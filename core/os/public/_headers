@@ -1,0 +1,5 @@
+# Headers for the public files served beside the issuer's pages (the pages set their own in
+# src/issuer-pages.ts). Nothing here runs script or renders inside a frame.
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: https:; base-uri 'none'; frame-ancestors 'none'
+  X-Frame-Options: DENY

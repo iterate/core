@@ -1,0 +1,568 @@
+// context/fetch-upgrade-splice.ts — A LENT STUB'S WEBSOCKET THAT OUTLIVES ITS CONTEXT'S SOCKETS.
+//
+// A visitor's WebSocket to a lent rpc stub (a tunnel: `iterate tunnel 5173` serving Vite's HMR
+// socket) rides two platform sockets that meet in the context Durable Object (fetch-upgrade.ts):
+// the EYEBALL socket (the edge ⇄ the DO) and the UPGRADE LEG (the /api relay ⇄ the DO). The DO
+// forwards frames between them by upgradeId. Both are cut whenever the DO resets — every deploy
+// resets every Durable Object for its new code — or the platform drops one. A cut the visitor saw
+// would close its socket 1006, and a Vite HMR client then reloads the page and loses its state.
+//
+// The two ends of those sockets are the platform's own stateless invocations — the edge holding the
+// visitor's socket, the relay holding the provider's — and they outlive a DO reset (a deploy leaves
+// running invocations on the version they started on). So each end is a `FetchUpgradeSpliceEnd`:
+// it numbers the frames it sends, keeps them until the other end acknowledges them, and when its
+// DO socket drops it dials the DO again under the same upgradeId (redial.ts), says what it has
+// received (`resume`), and sends again what the other end has not. The visitor's and the
+// provider's sockets never see the drop; nothing is lost or delivered twice.
+//
+// THE WIRE between the two ends (the DO forwards it untouched): every message is binary.
+//   data   [1 text | 2 binary][seq: float64][payload — UTF-8 for text]
+//   resume [3][received through: float64][1 = a reply, 0 = asks for one]
+//   ack    [4][received through: float64]
+//   close  [5][code: uint16][reason: UTF-8]
+// `close` is the only orderly end: a DO socket that closes without one is a drop.
+//
+// A LOCAL SOCKET WHOSE FAR SIDE IS GONE is an end too, said at once: the provider's socket on the
+// relay closes without a status when the tunnel's capnweb session ends (a CLI killed outright), so
+// the leg end sends `close` 1011 "tunnel disconnected" (websocket-close.ts: a drop is 1011) and the
+// visitor's socket closes with it — likewise the edge's end for a visitor that vanished. A local
+// socket that closes with a code sends that code. Only a DO socket's drop, whose cause nobody can
+// tell, waits for a resume.
+//
+// BOUNDED: an end whose other end has not resumed within `FETCH_UPGRADE_RESUME_DEADLINE_MS` of the
+// drop, or whose re-dial gave up, gives up and closes its own socket (1011): the other end is gone
+// without a word (its invocation died). Frames kept for the other end are capped
+// (`FETCH_UPGRADE_UNACKED_MAX_BYTES`); past the cap the end gives up the same way. The edge's
+// invocation dying is beyond any of this: the visitor's connection terminates in it, so the
+// visitor's socket dies with it.
+
+import { redial } from "./redial.ts";
+import { DROPPED_CLOSE_CODE, relayedCloseCode, truncateCloseReason } from "./websocket-close.ts";
+
+/** How long an end keeps trying after its DO socket dropped: re-dials, then the other end's
+ *  resume. */
+export const FETCH_UPGRADE_RESUME_DEADLINE_MS = 30_000;
+/** How long after a re-dial found a new deploy a further reset still counts as that deploy's: the
+ *  runtime resets a context again after a deploy's first reset — 5 s, 14 s, 40 s and 90 s later on
+ *  prd 2026-09-24 (the new version reaching the context's other callers). */
+const DEPLOY_SETTLE_MS = 180_000;
+/** Bytes of sent frames an end keeps for the other end until acknowledged. */
+export const FETCH_UPGRADE_UNACKED_MAX_BYTES = 16 * 1024 * 1024;
+/** An end acknowledges after this many frames received, or this many bytes, whichever comes first. */
+const ACK_EVERY_FRAMES = 32;
+const ACK_EVERY_BYTES = 256 * 1024;
+
+const KIND = { text: 1, binary: 2, resume: 3, ack: 4, close: 5 } as const;
+
+/** On a dialed upgrade socket's 101 (a leg, a re-dialed eyeball): the deploy that answered it, so a
+ *  re-dialing end can tell a deploy's reset from a platform failure. */
+export const FETCH_UPGRADE_DEPLOY_ID_HEADER = "x-itx-deploy-id";
+/** On every upgrade socket's 101 from a context whose incarnation began with the reset a recorded
+ *  `itx.abort()` asked for: that `itx/aborted` event's offset, so a re-dialing end can tell the
+ *  deliberate reset from a platform failure. Absent otherwise. */
+export const FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER = "x-itx-context-aborted-offset";
+/** The `itx/aborted` offset a DO's 101 names (`FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER`). */
+export function contextAbortedOffsetOf(response: Pick<Response, "headers">): number | null {
+  const offset = response.headers.get(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER);
+  return offset ? Number(offset) : null;
+}
+
+/** The socket an end holds — the runtime's WebSocket, and capnweb's tunneled one on the relay. */
+export type SpliceSocket = {
+  send(data: string | ArrayBuffer | ArrayBufferView): void;
+  close(code?: number, reason?: string): void;
+  addEventListener(type: "message" | "close" | "error", listener: (event: Event) => void): void;
+};
+
+/** What a socket event carries, read loosely: a message's `data`, a close's `code` and `reason`. */
+type SocketEventFields = { data?: unknown; code?: number; reason?: string };
+
+/** What an end reports, for the logs. */
+export type FetchUpgradeSpliceEvent =
+  | {
+      type: "resumed";
+      side: FetchUpgradeSide;
+      upgradeId: string;
+      downMs: number;
+      dials: number;
+      resent: number;
+      /** the DO answered the re-dial on another deploy: a deploy's reset, expected */
+      deployReset: boolean;
+      /** the DO answered the re-dial on an incarnation a recorded `itx.abort()` began: the offset of
+       *  its `itx/aborted` event — a deliberate reset, expected */
+      contextAbortedOffset: number | null;
+    }
+  | {
+      type: "gave-up";
+      side: FetchUpgradeSide;
+      upgradeId: string;
+      downMs: number;
+      dials: number;
+      why: string;
+    }
+  | {
+      type: "local-gone";
+      side: FetchUpgradeSide;
+      upgradeId: string;
+      /** the local socket's close code (1005, 1006), or undefined: it failed */
+      code: number | undefined;
+    };
+
+type FetchUpgradeSide = "eyeball" | "leg";
+
+/** One end of a spliced upgrade (the file header). */
+export class FetchUpgradeSpliceEnd {
+  readonly #side: FetchUpgradeSide;
+  readonly #upgradeId: string;
+  readonly #local: SpliceSocket;
+  readonly #localGoneReason: string;
+  readonly #dial: () => Promise<Response>;
+  readonly #report: (event: FetchUpgradeSpliceEvent) => void;
+
+  /** The DO socket in service, null while re-dialing. */
+  #socket: SpliceSocket | null = null;
+  /** The deploy the DO socket was answered on: a re-dial answered on another is a deploy's reset. */
+  #deployId: string | null;
+  /** The `itx/aborted` the DO socket's incarnation began after: a re-dial answered after another
+   *  is a recorded `itx.abort()`'s reset. */
+  #contextAbortedOffset: number | null;
+  #ended = false;
+
+  // SENDING: the last sequence number used, and every data frame the other end has not acknowledged.
+  #sentThrough = 0;
+  readonly #unacked: { seq: number; frame: ArrayBuffer }[] = [];
+  #unackedBytes = 0;
+
+  // RECEIVING: the last sequence number delivered to the local socket, and what is not yet acknowledged.
+  #receivedThrough = 0;
+  #receivedSinceAck = 0;
+  #bytesSinceAck = 0;
+
+  // A DROP IN PROGRESS: since when, how many dials, and the deadline for the other end's resume.
+  #downSince: number | null = null;
+  #dials = 0;
+  #deadline: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(input: {
+    side: FetchUpgradeSide;
+    upgradeId: string;
+    /** The socket this end serves: the visitor's (the edge) or the provider's (the relay). Frames
+     *  on it are the application's, untouched. */
+    local: SpliceSocket;
+    /** The reason this end gives when the local socket's far side is gone — it closed without a
+     *  status (1005 none, 1006 abnormal) or failed — rather than closed: the leg's "tunnel
+     *  disconnected". */
+    localGoneReason: string;
+    /** The first DO socket, the deploy it was answered on, and the abort its incarnation began after. */
+    socket: SpliceSocket;
+    deployId: string | null;
+    contextAbortedOffset: number | null;
+    /** One dial of this side's DO socket again (redial.ts tries it until the DO answers). */
+    dial: () => Promise<Response>;
+    report: (event: FetchUpgradeSpliceEvent) => void;
+  }) {
+    this.#side = input.side;
+    this.#upgradeId = input.upgradeId;
+    this.#local = input.local;
+    this.#localGoneReason = input.localGoneReason;
+    this.#dial = input.dial;
+    this.#report = input.report;
+    this.#deployId = input.deployId;
+    this.#contextAbortedOffset = input.contextAbortedOffset;
+    // an Event subtype per `type`: a MessageEvent's `data`, a CloseEvent's `code` and `reason`
+    preferArrayBuffers(this.#local);
+    this.#local.addEventListener("message", (event) =>
+      this.#inOrder((event as SocketEventFields).data, (data) => this.#sendData(data)),
+    );
+    this.#local.addEventListener("close", (event) => {
+      const { code, reason } = event as SocketEventFields;
+      if (code === undefined || code === 1005 || code === 1006) this.#localGone(code);
+      else this.#endLocally(code, reason);
+    });
+    this.#local.addEventListener("error", () => this.#localGone(undefined));
+    // The first socket waits for the other end exactly as a re-dialed one does: the relay's leg is
+    // up before the edge's socket exists, and neither end may wait forever.
+    this.#downSince = Date.now();
+    this.#armDeadline();
+    this.#attach(input.socket);
+  }
+
+  /** Messages from either socket, handled in the order they arrived: a binary one the runtime
+   *  hands over as a Blob (a socket whose `binaryType` is "blob") is read first, and every message
+   *  after it waits its turn. */
+  #pending: Promise<void> | null = null;
+  #inOrder(data: unknown, handle: (data: unknown) => void): void {
+    if (!this.#pending && !(data instanceof Blob)) return handle(data);
+    const previous = this.#pending || Promise.resolve();
+    const next = previous
+      .then(async () => handle(data instanceof Blob ? await data.arrayBuffer() : data))
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.#pending === next) this.#pending = null;
+      });
+    this.#pending = next;
+  }
+
+  // ── the local socket ──
+
+  #sendData(data: unknown): void {
+    if (this.#ended || this.#closeFrame) return;
+    const payload =
+      typeof data === "string"
+        ? { kind: KIND.text, bytes: new TextEncoder().encode(data) }
+        : { kind: KIND.binary, bytes: bytesOf(data) };
+    if (!payload.bytes) return;
+    const seq = ++this.#sentThrough;
+    const frame = new Uint8Array(9 + payload.bytes.byteLength);
+    frame[0] = payload.kind;
+    new DataView(frame.buffer).setFloat64(1, seq);
+    frame.set(payload.bytes, 9);
+    this.#unacked.push({ seq, frame: frame.buffer });
+    this.#unackedBytes += frame.byteLength;
+    if (this.#unackedBytes > FETCH_UPGRADE_UNACKED_MAX_BYTES) {
+      this.#giveUp(
+        `more than ${FETCH_UPGRADE_UNACKED_MAX_BYTES} bytes sent and not acknowledged by the other end`,
+      );
+      return;
+    }
+    this.#sendOnSocket(frame.buffer);
+  }
+
+  /** The local socket closed: the orderly end, said to the other end in-band — once the splice is
+   *  whole, after everything sent before it. While the DO socket is down it waits for the resume. */
+  #endLocally(code: number | undefined, reason: string | undefined): void {
+    if (this.#ended || this.#closeFrame) return;
+    const reasonBytes = new TextEncoder().encode(truncateCloseReason(reason || ""));
+    const frame = new Uint8Array(3 + reasonBytes.byteLength);
+    frame[0] = KIND.close;
+    new DataView(frame.buffer).setUint16(1, relayedCloseCode(code));
+    frame.set(reasonBytes, 3);
+    this.#closeFrame = frame.buffer;
+    if (this.#downSince === null) this.#sendClose();
+  }
+
+  /** The local socket's far side is gone without a close frame (a visitor's network vanished, a
+   *  tunnel's session ended): a drop, reported, said to the other end with `localGoneReason`, and
+   *  the local socket closed too — left open, the runtime's pump of the visitor's socket waits on it
+   *  for good and fails the edge's invocation as "hung". An error after the socket's own close is
+   *  not one. */
+  #localGone(code: number | undefined): void {
+    if (this.#ended || this.#closeFrame) return;
+    this.#report({ type: "local-gone", side: this.#side, upgradeId: this.#upgradeId, code });
+    this.#endLocally(DROPPED_CLOSE_CODE, this.#localGoneReason);
+    closeQuietly(this.#local, DROPPED_CLOSE_CODE, this.#localGoneReason);
+  }
+
+  /** The local socket's close, owed to the other end until the splice is whole (`#endLocally`). */
+  #closeFrame: ArrayBuffer | null = null;
+
+  #sendClose(): void {
+    this.#ended = true;
+    this.#clearDeadline();
+    this.#sendOnSocket(this.#closeFrame!);
+    closeQuietly(this.#socket, 1000, "closed");
+    this.#socket = null;
+  }
+
+  // ── the DO socket ──
+
+  #attach(socket: SpliceSocket): void {
+    this.#socket = socket;
+    preferArrayBuffers(socket);
+    socket.addEventListener("message", (event) => {
+      // a MessageEvent: its `data`
+      this.#inOrder((event as SocketEventFields).data, (data) => {
+        if (this.#socket === socket) this.#receive(data);
+      });
+    });
+    const dropped = () => {
+      if (this.#socket !== socket) return;
+      this.#socket = null;
+      if (!this.#ended) void this.#redialAfterDrop();
+    };
+    socket.addEventListener("close", dropped);
+    socket.addEventListener("error", dropped);
+    // Say what this end has received: the other end sends the rest, and answers with its own.
+    this.#sendOnSocket(controlFrame(KIND.resume, this.#receivedThrough, 0));
+  }
+
+  #receive(data: unknown): void {
+    if (this.#ended) return;
+    const bytes = bytesOf(data);
+    if (!bytes || bytes.byteLength < 1) return; // not this wire's: nothing an end sends
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const kind = bytes[0];
+    if (kind === KIND.text || kind === KIND.binary) {
+      if (bytes.byteLength < 9) return;
+      const seq = view.getFloat64(1);
+      // A frame already delivered is a resend; one past the next is a live frame that overtook the
+      // resend of an earlier one — it is resent in its turn, since the other end keeps it.
+      if (seq !== this.#receivedThrough + 1) return;
+      this.#receivedThrough = seq;
+      const payload = bytes.subarray(9);
+      try {
+        this.#local.send(
+          kind === KIND.text ? new TextDecoder().decode(payload) : payload.slice().buffer,
+        );
+      } catch {
+        /* the local socket is closing: its close ends this end */
+      }
+      this.#receivedSinceAck += 1;
+      this.#bytesSinceAck += bytes.byteLength;
+      if (this.#receivedSinceAck >= ACK_EVERY_FRAMES || this.#bytesSinceAck >= ACK_EVERY_BYTES)
+        this.#acknowledge();
+      return;
+    }
+    if (kind === KIND.ack) {
+      if (bytes.byteLength >= 9) this.#forgetThrough(view.getFloat64(1));
+      return;
+    }
+    if (kind === KIND.resume) {
+      if (bytes.byteLength < 10) return;
+      this.#forgetThrough(view.getFloat64(1));
+      for (const { frame } of this.#unacked) this.#sendOnSocket(frame);
+      if (bytes[9] === 0) this.#sendOnSocket(controlFrame(KIND.resume, this.#receivedThrough, 1));
+      this.#resumed();
+      if (this.#closeFrame) this.#sendClose();
+      return;
+    }
+    if (kind === KIND.close) {
+      if (bytes.byteLength < 3) return;
+      const code = view.getUint16(1);
+      const reason = new TextDecoder().decode(bytes.subarray(3));
+      this.#ended = true;
+      this.#clearDeadline();
+      closeQuietly(this.#local, relayedCloseCode(code), reason);
+      closeQuietly(this.#socket, 1000, "closed");
+      this.#socket = null;
+    }
+  }
+
+  #acknowledge(): void {
+    this.#receivedSinceAck = 0;
+    this.#bytesSinceAck = 0;
+    this.#sendOnSocket(controlFrame(KIND.ack, this.#receivedThrough));
+  }
+
+  #forgetThrough(seq: number): void {
+    while (this.#unacked.length > 0 && this.#unacked[0]!.seq <= seq) {
+      this.#unackedBytes -= this.#unacked.shift()!.frame.byteLength;
+    }
+  }
+
+  #sendOnSocket(frame: ArrayBuffer): void {
+    try {
+      this.#socket?.send(frame);
+    } catch {
+      /* the DO socket is closing: its close starts the re-dial, and the frame is still kept */
+    }
+  }
+
+  // ── a drop: re-dial, then the other end's resume ──
+
+  /** The other end resumed: the splice is whole again. The first resume after the first socket is
+   *  the start, not a recovery — nothing to report. */
+  #resumed(): void {
+    if (this.#downSince === null) return;
+    const downMs = Date.now() - this.#downSince;
+    const recovered = this.#dials > 0;
+    this.#clearDeadline();
+    this.#downSince = null;
+    if (recovered)
+      this.#report({
+        type: "resumed",
+        side: this.#side,
+        upgradeId: this.#upgradeId,
+        downMs,
+        dials: this.#dials,
+        resent: this.#unacked.length,
+        deployReset:
+          this.#deployReset ||
+          (this.#deployChangedAt !== null && Date.now() - this.#deployChangedAt < DEPLOY_SETTLE_MS),
+        contextAbortedOffset: this.#contextAbortReset,
+      });
+    this.#dials = 0;
+    this.#deployReset = false;
+    this.#contextAbortReset = null;
+  }
+
+  /** Whether a re-dial of this drop was answered on another deploy than the socket it replaced. */
+  #deployReset = false;
+  /** When a re-dial last found the context on another deploy: the reset that follows a deploy's
+   *  first one on the same new deploy (prd 2026-09-24 20:40:22 → 20:40:27, and 20:11:59 →
+   *  20:12:13) is the deploy's too. */
+  #deployChangedAt: number | null = null;
+  /** The `itx/aborted` a re-dial of this drop found newly behind the context: its reset was the
+   *  one `itx.abort()` asked for. */
+  #contextAbortReset: number | null = null;
+
+  async #redialAfterDrop(): Promise<void> {
+    if (this.#downSince === null) {
+      this.#downSince = Date.now();
+      this.#armDeadline();
+    }
+    const redialed = await redial(
+      () => {
+        this.#dials += 1;
+        return this.#dial();
+      },
+      () => this.#ended,
+      FETCH_UPGRADE_RESUME_DEADLINE_MS,
+    );
+    if (!redialed) return;
+    if ("gaveUp" in redialed) {
+      this.#giveUp(`the context answered no re-dial (${redialed.gaveUp})`);
+      return;
+    }
+    const deployId = redialed.answer.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER);
+    const contextAbortedOffset = contextAbortedOffsetOf(redialed.answer);
+    if (deployId !== this.#deployId) {
+      this.#deployReset = true;
+      this.#deployChangedAt = Date.now();
+    }
+    this.#deployId = deployId;
+    if (contextAbortedOffset !== null && contextAbortedOffset !== this.#contextAbortedOffset)
+      this.#contextAbortReset = contextAbortedOffset;
+    this.#contextAbortedOffset = contextAbortedOffset;
+    this.#attach(redialed.socket);
+  }
+
+  #armDeadline(): void {
+    this.#clearDeadline();
+    const downSince = this.#downSince!;
+    this.#deadline = setTimeout(
+      () => {
+        this.#deadline = null;
+        if (this.#downSince === downSince)
+          this.#giveUp(
+            `the other end did not resume within ${FETCH_UPGRADE_RESUME_DEADLINE_MS / 1000} s`,
+          );
+      },
+      downSince + FETCH_UPGRADE_RESUME_DEADLINE_MS - Date.now(),
+    );
+  }
+
+  #clearDeadline(): void {
+    if (this.#deadline !== null) clearTimeout(this.#deadline);
+    this.#deadline = null;
+  }
+
+  #giveUp(why: string): void {
+    if (this.#ended) return;
+    this.#ended = true;
+    this.#clearDeadline();
+    this.#report({
+      type: "gave-up",
+      side: this.#side,
+      upgradeId: this.#upgradeId,
+      downMs: this.#downSince === null ? 0 : Date.now() - this.#downSince,
+      dials: this.#dials,
+      why,
+    });
+    closeQuietly(this.#local, DROPPED_CLOSE_CODE, truncateCloseReason(why));
+    closeQuietly(this.#socket, DROPPED_CLOSE_CODE, "gave up");
+    this.#socket = null;
+  }
+}
+
+/** THE VISITOR'S END of the edge's splice: the socket its 101 carries. `splice` gets the other end,
+ *  accepted, to splice to the DO socket — a turn later, once the runtime is sending the 101: a pair
+ *  end accepted before the runtime starts pumping the returned end to the network keeps that pump
+ *  reading past the visitor's close frame, and the accepted end's release then fails it ("other end
+ *  of WebSocketPipe was destroyed"), the edge's invocation ending in an uncaught "Network connection
+ *  lost." at every visitor's clean close (prd 2026-09-25: every tunnel /clock visit; workerd's,
+ *  pinned by fetch-upgrade-visitor-close.test.ts). Accept the DO socket in `splice` too:
+ *  its frames wait unread until then, where a frame for an unaccepted end would be lost. */
+export function visitorEndOfSplice(splice: (local: WebSocket) => void): WebSocket {
+  const pair = new WebSocketPair();
+  const [visitor, local] = [pair[0], pair[1]];
+  setTimeout(() => {
+    local.accept();
+    splice(local);
+  }, 0);
+  return visitor;
+}
+
+/** Binary messages as ArrayBuffers where the socket lets us choose (the runtime's `binaryType`). */
+function preferArrayBuffers(socket: SpliceSocket): void {
+  if ("binaryType" in socket) (socket as { binaryType: string }).binaryType = "arraybuffer";
+}
+
+function controlFrame(kind: number, seq: number, reply?: 0 | 1): ArrayBuffer {
+  const frame = new Uint8Array(reply === undefined ? 9 : 10);
+  frame[0] = kind;
+  new DataView(frame.buffer).setFloat64(1, seq);
+  if (reply !== undefined) frame[9] = reply;
+  return frame.buffer;
+}
+
+/** A binary message's bytes (an ArrayBuffer, a view of one, a Node Buffer), or null for anything else. */
+function bytesOf(data: unknown): Uint8Array | null {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data))
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  return null;
+}
+
+function closeQuietly(socket: SpliceSocket | null, code: number, reason: string): void {
+  try {
+    socket?.close(code, reason);
+  } catch {
+    /* already closing */
+  }
+}
+
+/** THE LOG LINE for what an end reports. A resume after a deploy's reset is expected on every deploy
+ *  under traffic (info), and one after a recorded `itx.abort()` is the reset someone asked for (info,
+ *  naming its `itx/aborted`); any other healed a platform failure (the prd fault alarm pages on
+ *  a burst of `platform-failure` heals). Giving up is the other end gone — a tunnel killed outright,
+ *  a laptop asleep — or a platform failure that outlasted the deadline or this end's re-dial: a
+ *  warn, with its reason. A local socket whose far side vanished without a close frame is a visitor
+ *  or a tunnel gone (info); on the edge the runtime also fails that invocation, "Network connection
+ *  lost." (its pump of the visitor's socket read a dead connection), which the prd fault alarm files
+ *  under this line's ray. */
+export function reportFetchUpgradeSpliceEvent(event: FetchUpgradeSpliceEvent): void {
+  const { type, side, ...fields } = event;
+  if (type === "local-gone") {
+    console.info({
+      event: "fetch-upgrade.local-gone",
+      name: `fetch-upgrade-${side}`,
+      message:
+        side === "eyeball"
+          ? "the visitor's connection ended without a close frame: the upgrade is closed"
+          : "the provider's socket ended without a close frame (its tunnel's session ended): the upgrade is closed",
+      ...fields,
+    });
+    return;
+  }
+  if (type === "gave-up") {
+    console.warn({
+      event: "fetch-upgrade.resume-gave-up",
+      name: `fetch-upgrade-${side}`,
+      message: "a resumable upgrade could not be resumed: its socket is closed",
+      ...fields,
+    });
+    return;
+  }
+  if (event.deployReset)
+    console.info({
+      event: "fetch-upgrade.deploy-reset-resumed",
+      name: `fetch-upgrade-${side}`,
+      message: "a deploy reset the context's sockets; the upgrade resumed",
+      ...fields,
+    });
+  else if (event.contextAbortedOffset !== null)
+    console.info({
+      event: "fetch-upgrade.context-abort-resumed",
+      name: `fetch-upgrade-${side}`,
+      message: "itx.abort() reset the context's sockets; the upgrade resumed",
+      ...fields,
+    });
+  else
+    console.warn({
+      event: "fetch-upgrade.platform-failure-resumed",
+      name: `fetch-upgrade-${side}`,
+      message: "a context's socket dropped without a deploy; the upgrade resumed",
+      ...fields,
+    });
+}

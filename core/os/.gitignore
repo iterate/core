@@ -1,0 +1,10 @@
+# scripts/build.ts: the two generated modules (their .d.ts siblings are committed). Only the
+# declarations belong in git — a stale generated .ts here shadows them for tsc.
+/src/generated/*
+!/src/generated/*.d.ts
+
+# Run output: scripts/os/preview.ts's preview.json, scripts/os/e2e-soak.ts's soak reports.
+/output/
+
+# sqlfu's scratch database and query catalog (sqlfu.config.ts): `pnpm db:check` rebuilds them.
+/.sqlfu/

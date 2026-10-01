@@ -1,0 +1,171 @@
+/* The stylesheet an app's own sign-in pages (iterate/app-server) link from the
+   deployment's issuer. The issuer's pages are Tailwind (src/styles.css) and do not use it. */
+:root {
+  color-scheme: light;
+  --ink: #171717;
+  --quiet: #737373;
+  --line: #e5e5e5;
+  --soft: #fafafa;
+  --paper: #fff;
+  --focus: #171717;
+  --danger: oklch(52% 0.2 27);
+}
+body {
+  font:
+    15px/1.5 ui-sans-serif,
+    system-ui,
+    sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+  margin: 0;
+  padding: 3rem 1rem;
+  min-height: 100dvh;
+  box-sizing: border-box;
+  display: grid;
+  place-items: start center;
+  -webkit-tap-highlight-color: transparent;
+  @media (width <= 420px) {
+    padding: 1.5rem 1rem;
+  }
+}
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 1.25rem;
+  text-align: center;
+  text-wrap: balance;
+}
+h2 {
+  font-size: 0.9rem;
+  margin: 0;
+}
+p {
+  margin: 0.5rem 0 0;
+  text-wrap: pretty;
+}
+strong {
+  font-weight: 600;
+}
+code {
+  font-size: 0.9em;
+  color: var(--quiet);
+}
+.muted {
+  color: var(--quiet);
+  font-size: 0.85em;
+}
+[role="alert"] {
+  color: var(--danger);
+  margin: 0 0 0.75rem;
+  transition: opacity 0.2s;
+  @starting-style {
+    opacity: 0;
+  }
+}
+label {
+  display: block;
+  margin: 0.6rem 0 0;
+  font-size: 13px;
+}
+/* the `hidden` attribute wins over any display above (the organization name field, the count) */
+[hidden] {
+  display: none !important;
+}
+input:is([type="email"], [type="text"], [type="password"]),
+select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: inherit;
+  font: inherit;
+  /* never under 16px: iOS Safari zooms the page into any smaller field it focuses */
+  font-size: max(1em, 16px);
+  padding: 0.75rem 0.875rem;
+  margin: 0.3rem 0 0;
+  box-sizing: border-box;
+  width: 100%;
+  &:user-invalid {
+    border-color: var(--danger);
+  }
+}
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--ink);
+  flex-shrink: 0;
+}
+button,
+.button {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+  text-align: center;
+  font: inherit;
+  font-weight: 500;
+  padding: 0.75rem 1rem;
+  box-sizing: border-box;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    background-color 0.15s,
+    opacity 0.15s;
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  @media (hover: hover) {
+    &:not(:disabled):hover {
+      background: color-mix(in oklch, var(--ink) 6%, transparent);
+    }
+  }
+}
+.primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+  @media (hover: hover) {
+    &:not(:disabled):hover {
+      background: color-mix(in oklch, var(--ink) 86%, var(--paper));
+    }
+  }
+}
+.quiet {
+  border-color: transparent;
+  padding: 0.4rem 0.5rem;
+}
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+/* A gate page: one column, the main action full width. */
+.issuer-card {
+  width: min(100%, 24rem);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  form {
+    margin: 0.75rem 0 0;
+  }
+  /* a form that is only a quiet action — Switch account, Use a different email — sits centred */
+  form:has(> .quiet) {
+    margin-top: 0.5rem;
+    text-align: center;
+  }
+  :is(.primary, .button) {
+    display: block;
+    width: 100%;
+    margin-top: 0.25rem;
+  }
+  .quiet {
+    font-size: 13px;
+  }
+}
+.issuer-mark {
+  display: block;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  margin: 0 auto 1rem;
+}

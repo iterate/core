@@ -1,0 +1,104 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { z } from "zod";
+
+export const CONFIG_DIR = join(
+  process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
+  "iterate",
+);
+
+export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+export const DEFAULT_CONFIG_NAME = "prd";
+
+/** Stored session (lives inside a config entry) */
+export const StoredSession = z.object({
+  token: z.string().optional(),
+  refreshToken: z.string().optional(),
+  clientId: z.string().optional(),
+  scope: z.string().optional(),
+  expiresAt: z.string().optional(),
+});
+
+export type StoredSession = z.infer<typeof StoredSession>;
+
+/** A named config — describes which server to talk to and how to authenticate. */
+export const Config = z.object({
+  defaultProject: z.string().optional(),
+  osBaseUrl: z.string().optional().default("https://os.iterate.com"),
+  session: StoredSession.optional(),
+});
+
+export type Config = z.infer<typeof Config>;
+
+/** The config file on disk (~/.config/iterate/config.json) */
+const ConfigFile = z.object({
+  configs: z.record(z.string(), Config).optional(),
+  default: z.string().optional(),
+  /** Maps absolute directory path to a config name */
+  workspaces: z.record(z.string(), z.string()).optional(),
+});
+
+type ConfigFile = z.infer<typeof ConfigFile>;
+
+const normalizeConfig = (config: Config): Config => ({
+  ...config,
+  // Strip trailing slashes to avoid double-slash URLs downstream.
+  osBaseUrl: config.osBaseUrl.replace(/\/+$/, ""),
+});
+
+export const readConfigFile = (): ConfigFile => {
+  if (!existsSync(CONFIG_PATH)) return {};
+  const rawText = readFileSync(CONFIG_PATH, "utf8");
+  try {
+    return ConfigFile.parse(JSON.parse(rawText));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid JSON in ${CONFIG_PATH}: ${detail}`);
+  }
+};
+
+export const writeConfigFile = (configFile: ConfigFile): void => {
+  const parsed = ConfigFile.safeParse(configFile);
+  if (!parsed.success) {
+    throw new Error(`Invalid config file: ${z.prettifyError(parsed.error)}`);
+  }
+  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+  writeFileSync(CONFIG_PATH, `${JSON.stringify(parsed.data, null, 2)}\n`, { mode: 0o600 });
+};
+
+/**
+ * Read and validate a single named config, applying schema defaults and
+ * normalizing URLs. A missing or invalid config is returned as an Error value.
+ */
+export function readConfig(name: string): Config | Error {
+  const raw = readConfigFile().configs?.[name] ?? (name === DEFAULT_CONFIG_NAME ? {} : undefined);
+  if (!raw) return new Error(`Config "${name}" not found in ${CONFIG_PATH}`);
+  const parsed = Config.safeParse(raw);
+  if (!parsed.success) {
+    return new Error(
+      `Invalid config "${name}" in ${CONFIG_PATH}:\n${z.prettifyError(parsed.error)}`,
+    );
+  }
+  return normalizeConfig(parsed.data);
+}
+
+/**
+ * Merge session fields into the named config's stored session. Extra
+ * runtime-only keys on `session` are stripped by the schema on write.
+ */
+export const updateConfigSession = (configName: string, session: StoredSession): void => {
+  const configFile = readConfigFile();
+  configFile.configs ||= {};
+  const entry = (configFile.configs[configName] ||= normalizeConfig(Config.parse({})));
+  entry.session = { ...entry.session, ...session };
+  writeConfigFile(configFile);
+};
+
+export const removeConfigSession = (configName: string): void => {
+  const configFile = readConfigFile();
+  const entry = configFile.configs?.[configName];
+  if (!entry?.session) return;
+  delete entry.session;
+  writeConfigFile(configFile);
+};

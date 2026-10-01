@@ -1,0 +1,201 @@
+// src/account/contract.ts — THE ACCOUNT: a person's context, `/users/<id>` in the deployment-global
+// namespace, where the FACTS about them land — an authentication (session.ts), a personal access
+// token minted, a grant ended or used (grants.ts, oauth.ts), a consent approved, a platform admin
+// signing a client in as the person or the admin doing so (consent.ts) — each
+// appended by the verb that did it, stamped with the caller; and, as activity, each membership of
+// theirs beginning or ending (session.ts `publishOrganizationFacts`: the control-plane database
+// holds the memberships, and the dash reads them there again when one lands here).
+// This file is the only place its own events and their payloads are spelled; processor.ts folds
+// them into the state a client reads through live state; durable-object.ts hosts it as the
+// first-party facet `account` (first-party-facets.ts), the row enabled where the first fact is
+// published. A PURE FOLD: no effect lives here. No credential is here: an OAuth token is the
+// provider's (grants.ts), and a personal access token is kept as its SHA-256 alone
+// (`personalAccessTokens`, which oauth.ts admits a key against). Whether a grant or a key is revoked
+// IS read here (`endedGrants`, oauth.ts): the account is the truth of its own grants' ends. Every
+// type is derived:
+//   AccountState = ProcessorState<typeof AccountContract>   the reduced state below
+//   ConsumedEvent<typeof AccountContract>                    what the reduce sees
+import { z } from "zod";
+import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
+import { SecretCatalog, SecretContract } from "../secret/contract.ts";
+import { IntegrationConnectionRow, IntegrationEventCatalog } from "../integrations/contract.ts";
+
+// Each fact's payload is spelled once and used twice — by its event and by the state that keeps it.
+
+/** `events.iterate.com/account/authenticated` (idempotency key
+ *  `account/authenticated/<operationId>`): NO credential material — only which KIND, when, and a
+ *  stable op id (dedup on retry). A client can append this type to its own account, but only the
+ *  platform's is stamped `source.platform`, and the account processor folds nothing else
+ *  (processor.ts). */
+const AuthenticationFact = z.object({
+  credential: z.enum(["from-server-cookie", "admin-secret"]),
+  at: z.number(),
+  operationId: z.string(),
+});
+export type AuthenticationFact = z.infer<typeof AuthenticationFact>;
+/** `events.iterate.com/account/personal-access-token-minted`: a personal access token minted
+ *  through `session.grants.mint` (grants.ts), and THE KEY'S RECORD, which oauth.ts admits its bearer
+ *  against (personal-access-token.ts): its id, the name given, the SHA-256 of the bearer (never the
+ *  bearer), the email it acts as, the projects it reaches, when it expires (epoch ms; null: never),
+ *  the session (the grant id) that minted it, and, for a device's key, the device's client and how
+ *  it is shown. AWAITED by the mint: the key works the moment its bearer is answered. */
+export const PersonalAccessTokenMinted = z.object({
+  id: z.string().startsWith("pat_"),
+  name: z.string(),
+  hash: z.string().regex(/^[0-9a-f]{64}$/),
+  email: z.string(),
+  projects: z.array(z.string()).min(1),
+  expiresAt: z.number().nullable(),
+  device: z
+    .object({
+      clientId: z.string(),
+      logoUri: z.string().optional(),
+      clientDomain: z.string().optional(),
+    })
+    .optional(),
+  /** The grant of the session that minted the key: the list shows it, so a person can tell which
+   *  sign-in made each key. The key outlives it (the CLI ends its minting session at once). */
+  mintedBy: z.string().min(1),
+});
+export type PersonalAccessTokenMinted = z.infer<typeof PersonalAccessTokenMinted>;
+/** `events.iterate.com/account/grant-ended`: a grant or a personal access token ended — a session
+ *  logged out, a key revoked (grants.ts `end` / `endCurrent`). AWAITED by the verb: from this fact
+ *  on, every admission of it is refused (oauth.ts reads `endedGrants`). */
+export const GrantEnded = z.object({ grantId: z.string().min(1) });
+export type GrantEnded = z.infer<typeof GrantEnded>;
+/** `events.iterate.com/account/grant-used`: the grant was presented — about once an hour per
+ *  grant at most (oauth.ts `recordGrantUse`), so the log stays a summary; what the sessions page
+ *  shows as "last used". */
+export const GrantUsed = z.object({ grantId: z.string().min(1), at: z.number() });
+export type GrantUsed = z.infer<typeof GrantUsed>;
+/** `events.iterate.com/account/consent-approved`: the person approved a client at consent
+ *  (consent.ts): which client, the projects ticked (`null` = every project, current and future)
+ *  and the scopes left ticked. Keyed by the grant the approval minted
+ *  (`account/consent-approved/<grantId>`), so a repeat of its append lands it once. */
+export const ConsentApproved = z.object({
+  clientId: z.string().min(1),
+  clientName: z.string(),
+  projects: z.array(z.string()).nullable(),
+  scopes: z.array(z.string()),
+});
+export type ConsentApproved = z.infer<typeof ConsentApproved>;
+/** A platform admin signed a client in as someone (consent.ts `#impersonate`): ONE record, landed on
+ *  both accounts — `events.iterate.com/account/impersonation-started` on the person's,
+ *  `events.iterate.com/account/impersonation-performed` on the admin's, each stamped with the admin
+ *  as `source.principal` — AWAITED before the client gets its code, so no impersonation is used
+ *  unrecorded. Audit only: the account folds nothing from it. */
+export const Impersonation = z.object({
+  /** the grant's id, the same in both records: what ends it (the person's Sessions list it) */
+  grantId: z.string().min(1),
+  target: z.object({ userId: z.string(), email: z.string() }),
+  impersonatedBy: z.object({ actor: z.string(), email: z.string() }),
+  clientId: z.string().min(1),
+  clientName: z.string(),
+  /** the resource the grant is for */
+  resource: z.enum(["api", "mcp"]),
+  scopes: z.array(z.string()),
+  /** the projects it is bound to; null = every project of the person's */
+  projects: z.array(z.string()).nullable(),
+  /** epoch ms */
+  expiresAt: z.number(),
+});
+export type Impersonation = z.infer<typeof Impersonation>;
+
+export const AccountContract = defineProcessorContract({
+  slug: "account",
+  // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
+  // is what re-reduces every existing root log.
+  version: "9",
+  description:
+    "The user's account: authentications, personal access tokens, ended and used grants, consents, the catalog of the user's own secrets and the lends of them, and the person's own connections.",
+  /** THE REDUCED STATE — the record of the account, folded from the facts above: what a client
+   *  reads through live state. The lists ARE the events they are folded from — no re-spelling. */
+  stateSchema: z.object({
+    authentications: z.array(AuthenticationFact).default([]),
+    /** Personal access tokens minted, by key id (`pat_…`): each key's record — when it was
+     *  minted, and ended. */
+    personalAccessTokens: z
+      .record(
+        z.string(),
+        PersonalAccessTokenMinted.omit({ id: true }).extend({
+          mintedAt: z.string(),
+          endedAt: z.string().nullable(),
+        }),
+      )
+      .default({}),
+    /** Every grant and key ended — a session logged out, a token revoked — by its id: when. THE
+     *  REVOCATION TRUTH: oauth.ts refuses a grant or key found here on every admission. */
+    endedGrants: z.record(z.string(), z.object({ at: z.string() })).default({}),
+    /** When each grant was last seen in use, by grant id (the sessions page's "last used"). */
+    grantUses: z.record(z.string(), z.object({ at: z.number() })).default({}),
+    /** Every consent approved, in order: the client and what it was given. */
+    consents: z.array(ConsentApproved.extend({ at: z.string() })).default([]),
+    /** Every secret set under this owner (src/secret/contract.ts): what `itx.secrets.list()` reads here. */
+    secrets: SecretCatalog.default({}),
+    /** The person's own connections (src/integrations/contract.ts), by log path: a sign-in that kept
+     *  its token, or a connect run on this context. The same row a project keeps. */
+    integrations: z.record(z.string(), IntegrationConnectionRow).default({}),
+  }),
+  events: {
+    "events.iterate.com/account/authenticated": {
+      description: "A successful authentication on the user's account (platform fact).",
+      payloadSchema: AuthenticationFact,
+    },
+    "events.iterate.com/account/personal-access-token-minted": {
+      description:
+        "A personal access token was minted for the account: its record, with the key's SHA-256 (platform fact).",
+      payloadSchema: PersonalAccessTokenMinted,
+    },
+    "events.iterate.com/account/grant-ended": {
+      description:
+        "A grant of the account ended: a session logged out, a token revoked (platform fact).",
+      payloadSchema: GrantEnded,
+    },
+    "events.iterate.com/account/grant-used": {
+      description:
+        "A grant of the account was presented (platform fact, at most hourly per grant).",
+      payloadSchema: GrantUsed,
+    },
+    "events.iterate.com/account/consent-approved": {
+      description: "The person approved a client at consent (platform fact).",
+      payloadSchema: ConsentApproved,
+    },
+    "events.iterate.com/account/impersonation-started": {
+      description:
+        "A platform admin signed a client in as the person, for an hour (platform fact, audit only).",
+      payloadSchema: Impersonation,
+    },
+    "events.iterate.com/account/impersonation-performed": {
+      description:
+        "The person, a platform admin, signed a client in as someone else, for an hour (platform fact, audit only).",
+      payloadSchema: Impersonation,
+    },
+  },
+  // THE RELATIONSHIPS: the account consumes the user's own secrets' certificates without owning
+  // them (src/secret/contract.ts: cross-posted from `/users/<id>/secrets/<name>`), and the person's
+  // own connections' facts (src/integrations/contract.ts, shared with projects).
+  processorDeps: [SecretContract, IntegrationEventCatalog],
+  consumes: [
+    "events.iterate.com/account/authenticated",
+    "events.iterate.com/account/personal-access-token-minted",
+    "events.iterate.com/account/grant-ended",
+    "events.iterate.com/account/grant-used",
+    "events.iterate.com/account/consent-approved",
+    "events.iterate.com/secret/set",
+    "events.iterate.com/secret/deleted",
+    "events.iterate.com/secret/lent",
+    "events.iterate.com/secret/lend-revoked",
+    "events.iterate.com/google/connected",
+    "events.iterate.com/google/disconnected",
+    "events.iterate.com/cloudflare/connected",
+    "events.iterate.com/cloudflare/disconnected",
+    "events.iterate.com/github/connected",
+    "events.iterate.com/github/disconnected",
+    "events.iterate.com/x/connected",
+    "events.iterate.com/x/disconnected",
+  ],
+  emits: [],
+});
+
+/** The account's reduced state: its record (the contract's `stateSchema`). */
+export type AccountState = ProcessorState<typeof AccountContract>;

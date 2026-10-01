@@ -1,0 +1,1756 @@
+// Executable spec for the processor layer — each block names the concurrency rule it proves.
+// The in-memory stream (stream/test-support.ts) mirrors the DO's commit semantics: one shared
+// offset sequence (ephemerals consume offsets but never land in the log), the scanned-offset-range
+// proof on both pushes and reads, and a fire-and-forget push to every registered engine after
+// each append. Every processor here is the PURE author class (`new X()` — no stream, no storage);
+// a `ProcessorEngine` drives it, and a test keeps the author handle where it reads a field. The
+// rule-by-rule spec under slow blockers, failing batches and version bumps is
+// processor-rules.test.ts.
+import { expect, test, vi } from "vitest";
+import { z } from "zod";
+import { applyPatch, errorCode, type PatchOp } from "../lib.ts";
+import {
+  defineProcessorContract,
+  type StreamEvent,
+  consumesEvent,
+  ProcessorEngine,
+  StreamProcessor,
+  type ProcessEventArgs,
+  type ReduceArgs,
+  sameIdempotentEvent,
+  LiveState,
+  type ScannedRange,
+  type StreamEventInput,
+} from "./processor.ts";
+import { committedEvent, memoryStorage, memoryStream, settle } from "./test-support.ts";
+
+// ── contract ──
+
+test("contract: stateSchema must default {} (initial state rule)", () => {
+  expect(() =>
+    defineProcessorContract({
+      slug: "bad",
+      version: "1",
+      description: "",
+      stateSchema: z.object({ required: z.string() }),
+      consumes: [],
+      emits: [],
+    }),
+  ).toThrow(/parse \{\}/);
+});
+
+test("contract: two deps declaring the same event type is rejected", () => {
+  const dep = (slug: string, schema: z.ZodType) =>
+    defineProcessorContract({
+      slug,
+      version: "1",
+      description: "",
+      stateSchema: z.object({}),
+      events: { "demo/shared": { description: slug, payloadSchema: schema } },
+      consumes: [],
+      emits: [],
+    });
+  // Two deps own "demo/shared" with different payloads: `resolve` would pick one while
+  // ConsumedEvent's union includes both — a mismatch the definition must refuse up front.
+  expect(() =>
+    defineProcessorContract({
+      slug: "consumer",
+      version: "1",
+      description: "",
+      stateSchema: z.object({}),
+      processorDeps: [
+        dep("dep-a", z.object({ a: z.string() })),
+        dep("dep-b", z.object({ b: z.number() })),
+      ],
+      consumes: ["demo/shared"],
+      emits: [],
+    }),
+  ).toThrow(/declared by two deps/);
+});
+
+// ── consumesEvent — THE ONE consumes rule (engine, delivery loop, inline reduces) ──
+
+test('consumesEvent: "*" delivers every durable event but NEVER sweeps ephemerals', () => {
+  expect(consumesEvent(["*"], { type: "a" })).toBe(true);
+  expect(consumesEvent(["*"], { type: "b" })).toBe(true);
+  expect(consumesEvent(["*"], { type: "eph", ephemeral: true })).toBe(false);
+});
+
+test("consumesEvent: undefined consumes = every durable event, no ephemerals (a subscriber's default)", () => {
+  expect(consumesEvent(undefined, { type: "a" })).toBe(true);
+  expect(consumesEvent(undefined, { type: "eph", ephemeral: true })).toBe(false);
+});
+
+test("consumesEvent: the wake record (itx/woken) is an ordinary durable event: swept by default and by \"*\" like any other — that a wake makes no LOOP is the delivery loop's and the alarm's to keep, never a carve-out here", () => {
+  expect(consumesEvent(undefined, { type: "events.iterate.com/itx/woken" })).toBe(true);
+  expect(consumesEvent(["*"], { type: "events.iterate.com/itx/woken" })).toBe(true);
+  expect(
+    consumesEvent(["events.iterate.com/itx/woken"], { type: "events.iterate.com/itx/woken" }),
+  ).toBe(true);
+});
+
+test("consumesEvent: a NAMED type opts that type in, INCLUDING when ephemeral", () => {
+  expect(consumesEvent(["eph"], { type: "eph", ephemeral: true })).toBe(true);
+  expect(consumesEvent(["eph"], { type: "other", ephemeral: true })).toBe(false);
+  expect(consumesEvent(["a"], { type: "a" })).toBe(true);
+  expect(consumesEvent(["a"], { type: "b" })).toBe(false);
+});
+
+test("consumesEvent: a live-state delta is an ephemeral like any other here: never swept by default or '*', delivered when NAMED", () => {
+  // (That no PROCESSOR may reduce a delta is the engine's `reducesEvent`, not this rule: a
+  // SUBSCRIPTION names the type to watch live state.)
+  expect(
+    consumesEvent(undefined, {
+      type: "events.iterate.com/itx/live-state-changed",
+      ephemeral: true,
+    }),
+  ).toBe(false);
+  expect(
+    consumesEvent(["*"], { type: "events.iterate.com/itx/live-state-changed", ephemeral: true }),
+  ).toBe(false);
+  expect(
+    consumesEvent(["events.iterate.com/itx/live-state-changed"], {
+      type: "events.iterate.com/itx/live-state-changed",
+      ephemeral: true,
+    }),
+  ).toBe(true);
+});
+
+// ── the concurrency contract ──
+
+test("rules 1+2 — strict per-event barrier: blocked work finishes before the next event starts", async () => {
+  const { engine, processor, tick } = setup();
+  tick();
+  tick();
+  tick();
+  await engine.catchUpFromLog();
+  const starts = processor.trace.filter((t) => t.startsWith("start"));
+  const dones = processor.trace.filter((t) => t.startsWith("blocked-done"));
+  expect(starts).toEqual(["start 1", "start 2", "start 3"]);
+  expect(dones).toEqual(["blocked-done 1", "blocked-done 2", "blocked-done 3"]);
+  // interleaving check: start N+1 never appears before blocked-done N
+  expect(processor.trace.indexOf("start 2")).toBeGreaterThan(
+    processor.trace.indexOf("blocked-done 1"),
+  );
+  expect(processor.trace.indexOf("start 3")).toBeGreaterThan(
+    processor.trace.indexOf("blocked-done 2"),
+  );
+});
+
+test("rule 3 — runInBackground escapes the barrier", async () => {
+  const mem = memoryStream();
+  const order: string[] = [];
+  const Contract = defineProcessorContract({
+    slug: "bg",
+    version: "1",
+    description: "",
+    stateSchema: z.object({}),
+    consumes: ["e"],
+    emits: [],
+  });
+  class BgProcessor extends StreamProcessor<object> {
+    readonly contract = Contract;
+    override processEvent(args: ProcessEventArgs<object>): undefined {
+      if (!args.event) return;
+      args.runInBackground(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        order.push(`bg ${args.event!.offset}`);
+      });
+      order.push(`fg ${args.event.offset}`);
+    }
+  }
+  const bg = new ProcessorEngine(new BgProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.stream.append({ type: "e" }, { type: "e" });
+  await bg.catchUpFromLog();
+  expect(order).toEqual(["fg 1", "fg 2"]); // background hasn't landed — it overtakes/loiters
+  await new Promise((r) => setTimeout(r, 30));
+  expect(order.slice(2).sort()).toEqual(["bg 1", "bg 2"]);
+});
+
+test("rule 4 — one persist per pushed scannedOffsetRange, cursor advances only after", async () => {
+  const { storage, engine, stream } = setup();
+  const before = storage.writes;
+  stream.append(
+    { type: "events.iterate.com/test/counter-ticked" },
+    { type: "events.iterate.com/test/counter-ticked" },
+    { type: "events.iterate.com/test/counter-ticked" },
+  );
+  await engine.catchUpFromLog();
+  await settle();
+  // the whole 3-event scannedOffsetRange persists ONCE (one checkpoint row). The milestone lands as
+  // its own scannedOffsetRange — a second write (cursor only: its reduce didn't change state).
+  expect(storage.writes - before).toBe(2);
+});
+
+test("rule 5 — at-head pass fires exactly once when the scannedOffsetRange reaches the head", async () => {
+  const { engine, processor, stream } = setup();
+  stream.append({ type: "unrelated" }); // consumed by nobody
+  await engine.catchUpFromLog();
+  expect(processor).toMatchObject({ trace: ["at-head ticks=0"] }); // no consumable events → eventless pass
+});
+
+test("redelivery dedupes against the persisted cursor", async () => {
+  const { engine, processor, tick } = setup();
+  tick();
+  await engine.catchUpFromLog();
+  await engine.catchUpFromLog(); // nothing new — no re-processing
+  expect(processor.trace.filter((t) => t === "start 1")).toHaveLength(1);
+});
+
+test("a failing scannedOffsetRange persists nothing and the next wake retries it whole", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  let attempts = 0;
+  const Contract = defineProcessorContract({
+    slug: "flaky",
+    version: "1",
+    description: "",
+    stateSchema: z.object({ seen: z.number().default(0) }),
+    consumes: ["e"],
+    emits: [],
+  });
+  class FlakyProcessor extends StreamProcessor<{ seen: number }> {
+    readonly contract = Contract;
+    override reduce({ state }: ReduceArgs<{ seen: number }>) {
+      return { seen: state.seen + 1 };
+    }
+    override processEvent(args: ProcessEventArgs<{ seen: number }>): undefined {
+      if (!args.event) return;
+      args.blockProcessorWhile(async () => {
+        attempts++;
+        if (attempts === 1) throw new Error("boom");
+      });
+    }
+  }
+  const flaky = new ProcessorEngine(new FlakyProcessor(), { stream: mem.stream, storage });
+  mem.engines.push(flaky);
+  mem.stream.append({ type: "e" }); // the auto-push fails (attempt 1)
+  await settle();
+  expect(storage.read("flaky")).toBeUndefined(); // nothing persisted
+  await flaky.catchUpFromLog(); // retried whole
+  expect(attempts).toBe(2);
+  expect(await flaky.snapshot()).toMatchObject({ state: { seen: 1 } });
+});
+
+// ── processEventBatch pushes (scan scannedOffsetRanges) ──
+
+test("a contiguous push reduces WITHOUT reading the log (the fast path)", async () => {
+  const mem = setup();
+  mem.tick();
+  await settle();
+  expect(mem.processor.trace).toContain("start 1");
+  expect(mem).toMatchObject({ reads: 0 }); // the batch itself was enough — zero log reads
+});
+
+test("a gapped push triggers repair from the own cursor (nothing skipped)", async () => {
+  const mem = memoryStream();
+  mem.stream.append({ type: "events.iterate.com/test/counter-ticked" }); // history
+  const storage = memoryStorage();
+  const late = new CounterProcessor();
+  mem.engines.push(new ProcessorEngine(late, { stream: mem.stream, storage })); // registered AFTER history exists
+  mem.stream.append({ type: "events.iterate.com/test/counter-ticked" }); // gapped push
+  await settle();
+  expect(late.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1", "start 2"]);
+  expect(mem.reads).toBeGreaterThan(0); // repair read the gap
+});
+
+test("a stale scannedOffsetRange (already behind the cursor) is a no-op", async () => {
+  const { engine, processor, tick } = setup();
+  tick();
+  await engine.catchUpFromLog();
+  await engine.processEventBatch([], { after: 0, through: 1 });
+  expect(processor.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1"]);
+});
+
+// ── delivery.caughtUp is tied to the SHOWN head ──
+
+test("caughtUp: two contiguous pushes enqueued back-to-back — only the one reaching the shown head fires caughtUp", async () => {
+  // Both pushes sit on the chain before either runs, so the processor has been SHOWN through=2
+  // when the through=1 batch runs: that batch is not at head. Contiguity alone never earns the
+  // at-head pass — the reconcile work it triggers must run against the head reduce, not a stale one.
+  const { probe, engine } = caughtUpProbe();
+  const first = engine.processEventBatch([committedEvent(1, "t")], { after: 0, through: 1 });
+  const second = engine.processEventBatch([committedEvent(2, "t")], { after: 1, through: 2 });
+  await Promise.all([first, second]);
+  expect(probe).toMatchObject({ caughtUps: 1 });
+});
+
+test("caughtUp: a single push that reaches the shown head fires caughtUp once", async () => {
+  const { probe, engine } = caughtUpProbe();
+  await engine.processEventBatch([committedEvent(1, "t")], { after: 0, through: 1 });
+  expect(probe).toMatchObject({ caughtUps: 1 });
+});
+
+// ── the read verbs' catch-up: a head a push showed, or — fed by pushes — one the log answered ──
+
+test.for([
+  {
+    name: "a row pushes it (the host's word): the first snapshot reads, the next four read nothing",
+    fedByPushes: true,
+    readsForFiveSnapshots: 1,
+  },
+  {
+    name: "nothing pushes it: every snapshot reads the log, the only way it learns of an event",
+    fedByPushes: false,
+    readsForFiveSnapshots: 5,
+  },
+])(
+  "an idle processor, snapshotted between commits it does not consume — $name",
+  async ({ fedByPushes, readsForFiveSnapshots }) => {
+    const { mem, engine } = ledger({
+      fedByPushes,
+      pushedByARow: fedByPushes,
+      history: [{ type: "counted" }], // committed before this incarnation: no push carries it
+    });
+    const readsBefore = mem.reads;
+    const snapshots = [];
+    for (let i = 0; i < 5; i++) {
+      mem.stream.append({ type: "noise" }); // the busy log: a commit the processor does not consume
+      snapshots.push(await engine.snapshot());
+    }
+    expect({ reads: mem.reads - readsBefore, states: snapshots.map((s) => s.state) }).toEqual({
+      reads: readsForFiveSnapshots,
+      states: Array.from({ length: 5 }, () => ({ counted: [1] })),
+    });
+  },
+);
+
+test("fed by pushes: an event that lands past the head read from the log is applied before the next read", async () => {
+  const { mem, engine } = ledger({ fedByPushes: true, pushedByARow: true });
+  await engine.snapshot(); // reads the log to its head (an empty one)
+  const readsAtHead = mem.reads;
+  mem.stream.append({ type: "noise" }, { type: "counted" }); // pushed in the commit's own turn…
+  // …so the very next read, issued before the push has even run, sees it — and pays one catch-up
+  expect(await engine.snapshot()).toMatchObject({ state: { counted: [2] } });
+  expect(mem.reads - readsAtHead).toBe(1);
+  await settle();
+  mem.stream.append({ type: "counted" }); // offset 4: the reduce's live-state delta took 3
+  await settle(); // the push ran: its head is reduced, so the read reads nothing
+  expect(await engine.snapshot()).toMatchObject({ state: { counted: [2, 4] } });
+  expect(await engine.liveSnapshot()).toMatchObject({ state: { counted: [2, 4] } });
+  expect(mem.reads - readsAtHead).toBe(1);
+});
+
+test("fed by pushes: a read that arrives while an earlier push is in flight sees a later event whose push still waits behind it", async () => {
+  // The context's delivery loop queues a row's pushes one behind another (subscription-delivery.ts
+  // `deliveryChain`): the second commit's push is not even sent while the first one's slow batch
+  // runs. The read's catch-up queues behind that batch and reads the log after it.
+  const { mem, engine } = ledger({ fedByPushes: true, pushedByARow: true, slowOffsets: [1] });
+  await engine.snapshot();
+  mem.stream.append({ type: "counted" }); // offset 1: its push runs a slow batch
+  mem.stream.append({ type: "counted" }); // offset 2: its push is queued behind the first
+  expect(await engine.snapshot()).toMatchObject({ state: { counted: [1, 2] } });
+  await settle(60); // the queued push lands behind the read: already reduced, it changes nothing
+  expect(await engine.snapshot()).toMatchObject({ state: { counted: [1, 2] } });
+});
+
+test("fed by pushes: reads interleaved with appends never miss or skip an event — each sees every event appended before it", async () => {
+  const { mem, engine } = ledger({ fedByPushes: true, pushedByARow: true, slowOffsets: [4, 10] });
+  const reads: { appendedBefore: number[]; answered: Promise<{ state: { counted: number[] } }> }[] =
+    [];
+  const counted: number[] = [];
+  for (let i = 1; i <= 24; i++) {
+    const [event] = commit(mem, { type: i % 3 === 0 ? "noise" : "counted" });
+    if (event!.type === "counted") counted.push(event!.offset);
+    if (i % 2 === 0) reads.push({ appendedBefore: [...counted], answered: engine.snapshot() });
+    if (i % 5 === 0) await settle(1);
+  }
+  for (const read of reads) {
+    const { state } = await read.answered;
+    // never a gap: what a read answers is a prefix of the log's counted events, and it holds every
+    // one appended before the read was asked
+    expect(state).toMatchObject({ counted: counted.slice(0, state.counted.length) });
+    expect(state.counted.length).toBeGreaterThanOrEqual(read.appendedBefore.length);
+  }
+  await settle(60);
+  expect(await engine.snapshot()).toMatchObject({ state: { counted } });
+});
+
+test("fed by pushes: checkpoints still land, and a new incarnation trusts no head it has not read — its first read catches up from the checkpoint", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const first = new ProcessorEngine(new LedgerProcessor(), {
+    stream: mem.stream,
+    storage,
+    fedByPushes: true,
+  });
+  const row = pushedByARow(mem, first, ["counted"]);
+  await first.snapshot();
+  const writesAtHead = storage.writes;
+  mem.stream.append({ type: "noise" }, { type: "counted" });
+  await settle();
+  // the push checkpointed its batch: cursor and state, one write
+  expect({
+    writes: storage.writes - writesAtHead,
+    checkpoint: storage.read("ledger"),
+  }).toEqual({
+    writes: 1,
+    checkpoint: { reducerVersion: "1", reducedThroughOffset: 2, state: { counted: [2] } },
+  });
+  // the incarnation ends; what lands meanwhile reaches no engine (no push, no read)
+  row.unsubscribe();
+  // offsets 4–6 (the push's live-state delta, an ephemeral, took 3)
+  mem.stream.append({ type: "counted" }, { type: "noise" }, { type: "counted" });
+  const next = new ProcessorEngine(new LedgerProcessor(), {
+    stream: mem.stream,
+    storage,
+    fedByPushes: true,
+  });
+  pushedByARow(mem, next, ["counted"]);
+  const readsAtBirth = mem.reads;
+  expect(await next.snapshot()).toMatchObject({ offset: 6, state: { counted: [2, 4, 6] } });
+  expect(await next.snapshot()).toMatchObject({ offset: 6, state: { counted: [2, 4, 6] } });
+  expect({
+    reads: mem.reads - readsAtBirth,
+    checkpoint: storage.read("ledger"),
+  }).toEqual({
+    reads: 1,
+    checkpoint: { reducerVersion: "1", reducedThroughOffset: 6, state: { counted: [2, 4, 6] } },
+  });
+});
+
+test("the host's word leaves a push's at-head judgement alone: a push the log already showed still runs its at-head pass", async () => {
+  // A catch-up that read the head, then a push whose range the log had already shown: the push
+  // is still judged against the pushed head alone (rule 5), exactly as without the word.
+  const results = [];
+  for (const fedByPushes of [false, true]) {
+    const probe = new CaughtUpProbeProcessor();
+    const engine = new ProcessorEngine(probe, {
+      stream: {
+        append: () => [],
+        read: (after = 0) =>
+          Promise.resolve({
+            events: [1, 2, 3]
+              .filter((offset) => offset > after)
+              .map((offset) => committedEvent(offset, "t")),
+            scannedThroughOffset: 3,
+            atHead: true,
+          }),
+        claim: () => Promise.reject(new Error("the probe runs no background work")),
+      },
+      storage: memoryStorage(),
+      fedByPushes,
+    });
+    await engine.snapshot(); // reduces 1–3 from the log; its at-head pass is one caught-up
+    await engine.processEventBatch([committedEvent(2, "t")], { after: 1, through: 2 }); // a push the log beat
+    results.push(probe.caughtUps);
+  }
+  expect(results).toEqual([2, 2]);
+});
+
+// ── ephemeral events ──
+
+test("ephemeral events: shared offsets; named-type opt-in; '*' never sweeps; zero persists for ephemeral-only scannedOffsetRanges", async () => {
+  const mem = memoryStream();
+  const ephStorage = memoryStorage();
+  const starStorage = memoryStorage();
+  const eph = new ProcessorEngine(new EphProcessor(), {
+    stream: mem.stream,
+    storage: ephStorage,
+  });
+  const star = new ProcessorEngine(new StarProcessor(), {
+    stream: mem.stream,
+    storage: starStorage,
+  });
+  mem.engines.push(eph, star);
+
+  mem.stream.append({ type: "loud" }); // offset 1, durable
+  await settle();
+  const ephWrites = ephStorage.writes;
+  const starWrites = starStorage.writes;
+
+  mem.stream.append({ type: "chunk", ephemeral: true }); // offset 2, ephemeral
+  mem.stream.append({ type: "chunk", ephemeral: true }); // offset 3
+  await settle();
+  // the NAMED consumer reduced both ephemerals in memory…
+  expect(await eph.snapshot()).toMatchObject({ state: { seen: ["loud@1", "chunk@2", "chunk@3"] } });
+  // …the "*" consumer saw neither…
+  expect(await star.snapshot()).toMatchObject({ state: { seen: ["loud@1"] } });
+  // …and the ephemeral-only scannedOffsetRanges persisted NOTHING for either.
+  expect(ephStorage).toMatchObject({ writes: ephWrites });
+  expect(starStorage).toMatchObject({ writes: starWrites });
+
+  mem.stream.append({ type: "loud" }); // offset 4 — durable, AFTER the gap
+  await settle();
+  expect(await star.snapshot()).toMatchObject({ state: { seen: ["loud@1", "loud@4"] } }); // holes invisible
+});
+
+test("a barrier that reaches the head BEFORE the commit's own push still leaves the named ephemeral delivered", async () => {
+  // The wake behind a read-your-writes barrier catches up the durable log and, via the
+  // head-clamped proof, advances the cursor OVER the ephemeral's offset while consuming only the
+  // durable. The commit's fire-and-forget push then arrives wholly behind the cursor: it must reduce
+  // nothing twice yet still deliver its named ephemeral (pushes are an ephemeral's ONLY delivery,
+  // and a live processor was handed it).
+  const mem = memoryStream();
+  const p = new ProcessorEngine(new EphProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.stream.append({ type: "loud" }); // offset 1, durable
+  await p.catchUpFromLog();
+  // one commit: durable loud@2 + ephemeral chunk@3 → range (1,3]; hand-delivered below
+  const committed = commit(mem, { type: "loud" }, { type: "chunk", ephemeral: true });
+  await p.waitUntilProcessed({ offset: 3, timeoutMs: 1000 }); // the barrier's wake wins the race…
+  await p.processEventBatch(committed, { after: 1, through: 3 }); // …then the push lands
+  expect(await p.snapshot()).toMatchObject({ state: { seen: ["loud@1", "loud@2", "chunk@3"] } });
+});
+
+test("⚠️ a processor that AWAITS its own append inside a blocker must not deadlock", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const Contract = defineProcessorContract({
+    slug: "echoer",
+    version: "1",
+    description: "",
+    stateSchema: z.object({}),
+    consumes: ["ping"],
+    emits: ["echoed"],
+  });
+  class EchoerProcessor extends StreamProcessor<object> {
+    readonly contract = Contract;
+    override processEvent(args: ProcessEventArgs<object>): undefined {
+      if (args.event?.type !== "ping") return;
+      args.blockProcessorWhile(() => args.append({ type: "echoed", idempotencyKey: "once" }));
+    }
+  }
+  mem.engines.push(new ProcessorEngine(new EchoerProcessor(), { stream: mem.stream, storage }));
+  mem.stream.append({ type: "ping" }); // would deadlock if the blocker held the append
+  await settle();
+  expect(mem.events.some((e) => e.type === "echoed")).toBe(true);
+}, 5000);
+
+// ── reduce cache + re-reduce ──
+
+test("version bump re-reduces via reduce only — effects never re-run", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const make = (version: string, effects: string[]) => {
+    const Contract = defineProcessorContract({
+      slug: "reduce",
+      version,
+      description: "",
+      stateSchema: z.object({ n: z.number().default(0) }),
+      consumes: ["events.iterate.com/test/counter-ticked"],
+      emits: [],
+    });
+    return new ProcessorEngine(
+      new (class extends StreamProcessor<{ n: number }> {
+        readonly contract = Contract;
+        override reduce({ state }: ReduceArgs<{ n: number }>) {
+          return { n: state.n + 1 };
+        }
+        override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
+          if (args.event) effects.push(`effect ${args.event.offset}`);
+        }
+      })(),
+      { stream: mem.stream, storage },
+    );
+  };
+  const effects: string[] = [];
+  const p1 = make("1.0.0", effects);
+  mem.stream.append(
+    { type: "events.iterate.com/test/counter-ticked" },
+    { type: "events.iterate.com/test/counter-ticked" },
+  );
+  await p1.catchUpFromLog();
+  expect(effects).toHaveLength(2);
+  // new incarnation with a bumped contract version: re-reduce, but NO new effects for old events
+  const p2 = make("2.0.0", effects);
+  expect(await p2.snapshot()).toMatchObject({ state: { n: 2 } }); // re-reduced
+  expect(effects).toHaveLength(2); // side effects did NOT re-run
+});
+
+// ── emit rules + idempotency ──
+
+test("milestone emitted with provenance stamp + idempotency key; re-wake dedupes", async () => {
+  const { engine, tick, events } = setup();
+  tick();
+  tick();
+  tick();
+  tick(); // ticks: 1,2,3,4 — milestone at state.ticks===3 (after 3rd tick)
+  await engine.catchUpFromLog();
+  await settle();
+  const milestones = events.filter(
+    (e) => e.type === "events.iterate.com/test/counter-milestone-reached",
+  );
+  expect(milestones).toHaveLength(1);
+  expect(milestones[0]).toMatchObject({
+    payload: { at: 3 },
+    source: { processor: { slug: "counter", whileProcessing: { offset: 3 } } },
+  });
+  // the milestone append itself lands on the stream and re-delivers — wake again, still one
+  await engine.catchUpFromLog();
+  expect(
+    events.filter((e) => e.type === "events.iterate.com/test/counter-milestone-reached"),
+  ).toHaveLength(1);
+});
+
+test("undeclared emit throws", async () => {
+  const mem = memoryStream();
+  const Contract = defineProcessorContract({
+    slug: "rogue",
+    version: "1",
+    description: "",
+    stateSchema: z.object({}),
+    consumes: ["e"],
+    emits: [],
+  });
+  class RogueProcessor extends StreamProcessor<object> {
+    readonly contract = Contract;
+    override processEvent(args: ProcessEventArgs<object>): undefined {
+      if (args.event) args.blockProcessorWhile(() => args.append({ type: "not-declared" }));
+    }
+  }
+  const rogue = new ProcessorEngine(new RogueProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.stream.append({ type: "e" });
+  await expect(rogue.catchUpFromLog()).rejects.toThrow(/without declaring/);
+});
+
+test("waitUntilProcessed resolves at the cursor", async () => {
+  const { engine, tick } = setup();
+  tick();
+  await expect(engine.waitUntilProcessed({ offset: 1, timeoutMs: 1000 })).resolves.toBeUndefined();
+});
+
+// ── live state (the delta patches on the wire) ──
+
+test("live state: a reduce that changes the projection emits ONE ephemeral change event carrying the patch", async () => {
+  const mem = memoryStream();
+  const p = new ProcessorEngine(new TallyProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.engines.push(p);
+  mem.stream.append({ type: "tick" });
+  await settle();
+  expect(changes(mem)).toHaveLength(1); // ONE change event per changed scannedOffsetRange, not per event
+  const [c] = changes(mem);
+  expect(c).toMatchObject({
+    ephemeral: true,
+    payload: { key: "tally", patch: [{ op: "replace", path: "/count", value: 1 }] },
+  });
+});
+
+test("live state: revisions chain: each emission's `from` equals the previous emission's `to`", async () => {
+  const mem = memoryStream();
+  const p = new ProcessorEngine(new TallyProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.engines.push(p);
+  mem.stream.append({ type: "tick" });
+  await settle();
+  mem.stream.append({ type: "other" }); // not consumed — a silent batch
+  await settle();
+  mem.stream.append({ type: "tick" });
+  await settle();
+  const [c1, c2] = changes(mem).map((e) => e.payload as { from: number; to: number });
+  expect(c2).toMatchObject({ from: c1.to }); // the silent batch did NOT break the chain
+});
+
+test("liveSnapshot() mints the rev the next emission chains from ({rev,state} atomically)", async () => {
+  const mem = memoryStream();
+  const p = new ProcessorEngine(new TallyProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.engines.push(p);
+  mem.stream.append({ type: "other" }); // advance the cursor, no projection change
+  await settle();
+  const seed = await p.liveSnapshot();
+  expect(seed).toEqual(expect.objectContaining({ state: { count: 0 } })); // exactly the projection: `secret` never leaks
+  mem.stream.append({ type: "tick" });
+  await settle();
+  const [c] = changes(mem).map((e) => e.payload as { from: number });
+  expect(c).toMatchObject({ from: seed.rev }); // seed → first patch, no re-seed needed
+});
+
+test("live state: no emission when consumed events leave the projection unchanged", async () => {
+  const contract2 = defineProcessorContract({
+    slug: "flat",
+    version: "1.0.0",
+    description: "consumes but never changes its projection",
+    stateSchema: z.object({ seen: z.number().default(0) }),
+    consumes: ["tick"],
+    emits: [],
+  });
+  class FlatProcessor extends StreamProcessor<z.infer<typeof contract2.stateSchema>> {
+    contract = contract2;
+    reduce({ state }: ReduceArgs<z.infer<typeof contract2.stateSchema>>) {
+      return { seen: state.seen + 1 };
+    }
+    projectLiveState() {
+      return { steady: true };
+    }
+  }
+  const mem = memoryStream();
+  const p = new ProcessorEngine(new FlatProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.engines.push(p);
+  mem.stream.append({ type: "tick" }, { type: "tick" });
+  await settle();
+  expect(changes(mem)).toHaveLength(0);
+});
+
+test("the loop guard: a processor's reduce never sees a live-state delta, even when its contract names the type", async () => {
+  // The refusal lives in the ENGINE (`reducesEvent`), not in `consumesEvent`: naming
+  // `events.iterate.com/itx/live-state-changed` in a SUBSCRIPTION's `consumes` is how a live tab
+  // receives deltas, so `consumesEvent` says yes to a named delta — and the engine still never
+  // reduces one (a delta feeding a reduce is the feedback-loop class, made unspellable here).
+  const contract3 = defineProcessorContract({
+    slug: "sneaky",
+    version: "1.0.0",
+    description: "tries to consume the platform live-state type",
+    stateSchema: z.object({ seen: z.number().default(0) }),
+    consumes: ["*", "events.iterate.com/itx/live-state-changed"],
+    emits: [],
+  });
+  class SneakyProcessor extends StreamProcessor<z.infer<typeof contract3.stateSchema>> {
+    contract = contract3;
+    reduce({ state }: ReduceArgs<z.infer<typeof contract3.stateSchema>>) {
+      return { seen: state.seen + 1 };
+    }
+    // Opt out of its OWN live-state emit so the assertion counts only tally's change event — the
+    // point here is that SneakyProcessor never CONSUMES a change event (the loop guard), not what it emits.
+    override projectLiveState() {
+      return null;
+    }
+  }
+  const mem = memoryStream();
+  const tally = new ProcessorEngine(new TallyProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  const sneaky = new ProcessorEngine(new SneakyProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.engines.push(tally, sneaky);
+  mem.stream.append({ type: "tick" }); // tally emits a change event
+  await settle();
+  expect(changes(mem)).toHaveLength(1);
+  expect(await sneaky.snapshot()).toMatchObject({ state: { seen: 1 } }); // the tick — NOT the change event
+});
+
+// ── the two-class shape: the author class stands alone; the engine re-projects after every batch ──
+
+test("the author class stands alone: constructible bare, `reduce` callable with no engine", () => {
+  // No stream, no storage, no constructor arguments — a processor is a unit-testable plain object.
+  const bare = new CounterProcessor();
+  const ticked = committedEvent(1, "events.iterate.com/test/counter-ticked");
+  expect(bare.reduce({ event: ticked, state: { ticks: 0 } })).toEqual({ ticks: 1 });
+  expect(
+    bare.reduce({ event: committedEvent(2, "unrelated"), state: { ticks: 1 } }),
+  ).toBeUndefined();
+  expect(bare.idempotencyKey("k")).toBe("counter/k");
+  expect(bare.idempotencyKey("k", ticked)).toBe("counter/k@1");
+});
+
+test("a runtime field bumped inside processEvent (reduced in by projectLiveState) publishes ONE delta at batch end — no publishLiveState call", async () => {
+  const contract4 = defineProcessorContract({
+    slug: "runtime",
+    version: "1.0.0",
+    description:
+      "reduce owns nothing; processEvent moves a runtime field the projection reduces in",
+    stateSchema: z.object({}),
+    consumes: ["tick"],
+    emits: [],
+  });
+  class RuntimeProcessor extends StreamProcessor<object> {
+    contract = contract4;
+    lastSeenOffset = 0; // RUNTIME state: on the instance, not in the reduce — gone with the host
+    override processEvent(args: ProcessEventArgs<object>): undefined {
+      if (args.event) this.lastSeenOffset = args.event.offset; // no publishLiveState() anywhere
+    }
+    override projectLiveState(state: object) {
+      return { ...state, lastSeenOffset: this.lastSeenOffset };
+    }
+  }
+  const mem = memoryStream();
+  const p = new ProcessorEngine(new RuntimeProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.engines.push(p);
+  mem.stream.append({ type: "tick" }, { type: "tick" }); // ONE batch, two events
+  await settle();
+  // The reduce never moved (state is the same object), yet the engine's after-every-batch
+  // re-projection sees the runtime field at 2 and emits exactly one delta — not one per event.
+  expect(changes(mem)).toHaveLength(1);
+  expect(changes(mem)[0].payload).toMatchObject({
+    key: "runtime",
+    patch: [{ op: "replace", path: "/lastSeenOffset", value: 2 }],
+  });
+});
+
+test("a batch that moves neither the reduce nor the projection emits NO delta (the unconditional re-project never spams)", async () => {
+  const contract5 = defineProcessorContract({
+    slug: "still",
+    version: "1.0.0",
+    description: "consumes ticks, reduces nothing, projects the (unchanged) state verbatim",
+    stateSchema: z.object({ n: z.number().default(0) }),
+    consumes: ["tick"],
+    emits: [],
+  });
+  class StillProcessor extends StreamProcessor<{ n: number }> {
+    contract = contract5;
+    fired = 0; // a runtime field the DEFAULT projection does NOT reduce in
+    override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
+      if (args.event) this.fired++;
+    }
+  }
+  const still = new StillProcessor();
+  const mem = memoryStream();
+  mem.engines.push(new ProcessorEngine(still, { stream: mem.stream, storage: memoryStorage() }));
+  mem.stream.append({ type: "tick" });
+  await settle();
+  mem.stream.append({ type: "tick" }, { type: "tick" });
+  await settle();
+  expect(still).toMatchObject({ fired: 3 }); // two batches ran every event to completion…
+  expect(changes(mem)).toHaveLength(0); // …and re-projecting after each emitted nothing
+});
+
+// ── live state emission failure is contained ──
+
+test("a throwing/unserializable projection loses the notification, never the batch", async () => {
+  const contract = defineProcessorContract({
+    slug: "biggie",
+    version: "1.0.0",
+    description: "keeps a BigInt in state — the projection cannot serialize",
+    stateSchema: z.object({ n: z.number().default(0) }),
+    consumes: ["tick"],
+    emits: [],
+  });
+  class BiggieProcessor extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
+    contract = contract;
+    reduce({ state }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
+      return { n: state.n + 1 };
+    }
+    projectLiveState() {
+      return { big: 10n }; // JSON.stringify throws TypeError on BigInt
+    }
+  }
+  const mem = memoryStream();
+  const p = new ProcessorEngine(new BiggieProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.engines.push(p);
+  mem.stream.append({ type: "tick" });
+  await settle();
+  // the reduce committed and the read surface works — the failure was only the notification
+  await expect(p.snapshot()).resolves.toMatchObject({ state: { n: 1 } });
+  expect(
+    mem.pushedEvents.filter((e) => e.type === "events.iterate.com/itx/live-state-changed"),
+  ).toHaveLength(0);
+});
+
+// ── eviction honors the persisted cursor ──
+
+test("a caught-up EFFECT-ONLY processor does not replay effects across an eviction", async () => {
+  // The engine constructor accepts the persisted cursor whenever the version matches, materializing
+  // initialState() when the state key is absent — a processor that never changed state must not
+  // fall back to offset 0 and re-drive the whole log WITH effects on every release.
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const p1 = new EffectOnlyProcessor();
+  const e1 = new ProcessorEngine(p1, { stream: mem.stream, storage });
+  mem.engines.push(e1);
+  for (let i = 0; i < 4; i++) mem.stream.append({ type: "boop" });
+  await e1.catchUpFromLog();
+  expect(p1).toMatchObject({ effects: [1, 2, 3, 4] });
+  // The cursor IS persisted (rule 4), even though state never changed.
+  expect(storage.read("eff")).toMatchObject({ reducedThroughOffset: 4 });
+
+  // Eviction: fresh instance, SAME storage + log, SAME version.
+  const p2 = new EffectOnlyProcessor();
+  const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
+  mem.engines.length = 0;
+  mem.engines.push(e2);
+  await e2.catchUpFromLog();
+  expect(p2).toMatchObject({ effects: [] }); // the persisted cursor (4) means nothing to re-do
+});
+
+test("CONTROL: a state-changing processor does not replay effects across an eviction either", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const p1 = new CountProcessor();
+  const e1 = new ProcessorEngine(p1, { stream: mem.stream, storage });
+  mem.engines.push(e1);
+  for (let i = 0; i < 4; i++) mem.stream.append({ type: "tick" });
+  await e1.catchUpFromLog();
+  expect(p1).toMatchObject({ effects: [1, 2, 3, 4] });
+
+  const p2 = new CountProcessor();
+  const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
+  mem.engines.length = 0;
+  mem.engines.push(e2);
+  await e2.catchUpFromLog();
+  expect(p2).toMatchObject({ effects: [] }); // cursor honored — no replay
+});
+
+test("a version bump over a stored cursor at offset 0 terminates and yields the initial state", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  // A v1 cursor at offset 0 (as if nothing was ever consumed), then a v2 incarnation.
+  storage.write("count", { reducerVersion: "1.0.0", reducedThroughOffset: 0 }, undefined, false);
+  const p2 = new ProcessorEngine(new CountProcessor("2.0.0"), { stream: mem.stream, storage });
+  mem.engines.push(p2);
+  expect(await p2.snapshot()).toEqual({ offset: 0, state: { ticks: 0 } });
+});
+
+// ── waitUntilProcessed — resolution and failure modes ──
+
+test("waitUntilProcessed resolves a waiter whose offset the version re-reduce reached (no batch was ever pushed)", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const p1 = new ProcessorEngine(new CountProcessor(), { stream: mem.stream, storage });
+  mem.engines.push(p1);
+  for (let i = 0; i < 3; i++) mem.stream.append({ type: "tick" });
+  await p1.catchUpFromLog();
+
+  // A bumped incarnation waits for an offset the re-reduce (ceiling = 3) covers. No new push, so
+  // the wake's catch-up reads an empty page and never runs a batch — only the re-reduce advances
+  // the cursor — and the re-reduce itself must resolve the waiter.
+  const p2 = new CountProcessor("2.0.0");
+  const e2 = new ProcessorEngine(p2, { stream: mem.stream, storage });
+  mem.engines.length = 0;
+  mem.engines.push(e2);
+  await expect(e2.waitUntilProcessed({ offset: 3, timeoutMs: 2000 })).resolves.toBeUndefined();
+  expect(p2).toMatchObject({ effects: [] }); // and the re-reduce stayed reduce-only
+});
+
+test("waitUntilProcessed does not spuriously resolve a waiter whose offset was NOT reached", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const p = new ProcessorEngine(new CountProcessor(), { stream: mem.stream, storage });
+  mem.engines.push(p);
+  mem.stream.append({ type: "tick" }); // only offset 1 exists
+  await p.catchUpFromLog();
+  await expect(p.waitUntilProcessed({ offset: 5, timeoutMs: 120 })).rejects.toThrow(
+    /did not reach offset 5/,
+  );
+});
+
+test("waitUntilProcessed: a self-pull that THROWS rejects the barrier with the read failure — promptly, not the generic timeout", async () => {
+  // wake enqueues the catch-up on the serial chain, whose failure the chain swallows (a failed
+  // batch must not wedge it); the waiter must still be told, so a transient read error is one
+  // fast rejection the caller can retry instead of a full-timeout wait.
+  const { engine } = caughtUpProbe(new Error("self-pull read failed: boom"));
+  await expect(engine.waitUntilProcessed({ offset: 5, timeoutMs: 1500 })).rejects.toThrow(/boom/);
+});
+
+// ── events ── `sameIdempotentEvent`, the retry-equality contract behind idempotency
+// keys: same key + same body → the existing event comes back; a different body is a CONFLICT. The
+// body is type + payload + metadata, compared with a key-order-insensitive deep-equal (the JSON
+// equality), so a re-serialized retry is the same event.
+
+test("payload key ORDER is insignificant — a reordered retry is the same event", () => {
+  expect(
+    sameIdempotentEvent(
+      { type: "j", payload: { a: 1, b: { c: 2, d: 3 } } },
+      { type: "j", payload: { b: { d: 3, c: 2 }, a: 1 } },
+    ),
+  ).toBe(true);
+});
+
+test("differing metadata makes it a DIFFERENT event (conflict, not dedupe)", () => {
+  expect(
+    sameIdempotentEvent(
+      { type: "j", payload: { x: 1 }, metadata: { trace: "a" } },
+      { type: "j", payload: { x: 1 }, metadata: { trace: "b" } },
+    ),
+  ).toBe(false);
+});
+
+test("metadata present on only one side is a DIFFERENT event", () => {
+  expect(
+    sameIdempotentEvent(
+      { type: "j", payload: { x: 1 }, metadata: { trace: "a" } },
+      { type: "j", payload: { x: 1 } },
+    ),
+  ).toBe(false);
+});
+
+// ── contract payload validation ── a contract declares a zod payloadSchema per owned event; the
+// engine validates a consumed event's payload against it before the reducer folds it, so a malformed
+// payload for a KNOWN event is skipped instead of corrupting reduced state (and thus the exported view).
+test("payload validation: a valid payload folds; a malformed one is skipped, leaving reduced state schema-valid", async () => {
+  const mem = memoryStream();
+  const p = new ProcessorEngine(new GuardedProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.engines.push(p);
+  mem.stream.append({ type: "demo/set", payload: { n: 5 } });
+  await settle();
+  expect(await p.snapshot()).toMatchObject({ state: { last: 5 } });
+
+  mem.stream.append({ type: "demo/set", payload: { n: "not-a-number" } }); // malformed: n is a string
+  await settle();
+  // Skipped — reduced state keeps the last valid value and still parses against its own schema.
+  const { state } = await p.snapshot();
+  expect(state).toEqual({ last: 5 });
+  expect(GuardedContract.stateSchema.safeParse(state)).toMatchObject({ success: true });
+});
+
+test("the reducer receives the schema's z.output (coercions applied), not the raw appended payload", async () => {
+  const coerceContract = defineProcessorContract({
+    slug: "coerce-payload",
+    version: "1",
+    description: "sums a coerced n",
+    stateSchema: z.object({ sum: z.number().default(0) }),
+    events: {
+      "demo/add": { description: "add n", payloadSchema: z.object({ n: z.coerce.number() }) },
+    },
+    consumes: ["demo/add"],
+    emits: [],
+  });
+  class CoerceProcessor extends StreamProcessor<z.infer<typeof coerceContract.stateSchema>> {
+    contract = coerceContract;
+    reduce({ event, state }: ReduceArgs<z.infer<typeof coerceContract.stateSchema>>) {
+      // The engine normalizes the payload to z.output, so `n` is a NUMBER here even for `"2"`.
+      if (event.type === "demo/add") return { sum: state.sum + (event.payload as { n: number }).n };
+      return undefined;
+    }
+  }
+  const mem = memoryStream();
+  const p = new ProcessorEngine(new CoerceProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.engines.push(p);
+  mem.stream.append({ type: "demo/add", payload: { n: "2" } }); // a numeric STRING
+  mem.stream.append({ type: "demo/add", payload: { n: 3 } });
+  await settle();
+  // Normalized: 0 + 2 + 3 = 5. Without normalization, "2" would concat to "02" then "023".
+  expect(await p.snapshot()).toMatchObject({ state: { sum: 5 } });
+});
+
+test("a malformed event is skipped for the EFFECT hook too, and never wedges the batch", async () => {
+  const contract = defineProcessorContract({
+    slug: "effect-skip",
+    version: "1",
+    description: "records the numbers its typed effect hook sees",
+    stateSchema: z.object({ seen: z.array(z.number()).default([]) }),
+    events: { "demo/x": { description: "x", payloadSchema: z.object({ n: z.number() }) } },
+    consumes: ["demo/x"],
+    emits: [],
+  });
+  const effects: number[] = [];
+  class P extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
+    contract = contract;
+    reduce({ event, state }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
+      return { seen: [...state.seen, (event.payload as { n: number }).n] };
+    }
+    override processEvent({
+      event,
+    }: ProcessEventArgs<z.infer<typeof contract.stateSchema>>): undefined {
+      // The hook is typed against ConsumedEvent's z.output — `n` is a number. A malformed event
+      // reaching here (n a string) would THROW and wedge the batch: checkpoints never advance and
+      // catch-up refails the same row. It must be skipped upstream.
+      if (event && typeof (event.payload as { n: unknown }).n !== "number")
+        throw new Error("a malformed event reached the typed effect hook");
+      if (event) effects.push((event.payload as { n: number }).n);
+    }
+  }
+  const mem = memoryStream();
+  const p = new ProcessorEngine(new P(), { stream: mem.stream, storage: memoryStorage() });
+  mem.engines.push(p);
+  mem.stream.append({ type: "demo/x", payload: { n: 1 } });
+  mem.stream.append({ type: "demo/x", payload: { n: "bad" } }); // malformed
+  mem.stream.append({ type: "demo/x", payload: { n: 2 } });
+  await settle();
+  expect(effects).toEqual([1, 2]); // the effect hook never saw the malformed event
+  expect(await p.snapshot()).toMatchObject({ state: { seen: [1, 2] } }); // and the batch advanced past it
+});
+
+test("a version replay reproduces the live coercion, not the raw input", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const make = (version: string) => {
+    const Contract = defineProcessorContract({
+      slug: "coerce-replay",
+      version,
+      description: "sums a coerced n",
+      stateSchema: z.object({ sum: z.number().default(0) }),
+      events: {
+        "demo/add": { description: "add n", payloadSchema: z.object({ n: z.coerce.number() }) },
+      },
+      consumes: ["demo/add"],
+      emits: [],
+    });
+    return new ProcessorEngine(
+      new (class extends StreamProcessor<{ sum: number }> {
+        readonly contract = Contract;
+        override reduce({ event, state }: ReduceArgs<{ sum: number }>) {
+          return { sum: state.sum + (event.payload as { n: number }).n };
+        }
+      })(),
+      { stream: mem.stream, storage },
+    );
+  };
+  const p1 = make("1");
+  mem.stream.append(
+    { type: "demo/add", payload: { n: "2" } },
+    { type: "demo/add", payload: { n: 3 } },
+  );
+  await p1.catchUpFromLog();
+  expect(await p1.snapshot()).toMatchObject({ state: { sum: 5 } }); // live: coerced
+
+  // A contract version bump re-reduces from the log — it MUST apply the same coercion, or a bump
+  // would silently rewrite state ("02" + 3 = "023" instead of 5).
+  const p2 = make("2");
+  expect(await p2.snapshot()).toMatchObject({ state: { sum: 5 } });
+});
+
+// ── live state ── the holder's revision-chain contract, pinned at the unit level. The load-
+// bearing property: EVERY base move advances the rev, so any client that missed an emission sees a
+// chain gap (mismatching `from`) and re-seeds — the swallowed-diff branch must never let a later
+// patch land on a base the client never received, and never wedge emission.
+
+test("set() chains rev exactly and emits the diff a client can apply", async () => {
+  const sink = collectingSink();
+  const live = new LiveState(sink, "k", { n: 0 });
+  const epoch = live.snapshot().rev;
+  live.set({ n: 1 });
+  live.set({ n: 2 });
+  await settle(); // the delta appends are chained (mint order) — let them settle
+  expect(sink.frames.map((f) => [f.from, f.to])).toEqual([
+    [epoch, epoch + 1],
+    [epoch + 1, epoch + 2],
+  ]);
+  // a client seeded at the epoch replays the chain to the held value
+  let doc: unknown = { n: 0 };
+  for (const f of sink.frames) doc = applyPatch(doc, f.patch);
+  expect(doc).toEqual({ n: 2 });
+  expect(live.snapshot()).toEqual({ rev: epoch + 2, state: { n: 2 } });
+});
+
+test("cross-hop ordering: each delta append is issued only after the previous one settles", async () => {
+  // The ORDERING path's guarantee (a cross-hop sink mints a fresh capability per call, so appends can
+  // race on the wire): deltas ride ONE chain, append(N+1) issued only once append(N) has settled — so
+  // mint order is the delivery order. This locks that serialization: with a fast-path that cleared an
+  // in-flight flag before the queue drained, a later delta could fork a parallel chain and overtake an
+  // earlier one (commit order 1, 3, 2).
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0)); // drain the microtask queue
+  const issued: number[] = [];
+  const resolvers: Array<() => void> = [];
+  const sink = {
+    append(event: { payload?: Record<string, unknown> }) {
+      issued.push((event.payload as { to: number }).to);
+      return new Promise<void>((resolve) => resolvers.push(resolve));
+    },
+  };
+  const live = new LiveState(sink, "k", { n: 0 });
+  const base = live.snapshot().rev;
+  live.set({ n: 1 });
+  live.set({ n: 2 });
+  live.set({ n: 3 });
+  await flush();
+  expect(issued).toEqual([base + 1]); // only the first append is out; the rest wait for it to settle
+  resolvers[0]!();
+  await flush();
+  expect(issued).toEqual([base + 1, base + 2]);
+  resolvers[1]!();
+  await flush();
+  expect(issued).toEqual([base + 1, base + 2, base + 3]);
+  resolvers[2]!();
+  await settle();
+});
+
+test("the SAME object set again is a no-op — no diff computed, no delta, the rev untouched", () => {
+  const sink = collectingSink();
+  const initial = { n: 1, big: Array.from({ length: 1000 }, (_, i) => ({ i })) };
+  const live = new LiveState(sink, "k", initial);
+  const epoch = live.snapshot().rev;
+  live.set(live.get()); // identity ⇒ same JSON by contract (no in-place mutation)
+  expect(sink).toMatchObject({ frames: [] });
+  expect(live.snapshot()).toMatchObject({ rev: epoch });
+});
+
+test("an unchanged set emits nothing and leaves the rev alone", () => {
+  const sink = collectingSink();
+  const live = new LiveState(sink, "k", { n: 1 });
+  const epoch = live.snapshot().rev;
+  live.set({ n: 1 });
+  expect(sink).toMatchObject({ frames: [] });
+  expect(live.snapshot()).toMatchObject({ rev: epoch });
+});
+
+test("an unserializable value can't corrupt or wedge the chain — a gap, then diffing resumes off the last serialized base", async () => {
+  // The corruption this pins: set(S1) where diff throws (BigInt) adopts S1 with NO emit. Two hazards:
+  //   (1) if the rev did not advance, the next emit's `from` would match a stale client's held rev
+  //       and it would apply a patch computed against a base it never received (silent corruption);
+  //   (2) if the poisoned value became the diff BASE, every later diff against it would throw too
+  //       and emission would never resume (a silently wedged chain).
+  const sink = collectingSink();
+  const live = new LiveState<Record<string, unknown>>(sink, "k", { n: 0 });
+  const epoch = live.snapshot().rev;
+  live.set({ n: 1 }); // client syncs through this frame → holds rev epoch+1
+  await settle();
+  expect(sink.frames).toHaveLength(1);
+
+  live.set({ n: 1, big: 10n }); // the diff throws → adopted, no emit, rev advances, base stays {n:1}
+  await settle();
+  expect(sink.frames).toHaveLength(1);
+  expect(live.snapshot()).toEqual({ rev: epoch + 2, state: { n: 1, big: 10n } });
+
+  // emission RESUMES as a diff from the last SERIALIZED base ({n:1}), never from the poisoned value
+  live.set({ n: 2 });
+  await settle();
+  expect(sink.frames).toHaveLength(2);
+  expect(sink.frames[1]).toEqual({
+    key: "k",
+    from: epoch + 2, // NOT the client's epoch+1 — the mismatch makes it re-seed instead of applying
+    to: epoch + 3,
+    patch: [{ op: "replace", path: "/n", value: 2 }],
+  });
+
+  // and normal diffing resumes off the healed base
+  live.set({ n: 3 });
+  await settle();
+  expect(sink.frames).toHaveLength(3);
+  expect(sink.frames[2]).toMatchObject({
+    from: epoch + 3,
+    patch: [{ op: "replace", path: "/n", value: 3 }],
+  });
+});
+
+test("a throwing sink is contained (lossy notification, value still adopted, the chain survives)", async () => {
+  const live = new LiveState(
+    {
+      append() {
+        throw new Error("sink down");
+      },
+    },
+    "k",
+    { n: 0 },
+  );
+  const epoch = live.snapshot().rev;
+  expect(() => live.set({ n: 1 })).not.toThrow(); // the append is chained; the throw never reaches the caller
+  await settle(); // the chain's .catch swallowed it — no wedge, no unhandled rejection reaches the runner
+  // the value and the rev both advanced — the lost emission is a chain gap, not lost state
+  expect(live.snapshot()).toEqual({ rev: epoch + 1, state: { n: 1 } });
+});
+
+// ── rule 3's other half: an attempt in flight holds a CLAIM on the context's alarm ──
+
+// ── rule 3 — the claim: work in flight ⇒ the context owes this processor a revive ──
+
+const T = Date.UTC(2035, 0, 1);
+
+test("rule 3 claim: CLAIMED RIGHT BEHIND THE FIRST ATTEMPT'S START (20 s out; the attempt never waits on it), RELEASED WHEN THE LAST SETTLES: one claim however many attempts are in flight", async () => {
+  vi.useFakeTimers({ now: T, toFake: ["Date"] });
+  try {
+    const mem = memoryStream();
+    const attempts = new AttemptsProcessor();
+    const claimed = mem.stream.claim;
+    mem.stream.claim = (at) => {
+      attempts.trace.push(`claimed ${at === null ? "nothing" : String(at - T)}`);
+      return claimed(at);
+    };
+    mem.engines.push(
+      new ProcessorEngine(attempts, { stream: mem.stream, storage: memoryStorage() }),
+    );
+    mem.stream.append({ type: "e" }, { type: "e" });
+    await settle();
+    // The claim rides the chain one microtask behind the first attempt's start — between the
+    // batch's two events — and the second attempt, in flight already, claims nothing new.
+    expect(attempts).toMatchObject({
+      trace: ["attempt 1 started", "claimed 20000", "attempt 2 started"],
+    });
+    expect(mem).toMatchObject({ claims: [T + 20_000] });
+    attempts.endings[0]!();
+    await settle();
+    expect(mem).toMatchObject({ claims: [T + 20_000] }); // one attempt still in flight: the claim stands
+    attempts.endings[1]!();
+    await settle();
+    expect(mem).toMatchObject({ claims: [T + 20_000, null] });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("rule 3 claim: A REVIVE catches up and runs the at-head pass; an attempt still in flight claims again, later each time (40 s, 80 s, …); idle, a revive claims nothing", async () => {
+  vi.useFakeTimers({ now: T, toFake: ["Date"] });
+  try {
+    const mem = memoryStream();
+    const attempts = new AttemptsProcessor();
+    const engine = new ProcessorEngine(attempts, {
+      stream: mem.stream,
+      storage: memoryStorage(),
+    });
+    mem.engines.push(engine);
+    mem.stream.append({ type: "e" });
+    await settle();
+    expect(mem).toMatchObject({ claims: [T + 20_000] });
+    // The pass spent the claim and calls revive(): the at-head pass runs, the attempt is found
+    // still in flight, the next claim is twice as far out.
+    await engine.revive();
+    expect(attempts).toMatchObject({ trace: ["attempt 1 started", "at-head"] });
+    expect(mem).toMatchObject({ claims: [T + 20_000, T + 40_000] });
+    await engine.revive();
+    expect(mem).toMatchObject({ claims: [T + 20_000, T + 40_000, T + 80_000] });
+    attempts.endings[0]!();
+    await settle();
+    expect(mem.claims.at(-1)).toBeNull(); // released — and the backoff starts over
+    await engine.revive();
+    expect(attempts.trace.at(-1)).toBe("at-head"); // the pass ran…
+    expect(mem.claims.at(-1)).toBeNull(); // …and nothing in flight claims nothing
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("five-deaths-then-failed: each revive restarts work that died with its host; the fifth is refused, and new code or a settle starts the count over", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const stored = new Map<string, unknown>();
+  const kv = {
+    get: <T>(key: string) => stored.get(key) as T | undefined,
+    put: (key: string, value: unknown) => void stored.set(key, value),
+    delete: (key: string) => stored.delete(key),
+  };
+  let settles = false;
+  /** One host of the processor: its at-head pass starts the work its state owes (here: always). */
+  const host = (codeId = "g1") => {
+    const work = new (class extends StreamProcessor<object> {
+      readonly contract = AttemptsContract;
+      started = 0;
+      override processEvent(args: ProcessEventArgs<object>): undefined {
+        if (!args.delivery.caughtUp) return;
+        this.started += 1;
+        args.runInBackground(() => (settles ? Promise.resolve() : new Promise(() => {})));
+      }
+    })();
+    return {
+      work,
+      engine: new ProcessorEngine(work, { stream: mem.stream, storage, kv, codeId }),
+    };
+  };
+  commit(mem, { type: "e" });
+  const first = host();
+  await first.engine.catchUpFromLog();
+  expect(first.work).toMatchObject({ started: 1 });
+  const revived: unknown[] = [];
+  for (let death = 1; death <= 6; death++) {
+    const next = host();
+    revived.push(await next.engine.revive().then(() => next.work.started, errorCode));
+  }
+  expect(revived).toEqual([1, 1, 1, 1, "PERMANENT_FAILURE", "PERMANENT_FAILURE"]);
+  // a host restarted onto other code (its own commit, a deploy) is no death
+  const moved = host("g2");
+  await moved.engine.revive();
+  expect(moved.work).toMatchObject({ started: 1 });
+  expect(stored.get("processor-work-started")).toEqual({ deaths: 0, codeId: "g2" });
+  // an attempt that settles starts the count over
+  settles = true;
+  const later = host();
+  commit(mem, { type: "e" });
+  await later.engine.catchUpFromLog();
+  await settle();
+  expect(later.work).toMatchObject({ started: 1 });
+  expect(stored.has("processor-work-started")).toBe(false);
+});
+
+test("rule 3 claim: A RELEASE NEVER OVERTAKES THE NEXT CLAIM: claims are sent one after another, so a slow release lands before the claim of the attempt that followed it", async () => {
+  const mem = memoryStream();
+  const attempts = new AttemptsProcessor();
+  const landed: (number | null)[] = [];
+  mem.stream.claim = async (at) => {
+    await new Promise((r) => setTimeout(r, at === null ? 30 : 0)); // the release is the slow one
+    landed.push(at);
+  };
+  mem.engines.push(new ProcessorEngine(attempts, { stream: mem.stream, storage: memoryStorage() }));
+  mem.stream.append({ type: "e" });
+  await settle();
+  attempts.endings[0]!(); // settles: a release is sent…
+  await settle(1);
+  mem.stream.append({ type: "e" }); // …and a new attempt claims right behind it
+  // three landings, however long the loaded runner takes; the assertion is their ORDER
+  await vi.waitFor(() => expect(landed).toHaveLength(3), { timeout: 5_000 });
+  expect(landed.map((at) => (at === null ? "release" : "claim"))).toEqual([
+    "claim",
+    "release",
+    "claim",
+  ]);
+});
+
+// ── a counter processor exercising every hook ──
+
+const CounterContract = defineProcessorContract({
+  slug: "counter",
+  version: "1.0.0",
+  description: "counts ticks; emits a milestone every 3",
+  stateSchema: z.object({ ticks: z.number().default(0) }),
+  consumes: ["events.iterate.com/test/counter-ticked"],
+  emits: ["events.iterate.com/test/counter-milestone-reached"],
+});
+
+class CounterProcessor extends StreamProcessor<{ ticks: number }> {
+  readonly contract = CounterContract;
+  readonly trace: string[] = [];
+
+  override reduce({ event, state }: ReduceArgs<{ ticks: number }>) {
+    if (event.type !== "events.iterate.com/test/counter-ticked") return undefined;
+    return { ticks: state.ticks + 1 };
+  }
+
+  override processEvent(args: ProcessEventArgs<{ ticks: number }>): undefined {
+    if (args.event === null) {
+      this.trace.push(`at-head ticks=${args.state.ticks}`);
+      return;
+    }
+    const offset = args.event.offset;
+    this.trace.push(`start ${offset}`);
+    args.blockProcessorWhile(async () => {
+      await new Promise((r) => setTimeout(r, 5)); // slow on purpose: proves the barrier
+      this.trace.push(`blocked-done ${offset}`);
+    });
+    if (args.state.ticks % 3 === 0)
+      args.blockProcessorWhile(() =>
+        args.append({
+          type: "events.iterate.com/test/counter-milestone-reached",
+          payload: { at: args.state.ticks },
+          idempotencyKey: this.idempotencyKey(`milestone-${args.state.ticks}`),
+        }),
+      );
+  }
+}
+
+function setup() {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const processor = new CounterProcessor();
+  const engine = new ProcessorEngine(processor, { stream: mem.stream, storage });
+  mem.engines.push(engine);
+  return {
+    ...mem,
+    storage,
+    processor, // the author instance — `trace` lives here
+    engine, // drives it: wake / snapshot / processEventBatch
+    tick: () => commit(mem, { type: "events.iterate.com/test/counter-ticked" })[0],
+  };
+}
+
+// ── the at-head pass is tied to the SHOWN head ──
+
+const CaughtUpContract = defineProcessorContract({
+  slug: "caughtup-probe",
+  version: "1.0.0",
+  description: "counts delivery.caughtUp firings — the at-head-pass probe",
+  stateSchema: z.object({ n: z.number().default(0) }),
+  consumes: ["*"],
+  emits: [],
+});
+class CaughtUpProbeProcessor extends StreamProcessor<{ n: number }> {
+  readonly contract = CaughtUpContract;
+  caughtUps = 0;
+  override reduce({ state }: ReduceArgs<{ n: number }>) {
+    return { n: state.n + 1 };
+  }
+  override processEvent(args: ProcessEventArgs<{ n: number }>): undefined {
+    if (args.delivery.caughtUp) this.caughtUps++;
+  }
+}
+/** A probe over a stream with nothing to read; `readFails` makes every self-pull reject. Returns
+ *  the author (`probe`, for its counter) and the engine that drives it. */
+function caughtUpProbe(readFails?: Error) {
+  const probe = new CaughtUpProbeProcessor();
+  const engine = new ProcessorEngine(probe, {
+    stream: {
+      append: () => [],
+      read: () =>
+        readFails
+          ? Promise.reject(readFails)
+          : Promise.resolve({ events: [], scannedThroughOffset: 0, atHead: true }),
+      claim: () => Promise.reject(new Error("the probe runs no background work")),
+    },
+    storage: memoryStorage(),
+  });
+  return { probe, engine };
+}
+
+// ── the read verbs' suite: a ledger processor, pushed the way a row of its context pushes it ──
+
+const LedgerContract = defineProcessorContract({
+  slug: "ledger",
+  version: "1",
+  description: "the offsets of the `counted` events it reduced — what a read must hold",
+  stateSchema: z.object({ counted: z.array(z.number()).default([]) }),
+  consumes: ["counted"],
+  emits: [],
+});
+class LedgerProcessor extends StreamProcessor<{ counted: number[] }> {
+  readonly contract = LedgerContract;
+  /** Offsets whose batch blocks for 20 ms: a push still in flight when the next commit lands. */
+  readonly #slowOffsets: readonly number[];
+  constructor(slowOffsets: readonly number[] = []) {
+    super();
+    this.#slowOffsets = slowOffsets;
+  }
+  override reduce({ event, state }: ReduceArgs<{ counted: number[] }>) {
+    return { counted: [...state.counted, event.offset] };
+  }
+  override processEvent(args: ProcessEventArgs<{ counted: number[] }>): undefined {
+    if (args.event && this.#slowOffsets.includes(args.event.offset))
+      args.blockProcessorWhile(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  }
+}
+
+/** A LedgerProcessor's engine over a fresh stream and storage — `history` committed before it
+ *  exists (nothing pushes it that) — and, with `pushedByARow`, pushed as a row pushes it. */
+function ledger(options: {
+  fedByPushes: boolean;
+  pushedByARow: boolean;
+  slowOffsets?: number[];
+  history?: StreamEventInput[];
+}) {
+  const mem = memoryStream();
+  if (options.history) mem.stream.append(...options.history);
+  const engine = new ProcessorEngine(new LedgerProcessor(options.slowOffsets), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+    fedByPushes: options.fedByPushes,
+  });
+  if (options.pushedByARow) pushedByARow(mem, engine, LedgerContract.consumes);
+  return { mem, engine };
+}
+
+/** A subscription row pushing `engine`, as the context's delivery loop does (os
+ *  subscription-delivery.ts): a commit is pushed only when it carries an event the row consumes, its
+ *  range opening where the row's last push closed (a skipped commit rides inside the next range),
+ *  and one push at a time — a push waits in the row's queue until the one ahead of it settled. The
+ *  loop queues a push in the commit's own turn, so a push behind nothing reaches the facet before
+ *  the appender hears back; that is modelled by sending it at once. `unsubscribe()` ends the row's
+ *  pushes (the incarnation it fed is gone). */
+function pushedByARow<State>(
+  mem: ReturnType<typeof memoryStream>,
+  engine: ProcessorEngine<State>,
+  consumes: readonly string[],
+) {
+  let subscribed = true;
+  let lastDeliveredThroughOffset: number | undefined;
+  let pushesOutstanding = 0;
+  let queueTail: Promise<unknown> = Promise.resolve();
+  const pump = {
+    processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
+      const consumed = events.filter((event) => consumesEvent(consumes, event));
+      if (!subscribed || consumed.length === 0) return Promise.resolve();
+      const pushRange = {
+        after: lastDeliveredThroughOffset ?? range.after,
+        through: range.through,
+      };
+      lastDeliveredThroughOffset = range.through;
+      pushesOutstanding++;
+      const send = () =>
+        engine
+          .processEventBatch(consumed, pushRange)
+          .catch(() => {})
+          .finally(() => pushesOutstanding--);
+      queueTail = pushesOutstanding === 1 ? send() : queueTail.then(send);
+      return Promise.resolve();
+    },
+  };
+  // The pump only needs `processEventBatch` (test-support.ts `engines`).
+  mem.engines.push(pump as unknown as ProcessorEngine<unknown>);
+  return {
+    unsubscribe: () => {
+      subscribed = false;
+    },
+  };
+}
+
+// ── the ephemeral-events suite's processors ──
+
+const EphContract = defineProcessorContract({
+  slug: "eph",
+  version: "1",
+  description: "",
+  stateSchema: z.object({ seen: z.array(z.string()).default([]) }),
+  consumes: ["loud", "chunk"], // "chunk" arrives ephemeral — NAMED, so it is consumed
+  emits: [],
+});
+class EphProcessor extends StreamProcessor<{ seen: string[] }> {
+  readonly contract = EphContract;
+  override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
+    return { seen: [...state.seen, `${event.type}@${event.offset}`] };
+  }
+  // This suite asserts exact offsets; opt out of the default live-state emit (a constant projection
+  // never diffs) so its ephemeral deltas don't consume offsets under test.
+  override projectLiveState() {
+    return null;
+  }
+}
+const StarContract = defineProcessorContract({
+  slug: "star",
+  version: "1",
+  description: "",
+  stateSchema: z.object({ seen: z.array(z.string()).default([]) }),
+  consumes: ["*"], // star NEVER sweeps ephemerals
+  emits: [],
+});
+class StarProcessor extends StreamProcessor<{ seen: string[] }> {
+  readonly contract = StarContract;
+  override reduce({ event, state }: ReduceArgs<{ seen: string[] }>) {
+    return { seen: [...state.seen, `${event.type}@${event.offset}`] };
+  }
+  override projectLiveState() {
+    return null;
+  }
+}
+
+// ── the live-state suite's processor and its change-event reader ──
+
+const TallyContract = defineProcessorContract({
+  slug: "tally",
+  version: "1.0.0",
+  description: "counts events; projects a trimmed live shape",
+  stateSchema: z.object({ count: z.number().default(0), secret: z.string().default("hidden") }),
+  consumes: ["tick"],
+  emits: [],
+});
+class TallyProcessor extends StreamProcessor<z.infer<typeof TallyContract.stateSchema>> {
+  contract = TallyContract;
+  reduce({ event, state }: ReduceArgs<z.infer<typeof TallyContract.stateSchema>>) {
+    if (event.type === "tick") return { ...state, count: state.count + 1 };
+    return undefined;
+  }
+  projectLiveState(state: z.infer<typeof TallyContract.stateSchema>) {
+    return { count: state.count }; // the projection REDACTS — diffs never see `secret`
+  }
+}
+
+function changes(mem: ReturnType<typeof memoryStream>) {
+  return mem.pushedEvents.filter((e) => e.type === "events.iterate.com/itx/live-state-changed");
+}
+
+// ── the persisted cursor across evictions and version bumps; the barrier's failure modes ──
+
+/** Reduces ticks AND records an effect per consumed event — the two things a re-reduce and an
+ *  eviction must treat differently (state is rebuilt from the log; effects never re-run). */
+function CountContract(version: string) {
+  return defineProcessorContract({
+    slug: "count",
+    version,
+    description: "counts ticks, records an effect per consumed event",
+    stateSchema: z.object({ ticks: z.number().default(0) }),
+    consumes: ["tick"],
+    emits: [],
+  });
+}
+class CountProcessor extends StreamProcessor<{ ticks: number }> {
+  readonly contract: ReturnType<typeof CountContract>;
+  readonly effects: number[] = []; // offsets whose processEvent fired
+  constructor(version = "1.0.0") {
+    super();
+    this.contract = CountContract(version);
+  }
+  override reduce({ event, state }: ReduceArgs<{ ticks: number }>) {
+    return event.type === "tick" ? { ticks: state.ticks + 1 } : undefined;
+  }
+  override processEvent(args: ProcessEventArgs<{ ticks: number }>): undefined {
+    if (args.event) this.effects.push(args.event.offset);
+  }
+  override projectLiveState() {
+    return null; // exact-offset suite: opt out of the default live-state emit
+  }
+}
+/** A reduce that NEVER changes state — so the state key is never written, only the cursor. */
+const EffectOnlyContract = defineProcessorContract({
+  slug: "eff",
+  version: "1.0.0",
+  description: "pure side-effect processor: reduce never changes state",
+  stateSchema: z.object({}),
+  consumes: ["*"],
+  emits: [],
+});
+class EffectOnlyProcessor extends StreamProcessor<Record<string, never>> {
+  readonly contract = EffectOnlyContract;
+  readonly effects: number[] = [];
+  override reduce(): undefined {
+    return undefined;
+  }
+  override processEvent(args: ProcessEventArgs<Record<string, never>>): undefined {
+    if (args.event) this.effects.push(args.event.offset);
+  }
+}
+
+// ── the payload-validation suite's processor ──
+
+const GuardedContract = defineProcessorContract({
+  slug: "guarded-payload",
+  version: "1",
+  description: "folds a validated payload; skips a malformed one",
+  stateSchema: z.object({ last: z.number().default(0) }),
+  events: {
+    "demo/set": { description: "set last to n", payloadSchema: z.object({ n: z.number() }) },
+  },
+  consumes: ["demo/set"],
+  emits: [],
+});
+class GuardedProcessor extends StreamProcessor<z.infer<typeof GuardedContract.stateSchema>> {
+  contract = GuardedContract;
+  reduce({ event }: ReduceArgs<z.infer<typeof GuardedContract.stateSchema>>) {
+    // A reducer TRUSTS the contract's payload shape — the engine's payload validation is what makes
+    // this safe; without it a malformed `n` would land in state and violate the exported schema.
+    if (event.type === "demo/set") return { last: (event.payload as { n: number }).n };
+    return undefined;
+  }
+}
+
+// ── the LiveState suite's sink ──
+
+type Frame = { key: string; from: number; to: number; patch: PatchOp[] };
+
+function collectingSink() {
+  const frames: Frame[] = [];
+  return {
+    frames,
+    append(event: { type: string; ephemeral?: true; payload?: Record<string, unknown> }) {
+      frames.push(event.payload as Frame);
+      return Promise.resolve();
+    },
+  };
+}
+
+// ── the rule 3 claim suite's processor ──
+
+const AttemptsContract = defineProcessorContract({
+  slug: "attempts",
+  version: "1",
+  description: "every consumed event starts one attempt; the test ends each by hand",
+  stateSchema: z.object({}),
+  consumes: ["e"],
+  emits: [],
+});
+class AttemptsProcessor extends StreamProcessor<object> {
+  readonly contract = AttemptsContract;
+  readonly trace: string[] = [];
+  readonly endings: (() => void)[] = [];
+  override processEvent(args: ProcessEventArgs<object>): undefined {
+    if (!args.event) {
+      this.trace.push("at-head");
+      return;
+    }
+    args.runInBackground(async () => {
+      this.trace.push(`attempt ${args.event!.offset} started`);
+      await new Promise<void>((end) => this.endings.push(end));
+    });
+  }
+}
+
+/** `memoryStream` commits synchronously, but `ProcessorStream` declares `append` as
+ *  `Promise | array`: the one cast, so a test reads the committed events straight back. */
+function commit(mem: ReturnType<typeof memoryStream>, ...events: StreamEventInput[]) {
+  return mem.stream.append(...events) as StreamEvent[];
+}
