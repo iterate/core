@@ -1,8 +1,7 @@
 # iterate/core's workspace: generated in iterate's own repo from its pnpm-workspace.yaml, for
 # these packages alone, with the same settings and the catalog trimmed to what they use.
 packages:
-  - core/os
-  - core/lib
+  - core/*
 
 catalog:
   '@base-ui/react': ^1.8.0
