@@ -35,9 +35,8 @@ export function pkgPrNewVersionOf(name: string, version: string) {
 export const isPkgPrNewCommit = (ref: string) => /^[0-9a-f]{40}$/.test(ref);
 
 /** The repository whose pkg.pr.new workflow (.github/workflows/pkg-pr-new.yml) publishes this
- *  repository's packages, as pkg.pr.new's URLs name it. It moves to iterate/private, which starts
- *  with fresh history (tasks/package-urls-survive-repo-move.md). */
-export const pkgPrNewRepository = "iterate/iterate";
+ *  repository's packages, as pkg.pr.new's URLs name it. */
+export const pkgPrNewRepository = "iterate/private";
 
 /** A build of one of this repository's packages (`iterate`, `@iterate-com/voice`, …): the
  *  pkg.pr.new workflow publishes every package together, for every main commit and for the head of
@@ -72,7 +71,8 @@ export async function pinPkgPrNewVersion(
  *  build main has published, by commit (`buildStanding`). */
 export type BuildStanding =
   /** `installed`, the version as its package.json pins it, is not this repository's build at a
-   *  commit (an npm version, a fork's build): the project's own, which it upgrades itself */
+   *  commit (an npm version, a fork's build, a build of the iterate/iterate archive): the
+   *  project's own, which it upgrades itself */
   | { kind: "own"; installed: string }
   /** the installed build is main's newest */
   | { kind: "newest"; installed: string }

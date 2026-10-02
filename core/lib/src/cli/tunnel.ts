@@ -248,7 +248,7 @@ export async function runTunnel(input: {
       const basePath = new URL(url).pathname;
       if (basePath !== "/")
         console.error(
-          `Projects are served under paths here: your local server must serve under ${basePath} (Vite: --base ${basePath}). To serve at / on an origin of its own, give the deployment a domain with a wildcard certificate: https://github.com/iterate/iterate/blob/main/core/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels`,
+          `Projects are served under paths here: your local server must serve under ${basePath} (Vite: --base ${basePath}). To serve at / on an origin of its own, give the deployment a domain with a wildcard certificate: https://github.com/iterate/core/blob/main/core/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels`,
         );
     } else console.error(`Reconnected: ${url} → http://localhost:${input.port}`);
     // The lend can end while the connection lives (the platform lost its pager, and the route

@@ -23,7 +23,7 @@ none). The worker extends `IterateConfigEntrypoint` from `iterate/sdk`, whose do
 its `fetch` and `processEvent` are handed; each template's `AGENTS.md` says what its own do.
 
 Templates are type-checkable as they stand: `package.json` lists the SDK's types from
-`https://pkg.pr.new/iterate/iterate/iterate@main`, `@cloudflare/workers-types` and `typescript` as
+`https://pkg.pr.new/iterate/private/iterate@main`, `@cloudflare/workers-types` and `typescript` as
 devDependencies, so `npm install && npx tsc` checks a project's checkout, while the loader links
 the running platform's SDK (an `iterate` absent from `dependencies` is the platform's).
 `devDependencies` are copied as written. In iterate's repo, `pnpm typecheck:configs` checks every

@@ -76,16 +76,16 @@ test("copies the pinned subdirectory into a fresh root commit before project/cre
 
 test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, one HEAD per version; devDependencies and other manifests keep their bytes", async () => {
   const commit = "d".repeat(40);
-  const voiceMain = "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@main";
+  const voiceMain = "https://pkg.pr.new/iterate/private/@iterate-com/voice@main";
   const head = vi.fn(
-    async () => new Response(null, { headers: { "x-commit-key": `iterate:iterate:${commit}` } }),
+    async () => new Response(null, { headers: { "x-commit-key": `iterate:private:${commit}` } }),
   );
   vi.stubGlobal("fetch", head);
   const manifestOf = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
   const root = manifestOf({
     main: "worker.ts",
     dependencies: { "@iterate-com/voice": voiceMain, hono: "^4" },
-    devDependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" },
+    devDependencies: { iterate: "https://pkg.pr.new/iterate/private/iterate@main" },
   });
   const agents = manifestOf({
     main: "index.ts",
@@ -99,7 +99,7 @@ test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, 
     { path: "fixtures/package.json", content: '{"name":"fixture"}' },
   ]);
   await deliver(fixture, requested(reference));
-  const pinned = `https://pkg.pr.new/iterate/iterate/@iterate-com/voice@${commit}`;
+  const pinned = `https://pkg.pr.new/iterate/private/@iterate-com/voice@${commit}`;
   expect(fixture.files()).toMatchObject({
     "package.json": root.replace(voiceMain, pinned),
     "agents/package.json": agents.replace(voiceMain, pinned),
@@ -113,14 +113,14 @@ test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, 
 });
 
 test("a template's pkg.pr.new branch that pkg.pr.new cannot pin fails the creation, and nothing is seeded", async () => {
-  const missing = "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@no-such-branch";
+  const missing = "https://pkg.pr.new/iterate/private/@iterate-com/voice@no-such-branch";
   // pkg.pr.new's 404 echoes the ref it was asked for
   vi.stubGlobal(
     "fetch",
     async () =>
       new Response(null, {
         status: 404,
-        headers: { "x-commit-key": "iterate:iterate:no-such-branch" },
+        headers: { "x-commit-key": "iterate:private:no-such-branch" },
       }),
   );
   const fixture = project(undefined, async () => [

@@ -7,7 +7,7 @@ test.for([
   ["a branch", "main"],
   ["a PR number", "3338"],
 ])("%s is pinned at the commit pkg.pr.new's HEAD names", async ([, ref]) => {
-  const head = vi.fn(async () => served(`iterate:iterate:${commit}`));
+  const head = vi.fn(async () => served(`iterate:private:${commit}`));
   expect(await pinPkgPrNewVersion("@iterate-com/agents", agentsAt(ref), head)).toBe(
     agentsAt(commit),
   );
@@ -23,14 +23,14 @@ test.for([
   ["a dist-tag", "hono", "latest"],
   ["a URL of another package (an alias)", "@iterate-com/voice", agentsAt("main")],
 ])("%s is written as it is, and pkg.pr.new is never asked", async ([, name, version]) => {
-  const head = vi.fn(async () => served(`iterate:iterate:${commit}`));
+  const head = vi.fn(async () => served(`iterate:private:${commit}`));
   expect(await pinPkgPrNewVersion(name, version, head)).toBe(version);
   expect(head).not.toHaveBeenCalled();
 });
 
 test.for([
-  ["a 404, which echoes the ref", served("iterate:iterate:main", 404), 404],
-  ["a 200 naming a short sha", served("iterate:iterate:9f8e7d6"), 200],
+  ["a 404, which echoes the ref", served("iterate:private:main", 404), 404],
+  ["a 200 naming a short sha", served("iterate:private:9f8e7d6"), 200],
   ["a 200 naming no commit", new Response(null), 200],
 ] as const)("%s cannot be pinned, and says so", async ([, answer, status]) => {
   await expect(
@@ -44,7 +44,7 @@ test("pkg.pr.new's 503 is asked once more a second later, and its next answer pi
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const answers = [new Response("down", { status: 503 }), served(`iterate:iterate:${commit}`)];
+  const answers = [new Response("down", { status: 503 }), served(`iterate:private:${commit}`)];
   const head = vi.fn(async () => answers.shift()!);
   const pinned = pinPkgPrNewVersion("@iterate-com/agents", agentsAt("main"), head);
   await vi.runAllTimersAsync();
@@ -89,8 +89,8 @@ test.for([
     name: "a build main published before its newest is behind: an upgrade to the newest",
     installed: older,
     answers: {
-      [agentsAt("main")]: served(`iterate:iterate:${newer}`, 200, later),
-      [agentsAt(older)]: served(`iterate:iterate:${older}`, 200, earlier),
+      [agentsAt("main")]: served(`iterate:private:${newer}`, 200, later),
+      [agentsAt(older)]: served(`iterate:private:${older}`, 200, earlier),
     },
     standing: { kind: "behind", installed: older, newest: newer, version: agentsAt(newer) },
   },
@@ -98,8 +98,8 @@ test.for([
     name: "main's newest build is the newest",
     installed: newer,
     answers: {
-      [agentsAt("main")]: served(`iterate:iterate:${newer}`, 200, later),
-      [agentsAt(newer)]: served(`iterate:iterate:${newer}`, 200, later),
+      [agentsAt("main")]: served(`iterate:private:${newer}`, 200, later),
+      [agentsAt(newer)]: served(`iterate:private:${newer}`, 200, later),
     },
     standing: { kind: "newest", installed: newer },
   },
@@ -107,8 +107,8 @@ test.for([
     name: "a build published after main's newest (a pull request's) is ahead, with no upgrade",
     installed: older,
     answers: {
-      [agentsAt("main")]: served(`iterate:iterate:${newer}`, 200, earlier),
-      [agentsAt(older)]: served(`iterate:iterate:${older}`, 200, later),
+      [agentsAt("main")]: served(`iterate:private:${newer}`, 200, earlier),
+      [agentsAt(older)]: served(`iterate:private:${older}`, 200, later),
     },
     standing: { kind: "ahead", installed: older, newest: newer },
   },
@@ -116,8 +116,8 @@ test.for([
     name: "a build pkg.pr.new no longer serves is behind",
     installed: older,
     answers: {
-      [agentsAt("main")]: served(`iterate:iterate:${newer}`, 200, later),
-      [agentsAt(older)]: served(`iterate:iterate:${older}`, 404),
+      [agentsAt("main")]: served(`iterate:private:${newer}`, 200, later),
+      [agentsAt(older)]: served(`iterate:private:${older}`, 404),
     },
     standing: { kind: "behind", installed: older, newest: newer, version: agentsAt(newer) },
   },
@@ -133,7 +133,7 @@ test.for([
   ["a fork's build", `https://pkg.pr.new/someone/fork/@iterate-com/agents@${older}`],
   ["another package's build", pkgPrNewVersion("@iterate-com/voice", older)],
 ])("%s is the project's own, and pkg.pr.new is never asked", async ([, installed]) => {
-  const head = vi.fn(async () => served(`iterate:iterate:${newer}`, 200, later));
+  const head = vi.fn(async () => served(`iterate:private:${newer}`, 200, later));
   expect(await buildStanding("@iterate-com/agents", installed, head)).toEqual({
     kind: "own",
     installed,
@@ -144,20 +144,20 @@ test.for([
 test.for([
   {
     name: "main's newest named without a publish time",
-    main: served(`iterate:iterate:${newer}`),
-    installed: served(`iterate:iterate:${older}`, 200, earlier),
+    main: served(`iterate:private:${newer}`),
+    installed: served(`iterate:private:${older}`, 200, earlier),
     error: `${agentsAt("main")} answered 200 without naming the commit it serves and when it was published`,
   },
   {
     name: "main's newest not found",
-    main: served("iterate:iterate:main", 404),
-    installed: served(`iterate:iterate:${older}`, 200, earlier),
+    main: served("iterate:private:main", 404),
+    installed: served(`iterate:private:${older}`, 200, earlier),
     error: `${agentsAt("main")} answered 404 without naming the commit it serves and when it was published`,
   },
   {
     name: "the installed build served without a publish time",
-    main: served(`iterate:iterate:${newer}`, 200, later),
-    installed: served(`iterate:iterate:${older}`),
+    main: served(`iterate:private:${newer}`, 200, later),
+    installed: served(`iterate:private:${older}`),
     error: `${agentsAt(older)} answered 200 without saying when it was published`,
   },
 ])("a standing is never guessed: $name throws", async ({ main, installed, error }) => {
@@ -175,7 +175,7 @@ test("pkg.pr.new failing main's HEAD twice fails the standing within its bound, 
   const head = vi.fn(async (url: string | URL | Request) =>
     String(url) === agentsAt("main")
       ? new Response("down", { status: 503 })
-      : served(`iterate:iterate:${older}`, 200, earlier),
+      : served(`iterate:private:${older}`, 200, earlier),
   );
   const standing = buildStanding("@iterate-com/agents", agentsAt(older), head);
   const settled = expect(standing).rejects.toThrow(`HEAD ${agentsAt("main")} answered HTTP 503`);

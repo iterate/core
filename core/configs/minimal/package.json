@@ -5,7 +5,7 @@
   "main": "worker.ts",
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260925.1",
-    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "iterate": "https://pkg.pr.new/iterate/private/iterate@main",
     "typescript": "^7.0.2"
   }
 }
