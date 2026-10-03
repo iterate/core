@@ -62,12 +62,34 @@ from that package too, so any other React library loads with `?external=react,re
 </script>
 <link rel="stylesheet" href="https://esm.sh/@iterate-com/ui@<version>/styles.css" />
 <script type="module">
-  import { html, render } from "@iterate-com/ui/page";
-  import { Button } from "@iterate-com/ui/components/ui/button";
-  render(html`<${Button}>Hello<//>`, document.body);
+  import { html, render, useState } from "@iterate-com/ui/page";
+  import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
+
+  // the worker's `fetch` answers ./events with the context's events
+  const events = await fetch("./events").then((response) => response.json());
+
+  function Page() {
+    const [state, setState] = useState({}); // the open inspector, the search, the filters
+    const context = {
+      events,
+      caughtUp: true,
+      processors: { rows: [] },
+      presence: { actors: [], rpcStubs: [] },
+      liveState: {},
+    };
+    return html`<${ContextView}
+      title="/agents/email/t42"
+      context=${context}
+      state=${state}
+      onStateChange=${(patch) => setState((previous) => ({ ...previous, ...patch }))}
+      className="h-screen"
+    />`;
+  }
+  render(html`<${Page} />`, document.body);
 </script>
 ```
 
-Each component is `@iterate-com/ui/components/<name>` (`context-view/context-view`, `ui/card`, …);
-`@iterate-com/ui/live` reads a context live for ContextView. Its package's AGENTS.md has more:
-https://github.com/iterate/packages/blob/main/packages/ui/AGENTS.md.
+Each component is `@iterate-com/ui/components/<name>` (`context-view/context-view`,
+`repo-ide/repo-ide`, `ui/card`, …); `@iterate-com/ui/live` reads a context live for ContextView. The
+package's README has a fuller page (polling, a React library beside it), and its AGENTS.md the rest:
+https://github.com/iterate/packages/tree/main/packages/ui.
