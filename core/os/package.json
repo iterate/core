@@ -1,6 +1,5 @@
 {
   "name": "os",
-  "private": true,
   "type": "module",
   "imports": {
     "#/*": "./src/*"

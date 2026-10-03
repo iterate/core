@@ -42,3 +42,32 @@ Files may be TypeScript or JavaScript and import each other by relative path. Im
 name: `iterate/*` and `zod` come from the platform; list any other package in `package.json` and
 it loads from npm through esm.sh (packages that need Node.js builtins are refused). Type-check
 locally with `npm install && npx tsc`; the loader strips types but never checks them.
+
+A page `fetch` serves can render iterate's own components (the stream viewer `ContextView`, buttons,
+code views) with no build step: an import map points at `@iterate-com/ui` on esm.sh, pinned to the
+version npm's `main` dist-tag names (`https://registry.npmjs.org/@iterate-com/ui`), and React comes
+from that package too, so any other React library loads with `?external=react,react-dom`:
+
+```html
+<script type="importmap">
+  {
+    "imports": {
+      "@iterate-com/ui/": "https://esm.sh/@iterate-com/ui@<version>/",
+      "react": "https://esm.sh/@iterate-com/ui@<version>/react",
+      "react/": "https://esm.sh/@iterate-com/ui@<version>/react/",
+      "react-dom": "https://esm.sh/@iterate-com/ui@<version>/react-dom",
+      "react-dom/": "https://esm.sh/@iterate-com/ui@<version>/react-dom/"
+    }
+  }
+</script>
+<link rel="stylesheet" href="https://esm.sh/@iterate-com/ui@<version>/styles.css" />
+<script type="module">
+  import { html, render } from "@iterate-com/ui/page";
+  import { Button } from "@iterate-com/ui/components/ui/button";
+  render(html`<${Button}>Hello<//>`, document.body);
+</script>
+```
+
+Each component is `@iterate-com/ui/components/<name>` (`context-view/context-view`, `ui/card`, …);
+`@iterate-com/ui/live` reads a context live for ContextView. Its package's AGENTS.md has more:
+https://github.com/iterate/packages/blob/main/packages/ui/AGENTS.md.

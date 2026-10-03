@@ -13,7 +13,7 @@ test("omitting a template seeds core/configs/minimal: a homepage, and no package
   await deliver(fixture, requested());
   expect(fixture.files()?.["worker.ts"]).toContain("Homepage of project");
   const manifest = JSON.parse(fixture.files()!["package.json"]!);
-  expect(manifest).toMatchObject({ private: true, type: "module", main: "worker.ts" });
+  expect(manifest).toMatchObject({ type: "module", main: "worker.ts" });
   expect(manifest).not.toHaveProperty("dependencies");
   expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
   // an unborn `main` is its own check (`parent: null`): no read of the tip comes first
