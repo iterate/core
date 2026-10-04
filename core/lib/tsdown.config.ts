@@ -38,7 +38,7 @@ export default defineConfig([
       "project-ingress": "src/project-ingress.ts",
       "app-config": "src/app-config.ts",
       "compatibility-date": "src/compatibility-date.ts",
-      "pkg-pr-new": "src/pkg-pr-new.ts",
+      "package-builds": "src/package-builds.ts",
       "platform-retry": "src/platform-retry.ts",
       "config-repo-template": "src/config-repo-template.ts",
       "integration-scopes": "src/integration-scopes.ts",

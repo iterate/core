@@ -112,6 +112,37 @@ test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, 
   expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
 });
 
+test("a template's `main` of one of ours is seeded at the version npm's main dist-tag names; devDependencies keep theirs", async () => {
+  const newest = "0.1.0-main.20261002T164000Z-ddddddd";
+  const distTags = vi.fn(async () => Response.json({ latest: "0.1.0", main: newest }));
+  vi.stubGlobal("fetch", distTags);
+  const root = `${JSON.stringify(
+    {
+      main: "worker.ts",
+      dependencies: { "@iterate-com/voice": "main", hono: "^4" },
+      devDependencies: { iterate: "main" },
+    },
+    null,
+    2,
+  )}\n`;
+  const fixture = project(undefined, async () => [
+    { path: "package.json", content: root },
+    { path: "worker.ts", content: worker },
+  ]);
+  await deliver(fixture, requested(reference));
+  expect(fixture.files()).toMatchObject({
+    "package.json": root.replace(
+      '"@iterate-com/voice": "main"',
+      `"@iterate-com/voice": "${newest}"`,
+    ),
+  });
+  expect(distTags).toHaveBeenCalledExactlyOnceWith(
+    "https://registry.npmjs.org/-/package/@iterate-com/voice/dist-tags",
+    expect.anything(),
+  );
+  expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
+});
+
 test("a template's pkg.pr.new branch that pkg.pr.new cannot pin fails the creation, and nothing is seeded", async () => {
   const missing = "https://pkg.pr.new/iterate/private/@iterate-com/voice@no-such-branch";
   // pkg.pr.new's 404 echoes the ref it was asked for

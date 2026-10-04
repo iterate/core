@@ -19,12 +19,12 @@
 //   pkg.pr.new ref that is not a full commit (a branch, a PR number, a short sha) is refused: a
 //   moving ref asks to follow it, which a lock cannot do without asking pkg.pr.new on every cold
 //   start, and a project's builds would then differ by when each host started. Whatever writes a
-//   dependency pins it as it writes (iterate/pkg-pr-new `pinPkgPrNewVersion`). esm.sh
+//   dependency pins it as it writes (iterate/package-builds `pinVersion`). esm.sh
 //   keeps the platform packages external, so a library's zod is the SDK's. An alias OF a platform
 //   package (`"zod3": "npm:zod@3"`) is a second copy its source asked for by another name: its own
 //   modules import each other at its version (`npmSelfImportOf`).
 
-import { isPkgPrNewCommit, pkgPrNewBuildOf } from "iterate/pkg-pr-new";
+import { isPkgPrNewCommit, pkgPrNewBuildOf } from "iterate/package-builds";
 import { failureKind, httpFailureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import { parse } from "es-module-lexer/js";
 import { transform } from "sucrase";

@@ -211,10 +211,9 @@ the project's existing config in one commit, through the `run` tool:
 `itx.repos.get("/repos/config")`, read its `tip()` and files, then `commitFiles({ message, changes,
 parent: <that tip> })` with:
 
-- `package.json`: `"@iterate-com/voice"` in `dependencies`, pinned to a commit:
-  `https://pkg.pr.new/iterate/private/@iterate-com/voice@<sha>`, where `<sha>` is the commit
-  `curl -sI https://pkg.pr.new/iterate/private/@iterate-com/voice@main` names in its
-  `x-commit-key` header (`iterate:private:<sha>`); the loader refuses `@main`, which moves;
+- `package.json`: `"@iterate-com/voice"` in `dependencies`, at the exact version npm's `main`
+  dist-tag names (`curl -s https://registry.npmjs.org/-/package/@iterate-com/voice/dist-tags`,
+  such as `0.1.0-main.20261002T164000Z-3202ce3`), not `main` itself, which moves;
 - `voice.ts`: `export { default, VoiceAgentDurableObject } from "@iterate-com/voice";`
 - `worker.ts`: `import { installVoice } from "@iterate-com/voice/install";` and
   `await installVoice(itx);` in the `events.iterate.com/project/worker-updated` case, after

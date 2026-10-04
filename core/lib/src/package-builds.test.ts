@@ -1,5 +1,11 @@
 import { expect, onTestFinished, test, vi } from "vitest";
-import { buildStanding, pinPkgPrNewVersion, pkgPrNewVersion } from "./pkg-pr-new.ts";
+import {
+  buildStanding,
+  pinPkgPrNewVersion,
+  pinVersion,
+  pkgPrNewVersion,
+  type BuildStanding,
+} from "./package-builds.ts";
 
 const commit = "aaaaabbbbbccccc111112222233333aaaaabbbbb";
 
@@ -83,106 +89,163 @@ const older = "1".repeat(40);
 const newer = "2".repeat(40);
 const earlier = "Mon, 28 Sep 2026 13:20:32 GMT";
 const later = "Tue, 29 Sep 2026 09:28:04 GMT";
+const afterLater = "Tue, 29 Sep 2026 10:00:00 GMT";
+const distTags = "https://registry.npmjs.org/-/package/@iterate-com/agents/dist-tags";
 
 test.for([
+  { name: "`main` of one of ours is the version npm's dist-tag names", pkg: "@iterate-com/agents" },
+  { name: "`main` of iterate itself too", pkg: "iterate" },
+])("$name", async ({ pkg }) => {
+  const get = vi.fn(async () => Response.json({ latest: "0.4.0", main: npmAt(newer, later) }));
+  expect(await pinVersion(pkg, "main", get)).toBe(npmAt(newer, later));
+  expect(get).toHaveBeenCalledExactlyOnceWith(
+    `https://registry.npmjs.org/-/package/${pkg}/dist-tags`,
+    expect.anything(),
+  );
+});
+
+test("`main` of another package is its own dist-tag, and npm is never asked", async () => {
+  const get = vi.fn(async () => Response.json({ main: npmAt(newer, later) }));
+  expect(await pinVersion("hono", "main", get)).toBe("main");
+  expect(get).not.toHaveBeenCalled();
+});
+
+test.for<{
+  name: string;
+  installed: string;
+  answers: Record<string, Response>;
+  standing: BuildStanding;
+}>([
   {
-    name: "a build main published before its newest is behind: an upgrade to the newest",
-    installed: older,
-    answers: {
-      [agentsAt("main")]: served(`iterate:private:${newer}`, 200, later),
-      [agentsAt(older)]: served(`iterate:private:${older}`, 200, earlier),
-    },
-    standing: { kind: "behind", installed: older, newest: newer, version: agentsAt(newer) },
+    name: "main's newest npm build is the newest",
+    installed: npmAt(newer, later),
+    answers: { [distTags]: Response.json({ main: npmAt(newer, later) }) },
+    standing: { kind: "newest", installed: "2222222" },
   },
   {
-    name: "main's newest build is the newest",
-    installed: newer,
+    name: "an npm build of an older commit is behind: an upgrade to the newest",
+    installed: npmAt(older, earlier),
+    answers: { [distTags]: Response.json({ main: npmAt(newer, later) }) },
+    standing: {
+      kind: "behind",
+      installed: "1111111",
+      newest: "2222222",
+      version: npmAt(newer, later),
+    },
+  },
+  {
+    name: "one of the first npm builds, whose version holds milliseconds and the whole sha, is main's newest by its first seven digits",
+    installed: `0.1.0-main.20260929T092804000Z-${newer}`,
+    answers: { [distTags]: Response.json({ main: npmAt(newer, later) }) },
+    standing: { kind: "newest", installed: newer },
+  },
+  {
+    name: "one of the first npm builds, of an older commit, is behind",
+    installed: `0.1.0-main.20260928T132032000Z-${older}`,
+    answers: { [distTags]: Response.json({ main: npmAt(newer, later) }) },
+    standing: { kind: "behind", installed: older, newest: "2222222", version: npmAt(newer, later) },
+  },
+  {
+    name: "a pkg.pr.new build published after main's newest commit (a pull request's) is ahead",
+    installed: agentsAt(older),
     answers: {
-      [agentsAt("main")]: served(`iterate:private:${newer}`, 200, later),
+      [distTags]: Response.json({ main: npmAt(newer, later) }),
+      [agentsAt(older)]: served(`iterate:private:${older}`, 200, afterLater),
+    },
+    standing: { kind: "ahead", installed: older, newest: "2222222" },
+  },
+  {
+    name: "a pkg.pr.new build of main from before npm is behind",
+    installed: agentsAt(older),
+    answers: {
+      [distTags]: Response.json({ main: npmAt(newer, later) }),
+      [agentsAt(older)]: served(`iterate:private:${older}`, 200, earlier),
+    },
+    standing: { kind: "behind", installed: older, newest: "2222222", version: npmAt(newer, later) },
+  },
+  {
+    name: "a build pkg.pr.new no longer serves is behind",
+    installed: agentsAt(older),
+    answers: {
+      [distTags]: Response.json({ main: npmAt(newer, later) }),
+      [agentsAt(older)]: served(`iterate:private:${older}`, 404),
+    },
+    standing: { kind: "behind", installed: older, newest: "2222222", version: npmAt(newer, later) },
+  },
+  {
+    name: "pkg.pr.new's build of main's newest commit is the newest, by the seven digits npm's version holds",
+    installed: agentsAt(newer),
+    answers: {
+      [distTags]: Response.json({ main: npmAt(newer, later) }),
       [agentsAt(newer)]: served(`iterate:private:${newer}`, 200, later),
     },
     standing: { kind: "newest", installed: newer },
   },
-  {
-    name: "a build published after main's newest (a pull request's) is ahead, with no upgrade",
-    installed: older,
-    answers: {
-      [agentsAt("main")]: served(`iterate:private:${newer}`, 200, earlier),
-      [agentsAt(older)]: served(`iterate:private:${older}`, 200, later),
-    },
-    standing: { kind: "ahead", installed: older, newest: newer },
-  },
-  {
-    name: "a build pkg.pr.new no longer serves is behind",
-    installed: older,
-    answers: {
-      [agentsAt("main")]: served(`iterate:private:${newer}`, 200, later),
-      [agentsAt(older)]: served(`iterate:private:${older}`, 404),
-    },
-    standing: { kind: "behind", installed: older, newest: newer, version: agentsAt(newer) },
-  },
 ])("$name", async ({ installed, answers, standing }) => {
-  const head = vi.fn(async (url: string | URL | Request) => answers[String(url)]!);
-  expect(await buildStanding("@iterate-com/agents", agentsAt(installed), head)).toEqual(standing);
-  expect(head.mock.calls.map(([url]) => url).sort()).toEqual(Object.keys(answers).sort());
+  const get = vi.fn(async (url: string | URL | Request) => answers[String(url)]!);
+  expect(await buildStanding("@iterate-com/agents", installed, get)).toEqual(standing);
+  expect(get.mock.calls.map(([url]) => url).sort()).toEqual(Object.keys(answers).sort());
 });
 
 test.for([
   ["an npm range", "^1.2.0"],
-  ["a branch, which the loader refuses", agentsAt("main")],
+  ["an npm release", "0.4.0"],
+  ["a pkg.pr.new branch, which the loader refuses", agentsAt("main")],
   ["a fork's build", `https://pkg.pr.new/someone/fork/@iterate-com/agents@${older}`],
   ["another package's build", pkgPrNewVersion("@iterate-com/voice", older)],
-])("%s is the project's own, and pkg.pr.new is never asked", async ([, installed]) => {
-  const head = vi.fn(async () => served(`iterate:private:${newer}`, 200, later));
-  expect(await buildStanding("@iterate-com/agents", installed, head)).toEqual({
+])("%s is the project's own, and nothing is asked", async ([, installed]) => {
+  const get = vi.fn(async () => Response.json({ main: npmAt(newer, later) }));
+  expect(await buildStanding("@iterate-com/agents", installed, get)).toEqual({
     kind: "own",
     installed,
   });
-  expect(head).not.toHaveBeenCalled();
+  expect(get).not.toHaveBeenCalled();
 });
 
 test.for([
   {
-    name: "main's newest named without a publish time",
-    main: served(`iterate:private:${newer}`),
+    name: "npm without the package (its 401 for a scope it doesn't have)",
+    main: new Response('"Unauthorized"', { status: 401 }),
     installed: served(`iterate:private:${older}`, 200, earlier),
-    error: `${agentsAt("main")} answered 200 without naming the commit it serves and when it was published`,
+    error: `npm has no main build of @iterate-com/agents: ${distTags} answered 401`,
   },
   {
-    name: "main's newest not found",
-    main: served("iterate:private:main", 404),
+    name: "a `main` that is no main build",
+    main: Response.json({ main: "0.4.0" }),
     installed: served(`iterate:private:${older}`, 200, earlier),
-    error: `${agentsAt("main")} answered 404 without naming the commit it serves and when it was published`,
+    error: `npm has no main build of @iterate-com/agents: ${distTags} answered 200 naming 0.4.0`,
   },
   {
     name: "the installed build served without a publish time",
-    main: served(`iterate:private:${newer}`, 200, later),
+    main: Response.json({ main: npmAt(newer, later) }),
     installed: served(`iterate:private:${older}`),
     error: `${agentsAt(older)} answered 200 without saying when it was published`,
   },
 ])("a standing is never guessed: $name throws", async ({ main, installed, error }) => {
   await expect(
     buildStanding("@iterate-com/agents", agentsAt(older), async (url) =>
-      String(url) === agentsAt("main") ? main : installed,
+      String(url) === distTags ? main : installed,
     ),
   ).rejects.toThrow(error);
 });
 
-test("pkg.pr.new failing main's HEAD twice fails the standing within its bound, naming the answer", async () => {
+test("npm failing the dist-tags twice fails the standing within its bound, naming the answer", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  const head = vi.fn(async (url: string | URL | Request) =>
-    String(url) === agentsAt("main")
-      ? new Response("down", { status: 503 })
-      : served(`iterate:private:${older}`, 200, earlier),
-  );
-  const standing = buildStanding("@iterate-com/agents", agentsAt(older), head);
-  const settled = expect(standing).rejects.toThrow(`HEAD ${agentsAt("main")} answered HTTP 503`);
+  const get = vi.fn(async () => new Response("down", { status: 503 }));
+  const standing = buildStanding("@iterate-com/agents", npmAt(older, earlier), get);
+  const settled = expect(standing).rejects.toThrow(`GET ${distTags} answered HTTP 503`);
   await vi.runAllTimersAsync();
   await settled;
-  expect(head.mock.calls.filter(([url]) => String(url) === agentsAt("main"))).toHaveLength(2);
+  expect(get).toHaveBeenCalledTimes(2);
 });
+
+/** main's npm build of `commit`, committed at `committed` (an HTTP date): `0.1.0-main.20260929T092804Z-2222222`. */
+function npmAt(commit: string, committed: string) {
+  const stamp = new Date(committed).toISOString().slice(0, 19).replace(/\W/g, "");
+  return `0.1.0-main.${stamp}Z-${commit.slice(0, 7)}`;
+}
 
 function agentsAt(ref: string) {
   return pkgPrNewVersion("@iterate-com/agents", ref);

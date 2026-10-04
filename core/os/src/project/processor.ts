@@ -34,7 +34,7 @@ import {
   type StreamEventInput,
   StreamProcessor,
 } from "iterate/stream/processor";
-import { pinPkgPrNewDependencies } from "iterate/pkg-pr-new";
+import { pinDependencies } from "iterate/package-builds";
 import { runningUnder } from "../cause.ts";
 import { minimalConfigFiles, templateFiles } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
@@ -567,12 +567,13 @@ export class ProjectProcessor extends StreamProcessor<
     let commitOid: string | null;
     const reference = state.creation?.configRepoTemplate;
     try {
-      // The seed pins its pkg.pr.new dependencies: a template's `…@main` means main's newest
-      // build, and the loader refuses a ref that moves (iterate/pkg-pr-new). A ref
-      // that cannot be pinned fails the creation, like a download that fails. A preset comes from
+      // The seed pins its dependencies of ours: a template's `main` (npm's dist-tag) or pkg.pr.new
+      // `…@main` means main's newest build, and the loader refuses a ref that moves
+      // (iterate/package-builds). One that cannot be pinned fails the creation, like a download that
+      // fails. A preset comes from
       // the build (scripts/build.ts), with no GitHub request (`presetFiles`); no template is
       // core/configs/minimal.
-      const changes = await pinPkgPrNewDependencies(
+      const changes = await pinDependencies(
         reference
           ? (presetFiles(reference) ??
               (await this.downloadTemplate(parseConfigRepoTemplateReference(reference))))
