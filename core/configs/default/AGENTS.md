@@ -90,6 +90,10 @@ from that package too, so any other React library loads with `?external=react,re
 ```
 
 Each component is `@iterate-com/ui/components/<name>` (`context-view/context-view`,
-`repo-ide/repo-ide`, `ui/card`, …); `@iterate-com/ui/live` reads a context live for ContextView. The
-package's README has a fuller page (polling, a React library beside it), and its AGENTS.md the rest:
-https://github.com/iterate/packages/tree/main/packages/ui.
+`repo-ide/repo-ide`, `ui/card`, …). The package's README has a fuller page (polling, a React library
+beside it), and its AGENTS.md the rest: https://github.com/iterate/packages/tree/main/packages/ui.
+
+`@iterate-com/ui/live` reads a context live, as the person viewing: guard the route with
+`this.auth.require(request)`, and the page connects with the host's own session. A whole page and
+its route, to copy beside `worker.ts`:
+https://github.com/iterate/packages/blob/main/packages/ui/examples/project-host-page.ts.
