@@ -89,7 +89,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     'an HTTP webhook as a fan-out row\'s target: `subscribe({ target: "itx.webhooks.get({ url, signingSecret? }).deliverEvent", ordered: false })` POSTs each event, signed with the secret when one is named',
   run: 'a fresh confined run of a script you write as text: `itx.run("async (itx) => …")`',
   connectToMcp:
-    "a live MCP handle: `(await itx.connectToMcp(url)).listTools()`, one method per tool",
+    "a live MCP handle: `(await itx.connectToMcp(url)).listTools()`, one method per tool; `subscribe(event, args)` lands the server's events here as `events.iterate.com/mcp/webhook-received`",
   connectToOpenApi:
     "a live OpenAPI handle: one method per operationId, `call(operationId, input)` too",
   connectToCapnweb: "a live capnweb handle: `itx.connectToCapnweb(url)`, dotted calls pipelined",

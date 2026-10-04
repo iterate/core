@@ -12,6 +12,7 @@ import type { Caller } from "../caller.ts";
 import type { Env } from "../iterate-context-durable-object.ts";
 import { appConfigOf } from "../app-config.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
+import { mcpWebhookOf } from "../integrations/mcp.ts";
 import { contextStub } from "../context-stub.ts";
 import { itxAiFor } from "../itx-ai.ts";
 import { buildLibrary, type LibraryItx } from "../library.ts";
@@ -245,6 +246,10 @@ export function statelessResolverFor(args: {
   const libraryItx = new InvokeHandle((steps) =>
     resolverUnder(libraryCaller).invoke(["itx", ...steps]),
   ) as unknown as LibraryItx;
-  const library = buildLibrary(libraryItx, { caller: () => withOrigin(caller), path }).roots;
+  const library = buildLibrary(libraryItx, {
+    caller: () => withOrigin(caller),
+    path,
+    mcpWebhook: (server) => mcpWebhookOf(appConfig, platformOrigin, address, server),
+  }).roots;
   return resolverUnder(caller);
 }

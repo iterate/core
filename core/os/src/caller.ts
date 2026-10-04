@@ -131,6 +131,7 @@ const PLATFORM_FACT_TYPE_LIST = [
   "events.iterate.com/email/sent",
   "events.iterate.com/github/webhook-received",
   "events.iterate.com/slack/webhook-received",
+  "events.iterate.com/mcp/webhook-received",
   // every provider's connection facts, typed from the provider by the one mechanism that lands them
   // (integrations/connections.ts `appendConnected`, verbs.ts `disconnectIntegration`)
   ...INTEGRATION_PROVIDERS.flatMap(

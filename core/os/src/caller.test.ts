@@ -176,6 +176,7 @@ test.for<{ name: string; who: keyof typeof writers; refused?: true }>([
         // provider's connection facts
         "events.iterate.com/github/webhook-received",
         "events.iterate.com/slack/webhook-received",
+        "events.iterate.com/mcp/webhook-received",
         ...INTEGRATION_PROVIDERS.flatMap((provider) => [
           `events.iterate.com/${provider}/connected`,
           `events.iterate.com/${provider}/disconnected`,

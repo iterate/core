@@ -27,6 +27,7 @@ import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { receiveEmail } from "./integrations/email.ts";
 import { slackWebhookRoute } from "./integrations/slack.ts";
 import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.ts";
+import { mcpWebhookRoute } from "./integrations/mcp.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { unavailableAnswer } from "./unavailable.ts";
 import { oauthResponse } from "./api.ts";
@@ -467,10 +468,11 @@ async function routeRequest(
     )
   )
     return secretOAuthCallback(request, env, addresses);
-  // Slack's and GitHub's webhooks and GitHub's connect callback (src/integrations/).
+  // Slack's, GitHub's and MCP servers' webhooks and GitHub's connect callback (src/integrations/).
   const integrationResponse =
     (await slackWebhookRoute(request, env)) ||
     (await githubWebhookRoute(request, env)) ||
+    (await mcpWebhookRoute(request, env)) ||
     (await githubCallbackRoute(request, env, addresses));
   if (integrationResponse) return integrationResponse;
   const identity = await identityResponse(request, env);

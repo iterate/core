@@ -20,6 +20,7 @@
   "dependencies": {
     "@base-ui/react": "catalog:",
     "@cloudflare/workers-oauth-provider": "catalog:",
+    "@modelcontextprotocol/client": "catalog:",
     "@modelcontextprotocol/server": "catalog:",
     "@octokit/auth-app": "8.3.1",
     "@tanstack/react-router": "catalog:",
@@ -39,6 +40,7 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "sqlfu": "catalog:",
+    "standardwebhooks": "catalog:",
     "sucrase": "^3.35.1",
     "tailwindcss": "catalog:",
     "tw-animate-css": "catalog:",

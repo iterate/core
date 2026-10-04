@@ -3,8 +3,10 @@
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
 import { RpcTarget, newHttpBatchRpcResponse } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
+import { z } from "zod";
 import { codedError } from "iterate/lib";
 import type { OpenApiDocument, WaitForEventFilter } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
@@ -45,7 +47,7 @@ const verbs: {
   {
     verb: "connectToMcp",
     connect: (roots) => roots.connectToMcp("https://mcp.example/", { headers: { a: "1" } }),
-    handshake: "initialize",
+    handshake: "server/discover",
   },
   {
     verb: "connectToOpenApi",
@@ -60,77 +62,22 @@ const verbs: {
 for (const { verb, connect, handshake } of verbs)
   test(`buildLibrary memoizes live connections per context: ${verb}: two connects with the same arguments are ONE connection — the same object back, one handshake`, async () => {
     const { itx, seen } = remotes();
-    const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
+    const { roots } = buildLibrary(itx, LIBRARY_DEPS);
     const a = await connect(roots);
     const b = await connect(roots);
     expect(b).toBe(a);
     if (handshake) expect(seen.filter((m) => m === handshake)).toHaveLength(1);
   });
 
-test("buildLibrary memoizes live connections per context: releaseConnections closes what it holds (MCP: the session's DELETE) and forgets it; the next connect is a fresh handshake, a new object, and works", async () => {
+test("buildLibrary memoizes live connections per context: releaseConnections forgets what it holds; the next connect is a fresh handshake, a new object, and works", async () => {
   const { itx, seen } = remotes();
-  const { roots, releaseConnections } = buildLibrary(itx, {
-    caller: () => ({ principal: null }),
-    path: "/",
-  });
+  const { roots, releaseConnections } = buildLibrary(itx, LIBRARY_DEPS);
   const a = await roots.connectToMcp("https://mcp.example/");
   releaseConnections();
-  await new Promise((r) => setTimeout(r, 10)); // the close rides a `.then` off the memoized promise
-  expect(seen).toContain("DELETE");
   const b = await roots.connectToMcp("https://mcp.example/");
   expect(b).not.toBe(a);
-  expect(initializes(seen)).toBe(2);
-  expect(await b.callTool("echo", {})).toBe("ok");
-});
-
-test("buildLibrary memoizes live connections per context: a held connection reused CONCURRENTLY after close re-handshakes ONCE — no session-less post", async () => {
-  // The pins' release closes the memoized client while a caller still holds the connection; its
-  // next request re-handshakes. Two concurrent requests must share ONE handshake and neither may
-  // post before the session id is established — this fake server delays initialize and rejects a
-  // session-less non-initialize (a real MCP server 400s), so a request that skips the shared
-  // handshake fails.
-  const { itx, requests } = mcpServer({
-    onInitialize: () => new Promise((r) => setTimeout(r, 5)), // let a racing request interleave first
-  });
-  const { roots, releaseConnections } = buildLibrary(itx, {
-    caller: () => ({ principal: null }),
-    path: "/",
-  });
-  const conn = await roots.connectToMcp("https://mcp.example/");
-  releaseConnections();
-  await new Promise((r) => setTimeout(r, 10)); // the close rides a `.then` off the memoized promise
-  const [r1, r2] = await Promise.all([conn.callTool("echo", {}), conn.callTool("echo", {})]);
-  expect([r1, r2]).toEqual(["ok", "ok"]);
-  // one for connect, one shared re-handshake — never a third
-  expect(requests.filter((r) => r.body?.method === "initialize")).toHaveLength(2);
-});
-
-test("buildLibrary memoizes live connections per context: closing DURING a re-handshake deletes the new session and does not revive the client", async () => {
-  let releaseHandshake: (() => void) | undefined;
-  const { itx, deletes } = mcpServer({
-    // park the re-handshake
-    onInitialize: (n) => (n > 1 ? new Promise<void>((r) => (releaseHandshake = r)) : undefined),
-  });
-  const { roots, releaseConnections } = buildLibrary(itx, {
-    caller: () => ({ principal: null }),
-    path: "/",
-  });
-  const conn = await roots.connectToMcp("https://mcp.example/"); // establishes s-1
-  releaseConnections();
-  await new Promise((r) => setTimeout(r, 10)); // closes s-1 (DELETE s-1)
-
-  const inflight = conn.callTool("echo", {}).then(
-    () => "ok",
-    (e: unknown) => (e instanceof Error ? e.message : String(e)),
-  );
-  await new Promise((r) => setTimeout(r, 10)); // the re-handshake (s-2) is parked
-  await conn.close(); // close AGAIN while the handshake is in flight — bumps the generation
-  releaseHandshake?.(); // now let the parked handshake complete
-  const outcome = await inflight;
-
-  expect(outcome).toMatch(/closed during its handshake/); // the call did not silently succeed
-  expect(deletes).toContain("s-1");
-  expect(deletes).toContain("s-2"); // the session the losing handshake established was NOT leaked
+  expect(discovers(seen)).toBe(2);
+  expect(await b.callTool("echo", { text: "ok" })).toEqual({ echoed: { text: "ok" } });
 });
 
 test("buildLibrary memoizes live connections per context: releaseConnections closes a WebSocket capnweb connection LOCALLY — `close` is the connection's own member, never the dotted proxy's remote call", async () => {
@@ -150,10 +97,7 @@ test("buildLibrary memoizes live connections per context: releaseConnections clo
     removeEventListener() {},
   };
   const itx = fakeItx({ fetch: async () => ({ status: 101, webSocket }) });
-  const { roots, releaseConnections } = buildLibrary(itx, {
-    caller: () => ({ principal: null }),
-    path: "/",
-  });
+  const { roots, releaseConnections } = buildLibrary(itx, LIBRARY_DEPS);
   await roots.connectToCapnweb("wss://ws.example/rpc");
   releaseConnections();
   await new Promise((r) => setTimeout(r, 10));
@@ -172,7 +116,7 @@ test("buildLibrary memoizes live connections per context: a connect that FAILS i
       return new Response("down", { status: 503 });
     },
   });
-  const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
+  const { roots } = buildLibrary(itx, LIBRARY_DEPS);
   await expect(roots.connectToMcp("https://mcp.example/")).rejects.toThrow(/503/);
   await expect(roots.connectToMcp("https://mcp.example/")).rejects.toThrow(/503/);
   expect(attempts).toBe(2);
@@ -180,13 +124,13 @@ test("buildLibrary memoizes live connections per context: a connect that FAILS i
 
 test("buildLibrary memoizes live connections per context: the memo is keyed by the options too, and two spellings of one options object are one key", async () => {
   const { itx, seen } = remotes();
-  const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
+  const { roots } = buildLibrary(itx, LIBRARY_DEPS);
   const a = await roots.connectToMcp("https://mcp.example/", { headers: { a: "1", b: "2" } });
   const b = await roots.connectToMcp("https://mcp.example/", { headers: { b: "2", a: "1" } });
   const c = await roots.connectToMcp("https://mcp.example/", { headers: { a: "other" } });
   expect(b).toBe(a);
   expect(c).not.toBe(a);
-  expect(initializes(seen)).toBe(2);
+  expect(discovers(seen)).toBe(2);
 });
 
 // ── run ── `itx.run(script)` over a fake itx: `run` is a REQUEST on the log (`itx.append`) and the
@@ -319,7 +263,7 @@ test("run: on the context, run(script) appends run-requested { code } — the re
   const script = "async (itx) => 1";
   const { itx, loaded, appended, waits, runs } = host();
   await expect(
-    buildLibrary(itx, { caller: () => ({ principal: null }), path: "/a" }).roots.run(script),
+    buildLibrary(itx, { ...LIBRARY_DEPS, path: "/a" }).roots.run(script),
   ).resolves.toEqual({ $itxScriptRunRequested: { path: "/a", requestOffset: 10 } });
   expect(appended).toEqual([
     { type: "events.iterate.com/itx/run-requested", payload: { code: script } },
@@ -613,202 +557,44 @@ test("connectToCapnweb, batch transport: a non-2xx batch answer rejects with the
   );
 });
 
-// ── mcp ── the MCP client against a fake server: a `Request → Response` function behind
-// a fake `itx.fetch`, recording every request. Rows, not prose.
-
-type Handler = (request: Request, body: any) => Response | Promise<Response>;
-
-const TOOLS = [
-  { name: "echo", description: "echo the args", inputSchema: { type: "object" } },
-  { name: "add", inputSchema: { type: "object" } },
-  { name: "callTool", inputSchema: {} }, // a reserved name: reachable through callTool only
-];
-
-test("connectToMcp: connect: initialize → initialized → tools/list, the session id riding on every later request", async () => {
-  const { itx, requests } = mcpItx(referenceServer());
-  const conn = await connectToMcp(itx, "https://mcp.example/rpc", {
-    headers: { authorization: "Bearer t" },
-  });
-  expect(requests.map((r) => r.body?.method)).toEqual([
-    "initialize",
-    "notifications/initialized",
-    "tools/list",
-  ]);
-  expect(requests[0].body.params).toMatchObject({ protocolVersion: "2025-03-26" });
-  expect(requests[0].request.headers.get("authorization")).toBe("Bearer t");
-  expect(requests[0].request.headers.get("accept")).toBe("application/json, text/event-stream");
-  expect(requests[2].request.headers.get("mcp-session-id")).toBe("s-1");
-  expect(conn.serverInfo()).toMatchObject({ serverInfo: { name: "fake", version: "0" } });
-  // the connection grew one method per listed tool (`callTool`, a reserved name, stays its own)
-  expect(["echo", "add"].map((name) => typeof (conn as any)[name])).toEqual([
-    "function",
-    "function",
-  ]);
-});
+// ── mcp ── the MCP client against a real MCP server (the official SDK's, as a third party runs
+// one) behind a fake `itx.fetch` that records every request. Rows, not prose.
 
 const mcpRows: Array<{
   call: (c: McpConnectionRpcTarget) => Promise<unknown>;
   becomes?: unknown;
   throws?: RegExp;
-  sse?: boolean;
 }> = [
   { call: (c) => c.callTool("echo", { text: "hi" }), becomes: { echoed: { text: "hi" } } },
   { call: (c) => (c as any).echo({ text: "dotted" }), becomes: { echoed: { text: "dotted" } } }, // a tool as a method
   { call: (c) => (c as any).add({ a: 2, b: 3 }), becomes: { sum: 5 } }, // structuredContent wins over text
   { call: (c) => c.callTool("plain"), becomes: "just text" }, // text that is not JSON stays text
-  { call: (c) => c.callTool("boom"), throws: /MCP tool boom failed: it broke/ },
-  { call: (c) => c.callTool("nope"), throws: /MCP tools\/call: unknown tool nope/ },
+  // no text and no structuredContent: the whole result, an image part keeping its data and mimeType
   {
-    call: (c) => c.callTool("echo", { via: "sse" }),
-    becomes: { echoed: { via: "sse" } },
-    sse: true,
+    call: (c) => c.callTool("shot"),
+    becomes: { content: [{ type: "image", data: "aGk=", mimeType: "image/png" }] },
   },
-  { call: (c) => c.listTools(), becomes: TOOLS },
+  { call: (c) => c.callTool("boom"), throws: /MCP tool boom failed: it broke/ },
 ];
 for (const row of mcpRows)
   test(`connectToMcp: ${row.call.toString().slice(0, 50)} → ${row.throws || JSON.stringify(row.becomes)}`, async () => {
-    const { itx } = mcpItx(referenceServer({ sse: row.sse }));
-    const conn = await connectToMcp(itx, "https://mcp.example/rpc");
+    const conn = await connectToMcp(mcpItx().itx, "https://mcp.example/rpc", {}, noWebhook);
     if (row.throws) await expect(row.call(conn)).rejects.toThrow(row.throws);
-    else expect(await row.call(conn)).toEqual(row.becomes);
+    else expect(await row.call(conn)).toMatchObject(row.becomes as object);
   });
 
-test("connectToMcp: a tool named like a reserved member does not shadow it: callTool stays callTool", async () => {
-  const { itx } = mcpItx(referenceServer());
-  const conn = await connectToMcp(itx, "https://mcp.example/rpc");
-  expect(await conn.callTool("echo", { x: 1 })).toEqual({ echoed: { x: 1 } });
-});
-
-test("connectToMcp: listTools REFUSES a server tool of the wrong shape — network data is parsed, not cast", async () => {
-  // An external MCP server is untrusted: a tool whose `name` is a number must not reach a typed
-  // frontend as McpTool[]. The first tools/list (at connect) is clean; the second is off-spec.
-  let listings = 0;
-  const { itx } = mcpServer({
-    answer: (body) =>
-      body.method === "tools/list" ? { tools: ++listings === 1 ? [] : [{ name: 42 }] } : {},
-  });
-  const conn = await connectToMcp(itx, "https://mcp.example/rpc");
-  await expect(conn.listTools()).rejects.toThrow();
-});
-
-test("connectToMcp: a stale handshake deletes ITS OWN session and never clobbers the live replacement", async () => {
-  // The hard race: handshake A parks, a close happens, handshake B completes and goes live, then A
-  // resumes. A must delete only ITS OWN session (s-2) and never touch the live one (s-3) — each
-  // handshake owns its session id, so A cannot clobber B into sending sessionless requests.
-  let releaseA: (() => void) | undefined;
-  const { itx, deletes } = mcpServer({
-    onInitialize: (n) => (n === 2 ? new Promise<void>((r) => (releaseA = r)) : undefined), // A parks
-    // a tool call echoes the session id it carried, so the test can see which session B used
-    answer: (body, request) =>
-      body.method === "tools/list"
-        ? { tools: [] }
-        : {
-            content: [
-              { type: "text", text: JSON.stringify(request.headers.get("mcp-session-id")) },
-            ],
-          },
-  });
-  const conn = await connectToMcp(itx, "https://mcp.example/rpc"); // s-1
-  await conn.close(); // DELETE s-1; generation 1
-  const aCall = conn.callTool("x").then(
-    () => "A ok",
-    (e: unknown) => (e instanceof Error ? e.message : String(e)),
-  ); // handshake A parks at initialize #2 (captures generation 1)
-  await new Promise((r) => setTimeout(r, 10));
-  await conn.close(); // generation 2; A's memo cleared
-  const bResult = await conn.callTool("y"); // handshake B → s-3 goes live, then tools/call carries s-3
-  releaseA?.(); // A resumes → stale (gen 1 ≠ 2) → deletes s-2, throws
-  const aOutcome = await aCall;
-
-  expect(bResult).toBe("s-3"); // B's call used its OWN live session — never clobbered by A
-  expect(aOutcome).toMatch(/closed during its handshake/);
-  expect(deletes).toEqual(expect.arrayContaining(["s-1", "s-2"]));
-  expect(deletes).not.toContain("s-3"); // the live session was not deleted
-});
-
-test("connectToMcp: callTool PRESERVES non-text content — an image part keeps its data and mimeType", async () => {
-  const { itx } = mcpServer({
-    answer: (body) =>
-      body.method === "tools/list"
-        ? { tools: [] }
-        : { content: [{ type: "image", data: "aGk=", mimeType: "image/png" }] },
-  });
-  const conn = await connectToMcp(itx, "https://mcp.example/rpc");
-  // No text/structuredContent → callTool returns the whole result; the image bytes must survive.
-  expect(await conn.callTool("shot")).toEqual({
-    content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
-  });
-});
-
-test("connectToMcp: a failed tool discovery closes the client — the handshake's session is DELETEd, not leaked", async () => {
-  const { itx, deletes } = mcpServer({
-    // discovery fails AFTER the handshake went live
-    answer: (body) =>
-      json({ jsonrpc: "2.0", id: body.id, error: { code: -32000, message: "boom" } }),
-  });
-  await expect(connectToMcp(itx, "https://mcp.example/rpc")).rejects.toThrow();
-  expect(deletes).toContain("s-1"); // the live session was cleaned up, not orphaned
-});
-
-test("connectToMcp: close DELETEs the session once; a server without a session id gets no DELETE", async () => {
-  const withSession = mcpItx(referenceServer());
-  const conn = await connectToMcp(withSession.itx, "https://mcp.example/rpc");
-  await conn.close();
-  await conn.close();
-  const deletes = withSession.requests.filter((r) => r.request.method === "DELETE");
-  expect(deletes).toHaveLength(1);
-  expect(deletes[0].request.headers.get("mcp-session-id")).toBe("s-1");
-  const sessionless = mcpItx(plainServer());
-  await (await connectToMcp(sessionless.itx, "https://mcp.example/rpc")).close();
-  expect(sessionless.requests.some((r) => r.request.method === "DELETE")).toBe(false);
-});
-
-test("connectToMcp: a connection closed by a holder re-runs its handshake on the next request — a closed connection is never dead", async () => {
-  const { itx, requests } = mcpItx(referenceServer());
-  const conn = await connectToMcp(itx, "https://mcp.example/rpc");
-  await conn.close();
-  expect(await conn.callTool("echo", { x: 1 })).toEqual({ echoed: { x: 1 } });
-  expect(requests.filter((r) => r.body?.method === "initialize")).toHaveLength(2);
-});
-
-test("connectToMcp: tools named `then` and `toJSON` grow no method (an await would adopt a THENABLE connection and call the tool, never settling; JSON.stringify would call `toJSON`): connect settles, no tools/call, and callTool reaches both", async () => {
-  const { itx, requests } = mcpItx(
-    plainServer([{ name: "then" }, { name: "toJSON" }, { name: "echo" }]),
-  );
-  const conn = await connectToMcp(itx, "https://mcp.example/rpc");
-  expect(requests.map((r) => r.body?.method)).not.toContain("tools/call");
-  expect((conn as { then?: unknown }).then).toBeUndefined();
-  expect((conn as { toJSON?: unknown }).toJSON).toBeUndefined();
-  expect(await conn.callTool("then")).toBe("answered");
-  expect(await conn.callTool("toJSON")).toBe("answered");
-});
-
-test("connectToMcp: an SSE answer the server leaves OPEN still connects — read as it arrives and left at the matching id, never awaited to EOF", async () => {
-  const plain = plainServer();
-  const encoder = new TextEncoder();
-  const { itx } = mcpItx(async (request, body) => {
-    const answer = await plain(request, body);
-    if (answer.status !== 200) return answer;
-    const message = await answer.text();
-    return new Response(
-      new ReadableStream({
-        start(controller) {
-          // one `data:` event, then the stream stays OPEN
-          controller.enqueue(encoder.encode(`event: message\ndata: ${message}\n\n`));
-        },
-      }),
-      { headers: { "content-type": "text/event-stream" } },
-    );
-  });
-  const conn = await connectToMcp(itx, "https://mcp.example/rpc");
-  expect(conn.serverInfo()).toMatchObject({ serverInfo: { name: "plain" } });
-});
-
-test("connectToMcp: a non-2xx answer throws with the status and the body", async () => {
-  const { itx } = mcpItx(() => new Response("nope", { status: 503 }));
-  await expect(connectToMcp(itx, "https://mcp.example/rpc")).rejects.toThrow(
-    /MCP initialize returned 503: nope/,
-  );
+test("connectToMcp, a server of the older protocol: initialize after the discover probe, no GET stream; close ends the session with a DELETE, and a call during the close is answered by a new session", async () => {
+  const { itx, seen, holdDeletes } = legacyItx();
+  const conn = await connectToMcp(itx, "https://mcp.example/rpc", {}, noWebhook);
+  const releaseDeletes = holdDeletes();
+  const closing = conn.close();
+  expect(await conn.listTools()).toEqual([]); // answered while the close's DELETE is still held
+  releaseDeletes();
+  await closing;
+  expect(await conn.listTools()).toEqual([]);
+  expect(conn.serverInfo()).toMatchObject({ serverInfo: { name: "legacy" } });
+  expect(seen.filter((method) => method === "initialize")).toHaveLength(2);
+  expect(seen.filter((entry) => /^[A-Z]+ /.test(entry))).toEqual(["DELETE s-1"]); // no GET
 });
 
 // ── openapi ── the OpenAPI connection against a fake service behind a fake `itx.fetch`:
@@ -1175,9 +961,9 @@ const json = (value: unknown, init: ResponseInit = {}) =>
     headers: { "content-type": "application/json", ...(init.headers as Record<string, string>) },
   });
 
-/** The three remotes behind one `itx.fetch`, by host: an MCP server (`mcp.example` — a session id on
- *  initialize, DELETE on close), an OpenAPI document (`api.example/openapi.json`) and a capnweb batch
- *  endpoint (`rpc.example`). `seen` is every request: the JSON-RPC method, `GET <path>`, `DELETE`. */
+/** The three remotes behind one `itx.fetch`, by host: an MCP server (`mcp.example`, `fakeMcpServer`),
+ *  an OpenAPI document (`api.example/openapi.json`) and a capnweb batch endpoint (`rpc.example`).
+ *  `seen` is every request: the JSON-RPC method or `GET <path>`. */
 function remotes(): { itx: LibraryItx; seen: string[] } {
   const seen: string[] = [];
   const itx = fakeItx({
@@ -1188,29 +974,19 @@ function remotes(): { itx: LibraryItx; seen: string[] } {
         seen.push(`GET ${url.pathname}`);
         return json(url.pathname.endsWith("openapi.json") ? REMOTES_SPEC : { ok: true });
       }
-      if (request.method === "DELETE") {
-        seen.push("DELETE");
-        return new Response(null, { status: 204 });
-      }
-      const body = JSON.parse(await request.text()) as { id?: number; method: string };
-      seen.push(body.method);
-      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
-      const result =
-        body.method === "initialize"
-          ? { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } }
-          : body.method === "tools/list"
-            ? { tools: [{ name: "echo" }] }
-            : { content: [{ type: "text", text: '"ok"' }] };
-      return json(
-        { jsonrpc: "2.0", id: body.id, result },
-        body.method === "initialize" ? { headers: { "mcp-session-id": "s-1" } } : {},
-      );
+      seen.push(JSON.parse(await request.clone().text()).method);
+      return mcpHandler().fetch(request);
     },
   });
   return { itx, seen };
 }
 
-const initializes = (seen: string[]) => seen.filter((m) => m === "initialize").length;
+const discovers = (seen: string[]) => seen.filter((m) => m === "server/discover").length;
+
+const noWebhook = () => Promise.reject(new Error("this test subscribes to nothing"));
+
+/** What `buildLibrary` is handed in these tests: a caller at the root, and a webhook no test reaches. */
+const LIBRARY_DEPS = { caller: () => ({ principal: null }), path: "/", mcpWebhook: noWebhook };
 
 /** A fake itx: `append` lands at offsets from 10; `waitForEvent` records a wait the library must
  *  never make on the context (the run's caller reads the settlement, `contextLog`). */
@@ -1372,133 +1148,74 @@ function capnwebItx() {
   return { itx, requests };
 }
 
-/** A fake `itx` whose fetch records requests and answers with `handler`. */
-function mcpItx(handler: Handler): {
-  itx: LibraryItx;
-  requests: Array<{ request: Request; body: any }>;
-} {
-  const requests: Array<{ request: Request; body: any }> = [];
+/** A fake `itx` whose fetch is `mcpHandler`. */
+const mcpItx = () => {
+  const handler = mcpHandler();
+  return { itx: fakeItx({ fetch: (request: Request) => handler.fetch(request) }) };
+};
+
+/** A real MCP server with a tool per `callTool` answer shape. */
+function mcpHandler() {
+  return createMcpHandler(() => {
+    const server = new McpServer({ name: "fake", version: "0" });
+    const text = (value: string) => ({ content: [{ type: "text" as const, text: value }] });
+    server.registerTool("echo", { inputSchema: { text: z.string() } }, (args) =>
+      text(JSON.stringify({ echoed: args })),
+    );
+    server.registerTool(
+      "add",
+      { inputSchema: { a: z.number(), b: z.number() }, outputSchema: { sum: z.number() } },
+      ({ a, b }) => ({ ...text("ignored"), structuredContent: { sum: a + b } }),
+    );
+    server.registerTool("plain", {}, () => text("just text"));
+    server.registerTool("shot", {}, () => ({
+      content: [{ type: "image" as const, data: "aGk=", mimeType: "image/png" }],
+    }));
+    server.registerTool("boom", {}, () => ({ ...text("it broke"), isError: true }));
+    return server;
+  });
+}
+
+/** A fake `itx` whose fetch is a server of the older protocol: `server/discover` is unknown,
+ *  `initialize` opens session `s-<n>`, and a DELETE ends one, once `holdDeletes`' release lets it.
+ *  `seen` is each JSON-RPC method, or `<HTTP method> <session>` for anything but a POST. */
+function legacyItx() {
+  const seen: string[] = [];
+  let sessions = 0;
+  let deletesHeld = Promise.resolve();
+  const holdDeletes = () => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    deletesHeld = promise;
+    return resolve;
+  };
   const itx = fakeItx({
     fetch: async (request: Request) => {
-      const text = await request.clone().text();
-      const body = text ? JSON.parse(text) : undefined;
-      requests.push({ request, body });
-      return handler(request, body);
+      if (request.method !== "POST") {
+        await deletesHeld;
+        seen.push(`${request.method} ${request.headers.get("mcp-session-id")}`);
+        return new Response(null, { status: request.method === "DELETE" ? 204 : 405 });
+      }
+      const { id, method } = JSON.parse(await request.text());
+      seen.push(method);
+      if (method === "notifications/initialized") return new Response(null, { status: 202 });
+      if (method === "initialize")
+        return json(
+          {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: { tools: {} },
+              serverInfo: { name: "legacy", version: "0" },
+            },
+          },
+          { headers: { "mcp-session-id": `s-${++sessions}` } },
+        );
+      if (method === "tools/list") return json({ jsonrpc: "2.0", id, result: { tools: [] } });
+      return json({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
     },
   });
-  return { itx, requests };
-}
-
-/** The reference fake server: hands out a session id on initialize and insists on it afterwards. */
-function referenceServer(options: { sse?: boolean } = {}): Handler {
-  return (request, body) => {
-    if (request.method === "DELETE") return new Response(null, { status: 204 });
-    if (body.method === "initialize")
-      return json(
-        {
-          jsonrpc: "2.0",
-          id: body.id,
-          result: {
-            protocolVersion: "2025-03-26",
-            capabilities: { tools: {} },
-            serverInfo: { name: "fake", version: "0" },
-          },
-        },
-        { headers: { "mcp-session-id": "s-1" } },
-      );
-    if (request.headers.get("mcp-session-id") !== "s-1")
-      return new Response("no session", { status: 400 });
-    if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
-    let result: unknown;
-    if (body.method === "tools/list") result = { tools: TOOLS };
-    else if (body.method === "tools/call") {
-      const { name, arguments: args } = body.params;
-      if (name === "echo")
-        result = { content: [{ type: "text", text: JSON.stringify({ echoed: args }) }] };
-      else if (name === "add")
-        result = {
-          content: [{ type: "text", text: "ignored" }],
-          structuredContent: { sum: args.a + args.b },
-        };
-      else if (name === "plain") result = { content: [{ type: "text", text: "just text" }] };
-      else if (name === "boom")
-        result = { content: [{ type: "text", text: "it broke" }], isError: true };
-      else
-        return json({
-          jsonrpc: "2.0",
-          id: body.id,
-          error: { code: -32602, message: `unknown tool ${name}` },
-        });
-    }
-    const message = { jsonrpc: "2.0", id: body.id, result };
-    return options.sse
-      ? new Response(`event: message\ndata: ${JSON.stringify(message)}\n\n`, {
-          headers: { "content-type": "text/event-stream" },
-        })
-      : json(message);
-  };
-}
-
-/** A session-less server (no `mcp-session-id`, so nothing to DELETE): initialize, then `tools`, then
- *  every tools/call answers `answer` as text. */
-function plainServer(tools: { name: string }[] = [], answer = "answered"): Handler {
-  return (_request, body) => {
-    if (body?.method === "notifications/initialized") return new Response(null, { status: 202 });
-    const result =
-      body?.method === "initialize"
-        ? { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "plain" } }
-        : body?.method === "tools/list"
-          ? { tools }
-          : { content: [{ type: "text", text: answer }] };
-    return json({ jsonrpc: "2.0", id: body?.id, result });
-  };
-}
-
-/** A live MCP server whose n-th handshake opens session `s-<n>` once `onInitialize(n)` settles. A
- *  request without a session is refused, as a real server 400s it; a DELETE records the session it
- *  closes in `deletes`; every other request answers `answer(body, request)`: a Response as it is,
- *  anything else as the JSON-RPC result (by default one `echo` tool, whose every call answers "ok"). */
-function mcpServer({
-  onInitialize = () => undefined,
-  answer = (body) =>
-    body.method === "tools/list"
-      ? { tools: [{ name: "echo" }] }
-      : { content: [{ type: "text", text: '"ok"' }] },
-}: {
-  onInitialize?: (handshake: number) => Promise<void> | undefined;
-  answer?: (body: any, request: Request) => unknown;
-}) {
-  const deletes: string[] = [];
-  let handshakes = 0;
-  const server = mcpItx(async (request, body) => {
-    if (request.method === "DELETE") {
-      deletes.push(request.headers.get("mcp-session-id") ?? "?");
-      return new Response(null, { status: 204 });
-    }
-    if (body.method === "initialize") {
-      const handshake = ++handshakes;
-      await onInitialize(handshake);
-      return json(
-        {
-          jsonrpc: "2.0",
-          id: body.id,
-          result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "f" } },
-        },
-        { headers: { "mcp-session-id": `s-${handshake}` } },
-      );
-    }
-    if (!request.headers.get("mcp-session-id"))
-      return json(
-        { jsonrpc: "2.0", id: body.id, error: { code: -32000, message: "no session" } },
-        { status: 400 },
-      );
-    if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
-    const answered = answer(body, request);
-    return answered instanceof Response
-      ? answered
-      : json({ jsonrpc: "2.0", id: body.id, result: answered });
-  });
-  return { ...server, deletes };
+  return { itx, seen, holdDeletes };
 }
 
 function openApiItx(answer: (request: Request) => Response = () => json({ ok: true })) {
@@ -1526,8 +1243,8 @@ function entities(origin?: string, app?: true) {
   return {
     dispatched,
     ...buildLibrary(itx, {
+      ...LIBRARY_DEPS,
       caller: () => ({ principal: null, path: origin, app }),
-      path: "/",
     }).roots,
   };
 }

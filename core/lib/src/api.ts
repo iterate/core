@@ -407,7 +407,7 @@ export interface CfArtifactsApi {
  *  at egress). */
 export type McpConnectOptions = { headers?: Record<string, string> };
 
-/** An MCP server's answer to `initialize`: its protocol version, capabilities, name and version. */
+/** An MCP server's protocol version, capabilities, name and version. */
 export type McpServerInfo = {
   protocolVersion?: string;
   capabilities?: Record<string, unknown>;
@@ -416,6 +416,20 @@ export type McpServerInfo = {
 
 /** One tool as an MCP server's `tools/list` describes it. */
 export type McpTool = { name: string; description?: string; inputSchema?: unknown };
+
+/** One event an MCP server offers (the draft MCP Events extension's `events/list`): its name, the
+ *  delivery modes it supports, the subscription arguments it takes and the payload it delivers. */
+export type McpEvent = {
+  name: string;
+  description?: string;
+  delivery: string[];
+  inputSchema?: unknown;
+  payloadSchema?: unknown;
+};
+
+/** An MCP server's grant for a subscription: its id, and when it lapses unless `subscribe` is called
+ *  again (an ISO time, or null for never). */
+export type McpSubscription = { id: string; refreshBefore: string | null };
 
 /** `itx.connectToMcp(url)`: an MCP server over Streamable HTTP. Besides these, the connection has
  *  one method per tool whose name is a legal identifier (reached by dotted spelling, untyped here);
@@ -426,6 +440,14 @@ export interface McpConnectionApi {
   /** The result's `structuredContent`, else its text content JSON-parsed when it parses, else the
    *  text; an `isError` result throws with that text. */
   callTool(name: string, args?: Record<string, unknown>): Promise<unknown>;
+  /** The events the server offers. */
+  listEvents(): Promise<McpEvent[]>;
+  /** Subscribe this context to the event `name` with its arguments: the server POSTs each one to
+   *  this context's MCP webhook, which appends it here as `events.iterate.com/mcp/webhook-received`
+   *  `{ server, subscriptionId, body }`. Calling it again renews the subscription. */
+  subscribe(name: string, args?: Record<string, unknown>): Promise<McpSubscription>;
+  /** End the subscription `subscribe(name, args)` made. */
+  unsubscribe(name: string, args?: Record<string, unknown>): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -1006,7 +1028,8 @@ export interface IterateContextApi {
   email: {
     send(input: EmailSendInput): Promise<StreamEvent>;
   };
-  /** An MCP server over Streamable HTTP, through this context's egress. */
+  /** An MCP server over Streamable HTTP, through this context's egress; its events subscribed to
+   *  land on this context. */
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnectionApi>;
   /** An OpenAPI 3 service from its document or the URL of one, through this context's egress. */
   connectToOpenApi(

@@ -92,6 +92,7 @@ import {
   resourceScope,
 } from "./context/paths.ts";
 import { LEND_USE_HEADER, LENT_AS_HEADER, verifyLendUse } from "./secrets.ts";
+import { mcpWebhookOf } from "./integrations/mcp.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
 import {
   appConfigOf,
@@ -856,6 +857,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // a relative `./x` answered here through a hop is the caller's.
     caller: () => this.#caller,
     path: this.#durableObjectAddress.path,
+    mcpWebhook: (server) =>
+      mcpWebhookOf(this.#appConfig, this.#platformOrigin, this.#durableObjectAddress, server),
   });
 
   // ── the runner: `itx/run-requested` → the script in a confined isolate → `run-settled` ──

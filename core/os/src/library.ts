@@ -1,13 +1,15 @@
 // library.ts — the library: `buildLibrary` closes the verbs below over one `itx` and memoizes the
 // live connections. The connectors (library/capnweb.ts, mcp.ts, openapi.ts) are userspace-shaped —
-// written against `itx.fetch` alone, so a userspace worker could carry them unchanged. `run` and the
+// written against `itx.fetch` alone, so a userspace worker could carry them unchanged; MCP's events
+// also need the webhook the platform mints for this context (`mcpWebhook`). `run` and the
 // entity roots (`repos`, `workspaces`) are platform sugar spelled at the fixed point,
 // `itx.builtins` — the word loaded code may not say; `files` is a path namespace over `itx.r2`.
 //
 // THE LIBRARY RULE: a library module takes `itx` and nothing else, so at runtime this file and
-// library/*.ts import only npm packages a userspace worker could bundle too (capnweb,
-// cloudflare:workers, zod), the SDK's pure `iterate/expression` (the codec and the pipelinable
-// handle), `iterate/lib` and `iterate/stream/run` (the run contract and its deadline), the
+// library/*.ts import only npm packages a userspace worker could bundle too
+// (@modelcontextprotocol/client, capnweb, cloudflare:workers, zod), the SDK's pure
+// `iterate/expression` (the codec and the pipelinable handle), `iterate/lib` and
+// `iterate/stream/run` (the run contract and its deadline), the
 // entities' contracts (pure zod, the vocabulary a handle's typed `append` validates against) and
 // each other. Type-only imports are free. Anything else (the stream, the DO, the rest of context/)
 // would make the library un-movable to userspace, which is the whole point of the tier. Lint
@@ -37,7 +39,7 @@ import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
 import type { WorkspaceDurableObject, workspaceVerbs } from "./workspace/durable-object.ts";
 import { connectToCapnweb } from "./library/capnweb.ts";
-import { connectToMcp } from "./library/mcp.ts";
+import { connectToMcp, type McpWebhook } from "./library/mcp.ts";
 import { connectToOpenApi } from "./library/openapi.ts";
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
@@ -115,6 +117,8 @@ type LibraryDeps = {
   caller: () => Caller;
   /** This context's path — a relative path's base when the caller carries none. */
   path: string;
+  /** Where the MCP server at a URL delivers this context's events (integrations/mcp.ts). */
+  mcpWebhook: (server: string) => Promise<McpWebhook>;
 };
 
 /** The library, built once per context: the verbs closed over one `itx`, memoizing the live
@@ -152,7 +156,9 @@ export function buildLibrary(
     roots: {
       run: (script) => requestScriptRun(itx, deps.path, script),
       connectToMcp: (url, options) =>
-        memoized(["mcp", url, options], false, () => connectToMcp(itx, url, options)),
+        memoized(["mcp", url, options], false, () =>
+          connectToMcp(itx, url, options || {}, () => deps.mcpWebhook(url)),
+        ),
       connectToOpenApi: (specOrUrl, options) =>
         memoized(["openapi", specOrUrl, options], false, () =>
           connectToOpenApi(itx, specOrUrl, options),
