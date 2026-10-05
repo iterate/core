@@ -12,6 +12,7 @@
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
 import { codedError, errorCode, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
+import { Webhook } from "standardwebhooks";
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
@@ -506,10 +507,17 @@ function abortReasonOf(reason: unknown, verb: string): string | undefined {
 }
 
 /** A webhook's spec (`webhooks.get`): where it POSTs, over http(s), and the secret that signs it. */
-const WebhookSpec = z.strictObject({
-  url: z.url({ protocol: /^https?$/, error: "a webhook's url is an http(s) URL" }),
-  signingSecret: z.string().transform(assertSecretPath).optional(),
-});
+const WebhookSpec = z
+  .strictObject({
+    url: z.url({ protocol: /^https?$/, error: "a webhook's url is an http(s) URL" }),
+    signingSecret: z.string().transform(assertSecretPath).optional(),
+    /** The MCP Events subscription this webhook delivers (mcp-events.ts): each event goes as an
+     *  `event.appended` occurrence, signed per Standard Webhooks with the signing secret. */
+    mcpSubscription: z.string().min(1).optional(),
+  })
+  .refine((spec) => !spec.mcpSubscription || spec.signingSecret, {
+    error: "an MCP subscription's webhook names its signing secret",
+  });
 
 /** How long one webhook POST may take: under the delivery watchdog (20 s), so the request is
  *  cancelled — and its delivery settles — before the watchdog gives up on it. */
@@ -2045,7 +2053,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // A genuine InvokeHandle, as `workers.get`'s: across a `cd` hop it is the expression that
       // names it (dispatch.ts), so the delivery's call reaches it whole, its authority carried.
       get: (spec) => {
-        const { url, signingSecret } = WebhookSpec.parse(spec);
+        const { url, signingSecret, mcpSubscription } = WebhookSpec.parse(spec);
         return new InvokeHandle(async (methodSteps) => {
           const [call] = methodSteps;
           if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] !== "deliverEvent")
@@ -2061,13 +2069,31 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             "webhooks.get(spec).deliverEvent",
             body,
           );
+          const eventId = `${projectId}${event.path}@${event.offset}`;
           const headers = new Headers({
             "content-type": "application/json",
-            "iterate-event-id": `${projectId}${event.path}@${event.offset}`,
+            "iterate-event-id": eventId,
           });
-          if (signingSecret) {
+          const key =
+            signingSecret && (await webhookSigningKey(signingSecret, new URL(url).origin));
+          let sent = body;
+          if (mcpSubscription && key) {
+            // MCP Events: the event as the data of an `event.appended` occurrence, signed with the
+            // client's secret per Standard Webhooks (its webhook-id the occurrence's eventId)
+            sent = JSON.stringify({
+              eventId,
+              name: "event.appended",
+              timestamp: event.createdAt,
+              data: event,
+              cursor: null,
+            });
+            const now = new Date();
+            headers.set("webhook-id", eventId);
+            headers.set("webhook-timestamp", String(Math.floor(now.getTime() / 1000)));
+            headers.set("webhook-signature", new Webhook(key).sign(eventId, now, sent));
+            headers.set("x-mcp-subscription-id", mcpSubscription);
+          } else if (key) {
             const timestamp = String(Math.floor(Date.now() / 1000));
-            const key = await webhookSigningKey(signingSecret, new URL(url).origin);
             headers.set("iterate-timestamp", timestamp);
             headers.set(
               "iterate-signature",
@@ -2083,7 +2109,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           const request = new Request(url, {
             method: "POST",
             headers,
-            body,
+            body: sent,
             redirect: "manual",
             signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
           });
@@ -2096,6 +2122,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           )) as Response;
           await response.body?.cancel();
           if (response.ok) return;
+          // MCP Events: a 410 or 413 refuses this event alone, never the subscription — dead-lettered
+          // once, and the row delivers the next
+          if (mcpSubscription && (response.status === 410 || response.status === 413))
+            throw codedError(
+              "PERMANENT_FAILURE",
+              `webhook ${url} answered ${response.status}: this event is not retried`,
+            );
           if (response.status === 410)
             throw codedError(
               "GONE",

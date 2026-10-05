@@ -10,8 +10,9 @@
 
 import { Webhook } from "standardwebhooks";
 import { z } from "zod";
-import { errorCode } from "iterate/lib";
+import { errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { appConfigOf, sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
+import { LOOP_DEPTH_LIMIT, parseCause, storedCause } from "../cause.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
 import { hmacSha256Hex } from "../secrets.ts";
@@ -75,15 +76,24 @@ export async function mcpWebhookRoute(request: Request, env: Env): Promise<Respo
     .object({ type: z.literal("verification"), challenge: z.string() })
     .safeParse(body);
   if (verification.success) return Response.json({ challenge: verification.data.challenge });
+  // A delivery our own server sent (mcp-events.ts) resumes the chain its mark carries, so a context
+  // that watches itself stops at the loop limit; any other begins one. Always recorded, as mail is.
+  const mark = parseCause(request.headers.get(ITERATE_CAUSE_HEADER));
   try {
-    await appendPlatformFact(env, project, path, {
-      type: "events.iterate.com/mcp/webhook-received",
-      // `webhook-id` is signed and is the event's `eventId`, so a retry is stored once
-      idempotencyKey: `mcp-webhook:${JSON.stringify([server, request.headers.get("webhook-id")])}`,
-      // the subscription id is only in a header, unsigned, and the one name a `terminated` or
-      // `gap` body has for its subscription
-      payload: { server, subscriptionId: request.headers.get("x-mcp-subscription-id"), body },
-    });
+    await appendPlatformFact(
+      env,
+      project,
+      path,
+      {
+        type: "events.iterate.com/mcp/webhook-received",
+        // `webhook-id` is signed and is the event's `eventId`, so a retry is stored once
+        idempotencyKey: `mcp-webhook:${JSON.stringify([server, request.headers.get("webhook-id")])}`,
+        // the subscription id is only in a header, unsigned, and the one name a `terminated` or
+        // `gap` body has for its subscription
+        payload: { server, subscriptionId: request.headers.get("x-mcp-subscription-id"), body },
+      },
+      mark && { ...storedCause(mark), depth: Math.min(mark.depth, LOOP_DEPTH_LIMIT) },
+    );
   } catch (error) {
     // A retry may carry a newer `cursor` or another subscription header, so it differs from the
     // event stored under the key: already stored.

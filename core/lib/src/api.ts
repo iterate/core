@@ -967,7 +967,13 @@ export interface IterateContextApi {
    *  alone. A signature vouches for the PROJECT, not a context: a receiver checks the body's `path`,
    *  and loaded code names a signing secret only at the project's root. */
   webhooks: {
-    get(spec: { url: string; signingSecret?: string }): InvokeHandle;
+    get(spec: {
+      url: string;
+      signingSecret?: string;
+      /** The MCP Events subscription it delivers: each event as an `event.appended` occurrence,
+       *  signed per Standard Webhooks with `signingSecret` (our MCP server's `events/subscribe`). */
+      mcpSubscription?: string;
+    }): InvokeHandle;
   };
   /** A subscription: a pure itx expression, or a live callback lent to the registry (what live state
    *  uses); `null` removes the row. The handle's dispose removes it too. */

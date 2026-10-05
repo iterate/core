@@ -1,4 +1,9 @@
-import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
+import {
+  createMcpHandler,
+  fromJsonSchema,
+  McpServer,
+  type ServerCapabilities,
+} from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { z } from "zod";
 import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
@@ -10,6 +15,7 @@ import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import type { Authorization } from "./oauth.ts";
 import { parseCause, type Cause } from "./cause.ts";
+import { registerMcpEvents } from "./mcp-events.ts";
 
 // MCP uses the same authorization and project root as a Cap’n Web project handle. The OAuth
 // grant or personal access token limits which projects can be selected; each run is attributed to
@@ -112,10 +118,27 @@ async function buildServer(
   const caller = { principal, grant: grant?.grantId, platformOrigin, cause };
   const mcpServer = new McpServer(
     { name: "control-plane", version: "0.1.0" },
-    instructed
-      ? { instructions: await serverInstructions(controlPlane, reach, platformOrigin) }
-      : {},
+    {
+      // MCP Events (mcp-events.ts): the draft's top-level `events` key, which ChatGPT reads. The
+      // SDK's 2026-07-28 type does not name it, and it answers it in server/discover as given.
+      capabilities: { events: {} } as ServerCapabilities,
+      ...(instructed && {
+        instructions: await serverInstructions(controlPlane, reach, platformOrigin),
+      }),
+    },
   );
+  /** A project's root, called as this request's caller (`contextStub`, as `run` below). */
+  const rootOf = (projectId: string) =>
+    contextStub(
+      env.ITERATE_CONTEXT,
+      DurableObjectNameCodec.address({ projectId, path: "/" }),
+      "mcp",
+    );
+  registerMcpEvents(mcpServer, {
+    caller,
+    projectOf: (requested) => projectOfToolCall(controlPlane, reach, requested),
+    rootOf,
+  });
 
   mcpServer.registerTool(
     "run",
@@ -157,11 +180,11 @@ async function buildServer(
         // Execute against the authorized root, through its rules, exactly as a project handle does
         // (`contextStub`, which reads the run's settlement back). The request carries the principal
         // and grant; the root's runner records its settlement.
-        const value = await contextStub(
-          env.ITERATE_CONTEXT,
-          DurableObjectNameCodec.address({ projectId, path: "/" }),
-          "mcp",
-        ).invoke(["itx", ["run", toolArguments.script]], [], caller);
+        const value = await rootOf(projectId).invoke(
+          ["itx", ["run", toolArguments.script]],
+          [],
+          caller,
+        );
         // THE JSON BOUNDARY: a round trip drops what JSON cannot carry and throws on what it refuses.
         const json = JSON.stringify(value) ?? "null";
         return {

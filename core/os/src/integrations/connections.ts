@@ -11,6 +11,7 @@ import type { StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "../app-config.ts";
 import { bytesFromBase64url, signClaims, type PlatformFactType } from "../caller.ts";
+import type { Cause } from "../cause.ts";
 import { facetStateOf } from "../context-stub.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane, type Reach } from "../control-plane/edge.ts";
@@ -194,17 +195,19 @@ export async function dropAttemptsOf(
 }
 
 /** One event onto a project context's log as the platform's own (`source.platform`, no principal):
- *  a connection's `connected`/`disconnected` on `/`, a webhook on the connection's log. */
+ *  a connection's `connected`/`disconnected` on `/`, a webhook on the connection's log. `cause`:
+ *  the chain it resumes (cause.ts), when what brought it carries our mark. */
 export async function appendPlatformFact(
   env: IntegrationEnv,
   projectId: string,
   path: string,
   event: StreamEventInput & { type: PlatformFactType },
+  cause?: Cause,
 ): Promise<void> {
   await env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path })).invoke(
     ["itx", "builtins", ["append", event]],
     [],
-    { principal: null, platform: true },
+    { principal: null, platform: true, cause },
   );
 }
 
