@@ -5,7 +5,7 @@
 // answers; the real one is test/vitest/os-workers/oauth.test.ts's.
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { AccountState } from "./account/contract.ts";
-import { platformAddressesOf } from "./app-config.ts";
+import { platformAddressesOf } from "./iterate-config.ts";
 import type { Env } from "./env.ts";
 import {
   accountStateOf,
@@ -123,8 +123,8 @@ async function accountHoldingKey(usedMinutesAgo: number | null) {
   };
   const appended: unknown[] = [];
   const env = {
-    APP_CONFIG_SECRETS__KEY: "secrets-key",
-    APP_CONFIG_LOGIN__PASSWORD: "password",
+    ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
+    ITERATE__LOGIN__PASSWORD: "password",
     OAUTH_KV: {
       get: async (key: string) =>
         key === `personal-access-token:${hash}` ? { userId, id: keyId } : null,

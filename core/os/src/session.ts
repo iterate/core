@@ -40,7 +40,7 @@ import {
 } from "./control-plane/catalog.ts";
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
 import { OrganizationRole } from "./organization/contract.ts";
-import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
+import { iterateAppScopesOf, type IterateConfig } from "./iterate-config.ts";
 import { contextStub, facetStateOf } from "./context-stub.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
 import { IntegrationProvider } from "./integrations/contract.ts";
@@ -70,8 +70,8 @@ export interface SessionInput {
   /** The control plane as the edge holds it: the catalog's reads and its commands. */
   controlPlane: ControlPlane;
   /** Configuration for operator authentication and context capabilities. */
-  appConfig: AppConfig;
-  /** THE PLATFORM ORIGIN this session was reached on (app-config.ts `platformAddressesOf`) — what
+  iterateConfig: IterateConfig;
+  /** THE PLATFORM ORIGIN this session was reached on (iterate-config.ts `platformAddressesOf`) — what
    *  every context it vends composes public URLs with (a DO isolate cannot know it: the caller
    *  carries it). */
   platformOrigin: string;
@@ -137,7 +137,7 @@ export class IterateRpcTarget extends RpcTarget implements IterateApi {
     }
     const admin = await verifyAdminSecret(
       credentials.data.secret,
-      this.#input.appConfig.secrets.adminBearer.exposeSecret(),
+      this.#input.iterateConfig.adminBearer.exposeSecret(),
     );
     if (!admin) throw codedError("INVALID_CREDENTIALS", "The admin secret did not match.");
     // Test/operator fixture only; product impersonation must retain operator attribution. The
@@ -220,7 +220,7 @@ export function ownerContext(
  *  A `snapshot` or `liveSnapshot` read of the owner's processor already holds the facts once this
  *  returns: the facet host holds such a read until the pushes it owes the facet have landed
  *  (context/facet-host.ts `#callFacet`). `folded` is for a verb that reads the fold INSIDE the facet
- *  (`this.snapshot()`, such as AccountDurableObject `connectIntegration`; identity.ts
+ *  (`this.snapshot()`, such as AccountFacet `connectIntegration`; identity.ts
  *  `keepSignInToken` passes it for the connect that follows a sign-in): it waits on the processor's
  *  read-your-writes barrier (`waitUntilProcessed`, which catches up from the log itself and rejects
  *  after its ten seconds) through the last fact's offset. */
@@ -490,7 +490,7 @@ export class SessionRpcTarget extends RpcTarget {
     });
     return this.#input.contextNamespace
       .getByName(name)
-      .exportSecretForProjectSeed(this.#input.appConfig.secrets.adminBearer.exposeSecret());
+      .exportSecretForProjectSeed(this.#input.iterateConfig.adminBearer.exposeSecret());
   }
 
   /** The deploy's readiness gate's (scripts/os/preview-readiness.ts), the operator's alone: the version
@@ -509,7 +509,7 @@ export class SessionRpcTarget extends RpcTarget {
           .getByName(DurableObjectNameCodec.address({ projectId, path: "/" }).name)
           .version(),
       );
-    return { edge: this.#input.appConfig.deployId, contexts: await Promise.all(contexts) };
+    return { edge: this.#input.iterateConfig.deployId, contexts: await Promise.all(contexts) };
   }
 
   /** Safe bootstrap data for every app, regardless of which host serves it. */
@@ -518,17 +518,17 @@ export class SessionRpcTarget extends RpcTarget {
       principal: this.#authority.principal,
       scopes: this.#authority.scopes ?? [],
       platformOrigin: this.#input.platformOrigin,
-      ingressRouting: this.#input.appConfig.urls.ingressRouting,
-      mcpOrigin: this.#input.appConfig.urls.mcp,
+      ingressRouting: this.#input.iterateConfig.urls.ingressRouting,
+      mcpOrigin: this.#input.iterateConfig.urls.mcp,
       iterateAppProviders: IntegrationProvider.options.filter((provider) =>
-        Boolean(this.#input.appConfig.integrations[provider]),
+        Boolean(this.#input.iterateConfig.integrations[provider]),
       ),
-      iterateAppScopes: iterateAppScopesOf(this.#input.appConfig),
+      iterateAppScopes: iterateAppScopesOf(this.#input.iterateConfig),
       // as identity.ts `signInClientOf`: the sign-in's block, and the integration's client it uses
       signInProviders: IdentityProvider.options.filter(
         (provider) =>
-          Boolean(this.#input.appConfig.login[provider]) &&
-          Boolean(this.#input.appConfig.integrations[provider]),
+          Boolean(this.#input.iterateConfig.login[provider]) &&
+          Boolean(this.#input.iterateConfig.integrations[provider]),
       ),
     };
   }

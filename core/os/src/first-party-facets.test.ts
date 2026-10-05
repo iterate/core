@@ -1,5 +1,5 @@
 // src/first-party-facets.test.ts — the reduce reads a first-party facet's hosting target WITHOUT a
-// spec: `itx.builtins.facets.get("repo").processEventBatch` marks the row as hosting RepoDurableObject
+// spec: `itx.builtins.facets.get("repo").processEventBatch` marks the row as hosting RepoFacet
 // (this worker's class), while any other name still needs `{ source, className }` to host.
 import { expect, test } from "vitest";
 import type { ItxExpression } from "iterate/expression";

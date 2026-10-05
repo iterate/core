@@ -8,7 +8,7 @@ import {
   type PlatformFailureKind,
 } from "iterate/platform-retry";
 import { clientDisplay } from "./client-display.ts";
-import { platformAddressesOf } from "./app-config.ts";
+import { platformAddressesOf } from "./iterate-config.ts";
 import type { Env } from "./env.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import { accountStateOf, oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";

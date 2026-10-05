@@ -1,7 +1,8 @@
 // Prepare source consumed by the Worker build: the platform packages loaded workers import and the
 // config templates it offers: core's own (core/configs), and any others this step is given
 // (`--template`, or `build({ templates })` from iterate's deploy tooling). Vite builds the Worker
-// and Start client after this step; Vitest runs that built Worker.
+// and Start client after this step (cloudflare.config.ts, into .cloudflare/output/); Vitest runs
+// that built Worker.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -16,7 +17,6 @@ import {
   pinPublicGithubTemplate,
 } from "../src/repo/github-template.ts";
 import { viteBuild } from "./vite-build.ts";
-import type { OsDeployableEnv } from "./os-env.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -237,24 +237,9 @@ export async function templatesFromArgs(args: string[]) {
   return { templates, rest };
 }
 
-/** `vite build` of one deployment's Worker and its TanStack client into dist/. vite.config.ts gets
- *  the deployment from `OS_DEPLOYMENT` (generate-wrangler-config.ts `deploymentFromEnv`), never by
- *  looking its name up. */
-export async function viteBuildOs(deployment: OsDeployableEnv) {
-  await viteBuild(root, {
-    CLOUDFLARE_ENV: deployment.name,
-    OS_DEPLOYMENT: JSON.stringify(deployment),
-  });
-}
-
-/** `build`, then `viteBuildOs`. */
-export async function buildOs(deployment: OsDeployableEnv, templates: ConfigTemplate[]) {
-  await build({ templates });
-  await viteBuildOs(deployment);
-}
-
 // `pnpm build [--template <reference>]… [--template-root <checkout>]`: the generated modules, then
-// `vite build` for CLOUDFLARE_ENV's deployment (a self-host's is `self-host`).
+// `vite build`, for the deployment the iterate config's `cloudflare` section names
+// (src/iterate-config.ts), or a local build.
 if (import.meta.main) {
   const { templates } = await templatesFromArgs(process.argv.slice(2));
   await build({ templates });

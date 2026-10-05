@@ -16,7 +16,7 @@
 // secret/durable-object.ts `#clientSecretOf`.
 //
 // AN INTEGRATION'S CONNECT (src/integrations/) names whose app instead of passing a client in the
-// clear: `client: { platform: "slack" }` is the deployment's own (APP_CONFIG `integrations.<provider>`,
+// clear: `client: { platform: "slack" }` is the deployment's own (ITERATE `integrations.<provider>`,
 // read inside the secret's facet and never copied into the record — the record holds the tokens, and
 // a refresh names the same client), `client: { project: "slack" }` the project's own, whose
 // credentials this secret already holds (`clientId`, `clientSecret`, and whatever else the app needs,

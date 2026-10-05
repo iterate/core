@@ -19,7 +19,7 @@ import type { AccountState, GrantUsed } from "./account/contract.ts";
 import { appendPlatformFacts, ownerContext } from "./session.ts";
 import { type Reach } from "./control-plane/edge.ts";
 import { emailAllowed } from "./allowed-emails.ts";
-import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
+import { iterateConfigOf, platformAddressesOf, type PlatformAddresses } from "./iterate-config.ts";
 import { providerStore } from "./oauth-store.ts";
 import { watchSlowStep } from "./sign-in-watch.ts";
 import {
@@ -128,10 +128,10 @@ export async function accountStateOf(env: Env, userId: string): Promise<AccountS
   );
 }
 
-/** Whether `email` is one of the deployment's platform admins (app-config.ts `admins`), as the
+/** Whether `email` is one of the deployment's platform admins (iterate-config.ts `admins`), as the
  *  configuration reads now. */
 export function isAdmin(env: Env, email: string): boolean {
-  return appConfigOf(env).admins.includes(email.trim().toLowerCase());
+  return iterateConfigOf(env).admins.includes(email.trim().toLowerCase());
 }
 
 /** A grant's admin claims, against the `admins` list as it reads NOW: the `admin` scope needs its
@@ -161,7 +161,7 @@ async function liveGrantAccount(env: Env, grant: AccessGrant): Promise<AccountSt
   if (
     grant.expiresAt <= Date.now() ||
     grant.deadline <= Date.now() ||
-    !emailAllowed(appConfigOf(env).login.allowedEmails, grant.email) ||
+    !emailAllowed(iterateConfigOf(env).login.allowedEmails, grant.email) ||
     !grantAdminsStillListed(env, grant)
   )
     return null;
@@ -224,7 +224,7 @@ export async function validateToken(
     }
     return { ...validated, props: authorization };
   }
-  if (await verifyAdminSecret(token, appConfigOf(env).secrets.adminBearer.exposeSecret())) {
+  if (await verifyAdminSecret(token, iterateConfigOf(env).adminBearer.exposeSecret())) {
     if (resource === addresses.api)
       return {
         props: {
@@ -483,7 +483,7 @@ async function personalAccessTokenAdmission(
   if (expiresAt <= Date.now()) return { ok: false, reason: "token_unknown_or_expired" };
   if (
     account.endedGrants[named.id] ||
-    !emailAllowed(appConfigOf(env).login.allowedEmails, key.email)
+    !emailAllowed(iterateConfigOf(env).login.allowedEmails, key.email)
   )
     return { ok: false, reason: "grant_not_live" };
   const grant: AccessGrant = {
@@ -537,7 +537,7 @@ async function grantLifetime(
     grant.kind === "issuer" && input.grantType === GrantType.AUTHORIZATION_CODE;
   if (!signInsOwnExchange && (await accountStateOf(env, input.userId)).endedGrants[input.grantId])
     throw refused("grant_ended", "The session is no longer active.");
-  if (!emailAllowed(appConfigOf(env).login.allowedEmails, grant.email))
+  if (!emailAllowed(iterateConfigOf(env).login.allowedEmails, grant.email))
     throw refused("email_not_allowed", "The session is no longer active.");
   if (!grantAdminsStillListed(env, { ...grant, scope: input.scope }))
     throw refused("admin_not_listed", "The session is no longer active.");

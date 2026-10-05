@@ -2,7 +2,7 @@
 // Cloudflare for SaaS calls behind one, against a fake API: find-or-create, the DNS records its
 // owner is shown, delete.
 import { expect, test } from "vitest";
-import type { AppConfig } from "../app-config.ts";
+import type { IterateConfig } from "../iterate-config.ts";
 import {
   cloudflareCustomHostnameProvider,
   customHostnameProblem,
@@ -143,6 +143,8 @@ const SAAS = {
   reservedZones: [],
 };
 
-function config(token: string): Pick<AppConfig, "customHostnames" | "cloudflareApiToken"> {
-  return { customHostnames: SAAS, cloudflareApiToken: { exposeSecret: () => token } as never };
+function config(token: string): Pick<IterateConfig, "customHostnames"> {
+  return {
+    customHostnames: { ...SAAS, cloudflareApiToken: { exposeSecret: () => token } as never },
+  };
 }

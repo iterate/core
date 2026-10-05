@@ -8,14 +8,16 @@ import { join } from "node:path";
 const CAPTURED_COMMAND_OUTPUT_LIMIT = 64 * 1024;
 
 /**
- * `vite build` of one app for one environment, into a fresh dist/: the Cloudflare Vite plugin
- * snapshots that environment's Worker config into dist/, and that snapshot is what deploys and what
- * a per-PR preview starts from. `env` selects it: `CLOUDFLARE_ENV`, and for core/os the deployment
- * itself (`OS_DEPLOYMENT`, core/os/scripts/build.ts). Its output streams as it runs; a failure's
- * error carries the last 40 lines, so a report of it (the PR preview's `deploy failed`) says why.
+ * `vite build` of one app for one environment, into a fresh output folder: the Cloudflare Vite
+ * plugin snapshots that environment's Worker config beside the code, and that snapshot is what
+ * deploys. The apps on top build into dist/ (`CLOUDFLARE_ENV` selects the environment); core/os
+ * builds into .cloudflare/output/ from cloudflare.config.ts (the iterate config's `cloudflare`
+ * section selects the deployment). Its output streams as it runs; a failure's error carries the
+ * last 40 lines, so a report of it (the PR preview's `deploy failed`) says why.
  */
 export async function viteBuild(appRoot: string, env: Record<string, string>) {
-  rmSync(join(appRoot, "dist"), { recursive: true, force: true });
+  for (const output of ["dist", ".cloudflare/output"])
+    rmSync(join(appRoot, output), { recursive: true, force: true });
   const result = await runStreamingCaptured("pnpm", ["exec", "vite", "build"], {
     cwd: appRoot,
     env,

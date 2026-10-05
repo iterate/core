@@ -10,7 +10,7 @@ Run from the repository root:
 
 ```sh
 pnpm install
-pnpm --dir core/os dev         # the platform on local workerd (scripts/dev.ts)
+pnpm --dir core/os dev         # the platform on local workerd (scripts/dev.ts; `cf dev` serves it too)
 pnpm --dir core/os build       # with core's templates; `--template <github reference>` adds others
 pnpm --dir core/os typecheck
 pnpm --dir core/os test
@@ -23,17 +23,20 @@ and never edited
 ([packages/ui/AGENTS.md](https://github.com/iterate/packages/blob/main/packages/ui/AGENTS.md#vendored-shadcn-components)),
 and ours beside them. Its UI is the auth flow and nothing more: a component only another app needs,
 or anything first-party and opinionated (stream views, app shells), belongs in packages/ui
-([iterate/packages](https://github.com/iterate/packages)). The build emits the Worker and its
-`dist/server/wrangler.json`, which the tests and deploys use. The end-to-end and browser suites
-that run against a deployment are iterate's, outside core.
+([iterate/packages](https://github.com/iterate/packages)). The Worker's Cloudflare config is
+`cloudflare.config.ts`, which `cf` and the Cloudflare Vite plugin read; the build writes the Worker
+and its config to `.cloudflare/output/`, which the tests and deploys use. The end-to-end and browser
+suites that run against a deployment are iterate's, outside core.
 
 ## Deployments
 
-A build is handed its deployment: `CLOUDFLARE_ENV` names it and `OS_DEPLOYMENT` carries its Worker
-name, URLs and resources as JSON (`scripts/generate-wrangler-config.ts` `deploymentFromEnv`).
-`CLOUDFLARE_ENV=self-host` needs nothing more ([self-hosting](SELF-HOSTING.md)), and a build with
-neither is a local one. iterate's own deployments, production and one per tested commit of a pull
-request, are configured and deployed by iterate's tooling, outside core.
+One object configures a deployment, the iterate config (`src/iterate-config.ts`): its
+`cloudflare` section says where the Worker deploys, the rest what the Worker does. `pnpm run deploy`
+(`scripts/deploy.ts`) reads it from the environment (`iterate.config.ts`) or a gitignored
+`iterate.config.local.ts`, builds the Worker from `cloudflare.config.ts`, migrates the D1 and runs
+`cf deploy`. [Self-hosting](SELF-HOSTING.md) explains the config and the deploy. iterate's own
+deployments, production and one per tested commit of a pull request, are configured and deployed
+by iterate's tooling, outside core.
 
 ## The control plane's database
 
@@ -55,7 +58,7 @@ pnpm --dir core/os db:generate  # the typed queries; commit what changes
 pnpm --dir core/os db:migrate   # this worktree's local D1 (`pnpm --dir core/os dev` runs it too)
 ```
 
-A deployment's D1 is migrated before the code that reads it uploads (the self-host recipe applies the
+A deployment's D1 is migrated before the code that reads it uploads (`pnpm run deploy` applies the
 migrations, then deploys): a migration must keep the running version working until then. D1 Time Travel restores a database to any minute of the last 30 days.
 
 ## Projects and MCP

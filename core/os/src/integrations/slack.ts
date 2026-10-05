@@ -18,7 +18,7 @@
 // `slack/webhook-received`, keyed `slack-webhook:<event_id|trigger_id>` (the codes: rules.ts).
 import { codedError, errorCode } from "iterate/lib";
 import { z } from "zod";
-import { appConfigOf, DEFAULT_SLACK_BOT_SCOPES } from "../app-config.ts";
+import { iterateConfigOf, DEFAULT_SLACK_BOT_SCOPES } from "../iterate-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -58,11 +58,11 @@ async function slackAppOf(
   connection: string,
 ): Promise<{ origin: string; scopes: readonly string[] }> {
   if (client === "iterate") {
-    const slack = appConfigOf(scope.env).integrations.slack;
+    const slack = iterateConfigOf(scope.env).integrations.slack;
     if (!slack)
       throw codedError(
         "INVALID_INPUT",
-        "This deployment has no Slack app (APP_CONFIG integrations.slack) — use your own.",
+        "This deployment has no Slack app (ITERATE integrations.slack) — use your own.",
       );
     return { origin: slack.slackOrigin, scopes: slack.scopes };
   }
@@ -381,7 +381,7 @@ export async function slackWebhookRoute(request: Request, env: Env): Promise<Res
         { principal: null },
       )) === true;
   } else {
-    const slack = appConfigOf(env).integrations.slack;
+    const slack = iterateConfigOf(env).integrations.slack;
     if (!slack)
       return Response.json({ error: "Slack integration is not configured." }, { status: 503 });
     hmacHexMatches = (payload, signature) =>

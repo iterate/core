@@ -1,4 +1,4 @@
-// ── who may sign in ── `login.allowedEmails` (app-config.ts): the email patterns a deployment
+// ── who may sign in ── `login.allowedEmails` (iterate-config.ts): the email patterns a deployment
 // admits, each an address with `*` for any run of characters (`*@iterate.com`, `jonas@*`), matched
 // whole and case-insensitively. Unset ⇒ every verified email. Checked at each sign-in before the
 // person is found or created (identity.ts, password-and-code-sign-in.ts) and at every grant's

@@ -2,7 +2,7 @@
 
 Paths are relative to `core/os`.
 
-A project connects a provider account through iterate's own app (its keys are APP_CONFIG
+A project connects a provider account through iterate's own app (its keys are ITERATE
 `integrations.{slack,google,github}`) or its own app. A connection is a
 name the project picks (`src/integrations/`):
 
@@ -11,7 +11,7 @@ name the project picks (`src/integrations/`):
   through egress. For a project's own app, the same secret also holds the app's credentials
   (`clientId`, `clientSecret`, and Slack's `signingSecret` or GitHub's `appId`, `privateKey` and
   `webhookSecret`). iterate's client secret never enters project material: the secret facet
-  attaches it from APP_CONFIG, and only toward that app's provider.
+  attaches it from ITERATE, and only toward that app's provider.
 - its record is two platform facts on the project root, `events.iterate.com/<provider>/connected`
   and `…/disconnected`, which the project processor folds into `state.integrations` (the Dash's
   list).
@@ -177,7 +177,7 @@ on `session.user` disconnects the person's own connection, and every project's u
 the Dash's Integrations page each provider's one action is Connect: a sheet that offers the person's
 own accounts first ("Use ada@example.com", or what the provider will ask to add), then another
 account through iterate's app (`ConnectButton`, `packages/ui`), then "Use your own app". It offers
-iterate's app only for the providers in `session.info().iterateAppProviders` (APP_CONFIG
+iterate's app only for the providers in `session.info().iterateAppProviders` (ITERATE
 `integrations`); a deployment without them, such as a self-host, connects through "Use your own
 app". GitHub's callback URL is the origin the callback request reached, so it needs no `urls.os`.
 

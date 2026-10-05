@@ -11,7 +11,7 @@
 //                answers 200 once the provider has onboarded our template
 //   the link     the apply URL, SIGNED: RS256 over its query string, which the provider verifies
 //                against the public key published at `_dck1.iterate.com` (the private key is
-//                APP_CONFIG `domainConnect.privateKey`)
+//                ITERATE `domainConnect.privateKey`)
 // A zone whose provider does not answer for it, or has not onboarded our template, answers no link
 // and the next zone up is tried; with none, the owner adds the records by hand. Every request is
 // bounded (REQUEST_TIMEOUT_MS) and follows no redirect (a 3xx answers nothing), every answer is parsed, and every URL a DNS

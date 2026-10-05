@@ -1,47 +1,23 @@
-// ── app config ── THE WORKER'S CONFIGURATION: ONE JSON object per deployment — the `APP_CONFIG`
-// Worker secret — parsed once per isolate by `parseAppConfig` below, plus the platform-supplied
-// deploy identity (the version-metadata binding). Loud on anything malformed, at first use — never a
-// silent default.
-//
-// Configuration is what differs between deployments of the SAME code. A constant (a timeout, a
-// budget, the AI Gateway's name, the loaded-worker compatibility flags) is a property of the code and
-// lives beside its consumer. The object's keys are the schema's own names, nested as the schema is:
-//
-//   {
-//     urls: { os, mcp, dash, ingressRouting: { type, hostname }, projectWildcard: { hostname, project, excludedHostnames } },
-//     login: { allowedEmails, password, emailCode: { from }, google: { scopes }, cloudflare: { scopes }, github: {}, adminIssuer, testEmailDomain },
-//     admins,
-//     customHostnames: { zone, zoneId, dcvDelegationUuid, reservedZones }, cloudflareApiToken,
-//     domainConnect: { privateKey },
-//     posthogProjectKey,
-//     integrations: {
-//       slack: { oauthClientId, oauthClientSecret, webhookSigningSecret, scopes, slackOrigin },
-//       google: { oauthClientId, oauthClientSecret, scopes, googleOrigin },
-//       cloudflare: { oauthClientId, oauthClientSecret, scopes, cloudflareOrigin },
-//       github: { appId, appSlug, oauthClientId, oauthClientSecret, privateKey, webhookSecret, githubOrigin },
-//     },
-//     secrets: { key, previousKey, adminBearer },
-//     contextBirthEvents,
-//   }
-//
-// Any key can also be set ALONE as a var, the path joined by `__`: `APP_CONFIG_URLS__OS`,
-// `APP_CONFIG_LOGIN__PASSWORD`, `APP_CONFIG_SECRETS__KEY` — the parser merges it on top of the object
-// (that is how a deployment's `urls` come from envs.ts while its secrets come from the one blob, and
-// how `secrets.key` stands alone as its own Worker secret so it can rotate with `previousKey` beside
-// it). A deploy ships every `APP_CONFIG*` var of its Doppler config (scripts/lib/deploy-helpers.ts
-// `appConfigSecretsOf`), so a new key is set in Doppler alone. A blank var is unset. A key the schema does not name is warned about loudly at boot and
-// dropped, never silently kept. The mechanism is shared with the apps on top
-// (iterate/app-config); this module is the platform's schema and cross-field rules.
+// iterate-config.ts — THE ITERATE CONFIG: everything that differs between deployments of the SAME
+// code, as ONE object checked against the schema below, each secret beside what it belongs to. A
+// deploy reads it from ../iterate.config.ts or iterate.config.local.ts (scripts/iterate-config-file.ts);
+// the Worker parses the same object once per isolate (`iterateConfigOf`). Any field can also be set
+// alone as `ITERATE__<PATH>` (`ITERATE__SECRETS_ENCRYPTION__KEY`), merged on top; a blank one is unset. A
+// value left out takes the default written beside its field; a malformed one fails loudly, and a key
+// the schema does not name is warned about and dropped. A constant (a timeout, the AI Gateway's
+// name) is the code's, beside its consumer, never config.
 
 import { z } from "zod";
 import {
+  appConfigInputOf,
   dnsName,
   fieldNameOf,
   httpOrigin,
   optionalOrigin,
-  parseAppConfigVars,
+  parseAppConfig,
 } from "iterate/app-config";
 import {
+  customHostnameCandidatesOf,
   projectAddressOf,
   projectWildcardHostOf,
   type IngressRouting,
@@ -51,6 +27,7 @@ import type { OAuthIntegrationProvider } from "iterate/api";
 import { refuseNonPlatformWrites, sha256Hex } from "./caller.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "./project/context-birth-events.ts";
 import { normalizeControlEvent } from "./stream/core-processor.ts";
 
 /** A secret config value: `exposeSecret()` hands it over; printing, logging or serialising it shows
@@ -78,8 +55,17 @@ function redacted<Schema extends z.ZodTypeAny>(schema: Schema) {
   return schema.transform((value): Redacted<z.output<Schema>> => new Redacted(value));
 }
 
-/** A field's failure message names the SHAPE; `parseAppConfig` prefixes where it came from. */
+/** The dash a deployment's landing page names unless it says otherwise: iterate's. */
+const DEFAULT_DASH = "https://dash.iterate.com";
+
+/** A field's failure message names the SHAPE; `parseIterateConfig` prefixes where it came from. */
 const REQUIRED = "required, but unset or blank";
+
+/** The iterate config's variables: the object is `ITERATE`, one field `ITERATE__<PATH>`. */
+export const ITERATE_CONFIG_PREFIX = { prefix: "ITERATE" };
+
+/** A field as a message names it: `ITERATE urls.os (ITERATE__URLS__OS)`. */
+const field = (path: readonly PropertyKey[]) => fieldNameOf(path, ITERATE_CONFIG_PREFIX);
 
 /** The bot scopes a Slack connection asks for unless told otherwise: the scopes iterate's Slack app
  *  is registered with. */
@@ -157,11 +143,42 @@ export const DEFAULT_GOOGLE_SIGN_IN_SCOPES = [
  *  Workers deploy scopes) names them. */
 export const DEFAULT_CLOUDFLARE_SCOPES = ["openid", "user-details.read"];
 
-/** THE `APP_CONFIG` SCHEMA — PER-FIELD validation only; the cross-field rules (a distinct MCP origin,
- *  the ingress routing's hostname, at least one sign-in mechanism) live in `parseAppConfig`, because
- *  `warnUnknownKeys` needs plain object schemas to check keys against. Every object `prefault`s to
- *  `{}` so a deployment that names none of a block's keys still gets the block. */
-export const AppConfig = z.object({
+/** A name Cloudflare takes for a Worker, a bucket and a database alike. */
+const resourceName = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, "expected lowercase letters, digits and dashes");
+
+/** THE ITERATE CONFIG'S SCHEMA — PER-FIELD validation only; the cross-field rules (a distinct MCP
+ *  origin, the ingress routing's hostname, at least one sign-in mechanism) live in `parseIterateConfig`, because `warnUnknownKeys` needs plain object schemas to
+ *  check keys against. Every object `prefault`s to `{}` so a deployment that names none of a
+ *  block's keys still gets the block. */
+export const IterateConfig = z.object({
+  /** WHERE IT DEPLOYS: what ../cloudflare.config.ts makes the Worker from. Unset ⇒ nowhere: local
+   *  dev, the suites, and a local build, which nothing deploys. */
+  cloudflare: z
+    .object({
+      /** The account the Worker and its resources live in. */
+      accountId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+      /** The prefix of what the Worker binds by name: D1 `<prefix>-db`, R2 `<prefix>-files`,
+       *  Artifacts `<prefix>-repos` (`resourceNamesOf`). No other Worker may bind them. */
+      resourcePrefix: resourceName,
+      /** The Worker's name. Default: `resourcePrefix`. */
+      workerName: resourceName.optional(),
+      /** The Worker's routes, each a pattern on a zone of the account (the zone's name or id).
+       *  Default: none. A deploy adds the routes it names and removes none. */
+      workerRoutes: z
+        .array(
+          z.object({
+            pattern: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+            zone: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          }),
+        )
+        .default([]),
+      /** Serve the Worker on `<workerName>.<subdomain>.workers.dev`. Default: on. */
+      workersDev: z.boolean().default(true),
+    })
+    .optional(),
   /** Where this deployment answers. Every one optional. */
   urls: z
     .object({
@@ -171,19 +188,20 @@ export const AppConfig = z.object({
       /** A separate MCP origin. Blank ⇒ `/mcp` on `urls.os`. */
       mcp: optionalOrigin,
       /** The dash (packages/dash) — where the landing page (`/`, routes/index.tsx) sends a person, this
-       *  origin being headless. Blank ⇒ the page names no dash. */
-      dash: optionalOrigin,
+       *  origin being headless. Default: iterate's, which signs in to any deployment. `""` ⇒ the
+       *  page names no dash. */
+      dash: z.union([z.literal(""), httpOrigin]).default(DEFAULT_DASH),
       /** How projects are reached over HTTP (project-ingress.ts): `subdomains` hangs
        *  `<routingSlug>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard on
-       *  `hostname`; `paths` serves `<urls.os>/projects/<project>/<routingSlug>/…` from the one origin. Unset ⇒ no
-       *  ingress: `/api` and `/mcp` still answer, no app is reachable over HTTP. */
+       *  `hostname`; `paths` serves `<urls.os>/projects/<project>/<routingSlug>/…` from the one
+       *  origin. Default: `paths`, which needs no domain. */
       ingressRouting: z
         .object({
           type: z.enum(["subdomains", "paths"], { error: 'expected "subdomains" or "paths"' }),
           /** `subdomains` only: the hostname the wildcard is on. */
           hostname: z.string().trim().default(""),
         })
-        .optional(),
+        .default({ type: "paths", hostname: "" }),
       /** This owned zone's apex and first-level names serve one project's config worker. */
       projectWildcard: z
         .object({
@@ -195,41 +213,48 @@ export const AppConfig = z.object({
           forwardEmailTo: z.email().optional(),
         })
         .optional(),
+      /** PROJECTS' OWN HOSTNAMES, set here rather than added by the project
+       *  (project/custom-hostnames.ts): each hostname is its project's apex, and one label under it
+       *  names a routing slug, as a project's own hostname does (`gmail.templestein.com` is
+       *  `gmail--templestein`). For a zone this deployment's own routes serve: no Cloudflare for
+       *  SaaS. The platform and MCP origins stay the platform's. Default: none. */
+      projectHostnames: z
+        .array(z.object({ hostname: dnsName, project: z.string().trim().min(1, REQUIRED) }))
+        .default([]),
     })
     .prefault({}),
   /** CUSTOM HOSTNAMES a project adds itself (project/custom-hostnames.ts): each a wildcard
    *  Cloudflare for SaaS custom hostname on `zone`, routed by the control plane's hostname table.
-   *  Unset ⇒ no project can add one. From envs.ts `cloudflareForSaas` (the generator), with the
-   *  deployment's own zones as `reservedZones`: a hostname equal to or under one is refused. */
+   *  Unset ⇒ no project can add one. `reservedZones` are the deployment's own zones: a hostname
+   *  equal to or under one is refused. */
   customHostnames: z
     .object({
       zone: dnsName,
       zoneId: z.string().trim().min(1, REQUIRED),
       dcvDelegationUuid: z.string().trim().min(1, REQUIRED),
       reservedZones: z.array(dnsName).default([]),
+      /** The Cloudflare API token the Worker provisions them with (edit on `zone`). Blank ⇒ none: a
+       *  custom hostname is then refused with that reason rather than half-provisioned. */
+      cloudflareApiToken: redacted(z.string().trim().default("")),
     })
     .optional(),
-  /** The deployment's Cloudflare API token, for what the worker itself asks of Cloudflare at runtime:
-   *  today a project's custom hostnames (edit on `customHostnames.zone`). Blank ⇒ none; a custom
-   *  hostname is then refused with that reason rather than half-provisioned. */
-  cloudflareApiToken: redacted(z.string().trim().default("")),
   /** DOMAIN CONNECT (project/domain-connect.ts): the private half of the key our template's apply
    *  links are signed with — PKCS#8, base64 DER — whose public half is TXT `_dck1.iterate.com`.
    *  Unset ⇒ a hostname offers no one-click DNS; its owner adds the records by hand. */
   domainConnect: z
     .object({ privateKey: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)) })
     .optional(),
-  /** PostHog's project key (envs.ts `posthogProjectKey`, prd only): the issuer's pages start
+  /** PostHog's project key (prd's): the issuer's pages start
    *  posthog-js with it (issuer.functions.ts) and every `reportIssue` becomes a `$exception` in
    *  PostHog Error Tracking (posthog.ts). A public key, not a secret. Blank ⇒ no PostHog. */
   posthogProjectKey: z.string().trim().default(""),
-  /** How a person signs in. Each mechanism is on iff its block is present; `parseAppConfig` refuses a
+  /** How a person signs in. Each mechanism is on iff its block is present; `parseIterateConfig` refuses a
    *  deployment with none (nobody could ever sign in). */
   login: z
     .object({
       /** WHO MAY SIGN IN (allowed-emails.ts): email patterns, `*` for any run of characters —
        *  `["*@iterate.com", "someone@example.com"]`, or the var
-       *  `APP_CONFIG_LOGIN__ALLOWED_EMAILS='["*@iterate.com"]'`. Every mechanism refuses an address
+       *  `ITERATE__LOGIN__ALLOWED_EMAILS='["*@iterate.com"]'`. Every mechanism refuses an address
        *  it does not name, and a live grant for one stops working. Unset ⇒ everyone. */
       allowedEmails: z
         .array(
@@ -269,10 +294,9 @@ export const AppConfig = z.object({
        *  deployment — prd, for a preview — whose word this one takes on who a browser is, for the
        *  addresses `admins` lists alone. The sign-in page offers "Continue with <its host>"; the
        *  grant it asks that issuer for reads who the person is and nothing else. Refused
-       *  (`parseAppConfig`) unless `urls.os` is a preview's https workers.dev origin or a test's:
-       *  a deployment on its own domain trusts no other issuer. Set in code, never in Doppler: a
-       *  per-commit deployment's config (envs.ts `previewDeployment`'s `adminIssuer`, through
-       *  scripts/generate-wrangler-config.ts), as `APP_CONFIG_LOGIN__ADMIN_ISSUER`. Unset ⇒ off. */
+       *  (`parseIterateConfig`) unless `urls.os` is a preview's https workers.dev origin or a test's:
+       *  a deployment on its own domain trusts no other issuer. A per-commit deployment's config
+       *  sets it, as `ITERATE__LOGIN__ADMIN_ISSUER`. Unset ⇒ off. */
       adminIssuer: httpOrigin.optional(),
       /** THE RESERVED DOMAIN OF THIS DEPLOYMENT'S TEST PEOPLE (test-email-domain.ts): a sign-in
        *  provider pointed at a fake (a preview's pet shop, which mints any address) signs in
@@ -280,21 +304,19 @@ export const AppConfig = z.object({
        *  admin's "Sign in as someone else" only under it (consent.ts). On a laptop's platform
        *  (`urls.os` an http loopback origin) it also opens `/.auth/local-sign-in`
        *  (local-sign-in.ts), which signs its test people in with no password. Refused
-       *  (`parseAppConfig`) unless `urls.os` is a preview's, a laptop's or a test's. Set in code,
-       *  never in Doppler: a per-commit deployment's config (envs.ts `previewDeployment`'s
-       *  `testEmailDomain`) and local dev's, both scripts/generate-wrangler-config.ts's, as
-       *  `APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN`.
+       *  (`parseIterateConfig`) unless `urls.os` is a preview's, a laptop's or a test's. A per-commit
+       *  deployment's config sets it, and local dev's (cloudflare.config.ts).
        *  Unset ⇒ no fake provider signs anyone in, no link pre-fills anyone, and no one-click local
        *  sign-in exists. */
       testEmailDomain: dnsName.optional(),
     })
     .prefault({}),
   /** THE PLATFORM ADMINS: exact email addresses, never a pattern — `["jonas@iterate.com"]`, or the
-   *  var `APP_CONFIG_ADMINS='["jonas@iterate.com"]'`. A person listed here may be granted the
+   *  var `ITERATE__ADMINS='["jonas@iterate.com"]'`. A person listed here may be granted the
    *  `admin` scope at consent (every project and person, 12 hours) and may sign any client in as
    *  someone else (consent.ts); every admission of such a grant reads the list again, so removing an
    *  address ends its admin grants and impersonations at their next request (oauth.ts). Refused
-   *  beside `login.password` but on a preview or local dev (`parseAppConfig`). Unset ⇒
+   *  beside `login.password` but on a preview or local dev (`parseIterateConfig`). Unset ⇒
    *  nobody. The operator bearer is not a person and needs no entry. */
   admins: z
     .array(
@@ -305,6 +327,12 @@ export const AppConfig = z.object({
         .regex(/^[^@\s*]+@[^@\s*]+$/, "expected exact email addresses, no `*`"),
     )
     .default([]),
+  /** THE OPERATOR'S BEARER, the deployment's machine credential — `authenticate({ type:
+   *  "admin-secret" })` on `/api` (every project, `as` a user without a login) or a bearer there,
+   *  never at `/mcp` (oauth.ts `validateToken`): the e2e harness, the deployed specs, deploy gates,
+   *  load scripts (docs/credentials.md). Blank ⇒ no operator access (a self-host needs none: a
+   *  personal access token covers scripting). */
+  adminBearer: redacted(z.string().trim().default("")),
   /** THE PLATFORM'S OWN APPS at third parties, which a project connects through instead of bringing
    *  its own (`client: { platform: "<name>" }`, secret-oauth.ts). Each block optional: unset, no
    *  project can connect through the platform's app there. */
@@ -320,7 +348,7 @@ export const AppConfig = z.object({
         .optional(),
       /** iterate's Slack app (integrations/slack/): the OAuth client, the key Slack signs webhooks
        *  with, the bot scopes asked for, and where Slack answers — `slackOrigin`, another origin only
-       *  for a fake (a per-commit deployment's, scripts/generate-wrangler-config.ts). */
+       *  for a fake (a per-commit deployment's). */
       slack: z
         .object({
           oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
@@ -332,7 +360,7 @@ export const AppConfig = z.object({
         .optional(),
       /** iterate's Google OAuth client (integrations/google/): the client and the scopes asked for.
        *  `googleOrigin` is unset for Google itself; set, ONE origin serves every Google path — a
-       *  fake's (a preview's, scripts/preview-google-app.ts). */
+       *  fake's (a per-commit deployment's). */
       google: z
         .object({
           oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
@@ -344,7 +372,7 @@ export const AppConfig = z.object({
       /** iterate's Cloudflare OAuth client (identity.ts signs in with it; integrations/cloudflare.ts
        *  connects with it). `cloudflareOrigin` is unset for Cloudflare itself (dash.cloudflare.com
        *  issues, api.cloudflare.com answers); set, a fake's origin serves both, its issuer at
-       *  `<origin>/cloudflare` (a preview's, scripts/preview-cloudflare-app.ts). */
+       *  `<origin>/cloudflare` (a per-commit deployment's). */
       cloudflare: z
         .object({
           oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
@@ -371,30 +399,25 @@ export const AppConfig = z.object({
         .optional(),
     })
     .prefault({}),
-  /** The deployment's own keys. */
-  secrets: z
+  /** THE KEY project secrets are encrypted with at rest, and the one before a rotation. */
+  secretsEncryption: z
     .object({
-      /** THE KEY. Project secrets' material at rest is encrypted under it (secret-at-rest.ts, the AES
-       *  key its SHA-256), and the session-signing secret derives from it under a label
+      /** Project secrets' material at rest is encrypted under it (secret-at-rest.ts, the AES key its
+       *  SHA-256), and the session-signing secret derives from it under a label
        *  (`sessionSigningSecretOf`). Any string. Losing it loses every stored secret's material (the
        *  catalog survives; each secret is set again) and signs every session out. */
       key: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
       /** The key before a rotation, decrypt-only: a record it opens is written back under `key` on that
        *  read, so it can be dropped once every record has been read once. Blank when not rotating. */
       previousKey: redacted(z.string().trim().default("")),
-      /** THE OPERATOR'S BEARER, the deployment's machine credential — `authenticate({ type:
-       *  "admin-secret" })` on `/api` (every project, `as` a user without a login) or a bearer there,
-       *  never at `/mcp` (oauth.ts `validateToken`): the e2e harness, the deployed specs, deploy
-       *  gates, load scripts (docs/credentials.md). Blank ⇒ no operator access (a self-host needs
-       *  none: a personal access token covers scripting). */
-      adminBearer: redacted(z.string().trim().default("")),
     })
-    // the prefault must satisfy the input type; `key: ""` then fails `min(1)` naming secrets.key
+    // the prefault must satisfy the input type; `key: ""` then fails `min(1)` naming secretsEncryption.key
     .prefault({ key: "" }),
-  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH (project/context-birth-events.ts, written
-   *  as `APP_CONFIG_CONTEXT_BIRTH_EVENTS`), appended unread in the birth's own batch (stream/stream.ts
-   *  `appendBirthRecord`). Each is checked here, at boot, as the append boundary checks one at `/`,
-   *  so a malformed one fails the deploy, not every project context. Unset ⇒ none. */
+  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH, appended unread in the birth's own batch
+   *  (stream/stream.ts `appendBirthRecord`). Default: the platform's own,
+   *  project/context-birth-events.ts; a suite that runs without them sets `[]`. Each is checked
+   *  here, at boot, as the append boundary checks one at `/`, so a malformed one fails the deploy,
+   *  not every project context. */
   contextBirthEvents: z
     .array(
       z.strictObject({
@@ -404,7 +427,9 @@ export const AppConfig = z.object({
       }),
       { error: 'expected a JSON array of events, like [{ "type": "…", "payload": {…} }]' },
     )
-    .default([])
+    .default(() =>
+      PROJECT_CONTEXT_BIRTH_EVENTS.map((event) => ({ ...event, payload: { ...event.payload } })),
+    )
     .transform((events) =>
       events.map((event, index) => {
         try {
@@ -413,18 +438,18 @@ export const AppConfig = z.object({
           return normalized;
         } catch (error) {
           throw new Error(
-            `APP_CONFIG contextBirthEvents[${index}]: ${error instanceof Error ? error.message : String(error)}`,
+            `ITERATE contextBirthEvents[${index}]: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       }),
     ),
 });
 
-/** THE WORKER'S CONFIGURATION: the parsed object (secrets as `Redacted`), the ingress routing
+/** THE ITERATE CONFIG: the parsed object (secrets as `Redacted`), the ingress routing
  *  narrowed to the SDK's `IngressRouting` (`subdomains` always carries its hostname), the deploy
  *  identity folded in. */
-export type AppConfig = Omit<z.output<typeof AppConfig>, "urls"> & {
-  readonly urls: Omit<z.output<typeof AppConfig>["urls"], "ingressRouting"> & {
+export type IterateConfig = Omit<z.output<typeof IterateConfig>, "urls"> & {
+  readonly urls: Omit<z.output<typeof IterateConfig>["urls"], "ingressRouting"> & {
     readonly ingressRouting: IngressRouting;
   };
   /** Cloudflare's version id of the running deployment (`CF_VERSION_METADATA.id`; local workerd mints
@@ -433,46 +458,63 @@ export type AppConfig = Omit<z.output<typeof AppConfig>, "urls"> & {
   readonly deployId: string;
 };
 
-/** The slice of `env` the configuration reads: the version-metadata binding, the `APP_CONFIG` object
- *  and the `APP_CONFIG_*` overrides, each an optional string. The worker's `Env` extends this. */
-export type AppConfigEnv = { CF_VERSION_METADATA?: { id: string }; APP_CONFIG?: string } & {
-  [Name in `APP_CONFIG_${string}`]?: string;
+/** THE ITERATE CONFIG AS IT IS WRITTEN: the schema's input, so every field with a default may be left
+ *  out. What core/os/iterate.config.ts and an iterate.config.local.ts export. */
+export type IterateConfigInput = z.input<typeof IterateConfig>;
+
+/** The iterate config `env` holds, before the schema: `ITERATE` with every `ITERATE__*` merged on
+ *  top. What core/os/iterate.config.ts exports. The cast to the input type is unchecked, so that an
+ *  iterate.config.local.ts can spread it and override fields with types; it is safe because nothing
+ *  reads the object before a parse (`parseIterateConfigInput`) checks it whole. */
+export function iterateConfigFromEnv(env: object): IterateConfigInput {
+  return appConfigInputOf(env, ITERATE_CONFIG_PREFIX) as IterateConfigInput;
+}
+
+/** The slice of `env` the configuration reads: the version-metadata binding, the `ITERATE` object
+ *  and the `ITERATE__*` overrides, each an optional string. The worker's `Env` extends this. */
+export type IterateConfigEnv = { CF_VERSION_METADATA?: { id: string }; ITERATE?: string } & {
+  [Name in `ITERATE__${string}`]?: string;
 };
 
-/** Parse the configuration out of `env` (a worker env, or any record — only `APP_CONFIG` and the
- *  `APP_CONFIG_*` keys are read; a blank one is unset). Pure; every test parses through it. A
+/** Parse the configuration out of `env` (a worker env, or any record — only `ITERATE` and the
+ *  `ITERATE__*` keys are read; a blank one is unset). Pure; every test parses through it. A
  *  malformed field throws naming itself; a key the schema does not name is warned about and
  *  dropped (`parseAppConfigVars`). */
-export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig {
-  const parsed = parseAppConfigVars(env, AppConfig);
+export function parseIterateConfig(env: object, deployId = "unversioned"): IterateConfig {
+  return parseIterateConfigInput(iterateConfigFromEnv(env), deployId);
+}
+
+/** Parse the configuration out of the object itself — a config file's export, or
+ *  `iterateConfigFromEnv`'s. Fails as `parseIterateConfig` does. */
+export function parseIterateConfigInput(input: unknown, deployId = "unversioned"): IterateConfig {
+  const parsed = parseAppConfig(input, IterateConfig, ITERATE_CONFIG_PREFIX);
   const { urls, login } = parsed;
   if (urls.mcp && !urls.os)
     throw new Error(
-      `${fieldNameOf(["urls", "mcp"])}: a separate MCP origin needs urls.os set (with a blank urls.os every request's own origin is the platform's, and the MCP origin is not)`,
+      `${field(["urls", "mcp"])}: a separate MCP origin needs urls.os set (with a blank urls.os every request's own origin is the platform's, and the MCP origin is not)`,
     );
   if (urls.mcp && urls.mcp === urls.os)
-    throw new Error(`${fieldNameOf(["urls", "mcp"])}: must differ from urls.os`);
+    throw new Error(`${field(["urls", "mcp"])}: must differ from urls.os`);
   let ingressRouting: IngressRouting = null;
   if (urls.ingressRouting?.type === "subdomains") {
     const hostname = dnsName.safeParse(urls.ingressRouting.hostname);
     if (!hostname.success)
       throw new Error(
-        `${fieldNameOf(["urls", "ingressRouting", "hostname"])}: ${hostname.error.issues[0]!.message} (the hostname the project wildcard is on)`,
+        `${field(["urls", "ingressRouting", "hostname"])}: ${hostname.error.issues[0]!.message} (the hostname the project wildcard is on)`,
       );
     ingressRouting = { type: "subdomains", hostname: hostname.data };
   } else if (urls.ingressRouting?.type === "paths") {
     if (urls.ingressRouting.hostname)
       throw new Error(
-        `${fieldNameOf(["urls", "ingressRouting", "hostname"])}: not for "paths" — projects are paths on urls.os`,
+        `${field(["urls", "ingressRouting", "hostname"])}: not for "paths" — projects are paths on urls.os`,
       );
     ingressRouting = { type: "paths" };
   }
-  // A second guard behind "set in code": even a Doppler value cannot let fakes sign people in at a
-  // deployment on its own domain (prd, os.iterate.com) — only on a preview's workers.dev origin or
-  // a laptop's.
+  // A guard on any value, wherever it came from: fakes never sign people in at a deployment on its
+  // own domain (prd, os.iterate.com) — only on a preview's workers.dev origin or a laptop's.
   if (login.testEmailDomain && !isPreviewOrLocalOrigin(urls.os))
     throw new Error(
-      `${fieldNameOf(["login", "testEmailDomain"])}: only for a preview, local dev or a test — urls.os must be a workers.dev, localhost or .test origin, not ${JSON.stringify(urls.os)}`,
+      `${field(["login", "testEmailDomain"])}: only for a preview, local dev or a test — urls.os must be a workers.dev, localhost or .test origin, not ${JSON.stringify(urls.os)}`,
     );
   // An admin reaches every project and signs any client in as anyone, so admins go only where
   // nobody's real data lives beside what could act as one: the global password (anyone who knows it
@@ -485,7 +527,7 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
       : null;
   if (parsed.admins.length && beside && !isPreviewOrLocalOrigin(urls.os))
     throw new Error(
-      `${fieldNameOf(["admins"])}: not with ${beside} except for a preview, local dev or a test (urls.os a workers.dev, localhost or .test origin), not ${JSON.stringify(urls.os)}`,
+      `${field(["admins"])}: not with ${beside} except for a preview, local dev or a test (urls.os a workers.dev, localhost or .test origin), not ${JSON.stringify(urls.os)}`,
     );
   // A deployment on its own domain takes no other issuer's word on who its admins are; a preview
   // (or a test) does, on https alone, where that issuer reads this deployment's client metadata.
@@ -494,14 +536,14 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
     (!isPreviewOrLocalOrigin(urls.os) || new URL(urls.os).protocol !== "https:")
   )
     throw new Error(
-      `${fieldNameOf(["login", "adminIssuer"])}: only for a preview or a test on https — urls.os must be an https workers.dev or .test origin, not ${JSON.stringify(urls.os)}`,
+      `${field(["login", "adminIssuer"])}: only for a preview or a test on https — urls.os must be an https workers.dev or .test origin, not ${JSON.stringify(urls.os)}`,
     );
   // A provider's sign-in without its client is off, loudly: the rest of the deployment still runs.
   const signIn = { ...login };
   for (const provider of IdentityProvider.options)
     if (signIn[provider] && !parsed.integrations[provider]) {
       console.warn(
-        `${fieldNameOf(["login", provider])}: off — it signs in with integrations.${provider}'s client, which is unset`,
+        `${field(["login", provider])}: off — it signs in with integrations.${provider}'s client, which is unset`,
       );
       signIn[provider] = undefined;
     }
@@ -513,13 +555,39 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
     !signIn.github
   )
     throw new Error(
-      `${fieldNameOf(["login"])}: no sign-in mechanism — set login.password, login.emailCode, or login.google, login.cloudflare or login.github with its integrations client`,
+      `${field(["login"])}: no sign-in mechanism — set login.password, login.emailCode, or login.google, login.cloudflare or login.github with its integrations client`,
     );
+  return { ...parsed, login: signIn, urls: { ...urls, ingressRouting }, deployId };
+}
+
+/** The config's SECRETS: each field the schema marks secret (`redacted`), its path and its value
+ *  (blank when unset). scripts/deploy.ts uploads each set one as a Worker secret of its own,
+ *  `ITERATE__<PATH>`, and the rest of the config as the plain var `ITERATE`. */
+export function secretFieldsOf(config: IterateConfig): Array<{ path: string[]; value: string }> {
+  const found: Array<{ path: string[]; value: string }> = [];
+  const walk = (value: unknown, path: string[]) => {
+    if (value instanceof Redacted) {
+      found.push({ path, value: String(value.exposeSecret()) });
+      return;
+    }
+    const object = z.record(z.string(), z.unknown()).safeParse(value);
+    if (object.success)
+      for (const [key, child] of Object.entries(object.data)) walk(child, [...path, key]);
+  };
+  walk(config, []);
+  return found;
+}
+
+/** The names a deployment's Worker and the resources it binds by name go by. */
+export function resourceNamesOf(
+  cloudflare: Pick<NonNullable<IterateConfig["cloudflare"]>, "resourcePrefix" | "workerName">,
+) {
+  const prefix = cloudflare.resourcePrefix;
   return {
-    ...parsed,
-    login: signIn,
-    urls: { ...urls, ingressRouting },
-    deployId,
+    worker: cloudflare.workerName || prefix,
+    db: `${prefix}-db`,
+    files: `${prefix}-files`,
+    repos: `${prefix}-repos`,
   };
 }
 
@@ -537,26 +605,26 @@ function isPreviewOrLocalOrigin(origin: string) {
   );
 }
 
-const appConfigByEnv = new WeakMap<object, AppConfig>();
+const iterateConfigByEnv = new WeakMap<object, IterateConfig>();
 
 /** The configuration of the isolate `env` belongs to — parsed on first use, then the same object every
  *  time (a WeakMap on the env object: a worker's `env` and a DO's `this.env` are stable for the
  *  isolate's life). A malformed field throws HERE, on the first request or the first DO
  *  construction, naming the field. */
-export function appConfigOf(env: AppConfigEnv): AppConfig {
-  let appConfig = appConfigByEnv.get(env);
-  if (!appConfig) {
-    appConfig = parseAppConfig(env, env.CF_VERSION_METADATA?.id?.trim() || "unversioned");
-    appConfigByEnv.set(env, appConfig);
+export function iterateConfigOf(env: IterateConfigEnv): IterateConfig {
+  let iterateConfig = iterateConfigByEnv.get(env);
+  if (!iterateConfig) {
+    iterateConfig = parseIterateConfig(env, env.CF_VERSION_METADATA?.id?.trim() || "unversioned");
+    iterateConfigByEnv.set(env, iterateConfig);
   }
-  return appConfig;
+  return iterateConfig;
 }
 
 /** WHAT iterate's APP ASKS FOR, by provider: its configured scopes — what a project's connect
  *  through it asks, and so what a person's account needs before a project uses it
  *  (context/built-ins.ts `integrations.connect`). A GitHub App's permissions are the App's, and a
  *  provider without iterate's app is absent. */
-export function iterateAppScopesOf(config: AppConfig) {
+export function iterateAppScopesOf(config: IterateConfig) {
   const scopes: Partial<Record<OAuthIntegrationProvider, string[]>> = {};
   for (const provider of OAUTH_INTEGRATION_PROVIDERS) {
     const app = config.integrations[provider];
@@ -565,17 +633,17 @@ export function iterateAppScopesOf(config: AppConfig) {
   return scopes;
 }
 
-const sessionSigningSecretByConfig = new WeakMap<AppConfig, Promise<string>>();
+const sessionSigningSecretByConfig = new WeakMap<IterateConfig, Promise<string>>();
 
 /** THE SESSION-SIGNING SECRET (caller.ts `signClaims`/`verifyClaims`; identity.ts `Flow` lists
- *  every claim set it signs): `secrets.key` under its own label, SHA-256, hex — so the one key a
+ *  every claim set it signs): `secretsEncryption.key` under its own label, SHA-256, hex — so the one key a
  *  deployment holds serves two algorithms without being reused raw (secret-at-rest.ts hashes the
  *  key under the other). Rotating the key signs every session out; a mid-rotation `previousKey`
  *  opens no session. Async (WebCrypto), computed once per config object. */
-export function sessionSigningSecretOf(config: AppConfig): Promise<string> {
+export function sessionSigningSecretOf(config: IterateConfig): Promise<string> {
   let secret = sessionSigningSecretByConfig.get(config);
   if (!secret) {
-    secret = sha256Hex(`iterate-session-signing:${config.secrets.key.exposeSecret()}`);
+    secret = sha256Hex(`iterate-session-signing:${config.secretsEncryption.key.exposeSecret()}`);
     sessionSigningSecretByConfig.set(config, secret);
   }
   return secret;
@@ -583,9 +651,9 @@ export function sessionSigningSecretOf(config: AppConfig): Promise<string> {
 
 /** The at-rest keys as secret-at-rest.ts takes them: the key, and the previous one only while
  *  rotating. */
-export function atRestKeysOf(config: AppConfig): { current: string; previous?: string } {
-  const previous = config.secrets.previousKey.exposeSecret();
-  return { current: config.secrets.key.exposeSecret(), previous: previous || undefined };
+export function atRestKeysOf(config: IterateConfig): { current: string; previous?: string } {
+  const previous = config.secretsEncryption.previousKey.exposeSecret();
+  return { current: config.secretsEncryption.key.exposeSecret(), previous: previous || undefined };
 }
 
 /** Where the platform answers, for the request in hand. `platformOrigin` is the origin the request
@@ -607,8 +675,8 @@ export type PlatformAddresses = {
 /** The userinfo resource's path on the platform origin (`PlatformAddresses.userinfo`). */
 export const USERINFO_PATH = "/oauth2/userinfo";
 
-export function platformAddressesOf(env: AppConfigEnv, request: Request): PlatformAddresses {
-  const config = appConfigOf(env);
+export function platformAddressesOf(env: IterateConfigEnv, request: Request): PlatformAddresses {
+  const config = iterateConfigOf(env);
   const platformOrigin = config.urls.os || new URL(request.url).origin;
   return {
     platformOrigin,
@@ -620,12 +688,14 @@ export function platformAddressesOf(env: AppConfigEnv, request: Request): Platfo
 
 /** The project `url` is a host of by the deployment's STATIC rules: under the ingress routing
  *  (iterate/project-ingress: subdomains — a host under the wildcard; paths — `/projects/<project>[/<routingSlug>]` on
- *  the platform origin), or the project wildcard (an owned zone's apex and first-level names). A
+ *  the platform origin), a project's hostname set in the config (`urls.projectHostnames`: its apex,
+ *  or one label under it a routing slug), or the project wildcard (an owned zone's apex and
+ *  first-level names). A
  *  hostname a project added itself is the control plane's (control-plane/edge.ts `projectHostOf`). The platform and MCP origins are the
  *  platform's own even when their zone also has a project wildcard. What worker.ts admits a project
  *  host with, and what consent.ts binds a project's CIMD client to. */
 export function projectHostOf(
-  config: AppConfig,
+  config: IterateConfig,
   url: URL,
   platformOrigin: string,
 ): ProjectAddress | null {
@@ -636,6 +706,11 @@ export function projectHostOf(
   const routed = projectAddressOf(config.urls.ingressRouting, url, platformOrigin);
   if (routed) return routed;
   if (url.origin === platformOrigin) return null;
+  const candidates = customHostnameCandidatesOf(url.hostname);
+  for (const candidate of candidates) {
+    const own = config.urls.projectHostnames.find((entry) => entry.hostname === candidate.hostname);
+    if (own) return { routingSlug: candidate.routingSlug, project: own.project, basePath: "" };
+  }
   const wildcard = projectWildcardHostOf(url.hostname, config.urls.projectWildcard);
   return wildcard && { ...wildcard, basePath: "" };
 }

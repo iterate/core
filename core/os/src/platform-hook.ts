@@ -1,6 +1,6 @@
 // platform-hook.ts — THE PLATFORM HOOK: the platform's own subscriber, handed every durable event of
 // a project context, one call each — a deployment's birth events give each project context its
-// fan-out row (app-config.ts `contextBirthEvents`). The built-in (context/built-ins.ts
+// fan-out row (iterate-config.ts `contextBirthEvents`). The built-in (context/built-ins.ts
 // `platformHook`) answers the delivery loop alone and hands each event here with the worker's
 // bindings, as every platform built-in holds them. It does nothing with an event yet: a platform
 // feature that reacts to a project's events starts here.

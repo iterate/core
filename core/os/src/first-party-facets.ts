@@ -1,5 +1,5 @@
 // src/first-party-facets.ts — THE FIRST-PARTY FACETS: facet name → the Durable Object class THIS
-// worker exports (worker.ts; declared in wrangler's `exports`). A context hosts one through
+// worker exports (worker.ts; declared in cloudflare.config.ts `exports`). A context hosts one through
 // `ctx.exports` — `ctx.exports.<Class>({ props })` mints the DurableObjectClass `ctx.facets.get`
 // takes, and the props are the facet's identity (`{ iterateContextName, name }`, sdk/index.ts) —
 // never through a loaded source: ordinary bundled worker code, with the worker's real env. THIS
@@ -9,14 +9,14 @@
 // without a source (stream/core-processor.ts). Pinned: test/vitest/os-workers/facets.test.ts.
 // WHERE each one may be hosted is context/first-party-facet-placement.ts's rules.
 export const FIRST_PARTY_FACET_CLASSES = {
-  account: "AccountDurableObject",
-  email: "EmailDurableObject",
-  instance: "InstanceDurableObject",
-  organization: "OrganizationDurableObject",
-  project: "ProjectDurableObject",
-  repo: "RepoDurableObject",
-  secret: "SecretDurableObject",
-  workspace: "WorkspaceDurableObject",
+  account: "AccountFacet",
+  email: "EmailFacet",
+  instance: "InstanceFacet",
+  organization: "OrganizationFacet",
+  project: "ProjectFacet",
+  repo: "RepoFacet",
+  secret: "SecretFacet",
+  workspace: "WorkspaceFacet",
 } as const;
 
 /** The exported class a first-party facet name hosts; undefined for every other name. */

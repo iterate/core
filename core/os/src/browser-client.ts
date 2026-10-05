@@ -1,5 +1,5 @@
 import { appAuth, appSession } from "iterate/app-server";
-import { platformAddressesOf } from "./app-config.ts";
+import { platformAddressesOf } from "./iterate-config.ts";
 import { oauthResponse } from "./api.ts";
 import type { Env } from "./env.ts";
 import { authorizationForToken } from "./oauth.ts";

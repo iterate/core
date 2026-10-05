@@ -21,7 +21,7 @@ import {
   logPlatformFailure,
 } from "iterate/platform-retry";
 import type { Caller } from "../caller.ts";
-import { projectHostOf, type AppConfig } from "../app-config.ts";
+import { projectHostOf, type IterateConfig } from "../iterate-config.ts";
 import type { Env } from "../env.ts";
 import { Kept } from "../kept.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
@@ -175,7 +175,7 @@ export class ControlPlane {
     return this.#read("deletedProject", () => this.#db.deletedProject(projectId));
   }
 
-  /** The project `url` is a host of — THE INGRESS ROUTING TABLE: the static rules first (app-config.ts
+  /** The project `url` is a host of — THE INGRESS ROUTING TABLE: the static rules first (iterate-config.ts
    *  `projectHostOf`: the ingress routing and the project wildcard), then a hostname a project added
    *  itself (project/custom-hostnames.ts): its apex, or one label under it a routing slug
    *  (iterate/project-ingress `customHostnameCandidatesOf`), in ONE catalog read, kept `KEPT_MS`,
@@ -183,7 +183,7 @@ export class ControlPlane {
    *  own origins and anything under its reserved zones never reach the table. A project host's
    *  admission (worker.ts) and consent.ts, which binds a project's CIMD client to it, read it. */
   async projectHostOf(
-    config: AppConfig,
+    config: IterateConfig,
     url: URL,
     platformOrigin: string,
   ): Promise<ProjectAddress | null> {

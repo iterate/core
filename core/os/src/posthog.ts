@@ -9,14 +9,14 @@
 import { env, waitUntil } from "cloudflare:workers";
 import type { Issue } from "iterate/lib";
 import { PostHog } from "posthog-node";
-import { appConfigOf } from "./app-config.ts";
+import { iterateConfigOf } from "./iterate-config.ts";
 import type { Env } from "./env.ts";
 
-/** Sent where the worker has a PostHog project key (`APP_CONFIG posthogProjectKey`) — envs.ts
+/** Sent where the worker has a PostHog project key (`ITERATE posthogProjectKey`) — envs.ts
  *  gives one to prd only, so previews and local dev report nothing. */
 export function captureIssueInPosthog(issue: Issue): void {
   // `cloudflare:workers` types its env without this worker's bindings
-  const config = appConfigOf(env as Env);
+  const config = iterateConfigOf(env as Env);
   if (!config.posthogProjectKey) return;
   const client = new PostHog(config.posthogProjectKey, {
     host: "https://eu.i.posthog.com",

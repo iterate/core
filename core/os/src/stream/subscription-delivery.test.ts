@@ -2040,7 +2040,7 @@ function incarnation(
     refusal?: Record<string, unknown>;
     /** Why this incarnation woke, as the DO's first handler records it. */
     wake?: Wake;
-    /** What the context is born with (app-config.ts `contextBirthEvents`). */
+    /** What the context is born with (iterate-config.ts `contextBirthEvents`). */
     birthEvents?: StreamEventInput[];
     /** The deploy this incarnation runs as (a lease names it). */
     deployId?: string;

@@ -7,7 +7,7 @@ import {
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { z } from "zod";
 import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
-import { platformAddressesOf } from "./app-config.ts";
+import { platformAddressesOf } from "./iterate-config.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import type { Env } from "./env.ts";
 import { contextStub } from "./context-stub.ts";

@@ -15,7 +15,8 @@
     "db:generate": "sqlfu generate",
     "db:check": "rm -f .sqlfu/app.db && sqlfu migrate --yes && sqlfu check",
     "db:draft": "sqlfu draft",
-    "db:migrate": "wrangler d1 migrations apply DB --local --persist-to .wrangler/state -c wrangler.base.jsonc"
+    "db:migrate": "cf d1 migrations apply 00000000-0000-4000-8000-000000000000 --local --persist-to .cloudflare/state --dir src/control-plane/db/migrations",
+    "deploy": "node --env-file-if-exists=.secrets scripts/deploy.ts"
   },
   "dependencies": {
     "@base-ui/react": "catalog:",
@@ -31,7 +32,6 @@
     "curve25519-js": "0.0.4",
     "es-module-lexer": "^2.1.0",
     "iterate": "workspace:*",
-    "json5": "catalog:",
     "lucide-react": "catalog:",
     "oauth4webapi": "catalog:",
     "pako": "catalog:",
@@ -48,18 +48,19 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "catalog:",
+    "@cloudflare/vite-plugin": "2.0.0-beta.sha-52b0dc0e9",
     "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "cf": "1.0.0-beta.12",
     "esbuild": "catalog:",
     "shadcn": "catalog:",
     "trpc-cli": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vitest": "catalog:",
-    "wrangler": "catalog:"
+    "vitest": "catalog:"
   }
 }

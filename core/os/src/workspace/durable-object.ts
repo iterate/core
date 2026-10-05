@@ -80,7 +80,7 @@ export const workspaceVerbs = [
   "gitLog",
 ] as const;
 
-export class WorkspaceDurableObject extends StreamProcessorDurableObject<
+export class WorkspaceFacet extends StreamProcessorDurableObject<
   EntityCreationAndDeletionState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope

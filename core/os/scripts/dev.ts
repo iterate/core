@@ -18,7 +18,7 @@
 // worktree keeps its port. Without `--port`, the port is this
 // worktree's last recorded one, else 8788, else any free one — so two worktrees each keep their
 // own, and the one that gets 8788 matches the Dash's documented `.dev.vars`
-// (`APP_CONFIG_URLS__OS=http://localhost:8788`).
+// (`APP_CONFIG__URLS__OS=http://localhost:8788`).
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   closeSync,
@@ -135,13 +135,14 @@ async function serve(argv: string[]) {
   // it moved aside (`holder`) is gone by now, and its taker stops here, before any workerd
   if (lockPid() !== process.pid)
     throw new Error(`another dev server took this worktree's lock (pid ${lockPid()})`);
-  // the control plane's local D1 (wrangler.base.jsonc `DB`), migrated before workerd opens it: the
-  // lock is held, so nothing else writes it (`pnpm db:migrate`, wrangler's own applier)
+  // the control plane's local D1 (cloudflare.config.ts `DB`), migrated before workerd opens it: the
+  // lock is held, so nothing else writes it (`pnpm db:migrate`, `cf`'s own applier)
   const migrated = spawnSync("pnpm", ["db:migrate"], { cwd: root, stdio: "inherit" });
   if (migrated.status !== 0) throw new Error(`pnpm db:migrate exited with ${migrated.status}`);
   const vite = spawn("pnpm", ["exec", "vite", "dev", ...viteArgs], {
     cwd: root,
-    env: { ...process.env, CLOUDFLARE_ENV: "", OS_DEV_PORT: `${port}` },
+    // cloudflare.config.ts's development mode serves on this port (`urls.os`)
+    env: { ...process.env, OS_DEV_PORT: `${port}` },
     stdio: ["inherit", "inherit", "inherit"],
   });
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const)

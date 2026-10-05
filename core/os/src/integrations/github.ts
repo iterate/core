@@ -1,7 +1,7 @@
 // src/integrations/github.ts — GITHUB: a connection is one GitHub App installation (connections.ts).
 // Its secret `/secrets/github-<connection>` holds no token until first use: its
 // `github-app-installation` strategy mints the installation's token (secret/durable-object.ts), with
-// iterate's App key (APP_CONFIG `integrations.github`) or, for a project's own App, the `appId` and
+// iterate's App key (ITERATE `integrations.github`) or, for a project's own App, the `appId` and
 // `privateKey` the secret itself holds beside `clientSecret` and `webhookSecret`. Outbound is the
 // real SDK with the placeholder as its token:
 // `new Octokit({ auth: 'getSecret("/secrets/github-acme", { field: "accessToken" })' })`.
@@ -23,7 +23,11 @@
 //                          `…/webhook/<projectId>/<connection>` (a project's own App)
 import { codedError } from "iterate/lib";
 import { signClaims, verifyClaims } from "../caller.ts";
-import { appConfigOf, sessionSigningSecretOf, type PlatformAddresses } from "../app-config.ts";
+import {
+  iterateConfigOf,
+  sessionSigningSecretOf,
+  type PlatformAddresses,
+} from "../iterate-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -92,7 +96,7 @@ async function signedState(scope: IntegrationScope, connection: string, attempt:
     nonce: attempt.nonce,
     exp: attempt.until,
   };
-  return signClaims(state, await sessionSigningSecretOf(appConfigOf(scope.env)));
+  return signClaims(state, await sessionSigningSecretOf(iterateConfigOf(scope.env)));
 }
 
 export async function connectGithub(
@@ -112,14 +116,14 @@ export async function connectGithub(
   },
 ): Promise<{ authorizationUrl: string }> {
   const { connection, client } = input;
-  const config = appConfigOf(scope.env);
+  const config = iterateConfigOf(scope.env);
   let app: { origin: string; appSlug: string; clientId: string };
   if (client === "iterate") {
     const github = config.integrations.github;
     if (!github)
       throw codedError(
         "INVALID_INPUT",
-        "This deployment has no GitHub App (APP_CONFIG integrations.github) — use your own.",
+        "This deployment has no GitHub App (ITERATE integrations.github) — use your own.",
       );
     app = { origin: github.githubOrigin, appSlug: github.appSlug, clientId: github.oauthClientId };
   } else {
@@ -214,7 +218,7 @@ export async function acceptGithubCallback(
   try {
     landing = nextUrlOf(
       attempt.next,
-      [input.platformOrigin, appConfigOf(env).urls.dash].filter(Boolean),
+      [input.platformOrigin, iterateConfigOf(env).urls.dash].filter(Boolean),
     );
   } catch (error) {
     throw codedError(
@@ -416,7 +420,7 @@ export async function connectGithubInstallation(
   else await land();
 }
 
-/** The human's user token for the code: iterate's App's client secret from APP_CONFIG, a project's
+/** The human's user token for the code: iterate's App's client secret from ITERATE, a project's
  *  own App's substituted by egress from its secret (so neither ever leaves where it is kept). GitHub
  *  takes the client credentials as query parameters. */
 async function githubUserTokenOf(
@@ -434,7 +438,7 @@ async function githubUserTokenOf(
       method: "POST",
       headers: { accept: "application/json" },
     });
-  const github = appConfigOf(scope.env).integrations.github;
+  const github = iterateConfigOf(scope.env).integrations.github;
   const response =
     attempt.client === "iterate"
       ? await fetch(request(encodeURIComponent(github?.oauthClientSecret.exposeSecret() ?? "")))
@@ -473,7 +477,10 @@ export async function githubCallbackRoute(
   if (!signedState)
     // an installation GitHub updated (`setup_action=update`) carries no state of ours
     return answer(200, "GitHub updated the app's installation. You can close this tab.");
-  const claims = await verifyClaims(signedState, await sessionSigningSecretOf(appConfigOf(env)));
+  const claims = await verifyClaims(
+    signedState,
+    await sessionSigningSecretOf(iterateConfigOf(env)),
+  );
   if (
     !isRecord(claims) ||
     claims.kind !== "github-connect" ||
@@ -571,7 +578,7 @@ export async function githubWebhookRoute(request: Request, env: Env): Promise<Re
         { principal: null },
       )) === true;
   } else {
-    const github = appConfigOf(env).integrations.github;
+    const github = iterateConfigOf(env).integrations.github;
     if (!github)
       return Response.json({ error: "GitHub integration is not configured." }, { status: 503 });
     hmacHexMatches = (payload, signature) =>

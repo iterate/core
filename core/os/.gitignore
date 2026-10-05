@@ -8,3 +8,8 @@
 
 # sqlfu's scratch database and query catalog (sqlfu.config.ts): `pnpm db:check` rebuilds them.
 /.sqlfu/
+
+# A deployment's own iterate config and its secrets (iterate.config.ts says what each holds). Never
+# commit them: .secrets holds the only copy of the secrets encryption key.
+/iterate.config.local.ts
+/.secrets

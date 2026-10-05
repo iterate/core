@@ -4,7 +4,7 @@
 // consent page then asks once, as after any sign-in.
 //
 // A laptop's platform alone: `urls.os` a loopback origin, with `login.testEmailDomain` set, which
-// app-config.ts refuses anywhere but a preview, a laptop or a test. A preview and prd (https) and a
+// iterate-config.ts refuses anywhere but a preview, a laptop or a test. A preview and prd (https) and a
 // self-host (a blank `urls.os`, so no test email domain) have no such route. The laptop's password
 // is `dev`, in this repository, so the route signs in no one a form post could not. What it adds is
 // a sign-in by GET, so it answers only a navigation the person started: the address bar, `open` or
@@ -12,7 +12,7 @@
 // page's navigation is refused: it would switch the laptop's session to another test person.
 import { isLocalOrigin } from "iterate/lib";
 import { emailAllowed } from "./allowed-emails.ts";
-import { appConfigOf, platformAddressesOf } from "./app-config.ts";
+import { iterateConfigOf, platformAddressesOf } from "./iterate-config.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { startIssuerSession } from "./issuer-session.ts";
@@ -25,7 +25,7 @@ import { watchSignInStep } from "./sign-in-watch.ts";
 export async function localSignInResponse(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname !== "/.auth/local-sign-in" || request.method !== "GET") return null;
-  const { login } = appConfigOf(env);
+  const { login } = iterateConfigOf(env);
   const { platformOrigin } = platformAddressesOf(env, request);
   // The request's own origin too, not only worker.ts's 421 before this route: moved above that
   // check, the route would still answer on a loopback origin alone.

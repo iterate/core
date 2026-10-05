@@ -12,7 +12,7 @@
 // This deployment is the issuer's CIMD client, its metadata document served here
 // (`adminSignInClientMetadata`), so no preview is registered anywhere by hand. The token is read
 // once and revoked at once; the issuer's grant ends in ten minutes besides (consent.ts). The flow's
-// state lives in one cookie signed like every platform claim set (app-config.ts
+// state lives in one cookie signed like every platform claim set (iterate-config.ts
 // `sessionSigningSecretOf`, kind `admin-sign-in`): where the browser goes next, the OAuth `state`
 // and the PKCE verifier, for ten minutes. Nothing is stored server-side.
 
@@ -22,11 +22,11 @@ import { cookieValueOf, sameOriginPath } from "iterate/lib";
 import { authorizationCodeRequest, authorizationServer } from "iterate/oauth";
 import { emailAllowed, EMAIL_NOT_ALLOWED_MESSAGE } from "./allowed-emails.ts";
 import {
-  appConfigOf,
+  iterateConfigOf,
   platformAddressesOf,
   sessionSigningSecretOf,
   USERINFO_PATH,
-} from "./app-config.ts";
+} from "./iterate-config.ts";
 import { signClaims, verifyClaims } from "./caller.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
@@ -77,7 +77,7 @@ export function adminSignInClientMetadata(platformOrigin: string) {
 /** `GET /.auth/admin-sign-in?next=`: send the browser to sign in at `issuer` (`login.adminIssuer`),
  *  asking only who they are, with the cookie that remembers `next` meanwhile. */
 export async function adminSignInResponse(request: Request, env: Env, issuer: string) {
-  const config = appConfigOf(env);
+  const config = iterateConfigOf(env);
   const { platformOrigin } = platformAddressesOf(env, request);
   const next = sameOriginPath(
     new URL(request.url).searchParams.get("next") || "/login",
@@ -115,7 +115,7 @@ export async function adminSignInResponse(request: Request, env: Env, issuer: st
  *  on to the flow's `next`; anyone else lands back on the sign-in page with why, and every outcome
  *  is logged with the address the issuer vouched for. */
 export async function adminSignInCallbackResponse(request: Request, env: Env, issuer: string) {
-  const config = appConfigOf(env);
+  const config = iterateConfigOf(env);
   const refused = (error: string, next = "/login") => {
     const headers = new Headers({
       location: `/login?${new URLSearchParams({ next, error })}`,

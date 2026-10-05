@@ -575,7 +575,7 @@ test("a refused pager upgrade (the DO would not append what names the key) lends
 });
 
 // The relay dups the client's stub for the session BEFORE it dials the DO. A fetch that REJECTS
-// outright (the DO's constructor throwing on a bad APP_CONFIG_* var) must not leave that dup alive for
+// outright (the DO's constructor throwing on a bad ITERATE__* var) must not leave that dup alive for
 // the session's life: the dup is disposed, then the error propagates as it is.
 test("a DO fetch that REJECTS releases the session's dup before the error propagates", async () => {
   let disposed = 0;
@@ -589,11 +589,13 @@ test("a DO fetch that REJECTS releases the session's dup before the error propag
   const context = {
     fetch: async () => {
       throw new Error(
-        "APP_CONFIG secrets.key (APP_CONFIG_SECRETS__KEY): required, but unset or blank",
+        "ITERATE secretsEncryption.key (ITERATE__SECRETS_ENCRYPTION__KEY): required, but unset or blank",
       );
     },
   };
-  await expect(lend(context, provider, "key-3")).rejects.toThrow(/APP_CONFIG_SECRETS__KEY/);
+  await expect(lend(context, provider, "key-3")).rejects.toThrow(
+    /ITERATE__SECRETS_ENCRYPTION__KEY/,
+  );
   expect(disposed).toBe(1);
 });
 

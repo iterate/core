@@ -4,7 +4,7 @@ import { RpcTarget } from "capnweb";
 import { codedError, isLocalOrigin, reportIssue } from "iterate/lib";
 import type { GrantRecord } from "iterate/api";
 import { type GrantEnded, type PersonalAccessTokenMinted } from "./account/contract.ts";
-import type { PlatformAddresses } from "./app-config.ts";
+import type { PlatformAddresses } from "./iterate-config.ts";
 import type { Env } from "./env.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import {
@@ -52,7 +52,7 @@ const mintsPersonalAccessTokens = (issuer: string): boolean =>
 export class GrantsRpcTarget extends RpcTarget {
   readonly #env: Env;
   readonly #auth: Authorization;
-  /** where this session reached the platform (app-config.ts `platformAddressesOf`) */
+  /** where this session reached the platform (iterate-config.ts `platformAddressesOf`) */
   readonly #addresses: PlatformAddresses;
   constructor(env: Env, auth: Authorization, addresses: PlatformAddresses) {
     super();

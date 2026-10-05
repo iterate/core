@@ -7,7 +7,11 @@
 // the offer to move the account here when another project holds it (Slack). Called by worker.ts.
 
 import { verifyClaims } from "./caller.ts";
-import { appConfigOf, sessionSigningSecretOf, type PlatformAddresses } from "./app-config.ts";
+import {
+  iterateConfigOf,
+  sessionSigningSecretOf,
+  type PlatformAddresses,
+} from "./iterate-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import {
   DurableObjectNameCodec,
@@ -87,7 +91,7 @@ export async function secretOAuthCallback(
     });
   const claims = await verifyClaims(
     url.searchParams.get("state") ?? "",
-    await sessionSigningSecretOf(appConfigOf(env)),
+    await sessionSigningSecretOf(iterateConfigOf(env)),
   );
   if (!isSecretOAuthState(claims) || claims.exp <= Date.now())
     return answer(400, "This link is not one the platform issued, or it has expired.");

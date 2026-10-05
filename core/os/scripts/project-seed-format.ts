@@ -128,7 +128,7 @@ export async function openProjectSeed(raw: unknown, keys: MaterialKeys) {
       ({ material } = await decryptSecretMaterial(secret.material, secret, keys));
     } catch {
       throw new Error(
-        `Cannot decrypt ${secret.path}: the encryption key or authenticated binding does not match. Nothing has been restored.`,
+        `Cannot decrypt ${secret.path}: the secrets encryption key or authenticated binding does not match. Nothing has been restored.`,
       );
     }
     secrets.push({ path: secret.path, ...normalizeSecretRecord(material, secret) });

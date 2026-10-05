@@ -42,7 +42,7 @@ import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-r
 import type { Cause } from "../cause.ts";
 import { refusePlatformIdempotencyKeys, sha256Hex, stampCaller, type Caller } from "../caller.ts";
 import { verifyOnBehalfOf } from "../on-behalf-of.ts";
-import { sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
+import { sessionSigningSecretOf, type IterateConfig } from "../iterate-config.ts";
 import { Kept } from "../kept.ts";
 import { facetStateOf } from "../context-stub.ts";
 import { TARGET_FAILURE_CODES } from "../stream/subscription-delivery.ts";
@@ -562,26 +562,26 @@ export interface BuildBuiltInsDeps {
     /** Email Sending — `itx.email`; absent where a deployment has no mailbox. */
     EMAIL?: SendEmail;
   };
-  /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
+  /** The deploy identity every loader cacheKey folds in (worker.ts `IterateConfig`). */
   deployId: string;
-  /** How projects are reached over HTTP (app-config.ts `urls.ingressRouting`) — `itx.url`. */
+  /** How projects are reached over HTTP (iterate-config.ts `urls.ingressRouting`) — `itx.url`. */
   ingressRouting: IngressRouting;
-  /** The domain one project owns outright (app-config.ts `urls.projectWildcard`: iterate.com, the
+  /** The domain one project owns outright (iterate-config.ts `urls.projectWildcard`: iterate.com, the
    *  `iterate` project's): that project may send from any address on it (`itx.email.send`). */
   projectWildcard: { hostname: string; project: string } | undefined;
   /** The Dash that this platform instance names for human administration. */
   dashOrigin: string;
-  /** The deployment's platform admins (app-config.ts `admins`): with the admin bearer, the
+  /** The deployment's platform admins (iterate-config.ts `admins`): with the admin bearer, the
    *  operator of the deployment's own secrets. */
   platformAdmins: () => readonly string[];
-  /** What iterate's app asks for, by provider (app-config.ts `iterateAppScopesOf`): what a project
+  /** What iterate's app asks for, by provider (iterate-config.ts `iterateAppScopesOf`): what a project
    *  needs of a person's account it connects. */
   iterateAppScopes: () => Partial<Record<IntegrationProvider, readonly string[]>>;
   /** THE PLATFORM ORIGIN the current call's caller reached the platform on (the DO's caller record)
    *  — null when the call carries none: a processor's own turn, a loaded worker's `env.ITX`, the
    *  delivery loop, an alarm. */
   platformOrigin: () => string | null;
-  /** The key the platform signs its own tokens with (app-config.ts `sessionSigningSecretOf`): a
+  /** The key the platform signs its own tokens with (iterate-config.ts `sessionSigningSecretOf`): a
    *  file URL (`itx.r2.presign`), and who a script runs for (on-behalf-of.ts). */
   signingSecret: () => Promise<string>;
   /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
@@ -717,7 +717,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           .invoke(["itx", "builtins", "secrets", call], [], hopCaller()) as Promise<T>);
   };
   /** THE DEPLOYMENT'S OWN SECRETS (`global:/secrets/<name>`, the global root's) are the
-   *  operator's: the admin bearer (actor `admin`, no email) or a platform admin (app-config.ts
+   *  operator's: the admin bearer (actor `admin`, no email) or a platform admin (iterate-config.ts
    *  `admins`, not viewing an app as someone else), whose `admin` scope is what opened the global
    *  root to them (session.ts `global`) — and the platform's own hops (a lend's other side). */
   const assertOperatorOfGlobalSecrets = () => {
@@ -1249,7 +1249,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       completeOAuth: (secretPath, input) =>
         onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
           // A facet call answers `unknown` over the hop; this is the platform's own
-          // SecretDurableObject.completeOAuth's declared answer.
+          // SecretFacet.completeOAuth's declared answer.
           const { urls, refresh, scopes, held } = (await secretFacet(["completeOAuth", input])) as {
             urls: string[];
             refresh?: SecretRefresh["kind"];
@@ -1273,7 +1273,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           ["admitHeldToken", secretPath, input],
           async (secret) => {
             // A facet call answers `unknown` over the hop; this is the platform's own
-            // SecretDurableObject.admitHeldToken's declared answer.
+            // SecretFacet.admitHeldToken's declared answer.
             const { urls, refresh } = (await secretFacet(["admitHeldToken", input])) as {
               urls: string[];
               refresh?: SecretRefresh["kind"];
@@ -1289,7 +1289,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       dropHeldToken: (secretPath, input) => {
         assertPlatformCaller("secrets.dropHeldToken");
         return onSecretContext(secretPath, ["dropHeldToken", secretPath, input], async (secret) => {
-          // the platform's own SecretDurableObject.dropHeldToken's declared answer, `unknown` over the hop
+          // the platform's own SecretFacet.dropHeldToken's declared answer, `unknown` over the hop
           const dropped = (await secretFacet(["dropHeldToken", input])) as
             | "held"
             | "gone"
@@ -1318,7 +1318,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return onSecretContext(
           secretPath,
           ["clientSecretFor", secretPath, input],
-          // the platform's own SecretDurableObject.clientSecretFor's declared answer, `unknown` over the hop
+          // the platform's own SecretFacet.clientSecretFor's declared answer, `unknown` over the hop
           async () => (await secretFacet(["clientSecretFor", input])) as string,
         );
       },
@@ -1333,7 +1333,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // and appends nothing.
       delete: (secretPath) =>
         onSecretContext(secretPath, ["delete", secretPath], async (secret) => {
-          // The facet is the platform's own SecretDurableObject and `snapshot()` the engine's
+          // The facet is the platform's own SecretFacet and `snapshot()` the engine's
           // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted.
           const { state } = (await secretFacet(["snapshot"])) as { state: SecretState };
           if (!state.material && !state.deletion) {
@@ -1420,7 +1420,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           );
         if (!deps.dashOrigin)
           throw new Error(
-            "itx.secrets.collectFromUser: this platform has no Dash (set APP_CONFIG_URLS__DASH)",
+            "itx.secrets.collectFromUser: this platform has no Dash (set ITERATE__URLS__DASH)",
           );
         const platformOrigin = deps.platformOrigin();
         if (!platformOrigin)
@@ -1775,7 +1775,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           .parse(options);
         if (!deps.dashOrigin)
           throw new Error(
-            "itx.integrations.requestFromUser: this platform has no Dash (set APP_CONFIG_URLS__DASH)",
+            "itx.integrations.requestFromUser: this platform has no Dash (set ITERATE__URLS__DASH)",
           );
         const project = await deps.projectInfo();
         if (!project.projectSlug)
@@ -2190,7 +2190,7 @@ export function buildIdentityRoots(
           "INVALID_INPUT",
           deps.ingressRouting
             ? `itx.url: ${JSON.stringify(target)} is not an address in this project (a routing slug is [a-z][a-z0-9-]*; a path starts with "/")`
-            : "itx.url: this deployment has no project ingress (APP_CONFIG urls.ingressRouting is unset) — nothing serves a project over HTTP",
+            : "itx.url: this deployment has no project ingress (ITERATE urls.ingressRouting is unset) — nothing serves a project over HTTP",
         );
       return url.href;
     },
@@ -2201,7 +2201,7 @@ export function buildIdentityRoots(
  *  the stateless resolver's alike. `projectSlug` is the reader's: the Durable Object keeps it in
  *  its own storage. */
 export function projectConfigDeps(
-  appConfig: AppConfig,
+  iterateConfig: IterateConfig,
   projectSlug: () => Promise<string | null | undefined>,
 ) {
   return {
@@ -2209,9 +2209,9 @@ export function projectConfigDeps(
       const slug = await projectSlug();
       return slug ? { projectSlug: slug } : {};
     },
-    ingressRouting: appConfig.urls.ingressRouting,
-    projectWildcard: appConfig.urls.projectWildcard,
-    signingSecret: () => sessionSigningSecretOf(appConfig),
+    ingressRouting: iterateConfig.urls.ingressRouting,
+    projectWildcard: iterateConfig.urls.projectWildcard,
+    signingSecret: () => sessionSigningSecretOf(iterateConfig),
   } satisfies Partial<BuildBuiltInsDeps>;
 }
 

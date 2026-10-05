@@ -1,22 +1,26 @@
 // app-config.test.ts — the mechanism every Worker's config goes through: the object and its vars
-// composed, a key the schema does not name warned about in both spellings and dropped, and a
-// malformed field refused. Each schema's own fields are its app's table (core/os/src/worker.test.ts,
+// composed under the config's prefix, a key the schema does not name warned about in both
+// spellings and dropped, and a malformed field refused. Each schema's own fields are its app's table (core/os/src/worker.test.ts,
 // scripts/lib/start-app.test.ts).
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
-import { httpOrigin, optionalOrigin, parseAppConfigVars } from "./app-config.ts";
+import { configVarNameOf, httpOrigin, optionalOrigin, parseAppConfigVars } from "./app-config.ts";
 
-/** A schema with each shape the walk meets: a prefaulted block, an optional one, a record. */
+/** A schema with each shape the walk meets: a prefaulted block, an optional one, a record, an array
+ *  of objects. */
 const Schema = z.object({
   urls: z.object({ os: httpOrigin, dash: optionalOrigin }).prefault({ os: "" }),
   routing: z.object({ type: z.string() }).optional(),
   labels: z.record(z.string(), z.string()).default({}),
+  routes: z.array(z.object({ pattern: z.string() })).optional(),
 });
 
 const IGNORED = "not in the schema, ignored — remove it, or add it to the schema";
 
 test.for<{
   name: string;
+  /** the config's name; `ITERATE` when unset */
+  prefix?: string;
   env: Record<string, string>;
   becomes?: unknown;
   throws?: RegExp;
@@ -26,8 +30,8 @@ test.for<{
   {
     name: "the object and a var compose, and a record's keys are its own",
     env: {
-      APP_CONFIG: JSON.stringify({ urls: { os: "https://os.test" }, labels: { anything: "kept" } }),
-      APP_CONFIG_URLS__DASH: "https://dash.test",
+      ITERATE: JSON.stringify({ urls: { os: "https://os.test" }, labels: { anything: "kept" } }),
+      ITERATE__URLS__DASH: "https://dash.test",
     },
     becomes: {
       urls: { os: "https://os.test", dash: "https://dash.test" },
@@ -37,33 +41,93 @@ test.for<{
   {
     name: "a key inside the object the schema does not name",
     env: {
-      APP_CONFIG: JSON.stringify({ urls: { os: "https://os.test", mcp: "https://mcp.test" } }),
+      ITERATE: JSON.stringify({ urls: { os: "https://os.test", mcp: "https://mcp.test" } }),
     },
     becomes: { urls: { os: "https://os.test", dash: "" }, labels: {} },
-    warns: [`APP_CONFIG urls.mcp (APP_CONFIG_URLS__MCP): ${IGNORED}`],
+    warns: [`ITERATE urls.mcp (ITERATE__URLS__MCP): ${IGNORED}`],
   },
   {
     name: "a var no field answers to, named where it leaves the schema",
-    env: { APP_CONFIG_URLS__OS: "https://os.test", APP_CONFIG_URL__DASH: "https://dash.test" },
+    env: { ITERATE__URLS__OS: "https://os.test", ITERATE__URL__DASH: "https://dash.test" },
     becomes: { urls: { os: "https://os.test", dash: "" }, labels: {} },
-    warns: [`APP_CONFIG url (APP_CONFIG_URL): ${IGNORED}`],
+    warns: [`ITERATE url (ITERATE__URL): ${IGNORED}`],
   },
   {
     name: "a stray key inside an optional block a var sets whole",
-    env: { APP_CONFIG_URLS__OS: "https://os.test", APP_CONFIG_ROUTING: '{"type":"paths","x":1}' },
+    env: { ITERATE__URLS__OS: "https://os.test", ITERATE__ROUTING: '{"type":"paths","x":1}' },
     becomes: { urls: { os: "https://os.test", dash: "" }, routing: { type: "paths" }, labels: {} },
-    warns: [`APP_CONFIG routing.x (APP_CONFIG_ROUTING__X): ${IGNORED}`],
+    warns: [`ITERATE routing.x (ITERATE__ROUTING__X): ${IGNORED}`],
   },
   {
     name: "a malformed field, even beside a key the schema does not name",
-    env: { APP_CONFIG_URLS__OS: "os.test", APP_CONFIG_URLS__MCP: "https://mcp.test" },
-    throws: /^APP_CONFIG urls\.os \(APP_CONFIG_URLS__OS\): expected an HTTP\(S\) origin/,
-    warns: [`APP_CONFIG urls.mcp (APP_CONFIG_URLS__MCP): ${IGNORED}`],
+    env: { ITERATE__URLS__OS: "os.test", ITERATE__URLS__MCP: "https://mcp.test" },
+    throws: /^ITERATE urls\.os \(ITERATE__URLS__OS\): expected an HTTP\(S\) origin/,
+    warns: [`ITERATE urls.mcp (ITERATE__URLS__MCP): ${IGNORED}`],
   },
-])("parseAppConfigVars: $name", ({ env, becomes, throws, warns = [] }) => {
+  {
+    name: "a field lands on the object its parent var sets, whatever order the environment lists them in",
+    env: {
+      ITERATE__URLS__OS: "https://os.test",
+      ITERATE__ROUTING__TYPE: "subdomains",
+      ITERATE__ROUTING: '{"type":"paths"}',
+    },
+    becomes: {
+      urls: { os: "https://os.test", dash: "" },
+      routing: { type: "subdomains" },
+      labels: {},
+    },
+  },
+  {
+    name: "a stray key inside an array's element",
+    env: {
+      ITERATE__URLS__OS: "https://os.test",
+      ITERATE__ROUTES: '[{"pattern":"a/*","zone":"z"}]',
+    },
+    becomes: {
+      urls: { os: "https://os.test", dash: "" },
+      routes: [{ pattern: "a/*" }],
+      labels: {},
+    },
+    warns: [`ITERATE routes.0.zone (ITERATE__ROUTES__0__ZONE): ${IGNORED}`],
+  },
+  {
+    name: "a binding that shares the name's first word is not the config's",
+    env: {
+      ITERATE__URLS__OS: "https://os.test",
+      ITERATE_CONTEXT: "a binding",
+    },
+    becomes: { urls: { os: "https://os.test", dash: "" }, labels: {} },
+  },
+  {
+    name: "another config's name reads only its own variables",
+    prefix: "APP_CONFIG",
+    env: {
+      APP_CONFIG: JSON.stringify({ urls: { os: "https://os.test" } }),
+      APP_CONFIG__URLS__DASH: "https://dash.test",
+      ITERATE__LABELS: '{"other":"config"}',
+    },
+    becomes: { urls: { os: "https://os.test", dash: "https://dash.test" }, labels: {} },
+  },
+  {
+    name: "a longer name that starts with the config's reads only its own variables",
+    prefix: "ITERATE_OTHER",
+    env: {
+      ITERATE: JSON.stringify({ urls: { os: "https://other.test" } }),
+      ITERATE_OTHER__URLS__OS: "https://os.test",
+    },
+    becomes: { urls: { os: "https://os.test", dash: "" }, labels: {} },
+  },
+])("parseAppConfigVars: $name", ({ prefix = "ITERATE", env, becomes, throws, warns = [] }) => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  if (throws) expect(() => parseAppConfigVars(env, Schema)).toThrow(throws);
+  if (throws) expect(() => parseAppConfigVars(env, Schema, { prefix })).toThrow(throws);
   // exact: a key the schema does not name is never kept
-  else expect(parseAppConfigVars(env, Schema)).toEqual(becomes);
+  else expect(parseAppConfigVars(env, Schema, { prefix })).toEqual(becomes);
   expect(warn.mock).toMatchObject({ calls: warns.map((message) => [message]) });
+});
+
+test("configVarNameOf: a field's var is its path, `__` before each part, each part in SNAKE_CASE", () => {
+  expect(
+    configVarNameOf(["integrations", "github", "oauthClientSecret"], { prefix: "ITERATE" }),
+  ).toBe("ITERATE__INTEGRATIONS__GITHUB__OAUTH_CLIENT_SECRET");
+  expect(configVarNameOf(["adminBearer"], { prefix: "ITERATE" })).toBe("ITERATE__ADMIN_BEARER");
 });

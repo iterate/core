@@ -12,7 +12,7 @@ import {
   type SessionAuthority,
   type SessionInput,
 } from "./session.ts";
-import { appConfigOf, platformAddressesOf } from "./app-config.ts";
+import { iterateConfigOf, platformAddressesOf } from "./iterate-config.ts";
 import { parseCause } from "./cause.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root holds what the upgrade's
@@ -26,7 +26,7 @@ export async function rpcResponse(
   ctx: ExecutionContext,
   auth: Authorization | null,
 ) {
-  // THE PLATFORM ADDRESSES this transport reached the platform at (app-config.ts): every address
+  // THE PLATFORM ADDRESSES this transport reached the platform at (iterate-config.ts): every address
   // and every caller stamp downstream is at them.
   const addresses = platformAddressesOf(env, request);
   const { platformOrigin } = addresses;
@@ -57,7 +57,7 @@ export async function rpcResponse(
     // A read unanswered in 5 s is UNAVAILABLE (overloaded), not a call held until D1's own 30 s
     // bound. About 1 in 2,000 D1 and DO calls take a fixed extra ~3.0 s (measured 2026-09-28).
     controlPlane: new ControlPlane(env, { readDeadlineMs: 5_000 }),
-    appConfig: appConfigOf(env),
+    iterateConfig: iterateConfigOf(env),
     platformOrigin,
     cause: parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),
     onProjectAccess: (projectId) => projects.add(projectId),

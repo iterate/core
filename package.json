@@ -4,6 +4,8 @@
   "type": "module",
   "packageManager": "pnpm@10.24.0",
   "scripts": {
-    "build": "CLOUDFLARE_ENV=self-host pnpm --filter os build"
+    "build": "pnpm --dir core/os build",
+    "deploy": "pnpm --dir core/os run deploy",
+    "dev": "pnpm --dir core/os dev"
   }
 }

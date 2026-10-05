@@ -35,9 +35,9 @@ import type {
 import type { Caller } from "./caller.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
-import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";
+import type { RepoFacet, repoVerbs } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
-import type { WorkspaceDurableObject, workspaceVerbs } from "./workspace/durable-object.ts";
+import type { WorkspaceFacet, workspaceVerbs } from "./workspace/durable-object.ts";
 import { connectToCapnweb } from "./library/capnweb.ts";
 import { connectToMcp, type McpWebhook } from "./library/mcp.ts";
 import { connectToOpenApi } from "./library/openapi.ts";
@@ -77,14 +77,12 @@ export interface LibraryRoots {
   /** A repo (src/repo/): a stream on any path whose `repo` facet lands the commit facts. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the repo's own events; `list()`
    *  and `create(path)` are the collection's on the `project` facet at `/`. */
-  repos: EntityRoot<
-    EntityHandle<RepoDurableObject, (typeof repoVerbs)[number], typeof RepoContract>
-  >;
+  repos: EntityRoot<EntityHandle<RepoFacet, (typeof repoVerbs)[number], typeof RepoContract>>;
   /** A workspace (src/workspace/): the workspace of any context, at most one per path. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the workspace's own events;
    *  `list()` and `create(path)` are the collection's on the `project` facet at `/`. */
   workspaces: EntityRoot<
-    EntityHandle<WorkspaceDurableObject, (typeof workspaceVerbs)[number], typeof WorkspaceContract>
+    EntityHandle<WorkspaceFacet, (typeof workspaceVerbs)[number], typeof WorkspaceContract>
   >;
   /** THE FILES: project file storage as a PATH namespace over `itx.r2`
    *  — a file is its path (leading slash), its bytes and a content type; last write wins, no

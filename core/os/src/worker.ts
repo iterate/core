@@ -41,7 +41,7 @@ import {
   adminSignInResponse,
 } from "./admin-sign-in.ts";
 import { localSignInResponse } from "./local-sign-in.ts";
-import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
+import { iterateConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./iterate-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
 import { serveProjectFileRequest } from "./context/file-urls.ts";
 import { FILES_ROUTING_SLUG } from "./fetch-routes.ts";
@@ -228,14 +228,14 @@ export { BrowserSession } from "iterate/app-session";
 // THE FIRST-PARTY FACETS: exported Durable Object classes hosted as facets of a context through
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.
-export { AccountDurableObject } from "./account/durable-object.ts";
-export { EmailDurableObject } from "./email/durable-object.ts";
-export { InstanceDurableObject } from "./instance/durable-object.ts";
-export { OrganizationDurableObject } from "./organization/durable-object.ts";
-export { ProjectDurableObject } from "./project/durable-object.ts";
-export { RepoDurableObject } from "./repo/durable-object.ts";
-export { SecretDurableObject } from "./secret/durable-object.ts";
-export { WorkspaceDurableObject } from "./workspace/durable-object.ts";
+export { AccountFacet } from "./account/durable-object.ts";
+export { EmailFacet } from "./email/durable-object.ts";
+export { InstanceFacet } from "./instance/durable-object.ts";
+export { OrganizationFacet } from "./organization/durable-object.ts";
+export { ProjectFacet } from "./project/durable-object.ts";
+export { RepoFacet } from "./repo/durable-object.ts";
+export { SecretFacet } from "./secret/durable-object.ts";
+export { WorkspaceFacet } from "./workspace/durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
 // Workers AI for a context's `itx.ai`, minted per project with the project as props.
 export { ItxAi } from "./itx-ai.ts";
@@ -265,29 +265,29 @@ async function routeRequest(
   // what reads the mark from here on (/api, /mcp) reads it one context further
   if (mark) request = requestCausedBy(request, cause);
 
-  const appConfig = appConfigOf(env);
-  const { deployId } = appConfig;
+  const iterateConfig = iterateConfigOf(env);
+  const { deployId } = iterateConfig;
   // A blank `urls.os` (a self-host, SELF-HOSTING.md) makes each request's own origin the
   // platform's, and OAuth takes no plain-http issuer or resource but a loopback one (the library
   // throws building them): a plain-http request goes to its HTTPS origin first.
   if (
-    !appConfig.urls.os &&
+    !iterateConfig.urls.os &&
     url.protocol === "http:" &&
     !/^(localhost|127(\.\d{1,3}){3}|\[::1\])$/.test(url.hostname)
   )
     return Response.redirect(`https://${url.host}${url.pathname}${url.search}`, 308);
-  if (appConfig.urls.mcp && url.origin === appConfig.urls.mcp) {
+  if (iterateConfig.urls.mcp && url.origin === iterateConfig.urls.mcp) {
     // MCP's public root is its protocol endpoint; /api remains Cap'n Web.
     if (url.pathname !== "/" && !url.pathname.startsWith("/.well-known/"))
       return new Response("Not found", { status: 404 });
     return oauthResponse(request, env, ctx);
   }
-  // THE PLATFORM ADDRESSES (app-config.ts `platformAddressesOf`): the origin — `urls.os`, else
+  // THE PLATFORM ADDRESSES (iterate-config.ts `platformAddressesOf`): the origin — `urls.os`, else
   // this request's own — stamped on every caller from here on, and the two resource identifiers.
   const addresses = platformAddressesOf(env, request);
   const { platformOrigin } = addresses;
   const controlPlane = new ControlPlane(env);
-  const routing = appConfig.urls.ingressRouting;
+  const routing = iterateConfig.urls.ingressRouting;
   // PROJECT-HOST INGRESS: a request on any host of a project reaches the project's config worker —
   // the Request riding into the context DO's `fetch` with its URL, the visitor's own cookies and a
   // WebSocket upgrade intact, the routing slug the host names said in `x-iterate-routing-slug`. The
@@ -301,7 +301,7 @@ async function routeRequest(
   // resolves the host's label (a slug, an id would do too) to the project's id; an unknown label
   // is 421. A slow read is waited for; one that fails on the platform's side is a 503
   // (`platformFailureAnswer`).
-  const projectHost = await controlPlane.projectHostOf(appConfig, url, platformOrigin);
+  const projectHost = await controlPlane.projectHostOf(iterateConfig, url, platformOrigin);
   if (projectHost) {
     const project = await controlPlane.getProject(projectHost.project);
     if (!project)
@@ -315,7 +315,7 @@ async function routeRequest(
     if (projectHost.routingSlug === FILES_ROUTING_SLUG) {
       const file = await serveProjectFileRequest({
         bucket: env.FILES,
-        secret: await sessionSigningSecretOf(appConfig),
+        secret: await sessionSigningSecretOf(iterateConfig),
         project: projectId,
         keyPrefix: `${resourceScope(projectId, "/").id}/`,
         request: withoutBasePath(request, projectHost.basePath),
@@ -440,8 +440,8 @@ async function routeRequest(
   // An admin's sign-in through another issuer (admin-sign-in.ts), prd's for a preview: its start,
   // that issuer's answer, and this deployment's client metadata document, which the issuer
   // fetches. None of them exists where `login.adminIssuer` is unset — prd, and every deployment
-  // on its own domain, which app-config.ts refuses it on.
-  const adminIssuer = appConfig.login.adminIssuer;
+  // on its own domain, which iterate-config.ts refuses it on.
+  const adminIssuer = iterateConfig.login.adminIssuer;
   if (adminIssuer && request.method === "GET") {
     if (url.pathname === ADMIN_SIGN_IN_PATH) return adminSignInResponse(request, env, adminIssuer);
     if (url.pathname === ADMIN_SIGN_IN_CALLBACK_PATH)
@@ -481,7 +481,7 @@ async function routeRequest(
     // With its own origin configured, MCP lives THERE: a client (or a person) pointed at the
     // platform's /mcp is sent to it, method and body kept (308), instead of falling through to the
     // issuer's pages and a bare "Sign in first".
-    if (appConfig.urls.mcp) return Response.redirect(`${appConfig.urls.mcp}/`, 308);
+    if (iterateConfig.urls.mcp) return Response.redirect(`${iterateConfig.urls.mcp}/`, 308);
     return oauthResponse(request, env, ctx);
   }
   const browserResponse = await browserClient(request, env, ctx);

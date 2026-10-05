@@ -8,7 +8,7 @@ import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { OrganizationState } from "./contract.ts";
 import { OrganizationProcessor } from "./processor.ts";
 
-export class OrganizationDurableObject extends StreamProcessorDurableObject<
+export class OrganizationFacet extends StreamProcessorDurableObject<
   OrganizationState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope

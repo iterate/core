@@ -2,11 +2,11 @@
 
 The platform accepts three kinds of bearer. Each has its own job.
 
-| Credential                                               | Who holds it                                                                            | Works at                                                      | Lifetime                                                        | Ended by                                             |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------- |
-| **Personal access token** (`itk_…`)                      | a person, for scripts, MCP clients, devices                                             | `/api`, `/mcp`, and the hosts of the projects it covers       | until its expiry, or none                                       | revoking it (Dash Sessions, `iterate tokens revoke`) |
-| **OAuth access token**                                   | an app a person signed in to: the Dash, the CLI, an MCP client that did the OAuth dance | its one resource: `/api` (with the projects' hosts) or `/mcp` | an hour; its grant refreshes for a week unused, 30 days at most | signing out, or ending the session in the Dash       |
-| **Operator bearer** (`APP_CONFIG` `secrets.adminBearer`) | the deployment, for automation                                                          | `/api` only                                                   | until the secret is rotated                                     | rotating the secret                                  |
+| Credential                                    | Who holds it                                                                            | Works at                                                      | Lifetime                                                        | Ended by                                             |
+| --------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------- |
+| **Personal access token** (`itk_…`)           | a person, for scripts, MCP clients, devices                                             | `/api`, `/mcp`, and the hosts of the projects it covers       | until its expiry, or none                                       | revoking it (Dash Sessions, `iterate tokens revoke`) |
+| **OAuth access token**                        | an app a person signed in to: the Dash, the CLI, an MCP client that did the OAuth dance | its one resource: `/api` (with the projects' hosts) or `/mcp` | an hour; its grant refreshes for a week unused, 30 days at most | signing out, or ending the session in the Dash       |
+| **Operator bearer** (`ITERATE` `adminBearer`) | the deployment, for automation                                                          | `/api` only                                                   | until the secret is rotated                                     | rotating the secret                                  |
 
 ## OAuth tokens
 
@@ -96,7 +96,7 @@ configuration (`~/.claude.json`); give such a key an expiry.
 
 ## The operator bearer
 
-`secrets.adminBearer` is the deployment's machine credential. It reaches every project as the
+`adminBearer` is the deployment's machine credential. It reaches every project as the
 `admin` actor, so it's for automation that has no person behind it: a test harness creating
 people and projects per test, deploy scripts and their readiness gates, load scripts, backups.
 `/api` accepts it in-band (`authenticate({ type: "admin-secret" })`) or as a bearer. Every other entry point refuses it and logs
@@ -111,8 +111,9 @@ people and projects per test, deploy scripts and their readiness gates, load scr
 People and agents use personal access tokens instead. The one exception is a project you are not
 a member of: a key can't reach it, so debugging a customer's project in production takes the
 bearer, on `/api`, through the CLI:
-`APP_CONFIG_SECRETS__ADMIN_BEARER=… iterate --config <deployment> itx run --project <slug> …`
+`ITERATE_ADMIN_BEARER=… iterate --config <deployment> itx run --project <slug> …`
 ([the CLI's configs](../../lib/src/cli/README.md#configs)).
 
-The CLI and `examples/serve-localhost.mjs` read `APP_CONFIG_SECRETS__ADMIN_BEARER`, the worker's
-own override of `secrets.adminBearer`, before `ITERATE_BEARER_TOKEN`.
+The CLI and `examples/serve-localhost.mjs` read the bearer from `ITERATE_ADMIN_BEARER` (one
+underscore: a client's variable, not the deployment's `ITERATE__ADMIN_BEARER`), before
+`ITERATE_BEARER_TOKEN`.

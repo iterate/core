@@ -14,7 +14,7 @@ import { missingScopes } from "iterate/integration-scopes";
 import type { OAuthIntegrationProvider } from "iterate/api";
 import { codedError, errorCode, reportIssue, withTimeout } from "iterate/lib";
 import { z } from "zod";
-import { appConfigOf, sessionSigningSecretOf } from "../app-config.ts";
+import { iterateConfigOf, sessionSigningSecretOf } from "../iterate-config.ts";
 import { verifyClaims } from "../caller.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
@@ -461,7 +461,7 @@ async function moveHere(scope: IntegrationScope, input: { offer: string }) {
   const expired = () =>
     codedError("INVALID_INPUT", "This offer to move it here has expired — connect again.");
   const claims = MoveOfferClaims.safeParse(
-    await verifyClaims(String(input?.offer), await sessionSigningSecretOf(appConfigOf(env))),
+    await verifyClaims(String(input?.offer), await sessionSigningSecretOf(iterateConfigOf(env))),
   );
   if (!claims.success || claims.data.projectId !== projectId || claims.data.exp <= Date.now())
     throw expired();

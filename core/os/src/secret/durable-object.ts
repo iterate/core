@@ -24,7 +24,7 @@
 // the code into the record (secret-oauth.ts). A client secret another of the owner's secrets holds is
 // read from that secret's facet at the exchange and at every refresh (`clientSecretFor`), never
 // stored here. The deployment's own app at a provider (an integration's
-// `client: { platform }`, APP_CONFIG `integrations.<provider>`) is attached here, where APP_CONFIG is,
+// `client: { platform }`, ITERATE `integrations.<provider>`) is attached here, where ITERATE is,
 // and only ever toward that app's own provider; a project's own app is this secret's material. The
 // two facts this facet appends itself, best-effort:
 // `secret/used` per dispatch and `secret/refreshed` per refresh outcome. It hosts the secret processor
@@ -47,11 +47,11 @@ import type {
 import { codedError, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { signClaims, verifyAdminSecret } from "../caller.ts";
 import {
-  appConfigOf,
+  iterateConfigOf,
   atRestKeysOf,
   sessionSigningSecretOf,
-  type AppConfigEnv,
-} from "../app-config.ts";
+  type IterateConfigEnv,
+} from "../iterate-config.ts";
 import { contextStub } from "../context-stub.ts";
 import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "../context/paths.ts";
 import { DROPPED_CLOSE_CODE, relayedCloseCode } from "../context/websocket-close.ts";
@@ -178,14 +178,14 @@ const MINTED_FIELDS: string[] = ["accessToken", "expiresAt"];
  *  the most a project that lost an installation keeps using a token it had minted. */
 const INSTALLATION_ROUTE_RECHECK_MS = 30_000;
 
-export class SecretDurableObject extends StreamProcessorDurableObject<
+export class SecretFacet extends StreamProcessorDurableObject<
   SecretState,
   {
     ITX?: ItxEntrypointService;
     DB: D1Database;
     ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
     LOADER: WorkerLoader;
-  } & AppConfigEnv,
+  } & IterateConfigEnv,
   ItxEntrypointScope
 > {
   /** The secret's READS alone — whether material was set and whether it was deleted, by the offsets
@@ -297,7 +297,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   }
 
   #keys(): MaterialKeys {
-    return atRestKeysOf(appConfigOf(this.env));
+    return atRestKeysOf(iterateConfigOf(this.env));
   }
 
   /** Operator recovery exports only the current encrypted value, with its original AAD.
@@ -306,10 +306,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   async exportForProjectSeed(adminSecret: unknown) {
     if (
       typeof adminSecret !== "string" ||
-      !(await verifyAdminSecret(
-        adminSecret,
-        appConfigOf(this.env).secrets.adminBearer.exposeSecret(),
-      ))
+      !(await verifyAdminSecret(adminSecret, iterateConfigOf(this.env).adminBearer.exposeSecret()))
     )
       throw codedError("FORBIDDEN", "Secret recovery exports require operator authority.");
     const stored = await this.ctx.storage.get<Stored>("stored");
@@ -588,7 +585,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     /** the platform origin the callback hangs under — the caller's (a facet knows none itself) */
     platformOrigin: string,
   ): Promise<{ authorizationUrl: string; nonce: string }> {
-    const config = appConfigOf(this.env);
+    const config = iterateConfigOf(this.env);
     const nonce = crypto.randomUUID();
     const state: SecretOAuthState = {
       kind: "secret-oauth",
@@ -649,11 +646,11 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     return { clientId: kept.clientId, clientSecret, kept };
   }
 
-  /** The deployment's app at a provider (APP_CONFIG `integrations.<provider>`) and the origins its
+  /** The deployment's app at a provider (ITERATE `integrations.<provider>`) and the origins its
    *  provider's OAuth endpoints answer on; refused when the deployment has none. GitHub's is the
    *  App's user-authorization client (a GitHub sign-in's token refreshes with it). */
   #platformOAuthApp(provider: OAuthPlatform) {
-    const { slack, google, cloudflare, github, x } = appConfigOf(this.env).integrations;
+    const { slack, google, cloudflare, github, x } = iterateConfigOf(this.env).integrations;
     const googleEndpoints = googleEndpointsOf(google?.googleOrigin);
     const app =
       provider === "x"
@@ -688,7 +685,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
               : github && { app: github, origins: [github.githubOrigin] };
     if (!app)
       throw new Error(
-        `secrets: this deployment has no ${provider} app (APP_CONFIG integrations.${provider} is unset)`,
+        `secrets: this deployment has no ${provider} app (ITERATE integrations.${provider} is unset)`,
       );
     return {
       clientId: app.app.oauthClientId,
@@ -1027,7 +1024,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
           lendId: borrowed.lendId,
           borrower: DurableObjectNameCodec.parse(this.#address().context).projectId,
         },
-        await sessionSigningSecretOf(appConfigOf(this.env)),
+        await sessionSigningSecretOf(iterateConfigOf(this.env)),
       ),
     );
     return this.env.ITERATE_CONTEXT.getByName(borrowed.lender).fetch(
@@ -1226,7 +1223,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
               PinnedOutbound: (options: { props: { urls: string[] } }) => Fetcher;
             }
           ).PinnedOutbound({ props: { urls } }),
-          deployId: appConfigOf(this.env).deployId,
+          deployId: iterateConfigOf(this.env).deployId,
           context: this.#address().context,
           urls,
           source: refresh.source,
@@ -1294,7 +1291,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
 
   /** A GitHub App installation's token: an App JWT (@octokit/auth-app) traded at the
    *  installation's `access_tokens`. The project's own App signs with the `appId` and `privateKey`
-   *  this secret's material holds. The deployment's App signs with APP_CONFIG's key, at its own
+   *  this secret's material holds. The deployment's App signs with ITERATE's key, at its own
    *  GitHub only, and only for an installation the control plane routes to THIS project — so no
    *  project mints for an installation another project connected. */
   async #githubInstallationToken(
@@ -1309,11 +1306,9 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         throw new Error(`${refresh.kind}: the secret's material holds no "appId" and "privateKey"`);
       app = { appId: material.appId, privateKey: material.privateKey };
     } else {
-      const github = appConfigOf(this.env).integrations.github;
+      const github = iterateConfigOf(this.env).integrations.github;
       if (!github)
-        throw new Error(
-          "this deployment has no GitHub App (APP_CONFIG integrations.github is unset)",
-        );
+        throw new Error("this deployment has no GitHub App (ITERATE integrations.github is unset)");
       if (refresh.apiOrigin !== githubApiOriginOf(github.githubOrigin))
         throw new Error(
           `the platform's GitHub App answers at ${githubApiOriginOf(github.githubOrigin)}`,

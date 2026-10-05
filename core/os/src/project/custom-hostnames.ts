@@ -12,7 +12,7 @@
 //                   (control-plane/edge.ts `projectHostOf`)
 // The facts are the project's own, on its root log (contract.ts `project/hostname-*`).
 
-import type { AppConfig } from "../app-config.ts";
+import type { IterateConfig } from "../iterate-config.ts";
 import type { CustomHostnameObservation } from "./contract.ts";
 
 /** A DNS name of two labels or more: lowercase letters, digits and inner hyphens (an IDN's `xn--`
@@ -43,7 +43,7 @@ export function customHostnameProblem(
  *  the wildcard certificate and every renewal. Pure. */
 export function customHostnameRecords(
   hostname: string,
-  config: Pick<NonNullable<AppConfig["customHostnames"]>, "zone" | "dcvDelegationUuid">,
+  config: Pick<NonNullable<IterateConfig["customHostnames"]>, "zone" | "dcvDelegationUuid">,
 ): CustomHostnameObservation["records"] {
   return [
     { type: "CNAME", name: hostname, value: `cname.${config.zone}` },
@@ -94,11 +94,11 @@ const WILDCARD_SSL = {
 /** The provider over Cloudflare's API with the deployment's token — null when the deployment has no
  *  `customHostnames` block or no token (a hostname is then refused, never half-provisioned). */
 export function cloudflareCustomHostnameProvider(
-  config: Pick<AppConfig, "customHostnames" | "cloudflareApiToken">,
+  config: Pick<IterateConfig, "customHostnames">,
   fetcher: typeof fetch = (input, init) => fetch(input, init),
 ): CustomHostnameProvider | null {
-  const token = config.cloudflareApiToken.exposeSecret();
   const saas = config.customHostnames;
+  const token = saas?.cloudflareApiToken.exposeSecret();
   if (!saas || !token) return null;
   const cloudflare = async <T>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetcher(

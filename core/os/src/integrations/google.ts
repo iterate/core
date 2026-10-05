@@ -9,7 +9,7 @@
 //   revokeGoogle       → a disconnect's grant revoked (verbs.ts `PROVIDERS`)
 // Google sends no webhooks here, so nothing is routed.
 import { codedError } from "iterate/lib";
-import { appConfigOf, DEFAULT_GOOGLE_SCOPES } from "../app-config.ts";
+import { iterateConfigOf, DEFAULT_GOOGLE_SCOPES } from "../iterate-config.ts";
 import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord } from "../secrets.ts";
 import type { IntegrationConnectionRow } from "./contract.ts";
@@ -60,11 +60,11 @@ async function googleClientOf(
   connection: string,
 ): Promise<{ origin: string | null; scopes: readonly string[] }> {
   if (client === "iterate") {
-    const google = appConfigOf(scope.env).integrations.google;
+    const google = iterateConfigOf(scope.env).integrations.google;
     if (!google)
       throw codedError(
         "INVALID_INPUT",
-        "This deployment has no Google client (APP_CONFIG integrations.google) — use your own.",
+        "This deployment has no Google client (ITERATE integrations.google) — use your own.",
       );
     return { origin: google.googleOrigin || null, scopes: google.scopes };
   }

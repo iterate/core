@@ -5,7 +5,7 @@ import { issuerRequestContext } from "./issuer-request-context.server.ts";
 import { loginSearchOf } from "./login-search.ts";
 import { loginState } from "./login.server.ts";
 import { createConsentProject, describeConsent, NewConsentProject } from "./consent-page.server.ts";
-import { appConfigOf, platformAddressesOf } from "./app-config.ts";
+import { iterateConfigOf, platformAddressesOf } from "./iterate-config.ts";
 
 /** A server function's input, parsed. Start answers a thrown validation error with a 500 and an
  *  error log; input that does not parse is the caller's mistake, so it is a plain 400. */
@@ -24,7 +24,7 @@ export const getLandingState = createServerFn({ method: "GET" }).handler(async (
   setResponseHeader("cache-control", "no-store");
   return {
     issuer: platformAddressesOf(env, request).platformOrigin,
-    dash: appConfigOf(env).urls.dash || null,
+    dash: iterateConfigOf(env).urls.dash || null,
   };
 });
 
@@ -51,10 +51,10 @@ export const createProjectForConsent = createServerFn({ method: "POST" })
     return createConsentProject(getRequest(), env, ctx, data);
   });
 
-/** The worker's PostHog project key (`APP_CONFIG posthogProjectKey`: envs.ts, prd only) — the
+/** The worker's PostHog project key (`ITERATE posthogProjectKey`: envs.ts, prd only) — the
  *  root route starts posthog-js with it. */
 export const getPosthogProjectKey = createServerFn({ method: "GET" }).handler(
-  () => appConfigOf(issuerRequestContext().env).posthogProjectKey || null,
+  () => iterateConfigOf(issuerRequestContext().env).posthogProjectKey || null,
 );
 
 /** Every server function the issuer serves; the Worker admits no other `/_serverFn/` path. */

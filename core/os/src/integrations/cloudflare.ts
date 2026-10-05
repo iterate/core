@@ -1,5 +1,5 @@
 // src/integrations/cloudflare.ts — CLOUDFLARE: a connection is one Cloudflare account (connections.ts),
-// through iterate's OAuth client alone (APP_CONFIG `integrations.cloudflare`, the client that signs
+// through iterate's OAuth client alone (ITERATE `integrations.cloudflare`, the client that signs
 // people in too). Its tokens live in `/secrets/cloudflare-<connection>`, an `oauth-refresh-token`
 // secret whose refresh attaches the client inside the secret's facet when Cloudflare issued a
 // refresh token (`offline_access`). Outbound calls carry
@@ -10,7 +10,7 @@
 // the body, which egress never fills in, so deleting the secret is the disconnect (the person
 // revokes the grant at dash.cloudflare.com).
 import { codedError } from "iterate/lib";
-import { appConfigOf } from "../app-config.ts";
+import { iterateConfigOf } from "../iterate-config.ts";
 import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord } from "../secrets.ts";
 import type { IntegrationConnectionRow } from "./contract.ts";
@@ -54,11 +54,11 @@ export async function connectCloudflare(
     connectToProject?: ConnectionAttempt["connectToProject"];
   },
 ): Promise<{ authorizationUrl: string }> {
-  const cloudflare = appConfigOf(scope.env).integrations.cloudflare;
+  const cloudflare = iterateConfigOf(scope.env).integrations.cloudflare;
   if (input.client !== "iterate" || !cloudflare)
     throw codedError(
       "INVALID_INPUT",
-      "Cloudflare connects through this deployment's Cloudflare client (APP_CONFIG integrations.cloudflare) alone.",
+      "Cloudflare connects through this deployment's Cloudflare client (ITERATE integrations.cloudflare) alone.",
     );
   const endpoints = cloudflareEndpointsOf(cloudflare.cloudflareOrigin);
   const asked = [...new Set([...cloudflare.scopes, ...(input.scopes || [])])];

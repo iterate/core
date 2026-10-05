@@ -158,7 +158,7 @@ export const isConfigPointerMatch = (match: ItxExpressionPrefix) =>
  *  fact (`PLATFORM_FACT_TYPES`) and a row on the config pointer (`isConfigPointerMatch`: a target, a
  *  mask, a removal), appended or scheduled — an occurrence fires under its schedule's stamp, so what
  *  one may not append it may not schedule. Runs on the normalized batch at the append boundary
- *  (iterate-context-durable-object.ts), and on a deployment's birth events (app-config.ts), which
+ *  (iterate-context-durable-object.ts), and on a deployment's birth events (iterate-config.ts), which
  *  never pass it. */
 export function refuseNonPlatformWrites(events: readonly StreamEventInput[], caller: Caller): void {
   if (caller.platform) return;
@@ -252,8 +252,8 @@ const sha256 = async (text: string): Promise<Uint8Array> =>
   new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text)));
 
 /** The SHA-256 of `text`, hex: what the platform keeps of a random token (an invitation link, a
- *  personal access token, a mailed code), a secret derived from `secrets.key` under a label
- *  (app-config.ts `sessionSigningSecretOf`), and a content identity (exchange code's
+ *  personal access token, a mailed code), a secret derived from `secretsEncryption.key` under a label
+ *  (iterate-config.ts `sessionSigningSecretOf`), and a content identity (exchange code's
  *  `refreshSourceSha256`, a module lock's key). */
 export const sha256Hex = async (text: string): Promise<string> =>
   Array.from(await sha256(text), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -269,7 +269,7 @@ export async function secretsEqual(a: string, b: string): Promise<boolean> {
 }
 
 /** The principal the admin secret grants — `{ actor: "admin" }`, every project — when `candidate`
- *  IS `secret` (`secrets.adminBearer`: at `authenticate({ type: "admin-secret" })`, and as a bearer
+ *  IS `secret` (`adminBearer`: at `authenticate({ type: "admin-secret" })`, and as a bearer
  *  on `/api` — oauth.ts refuses it at `/mcp`), else null, by `secretsEqual`. A blank secret matches
  *  nothing. */
 export async function verifyAdminSecret(

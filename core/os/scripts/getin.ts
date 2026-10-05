@@ -18,8 +18,8 @@
 //    Or, for `--token`, sign the person in with local dev's password and mint them a personal
 //    access token for the project (src/grants.ts `mint`), 30 days.
 //
-// Local dev only: the credentials are local dev's (scripts/generate-wrangler-config.ts
-// `viteWranglerConfig`), and a preview or prd has no one-click sign-in.
+// Local dev only: the credentials are local dev's (cloudflare.config.ts
+// `localDevConfig`), and a preview or prd has no one-click sign-in.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import process from "node:process";
@@ -74,7 +74,7 @@ export default async function getin(
   const url = `${server.baseUrl}/.auth/local-sign-in?${new URLSearchParams({ email, next })}`;
   if (!dash)
     console.error(
-      `no local Dash on this server — landing on ${server.baseUrl}/login. For the Dash: APP_CONFIG_URLS__OS=${server.baseUrl} in packages/dash/.dev.vars, then \`pnpm --dir packages/dash dev\``,
+      `no local Dash on this server — landing on ${server.baseUrl}/login. For the Dash: APP_CONFIG__URLS__OS=${server.baseUrl} in packages/dash/.dev.vars, then \`pnpm --dir packages/dash dev\``,
     );
   if (options.print) return console.log(url);
   console.error(`opening ${next} as ${email}`);
@@ -86,7 +86,7 @@ export default async function getin(
 async function createProject(baseUrl: string, input: { email: string; project: string }) {
   using connection = await connectIterate({
     baseUrl,
-    // local dev's `secrets.adminBearer` (generate-wrangler-config.ts `viteWranglerConfig`)
+    // local dev's `adminBearer` (cloudflare.config.ts `localDevConfig`)
     auth: { type: "admin-secret", secret: "dev-admin-api-secret", as: { email: input.email } },
   });
   const { projectId } = await connection.session.projects
@@ -102,7 +102,7 @@ async function mintToken(baseUrl: string, input: { email: string; projectId: str
   const login = await fetch(new URL("/login", baseUrl), {
     method: "POST",
     headers: { Origin: baseUrl },
-    // local dev's `login.password` (generate-wrangler-config.ts `viteWranglerConfig`)
+    // local dev's `login.password` (cloudflare.config.ts `localDevConfig`)
     body: new URLSearchParams({ email: input.email, password: "dev", next: "/" }),
     redirect: "manual",
   });

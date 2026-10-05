@@ -9,17 +9,99 @@ served at https://os.iterate.com/setup-prompt.md. Tell Claude Code, Codex or ope
 
 > follow https://os.iterate.com/setup-prompt.md to set up self-hosted iterate
 
-From an empty folder it builds and deploys into the Cloudflare account you pick, creates your first
-project, checks it, connects itself over MCP, and hands you the dash, voice and kit links. Its
-requirements are at the top: Workers Paid, R2, and access to Cloudflare Artifacts (a closed beta).
-You can follow it by hand too.
+From an empty folder it deploys into the Cloudflare account you pick, creates your first project,
+checks it, connects itself over MCP, and hands you the dash, voice and kit links. Its requirements
+are at the top: Workers Paid, R2, and access to Cloudflare Artifacts (a closed beta). You can follow
+it by hand too. This page is the reference for what it does.
 
-The rest of this page is what the recipe leaves out.
+## Deploy
+
+```sh
+git clone https://github.com/iterate/core iterate && cd iterate
+pnpm install
+pnpm --dir core/os exec cf auth login   # or set CLOUDFLARE_API_TOKEN
+# write your config: core/os/iterate.config.local.ts and core/os/.secrets ("The config")
+pnpm run deploy
+```
+
+Use the project's own `cf` (`pnpm --dir core/os exec cf …`): a `cf` installed globally may be
+older. To update: `git pull`, `pnpm install`, `pnpm run deploy`.
+
+`pnpm run deploy --check` builds and checks everything and runs `cf deploy --dry-run`. Nothing on
+the account changes.
+
+## The config
+
+One object configures a deployment, the iterate config
+([`src/iterate-config.ts`](src/iterate-config.ts) documents every field and its default). Its
+`cloudflare` section says where the Worker deploys: the account, the prefix of the resources it
+binds by name, the Worker's name and routes. Every other field says what the Worker does: its URLs,
+sign-in, admins, integrations and keys. A field you leave out takes its default.
+
+`pnpm run deploy` reads it from one of two files in `core/os/`:
+
+- [`iterate.config.ts`](iterate.config.ts), committed, reads it from the environment. `ITERATE` is
+  the whole object as JSON. Any one field can also be set alone, `__` before each part of its path
+  (`ITERATE__URLS__OS`, `ITERATE__SECRETS_ENCRYPTION__KEY`), and wins over the object. `pnpm run deploy`
+  loads `core/os/.secrets` (gitignored, `NAME=value` lines) when it exists; a variable already in
+  the environment keeps its value.
+- `iterate.config.local.ts`, gitignored, is used instead when it exists. It is yours: it imports
+  `iterate.config.ts` and overrides what you need, with types.
+
+A self-host usually has both: the non-secret values in `iterate.config.local.ts`, the secrets in
+`.secrets` by their variable names.
+
+```ts
+// core/os/iterate.config.local.ts
+import type { IterateConfigInput } from "./src/iterate-config.ts";
+import base from "./iterate.config.ts";
+
+export default {
+  ...base,
+  cloudflare: { accountId: "<your Cloudflare account id>", resourcePrefix: "iterate" },
+} satisfies IterateConfigInput;
+```
+
+```sh
+# core/os/.secrets (chmod 600)
+ITERATE__SECRETS_ENCRYPTION__KEY=<openssl rand -hex 32>
+ITERATE__LOGIN__PASSWORD=<openssl rand -hex 16>
+```
+
+A section the file sets replaces the environment's whole: spread `base.<section>` into it to keep
+the environment's fields. Without `iterate.config.local.ts`, any secrets manager that injects
+environment variables works: `doppler run -- pnpm run deploy`, `infisical run -- …`,
+`op run --env-file=core/os/.env.op -- …`.
+
+Cloudflare's credentials are not part of the config: `cf auth login`, or `CLOUDFLARE_API_TOKEN`.
+(`customHostnames.cloudflareApiToken` is the Worker's own token, for projects' custom hostnames.)
+
+The key, `secretsEncryption.key`, encrypts every project secret. Losing it loses them, and changing it
+signs everyone out. Keep `core/os/.secrets`, or your secrets manager's copy: it is the only one.
+
+## What the deploy does
+
+`pnpm run deploy` (`scripts/deploy.ts`):
+
+1. Reads the config, parses it as the Worker will, and prints it with secrets redacted. A key the
+   schema does not name is warned about and left out.
+2. Builds the Worker.
+3. Looks up the D1 `<prefix>-db`. A deploy binds the D1, the R2 bucket `<prefix>-files` and the
+   KV namespaces by name and creates, empty, those that do not exist, so it says loudly when the D1
+   is missing: with a wrong prefix, an existing deployment would start empty. The first repo the
+   Worker creates makes the Artifacts namespace `<prefix>-repos`.
+4. Migrates the D1 (a new one right after the deploy), then runs `cf deploy`. Each field the schema
+   marks secret becomes a Worker secret of its own, named by its path
+   (`ITERATE__INTEGRATIONS__GITHUB__OAUTH_CLIENT_SECRET`); the rest becomes the plain var `ITERATE`,
+   which the dashboard shows. The Worker merges them back. The secrets go through a file only you
+   can read; no value is printed or put on a command line. An `ITERATE__*` secret the config no
+   longer sets is blanked by the same upload, then deleted.
 
 ## Project apps
 
-`https://iterate.<your-subdomain>.workers.dev/projects/<project>/<routingSlug>/`, and `/projects/<project>/`
-for the project's own config worker (`urls.ingressRouting: { type: "paths" }`).
+`https://<worker>.<your-subdomain>.workers.dev/projects/<project>/<routingSlug>/`, and
+`/projects/<project>/` for the project's own config worker (`urls.ingressRouting`, by default
+`{ "type": "paths" }`).
 
 With no domain, every project's code runs on the platform's own origin. An app's code can do
 anything the person visiting it can do on the deployment, in every project they reach, including
@@ -32,17 +114,12 @@ can never act as whoever opens it.
 For apps on an origin of their own, or people who don't all trust each other, give the deployment
 a [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
 
-## Other sign-in methods and configuration
-
-The whole configuration is one JSON object, the `APP_CONFIG` secret (`core/os/src/app-config.ts`
-documents every key). Any key can also be set alone as a var, the path joined by `__`; the Vite build
-sets `APP_CONFIG_URLS__INGRESS_ROUTING` and `APP_CONFIG_URLS__DASH` that way.
+## Other sign-in methods
 
 The recipe signs people in with one password (`login.password`). To add Google, Cloudflare or
 GitHub sign-in, or mailed codes, add `login.google`, `login.cloudflare`, `login.github` or
-`login.emailCode` to the `APP_CONFIG` line in the `.secrets` file the recipe kept, and deploy again
-with `--secrets-file`. A provider's sign-in is `{}` (or `{ scopes }`) and signs in with that
-provider's integration client, which the person's connection then uses too:
+`login.emailCode` to the config (`iterate.config.local.ts`, or `ITERATE`), and deploy again. A provider's sign-in is `{}` (or `{ scopes }`)
+and signs in with that provider's integration client, which the person's connection then uses too:
 `integrations.cloudflare` takes `{ oauthClientId, oauthClientSecret }` from your own OAuth client;
 register `<your-origin>/.auth/identity/cloudflare/callback` and
 `<your-origin>/api/integrations/cloudflare/callback`, and configure the client for
@@ -70,8 +147,8 @@ secret `/secrets/<provider>-<connection>`:
   client ID, client secret, private key (.pem) and webhook secret.
 
 Connecting Cloudflare, a person's own Google or Cloudflare connection, and signing in with Google,
-Cloudflare or GitHub all need that provider's app in `APP_CONFIG` as `integrations.<provider>` (the
-keys are in `src/app-config.ts`). Register its redirect URIs: `<origin>/.auth/identity/callback`
+Cloudflare or GitHub all need that provider's app in the config as `integrations.<provider>` (the
+keys are in `src/iterate-config.ts`). Register its redirect URIs: `<origin>/.auth/identity/callback`
 (Google), `<origin>/.auth/identity/cloudflare/callback` (Cloudflare) or
 `<origin>/.auth/identity/github/callback` (GitHub) for sign-in, and
 `<origin>/api/integrations/<provider>/callback` for connecting. The Dash shows a provider's
@@ -87,15 +164,39 @@ and `iterate tunnel` works private or `--public`, at the root of its own origin.
 What it takes:
 
 1. **The zone** for `<your-domain>` on the same Cloudflare account as the Worker.
-2. **A proxied wildcard DNS record** for `*.<your-domain>`. It also covers `os.<your-domain>`. The
-   record's target does not matter; the Worker route answers.
+2. **Your routes in `cloudflare.workerRoutes`**:
+   `[{"pattern":"*.<your-domain>/*","zone":"<your-domain>"}]`. The wildcard also covers
+   `os.<your-domain>`. A route answers only where DNS does: make a proxied record
+   `*.<your-domain>` (any target, such as AAAA `100::`).
 3. **A certificate for `*.<your-domain>`.** Cloudflare's Universal SSL covers the apex and one
    wildcard level, which is why a project host is one label under `<your-domain>`:
    `<routingSlug>--<project>`, or the apex `<project>`.
-4. **Worker routes** `os.<your-domain>/*` and `*.<your-domain>/*` (zone `<your-domain>`), added to
-   `selfHostWranglerConfig` in `core/os/scripts/generate-wrangler-config.ts`, which sets none.
-5. **The config:** `urls.os` = `https://os.<your-domain>` in `APP_CONFIG`, and
-   `APP_CONFIG_URLS__INGRESS_ROUTING` = `{"type":"subdomains","hostname":"<your-domain>"}` in the
-   same function's `vars`, which override `urls.ingressRouting` in `APP_CONFIG`.
+4. **The URLs**: `urls.os` = `https://os.<your-domain>` and `urls.ingressRouting` =
+   `{"type":"subdomains","hostname":"<your-domain>"}`.
 
-Deploy again. `/mcp` then lives at `https://os.<your-domain>/mcp`; reconnect your MCP client there.
+Deploy again. `/mcp` then lives at
+`https://os.<your-domain>/mcp`; reconnect your MCP client there. Keep `cloudflare.workersDev` on
+while anything still uses the workers.dev origin.
+
+A deploy adds and keeps the routes it names, and does not remove one you take out of
+`cloudflare.workerRoutes`: delete it in the Cloudflare dashboard (the Worker's Settings, Domains &
+Routes).
+
+### A project's own domain
+
+`urls.projectHostnames: [{ "hostname": "example.org", "project": "<slug>" }]` gives one project a
+domain of its own: `example.org` is the project's apex, and `notes.example.org` is its `notes` app,
+as with a hostname the project adds itself. Route `example.org/*` and `*.example.org/*` on that
+zone to the Worker. The platform's own origin stays the platform's, even on the same zone (the
+platform on `iterate.example.org`, its projects on `*.iterate.example.org`). A more specific route
+on the zone wins over the wildcard, but a Custom Domain does not: give each Custom Domain on the
+zone a route of its own to its Worker (`app.example.org/*`), or the wildcard takes it.
+
+## Local development
+
+`pnpm --dir core/os dev` (or `pnpm --dir core/os exec cf dev`) serves the platform on
+`http://localhost:8788`, signed in with the password `dev`, projects under
+`<project>.localhost:8788`. D1, KV and R2 stay on disk; Workers AI, Browser Run and Artifacts have
+no local version and reach the account set in `CLOUDFLARE_ACCOUNT_ID`, in the namespace
+`os-dev-repos`. Local dev never reads `iterate.config.local.ts` or `.secrets`: they are a
+deployment's config.

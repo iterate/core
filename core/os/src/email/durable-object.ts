@@ -6,7 +6,7 @@ import type { EmailState } from "iterate/email";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { EmailProcessor } from "./processor.ts";
 
-export class EmailDurableObject extends StreamProcessorDurableObject<
+export class EmailFacet extends StreamProcessorDurableObject<
   EmailState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope

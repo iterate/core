@@ -1,5 +1,5 @@
-// context-birth-events.ts — pure, so scripts that run before a build (the Vite config's
-// scripts/generate-wrangler-config.ts) and the tests import it as they are.
+// context-birth-events.ts — pure, so what runs before a build (cloudflare.config.ts, which sets it
+// as `ITERATE__CONTEXT_BIRTH_EVENTS`) and the tests import it as they are.
 
 /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH, in every deployment (a change reaches the contexts
  *  born after it): two fan-out rows from the context's birth on, both spelled at the fixed point

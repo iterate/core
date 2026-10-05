@@ -9,7 +9,11 @@ import { errorCode } from "iterate/lib";
 import { INTEGRATION_PROVIDER_NAMES, type StreamPage } from "iterate/api";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
-import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "../app-config.ts";
+import {
+  iterateConfigOf,
+  sessionSigningSecretOf,
+  type IterateConfigEnv,
+} from "../iterate-config.ts";
 import { bytesFromBase64url, signClaims, type PlatformFactType } from "../caller.ts";
 import type { Cause } from "../cause.ts";
 import { facetStateOf } from "../context-stub.ts";
@@ -21,7 +25,7 @@ import type { ProjectState } from "../project/contract.ts";
 import type { IntegrationConnectionRow, IntegrationProvider } from "./contract.ts";
 
 /** The bindings a provider acts through. */
-export type IntegrationEnv = Pick<Env, "DB" | "ITERATE_CONTEXT"> & AppConfigEnv;
+export type IntegrationEnv = Pick<Env, "DB" | "ITERATE_CONTEXT"> & IterateConfigEnv;
 
 /** The owner facet's reach, for connect, finish and disconnect: the project (or, for a person's own
  *  connection, the global namespace and `rootPath` `/users/<id>`), its bindings, the caller's itx
@@ -152,7 +156,7 @@ export async function moveOfferLanding(
   const url = new URL(landing);
   url.searchParams.set(
     "move",
-    await signClaims(offer, await sessionSigningSecretOf(appConfigOf(env))),
+    await signClaims(offer, await sessionSigningSecretOf(iterateConfigOf(env))),
   );
   return new Response(null, {
     status: 303,

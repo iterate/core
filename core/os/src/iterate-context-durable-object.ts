@@ -95,11 +95,11 @@ import { LEND_USE_HEADER, LENT_AS_HEADER, verifyLendUse } from "./secrets.ts";
 import { mcpWebhookOf } from "./integrations/mcp.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
 import {
-  appConfigOf,
+  iterateConfigOf,
   iterateAppScopesOf,
   sessionSigningSecretOf,
-  type AppConfigEnv,
-} from "./app-config.ts";
+  type IterateConfigEnv,
+} from "./iterate-config.ts";
 import {
   ItxExpressionResolver,
   REWRITE_BUDGET,
@@ -203,10 +203,10 @@ export type AlarmTrace = {
 };
 
 /** The bindings THE DO reads (Vite's built Wrangler config): the DO namespace, the Worker Loader, the kv namespaces,
- *  Workers AI, Browser Run, Artifacts, Email Sending — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
- *  vars worker.ts's `parseAppConfig` parses. env.ts's `Env` extends this with the issuer's own
+ *  Workers AI, Browser Run, Artifacts, Email Sending — and, from `IterateConfigEnv`, the version-metadata binding and the `ITERATE__*`
+ *  vars worker.ts's `parseIterateConfig` parses. env.ts's `Env` extends this with the issuer's own
  *  (OAuth KV, the browser sessions, the page files): the one worker's env. */
-export interface Env extends AppConfigEnv {
+export interface Env extends IterateConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   /** THE CONTROL PLANE'S D1: the deployment's users, identities, organizations, memberships,
    *  projects, invitations, custom hostnames and the OAuth provider's grants
@@ -260,7 +260,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** The version this context runs (`CF_VERSION_METADATA.id`), for `session.versions`. Native RPC
    *  only. */
   version() {
-    return this.#appConfig.deployId;
+    return this.#iterateConfig.deployId;
   }
 
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
@@ -289,8 +289,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       };
     return this.#itxEntrypointStub.stub;
   }
-  /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
-  readonly #appConfig = appConfigOf(this.env);
+  /** This deployment's configuration (worker.ts `iterateConfigOf`) — a malformed var throws here, naming it. */
+  readonly #iterateConfig = iterateConfigOf(this.env);
   /** This context's reach into its project (context/stateless-context.ts `contextReach`). */
   readonly #reach = contextReach({
     env: this.env,
@@ -304,7 +304,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   });
   /** context/fetch-upgrade.ts — wired to `fetch` and the two WebSocket handlers below. */
   readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx, {
-    deployId: this.#appConfig.deployId,
+    deployId: this.#iterateConfig.deployId,
     path: this.#durableObjectAddress.path,
     contextAbortedOffset: () =>
       this.#stream.coreReducedState.wokenAfterContextAbortedOffset ?? null,
@@ -453,7 +453,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // hostname) knows it outright; one that does not (a self-host on workers.dev) learns it from the
       // first stamped caller and keeps it here across evictions.
       this.#platformOrigin =
-        this.#appConfig.urls.os ||
+        this.#iterateConfig.urls.os ||
         ((this.ctx.storage.kv.get("platform-origin") as string | undefined) ?? null);
       // Before this incarnation writes anything: the facets the last one ran are started (and the
       // unclaimed loaded ones reset) — a facet evicted mid-write meets no commit of it stopped.
@@ -535,7 +535,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  schedules or queued a delivery. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
-    deployId: this.#appConfig.deployId,
+    deployId: this.#iterateConfig.deployId,
     incarnationCountedByHost: true,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
@@ -543,7 +543,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     birthEvents:
       this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID
         ? []
-        : this.#appConfig.contextBirthEvents,
+        : this.#iterateConfig.contextBirthEvents,
     wakeRecordDetail: () => this.#residency.wakeRecordDetail(),
     cause: () => this.#callerStorage.getStore()?.cause,
     onCommit: (freshEvents, afterOffset, throughOffset) => {
@@ -859,7 +859,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     caller: () => this.#caller,
     path: this.#durableObjectAddress.path,
     mcpWebhook: (server) =>
-      mcpWebhookOf(this.#appConfig, this.#platformOrigin, this.#durableObjectAddress, server),
+      mcpWebhookOf(this.#iterateConfig, this.#platformOrigin, this.#durableObjectAddress, server),
   });
 
   // ── the runner: `itx/run-requested` → the script in a confined isolate → `run-settled` ──
@@ -952,7 +952,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               onBehalfOf: await mintOnBehalfOf(
                 { ...requester, run: `${this.#durableObjectAddress.path}@${requestOffset}` },
                 this.#durableObjectAddress.projectId,
-                await sessionSigningSecretOf(this.#appConfig),
+                await sessionSigningSecretOf(this.#iterateConfig),
                 Date.now(),
               ),
             }
@@ -1072,7 +1072,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
   readonly #builtIns = buildBuiltIns({
-    ...projectConfigDeps(this.#appConfig, () => this.#projectSlug()),
+    ...projectConfigDeps(this.#iterateConfig, () => this.#projectSlug()),
     primaryHostname: async () =>
       (await this.#controlPlane.getProject(this.#durableObjectAddress.projectId))
         ?.primaryHostname ?? null,
@@ -1082,10 +1082,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     iterateContextName: this.#durableObjectAddress.name,
     ai: itxAiFor(this.ctx, this.#durableObjectAddress.projectId),
     env: this.env,
-    deployId: this.#appConfig.deployId,
-    dashOrigin: this.#appConfig.urls.dash,
-    platformAdmins: () => this.#appConfig.admins,
-    iterateAppScopes: () => iterateAppScopesOf(this.#appConfig),
+    deployId: this.#iterateConfig.deployId,
+    dashOrigin: this.#iterateConfig.urls.dash,
+    platformAdmins: () => this.#iterateConfig.admins,
+    iterateAppScopes: () => iterateAppScopesOf(this.#iterateConfig),
     platformOrigin: () => this.#platformOrigin,
     // A producer is loaded code's word: walled on its input and on every row it appends.
     invoke: (call) =>
@@ -1290,7 +1290,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #facetHost = new FacetHost({
     ctx: this.ctx,
     env: () => this.env,
-    deployId: this.#appConfig.deployId,
+    deployId: this.#iterateConfig.deployId,
     iterateContextName: this.#durableObjectAddress.name,
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
@@ -1733,7 +1733,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (lendUse) {
       const lend = await verifyLendUse(
         lendUse,
-        await sessionSigningSecretOf(this.#appConfig),
+        await sessionSigningSecretOf(this.#iterateConfig),
         this.#durableObjectAddress.name,
       );
       if (!lend)
@@ -1789,7 +1789,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
         ) as Principal | null;
         const grant = headers.get(ITX_GRANT_HEADER) || undefined;
-        // The platform origin the caller reached the platform on (app-config.ts `platformAddressesOf`): the edge's
+        // The platform origin the caller reached the platform on (iterate-config.ts `platformAddressesOf`): the edge's
         // stamp, stripped before the app sees the Request (an app composes URLs through `itx.url`).
         const platformOrigin = headers.get(ITX_PLATFORM_ORIGIN_HEADER);
         headers.delete(ITX_PLATFORM_ORIGIN_HEADER);

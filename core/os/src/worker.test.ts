@@ -1,4 +1,4 @@
-// worker.test.ts — the edge's pure halves as tables: the app config (what the one object becomes,
+// worker.test.ts — the edge's pure halves as tables: the iterate config (what the one object becomes,
 // what is refused by name, the per-env memo, the derived keys), the platform's own endpoints (the public
 // protocol origins, `/version`, a preview's admin sign-in through prd, local dev's one click, and under path routing the platform's
 // own paths never a project).
@@ -14,18 +14,18 @@ import { PROJECT_CONTEXT_BIRTH_EVENTS } from "./project/context-birth-events.ts"
 // browser suites, where its Vite virtual modules exist.
 import worker from "./worker.ts";
 import {
-  appConfigOf,
+  iterateConfigOf,
   atRestKeysOf,
   DEFAULT_CLOUDFLARE_SCOPES,
   DEFAULT_GOOGLE_SIGN_IN_SCOPES,
-  parseAppConfig,
+  parseIterateConfig,
   projectHostOf,
   sessionSigningSecretOf,
-  type AppConfig,
-} from "./app-config.ts";
+  type IterateConfig,
+} from "./iterate-config.ts";
 import type { Env } from "./env.ts";
 
-// ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
+// ── iterate config ── THE TABLE for the iterate config: what the vars become, what is refused (by name),
 // and the per-env memo. Each row is `{ vars, becomes | throws, warns? }`.
 
 /** prd's origin, and a per-PR preview's. */
@@ -34,25 +34,37 @@ const PR123 = "https://pr123-os.iterate-dev-preview.workers.dev";
 
 /** The smallest valid configuration: the key and one sign-in mechanism, as two override vars. */
 const MINIMAL = {
-  APP_CONFIG_SECRETS__KEY: "secrets-key",
-  APP_CONFIG_LOGIN__PASSWORD: "password",
+  ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
+  ITERATE__LOGIN__PASSWORD: "password",
 };
 /** The same, as the one object. */
 const MINIMAL_BLOB = {
-  APP_CONFIG: JSON.stringify({ login: { password: "password" }, secrets: { key: "secrets-key" } }),
+  ITERATE: JSON.stringify({
+    login: { password: "password" },
+    secretsEncryption: { key: "secrets-key" },
+  }),
 };
-/** What MINIMAL becomes: every optional field blank, the ingress unset, the deploy id defaulted. */
+/** What MINIMAL becomes: every optional field blank or its default (iterate's dash, projects as
+ *  paths), the deploy id defaulted. */
 const MINIMAL_CONFIG = {
-  urls: { os: "", mcp: "", dash: "", ingressRouting: null },
+  urls: { os: "", mcp: "", dash: "https://dash.iterate.com", ingressRouting: { type: "paths" } },
   login: { password: "password" },
-  cloudflareApiToken: "",
   posthogProjectKey: "",
   admins: [],
-  secrets: { key: "secrets-key", previousKey: "", adminBearer: "" },
+  adminBearer: "",
+  secretsEncryption: { key: "secrets-key", previousKey: "" },
   deployId: "unversioned",
 };
 
-const appConfigRows: {
+/** A cloudflare section with only its two required fields, its defaults filled in. */
+const ACME_CLOUDFLARE = {
+  accountId: "account-1",
+  resourcePrefix: "acme-os",
+  workerRoutes: [],
+  workersDev: true,
+};
+
+const iterateConfigRows: {
   vars: Record<string, unknown>;
   becomes?: unknown;
   throws?: RegExp;
@@ -60,31 +72,17 @@ const appConfigRows: {
    *  var), a provider's sign-in without its client */
   warns?: number;
 }[] = [
-  // the object alone, the overrides alone, and both — an override wins over the object
+  // the object alone, and the overrides alone (core/lib/src/app-config.test.ts tests the merge)
   { vars: MINIMAL_BLOB, becomes: MINIMAL_CONFIG },
   { vars: MINIMAL, becomes: MINIMAL_CONFIG },
-  {
-    vars: {
-      APP_CONFIG: JSON.stringify({
-        urls: { os: "https://from-the-object.test" },
-        login: { password: "password" },
-        secrets: { key: "secrets-key" },
-      }),
-      APP_CONFIG_URLS__OS: "https://from-the-override.test",
-    },
-    becomes: {
-      ...MINIMAL_CONFIG,
-      urls: { ...MINIMAL_CONFIG.urls, os: "https://from-the-override.test" },
-    },
-  },
   // a blank var is unset (a deployment's generated vars may spell a blank), and values are trimmed
   {
     vars: {
       ...MINIMAL,
-      APP_CONFIG_SECRETS__KEY: " secrets-key ",
-      APP_CONFIG_URLS__OS: "   ",
-      APP_CONFIG_URLS__MCP: "",
-      APP_CONFIG_URLS__INGRESS_ROUTING: "",
+      ITERATE__SECRETS_ENCRYPTION__KEY: " secrets-key ",
+      ITERATE__URLS__OS: "   ",
+      ITERATE__URLS__MCP: "",
+      ITERATE__URLS__INGRESS_ROUTING: "",
     },
     becomes: MINIMAL_CONFIG,
   },
@@ -93,21 +91,21 @@ const appConfigRows: {
   {
     vars: {
       ...MINIMAL,
-      APP_CONFIG_URLS__OS: "https://os.iterate.com",
-      APP_CONFIG_URLS__MCP: "https://mcp.iterate.com",
-      APP_CONFIG_URLS__DASH: "https://dash.iterate.com",
-      APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"Iterate.app"}',
-      APP_CONFIG_URLS__PROJECT_WILDCARD: '{"hostname":"Iterate.com","project":"iterate"}',
-      APP_CONFIG_CUSTOM_HOSTNAMES:
+      ITERATE__URLS__OS: "https://os.iterate.com",
+      ITERATE__URLS__MCP: "https://mcp.iterate.com",
+      ITERATE__URLS__DASH: "https://dash.iterate.com",
+      ITERATE__URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"Iterate.app"}',
+      ITERATE__URLS__PROJECT_WILDCARD: '{"hostname":"Iterate.com","project":"iterate"}',
+      ITERATE__CUSTOM_HOSTNAMES:
         '{"zone":"iterate.app","zoneId":"zone-1","dcvDelegationUuid":"dcv-1","reservedZones":["iterate.app","iterate.com"]}',
-      APP_CONFIG_CLOUDFLARE_API_TOKEN: "cloudflare-token",
-      APP_CONFIG_POSTHOG_PROJECT_KEY: "phc_test",
-      APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
-      APP_CONFIG_LOGIN__GOOGLE: "{}",
-      APP_CONFIG_INTEGRATIONS__GOOGLE__OAUTH_CLIENT_ID: "google-id",
-      APP_CONFIG_INTEGRATIONS__GOOGLE__OAUTH_CLIENT_SECRET: "google-secret",
-      APP_CONFIG_SECRETS__PREVIOUS_KEY: "the-old-key",
-      APP_CONFIG_SECRETS__ADMIN_BEARER: "admin-bearer",
+      ITERATE__CUSTOM_HOSTNAMES__CLOUDFLARE_API_TOKEN: "cloudflare-token",
+      ITERATE__POSTHOG_PROJECT_KEY: "phc_test",
+      ITERATE__LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
+      ITERATE__LOGIN__GOOGLE: "{}",
+      ITERATE__INTEGRATIONS__GOOGLE__OAUTH_CLIENT_ID: "google-id",
+      ITERATE__INTEGRATIONS__GOOGLE__OAUTH_CLIENT_SECRET: "google-secret",
+      ITERATE__SECRETS_ENCRYPTION__PREVIOUS_KEY: "the-old-key",
+      ITERATE__ADMIN_BEARER: "admin-bearer",
       LOADER: {},
       OTHER: "ignored",
     },
@@ -124,8 +122,8 @@ const appConfigRows: {
         zoneId: "zone-1",
         dcvDelegationUuid: "dcv-1",
         reservedZones: ["iterate.app", "iterate.com"],
+        cloudflareApiToken: "cloudflare-token",
       },
-      cloudflareApiToken: "cloudflare-token",
       posthogProjectKey: "phc_test",
       login: {
         password: "password",
@@ -133,55 +131,56 @@ const appConfigRows: {
         google: { scopes: DEFAULT_GOOGLE_SIGN_IN_SCOPES },
       },
       admins: [],
-      secrets: { key: "secrets-key", previousKey: "the-old-key", adminBearer: "admin-bearer" },
+      adminBearer: "admin-bearer",
+      secretsEncryption: { key: "secrets-key", previousKey: "the-old-key" },
       deployId: "unversioned",
     },
   },
   // the ingress routing, narrowed: paths carry no hostname, subdomains must; the type is one of two
   {
-    vars: { ...MINIMAL, APP_CONFIG_URLS__INGRESS_ROUTING__TYPE: "paths" },
+    vars: { ...MINIMAL, ITERATE__URLS__INGRESS_ROUTING__TYPE: "paths" },
     becomes: {
       ...MINIMAL_CONFIG,
       urls: { ...MINIMAL_CONFIG.urls, ingressRouting: { type: "paths" } },
     },
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_URLS__INGRESS_ROUTING__TYPE: "subdomains" },
+    vars: { ...MINIMAL, ITERATE__URLS__INGRESS_ROUTING__TYPE: "subdomains" },
     throws:
-      /^APP_CONFIG urls\.ingressRouting\.hostname \(APP_CONFIG_URLS__INGRESS_ROUTING__HOSTNAME\): expected a DNS name/,
+      /^ITERATE urls\.ingressRouting\.hostname \(ITERATE__URLS__INGRESS_ROUTING__HOSTNAME\): expected a DNS name/,
   },
   {
     vars: {
       ...MINIMAL,
-      APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"not a host"}',
+      ITERATE__URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"not a host"}',
     },
     throws: /urls\.ingressRouting\.hostname .*expected a DNS name/,
   },
   {
     vars: {
       ...MINIMAL,
-      APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"paths","hostname":"iterate.app"}',
+      ITERATE__URLS__INGRESS_ROUTING: '{"type":"paths","hostname":"iterate.app"}',
     },
     throws: /urls\.ingressRouting\.hostname .*not for "paths"/,
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_URLS__INGRESS_ROUTING__TYPE: "wildcards" },
+    vars: { ...MINIMAL, ITERATE__URLS__INGRESS_ROUTING__TYPE: "wildcards" },
     throws: /urls\.ingressRouting\.type .*expected "subdomains" or "paths"/,
   },
   // a mechanism to sign in with is required — a deployment nobody can sign in to is refused at boot
   {
-    vars: { APP_CONFIG_SECRETS__KEY: "secrets-key" },
-    throws: /^APP_CONFIG login \(APP_CONFIG_LOGIN\): no sign-in mechanism/,
+    vars: { ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key" },
+    throws: /^ITERATE login \(ITERATE__LOGIN\): no sign-in mechanism/,
   },
   {
-    vars: { APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__PASSWORD: "  " },
+    vars: { ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key", ITERATE__LOGIN__PASSWORD: "  " },
     throws: /no sign-in mechanism/,
   },
   // one of the other two mechanisms alone is enough
   {
     vars: {
-      APP_CONFIG_SECRETS__KEY: "secrets-key",
-      APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
+      ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
+      ITERATE__LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
     },
     becomes: {
       ...MINIMAL_CONFIG,
@@ -191,10 +190,10 @@ const appConfigRows: {
   // a provider's sign-in is its integration's client: on with it, off (and so no mechanism) without
   {
     vars: {
-      APP_CONFIG_SECRETS__KEY: "secrets-key",
-      APP_CONFIG_LOGIN__CLOUDFLARE: "{}",
-      APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id",
-      APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_SECRET: "cf-secret",
+      ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
+      ITERATE__LOGIN__CLOUDFLARE: "{}",
+      ITERATE__INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id",
+      ITERATE__INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_SECRET: "cf-secret",
     },
     becomes: {
       ...MINIMAL_CONFIG,
@@ -202,43 +201,43 @@ const appConfigRows: {
     },
   },
   {
-    vars: { APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__CLOUDFLARE: "{}" },
+    vars: { ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key", ITERATE__LOGIN__CLOUDFLARE: "{}" },
     throws: /no sign-in mechanism/,
     warns: 1,
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__GITHUB: "{}" },
+    vars: { ...MINIMAL, ITERATE__LOGIN__GITHUB: "{}" },
     becomes: MINIMAL_CONFIG,
     warns: 1,
   },
   // who may sign in: a JSON array, lowercased; a comma-separated list, an entry without an @ or an
   // empty list is refused rather than silently admitting nobody or everybody
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: '["*@Iterate.com", "a@b.dev"]' },
+    vars: { ...MINIMAL, ITERATE__LOGIN__ALLOWED_EMAILS: '["*@Iterate.com", "a@b.dev"]' },
     becomes: {
       ...MINIMAL_CONFIG,
       login: { password: "password", allowedEmails: ["*@iterate.com", "a@b.dev"] },
     },
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: "*@iterate.com, *@nustom.com" },
+    vars: { ...MINIMAL, ITERATE__LOGIN__ALLOWED_EMAILS: "*@iterate.com, *@nustom.com" },
     throws:
-      /^APP_CONFIG login\.allowedEmails \(APP_CONFIG_LOGIN__ALLOWED_EMAILS\): expected a JSON array of email patterns/,
+      /^ITERATE login\.allowedEmails \(ITERATE__LOGIN__ALLOWED_EMAILS\): expected a JSON array of email patterns/,
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: '["iterate.com"]' },
+    vars: { ...MINIMAL, ITERATE__LOGIN__ALLOWED_EMAILS: '["iterate.com"]' },
     throws: /login\.allowedEmails\.0 .*expected email patterns/,
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: "[]" },
+    vars: { ...MINIMAL, ITERATE__LOGIN__ALLOWED_EMAILS: "[]" },
     throws: /login\.allowedEmails .*nobody could sign in/,
   },
   // the platform admins: exact addresses, lowercased; a pattern is refused, never read as one
   {
     vars: {
       ...MINIMAL,
-      APP_CONFIG_URLS__OS: "http://localhost:8788",
-      APP_CONFIG_ADMINS: '["Jonas@Iterate.com"]',
+      ITERATE__URLS__OS: "http://localhost:8788",
+      ITERATE__ADMINS: '["Jonas@Iterate.com"]',
     },
     becomes: {
       ...MINIMAL_CONFIG,
@@ -251,31 +250,31 @@ const appConfigRows: {
   {
     vars: {
       ...MINIMAL,
-      APP_CONFIG_URLS__OS: "https://os.example.com",
-      APP_CONFIG_ADMINS: '["jonas@iterate.com"]',
+      ITERATE__URLS__OS: "https://os.example.com",
+      ITERATE__ADMINS: '["jonas@iterate.com"]',
     },
-    throws: /^APP_CONFIG admins \(APP_CONFIG_ADMINS\): not with login\.password/,
+    throws: /^ITERATE admins \(ITERATE__ADMINS\): not with login\.password/,
   },
   // …nor beside paths ingress, where a project's own code runs on the issuer's origin
   {
     vars: {
-      APP_CONFIG_SECRETS__KEY: "secrets-key",
-      APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "login@example.com",
-      APP_CONFIG_URLS__OS: "https://os.example.com",
-      APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"paths"}',
-      APP_CONFIG_ADMINS: '["jonas@iterate.com"]',
+      ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
+      ITERATE__LOGIN__EMAIL_CODE__FROM: "login@example.com",
+      ITERATE__URLS__OS: "https://os.example.com",
+      ITERATE__URLS__INGRESS_ROUTING: '{"type":"paths"}',
+      ITERATE__ADMINS: '["jonas@iterate.com"]',
     },
-    throws: /^APP_CONFIG admins \(APP_CONFIG_ADMINS\): not with paths ingress routing/,
+    throws: /^ITERATE admins \(ITERATE__ADMINS\): not with paths ingress routing/,
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_ADMINS: '["*@iterate.com"]' },
+    vars: { ...MINIMAL, ITERATE__ADMINS: '["*@iterate.com"]' },
     throws: /admins\.0 .*expected exact email addresses/,
   },
   // admins sign in through another issuer only on a preview's (or a test's) https origin: a
   // deployment on its own domain takes no other issuer's word, even from a mistaken Doppler value,
   // and that issuer reads this deployment's client metadata document over https
   {
-    vars: { ...MINIMAL, APP_CONFIG_URLS__OS: PR123, APP_CONFIG_LOGIN__ADMIN_ISSUER: PRD },
+    vars: { ...MINIMAL, ITERATE__URLS__OS: PR123, ITERATE__LOGIN__ADMIN_ISSUER: PRD },
     becomes: {
       ...MINIMAL_CONFIG,
       urls: { ...MINIMAL_CONFIG.urls, os: PR123 },
@@ -283,16 +282,16 @@ const appConfigRows: {
     },
   },
   ...[PRD, "http://localhost:8788", ""].map((os) => ({
-    vars: { ...MINIMAL, APP_CONFIG_URLS__OS: os, APP_CONFIG_LOGIN__ADMIN_ISSUER: PRD },
-    throws: /^APP_CONFIG login\.adminIssuer .*only for a preview or a test on https/,
+    vars: { ...MINIMAL, ITERATE__URLS__OS: os, ITERATE__LOGIN__ADMIN_ISSUER: PRD },
+    throws: /^ITERATE login\.adminIssuer .*only for a preview or a test on https/,
   })),
   // a fake provider signs test people in only where nobody's real data lives: never on prd's own
   // domain, and a blank urls.os (a self-host on each request's own origin) must name one first
   {
     vars: {
       ...MINIMAL,
-      APP_CONFIG_URLS__OS: "http://localhost:8788",
-      APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
+      ITERATE__URLS__OS: "http://localhost:8788",
+      ITERATE__LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
     },
     becomes: {
       ...MINIMAL_CONFIG,
@@ -303,127 +302,117 @@ const appConfigRows: {
   ...[PRD, ""].map((os) => ({
     vars: {
       ...MINIMAL,
-      APP_CONFIG_URLS__OS: os,
-      APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
+      ITERATE__URLS__OS: os,
+      ITERATE__LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
     },
-    throws: /^APP_CONFIG login\.testEmailDomain .*only for a preview, local dev or a test/,
+    throws: /^ITERATE login\.testEmailDomain .*only for a preview, local dev or a test/,
   })),
   // a client is both halves or neither
   {
-    vars: { ...MINIMAL, APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id" },
+    vars: { ...MINIMAL, ITERATE__INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id" },
     throws:
-      /^APP_CONFIG integrations\.cloudflare\.oauthClientSecret \(APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_SECRET\): required, but unset or blank$/,
+      /^ITERATE integrations\.cloudflare\.oauthClientSecret \(ITERATE__INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_SECRET\): required, but unset or blank$/,
   },
   // the key encrypts every project secret and signs every session: a blank one is refused at
   // first use, not a silent lock-out
   {
-    vars: { APP_CONFIG_LOGIN__PASSWORD: "password" },
-    throws: /^APP_CONFIG secrets\.key \(APP_CONFIG_SECRETS__KEY\): required, but unset or blank$/,
+    vars: { ITERATE__LOGIN__PASSWORD: "password" },
+    throws:
+      /^ITERATE secretsEncryption\.key \(ITERATE__SECRETS_ENCRYPTION__KEY\): required, but unset or blank$/,
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_SECRETS__KEY: "  " },
-    throws: /^APP_CONFIG secrets\.key \(APP_CONFIG_SECRETS__KEY\): required, but unset or blank$/,
+    vars: { ...MINIMAL, ITERATE__SECRETS_ENCRYPTION__KEY: "  " },
+    throws:
+      /^ITERATE secretsEncryption\.key \(ITERATE__SECRETS_ENCRYPTION__KEY\): required, but unset or blank$/,
   },
   // a wrangler var may be a JSON object; the config parser only reads STRING vars, so a non-string
   // is ignored — the field is then unset, and its required-ness is what's refused
   {
-    vars: { ...MINIMAL, APP_CONFIG_SECRETS__KEY: { not: "a string" } },
-    throws: /^APP_CONFIG secrets\.key \(APP_CONFIG_SECRETS__KEY\): required, but unset or blank$/,
+    vars: { ...MINIMAL, ITERATE__SECRETS_ENCRYPTION__KEY: { not: "a string" } },
+    throws:
+      /^ITERATE secretsEncryption\.key \(ITERATE__SECRETS_ENCRYPTION__KEY\): required, but unset or blank$/,
   },
   // the MCP origin, when set, is its own origin without a path
   {
     vars: {
       ...MINIMAL,
-      APP_CONFIG_URLS__OS: "https://os.test",
-      APP_CONFIG_URLS__MCP: "https://mcp.test/path",
+      ITERATE__URLS__OS: "https://os.test",
+      ITERATE__URLS__MCP: "https://mcp.test/path",
     },
     throws: /urls\.mcp .*origin/,
   },
   {
     vars: {
       ...MINIMAL,
-      APP_CONFIG_URLS__OS: "https://os.test",
-      APP_CONFIG_URLS__MCP: "https://os.test",
+      ITERATE__URLS__OS: "https://os.test",
+      ITERATE__URLS__MCP: "https://os.test",
     },
-    throws: /^APP_CONFIG urls\.mcp \(APP_CONFIG_URLS__MCP\): must differ from urls\.os$/,
+    throws: /^ITERATE urls\.mcp \(ITERATE__URLS__MCP\): must differ from urls\.os$/,
   },
-  // a key the schema does not name — a typo inside the object, a var no field answers to, a stray
-  // key in a block a var sets whole — is WARNED about loudly and dropped, and the rest parses
-  // (why: parseAppConfigVars); a malformed field beside one still throws
+  // where it deploys: the cloudflare section, its defaults filled in
   {
     vars: {
-      APP_CONFIG: JSON.stringify({
-        login: { password: "password", bogus: 1 },
-        secrets: { key: "secrets-key" },
-      }),
+      ...MINIMAL,
+      ITERATE__CLOUDFLARE: '{"accountId":"account-1","resourcePrefix":"acme-os"}',
     },
-    becomes: MINIMAL_CONFIG,
-    warns: 1,
+    becomes: { ...MINIMAL_CONFIG, cloudflare: ACME_CLOUDFLARE },
   },
-  {
-    vars: { ...MINIMAL, APP_CONFIG_ADMIN_API_SECRET: "admin-bearer" },
-    becomes: MINIMAL_CONFIG,
-    warns: 1,
-  },
-  {
-    vars: { ...MINIMAL, APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"paths","wildcard":true}' },
-    becomes: {
-      ...MINIMAL_CONFIG,
-      urls: { ...MINIMAL_CONFIG.urls, ingressRouting: { type: "paths" } },
-    },
-    warns: 1,
-  },
-  {
-    vars: { ...MINIMAL, APP_CONFIG_ADMIN_API_SECRET: "admin-bearer", APP_CONFIG_URLS__OS: "os" },
-    throws: /^APP_CONFIG urls\.os \(APP_CONFIG_URLS__OS\): expected an HTTP\(S\) origin/,
-    warns: 1,
-  },
-  // an override merges INTO the object's block rather than replacing it; a JSON-looking value
-  // (object, array, boolean) is parsed, anything else is the string itself
+  // a resource prefix Cloudflare would refuse, by name
   {
     vars: {
-      APP_CONFIG: JSON.stringify({
-        urls: { os: "https://os.test", mcp: "https://mcp.test" },
+      ...MINIMAL,
+      ITERATE__CLOUDFLARE: '{"accountId":"account-1","resourcePrefix":"Acme_OS"}',
+    },
+    throws:
+      /^ITERATE cloudflare\.resourcePrefix \(ITERATE__CLOUDFLARE__RESOURCE_PREFIX\): expected lowercase letters/,
+  },
+  // the dash and the ingress take what is given over their defaults
+  {
+    vars: {
+      ITERATE: JSON.stringify({
         login: { password: "password" },
-        secrets: { key: "secrets-key" },
+        secretsEncryption: { key: "secrets-key" },
+        urls: { dash: "", ingressRouting: { type: "subdomains", hostname: "acme.test" } },
       }),
-      APP_CONFIG_URLS__PROJECT_WILDCARD:
-        '{"hostname":"iterate.com","project":"iterate","excludedHostnames":["www.iterate.com"]}',
     },
     becomes: {
       ...MINIMAL_CONFIG,
       urls: {
         ...MINIMAL_CONFIG.urls,
-        os: "https://os.test",
-        mcp: "https://mcp.test",
-        projectWildcard: {
-          hostname: "iterate.com",
-          project: "iterate",
-          excludedHostnames: ["www.iterate.com"],
-        },
+        dash: "",
+        ingressRouting: { type: "subdomains", hostname: "acme.test" },
       },
     },
   },
-  // the object must be a JSON object
-  { vars: { ...MINIMAL, APP_CONFIG: "{not json" }, throws: /^APP_CONFIG must be valid JSON$/ },
-  { vars: { ...MINIMAL, APP_CONFIG: "[]" }, throws: /^APP_CONFIG must be a JSON object$/ },
 ];
-for (const { vars, becomes, throws, warns } of appConfigRows)
-  test(`parseAppConfig: ${JSON.stringify(vars)} → ${throws ? `throws ${throws}` : JSON.stringify(becomes)}`, () => {
+for (const { vars, becomes, throws, warns } of iterateConfigRows)
+  test(`parseIterateConfig: ${JSON.stringify(vars)} → ${throws ? `throws ${throws}` : JSON.stringify(becomes)}`, () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
-    else expect(expose(parseAppConfig(vars))).toEqual(becomes);
+    if (throws) expect(() => parseIterateConfig(vars)).toThrow(throws);
+    else expect(expose(parseIterateConfig(vars))).toEqual(becomes);
     if (warns !== undefined) expect(warn).toHaveBeenCalledTimes(warns);
     else expect(warn).not.toHaveBeenCalled();
   });
 // THE BIRTH EVENTS, checked at boot (the deploy gate) and stored as the append boundary stores each.
 test.for([
-  { name: "unset: none", vars: MINIMAL, becomes: [] },
+  {
+    name: "unset: the platform's own, each target parsed as an append stores it",
+    vars: MINIMAL,
+    becomes: PROJECT_CONTEXT_BIRTH_EVENTS.map((row) => ({
+      ...row,
+      payload: { ...row.payload, target: parse(row.payload.target) },
+    })),
+  },
+  {
+    name: "none, as a suite that runs without them says",
+    vars: { ...MINIMAL, ITERATE__CONTEXT_BIRTH_EVENTS: "[]" },
+    becomes: [],
+  },
   {
     name: "every deployment's rows, each target parsed as an append stores it",
     vars: {
       ...MINIMAL,
-      APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS),
+      ITERATE__CONTEXT_BIRTH_EVENTS: JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS),
     },
     becomes: PROJECT_CONTEXT_BIRTH_EVENTS.map((row) => ({
       ...row,
@@ -434,73 +423,77 @@ test.for([
     name: "a record only the platform appends is refused, naming its entry",
     vars: {
       ...MINIMAL,
-      APP_CONFIG_CONTEXT_BIRTH_EVENTS:
+      ITERATE__CONTEXT_BIRTH_EVENTS:
         '[{"type":"test/fine"},{"type":"events.iterate.com/itx/woken"}]',
     },
     throws:
-      /^APP_CONFIG contextBirthEvents\[1\]: events\.iterate\.com\/itx\/woken is the platform's own record/,
+      /^ITERATE contextBirthEvents\[1\]: events\.iterate\.com\/itx\/woken is the platform's own record/,
   },
   {
     name: "a subscription whose target does not parse is refused, naming its entry",
     vars: {
       ...MINIMAL,
-      APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify([
+      ITERATE__CONTEXT_BIRTH_EVENTS: JSON.stringify([
         {
           type: "events.iterate.com/itx/subscription-configured",
           payload: { name: "config", target: "itx.config(" },
         },
       ]),
     },
-    throws: /^APP_CONFIG contextBirthEvents\[0\]:/,
+    throws: /^ITERATE contextBirthEvents\[0\]:/,
   },
   {
     name: "an event with no type is refused, naming the field",
-    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: '[{"payload":{}}]' },
+    vars: { ...MINIMAL, ITERATE__CONTEXT_BIRTH_EVENTS: '[{"payload":{}}]' },
     throws: /contextBirthEvents/,
   },
   {
     name: "a key an event does not have is refused",
-    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: '[{"type":"x/y","offset":3}]' },
+    vars: { ...MINIMAL, ITERATE__CONTEXT_BIRTH_EVENTS: '[{"type":"x/y","offset":3}]' },
     throws: /contextBirthEvents/,
   },
-])("parseAppConfig contextBirthEvents: $name", ({ vars, becomes, throws }) => {
-  if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
-  else expect(parseAppConfig(vars)).toMatchObject({ contextBirthEvents: becomes });
+])("parseIterateConfig contextBirthEvents: $name", ({ vars, becomes, throws }) => {
+  if (throws) expect(() => parseIterateConfig(vars)).toThrow(throws);
+  else expect(parseIterateConfig(vars)).toMatchObject({ contextBirthEvents: becomes });
 });
 
-test("parseAppConfig: a secret never prints", () => {
-  const { secrets } = parseAppConfig(MINIMAL);
-  expect(String(secrets.key)).toBe("REDACTED");
-  expect(JSON.stringify(secrets)).not.toContain("secrets-key");
-  expect(inspect(secrets.key)).toBe("Redacted {}");
-  expect(secrets.key.exposeSecret()).toBe("secrets-key");
+test("parseIterateConfig: a secret never prints", () => {
+  const { secretsEncryption } = parseIterateConfig(MINIMAL);
+  expect(String(secretsEncryption.key)).toBe("REDACTED");
+  expect(JSON.stringify(secretsEncryption)).not.toContain("secrets-key");
+  expect(inspect(secretsEncryption.key)).toBe("Redacted {}");
+  expect(secretsEncryption.key.exposeSecret()).toBe("secrets-key");
 });
-test("parseAppConfig: the deploy id is handed in", () => {
-  expect(parseAppConfig(MINIMAL, "v-123")).toMatchObject({ deployId: "v-123" });
+test("parseIterateConfig: the deploy id is handed in", () => {
+  expect(parseIterateConfig(MINIMAL, "v-123")).toMatchObject({ deployId: "v-123" });
 });
 
 test("the derived keys: the session-signing secret derives from the key under its own label: hex, stable per config, another key another secret, never the key itself", async () => {
-  const config = parseAppConfig(MINIMAL);
+  const config = parseIterateConfig(MINIMAL);
   const secret = await sessionSigningSecretOf(config);
   expect(secret).toMatch(/^[0-9a-f]{64}$/);
   expect(await sessionSigningSecretOf(config)).toBe(secret);
-  expect(await sessionSigningSecretOf(parseAppConfig(MINIMAL))).toBe(secret);
+  expect(await sessionSigningSecretOf(parseIterateConfig(MINIMAL))).toBe(secret);
   expect(
-    await sessionSigningSecretOf(parseAppConfig({ ...MINIMAL, APP_CONFIG_SECRETS__KEY: "other" })),
+    await sessionSigningSecretOf(
+      parseIterateConfig({ ...MINIMAL, ITERATE__SECRETS_ENCRYPTION__KEY: "other" }),
+    ),
   ).not.toBe(secret);
-  expect(secret).not.toBe(config.secrets.key.exposeSecret());
+  expect(secret).not.toBe(config.secretsEncryption.key.exposeSecret());
 });
 test("the derived keys: the at-rest keys carry the previous one only while rotating", () => {
-  expect(atRestKeysOf(parseAppConfig(MINIMAL))).toEqual({ current: "secrets-key" });
+  expect(atRestKeysOf(parseIterateConfig(MINIMAL))).toEqual({ current: "secrets-key" });
   expect(
-    atRestKeysOf(parseAppConfig({ ...MINIMAL, APP_CONFIG_SECRETS__PREVIOUS_KEY: "the-old-key" })),
+    atRestKeysOf(
+      parseIterateConfig({ ...MINIMAL, ITERATE__SECRETS_ENCRYPTION__PREVIOUS_KEY: "the-old-key" }),
+    ),
   ).toEqual({ current: "secrets-key", previous: "the-old-key" });
 });
 
 const origins = {
   ...MINIMAL,
-  APP_CONFIG_URLS__OS: "https://os.iterate.com",
-  APP_CONFIG_URLS__MCP: "https://mcp.iterate.com",
+  ITERATE__URLS__OS: "https://os.iterate.com",
+  ITERATE__URLS__MCP: "https://mcp.iterate.com",
 };
 /** The bindings the edge touches before it answers a public route: the control plane's D1 the edge
  *  is built over (`ControlPlane`, src/control-plane/edge.ts — never queried: these rows never reach
@@ -565,7 +558,7 @@ test("public protocol origins: /version is `<deployId> <platformOrigin>` — the
 test("public protocol origins: the issuer stays on the control plane when its zone also has a project wildcard", async () => {
   const response = await request("https://os.iterate.com/version", {
     ...origins,
-    APP_CONFIG_URLS__PROJECT_WILDCARD: '{"hostname":"iterate.com","project":"iterate"}',
+    ITERATE__URLS__PROJECT_WILDCARD: '{"hostname":"iterate.com","project":"iterate"}',
   });
   expect(response).toMatchObject({ status: 200 });
   expect(await response.text()).toBe("unversioned https://os.iterate.com\n");
@@ -574,14 +567,20 @@ test("public protocol origins: the issuer stays on the control plane when its zo
 // ── projectHostOf ── the platform and MCP origins are never a project host, even under the wildcard
 const subdomains = {
   ...MINIMAL,
-  APP_CONFIG_URLS__OS: "https://os.example.com",
-  APP_CONFIG_URLS__MCP: "https://mcp.example.com",
-  APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"example.com"}',
+  ITERATE__URLS__OS: "https://os.example.com",
+  ITERATE__URLS__MCP: "https://mcp.example.com",
+  ITERATE__URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"example.com"}',
+};
+const ownHostname = {
+  ...MINIMAL,
+  ITERATE__URLS__OS: "https://iterate.family.test",
+  ITERATE__URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"iterate.family.test"}',
+  ITERATE__URLS__PROJECT_HOSTNAMES: '[{"hostname":"family.test","project":"family"}]',
 };
 const pathsRouting = {
   ...MINIMAL,
-  APP_CONFIG_URLS__OS: "https://os.test",
-  APP_CONFIG_URLS__INGRESS_ROUTING__TYPE: "paths",
+  ITERATE__URLS__OS: "https://os.test",
+  ITERATE__URLS__INGRESS_ROUTING__TYPE: "paths",
 };
 test.for<{ vars: Record<string, string>; url: string; host: object | null }>([
   { vars: subdomains, url: "https://os.example.com/login", host: null },
@@ -603,16 +602,35 @@ test.for<{ vars: Record<string, string>; url: string; host: object | null }>([
     url: "https://os.test/projects/acme/site/x",
     host: { project: "acme", routingSlug: "site", basePath: "/projects/acme/site" },
   },
+  // a project's own hostname in the config: its apex, and one label under it a routing slug
+  {
+    vars: ownHostname,
+    url: "https://family.test/",
+    host: { project: "family", routingSlug: null, basePath: "" },
+  },
+  {
+    vars: ownHostname,
+    url: "https://gmail.family.test/push",
+    host: { project: "family", routingSlug: "gmail", basePath: "" },
+  },
+  { vars: ownHostname, url: "https://a.b.family.test/", host: null },
+  // the platform origin under that zone stays the platform's, and its projects' hosts its own
+  { vars: ownHostname, url: "https://iterate.family.test/login", host: null },
+  {
+    vars: ownHostname,
+    url: "https://notes--acme.iterate.family.test/",
+    host: { project: "acme", routingSlug: "notes", basePath: "" },
+  },
 ])("projectHostOf $url → $host", ({ vars, url, host }) => {
-  const config = parseAppConfig(vars);
+  const config = parseIterateConfig(vars);
   expect(projectHostOf(config, new URL(url), config.urls.os)).toEqual(host);
 });
 
 test("public protocol origins: under path routing the platform's own paths are never a project (projects live under /projects/): its endpoints answer as themselves", async () => {
   const paths = {
     ...MINIMAL,
-    APP_CONFIG_URLS__OS: "https://os.test",
-    APP_CONFIG_URLS__INGRESS_ROUTING__TYPE: "paths",
+    ITERATE__URLS__OS: "https://os.test",
+    ITERATE__URLS__INGRESS_ROUTING__TYPE: "paths",
   };
   // the bearer challenges (no session, no project lookup, no 421)
   for (const endpoint of ["/api", "/mcp"]) {
@@ -640,8 +658,8 @@ test("public protocol origins: a preview's admin sign-in (admin-sign-in.ts) asks
   expect(await request(`${PRD}/.auth/admin-sign-in?next=%2Flogin`)).toMatchObject({ status: 404 });
   const started = await request(`${PR123}/.auth/admin-sign-in?next=%2Flogin`, {
     ...MINIMAL,
-    APP_CONFIG_URLS__OS: PR123,
-    APP_CONFIG_LOGIN__ADMIN_ISSUER: PRD,
+    ITERATE__URLS__OS: PR123,
+    ITERATE__LOGIN__ADMIN_ISSUER: PRD,
   });
   expect(started).toMatchObject({ status: 302 });
   const authorize = new URL(started.headers.get("location")!);
@@ -667,14 +685,14 @@ test.for<{ name: string; origin: string; vars: Record<string, unknown> }>([
     origin: PR123,
     vars: {
       ...MINIMAL,
-      APP_CONFIG_URLS__OS: PR123,
-      APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
+      ITERATE__URLS__OS: PR123,
+      ITERATE__LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
     },
   },
   {
     name: "a laptop's platform with no test email domain",
     origin: "http://localhost:8788",
-    vars: { ...MINIMAL, APP_CONFIG_URLS__OS: "http://localhost:8788" },
+    vars: { ...MINIMAL, ITERATE__URLS__OS: "http://localhost:8788" },
   },
   {
     name: "a self-host on a laptop (a blank urls.os)",
@@ -736,7 +754,7 @@ test("public protocol origins: /favicon.svg is production's logo, and a preview'
       {
         ...bindings,
         ...origins,
-        APP_CONFIG_URLS__OS: origin,
+        ITERATE__URLS__OS: origin,
         ASSETS: {
           fetch: async (asset: Request) => {
             assetPaths.push(new URL(asset.url).pathname);
@@ -754,19 +772,19 @@ test("public protocol origins: /favicon.svg is production's logo, and a preview'
   expect(assetPaths).toEqual(["/iterate-logo.svg"]);
 });
 
-test("appConfigOf — once per env object: reads the version-metadata binding, blank ⇒ unversioned, and memoizes on the env", () => {
+test("iterateConfigOf — once per env object: reads the version-metadata binding, blank ⇒ unversioned, and memoizes on the env", () => {
   const deployed = { ...MINIMAL, CF_VERSION_METADATA: { id: "v-9" } };
   const local = { ...MINIMAL, CF_VERSION_METADATA: { id: "" } };
   const bare = { ...MINIMAL_BLOB };
-  expect(expose(appConfigOf(deployed))).toEqual({ ...MINIMAL_CONFIG, deployId: "v-9" });
-  expect(expose(appConfigOf(local))).toEqual(MINIMAL_CONFIG);
-  expect(expose(appConfigOf(bare))).toEqual(MINIMAL_CONFIG);
-  expect(appConfigOf(deployed)).toBe(appConfigOf(deployed)); // the same object, parsed once
-  expect(appConfigOf(deployed)).not.toBe(appConfigOf(local));
+  expect(expose(iterateConfigOf(deployed))).toEqual({ ...MINIMAL_CONFIG, deployId: "v-9" });
+  expect(expose(iterateConfigOf(local))).toEqual(MINIMAL_CONFIG);
+  expect(expose(iterateConfigOf(bare))).toEqual(MINIMAL_CONFIG);
+  expect(iterateConfigOf(deployed)).toBe(iterateConfigOf(deployed)); // the same object, parsed once
+  expect(iterateConfigOf(deployed)).not.toBe(iterateConfigOf(local));
 });
-test("appConfigOf — once per env object: a malformed field throws at first use, naming it", () => {
-  expect(() => appConfigOf({ ...MINIMAL, APP_CONFIG_SECRETS__KEY: "" })).toThrow(
-    /^APP_CONFIG secrets\.key \(APP_CONFIG_SECRETS__KEY\): required, but unset or blank$/,
+test("iterateConfigOf — once per env object: a malformed field throws at first use, naming it", () => {
+  expect(() => iterateConfigOf({ ...MINIMAL, ITERATE__SECRETS_ENCRYPTION__KEY: "" })).toThrow(
+    /^ITERATE secretsEncryption\.key \(ITERATE__SECRETS_ENCRYPTION__KEY\): required, but unset or blank$/,
   );
 });
 
@@ -780,20 +798,25 @@ const request = (url: string | Request, env: Record<string, unknown> = origins) 
 
 /** Secrets are `Redacted` (they never print); expose them for a value comparison against the plain
  *  strings above. */
-const expose = (config: AppConfig) => ({
-  urls: config.urls,
-  customHostnames: config.customHostnames,
-  cloudflareApiToken: config.cloudflareApiToken.exposeSecret(),
+const expose = (config: IterateConfig) => ({
+  cloudflare: config.cloudflare,
+  // projects' own hostnames, shown when the config sets any
+  urls: (({ projectHostnames, ...urls }) =>
+    projectHostnames.length ? { ...urls, projectHostnames } : urls)(config.urls),
+  customHostnames: config.customHostnames && {
+    ...config.customHostnames,
+    cloudflareApiToken: config.customHostnames.cloudflareApiToken.exposeSecret(),
+  },
   posthogProjectKey: config.posthogProjectKey,
   admins: config.admins,
   login: {
     ...config.login,
     password: config.login.password.exposeSecret(),
   },
-  secrets: {
-    key: config.secrets.key.exposeSecret(),
-    previousKey: config.secrets.previousKey.exposeSecret(),
-    adminBearer: config.secrets.adminBearer.exposeSecret(),
+  adminBearer: config.adminBearer.exposeSecret(),
+  secretsEncryption: {
+    key: config.secretsEncryption.key.exposeSecret(),
+    previousKey: config.secretsEncryption.previousKey.exposeSecret(),
   },
   deployId: config.deployId,
 });

@@ -6,12 +6,12 @@
 // the secret for its own URL only: it cannot sign for another server or another context. The route
 // derives the secret again from the URL and verifies the signature; a `verification` challenge is
 // echoed, and every other body lands on the context as `events.iterate.com/mcp/webhook-received`.
-// Unsubscribing asks the server to stop; the secret itself keeps working while `secrets.key` does.
+// Unsubscribing asks the server to stop; the secret itself keeps working while `secretsEncryption.key` does.
 
 import { Webhook } from "standardwebhooks";
 import { z } from "zod";
 import { errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
-import { appConfigOf, sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
+import { iterateConfigOf, sessionSigningSecretOf, type IterateConfig } from "../iterate-config.ts";
 import { LOOP_DEPTH_LIMIT, parseCause, storedCause } from "../cause.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -30,7 +30,7 @@ const MCPWebhookTarget = z.object({
 /** The webhook the MCP server at `server` delivers the context `{ projectId, path }`'s events to,
  *  and the secret it signs them with. */
 export async function mcpWebhookOf(
-  appConfig: AppConfig,
+  iterateConfig: IterateConfig,
   platformOrigin: string | null,
   { projectId, path }: { projectId: string; path: string },
   server: string,
@@ -39,15 +39,18 @@ export async function mcpWebhookOf(
     throw new Error("MCP events: this context knows no platform origin to receive them on");
   const target = { project: projectId, path, server };
   const url = new URL(`${MCP_WEBHOOK_PATH}?${new URLSearchParams(target)}`, platformOrigin);
-  return { url: url.href, secret: await webhookSecretOf(appConfig, target) };
+  return { url: url.href, secret: await webhookSecretOf(iterateConfig, target) };
 }
 
 /** A webhook's Standard Webhooks secret: `whsec_` and the base64 of the 64 hex digits of an HMAC of
  *  its target, which Standard Webhooks takes as the secret's 64 bytes. */
-const webhookSecretOf = async (appConfig: AppConfig, target: z.output<typeof MCPWebhookTarget>) =>
+const webhookSecretOf = async (
+  iterateConfig: IterateConfig,
+  target: z.output<typeof MCPWebhookTarget>,
+) =>
   `whsec_${btoa(
     await hmacSha256Hex(
-      await sessionSigningSecretOf(appConfig),
+      await sessionSigningSecretOf(iterateConfig),
       `mcp-webhook-secret:${JSON.stringify([target.project, target.path, target.server])}`,
     ),
   )}`;
@@ -61,7 +64,7 @@ export async function mcpWebhookRoute(request: Request, env: Env): Promise<Respo
   if (!target.success) return Response.json({ error: "Unknown MCP webhook." }, { status: 404 });
   let body: unknown;
   try {
-    body = new Webhook(await webhookSecretOf(appConfigOf(env), target.data)).verify(
+    body = new Webhook(await webhookSecretOf(iterateConfigOf(env), target.data)).verify(
       await request.text(),
       Object.fromEntries(request.headers),
     );

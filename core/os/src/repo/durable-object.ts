@@ -29,7 +29,11 @@ import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate
 import type { RepoFileChange, RepoLogEntry, RepoSyncResult } from "iterate/api";
 import { codedError } from "iterate/lib";
 import type { EventInput, ReduceArgs } from "iterate/stream/processor";
-import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "../app-config.ts";
+import {
+  iterateConfigOf,
+  sessionSigningSecretOf,
+  type IterateConfigEnv,
+} from "../iterate-config.ts";
 import { refuseActPastLimit, runningCause, type Cause } from "../cause.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
@@ -135,9 +139,9 @@ function originRefusal(origin: string): string | null {
   return null;
 }
 
-export class RepoDurableObject extends StreamProcessorDurableObject<
+export class RepoFacet extends StreamProcessorDurableObject<
   RepoState,
-  { ITX?: ItxEntrypointService } & AppConfigEnv,
+  { ITX?: ItxEntrypointService } & IterateConfigEnv,
   ItxEntrypointScope
 > {
   /** The processor's reads, and the repo's own verbs — what `itx.repos.get(path)` reaches (library.ts). */
@@ -391,7 +395,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return await verifyOnBehalfOf(
       cause.onBehalfOf,
       projectId,
-      await sessionSigningSecretOf(appConfigOf(this.env)),
+      await sessionSigningSecretOf(iterateConfigOf(this.env)),
       Date.now(),
     );
   }

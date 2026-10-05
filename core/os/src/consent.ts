@@ -19,7 +19,7 @@ import { type ConsentApproved, type Impersonation } from "./account/contract.ts"
 import type { Env } from "./env.ts";
 import type { OrganizationRecord, ProjectRecord, UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { appConfigOf, type PlatformAddresses } from "./app-config.ts";
+import { iterateConfigOf, type PlatformAddresses } from "./iterate-config.ts";
 import {
   grantIsLive,
   isAdmin,
@@ -111,7 +111,7 @@ export async function projectsForClient(
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
   const host =
     url?.pathname === "/.auth/client.json"
-      ? await controlPlane.projectHostOf(appConfigOf(env), url, platformOrigin)
+      ? await controlPlane.projectHostOf(iterateConfigOf(env), url, platformOrigin)
       : null;
   if (!host) return { projects, projectBound: false };
   const project = await controlPlane.getProject(host.project);
@@ -180,7 +180,7 @@ export class ConsentRpcTarget extends RpcTarget {
   readonly #env: Env;
   readonly #ctx: ExecutionContext;
   readonly #grant: AccessGrant;
-  /** where this session reached the platform (app-config.ts `platformAddressesOf`) */
+  /** where this session reached the platform (iterate-config.ts `platformAddressesOf`) */
   readonly #addresses: PlatformAddresses;
   /** Whether this target serves one call of the request whose own admission just read the grant
    *  live (consent-page.server.ts, `browserAuthorization`), rather than a session (rpc.ts). */
@@ -263,7 +263,7 @@ export class ConsentRpcTarget extends RpcTarget {
           return { name, ...OAuthScopeDescriptions[name] };
         }),
         orgs: organizations,
-        ingressRouting: appConfigOf(env).urls.ingressRouting,
+        ingressRouting: iterateConfigOf(env).urls.ingressRouting,
         suggestedOrganizationName: suggestOrganizationName({
           name: this.#grant.name,
           email: this.#grant.email,
@@ -287,7 +287,7 @@ export class ConsentRpcTarget extends RpcTarget {
     const ownApp = isOwnApp(request, this.#addresses.platformOrigin, projectBound);
     // a link pre-fills only a test person (a PR body's `pr<N>@…`), and only for one of our apps:
     // prd has no test email domain, so there, like for a third party, the choice stays the admin's
-    const testEmailDomain = appConfigOf(this.#env).login.testEmailDomain;
+    const testEmailDomain = iterateConfigOf(this.#env).login.testEmailDomain;
     const hint = new URLSearchParams(query).get("login_hint")?.trim().toLowerCase();
     const named = ownApp && testEmailDomain && hint?.endsWith(`@${testEmailDomain}`);
     return {
@@ -365,7 +365,7 @@ export class ConsentRpcTarget extends RpcTarget {
   }
 
   /** The scopes of `request` this person may grant: all it asked for, but `admin` only to a
-   *  platform admin (app-config.ts `admins`), only for `/api` and never for a client bound to one
+   *  platform admin (iterate-config.ts `admins`), only for `/api` and never for a client bound to one
    *  project — on a project host an admin's grant would count as a member of every project. */
   #grantable(request: AuthRequest, projectBound: boolean): string[] {
     const admin =

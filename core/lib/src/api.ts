@@ -1320,7 +1320,7 @@ export interface IterateSessionApi {
     ingressRouting: IngressRouting;
     /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
     mcpOrigin: string;
-    /** the providers whose iterate app this deployment holds (APP_CONFIG `integrations`): a
+    /** the providers whose iterate app this deployment holds (ITERATE `integrations`): a
      *  project connects through iterate's app only there, and brings its own app anywhere */
     iterateAppProviders: IntegrationProvider[];
     /** what iterate's app asks for there, by provider — what a project needs of your account before

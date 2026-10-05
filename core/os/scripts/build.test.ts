@@ -10,7 +10,12 @@ test("the build reaches nothing outside core/", async () => {
   const repo = path.resolve(import.meta.dirname, "../../..");
   const { metafile } = await build({
     absWorkingDir: repo,
-    entryPoints: ["core/os/vite.config.ts", "core/os/scripts/build.ts"],
+    entryPoints: [
+      "core/os/vite.config.ts",
+      "core/os/cloudflare.config.ts",
+      "core/os/scripts/build.ts",
+      "core/os/scripts/deploy.ts",
+    ],
     bundle: true,
     packages: "external",
     platform: "node",

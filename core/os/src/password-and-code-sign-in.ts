@@ -14,7 +14,7 @@ import { z } from "zod";
 import { codedError, cookieValueOf, reportIssue } from "iterate/lib";
 import type { Env } from "./env.ts";
 import { EMAIL_NOT_ALLOWED_MESSAGE, emailAllowed } from "./allowed-emails.ts";
-import { appConfigOf } from "./app-config.ts";
+import { iterateConfigOf } from "./iterate-config.ts";
 import { secretsEqual, sha256Hex } from "./caller.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
@@ -42,7 +42,7 @@ const reservedDomain = /@(example\.(com|net|org)|[^@]+\.(test|example|invalid|lo
 function addressOf(env: Env, email: string): string {
   const address = email.trim().toLowerCase();
   if (!z.email().safeParse(address).success) throw codedError("INVALID_INPUT", "Enter an email.");
-  if (!emailAllowed(appConfigOf(env).login.allowedEmails, address))
+  if (!emailAllowed(iterateConfigOf(env).login.allowedEmails, address))
     throw codedError("INVALID_INPUT", EMAIL_NOT_ALLOWED_MESSAGE);
   return address;
 }
@@ -75,7 +75,7 @@ export async function signInWithPassword(
   password: string,
   client: string | null,
 ): Promise<{ user: UserRecord } | { error: string }> {
-  const secret = appConfigOf(env).login.password.exposeSecret();
+  const secret = iterateConfigOf(env).login.password.exposeSecret();
   if (!secret) throw codedError("UNAUTHENTICATED", "Password sign-in is not offered here.");
   const address = addressOf(env, email);
   const keys = [
@@ -139,7 +139,7 @@ export async function startLoginCode(
   email: string,
   client: string | null,
 ): Promise<{ setCookie: string }> {
-  const config = appConfigOf(env);
+  const config = iterateConfigOf(env);
   if (!(env.EMAIL && config.login.emailCode))
     throw codedError("UNAUTHENTICATED", "Email sign-in is not offered here.");
   const address = addressOf(env, email);
@@ -206,7 +206,7 @@ export async function finishLoginCode(
   }
   await env.OAUTH_KV.delete(key(id));
   // the list may have changed since the code went out
-  if (!emailAllowed(appConfigOf(env).login.allowedEmails, challenge.email))
+  if (!emailAllowed(iterateConfigOf(env).login.allowedEmails, challenge.email))
     return { error: EMAIL_NOT_ALLOWED_MESSAGE, restart: true };
   return { user: await new ControlPlane(env).ensureUser(challenge.email) };
 }

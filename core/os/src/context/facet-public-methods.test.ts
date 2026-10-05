@@ -6,9 +6,9 @@ import { expect, test } from "vitest";
 import { parse } from "iterate/expression";
 import { errorCode } from "iterate/lib";
 import { FacetDurableObject, StreamProcessorDurableObject } from "iterate/sdk";
-import { AccountDurableObject } from "../account/durable-object.ts";
-import { ProjectDurableObject } from "../project/durable-object.ts";
-import { SecretDurableObject } from "../secret/durable-object.ts";
+import { AccountFacet } from "../account/durable-object.ts";
+import { ProjectFacet } from "../project/durable-object.ts";
+import { SecretFacet } from "../secret/durable-object.ts";
 import { assertFacetMethodIsPublic } from "./facet-public-methods.ts";
 
 const FACET_PUBLIC_METHOD_ROWS: {
@@ -70,9 +70,7 @@ test.each(FACET_PUBLIC_METHOD_ROWS)(
 
 test("the refusal names the facet, the step and the list", () => {
   expect(() =>
-    assertFacetMethodIsPublic("account", AccountDurableObject.publicMethods, [
-      ["processEventBatch"],
-    ]),
+    assertFacetMethodIsPublic("account", AccountFacet.publicMethods, [["processEventBatch"]]),
   ).toThrow(
     `facet "account": "processEventBatch" is not one of its public methods (fetch, snapshot, liveSnapshot, waitUntilProcessed)`,
   );
@@ -93,9 +91,9 @@ abstract class ChatroomDurableObject extends FacetDurableObject {
 
 /** The class each row's facet names; below the classes it lists, read only when a test runs. */
 const FACET_CLASSES = {
-  account: AccountDurableObject,
-  project: ProjectDurableObject,
-  secret: SecretDurableObject,
+  account: AccountFacet,
+  project: ProjectFacet,
+  secret: SecretFacet,
   "a loaded processor": SendingProcessorDurableObject,
   "a loaded mini-app": ChatroomDurableObject,
 };

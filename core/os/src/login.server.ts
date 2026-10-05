@@ -11,7 +11,7 @@ import {
   signInWithPassword,
   startLoginCode,
 } from "./password-and-code-sign-in.ts";
-import { appConfigOf, platformAddressesOf } from "./app-config.ts";
+import { iterateConfigOf, platformAddressesOf } from "./iterate-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import type { Env } from "./env.ts";
@@ -24,7 +24,7 @@ export async function loginState(
   env: Env,
   search: ReturnType<typeof loginSearchOf>,
 ) {
-  const config = appConfigOf(env);
+  const config = iterateConfigOf(env);
   const { platformOrigin } = platformAddressesOf(env, request);
   const next = sameOriginPath(search.next || "/login", platformOrigin);
   const session = await browserAuthorization(env, request);

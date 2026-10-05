@@ -114,7 +114,7 @@ interface StreamDeps {
   /** The birth certificate's payload. */
   projectId: string;
   /** What the birth appends after the certificate and the wake record, in the same batch, unread:
-   *  the deployment's birth events for a project context (app-config.ts `contextBirthEvents`), none
+   *  the deployment's birth events for a project context (iterate-config.ts `contextBirthEvents`), none
    *  for a global one. Absent: none. */
   birthEvents?: readonly StreamEventInput[];
   /** The post-commit fan-out, once per offset-advancing commit with the newly committed events in

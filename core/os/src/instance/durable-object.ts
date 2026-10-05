@@ -6,7 +6,7 @@ import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { InstanceState } from "./contract.ts";
 import { InstanceProcessor } from "./processor.ts";
 
-export class InstanceDurableObject extends StreamProcessorDurableObject<
+export class InstanceFacet extends StreamProcessorDurableObject<
   InstanceState,
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope

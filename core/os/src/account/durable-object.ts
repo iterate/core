@@ -8,7 +8,7 @@
 // `/users/<id>` root. Reached as `session.user.integrations.connect(…)` and `.disconnect(…)`
 // (context/built-ins.ts); the callback finishes (secret-oauth-callback.ts).
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
-import type { AppConfigEnv } from "../app-config.ts";
+import type { IterateConfigEnv } from "../iterate-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
@@ -26,13 +26,13 @@ import type { ConnectionAttempt } from "../integrations/connections.ts";
 import type { AccountState } from "./contract.ts";
 import { AccountProcessor } from "./processor.ts";
 
-export class AccountDurableObject extends StreamProcessorDurableObject<
+export class AccountFacet extends StreamProcessorDurableObject<
   AccountState,
   {
     ITX?: ItxEntrypointService;
     DB: D1Database;
     ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
-  } & AppConfigEnv,
+  } & IterateConfigEnv,
   ItxEntrypointScope
 > {
   processor = new AccountProcessor();

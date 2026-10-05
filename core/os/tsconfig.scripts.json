@@ -4,6 +4,8 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "types": ["node"] },
   "include": [
+    "cloudflare.config.ts",
+    "iterate.config*.ts",
     "vite.config.ts",
     "vitest.config.ts",
     "vitest.global-setup.ts",

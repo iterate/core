@@ -2,7 +2,7 @@
 // Account identity comes from /users/me; personal connections require Iterate's client.
 import { codedError } from "iterate/lib";
 import { z } from "zod";
-import { appConfigOf, DEFAULT_X_SCOPES } from "../app-config.ts";
+import { iterateConfigOf, DEFAULT_X_SCOPES } from "../iterate-config.ts";
 import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import type { IntegrationConnectionRow } from "./contract.ts";
 import {
@@ -49,7 +49,7 @@ export async function connectX(
 ) {
   if (scope.rootPath !== "/" && input.client !== "iterate")
     throw codedError("INVALID_INPUT", "Link your X identity through Iterate's X app.");
-  const app = appConfigOf(scope.env).integrations.x;
+  const app = iterateConfigOf(scope.env).integrations.x;
   using itx = scope.getItx();
   let origin: string | undefined;
   if (input.client === "iterate") {

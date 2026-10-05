@@ -1,6 +1,6 @@
 // context/first-party-facet-placement.ts — WHERE A FACET MAY BE HOSTED AND CODE MAY BE LOADED, pure
 // (no I/O). A first-party facet (first-party-facets.ts) is this worker's own class, minted from
-// `ctx.exports` with the worker's REAL env (APP_CONFIG, the at-rest key, every binding) and a
+// `ctx.exports` with the worker's REAL env (ITERATE, the at-rest key, every binding) and a
 // loopback to the context that hosts it — so that context is its authority, and it is hosted only
 // where the platform's own code hosts it, never wherever a caller reaches `itx.facets.get(name)` (a
 // signed-in person reaches their own `global:/users/<id>`, their organizations and every path of

@@ -3,7 +3,7 @@
 // verified email (control-plane/catalog.ts `linkIdentity`).
 //
 // A SIGN-IN KEEPS ITS TOKEN: each provider's one OAuth client serves signing in and connecting
-// (APP_CONFIG `integrations.<provider>`: a refresh token only works with the client that issued it),
+// (ITERATE `integrations.<provider>`: a refresh token only works with the client that issued it),
 // so the token the sign-in was given, with the scopes `login.<provider>.scopes` asked for and the
 // provider granted, becomes the person's own connection — the secret
 // `global:/users/<id>/secrets/<provider>-<subject>`, in the record an integration's callback writes
@@ -50,11 +50,11 @@ import { signClaims, verifyClaims } from "./caller.ts";
 import type { Env } from "./env.ts";
 import { EMAIL_NOT_ALLOWED_MESSAGE, emailAllowed } from "./allowed-emails.ts";
 import {
-  appConfigOf,
+  iterateConfigOf,
   platformAddressesOf,
   sessionSigningSecretOf,
-  type AppConfig,
-} from "./app-config.ts";
+  type IterateConfig,
+} from "./iterate-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
@@ -131,7 +131,7 @@ type SignedIn = {
 /** A provider's sign-in client for this deployment, or null when it is off: its client (the
  *  integration's), what the sign-in asks for, where it answers, and the connection secret's pin and
  *  refresh endpoint. */
-function signInClientOf(config: AppConfig, provider: IdentityProvider) {
+function signInClientOf(config: IterateConfig, provider: IdentityProvider) {
   const { google, cloudflare, github } = config.integrations;
   if (provider === "google" && google && config.login.google) {
     const endpoints = googleEndpointsOf(google.googleOrigin);
@@ -226,7 +226,7 @@ export async function identityResponse(request: Request, env: Env) {
   );
   if (!provider) return null;
   if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
-  const config = appConfigOf(env);
+  const config = iterateConfigOf(env);
   const client = signInClientOf(config, provider);
   if (!client)
     return new Response(`${INTEGRATION_PROVIDER_NAMES[provider]} sign-in is not configured`, {

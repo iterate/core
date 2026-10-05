@@ -38,7 +38,7 @@ import {
   refuseActPastLimit,
   storedCause,
 } from "../cause.ts";
-import { appConfigOf } from "../app-config.ts";
+import { iterateConfigOf } from "../iterate-config.ts";
 import { sha256Hex, type Caller } from "../caller.ts";
 import { DurableObjectNameCodec, resourceScope } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
@@ -51,7 +51,7 @@ import { authenticationOf, isAutomated } from "../email/sender.ts";
 const BODY_MAX_CHARS = 100_000;
 
 export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
-  const { urls } = appConfigOf(env);
+  const { urls } = iterateConfigOf(env);
   const recipient = /^([^@+]+)(?:\+[^@]*)?@(.+)$/.exec(message.to.trim().toLowerCase());
   const wildcard = urls.projectWildcard;
   const viaWildcard = !!recipient && !!wildcard && recipient[2] === wildcard.hostname;

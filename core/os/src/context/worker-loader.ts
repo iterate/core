@@ -210,7 +210,7 @@ function applySdkCompatibilityFlags(declared: string[] | undefined, where: strin
 /** What `prepareConfinedWorker` needs. */
 type PrepareConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader; ITX_KV: KVNamespace };
-  /** The deploy identity every loader id folds in (worker.ts `AppConfig.deployId`: CF_VERSION_METADATA.id,
+  /** The deploy identity every loader id folds in (worker.ts `IterateConfig.deployId`: CF_VERSION_METADATA.id,
    *  "unversioned" locally) — a facet built from an isolate a PRIOR deployment minted cannot be called
    *  by the new parent, so a redeploy must mint fresh isolates. */
   deployId: string;

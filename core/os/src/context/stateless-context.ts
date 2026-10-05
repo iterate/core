@@ -10,7 +10,7 @@ import { InvokeHandle, normalizedItxExpression, type ItxExpression } from "itera
 import { crossingOneMore, type Cause } from "../cause.ts";
 import type { Caller } from "../caller.ts";
 import type { Env } from "../iterate-context-durable-object.ts";
-import { appConfigOf } from "../app-config.ts";
+import { iterateConfigOf } from "../iterate-config.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import { mcpWebhookOf } from "../integrations/mcp.ts";
 import { contextStub } from "../context-stub.ts";
@@ -109,7 +109,7 @@ export function contextReach(args: {
       };
       return workersRoot({
         env,
-        deployId: appConfigOf(env).deployId,
+        deployId: iterateConfigOf(env).deployId,
         projectId,
         path,
         iterateContextName: nameOf(path),
@@ -174,8 +174,8 @@ export function statelessResolverFor(args: {
 }): ItxExpressionResolver {
   const { env, address, caller } = args;
   const { projectId, path } = address;
-  const appConfig = appConfigOf(env);
-  const platformOrigin = caller.platformOrigin || appConfig.urls.os || null;
+  const iterateConfig = iterateConfigOf(env);
+  const platformOrigin = caller.platformOrigin || iterateConfig.urls.os || null;
   const reach = contextReach({
     env,
     namespace: args.namespace,
@@ -192,7 +192,7 @@ export function statelessResolverFor(args: {
     projectId === GLOBAL_PROJECT_ID
       ? Promise.resolve(null)
       : (catalogRow ||= new ControlPlane(env).getProject(projectId));
-  const projectDeps = projectConfigDeps(appConfig, async () => (await project())?.slug);
+  const projectDeps = projectConfigDeps(iterateConfig, async () => (await project())?.slug);
   // The built-ins speak for the caller the resolver runs under: the library's hops (`cd` to the
   // catalog, a repo) go as the platform's, never as the loaded code they serve. Every portable root
   // but the connectors, whose live connections the context's library memoizes and its residency
@@ -249,7 +249,7 @@ export function statelessResolverFor(args: {
   const library = buildLibrary(libraryItx, {
     caller: () => withOrigin(caller),
     path,
-    mcpWebhook: (server) => mcpWebhookOf(appConfig, platformOrigin, address, server),
+    mcpWebhook: (server) => mcpWebhookOf(iterateConfig, platformOrigin, address, server),
   }).roots;
   return resolverUnder(caller);
 }

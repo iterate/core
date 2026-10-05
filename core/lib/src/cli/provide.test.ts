@@ -273,7 +273,7 @@ function cliConfig(baseUrl: string) {
           ...process.env,
           XDG_CONFIG_HOME: config.path,
           NO_COLOR: "1",
-          APP_CONFIG_SECRETS__ADMIN_BEARER: "",
+          ITERATE_ADMIN_BEARER: "",
           ITERATE_BEARER_TOKEN: "",
         },
       });

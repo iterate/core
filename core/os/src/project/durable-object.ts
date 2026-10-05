@@ -12,7 +12,7 @@
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import { runningCause } from "../cause.ts";
 import { downloadPublicGithubTemplate } from "../repo/github-template.ts";
-import { appConfigOf, type AppConfigEnv } from "../app-config.ts";
+import { iterateConfigOf, type IterateConfigEnv } from "../iterate-config.ts";
 import { canBackRepo, projectScopedArtifacts } from "../context/cf-artifacts.ts";
 import { moduleIdentityOf } from "../context/worker-loader.ts";
 import { CONTEXT_DESTROYED, DurableObjectNameCodec } from "../context/paths.ts";
@@ -43,13 +43,13 @@ import { dnsZoneOf, txtRecordsOf } from "./dns-provider.ts";
 import { ProjectProcessor, type ProjectDeletion, type ProjectHostnames } from "./processor.ts";
 import type { ProjectPublisher } from "./publication.ts";
 
-export class ProjectDurableObject extends StreamProcessorDurableObject<
+export class ProjectFacet extends StreamProcessorDurableObject<
   ProjectState,
   {
     ITX?: ItxEntrypointService;
     DB: D1Database;
   } & Pick<ContextEnv, "ITERATE_CONTEXT" | "ITX_KV" | "FILES" | "ARTIFACTS"> &
-    AppConfigEnv,
+    IterateConfigEnv,
   ItxEntrypointScope
 > {
   /** The processor's reads, the two collections `itx.repos` / `itx.workspaces` reach (library.ts),
@@ -168,7 +168,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   #hostnames(): ProjectHostnames {
     const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     const controlPlane = new ControlPlane(this.env);
-    const config = appConfigOf(this.env);
+    const config = iterateConfigOf(this.env);
     return {
       reservedZones: config.customHostnames?.reservedZones || [],
       claim: (hostname) => controlPlane.claimHostname(projectId, hostname),

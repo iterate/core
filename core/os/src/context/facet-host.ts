@@ -46,16 +46,16 @@ import {
   rowsPushingFacet,
   type CoreState,
 } from "../stream/core-processor.ts";
-import { AccountDurableObject } from "../account/durable-object.ts";
-import { EmailDurableObject } from "../email/durable-object.ts";
-import { InstanceDurableObject } from "../instance/durable-object.ts";
+import { AccountFacet } from "../account/durable-object.ts";
+import { EmailFacet } from "../email/durable-object.ts";
+import { InstanceFacet } from "../instance/durable-object.ts";
 import { type FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
-import { OrganizationDurableObject } from "../organization/durable-object.ts";
-import { ProjectDurableObject } from "../project/durable-object.ts";
-import { RepoDurableObject } from "../repo/durable-object.ts";
-import { SecretDurableObject } from "../secret/durable-object.ts";
+import { OrganizationFacet } from "../organization/durable-object.ts";
+import { ProjectFacet } from "../project/durable-object.ts";
+import { RepoFacet } from "../repo/durable-object.ts";
+import { SecretFacet } from "../secret/durable-object.ts";
 import type { Stream } from "../stream/stream.ts";
-import { WorkspaceDurableObject } from "../workspace/durable-object.ts";
+import { WorkspaceFacet } from "../workspace/durable-object.ts";
 import {
   walkSteps,
   awaitAnswerReleasedIfRejected,
@@ -165,14 +165,14 @@ export const UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS = 60_000;
  *  `ctx.exports` by name, first-party-facets.ts). A first-party name without its list fails to
  *  typecheck. */
 const FIRST_PARTY_FACET_PUBLIC_METHODS = {
-  account: AccountDurableObject.publicMethods,
-  email: EmailDurableObject.publicMethods,
-  instance: InstanceDurableObject.publicMethods,
-  organization: OrganizationDurableObject.publicMethods,
-  project: ProjectDurableObject.publicMethods,
-  repo: RepoDurableObject.publicMethods,
-  secret: SecretDurableObject.publicMethods,
-  workspace: WorkspaceDurableObject.publicMethods,
+  account: AccountFacet.publicMethods,
+  email: EmailFacet.publicMethods,
+  instance: InstanceFacet.publicMethods,
+  organization: OrganizationFacet.publicMethods,
+  project: ProjectFacet.publicMethods,
+  repo: RepoFacet.publicMethods,
+  secret: SecretFacet.publicMethods,
+  workspace: WorkspaceFacet.publicMethods,
 } satisfies Record<keyof typeof FIRST_PARTY_FACET_CLASSES, readonly string[]>;
 
 type FacetHostDeps = {

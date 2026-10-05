@@ -6,7 +6,7 @@
 import { redirect } from "@tanstack/react-router";
 import { z } from "zod";
 import { errorCode, withTimeout } from "iterate/lib";
-import { appConfigOf, platformAddressesOf } from "./app-config.ts";
+import { iterateConfigOf, platformAddressesOf } from "./iterate-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { ConsentRpcTarget } from "./consent.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
@@ -96,7 +96,7 @@ export async function createConsentProject(
       contextNamespace: env.ITERATE_CONTEXT,
       waitUntil: (promise) => ctx.waitUntil(promise),
       controlPlane: new ControlPlane(env),
-      appConfig: appConfigOf(env),
+      iterateConfig: iterateConfigOf(env),
       platformOrigin: platformAddressesOf(env, request).platformOrigin,
     },
     teardown,
