@@ -85,7 +85,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   processors: "hosted processors: `processors.enable(name, spec)` · `list()` · `disable(name)`",
   workers: "load code as a stateless worker: `workers.get({ source }).run()`",
   platformHook:
-    "the platform's own subscriber of every durable event here: a fan-out row's target, called by the delivery loop alone",
+    "the platform's own subscriber of every durable event here: an ordered row's target, called by the delivery loop alone",
   webhooks:
     'an HTTP webhook as a fan-out row\'s target: `subscribe({ target: "itx.webhooks.get({ url, signingSecret? }).deliverEvent", ordered: false })` POSTs each event, signed with the secret when one is named',
   run: 'a fresh confined run of a script you write as text: `itx.run("async (itx) => …")`',
@@ -100,6 +100,8 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
   files:
     "project files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
+  telemetry:
+    'the project\'s telemetry as SQL, its last day unless `{ hours }` says (at most 720): `telemetry.query("SELECT type, count(*) FROM events GROUP BY type")` over `events`, `logs`, `spans`, or `metrics` alone',
   email:
     "the project's mail at `<slug>@<email domain>`: `email.send({ to, subject, text?, html?, from?, attachments?: [{ path }] })`, or `{ inReplyToOffset, text }` to answer a message; mail in and out lands on `/integrations/email`, threaded by its `email` facet",
 } as const satisfies Record<string, string>;
@@ -152,6 +154,7 @@ const PORTABLE_ROOTS = [
   "cfArtifacts",
   "fetch",
   "email",
+  "telemetry",
   "repos",
   "workspaces",
   "files",

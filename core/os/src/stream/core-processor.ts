@@ -187,12 +187,15 @@ export function targetOwnsProgress(state: CoreState, row: Subscription): boolean
   return !!(builtInsGetStep(resolved, "facets") || builtInsGetStep(resolved, "rpcStubs"));
 }
 
-/** Does a row's target resolve, through the rules alone, to an HTTP webhook
- *  (`itx.builtins.webhooks.get(…)`, context/built-ins.ts)? Its fan-out events climb a longer ladder
- *  (subscription-delivery.ts). */
-export function targetIsWebhook(state: CoreState, row: Subscription): boolean {
+/** Does a row's target resolve, through the rules alone, to a service someone else runs: an HTTP
+ *  webhook (`itx.builtins.webhooks.get(…)`) or the platform hook, whose sends reach a Basin Pipelines
+ *  stream (context/built-ins.ts)? Its deliveries climb the longer ladder (subscription-delivery.ts
+ *  `#ladder`). */
+export function targetIsAnotherService(state: CoreState, row: Subscription): boolean {
   const resolved = resolveThroughState(state, row.target);
-  return resolved?.[1] === "builtins" && resolved[2] === "webhooks";
+  return (
+    resolved?.[1] === "builtins" && (resolved[2] === "webhooks" || resolved[2] === "platformHook")
+  );
 }
 
 /** The names of the live rows that PUSH this context's facet `facetName` every commit they consume —

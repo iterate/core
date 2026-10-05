@@ -50,11 +50,12 @@ import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stre
 import { deepestCause, recordRefusal, type Cause } from "../cause.ts";
 import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
 import { SNAPSHOT_TTL_MS } from "../context/rule-snapshots.ts";
+import type { Metrics } from "../metrics.ts";
 import {
   type CoreState,
   rowsPushingFacet,
   type Subscription,
-  targetIsWebhook,
+  targetIsAnotherService,
   targetOwnsProgress,
 } from "./core-processor.ts";
 import {
@@ -84,19 +85,25 @@ const DELIVERY_MAX_ATTEMPTS = 15;
  *  concurrent appends (30 × 7 MiB ephemerals to 10 facets reset the parent at 16 — this budget is
  *  what the fan-out retains on top of the args workerd is deserializing; e2e LARGE EPHEMERAL FAN-OUT). */
 const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 8 * 1024 * 1024;
+/** A worst-case page: READ_PAGE_BUDGET_BYTES of stored BODIES (8 MiB — a lone event at
+ *  EVENT_BODY_MAX_CHARS rides alone). With each event's offset and path it serializes to slightly
+ *  MORE, which stays charged as the page. */
+const CURSOR_READ_PAGE_CHARS = 8 * 1024 * 1024;
 /** THE CURSOR-READ BUDGET: the most chars CURSOR delivery may hold across its read-through-call at
  *  once — a SEPARATE ceiling from the push budget so a cursor reserving a worst-case page never trips
  *  a live-client push drop. N cursor rows firing on one commit each read a page and hold the batch
  *  across the awaited call; without this they coexist (20 × an 8 MiB page = 160 MiB, a reset). A
- *  worst-case page is READ_PAGE_BUDGET_BYTES of stored BODIES (8 MiB — a lone event at
- *  EVENT_BODY_MAX_CHARS rides alone); with each event's offset and path it serializes to slightly
- *  MORE, so a full catch-up page OVERFILLS it: the read branch holds the whole budget from before the
- *  read and only ever RELEASES (the overshoot stays charged as the page), so big catch-up serializes
- *  and the next cursor read WAITS; a small batch is trimmed to its real size and frees the reserve so
- *  small cursor deliveries stay concurrent and no call head-of-line-blocks the other cursor rows.
- *  A row AT the mark reads nothing but the stream's recent-ephemerals ring and reserves that ring's
- *  size instead. */
-const CURSOR_READ_BUDGET_CHARS = 8 * 1024 * 1024;
+ *  row behind the mark reserves a worst-case page and the ring before its read and only ever
+ *  RELEASES after it: a small batch is trimmed to its real size, while a full catch-up page stays
+ *  charged, so big catch-up serializes and the next cursor read WAITS. A row AT the mark reads
+ *  nothing but the stream's recent-ephemerals ring and reserves that ring's size.
+ *
+ *  The budget is that reservation and 1 MiB more: room for small batches in flight BESIDE a read. A
+ *  call holds its batch until it settles, and the platform hook's row sends to Basin Pipelines on every
+ *  commit of every project context: without that room one row's slow call would hold back every
+ *  other cursor row's read. */
+const CURSOR_READ_BUDGET_CHARS =
+  CURSOR_READ_PAGE_CHARS + RECENT_EPHEMERALS_BUDGET_CHARS + 1024 * 1024;
 /** THE PENDING-PUSH BUDGET, per context: the most serialized event chars ALL rows together may hold
  *  back while their deliveries are in flight. Past it the OLDEST events are dropped from the LARGEST
  *  queue first and that push's `after` moves up to the last dropped offset — the span a facet heals
@@ -110,11 +117,15 @@ const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 /** THE FAN-OUT BOUND: the most calls one fan-out row has out at once, each holding its slot until
  *  it settles. */
 const FAN_OUT_CALLS_IN_FLIGHT = 8;
-/** A WEBHOOK row's ladder (context/built-ins.ts `webhooks`) is longer: its receiver is someone
- *  else's deploy, and an outage of a few hours must not dead-letter its events. 1s·2ⁿ capped at 4 h,
- *  25 attempts: ~44 h, as Svix retries for ~42 h (https://docs.svix.com/retries). */
-const WEBHOOK_MAX_ATTEMPTS = 25;
-const WEBHOOK_LADDER_CAP_MS = 4 * 60 * 60_000;
+/** THE LONG LADDER, for a row whose target is a service someone else runs (core-processor.ts
+ *  `targetIsAnotherService`): a webhook's receiver is someone else's deploy, and the platform hook's
+ *  Basin Pipelines stream is Cloudflare's. An outage of a few hours there must not halt the row or
+ *  dead-letter its events: they wait in the log. A retry costs one alarm wake and one call, so a
+ *  longer ladder costs next to nothing. 1s·2ⁿ capped at 4 h, 25 attempts: ~44 h, as Svix retries
+ *  webhooks for ~42 h (https://docs.svix.com/retries). The default ladder stays short: its targets
+ *  are our code and the project's, and a failure of hours there is a defect the halt surfaces. */
+const LONG_LADDER_MAX_ATTEMPTS = 25;
+const LONG_LADDER_CAP_MS = 4 * 60 * 60_000;
 /** A fan-out row stops admitting new events once this many DISTINCT events in a row failed with no
  *  success between (one event failing fifteen times counts once): a receiver that is down. */
 const FAN_OUT_PAUSE_AFTER_DISTINCT_FAILURES = 3;
@@ -179,6 +190,9 @@ type FanOutRow = {
   waitingForRoom: boolean;
   /** Admission alternates a due record and a new event, so neither starves the other. */
   preferRetry: boolean;
+  /** Since the row's last `subscription.lag_ms`: the events delivered, and their longest wait. */
+  deliveredSinceTiming: number;
+  longestWaitMs: number;
 };
 
 /** One fan-out call the pump starts: the event, the in-flight room it holds, and its attempt. */
@@ -307,6 +321,8 @@ type SubscriptionDeliveryDeps = {
   /** Ends this incarnation (the DO's `ctx.abort`, after its writes are durable): a fan-out row
    *  whose every slot holds a call that will not settle. */
   abortIncarnation: (reason: string) => void;
+  /** This context's custom metrics, each labelled with the row's name (docs/telemetry.md). */
+  metrics: Metrics;
 };
 
 /** One cursor row's claim on the DO's alarm, for `deadlines()` and the trace: the persisted
@@ -321,6 +337,7 @@ export class SubscriptionDelivery {
   readonly #reconcileAlarm: SubscriptionDeliveryDeps["reconcileAlarm"];
   readonly #runAsDelivery: SubscriptionDeliveryDeps["runAsDelivery"];
   readonly #abortIncarnation: SubscriptionDeliveryDeps["abortIncarnation"];
+  readonly #metrics: Metrics;
   /** What the loop remembers per row, by name (SubscriptionDeliveryRecord). */
   readonly #deliveryRecordByName = new Map<string, SubscriptionDeliveryRecord>();
   /** Cursor delivery's lock, per NAME and outside the record on purpose: one `#deliverFromCursor`
@@ -344,6 +361,7 @@ export class SubscriptionDelivery {
     this.#reconcileAlarm = deps.reconcileAlarm;
     this.#runAsDelivery = deps.runAsDelivery;
     this.#abortIncarnation = deps.abortIncarnation;
+    this.#metrics = deps.metrics;
     // The persisted cursors and fan-out delivery records seed memory once, here — after this,
     // memory is the one truth.
     for (const [name, cursor] of this.#stream.storage.listSubscriptionCursors())
@@ -637,9 +655,10 @@ export class SubscriptionDelivery {
    *  and awaited: the pass ends with every loop drained, so no claim leaves a pass due. */
   async deliverEveryCursorSubscription(): Promise<void> {
     const state = this.#stream.coreReducedState;
-    const rows = Object.entries(state.subscriptions).filter(
-      ([, row]) => !row.halted && !targetOwnsProgress(state, row),
+    const cursorRows = Object.entries(state.subscriptions).filter(
+      ([, row]) => !targetOwnsProgress(state, row),
     );
+    const rows = cursorRows.filter(([, row]) => !row.halted);
     // A fan-out row's pass pumps it — its due records, a lease a death left — and waits for the
     // outcome of every call it has out: an outcome is in by the watchdog.
     for (const [name, row] of rows)
@@ -657,6 +676,16 @@ export class SubscriptionDelivery {
             ),
       ),
     );
+    // WHAT EACH ROW STILL OWES once the pass is done, a halted row's too (the pass delivers it
+    // nothing, and it owes the most): the offsets past its cursor and its deliveries not yet acked.
+    const head = this.#stream.highestDurableOffset();
+    for (const [name] of cursorRows) {
+      const record = this.#deliveryRecordByName.get(name);
+      const watermark = record?.fanOut?.admittedThroughOffset ?? record?.cursor?.confirmedOffset;
+      if (!record || watermark === undefined) continue; // removed during the pass
+      const backlog = Math.max(0, head - watermark) + record.deliveries.size;
+      this.#metrics("subscription.backlog", backlog, name);
+    }
   }
 
   /** READ-YOUR-WRITES for a facet's reads: settles once every delivery already queued on the rows
@@ -889,6 +918,8 @@ export class SubscriptionDelivery {
       },
       source: { cause: this.#causeAt(afterOffset + 1) },
     });
+    // a halted row arms no alarm, so no pass measures its backlog again until something else runs one
+    this.#metrics("subscription.halts", 1, name);
   }
 
   /** The cause of the durable event at `offset`: what a receipt of its delivery (a halt, a dead
@@ -1083,7 +1114,7 @@ export class SubscriptionDelivery {
         if (behindTheDurableMark) {
           const attempt = cursor.attempt + 1;
           // Every earlier attempt died without an ack or a failure: no (MAX+1)th claim is made.
-          if (attempt > DELIVERY_MAX_ATTEMPTS) {
+          if (attempt > this.#ladder(row).maxAttempts) {
             this.#haltCursorRow(
               name,
               row,
@@ -1110,8 +1141,8 @@ export class SubscriptionDelivery {
         // from the cursor — which, after an ephemeral-only ack, stands on that ephemeral's offset in
         // memory, so a re-read holds only what is newer. Cursor-read room is held from BEFORE the
         // read — the READ is what allocates — THROUGH the awaited call, released once in the
-        // finally: a row behind the mark reads a page of unknown size and reserves the whole
-        // CURSOR_READ_BUDGET_CHARS and the ring; a row at the mark can read nothing but the ring and
+        // finally: a row behind the mark reads a page of unknown size and reserves a worst-case one
+        // (CURSOR_READ_PAGE_CHARS) and the ring; a row at the mark can read nothing but the ring and
         // reserves its size, so a row waiting for room pins no batch of its own (what the ring lets go
         // while it waits is not delivered, as a pending push loses what is dropped from it).
         let inFlightRoomHeld = 0;
@@ -1122,7 +1153,7 @@ export class SubscriptionDelivery {
             this.#stream.recentEphemeralsChars(),
           );
           const reserveChars = behindTheDurableMark
-            ? CURSOR_READ_BUDGET_CHARS + ringChars
+            ? CURSOR_READ_PAGE_CHARS + ringChars
             : ringChars;
           await this.#cursorReadCharsInFlight.acquire(reserveChars);
           inFlightRoomHeld = reserveChars;
@@ -1191,8 +1222,8 @@ export class SubscriptionDelivery {
           // with the read, no yield, so a second read never piles a page on: a SMALL batch frees
           // the reserve so other cursor rows keep flowing. A page that serializes PAST the reserve
           // (a full page: offset and path ride on top of the bodies) stays charged as the reserve —
-          // acquiring the overshoot while holding the whole budget would wait on this very
-          // reservation, forever, and every cursor row behind it.
+          // acquiring the overshoot while holding the reserve could wait on this very reservation,
+          // forever, and every cursor row behind it.
           const batchChars = serializedChars(events);
           if (batchChars < inFlightRoomHeld) {
             this.#cursorReadCharsInFlight.release(inFlightRoomHeld - batchChars);
@@ -1246,6 +1277,18 @@ export class SubscriptionDelivery {
               },
               persist,
             );
+            // One `subscription.lag_ms` per batch, its oldest event's commit to this ack, and the
+            // events it timed. History the row asked for (`afterOffset`) waited on no one; an event
+            // a halted row owed did.
+            const live = events.filter((event) => event.offset > row.configuredAtOffset);
+            if (live.length > 0) {
+              this.#metrics(
+                "subscription.lag_ms",
+                Date.now() - Date.parse(live[0]!.createdAt),
+                name,
+              );
+              this.#metrics("subscription.delivered", live.length, name);
+            }
           } catch (error) {
             if (!this.#isStillTheRow(name, row) || !this.cursor(name)) continue; // the old row's failure
             // The target DANGLES: nothing resolves it under this rule table (a `subscribe` before
@@ -1278,13 +1321,15 @@ export class SubscriptionDelivery {
             // The rung is written on the SAME attempt the claim was (one bump per attempt).
             const attempt = cursorBeforeAttempt.attempt + 1;
             // A failure that can only repeat halts now, not in half an hour.
-            if (deterministicFailure(error) || attempt >= DELIVERY_MAX_ATTEMPTS) {
+            const ladder = this.#ladder(row);
+            if (deterministicFailure(error) || attempt >= ladder.maxAttempts) {
               this.#haltCursorRow(name, row, cursor, attempt, error);
               return;
             }
-            const nextAttemptAtMs = Date.now() + durableLadderDelayMs(attempt);
+            const nextAttemptAtMs = Date.now() + ladder.delayMs(attempt);
             // The ladder's time IS the row's claim from here (durable, so it survives eviction).
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
+            this.#metrics("subscription.retries", 1, name);
             return;
           }
         } finally {
@@ -1310,7 +1355,7 @@ export class SubscriptionDelivery {
   //   admitted (a slot, in-flight room)        leased, attempt n, due at now + 20 s
   //   acked                                    deleted
   //   refused, or no answer in 20 s            not leased, due at its rung (1s·2ⁿ) — a webhook's
-  //                                            ladder is longer (WEBHOOK_MAX_ATTEMPTS)
+  //                                            ladder is longer (LONG_LADDER_MAX_ATTEMPTS)
   //   refused for good (PERMANENT_FAILURE,     deleted after its dead letter,
   //   EVENT_TOO_LARGE), or its last attempt    `subscription-delivery-failed` (once, keyed)
   //   the target resolves to nothing           attempt n − 1, no time: the row DANGLES
@@ -1369,6 +1414,8 @@ export class SubscriptionDelivery {
       pumpAgain: false,
       waitingForRoom: false,
       preferRetry: false,
+      deliveredSinceTiming: 0,
+      longestWaitMs: 0,
     };
     return record.fanOut;
   }
@@ -1430,7 +1477,7 @@ export class SubscriptionDelivery {
     }
     if (row.halted || fanOut.dangling) return this.#persistFanOutCursor(name, fanOut);
 
-    const ladder = this.#fanOutLadder(row);
+    const ladder = this.#ladder(row);
     const writes: FanOutDeliveryRecord[] = [];
     const calls: FanOutCall[] = [];
     const deadLetters: FanOutFailure[] = [];
@@ -1614,20 +1661,42 @@ export class SubscriptionDelivery {
   #startFanOutCall(name: string, row: Subscription, fanOut: FanOutRow, call: FanOutCall): void {
     const { offset } = call.event;
     let settled = false;
+    /** Whether the target was handed the event: not if the row was replaced during evaluation. */
     const operation = (async () => {
       const { deliverEvent } = await this.#evaluateTargetHeadForRow(name, row);
-      if (this.#isStillTheRow(name, row))
-        await deliverEvent(call.event).catch((error: unknown) => this.#settleLoopLimit(error));
+      if (!this.#isStillTheRow(name, row)) return false;
+      await deliverEvent(call.event).catch((error: unknown) => this.#settleLoopLimit(error));
+      return true;
     })();
     // Registered before the watchdog's race, so it runs first: an outcome sees `settled` true.
-    const onSettled = () => {
+    const onSettled = (delivered: boolean) => {
       settled = true;
       fanOut.slots.delete(offset);
       fanOut.overdue.delete(offset);
       this.#deliveryCharsInFlight.release(call.chars);
+      // a wait is of an event committed after its row was, as a cursor batch's is (`#drainCursor`)
+      if (delivered && !isWake(call.event) && offset > row.configuredAtOffset) {
+        fanOut.deliveredSinceTiming++;
+        fanOut.longestWaitMs = Math.max(
+          fanOut.longestWaitMs,
+          Date.now() - Date.parse(call.event.createdAt),
+        );
+      }
       this.#pumpFanOut(name);
+      // ONE `subscription.lag_ms` A BURST, its longest wait, and the events it timed, once the row
+      // has caught up, or each hundred events, so a row under load it never catches up with is
+      // timed too.
+      if (
+        fanOut.deliveredSinceTiming >= 100 ||
+        (fanOut.deliveredSinceTiming > 0 && fanOut.slots.size === 0)
+      ) {
+        this.#metrics("subscription.lag_ms", fanOut.longestWaitMs, name);
+        this.#metrics("subscription.delivered", fanOut.deliveredSinceTiming, name);
+        fanOut.deliveredSinceTiming = 0;
+        fanOut.longestWaitMs = 0;
+      }
     };
-    operation.then(onSettled, onSettled);
+    operation.then(onSettled, () => onSettled(false));
     const outcome = withTimeout(
       operation,
       CURSOR_DELIVERY_CALL_WATCHDOG_MS,
@@ -1731,7 +1800,7 @@ export class SubscriptionDelivery {
       return this.#pumpFanOut(name);
     }
     this.#noteFanOutFailure(name, fanOut, event.offset);
-    const ladder = this.#fanOutLadder(row);
+    const ladder = this.#ladder(row);
     if (deterministicFailure(error) || attempt >= ladder.maxAttempts)
       this.#deadLetter(name, row, {
         type: event.type,
@@ -1739,7 +1808,7 @@ export class SubscriptionDelivery {
         attempts: attempt,
         error,
       });
-    else
+    else {
       this.#writeFanOutDelivery(name, {
         ...delivery,
         attempt,
@@ -1747,6 +1816,8 @@ export class SubscriptionDelivery {
         leased: false,
         error: errorMessage(error),
       });
+      this.#metrics("subscription.retries", 1, name);
+    }
     this.#pumpFanOut(name);
   }
 
@@ -1758,13 +1829,14 @@ export class SubscriptionDelivery {
     recordRefusal(error, (cause, message) => this.#stream.recordLoopLimit(cause, message));
   }
 
-  /** The ladder an event of `row` climbs: a webhook's, longer, or the cursor row's. */
-  #fanOutLadder(row: Subscription): { maxAttempts: number; delayMs: (attempt: number) => number } {
-    if (!targetIsWebhook(this.#stream.coreReducedState, row))
+  /** The ladder a delivery of `row` climbs, a cursor row's batch or a fan-out row's event: the long
+   *  one when its target is a service someone else runs, else the default. */
+  #ladder(row: Subscription): { maxAttempts: number; delayMs: (attempt: number) => number } {
+    if (!targetIsAnotherService(this.#stream.coreReducedState, row))
       return { maxAttempts: DELIVERY_MAX_ATTEMPTS, delayMs: durableLadderDelayMs };
     return {
-      maxAttempts: WEBHOOK_MAX_ATTEMPTS,
-      delayMs: (attempt) => durableLadderDelayMs(attempt, WEBHOOK_LADDER_CAP_MS),
+      maxAttempts: LONG_LADDER_MAX_ATTEMPTS,
+      delayMs: (attempt) => durableLadderDelayMs(attempt, LONG_LADDER_CAP_MS),
     };
   }
 
@@ -1789,13 +1861,15 @@ export class SubscriptionDelivery {
   #deadLetter(name: string, row: Subscription, { offset, attempts, error }: FanOutFailure) {
     if (!this.#isStillTheRow(name, row)) return;
     const idempotencyKey = `itx/subscription-delivery-failed:${name}:${row.configuredAtOffset}:${row.resumed?.atOffset ?? 0}:${offset}`;
-    if (!this.#stream.storage.readEventByIdempotencyKey(idempotencyKey))
+    if (!this.#stream.storage.readEventByIdempotencyKey(idempotencyKey)) {
       this.#stream.append({
         type: "events.iterate.com/itx/subscription-delivery-failed",
         idempotencyKey,
         payload: { name, offset, attempts, error: errorMessage(error) },
         source: { cause: this.#causeAt(offset) },
       });
+      this.#metrics("subscription.dead_letters", 1, name);
+    }
     const record = this.#deliveryRecordFor(name);
     if (record.deliveries.delete(offset))
       this.#stream.storage.deleteSubscriptionDelivery(name, offset);

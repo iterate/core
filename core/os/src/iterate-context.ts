@@ -571,6 +571,19 @@ registerRpcSessionBrand(NativeRpcProperty);
 registerPipelinedRpcBrand(CapnwebRpcPromise as unknown as abstract new () => unknown);
 registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknown);
 
+/** THE ACTIVE SPAN NAMES ITS CONTEXT, at each entry point that serves one project: the context's
+ *  own (iterate-context-durable-object.ts) and `ItxEntrypoint`'s fetch below (its `get` span keeps
+ *  no stamp; the warehouse's receiver fills it). Cloudflare's spans inside the invocation take the
+ *  same project and path in the warehouse (docs/telemetry.md). The Worker's
+ *  own fetch names the project alone: which context a request reaches is decided after it. The global
+ *  namespace (users' and organizations' contexts) is no project's. */
+export function nameActiveSpan({ projectId, path }: { projectId: string; path?: string }): void {
+  if (projectId === GLOBAL_PROJECT_ID) return;
+  cloudflareWorkers.tracing
+    .getActiveSpan()
+    ?.setAttributes({ "iterate.project_id": projectId, "iterate.path": path });
+}
+
 // ── ItxEntrypoint ── a loaded worker's WHOLE WORLD. Every confined dynamic worker's `env.ITX` and
 // `globalOutbound` are one stub of THIS entrypoint, minted via `ctx.exports.ItxEntrypoint({ props:
 // { iterateContextName } })` — never a raw `env.ITERATE_CONTEXT.getByName` DO stub — so the context it forwards
@@ -630,6 +643,7 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
    *  strips stripped, a failure answered as it answers one (`expressionFetchErrorAnswer`). */
   override async fetch(request: Request): Promise<Response> {
     const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
+    nameActiveSpan(address);
     // why, as the loaded code's `fetch` said it (cause.ts)
     const caller = this.#caller(address, parseCause(request.headers.get(ITERATE_CAUSE_HEADER)));
     // A raw `fetch(url)` IS `itx.fetch(request)` at its context: loaded code's through the table (no

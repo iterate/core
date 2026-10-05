@@ -50,7 +50,7 @@ import { itxExpressionEndingInFetch } from "./context/rpc-stubs.ts";
 import { implicitRootsAt, resolveItxExpression } from "./context/itx-expression-rewriting.ts";
 import { contextReach, statelessResolverFor } from "./context/stateless-context.ts";
 import { matchFetchRoute } from "./fetch-routes.ts";
-import { statelessExpressionFetch } from "./iterate-context.ts";
+import { nameActiveSpan, statelessExpressionFetch } from "./iterate-context.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
 import { FETCH_UPGRADE_RESUMABLE_HEADER, spliceEyeballAnswer } from "./context/fetch-upgrade.ts";
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
@@ -310,6 +310,8 @@ async function routeRequest(
         { status: 421 },
       );
     const projectId = project.id;
+    // the request is the project's from here (iterate-context.ts `nameActiveSpan`)
+    nameActiveSpan({ projectId });
     // THE FILES HOST (context/file-urls.ts): `files--<project>` serves a signed file URL straight
     // from the bucket, before any session or DO — the token in the URL is the authorization.
     if (projectHost.routingSlug === FILES_ROUTING_SLUG) {

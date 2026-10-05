@@ -31,6 +31,7 @@ import type {
   IterateContextApi,
   R2ObjectRecord,
   SecretRefresh,
+  TelemetryRows,
 } from "iterate/api";
 import {
   ITERATE_ROUTING_SLUG_HEADER,
@@ -58,7 +59,6 @@ import type { LibraryRoots } from "../library.ts";
 import { assertSecretPath, hmacSha256Hex, normalizeSecretRecord, originsOf } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
-import { deliverToPlatformHook } from "../platform-hook.ts";
 import { IntegrationConnectionRow, IntegrationProvider } from "../integrations/contract.ts";
 import {
   connectionPathOf,
@@ -314,6 +314,8 @@ export interface BuiltInScope extends LibraryRoots {
   cfArtifacts: IterateContextApi["cfArtifacts"];
   /** The project's mail: email/contract.ts for its address, integrations/email.ts for sending. */
   email: IterateContextApi["email"];
+  /** The project's telemetry, scoped and run by the warehouse's Worker (docs/telemetry.md). */
+  telemetry: IterateContextApi["telemetry"];
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
@@ -415,10 +417,15 @@ export interface BuiltInScope extends LibraryRoots {
    *  `this.ctx.props` (a url, a key name, …). No name and no `list`: a stateless worker is its spec. */
   workers: IterateContextApi["workers"];
   /** THE PLATFORM HOOK (platform-hook.ts): the platform's own subscriber, that a deployment's birth
-   *  events point a fan-out row at (`itx.builtins.platformHook.deliverEvent`). `deliverEvent`
-   *  answers the delivery loop alone (`assertDeliveryCaller`) and hands each event to the platform's
-   *  code with the bindings every built-in holds. Not in the published API: no one else calls it. */
-  platformHook: { deliverEvent(event: StreamEvent): Promise<void> };
+   *  events point an ordered row at (`itx.builtins.platformHook.deliverEvents`;
+   *  project/context-birth-events.ts says why ordered). `deliverEvents` answers the delivery loop
+   *  alone (`assertDeliveryCaller`) and hands each batch to what the context built for it
+   *  (`sendEvents`). `deliverEvent` is the target of an older context's fan-out row, and does nothing.
+   *  Not in the published API: no one else calls it. */
+  platformHook: {
+    deliverEvents(events: StreamEvent[]): Promise<void>;
+    deliverEvent(event: StreamEvent): Promise<void>;
+  };
   /** HTTP WEBHOOKS (`webhooks.get({ url, signingSecret? })`): a fan-out row's target that POSTs each
    *  event through THIS context's own `itx.fetch`, signed with a secret the row names.
    *  The signing key is read from the secret's context at most once per SNAPSHOT_TTL_MS per spec,
@@ -508,6 +515,12 @@ function abortReasonOf(reason: unknown, verb: string): string | undefined {
   return parsed.data;
 }
 
+/** The warehouse's Worker's `TelemetryQuery` entrypoint (internal-packages/telemetry `query.ts`):
+ *  one project's SQL, scoped there. */
+export type TelemetryQuery = {
+  query(sql: string, projectId: string, hours?: number): Promise<TelemetryRows>;
+};
+
 /** A webhook's spec (`webhooks.get`): where it POSTs, over http(s), and the secret that signs it. */
 const WebhookSpec = z
   .strictObject({
@@ -526,7 +539,8 @@ const WebhookSpec = z
 const WEBHOOK_TIMEOUT_MS = 15_000;
 
 /** `deliverEvent` is the delivery loop's own call, for the one event it carries (caller.ts
- *  `Caller.delivery`, the SHA-256 of `eventJson`, as the call being made carries it): anyone else —
+ *  `Caller.delivery`, the SHA-256 of `eventJson`, as the call being made carries it; a cursor row's
+ *  batch is the JSON of its events): anyone else —
  *  loaded code spelling `itx.cd('/').x.deliverEvent(forged)`, a session, a rule or a bound argument
  *  inside the delivery's own call — could hand a subscriber an event no log holds. */
 async function assertDeliveryCaller(
@@ -561,7 +575,13 @@ export interface BuildBuiltInsDeps {
     DB: D1Database;
     /** Email Sending — `itx.email`; absent where a deployment has no mailbox. */
     EMAIL?: SendEmail;
+    /** The warehouse's Worker — `itx.telemetry`; absent where a deployment has no warehouse. */
+    TELEMETRY?: TelemetryQuery;
   };
+  /** Sends a batch of this context's durable events to its account's `events` table
+   *  (platform-hook.ts `sendEvents`), which the platform hook hands each batch; unset where the
+   *  Worker has no `TELEMETRY_EVENTS` binding. */
+  sendEvents?: (events: StreamEvent[]) => Promise<void>;
   /** The deploy identity every loader cacheKey folds in (worker.ts `IterateConfig`). */
   deployId: string;
   /** How projects are reached over HTTP (iterate-config.ts `urls.ingressRouting`) — `itx.url`. */
@@ -2042,13 +2062,22 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       namedWorker: deps.namedWorker,
     }),
     platformHook: {
+      // A batch the loop hands in turn and awaits: a send that fails throws, and the loop retries the
+      // batch from its cursor on the long ladder.
+      deliverEvents: async (events) => {
+        await assertDeliveryCaller(
+          deps.caller().delivery,
+          "platformHook.deliverEvents",
+          JSON.stringify(events),
+        );
+        await deps.sendEvents?.(events);
+      },
       deliverEvent: async (event) => {
         await assertDeliveryCaller(
           deps.caller().delivery,
           "platformHook.deliverEvent",
           JSON.stringify(event),
         );
-        await deliverToPlatformHook(env, event);
       },
     },
     webhooks: {
@@ -2362,6 +2391,16 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
         );
       },
     },
+    telemetry: {
+      query: async (sql, options) => {
+        if (owner.kind !== "project" || !env.TELEMETRY)
+          throw codedError(
+            "INVALID_CONTEXT",
+            "itx.telemetry: only a project has telemetry, on a deployment with a warehouse (docs/telemetry.md)",
+          );
+        return env.TELEMETRY.query(String(sql), owner.id, options?.hours);
+      },
+    },
     // A bare `cd` handle's calls are this context's resolver's, at the fixed point (so a jail's
     // `itx ⇒ null` masks none of them): the one dispatch path, its hop and where each call runs.
     cd: (contextPath: string) => {
@@ -2388,7 +2427,16 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
     ...deps.library, // THE LIBRARY (library.ts), built by the context that holds this scope
   } satisfies Pick<
     BuiltInScope,
-    "kv" | "r2" | "ai" | "browser" | "cfArtifacts" | "email" | "cd" | "fetch" | keyof LibraryRoots
+    | "kv"
+    | "r2"
+    | "ai"
+    | "browser"
+    | "cfArtifacts"
+    | "email"
+    | "telemetry"
+    | "cd"
+    | "fetch"
+    | keyof LibraryRoots
   >;
 }
 

@@ -40,6 +40,7 @@ export default defineConfig(async ({ mode }) => {
   const local = mode === "development" || mode === "test";
   const deployment = local ? undefined : await readDeployment();
   const cloudflare = deployment?.config.cloudflare;
+  const telemetry = cloudflare?.telemetry;
   const names = cloudflare ? resourceNamesOf(cloudflare) : LOCAL_RESOURCES;
   const worker = cloudflare
     ? names.worker
@@ -77,12 +78,25 @@ export default defineConfig(async ({ mode }) => {
       // re-reduce over a long log, or a large per-commit fan-out, is CPU-bound on the DO's one
       // thread; 5 min (the paid maximum) gives 10x the 30 s default. Neither is billed until used.
       limits: { subrequests: 1_000_000, cpuMs: 300_000 },
-      // Every log line and trace, kept.
+      // Every log line and trace, kept; with a telemetry warehouse, exported to it too
+      // (docs/telemetry.md), and the traces kept there alone: its `spans` table holds each one, and
+      // from 2026-12-01 Cloudflare bills stored traces by the GB.
       observability: {
         enabled: true,
         headSamplingRate: 1,
-        logs: { enabled: true, headSamplingRate: 1, persist: true, invocationLogs: true },
-        traces: { enabled: true, headSamplingRate: 1, persist: true },
+        logs: {
+          enabled: true,
+          headSamplingRate: 1,
+          persist: true,
+          invocationLogs: true,
+          ...(telemetry && { destinations: ["telemetry-logs"] }),
+        },
+        traces: {
+          enabled: true,
+          headSamplingRate: 1,
+          persist: !telemetry,
+          ...(telemetry && { destinations: ["telemetry-traces"] }),
+        },
       },
       // both always said: with a route and no `workersDev`, Cloudflare turns workers.dev off
       workersDev: cloudflare?.workersDev ?? true,
@@ -140,6 +154,22 @@ export default defineConfig(async ({ mode }) => {
         CF_VERSION_METADATA: bindings.versionMetadata(),
         // The Start client and the consent page (issuer-pages.ts).
         ASSETS: bindings.assets(),
+        // The Worker's own name, which its custom metrics and `events` rows say wrote them.
+        WORKER_NAME: bindings.text(worker),
+        // TELEMETRY (docs/telemetry.md). Custom metrics (src/metrics.ts) need no warehouse: Workers
+        // Analytics Engine makes the dataset on its first write, so every deployment writes them.
+        // With a warehouse, the platform hook sends each durable event to its `events` stream, and
+        // `itx.telemetry` runs a project's SQL through its Worker's `TelemetryQuery`.
+        ...(deployment && {
+          TELEMETRY_METRICS: bindings.analyticsEngineDataset({ name: "iterate_metrics" }),
+        }),
+        ...(telemetry && {
+          TELEMETRY_EVENTS: bindings.pipeline({ name: telemetry.eventsStream }),
+          TELEMETRY: bindings.worker({
+            worker: telemetry.workerName,
+            exportName: "TelemetryQuery",
+          }),
+        }),
         // THE ITERATE CONFIG: a deployment's plain var (`cf deploy` uploads its secrets), `cf dev`'s
         // own; a suite sets its own
         ...(deployment && { ITERATE: bindings.text(deployment.vars.ITERATE) }),

@@ -29,6 +29,7 @@ import {
   releaseRpcSessions,
   reportIssue,
 } from "iterate/lib";
+import type { Pipeline } from "cloudflare:pipelines";
 import { DurableObject } from "cloudflare:workers";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
@@ -94,6 +95,8 @@ import {
 import { LEND_USE_HEADER, LENT_AS_HEADER, verifyLendUse } from "./secrets.ts";
 import { mcpWebhookOf } from "./integrations/mcp.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
+import { metrics } from "./metrics.ts";
+import { sendEvents, type EventsRow } from "./platform-hook.ts";
 import {
   iterateConfigOf,
   iterateAppScopesOf,
@@ -113,7 +116,8 @@ import {
   type ItxExpressionRewriteRule,
 } from "./context/itx-expression-rewriting.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { buildBuiltIns, projectConfigDeps } from "./context/built-ins.ts";
+import { buildBuiltIns, projectConfigDeps, type TelemetryQuery } from "./context/built-ins.ts";
+import { nameActiveSpan } from "./iterate-context.ts";
 import { contextReach, itxEntrypointFor } from "./context/stateless-context.ts";
 import { FacetHost } from "./context/facet-host.ts";
 import type { NamedWorker } from "./context/worker-loader.ts";
@@ -227,6 +231,19 @@ export interface Env extends IterateConfigEnv {
    *  `itx.email` (context/built-ins.ts). Simulated by wrangler dev and the test configs; absent where
    *  a deployment has no mailbox. */
   EMAIL?: SendEmail;
+  /** This Worker's own name, which the runtime does not tell it: every config names it
+   *  (scripts/generate-wrangler-config.ts), and every telemetry row and data point carries it. */
+  WORKER_NAME: string;
+  /** The Basin Pipelines stream that fills its account's `events` table (docs/telemetry.md), which
+   *  the platform hook sends every durable event to; bound only where the account has a telemetry
+   *  warehouse (envs.ts `telemetryEnvs`). Absent ⇒ nothing is sent. */
+  TELEMETRY_EVENTS?: Pipeline<EventsRow>;
+  /** The warehouse's Worker, which scopes and runs `itx.telemetry.query` (docs/telemetry.md); bound
+   *  beside `TELEMETRY_EVENTS`. */
+  TELEMETRY?: TelemetryQuery;
+  /** The Workers Analytics Engine dataset of custom metrics (./metrics.ts), bound beside `TELEMETRY_EVENTS`.
+   *  Absent ⇒ nothing is written. */
+  TELEMETRY_METRICS?: AnalyticsEngineDataset;
 }
 
 /** How far the clock of the machine a context wakes on may be from the one it last ran on: a wake
@@ -615,6 +632,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** ONE PAGE OF THIS CONTEXT'S LOG, for the context sweep, which reaches it by id and backs an
    *  orphan up before destroying it: `read`'s page, and like `identity` it records no wake. */
   readForSweep(afterOffset: number): StreamPage {
+    this.#nameActiveSpan();
     return this.#stream.read(afterOffset);
   }
 
@@ -627,6 +645,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  context, it is born empty (and announces itself) and destroyed again; a deleted project's root
    *  is not born (`#refuseBirthOfDeletedProjectRoot`). */
   async destroy(): Promise<void> {
+    this.#nameActiveSpan();
     this.#destroyed = true;
     await this.ctx.blockConcurrencyWhile(async () => {
       await this.ctx.storage.deleteAll();
@@ -735,6 +754,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  NOTHING (cause.ts): no wake of a context that slept, no birth of one never born, which answers
    *  its empty table as `unborn`. */
   rulesSnapshot(ifVersion?: string): RulesSnapshotAnswer {
+    this.#nameActiveSpan();
     // A read of this context's rules on another's behalf: counted, and no wake of this context's —
     // the root is read by every context of the project, and a wake is an event delivered to each
     // of its rows.
@@ -760,9 +780,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  `call` wake record, of the census's kind, naming the entry point `call`, caused by `cause` when
    *  the call names one. */
   #inboundRequestInOneTurn(call: string, cause?: Cause): void {
+    this.#nameActiveSpan();
     if (this.#unborn) throw this.#unborn;
     this.#residency.inboundCallInOneTurn();
     this.#stream.appendWakeRecord({ cause: "call", caller: "other", call }, cause);
+  }
+
+  /** THE ACTIVE SPAN NAMES THIS CONTEXT, at each entry point (iterate-context.ts `nameActiveSpan`). */
+  #nameActiveSpan(): void {
+    nameActiveSpan(this.#durableObjectAddress);
   }
 
   /** SYNCHRONOUS end to end (Stream.append is): the commit, the committed-event effects. Two
@@ -1082,6 +1108,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     iterateContextName: this.#durableObjectAddress.name,
     ai: itxAiFor(this.ctx, this.#durableObjectAddress.projectId),
     env: this.env,
+    sendEvents:
+      this.env.TELEMETRY_EVENTS &&
+      ((events) =>
+        sendEvents(
+          { TELEMETRY_EVENTS: this.env.TELEMETRY_EVENTS!, WORKER_NAME: this.env.WORKER_NAME },
+          this.#durableObjectAddress.projectId,
+          events,
+        )),
     deployId: this.#iterateConfig.deployId,
     dashOrigin: this.#iterateConfig.urls.dash,
     platformAdmins: () => this.#iterateConfig.admins,
@@ -1221,17 +1255,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     catchUpFacetFromLog: (facetHandle, cause) =>
       this.#facetHost.callFacetAsPlatform(facetHandle, [["catchUpFromLog"]], cause),
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
-    // A delivery runs one hand-off deeper than what it delivers (cause.ts), and a fan-out call as
-    // the delivery loop's own caller for its one event (caller.ts `Caller.delivery`).
+    // A delivery runs one hand-off deeper than what it delivers (cause.ts), as the delivery loop's
+    // own caller for what it delivers (caller.ts `Caller.delivery`): a fan-out call's one event, its
+    // writes keyed by `delivery`, or a cursor row's batch.
     runAsDelivery: async (events, call, delivery) => {
       const caller: Caller = { principal: null, cause: causeOfDelivery(events) };
-      if (delivery) {
-        caller.cause = { ...caller.cause!, writeKey: delivery };
-        caller.delivery = await sha256Hex(JSON.stringify(events[0]));
-      }
+      if (delivery) caller.cause = { ...caller.cause!, writeKey: delivery };
+      caller.delivery = await sha256Hex(JSON.stringify(delivery ? events[0] : events));
       return this.#callerStorage.run(this.#withPlatformOrigin(caller), call);
     },
     abortIncarnation: (reason) => this.#abortAfterTheAnswer(reason),
+    metrics: metrics(this.env, {
+      projectId: this.#durableObjectAddress.projectId,
+      path: this.#durableObjectAddress.path,
+    }),
   });
 
   // ── THE ONE ALARM (alarm-coordinator.ts): derived from five deadline sources, traced ──
@@ -1419,6 +1456,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  unclaimed-facet sweep is decided first in every pass; a wake with nothing owed is the sweep's
    *  alone and does nothing else. */
   async alarm(): Promise<void> {
+    this.#nameActiveSpan();
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
@@ -1576,6 +1614,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  reduce aborted midway is the stall its gap repair would have to heal). Aborted facets
    *  re-materialize from their startup memo on their next call. */
   releasePins(): void {
+    this.#nameActiveSpan();
     this.#facetHost.abortLiveFacetsWhenIdle("released for the test's eviction");
     this.#residency.releasePinsNow();
   }
@@ -1597,6 +1636,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     args: unknown[] = [],
     caller: Caller = { principal: null },
   ): Promise<unknown> {
+    this.#nameActiveSpan();
     if (this.#unborn) throw await this.#unbornStill(this.#unborn);
     const kind = caller.app ? "loaded" : caller.path ? "context" : "other";
     // A call that names no cause — a person's, an outside request's — begins a chain (cause.ts).
@@ -1623,6 +1663,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  under `key` — what the send came to — or whether this attempt reserved it now; neither when an
    *  earlier attempt reserved it and recorded nothing. A DO-only verb. */
   reserveSend(key: string): { recorded?: StreamEvent; reserved: boolean } {
+    this.#nameActiveSpan();
     const row = this.#stream.storage.readEventByIdempotencyKey(key);
     if (row)
       return {
@@ -1639,6 +1680,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
   /** A reservation's release: its send was refused, so nothing went out (`reserveSend`). */
   releaseSend(key: string): void {
+    this.#nameActiveSpan();
     this.ctx.storage.kv.delete(`send:${key}`);
   }
 
@@ -1707,6 +1749,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Ends when the Response is handed back — a body still streaming after that is not counted. */
   async fetch(request: Request): Promise<Response> {
+    this.#nameActiveSpan();
     // a project host's answer for a project it does not serve, as the edge's admission gives it
     if (this.#unborn) {
       const { message } = await this.#unbornStill(this.#unborn);
@@ -1944,6 +1987,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#rpcStubs.rpcStubPagerClosed(ws);
   }
   webSocketError(ws: WebSocket): void {
+    this.#nameActiveSpan();
     this.webSocketClose(ws, 1006, "transport error");
   }
 

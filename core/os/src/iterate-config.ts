@@ -177,6 +177,17 @@ export const IterateConfig = z.object({
         .default([]),
       /** Serve the Worker on `<workerName>.<subdomain>.workers.dev`. Default: on. */
       workersDev: z.boolean().default(true),
+      /** The account's telemetry warehouse (docs/telemetry.md), which iterate's
+       *  internal-packages/telemetry sets up: `workerName` is its Worker, the OTLP endpoint of the
+       *  account's export destinations, whose `TelemetryQuery` runs `itx.telemetry`; `eventsStream`
+       *  is the Basin Pipelines stream the platform hook sends each durable event to. Unset ⇒ no
+       *  rows, no export, and `itx.telemetry` throws. Custom metrics need no warehouse. */
+      telemetry: z
+        .object({
+          workerName: resourceName,
+          eventsStream: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+        })
+        .optional(),
     })
     .optional(),
   /** Where this deployment answers. Every one optional. */

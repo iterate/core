@@ -44,10 +44,11 @@ export type Caller = {
    *  those facts require; the fixed point is what no rewrite rule redirects, so nothing else runs
    *  under it. */
   platform?: true;
-  /** Set ONLY by the delivery loop, on the call a fan-out row makes to deliver one event (the
-   *  context DO's `runAsDelivery`): the SHA-256 of that event's JSON. A target's `deliverEvent`
-   *  answers only the event it names, so nothing the call reaches can hand a subscriber an event its
-   *  log never held. It rides the delivery's own hops alone (context/built-ins.ts `callContext`). */
+  /** Set ONLY by the delivery loop, on each call it makes to deliver (the context DO's
+   *  `runAsDelivery`): the SHA-256 of what it delivers, a fan-out row's one event's JSON or a cursor
+   *  row's batch's. A target's `deliverEvent` (or the platform hook's `deliverEvents`) answers only
+   *  what it names, so nothing the call reaches can hand a subscriber an event its log never held.
+   *  It rides the delivery's own hops alone (context/built-ins.ts `callContext`). */
   delivery?: string;
   /** WHY the call is made (cause.ts), stamped on every event it appends. Absent where a call begins
    *  a chain: the context it reaches begins one. */

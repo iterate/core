@@ -414,10 +414,8 @@ test("a two-step target (`itx.<alias>` — the spelling every provide mints) IS 
 
 // ── cursor delivery's read reservation is never re-acquired while held ──
 
-// The read branch reserves the whole cursor budget (8 MiB) before its read. A page's BODIES fill
-// the read budget (8 MiB of stored bytes) and each event's offset and path ride on top, so a full
-// page serializes PAST the reservation. Acquiring the overshoot while holding the whole budget
-// waited on the reservation itself — forever — and every other cursor row on the context behind it.
+// A full page serializes past its reservation (subscription-delivery.ts, CURSOR_READ_PAGE_CHARS and
+// the batch-size adjustment): the overshoot must never wait on the reservation it holds.
 test.for([
   { bodyShortfall: 100, label: "CONTROL: a body 100 chars under the ceiling (the page fits)" },
   {
@@ -459,6 +457,34 @@ test.for([
   await drainDeliveries();
   expect(delivered).toEqual({ history: [big.offset], now: [tick.offset] });
   expect(rig.delivery.cursor("now")?.confirmedOffset).toBe(tick.offset);
+});
+
+test("a parked cursor call with a small batch holds back no other cursor row: the budget keeps room beside a read", async () => {
+  // every project context has such a row: `platform`, whose call is a send to another service
+  const parked: (() => void)[] = [];
+  const pushes: Record<string, number[][]> = { slow: [], other: [] };
+  const rig = incarnation((printed) => {
+    const name = printed === "itx.slow" ? "slow" : printed === "itx.other" ? "other" : undefined;
+    return (
+      name && {
+        push: (events: { payload?: { n?: number } }[]) => {
+          pushes[name].push(ns(events));
+          if (name === "slow") return new Promise<void>((resolve) => parked.push(resolve));
+        },
+      }
+    );
+  });
+  configure(rig, { name: "slow", target: "itx.slow.push", consumes: ["demo/ping"] });
+  configure(rig, { name: "other", target: "itx.other.push", consumes: ["tick"] });
+  await drainDeliveries();
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries(); // `slow`'s call is parked, holding its batch's room
+  const [tick] = rig.stream.append({ type: "tick", payload: { n: 2 } });
+  await drainDeliveries();
+  expect(pushes).toEqual({ slow: [[1]], other: [[2]] });
+  expect(rig.delivery.cursor("other")).toMatchObject({ confirmedOffset: tick.offset, attempt: 0 });
+  parked.splice(0).forEach((resolve) => resolve());
+  await drainDeliveries();
 });
 
 // ── a rule re-point re-classifies a row ──
@@ -708,8 +734,9 @@ test("alarm claim: an ephemeral-only push to a caught-up cursor row is uninsurab
 
 test("alarm claim: a durable that lands while an at-mark row WAITS for cursor-read room is delivered under a claim, not on the ring-sized reserve the wait began with", async () => {
   // Row `big` (consumes blob) reads a 7.5 MiB page and parks its call, holding most of the
-  // cursor-read budget; row `small` (consumes demo/ping) is at the mark when an ephemeral kicks it,
-  // so it reserves the ring's size and waits behind `big`. A durable it consumes lands meanwhile.
+  // cursor-read budget; row `small` (consumes demo/ping) is at the mark when a 2.6 MiB ephemeral
+  // kicks it, so it reserves the ring's size, which does not fit beside `big`, and waits. A durable
+  // it consumes lands meanwhile.
   // Woken, `small` is behind the mark: it must start over — a claim in the table, a page's worth
   // of room — before it reads, or an isolate death mid-call would leave that durable with no wake.
   const parked: Record<string, (() => void)[]> = { big: [], small: [] };
@@ -738,7 +765,11 @@ test("alarm claim: a durable that lands while an at-mark row WAITS for cursor-re
   rig.stream.append({ type: "blob", payload: { n: 0, blob: "x".repeat(7.5 * MiB) } });
   await drainDeliveries(); // `big` parks its call holding ~7.5 MiB; `small` was moved along: at the mark
   expect(pushes).toMatchObject({ big: [[0]] });
-  rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 1 } });
+  rig.stream.append({
+    type: "demo/ping",
+    ephemeral: true,
+    payload: { n: 1, blob: "x".repeat(2.6 * MiB) },
+  });
   await drainDeliveries(); // `small` reserved the ring's size and is waiting for room
   expect(pushes).toMatchObject({ small: [] });
   const [durable] = rig.stream.append({ type: "demo/ping", payload: { n: 2 } });
@@ -769,10 +800,10 @@ test("alarm claim: a durable that lands while an at-mark row WAITS for cursor-re
 });
 
 test("alarm claim: an ephemeral that outgrows the ring while caught-up rows wait for room is read under a reserve its size: two rows never send it at once", async () => {
-  // `big` parks a 7.5 MiB page; rows `a` and `b` are at the mark when a small ephemeral kicks them,
-  // so each reserves the ring's 1 MiB and waits. A 5 MiB ephemeral lands meanwhile. Woken, each
-  // must reserve what the ring now holds: 5 + 5 MiB is past the budget, so one reads and the other
-  // waits for it — never two 5 MiB batches in flight on 2 MiB of room.
+  // `big` parks a 7.5 MiB page; rows `a` and `b` are at the mark when a 2.6 MiB ephemeral kicks
+  // them, so each reserves the ring's 2.6 MiB and waits. A 5.5 MiB ephemeral lands meanwhile. Woken,
+  // each must reserve what the ring now holds: 5.5 + 5.5 MiB is past the budget, so one reads and
+  // the other waits for it — never two 5.5 MiB batches in flight on 5.2 MiB of room.
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const parked: Record<string, (() => void)[]> = { big: [], a: [], b: [] };
   const pushes: Record<string, number[][]> = { big: [], a: [], b: [] };
@@ -800,17 +831,21 @@ test("alarm claim: an ephemeral that outgrows the ring while caught-up rows wait
   await drainDeliveries();
   rig.stream.append({ type: "blob", payload: { n: 0, blob: "x".repeat(7.5 * MiB) } });
   await drainDeliveries(); // `big` parks holding ~7.5 MiB; `a` and `b` were moved along: at the mark
-  rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 1 } });
-  await drainDeliveries(); // both reserved the ring's 1 MiB and wait for room
   rig.stream.append({
     type: "demo/ping",
     ephemeral: true,
-    payload: { n: 2, blob: "x".repeat(5 * MiB) },
+    payload: { n: 1, blob: "x".repeat(2.6 * MiB) },
+  });
+  await drainDeliveries(); // both reserved the ring's 2.6 MiB and wait for room
+  rig.stream.append({
+    type: "demo/ping",
+    ephemeral: true,
+    payload: { n: 2, blob: "x".repeat(5.5 * MiB) },
   });
   await drainDeliveries();
   expect({ a: pushes.a, b: pushes.b }).toEqual({ a: [], b: [] });
   await release("big");
-  expect(pushes.a.length + pushes.b.length).toBe(1); // one 5 MiB batch in flight, the other waits
+  expect(pushes.a.length + pushes.b.length).toBe(1); // one 5.5 MiB batch in flight, the other waits
   await release("a");
   await release("b");
   expect({ a: pushes.a, b: pushes.b }).toEqual({ a: [[2]], b: [[2]] }); // n=1 was evicted by n=2
@@ -1097,6 +1132,46 @@ test("alarm claim: the ladder's next attempt IS the row's deadline, and survives
   expect(first.delivery.deadlines()).toMatchObject([{ at: failed.nextAttemptAtMs }]);
   const second = incarnation(() => undefined, first.storage);
   expect(second.delivery.deadlines()).toMatchObject([{ name: "s", at: failed.nextAttemptAtMs }]);
+});
+
+// The default ladder is for our code and the project's: 15 attempts, ~2.5 h, then a halt that says
+// something is broken. A row on a service someone else runs climbs the long ladder instead (~44 h).
+test.for([
+  {
+    name: "a cursor row on our own code halts after the default ladder's 15 attempts",
+    target: "itx.sink.push",
+    halted: true,
+  },
+  {
+    name: "a cursor row on the platform hook, whose stream is Cloudflare's, climbs the long ladder past them",
+    target: "itx.builtins.platformHook.deliverEvents",
+    halted: false,
+  },
+])("ladder: $name", async ({ target, halted }) => {
+  fakeClock();
+  const [head, method] = [target.slice(0, target.lastIndexOf(".")), target.split(".").at(-1)!];
+  const rig = incarnation((printed) =>
+    printed === head
+      ? {
+          [method]: () => {
+            throw new Error("down");
+          },
+        }
+      : undefined,
+  );
+  configure(rig, { name: "s", target, consumes: ["demo/ping"] });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  for (let rung = 1; rung < 16 && !rig.stream.coreReducedState.subscriptions.s?.halted; rung++) {
+    vi.setSystemTime(rig.delivery.cursor("s")!.nextAttemptAtMs!);
+    await rig.pass();
+    await drainDeliveries();
+  }
+  const waitMs = (rig.delivery.cursor("s")?.nextAttemptAtMs ?? 0) - Date.now();
+  expect({
+    halted: Boolean(rig.stream.coreReducedState.subscriptions.s?.halted),
+    waitsOverHalfAnHour: waitMs > 30 * 60_000,
+  }).toEqual({ halted, waitsOverHalfAnHour: !halted });
 });
 
 test("alarm claim: a due retry stays a claim until a pass acts on it; a pass that finds the retry's call in flight waits for it", async () => {
@@ -1999,6 +2074,118 @@ test("fan-out, the wake rule, seeded: a jitter draw that restarts the climb twic
   expect(told.filter((label) => label.startsWith("woken#")).length).toBeLessThan(60);
 });
 
+// ── custom metrics: a row's backlog, an event's lag from commit to ack and the events it timed, each retry, halt and dead letter ──
+
+test("metrics: a fan-out row's ack writes its lag, a retry, dead letter and halt one each, a pass its backlog", async () => {
+  const outcomes: Record<number, "fail" | Error> = {
+    2: "fail", // onto the ladder
+    3: codedError("PERMANENT_FAILURE", "no"), // dead-lettered
+    4: codedError("NOT_A_METHOD", "no"), // the row halts
+  };
+  const rig = fanOutRig({ behave: ({ n }) => outcomes[n] ?? "ack" });
+  for (const n of [1, 2, 3, 4, 5]) {
+    rig.pings(n);
+    await drainDeliveries();
+  }
+  await rig.pass(); // before ping 2's rung; a halted row's pass delivers it nothing
+  expect(rig).toMatchObject({
+    measured: [
+      { name: "subscription.lag_ms", label: "f" },
+      { name: "subscription.delivered", value: 1, label: "f" },
+      { name: "subscription.retries", value: 1, label: "f" },
+      { name: "subscription.dead_letters", value: 1, label: "f" },
+      { name: "subscription.halts", value: 1, label: "f" },
+      // owed: pings 2 and 4; past the admission cursor, at ping 4: the halted fact and ping 5
+      { name: "subscription.backlog", value: 4, label: "f" },
+    ],
+  });
+});
+
+test("metrics: a fan-out row writes one lag a burst, its longest wait, with the events it timed, or one each hundred events of a long burst", async () => {
+  const rig = fanOutRig({});
+  fakeClock();
+  rig.pings(1);
+  vi.setSystemTime(Date.now() + 60_000); // ping 1's subscriber answers a minute on
+  await drainDeliveries();
+  rig.pings(...range(2, 251));
+  await drainDeliveries();
+  // 250 events: at the hundredth, the two hundredth, and the last
+  expect(rig).toMatchObject({
+    measured: [
+      [60_000, 2],
+      [0, 100],
+      [0, 100],
+      [0, 50],
+    ].flatMap(([lag, delivered]) => [
+      { name: "subscription.lag_ms", value: lag },
+      { name: "subscription.delivered", value: delivered },
+    ]),
+  });
+});
+
+// An event's age is not how long it waited: only an event committed after its row was has a lag.
+test.for([
+  { name: "a cursor row", row: { name: "s", target: "itx.sink.push" } },
+  { name: "a fan-out row", row: { name: "f", target: "itx.sink.deliverEvent", ordered: false } },
+])("metrics: $name writes no lag for replayed history, only for later events", async ({ row }) => {
+  const delivered: number[] = [];
+  const take = (events: StreamEvent[]) => void delivered.push(...ns(events));
+  const rig = incarnation((printed) =>
+    printed === "itx.sink"
+      ? { push: take, deliverEvent: (event: StreamEvent) => take([event]) }
+      : undefined,
+  );
+  fakeClock();
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  vi.setSystemTime(Date.now() + 3_600_000); // the row is configured an hour after ping 1
+  configure(rig, { ...row, consumes: ["demo/ping"], afterOffset: 0 });
+  await drainDeliveries();
+  rig.stream.append({ type: "demo/ping", payload: { n: 2 } });
+  await drainDeliveries();
+  expect({ delivered, measured: rig.measured }).toMatchObject({
+    delivered: [1, 2],
+    measured: [
+      { name: "subscription.lag_ms", value: 0 },
+      { name: "subscription.delivered", value: 1 },
+    ],
+  });
+});
+
+test("metrics: a fan-out call that delivered nothing, its row replaced while the target was evaluating, writes no lag", async () => {
+  const evaluation = Promise.withResolvers<void>();
+  const rig = incarnation((printed) =>
+    printed === "itx.sink"
+      ? evaluation.promise.then(() => ({ deliverEvent: () => {} }))
+      : undefined,
+  );
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] }); // over ping 1's evaluation
+  evaluation.resolve();
+  await drainDeliveries();
+  expect(rig).toMatchObject({ measured: [] });
+});
+
+test("metrics: a cursor row's refused batch counts a retry, and its ack on the rung writes the lag since its commit", async () => {
+  const rig = refusingSinkRig();
+  rig.modeRef.mode = "throw";
+  const [ping] = rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  await rig.pass(); // before the rung: the batch is still owed
+  rig.modeRef.mode = "deliver";
+  const ackedAt = rig.delivery.cursor("s")!.nextAttemptAtMs! + 1;
+  fakeClock(ackedAt);
+  await rig.pass();
+  expect(rig.measured).toMatchObject([
+    { name: "subscription.retries", value: 1, label: "s" },
+    { name: "subscription.backlog", value: 1, label: "s" },
+    { name: "subscription.lag_ms", value: ackedAt - Date.parse(ping.createdAt), label: "s" },
+    { name: "subscription.delivered", value: 1, label: "s" },
+    { name: "subscription.backlog", value: 0, label: "s" },
+  ]);
+});
+
 function nextMacrotask() {
   return new Promise((r) => setImmediate(r));
 }
@@ -2051,6 +2238,8 @@ function incarnation(
   const evaluated: string[] = [];
   /** Every reset the loop asked for (`abortIncarnation`): a test builds the next incarnation. */
   const aborts: string[] = [];
+  /** Every data point the loop wrote, in order (../metrics.ts). */
+  const measured: { name: string; value: number; label?: string }[] = [];
   let delivery!: SubscriptionDelivery;
   const coordinator = new AlarmCoordinator({
     setAlarm: async (at) => void alarms.push(at),
@@ -2097,6 +2286,7 @@ function incarnation(
     // as the DO runs a delivery: one hand-off deeper than what it delivers (cause.ts)
     runAsDelivery: (events, call) => causes.run(causeOfDelivery(events), call),
     abortIncarnation: (reason) => void aborts.push(reason),
+    metrics: (name, value, label) => void measured.push({ name, value, label }),
   });
   // created + woken on a fresh store, the wake alone on one with rows, as the DO's first handler
   // records it — an alarm's caused by the deepest delivery it came back for
@@ -2113,6 +2303,7 @@ function incarnation(
     deletes,
     evaluated,
     aborts,
+    measured,
     /** An alarm pass, as the DO runs it: the stream-kept cursors under the coordinator's hold. */
     pass: () => coordinator.pass(() => delivery.deliverEveryCursorSubscription()),
   };

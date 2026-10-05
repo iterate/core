@@ -860,6 +860,9 @@ export interface InstalledAppRoots {}
 /** A context whose project installed the named apps: with the app's package imported,
  *  `IterateContextApiWith<"myApp">` spells `itx.myApp`. Code that holds a plain scope asserts it
  *  (`itx as IterateContextApiWith<"myApp">`) where it knows the app is installed. */
+/** What `itx.telemetry.query` answers: the rows, and the SQL that ran for the project. */
+export type TelemetryRows = { rows: Record<string, unknown>[]; sql: string };
+
 export type IterateContextApiWith<App extends keyof InstalledAppRoots> = IterateContextApi &
   Pick<InstalledAppRoots, App>;
 
@@ -1203,6 +1206,11 @@ export interface IterateContextApi {
     get(path: string): InvokeHandle & FileHandle;
     list(prefix?: string): Promise<FileRecord[]>;
   };
+  /** THE PROJECT'S TELEMETRY (docs/telemetry.md): `query(sql, { hours })` runs one SELECT over
+   *  `events`, `logs` and `spans` (Basin SQL), or over `metrics` alone (Workers Analytics Engine),
+   *  each cut to this project's rows of the last `hours` (default 24, at most 720), and answers the
+   *  rows with the SQL that ran. Throws on a deployment with no warehouse. */
+  telemetry: { query(sql: string, options?: { hours?: number }): Promise<TelemetryRows> };
   /** The project's email, `<slug>@iterate.app` (core/os/src/email/contract.ts has its events and
    *  threads). `send` answers the `email/sent` event. */
   email: {
