@@ -146,6 +146,59 @@ export function isNotRoutedYet(answer: {
   );
 }
 
+/**
+ * A Worker's `fetch`, sent again while Cloudflare answers it itself because the server it reached
+ * does not route the hostname yet (`isNotRoutedYet`). The request never reached a Worker, so it is
+ * sent again whatever its method, a code exchange that spends its code included, on UPSTREAM_ONCE
+ * (an upstream API's `disconnected` failure), within `init.signal`. A hostname still not routed
+ * throws, stamped as a lost connection, so `failureKind` reads `disconnected` across an RPC hop
+ * too. Every other answer, and every other failure, comes back as it came. `name` is what the
+ * `<area>.platform-failure-…` lines name for the prd fault alarm.
+ */
+export function fetchResendingNotRoutedYet(input: { area: string; name: string }) {
+  return (url: string, init: RequestInit): Promise<Response> => {
+    // no query string: a signed URL's carries its signature
+    const { origin, pathname } = new URL(url);
+    const request = `${init.method || "GET"} ${origin}${pathname}`;
+    return retryPlatformFailures(
+      async () => {
+        const response = await fetch(url, init);
+        if (!(await answeredNotRoutedYet(response))) return response;
+        await response.body?.cancel();
+        throw new NotRoutedYetError(
+          `${request} answered Cloudflare's own not-found (${response.status}, cf-ray ${response.headers.get("cf-ray")}): the server it reached does not route this hostname yet`,
+        );
+      },
+      {
+        area: input.area,
+        schedule: UPSTREAM_ONCE,
+        idempotent: true,
+        kind: (error) => (error instanceof NotRoutedYetError ? "disconnected" : "failed"),
+        describe: () => ({ name: input.name, request }),
+        signal: init.signal || undefined,
+      },
+    );
+  };
+}
+
+/** Cloudflare's own not-found, stamped as workerd stamps a lost connection (`retryable`). */
+class NotRoutedYetError extends Error {
+  readonly retryable = true;
+}
+
+/** Whether `response` is Cloudflare's own not-found: known by the page's header, or by a plain
+ *  answer's code, which is read from a copy so the answer itself stays unread. */
+async function answeredNotRoutedYet(response: Response) {
+  const headers = Object.fromEntries(response.headers);
+  if (isNotRoutedYet({ status: response.status, headers })) return true;
+  const plain =
+    (response.status === 404 || response.status === 500) &&
+    response.headers.get("content-type")?.startsWith("text/plain");
+  return plain
+    ? isNotRoutedYet({ status: response.status, headers, body: await response.clone().text() })
+    : false;
+}
+
 /** What a script's log line says about a failed HTTP call: its status (`network` when no answer
  *  came) and its message. */
 export function httpFailureFields(error: unknown) {

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { authorizationCodeRequest, authorizationServer } from "./client/oauth.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
 import { isLocalOrigin } from "./lib.ts";
+import { fetchResendingNotRoutedYet } from "./platform-retry.ts";
 import type { IterateApi } from "./api.ts";
 
 export type BrowserHost = {
@@ -227,14 +228,20 @@ export class BrowserSession extends DurableObject {
     return (await this.#activate(data, tokens, started)).accessToken;
   }
 
-  /** The token request's shared options: the audience (RFC 8707 resource), a bounded timeout, and —
-   *  only for a LOCAL APP (`begin` already admits http there) — oauth4webapi's opt-out of its
-   *  HTTPS-only default. Keyed on the app's origin, never the issuer's: an issuer a person typed can
-   *  not talk a deployed app into sending its codes in the clear. */
+  /** The token request's shared options: the audience (RFC 8707 resource), a bounded timeout, a
+   *  request Cloudflare answered itself sent again (an issuer's brand-new workers.dev hostname that
+   *  the server reached does not route yet), and — only for a LOCAL APP (`begin` already admits
+   *  http there) — oauth4webapi's opt-out of its HTTPS-only default. Keyed on the app's origin,
+   *  never the issuer's: an issuer a person typed can not talk a deployed app into sending its
+   *  codes in the clear. */
   #tokenOptions(data: StoredSession): oauth.TokenEndpointRequestOptions {
     const options: oauth.TokenEndpointRequestOptions = {
       additionalParameters: { resource: data.resource },
       signal: AbortSignal.timeout(10_000),
+      [oauth.customFetch]: fetchResendingNotRoutedYet({
+        area: "app-session",
+        name: "token-request",
+      }),
     };
     if (isLocalOrigin(data.origin)) options[oauth.allowInsecureRequests] = true;
     return options;
