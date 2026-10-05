@@ -102,6 +102,14 @@ import {
 } from "../secrets.ts";
 import { SecretContract, type LendRevokedReason, type SecretState } from "./contract.ts";
 import { runExchangeCode } from "./exchange-jail.ts";
+import {
+  SecretKeyAgreement,
+  SecretKeyField,
+  SecretKeySignature,
+  x25519PublicKey,
+  x25519SharedSecret,
+  x25519Sign,
+} from "./key-ops.ts";
 import { SecretProcessor } from "./processor.ts";
 
 /** The deployment's apps a strategy names as its client (`{ platform }`, secrets.ts). */
@@ -186,7 +194,14 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
    *  (context/built-ins.ts, whose verbs append the attributed facts), `fetch` is egress's and
    *  `exportForProjectSeed` the operator's native RPC — each reaches this facet through the facet
    *  host's platform entry. */
-  static override publicMethods = ["snapshot", "liveSnapshot", "waitUntilProcessed"];
+  static override publicMethods = [
+    "snapshot",
+    "liveSnapshot",
+    "waitUntilProcessed",
+    "deriveSharedSecret",
+    "publicKeyOf",
+    "signWithKey",
+  ];
 
   processor = new SecretProcessor();
 
@@ -510,6 +525,57 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     if (!stored) return false;
     const { material } = await this.#opened(stored);
     return verifySecretEquals(material, input);
+  }
+
+  /** DIFFIE-HELLMAN with one of this secret's stored private keys (key-ops.ts): userspace runs its
+   *  protocol itself (e.g. the Noise and Signal agreements of a WhatsApp device) and calls this for
+   *  each agreement that uses a stored key. `field` names the 32-byte X25519 private in the material
+   *  (e.g. "noiseKey.private"); the private never leaves — only the shared secret of it and
+   *  `peerPublicHex` does. */
+  async deriveSharedSecret(input: unknown): Promise<string> {
+    const { field, peerPublicHex } = SecretKeyAgreement.parse(input);
+    const priv = this.#privateAt(await this.#materialRecord(), field);
+    return Buffer.from(await x25519SharedSecret(priv, Buffer.from(peerPublicHex, "hex"))).toString(
+      "hex",
+    );
+  }
+
+  /** The public key of one of this secret's stored private keys, so userspace can place a device
+   *  public on the wire without the material having to carry it. */
+  async publicKeyOf(input: unknown): Promise<string> {
+    const { field } = SecretKeyField.parse(input);
+    return Buffer.from(
+      await x25519PublicKey(this.#privateAt(await this.#materialRecord(), field)),
+    ).toString("hex");
+  }
+
+  /** XEdDSA sign a message with one of this secret's stored private keys (key-ops.ts): userspace
+   *  builds the message (e.g. the account details a WhatsApp device's identity key signs at pairing)
+   *  and gets back only the 64-byte signature, never the key. */
+  async signWithKey(input: unknown): Promise<string> {
+    const { field, messageHex } = SecretKeySignature.parse(input);
+    const priv = this.#privateAt(await this.#materialRecord(), field);
+    return Buffer.from(x25519Sign(priv, Buffer.from(messageHex, "hex"))).toString("hex");
+  }
+
+  /** This secret's object material in the clear, or a refusal when it holds none — a borrowed secret
+   *  keeps no material here. */
+  async #materialRecord(): Promise<Record<string, unknown>> {
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored) throw codedError("SECRET_NOT_SET", "key-ops: this secret holds no key material");
+    const { material } = await this.#opened(stored);
+    if (!isRecord(material))
+      throw codedError("INVALID_INPUT", "key-ops: material is not an object of key fields");
+    return material;
+  }
+
+  /** The 32-byte X25519 private at a dotted `field` of the material (e.g. "noiseKey.private"). */
+  #privateAt(material: Record<string, unknown>, field: string): Uint8Array {
+    let node: unknown = material;
+    for (const part of field.split(".")) node = isRecord(node) ? node[part] : undefined;
+    if (typeof node !== "string")
+      throw codedError("INVALID_INPUT", `key-ops: material has no hex key at "${field}"`);
+    return Buffer.from(node, "hex");
   }
 
   /** OAUTH, step one: keep the pending attempt, hand back the authorize URL. The `state` is a

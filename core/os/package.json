@@ -28,6 +28,7 @@
     "capnweb": "catalog:",
     "class-variance-authority": "catalog:",
     "cn": "catalog:",
+    "curve25519-js": "0.0.4",
     "es-module-lexer": "^2.1.0",
     "iterate": "workspace:*",
     "json5": "catalog:",

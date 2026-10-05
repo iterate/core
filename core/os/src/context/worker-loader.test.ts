@@ -27,6 +27,43 @@ test("two literal sources whose djb2 hashes collide never share one Worker Loade
   expect(new Set(keys)).toMatchObject({ size: 2 });
 });
 
+test("a worker's package.json `compatibilityFlags` set the loaded isolate's flags; the default keeps Node compat off; the SDK's flags are always present", async () => {
+  const on = fakeLoaderEnv();
+  await loadConfined(on.env, {
+    source: {
+      "package.json": '{"main":"worker.js","compatibilityFlags":["nodejs_compat"]}',
+      "worker.js": "export default 1;",
+    },
+  });
+  const onConfig = (await on.warm.get(on.keys[0]!)) as { compatibilityFlags: string[] };
+  expect(onConfig.compatibilityFlags).toContain("nodejs_compat");
+  expect(onConfig.compatibilityFlags).not.toContain("no_nodejs_compat");
+  // the SDK's required flags are force-added whatever the worker declares
+  expect(onConfig).toMatchObject({
+    compatibilityFlags: expect.arrayContaining(["nodejs_als", "allow_irrevocable_stub_storage"]),
+  });
+
+  const off = fakeLoaderEnv();
+  await loadConfined(off.env, {
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": "export default 1;" },
+  });
+  const offConfig = (await off.warm.get(off.keys[0]!)) as { compatibilityFlags: string[] };
+  expect(offConfig.compatibilityFlags).toContain("no_nodejs_compat");
+  expect(offConfig.compatibilityFlags).not.toContain("nodejs_compat");
+  expect(offConfig.compatibilityFlags).toContain("nodejs_als");
+});
+
+test("a worker whose compatibilityFlags disable a flag the SDK needs is refused", async () => {
+  const { env, warm, keys } = fakeLoaderEnv();
+  await loadConfined(env, {
+    source: {
+      "package.json": '{"main":"worker.js","compatibilityFlags":["no_nodejs_als"]}',
+      "worker.js": "export default 1;",
+    },
+  });
+  await expect(warm.get(keys[0]!)).rejects.toThrow(/nodejs_als/);
+});
+
 test("an owner and a caller's cacheKey that concatenate alike never share one Worker Loader cacheKey", async () => {
   // owner "…/x" + key "y:z" vs owner "…/x:y" + key "z": joined with ":" they would spell ONE id.
   const { env, keys } = fakeLoaderEnv();

@@ -112,6 +112,19 @@ test.for([
   await expect(resolve(source)).rejects.toThrow(message);
 });
 
+test("a worker whose compatibilityFlags list nodejs_compat keeps its node: builtins for the runtime", async () => {
+  const resolved = await resolveModules(
+    {
+      "package.json": '{"main":"worker.js","compatibilityFlags":["nodejs_compat"]}',
+      "worker.js": `import { createHmac } from "node:crypto"; export default createHmac;`,
+    },
+    { platform, store: memoryStore(), fetch: offline, where: "test" },
+  );
+  expect(resolved).toMatchObject({ compatibilityFlags: ["nodejs_compat"] });
+  // the node: import is left as written (like a cloudflare: builtin), not rewritten or refused
+  expect(resolved.modules["worker.js"]).toContain('"node:crypto"');
+});
+
 test.for([
   [
     "package.json's main",
@@ -221,6 +234,36 @@ test("the graph is crawled once, rewritten to relative names, and locked in the 
   // Any project, any cold isolate, the same dependency set: the lock, and no network.
   const second = await resolve(source, { fetch: offline, store });
   expect(second).toEqual(modules);
+});
+
+test("the lock is keyed on nodejs_compat, so one mode's cached graph can't poison another worker", async () => {
+  const esm = fakeEsm({ "/needs-node@1": `import "node:fs"; export const x = 1;` });
+  const store = memoryStore();
+  const nodeSource = (compatibilityFlags?: string[]) => ({
+    "worker.js": `import "needs-node"; export default 1;`,
+    // JSON.stringify drops an undefined value, so `off` sends no compatibilityFlags key at all.
+    "package.json": JSON.stringify({
+      main: "worker.js",
+      dependencies: { "needs-node": "1" },
+      compatibilityFlags,
+    }),
+  });
+
+  // A nodejs_compat worker resolves first and locks a graph that KEEPS the dependency's node:fs.
+  const on = await resolveModules(nodeSource(["nodejs_compat"]), {
+    platform,
+    store,
+    fetch: esm.fetch,
+    where: "on",
+  });
+  expect(Object.values(on.modules).some((module) => module.includes('"node:fs"'))).toBe(true);
+  expect(store.values).toMatchObject({ size: 1 });
+
+  // A worker that never opted in, same dependency, same shared store: it must not reuse that graph.
+  // The resolve-time refusal of node:fs still fires, rather than loading the cached graph and skipping it.
+  await expect(
+    resolveModules(nodeSource(), { platform, store, fetch: esm.fetch, where: "off" }),
+  ).rejects.toThrow(/needs the Node\.js builtin node:fs/);
 });
 
 test.for([

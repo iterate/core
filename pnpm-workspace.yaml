@@ -76,4 +76,5 @@ overrides:
   ws: 'catalog:'
 
 patchedDependencies:
+  '@iterate-com/capnweb@0.12.3': patches/@iterate-com__capnweb@0.12.3.patch
   zod@4.6.5: patches/zod@4.6.5.patch

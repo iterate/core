@@ -187,6 +187,26 @@ export function contentHashOfWorkerModules(modules: WorkerModules): string {
   return hash;
 }
 
+/** The workerd compatibility flags a loaded worker cannot run without: `nodejs_als` carries a call's
+ *  cause (cause.ts) and `allow_irrevocable_stub_storage` lets loaded code persist its `env.ITX` stub. */
+const SDK_REQUIRED_COMPATIBILITY_FLAGS = ["nodejs_als", "allow_irrevocable_stub_storage"] as const;
+/** The default base when a worker declares no `compatibilityFlags`: Node compat stays off (this
+ *  compat date would otherwise turn v2 on). A declaring worker replaces this base with its own list. */
+const DEFAULT_BASE_COMPATIBILITY_FLAGS = ["no_nodejs_compat", "no_nodejs_compat_v2"] as const;
+
+/** A loaded worker's effective compatibility flags: its declared list (or the default base), with the
+ *  SDK-required flags force-added. A list that disables one of those is refused — one clear error, so a
+ *  worker cannot silently break the SDK. */
+function applySdkCompatibilityFlags(declared: string[] | undefined, where: string): string[] {
+  const base = declared || [...DEFAULT_BASE_COMPATIBILITY_FLAGS];
+  for (const required of SDK_REQUIRED_COMPATIBILITY_FLAGS)
+    if (base.includes(`no_${required}`))
+      throw new Error(
+        `${where}: compatibilityFlags must not disable "${required}", which the iterate SDK needs`,
+      );
+  return [...new Set([...base, ...SDK_REQUIRED_COMPATIBILITY_FLAGS])];
+}
+
 /** What `prepareConfinedWorker` needs. */
 type PrepareConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader; ITX_KV: KVNamespace };
@@ -411,20 +431,17 @@ export async function prepareConfinedWorker(
         throw error;
       }
       return {
-        // The Node.js compatibility this date turns on stays off: it adds ~0.7 ms to every cold load
-        // (measured 2026-09-29), and the SDK needs only `nodejs_als`, which carries a call's cause
-        // (cause.ts).
-        // `allow_irrevocable_stub_storage` (experimental) lets loaded code store its `env.ITX` stub
-        // and replay it (workers-and-facets.e2e pins it) — every worker in the chain needs it, so
-        // the parent config carries it too. No `limits`: trusted clients. The platform bounds a DO to
-        // 10 distinct dynamic workers with in-flight requests — the pins' release keeps a context under it.
+        // A worker's package.json gives its workerd compatibility flags (module-resolution.ts). The
+        // default keeps Node compat OFF — this date turns it on, and it adds ~0.7 ms to every cold load
+        // (measured 2026-09-29) while the SDK needs only `nodejs_als` — so a worker that wants Node
+        // builtins (Baileys and the like) opts in with `"compatibilityFlags": ["nodejs_compat"]` and
+        // pays that. `applySdkCompatibilityFlags` force-adds the flags the SDK cannot run without
+        // (`nodejs_als`, which carries a call's cause; `allow_irrevocable_stub_storage`, which lets
+        // loaded code persist its `env.ITX` stub — workers-and-facets.e2e pins it) and refuses a list
+        // that disables either. No `limits`: trusted clients. The platform bounds a DO to 10 distinct
+        // dynamic workers with in-flight requests — the pins' release keeps a context under it.
         compatibilityDate: COMPATIBILITY_DATE,
-        compatibilityFlags: [
-          "no_nodejs_compat",
-          "no_nodejs_compat_v2",
-          "nodejs_als",
-          "allow_irrevocable_stub_storage",
-        ],
+        compatibilityFlags: applySdkCompatibilityFlags(resolved.compatibilityFlags, opts.where),
         mainModule: resolved.mainModule,
         modules: resolved.modules,
         env: { ITX: opts.itxEntrypoint },

@@ -164,6 +164,10 @@ export async function dialRpcStubFetch(
   const legResponse = await dialLeg();
   const leg = legResponse.webSocket;
   if (!leg) throw new Error(`fetch-upgrade leg returned ${legResponse.status} without a WebSocket`);
+  // Binary frames as ArrayBuffers, chosen before `accept()`: the runtime's default is a Blob
+  // (compatibility date 2026-03-17 on), and `send(blob)` writes the text "[object Blob]". The cast
+  // reaches `binaryType`, which the runtime WebSocket has but `ClientWebSocket` does not declare.
+  (leg as { binaryType?: string }).binaryType = "arraybuffer";
   leg.accept();
   if (resumable) {
     new FetchUpgradeSpliceEnd({
@@ -196,6 +200,10 @@ export async function dialRpcStubFetch(
         }
       });
     };
+    // The provider's socket too, where it is the runtime's own (a loaded worker's answer). The `in`
+    // guard confirms the field is there before the cast reaches it (capnweb's stub has no `binaryType`).
+    if ("binaryType" in providerSocket)
+      (providerSocket as { binaryType?: string }).binaryType = "arraybuffer";
     // The leg is workerd's own WebSocket, which has every member ClientWebSocket names.
     wire(providerSocket, leg as unknown as ClientWebSocket);
     wire(leg as unknown as ClientWebSocket, providerSocket);

@@ -55,6 +55,10 @@ export type ResolveOptions = {
   fetch: typeof fetch;
   /** Names the load site in errors. */
   where: string;
+  /** Derived from the entry package.json's `compatibilityFlags` (whether it lists `nodejs_compat`): a
+   *  `node:` builtin then passes through to the runtime instead of being refused. `resolveModules`
+   *  fills it; carried here so the esm.sh crawl sees it too. */
+  nodejsCompat?: boolean;
   /** The module to load as the entry in place of package.json's `main` — the worker's
    *  `mainModule`, as Cloudflare's Worker Loader names it: a facet whose class lives in `agents.ts`
    *  of a source whose `main` is `worker.ts` loads `agents.ts`'s own graph. Its dependencies are
@@ -160,6 +164,10 @@ function stripTypes(code: string, name: string, where: string): string {
 const PackageManifest = z.object({
   main: z.string().optional(),
   dependencies: z.record(z.string(), z.string()).optional(),
+  /** Workerd compatibility flags for this worker's load, as Cloudflare's Worker Loader names them.
+   *  Declaring `"nodejs_compat"` lets this worker's `node:` imports pass through here (otherwise they
+   *  are refused); the loader owns the defaults and the flags the SDK forces in (worker-loader.ts). */
+  compatibilityFlags: z.array(z.string()).optional(),
 });
 
 /** A source's package: its entry — package.json's `main` (else `ENTRY_FILES`) — and its
@@ -168,7 +176,11 @@ const PackageManifest = z.object({
 export function readPackage(
   source: ModuleMap,
   where: string,
-): { entry: string; dependencies: Record<string, string> } {
+): {
+  entry: string;
+  dependencies: Record<string, string>;
+  compatibilityFlags: string[] | undefined;
+} {
   let manifest: z.infer<typeof PackageManifest> = {};
   if (source["package.json"]) {
     let parsed: unknown;
@@ -190,7 +202,11 @@ export function readPackage(
     throw new Error(
       `${where}: no entry — ${main ? `package.json's main ${JSON.stringify(main)} is not a file` : `name the entry module in package.json "main"`}`,
     );
-  return { entry, dependencies: manifest.dependencies || {} };
+  return {
+    entry,
+    dependencies: manifest.dependencies || {},
+    compatibilityFlags: manifest.compatibilityFlags,
+  };
 }
 
 /** Every bare import is this module: a platform entry (build.ts names them so) or an npm package's
@@ -238,9 +254,11 @@ function platformModuleOf(
 export async function resolveModules(
   source: ModuleMap,
   opts: ResolveOptions,
-): Promise<{ mainModule: string; modules: ModuleMap }> {
+): Promise<{ mainModule: string; modules: ModuleMap; compatibilityFlags: string[] | undefined }> {
   const { where, platform } = opts;
-  const { entry: main, dependencies } = readPackage(source, where);
+  const { entry: main, dependencies, compatibilityFlags } = readPackage(source, where);
+  // Resolution only needs to know whether Node builtins pass through; the loader applies the full list.
+  const nodejsCompat = compatibilityFlags?.includes("nodejs_compat") ?? false;
   const entry = opts.mainModule ? joinPath("", opts.mainModule) : main;
   if (!Object.hasOwn(source, entry))
     throw new Error(
@@ -282,6 +300,9 @@ export async function resolveModules(
         }
         target = outputName(file);
       } else if (specifier.startsWith("node:")) {
+        // A worker that declared `nodejsCompat` runs with node:compat on, so leave the builtin for the
+        // runtime to resolve (like `cloudflare:`); otherwise it is unavailable and the import is refused.
+        if (nodejsCompat) continue;
         throw new Error(
           `${where}: ${path} imports the Node.js builtin ${specifier}, which loaded workers do not have`,
         );
@@ -306,14 +327,17 @@ export async function resolveModules(
 
   // 2. npm packages: their locked graph, which may itself import platform packages.
   if (npmSpecifiers.size) {
-    const graph = await lockedDependencyGraph([...npmSpecifiers].sort(), dependencies, opts);
+    const graph = await lockedDependencyGraph([...npmSpecifiers].sort(), dependencies, {
+      ...opts,
+      nodejsCompat,
+    });
     Object.assign(out, graph.modules);
     platformUsed.push(...graph.platformModules);
   }
 
   // 3. the platform modules the worker reaches, and nothing else.
   addPlatformModules(out, platformUsed, platform);
-  return { mainModule: outputName(entry), modules: out };
+  return { mainModule: outputName(entry), modules: out, compatibilityFlags };
 }
 
 /** The platform modules `names` added to `out`, with every platform module they import. */
@@ -333,15 +357,15 @@ const LOADED_WORKER_MODULE = "node_modules/.platform/loaded-worker.js";
  *  LOADED_WORKER_MODULE before anything of its own — on its first line, so its lines keep their
  *  numbers — and exports what it always did. */
 export function enteredThroughPlatform(
-  resolved: { mainModule: string; modules: ModuleMap },
+  resolved: { mainModule: string; modules: ModuleMap; compatibilityFlags?: string[] },
   platform: PlatformModules,
-): { mainModule: string; modules: ModuleMap } {
+): { mainModule: string; modules: ModuleMap; compatibilityFlags: string[] | undefined } {
   const modules = { ...resolved.modules };
   addPlatformModules(modules, [LOADED_WORKER_MODULE], platform);
   const { mainModule } = resolved;
   const platformFirst = JSON.stringify(relativeSpecifier(mainModule, LOADED_WORKER_MODULE));
   modules[mainModule] = `import ${platformFirst}; ${modules[mainModule]}`;
-  return { mainModule, modules };
+  return { mainModule, modules, compatibilityFlags: resolved.compatibilityFlags };
 }
 
 /** A locked npm graph: every module (each requested specifier's entry under
@@ -365,6 +389,10 @@ async function lockedDependencyGraph(
     specifiers,
     ranges: Object.fromEntries(packages.map((name) => [name, dependencies[name]!])),
     externals: [...WORKERD_BUILTINS, ...platformPackages(opts.platform)],
+    // Part of the key: `nodejsCompat` decides whether a dependency's `node:` imports are kept for the
+    // runtime or refused (resolveFromEsm), so the two modes must not share a stored graph. The store
+    // is shared across every project, so without this a worker could load the other mode's graph.
+    nodejsCompat: opts.nodejsCompat === true,
   };
   // The prefix names the lock's shape and the rewrite rules: a change to either is a new prefix.
   const key = `module-lock-3/${await sha256Hex(JSON.stringify(lockInput))}`;
@@ -506,11 +534,13 @@ async function resolveFromEsm(
         if (builtin) {
           edits.push({ ...edit, specifier: builtin });
         } else if (specifier.startsWith("node:")) {
-          // esm.sh's own `/node/*.mjs` polyfills are ordinary modules; a bare `node:` import would
-          // need nodejs_compat, which loaded workers run without.
-          throw new Error(
-            `${url.pathname} needs the Node.js builtin ${specifier}, which loaded workers do not have`,
-          );
+          // esm.sh's own `/node/*.mjs` polyfills are ordinary modules; a bare `node:` import needs
+          // nodejs_compat. With the worker's opt-in, leave it for the runtime; otherwise refuse it.
+          if (opts.nodejsCompat) edits.push({ ...edit, specifier });
+          else
+            throw new Error(
+              `${url.pathname} needs the Node.js builtin ${specifier}, which loaded workers do not have`,
+            );
         } else if (specifier.startsWith("/") || isRelative(specifier)) {
           const child = new URL(specifier, url);
           if (child.origin !== ESM_ORIGIN)

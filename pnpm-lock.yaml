@@ -120,6 +120,9 @@ overrides:
   ws: 8.21.3
 
 patchedDependencies:
+  '@iterate-com/capnweb@0.12.3':
+    hash: 122a3b22e77993d4762910c30be819b40cd09d6b7acc19e1578f222c4c8cb567
+    path: patches/@iterate-com__capnweb@0.12.3.patch
   zod@4.6.5:
     hash: 5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86
     path: patches/zod@4.6.5.patch
@@ -132,7 +135,7 @@ importers:
     dependencies:
       capnweb:
         specifier: 'catalog:'
-        version: '@iterate-com/capnweb@0.12.3'
+        version: '@iterate-com/capnweb@0.12.3(patch_hash=122a3b22e77993d4762910c30be819b40cd09d6b7acc19e1578f222c4c8cb567)'
       json5:
         specifier: 'catalog:'
         version: 2.2.3
@@ -199,13 +202,16 @@ importers:
         version: 1.168.58(crossws@0.4.4(srvx@0.11.22))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.10)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
       capnweb:
         specifier: 'catalog:'
-        version: '@iterate-com/capnweb@0.12.3'
+        version: '@iterate-com/capnweb@0.12.3(patch_hash=122a3b22e77993d4762910c30be819b40cd09d6b7acc19e1578f222c4c8cb567)'
       class-variance-authority:
         specifier: 'catalog:'
         version: 0.7.1
       cn:
         specifier: 'catalog:'
         version: 0.4.0
+      curve25519-js:
+        specifier: 0.0.4
+        version: 0.0.4
       es-module-lexer:
         specifier: ^2.1.0
         version: 2.1.0
@@ -2482,6 +2488,9 @@ packages:
 
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
+
+  curve25519-js@0.0.4:
+    resolution: {integrity: sha512-axn2UMEnkhyDUPWOwVKBMVIzSQy2ejH2xRGy1wq81dqRwApXfIzfbE3hIX0ZRFBIihf/KDqK158DLwESu4AK1w==}
 
   data-urls@7.0.0:
     resolution: {integrity: sha512-23XHcCF+coGYevirZceTVD7NdJOqVn+49IHyxgszm+JIiHLoB2TkmPtsYkNWT1pvRSGkc35L6NHs0yHkN2SumA==}
@@ -5178,7 +5187,7 @@ snapshots:
       '@types/node': 26.1.1
     optional: true
 
-  '@iterate-com/capnweb@0.12.3': {}
+  '@iterate-com/capnweb@0.12.3(patch_hash=122a3b22e77993d4762910c30be819b40cd09d6b7acc19e1578f222c4c8cb567)': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -6449,6 +6458,8 @@ snapshots:
   cssesc@3.0.0: {}
 
   csstype@3.2.3: {}
+
+  curve25519-js@0.0.4: {}
 
   data-urls@7.0.0(@noble/hashes@2.2.0):
     dependencies:

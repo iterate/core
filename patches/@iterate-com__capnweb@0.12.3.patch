@@ -1,0 +1,156 @@
+diff --git a/dist/index-bun.cjs b/dist/index-bun.cjs
+index 148d72d95709d7249c951f625cca930f3052c9b3..54b83a0bba0a72deaa4563042951d14e03d9c8e6 100644
+--- a/dist/index-bun.cjs
++++ b/dist/index-bun.cjs
+@@ -1114,10 +1114,10 @@ const sentWebSockets = /* @__PURE__ */ new WeakSet();
+ function webSocketToStreams(socket) {
+ 	if (sentWebSockets.has(socket)) throw new Error("A WebSocket can only be sent over RPC once.");
+ 	sentWebSockets.add(socket);
+-	socket.accept?.();
+ 	try {
+ 		socket.binaryType = "arraybuffer";
+ 	} catch {}
++	socket.accept?.();
+ 	let closed = false;
+ 	let readableController;
+ 	return {
+@@ -1415,6 +1415,9 @@ function upgradeWebSocketResponse(webSocket, init) {
+ 	}
+ }
+ function pumpNativeSocket(native, tunneled) {
++	try {
++		native.binaryType = "arraybuffer";
++	} catch {}
+ 	native.accept();
+ 	native.addEventListener("message", (event) => {
+ 		try {
+diff --git a/dist/index-bun.js b/dist/index-bun.js
+index 8705adf50a5a8e4561314314ad11b65f25310a1a..ef831aa1cb9fc5497add200f82b970fa4be4f1f2 100644
+--- a/dist/index-bun.js
++++ b/dist/index-bun.js
+@@ -1112,10 +1112,10 @@ const sentWebSockets = /* @__PURE__ */ new WeakSet();
+ function webSocketToStreams(socket) {
+ 	if (sentWebSockets.has(socket)) throw new Error("A WebSocket can only be sent over RPC once.");
+ 	sentWebSockets.add(socket);
+-	socket.accept?.();
+ 	try {
+ 		socket.binaryType = "arraybuffer";
+ 	} catch {}
++	socket.accept?.();
+ 	let closed = false;
+ 	let readableController;
+ 	return {
+@@ -1413,6 +1413,9 @@ function upgradeWebSocketResponse(webSocket, init) {
+ 	}
+ }
+ function pumpNativeSocket(native, tunneled) {
++	try {
++		native.binaryType = "arraybuffer";
++	} catch {}
+ 	native.accept();
+ 	native.addEventListener("message", (event) => {
+ 		try {
+diff --git a/dist/index-workers.cjs b/dist/index-workers.cjs
+index c1f9f16082cd51b33ed80f7f4104649ebc9f7013..688947c5dc17a0b6bd372b42a0a1b434a11bc810 100644
+--- a/dist/index-workers.cjs
++++ b/dist/index-workers.cjs
+@@ -1147,10 +1147,10 @@ const sentWebSockets = /* @__PURE__ */ new WeakSet();
+ function webSocketToStreams(socket) {
+ 	if (sentWebSockets.has(socket)) throw new Error("A WebSocket can only be sent over RPC once.");
+ 	sentWebSockets.add(socket);
+-	socket.accept?.();
+ 	try {
+ 		socket.binaryType = "arraybuffer";
+ 	} catch {}
++	socket.accept?.();
+ 	let closed = false;
+ 	let readableController;
+ 	return {
+@@ -1448,6 +1448,9 @@ function upgradeWebSocketResponse(webSocket, init) {
+ 	}
+ }
+ function pumpNativeSocket(native, tunneled) {
++	try {
++		native.binaryType = "arraybuffer";
++	} catch {}
+ 	native.accept();
+ 	native.addEventListener("message", (event) => {
+ 		try {
+diff --git a/dist/index-workers.js b/dist/index-workers.js
+index fec52aed4e0bc91e82bdcd808656efc0d0cf2b22..c0c9d1c288f7e076460d0fa645900fdef056426a 100644
+--- a/dist/index-workers.js
++++ b/dist/index-workers.js
+@@ -1118,10 +1118,10 @@ const sentWebSockets = /* @__PURE__ */ new WeakSet();
+ function webSocketToStreams(socket) {
+ 	if (sentWebSockets.has(socket)) throw new Error("A WebSocket can only be sent over RPC once.");
+ 	sentWebSockets.add(socket);
+-	socket.accept?.();
+ 	try {
+ 		socket.binaryType = "arraybuffer";
+ 	} catch {}
++	socket.accept?.();
+ 	let closed = false;
+ 	let readableController;
+ 	return {
+@@ -1419,6 +1419,9 @@ function upgradeWebSocketResponse(webSocket, init) {
+ 	}
+ }
+ function pumpNativeSocket(native, tunneled) {
++	try {
++		native.binaryType = "arraybuffer";
++	} catch {}
+ 	native.accept();
+ 	native.addEventListener("message", (event) => {
+ 		try {
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 2ee8fe19098705f7dd8d5eff2259019ff31642a0..8b90d0ad5921468788e706bb27f39999a8d1b3cc 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -1114,10 +1114,10 @@ const sentWebSockets = /* @__PURE__ */ new WeakSet();
+ function webSocketToStreams(socket) {
+ 	if (sentWebSockets.has(socket)) throw new Error("A WebSocket can only be sent over RPC once.");
+ 	sentWebSockets.add(socket);
+-	socket.accept?.();
+ 	try {
+ 		socket.binaryType = "arraybuffer";
+ 	} catch {}
++	socket.accept?.();
+ 	let closed = false;
+ 	let readableController;
+ 	return {
+@@ -1415,6 +1415,9 @@ function upgradeWebSocketResponse(webSocket, init) {
+ 	}
+ }
+ function pumpNativeSocket(native, tunneled) {
++	try {
++		native.binaryType = "arraybuffer";
++	} catch {}
+ 	native.accept();
+ 	native.addEventListener("message", (event) => {
+ 		try {
+diff --git a/dist/index.js b/dist/index.js
+index 67458976db770f95dde7b7a31008df71f5312fd1..04a5d7cd3d81daf7dea9237e1c8c307f49505a0e 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1112,10 +1112,10 @@ const sentWebSockets = /* @__PURE__ */ new WeakSet();
+ function webSocketToStreams(socket) {
+ 	if (sentWebSockets.has(socket)) throw new Error("A WebSocket can only be sent over RPC once.");
+ 	sentWebSockets.add(socket);
+-	socket.accept?.();
+ 	try {
+ 		socket.binaryType = "arraybuffer";
+ 	} catch {}
++	socket.accept?.();
+ 	let closed = false;
+ 	let readableController;
+ 	return {
+@@ -1413,6 +1413,9 @@ function upgradeWebSocketResponse(webSocket, init) {
+ 	}
+ }
+ function pumpNativeSocket(native, tunneled) {
++	try {
++		native.binaryType = "arraybuffer";
++	} catch {}
+ 	native.accept();
+ 	native.addEventListener("message", (event) => {
+ 		try {
