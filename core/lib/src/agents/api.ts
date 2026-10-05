@@ -14,14 +14,21 @@ export type AgentMessageInput =
       files?: { contentType: string; filename: string; data: Uint8Array | ArrayBuffer | string }[];
     };
 
+/** How `message` delivers the words. `trigger: false` makes them context only: the agent reads
+ *  them on its next turn but does not wake for them (an FYI that needs nothing now). The default,
+ *  `trigger: true`, starts a turn, unless the project gates words between agents (message.ts). */
+export type AgentMessageOptions = { trigger?: boolean };
+
 /** `itx.agents.get(path)`: one agent. Anything else on its context is a plain
  *  `itx.cd(path).append(…)`, stamped with where it came from. */
 export interface AgentHandleApi {
   /** A person's words: ONE `events.iterate.com/agent/context-added`, the trigger of the agent's
-   *  next turn, answered so a caller can wait for what follows it. Sent from another agent, the model reads them as `[from <sender's context>]` — the collection's base, which
-   *  the sender's own `itx.agents` row pins (collection.ts); from anywhere else they read as a
-   *  person's. A deleted agent, or one never created, refuses. */
-  message(input: AgentMessageInput): Promise<StreamEvent>;
+   *  next turn (or, with `{ trigger: false }`, context it reads on that turn), answered so a caller
+   *  can wait for what follows it. Sent from another agent, the model reads them
+   *  as `[from <sender's context>]` — the collection's base, which the sender's own `itx.agents` row
+   *  pins (collection.ts); from anywhere else they read as a person's. A deleted agent, or one never
+   *  created, refuses. */
+  message(input: AgentMessageInput, options?: AgentMessageOptions): Promise<StreamEvent>;
 }
 
 /** `itx.agents` — installed by rewrite rule on the project's root and on each agent's context.

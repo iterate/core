@@ -1,19 +1,28 @@
-// App-owned agent facet, loaded into a project through the public SDK.
+// durable-object.ts — one agent's facet, loaded into a project through the public SDK: the processor
+// (processor.ts) and `message()`, a person's words.
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { StreamEvent } from "../stream/processor.ts";
 import type { AgentHandleApi } from "./api.ts";
+import { type AgentInputGate, messagePayload } from "./message.ts";
 import type { AgentState, FileAttachment } from "./contract.ts";
 import { AgentProcessor } from "./processor.ts";
 
-export class AgentDurableObject
-  extends StreamProcessorDurableObject<AgentState>
-  implements Pick<AgentHandleApi, "message">
-{
+// Not `implements Pick<AgentHandleApi, "message">`: the facet's `message` takes the sender (the
+// collection's base) between the published input and its options (collection.ts relays all three).
+export class AgentDurableObject extends StreamProcessorDurableObject<AgentState> {
   /** The processor's reads, and a person's words (`message`) — `itx.agents.get(path).message(…)`
    *  reaches it through the collection (collection.ts). */
   static override publicMethods = [...super.publicMethods, "message"];
 
-  processor = new AgentProcessor({ getItx: () => this.getItx() });
+  /** The project's gate on words another agent sends without `trigger: false`, which the
+   *  processor applies on the receiving side (message.ts `AgentInputGate`): a config repo's
+   *  `agents.ts` sets it. None: every such message is a trigger, as before. */
+  static messageGate: AgentInputGate | undefined;
+
+  processor = new AgentProcessor({
+    getItx: () => this.getItx(),
+    messageGate: () => AgentDurableObject.messageGate,
+  });
 
   /** The context this facet is hosted on IS the agent: its path is the one name it goes by, here
    *  and under `itx.files` (attachments are stored beneath it). Read once per incarnation. */
@@ -28,10 +37,15 @@ export class AgentDurableObject
   /** A person's words: ONE `context-added`, the trigger of the next turn — with their attachments,
    *  each stored first under this agent's path (`itx.files`, `<path>/<8 of a uuid>-<name>`)
    *  and named on the event; an image among them is what the model will see. `from` is the
-   *  collection's base, which it relays as the sender (collection.ts `AgentReference.message`). The
-   *  event is answered so a caller can wait for what follows it. */
-  // oxlint-disable-next-line iterate/mechanical-class-impl -- `from` is the collection's relay of the sender, beside the published input: `itx.agents.get(path).message` never takes it
-  async message(input: Parameters<AgentHandleApi["message"]>[0], from?: string) {
+   *  collection's base, which it relays as the sender (collection.ts `AgentReference.message`).
+   *  `{ trigger: false }` makes the words context only. Otherwise words from another agent pass the
+   *  project's gate, if any, once they are in the log (processor.ts, `agent/input-gated`). The event
+   *  is answered so a caller can wait for what follows it. */
+  async message(
+    input: Parameters<AgentHandleApi["message"]>[0],
+    from?: string,
+    options?: Parameters<AgentHandleApi["message"]>[1],
+  ) {
     const path = await this.#created();
     const { message, files = [] } = typeof input === "string" ? { message: input } : input;
     const attachments: FileAttachment[] = [];
@@ -52,13 +66,12 @@ export class AgentDurableObject
     using itx = this.getItx();
     const appended = await itx.append({
       type: "events.iterate.com/agent/context-added",
-      payload: {
-        role: "user",
-        content: message,
-        actor: { type: "user" },
-        ...(attachments.length > 0 && { files: attachments }),
+      payload: messagePayload({
+        message,
+        files: attachments,
         from,
-      },
+        trigger: options?.trigger !== false,
+      }),
     });
     // Over the loopback stub the append's answer types as an RPC result, not the array the context
     // declares (`append(...events): Promise<StreamEvent[]>`, context/built-ins.ts); the wire copied it.

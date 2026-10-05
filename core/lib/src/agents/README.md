@@ -36,5 +36,5 @@ Importing `iterate/agents` registers `itx.agents` on iterate/api's `InstalledApp
 `itx as IterateContextApiWith<"agents">` types `create`, `get(path).message`, `list` and `delete`.
 
 - `contract.ts` — an agent's events and state; `processor.ts` — the reduce and the loop;
-  `processor.test.ts` — the processor's spec.
+  `render.ts` — each request as OpenAI reads it; `processor.test.ts` — the processor's spec.
 - `catalog.ts`, `collection.ts` — `itx.agents`; `durable-object.ts` — one agent.

@@ -63,8 +63,9 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "connect a provider through this deployment's app: `integrations.connect(provider, { scopes? })` → { authorizationUrl, connection } (send the human there); a person connects one of their own accounts to a project with `integrations.connect(provider, { account })` from their own session; `integrations.requestFromUser(provider, { scopes? })` → a Dash link asking a person to connect their account (or another) to this project, which then uses it as `/secrets/<provider>-<connection>`; `integrations.disconnect(provider, connection)` removes one",
   fetchRoutes:
     "which itx expression a request on this project's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the platform serves a match from `route.target`, before the config worker's fetch",
-  ai: "Workers AI, verbatim: `ai.run(model, inputs)`",
-  browser: 'browser rendering: `browser.quickAction("markdown", { url })`',
+  ai: 'Workers AI, verbatim: `ai.run(model, inputs, options?)` · `ai.models({ search?, task? })`; files as Markdown: `ai.toMarkdown({ name, blob } | [ … ], { conversionOptions? })` → { name, mimeType, format, tokens, data } (or `format: "error"`) for PDF, Office (docx, xlsx), ODF, CSV, HTML, XML and pictures (described), `blob` the bytes or a text, or `{ name, data }` with base64, at most 10 MiB a call; `ai.toMarkdown().supported()` lists the formats; web search through AI Gateway, billed to its credits: `ai.websearch({ gatewayId: "default", query, provider?: "ceramic" | "exa" | "linkup", limit? })` → { items: [{ url, title, description? }] }; AI Gateway: `ai.gateway(id).run(request)` · `getLog(logId)` · `patchLog(logId, { score?, feedback? })` · `getUrl(provider?)`',
+  browser:
+    'Cloudflare Browser Run. One-shot: `browser.quickAction("markdown", { url })` (also "content", "screenshot", "pdf", "links", "json", "snapshot", "scrape"). A session, to click and type: `browser.openPage({ url })` → { sessionId, targetId, url, title, loaded }; `browser.cdp(sessionId, method, params)` runs one Chrome DevTools Protocol command on its page (`Runtime.evaluate` with { expression, returnByValue: true, awaitPromise: true } to read or click, `Input.insertText`, `Page.captureScreenshot`); `browser.navigate(sessionId, url)`; `browser.devtools.listTargets(sessionId)` · `newTarget(sessionId, url)` for tabs; `browser.getLiveView(sessionId)` → a link to watch it; `browser.closeSession(sessionId)` when done (an open session is billed until its keepAlive, five minutes by default, runs out)',
   r2: "the object store, verbatim (`files` is the friendlier surface)",
   cfArtifacts: "the Artifacts binding, project-scoped (`repos` is the friendlier surface)",
   append: "write events to this log: `itx.append({ type, payload })`",
@@ -329,8 +330,10 @@ export function resolveItxExpression(
   let rulesList: readonly ItxExpressionRewriteRule[] | undefined;
   for (let rewrites = 0; ; rewrites++) {
     if (isBuiltInsRooted(current)) return chain;
-    if (rewrites >= 32)
-      throw new Error(`itx-expression rewriting exceeded depth 32 — self-referential rule?`);
+    if (rewrites >= REWRITE_BUDGET)
+      throw new Error(
+        `itx-expression rewriting exceeded depth ${String(REWRITE_BUDGET)} — self-referential rule?`,
+      );
     const root = itxExpressionStepName(current[1]);
     const implicit = current[0] === "itx" && !!root && implicitRoots.has(root);
     const winner =
@@ -815,6 +818,12 @@ export function rpcStubKeysNamed(args: {
   }
   return keys;
 }
+
+/** How many rewrites one call may take before it is refused as self-referential, and so how many
+ *  bare links `rewriteRules.list()` follows by default: a list that stopped sooner would leave out
+ *  names a call from the same context reaches (an agent's subagent's sandbox is four links from
+ *  the project's root). */
+export const REWRITE_BUDGET = 32;
 
 // ── THE TABLE, DESCRIBED (pure; the DO hands it the rows and the hop) ──
 

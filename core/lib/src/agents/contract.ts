@@ -1,32 +1,9 @@
-// agents/contract.ts — AN AGENT: a domain object on the context at any path (`/agents/<name>` by
-// convention) — a conversation driven by a model that acts by writing scripts against that
-// context's `itx`. Its facts live on that path's log, and THIS FILE is the only place they are
-// spelled. The rest of the folder derives from it: processor.ts reduces these events, runs the
-// creation and deletion sagas and THE LOOP, durable-object.ts is the processor's shell plus
-// `message()`, collection.ts is `itx.agents` (`list`, `create`, `delete`, and the handle
-// `itx.agents.get(path)`). Deletion is the creation's mirror: `delete-requested` opens it, the
-// processor lands `deleted` — cross-posted to `/` so the catalog drops the entry and keeps the death —
-// and a deleted agent runs no more turns. Every type is derived here, never hand-kept:
-//   AgentState                        = ProcessorState<typeof AgentContract>  the reduced state below
-//   ConsumedEvent<typeof AgentContract>                                        what reduce and processEvent see
-//   EventInput<typeof AgentContract>                                           what `itx.cd(path).append(…)` takes
-//
-// Its birth is the saga `itx.agents.create(path)` opens: `create-requested`, then `created` — the
-// certificate, cross-posted to `/` for the project catalog (core/os/src/project/) — with the
-// default system prompt beside it; an operator's instructions are their own `context-added` after.
-// From then on everything is THE LOOP: a `context-added` from outside (a person) or from a script's
-// result raises the ONE pending trigger; the loop records the request (`llm-request-requested`),
-// runs the model, settles it (`llm-request-settled`) with the assistant's words as the next
-// `context-added`. The answer is markdown prose plus at most one `<codemode status="…">` block
-// (codemode-format.ts, mmkal's grammar): the prose is `web-message-sent` — what a person is shown —
-// the status `summary-updated`, the body a script: the CONTEXT's own `itx/run-requested` (the
-// context runs it; a restart settles it `interrupted`, never re-run), whose `run-settled` result is
-// the next developer `context-added`, which triggers the next turn; prose alone ends the turn.
-// Bounded: an open request expires, N consecutive model failures pause, N consecutive
-// self-triggered turns pause, and a person's next words resume. A request is DEBOUNCED as one
-// window after the trigger (more words inside it move the trigger; one request answers them all),
-// with a failure's backoff folded into the same window. The script runs against this context's
-// `itx` as it is: no capability host, typecheck or preamble.
+// contract.ts — AN AGENT'S EVENTS AND STATE: the vocabulary the Agents app, the WhatsApp relays and
+// voice read, and what a cache-friendly loop keeps beside each item: the `run` call an answer made and the provider's
+// own output items (replayed verbatim, render.ts), the standing-instruction SECTIONS as positional
+// items (a head snapshot, then updates where they happen), which call each script run answered, and
+// what a request cost (cache writes and dollars included). An agent whose log the previous
+// loop wrote has it re-reduced once, and its `<codemode>` answers render as calls.
 import { z } from "zod";
 // the contract module alone, never the engine: the Agents page loads this file
 import { defineProcessorContract, type ProcessorState } from "../stream/contract.ts";
@@ -42,15 +19,6 @@ const Actor = z.discriminatedUnion("type", [
 ]);
 
 const Role = z.enum(["system", "developer", "user", "assistant"]);
-
-/** One message of the model's conversation, as the model call takes it: text, or the chat-completions
- *  parts a vision model reads — text and images as data: URLs. */
-export type ChatMessage = {
-  role: "system" | "user" | "assistant";
-  content:
-    | string
-    | ({ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } })[];
-};
 
 /** A file attached to a context item (an attachment record, minus its signed URL): the
  *  project file it was stored as (`itx.files`), its content type, original name and size. */
@@ -72,19 +40,43 @@ const TriggerSource = z.enum(["external", "agent-loop"]);
 export const AgentLlmRequestCancelReason = z.enum(["interrupted-by-user-input", "expired"]);
 export type AgentLlmRequestCancelReason = z.infer<typeof AgentLlmRequestCancelReason>;
 
+/** What the agent is waiting for when it hands back: a person's words, something outside (a
+ *  webhook, another agent's report), or a time it set. Cleared when a person's words arrive. */
+const WaitingFor = z.enum(["user_input", "external_event", "timer"]);
+
 const LlmUsage = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
   cachedInputTokens: z.number().int().nonnegative().optional(),
+  /** Input written to the prompt cache (billed 1.25x for the GPT-6 family). */
+  cacheWriteInputTokens: z.number().int().nonnegative().optional(),
   reasoningOutputTokens: z.number().int().nonnegative().optional(),
+  /** What the request cost in US dollars (pricing.ts), when the model has a price. */
+  costUsd: z.number().nonnegative().optional(),
 });
 export type LlmUsage = z.infer<typeof LlmUsage>;
 
+/** A compaction summary's barrier: the offset through which it replaced the conversation, and what
+ *  the summary request cost. An idle summary that `keepsEarlierSummaries` covers only the history
+ *  after the newest earlier summary, and those stay in the conversation word for word. */
+const Compaction = z.object({
+  replacesHistoryThrough: z.number().int().positive(),
+  keepsEarlierSummaries: z.boolean().optional(),
+  usage: LlmUsage.optional(),
+});
+
+/** The `run` call an answer made: its id (the provider's call_id), its status label and script. */
+const RunCall = z.object({ callId: z.string().min(1), status: z.string(), script: z.string() });
+
+/** Standing-instruction sections an item sets, by name (null: the section is gone). */
+const Sections = z.record(z.string(), z.string().nullable());
+
 export const AgentContract = defineProcessorContract({
   slug: "agent",
-  version: "6",
+  // Bumping the version re-reduces every agent's log from offset 0 (stream/processor.ts).
+  version: "15",
   description:
-    "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
+    "An agent: a conversation on its own context, driven by a model that acts through one tool, run(script), against itx; each request's input extends the previous one, so the provider's prompt cache holds the conversation.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
    *  of the event that says so — the request, the certificate, or the failure; read that event for
    *  the error), where deletion stands the same way (the request, or the certificate — set, the loop
@@ -113,12 +105,16 @@ export const AgentContract = defineProcessorContract({
     config: z
       .object({
         llm: z
-          // OpenAI's astra, read FAST (low reasoning effort, the priority tier — processor.ts); a
-          // `@cf/…` name routes to Workers AI instead (`@cf/meta/llama-4-scout-17b-16e-instruct` sees images too).
-          .object({ model: z.string().min(1).default("gpt-6-astra") })
+          // OpenAI's gpt-6.1-sol at medium reasoning effort by default: a fifth of
+          // gpt-6-astra's input price and a tenth of its cached price. `reasoningEffort` is the
+          // Responses API's `reasoning.effort`; reasoning tokens are billed as output.
+          .object({
+            model: z.string().min(1).default("gpt-6.1-sol"),
+            reasoningEffort: z.string().min(1).default("medium"),
+          })
           .prefault({}),
         /** Consecutive self-triggered turns (script results, corrections) before the loop pauses. */
-        maxAutonomousTurns: z.number().int().positive().default(20),
+        maxAutonomousTurns: z.number().int().positive().default(50),
         /** How long a recorded request stays runnable; past it, settled as expired. */
         llmRequestExpiryMs: z
           .number()
@@ -133,10 +129,39 @@ export const AgentContract = defineProcessorContract({
         llmRequestRetryPolicy: z
           .object({
             maxAttempts: z.number().int().positive().default(3),
-            backoffBaseMs: z.number().int().nonnegative().default(10_000),
+            backoffBaseMs: z.number().int().nonnegative().default(2_000),
             backoffMaxMs: z.number().int().nonnegative().default(60_000),
           })
           .prefault({}),
+        /** A script result longer than this (in characters) is written to its file and renders as
+         *  its shape plus a preview (result-render.ts). */
+        scriptResultHistoryLimit: z.number().int().positive().default(30_000),
+        /** The share of the model's context window a request may fill before the conversation up
+         *  to it is compacted into a summary (processor.ts `#compact`). */
+        compactionTriggerFraction: z.number().positive().max(1).default(0.5),
+        /** IDLE COMPACTION, off by default (0): this long after a request settles with no activity
+         *  since, the history
+         *  after the newest summary, when it is at least `idleCompactionMinNewTokens` (estimated
+         *  from its characters), is summarized while the provider still holds it in cache (OpenAI
+         *  keeps a prefix 30 minutes after its last use), so the next wake-up re-sends short
+         *  summaries instead of the whole history uncached. Earlier summaries stay word for word
+         *  until together they pass `idleSummariesMaxChars`; the next idle summary then merges
+         *  them all into one. */
+        idleCompactionAfterMs: z.number().int().nonnegative().default(0),
+        idleCompactionMinNewTokens: z.number().int().positive().default(30_000),
+        idleSummariesMaxChars: z.number().int().positive().default(40_000),
+        /** KEEP-WARM: a long-lived agent (`/agents/<name>`) keeps its history cached this long
+         *  after its last request, with a ping every `keepWarmEveryMs` (a cache read refreshes
+         *  OpenAI's 30 minutes), and only then has its idle summary: a ping costs a twenty-fifth of
+         *  re-sending the history, and a quiet hour stays lossless. Off by default (0); the pings ride
+         *  the idle check, so they need `idleCompactionAfterMs` too. A voice call's agent does
+         *  neither: its call is over. */
+        keepWarmForMs: z.number().int().nonnegative().default(0),
+        keepWarmEveryMs: z
+          .number()
+          .int()
+          .positive()
+          .default(25 * 60_000),
       })
       .prefault({}),
     /** Every model-visible item, in offset order — the conversation the next request is built from. */
@@ -152,12 +177,73 @@ export const AgentContract = defineProcessorContract({
           /** The context it came from, when another one sent it (processor.ts, the fold): the
            *  model reads it as `[from <context>]`. */
           from: z.string().optional(),
+          /** A compaction summary: it replaced every non-system item through this offset. */
+          compaction: Compaction.optional(),
+          /** An answer's `run` call, and the provider's output items for exact replay. */
+          call: RunCall.optional(),
+          providerItems: z.array(z.unknown()).optional(),
+          providerModel: z.string().optional(),
+          /** A standing-instructions item; `snapshot` marks the conversation's head copy. */
+          sections: Sections.optional(),
+          snapshot: z.boolean().optional(),
+          /** A request's stamp, at the request's own offset. */
+          stamp: z.boolean().optional(),
         }),
       )
       .default([]),
-    /** The ONE trigger the next request answers; null once a request has been recorded for it. */
+    /** The standing sections as the model has been shown them (the head snapshot and every update
+     *  since), by name: what a fresh read is compared with before each request. */
+    sections: z.record(z.string(), z.string()).default({}),
+    /** Which call each of this loop's script runs answered: run request offset → call id. */
+    runs: z.record(z.string(), z.object({ callId: z.string() })).default({}),
+    /** The call of the newest answer whose run has not been requested yet. */
+    awaitingRun: z.object({ callId: z.string() }).nullable().default(null),
+    /** The script runs this loop asked for and that have not settled, by request offset, with
+     *  when they were asked for: only their settlements become the model's input. */
+    pendingRuns: z.record(z.string(), z.object({ requestedAt: z.number() })).default({}),
+    /** This loop's newest script outcomes, oldest first: every script's `results` (results-preamble.ts). */
+    scriptResults: z
+      .array(
+        z.object({
+          offset: z.number().int().positive(),
+          requestOffset: z.number().int().positive(),
+          kind: z.enum(["data", "large", "error", "done"]),
+          json: z.string().optional(),
+          path: z.string().optional(),
+          text: z.boolean().optional(),
+          error: z.string().optional(),
+        }),
+      )
+      .default([]),
+    /** What the agent says about itself (`agent/summary-updated`): its own title, what it is doing
+     *  now, what it is waiting for, and a sentence on its purpose or conclusions. The Agents app
+     *  titles the agent with `title` when set. */
+    summary: z
+      .object({
+        title: z.string().nullable().default(null),
+        activity: z.string().nullable().default(null),
+        waitingFor: WaitingFor.nullable().default(null),
+        description: z.string().nullable().default(null),
+      })
+      .prefault({}),
+    /** Code pinned above every later script (`agent/preamble-entry-set`), in first-set order. */
+    preamble: z.array(z.object({ key: z.string(), code: z.string() })).default([]),
+    /** The pinned entries the loop took out because they broke scripts, newest last, until their
+     *  key is set again (`agent/preamble-entry-quarantined`, or an entry the reduce would not pin
+     *  past the ceiling): the PINNED PREAMBLE section names them (results-preamble.ts). */
+    preambleQuarantined: z
+      .array(z.object({ key: z.string(), error: z.string(), offset: z.number().int().positive() }))
+      .default([]),
+    /** The ONE trigger the next request answers; null once a request has been recorded for it.
+     *  `gate`: every input it stands for came from another agent, and these offsets wait for the
+     *  project's gate (`agent/input-gated`) before a request is recorded; absent, nothing waits. */
     pendingLlmRequestTrigger: z
-      .object({ offset: z.number().int().positive(), atMs: z.number(), source: TriggerSource })
+      .object({
+        offset: z.number().int().positive(),
+        atMs: z.number(),
+        source: TriggerSource,
+        gate: z.object({ waiting: z.array(z.number().int().positive()) }).optional(),
+      })
       .nullable()
       .default(null),
     /** The one recorded request not yet settled: the loop's obligation, whichever incarnation runs it. */
@@ -178,6 +264,19 @@ export const AgentContract = defineProcessorContract({
     /** Set by `agent/paused` (the breakers, or an operator); cleared by `agent/resumed`. */
     paused: z
       .object({ reason: z.string(), atOffset: z.number().int().positive() })
+      .nullable()
+      .default(null),
+    /** THE ANSWER OWED: the newest input that must be answered (processor.ts `answerOwedFor`: a
+     *  job an agent scheduled, or words marked `answerOwed`), described for the reminder, until
+     *  the model ends a turn itself (words, or a deliberate empty answer) or a turn ends after its
+     *  one reminder. A turn about to end on a script that returned nothing while this is owed is
+     *  asked once more (`agent/answer-reminded`, which sets `reminded`). */
+    owedAnswer: z
+      .object({
+        offset: z.number().int().positive(),
+        why: z.string(),
+        reminded: z.boolean().default(false),
+      })
       .nullable()
       .default(null),
   }),
@@ -211,10 +310,22 @@ export const AgentContract = defineProcessorContract({
         "Merges a partial configuration into the agent's config; omitted keys keep their values.",
       payloadSchema: z.object({
         config: z.object({
-          llm: z.object({ model: z.string().min(1).optional() }).optional(),
+          llm: z
+            .object({
+              model: z.string().min(1).optional(),
+              reasoningEffort: z.string().min(1).optional(),
+            })
+            .optional(),
           maxAutonomousTurns: z.number().int().positive().optional(),
           llmRequestExpiryMs: z.number().int().positive().optional(),
           llmRequestDebounceMs: z.number().int().nonnegative().optional(),
+          scriptResultHistoryLimit: z.number().int().positive().optional(),
+          compactionTriggerFraction: z.number().positive().max(1).optional(),
+          idleCompactionAfterMs: z.number().int().nonnegative().optional(),
+          idleCompactionMinNewTokens: z.number().int().positive().optional(),
+          idleSummariesMaxChars: z.number().int().positive().optional(),
+          keepWarmForMs: z.number().int().nonnegative().optional(),
+          keepWarmEveryMs: z.number().int().positive().optional(),
           llmRequestRetryPolicy: z
             .object({
               maxAttempts: z.number().int().positive().optional(),
@@ -250,7 +361,39 @@ export const AgentContract = defineProcessorContract({
             ]),
           })
           .optional(),
+        /** Words that must be answered (a person's request): a turn that would end on a script
+         *  returning nothing, before anything was said, is asked once more (`owedAnswer`). An input
+         *  a schedule delivers is owed by default when the schedule was set by a script (a job an
+         *  agent scheduled), not by the project's code at `/`; `false` opts it out. */
+        answerOwed: z.boolean().optional(),
         llmRequestOffset: z.number().int().positive().optional(),
+        /** A compaction summary (processor.ts `#compact`), on a developer item: it replaces every
+         *  non-system item through `replacesHistoryThrough`. */
+        compaction: Compaction.optional(),
+        /** On an answer: its `run` call, and the provider's output items with the model that
+         *  wrote them, replayed verbatim on later requests (render.ts). */
+        call: RunCall.optional(),
+        providerItems: z.array(z.unknown()).optional(),
+        providerModel: z.string().optional(),
+        /** On a system item the loop wrote: the standing sections it sets, as the content renders
+         *  them; `snapshot` for the head copy. */
+        sections: Sections.optional(),
+        snapshot: z.boolean().optional(),
+      }),
+    },
+    "events.iterate.com/agent/preamble-entry-set": {
+      description:
+        "Code pinned above every later script of this agent (a script's `setPreamble({ key, code })`), or removed (`code: null`). Entries keep first-set order; setting a key again replaces its code in place.",
+      payloadSchema: z.object({ key: z.string().min(1), code: z.string().nullable() }),
+    },
+    "events.iterate.com/agent/preamble-entry-quarantined": {
+      description:
+        "A pinned entry the loop took out because it broke scripts: the script envelope would not load with it (found before a run, which then went ahead without it), or it threw before a script began (`requestOffset` names that run). It is removed as `code: null` removes it; its code stays here, and the PINNED PREAMBLE section names it until its key is set again.",
+      payloadSchema: z.object({
+        key: z.string().min(1),
+        code: z.string(),
+        error: z.string().min(1),
+        requestOffset: z.number().int().positive().optional(),
       }),
     },
     "events.iterate.com/agent/web-message-sent": {
@@ -266,8 +409,13 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/summary-updated": {
       description:
-        "The tag's status attribute as the live activity label — the platform's summary vocabulary, the one field this loop speaks.",
-      payloadSchema: z.object({ activity: z.string().min(1) }),
+        "What the agent says about itself, each field optional and merged: `activity` (the tag's status attribute, what it is doing now), `title` (its own short title), `waitingFor` (what it handed back waiting on; null clears it — a prose-only answer sets user_input, a person's words clear it) and `description` (its purpose or conclusions). A script sets them with `setSummary`.",
+      payloadSchema: z.object({
+        activity: z.string().min(1).optional(),
+        title: z.string().min(1).max(200).optional(),
+        waitingFor: WaitingFor.nullable().optional(),
+        description: z.string().min(1).max(1_000).optional(),
+      }),
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
@@ -325,6 +473,9 @@ export const AgentContract = defineProcessorContract({
         maxContextTokens: z.number().int().positive(),
         inputTokens: z.number().int().nonnegative(),
         outputTokens: z.number().int().nonnegative(),
+        cachedInputTokens: z.number().int().nonnegative().optional(),
+        cacheWriteInputTokens: z.number().int().nonnegative().optional(),
+        costUsd: z.number().nonnegative().optional(),
       }),
     },
     "events.iterate.com/agent/paused": {
@@ -338,6 +489,42 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/resumed": {
       description: "Turns run again; the breakers' counts start over.",
       payloadSchema: z.object({ reason: z.string().optional() }),
+    },
+    "events.iterate.com/agent/idle-check": {
+      description:
+        "The agent's own schedule (`idle-compaction`, set when a request settles) firing: if nothing happened since the request it names, a ping keeps the conversation cached until `keepWarmUntil`, and after that it is compacted while it is still cached.",
+      payloadSchema: z.object({
+        afterRequestOffset: z.number().int().positive(),
+        inputTokens: z.number().int().nonnegative(),
+        /** Until when pings keep the history cached (a long-lived agent's): ISO. */
+        keepWarmUntil: z.string().optional(),
+      }),
+    },
+    "events.iterate.com/agent/cache-kept-warm": {
+      description:
+        "A keep-warm ping: the request it names re-read from the provider's prompt cache, so the history stays cached 30 more minutes, and what that cost.",
+      payloadSchema: z.object({
+        afterRequestOffset: z.number().int().positive(),
+        usage: LlmUsage.optional(),
+      }),
+    },
+    "events.iterate.com/agent/input-gated": {
+      description:
+        "The project's gate (message.ts `AgentInputGate`, set by the config's agents.ts) on words another agent sent without `trigger: false`: `wake` lets the input at `inputOffset` start a turn; otherwise it stays context, read on the next turn. `decision` is the gate's record (the triage decision, its probability and reason). A decision for an input no longer waiting is a harmless fact.",
+      payloadSchema: z.object({
+        inputOffset: z.number().int().positive(),
+        wake: z.boolean(),
+        decision: z.record(z.string(), z.unknown()).optional(),
+      }),
+    },
+    "events.iterate.com/agent/answer-reminded": {
+      description:
+        "A turn that owed an answer (the input at `inputOffset`: a job an agent scheduled, or words marked answerOwed) was about to end on the script at `runRequestOffset` returning nothing, with nothing said: that script's result note, beside this event, asks the model once more, and starts one more request. Once per owed input.",
+      payloadSchema: z.object({
+        inputOffset: z.number().int().positive(),
+        runRequestOffset: z.number().int().positive(),
+        why: z.string(),
+      }),
     },
   },
   // The script events are the CONTEXT's (`itx/run-requested` / `run-settled`): the agent asks,
@@ -355,6 +542,13 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
+    "events.iterate.com/agent/preamble-entry-set",
+    "events.iterate.com/agent/preamble-entry-quarantined",
+    "events.iterate.com/agent/summary-updated",
+    "events.iterate.com/agent/idle-check",
+    "events.iterate.com/agent/answer-reminded",
+    "events.iterate.com/agent/input-gated",
+    "events.iterate.com/itx/run-requested",
     "events.iterate.com/itx/run-settled",
   ],
   emits: [
@@ -368,8 +562,12 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/llm-response-frame",
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/token-usage-reported",
+    "events.iterate.com/agent/cache-kept-warm",
+    "events.iterate.com/agent/answer-reminded",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
+    "events.iterate.com/agent/preamble-entry-quarantined",
+    "events.iterate.com/agent/input-gated",
     "events.iterate.com/itx/run-requested",
   ],
 });

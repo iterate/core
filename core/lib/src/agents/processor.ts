@@ -1,25 +1,15 @@
-// agents/processor.ts — THE AGENT PROCESSOR: the pure reduce of the creation and deletion facts,
-// the conversation and the loop's obligations, and the effects over that fold — THE SAGAS (the birth
-// `itx.agents.create(path)` opens: the certificate on `/` and here with the default prompt beside it;
-// the death `itx.agents.delete(path)` opens: the certificate on `/` and here, after which the loop
-// runs no more turns) and THE LOOP (the turn loop, LLM request and codemode parts folded into one
-// class, lean). The model call LIVES HERE (`#stream`): a `@cf/…` model through `itx.ai` (the
-// Workers AI binding under THIS context's rules, so a test lends a fake there), anything else
-// through the account's AI Gateway as a Workers AI partner model, streamed from the Responses API.
-// The host (durable-object.ts) hands in `getItx`, so a unit test constructs the processor with
-// `new` and reduces rows (processor.test.ts, in node); the saga and the loop are proven on the
-// worker (test/vitest/agents/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
+// processor.ts — THE AGENT PROCESSOR: the reduce, the birth and death sagas, the debounced turn
+// loop, interrupts, expiry, retries, breakers and compaction, with each request built for OpenAI's
+// prompt cache, after Pi 1.0 and Pi Durable. render.ts says how the input stays append-only; this
+// loop records what that needs: the calls of the one tool, `run({ status, script })`, the
+// standing sections' changes (`#syncSections`) and the response's own items.
 //
-// A request is debounced by the at-head scheduling below: one window after its trigger,
-// the failure backoff folded in, the delayed append being the intent.
+// - a message that arrives while this loop's own script is still running waits for its result
+//   (up to HOLD_FOR_RUN_MS), so a call is always followed by its output;
+// - every request's usage carries cache writes and its dollar cost (pricing.ts); a compaction's too.
 //
-// Two kinds of effect, chosen at the dispatch site: a PER-EVENT consequence — the assistant's
-// output parsed into a script request, a script's settlement rendered into the next developer item
-// — is BLOCKED (`blockProcessorWhile`): the event is delivered once, so losing the append would
-// lose the consequence. A STATE-DERIVED consequence — the birth, recording the next request,
-// running the open request, tripping a breaker — runs at head in the BACKGROUND: any later delivery
-// over the same fold re-derives it, so an attempt lost to an eviction costs nothing, and every
-// append is idempotency-keyed so a retry appends nothing twice.
+// The event log spells an answer's content as its prose plus the call rendered as a `<codemode>`
+// block, the format the Agents app, the relays and voice read.
 import { z } from "zod";
 import { bytesToBase64, errorCode } from "../lib.ts";
 import {
@@ -29,22 +19,163 @@ import {
   type ReduceArgs,
   StreamProcessor,
 } from "../stream/processor.ts";
-import type { IterateContextApi, RewriteRuleListEntry } from "../api.ts";
-import type { RunSettlement } from "../stream/run.ts";
-import {
-  AgentContract,
-  type AgentState,
-  type ChatMessage,
-  type FileAttachment,
-  type LlmUsage,
-} from "./contract.ts";
+import type { IterateContextApi } from "../api.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
+import { formatScriptDuration, renderScriptSettlement } from "./result-render.ts";
+import {
+  classifyScriptResult,
+  envelopeLoader,
+  guardPreamble,
+  pinnedEntryThrew,
+  pinnedEntryThrewNote,
+  preambleEntryQuarantined,
+  preambleEntrySet,
+  preambleSection,
+  RETAINED_SCRIPT_RESULTS,
+  wrapScript,
+} from "./results-preamble.ts";
+import {
+  type AgentInputGate,
+  isForeignAgentFact,
+  isOtherContext,
+  trustBoundary,
+} from "./message.ts";
+import { standingFileSection, standingInstructionFiles } from "./standing-instructions.ts";
+import { AgentContract, type AgentState, type LlmUsage } from "./contract.ts";
+import { AGENT_COMPACTION_PROMPT, DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
+import {
+  answerText,
+  buildResponsesInput,
+  type InputItem,
+  messageText,
+  OutputItem,
+  type RenderItem,
+  RUN_TOOL,
+  sectionChanges,
+  stableCapabilityTree,
+} from "./render.ts";
+import { requestCostUsd } from "./pricing.ts";
 
 /** THE AI GATEWAY the agent's model calls go through — `default`, the gateway Cloudflare creates on
  *  an account's first authenticated request; unified billing pays the provider, no key anywhere. A
  *  property of the code, not of a deployment. */
 const AI_GATEWAY_ID = "default";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
+/** How long a new message waits for this loop's own running script before a turn starts anyway:
+ *  the call's result then comes back before the message is read, so the call is followed by its
+ *  output and nothing in the prompt has to move. A script still running after this is answered
+ *  with "no result yet", and its result arrives later as its own message (render.ts). */
+const HOLD_FOR_RUN_MS = 20_000;
+/** THE IDLE SUMMARIES' instructions: the compaction prompt (../system-prompt.ts) with a cap, the
+ *  pending asks and the exact identifiers. The first summary, and a merge of summaries that grew
+ *  too long, carries everything forward; every other one summarizes only what happened after the
+ *  earlier summaries, which stay word for word, because a summary rewritten from the summary
+ *  before it loses facts. At the agent's own reasoning effort: the effort is part of the
+ *  provider's cache key. */
+const IDLE_SUMMARY_PROMPT = `${AGENT_COMPACTION_PROMPT}
+
+If the history above begins with earlier summaries, carry all of their facts forward, updated. End with two short lists: PENDING (every open item and every question awaiting someone's answer, with who and what next) and IDENTIFIERS (exact ids, threads, paths, kv keys, amounts and dates). Keep it all under 1,500 words.`;
+const IDLE_SUMMARY_SINCE_PROMPT = `${AGENT_COMPACTION_PROMPT}
+
+The earlier summaries above stay in your context word for word, so do not repeat anything in them. Summarize only what happened after them, the same way, and say where it updates or supersedes them. End with two short lists: PENDING and IDENTIFIERS (only new or changed ones). Keep it under 1,000 words.`;
+
+/** A KEEP-WARM PING's input after the request's own: it asks for nothing, and the answer is dropped. */
+const KEEP_WARM_PROMPT =
+  "[Keep-warm request from the platform, not from anyone: it only keeps this conversation in the prompt cache. Do nothing and reply with exactly: ok]";
+
+/** A voice call's agent: its call is over once it goes quiet, so it neither pings nor summarizes. */
+const isVoiceCall = (path: string) => path.startsWith("/agents/voice/");
+/** A long-lived agent (`/agents/<name>`), which pings to keep its history cached; a task's
+ *  subagent or a thread goes cold, with an idle summary when it is worth one. */
+export const keepsWarm = (path: string) => /^\/agents\/[^/]+$/.test(path) && !isVoiceCall(path);
+
+/** The conversation after the newest summary, in tokens, estimated from its characters: what an
+ *  idle summary would take out of the next wake-up's uncached input. */
+export function historyTokensSinceSummary(state: AgentState): number {
+  const cutoff = Math.max(
+    0,
+    ...state.contextItems.flatMap((item) =>
+      item.compaction ? [item.compaction.replacesHistoryThrough] : [],
+    ),
+  );
+  const chars = state.contextItems
+    .filter((item) => item.role !== "system" && !item.compaction && item.offset > cutoff)
+    .reduce((sum, item) => sum + item.content.length, 0);
+  return Math.round(chars / 3.6);
+}
+
+/** What an idle check does at `now`: nothing if anything happened since the request it names (that
+ *  is no longer the newest request, or something is open, running or waiting, or a summary covers
+ *  it); a ping while the keep-warm window lasts past the next check; then a summary, when enough
+ *  history came after the newest one to be worth it. */
+export function idleAction(
+  state: AgentState,
+  check: { afterRequestOffset: number; inputTokens: number; keepWarmUntil?: string },
+  now: number,
+): "keep-warm" | "compact" | undefined {
+  if (!quietSince(state, check.afterRequestOffset)) return undefined;
+  if (check.keepWarmUntil && now + state.config.keepWarmEveryMs <= Date.parse(check.keepWarmUntil))
+    return "keep-warm";
+  return historyTokensSinceSummary(state) >= state.config.idleCompactionMinNewTokens
+    ? "compact"
+    : undefined;
+}
+
+/** Nothing happened since the request at `requestOffset`, and no summary covers it. */
+function quietSince(state: AgentState, requestOffset: number): boolean {
+  const newest = Math.max(
+    0,
+    ...state.contextItems.filter((item) => item.stamp).map((item) => item.offset),
+  );
+  return (
+    newest === requestOffset &&
+    !state.openRequest &&
+    !state.pendingLlmRequestTrigger &&
+    Object.keys(state.pendingRuns).length === 0 &&
+    !state.paused &&
+    !state.deletion &&
+    !state.contextItems.some(
+      (item) =>
+        item.compaction &&
+        (item.compaction.replacesHistoryThrough >= requestOffset || item.offset > requestOffset),
+    )
+  );
+}
+
+/** Why an input is OWED AN ANSWER, or null when its turn may end in silence: a job an agent
+ *  scheduled (an input a schedule delivers, set by a script rather than by the project's own code
+ *  at `/`, whose WhatsApp reviews mostly end in silence), or words their writer marked
+ *  `answerOwed`; `answerOwed: false` opts a scheduled input out. */
+export function answerOwedFor(event: {
+  payload: { answerOwed?: boolean };
+  source: { origin?: string; schedule?: { key: string } };
+}): string | null {
+  const { answerOwed } = event.payload;
+  const { schedule, origin } = event.source;
+  if (answerOwed === false || !(answerOwed || (schedule && origin !== "/"))) return null;
+  return schedule ? `the scheduled job "${schedule.key}"` : "the message";
+}
+
+/** The result note of a script that returned nothing while its turn still owes an answer: the
+ *  plain note, then why the turn goes on once more. A deliberate silence stays one empty answer
+ *  away. */
+function answerReminder(note: string, owed: { offset: number; why: string }): string {
+  return `${note} That would end your turn, but nothing has been said yet for ${owed.why} @${String(owed.offset)}, which expects an answer (words written beside a call do not count: some readers hold them back). If it needs a message or a report, write it now as your final message, with no call. If it needs none, or \`sendMessage\` already sent it, reply with nothing.`;
+}
+
+/** A script body that is already a complete async function, passed through unwrapped
+ *  (codemode-format.ts's rule). */
+const ASYNC_FUNCTION_BODY_RE = /^(?:async\s*(?:function|\()|\(?async\s*\()/;
+/** The provider's prompt-cache key is at most this long (Pi: clampOpenAIPromptCacheKey). */
+const PROMPT_CACHE_KEY_MAX = 64;
+
+/** The cache key a request is routed with: the agent's path, except a voice call's agent, which
+ *  shares its client's key (`voice/<client>`) so calls with the same person share their cached head
+ *  (render.ts OWN_SECTIONS). */
+export function promptCacheKey(path: string): string {
+  const voice = /^\/agents\/voice\/([^/]+)\/[^/]+$/.exec(path);
+  const key = voice ? `voice/${voice[1]}` : path;
+  return Array.from(key).slice(0, PROMPT_CACHE_KEY_MAX).join("");
+}
 
 /** The failure backoff, folded into the debounce window: doubling from the policy's base per
  *  consecutive failure, capped at its ceiling; nothing after a success. */
@@ -54,71 +185,11 @@ function retryBackoffMs(state: Pick<AgentState, "consecutiveLlmFailures" | "conf
   return Math.min(2 ** (state.consecutiveLlmFailures - 1) * backoffBaseMs, backoffMaxMs);
 }
 
-/** The conversation as the model reads it. An item another context appended opens with
- *  `[from <context>]`. An item's images become image parts (a data: URL of the bytes in `images`,
- *  keyed by path — a vision model sees the pixels); any other attachment, or an image whose bytes
- *  are gone, is a line naming it and how a script reads it (a hint line). The developer's notes
- *  read as system instructions. */
-export function buildChatMessages(
-  items: AgentState["contextItems"],
-  images: Map<string, { contentType: string; base64: string }>,
-  tree: RewriteRuleListEntry[] = [],
-): ChatMessage[] {
-  const messages = items.map((item): ChatMessage => {
-    const role = item.role === "developer" ? "system" : item.role;
-    const content = item.from ? `[from ${item.from}] ${item.content}` : item.content;
-    if (!item.files?.length) return { role, content };
-    const parts: Extract<ChatMessage["content"], unknown[]> = [];
-    const hints: string[] = [];
-    for (const file of item.files) {
-      const image = images.get(file.path);
-      if (image)
-        parts.push({
-          type: "image_url",
-          image_url: { url: `data:${image.contentType};base64,${image.base64}` },
-        });
-      else hints.push(fileHintLine(file));
-    }
-    const text = [content, ...hints].filter(Boolean).join("\n");
-    if (parts.length === 0) return { role, content: text };
-    return { role, content: [{ type: "text", text }, ...parts] };
-  });
-  // THE TREE this turn — the agent's `rewriteRules.list()`, rendered — as one system message after
-  // the journaled system items, before the conversation: what the model's scripts can spell.
-  const rendered = renderCapabilityTree(tree);
-  if (rendered) {
-    const firstNonSystem = messages.findIndex((message) => message.role !== "system");
-    messages.splice(firstNonSystem === -1 ? messages.length : firstNonSystem, 0, {
-      role: "system",
-      content: rendered,
-    });
-  }
-  return messages;
-}
-
-/** The agent's table as the model reads it: one line per name it can spell (`match — description`,
- *  a row without a description shows its target), grouped by the context each row came from when
- *  more than one; masks and the bare `itx` row are not names. Null when nothing is spellable (a jail
- *  with no grants yet): then no tree message at all. */
-export function renderCapabilityTree(rows: RewriteRuleListEntry[]): string | null {
-  const visible = rows.filter((row) => row.target && row.match !== "itx");
-  if (visible.length === 0) return null;
-  const contexts = [...new Set(visible.map((row) => row.context))];
-  const body = contexts.flatMap((context) => [
-    `from ${context}:`,
-    ...visible
-      .filter((row) => row.context === context)
-      .map((row) => `${row.match} — ${row.description || `⇒ ${row.target}`}`),
-  ]);
-  return [
-    "`itx` IS THIS CONTEXT'S CAPABILITY TREE (`await itx.rewriteRules.list()`) — every name below is one you can spell inside a tag; nothing else resolves:",
-    ...body,
-  ].join("\n");
-}
-
-/** How a non-image (or gone) attachment is named to the model. */
-function fileHintLine(file: FileAttachment): string {
-  return `[Attached file: ${file.filename} (${file.contentType}, ${String(file.size)} bytes) — read it with \`await itx.files.get(${JSON.stringify(file.path)}).bytes()\`]`;
+/** The request stamp a newly opened request adds to the conversation: the moment it was asked for,
+ *  in UTC (a person's own zone is theirs to state: AGENTS.md, a role file). It stays in place, so
+ *  the prompt a provider cached stays a prefix. */
+function requestStamp(createdAt: string): string {
+  return `Requested at: ${createdAt} (UTC)`;
 }
 
 /** The coalescing window: how much streamed text rides one `llm-response-frame` append — ~7
@@ -127,8 +198,9 @@ const FRAME_WINDOW_MS = 150;
 /** A window whose text grew past this lands early rather than as one oversized append. */
 const FRAME_WINDOW_MAX_CHARS = 64_000;
 /** The idle watchdog: a stream that carries nothing for this long fails the attempt, so a stalled
- *  provider never wedges a turn until its expiry. */
-const STREAM_IDLE_BUDGET_MS = 45_000;
+ *  provider never wedges a turn until its expiry. Short, because a person may be waiting on the
+ *  line: a low-effort reasoning model streams within seconds, and a stall is retried at once. */
+const STREAM_IDLE_BUDGET_MS = 25_000;
 
 /** The context windows of the models this loop names; a conservative floor for the rest. OpenAI's
  *  figures are the operating window (where pricing doubles), not the documented one. */
@@ -162,12 +234,6 @@ async function appendUnlessLost(
 
 // ── the model call's wire shapes ──
 
-/** What Workers AI answers when it does not stream: `{ response }`, or the chat-completions shape. */
-const ChatAnswer = z.union([
-  z.object({ response: z.string() }),
-  z.object({ choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1) }),
-]);
-
 /** The usage a provider reports, both dialects: OpenAI Responses
  *  (`input_tokens`/`output_tokens`) and chat completions (`prompt_tokens`/`completion_tokens`),
  *  with the cached/reasoning breakdowns when present. Loose: vendors keep adding fields. */
@@ -183,7 +249,10 @@ const ProviderUsage = z.looseObject({
     .looseObject({ reasoning_tokens: z.number().int().nonnegative().optional() })
     .optional(),
   input_tokens_details: z
-    .looseObject({ cached_tokens: z.number().int().nonnegative().optional() })
+    .looseObject({
+      cached_tokens: z.number().int().nonnegative().optional(),
+      cache_write_tokens: z.number().int().nonnegative().optional(),
+    })
     .optional(),
   output_tokens_details: z
     .looseObject({ reasoning_tokens: z.number().int().nonnegative().optional() })
@@ -202,12 +271,32 @@ function normalizeUsage(raw: unknown): LlmUsage | undefined {
   const reasoningOutputTokens =
     parsed.data.completion_tokens_details?.reasoning_tokens ??
     parsed.data.output_tokens_details?.reasoning_tokens;
-  return { inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens };
+  const cacheWriteInputTokens = parsed.data.input_tokens_details?.cache_write_tokens;
+  return {
+    inputTokens,
+    outputTokens,
+    cachedInputTokens,
+    cacheWriteInputTokens,
+    reasoningOutputTokens,
+  };
 }
 
 /** One OpenAI Responses API stream event — the loop reads the few types it knows and skips the
- *  rest. */
-const ResponsesEvent = z.looseObject({ type: z.string() });
+ *  rest. A delta's text and a finished item are read when well-formed, and ignored otherwise. */
+const ResponsesEvent = z.looseObject({
+  type: z.string(),
+  delta: z.string().optional().catch(undefined),
+  item: OutputItem.optional().catch(undefined),
+});
+
+/** A call of the one tool: its id and its arguments, a JSON string as the provider sends it. */
+const FunctionCallItem = z.looseObject({
+  call_id: z.string().catch(""),
+  arguments: z.string().catch(""),
+});
+
+/** `run`'s arguments, when they are the JSON the tool declares. */
+const RunArguments = z.looseObject({ status: z.string().catch(""), script: z.string() });
 
 /** Read an SSE body frame by frame, handing each `data:` JSON to `onEvent`; the reader is cancelled
  *  when `signal` aborts, so nothing lands after the caller has settled. */
@@ -298,53 +387,41 @@ export function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> 
   });
 }
 
-/** The conversation as the Responses API takes it: `input` items with text and image parts. */
-function responsesInput(messages: ChatMessage[]) {
-  return messages.map((message) =>
-    typeof message.content === "string"
-      ? { role: message.role, content: message.content }
-      : {
-          role: message.role,
-          content: message.content.map((part) =>
-            part.type === "text"
-              ? { type: "input_text", text: part.text }
-              : { type: "input_image", image_url: part.image_url.url, detail: "auto" },
-          ),
-        },
-  );
-}
-
 type AgentEvent = ConsumedEvent<typeof AgentContract>;
+/** What one model call answered: the rendered text (prose, then the call as a `<codemode>` block),
+ *  its parts, the response's own items and the usage. */
+type StreamAnswer = {
+  text: string;
+  prose: string;
+  call?: { callId: string; status: string; script: string };
+  providerItems: unknown[];
+  usage?: LlmUsage;
+};
 type AgentArgs = ProcessEventArgs<AgentState, AgentEvent, AgentEmitted>;
 /** What the loop appends: each type the contract emits, its payload as the catalog spells it. */
 type AgentEmitted = EmittedEventInput<typeof AgentContract>;
 
-/** A settlement as the model reads it next — or null when the script returned nothing: the turn ends. */
-export function renderScriptSettlement(settlement: RunSettlement): string | null {
-  if (settlement.status === "failed")
-    return `Your script failed (${settlement.failureKind}):\n\`\`\`\n${settlement.error}\n\`\`\``;
-  if (settlement.result === undefined) return null;
-  return `Your script returned:\n\`\`\`json\n${JSON.stringify(settlement.result, null, 2)}\n\`\`\``;
-}
-
-type AgentProcessorDeps = {
+type CachedAgentProcessorDeps = {
   /** The host's scope accessor: `itx.ai`, `itx.files`, `itx.whoami()` — the effects this loop
    *  reaches through the context, under its rules (a test lends a fake `itx.ai` there). */
   getItx: () => IterateContextApi & Disposable;
   /** The clock and the wait, injected only so a unit test can make the debounce instant. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** The project's gate on words another agent sent (message.ts), read when it is needed: the
+   *  facet class's `messageGate`, which the config's agents.ts sets. */
+  messageGate?: () => AgentInputGate | undefined;
 };
 
 export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   readonly contract = AgentContract;
 
-  private readonly deps: AgentProcessorDeps;
+  private readonly deps: CachedAgentProcessorDeps;
   readonly #now: () => number;
   /** The debounce window's wait — a test makes it instant. */
   readonly #sleep: (ms: number) => Promise<void>;
 
-  constructor(deps: AgentProcessorDeps) {
+  constructor(deps: CachedAgentProcessorDeps) {
     super();
     this.deps = deps;
     this.#now = deps.now || (() => Date.now());
@@ -354,6 +431,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   /** This incarnation's birth attempt, so one at-head pass does not start a second; the durable
    *  ground is `state.creation`. */
   #creating = false;
+  /** The inputs THIS incarnation is asking the gate about; the durable ground is the trigger's
+   *  `gate.waiting` and the `agent/input-gated` that answers each. */
+  readonly #gatesInFlight = new Set<number>();
   /** The same for this incarnation's death attempt; the durable ground is `state.deletion`. */
   #deleting = false;
 
@@ -385,6 +465,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
    *  when the state does, so a harmless fact (a late intent, a repeated certificate) never reorders
    *  the sidebar. */
   reduce(args: ReduceArgs<AgentState, AgentEvent>): AgentState | undefined {
+    if (isForeignAgentFact(args.event)) return undefined;
     const next = this.#reduceFacts(args);
     return next && { ...next, lastActivityAt: args.event.createdAt };
   }
@@ -423,10 +504,25 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         return {
           ...state,
           config: {
-            llm: { model: patch.llm?.model || state.config.llm.model },
+            llm: {
+              model: patch.llm?.model || state.config.llm.model,
+              reasoningEffort: patch.llm?.reasoningEffort || state.config.llm.reasoningEffort,
+            },
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
             llmRequestDebounceMs: patch.llmRequestDebounceMs ?? state.config.llmRequestDebounceMs,
+            scriptResultHistoryLimit:
+              patch.scriptResultHistoryLimit ?? state.config.scriptResultHistoryLimit,
+            compactionTriggerFraction:
+              patch.compactionTriggerFraction ?? state.config.compactionTriggerFraction,
+            idleCompactionAfterMs:
+              patch.idleCompactionAfterMs ?? state.config.idleCompactionAfterMs,
+            idleCompactionMinNewTokens:
+              patch.idleCompactionMinNewTokens ?? state.config.idleCompactionMinNewTokens,
+            idleSummariesMaxChars:
+              patch.idleSummariesMaxChars ?? state.config.idleSummariesMaxChars,
+            keepWarmForMs: patch.keepWarmForMs ?? state.config.keepWarmForMs,
+            keepWarmEveryMs: patch.keepWarmEveryMs ?? state.config.keepWarmEveryMs,
             llmRequestRetryPolicy: {
               maxAttempts:
                 patch.llmRequestRetryPolicy?.maxAttempts ??
@@ -443,16 +539,88 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       }
 
       case "events.iterate.com/agent/context-added": {
-        const { role, content, actor, llmRequestPolicy, llmRequestOffset } = event.payload;
-        // WHO SENT IT: another context's stamp (core/os caller.ts `stampCaller`), else the sender
+        // THE TRUST BOUNDARY (message.ts): what another agent's context appended is its words, a
+        // user item from that context, whatever role, actor or sections it claims
+        const payload = trustBoundary(event);
+        const { role, content, actor, llmRequestPolicy, llmRequestOffset, compaction } = payload;
+        // The previous loop journaled its default prompt beside the birth certificate, under this
+        // key. The sections supersede it, so it is not part of the conversation.
+        if (role === "system" && event.idempotencyKey?.startsWith("agent/system-prompt:"))
+          return undefined;
+        // A COMPACTION SUMMARY replaces the conversation through its barrier. The standing sections
+        // collapse into ONE head snapshot of what the model has been shown (every update folded
+        // in), other system items survive, then the earlier summaries when it keeps them, then the
+        // summary, then everything after the barrier verbatim — what arrived while the summary
+        // was written included. A summary no newer than one already applied is a harmless fact.
+        // It raises no turn.
+        if (role === "developer" && compaction) {
+          const cutoff = compaction.replacesHistoryThrough;
+          const applied = state.contextItems.some(
+            (item) => item.compaction && item.compaction.replacesHistoryThrough >= cutoff,
+          );
+          if (applied || cutoff >= event.offset) return undefined;
+          const firstSection = state.contextItems.find((item) => item.sections);
+          const head =
+            Object.keys(state.sections).length > 0
+              ? [
+                  {
+                    offset: firstSection?.offset ?? event.offset,
+                    role: "system" as const,
+                    content: "",
+                    sections: state.sections,
+                    snapshot: true,
+                  },
+                ]
+              : [];
+          return {
+            ...state,
+            contextItems: [
+              ...head,
+              ...state.contextItems.filter((item) => item.role === "system" && !item.sections),
+              ...(compaction.keepsEarlierSummaries
+                ? state.contextItems.filter((item) => item.compaction && item.offset <= cutoff)
+                : []),
+              { offset: event.offset, role, content, actor, compaction },
+              ...state.contextItems.filter(
+                (item) => item.role !== "system" && item.offset > cutoff,
+              ),
+            ],
+            runs: Object.fromEntries(
+              Object.entries(state.runs).filter(([run]) => Number(run) > cutoff),
+            ),
+          };
+        }
+        // WHO SENT IT: another context's stamp (apps/os caller.ts `stampCaller`), else the sender
         // the collection relayed through this agent's own facet (`message`; its base is the
         // caller's to choose through the public `at(base)`, collection.ts). `/` is the people's
         // (the dash, a member's session, the root's collection): a person's words carry no sender.
         // The sender signs nothing, so the label is advisory.
         const { origin } = event.source;
-        const sender = origin !== event.path ? origin : event.payload.from;
+        const sender = origin !== event.path ? origin : payload.from;
+        const { call, providerItems, providerModel, sections, snapshot } = payload;
+        // A standing-instructions item folds into what the model has been shown.
+        const shown =
+          role === "system" && sections
+            ? Object.fromEntries(
+                Object.entries({ ...state.sections, ...sections }).filter(
+                  (entry): entry is [string, string] => entry[1] !== null,
+                ),
+              )
+            : state.sections;
+        // An answer's call waits for the run this loop requests for it next (the previous
+        // loop's `<codemode>` answer, re-reduced, makes its call the same way).
+        const awaitingRun =
+          role === "assistant" && llmRequestOffset !== undefined
+            ? call
+              ? { callId: call.callId }
+              : parseCodemodeResponse(content).kind === "script"
+                ? { callId: `call_${String(event.offset)}` }
+                : null
+            : state.awaitingRun;
         const next: AgentState = {
           ...state,
+          sections: shown,
+          awaitingRun,
           contextItems: [
             ...state.contextItems,
             {
@@ -461,8 +629,13 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               content,
               actor,
               llmRequestOffset,
-              files: event.payload.files,
+              files: payload.files,
               from: sender === "/" ? undefined : sender,
+              call,
+              providerItems,
+              providerModel,
+              sections,
+              snapshot,
             },
           ],
         };
@@ -471,17 +644,45 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         const triggers =
           (role === "user" || role === "developer") &&
           llmRequestPolicy?.behaviour !== "dont-trigger-request";
-        if (!triggers) return next;
+        // A script's note that starts no turn (it returned nothing) ends the turn: an answer still
+        // owed after its one reminder is given up with it, unless a turn goes on anyway.
+        if (!triggers) {
+          const givenUp =
+            actor?.type === "script" &&
+            state.owedAnswer?.reminded === true &&
+            !state.openRequest &&
+            !state.pendingLlmRequestTrigger;
+          if (!givenUp) return next;
+          return { ...next, owedAnswer: null };
+        }
         const source =
           actor?.type === "script" || actor?.type === "agent" ? "agent-loop" : "external";
+        // words that must be answered: the newest such input is the one owed
+        const why = source === "external" ? answerOwedFor({ ...event, payload }) : null;
+        // THE GATE (message.ts `AgentInputGate`): words from another agent wait for the project's
+        // gate when everything the trigger stands for came from other agents; once a person's or
+        // the loop's own words are pending, a turn is owed anyway and nothing waits
+        const prior = state.pendingLlmRequestTrigger;
+        const gate =
+          source === "external" && isOtherContext(event.path, sender) && (!prior || prior.gate)
+            ? { waiting: [...(prior?.gate?.waiting || []), event.offset] }
+            : undefined;
         return {
           ...next,
           pendingLlmRequestTrigger: {
             offset: event.offset,
             atMs: Date.parse(event.createdAt),
             source,
+            gate,
           },
-          ...(source === "external" && { autonomousTurnCount: 0 }),
+          ...(why && { owedAnswer: { offset: event.offset, why, reminded: false } }),
+          // a person's words start the breakers over (a transient outage's backoff ends with them)
+          // and answer whatever the agent was waiting for
+          ...(source === "external" && {
+            autonomousTurnCount: 0,
+            consecutiveLlmFailures: 0,
+            summary: { ...state.summary, waitingFor: null },
+          }),
         };
       }
 
@@ -495,6 +696,18 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           return undefined;
         return {
           ...state,
+          // the request's stamp: the model's clock, at the request's own offset (processor
+          // `#messages` reads items through it)
+          contextItems: [
+            ...state.contextItems,
+            {
+              offset: event.offset,
+              role: "developer",
+              content: requestStamp(event.createdAt),
+              actor: { type: "agent" },
+              stamp: true,
+            },
+          ],
           pendingLlmRequestTrigger: null,
           openRequest: {
             requestedAtOffset: event.offset,
@@ -514,7 +727,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         if (!open || open.requestedAtOffset !== event.payload.requestOffset) return undefined;
         const { result } = event.payload;
         if (result.status === "succeeded")
-          return { ...state, openRequest: null, consecutiveLlmFailures: 0 };
+          return {
+            ...state,
+            openRequest: null,
+            consecutiveLlmFailures: 0,
+            // an answer with no call ends the turn the model's own way, in words or a deliberate
+            // silence: nothing more is owed
+            ...(parseCodemodeResponse(result.text).kind === "none" && { owedAnswer: null }),
+          };
         if (result.status === "failed")
           // The trigger comes back for the retry, still the same source; the pass caps the retries.
           return {
@@ -547,16 +767,150 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           ? { ...state, paused: null, autonomousTurnCount: 0, consecutiveLlmFailures: 0 }
           : undefined;
 
+      // THIS LOOP'S OWN RUNS: a run request the engine stamped as this processor's, on this
+      // context. A run anyone else asked for here is theirs: its settlement wakes no turn.
+      case "events.iterate.com/itx/run-requested":
+        if (
+          event.source.processor?.slug !== this.contract.slug ||
+          event.source.origin !== event.path
+        )
+          return undefined;
+        return {
+          ...state,
+          pendingRuns: {
+            ...state.pendingRuns,
+            [String(event.offset)]: { requestedAt: Date.parse(event.createdAt) },
+          },
+          // the run answers the newest answer's call: its result becomes that call's output
+          ...(state.awaitingRun && {
+            runs: { ...state.runs, [String(event.offset)]: { callId: state.awaitingRun.callId } },
+            awaitingRun: null,
+          }),
+        };
+
+      // An own run's outcome joins `results` (the newest ten); the note itself is processEvent's.
+      case "events.iterate.com/itx/run-settled": {
+        const { requestOffset, settlement } = event.payload;
+        const key = String(requestOffset);
+        if (!state.pendingRuns[key]) return undefined;
+        const { [key]: _settled, ...pendingRuns } = state.pendingRuns;
+        const row = classifyScriptResult({
+          agentPath: event.path,
+          requestOffset,
+          offset: event.offset,
+          settlement,
+        });
+        return {
+          ...state,
+          pendingRuns,
+          scriptResults: [...state.scriptResults, row].slice(-RETAINED_SCRIPT_RESULTS),
+        };
+      }
+
+      // What the agent says about itself: each field it names replaces that field.
+      case "events.iterate.com/agent/summary-updated": {
+        const { activity, title, waitingFor, description } = event.payload;
+        return {
+          ...state,
+          summary: {
+            title: title || state.summary.title,
+            activity: activity || state.summary.activity,
+            // oxlint-disable-next-line iterate/simple-truthiness-check -- null clears what it waits for; absent keeps it (contract.ts summary-updated)
+            waitingFor: waitingFor === undefined ? state.summary.waitingFor : waitingFor,
+            description: description || state.summary.description,
+          },
+        };
+      }
+
+      // The gate's decision on words another agent sent: a wake lets the trigger go on to a
+      // request; a hold drops the input from what waits, and the trigger with the last of them
+      // (the words stay in the context, read on the next turn).
+      case "events.iterate.com/agent/input-gated": {
+        const trigger = state.pendingLlmRequestTrigger;
+        const { inputOffset, wake } = event.payload;
+        if (!trigger?.gate?.waiting.includes(inputOffset)) return undefined;
+        if (wake) {
+          const { gate: _decided, ...woken } = trigger;
+          return { ...state, pendingLlmRequestTrigger: woken };
+        }
+        const waiting = trigger.gate.waiting.filter((offset) => offset !== inputOffset);
+        return {
+          ...state,
+          pendingLlmRequestTrigger: waiting.length > 0 ? { ...trigger, gate: { waiting } } : null,
+        };
+      }
+
+      // The one reminder an owed answer gets is spent.
+      case "events.iterate.com/agent/answer-reminded":
+        return state.owedAnswer?.offset === event.payload.inputOffset
+          ? { ...state, owedAnswer: { ...state.owedAnswer, reminded: true } }
+          : undefined;
+
+      // Pinned code (results-preamble.ts): set, replaced or removed by a script, and taken out by
+      // the loop when it breaks scripts.
+      case "events.iterate.com/agent/preamble-entry-set":
+        return { ...state, ...preambleEntrySet(state, event.payload, event.offset) };
+
+      case "events.iterate.com/agent/preamble-entry-quarantined":
+        return { ...state, ...preambleEntryQuarantined(state, event.payload, event.offset) };
+
       default:
         return undefined;
     }
   }
 
+  /** THE PINNED ENTRIES' GUARD before a run (results-preamble.ts `guardPreamble`): an entry the
+   *  script envelope would not load with is quarantined just before the run request, which then
+   *  carries the envelope without it, so a broken entry costs no failed run and never blocks the
+   *  script that removes it. One load per run of an agent with pinned entries, warm while they stay
+   *  the same; an agent without any pays nothing. */
+  async #guardPinned(
+    consequences: AgentEmitted[],
+    state: AgentState,
+    event: AgentEvent,
+    code: string,
+  ): Promise<AgentEmitted[]> {
+    if (state.preamble.length === 0) return consequences;
+    using itx = this.deps.getItx();
+    const { keep, quarantined } = await guardPreamble(
+      envelopeLoader(itx),
+      event.path,
+      state.preamble,
+    );
+    if (quarantined.length === 0) return consequences;
+    return consequences.flatMap((consequence): AgentEmitted[] =>
+      consequence.type === "events.iterate.com/itx/run-requested"
+        ? [
+            ...quarantined.map(
+              (payload) =>
+                ({
+                  type: "events.iterate.com/agent/preamble-entry-quarantined",
+                  idempotencyKey: this.idempotencyKey(`preamble-quarantined/${payload.key}`, event),
+                  payload,
+                }) satisfies AgentEmitted,
+            ),
+            {
+              ...consequence,
+              payload: {
+                code: wrapScript({
+                  code,
+                  agentPath: event.path,
+                  rows: state.scriptResults,
+                  preamble: keep,
+                }),
+              },
+            },
+          ]
+        : [consequence],
+    );
+  }
+
   processEvent(args: AgentArgs): undefined {
-    const { event, state, append, blockProcessorWhile } = args;
+    const { event, state, previousState, append, blockProcessorWhile, runInBackground } = args;
     // An agent asked to go acts no more: no consequence of a late event (a script result landing
     // after the request raises no turn), no interrupt to settle — only the death itself, at head.
-    if (state.deletion) {
+    // Another context's fact about this loop (message.ts) is not this loop's: it has no consequence.
+    if (state.deletion || (event && isForeignAgentFact(event))) {
       this.#atHead(args);
       return;
     }
@@ -569,7 +923,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     if (
       event?.type === "events.iterate.com/agent/context-added" &&
       event.payload.llmRequestPolicy?.behaviour === "interrupt-current-request" &&
-      (event.payload.role === "user" || event.payload.role === "developer") &&
+      ["user", "developer"].includes(trustBoundary(event).role) &&
       state.openRequest
     ) {
       const open = state.openRequest;
@@ -611,13 +965,30 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // ── per-event consequences, blocked: the event is delivered once ──
     // The assistant's answer, interpreted (mmkal's order: the status precedes the script so the step
     // is born with its label, the script precedes the prose so a feed groups the turn as one).
+    // Only an answer this agent's own context wrote: another context's is its words (message.ts).
     if (
       event?.type === "events.iterate.com/agent/context-added" &&
-      event.payload.role === "assistant" &&
+      trustBoundary(event).role === "assistant" &&
       event.payload.llmRequestOffset !== undefined
     ) {
-      const { llmRequestOffset } = event.payload;
-      const outcome = parseCodemodeResponse(event.payload.content);
+      const { llmRequestOffset, call } = event.payload;
+      const parsed = parseCodemodeResponse(event.payload.content);
+      // THIS loop's answer names its call: the script is the call's own text, never re-parsed out of
+      // the rendered block (a script may itself contain `<codemode>` lines); the prose is what the
+      // rendering put before it.
+      const outcome: ReturnType<typeof parseCodemodeResponse> = call
+        ? {
+            kind: "script",
+            code: ASYNC_FUNCTION_BODY_RE.test(call.script.trim())
+              ? call.script.trim()
+              : `async (itx) => {\n${call.script}\n}`,
+            status: call.status.trim() || undefined,
+            prose:
+              (parsed.kind === "script" || parsed.kind === "none"
+                ? parsed.prose
+                : event.payload.content.split(/\n*<codemode /)[0]!.trim()) || undefined,
+          }
+        : parsed;
       const consequences: AgentEmitted[] = [];
       if (outcome.kind === "malformed" || outcome.kind === "multiple")
         consequences.push({
@@ -635,12 +1006,20 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         consequences.push({
           type: "events.iterate.com/itx/run-requested",
           idempotencyKey: this.idempotencyKey("run-requested", event),
-          payload: { code: outcome.code },
+          // the model's script in its envelope: `results`, pinned entries, the serializer
+          payload: {
+            code: wrapScript({
+              code: outcome.code,
+              agentPath: event.path,
+              rows: state.scriptResults,
+              preamble: state.preamble,
+            }),
+          },
         });
       }
       // The prose — beside a tag or on its own — is the message, appended directly on this context.
       // Where a reply GOES from here is a subscriber's business (events are the interface), never a
-      // script the model would need a row for.
+      // script would need a row for.
       if ((outcome.kind === "script" || outcome.kind === "none") && outcome.prose)
         consequences.push({
           type: "events.iterate.com/agent/web-message-sent",
@@ -651,32 +1030,295 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             ...(outcome.kind === "script" && { besideScript: true }),
           },
         });
-      if (consequences.length > 0) blockProcessorWhile(() => append(...consequences));
+      // Words with no script end the turn on the person: the agent now waits for their answer.
+      if (outcome.kind === "none" && outcome.prose)
+        consequences.push({
+          type: "events.iterate.com/agent/summary-updated",
+          idempotencyKey: this.idempotencyKey("waiting-for", event),
+          payload: { waitingFor: "user_input" },
+        });
+      // A pinned entry the script envelope would not load with is quarantined before the run,
+      // which goes ahead without it (`#guardPinned`).
+      if (consequences.length > 0)
+        blockProcessorWhile(async () =>
+          append(
+            ...(outcome.kind === "script"
+              ? await this.#guardPinned(consequences, state, event, outcome.code)
+              : consequences),
+          ),
+        );
     }
 
-    // THE CONTEXT ran the script (whoever asked — this loop, or anything else on this context);
-    // its settlement is the model's next input.
+    // THE CONTEXT ran one of this loop's scripts: its settlement is the model's next input — only
+    // an own run's (the reduce knew it as pending), with how long it ran. A large result is written
+    // to its file first, inside the block: the note must never land before the file it names.
     if (event?.type === "events.iterate.com/itx/run-settled") {
-      const rendered = renderScriptSettlement(event.payload.settlement);
-      if (rendered)
+      const { requestOffset, settlement } = event.payload;
+      const pending = previousState.pendingRuns[String(requestOffset)];
+      const row = state.scriptResults.find((entry) => entry.offset === event.offset);
+      if (pending && row)
+        blockProcessorWhile(async () => {
+          // A PINNED ENTRY THAT THREW before the script began is quarantined (results-preamble.ts):
+          // it would throw before every later script too.
+          const threw = pinnedEntryThrew(settlement, state.preamble, requestOffset);
+          if (threw)
+            await append({
+              type: "events.iterate.com/agent/preamble-entry-quarantined",
+              idempotencyKey: this.idempotencyKey("preamble-threw", event),
+              payload: threw,
+            });
+          const rendered = await renderScriptSettlement({
+            settlement,
+            row,
+            durationMs: Math.max(0, Date.parse(event.createdAt) - pending.requestedAt),
+            historyLimit: state.config.scriptResultHistoryLimit,
+            write: async (path, text) => {
+              using itx = this.deps.getItx();
+              await itx.files.get(path).put({
+                contentType: row.text ? "text/plain; charset=utf-8" : "application/json",
+                data: new TextEncoder().encode(text),
+              });
+            },
+          });
+          const content = rendered && threw ? pinnedEntryThrewNote(rendered, threw) : rendered;
+          const nothing = `Your script finished and returned nothing (in ${formatScriptDuration(Math.max(0, Date.parse(event.createdAt) - pending.requestedAt))}).`;
+          // A script that returned nothing still answers its call (every call needs its output),
+          // and starts no turn: returning nothing ends the loop. Except, ONCE, on a turn that
+          // still owes an answer and that nothing else carries on (no request open, no new
+          // words waiting): a script that only updated notes must not end a turn whose answer
+          // never went out. The note then says so and starts one more request, and
+          // `answer-reminded` records it.
+          const owed = state.owedAnswer;
+          const reminder =
+            !content &&
+            owed &&
+            !owed.reminded &&
+            !state.openRequest &&
+            !state.pendingLlmRequestTrigger &&
+            !state.paused
+              ? owed
+              : null;
+          await append(
+            ...(reminder
+              ? [
+                  {
+                    type: "events.iterate.com/agent/answer-reminded",
+                    idempotencyKey: this.idempotencyKey("answer-reminded", event),
+                    payload: {
+                      inputOffset: reminder.offset,
+                      runRequestOffset: requestOffset,
+                      why: reminder.why,
+                    },
+                  } satisfies AgentEmitted,
+                ]
+              : []),
+            {
+              type: "events.iterate.com/agent/context-added",
+              idempotencyKey: this.idempotencyKey("script-result", event),
+              payload: {
+                role: "developer",
+                content: content || (reminder ? answerReminder(nothing, reminder) : nothing),
+                actor: { type: "script", requestOffset },
+                ...(!content &&
+                  !reminder && { llmRequestPolicy: { behaviour: "dont-trigger-request" } }),
+              },
+            },
+          );
+        });
+    }
+
+    if (event?.type === "events.iterate.com/agent/llm-request-settled") {
+      const { requestOffset, result } = event.payload;
+      const open = previousState.openRequest;
+      // A LOST TURN IS SAID: a failed attempt or an expired request becomes a note the next turn
+      // reads, so the model can tell the person — raising no turn of its own (the retry is the
+      // reduce's; `agent` actor, so it resets no breaker).
+      const lost =
+        result.status === "failed"
+          ? `The model request @${String(requestOffset)} failed (attempt ${String(state.consecutiveLlmFailures)} of ${String(state.config.llmRequestRetryPolicy.maxAttempts)}): ${result.errorMessage.slice(0, 500)}. ${state.consecutiveLlmFailures < state.config.llmRequestRetryPolicy.maxAttempts ? "Retrying." : "Giving up until the next message."}`
+          : result.status === "cancelled" && result.reason === "expired"
+            ? `The model request @${String(requestOffset)} expired before it finished; that turn was dropped.`
+            : null;
+      if (lost && open?.requestedAtOffset === requestOffset)
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/agent/context-added",
-            idempotencyKey: this.idempotencyKey("script-result", event),
+            idempotencyKey: this.idempotencyKey("lost-turn", event),
             payload: {
               role: "developer",
-              content: rendered,
-              actor: { type: "script", requestOffset: event.payload.requestOffset },
+              content: lost,
+              actor: { type: "agent" },
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
             },
           }),
         );
+      // COMPACTION: a request that filled its share of the window has the conversation through it
+      // summarized, in the background — the turn's own consequences (its script) go on meanwhile,
+      // and the summary replaces that history when it lands (the reduce). One at a time per
+      // incarnation; a summary already covering this request is not asked for twice.
+      if (
+        result.status === "succeeded" &&
+        result.usage &&
+        open?.requestedAtOffset === requestOffset
+      ) {
+        const usedTokens = result.usage.inputTokens + result.usage.outputTokens;
+        const thresholdTokens = Math.floor(
+          contextWindowTokens(open.model) * state.config.compactionTriggerFraction,
+        );
+        // covered: a summary already reaches this request, or landed after its prompt was built
+        // (its prompt held the whole pre-summary history, so its size says nothing now)
+        const covered = state.contextItems.some(
+          (item) =>
+            item.compaction &&
+            (item.compaction.replacesHistoryThrough >= requestOffset ||
+              item.offset > requestOffset),
+        );
+        const history = state.contextItems.some(
+          (item) => item.role !== "system" && item.offset < requestOffset,
+        );
+        // GOING QUIET, armed: a check this long after the request, which pings or compacts if
+        // nothing happened since (the schedule is the agent's own; a newer request re-arms it)
+        const settledAt = Date.parse(event.createdAt);
+        const warm = keepsWarm(event.path) && state.config.keepWarmForMs > 0;
+        if (
+          state.config.idleCompactionAfterMs > 0 &&
+          !isVoiceCall(event.path) &&
+          !covered &&
+          (warm || historyTokensSinceSummary(state) >= state.config.idleCompactionMinNewTokens)
+        )
+          runInBackground(() =>
+            this.#armIdleCheck(
+              {
+                afterRequestOffset: requestOffset,
+                inputTokens: result.usage!.inputTokens,
+                ...(warm && {
+                  keepWarmUntil: new Date(settledAt + state.config.keepWarmForMs).toISOString(),
+                }),
+              },
+              settledAt + state.config.idleCompactionAfterMs,
+              `idle-compaction/${String(requestOffset)}`,
+            ),
+          );
+        if (usedTokens >= thresholdTokens && history && !covered && !this.#compacting) {
+          this.#compacting = true;
+          runInBackground(async () => {
+            try {
+              await this.#compact({
+                state,
+                requestOffset,
+                model: open.model,
+                usedTokens,
+                thresholdTokens,
+                append,
+              });
+            } finally {
+              this.#compacting = false;
+            }
+          });
+        }
+      }
+    }
+
+    // GOING QUIET, due: the agent's own schedule fired and nothing has happened since the request
+    // it names. `idleAction` says whether to ping or to summarize; contract.ts's `keepWarmForMs`
+    // and `idleCompactionAfterMs` say why.
+    const idle =
+      event?.type === "events.iterate.com/agent/idle-check" && !this.#compacting
+        ? idleAction(state, event.payload, Date.parse(event.createdAt))
+        : undefined;
+    if (event?.type === "events.iterate.com/agent/idle-check" && idle === "keep-warm") {
+      const check = event.payload;
+      runInBackground(() => this.#keepWarm({ state, check, checkOffset: event.offset, append }));
+    }
+    if (event?.type === "events.iterate.com/agent/idle-check" && idle === "compact") {
+      this.#compacting = true;
+      runInBackground(async () => {
+        try {
+          await this.#compact({
+            state,
+            requestOffset: event.payload.afterRequestOffset,
+            model: state.config.llm.model,
+            usedTokens: event.payload.inputTokens,
+            thresholdTokens: state.config.idleCompactionMinNewTokens,
+            append,
+            idle: true,
+          });
+        } finally {
+          this.#compacting = false;
+        }
+      });
     }
 
     this.#atHead(args);
   }
 
+  /** The idle check `check`, at `at`: the agent's own schedule, `idle-compaction`, which a newer
+   *  request's check replaces. */
+  async #armIdleCheck(
+    check: { afterRequestOffset: number; inputTokens: number; keepWarmUntil?: string },
+    at: number,
+    key: string,
+  ): Promise<void> {
+    using itx = this.deps.getItx();
+    await itx.schedules.set(
+      {
+        key: "idle-compaction",
+        when: { at: new Date(at).toISOString() },
+        events: [{ type: "events.iterate.com/agent/idle-check", payload: check }],
+      },
+      { idempotencyKey: this.idempotencyKey(key) },
+    );
+  }
+
+  /** THE KEEP-WARM PING: the named request's own input (so its cached prefix is what is read) and
+   *  the ping, on the agent's model and effort (both part of the cache key), the tool declared
+   *  but not callable. Its cost lands as `cache-kept-warm`, and the next check is set a ping
+   *  interval later. Best effort: a failed ping still sets the next check, which then compacts or
+   *  pings again. */
+  async #keepWarm(input: {
+    state: AgentState;
+    check: { afterRequestOffset: number; inputTokens: number; keepWarmUntil?: string };
+    checkOffset: number;
+    append: AgentArgs["append"];
+  }): Promise<void> {
+    const { state, check, checkOffset, append } = input;
+    const model = state.config.llm.model;
+    try {
+      const { path } = await this.#identity();
+      const answer = await this.#stream({
+        model,
+        effort: state.config.llm.reasoningEffort,
+        input: [
+          ...(await this.#requestInput(state, check.afterRequestOffset, model, append)),
+          { role: "user", content: KEEP_WARM_PROMPT },
+        ],
+        cacheKey: promptCacheKey(path),
+        signal: AbortSignal.timeout(state.config.llmRequestExpiryMs),
+        onDelta: () => undefined,
+        toolChoice: "none",
+      });
+      await appendUnlessLost(append, {
+        type: "events.iterate.com/agent/cache-kept-warm",
+        idempotencyKey: this.idempotencyKey(`keep-warm/${String(checkOffset)}`),
+        payload: {
+          afterRequestOffset: check.afterRequestOffset,
+          ...(answer.usage && {
+            usage: { ...answer.usage, costUsd: requestCostUsd(model, answer.usage) },
+          }),
+        },
+      });
+    } catch (error) {
+      console.error("[agent] keep-warm ping failed", { error, check });
+    }
+    await this.#armIdleCheck(
+      check,
+      Date.now() + state.config.keepWarmEveryMs,
+      `idle-compaction/${String(check.afterRequestOffset)}/${String(checkOffset)}`,
+    );
+  }
+
   // ── state-derived consequences, at head, in the background: re-derived by any later delivery ──
-  #atHead({ state, delivery, append, runInBackground }: AgentArgs): void {
+  #atHead({ event, state, delivery, append, runInBackground }: AgentArgs): void {
     if (!delivery.caughtUp) return;
 
     // THE SAGA — the birth, from state at head, in the background: at most once per incarnation,
@@ -701,15 +1343,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             idempotencyKey: `agent/created:${path}`,
           };
           await this.#postToTheCatalog(certificate); // the project catalog first
-          await append(certificate, {
-            // this path last: the certificate closes the obligation, the prompt rides with it
-            type: "events.iterate.com/agent/context-added",
-            idempotencyKey: `agent/system-prompt:${path}`,
-            payload: {
-              role: "system",
-              content: `${DEFAULT_AGENT_SYSTEM_PROMPT}\nCURRENT PROJECT: ${JSON.stringify(whoami)}`,
-            },
-          });
+          // this path last: the certificate closes the obligation. The instructions are the
+          // sections, snapshotted by the first request (`#syncSections`).
+          await append(certificate);
         } catch (error) {
           await append({
             type: "events.iterate.com/agent/create-failed",
@@ -749,8 +1385,67 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     }
     const now = this.#now();
 
-    // A person's words resume a paused loop; the loop's own never do (they are what paused it).
+    // THE GATE: words another agent sent wait for the project's gate (message.ts), asked once per
+    // input while no request is open; its `agent/input-gated` lets the trigger on or drops it. An
+    // input from a sender the gate does not apply to, or no gate at all, wakes the agent as before.
     const trigger = state.pendingLlmRequestTrigger;
+    const gate = trigger?.gate && !state.openRequest ? this.deps.messageGate?.() : undefined;
+    if (trigger?.gate && gate) {
+      const waiting = trigger.gate.waiting.map((offset) => ({
+        offset,
+        item: state.contextItems.find((item) => item.offset === offset),
+      }));
+      // this agent's path: every event delivered here is on its context
+      const path = this.#identityRead?.path ?? event?.path;
+      if (
+        path &&
+        waiting.every(({ item }) => item?.from && gate.applies({ path, from: item.from }))
+      ) {
+        for (const { offset, item } of waiting) {
+          if (this.#gatesInFlight.has(offset)) continue;
+          this.#gatesInFlight.add(offset);
+          const recent = state.contextItems
+            .filter((earlier) => earlier.role === "user" && earlier.offset < offset)
+            .slice(-3)
+            .map((earlier) => (earlier.from ? `[from ${earlier.from}] ` : "") + earlier.content);
+          runInBackground(async () => {
+            try {
+              const decided = await gate
+                .decide({
+                  getItx: this.deps.getItx,
+                  path,
+                  from: item!.from!,
+                  offset,
+                  at: new Date(now).toISOString(),
+                  content: item!.content,
+                  recent,
+                })
+                .catch((error: unknown) => {
+                  console.warn("[agent] the message gate failed: the input wakes the agent", {
+                    offset,
+                    error,
+                  });
+                  return { wake: true, decision: { error: String(error) } };
+                });
+              await append({
+                type: "events.iterate.com/agent/input-gated",
+                idempotencyKey: this.idempotencyKey(`input-gated/${String(offset)}`),
+                payload: {
+                  inputOffset: offset,
+                  wake: decided.wake,
+                  decision: decided.decision,
+                },
+              });
+            } finally {
+              this.#gatesInFlight.delete(offset);
+            }
+          });
+        }
+        return;
+      }
+    }
+
+    // A person's words resume a paused loop; the loop's own never do (they are what paused it).
     if (state.paused && trigger?.source === "external") {
       runInBackground(() =>
         append({
@@ -792,7 +1487,12 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       // A droppable attempt: dying mid-window, the revival pass re-runs this with the window long
       // closed and appends at once.
       const windowMs = state.config.llmRequestDebounceMs + retryBackoffMs(state);
-      const windowClosesInMs = trigger.atMs + windowMs - now;
+      // THE HOLD: while this loop's own script runs, the turn waits for its result (the
+      // settlement's delivery re-runs this pass and the result moves the trigger), so the call is
+      // answered before anything else is read — up to HOLD_FOR_RUN_MS after the oldest run began.
+      const running = Object.values(state.pendingRuns).map((run) => run.requestedAt);
+      const holdUntil = running.length > 0 ? Math.min(...running) + HOLD_FOR_RUN_MS : 0;
+      const windowClosesInMs = Math.max(trigger.atMs + windowMs, holdUntil) - now;
       const intent: AgentEmitted = {
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: this.idempotencyKey(`request/${String(trigger.offset)}`),
@@ -809,27 +1509,32 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       return;
     }
 
-    // An open request nobody HERE is running: run it — the first time and after an eviction are the
-    // same path (the engine's revive wakes a dead context while an attempt is in flight; the wake's
-    // push lands here) — or settle it expired.
+    // An open request nobody HERE is running, within its expiry: run it — the first time and after
+    // an eviction are the same path (the engine's revive wakes a dead context while an attempt is
+    // in flight; the wake's push lands here).
     const open = state.openRequest;
+    // Past its expiry, a request is settled expired even when this incarnation believes it is
+    // running it — its attempt is aborted: a request wedged in an await must not hold the loop.
+    if (open && now >= open.expiresAt) {
+      this.#llmRequestsInFlight
+        .get(open.requestedAtOffset)
+        ?.controller.abort(new Error("the model did not finish before the request expired"));
+      runInBackground(() =>
+        appendUnlessLost(append, {
+          type: "events.iterate.com/agent/llm-request-settled",
+          idempotencyKey: this.idempotencyKey(`settle/${String(open.requestedAtOffset)}`),
+          payload: {
+            requestOffset: open.requestedAtOffset,
+            result: { status: "cancelled", reason: "expired" },
+          },
+        }),
+      );
+      return;
+    }
     if (open && !this.#llmRequestsInFlight.has(open.requestedAtOffset)) {
-      if (now >= open.expiresAt)
-        runInBackground(() =>
-          append({
-            type: "events.iterate.com/agent/llm-request-settled",
-            idempotencyKey: this.idempotencyKey(`settle/${String(open.requestedAtOffset)}`),
-            payload: {
-              requestOffset: open.requestedAtOffset,
-              result: { status: "cancelled", reason: "expired" },
-            },
-          }),
-        );
-      else {
-        const inFlight = { controller: new AbortController(), partialText: "" };
-        this.#llmRequestsInFlight.set(open.requestedAtOffset, inFlight);
-        runInBackground(() => this.#runLlmRequest(open, state, append, inFlight));
-      }
+      const inFlight = { controller: new AbortController(), partialText: "" };
+      this.#llmRequestsInFlight.set(open.requestedAtOffset, inFlight);
+      runInBackground(() => this.#runLlmRequest(open, state, append, inFlight));
     }
   }
 
@@ -857,34 +1562,12 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       STREAM_IDLE_BUDGET_MS,
     );
     try {
-      const { path } = await this.#identity();
-      let tree: RewriteRuleListEntry[] = [];
-      try {
-        using itx = this.deps.getItx();
-        tree = await itx.cd(path).rewriteRules.list();
-      } catch (error) {
-        // A fully masked agent deliberately denies introspection too. Give the model no
-        // advertised tools; prose replies still work. Transport/runtime failures remain errors.
-        if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
-      }
-      const items = state.contextItems.filter((item) => item.offset < open.requestedAtOffset);
-      // The images the model will see: read now, the freshest bytes at the request; one that is
-      // gone (deleted meanwhile) is named instead of shown.
-      const images = new Map<string, { contentType: string; base64: string }>();
-      for (const item of items)
-        for (const file of item.files || []) {
-          if (!file.contentType.startsWith("image/") || images.has(file.path)) continue;
-          try {
-            using itx = this.deps.getItx();
-            images.set(file.path, {
-              contentType: file.contentType,
-              base64: bytesToBase64(await itx.files.get(file.path).bytes()),
-            });
-          } catch {
-            // named by its hint line instead
-          }
-        }
-      const messages = buildChatMessages(items, images, tree);
+      const { path } = await raceAbort(controller.signal, this.#identity());
+      // raced, so the expiry frees a request stuck before its stream (a hung read) too
+      const input = await raceAbort(
+        controller.signal,
+        this.#requestInput(state, open.requestedAtOffset, open.model, append),
+      );
       // THE WINDOWS: the text and thinking the stream adds pile into one buffer; a window closes
       // FRAME_WINDOW_MS after its first delta (or at the size cap) and lands as one ephemeral
       // append, windows in order — each waits for the one before. Nothing is stored: the
@@ -937,32 +1620,55 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           ...alongside,
         );
       };
-      let answer: { text: string; usage?: LlmUsage };
+      let answer: StreamAnswer;
+      const onDelta = (text: string, thinking: string) => {
+        if (controller.signal.aborted) return;
+        clearTimeout(idle);
+        idle = setTimeout(
+          () => controller.abort(new Error("the model stream stalled")),
+          STREAM_IDLE_BUDGET_MS,
+        );
+        if (!text && !thinking) return; // a bookkeeping event: alive, nothing to show
+        // The partial accrues BEFORE buffering: an interrupt keeps the whole streamed text even
+        // when its last window never landed.
+        inFlight.partialText += text;
+        responseDelta += text;
+        thinkingDelta += thinking;
+        if (responseDelta.length + thinkingDelta.length >= FRAME_WINDOW_MAX_CHARS)
+          return closeWindow();
+        if (windowOpen) return;
+        windowOpen = true;
+        void this.#sleep(FRAME_WINDOW_MS).then(closeWindow);
+      };
       try {
-        answer = await this.#stream({
+        const request = {
           model: open.model,
-          messages,
+          effort: state.config.llm.reasoningEffort,
+          cacheKey: promptCacheKey(path),
           signal: controller.signal,
-          onDelta: (text, thinking) => {
-            if (controller.signal.aborted) return;
-            clearTimeout(idle);
-            idle = setTimeout(
-              () => controller.abort(new Error("the model stream stalled")),
-              STREAM_IDLE_BUDGET_MS,
-            );
-            if (!text && !thinking) return; // a bookkeeping event: alive, nothing to show
-            // The partial accrues BEFORE buffering: an interrupt keeps the whole streamed text even
-            // when its last window never landed.
-            inFlight.partialText += text;
-            responseDelta += text;
-            thinkingDelta += thinking;
-            if (responseDelta.length + thinkingDelta.length >= FRAME_WINDOW_MAX_CHARS)
-              return closeWindow();
-            if (windowOpen) return;
-            windowOpen = true;
-            void this.#sleep(FRAME_WINDOW_MS).then(closeWindow);
-          },
-        });
+          onDelta,
+        };
+        try {
+          answer = await this.#stream({ ...request, input });
+        } catch (error) {
+          // The provider refused the replayed reasoning (a model change, a rotated key): once more
+          // without it. Every other failure is the retry policy's.
+          if (
+            !/reasoning|encrypted_content|\brs_/i.test(String(error)) ||
+            controller.signal.aborted
+          )
+            throw error;
+          answer = await this.#stream({
+            ...request,
+            input: await this.#requestInput(
+              state,
+              open.requestedAtOffset,
+              open.model,
+              append,
+              false,
+            ),
+          });
+        }
       } catch (error) {
         // The interrupt path's story — it settled the request itself.
         if (controller.signal.reason instanceof InterruptedError) return;
@@ -975,14 +1681,30 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       }
       // An answer that arrived after the interruption is the interrupt path's story too.
       if (controller.signal.reason instanceof InterruptedError) return;
-      const { text, usage } = answer;
+      const { text, call, providerItems } = answer;
+      const usage = answer.usage && {
+        ...answer.usage,
+        costUsd: requestCostUsd(open.model, answer.usage),
+      };
       await settle(
         { status: "succeeded", text, usage },
-        {
-          type: "events.iterate.com/agent/context-added",
-          idempotencyKey: this.idempotencyKey(`assistant/${String(llmRequestOffset)}`),
-          payload: { role: "assistant", content: text, llmRequestOffset },
-        },
+        // an empty answer adds no assistant message: nothing was said
+        ...(text
+          ? [
+              {
+                type: "events.iterate.com/agent/context-added",
+                idempotencyKey: this.idempotencyKey(`assistant/${String(llmRequestOffset)}`),
+                payload: {
+                  role: "assistant",
+                  content: text,
+                  llmRequestOffset,
+                  call,
+                  providerItems,
+                  providerModel: open.model,
+                },
+              } satisfies AgentEmitted,
+            ]
+          : []),
         ...(usage
           ? [
               {
@@ -993,6 +1715,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
                   maxContextTokens: contextWindowTokens(open.model),
                   inputTokens: usage.inputTokens,
                   outputTokens: usage.outputTokens,
+                  cachedInputTokens: usage.cachedInputTokens,
+                  cacheWriteInputTokens: usage.cacheWriteInputTokens,
+                  costUsd: usage.costUsd,
                 },
               } satisfies AgentEmitted,
             ]
@@ -1005,65 +1730,224 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     }
   }
 
-  /** One STREAMED model call over the conversation so far: every provider event the stream carries
-   *  reaches `onDelta` as it arrives, with the answer text and the thinking it adds (both "" for a
-   *  bookkeeping event); the call answers the whole text once the stream ends, with the usage the
-   *  provider reported. Aborting `signal` stops the stream; the call then rejects.
-   *
-   *  Two routes by the model's name, both `itx.ai` under THIS context's rules (a test lends a fake
-   *  there), each drained inside its one `getItx` scope: the call stays open until its body is
-   *  read. A `@cf/…` answer may be streamed or whole JSON.
-   *  Anything else is OpenAI's Responses API as a Workers AI partner model on Cloudflare's billing
-   *  — no key, ours or a project's — the FAST reading of a reasoning model: low effort, with its
-   *  summary streamed. */
+  /** THE STANDING SECTIONS as they are now: the system prompt, the role's files (read fresh from
+   *  /repos/config), the pinned preamble, the stable capability tree and this agent's identity, in
+   *  that order. A file or tree that cannot be read this time keeps the version the model was shown
+   *  (a passing failure must not read as the section being withdrawn); an empty file is gone. */
+  async #currentSections(state: AgentState): Promise<Record<string, string>> {
+    const whoami = await this.#identity();
+    const { path } = whoami;
+    const sections: Record<string, string> = { system: DEFAULT_AGENT_SYSTEM_PROMPT };
+    for (const file of standingInstructionFiles(path)) {
+      try {
+        using itx = this.deps.getItx();
+        // the handle first: a pipelined `get` that refuses (a project with no config repo) would
+        // reject a second promise nobody awaits
+        const repo = await itx.repos.get("/repos/config");
+        const text = await repo.readFile(file);
+        if (text) sections[file] = standingFileSection(file, text);
+      } catch {
+        if (state.sections[file]) sections[file] = state.sections[file]!;
+      }
+    }
+    const pinned = preambleSection(state.preamble, state.preambleQuarantined);
+    if (pinned) sections.preamble = pinned;
+    try {
+      using itx = this.deps.getItx();
+      const tree = stableCapabilityTree(await itx.cd(path).rewriteRules.list());
+      if (tree) sections["capability-tree"] = tree;
+    } catch (error) {
+      // a fully masked agent denies introspection too: no tree. Anything else keeps the last one.
+      if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH" && state.sections["capability-tree"])
+        sections["capability-tree"] = state.sections["capability-tree"]!;
+    }
+    sections.identity = `CURRENT PROJECT: ${JSON.stringify(whoami)}`;
+    return sections;
+  }
+
+  /** Before a request: what changed in the standing sections since the model last saw them, as
+   *  ONE system item keyed to the request (the head snapshot on the first request). It lands after
+   *  the request's stamp and before its answer, which is exactly where every later request renders
+   *  it, so the input stays append-only. Answers the item for the request being built (the state
+   *  may not have it yet); null when nothing changed or the item is already in the state. */
+  async #syncSections(
+    state: AgentState,
+    append: AgentArgs["append"],
+    requestOffset: number,
+  ): Promise<RenderItem | null> {
+    if (state.contextItems.some((item) => item.sections && item.llmRequestOffset === requestOffset))
+      return null;
+    const current = await this.#currentSections(state);
+    const first = Object.keys(state.sections).length === 0;
+    const change = first
+      ? { sections: current, content: "[standing instructions: the head snapshot]" }
+      : sectionChanges(state.sections, current);
+    if (!change) return null;
+    const payload = {
+      role: "system" as const,
+      content: change.content,
+      sections: change.sections,
+      llmRequestOffset: requestOffset,
+      ...(first && { snapshot: true }),
+    };
+    await appendUnlessLost(append, {
+      type: "events.iterate.com/agent/context-added",
+      idempotencyKey: this.idempotencyKey(`sections/${String(requestOffset)}`),
+      payload,
+    });
+    return { offset: requestOffset + 0.5, ...payload };
+  }
+
+  /** THE INPUT of the request at `throughOffset`: its conversation (the items up to its stamp,
+   *  plus the section item written for it), rendered by render.ts. A turn and the compaction of that
+   *  turn build the same input, so the summary request reads it from cache. */
+  async #requestInput(
+    state: AgentState,
+    throughOffset: number,
+    model: string,
+    append: AgentArgs["append"],
+    replayReasoning = true,
+  ): Promise<InputItem[]> {
+    const { path } = await this.#identity();
+    const update = await this.#syncSections(state, append, throughOffset);
+    const items: RenderItem[] = [
+      ...state.contextItems.filter(
+        (item) =>
+          item.offset <= throughOffset ||
+          (item.sections && item.llmRequestOffset === throughOffset),
+      ),
+      ...(update ? [update] : []),
+    ];
+    // The images the model will see: read now, the freshest bytes at the request; one that is
+    // gone (deleted meanwhile) is named instead of shown.
+    const images = new Map<string, { contentType: string; base64: string }>();
+    for (const item of items)
+      for (const file of item.files || []) {
+        if (!file.contentType.startsWith("image/") || images.has(file.path)) continue;
+        try {
+          using itx = this.deps.getItx();
+          images.set(file.path, {
+            contentType: file.contentType,
+            base64: bytesToBase64(await itx.files.get(file.path).bytes()),
+          });
+        } catch {
+          // named by its hint line instead
+        }
+      }
+    return buildResponsesInput({
+      items,
+      images,
+      runs: state.runs,
+      model,
+      ownPath: path,
+      replayReasoning,
+    });
+  }
+
+  /** This incarnation's compaction, so a second over-threshold request waits for the first. */
+  #compacting = false;
+
+  /** THE COMPACTION: the request's own input, the
+   *  summarize instruction appended as its last message (user role: the cache breakpoint before it
+   *  is the turn's own, so that whole input is read from cache), on the request's own model, the
+   *  tool declared but not callable (declared, so the prefix is the turn's). The summary lands as
+   *  one developer item whose `compaction` barrier the reduce applies, with what it cost. Best
+   *  effort: a failure appends nothing, and the next request over the threshold tries again. */
+  async #compact(input: {
+    state: AgentState;
+    requestOffset: number;
+    model: string;
+    usedTokens: number;
+    thresholdTokens: number;
+    append: AgentArgs["append"];
+    /** An idle compaction (idle-check): a capped summary of the history since the earlier
+     *  summaries, which it keeps, or of everything once they grew past their cap. */
+    idle?: boolean;
+  }): Promise<void> {
+    const { state, requestOffset, model, usedTokens, thresholdTokens, append, idle } = input;
+    const earlier = state.contextItems.filter((item) => item.compaction);
+    const keepsEarlierSummaries =
+      idle === true &&
+      earlier.length > 0 &&
+      earlier.reduce((sum, item) => sum + item.content.length, 0) <=
+        state.config.idleSummariesMaxChars;
+    let prompt = AGENT_COMPACTION_PROMPT;
+    if (idle) prompt = keepsEarlierSummaries ? IDLE_SUMMARY_SINCE_PROMPT : IDLE_SUMMARY_PROMPT;
+    try {
+      const { path } = await this.#identity();
+      const items = [
+        ...(await this.#requestInput(state, requestOffset, model, append)),
+        { role: "user", content: prompt },
+      ];
+      const answer = await this.#stream({
+        model,
+        effort: state.config.llm.reasoningEffort,
+        input: items,
+        cacheKey: promptCacheKey(path),
+        signal: AbortSignal.timeout(state.config.llmRequestExpiryMs),
+        onDelta: () => undefined,
+        toolChoice: "none",
+      });
+      if (!answer.prose) throw new Error("the model wrote an empty summary");
+      const usage = answer.usage && {
+        ...answer.usage,
+        costUsd: requestCostUsd(model, answer.usage),
+      };
+      await appendUnlessLost(append, {
+        type: "events.iterate.com/agent/context-added",
+        idempotencyKey: this.idempotencyKey(`compact/${String(requestOffset)}`),
+        payload: {
+          role: "developer",
+          content: keepsEarlierSummaries
+            ? `[The conversation after the summaries above was compacted through @${String(requestOffset)} while idle (~${String(historyTokensSinceSummary(state))} tokens). Summary:]\n\n${answer.prose}`
+            : idle
+              ? `[Earlier conversation history was compacted through @${String(requestOffset)} while idle (~${String(usedTokens)} tokens). Summary:]\n\n${answer.prose}`
+              : `[Earlier conversation history was compacted through @${String(requestOffset)} (~${String(usedTokens)} tokens > ${String(thresholdTokens)}). Summary:]\n\n${answer.prose}`,
+          actor: { type: "agent" },
+          compaction: {
+            replacesHistoryThrough: requestOffset,
+            ...(keepsEarlierSummaries && { keepsEarlierSummaries: true }),
+            usage,
+          },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      });
+    } catch (error) {
+      console.error("[agent] compaction failed", { error, requestOffset });
+    }
+  }
+
+  /** One STREAMED Responses API call with the one tool: every provider event reaches `onDelta`
+   *  (text and thinking it adds, both "" for any other event, which keeps the idle watchdog fed
+   *  while a long script's arguments stream); the call answers once the stream ends with the
+   *  response's own items (stored for exact replay), its prose, its first `run` call, and the
+   *  usage. An `openai/…` Workers AI partner model through `itx.ai` and the account's AI Gateway:
+   *  Cloudflare's billing, no key, and the gateway's spend limits partition on the metadata
+   *  (project, stream path). `store: false` with the encrypted reasoning included: nothing lives on the provider's side,
+   *  and the reasoning comes back on the next request (render.ts). */
   async #stream({
     model,
-    messages,
+    input,
+    cacheKey,
     signal,
     onDelta,
+    toolChoice = "auto",
+    effort,
   }: {
     model: string;
-    messages: ChatMessage[];
+    /** The Responses API's `reasoning.effort` (the agent's config, `llm.reasoningEffort`). */
+    effort: string;
+    input: InputItem[];
+    /** The provider's prompt-cache routing key (promptCacheKey). */
+    cacheKey: string;
     signal: AbortSignal;
     onDelta(text: string, thinking: string): void;
-  }): Promise<{ text: string; usage?: LlmUsage }> {
-    if (model.startsWith("@cf/")) {
-      using itx = this.deps.getItx();
-      // workers-types keys `run`'s inputs and outputs by model-name literal; the model is
-      // configuration here (any name the account can reach), so the call is made through the
-      // binding's runtime shape and the answer is validated below rather than trusted from a type.
-      const ai = itx.ai as unknown as { run(model: string, inputs: unknown): Promise<unknown> };
-      const raw: unknown = await raceAbort(signal, ai.run(model, { messages, stream: true }));
-      if (raw instanceof ReadableStream) {
-        let text = "";
-        let usage: LlmUsage | undefined;
-        await drainSse(raw, signal, (event) => {
-          const chunk = z.looseObject({ response: z.string().optional() }).safeParse(event);
-          const delta = chunk.success ? chunk.data.response || "" : "";
-          text += delta;
-          onDelta(delta, "");
-          const reported = z.looseObject({ usage: z.unknown() }).safeParse(event);
-          if (reported.success && reported.data.usage !== undefined)
-            usage = normalizeUsage(reported.data.usage) ?? usage;
-        });
-        if (text.trim() === "") throw new Error("the model answered with no text");
-        return { text: text.trim(), usage };
-      }
-      // A binding (or a lent fake) that answered whole: the one delta there is.
-      const answer = ChatAnswer.parse(raw);
-      const text = (
-        "response" in answer ? answer.response : answer.choices[0]!.message.content
-      ).trim();
-      if (text === "") throw new Error("the model answered with no text");
-      onDelta(text, "");
-      return { text };
-    }
-    // No key of ours rides this request: an `openai/…` model is a Workers AI PARTNER model, billed
-    // by Cloudflare through the binding — the Responses API shape, streamed, the raw Response asked
-    // for so the SSE body is ours to read. The gateway option routes it through the account's AI
-    // Gateway; its metadata (project, stream path, context) is what the gateway's spend limits
-    // partition on, so a runaway agent hits ITS ceiling. Nothing is trusted from the answer: it is a
-    // Response checked for status and parsed event by event below.
+    toolChoice?: "auto" | "none";
+  }): Promise<StreamAnswer> {
+    if (model.startsWith("@cf/"))
+      throw new Error(
+        `model ${model}: the agent speaks OpenAI's Responses API only; configure an OpenAI model`,
+      );
     const { projectId, path } = await this.#identity();
     using itx = this.deps.getItx();
     const raw: unknown = await raceAbort(
@@ -1075,10 +1959,15 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         // Responses API's), which no catalog input type names.
         `openai/${model}` as Parameters<Ai["run"]>[0],
         {
-          input: responsesInput(messages),
+          input,
+          tools: [RUN_TOOL],
+          tool_choice: toolChoice,
+          parallel_tool_calls: false,
           stream: true,
           store: false,
-          reasoning: { effort: "low", summary: "auto" },
+          include: ["reasoning.encrypted_content"],
+          prompt_cache_key: cacheKey,
+          reasoning: { effort, summary: "auto" },
         } as never,
         {
           returnRawResponse: true,
@@ -1097,23 +1986,27 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       throw new Error(
         `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
       );
-    let text = "";
     let usage: LlmUsage | undefined;
+    const done: OutputItem[] = [];
+    let output: OutputItem[] | undefined;
     await drainSse(response.body, signal, (raw) => {
       const event = ResponsesEvent.safeParse(raw);
       if (!event.success) return;
-      const { type } = event.data;
-      if (type === "response.output_text.delta") {
-        const delta = typeof event.data.delta === "string" ? event.data.delta : "";
-        text += delta;
-        onDelta(delta, "");
-      } else if (type === "response.reasoning_summary_text.delta")
-        onDelta("", typeof event.data.delta === "string" ? event.data.delta : "");
+      const { type, delta, item } = event.data;
+      if (type === "response.output_text.delta") onDelta(delta || "", "");
+      else if (type === "response.reasoning_summary_text.delta") onDelta("", delta || "");
+      else onDelta("", "");
+      if (type === "response.output_item.done" && item) done.push(item);
       else if (type === "response.completed" || type === "response.incomplete") {
-        const done = z
-          .looseObject({ response: z.looseObject({ usage: z.unknown() }) })
+        const finished = z
+          .looseObject({
+            response: z.looseObject({ usage: z.unknown(), output: z.array(OutputItem).optional() }),
+          })
           .safeParse(raw);
-        if (done.success) usage = normalizeUsage(done.data.response.usage) ?? usage;
+        if (finished.success) {
+          usage = normalizeUsage(finished.data.response.usage) ?? usage;
+          output = finished.data.response.output;
+        }
       } else if (type === "response.failed" || type === "error") {
         const failure = z
           .looseObject({
@@ -1128,7 +2021,28 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         );
       }
     });
-    if (text.trim() === "") throw new Error("the model answered with no text");
-    return { text: text.trim(), usage };
+    const items = (output && output.length > 0 ? output : done).filter(
+      (item) =>
+        item.type === "reasoning" || item.type === "message" || item.type === "function_call",
+    );
+    const prose = items
+      .map((item) => (item.type === "message" ? messageText(item) : ""))
+      .join("")
+      .trim();
+    const first = items.find((item) => item.type === "function_call");
+    let call: StreamAnswer["call"];
+    if (first) {
+      const { call_id: callId, arguments: args } = FunctionCallItem.parse(first);
+      let run = { status: "", script: args };
+      try {
+        run = RunArguments.parse(JSON.parse(args));
+      } catch {
+        // arguments that are not `run`'s JSON are the script itself
+      }
+      call = { callId, status: run.status, script: run.script };
+    }
+    // An empty answer is the model choosing to say nothing (a chief of staff's input that needs no
+    // reply): the turn ends quietly, never a failure that would retry and pause the agent.
+    return { text: answerText(prose, call), prose, call, providerItems: items, usage };
   }
 }

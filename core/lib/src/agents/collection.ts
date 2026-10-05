@@ -281,19 +281,25 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
    *  again — each refused. The facet appends them, so they are stamped with the agent's own path;
    *  the sender rides beside them as the base, which the sender's own `itx.agents` row pins
    *  (`itx.cd('/').agents.at(<sender>)`, written by `create`) — `/` for every context that reaches
-   *  the root's collection, which the fold reads as a person (processor.ts). */
-  async message(input: Parameters<AgentHandleApi["message"]>[0]) {
+   *  the root's collection, which the fold reads as a person (processor.ts). `options` (`{ trigger:
+   *  false }`) rides as the facet's third argument, after the base (message.ts). */
+  async message(...[input, options]: Parameters<AgentHandleApi["message"]>) {
     const path = this.path;
     const dead = new Error(`agent ${path}: deleted`);
     // The catalog first: a dead agent's context is not even called.
     if ((await this.catalog()).deleted[path]) throw dead;
     // The facet is this app's AgentDurableObject, whose `message` answers the event it appended
-    // (durable-object.ts, `implements Pick<AgentHandleApi, "message">`) — ours, so asserted.
+    // (durable-object.ts: `message(input, from, options)`) — ours, so asserted.
     try {
       using itx = this.getItx();
       return (await itx
         .cd(path)
-        .invoke(["itx", "facets", ["get", "agent"], ["message", input, this.base]])) as StreamEvent;
+        .invoke([
+          "itx",
+          "facets",
+          ["get", "agent"],
+          ["message", input, this.base, ...(options ? [options] : [])],
+        ])) as StreamEvent;
     } catch (error) {
       if (errorCode(error) !== "NO_FACET") throw error;
     }

@@ -11,7 +11,19 @@
 // The roots installed apps add are NOT here: each app registers its own on `InstalledAppRoots` from
 // its package, and `IterateContextApiWith` spells a context that has them.
 
-import type { Ai, R2HTTPMetadata, R2Range } from "@cloudflare/workers-types";
+import type {
+  Ai,
+  AiGatewayLog,
+  AiGatewayPatchLog,
+  AIGatewayUniversalRequest,
+  AiWebSearchRequest,
+  ConversionRequestOptions,
+  ConversionResponse,
+  R2HTTPMetadata,
+  R2Range,
+  SupportedFileFormat,
+  UniversalGatewayOptions,
+} from "@cloudflare/workers-types";
 import type { InvokeHandle, ItxExpression, ItxExpressionInput } from "./expression.ts";
 import type { ConsentScope } from "./oauth-scopes.ts";
 import type { Principal } from "./principal.ts";
@@ -367,12 +379,175 @@ export type CfBrowserQuickAction =
 export type CfBrowserQuickActionOptions = Record<string, unknown> &
   ({ url: string } | { html: string });
 
-/** `itx.browser`: Cloudflare Browser Run — the raw CDP `fetch`, and `quickAction`, which answers the
- *  action's RESULT (a string, parsed JSON, or bytes for a screenshot or a PDF), not the binding's
- *  `{ success, result }` envelope; a failed action throws. */
+/** What a browser session is acquired with: how long it lives idle (`keepAlive`, 10 seconds to 20
+ *  minutes, in milliseconds), whether it is recorded, the country its requests leave from (ISO
+ *  3166 alpha-2), and the hosts it may reach. */
+export type CfBrowserSessionOptions = {
+  keepAlive?: number;
+  recording?: boolean;
+  location?: string;
+  guardrails?: { allowedDomains?: string[]; allowedDomainSets?: string[] };
+};
+
+/** A tab (or worker, or frame) of a session's browser, as its DevTools endpoint lists it. */
+export type CfBrowserTarget = {
+  id: string;
+  type: string;
+  url: string;
+  title?: string;
+  description?: string;
+  webSocketDebuggerUrl?: string;
+  devtoolsFrontendUrl?: string;
+};
+
+/** A page a session has open, once it loaded (`loaded: false` when its load event did not arrive
+ *  in time: the page may still be usable). */
+export type CfBrowserPage = {
+  sessionId: string;
+  targetId: string;
+  url: string;
+  title: string;
+  loaded: boolean;
+};
+
+/** Which of a session's targets a call is for: the session's first page when omitted, and
+ *  `"browser"` for the browser's own endpoint (`Target.*`, `Browser.*`). `timeoutMs` bounds the
+ *  command (30 seconds when omitted). */
+export type CfBrowserCdpOptions = { targetId?: string; timeoutMs?: number };
+
+/** `itx.ai`: the Workers AI binding's methods under their own names and shapes, as far as a call
+ *  across RPC can carry them. No RPC carries a Blob, so a file for `toMarkdown` is its bytes; and a
+ *  method whose binding answers a Response (`websearch`, a gateway's `run`) answers that Response's
+ *  body. The binding's `aiSearch()` and `autorag(id)` are not here: Cloudflare deprecated both for
+ *  the `ai_search` bindings, and both reach every instance on the deployment's account. Nor is
+ *  `aiGatewayLogId`, which the binding sets after each `run` and so holds whichever call ended
+ *  last. */
+export type ItxAiApi = Pick<Ai, "run" | "models"> & {
+  /** Documents, spreadsheets, web pages and pictures as Markdown: Cloudflare's `toMarkdown`. One
+   *  file answers one result, a list a list; a file Cloudflare cannot convert answers
+   *  `format: "error"` in its place. With no files, the service, for `supported()`. */
+  toMarkdown(): ItxToMarkdownService;
+  toMarkdown(
+    files: ItxMarkdownDocument[],
+    options?: ConversionRequestOptions,
+  ): Promise<ConversionResponse[]>;
+  toMarkdown(
+    files: ItxMarkdownDocument,
+    options?: ConversionRequestOptions,
+  ): Promise<ConversionResponse>;
+  /** AI Gateway `gatewayId` on the deployment's account. */
+  gateway(gatewayId: string): ItxAiGateway;
+  /** Cloudflare's Web Search API through AI Gateway `gatewayId`, billed to that gateway's
+   *  credits (or a provider key stored on it): the answer's body. */
+  websearch(request: AiWebSearchRequest): Promise<ItxWebSearchAnswer>;
+};
+
+/** A file for `itx.ai.toMarkdown`: Cloudflare's `{ name, blob }` with what the Blob is made of in
+ *  place of the Blob, bytes or text (`new Blob([blob], { type })`), or `{ name, data }` with the
+ *  bytes in base64. `name`'s extension tells Cloudflare the format; `type` is
+ *  `application/octet-stream` when omitted. */
+export type ItxMarkdownDocument =
+  | { name: string; blob: Uint8Array | ArrayBuffer | string; type?: string }
+  | { name: string; data: string; type?: string };
+
+/** `itx.ai.toMarkdown()`: the binding's `ToMarkdownService`. */
+export type ItxToMarkdownService = {
+  transform(
+    files: ItxMarkdownDocument[],
+    options?: ConversionRequestOptions,
+  ): Promise<ConversionResponse[]>;
+  transform(
+    files: ItxMarkdownDocument,
+    options?: ConversionRequestOptions,
+  ): Promise<ConversionResponse>;
+  supported(): Promise<SupportedFileFormat[]>;
+};
+
+/** `itx.ai.gateway(id)`: the binding's `AiGateway`. `run` is the gateway's universal endpoint and
+ *  answers the provider's body: parsed JSON, text, or bytes. `getLog` and `patchLog` take a log's
+ *  id as the gateway's log list shows it; a gateway may log other projects' calls too, so nothing
+ *  here lists them. */
+export type ItxAiGateway = {
+  getLog(logId: string): Promise<AiGatewayLog>;
+  patchLog(logId: string, data: AiGatewayPatchLog): Promise<void>;
+  getUrl(provider?: string): Promise<string>;
+  run(
+    data: AIGatewayUniversalRequest | AIGatewayUniversalRequest[],
+    options?: { gateway?: UniversalGatewayOptions; extraHeaders?: object },
+  ): Promise<unknown>;
+};
+
+/** What `itx.ai.websearch` answers: the Web Search API's JSON. A result carries more fields when its
+ *  provider gives them (Exa: `imageUrl`, `lastModifiedDate`). */
+export type ItxWebSearchAnswer = {
+  items: ({ url: string; title: string; description?: string } & Record<string, unknown>)[];
+  metadata: { query: string; requestId: string; latencyMs: number } & Record<string, unknown>;
+};
+
+/** `itx.browser`: Cloudflare Browser Run.
+ *
+ *  ONE-SHOT: `quickAction` renders a page and answers the action's RESULT (a string, parsed JSON, or
+ *  bytes for a screenshot or a PDF), not the binding's `{ success, result }` envelope; a failed
+ *  action throws.
+ *
+ *  A SESSION is a browser that stays open between calls, with its pages, cookies and sign-ins:
+ *  `openPage({ url })` starts one and answers once the page loaded, `cdp(sessionId, method, params)`
+ *  runs one Chrome DevTools Protocol command on it (read with `Runtime.evaluate`, click by
+ *  evaluating a script, type with `Input.insertText`, picture with `Page.captureScreenshot`),
+ *  `navigate` loads another URL in the same page, and `closeSession` ends it. A session left open
+ *  is billed until its `keepAlive` runs out. Every session call names a session by the id
+ *  `openPage` or `acquire` answered, which is the capability: nothing here lists sessions.
+ *
+ *  `fetch` is the binding's raw endpoint, for a library that speaks CDP itself. */
 export type CfBrowserApi = {
   fetch(input: Request | string | URL, init?: RequestInit): Promise<Response>;
   quickAction(action: CfBrowserQuickAction, options: CfBrowserQuickActionOptions): Promise<unknown>;
+  /** A new session with `url` open in its page. `keepAlive` is five minutes when omitted. */
+  openPage(input: { url: string } & CfBrowserSessionOptions): Promise<CfBrowserPage>;
+  /** Another URL in a session's page (the first page, or `targetId`'s). */
+  navigate(sessionId: string, url: string, options?: CfBrowserCdpOptions): Promise<CfBrowserPage>;
+  /** One CDP command on a session's page, answered with the command's result. A CDP error throws. */
+  cdp(
+    sessionId: string,
+    method: string,
+    params?: Record<string, unknown>,
+    options?: CfBrowserCdpOptions,
+  ): Promise<unknown>;
+  /** The binding's own `acquire`: a session with a blank page, and `targets` when asked for. */
+  acquire(
+    options?: CfBrowserSessionOptions & { targets?: boolean; liveViewUrlExpiresInMs?: number },
+  ): Promise<{ sessionId: string; targets?: CfBrowserTarget[] }>;
+  /** The session's times and state, or null when there is no such session. */
+  getSession(sessionId: string): Promise<Record<string, unknown> | null>;
+  closeSession(sessionId: string): Promise<{ status: "closing" | "closed" }>;
+  /** A link a person opens to watch (or, without `guardrails`, drive) the session. The link is a
+   *  credential. */
+  getLiveView(
+    sessionId: string,
+    options?: {
+      mode?: "devtools" | "tab" | "full";
+      targetId?: string;
+      expiresInMs?: number;
+      guardrails?: { mode: "readonly" };
+    },
+  ): Promise<{ webSocketDebuggerUrl: string; devtoolsFrontendUrl: string; id: string }>;
+  /** How many sessions the account may run and is running, and when the next may start. */
+  limits(): Promise<{
+    activeSessions: number;
+    maxConcurrentSessions: number;
+    allowedBrowserAcquisitions: number;
+    timeUntilNextAllowedBrowserAcquisition: number;
+    usedBrowserTimeSeconds?: number;
+  }>;
+  /** A session's tabs: list them, open one, bring one to the front, close one. */
+  devtools: {
+    getVersion(sessionId: string): Promise<Record<string, unknown>>;
+    listTargets(sessionId: string): Promise<CfBrowserTarget[]>;
+    getTarget(sessionId: string, targetId: string): Promise<CfBrowserTarget>;
+    newTarget(sessionId: string, url?: string): Promise<CfBrowserTarget>;
+    activateTarget(sessionId: string, targetId: string): Promise<{ message: string }>;
+    closeTarget(sessionId: string, targetId: string): Promise<{ message: string }>;
+  };
 };
 
 /** A token for an Artifacts repo's git remote. */
@@ -1017,9 +1192,8 @@ export interface IterateContextApi {
    *  request, `deleted` cross-posted to `/`, the row disabled). A relative `path` means the caller's. */
   repos: EntityCollectionApi<RepoHandle>;
   workspaces: EntityCollectionApi<WorkspaceHandle>;
-  /** Workers AI's `run(model, inputs, options?)` and `models()`, under this context's capability
-   *  rules. */
-  ai: Pick<Ai, "run" | "models">;
+  /** Workers AI's binding (`ItxAiApi`), under this context's capability rules. */
+  ai: ItxAiApi;
   /** Cloudflare Browser Run. */
   browser: CfBrowserApi;
   /** Cloudflare Artifacts, project-scoped (`repos` is the friendlier surface). */

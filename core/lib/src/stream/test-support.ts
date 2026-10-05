@@ -69,6 +69,7 @@ export function reduceProcessor<State>(
     source?: StreamEventInput["source"];
     /** The context it is on; `/` by default. */
     path?: string;
+    idempotencyKey?: string;
   }[],
 ): State {
   let state = processor.contract.initialState();
@@ -81,6 +82,7 @@ export function reduceProcessor<State>(
       payload: parsed?.success ? parsed.data : input.payload,
       source: { ...input.source, origin: input.source?.origin || path },
       path,
+      idempotencyKey: input.idempotencyKey,
     } as StreamEvent;
     state = processor.reduce({ event, state }) ?? state;
   });
