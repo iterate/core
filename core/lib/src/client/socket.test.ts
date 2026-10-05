@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { openSocketWithRetry } from "./socket.ts";
+import { openSocketWithRetry, socketOnceOpen } from "./socket.ts";
 
 test("openSocketWithRetry: a connection that fails twice and opens on the third attempt resolves after two waits, one warn each", async () => {
   const warn = captureWarn();
@@ -97,6 +97,52 @@ test("openSocketWithRetry: a handshake that never answers on the last attempt re
   expect(Socket.closed()).toBe(1);
 });
 
+test("socketOnceOpen: CONNECTING until the retried socket opens, then it passes on that socket's messages and close and sends through it", async () => {
+  const real = recordingSocket();
+  let open!: (socket: WebSocket) => void;
+  const socket = socketOnceOpen(new Promise<WebSocket>((resolve) => (open = resolve)));
+  const seen = eventsOf(socket);
+  expect(socket).toMatchObject({ readyState: WebSocket.CONNECTING });
+  expect(() => socket.send("early")).toThrow("The WebSocket is not open yet.");
+  open(real.socket);
+  await vi.waitFor(() => expect(socket).toMatchObject({ readyState: WebSocket.OPEN }));
+  socket.send("hello");
+  real.socket.dispatchEvent(new MessageEvent("message", { data: "back" }));
+  real.socket.dispatchEvent(new CloseEvent("close", { code: 1000, reason: "bye" }));
+  expect(seen).toEqual(["open", "message back", "close 1000 bye"]);
+  expect(real).toMatchObject({ sent: ["hello"] });
+  expect(socket).toMatchObject({ readyState: WebSocket.CLOSED });
+});
+
+test("socketOnceOpen: every attempt failing is an error, then a close 1006", async () => {
+  const socket = socketOnceOpen(Promise.reject(new Error("never opened")));
+  const seen = eventsOf(socket);
+  await vi.waitFor(() => expect(seen).toEqual(["error", "close 1006 "]));
+  expect(socket).toMatchObject({ readyState: WebSocket.CLOSED });
+});
+
+test("socketOnceOpen: a socket that opened and closed again before it arrived is closed, never open", async () => {
+  const real = recordingSocket();
+  Object.assign(real.socket, { readyState: WebSocket.CLOSED });
+  const socket = socketOnceOpen(Promise.resolve(real.socket));
+  const seen = eventsOf(socket);
+  await vi.waitFor(() => expect(seen).toEqual(["close 1006 "]));
+  expect(socket).toMatchObject({ readyState: WebSocket.CLOSED });
+});
+
+test("socketOnceOpen: a close asked for before the open closes the socket when it arrives", async () => {
+  const real = recordingSocket();
+  let open!: (socket: WebSocket) => void;
+  const socket = socketOnceOpen(new Promise<WebSocket>((resolve) => (open = resolve)));
+  const seen = eventsOf(socket);
+  socket.close(1000, "not needed");
+  expect(socket).toMatchObject({ readyState: WebSocket.CLOSING });
+  open(real.socket);
+  await vi.waitFor(() => expect(seen).toEqual(["close 1000 "]));
+  expect(real).toMatchObject({ closed: [[1000, "not needed"]] });
+  expect(socket).toMatchObject({ readyState: WebSocket.CLOSED });
+});
+
 /** A WebSocket whose first `silent` constructions never answer (no `open`, no `close`: a hung
  *  handshake), whose next `failures` fail — an `error` carrying undici's reason, then a `close` 1006
  *  before `open`, the way Node's WebSocket fails a refused upgrade — and which opens every one
@@ -152,4 +198,27 @@ function captureWarn() {
       return spy.mock.calls.map(([first]) => first);
     },
   };
+}
+
+/** An open WebSocket that records what is sent through it and every close asked of it. */
+function recordingSocket() {
+  const sent: unknown[] = [];
+  const closed: unknown[][] = [];
+  const socket = Object.assign(new EventTarget(), {
+    readyState: WebSocket.OPEN,
+    binaryType: "blob",
+    send: (data: unknown) => void sent.push(data),
+    close: (...args: unknown[]) => void closed.push(args),
+  }) as unknown as WebSocket;
+  return { socket, sent, closed };
+}
+
+/** The open, message, error and close events a socket dispatches, as short lines. */
+function eventsOf(socket: WebSocket) {
+  const seen: string[] = [];
+  socket.addEventListener("open", () => seen.push("open"));
+  socket.addEventListener("error", () => seen.push("error"));
+  socket.addEventListener("message", (event) => seen.push(`message ${event.data}`));
+  socket.addEventListener("close", (event) => seen.push(`close ${event.code} ${event.reason}`));
+  return seen;
 }

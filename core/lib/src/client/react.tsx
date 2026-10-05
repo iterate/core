@@ -50,7 +50,16 @@ export type LiveStateResult<S = unknown> = {
  *  disposes the previous server-side subscription. */
 export function useLiveState<S>(
   itx: LiveStateItx | undefined,
-  opts: { key: string; name?: string; readSeed: () => Promise<LiveStateSeed<S>> },
+  opts: {
+    key: string;
+    name?: string;
+    readSeed: () => Promise<LiveStateSeed<S>>;
+    /** A seed read before `itx` is held — a route loader's `read` — shown until the subscription
+     *  has its own: the page has its data while its socket is still being upgraded. `status` stays
+     *  `connecting` meanwhile, and the page shows it (a `Spinner` by its heading): what an action
+     *  changes reaches the page only once the subscription is live. */
+    initial?: LiveStateSeed<S>;
+  },
 ): LiveStateResult<S> {
   const [store, setStore] = useState<LiveStateStore<S> | undefined>();
   const [status, setStatus] = useState<LiveStateStatus>("connecting");
@@ -118,6 +127,8 @@ export function useLiveState<S>(
     () => store?.get(),
     () => undefined,
   );
+  if (!store && opts.initial)
+    return { value: opts.initial.state, rev: opts.initial.rev, status, error };
   return { value, rev: store?.rev() ?? null, status, error };
 }
 
@@ -127,16 +138,33 @@ export function useLiveState<S>(
 export function useFacetLiveState(
   itx: (LiveStateItx & { invoke(call: string): Promise<unknown> }) | undefined,
   facet: string,
+  /** The facet's `liveSnapshot()` as a route loader read it (`facetSnapshotOf`), shown until the
+   *  subscription is live. */
+  initial?: FacetLiveSnapshot,
 ): LiveStateResult<unknown> {
   return useLiveState<unknown>(itx, {
     key: facet,
-    readSeed: async () =>
-      FacetLiveSnapshot.parse(await itx!.invoke(`itx.facets.get('${facet}').liveSnapshot()`)),
+    readSeed: async () => FacetLiveSnapshot.parse(await itx!.invoke(facetSnapshotCall(facet))),
+    initial,
   });
 }
 
+/** A facet's `liveSnapshot()` from a context a loader reads through `read`, for
+ *  `useFacetLiveState`'s `initial`: `read(async (api) => { using project = api.projects.get(id);
+ *  return await facetSnapshotOf(project, "project"); })` — the `using` releases the pipelined
+ *  context once read, which over the open socket would otherwise stay held. */
+export async function facetSnapshotOf(
+  context: { invoke(call: string): PromiseLike<unknown> },
+  facet: string,
+): Promise<FacetLiveSnapshot> {
+  return FacetLiveSnapshot.parse(await context.invoke(facetSnapshotCall(facet)));
+}
+
+const facetSnapshotCall = (facet: string) => `itx.facets.get('${facet}').liveSnapshot()`;
+
 /** What a facet's `liveSnapshot()` answers. */
 const FacetLiveSnapshot = z.object({ rev: z.number(), state: z.unknown() });
+export type FacetLiveSnapshot = z.infer<typeof FacetLiveSnapshot>;
 
 type ContextStubState<S> = { stub?: S; error?: string; pending: boolean };
 

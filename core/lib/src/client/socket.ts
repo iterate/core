@@ -88,3 +88,62 @@ export function openSocketWithRetry(
     }
   })();
 }
+
+/** A socket that BECOMES the one `opening` resolves with (`openSocketWithRetry`): CONNECTING until
+ *  that one opens, then a stand-in that passes on every message, close and error and sends through
+ *  it. A capnweb session made on it queues its calls until the upgrade lands, so a page can hold its
+ *  connection while the attempts are still running. Every attempt failing is an error, then a close
+ *  (1006); a close asked for before the socket opened closes it on arrival. */
+export function socketOnceOpen(opening: Promise<WebSocket>): WebSocket {
+  const events = new EventTarget();
+  let socket: WebSocket | undefined;
+  let readyState: number = WebSocket.CONNECTING;
+  let closing: [code?: number, reason?: string] | undefined;
+  opening.then(
+    (opened) => {
+      if (closing) {
+        opened.close(...closing);
+        readyState = WebSocket.CLOSED;
+        events.dispatchEvent(new CloseEvent("close", { code: closing[0] ?? 1000 }));
+        return;
+      }
+      // it opened, and may have closed again before it got here (`opening` can be held a while)
+      if (opened.readyState !== WebSocket.OPEN) {
+        readyState = WebSocket.CLOSED;
+        events.dispatchEvent(new CloseEvent("close", { code: 1006 }));
+        return;
+      }
+      socket = opened;
+      opened.binaryType = "arraybuffer";
+      opened.addEventListener("message", (event) =>
+        events.dispatchEvent(new MessageEvent("message", { data: event.data })),
+      );
+      opened.addEventListener("error", () => events.dispatchEvent(new Event("error")));
+      opened.addEventListener("close", (event) => {
+        readyState = WebSocket.CLOSED;
+        events.dispatchEvent(new CloseEvent("close", { code: event.code, reason: event.reason }));
+      });
+      readyState = WebSocket.OPEN;
+      events.dispatchEvent(new Event("open"));
+    },
+    () => {
+      readyState = WebSocket.CLOSED;
+      events.dispatchEvent(new Event("error"));
+      events.dispatchEvent(new CloseEvent("close", { code: 1006 }));
+    },
+  );
+  // the state is read live: `Object.assign` would copy a getter's value once
+  Object.defineProperty(events, "readyState", { get: () => readyState });
+  return Object.assign(events, {
+    binaryType: "arraybuffer",
+    send(data: Parameters<WebSocket["send"]>[0]) {
+      if (!socket) throw new Error("The WebSocket is not open yet.");
+      socket.send(data);
+    },
+    close(code?: number, reason?: string) {
+      if (socket) return socket.close(code, reason);
+      closing = [code, reason];
+      readyState = WebSocket.CLOSING;
+    },
+  }) as unknown as WebSocket; // the members capnweb's WebSocket transport and `adopt` use, no more
+}
