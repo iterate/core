@@ -420,8 +420,8 @@ export interface BuiltInScope extends LibraryRoots {
    *  events point an ordered row at (`itx.builtins.platformHook.deliverEvents`;
    *  project/context-birth-events.ts says why ordered). `deliverEvents` answers the delivery loop
    *  alone (`assertDeliveryCaller`) and hands each batch to what the context built for it
-   *  (`sendEvents`). `deliverEvent` is the target of an older context's fan-out row, and does nothing.
-   *  Not in the published API: no one else calls it. */
+   *  (`sendEvents`). `deliverEvent` is the target of a fan-out `platform` row, and sends its one event
+   *  the same way. Not in the published API: no one else calls it. */
   platformHook: {
     deliverEvents(events: StreamEvent[]): Promise<void>;
     deliverEvent(event: StreamEvent): Promise<void>;
@@ -2072,12 +2072,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         );
         await deps.sendEvents?.(events);
       },
+      // A context whose `platform` row is a fan-out row: each event sent alone.
       deliverEvent: async (event) => {
         await assertDeliveryCaller(
           deps.caller().delivery,
           "platformHook.deliverEvent",
           JSON.stringify(event),
         );
+        await deps.sendEvents?.([event]);
       },
     },
     webhooks: {
