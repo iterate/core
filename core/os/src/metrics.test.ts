@@ -14,10 +14,12 @@ test("a data point is the name, the Worker, the context and the label, indexed b
   );
   metric("subscription.halts", 1, "s");
   metric("subscription.lag_ms", 850);
+  metric("context.size", [61_440, 4]);
   // exact: every query reads the blobs by position, so the layout only grows at the end
   expect(points).toEqual([
     { indexes: ["prj_1"], blobs: ["subscription.halts", "os", "prj_1", "/", "s"], doubles: [1] },
     { indexes: ["prj_1"], blobs: ["subscription.lag_ms", "os", "prj_1", "/", ""], doubles: [850] },
+    { indexes: ["prj_1"], blobs: ["context.size", "os", "prj_1", "/", ""], doubles: [61_440, 4] },
   ]);
 });
 

@@ -128,6 +128,13 @@ export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd" | "face
   facets: IterateContextApi["facets"];
 }
 
+/** A resolver of the context at `address` for `caller`, or none for a call it leaves to the context. */
+export type StatelessReach = (
+  address: DurableObjectAddress,
+  caller: Caller,
+  expression: ItxExpression,
+) => ItxExpressionResolver | undefined;
+
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
 export class IterateContextRpcTarget extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
@@ -144,11 +151,9 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  as a project's walks the project. */
   readonly #globalPaths: boolean;
   /** THE STATELESS REACH (`ItxEntrypoint`'s, context/stateless-context.ts): a resolver of the
-   *  context at an address for a caller. Absent for a session's handle, whose calls go to the
-   *  context it names. */
-  readonly #statelessResolverOf:
-    | ((address: DurableObjectAddress, caller: Caller) => ItxExpressionResolver)
-    | undefined;
+   *  context at an address for a caller, for the calls it takes; a call it declines, or every call
+   *  where there is none, goes to the context the handle names. */
+  readonly #statelessResolverOf: StatelessReach | undefined;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -157,7 +162,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     waitUntil: WaitUntil,
     caller: Caller,
     globalPaths = false,
-    statelessResolverOf?: (address: DurableObjectAddress, caller: Caller) => ItxExpressionResolver,
+    statelessResolverOf?: StatelessReach,
   ) {
     super();
     this.#globalPaths = globalPaths;
@@ -280,8 +285,12 @@ export class IterateContextRpcTarget extends RpcTarget {
   }
 
   async #dispatch(call: ItxExpressionInput, args: unknown[]): Promise<unknown> {
-    const resolver = this.#statelessResolverOf?.(this.#durableObjectAddress, this.#caller);
     const itxExpression = normalizedItxExpression(call);
+    const resolver = this.#statelessResolverOf?.(
+      this.#durableObjectAddress,
+      this.#caller,
+      itxExpression,
+    );
     const terminalFetch = terminalFetchOf(itxExpression, args);
     if (resolver && terminalFetch)
       return statelessExpressionFetch(
@@ -572,9 +581,9 @@ registerPipelinedRpcBrand(CapnwebRpcPromise as unknown as abstract new () => unk
 registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknown);
 
 /** THE ACTIVE SPAN NAMES ITS CONTEXT, at each entry point that serves one project: the context's
- *  own (iterate-context-durable-object.ts) and `ItxEntrypoint`'s fetch below (its `get` span keeps
- *  no stamp; the warehouse's receiver fills it). Cloudflare's spans inside the invocation take the
- *  same project and path in the warehouse (docs/telemetry.md). The Worker's
+ *  own (iterate-context-durable-object.ts) and `ItxEntrypoint`'s below. Cloudflare's spans opened
+ *  while the code runs are the stamped span's children, and take its project and path in the
+ *  warehouse (docs/telemetry.md). The Worker's
  *  own fetch names the project alone: which context a request reaches is decided after it. The global
  *  namespace (users' and organizations' contexts) is no project's. */
 export function nameActiveSpan({ projectId, path }: { projectId: string; path?: string }): void {
@@ -619,6 +628,7 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
     // edge context does, so it carries its own context as `Caller.path`: what it appends elsewhere
     // (an entity's certificate on `/`) is stamped with where it came from, not where it landed.
     const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
+    nameActiveSpan(address);
     return new IterateContextRpcTarget(
       this.env.ITERATE_CONTEXT,
       address,

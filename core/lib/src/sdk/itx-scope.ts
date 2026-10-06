@@ -11,9 +11,10 @@
 import { currentCause } from "../cause.ts";
 import { releaseRpcSessions } from "../lib.ts";
 
-/** ONE get on `entrypoint`, under the running cause, for a `using` declaration: its
- *  `[Symbol.dispose]` releases the scope and every call made through it or through a handle it
- *  awaited, the last first. A release that throws is reported and the rest still run (lib.ts
+/** ONE get on `entrypoint`, under the cause running when the scope is made, for a `using`
+ *  declaration, made on the scope's first use: a block that never touches its context (most
+ *  `processEvent`s) opens no session. Its `[Symbol.dispose]` releases the scope and every call made
+ *  through it or through a handle it awaited, the last first. A release that throws is reported and the rest still run (lib.ts
  *  `releaseRpcSessions`), so an answer already awaited stands. Data stays usable after the block;
  *  a stub or handle is released with the rest, so a block hands out data. Await every call before
  *  the block ends: `return await itx.whoami()`, never `return itx.whoami()`.
@@ -23,12 +24,36 @@ import { releaseRpcSessions } from "../lib.ts";
  */
 export function itxScope<Scope>(entrypoint: { get(): Scope }): Scope & Disposable {
   const steps: unknown[] = [];
-  // …and hands the platform why the code runs (../cause.ts): a word on no signature
-  const itx = (entrypoint as { get(cause: unknown): Scope }).get(currentCause());
-  const scope = recordPipelinedSteps(itx, steps, () => releaseRpcSessions([itx, ...steps]));
-  // the root answers `[Symbol.dispose]` with the release handed to `recordPipelinedSteps`
-  return scope as Scope & Disposable;
+  const cause = currentCause();
+  let opened: { itx: Scope; scope: Scope } | undefined;
+  const open = () => {
+    if (!opened) {
+      // `get` also takes why the code runs (../cause.ts), a word on no declared signature
+      const itx = (entrypoint as { get(cause: unknown): Scope }).get(cause);
+      opened = { itx, scope: recordPipelinedSteps(itx, steps) };
+    }
+    return opened.scope;
+  };
+  // A function, as the stub it stands for is: callable, and handed across RPC as a stub. Its
+  // members are the opened stub's; `[Symbol.dispose]` releases what was opened. The casts: a
+  // Workers-RPC stub is a callable object, whatever `Scope` declares.
+  const root = new Proxy(() => {}, {
+    get: (_, key) =>
+      key === Symbol.dispose
+        ? () => opened && releaseRpcSessions([opened.itx, ...steps])
+        : Reflect.get(open() as object, key),
+    apply: (_, thisArg, args) => Reflect.apply(open() as () => unknown, thisArg, args),
+  });
+  scopeRoots.set(root, () => {
+    open();
+    return opened!.itx;
+  });
+  return root as Scope & Disposable;
 }
+
+/** Each scope `itxScope` made, to the stub it opens: a recorded call handed the scope crosses the
+ *  wire with that stub, as it would with any recorded value. */
+const scopeRoots = new WeakMap<object, () => unknown>();
 
 /** `stub` as the caller sees it, except that every CALL made through it — at any depth, on the stub,
  *  on a call's result, or on the handle a call's result resolves to once awaited — is pushed onto
@@ -36,17 +61,15 @@ export function itxScope<Scope>(entrypoint: { get(): Scope }): Scope & Disposabl
  *  that keeps its session open until disposed, awaited or not. Awaiting hands back a handle (a stub
  *  is callable, in workerd and capnweb alike) recorded and pushed too, and plain data untouched, so
  *  data still copies across RPC. `catch`/`finally` and symbol members (`Symbol.dispose`) are the
- *  value's own, bound to it, so disposing behaves exactly as on the bare stub — but for `stub`'s own
- *  `[Symbol.dispose]`, which is `release` when one is given (`itxScope`); an argument that is
- *  itself a recorded value crosses the wire as the stub it wraps. */
-export function recordPipelinedSteps<T>(stub: T, steps: unknown[], release?: () => void): T {
+ *  value's own, bound to it, so disposing behaves exactly as on the bare stub; an argument that is
+ *  itself a recorded value, or an `itxScope`, crosses the wire as the stub it wraps. */
+export function recordPipelinedSteps<T>(stub: T, steps: unknown[]): T {
   const wrapped = new WeakMap<object, object>();
   const record = (value: unknown, receiver: unknown): unknown => {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- a Proxy target must be an object or a function: a call may answer any value, and only those two can be wrapped
     if (!value || (typeof value !== "object" && typeof value !== "function")) return value;
     const proxy = new Proxy(value, {
       get(target, key) {
-        if (release && key === Symbol.dispose && target === stub) return release;
         const member: unknown = Reflect.get(target, key);
         if (key === "then" && typeof member === "function")
           // `const repo = await itx.repos.get(p); await repo.whoami()`: disposing the step releases
@@ -74,7 +97,7 @@ export function recordPipelinedSteps<T>(stub: T, steps: unknown[], release?: () 
           target as (...args: unknown[]) => unknown,
           receiver,
           // `Object(arg)` is a fresh wrapper for a primitive, so only a recorded value is found.
-          args.map((arg) => wrapped.get(Object(arg)) ?? arg),
+          args.map((arg) => wrapped.get(Object(arg)) ?? scopeRoots.get(Object(arg))?.() ?? arg),
         );
         steps.push(result);
         return record(result, undefined);

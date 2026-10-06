@@ -2239,7 +2239,7 @@ function incarnation(
   /** Every reset the loop asked for (`abortIncarnation`): a test builds the next incarnation. */
   const aborts: string[] = [];
   /** Every data point the loop wrote, in order (../metrics.ts). */
-  const measured: { name: string; value: number; label?: string }[] = [];
+  const measured: { name: string; value: number | number[]; label?: string }[] = [];
   let delivery!: SubscriptionDelivery;
   const coordinator = new AlarmCoordinator({
     setAlarm: async (at) => void alarms.push(at),

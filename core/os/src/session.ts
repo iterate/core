@@ -27,6 +27,7 @@ import { CONTEXT_DESTROYED, DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./
 import {
   IterateContextRpcTarget,
   type IterateContextNamespace,
+  type StatelessReach,
   type WaitUntil,
 } from "./iterate-context.ts";
 import {
@@ -80,6 +81,10 @@ export interface SessionInput {
   cause?: Cause;
   /** A live transport tracks projects whose capabilities it has handed out. */
   onProjectAccess?: (projectId: string) => void;
+  /** THE STATELESS REACH (context/stateless-context.ts) for the calls it takes, where the edge can
+   *  build it: a project's handle resolves those here, with the contexts' rule snapshots, and wakes
+   *  no context; every other call goes to the context it names. */
+  statelessResolverOf?: StatelessReach;
   /** The in-band bearer (rpc.ts): verify the token `authenticate` presents and bind the transport
    *  to its grant — null for a token the gate refuses. Absent where no `/api` root is served. */
   resolveBearer?: (token: string) => Promise<SessionAuthority | null>;
@@ -1207,6 +1212,8 @@ class ProjectCollectionRpcTarget extends RpcTarget {
       this.#sessionTeardown,
       this.#session.input.waitUntil,
       this.#session.caller,
+      false,
+      this.#session.input.statelessResolverOf,
     );
   }
 }

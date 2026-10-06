@@ -162,7 +162,9 @@ test("run: the source: package.json naming worker.js its main, the script splice
 test("run: the module's run() races the script against RUN_DEADLINE_MS in its own isolate: a script that never settles is given up on at the deadline — the call ends, the itx is disposed, no timer is left", async () => {
   vi.useFakeTimers();
   try {
-    const { run, disposals } = await loadedRun("async () => new Promise(() => {})");
+    const { run, disposals } = await loadedRun(
+      "async (itx) => { void itx.touched; return new Promise(() => {}); }",
+    );
     let outcome: unknown;
     void run().then(
       () => (outcome = "resolved"),
@@ -183,11 +185,11 @@ test("run: the module's run() races the script against RUN_DEADLINE_MS in its ow
 test("run: the module's run(): a script that finishes (or throws) settles the call at once and clears its deadline", async () => {
   vi.useFakeTimers();
   try {
-    const finishes = await loadedRun("async () => 42");
+    const finishes = await loadedRun("async (itx) => { void itx.touched; return 42; }");
     expect(await finishes.run()).toBe(42);
     expect(finishes.disposals()).toBe(1);
     expect(vi.getTimerCount()).toBe(0);
-    const throws = await loadedRun("async () => { throw new Error('nope') }");
+    const throws = await loadedRun("async (itx) => { void itx.touched; throw new Error('nope') }");
     await expect(throws.run()).rejects.toThrow("nope");
     expect(throws.disposals()).toBe(1);
     expect(vi.getTimerCount()).toBe(0);
@@ -246,10 +248,16 @@ test("run: the module's run() releases a handle the script awaited, and the call
 });
 
 test("run: the callWithCause every loaded WorkerEntrypoint has runs the script under the cause it is handed: its one getItx() scope names it", async () => {
-  const { callWithCause, causes } = await loadedRun("async () => 1");
+  const { callWithCause, causes } = await loadedRun(
+    "async (itx) => { void itx.touched; return 1; }",
+  );
   const cause = { chain: "a request's chain", depth: 3 };
   expect(await callWithCause(cause)).toBe(1);
   expect(causes).toEqual([cause]);
+  // a script that never touches its itx opens no scope (sdk/itx-scope.ts)
+  const untouched = await loadedRun("async () => 1");
+  expect(await untouched.callWithCause(cause)).toBe(1);
+  expect(untouched).toMatchObject({ causes: [] });
 });
 
 test("run: executeScript (the runner's call) loads that module through itx.workers.get and calls run() with nothing: the cause is the call's", async () => {

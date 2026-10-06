@@ -30,11 +30,11 @@ test("deliverEvent hands processEvent the event and the root in one round trip, 
   ]);
 });
 
-test("the defaults: an event is ignored and every request is not found", async () => {
+test("the defaults: an event is ignored, without opening its context, and every request is not found", async () => {
   const log: string[] = [];
   const entrypoint = configEntrypoint(log);
   await entrypoint.deliverEvent(event);
-  expect(log).toEqual(["get", "dispose root"]);
+  expect(log).toEqual([]);
   expect(await entrypoint.fetch(new Request("https://project.example/"))).toMatchObject({
     status: 404,
   });

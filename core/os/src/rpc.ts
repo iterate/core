@@ -13,7 +13,8 @@ import {
   type SessionInput,
 } from "./session.ts";
 import { iterateConfigOf, platformAddressesOf } from "./iterate-config.ts";
-import { parseCause } from "./cause.ts";
+import { newChain, parseCause } from "./cause.ts";
+import { statelessResolverFor } from "./context/stateless-context.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root holds what the upgrade's
  * credential resolved — nothing, on a socket opened BARE (api.ts). `authenticate({ type: "bearer",
@@ -61,6 +62,18 @@ export async function rpcResponse(
     platformOrigin,
     cause: parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),
     onProjectAccess: (projectId) => projects.add(projectId),
+    // A session's `itx.telemetry` (the dash polls it) resolves here: a read of the warehouse wakes
+    // no context. A call that names no cause begins a chain, as a context's own `invoke` does.
+    statelessResolverOf: (address, caller, expression) =>
+      expression[1] === "telemetry"
+        ? statelessResolverFor({
+            env,
+            namespace: env.ITERATE_CONTEXT,
+            address,
+            caller: caller.cause ? caller : { ...caller, cause: newChain("a call") },
+            ctx,
+          })
+        : undefined,
     resolveBearer: async (token) => {
       // Claimed BEFORE the gate is awaited: two tokens racing on one socket cannot both bind.
       if (binding || (bound && !auth)) throw new Error("This transport already carries a session");

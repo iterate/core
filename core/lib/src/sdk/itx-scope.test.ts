@@ -84,6 +84,24 @@ test("`using itx = itxScope(…)` gets the scope under the running cause and rel
   ]);
 });
 
+test("a block that never touches its context opens no session, and releases none", () => {
+  const get = vi.fn();
+  {
+    using _itx = itxScope({ get });
+  }
+  expect(get).not.toHaveBeenCalled();
+});
+
+test("a scope is callable, as the stub it opens is, and a call handed the scope itself gets that stub", () => {
+  const handed: unknown[] = [];
+  const raw = { ...fakeStub([]), echo: (arg: unknown) => void handed.push(arg) };
+  using scope: any = itxScope({ get: () => raw });
+  expect(typeof scope).toBe("function");
+  scope.echo(scope);
+  expect(handed).toEqual([raw]);
+  expect(handed[0]).toBe(raw);
+});
+
 test("a release that throws is reported, the rest are still released and the block ends without its throw", async () => {
   const log: string[] = [];
   const stub = fakeStub(log);

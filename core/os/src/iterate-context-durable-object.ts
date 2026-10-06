@@ -575,6 +575,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       });
       const woken = events.find((event) => event.type === "events.iterate.com/itx/woken");
       if (woken) this.#announceToAncestors(woken.source?.cause);
+      this.#measureSize();
       this.#unsetWhatNamesDeadRpcStubs(events);
       this.#alarmCoordinator.reconcile();
     },
@@ -1241,6 +1242,26 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   // ── SUBSCRIPTION DELIVERY: the one loop (subscription-delivery.ts), wired to this DO ──
 
+  /** This context's custom metrics (./metrics.ts): the delivery loop's, and its own size. */
+  readonly #metrics = metrics(this.env, {
+    projectId: this.#durableObjectAddress.projectId,
+    path: this.#durableObjectAddress.path,
+  });
+  #sizeMeasuredAt = -Infinity;
+
+  /** THE CONTEXT'S SIZE (docs/telemetry.md), at the first commit of each incarnation (its birth or a
+   *  wake), then at most hourly as it commits or its alarm runs: its
+   *  SQLite database in bytes, which Cloudflare caps at 10 GB a Durable Object, and its stream's head
+   *  offset, every event it committed, ephemeral ones included. */
+  #measureSize(): void {
+    if (Date.now() - this.#sizeMeasuredAt < 3_600_000) return;
+    this.#sizeMeasuredAt = Date.now();
+    this.#metrics("context.size", [
+      this.ctx.storage.sql.databaseSize,
+      this.#stream.highestDurableOffset(),
+    ]);
+  }
+
   readonly #subscriptionDelivery = new SubscriptionDelivery({
     stream: this.#stream,
     // The RESOLVER's `evaluate`, not this class's `invoke`: the loop's evaluation is the kernel's own
@@ -1265,10 +1286,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return this.#callerStorage.run(this.#withPlatformOrigin(caller), call);
     },
     abortIncarnation: (reason) => this.#abortAfterTheAnswer(reason),
-    metrics: metrics(this.env, {
-      projectId: this.#durableObjectAddress.projectId,
-      path: this.#durableObjectAddress.path,
-    }),
+    metrics: this.#metrics,
   });
 
   // ── THE ONE ALARM (alarm-coordinator.ts): derived from five deadline sources, traced ──
@@ -1457,6 +1475,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  alone and does nothing else. */
   async alarm(): Promise<void> {
     this.#nameActiveSpan();
+    this.#measureSize();
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;

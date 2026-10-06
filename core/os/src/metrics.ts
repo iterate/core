@@ -3,7 +3,8 @@
 
 /** The custom metrics of one context (docs/telemetry.md): each call writes ONE data
  *  point, indexed by the project so a busy one cannot crowd a quiet one out of the sample, its
- *  blobs the name, `WORKER_NAME`, the project, the path and the label. Queries read the blobs by
+ *  blobs the name, `WORKER_NAME`, the project, the path and the label, its doubles the value or
+ *  values: values one point holds land together or not at all. Queries read the blobs by
  *  position, so the layout only grows at the end. Never awaited: call it once per batch, never per
  *  item. A call never throws, and with no dataset bound (local dev, tests) writes nothing. */
 export function metrics(
@@ -11,12 +12,12 @@ export function metrics(
   { projectId, path }: { projectId: string; path: string },
 ) {
   const { TELEMETRY_METRICS: dataset, WORKER_NAME: worker } = env;
-  return (name: string, value: number, label = ""): void => {
+  return (name: string, value: number | number[], label = ""): void => {
     try {
       dataset?.writeDataPoint({
         indexes: [projectId],
         blobs: [name, worker, projectId, path, label],
-        doubles: [value],
+        doubles: Array.isArray(value) ? value : [value],
       });
     } catch (error) {
       // past an invocation's 250 data points `writeDataPoint` throws, and the point is lost
