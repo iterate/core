@@ -56,7 +56,7 @@ export function ProjectFields({
           <FieldLabel htmlFor={organizationId}>Organization</FieldLabel>
           <NativeSelect
             id={organizationId}
-            className="w-full *:data-[slot=native-select]:h-11 *:data-[slot=native-select]:pl-3 *:data-[slot=native-select]:text-base"
+            className="w-full *:data-[slot=native-select]:h-11 *:data-[slot=native-select]:bg-muted *:data-[slot=native-select]:pl-3"
             value={draft.orgId}
             disabled={disabled}
             onChange={(event) => onDraftChange({ ...draft, orgId: event.target.value })}
@@ -80,7 +80,7 @@ export function ProjectFields({
             autoComplete="organization"
             required
             disabled={disabled}
-            className="h-11 px-3 text-base md:text-base"
+            className="h-11 bg-muted px-3"
             onChange={(event) => onDraftChange({ ...draft, organizationName: event.target.value })}
           />
         </Field>
@@ -97,13 +97,15 @@ export function ProjectFields({
           required
           ref={focusSlug ? focusOnMount : undefined}
           disabled={disabled}
-          className="h-11 px-3 text-base md:text-base"
+          className="h-11 bg-muted px-3"
           onChange={(event) =>
             onDraftChange({ ...draft, slug: typedSlug(event.target.value), followsName: false })
           }
         />
         {hostedAt ? (
-          <FieldDescription>Your project will be hosted at {hostedAt}</FieldDescription>
+          <FieldDescription className="text-xs wrap-anywhere">
+            Your project will be hosted at {hostedAt}
+          </FieldDescription>
         ) : null}
       </Field>
     </div>

@@ -3,6 +3,7 @@ import { Button } from "../ui/button.tsx";
 import { Field, FieldLabel } from "../ui/field.tsx";
 import { Input } from "../ui/input.tsx";
 import { focusOnMount } from "../focus-on-mount.ts";
+import { linkClass } from "../standalone-page.tsx";
 
 /** Email, then either a mailed code or the deployment's password. With both configured the code is
  *  the default and the password the alternate; switching posts the form back to the page in the
@@ -25,7 +26,7 @@ export function EmailSignInForm({
   const usePassword = passwordEnabled && (!codeEnabled || passwordSelected);
   const focusPassword = usePassword && Boolean(email);
   return (
-    <form method="post" action="/login" className="flex flex-col gap-3">
+    <form method="post" action="/login" className="flex max-w-md flex-col gap-4">
       <input type="hidden" name="next" value={next} />
       <Field>
         <FieldLabel htmlFor={emailId}>Email</FieldLabel>
@@ -37,7 +38,7 @@ export function EmailSignInForm({
           autoComplete="email"
           required
           ref={focusPassword ? undefined : focusOnMount}
-          className="h-11 px-3 text-base md:text-base"
+          className="h-11 bg-muted px-3"
         />
       </Field>
       {usePassword ? (
@@ -50,25 +51,27 @@ export function EmailSignInForm({
             autoComplete="current-password"
             required
             ref={focusPassword ? focusOnMount : undefined}
-            className="h-11 px-3 text-base md:text-base"
+            className="h-11 bg-muted px-3"
           />
         </Field>
       ) : null}
-      <Button type="submit" size="lg" className="h-11">
-        {usePassword ? "Sign in" : "Send me a code"}
-      </Button>
-      {passwordEnabled && codeEnabled ? (
-        <Button
-          type="submit"
-          variant="ghost"
-          name="method"
-          value={usePassword ? "code" : "password"}
-          formNoValidate
-          className="h-9 text-[0.8rem]"
-        >
-          {usePassword ? "Use email code instead" : "Use password instead"}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+        <Button type="submit" size="lg" className="h-11 px-4">
+          {usePassword ? "Sign in" : "Send me a code"}
         </Button>
-      ) : null}
+        {passwordEnabled && codeEnabled ? (
+          <Button
+            type="submit"
+            variant="link"
+            name="method"
+            value={usePassword ? "code" : "password"}
+            formNoValidate
+            className={linkClass}
+          >
+            {usePassword ? "Use email code instead" : "Use password instead"}
+          </Button>
+        ) : null}
+      </div>
     </form>
   );
 }

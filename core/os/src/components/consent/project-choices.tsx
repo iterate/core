@@ -1,7 +1,9 @@
 import { useId } from "react";
+import { cn } from "cn";
 import { Button } from "../ui/button.tsx";
 import { Checkbox } from "../ui/checkbox.tsx";
 import { Label } from "../ui/label.tsx";
+import { linkClass } from "../standalone-page.tsx";
 
 /** A project the person reaches, with its organization's name for the list. */
 export interface ProjectRow {
@@ -19,7 +21,8 @@ export interface ProjectSelection {
 }
 
 /** The project list with its either/or — all projects, or those ticked — and the New project
- *  toggle. A client bound to one project has neither choice. */
+ *  toggle. A client bound to one project has neither choice: its project is listed ticked, and
+ *  stays so. */
 export function ProjectChoices({
   projects,
   projectBound,
@@ -46,11 +49,11 @@ export function ProjectChoices({
     onSelectionChange({ ...selection, excluded });
   }
   return (
-    <fieldset aria-label="Projects it may reach" className="-mx-2 flex flex-col gap-1">
+    <fieldset aria-label="Projects it may reach" className="flex flex-col gap-2">
       {projectBound ? null : (
-        <Label className="gap-3 rounded-lg px-2 py-2 leading-normal hover:bg-muted">
+        <Label className="gap-3 leading-normal">
           <Checkbox
-            className="border-foreground/30 data-disabled:opacity-50"
+            className="rounded-none border-foreground/30 data-disabled:opacity-50"
             checked={selection.all}
             disabled={disabled}
             onCheckedChange={(all) => onSelectionChange({ ...selection, all })}
@@ -59,40 +62,38 @@ export function ProjectChoices({
         </Label>
       )}
       {projects.map((project) => (
-        <Label
-          key={project.id}
-          className="gap-3 rounded-lg px-2 py-2 leading-normal font-normal hover:bg-muted"
-        >
+        <Label key={project.id} className="items-start gap-3 leading-normal">
           <Checkbox
-            className="border-foreground/30 data-disabled:opacity-50"
+            className="mt-1 rounded-none border-foreground/30 data-disabled:opacity-50"
             aria-labelledby={`${id}-${project.id}-slug ${id}-${project.id}-in ${id}-${project.id}-org`}
             checked={selection.all || !selection.excluded.has(project.id)}
-            disabled={disabled || selection.all}
+            disabled={disabled || selection.all || projectBound}
             onCheckedChange={(checked) => tick(project.id, checked)}
           />
-          <span className="flex min-w-0 flex-col">
-            <span id={`${id}-${project.id}-slug`} className="truncate font-mono">
+          <span className="flex min-w-0 flex-wrap items-baseline gap-x-3">
+            <span id={`${id}-${project.id}-slug`} className="wrap-anywhere">
               {project.slug}
             </span>
             <span id={`${id}-${project.id}-in`} className="sr-only">
               in
             </span>
-            <span id={`${id}-${project.id}-org`} className="truncate text-xs text-muted-foreground">
+            <span
+              id={`${id}-${project.id}-org`}
+              className="text-xs wrap-anywhere text-muted-foreground"
+            >
               {project.orgName}
             </span>
           </span>
         </Label>
       ))}
       {projectBound && !projects.length ? (
-        <p className="px-2 text-sm text-muted-foreground">
-          You do not have access to this app’s project.
-        </p>
+        <p className="text-muted-foreground">You do not have access to this app’s project.</p>
       ) : null}
       {projectBound ? null : (
         <Button
           type="button"
-          variant="ghost"
-          className="justify-start"
+          variant="link"
+          className={cn(linkClass, "self-start")}
           aria-expanded={creating}
           disabled={disabled}
           onClick={() => onCreatingChange(!creating)}

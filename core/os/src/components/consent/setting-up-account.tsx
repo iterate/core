@@ -1,7 +1,6 @@
 import { useRouter } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Button } from "../ui/button.tsx";
-import { IterateLogo } from "../iterate-logo.tsx";
 import { Spinner } from "../ui/spinner.tsx";
 import { StandalonePage } from "../standalone-page.tsx";
 
@@ -39,18 +38,17 @@ export function SettingUpAccount() {
     };
   }, [router, round]);
   return (
-    <StandalonePage className="items-center gap-4 text-center text-sm">
-      <IterateLogo alt="" className="size-14" />
+    <StandalonePage>
       {gaveUp ? (
         <>
-          <h1 className="text-xl font-semibold tracking-tight">Your account is not ready yet</h1>
-          <p role="alert" data-type="error">
+          <h1>Your account is not ready yet</h1>
+          <p role="alert" data-type="error" className="text-destructive">
             Setting up your account is taking longer than it should. Nothing was granted.
           </p>
           <Button
             type="button"
             size="lg"
-            className="h-11 w-full"
+            className="h-11 self-start px-4"
             onClick={() => {
               setGaveUp(false);
               setRound(round + 1);
@@ -61,7 +59,7 @@ export function SettingUpAccount() {
         </>
       ) : (
         <>
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+          <h1 className="flex items-center gap-3">
             <Spinner className="size-5" />
             Setting up your account…
           </h1>

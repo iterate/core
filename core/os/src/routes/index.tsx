@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { cn } from "cn";
 import { buttonVariants } from "../components/ui/button.tsx";
-import { IterateLogo } from "../components/iterate-logo.tsx";
-import { StandalonePage } from "../components/standalone-page.tsx";
+import { linkClass, StandalonePage } from "../components/standalone-page.tsx";
 import { getLandingState } from "../issuer.functions.ts";
 import { loginSearchOf } from "../login-search.ts";
 
@@ -14,13 +14,12 @@ export const Route = createFileRoute("/")({
 function LandingPage() {
   const { issuer, dash } = Route.useLoaderData();
   return (
-    <StandalonePage className="text-sm leading-relaxed">
-      <IterateLogo alt="" className="size-12" />
-      <h1 className="text-xl font-semibold">iterate platform</h1>
+    <StandalonePage>
+      <h1>iterate platform</h1>
       <p>
         <strong>{new URL(issuer).host}</strong> is deliberately headless: the API (<code>/api</code>
         ), the OAuth issuer and the MCP server. Its only pages are{" "}
-        <Link to="/login" search={loginSearchOf({})} className="underline underline-offset-4">
+        <Link to="/login" search={loginSearchOf({})} className={linkClass}>
           sign-in
         </Link>{" "}
         and consent.
@@ -29,7 +28,7 @@ function LandingPage() {
         <div className="flex flex-col items-start gap-3">
           <p>Your projects, organizations and sessions are in the dash.</p>
           <a
-            className={buttonVariants({ size: "lg" })}
+            className={cn(buttonVariants({ size: "lg" }), "h-11 px-4")}
             href={`${dash}/.auth/connect?${new URLSearchParams({ issuer })}`}
           >
             {new URL(dash).host}
@@ -38,7 +37,7 @@ function LandingPage() {
       ) : null}
       <p className="text-muted-foreground">
         Setting this up with an agent? Point it at{" "}
-        <a href="/setup-prompt.md" className="underline underline-offset-4">
+        <a href="/setup-prompt.md" className={linkClass}>
           /setup-prompt.md
         </a>
         .

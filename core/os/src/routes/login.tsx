@@ -1,9 +1,7 @@
 import { Fragment } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { environmentFaviconHref, type DeploymentEnvironment } from "iterate/lib";
-import { FieldSeparator } from "../components/ui/field.tsx";
-import { IterateLogo } from "../components/iterate-logo.tsx";
-import { ErrorMessage, StandaloneCard, StandalonePage } from "../components/standalone-page.tsx";
+import type { DeploymentEnvironment } from "iterate/lib";
+import { ErrorMessage, StandalonePage } from "../components/standalone-page.tsx";
 import { CodeSignInForm } from "../components/login/code-sign-in-form.tsx";
 import { EmailSignInForm } from "../components/login/email-sign-in-form.tsx";
 import { RecommendedSignIn, SignInProviders } from "../components/login/sign-in-providers.tsx";
@@ -43,31 +41,24 @@ function LoginPage() {
       ? "Check your inbox"
       : `Sign in to ${deploymentNameOf(state.environment)}`;
   return (
-    <StandalonePage className="max-w-100">
-      <StandaloneCard>
-        <header className="flex items-center gap-3">
-          <DeploymentIcon environment={state.environment} />
-          <div className="flex min-w-0 flex-col">
-            <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-            {state.environment.kind === "preview" ? (
-              <p className="font-mono text-xs text-muted-foreground">
-                {state.environment.deployment}
-              </p>
-            ) : null}
-          </div>
-        </header>
-        {state.error ? <ErrorMessage>{state.error}</ErrorMessage> : null}
-        {state.signedInAs ? (
-          <SignedIn
-            email={state.signedInAs}
-            next={state.next}
-            dash={state.dash}
-            switchAccount={state.switchAccount}
-          />
-        ) : (
-          <SignInOptions state={state} />
-        )}
-      </StandaloneCard>
+    <StandalonePage>
+      <header>
+        <h1>{title}</h1>
+        {state.environment.kind === "preview" ? (
+          <p className="wrap-anywhere text-muted-foreground">{state.environment.deployment}</p>
+        ) : null}
+      </header>
+      {state.error ? <ErrorMessage>{state.error}</ErrorMessage> : null}
+      {state.signedInAs ? (
+        <SignedIn
+          email={state.signedInAs}
+          next={state.next}
+          dash={state.dash}
+          switchAccount={state.switchAccount}
+        />
+      ) : (
+        <SignInOptions state={state} />
+      )}
     </StandalonePage>
   );
 }
@@ -81,21 +72,6 @@ function deploymentNameOf(environment: DeploymentEnvironment) {
   return "iterate";
 }
 
-/** The deployment's mark: production's logo, else the same purple PR-number or teal dev square the
- *  tab shows (`/favicon.svg`, issuer-pages.ts). */
-function DeploymentIcon({ environment }: { environment: DeploymentEnvironment }) {
-  if (environment.kind === "production") return <IterateLogo alt="" className="size-8" />;
-  return (
-    <img
-      src={environmentFaviconHref(environment, "/iterate-logo.svg")}
-      alt=""
-      width={32}
-      height={32}
-      className="size-8 shrink-0 rounded-lg"
-    />
-  );
-}
-
 /** Every sign-in this deployment offers, as the config lists them (sign-in-methods.ts): the email
  *  form (or, once a code is sent, its entry) and the links, in order — or, when the link suggested
  *  one of them (`provider_hint`), that one alone and the way back to the rest. */
@@ -105,9 +81,8 @@ function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginSta
     ? undefined
     : links.find((provider) => provider.key === state.providerHint);
   if (recommended) return <RecommendedSignIn provider={recommended} everyWay={state.everyWay} />;
-  if (!state.methods.length)
-    return <p className="text-sm">Sign-in is not configured for this deployment.</p>;
-  // consecutive links share one list; a separator between the form and the links
+  if (!state.methods.length) return <p>Sign-in is not configured for this deployment.</p>;
+  // consecutive links share one list; a line of text between the form and the links
   const groups: Array<(typeof state.methods)[number] | typeof links> = [];
   for (const method of state.methods) {
     const last = groups.at(-1);
@@ -118,11 +93,7 @@ function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginSta
     <>
       {groups.map((group, index) => (
         <Fragment key={index}>
-          {index > 0 ? (
-            <FieldSeparator className="text-xs *:data-[slot=field-separator-content]:bg-card">
-              or continue with
-            </FieldSeparator>
-          ) : null}
+          {index > 0 ? <p className="text-muted-foreground">or continue with</p> : null}
           {Array.isArray(group) ? (
             <SignInProviders providers={group} />
           ) : group.kind === "email" && state.codeSentTo ? (

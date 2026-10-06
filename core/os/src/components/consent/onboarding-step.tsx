@@ -1,35 +1,32 @@
-import { useId, type FormEvent, type Ref } from "react";
+import type { FormEvent, Ref } from "react";
 import { Button } from "../ui/button.tsx";
-import { ConsentPanel, StepHeading, type ConsentFrame } from "./consent-step.tsx";
+import { ConsentActions, StepHeading, type ConsentOutcome } from "./consent-step.tsx";
 import { ProjectFields } from "./project-fields.tsx";
 
-/** The first step for someone with no project yet: create one. Its button sits with Cancel in the
- *  panel's other column, joined to the form by `form`, so Enter in a field still submits. */
+/** The first view for someone with no project yet: create one. There is nothing to authorize
+ *  until it exists, so the consent itself follows (authorize-step.tsx). */
 export function OnboardingStep({
   headingRef,
-  frame,
+  outcome,
   fields,
   onCreateProject,
 }: {
   headingRef: Ref<HTMLHeadingElement>;
-  frame: ConsentFrame;
+  outcome: ConsentOutcome;
   fields: Parameters<typeof ProjectFields>[0];
   onCreateProject: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  const formId = useId();
   return (
-    <ConsentPanel
-      {...frame}
-      action={
-        <Button type="submit" form={formId} size="lg" className="h-11" disabled={fields.disabled}>
-          Review permissions
-        </Button>
-      }
-    >
-      <StepHeading ref={headingRef}>Create a project</StepHeading>
-      <form id={formId} onSubmit={onCreateProject}>
+    <form onSubmit={onCreateProject} className="flex flex-col gap-6">
+      <section className="flex max-w-md flex-col gap-3">
+        <StepHeading ref={headingRef}>Create a project</StepHeading>
         <ProjectFields {...fields} />
-      </form>
-    </ConsentPanel>
+      </section>
+      <ConsentActions {...outcome}>
+        <Button type="submit" size="lg" className="h-11 px-4" disabled={fields.disabled}>
+          Create project
+        </Button>
+      </ConsentActions>
+    </form>
   );
 }

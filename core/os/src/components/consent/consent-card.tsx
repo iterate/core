@@ -7,21 +7,19 @@ import type { ConsentView } from "../../consent.ts";
 import { projectSlug } from "../../control-plane/catalog.ts";
 import { createProjectForConsent } from "../../issuer.functions.ts";
 import { switchAccountHref } from "../../login-search.ts";
+import { AuthorizeStep } from "./authorize-step.tsx";
 import { ClientHeading } from "./client-heading.tsx";
 import { OnboardingStep } from "./onboarding-step.tsx";
-import { PermissionsStep } from "./permissions-step.tsx";
 import type { ProjectSelection } from "./project-choices.tsx";
 import type { ProjectDraft } from "./project-fields.tsx";
-import { ProjectsStep } from "./projects-step.tsx";
 import { SignedInAccount } from "./signed-in-account.tsx";
 import { SomeoneElseStep } from "./someone-else-step.tsx";
 
-/** The consent page for a request the platform accepted. Three steps: a first project for someone
- *  with none, then which projects the client may reach, then which of the permissions it asked for
- *  to grant — or, for a platform admin, "Sign in as someone else…" instead, which a link naming
- *  someone opens on. Choices live here, so a refreshed description (after a project is created)
- *  and a trip between the steps never drop one. Authorize is a plain POST to this very
- *  authorization URL. */
+/** The consent page for a request the platform accepted: one screen with the projects the client
+ *  may reach, the permissions it asked for and Authorize (authorize-step.tsx). Two views stand in
+ *  for it: a first project for someone with none, and, for a platform admin, "Sign in as someone
+ *  else…", which a link naming someone opens on. Choices live here, so a refreshed description
+ *  (after a project is created) and a trip to another view never drop one. */
 export function ConsentCard({
   view,
   authorization,
@@ -36,9 +34,7 @@ export function ConsentCard({
   const hydrated = useHydrated();
   const [pending, startTransition] = useTransition();
   // a link that named someone (`impersonation.suggested`) opens on signing in as them
-  const [step, setStep] = useState<"projects" | "permissions" | "someone-else">(
-    view.impersonation?.suggested ? "someone-else" : "projects",
-  );
+  const [someoneElse, setSomeoneElse] = useState(Boolean(view.impersonation?.suggested));
   const [selection, setSelection] = useState<ProjectSelection>({
     all: !view.projectBound,
     excluded: new Set(),
@@ -62,25 +58,22 @@ export function ConsentCard({
     slug: project.slug,
     orgName: orgNames.get(project.orgId) ?? project.orgId,
   }));
-  const selected = selection.all
-    ? projects
-    : projects.filter((project) => !selection.excluded.has(project.id));
   const onboarding = !view.projectBound && !view.projects.length;
   const organizationName = draft.orgId ? (orgNames.get(draft.orgId) ?? "") : draft.organizationName;
   const slug = onboarding && draft.followsName ? projectSlug(organizationName) : draft.slug;
   const switchAccount = switchAccountHref(`/oauth2/auth${authorization}`);
 
-  /** Change step and move focus to its heading, so the change is announced. */
-  function showStep(next: "projects" | "permissions" | "someone-else") {
+  /** Change view and move focus to its heading, so the change is announced. */
+  function showSomeoneElse(shown: boolean) {
     flushSync(() => {
-      setStep(next);
+      setSomeoneElse(shown);
       setError(null);
     });
     headingRef.current?.focus();
   }
 
   /** Create the drafted project (and its new organization, when one is named), then refresh the
-   *  description. The first project goes straight on to the permissions. */
+   *  description. The first project goes straight on to the consent. */
   function submitDraft(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     // cleared first, so a refusal (even the same one again) is a new alert that takes focus
@@ -110,8 +103,12 @@ export function ConsentCard({
           setError(result.error);
           return;
         }
-        setDraft({ open: false, slug: "", followsName: true, orgId, organizationName: "" });
-        if (first) showStep("permissions");
+        // Rendered at once: after a first project the refreshed description has replaced the
+        // first-project view with the consent, whose heading takes focus.
+        flushSync(() =>
+          setDraft({ open: false, slug: "", followsName: true, orgId, organizationName: "" }),
+        );
+        if (first) headingRef.current?.focus();
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
@@ -128,17 +125,7 @@ export function ConsentCard({
     onDraftChange: setDraft,
   };
 
-  const frame = {
-    account: (
-      <SignedInAccount
-        email={view.email}
-        picture={view.picture}
-        switchAccount={switchAccount}
-        onSignInAsSomeoneElse={
-          view.impersonation && step !== "someone-else" ? () => showStep("someone-else") : undefined
-        }
-      />
-    ),
+  const outcome = {
     error,
     // Creating a project takes the platform a few seconds; say so while the controls wait.
     status: pending ? "Creating project…" : null,
@@ -146,52 +133,44 @@ export function ConsentCard({
   };
 
   return (
-    <StandalonePage wide className="gap-8 md:gap-10">
-      <ClientHeading
-        clientName={view.clientName}
-        clientLogoUri={view.clientLogoUri}
-        clientDomain={view.clientDomain}
+    <StandalonePage>
+      <ClientHeading clientName={view.clientName} clientDomain={view.clientDomain} />
+      <SignedInAccount
+        email={view.email}
+        switchAccount={switchAccount}
+        onSignInAsSomeoneElse={
+          view.impersonation && !someoneElse ? () => showSomeoneElse(true) : undefined
+        }
       />
-      {step === "someone-else" && view.impersonation ? (
+      {someoneElse && view.impersonation ? (
         <SomeoneElseStep
           headingRef={headingRef}
-          frame={frame}
+          outcome={outcome}
           clientName={view.clientName}
           clientId={view.clientId}
           impersonation={view.impersonation}
-          onBack={() => showStep("projects")}
+          onBack={() => showSomeoneElse(false)}
         />
       ) : onboarding ? (
         <OnboardingStep
           headingRef={headingRef}
-          frame={frame}
+          outcome={outcome}
           fields={fields}
           onCreateProject={submitDraft}
         />
-      ) : step === "projects" ? (
-        <ProjectsStep
+      ) : (
+        <AuthorizeStep
           headingRef={headingRef}
-          frame={frame}
+          outcome={outcome}
           projects={projects}
           projectBound={view.projectBound}
           selection={selection}
-          fields={fields}
-          canReview={selection.all || selected.length > 0}
-          onSelectionChange={setSelection}
-          onCreateProject={submitDraft}
-          onReview={() => showStep("permissions")}
-        />
-      ) : (
-        <PermissionsStep
-          headingRef={headingRef}
-          frame={frame}
-          all={selection.all}
-          selected={selected}
           scopes={view.scopes}
           declined={declined}
-          disabled={disabled}
+          fields={fields}
+          onSelectionChange={setSelection}
           onDeclinedChange={setDeclined}
-          onEditProjects={() => showStep("projects")}
+          onCreateProject={submitDraft}
         />
       )}
     </StandalonePage>

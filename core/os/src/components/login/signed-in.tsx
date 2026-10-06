@@ -1,5 +1,6 @@
 import { cn } from "cn";
 import { Button, buttonVariants } from "../ui/button.tsx";
+import { linkClass } from "../standalone-page.tsx";
 
 /** A browser already signed in: who, where to go on, and the way to become someone else. */
 export function SignedIn({
@@ -18,20 +19,22 @@ export function SignedIn({
       ? dash && { href: dash, label: "Go to the dash" }
       : { href: next, label: "Continue" };
   return (
-    <div className="flex flex-col gap-3">
-      <p className="text-sm">
+    <div className="flex flex-col gap-4">
+      <p>
         Signed in as <strong className="wrap-anywhere">{email}</strong>.
       </p>
-      {onward ? (
-        <a className={cn(buttonVariants({ size: "lg" }), "h-11")} href={onward.href}>
-          {onward.label}
-        </a>
-      ) : null}
-      <form method="post" action={switchAccount} className="flex flex-col">
-        <Button type="submit" variant="ghost" className="h-9 text-[0.8rem]">
-          Switch account
-        </Button>
-      </form>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+        {onward ? (
+          <a className={cn(buttonVariants({ size: "lg" }), "h-11 px-4")} href={onward.href}>
+            {onward.label}
+          </a>
+        ) : null}
+        <form method="post" action={switchAccount}>
+          <Button type="submit" variant="link" className={linkClass}>
+            Switch account
+          </Button>
+        </form>
+      </div>
     </div>
   );
 }

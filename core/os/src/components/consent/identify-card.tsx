@@ -1,8 +1,6 @@
 import { useHydrated } from "@tanstack/react-router";
-import { cn } from "cn";
-import { Button, buttonVariants } from "../ui/button.tsx";
-import { IterateLogo } from "../iterate-logo.tsx";
-import { StandalonePage } from "../standalone-page.tsx";
+import { Button } from "../ui/button.tsx";
+import { linkClass, StandalonePage } from "../standalone-page.tsx";
 import type { ConsentView } from "../../consent.ts";
 
 /** A client asking only who the person is (the `/oauth2/userinfo` resource): it learns their email
@@ -11,31 +9,30 @@ import type { ConsentView } from "../../consent.ts";
 export function IdentifyCard({ view }: { view: Extract<ConsentView, { kind: "identify" }> }) {
   const hydrated = useHydrated();
   return (
-    <StandalonePage className="items-center gap-4 text-center text-sm">
-      <IterateLogo alt="" className="size-14" />
-      <h1 className="text-xl font-semibold tracking-tight text-balance">
-        Confirm it's you to {view.clientDomain || view.clientName}
-      </h1>
-      <div className="flex flex-col gap-1">
+    <StandalonePage>
+      <h1 className="wrap-anywhere">Confirm it's you to {view.clientDomain || view.clientName}</h1>
+      <div>
         <p>
-          {view.clientName} learns that you are <strong>{view.email}</strong>.
+          {view.clientName} learns that you are{" "}
+          <strong className="wrap-anywhere">{view.email}</strong>.
         </p>
         <p className="text-muted-foreground">
           Nothing else: it gets no access to your projects or your account.
         </p>
       </div>
-      <form method="post" className="w-full">
-        <Button type="submit" size="lg" className="h-11 w-full" disabled={!hydrated}>
+      <form method="post" className="flex flex-wrap items-center gap-x-5 gap-y-3">
+        <Button
+          type="submit"
+          size="lg"
+          className="h-auto min-h-11 max-w-full shrink px-4 py-2 text-left whitespace-normal"
+          disabled={!hydrated}
+        >
           Continue as {view.email}
         </Button>
+        <a href={view.denyLocation} className={linkClass}>
+          Cancel
+        </a>
       </form>
-      <a
-        href={view.denyLocation}
-        // cn() lets outline's border beat the base's transparent one, as <Button> does
-        className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 w-full")}
-      >
-        Cancel
-      </a>
     </StandalonePage>
   );
 }
