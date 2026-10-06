@@ -335,8 +335,8 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     );
 
   if (url.pathname === "/.auth/session.json") {
-    // which issuer this browser is connected to — the app's shell says so when it is not the
-    // deployment's own; no credential, no identity, nothing a page on another origin could use
+    // which issuer this browser is connected to — the app's shell names it, and marks it when it is
+    // not the deployment's own; no credential, no identity, nothing a page on another origin could use
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
     const host = await held();
     return Response.json(
