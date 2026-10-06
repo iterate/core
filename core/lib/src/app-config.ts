@@ -1,16 +1,16 @@
 // app-config.ts — THE PREFIXED CONFIG MECHANISM: how every Worker of ours reads what differs between
 // deployments of the same code. ONE JSON object under a prefix of the Worker's own — the
-// platform's `ITERATE` (the iterate config, core/os/src/iterate-config.ts), the apps' `APP_CONFIG`
+// platform's `ITERATE` (the iterate config, core/os/src/iterate-config.ts), the apps' `ITERATE_APP`
 // — checked against the Worker's own zod schema; loud on anything malformed, naming the field. A
 // value left out takes its schema's default.
 //
 // Any key can also be set ALONE as a var: the name, then the path, `__` before every segment and
 // each segment in SNAKE_CASE: `ITERATE__URLS__OS`, `ITERATE__LOGIN__PASSWORD`,
-// `APP_CONFIG__URLS__OS`. The parser merges it on top of the object, so a deployment's vars and its
+// `ITERATE_APP__URLS__OS`. The parser merges it on top of the object, so a deployment's vars and its
 // secrets compose, and a laptop's gitignored `.dev.vars` names one local origin without restating
 // the rest. A blank var is unset. A key the schema does not name, in the object or as a var, is
 // warned about loudly and dropped, never silently kept. A var under the prefix with ONE underscore
-// (`ITERATE_CONTEXT`, a binding) is not the config's.
+// (`ITERATE_CONTEXT`, a binding, or the apps' `ITERATE_APP`) is not the config's.
 //
 // The schemas: the platform's in core/os/src/iterate-config.ts, the apps on top's in
 // packages/shared/src/start-app-config.ts.

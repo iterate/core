@@ -100,20 +100,30 @@ test.for<{
   },
   {
     name: "another config's name reads only its own variables",
-    prefix: "APP_CONFIG",
+    prefix: "ITERATE_APP",
     env: {
-      APP_CONFIG: JSON.stringify({ urls: { os: "https://os.test" } }),
-      APP_CONFIG__URLS__DASH: "https://dash.test",
+      ITERATE_APP: JSON.stringify({ urls: { os: "https://os.test" } }),
+      ITERATE_APP__URLS__DASH: "https://dash.test",
       ITERATE__LABELS: '{"other":"config"}',
     },
     becomes: { urls: { os: "https://os.test", dash: "https://dash.test" }, labels: {} },
   },
   {
-    name: "a longer name that starts with the config's reads only its own variables",
-    prefix: "ITERATE_OTHER",
+    name: "an app's ITERATE_APP never reads the platform's ITERATE or ITERATE__*",
+    prefix: "ITERATE_APP",
     env: {
-      ITERATE: JSON.stringify({ urls: { os: "https://other.test" } }),
-      ITERATE_OTHER__URLS__OS: "https://os.test",
+      ITERATE: JSON.stringify({ urls: { os: "https://platform.test" } }),
+      ITERATE__URLS__DASH: "https://platform-dash.test",
+      ITERATE_APP__URLS__OS: "https://os.test",
+    },
+    becomes: { urls: { os: "https://os.test", dash: "" }, labels: {} },
+  },
+  {
+    name: "the platform's ITERATE never reads an app's ITERATE_APP or ITERATE_APP__*",
+    env: {
+      ITERATE__URLS__OS: "https://os.test",
+      ITERATE_APP: JSON.stringify({ urls: { dash: "https://app-dash.test" } }),
+      ITERATE_APP__URLS__DASH: "https://app-dash.test",
     },
     becomes: { urls: { os: "https://os.test", dash: "" }, labels: {} },
   },
