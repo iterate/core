@@ -100,6 +100,9 @@ export default defineConfig(async ({ mode }) => {
       },
       // both always said: with a route and no `workersDev`, Cloudflare turns workers.dev off
       workersDev: cloudflare?.workersDev ?? true,
+      // Never per-version preview URLs: unset, cf turns them on with workers.dev, and each version
+      // would answer on its own origin against the deployment's data
+      previewUrls: false,
       triggers: (cloudflare?.workerRoutes || []).map((route) => triggers.fetch(route)),
       // The Durable Object namespaces, SQLite-backed. The first-party facets
       // (src/first-party-facets.ts) are exported classes too, but each lives inside a context's
