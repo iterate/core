@@ -25,7 +25,12 @@
 //   modules import each other at its version (`npmSelfImportOf`).
 
 import { isPkgPrNewCommit, pkgPrNewBuildOf } from "iterate/package-builds";
-import { failureKind, httpFailureKind, isPlatformFailureKind } from "iterate/platform-retry";
+import {
+  failureKind,
+  httpFailureKind,
+  isPlatformFailureKind,
+  logPlatformFailure,
+} from "iterate/platform-retry";
 import { parse } from "es-module-lexer/js";
 import { transform } from "sucrase";
 import { z } from "zod";
@@ -399,7 +404,19 @@ async function lockedDependencyGraph(
   const stored = await opts.store.get(key);
   if (stored) return JSON.parse(stored) as DependencyGraph;
   const graph = await resolveFromEsm(lockInput, bases, opts);
-  await opts.store.put(key, JSON.stringify(graph));
+  // This resolution has its graph; the lock is for the next one. A write the platform fails is
+  // logged and skipped: KV allows one write per key per second, so a 429 says another resolution of
+  // this set wrote the lock within the second, and after any other the next resolution writes it.
+  await opts.store.put(key, JSON.stringify(graph)).catch((error: unknown) => {
+    const kind = failureKind(error);
+    if (!isPlatformFailureKind(kind)) throw error;
+    logPlatformFailure("module-resolution", "lock-write", kind, {
+      name: "module-lock",
+      where: opts.where,
+      key,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
   return graph;
 }
 

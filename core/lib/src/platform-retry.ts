@@ -58,11 +58,14 @@ export function failureKind(error: unknown): FailureKind {
  *  object elsewhere or to update its runtime, fails with "this Durable Object instance is no longer
  *  active. Reconnect or retry the request." once it touches storage, and the next call reaches the
  *  instance that replaced it
- *  (https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/#shutdown-behavior). */
+ *  (https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/#shutdown-behavior).
+ *  Workers KV's binding quotes the HTTP status the KV service answered ("KV PUT failed: 429 Too Many
+ *  Requests", workerd api/kv.c++ `checkForErrorStatus`), read as `httpFailureKind` reads a status:
+ *  KV allows one write per key per second (https://developers.cloudflare.com/kv/platform/limits/). */
 const OVERLOADED_MESSAGE =
-  /is overloaded|exceeded timeout which caused object to be reset|exceeded its (memory|CPU time) limit and was reset/;
+  /is overloaded|exceeded timeout which caused object to be reset|exceeded its (memory|CPU time) limit and was reset|KV [A-Z]+ failed: (429|408)\b/;
 const DISCONNECTED_MESSAGE =
-  /Network connection lost|storage\b.*\bcaused object to be reset|this Durable Object instance is no longer active|Replica disconnected|transient issue on remote node|client disconnected/;
+  /Network connection lost|storage\b.*\bcaused object to be reset|this Durable Object instance is no longer active|Replica disconnected|transient issue on remote node|client disconnected|KV [A-Z]+ failed: 5\d\d\b/;
 
 /** A failure's message and those of the causes it wraps, one per line: sqlfu wraps a D1 error, whose
  *  cause is the binding's own. */

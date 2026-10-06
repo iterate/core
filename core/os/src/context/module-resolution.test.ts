@@ -266,6 +266,43 @@ test("the lock is keyed on nodejs_compat, so one mode's cached graph can't poiso
   ).rejects.toThrow(/needs the Node\.js builtin node:fs/);
 });
 
+// KV allows one write per key per second: two projects publishing one dependency set at once both
+// crawl it, and the second write of its lock answers 429 (workerd's text below).
+test("a lock write KV refuses with 429 is logged and skipped: this resolution keeps its graph", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const store = {
+    ...memoryStore(),
+    put: () => Promise.reject(new Error("KV PUT failed: 429 Too Many Requests")),
+  };
+  const source = {
+    "worker.js": `import { a } from "lib-a"; export default { fetch: () => new Response(String(a)) };`,
+    "package.json": JSON.stringify({ main: "worker.js", dependencies: { "lib-a": "^1.0.0" } }),
+  };
+  const modules = await resolve(source, { fetch: fakeEsm(esmFiles).fetch, store });
+  expect(modules).toMatchObject({
+    "node_modules/.esm/lib-a@1.2.3/es2022/lib-a.js": expect.stringContaining("export const a = 1"),
+  });
+  expect(warn.mock.calls).toMatchObject([
+    [{ event: "module-resolution.platform-failure-lock-write", kind: "overloaded" }],
+  ]);
+});
+
+test("a lock write KV refuses for the call's own reason is the resolution's failure, as it came", async () => {
+  const store = {
+    ...memoryStore(),
+    put: () => Promise.reject(new Error("KV PUT failed: 413 Payload Too Large")),
+  };
+  await expect(
+    resolve(
+      {
+        "worker.js": `import "lib-a";`,
+        "package.json": JSON.stringify({ main: "worker.js", dependencies: { "lib-a": "^1.0.0" } }),
+      },
+      { fetch: fakeEsm(esmFiles).fetch, store },
+    ),
+  ).rejects.toThrow("KV PUT failed: 413 Payload Too Large");
+});
+
 test.for([
   [
     "a Node builtin",

@@ -128,6 +128,31 @@ test.for([
   },
 );
 
+// Workers KV's binding throws its service's HTTP status in the message, with no flags (workerd
+// api/kv.c++ `checkForErrorStatus`); a status about the call itself is not the platform's.
+test.for([
+  {
+    name: "its 429, one write per key per second, is overloaded",
+    message: "KV PUT failed: 429 Too Many Requests",
+    kind: "overloaded",
+  },
+  {
+    name: "its 5xx is disconnected",
+    message: "KV GET failed: 503 Service Unavailable",
+    kind: "disconnected",
+  },
+  {
+    name: "a value over its size limit is failed",
+    message: "KV PUT failed: 413 Payload Too Large",
+    kind: "failed",
+  },
+] satisfies { name: string; message: string; kind: FailureKind }[])(
+  "failureKind of Workers KV: $name",
+  ({ message, kind }) => {
+    expect(failureKind(new Error(message))).toBe(kind);
+  },
+);
+
 // The control plane reads workerd's opaque internal error as an overload (control-plane/edge.ts):
 // D1 runs no code of ours, so there it is the runtime's own failure.
 test("isOpaqueInternalError: workerd's opaque internal error, through the cause sqlfu wraps, never a message that only mentions one", () => {
