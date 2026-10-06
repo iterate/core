@@ -36,6 +36,7 @@ import {
   type FinishConnectInput,
 } from "../integrations/verbs.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
+import type { EntitySlug } from "./entity-lifecycle.ts";
 import type { ProjectState } from "./contract.ts";
 import { cloudflareCustomHostnameProvider, ownershipRecordOf } from "./custom-hostnames.ts";
 import { domainConnectLinkOf } from "./domain-connect.ts";
@@ -62,6 +63,7 @@ export class ProjectFacet extends StreamProcessorDurableObject<
     ...super.publicMethods,
     "repos",
     "workspaces",
+    "sandboxes",
     "confirmIntegrationMove",
     "acceptGithubCallback",
   ];
@@ -207,7 +209,7 @@ export class ProjectFacet extends StreamProcessorDurableObject<
   // and an RpcTarget a METHOD returns is the shape it hands back as a stub — so the library spells
   // `itx.facets.get("project").repos().create(path)`. Each is built once, on first use.
   #collections = new Map<string, EntityCollectionRpcTarget>();
-  #collection(slug: "repo" | "workspace"): EntityCollectionRpcTarget {
+  #collection(slug: EntitySlug): EntityCollectionRpcTarget {
     const known = this.#collections.get(slug);
     if (known) return known;
     const collection = new EntityCollectionRpcTarget(
@@ -226,6 +228,11 @@ export class ProjectFacet extends StreamProcessorDurableObject<
   /** `itx.workspaces`: the catalog's workspaces, and a workspace's creation on its path. */
   workspaces(): EntityCollectionRpcTarget {
     return this.#collection("workspace");
+  }
+
+  /** `itx.sandboxes`: the catalog's sandboxes, and a sandbox's creation on its path. */
+  sandboxes(): EntityCollectionRpcTarget {
+    return this.#collection("sandbox");
   }
 
   /** Each connection's integration verbs, one at a time (`#onConnection`): the tail of its chain. */

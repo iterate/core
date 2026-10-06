@@ -889,7 +889,138 @@ export type WorkspaceHandle = InvokeHandle & {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
 };
 
-/** An entity collection root (`itx.repos`, `itx.workspaces`): `get(path)` the entity's handle,
+/** Cloudflare's handle to a saved disk, as `itx.sandboxes` records it. Opaque; valid only for the
+ *  image it was taken from, and for 30 days after its last restore. */
+export type SandboxSnapshot = { id: string; size: number; name?: string };
+
+/** What `start` takes: `ctx.container.start`'s options, but for `enableInternet` (refused: a
+ *  sandbox's only way out is the project's egress) and a `containerSnapshot`, which can only be the
+ *  snapshot the sandbox's own log records. */
+export type SandboxStartOptions = {
+  image?: string;
+  containerSnapshot?: { id: string };
+  entrypoint?: string[];
+  env?: Record<string, string>;
+  instance?:
+    | "lite"
+    | "standard-1"
+    | "standard-2"
+    | "standard-3"
+    | "standard-4"
+    | { vcpu: number; memoryMib: number; diskMb: number };
+  labels?: Record<string, string>;
+};
+
+/** What a sandbox's `files.stat` and `files.lstat` answer (the `iterate fs` tool's, run in the
+ *  container). */
+export type SandboxFileStat = {
+  type: "file" | "directory" | "symlink" | "other";
+  size: number;
+  mode: number;
+  uid: number;
+  gid: number;
+  atimeMs: number;
+  mtimeMs: number;
+  ctimeMs: number;
+};
+
+/** `itx.sandboxes.get(path).files`: the Sandbox SDK's `Files`, over the sandbox's container, with
+ *  `iterate fs` (the CLI's file tool) running inside it. A file is read and written as a stream. A
+ *  failure carries the errno's name as `code`: `ENOENT`, `EISDIR`, `ENOTDIR`, … Each call starts the
+ *  container first, from the disk last saved, as `exec` does. */
+export type SandboxFilesApi = {
+  /** A file's bytes. A missing file, or a directory, fails the call, never the stream half way. */
+  read(path: string): Promise<ReadableStream<Uint8Array>>;
+  /** `content` into a file, created or truncated; its directory must exist. A string is UTF-8. */
+  write(
+    path: string,
+    content: string | Uint8Array | ArrayBuffer | ReadableStream<Uint8Array>,
+  ): Promise<void>;
+  /** A path's metadata, a symbolic link followed. */
+  stat(path: string): Promise<SandboxFileStat>;
+  /** `stat` without following a symbolic link at the end of the path. */
+  lstat(path: string): Promise<SandboxFileStat>;
+  /** A directory's immediate entries, in the order it gives them. */
+  readDirectory(path: string): Promise<{ name: string; type: SandboxFileStat["type"] }[]>;
+  /** A directory; with `recursive`, its missing parents too, and no error when it exists. */
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  /** A file, directory or link renamed; an existing file at the destination is replaced. */
+  rename(source: string, destination: string): Promise<void>;
+  /** A file or link removed; a directory needs `recursive`, `force` makes a missing path no error. */
+  remove(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
+};
+
+/** `itx.sandboxes.get(path).container`: the Durable Object container API (`ctx.container`) itself,
+ *  every member under its own name, replayed where the container lives. A member that answers data is
+ *  a call: `container.inspect()`, `container.snapshotContainer()`, `container.destroy()`. A CHAIN is
+ *  `container.invoke(steps)`: `container.invoke([["exec", argv, { stdin?: ReadableStream }], "stdout"])`
+ *  is one call, and a `ReadableStream` comes back as it is; an `exec` chain ends in the process's
+ *  `.stdout`, `.stderr`, `.exitCode`, `.pid`, `.output()` (plain `{ exitCode, stdout, stderr }`) or
+ *  `.kill(signo?)`. A `start`, `snapshotContainer` or `destroy` lands on the sandbox's log, and a
+ *  sandbox with a call running is not parked. Cloudflare's meaning holds: a raw `start` restores
+ *  nothing by itself and a `destroy` saves nothing. Not reachable: `interceptOutbound*` (the
+ *  project's egress is the platform's alone). */
+export type SandboxContainerApi = InvokeHandle & {
+  readonly running: Promise<boolean>;
+  readonly images: Promise<Record<string, string>>;
+  start(options?: SandboxStartOptions): Promise<void>;
+  monitor(): Promise<void>;
+  destroy(reason?: string): Promise<void>;
+  signal(signo: number): Promise<void>;
+  setInactivityTimeout(durationMs: number): Promise<void>;
+  snapshotContainer(options?: { name?: string }): Promise<SandboxSnapshot>;
+  inspect(): Promise<{ image: string; labels: Record<string, string> } | null>;
+  /** The chain, replayed in one call: `[["exec", argv, options], "stdout"]`. */
+  invoke(steps: ItxExpression): Promise<any>;
+};
+
+/** `itx.sandboxes.get(path)`: a Linux container with a disk (the sandbox facet in core/os). `exec`
+ *  and every call of `files` start the container when none runs, from the disk last saved, on
+ *  `standard-1` unless `start({ instance })` says otherwise. Memory and running processes do not
+ *  survive a stop; the disk does, for 30 days after its last restore and only on the image it was
+ *  saved from (Cloudflare's managed `cloudflare/debian-trixie`: Node 24, Debian; no git, curl or
+ *  Python). NOTHING RUNS FOR NOTHING: a sandbox unused for `idleAfterMs` (five minutes by default; a
+ *  command, a file call or a stream being read is use; a call left open counts for an hour at most)
+ *  is saved and stopped, a sandbox in use has its disk saved every 15 minutes, and Cloudflare stops
+ *  the container two hours after it last answered, whatever else fails. THE ONLY WAY OUT IS THE
+ *  PROJECT'S EGRESS: the container starts with the internet off, and every HTTP and HTTPS request it
+ *  makes, to any name or address, is answered by the project's own `itx.fetch` (its rewrite rules;
+ *  `getSecret("/secrets/…")` placeholders are substituted there). `apt-get` works through it. A call
+ *  that does not answer within a minute fails: run longer work in the background and poll. Where the
+ *  sandbox stands is `(await handle.snapshot()).state`. */
+export type SandboxHandle = InvokeHandle & {
+  /** `container.start(options)` with the sandbox's disk: make the container run, from the disk last
+   *  saved unless `image` asks for a fresh one (which leaves that disk behind). Running already:
+   *  nothing happens. A disk Cloudflare will not restore (the image was replaced, or 30 days passed)
+   *  FAILS the start rather than start empty; `start({ image: "cloudflare/debian-trixie" })` is the
+   *  way out. */
+  start(options?: SandboxStartOptions): Promise<void>;
+  /** `container.exec(argv, options)` then `process.output()`: run a command and wait for it
+   *  (a shell is `["bash", "-c", "…"]`). A nonzero exit is an answer, not a failure. Output over
+   *  8 MiB fails (write it to a file, or stream it with `container.exec(argv).stdout`); take secrets
+   *  from `env`, since the log keeps the first 500 characters of the command. */
+  exec(
+    command: string[],
+    options?: {
+      cwd?: string;
+      env?: Record<string, string>;
+      user?: string;
+      stdin?: string | Uint8Array;
+      timeoutMs?: number;
+    },
+  ): Promise<{ exitCode: number; stdout: Uint8Array; stderr: Uint8Array }>;
+  /** The Sandbox SDK's `Files`. */
+  files: SandboxFilesApi;
+  /** The container API itself. */
+  container: SandboxContainerApi;
+  /** How long the sandbox may sit unused before it is saved and stopped: 1 second to 1 hour, five
+   *  minutes by default. */
+  configure(settings: { idleAfterMs?: number }): Promise<{ idleAfterMs: number }>;
+  /** Append the sandbox's own events on its context; its lifecycle facts are the collection's. */
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+};
+
+/** An entity collection root (`itx.repos`, `itx.workspaces`, `itx.sandboxes`): `get(path)` the entity's handle,
  *  `list()` the project catalog, `create(path)` the creation saga on that path (the parent link the
  *  caller's context writes first, then the processor row, the request, the terminal fact — created,
  *  or create-failed thrown), `delete(path)` the deletion saga (the request, `deleted` cross-posted to
@@ -1248,6 +1379,8 @@ export interface IterateContextApi {
    *  request, `deleted` cross-posted to `/`, the row disabled). A relative `path` means the caller's. */
   repos: EntityCollectionApi<RepoHandle>;
   workspaces: EntityCollectionApi<WorkspaceHandle>;
+  /** Linux containers with a disk: `create(path)` once, then `get(path).exec("make test")`. */
+  sandboxes: EntityCollectionApi<SandboxHandle>;
   /** Workers AI's binding (`ItxAiApi`), under this context's capability rules. */
   ai: ItxAiApi;
   /** Cloudflare Browser Run. */

@@ -4,7 +4,7 @@
 // bind local resources and need no config; any other (a build, `cf deploy`) deploys where the
 // iterate config's `cloudflare` section says (scripts/iterate-config-file.ts), or builds locally
 // when it has none.
-import { bindings, defineConfig, exports, triggers } from "cf/config";
+import { bindings, defineConfig, defineContainer, exports, triggers } from "cf/config";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { readDeployment } from "./scripts/iterate-config-file.ts";
 import { resourceNamesOf } from "./src/iterate-config.ts";
@@ -47,8 +47,17 @@ export default defineConfig(async ({ mode }) => {
     : mode === "development"
       ? LOCAL_RESOURCES.worker
       : "os-local-build";
+  // The sandboxes' containers (src/sandbox/container.ts). A Containers application's name is the
+  // account's, so a deployment's carries its Worker's. The `durable-object` scheduling policy lets
+  // the class pick image and size at each start, and is the only one that takes disk snapshots. It
+  // names no image: sandboxes start from Cloudflare's managed `cloudflare/debian-trixie`.
+  const sandboxContainer = defineContainer({
+    name: `${worker}-sandbox`,
+    schedulingPolicy: "durable-object",
+  });
   return {
     accountId: cloudflare?.accountId,
+    containers: [sandboxContainer],
     worker: {
       name: worker,
       // Vite builds the Worker from this entry; scripts/build.ts first writes the generated source
@@ -110,6 +119,10 @@ export default defineConfig(async ({ mode }) => {
       exports: {
         IterateContextDurableObject: exports.durableObject({ storage: "sqlite" }),
         BrowserSession: exports.durableObject({ storage: "sqlite" }),
+        SandboxContainer: exports.durableObject({
+          storage: "sqlite",
+          container: sandboxContainer,
+        }),
         // TRANSITION: the facets' former class names, which had empty namespaces of their own. A
         // deploy refuses to drop a namespace that is not declared, so each is retired here. Remove
         // these lines once a deploy reports them as stale tombstones.

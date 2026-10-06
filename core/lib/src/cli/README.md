@@ -19,8 +19,8 @@ npx iterate mcp claude                    # Claude Code on /mcp with ITERATE_BEA
 npx iterate use-my-computer --project my-project --name myComputer
 npx iterate tunnel 5173 --project my-project --name blog  # a local port on a project host
 npx iterate provide ./whatsapp.ts --project my-project  # a local file's functions as itx.whatsapp
-npx iterate menubar --project my-project  # macOS app
 npx iterate logout
+npx iterate fs read ./notes.md            # a file's bytes on stdout; also write, stat, lstat, ls, mkdir, mv, rm
 ```
 
 The default server is `https://os.iterate.com`. Login uses that server's OAuth
@@ -36,6 +36,16 @@ no key. `mcp claude` prints a command that reads the key from
 `$ITERATE_BEARER_TOKEN`, never the key itself. See
 [credentials](../../../os/docs/credentials.md).
 `ITERATE_SKIP_BROWSER_OPEN=1` prints the login URL without opening a browser.
+
+## Files of this machine
+
+`iterate fs <op>` is one file operation on the machine it runs on (`read`, `write` from stdin, `stat`,
+`lstat`, `ls`, `mkdir [--recursive]`, `mv`, `rm [--recursive] [--force]`). A failure is one JSON line on
+stderr, `{"code":"ENOENT","message":"…"}`, and exit code 1. It needs no sign-in. A sandbox's `files`
+(`itx.sandboxes.get(path).files`) is this command run inside its container, over `exec`:
+[fs.ts](fs.ts) is standalone (`node fs.ts <op>`), which is how the platform puts it there. The same
+operations, as functions, are `files` of [`use-my-computer`](#use-my-computer): one implementation,
+two entry points, so a file is streamed by one code path.
 
 ## Running scripts
 
@@ -59,17 +69,22 @@ config's `defaultProject`, or the only project accessible to the session.
 
 ## Use my computer
 
-`use-my-computer` shares a Mac as a live Iterate capability until Ctrl-C:
+`use-my-computer` shares this computer as a live Iterate capability until Ctrl-C. It is
+[`provide`](#provide) of `use-my-computer.ts` (`iterate provide use-my-computer.ts --name
+jonasComputer` lends the same object), with a friendly default name:
 
-- `itx.myComputer.ask({ question, buttons? })`: native choice dialog.
-- `itx.myComputer.notify({ message, title? })`: desktop notification.
-- `itx.myComputer.runSwift({ code })`: Swift with the owner's local permissions.
+- `itx.myComputer.exec(argv, { cwd?, env?, stdin?, timeoutMs? })`: run a command; answers
+  `{ exitCode, stdout, stderr }` as bytes.
+- `itx.myComputer.files.read(path)` (a stream), `.write(path, content)`, `.stat`, `.lstat`,
+  `.readDirectory`, `.mkdir`, `.rename`, `.remove`: the same code as `iterate fs`, which a
+  sandbox runs in its container.
+- On a Mac: `itx.myComputer.mac.ask({ question, buttons? })`, `.notify({ message, title? })`
+  and `.runSwift({ code })` (AppleScript and Swift, with the owner's local permissions).
 - `itx.myComputer.__describe()`: usage instructions and method signatures.
 
-The command requires macOS, AppleScript and Swift. Share only with a project
-you trust: its callers can run local code. The capability belongs to the live
-connection and is released on exit. A disconnect or token expiry ends sharing
-with an error; rerun the command to refresh authentication and reconnect.
+Share only with a project you trust: its callers can run local code, and `files` reaches
+everything you can. The capability belongs to the live connection and is released on exit. A
+disconnect reconnects as `provide` does; when every attempt fails the command ends with an error.
 
 ## Tunnel
 
@@ -203,9 +218,8 @@ iterate config list
 iterate config get
 ```
 
-Changing a config's server clears its session. The menu bar supports sign-in and
-computer sharing. Use `iterate itx run` for scripts; its `--project` selects the
-project and `--context` selects a path within it.
+Changing a config's server clears its session. Use `iterate itx run` for scripts; its
+`--project` selects the project and `--context` selects a path within it.
 
 ## Node REPL
 

@@ -184,6 +184,7 @@ const IDEMPOTENT_CALLS: ReadonlySet<string> = new Set([
       "gitLog",
     ] satisfies (typeof workspaceVerbs)[number][]
   ).map((verb) => `workspaces.get.${verb}`),
+  "sandboxes.list",
 ]);
 
 /** An event the log answers with itself when it lands twice: a durable one under an idempotency key,

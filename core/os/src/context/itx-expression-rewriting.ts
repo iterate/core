@@ -100,6 +100,8 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "git on Artifacts; `/repos/config` is the project's code: `repos.get(path).readFile(f)` · `commitFiles({ message, changes, parent? })` with whole files (edit the text in your script: `replace`, a regex) · `repos.list()`",
   workspaces:
     "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
+  sandboxes:
+    'Linux containers with a disk that is saved when idle and restored on the next use: `sandboxes.create(path)` once, then `sandboxes.get(path).exec(["bash", "-c", "ls -la"], { cwd?, env?, stdin?, timeoutMs? })` → { exitCode, stdout, stderr } (bytes) · `.files.read(path)` (a stream) · `.files.write(path, string | bytes | stream)` · `stat` · `lstat` · `readDirectory` · `mkdir` · `rename` · `remove` · `.container.<the container API>`, every member under its own name: `.container.snapshotContainer()`, `.container.exec(argv).stdout`, `.container.destroy()`, `.container.setInactivityTimeout(ms)`, `.container.monitor()` · `.configure({ idleAfterMs })` · `sandboxes.list()`. Debian with Node 24 and no git, curl or Python: `apt-get update && apt-get install` work through the egress (a call that does not answer within a minute fails: run longer work in the background). The default instance is standard-1; `start({ instance })` names another. The only way out is the egress of the project: every HTTP and HTTPS request of the container is answered by `itx.fetch`. An idle sandbox is saved and stopped after five minutes; a disk Cloudflare cannot restore fails the start (`start({ image: "cloudflare/debian-trixie" })` discards it)',
   files:
     "project files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
   telemetry:
@@ -160,6 +162,7 @@ const PORTABLE_ROOTS = [
   "telemetry",
   "repos",
   "workspaces",
+  "sandboxes",
   "files",
   "connectToMcp",
   "connectToOpenApi",

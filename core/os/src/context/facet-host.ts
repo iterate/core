@@ -55,6 +55,7 @@ import { ProjectFacet } from "../project/durable-object.ts";
 import { RepoFacet } from "../repo/durable-object.ts";
 import { SecretFacet } from "../secret/durable-object.ts";
 import type { Stream } from "../stream/stream.ts";
+import { SandboxFacet } from "../sandbox/durable-object.ts";
 import { WorkspaceFacet } from "../workspace/durable-object.ts";
 import {
   walkSteps,
@@ -171,6 +172,7 @@ const FIRST_PARTY_FACET_PUBLIC_METHODS = {
   organization: OrganizationFacet.publicMethods,
   project: ProjectFacet.publicMethods,
   repo: RepoFacet.publicMethods,
+  sandbox: SandboxFacet.publicMethods,
   secret: SecretFacet.publicMethods,
   workspace: WorkspaceFacet.publicMethods,
 } satisfies Record<keyof typeof FIRST_PARTY_FACET_CLASSES, readonly string[]>;

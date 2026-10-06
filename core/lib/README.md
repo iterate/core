@@ -188,7 +188,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   prefix.
 - **A domain namespace** is the singular name of the kind of context whose log the event belongs
   to, which is the defining contract's slug when there is one: `account`, `organization`,
-  `project`, `repo`, `workspace`, `secret`, `agent`, `voice-agent`. A fact cross-posted to another
+  `project`, `repo`, `workspace`, `sandbox`, `secret`, `agent`, `voice-agent`. A fact cross-posted to another
   log keeps its own namespace: `repo/created` on `/` is still a repo fact.
 - **An integration** uses its own name as its namespace, for example `chrome`, `slack`, `google`,
   `github`.
@@ -217,7 +217,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 - **One verb pair per kind of change:**
   - `added` / `removed` for membership in a set: `organization/member-added`,
     `organization/project-added`, hostnames.
-  - `created` / `deleted` for an entity with a lifecycle: projects, repos, workspaces, agents.
+  - `created` / `deleted` for an entity with a lifecycle: projects, repos, workspaces, sandboxes, agents.
   - `set` / `deleted` for a keyed value: `secret/*`.
   - `set` / `cancelled` for a schedule: `itx/schedule-*`. Each occurrence is `fired` or `failed`.
   - `-configured` for one fact that sets a row or clears it with `null`

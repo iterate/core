@@ -9,11 +9,11 @@ import { z } from "zod";
 import { connectIterate } from "../node.ts";
 import type { SessionCredentials } from "../api.ts";
 import { isCodingAgent } from "./coding-agent.ts";
-import { launchMenubarApp } from "./menubar-app.ts";
+import { runFs } from "./fs.ts";
 import { oauthLogin, refreshOAuthSession } from "./oauth.ts";
 import { importProvidedFile, nameOfFile, runProvide } from "./provide.ts";
 import { runTunnel } from "./tunnel.ts";
-import { shareMyComputer } from "./use-my-computer.ts";
+import { shareMyComputer } from "./share-my-computer.ts";
 import {
   CONFIG_PATH,
   Config,
@@ -484,20 +484,10 @@ const launcherProcedures = {
         process.exit(claude.status ?? 1);
       }),
   },
-  menubar: os
-    .input(z.object({ project: z.string().optional().describe("Project id or slug") }))
-    .meta({ description: "Launch the macOS menu bar for sign-in and computer sharing" })
-    .handler(async ({ input }) => {
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-      const project = input.project || resolved.config.defaultProject;
-      if (!project) throw new Error("menubar needs --project or a configured defaultProject.");
-      await launchMenubarApp({ configName: resolved.name, project, log: console.error });
-    }),
   useMyComputer: os
     .input(
       z.object({
         project: z.string().optional().describe("Project id or slug"),
-        json: z.boolean().optional().describe("Emit menu-bar events as NDJSON; stop on stdin EOF"),
         name: z
           .string()
           .regex(/^[a-zA-Z][a-zA-Z0-9]*$/)
@@ -505,14 +495,26 @@ const launcherProcedures = {
           .describe("Computer capability name, e.g. jonasComputer"),
       }),
     )
-    .meta({ description: "Share this Mac with a project until Ctrl-C" })
+    .meta({
+      description:
+        "Share this computer with a project until Ctrl-C: run commands and read and write files (on a Mac, native dialogs and Swift too). The same as `iterate provide` of use-my-computer.ts",
+    })
     .handler(async ({ input }) => {
-      if (process.platform !== "darwin")
-        throw new Error("use-my-computer requires macOS (AppleScript and Swift).");
       const { resolved, connection } = await connectConfigured();
-      using owned = connection;
-      const project = await selectProject(owned, input.project || resolved.config.defaultProject);
-      await shareMyComputer({ connection: owned, project, name: input.name, json: input.json });
+      let project: string;
+      try {
+        project = await selectProject(connection, input.project || resolved.config.defaultProject);
+      } catch (error) {
+        connection[Symbol.dispose]();
+        throw error;
+      }
+      // shareMyComputer owns the connection from here, and every one `reconnect` opens
+      await shareMyComputer({
+        connection,
+        reconnect: async () => (await connectConfigured()).connection,
+        project,
+        name: input.name,
+      });
     }),
   tunnel: os
     .input(
@@ -743,6 +745,11 @@ const launcherProcedures = {
   },
 };
 export const runCli = async () => {
+  // the machine's own files, no sign-in and no flags of ours (fs.ts); a sandbox runs the same file alone
+  if (process.argv[2] === "fs") {
+    process.exitCode = await runFs(process.argv.slice(3), process);
+    return;
+  }
   configFlagOverride = consumeCliStringFlag("--config");
   if (process.argv.length === 2) process.argv.push("--help");
   const cli = createCli({

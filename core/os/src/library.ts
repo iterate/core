@@ -30,6 +30,7 @@ import type {
   FileHandle,
   FileRecord,
   IterateContextApi,
+  SandboxHandle,
   WaitForEventFilter,
 } from "iterate/api";
 import type { Caller } from "./caller.ts";
@@ -38,6 +39,9 @@ import { RepoContract } from "./repo/contract.ts";
 import type { RepoFacet, repoVerbs } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
 import type { WorkspaceFacet, workspaceVerbs } from "./workspace/durable-object.ts";
+import { SandboxContract } from "./sandbox/contract.ts";
+import type { SandboxFacet, sandboxVerbs } from "./sandbox/durable-object.ts";
+import type { EntitySlug } from "./project/entity-lifecycle.ts";
 import { connectToCapnweb } from "./library/capnweb.ts";
 import { connectToMcp, type McpWebhook } from "./library/mcp.ts";
 import { connectToOpenApi } from "./library/openapi.ts";
@@ -83,6 +87,18 @@ export interface LibraryRoots {
    *  `list()` and `create(path)` are the collection's on the `project` facet at `/`. */
   workspaces: EntityRoot<
     EntityHandle<WorkspaceFacet, (typeof workspaceVerbs)[number], typeof WorkspaceContract>
+  >;
+  /** A sandbox (src/sandbox/): a Linux container with a disk, at any path. `get(path)` is the handle —
+   *  the facet's verbs (`exec`, `start`, `files`) and `container`, the container API itself, plus the typed
+   *  `append` of the sandbox's own events; `list()` and `create(path)` are the collection's on the
+   *  `project` facet at `/`. */
+  sandboxes: EntityRoot<
+    EntityHandle<
+      SandboxFacet,
+      Exclude<(typeof sandboxVerbs)[number], "replay">,
+      typeof SandboxContract
+    > &
+      Pick<SandboxHandle, "container">
   >;
   /** THE FILES: project file storage as a PATH namespace over `itx.r2`
    *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
@@ -165,8 +181,9 @@ export function buildLibrary(
         memoized(["capnweb", url, options], options?.transport !== "batch", () =>
           connectToCapnweb(itx, url, options),
         ),
-      repos: entityRoot(itx, deps, "repo", RepoContract),
-      workspaces: entityRoot(itx, deps, "workspace", WorkspaceContract),
+      repos: entityRoot(itx, deps, "repo", "repos", RepoContract),
+      workspaces: entityRoot(itx, deps, "workspace", "workspaces", WorkspaceContract),
+      sandboxes: entityRoot(itx, deps, "sandbox", "sandboxes", SandboxContract),
       files: {
         get: (path) => fileHandle(itx, path),
         list: async (prefix = "") => {
@@ -472,10 +489,10 @@ const originOf = (caller: Caller, ownPath: string): string => caller.path || own
 function entityRoot<Handle>(
   itx: LibraryItx,
   deps: LibraryDeps,
-  name: "repo" | "workspace",
+  name: EntitySlug,
+  collection: "repos" | "workspaces" | "sandboxes",
   contract: EntityContract,
 ): EntityRoot<Handle> {
-  const collection = `${name}s` as const;
   // CREATING AND DELETING REACH ONLY STRICTLY BENEATH THE CALLER'S ORIGIN (`Caller.path`, stamped by
   // the platform, never an argument). Its hops are the platform's (below), so this is what bounds a
   // jail granted the collection (`itx.repos ⇒ itx.builtins.repos`): reaching further, it could delete
@@ -555,7 +572,7 @@ function entityHandle(
   caller: Caller,
   ownPath: string,
 ): InvokeHandle {
-  return new InvokeHandle(async (itxExpressionSteps) => {
+  const dispatch = async (itxExpressionSteps: ItxExpression) => {
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
     // in-process a VALUE — then the chain relative to it. The path means the CALLER's `./x`.
     const entityPath = resolveContextPath(originOf(caller, ownPath), path);
@@ -586,7 +603,10 @@ function entityHandle(
       // `refusePlatformIdempotencyKeys` says why; the library imports none of the platform's code).
       if (caller.app)
         for (const { idempotencyKey } of parsed)
-          if (idempotencyKey && /^(?:itx|project|repo|workspace|secret)[/@]/.test(idempotencyKey))
+          if (
+            idempotencyKey &&
+            /^(?:itx|project|repo|workspace|sandbox|secret)[/@]/.test(idempotencyKey)
+          )
             throw codedError(
               "FORBIDDEN",
               `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
@@ -594,6 +614,20 @@ function entityHandle(
       return (await itx.cd(entityPath)).invoke([["append", ...parsed]]);
     }
     const context = await itx.builtins.cd(entityPath);
+    // A sandbox's `container` is the container API itself: everything after it is ONE call to the
+    // facet, which replays the steps where the container's objects live (sandbox/container.ts)
+    if (name === "sandbox" && first === "container")
+      // `container.invoke(steps)` names the whole chain itself; any other call is a one-step chain
+      return context.invoke([
+        "facets",
+        ["get", name],
+        [
+          "replay",
+          rest.length === 1 && Array.isArray(rest[0]) && rest[0][0] === "invoke"
+            ? rest[0][1]
+            : rest,
+        ],
+      ]);
     // A repo's pull or push reaches its remote through the CALLER's egress, never the repo's (whose
     // parent link leads to its creator's): the caller's own `itx.fetch`, through its own rules, so a
     // caller that may not fetch reaches no remote, and no project secret, through a repo.
@@ -607,7 +641,10 @@ function entityHandle(
       ]);
     }
     return context.invoke(["facets", ["get", name], ...itxExpressionSteps]);
-  });
+  };
+  // a sandbox's `container.exec(argv).stdout` is ONE walk, not a dispatch per call: its `exec`
+  // answers a process that no hop can carry
+  return new InvokeHandle(dispatch, { takesTheRest: name === "sandbox" });
 }
 
 // ── the files ── `itx.files.get(path)`: the path's object in `itx.r2` (already the owner's slice),

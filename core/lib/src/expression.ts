@@ -426,9 +426,18 @@ export function installPrototypeInvokeFallback<T extends abstract new (...args: 
  *  capability cannot be named either — the two reserved words this wrapper adds. */
 export class InvokeHandle extends RpcTarget {
   readonly #dispatchItxExpressionSteps: (itxExpressionSteps: ItxExpression) => unknown;
-  constructor(dispatchItxExpressionSteps: (itxExpressionSteps: ItxExpression) => unknown) {
+  /** Whether a walk that reaches this handle gives it the REST of its steps in one dispatch, calls
+   *  and all (core/os context/dispatch.ts `walkSteps`), instead of one dispatch per call. For a
+   *  handle whose intermediate answers cannot cross a hop: a sandbox's `container.exec(argv).stdout`,
+   *  whose `exec` answers a process that no RPC carries. An own property: no caller reaches it. */
+  readonly takesTheRest: boolean;
+  constructor(
+    dispatchItxExpressionSteps: (itxExpressionSteps: ItxExpression) => unknown,
+    options: { takesTheRest?: boolean } = {},
+  ) {
     super();
     this.#dispatchItxExpressionSteps = dispatchItxExpressionSteps;
+    this.takesTheRest = options.takesTheRest ?? false;
   }
   /** THE dispatch method the prototype hop reduces onto; the expression is RELATIVE to this handle. */
   invoke(itxExpressionSteps: ItxExpression): unknown {

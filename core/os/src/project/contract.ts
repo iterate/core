@@ -14,6 +14,7 @@ import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
 import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
+import { SandboxContract } from "../sandbox/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 import { CoreEventCatalog } from "../stream/core-events.ts";
 import { IntegrationConnectionRow, IntegrationEventCatalog } from "../integrations/contract.ts";
@@ -51,9 +52,9 @@ export const ProjectContract = defineProcessorContract({
   slug: "project",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "18",
+  version: "19",
   description:
-    "The project: where its own creation and deletion stand, its custom hostnames, its integration connections, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
+    "The project: where its own creation and deletion stand, its custom hostnames, its integration connections, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace, sandbox and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
    *  stands, as the OFFSET of the event that says so (the request, the certificate, or the failure —
    *  read that event for the error), and the CATALOG of what exists under it — read by each
@@ -74,6 +75,8 @@ export const ProjectContract = defineProcessorContract({
     repos: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     /** Every workspace born under the project, by path. */
     workspaces: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
+    /** Every sandbox born under the project, by path. */
+    sandboxes: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     /** THE CONTEXT REGISTRY: every context under the project, by path, from the
      *  `itx/child-created` each one lands on `/` when it first wakes. `/` itself is not in it. */
     contexts: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
@@ -248,6 +251,7 @@ export const ProjectContract = defineProcessorContract({
   processorDeps: [
     RepoContract,
     WorkspaceContract,
+    SandboxContract,
     SecretContract,
     CoreEventCatalog,
     IntegrationEventCatalog,
@@ -267,6 +271,8 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/workspace/created",
     "events.iterate.com/repo/deleted",
     "events.iterate.com/workspace/deleted",
+    "events.iterate.com/sandbox/created",
+    "events.iterate.com/sandbox/deleted",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
     "events.iterate.com/secret/lent",

@@ -17,7 +17,8 @@ import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
 import { connectIterate } from "../node.ts";
 import { claudeMcpArgs, claudeMcpCommand, preflightMcp, shellCommand } from "./cli.ts";
-import { MyComputer } from "./use-my-computer.ts";
+import { rpcTargetOf } from "./provide.ts";
+import computer from "./use-my-computer.ts";
 
 const bin = fileURLToPath(new URL("../../bin/iterate.js", import.meta.url));
 
@@ -30,7 +31,6 @@ test("bare invocation and all command help work offline", { timeout: 20_000 }, a
     ["use-my-computer", "--help"],
     ["tunnel", "--help"],
     ["provide", "--help"],
-    ["menubar", "--help"],
     ["repl", "--help"],
   ]) {
     const { stdout } = await runCli(config.path, args);
@@ -187,10 +187,11 @@ test(
   },
 );
 
-test("computer is an RPC target with discoverable local methods", () => {
-  const computer = new MyComputer();
-  expect(computer).toBeInstanceOf(RpcTarget);
-  expect(computer.__describe().types).toContain("runSwift");
+test("the computer is lent as an RPC target with discoverable local methods", () => {
+  expect(rpcTargetOf(computer())).toBeInstanceOf(RpcTarget);
+  const { types } = computer().__describe();
+  expect(types).toContain("exec(");
+  expect(types).toContain("files.read(");
 });
 
 test("failed authentication releases the websocket", async () => {
@@ -316,70 +317,14 @@ test("an authentication timeout closes the transport without an unhandled RPC re
   }
 });
 
-test("computer activity pairs a failed call with its completion", async () => {
-  const events: unknown[] = [];
-  const computer = new MyComputer((event) => events.push(event));
-  await expect(computer.ask({ question: "A question", buttons: [] })).rejects.toThrow("1–3");
-  expect(events).toEqual([
-    { type: "call", id: 1, method: "ask", summary: "A question" },
-    { type: "call-done", id: 1, ok: false },
-  ]);
-});
-
-test("menu-bar sharing releases its provision on stdin EOF", { timeout: 15_000 }, async () => {
-  let released = false;
-  class Provision extends RpcTarget {
-    [Symbol.dispose]() {
-      released = true;
-    }
-  }
-  class Project extends RpcTarget {
-    provide() {
-      return new Provision();
-    }
-  }
-  class Projects extends RpcTarget {
-    get() {
-      return new Project();
-    }
-  }
-  class Session extends RpcTarget {
-    get projects() {
-      return new Projects();
-    }
-  }
-  class Root extends RpcTarget {
-    authenticate() {
-      return new Session();
-    }
-  }
-  const server = new WebSocketServer({ port: 0 });
-  await new Promise<void>((resolve) => server.once("listening", resolve));
-  server.on("connection", (socket) => {
-    // ws implements the DOM WebSocket interface capnweb consumes.
-    newWebSocketRpcSession(socket as unknown as WebSocket, new Root());
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("No port");
-  const source = `
-    import { connectIterate } from ${JSON.stringify(new URL("../node.ts", import.meta.url).href)};
-    import { shareMyComputer } from ${JSON.stringify(new URL("./use-my-computer.ts", import.meta.url).href)};
-    using connection = await connectIterate({ baseUrl: "http://127.0.0.1:${address.port}", auth: { type: "bearer", token: "test" } });
-    await shareMyComputer({ connection, project: "demo", name: "testComputer", json: true });
-  `;
-  try {
-    const child = promisify(execFile)(process.execPath, ["--input-type=module", "--eval", source], {
-      timeout: 10_000,
-    });
-    child.child.stdin!.end();
-    expect((await child).stdout.trim()).toBe(
-      JSON.stringify({ type: "status", loggedIn: true, name: "testComputer" }),
-    );
-    await expect.poll(() => released).toBe(true);
-  } finally {
-    for (const client of server.clients) client.terminate();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
+test("the lent computer's exec answers bytes, and its files fail with the errno's name", async () => {
+  const target = rpcTargetOf(computer()) as unknown as {
+    exec(argv: string[]): Promise<{ exitCode: number; stdout: Uint8Array }>;
+    files: { read(path: string): Promise<unknown> };
+  };
+  const answer = await target.exec(["echo", "hi"]);
+  expect([answer.exitCode, new TextDecoder().decode(answer.stdout)]).toEqual([0, "hi\n"]);
+  await expect(target.files.read("/no/such/file")).rejects.toThrow("ENOENT");
 });
 
 test("mcp claude: the command is Claude Code's argv for the one iterate server, shell-quoted", async () => {

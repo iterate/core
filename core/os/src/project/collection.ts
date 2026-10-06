@@ -11,7 +11,11 @@ import { codedError, errorCode, resolveContextPath } from "iterate/lib";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "./contract.ts";
-import type { EntityCreationAndDeletionState } from "./entity-lifecycle.ts";
+import {
+  entityPlural,
+  type EntityCreationAndDeletionState,
+  type EntitySlug,
+} from "./entity-lifecycle.ts";
 
 /** How long `create` and `delete` wait for the entity's terminal fact in all: what one
  *  `waitForEvent` waited by default before the wait was sliced. */
@@ -31,12 +35,12 @@ const TERMINAL_WAIT_MS = 30_000;
 const TERMINAL_WAIT_SLICE_MS = 5_000;
 
 export class EntityCollectionRpcTarget extends RpcTarget {
-  private readonly slug: "repo" | "workspace";
+  private readonly slug: EntitySlug;
   private readonly getItx: () => ItxEntrypointScope & Disposable;
   private readonly catalog: () => Promise<ProjectState>;
 
   constructor(
-    slug: "repo" | "workspace",
+    slug: EntitySlug,
     getItx: () => ItxEntrypointScope & Disposable,
     catalog: () => Promise<ProjectState>,
   ) {
@@ -109,7 +113,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
   /** Every entity of this kind born under the project, by path — the certificates cross-posted to
    *  `/`, folded. */
   async list(): Promise<{ path: string; createdAt: string }[]> {
-    return Object.entries((await this.catalog())[`${this.slug}s`]).map(([path, row]) => ({
+    return Object.entries((await this.catalog())[entityPlural(this.slug)]).map(([path, row]) => ({
       path,
       ...row,
     }));
@@ -130,7 +134,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
     if (!parsed.success)
       throw codedError(
         "INVALID_INPUT",
-        `${this.slug}s.create(${JSON.stringify(path)}): the creator must be an absolute context path`,
+        `${entityPlural(this.slug)}.create(${JSON.stringify(path)}): the creator must be an absolute context path`,
       );
     const creator = resolveContextPath("/", parsed.data.creator);
     using itx = this.getItx();

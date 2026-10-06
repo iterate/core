@@ -48,6 +48,8 @@ test(
             return \`\${hello}, \${name} (ts)\`;
           },
           bytes: () => new Uint8Array([1, 2, 3]),
+          // a plain object of functions is a member of its own, to any depth
+          words: { shout: (word: string) => word.toUpperCase(), more: { twice: (n: number) => n * 2 } },
           notAFunction: 42,
         };
       }`,
@@ -80,6 +82,11 @@ test(
     expect(await greeter.stub.greet("Jonas")).toBe("Hello, Jonas (ts)");
     // bytes cross as bytes (a Buffer on this side, Node's)
     expect([...((await greeter.stub.bytes()) as Uint8Array)]).toEqual([1, 2, 3]);
+    const words = greeter.stub as unknown as {
+      words: { shout(word: string): Promise<string>; more: { twice(n: number): Promise<number> } };
+    };
+    expect(await words.words.shout("hi")).toBe("HI");
+    expect(await words.words.more.twice(21)).toBe(42);
     await expect(greeter.stub.notAFunction()).rejects.toThrow();
     expect(deployment).toMatchObject({
       appended: [{ type: "greeted", payload: { name: "Jonas", calls: 1 } }],

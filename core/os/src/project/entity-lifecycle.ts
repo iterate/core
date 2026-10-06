@@ -18,6 +18,16 @@ import {
 } from "iterate/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 
+/** The entity kinds: each has a facet on its own path, the lifecycle below and a catalog on `/`. */
+export type EntitySlug = "repo" | "workspace" | "sandbox";
+
+const PLURALS = { repo: "repos", workspace: "workspaces", sandbox: "sandboxes" } as const;
+
+/** The collection's name (`itx.repos`, `itx.workspaces`, `itx.sandboxes`) and the project catalog's key. */
+export function entityPlural<const Slug extends EntitySlug>(slug: Slug): (typeof PLURALS)[Slug] {
+  return PLURALS[slug];
+}
+
 /** What the reduce keeps between events: where creation stands, as the offset of the event that
  *  says so (the request, the certificate, or the failure — read that event for the error), and where
  *  deletion stands the same way (the request, or the certificate). It is the checkpoint the facet
@@ -52,12 +62,12 @@ type LifecycleEvent<Schema> = { description: string; payloadSchema: Schema };
  *  events of its own (a repo's `commit-completed`). Deletion is the creation's mirror:
  *  `delete-requested` opens it and `deleted` closes it, cross-posted to `/` so the catalog drops
  *  the entry. */
-export function entityLifecycle<const Slug extends "repo" | "workspace">(slug: Slug) {
+export function entityLifecycle<const Slug extends EntitySlug>(slug: Slug) {
   const type = <const Fact extends string>(fact: Fact) =>
     `events.iterate.com/${slug}/${fact}` as const;
   const events = {
     [type("create-requested")]: {
-      description: `Someone asked for this ${slug} (\`itx.${slug}s.create(path)\`). No payload: the context it lands on IS the ${slug}. The collection writes the child's parent link \`itx ⇒ itx.builtins.cd(creator)\` before this request, the creator being the context that called, so the link is part of the birth and nothing re-points a born context. The processor provisions what the ${slug} needs (a repo's Artifacts repo; a workspace, nothing) and lands created or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.`,
+      description: `Someone asked for this ${slug} (\`itx.${entityPlural(slug)}.create(path)\`). No payload: the context it lands on IS the ${slug}. The collection writes the child's parent link \`itx ⇒ itx.builtins.cd(creator)\` before this request, the creator being the context that called, so the link is part of the birth and nothing re-points a born context. The processor provisions what the ${slug} needs (a repo's Artifacts repo; a workspace, nothing; a sandbox, nothing: its container starts on first use) and lands created or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.`,
       payloadSchema: NoPayload,
     },
     [type("created")]: {
@@ -69,7 +79,7 @@ export function entityLifecycle<const Slug extends "repo" | "workspace">(slug: S
       payloadSchema: FailurePayload,
     },
     [type("delete-requested")]: {
-      description: `Someone asked for this ${slug} to go (\`itx.${slug}s.delete(path)\`). No payload: the context it lands on IS the ${slug}. The processor tears down what it provisioned and lands deleted; a request after the certificate is a harmless fact.`,
+      description: `Someone asked for this ${slug} to go (\`itx.${entityPlural(slug)}.delete(path)\`). No payload: the context it lands on IS the ${slug}. The processor tears down what it provisioned and lands deleted; a request after the certificate is a harmless fact.`,
       payloadSchema: NoPayload,
     },
     [type("deleted")]: {
@@ -245,13 +255,13 @@ export class EntityLifecycleProcessor<
  *  refuses, and so does one whose deletion has been asked for. Deletion can land at any moment, so
  *  the facet reads its state on every call (in memory once it is caught up). */
 export function assertCreated(
-  slug: "repo" | "workspace",
+  slug: EntitySlug,
   path: string,
   { creation, deletion }: EntityCreationAndDeletionState,
 ): void {
   if (deletion) throw new Error(`${slug} ${path}: deleted`);
   if (creation?.status !== "created")
     throw new Error(
-      `${slug} ${path}: not created — itx.${slug}s.create(${JSON.stringify(path)}) first`,
+      `${slug} ${path}: not created — itx.${entityPlural(slug)}.create(${JSON.stringify(path)}) first`,
     );
 }

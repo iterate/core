@@ -235,6 +235,11 @@ export { InstanceFacet } from "./instance/durable-object.ts";
 export { OrganizationFacet } from "./organization/durable-object.ts";
 export { ProjectFacet } from "./project/durable-object.ts";
 export { RepoFacet } from "./repo/durable-object.ts";
+export { SandboxFacet } from "./sandbox/durable-object.ts";
+// The sandbox's container: a Durable Object of its own, which only `SandboxFacet` reaches (`ctx.exports`).
+export { SandboxContainer } from "./sandbox/container.ts";
+// Every request a sandbox's container makes is answered by the sandbox's project's own `itx.fetch`.
+export { SandboxEgress } from "./sandbox/egress.ts";
 export { SecretFacet } from "./secret/durable-object.ts";
 export { WorkspaceFacet } from "./workspace/durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";

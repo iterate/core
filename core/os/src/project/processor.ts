@@ -311,6 +311,17 @@ export class ProjectProcessor extends StreamProcessor<
         const { [event.payload.path]: _gone, ...workspaces } = state.workspaces;
         return { ...state, workspaces };
       }
+      case "events.iterate.com/sandbox/created":
+        if (state.sandboxes[event.payload.path]) return undefined;
+        return {
+          ...state,
+          sandboxes: { ...state.sandboxes, [event.payload.path]: { createdAt: event.createdAt } },
+        };
+      case "events.iterate.com/sandbox/deleted": {
+        if (!state.sandboxes[event.payload.path]) return undefined;
+        const { [event.payload.path]: _gone, ...sandboxes } = state.sandboxes;
+        return { ...state, sandboxes };
+      }
       case "events.iterate.com/secret/set":
       case "events.iterate.com/secret/deleted":
       case "events.iterate.com/secret/lent":

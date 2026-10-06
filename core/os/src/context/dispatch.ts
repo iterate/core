@@ -105,9 +105,14 @@ export async function walkSteps(
   for (const [stepIndex, step] of steps.entries()) {
     if (!pipelined(value)) value = await value;
     // A FACET TAKES THE REST OF THE WALK IN ONE CALL, through its `callWithCause` (cause.ts): a
-    // verb of what it answers (`repos().create(path)`) then runs under the call's cause too.
+    // verb of what it answers (`repos().create(path)`) then runs under the call's cause too. So does
+    // a handle that says so (`takesTheRest`): a sandbox's, which replays a chain over its container.
     const name = typeof step === "string" ? step : step[0];
-    if (value instanceof FacetHandle && name !== "invoke" && name !== "applyRoot")
+    if (
+      (value instanceof FacetHandle || (value instanceof InvokeHandle && value.takesTheRest)) &&
+      name !== "invoke" &&
+      name !== "applyRoot"
+    )
       return { value: await value.invoke(steps.slice(stepIndex)), receiver: undefined };
     if (stepIndex > 0 && holdsRpcSession(value)) rpcSessionsSteppedPast?.push(value);
     if (value == null)

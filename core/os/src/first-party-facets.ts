@@ -15,6 +15,7 @@ export const FIRST_PARTY_FACET_CLASSES = {
   organization: "OrganizationFacet",
   project: "ProjectFacet",
   repo: "RepoFacet",
+  sandbox: "SandboxFacet",
   secret: "SecretFacet",
   workspace: "WorkspaceFacet",
 } as const;

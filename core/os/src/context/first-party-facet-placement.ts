@@ -24,8 +24,8 @@
 //      project's `/secrets/<name>`, a user's `global:/users/<id>/secrets/<name>`, an organization's
 //      `global:/organizations/<id>/secrets/<name>`, the deployment's own `global:/secrets/<name>`
 //      (the operator's, lent to projects).
-//   5. `repo`, `workspace` — any context of a project: `itx.repos.create(path)` and
-//      `itx.workspaces.create(path)` take any path beneath the caller's context (library.ts
+//   5. `repo`, `workspace`, `sandbox` — any context of a project: `itx.repos.create(path)`,
+//      `itx.workspaces.create(path)` and `itx.sandboxes.create(path)` take any path beneath the caller's context (library.ts
 //      `entityRoot`; `/repos/<name>` is a convention, not a rule). Never the global namespace.
 //   6. Loaded code — a facet or processor of any other name, hosted from the source its spec names,
 //      and a stateless worker, `itx.workers.get({ source })` (which `itx.run` loads its script
@@ -85,6 +85,10 @@ const FIRST_PARTY_FACET_PLACEMENT_RULES = {
     mayBeHostedOn: ({ projectId }) => projectId !== GLOBAL_PROJECT_ID,
   },
   workspace: {
+    where: "a project's context",
+    mayBeHostedOn: ({ projectId }) => projectId !== GLOBAL_PROJECT_ID,
+  },
+  sandbox: {
     where: "a project's context",
     mayBeHostedOn: ({ projectId }) => projectId !== GLOBAL_PROJECT_ID,
   },

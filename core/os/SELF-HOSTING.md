@@ -211,5 +211,5 @@ zone a route of its own to its Worker (`app.example.org/*`), or the wildcard tak
 `<project>.localhost:8788`. D1, KV and R2 stay on disk, and so does Images (an offline version
 that knows `width`, `height`, `rotate` and `format` only; `text` and `draw` need a deployment); Workers AI, Browser Run and Artifacts have
 no local version and reach the account set in `CLOUDFLARE_ACCOUNT_ID`, in the namespace
-`os-dev-repos`. Local dev never reads `iterate.config.local.ts` or `.secrets`: they are a
+`os-dev-repos`. `itx.sandboxes` runs its containers in Docker (any Docker-compatible engine), so a sandbox verb needs one running; nothing else does. A deployment needs Cloudflare Containers on its account (the `SandboxContainer` class, `schedulingPolicy: "durable-object"`). Local dev never reads `iterate.config.local.ts` or `.secrets`: they are a
 deployment's config.

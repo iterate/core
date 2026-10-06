@@ -349,6 +349,25 @@ test("an answer leaves a context holding nothing of its session: the holder mint
   expect(materializeItxHandleReference({ ok: true }, () => undefined)).toEqual({ ok: true });
 });
 
+// ───────────────────────────── a handle that takes the rest of the walk ─────────────────────────────
+
+test("a handle that takesTheRest is given every step after it in ONE dispatch, calls and all", async () => {
+  const dispatched: ItxExpression[] = [];
+  const handle = (takesTheRest: boolean) =>
+    new InvokeHandle(
+      (steps) => {
+        dispatched.push(steps);
+        return steps.length;
+      },
+      { takesTheRest },
+    );
+  const steps: ItxExpression = [["exec", ["echo"]], "stdout"];
+  expect(await walkSteps({ value: handle(true), receiver: undefined }, steps)).toMatchObject({
+    value: 2,
+  });
+  expect(dispatched).toEqual([steps]);
+});
+
 /** A fake built-ins scope: enough physical layer to walk into — under REAL root names, since the
  *  resolver's platform rows come from the leaf list (itx-expression-rewriting.ts `BUILT_IN_ROOTS`). `kv` is `this`-dependent on purpose
  *  (a method detached from its receiver would lose its store). */

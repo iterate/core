@@ -63,19 +63,30 @@ export function nameOfFile(file: string): string {
   return name;
 }
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value instanceof Object && Object.getPrototypeOf(value) === Object.prototype;
+
 /** THE LENT STUB: the functions of `provided` as the methods of one RpcTarget of THIS process's
  *  capnweb. capnweb lends only instances of its own `RpcTarget`, and in Node that is a class of each
  *  installed copy: an RpcTarget from the file's own copy of capnweb would not be one here, so the
  *  file answers plain functions and this wraps them. Which functions is capnweb's own rule: a plain
- *  object's own properties, a class instance's methods (never its fields). Arguments and answers
- *  cross as they are (plain data, bytes, stubs); anything else fails the call. */
+ *  object's own properties, a class instance's methods (never its fields). A plain object of
+ *  functions is lent as a member of its own (`files.read`), to any depth. Arguments and answers
+ *  cross as they are (plain data, bytes, streams, stubs); anything else fails the call. */
 export function rpcTargetOf(provided: unknown): RpcTarget {
   if (typeof provided !== "object" || !provided)
     throw new Error(
       `The default export answered ${String(provided)}: it must answer an object of functions.`,
     );
-  // an object, checked above: its properties are read by name, each checked to be a function
-  const object = provided as Record<string, unknown>;
+  // an object, checked above: its properties are read by name, each checked as it is lent
+  const target = lend(provided as Record<string, unknown>);
+  if (!target)
+    throw new Error("The default export answered an object with no functions: nothing to lend.");
+  return target;
+}
+
+/** `object`'s functions and its plain objects of functions as one RpcTarget; null when it has none. */
+function lend(object: Record<string, unknown>): RpcTarget | null {
   const prototype = Object.getPrototypeOf(object);
   const layers: object[] = [];
   if (prototype === Object.prototype || prototype === null) layers.push(object);
@@ -86,19 +97,27 @@ export function rpcTargetOf(provided: unknown): RpcTarget {
       layer = Object.getPrototypeOf(layer)
     )
       layers.push(layer);
-  const names = new Set<string>();
-  for (const layer of layers)
-    for (const name of Object.getOwnPropertyNames(layer))
-      if (name !== "constructor" && typeof object[name] === "function") names.add(name);
-  if (names.size === 0)
-    throw new Error("The default export answered an object with no functions: nothing to lend.");
   class Provided extends RpcTarget {}
-  for (const name of names)
-    Object.defineProperty(Provided.prototype, name, {
-      // `name` was collected only where `object[name]` is a function
-      value: (...args: unknown[]) => (object[name] as (...args: unknown[]) => unknown)(...args),
-    });
-  return new Provided();
+  let lent = 0;
+  for (const layer of layers)
+    for (const name of Object.getOwnPropertyNames(layer)) {
+      const member = object[name];
+      if (name === "constructor" || Object.hasOwn(Provided.prototype, name)) continue;
+      if (typeof member === "function") {
+        lent += 1;
+        Object.defineProperty(Provided.prototype, name, {
+          // `member` is a function, checked above; `this` stays the provided object
+          value: (...args: unknown[]) =>
+            (member as (...args: unknown[]) => unknown).apply(object, args),
+        });
+      } else if (isPlainObject(member)) {
+        const nested = lend(member);
+        if (!nested) continue;
+        lent += 1;
+        Object.defineProperty(Provided.prototype, name, { get: () => nested });
+      }
+    }
+  return lent > 0 ? new Provided() : null;
 }
 
 /** How long `provide` waits before each attempt to reconnect after its connection closed, about
