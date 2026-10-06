@@ -135,7 +135,7 @@ test("a source that is not an image source, a bad URL, an answer that is not ok,
   };
   expect(await refused(() => images.input(12 as never))).toBe("INVALID_INPUT");
   expect(await refused(() => images.input("file:///etc/passwd"))).toBe("INVALID_INPUT");
-  expect(await refused(() => images.input("/a/path.png"))).toBe("INVALID_INPUT");
+  expect(await refused(() => images.input("a/relative.png"))).toBe("INVALID_INPUT");
   expect(await refused(() => images.input(new Uint8Array(IMAGE_MAX_BYTES + 1)))).toBe(
     "INVALID_INPUT",
   );
@@ -179,13 +179,57 @@ test("writeTo puts the encoded image, with its content type, into the file", asy
   expect(puts).toEqual([{ contentType: "image/webp", data: new Uint8Array([1, 2]) }]);
 });
 
+test("a project file's path is a source for input, draw and info, and a destination for writeTo", async () => {
+  const { log, images, stored } = fake({
+    encoded: [9, 9],
+    contentType: "image/webp",
+    files: { "/in/a.png": [1, 2, 3], "/in/logo.png": [4] },
+  });
+  expect(await images.info("/in/a.png")).toMatchObject({ format: "image/png" });
+  const result = await images
+    .input("/in/a.png")
+    .draw("/in/logo.png")
+    .output({ format: "image/webp" });
+  const record = await result.writeTo("/out/b.webp");
+  expect(record).toEqual({ path: "/out/b.webp", contentType: "image/webp", size: 2 });
+  expect([...stored.get("/out/b.webp")!]).toEqual([9, 9]);
+  expect(log.filter(([call]) => call === "input").map(([, bytes]) => bytes)).toEqual([[1, 2, 3]]);
+  expect(log.filter(([call]) => call === "draw").map(([, bytes]) => bytes)).toEqual([[4]]);
+});
+
+test("a path that holds no file, a path that names no file, and a file over 20 MB are INVALID_INPUT", async () => {
+  const { images, stored } = fake({ encoded: [] });
+  stored.set("/in/huge.png", new Uint8Array(IMAGE_MAX_BYTES + 1));
+  const refused = async (run: () => unknown) => {
+    try {
+      await run();
+    } catch (error) {
+      return [errorCode(error), (error as Error).message];
+    }
+    return "answered";
+  };
+  expect(await refused(() => images.info("/in/missing.png"))).toEqual([
+    "INVALID_INPUT",
+    "there is no file at /in/missing.png",
+  ]);
+  expect((await refused(() => images.info("/in/huge.png")))[0]).toBe("INVALID_INPUT");
+  expect((await refused(() => images.info("/")))[0]).toBe("INVALID_INPUT");
+  expect((await refused(() => images.info("/in/")))[0]).toBe("INVALID_INPUT");
+  const result = await images.input(new Uint8Array([1])).output({ format: "image/png" });
+  expect((await refused(() => result.writeTo("relative.png")))[0]).toBe("INVALID_INPUT");
+});
+
 function fake(options: {
+  files?: Record<string, number[]>;
   encoded: number[];
   contentType?: string;
   failure?: Error;
   fetch?: (request: Request) => Promise<Response>;
 }) {
   const log: unknown[][] = [];
+  const stored = new Map<string, Uint8Array>(
+    Object.entries(options.files || {}).map(([path, bytes]) => [path, new Uint8Array(bytes)]),
+  );
   const read = async (stream: ReadableStream<Uint8Array>) => [
     ...new Uint8Array(await new Response(stream).arrayBuffer()),
   ];
@@ -242,6 +286,18 @@ function fake(options: {
     log,
     images: cfImages(binding, {
       fetch: options.fetch || (async () => new Response("no fetch expected", { status: 500 })),
+      file: (path) => ({
+        head: async () => {
+          const bytes = stored.get(path);
+          return bytes ? { path, contentType: "image/png", size: bytes.byteLength } : null;
+        },
+        bytes: async () => stored.get(path)!,
+        put: async ({ contentType, data }) => {
+          stored.set(path, data as Uint8Array);
+          return { path, contentType: contentType || "", size: (data as Uint8Array).byteLength };
+        },
+      }),
     }),
+    stored,
   };
 }

@@ -12,13 +12,13 @@
 // arguments stay live objects in one isolate and `await itx.images.input(x).transform(t).output(o)
 // .response()` is one round trip.
 //
-// SOURCES (`CfImagesSource`): bytes, a `ReadableStream`, an http(s) URL (fetched here, through the
-// project's egress, so no image bytes visit the caller), or a file handle (`itx.files.get(path)`).
+// SOURCES: `CfImageSource` in iterate/api says what an image may be, and why a script names a file by its path.
 
 import { RpcTarget } from "capnweb";
 import { codedError } from "iterate/lib";
 import type {
   CfImageSource,
+  FileHandle,
   CfImageTransformationResult,
   CfImageTransformer,
   CfImagesApi,
@@ -32,7 +32,11 @@ export const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
  *  a format that could not be decoded. Everything else stays what the binding made it. */
 const INPUT_FAULT_CODES: ReadonlySet<number> = new Set([9401, 9402, 9412, 9413, 9520, 9523]);
 
-type Deps = { fetch: (request: Request) => Promise<Response> };
+type Deps = {
+  fetch: (request: Request) => Promise<Response>;
+  /** The project's file at `path` (`itx.files.get`), made here: nothing is read until a verb runs. */
+  file: (path: string) => Pick<FileHandle, "bytes" | "head" | "put">;
+};
 
 /** One image's bytes, read when a terminal verb needs them. */
 type Bytes = () => Promise<Uint8Array>;
@@ -78,7 +82,7 @@ class ImageTransformerTarget extends RpcTarget implements CfImageTransformer {
     return this.#with({ draw: bytesOf(image, this.#deps), options });
   }
   async output(options: Parameters<CfImageTransformer["output"]>[0]) {
-    return new ImageResultTarget(this.#binding, this.#plan, options);
+    return new ImageResultTarget(this.#binding, this.#deps, this.#plan, options);
   }
   #with(step: Step) {
     return new ImageTransformerTarget(this.#binding, this.#deps, {
@@ -90,11 +94,13 @@ class ImageTransformerTarget extends RpcTarget implements CfImageTransformer {
 
 class ImageResultTarget extends RpcTarget implements CfImageTransformationResult {
   readonly #binding: ImagesBinding;
+  readonly #deps: Deps;
   readonly #plan: Plan;
   readonly #output: ImageOutputOptions;
-  constructor(binding: ImagesBinding, plan: Plan, output: ImageOutputOptions) {
+  constructor(binding: ImagesBinding, deps: Deps, plan: Plan, output: ImageOutputOptions) {
     super();
     this.#binding = binding;
+    this.#deps = deps;
     this.#plan = plan;
     this.#output = output;
   }
@@ -108,10 +114,10 @@ class ImageResultTarget extends RpcTarget implements CfImageTransformationResult
   async image(options?: Parameters<CfImageTransformationResult["image"]>[0]) {
     return (await this.#run()).image(options);
   }
-  /** The result's bytes into a file (`itx.files.get(path)`), without visiting the caller. */
+  /** The result's bytes into a file (`itx.files.get(path)`, or its path), without visiting the caller. */
   async writeTo(file: Parameters<CfImageTransformationResult["writeTo"]>[0]) {
     const run = await this.#run();
-    return file.put({
+    return (typeof file === "string" ? this.#deps.file(projectPath(file)) : file).put({
       contentType: run.contentType(),
       data: new Uint8Array(await run.response().arrayBuffer()),
     });
@@ -171,6 +177,15 @@ function bytesOf(image: CfImageSource, deps: Deps): Bytes {
     const held = seen;
     return () => (held.bytes ||= boundedBytesOf("the stream", held.held));
   }
+  if (typeof image === "string" && image.startsWith("/")) {
+    const file = deps.file(projectPath(image));
+    return async () => {
+      const record = await file.head();
+      if (!record) throw codedError("INVALID_INPUT", `there is no file at ${image}`);
+      if (record.size > IMAGE_MAX_BYTES) throw tooLarge(image);
+      return fits(await file.bytes())();
+    };
+  }
   if (typeof image === "string" || image instanceof URL) {
     const url = image instanceof URL ? image : parsedUrl(image);
     return async () => {
@@ -188,7 +203,7 @@ function bytesOf(image: CfImageSource, deps: Deps): Bytes {
   }
   throw codedError(
     "INVALID_INPUT",
-    "an image is bytes, a ReadableStream, an http(s) URL, or a file handle (itx.files.get(path))",
+    'an image is bytes, a ReadableStream, an http(s) URL, a project file path ("/images/photo.jpg"), or a file handle (itx.files.get(path))',
   );
 }
 
@@ -219,10 +234,23 @@ function fits(bytes: Uint8Array): Bytes {
   return async () => bytes;
 }
 
+/** A project file's path, `/images/photo.jpg`: what `itx.files.get` takes. */
+function projectPath(path: string): string {
+  if (!path.startsWith("/") || path.length < 2 || path.endsWith("/"))
+    throw codedError(
+      "INVALID_INPUT",
+      `${JSON.stringify(path)} is not a file path like "/images/photo.jpg"`,
+    );
+  return path;
+}
+
 function parsedUrl(text: string): URL {
   const url = URL.canParse(text) ? new URL(text) : undefined;
   if (url?.protocol !== "http:" && url?.protocol !== "https:")
-    throw codedError("INVALID_INPUT", `${JSON.stringify(text)} is not an http(s) URL`);
+    throw codedError(
+      "INVALID_INPUT",
+      `${JSON.stringify(text)} is not an http(s) URL or a file path like "/images/photo.jpg"`,
+    );
   return url;
 }
 

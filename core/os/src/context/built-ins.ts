@@ -2371,7 +2371,10 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
     },
     ai: deps.ai,
     browser: cfBrowser(env.BROWSER),
-    images: cfImages(env.IMAGES, { fetch: (request) => deps.egress(request) }),
+    images: cfImages(env.IMAGES, {
+      fetch: (request) => deps.egress(request),
+      file: (path) => deps.library.files.get(path),
+    }),
     cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
     email: {
       send: async (input) => {

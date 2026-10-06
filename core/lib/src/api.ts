@@ -559,8 +559,10 @@ export type CfBrowserApi = {
 };
 
 /** Where an `itx.images` image comes from: its bytes, a `ReadableStream` of them, an http(s) URL
- *  (fetched by the platform through the project's egress, so the bytes never visit you), or a file
- *  handle (`itx.files.get(path)`). At most 20 MB, the Images binding's own limit. */
+ *  (fetched by the platform through the project's egress, so the bytes never visit you), a project
+ *  file's path (`"/images/photo.jpg"`), or a file handle (`itx.files.get(path)`). A script uses the
+ *  path: its `itx.files.get(path)` is a promise it must `await` before it can pass the handle on.
+ *  At most 20 MB, the Images binding's own limit. */
 export type CfImageSource =
   | Uint8Array
   | ArrayBuffer
@@ -569,8 +571,8 @@ export type CfImageSource =
   | URL
   | Pick<FileHandle, "bytes">;
 
-/** A file `itx.images` writes into: `itx.files.get(path)`. */
-export type CfImagesFile = Pick<FileHandle, "put">;
+/** A file `itx.images` writes into: its path (`"/images/small.jpg"`) or `itx.files.get(path)`. */
+export type CfImagesFile = Pick<FileHandle, "put"> | string;
 
 /** What `itx.images.input(…)` and `.text(…)` answer, and every `.transform(…)` and `.draw(…)` on it:
  *  the Images binding's `ImageTransformer`, a plan nothing has run yet. `draw`'s overlay is any
