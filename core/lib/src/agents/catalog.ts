@@ -13,7 +13,6 @@ import { AgentCollectionRpcTarget } from "./collection.ts";
 
 const AgentCatalogContract = defineProcessorContract({
   slug: "agents",
-  // 3: a certificate counts only when stamped with the path of the agent it names.
   version: "3",
   description: "The agents installed in this project by the userspace agents app.",
   stateSchema: z.object({
@@ -34,16 +33,13 @@ export class AgentCatalogProcessor extends StreamProcessor<
   ConsumedEvent<typeof AgentCatalogContract>
 > {
   readonly contract = AgentCatalogContract;
-  /** A certificate counts only from the agent it names: each agent writes its own on `/`
-   *  (processor.ts), and the platform stamps where it came from (core/os caller.ts `stampCaller`),
-   *  so one any other context appends is ignored — anyone may append anywhere, and a forged death
-   *  would refuse the agent's every message for good. */
+  /** Folds the `agent/created` and `agent/deleted` certificates on `/` (each agent posts its own,
+   *  processor.ts) into the live and the dead agents. A birth counts once, and a death is terminal. */
   reduce({
     state,
     event,
   }: ReduceArgs<AgentCatalogState, ConsumedEvent<typeof AgentCatalogContract>>) {
     const path = event.payload.path;
-    if (event.source.origin !== path) return;
     if (event.type === "events.iterate.com/agent/created") {
       if (state.agents[path] || state.deleted[path]) return; // born once; dead is terminal
       return { ...state, agents: { ...state.agents, [path]: { createdAt: event.createdAt } } };
