@@ -2,7 +2,10 @@
 // onboarding. They only need to produce a plausible first draft that the user
 // can edit — improve freely.
 
-/** Email providers whose domain says nothing about the user's team. */
+import { TEST_EMAIL_DOMAIN } from "./test-email-domain.ts";
+
+/** Email domains that say nothing about the user's team: the providers anyone has an address at,
+ *  then our own. */
 const GENERIC_EMAIL_DOMAINS = new Set([
   "gmail.com",
   "googlemail.com",
@@ -25,27 +28,26 @@ const GENERIC_EMAIL_DOMAINS = new Set([
   "mail.com",
   "yandex.com",
   "zoho.com",
+  // Most sign-ins in dev and on a preview come from these two. A project's slug follows the
+  // suggestion and is one project across the deployment, so a name they all share is one only the
+  // first of them can take.
+  "nustom.com",
+  TEST_EMAIL_DOMAIN,
 ]);
 
 /**
- * Proposes an organization name for first-run onboarding.
- *
- * Prefer the OAuth display name when the provider gave us one
- * ("Jonas Templestein" → "Jonas Templestein's Organization"). Fall back to
- * the email-only heuristic when name is missing.
+ * Proposes an organization name for first-run onboarding: the OAuth display
+ * name as the provider gave it ("Jonas Templestein"), or the email-only
+ * heuristic when there is none.
  */
 export function suggestOrganizationName(input: { name?: string | null; email?: string | null }) {
-  const displayName = input.name?.trim();
-  if (displayName) {
-    return `${displayName}'s Organization`;
-  }
-  return suggestOrganizationNameFromEmail(input.email || "");
+  return input.name?.trim() || suggestOrganizationNameFromEmail(input.email || "");
 }
 
 /**
  * Proposes an organization name from an email address: the company domain's
- * first label when the domain looks like a company ("jonas@nustom.com" →
- * "Nustom"), otherwise the local part ("jane.doe+work@gmail.com" → "Jane
+ * first label when the domain looks like a company ("ada@acme.com" →
+ * "Acme"), otherwise the local part ("jane.doe+work@gmail.com" → "Jane
  * Doe"). Returns "" when nothing sensible can be derived.
  */
 export function suggestOrganizationNameFromEmail(email: string): string {
