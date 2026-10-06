@@ -5,16 +5,17 @@
 //                  project (a `+tag` after it is ignored). On the project wildcard's domain
 //                  (iterate.com on prd) every address routed here is that one project's, and the
 //                  message is also forwarded as it arrived to `projectWildcard.forwardEmailTo` (a
-//                  Google Group on prd) once the project has it. Each
-//                  attachment becomes a project file under `/email/<message key>/`, then
+//                  Google Group on prd) once the project has it. The message as it arrived and
+//                  each attachment become project files under `/email/<message key>/`, then
 //                  `email/received` lands on `/integrations/email`, keyed by the Message-ID and the
 //                  address it reached, so a redelivery lands nothing new and a copy to another of the
-//                  project's addresses is its own. The fact says who sent it as far as the platform
-//                  can tell (email/sender.ts): whether the From address is verified, whether it is a
-//                  member's, whether its domain's own server sent it, and whether the mail is
-//                  automated; nothing is refused for it, the reader decides. Mail for no project is
-//                  rejected (a bounce the sender sees); a failure of ours throws, and the sending
-//                  server retries.
+//                  project's addresses is its own. Beside the parsed fields the fact keeps the
+//                  message's header fields as written (email/raw-headers.ts) and names its file. It
+//                  says who sent it as far as the platform can tell (email/sender.ts): whether the
+//                  From address is verified, whether it is a member's, whether its domain's own
+//                  server sent it, and whether the mail is automated; nothing is refused for it, the
+//                  reader decides. Mail for no project is rejected (a bounce the sender sees); a
+//                  failure of ours throws, and the sending server retries.
 //   sendEmail    — `itx.email.send` (context/built-ins.ts): from the project's own address, or for
 //                  the project wildcard's project any address on its domain (`hello@iterate.com`),
 //                  with project files attached, then `email/sent` on `/integrations/email`. Given
@@ -45,6 +46,7 @@ import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
 import type { ReachableContext } from "../stream/stream.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
+import { rawHeadersOf } from "../email/raw-headers.ts";
 import { authenticationOf, isAutomated } from "../email/sender.ts";
 
 /** A body longer than this many characters is cut, so no message outgrows one event. */
@@ -62,25 +64,40 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   const project = projectRef ? await controlPlane.getProject(projectRef) : null;
   if (!project) return message.setReject("No such address.");
 
-  const raw = await new Response(message.raw).arrayBuffer();
-  const email = await PostalMime.parse(raw);
-  const messageId = bareMessageIdsOf(email.messageId)[0] ?? null;
+  const delivered = new Uint8Array(await new Response(message.raw).arrayBuffer());
+  const parsed = await PostalMime.parse(delivered);
+  const messageId = bareMessageIdsOf(parsed.messageId)[0] ?? null;
   // Names the message's files and its fact: the Message-ID, else the message itself.
-  const messageKey = (await sha256Hex(messageId || new TextDecoder().decode(raw))).slice(0, 16);
+  const messageKey = (await sha256Hex(messageId || new TextDecoder().decode(delivered))).slice(
+    0,
+    16,
+  );
+  // the project's file at a path (library.ts `fileHandle`: its key is the path, owner-prefixed)
+  const fileKeyOf = (path: string) => `${resourceScope(project.id, "/").id}${path}`;
+  // The address it reached, percent-encoded but for `@` and `+`: it reads as the address, and no
+  // two addresses share a file, as no two share the fact's idempotency key.
+  const recipientName = encodeURIComponent(message.to.toLowerCase())
+    .replace(/%40/g, "@")
+    .replace(/%2B/g, "+");
+  const rawPath = `/email/${messageKey}/${recipientName}.eml`;
+  // The fact is read from the first delivery's copy: a redelivery, which Cloudflare stamps with new
+  // Received and ARC fields, or a list's copy under the same Message-ID records the same fact again,
+  // and the stream's idempotency answers the event it has.
+  const earlier = await earlierDeliveryOf(env.FILES, fileKeyOf(rawPath), delivered);
+  const raw = earlier || delivered;
+  const email = earlier ? await PostalMime.parse(earlier) : parsed;
   const attachments = await Promise.all(
     email.attachments.map(async (attachment, index) => {
       const filename = attachment.filename || `attachment-${index + 1}`;
       const path = `/email/${messageKey}/${index + 1}-${filename.replace(/[^\w.-]+/g, "_")}`;
       const contentType = attachment.mimeType || "application/octet-stream";
-      // the project's file at `path` (library.ts `fileHandle`: its key is the path, owner-prefixed)
-      const stored = await env.FILES.put(
-        `${resourceScope(project.id, "/").id}${path}`,
-        attachment.content,
-        { httpMetadata: { contentType } },
-      );
+      const stored = await env.FILES.put(fileKeyOf(path), attachment.content, {
+        httpMetadata: { contentType },
+      });
       return { filename, contentType, size: stored.size, path };
     }),
   );
+  const { headers, headersTruncated } = rawHeadersOf(raw);
   const replyTo = addressesOf(email.replyTo)[0];
   const from = addressesOf(email.from && [email.from])[0] ?? message.from;
   const { authentication, verified, direct } = authenticationOf(email.headers, from);
@@ -117,6 +134,9 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
         references: bareMessageIdsOf(email.references),
         attachments,
         envelope: { from: message.from, to: message.to },
+        raw: { path: rawPath, contentType: "message/rfc822", size: raw.byteLength },
+        headers,
+        headersTruncated,
         sender: { verified, member, direct },
         automated: isAutomated(email.headers, message.from),
         authentication,
@@ -132,6 +152,23 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
       if (!String(error).includes("non-authenticated emails cannot be forwarded")) throw error;
     }
   }
+}
+
+/** Stores `delivered` as the project's file at `key` unless an earlier delivery of the message to
+ *  that address is there, and answers the earlier one's bytes, or null when this is the first. R2
+ *  writes only where no object is (`etagDoesNotMatch: "*"` is the wildcard etag, workerd
+ *  api/r2-bucket.c++ `buildSingleEtagArray`), so of two deliveries at once one copy stands. */
+async function earlierDeliveryOf(files: R2Bucket, key: string, delivered: Uint8Array) {
+  const written = await files.put(key, delivered, {
+    onlyIf: { etagDoesNotMatch: "*" },
+    httpMetadata: { contentType: "message/rfc822" },
+  });
+  if (written) return null;
+  const earlier = await files.get(key);
+  if (!earlier)
+    throw new Error(`email: the earlier delivery at ${key} was deleted while it was read`);
+  console.info({ event: "email.redelivered", key });
+  return new Uint8Array(await earlier.arrayBuffer());
 }
 
 /** What `itx.email.send` takes, checked here: it arrives over the wire. */

@@ -2,7 +2,8 @@
 // `/integrations/email` (core/os src/email/contract.ts), inbound as `email/received` and each
 // `itx.email.send` as `email/sent`, both appended by the platform (core/os integrations/email.ts).
 // The first-party `email` facet there folds them into threads (core/os email/processor.ts); a config
-// repo reads its state and parses a message with this contract (core/configs/default/worker.ts).
+// repo reads its state and parses a message with this contract (core/configs/default/worker.ts). An
+// inbound message's bytes, as it arrived, and each attachment's are project files under `/email/`.
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "./stream/processor.ts";
 
@@ -57,6 +58,21 @@ export const EmailContract = defineProcessorContract({
         /** The SMTP envelope: the sending server's MAIL FROM, and the address it was delivered to
          *  (`<slug>@…`, or `<slug>+<tag>@…`). */
         envelope: z.object({ from: z.string(), to: z.string() }),
+        /** The whole message as Cloudflare delivered it to `envelope.to`, its RFC 5322 bytes: the
+         *  project file at `path` (`/email/<message key>/<address>.eml`, `message/rfc822`), `size`
+         *  bytes long (what Cloudflare's `rawSize` counts). A redelivery keeps the first delivery's
+         *  file, and the event describes that one. Absent on a message recorded before the
+         *  platform kept it. */
+        raw: z.object({ path: z.string(), contentType: z.string(), size: z.number() }).optional(),
+        /** Every header field of `raw` in order, duplicates kept (each Received,
+         *  Authentication-Results, DKIM-Signature and ARC set): `name` as written, `value` in
+         *  JMAP's Raw form (RFC 8621 4.1.2.1), everything after the colon to the field's end, folds
+         *  included, nothing decoded. `value.replace(/\r?\n(?=[ \t])/g, "")` unfolds it. Whole
+         *  fields from the top, the newest, up to 256 KiB of JSON (core/os email/raw-headers.ts).
+         *  Absent when `raw` is. */
+        headers: z.array(z.object({ name: z.string(), value: z.string() })).optional(),
+        /** `headers` stops before the message's last field: the rest are only in `raw`. */
+        headersTruncated: z.boolean().optional(),
         /** Who sent it, as far as the platform can tell (email/sender.ts). */
         sender: z.object({
           /** The From address is proven by Cloudflare's checks as it received the message: an

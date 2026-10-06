@@ -5,7 +5,8 @@
 // `itx.email.send` as `email/sent`, both appended by the platform (integrations/email.ts). Their
 // events and the threads processor.ts folds them into are `iterate/email`'s contract, which a config
 // repo reads too; durable-object.ts hosts the fold as the first-party facet `email` on that context.
-// An attachment's bytes are a project file (`itx.files.get(path)`), under `/email/`.
+// An inbound message as it arrived and each attachment are project files (`itx.files.get(path)`),
+// under `/email/`.
 import type { IngressRouting } from "iterate/project-ingress";
 
 /** The context every message of a project lands on, and the `email` facet folds. */
