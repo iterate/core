@@ -2,6 +2,7 @@
 // snapshots; the same across real contexts is test/vitest/os-workers/rule-snapshots.test.ts.
 import { expect, test, vi } from "vitest";
 import { parseItxExpressionPrefix, print } from "iterate/expression";
+import { withTimeout } from "iterate/lib";
 import {
   implicitRootsAt,
   namesTakenAway,
@@ -61,6 +62,24 @@ test("a read that answers after its snapshot's lifetime is never used, by the ca
     { expiresAt: 2 * SNAPSHOT_TTL_MS + 1 },
   ]);
   expect(owner).toMatchObject({ reads: [undefined, "v1"] });
+});
+
+test("a read that never answers holds the calls that joined it only for its lifetime, then the table is read again", async () => {
+  const { cache, clock, owner } = setup();
+  const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
+  owner.delayed = true;
+  // Never answered: the request that sent it is gone
+  // (test/vitest/os-workers/rule-snapshot-cut-off.test.ts).
+  void cache.get("/", owner.read);
+  owner.delayed = false;
+  clock.now = SNAPSHOT_TTL_MS - 10;
+  expect(await withTimeout(cache.get("/", owner.read), 1_000, "the next read")).toMatchObject({
+    expiresAt: 2 * SNAPSHOT_TTL_MS - 10,
+  });
+  expect(owner).toMatchObject({ reads: [undefined, undefined] });
+  expect(warns.mock.calls.map(([line]) => line)).toMatchObject([
+    { event: "rule-snapshot.platform-failure-read-deadline", context: "/" },
+  ]);
 });
 
 test("an owner whose snapshots keep arriving expired is UNAVAILABLE after three reads, never answered from them", async () => {
