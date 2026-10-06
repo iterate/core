@@ -147,6 +147,27 @@ function sessionFromTokens(
   };
 }
 
+/** The page the browser lands on at the redirect, in the look of the issuer's sign-in and consent
+ *  pages (core/os `styles.css`, `StandalonePage`): monospace, black on white, one left-aligned
+ *  column. Inlined, because this page comes from the terminal's localhost. */
+function redirectPage(title: string, message: string) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title>
+<style>
+body { margin: 0; background: #ffffff; color: #111111; font: 1rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+main { box-sizing: border-box; display: flex; flex-direction: column; gap: 1.5rem; max-width: 52.5rem; margin: 0 auto; padding: 3.5rem 1.25rem 6.5rem; }
+h1 { margin: 0; font-size: 1.75rem; line-height: 1.3; }
+p { margin: 0; }
+</style>
+</head>
+<body><main><h1>${title}</h1><p>${message}</p></main></body>
+</html>`;
+}
+
 /** The loopback redirect (https://www.rfc-editor.org/rfc/rfc8252#section-7.3): `/callback` on an
  *  ephemeral localhost port, answered once. `redirect` is its query string, for oauth4webapi to
  *  validate; it rejects after five minutes without one. Disposal closes the listener. */
@@ -173,8 +194,11 @@ async function listenForRedirect() {
       .writeHead(declined ? 400 : 200, { "content-type": "text/html; charset=utf-8" })
       .end(
         declined
-          ? "<h1>Iterate sign-in was not authorized</h1><p>You can return to the terminal.</p>"
-          : "<h1>Iterate sign-in received</h1><p>You can close this tab and return to the terminal.</p>",
+          ? redirectPage("Iterate sign-in was not authorized", "You can return to the terminal.")
+          : redirectPage(
+              "Iterate sign-in received",
+              "You can close this tab and return to the terminal.",
+            ),
       );
     settle.resolve(url.searchParams);
   });
