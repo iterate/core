@@ -2234,8 +2234,8 @@ export function buildIdentityRoots(
 }
 
 /** What the built-ins read of the deployment and the project, a context's Durable Object's and
- *  the stateless resolver's alike. `projectSlug` is the reader's: the Durable Object keeps it in
- *  its own storage. */
+ *  the stateless resolver's alike. `projectSlug` is the reader's: each reads the project's row as
+ *  its isolate keeps it (control-plane/edge.ts), so a rename reaches both within `KEPT_MS`. */
 export function projectConfigDeps(
   iterateConfig: IterateConfig,
   projectSlug: () => Promise<string | null | undefined>,

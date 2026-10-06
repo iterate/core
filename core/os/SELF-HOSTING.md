@@ -194,10 +194,12 @@ Routes).
 
 ### A project's own domain
 
-`urls.projectHostnames: [{ "hostname": "example.org", "project": "<slug>" }]` gives one project a
-domain of its own: `example.org` is the project's apex, and `notes.example.org` is its `notes` app,
-as with a hostname the project adds itself. Route `example.org/*` and `*.example.org/*` on that
-zone to the Worker. The platform's own origin stays the platform's, even on the same zone (the
+`urls.projectHostnames: [{ "hostname": "example.org", "project": "<id or slug>" }]` gives one
+project a domain of its own: `example.org` is the project's apex, and `notes.example.org` is its
+`notes` app, as with a hostname the project adds itself. Name the project by its id (`prj_…`): an
+entry that names its slug stops serving it when the project is renamed, so `projects.rename`
+refuses to rename a project the config names by its slug. Route `example.org/*` and
+`*.example.org/*` on that zone to the Worker. The platform's own origin stays the platform's, even on the same zone (the
 platform on `iterate.example.org`, its projects on `*.iterate.example.org`). A more specific route
 on the zone wins over the wildcard, but a Custom Domain does not: give each Custom Domain on the
 zone a route of its own to its Worker (`app.example.org/*`), or the wildcard takes it.

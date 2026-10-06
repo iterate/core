@@ -51,9 +51,9 @@ export const describeReach = (reach: Reach): string =>
       : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
 
 /** How long an isolate keeps a catalog answer, and so how long a change made through another
- *  isolate (a deletion, a removed member, a moved hostname) can go unseen here. Keeping nothing
- *  would put a round trip to D1's primary (WEUR) before every project host's context is dialled:
- *  9–30 ms from Europe, 80–310 ms from the US, Asia and Oceania (measured 2026-09-27). */
+ *  isolate (a deletion, a rename, a removed member, a moved hostname) can go unseen here. Keeping
+ *  nothing would put a round trip to D1's primary (WEUR) before every project host's context is
+ *  dialled: 9–30 ms from Europe, 80–310 ms from the US, Asia and Oceania (measured 2026-09-27). */
 const KEPT_MS = 5_000;
 
 /** Projects' rows, each under its id and its slug (`keep`), their primary hostnames with them. */
@@ -465,6 +465,24 @@ export class ControlPlane {
     keep(project);
     this.#forget(caller.principal?.actor);
     return mintedOrganization ? { ...project, mintedOrganization } : project;
+  }
+
+  /** A project's new slug (catalog.ts `renameProject`): its row is kept here at once under its id
+   *  and the new slug, and its old slug names nothing here; another isolate may still answer the
+   *  old row, by the id or the old slug, for `KEPT_MS`. */
+  async renameProject(
+    caller: Caller,
+    ref: string,
+    slug: string,
+  ): Promise<ProjectRow & { from: string }> {
+    const renamed = await this.#call("renameProject", () =>
+      this.#db.renameProject(callerOf(caller), ref, slug),
+    );
+    const { from, ...project } = renamed;
+    projects.delete(from);
+    keep(project);
+    access.clear(); // the slug rides every member's access record
+    return renamed;
   }
 
   /** The project `caller` may delete (catalog.ts `projectToDelete`), or a refusal. */

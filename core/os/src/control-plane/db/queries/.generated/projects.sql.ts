@@ -239,6 +239,40 @@ export namespace firstOrganizationOf {
 	};
 }
 
+const renameProjectSql = `
+update projects set slug = ?
+where id = ?
+  and not exists (select 1 from projects p where p.slug = ?)
+  and (? = 1 or exists (
+    select 1 from memberships a
+    where a.org_id = projects.org_id and a.user_id = ? and a.role = 'owner'
+  ));
+`.trim();
+const renameProjectQuery = (data: renameProject.Data, params: renameProject.Params) => ({
+	name: "renameProject",
+	sql: renameProjectSql,
+	args: [data.slug, params.id, params.slug, params.asOperator, params.actorId],
+});
+
+export const renameProject = Object.assign(
+	async function renameProject(client: Client, data: renameProject.Data, params: renameProject.Params) {
+		return client.run(renameProjectQuery(data, params));
+	},
+	{ sql: renameProjectSql, query: renameProjectQuery },
+);
+
+export namespace renameProject {
+	export type Data = {
+		slug: string;
+	};
+	export type Params = {
+		id: string;
+		slug: string;
+		asOperator: number;
+		actorId: string;
+	};
+}
+
 const deleteProjectSql = `
 delete from projects
 where id = ?

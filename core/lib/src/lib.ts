@@ -46,7 +46,7 @@ type ErrorCode =
   | "INVALID_CREDENTIALS" // authenticate(): the admin secret did not match, or the credentials named no known kind
   | "UNAUTHENTICATED" // authenticate({ type: "from-server-cookie" }): no session cookie on the request, or a cross-origin browser's request
   | "FORBIDDEN" // projects.get(project): outside the session's reach (a grant narrowed to other projects, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (core/os first-party-facet-placement.ts)
-  | "PROJECT_NAME_TAKEN" // projects.create({ project }): a project of that slug exists in another org
+  | "PROJECT_NAME_TAKEN" // projects.create({ project }): a project of that slug exists in another org; projects.rename(project, { slug }): another project holds the slug
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context

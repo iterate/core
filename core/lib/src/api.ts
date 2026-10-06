@@ -1362,7 +1362,7 @@ export interface OrgRecord {
 
 /** A project as the catalog lists it: addressed by `id` everywhere (`projects.get`, a grant's list,
  *  an MCP call's `project`, an app's URL); `slug` is the label of its hostnames and its name to a
- *  person. The id is the one stable identifier. */
+ *  person, which `projects.rename` changes. The id is the one stable identifier. */
 export interface ProjectRecord {
   id: string;
   slug: string;
@@ -1443,6 +1443,19 @@ export interface IterateSessionApi {
       /** Operator-only recovery: retain the source project identity from a project seed. */
       restoreProjectId?: string;
     }): Promise<IterateContextApi>;
+    /** Rename a project, by its slug or its id — its organization's owner, or the operator; anyone
+     *  else is refused (FORBIDDEN). `slug` is the new label of its hosts (`<slug>.<hostname>`,
+     *  `<routingSlug>--<slug>.<hostname>`, `/projects/<slug>/…`) and the local part of its email
+     *  address, given as a slug (lowercase letters and digits, words joined by single dashes:
+     *  INVALID_INPUT otherwise) that no other project holds (PROJECT_NAME_TAKEN). Answers the row
+     *  renamed: from then on the project answers on the new hosts and address, and the old ones
+     *  name nothing (another edge isolate may serve the old ones for up to five seconds). The id
+     *  stays, and so does everything keyed by it: contexts, data, custom hostnames, connections,
+     *  grants. Refused while the deployment's config names the project by its slug
+     *  (`urls.projectHostnames`, `urls.projectWildcard`): name it by its id there first. The same
+     *  slug again changes nothing. Lands `events.iterate.com/project/renamed` on the project's root
+     *  and `events.iterate.com/organization/project-renamed` on its organization. */
+    rename(project: string, input: { slug: string }): Promise<ProjectRecord>;
     /** Delete a project, by its slug or its id — its organization's owner, or the operator; anyone
      *  else is refused (FORBIDDEN). Answers once nothing reaches the project any more (its row is
      *  gone, and its slug free); its contexts, hostnames and storage are destroyed after, by the

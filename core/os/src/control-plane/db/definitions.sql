@@ -40,9 +40,10 @@ create table memberships (
 );
 create index memberships_user on memberships (user_id);
 
--- A row is inserted once and never updated, only deleted: a context's stored slug relies on it (a
--- deletion destroys that storage too), and the edge keeps a row five seconds (edge.ts `KEPT_MS`).
--- No cascade: an organization that holds a project cannot be deleted.
+-- The id never changes, and everything a project keeps is keyed by it; the slug changes only by a
+-- rename (catalog.ts `renameProject`). The edge keeps a row five seconds (edge.ts `KEPT_MS`), so a
+-- rename or a deletion reaches every isolate within that. No cascade: an organization that holds a
+-- project cannot be deleted.
 create table projects (
   id text primary key,
   slug text not null unique,

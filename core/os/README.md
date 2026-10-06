@@ -72,6 +72,13 @@ offers are core's configs (`core/configs/`, whose `default` installs the agents 
 `iterate/agents`) and any others its build is given (`pnpm build --template <github reference>`),
 such as `configs/voice` in [iterate/packages](https://github.com/iterate/packages). See [project creation](docs/project-creation.md).
 
+A project's id never changes; its slug is the label of its hosts and the local part of its email
+address. `session.projects.rename(project, { slug })` changes the slug: the owner of its
+organization or the operator renames it, its hosts and address follow the new slug, and the old ones
+stop answering (within five seconds on every edge isolate). Its data, custom hostnames and
+connections stay, keyed by the id. A rename lands `project/renamed` on the project's root and
+`organization/project-renamed` on its organization. `session.projects.delete(project)` deletes it.
+
 A context hosts Durable Object classes as facets (`itx.facets.get(name, { source, className })`, or
 a processor's row). A caller reaches a facet by itx expression only through the methods its class
 lists in `static publicMethods`: extend `FacetDurableObject` or `StreamProcessorDurableObject` from

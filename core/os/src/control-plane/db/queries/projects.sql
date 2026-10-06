@@ -59,6 +59,15 @@ where m.user_id = :userId
 order by o.created_at, o.name, o.id
 limit 1;
 
+/** @name renameProject */
+update projects set slug = :slug
+where id = :id
+  and not exists (select 1 from projects p where p.slug = :slug)
+  and (:asOperator = 1 or exists (
+    select 1 from memberships a
+    where a.org_id = projects.org_id and a.user_id = :actorId and a.role = 'owner'
+  ));
+
 /** @name deleteProject */
 delete from projects
 where id = :id

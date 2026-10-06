@@ -186,31 +186,29 @@ export class IterateRpcTarget extends RpcTarget implements IterateApi {
 }
 
 /** Whose own context a platform fact lands on: a person's account (`global:/users/<id>`, folded by
- *  the `account` processor, src/account/) or an organization (`global:/organizations/<id>`, folded
- *  by `organization`, src/organization/). */
-type FactOwner = { account: string } | { organization: string };
+ *  the `account` processor, src/account/), an organization (`global:/organizations/<id>`, folded
+ *  by `organization`, src/organization/), or a project's root (`/` of the project, the `project`
+ *  processor's, src/project/). */
+type FactOwner = { account: string } | { organization: string } | { project: string };
 
-const ownerAddress = (owner: FactOwner) =>
-  "account" in owner
-    ? { processor: "account", path: `/users/${owner.account}` }
-    : { processor: "organization", path: `/organizations/${owner.organization}` };
+function ownerAddress(owner: FactOwner) {
+  if ("project" in owner) return { processor: "project", projectId: owner.project, path: "/" };
+  if ("account" in owner)
+    return { processor: "account", projectId: GLOBAL_PROJECT_ID, path: `/users/${owner.account}` };
+  const path = `/organizations/${owner.organization}`;
+  return { processor: "organization", projectId: GLOBAL_PROJECT_ID, path };
+}
 
-/** The owner's own context on the global project — where its facts land and its fold is read
- *  (oauth.ts `accountStateOf`) — called under the failure model (`contextStub`), its lines named
+/** The owner's own context — where its facts land and its fold is read (oauth.ts
+ *  `accountStateOf`) — called under the failure model (`contextStub`), its lines named
  *  `<area>.…`. */
 export function ownerContext(
   contextNamespace: IterateContextNamespace,
   owner: FactOwner,
   area: string,
 ) {
-  return contextStub(
-    contextNamespace,
-    DurableObjectNameCodec.address({
-      projectId: GLOBAL_PROJECT_ID,
-      path: ownerAddress(owner).path,
-    }),
-    area,
-  );
+  const { projectId, path } = ownerAddress(owner);
+  return contextStub(contextNamespace, DurableObjectNameCodec.address({ projectId, path }), area);
 }
 
 /** PLATFORM FACTS, appended to their owner's own context, awaited and throwing: the owner's
@@ -367,11 +365,12 @@ async function borrowEveryProjectLends(
 type KeyedFact = StreamEventInput & { idempotencyKey: string };
 
 /** `appendPlatformFacts` best-effort and ASYNC (waitUntil), off the verb's own path: the account's
- *  sign-ins and consents, and an organization's activity — facts no answer depends on. Each is
- *  KEYED (its sign-in's operation, its consent's grant, its organization verb's operation), so
- *  running the append twice lands the fact once: the stream answers a key it holds with the event
- *  it already has, and `ownerContext` sends an append the platform cut ONCE more. A second failure,
- *  and any other, is reported, as oauth.ts reports a grant use it could not record. */
+ *  sign-ins and consents, an organization's activity, and a project's rename on its root — facts no
+ *  answer depends on. Each is KEYED (its sign-in's operation, its consent's grant, its verb's
+ *  operation), so running the append twice lands the fact once: the stream answers a key it holds
+ *  with the event it already has, and `ownerContext` sends an append the platform cut ONCE more. A
+ *  second failure, and any other, is reported, as oauth.ts reports a grant use it could not
+ *  record. */
 export function publishPlatformFacts(
   input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   owner: FactOwner,
@@ -382,6 +381,7 @@ export function publishPlatformFacts(
   input.waitUntil(
     appendPlatformFacts(input.contextNamespace, owner, events, caller).catch((error) =>
       reportIssue("session.platform-fact-not-recorded", error, {
+        projectId: ownerAddress(owner).projectId,
         path: ownerAddress(owner).path,
         type: events.map((event) => event.type).join(" "),
       }),
@@ -999,8 +999,9 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
 }
 
 /** The project catalog: `list()`, `get(project)`, `create({ project })` — get and create vend the
- *  project's root context. What a session reaches is its `Reach` (control-plane/edge.ts): every
- *  project, the projects of the user's orgs, or the projects named outright. */
+ *  project's root context — and an owner's `rename` and `delete`. What a session reaches is its
+ *  `Reach` (control-plane/edge.ts): every project, the projects of the user's orgs, or the projects
+ *  named outright. */
 class ProjectCollectionRpcTarget extends RpcTarget {
   readonly #session: SessionOf;
   readonly #sessionTeardown: SessionTeardown;
@@ -1157,16 +1158,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
    *  answer does not wait for it. */
   async delete(project: string): Promise<void> {
     const { input: sessionInput, caller } = this.#session;
-    const address = DurableObjectNameCodec.parse(project);
-    const id =
-      address.path === "/" && address.projectId !== GLOBAL_PROJECT_ID
-        ? await sessionInput.controlPlane.reachableProjectId(
-            this.#session.authority.reach,
-            address.projectId,
-          )
-        : null;
-    if (!id)
-      throw codedError("FORBIDDEN", `projects.delete(${JSON.stringify(project)}): no such project`);
+    const id = await this.#reachableId("delete", project);
     const doomed = await sessionInput.controlPlane.projectToDelete(caller, id);
     const root = sessionInput.contextNamespace.getByName(
       DurableObjectNameCodec.stringify({ projectId: id, path: "/" }),
@@ -1202,6 +1194,83 @@ class ProjectCollectionRpcTarget extends RpcTarget {
           ],
         ],
       ]);
+  }
+
+  /** RENAME the project, by its slug or its id: its slug becomes `slug`. Only the owner of its
+   *  organization, or the operator, may (catalog.ts `renameProject`); anyone else is refused
+   *  (FORBIDDEN). The slug is the label of every host of the project (`<slug>.<hostname>`,
+   *  `<routingSlug>--<slug>.<hostname>`, `/projects/<slug>/…` under paths) and the local part of
+   *  its address (`<slug>@<email domain>`). From the answer on they follow the new slug, on every
+   *  isolate within `KEPT_MS` (control-plane/edge.ts), and the old ones name nothing. The id stays,
+   *  and so does everything keyed by it, its custom hostnames included.
+   *
+   *  Refused for a slug `create` would not make as given (INVALID_INPUT), for one another project
+   *  holds (PROJECT_NAME_TAKEN), and while the deployment's config serves hosts by the project's
+   *  slug (`urls.projectHostnames`, `urls.projectWildcard`), which would stop serving it: the
+   *  config names it by its id first (INVALID_INPUT). Its own slug again changes nothing and lands
+   *  nothing. A rename lands `project/renamed` on the project's root and, unless it is the
+   *  operator's own, `organization/project-renamed` on its organization's activity, both in the
+   *  background (`publishPlatformFacts`). */
+  async rename(project: string, input: { slug: string }): Promise<ProjectRecord> {
+    const { input: sessionInput, caller } = this.#session;
+    const { slug } = z.object({ slug: z.string() }).parse(input);
+    const id = await this.#reachableId("rename", project);
+    const current = await sessionInput.controlPlane.getProject(id, true);
+    const { projectHostnames, projectWildcard } = sessionInput.iterateConfig.urls;
+    const servedBySlug = [...projectHostnames, ...(projectWildcard ? [projectWildcard] : [])]
+      .filter((entry) => entry.project === current?.slug)
+      .map((entry) => entry.hostname);
+    if (current && current.slug !== slug && servedBySlug.length)
+      throw codedError(
+        "INVALID_INPUT",
+        `projects.rename(${JSON.stringify(project)}): this deployment's config serves ${servedBySlug.join(", ")} by the slug '${current.slug}' — name the project by its id, ${id}, there first`,
+      );
+    const { from, ...renamed } = await sessionInput.controlPlane.renameProject(caller, id, slug);
+    const record = { id: renamed.id, slug: renamed.slug, orgId: renamed.orgId };
+    if (from === record.slug) return record;
+    publishPlatformFacts(
+      sessionInput,
+      { project: id },
+      {
+        type: "events.iterate.com/project/renamed",
+        payload: { from, to: record.slug },
+        idempotencyKey: `project/renamed:${crypto.randomUUID()}`,
+      },
+      caller,
+    );
+    if (record.orgId !== ADMIN_ORG_ID)
+      publishOrganizationFacts(sessionInput, caller, [
+        [
+          { organization: record.orgId },
+          [
+            {
+              type: "events.iterate.com/organization/project-renamed",
+              payload: { projectId: id, from, to: record.slug },
+            },
+          ],
+        ],
+      ]);
+    return record;
+  }
+
+  /** The id of the project a verb names, by its slug or its id, when this session reaches it; a
+   *  context name below a root, the global namespace and a project out of reach are no such
+   *  project (FORBIDDEN). */
+  async #reachableId(verb: string, project: string): Promise<string> {
+    const address = DurableObjectNameCodec.parse(project);
+    const id =
+      address.path === "/" && address.projectId !== GLOBAL_PROJECT_ID
+        ? await this.#session.input.controlPlane.reachableProjectId(
+            this.#session.authority.reach,
+            address.projectId,
+          )
+        : null;
+    if (!id)
+      throw codedError(
+        "FORBIDDEN",
+        `projects.${verb}(${JSON.stringify(project)}): no such project`,
+      );
+    return id;
   }
 
   #context(projectId: string): IterateContextRpcTarget {

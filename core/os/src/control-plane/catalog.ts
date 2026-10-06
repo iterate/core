@@ -65,6 +65,7 @@ import {
   insertProject,
   listProjects,
   projectsByRef,
+  renameProject,
 } from "./db/queries/.generated/projects.sql.ts";
 import {
   identityUser,
@@ -102,11 +103,10 @@ const newId = (prefix: "user" | "org" | "prj" | "inv" | "acc") =>
   `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
 
 export type UserRecord = { id: string; email: string };
-/** A project, addressed by `id` everywhere (the context's name, a grant's list, the API); `slug` is
- *  the DNS label of its hostnames; `role` is the reader's, when read through their memberships. A
- *  row is only ever inserted or deleted: a context's own `project-slug` relies on that
- *  (iterate-context-durable-object.ts `#projectSlug`; a deletion destroys that storage too), and
- *  the edge keeps a row `KEPT_MS` (edge.ts). */
+/** A project, addressed by `id` everywhere (the context's name, a grant's list, the API), which
+ *  never changes; `slug` is the DNS label of its hostnames and its address's local part, which a
+ *  rename changes (`renameProject`); `role` is the reader's, when read through their memberships.
+ *  The edge keeps a row `KEPT_MS` (edge.ts). */
 export type ProjectRecord = {
   id: string;
   slug: string;
@@ -681,6 +681,51 @@ export class ControlPlaneDatabase {
     );
     // this batch made the person's organization: the session lands its creation (session.ts)
     return changed(minted[0]) ? { ...record, mintedOrganization: organization.name } : record;
+  }
+
+  /** RENAME a project: its slug becomes `slug`. Only the owner of its organization, or the
+   *  operator, may. `slug` must be a slug as `projectSlug` makes one (INVALID_INPUT):
+   *  `createProject` slugs a name, and a rename takes the slug itself. A slug another project holds
+   *  is PROJECT_NAME_TAKEN; the project's own slug again changes nothing. The id stays, and so does
+   *  everything keyed by it: its contexts, hostname claims, integration routes and grants.
+   *
+   *  One batch: the row as it stood, then the update — its `where` lets only an owner or the
+   *  operator through, and only while no project holds the slug, so two renames to one slug at once
+   *  end as one — then the caller's role and the rows that hold the id or the slug now. Answers the
+   *  row as renamed, and the slug it had (`from`). */
+  async renameProject(
+    caller: Caller,
+    ref: string,
+    slug: string,
+  ): Promise<ProjectRow & { from: string }> {
+    if (!slug || projectSlug(slug) !== slug)
+      throw codedError(
+        "INVALID_INPUT",
+        `${JSON.stringify(slug)} is not a project slug: lowercase letters and digits, words joined by single dashes, like "${projectSlug(slug) || "my-project"}".`,
+      );
+    const guard = this.#ownerGuard(caller, "rename a project of");
+    const project = await this.project(ref);
+    if (!project) throw codedError("FORBIDDEN", "You cannot rename that project.");
+    const results = await batch(this.#d1, [
+      projectsByRef.query({ id: project.id, slug: project.id }),
+      renameProject.query({ slug }, { id: project.id, slug, ...guard }),
+      organizationRole.query({ orgId: project.orgId, userId: guard.actorId }),
+      projectsByRef.query({ id: project.id, slug }),
+    ]);
+    const before = rowsOf<projectsByRef.Result>(results, 0)[0];
+    if (!before) throw codedError("FORBIDDEN", "You cannot rename that project.");
+    const refusal = ownerRefusal(
+      rowsOf<organizationRole.Result>(results, 2)[0],
+      guard,
+      "rename a project of",
+    );
+    if (refusal) throw refusal;
+    const held = rowsOf<projectsByRef.Result>(results, 3);
+    const renamed = held.find((row) => row.id === project.id && row.slug === slug);
+    if (renamed) return { ...projectRow(renamed), from: before.slug };
+    if (held.some((row) => row.slug === slug))
+      throw codedError("PROJECT_NAME_TAKEN", `The project name '${slug}' is already taken.`);
+    throw new Error(`renameProject changed nothing for its owner (${project.id})`);
   }
 
   /** The project `caller` may delete — the owner of its organization, or the operator — or a

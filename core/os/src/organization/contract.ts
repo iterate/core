@@ -1,15 +1,15 @@
 // src/organization/contract.ts — THE ORGANIZATION: its context, `/organizations/<orgId>` in the
-// deployment-global namespace, where its ACTIVITY lands — created, renamed, deleted, a member added
-// or removed, an invitation link created, accepted or revoked, a project added or removed — each
-// published by the session (session.ts `publishOrganizationFacts`) after the control-plane database
-// makes the write, stamped with whoever asked: the audit lives where it happened, attributed to who
-// asked and through which connection. THE DATABASE IS THE TRUTH of the organization, its members,
-// invitations and projects, and what every reader reads (`session.organizations`); a fact here is
-// the record, and the dash's signal to read again. This file is the only place those events and
-// their payloads are spelled; processor.ts folds only the catalog of the organization's own
-// secrets, and durable-object.ts hosts it as the first-party facet `organization`
-// (first-party-facets.ts), the context enabled by the session with the first fact. A PURE FOLD: no
-// effect lives here. Every type is derived:
+// deployment-global namespace, where its ACTIVITY lands — created, renamed, deleted, a member
+// added or removed, an invitation link created, accepted or revoked, a project added, renamed or
+// removed — each published by the session (session.ts `publishOrganizationFacts`) after the
+// control-plane database makes the write, stamped with whoever asked: the audit lives where it
+// happened, attributed to who asked and through which connection. THE DATABASE IS THE TRUTH of the
+// organization, its members, invitations and projects, and what every reader reads
+// (`session.organizations`); a fact here is the record, and the dash's signal to read again. This
+// file is the only place those events and their payloads are spelled; processor.ts folds only the
+// catalog of the organization's own secrets, and durable-object.ts hosts it as the first-party
+// facet `organization` (first-party-facets.ts), the context enabled by the session with the first
+// fact. A PURE FOLD: no effect lives here. Every type is derived:
 //   OrganizationState = ProcessorState<typeof OrganizationContract>   the reduced state below
 //   ConsumedEvent<typeof OrganizationContract>                         what the reduce sees
 import { z } from "zod";
@@ -91,6 +91,15 @@ export const OrganizationContract = defineProcessorContract({
       description:
         "A project joined the organization's catalog (platform fact): activity, published after the catalog write, whatever becomes of the project's own `project/created`.",
       payloadSchema: z.object({ projectId: z.string().min(1), slug: z.string().min(1) }),
+    },
+    "events.iterate.com/organization/project-renamed": {
+      description:
+        "A project of the organization's catalog changed its slug from `from` to `to`; its id stays (platform fact).",
+      payloadSchema: z.object({
+        projectId: z.string().min(1),
+        from: z.string().min(1),
+        to: z.string().min(1),
+      }),
     },
     "events.iterate.com/organization/project-removed": {
       description:

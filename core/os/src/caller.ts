@@ -128,6 +128,7 @@ const PLATFORM_FACT_TYPE_LIST = [
   "events.iterate.com/project/worker-updated",
   "events.iterate.com/project/worker-update-failed",
   "events.iterate.com/project/delete-requested",
+  "events.iterate.com/project/renamed",
   "events.iterate.com/email/received",
   "events.iterate.com/email/sent",
   "events.iterate.com/github/webhook-received",

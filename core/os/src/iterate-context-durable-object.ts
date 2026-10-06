@@ -1080,23 +1080,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ),
   };
 
-  /** The control plane as this context reads it: its own project's slug, once (`#projectSlug`). */
+  /** The control plane as this context reads it: its own project's row (`#projectSlug`, and the
+   *  primary hostname), kept by the isolate `KEPT_MS` (control-plane/edge.ts). */
   readonly #controlPlane = new ControlPlane(this.env);
 
-  /** This context's project's slug; null for a global context (a user's, an organization's). A
-   *  project's slug never changes — catalog.ts inserts a project's row and nothing updates one,
-   *  and deleting the project or an erase destroys this storage with the row — so the control plane's
-   *  answer is kept in this context's own storage: read once in its life, not once per isolate (a
-   *  config worker asks `whoami` on every request). */
+  /** This context's project's slug; null for a global context (a user's, an organization's) and for
+   *  a project the catalog no longer holds. Read from the project's row as the isolate keeps it,
+   *  never from this context's storage: a rename (session.ts `projects.rename`) changes the slug,
+   *  and reaches every context within `KEPT_MS` (control-plane/edge.ts). */
   async #projectSlug() {
     const { projectId } = this.#durableObjectAddress;
     if (projectId === GLOBAL_PROJECT_ID) return null;
-    const kept = this.ctx.storage.kv.get<string>("project-slug");
-    if (kept) return kept;
-    const project = await this.#controlPlane.getProject(projectId);
-    if (!project) return null;
-    this.ctx.storage.kv.put("project-slug", project.slug);
-    return project.slug;
+    return (await this.#controlPlane.getProject(projectId))?.slug ?? null;
   }
 
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */

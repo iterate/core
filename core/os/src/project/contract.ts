@@ -162,6 +162,11 @@ export const ProjectContract = defineProcessorContract({
         "The project's owner deleted it (`session.projects.delete`): the verb appends this just before the control plane drops the project's row, and the edge admits nothing to the project once the row is gone. The processor destroys every context in the project's registry (deepest first), its custom hostnames, its kv, files and Artifacts repos, lands `project/deleted`, and destroys `/` last, only once the row is gone. Honoured only as the platform's own fact (`source.platform`): a member can append it, and it does nothing.",
       payloadSchema: z.object({}),
     },
+    "events.iterate.com/project/renamed": {
+      description:
+        "The project's slug changed from `from` to `to` (`session.projects.rename`), after the control plane's row did: its hosts, its `/projects/<slug>` paths and its email address follow the new slug, and the old ones name nothing. Its id, and everything keyed by it, stay. Only the platform appends it. A record: nothing reads it back.",
+      payloadSchema: z.object({ from: z.string().min(1), to: z.string().min(1) }),
+    },
     "events.iterate.com/project/context-deleted": {
       description:
         "One of the project's contexts was destroyed by the deletion saga: its storage, its facets' and its alarm are gone. A record: nothing reads it back.",
