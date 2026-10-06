@@ -207,13 +207,57 @@ function applySdkCompatibilityFlags(declared: string[] | undefined, where: strin
   return [...new Set([...base, ...SDK_REQUIRED_COMPATIBILITY_FLAGS])];
 }
 
+/** How this file and module-resolution.ts turn a source into the modules an isolate runs. Bump it
+ *  when a change to either, or to sucrase or es-module-lexer, changes what a source produces, as
+ *  `module-lock-3` names the lock's rewrite rules. loaded-code-format.test.ts fails on a change to
+ *  that code until it is decided here. */
+const LOADED_CODE_FORMAT = 1;
+let platformIdentity: Promise<string> | undefined;
+/** WHAT THE PLATFORM PUTS INTO EVERY LOADED ISOLATE, as one hash in every loader id: this build's
+ *  platform packages at their content (PLATFORM_MODULES), the compatibility date, the flags the
+ *  loader adds, and LOADED_CODE_FORMAT. Never the deploy: a deploy that changes none of these keeps
+ *  every loaded identity, so no facet restarts for it and nothing is produced again (the runtime
+ *  still builds each isolate again, `prepareConfinedWorker`). Hashed once per isolate, at its first
+ *  load. */
+const platformCodeIdentity = () =>
+  (platformIdentity ||= sha256Hex(
+    JSON.stringify([
+      LOADED_CODE_FORMAT,
+      COMPATIBILITY_DATE,
+      SDK_REQUIRED_COMPATIBILITY_FLAGS,
+      DEFAULT_BASE_COMPATIBILITY_FLAGS,
+      PLATFORM_MODULES.modules,
+    ]),
+  ));
+
+/** The parts of a loader id (`prepareConfinedWorker`, step 2), by name: what a restart logs as its
+ *  reason, `generation` past 0 being the dead-load workaround's (`generationId`). */
+const LOADER_ID_PARTS = ["kind", "platform", "platformOrigin", "owner", "source", "mainModule"];
+/** The parts that differ between two loader ids, by name (`LOADER_ID_PARTS`): what a facet logs
+ *  when its loaded identity moves (FacetHost `#materialize`). */
+export function loadedIdentityChanges(previous: string, next: string): string[] {
+  const split = (id: string) => {
+    const end = id.lastIndexOf("]") + 1;
+    try {
+      return {
+        parts: z.array(z.unknown()).parse(JSON.parse(id.slice(0, end))),
+        generation: id.slice(end),
+      };
+    } catch {
+      return { parts: [], generation: id }; // not an id this file spells: every part differs
+    }
+  };
+  const before = split(previous);
+  const after = split(next);
+  const changed = LOADER_ID_PARTS.filter(
+    (_, i) => JSON.stringify(before.parts[i]) !== JSON.stringify(after.parts[i]),
+  );
+  return before.generation === after.generation ? changed : [...changed, "generation"];
+}
+
 /** What `prepareConfinedWorker` needs. */
 type PrepareConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader; ITX_KV: KVNamespace };
-  /** The deploy identity every loader id folds in (worker.ts `IterateConfig.deployId`: CF_VERSION_METADATA.id,
-   *  "unversioned" locally) — a facet built from an isolate a PRIOR deployment minted cannot be called
-   *  by the new parent, so a redeploy must mint fresh isolates. */
-  deployId: string;
   /** The platform origin the `itxEntrypoint` stub was minted with (null until a self-host's first
    *  stamped caller) — FOLDED INTO THE LOADER ID: a warm isolate keeps the `env.ITX` it captured, so
    *  one minted before the origin was known must not be reused once it is (the next `LOADER.get`
@@ -264,12 +308,14 @@ type PrepareConfinedWorkerOptions = {
  * ⚠️  THE cacheKey IS A DOLLAR AMOUNT. Cloudflare bills EVERY DISTINCT value ever passed to
  * `LOADER.get` as a Dynamic Worker at $0.002/worker/day, and a new value is a cold isolate build
  * (~5MB, 1-2s): a per-request nonce in the key bills a new worker and a cold build on every
- * dispatch. Key components must be LOW-CARDINALITY: deploy version × owning
- * context × (content hash | the caller's build/commit id) — NEVER a nonce, timestamp, request id, or
- * offset, but for one bounded by failures (`generationId`). (The tension the nonce papered over is
- * real — a loaded isolate captures the minting host's `env.ITX`/`globalOutbound`, which can die
- * with the host's incarnation; we accept the rare re-dial failure and re-key on DEPLOY, not per
- * use.) The confinement contract, stated once: a loaded
+ * dispatch. Key components must be LOW-CARDINALITY: the platform's code × owning context ×
+ * (content hash | module identity | the caller's build/commit id) — NEVER a nonce, timestamp,
+ * request id, deploy or offset, but for one bounded by failures (`generationId`). A loaded isolate
+ * keeps the `env.ITX`/`globalOutbound` it was minted with, a loopback stub whose props name the
+ * context and its origin (both in the key). The deploy needs no place in the key: the Worker Loader
+ * keeps no isolate across its parent's deploy, and builds it again under the same id
+ * (test/vitest/os/facet-rebuild.probe.e2e.test.ts shows it on a deployment). The confinement
+ * contract, stated once: a loaded
  * worker's WHOLE world — `env.ITX` and every global fetch — is its owning context, so sibling calls
  * and egress route through the host's dispatch with no second path.
  */
@@ -299,14 +345,16 @@ export async function prepareConfinedWorker(
   } else {
     if (!named)
       throw new Error(
-        `${where}: a source EXPRESSION needs a cacheKey (a build id, a commit) — the producer runs only when no isolate is warm under it and no answer of its is kept (a day, per deploy), so the key must change whenever the code does`,
+        `${where}: a source EXPRESSION needs a cacheKey (a build id, a commit) — the producer runs only when no isolate is warm under it and no answer of its is kept (a day), so the key must change whenever the code does`,
       );
     sourceVersion = named;
-    // A producer's modules are kept in `ITX_KV` under its whole input — the deploy (the loader id
-    // folds it in too, and a deploy can change how a producer answers), the owner, the caller's key
-    // (else the published module identity it loads under) and the expression — so a cold isolate
-    // reads them there instead of waking the context that produces them. For the site ingress
-    // that context is `/repos/config`, and a commit's tree never changes. A KV failure is a miss:
+    // A producer's modules are kept in `ITX_KV` under the owner and what names the code, so a cold
+    // isolate reads them there instead of waking the context that produces them (for a config's
+    // worker, `/repos/config`). A published module identity names the code alone: every commit
+    // that publishes it, and every deploy, reads the same answer, the files of whichever commit ran
+    // the producer first, whose graph from `mainModule` is the one the identity hashes
+    // (`moduleIdentityOf`). A caller's key names the code with its expression. Never the deploy:
+    // a platform change to what a producer answers is a new key prefix. A KV failure is a miss:
     // the producer runs, as it always did.
     const cacheFailed = (action: "get" | "put") => (error: unknown) => {
       console.warn({
@@ -330,20 +378,16 @@ export async function prepareConfinedWorker(
     };
     getModules = async () => {
       const producer = normalizedItxExpression(source);
-      const kvKey = `produced-modules-1/${await sha256Hex(
-        JSON.stringify([
-          opts.deployId,
-          opts.owner,
-          cacheKey || `module:${opts.moduleIdentity}`,
-          producer,
-        ]),
+      const kvKey = `produced-modules-2/${await sha256Hex(
+        JSON.stringify([opts.owner, named, ...(opts.moduleIdentity ? [] : [producer])]),
       )}`;
       const stored: unknown = await opts.env.ITX_KV.get(kvKey, "json").catch(cacheFailed("get"));
       if (loadable(stored)) return stored;
+      console.info({ event: "worker-loader.produced", name: opts.owner, where, source: named });
       // The producer is a read the cacheKey names, so running it twice is running it once: a read a
       // deploy's reset of the context it reads cut (the project ingress's
-      // `itx.repos.get("/repos/config")`, read on the first request after every deploy), or a lost
-      // connection, is read once more, from that context's fresh incarnation.
+      // `itx.repos.get("/repos/config")`), or a lost connection, is read once more, from that
+      // context's fresh incarnation.
       const produced = await retryPlatformFailures(() => opts.invoke(producer), {
         area: "worker-loader",
         schedule: ONCE_NOW,
@@ -370,11 +414,11 @@ export async function prepareConfinedWorker(
   //    a class name or a caller's cacheKey may itself contain ":", and a joined string would let two
   //    different owners name ONE isolate — a silent cross-context authority transfer, since the
   //    isolate's whole world is the host stub baked in at first materialization. Changing the
-  //    spelling restarts every facet once on its next wake (a new restart marker), storage
-  //    surviving — the same as a deploy does.
+  //    spelling restarts every loaded facet once on its next wake (a new restart marker), storage
+  //    surviving, as a change to the platform's code does (`platformCodeIdentity`).
   const loaderIdBase = JSON.stringify([
     opts.kind,
-    opts.deployId,
+    await platformCodeIdentity(),
     opts.platformOrigin,
     opts.owner,
     sourceVersion,
@@ -430,6 +474,9 @@ export async function prepareConfinedWorker(
         loaderIdGenerations.set(loaderIdBase, { generation, dead: true });
         throw error;
       }
+      // An isolate built: a new loaded identity, one this machine did not keep warm, or the first
+      // load after a deploy.
+      console.info({ event: "worker-loader.built", name: opts.owner, where, loaderId });
       return {
         // A worker's package.json gives its workerd compatibility flags (module-resolution.ts). The
         // default keeps Node compat OFF — this date turns it on, and it adds ~0.7 ms to every cold load
@@ -488,7 +535,7 @@ export function isLoadedWorkerPlatformFailure(error: unknown): error is Error {
   );
 }
 
-/** How the loader resolves a source (module-resolution.ts): this deployment's platform packages,
+/** How the loader resolves a source (module-resolution.ts): this build's platform packages,
  *  the npm locks in ITX_KV, and the network for a dependency set no lock holds yet. */
 function resolveOptions(
   env: { ITX_KV: KVNamespace },
@@ -508,11 +555,12 @@ function resolveOptions(
 
 /**
  * THE IDENTITY OF ONE MODULE OF A SOURCE: the SHA-256 of what the loader loads with it as the main
- * module — its resolved graph, its npm dependencies as their locks have them — less this
- * deployment's platform packages, which the deploy id in every loader id names already. Two sources
- * whose `mainModule` answers one identity load the same code for it, so a facet whose class lives
- * there keeps running across a commit that changes only the rest of the source (a worker's
- * manifest, FacetHost). A module that does not resolve throws, as its load would.
+ * module — its resolved graph, its npm dependencies as their locks have them, and package.json's
+ * `compatibilityFlags` — less this build's platform packages, which the platform identity in every
+ * loader id names already (`platformCodeIdentity`). Two sources whose `mainModule` answers one
+ * identity load the same code for it, so a facet whose class lives there keeps running across a
+ * commit that changes only the rest of the source (a worker's manifest, FacetHost): another
+ * module, an `AGENTS.md`. A module that does not resolve throws, as its load would.
  */
 export async function moduleIdentityOf(
   files: WorkerModules,
@@ -524,5 +572,7 @@ export async function moduleIdentityOf(
   const graph = Object.entries(resolved.modules)
     .filter(([name]) => !Object.hasOwn(PLATFORM_MODULES.modules, name))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return sha256Hex(JSON.stringify([resolved.mainModule, graph]));
+  return sha256Hex(
+    JSON.stringify([resolved.mainModule, graph, resolved.compatibilityFlags || null]),
+  );
 }

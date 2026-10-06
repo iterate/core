@@ -3,7 +3,7 @@
 // the identity its id names, and the host's restarts queue behind one another as
 // `blockConcurrencyWhile` queues them. The Workers suite drives the real publication
 // (test/vitest/os-workers/named-facets.test.ts).
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { codedError } from "iterate/lib";
 import type { StreamEvent } from "iterate/stream/processor";
 import { unavailableError } from "../unavailable.ts";
@@ -26,6 +26,25 @@ test("a materialization that resolved an older publication and resumes after a n
   facets.releaseRestarts();
   await Promise.all([olderBoot, newerBoot]);
   expect(facets).toMatchObject({ started: ["agents-v1", "agents-v2"] });
+});
+
+test("a publication restarts the facet only when its module identity moved, and logs which part of the loaded identity moved", async () => {
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  onTestFinished(() => void info.mockRestore());
+  const facets = namedFacets();
+  facets.publish(1);
+  expect(await facets.boot()).toBe("agents-v1");
+  // a commit that leaves agents.ts: the same identity
+  facets.publish(2, "agents-v1");
+  expect(await facets.boot()).toBe("agents-v1");
+  expect(facets).toMatchObject({ started: ["agents-v1"], locks: 0 });
+  // a commit to agents.ts: a new identity
+  facets.publish(3);
+  expect(await facets.boot()).toBe("agents-v3");
+  expect(facets).toMatchObject({ started: ["agents-v1", "agents-v3"], locks: 1 });
+  expect(
+    info.mock.calls.filter(([line]) => line.event === "facet.loaded-identity-changed"),
+  ).toMatchObject([[{ name: "tally", changed: ["source"] }]]);
 });
 
 test("a live facet outlasts a name it cannot read right now: the platform failed the read, so the facet answers under the identity it runs", async () => {
@@ -77,13 +96,63 @@ test("a call in flight when its facet is deleted rejects NO_FACET only for the r
   await expect(cutOff).rejects.toMatchObject({ code: "NO_FACET" });
 });
 
+test("a restart whose start never answers ends when the start watchdog's clock answers, and its warn says why it ran and how long it took", async () => {
+  const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+  onTestFinished(() => void warned.mockRestore());
+  const facets = namedFacets();
+  facets.publish(1);
+  await facets.boot();
+  facets.holdNextResolution(); // the start never reaches its facet: only the clock can end it
+  const aborting = facets.abort("asked");
+  await settle();
+  facets.answerClock();
+  await aborting;
+  expect(warned.mock.calls).toMatchObject([
+    [
+      {
+        event: "facet.start-failed",
+        why: "itx.facets.abort",
+        elapsedMs: expect.any(Number),
+        message: 'facet "tally" start: no answer in 10s',
+      },
+    ],
+  ]);
+});
+
+test("a restart whose clock fails logs that once, and a timer of the context still ends the start", async () => {
+  const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+  onTestFinished(() => void warned.mockRestore());
+  const facets = namedFacets({ clockFails: true });
+  facets.publish(1);
+  await facets.boot();
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  facets.holdNextResolution();
+  const aborting = facets.abort("under a failing clock");
+  await vi.advanceTimersByTimeAsync(10_000);
+  await aborting;
+  expect(warned.mock.calls).toMatchObject([
+    [{ event: "facet-start-deadline.platform-failure-fetch", message: "no loopback" }],
+    [{ event: "facet.start-failed", why: "itx.facets.abort", elapsedMs: 10_000 }],
+  ]);
+});
+
+test("a birth with no facet to start opens no critical section and asks the clock nothing", async () => {
+  const facets = namedFacets();
+  expect(await facets.birth()).toEqual([]);
+  expect(facets).toMatchObject({ locks: 0, clockRequests: 0 });
+});
+
 /** A context's facet host with one facet, `tally`, named by the root's published worker: `publish`
- *  sets the generation the name resolves to (agents.ts's identity `agents-v<generation>`), `boot` is
+ *  sets the generation the name resolves to (agents.ts's identity `agents-v<generation>`, unless it
+ *  names one), `boot` is
  *  one call on it answering the identity its class was minted under, and `started` every class the
  *  host minted, in order. `work` is a call the facet holds until `failHeldWork` rejects the oldest
  *  one held: the fake's abort and `delete` (its hosting row removed) cut off nothing by themselves,
- *  so a test says when the runtime's rejection arrives. */
-function namedFacets() {
+ *  so a test says when the runtime's rejection arrives. The start watchdog's clock
+ *  (`FacetStartDeadline`) answers when `answerClock` says, or fails with `clockFails`; `locks`
+ *  counts the host's `blockConcurrencyWhile` calls and `clockRequests` the clock's. */
+function namedFacets({ clockFails = false } = {}) {
   const kv = new Map<string, unknown>();
   const started: string[] = [];
   const instances = new Map<
@@ -92,11 +161,15 @@ function namedFacets() {
   >();
   const heldWork: ((error: unknown) => void)[] = [];
   let generation = 0;
+  const identityAt = new Map<number, string>();
   let holdNext = false;
   let answerHeld = (_generation: number) => {};
   let failure: unknown;
   let restarts = Promise.resolve<unknown>(undefined);
   let releaseRestarts = () => {};
+  let locks = 0;
+  let clockRequests = 0;
+  const clockAnswers: (() => void)[] = [];
   const named = async () => {
     if (failure) throw failure;
     const at = holdNext
@@ -112,7 +185,9 @@ function namedFacets() {
         source: { "package.json": '{"main":"worker.js"}', "worker.js": "", "agents.ts": "" },
         manifest: {
           generation: at,
-          modules: { "agents.ts": { identity: `agents-v${at}`, classes: ["Tally"] } },
+          modules: {
+            "agents.ts": { identity: identityAt.get(at) ?? `agents-v${at}`, classes: ["Tally"] },
+          },
         },
       },
     };
@@ -146,11 +221,22 @@ function namedFacets() {
         delete: (name: string) => void instances.delete(name),
       },
       blockConcurrencyWhile: <T>(work: () => Promise<T>) => {
+        locks++;
         const run = restarts.then(work);
         restarts = run.catch(() => undefined);
         return run;
       },
-      exports: {},
+      exports: {
+        FacetStartDeadline: {
+          fetch: () => {
+            clockRequests++;
+            if (clockFails) return Promise.reject(new Error("no loopback"));
+            return new Promise<Response>((resolve) =>
+              clockAnswers.push(() => resolve(new Response(null, { status: 204 }))),
+            );
+          },
+        },
+      },
     },
     env: () => ({
       LOADER: {
@@ -182,7 +268,18 @@ function namedFacets() {
   });
   return {
     started,
-    publish: (next: number) => void (generation = next),
+    get locks() {
+      return locks;
+    },
+    get clockRequests() {
+      return clockRequests;
+    },
+    answerClock: () => clockAnswers.splice(0).forEach((answer) => answer()),
+    birth: () => host.startFacetsTheLastIncarnationRan(),
+    publish: (next: number, identity = `agents-v${next}`) => {
+      generation = next;
+      identityAt.set(next, identity);
+    },
     boot: () => host.callFacetAsPlatform(tally, [["boot"]]),
     work: () => host.callFacetAsPlatform(tally, [["work"]]),
     abort: (reason: string) => host.abort("tally", reason),

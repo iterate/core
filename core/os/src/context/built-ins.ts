@@ -413,7 +413,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  its own confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`,
    *  `fetch`, `processEventBatch`, …). `source` is the worker's FILES, literally (`{ "package.json":
    *  '{"main":"worker.js"}', "worker.js": code, … }`, its entry as module-resolution.ts `readPackage` finds it), OR an itx EXPRESSION that produces them under `cacheKey` — the producer runs
-   *  only when no isolate is warm under it and its answer is not kept (a day, per deploy;
+   *  only when no isolate is warm under it and its answer is not kept (a day;
    *  worker-loader.ts: Cloudflare's `get(id, getCode)` contract; the caller owns "same key ⇒ same code"),
    *  OR, an expression with no `cacheKey`, the NAME of another worker, whose code it loads
    *  (`namedWorkerLoad`: `mainModule` by its published identity). `className` names the exported class (default:
@@ -587,8 +587,6 @@ export interface BuildBuiltInsDeps {
    *  (platform-hook.ts `sendEvents`), which the platform hook hands each batch; unset where the
    *  Worker has no `TELEMETRY_EVENTS` binding. */
   sendEvents?: (events: StreamEvent[]) => Promise<void>;
-  /** The deploy identity every loader cacheKey folds in (worker.ts `IterateConfig`). */
-  deployId: string;
   /** How projects are reached over HTTP (iterate-config.ts `urls.ingressRouting`) — `itx.url`. */
   ingressRouting: IngressRouting;
   /** The domain one project owns outright (iterate-config.ts `urls.projectWildcard`: iterate.com, the
@@ -2054,7 +2052,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     rewriteRules: deps.rewriteRules,
     workers: workersRoot({
       env,
-      deployId: deps.deployId,
       projectId,
       path,
       iterateContextName,
@@ -2466,7 +2463,6 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
  *  producer expression never re-runs. */
 export function workersRoot(deps: {
   env: { LOADER: WorkerLoader; ITX_KV: KVNamespace };
-  deployId: string;
   projectId: string;
   path: string;
   iterateContextName: string;
@@ -2541,7 +2537,6 @@ export function workersRoot(deps: {
         const attempt = async () => {
           const prepared = await prepareConfinedWorker({
             env: deps.env,
-            deployId: deps.deployId,
             platformOrigin: deps.platformOrigin(),
             itxEntrypoint: deps.itxEntrypoint(),
             kind: "worker",

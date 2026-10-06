@@ -1114,7 +1114,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           this.#durableObjectAddress.projectId,
           events,
         )),
-    deployId: this.#iterateConfig.deployId,
     dashOrigin: this.#iterateConfig.urls.dash,
     platformAdmins: () => this.#iterateConfig.admins,
     iterateAppScopes: () => iterateAppScopesOf(this.#iterateConfig),

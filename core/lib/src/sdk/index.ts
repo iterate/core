@@ -86,8 +86,9 @@ export type FacetProps = {
    *  head a catch-up read until the next push (stream/processor.ts, the read verbs). Absent, only a
    *  push is proof, so a processor no row pushes reads its log on every read. */
   fedByPushes?: true;
-  /** The code it was started on, as the parent names it (its loaded identity, or the deploy): work
-   *  in flight that died with a restart onto other code is no death of that work (stream/processor.ts). */
+  /** The code it was started on, as the parent names it (the deploy, and a loaded facet's identity):
+   *  work in flight that died with a restart onto other code is no death of that work
+   *  (stream/processor.ts). */
   codeId?: string;
 };
 

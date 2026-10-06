@@ -13,6 +13,8 @@ import { DurableObjectNameCodec } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
   isLoadedWorkerPlatformFailure,
+  loadedIdentityChanges,
+  moduleIdentityOf,
   prepareConfinedWorker,
 } from "./worker-loader.ts";
 
@@ -116,9 +118,13 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   expect(produced).toBe(0);
   // with a key: the producer runs when the key is cold …
   const first = await load("todo@3f2a1c");
-  expect(first).toMatchObject({
-    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@3f2a1c"]),
-  });
+  expect(JSON.parse(first.loaderId)).toEqual([
+    "worker",
+    PLATFORM_ID,
+    null,
+    "prj_u.iterate/",
+    "key:todo@3f2a1c",
+  ]);
   expect(keys.at(-1)).toBe(first.loaderId);
   await vi.waitFor(() => expect(produced).toBe(1)); // getCode's async body runs, its key digested first
   // … and NOT when it is warm — "same key ⇒ same code" is the caller's contract
@@ -153,7 +159,7 @@ test("a producer's modules are read once per commit, not once per cold isolate: 
   expect(producer.produced()).toBe(1);
 });
 
-test("what a producer answered is kept for a day under its deploy, owner, key and expression: no other caller reads it", async () => {
+test("what a producer answered is kept for a day under its owner, key and expression: no other caller reads it", async () => {
   const shared = fakeKv();
   const producer = fakeProducer();
   const load = (overrides: Partial<ConfinedWorkerOptions> = {}) =>
@@ -168,12 +174,11 @@ test("what a producer answered is kept for a day under its deploy, owner, key an
   await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
   expect(shared).toMatchObject({
     puts: [
-      { key: expect.stringMatching(/^produced-modules-1\//), options: { expirationTtl: 86_400 } },
+      { key: expect.stringMatching(/^produced-modules-2\//), options: { expirationTtl: 86_400 } },
     ],
   });
   const others: Partial<ConfinedWorkerOptions>[] = [
     { owner: "prj_other.iterate/" },
-    { deployId: "deploy-2" },
     { cacheKey: "decade" },
     { source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid: "decade" }]] },
   ];
@@ -182,7 +187,82 @@ test("what a producer answered is kept for a day under its deploy, owner, key an
     await load(other);
     await vi.waitFor(() => expect(producer.produced()).toBe(before + 1));
   }
-  expect(new Set(shared.puts.map((put) => put.key))).toMatchObject({ size: 5 });
+  expect(new Set(shared.puts.map((put) => put.key))).toMatchObject({ size: 4 });
+});
+
+test("what a producer answered under a published module identity is kept under the identity alone: a later commit that publishes it reads ITX_KV, and the producer runs once", async () => {
+  const shared = fakeKv();
+  const producer = fakeProducer();
+  const coldIsolate = async (commitOid: string, moduleIdentity: string) => {
+    const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+    const { loaderId } = await loadConfined(env, {
+      kind: "facet",
+      owner: ["prj_kv_module.iterate/", "Agents"],
+      source: ["itx", "config", ["modules", { commitOid }]],
+      cacheKey: commitOid,
+      moduleIdentity,
+      ...producer,
+    });
+    await warm.get(loaderId);
+    return loaderId;
+  };
+  const first = await coldIsolate("commit-1", "agents-a");
+  // an AGENTS.md commit: agents.ts publishes the same identity, so the same id and the same answer
+  expect(await coldIsolate("commit-2", "agents-a")).toBe(first);
+  expect(producer.produced()).toBe(1);
+  // agents.ts changed: a new identity, produced once more
+  expect(await coldIsolate("commit-3", "agents-b")).not.toBe(first);
+  expect(producer.produced()).toBe(2);
+});
+
+test("a module's identity is its graph: an AGENTS.md or a module it does not import leaves it, and a module it imports or its compatibility flags move it", async () => {
+  const kv = fakeKv().kv;
+  const config = {
+    "package.json": '{"main":"worker.ts"}',
+    "worker.ts": "export default {};",
+    "agents.ts":
+      'import { greeting } from "./greeting.ts"; export class Agents { hi() { return greeting; } }',
+    "greeting.ts": 'export const greeting = "hi";',
+    "AGENTS.md": "# How to work here",
+  };
+  const identityOf = (files: Record<string, string>) =>
+    moduleIdentityOf(files, "agents.ts", { ITX_KV: kv }, "agents.ts");
+  const identity = await identityOf(config);
+  expect({
+    agentsMd: await identityOf({ ...config, "AGENTS.md": "# How to work here, edited" }),
+    worker: await identityOf({ ...config, "worker.ts": "export default { edited: true };" }),
+  }).toEqual({ agentsMd: identity, worker: identity });
+  expect(
+    new Set([
+      identity,
+      await identityOf({ ...config, "greeting.ts": 'export const greeting = "hello";' }),
+      await identityOf({
+        ...config,
+        "package.json": '{"main":"worker.ts","compatibilityFlags":["nodejs_compat"]}',
+      }),
+    ]),
+  ).toMatchObject({ size: 3 });
+});
+
+test("a loaded identity that moved says which of its parts moved: the platform's code, the source, the dead-load generation, or every part of a row an older spelling wrote", () => {
+  const id = (platform: string, source: string, generation = "") =>
+    JSON.stringify(["facet", platform, null, ["prj_u.iterate/", "Agents"], source, "agents.ts"]) +
+    generation;
+  expect({
+    same: loadedIdentityChanges(id("p1", "module:a"), id("p1", "module:a")),
+    deploy: loadedIdentityChanges(id("p1", "module:a"), id("p2", "module:a")),
+    commit: loadedIdentityChanges(id("p1", "module:a"), id("p1", "module:b")),
+    deadLoad: loadedIdentityChanges(id("p1", "module:a"), id("p1", "module:a", "#1.0a1b2c3d")),
+  }).toEqual({ same: [], deploy: ["platform"], commit: ["source"], deadLoad: ["generation"] });
+  expect(loadedIdentityChanges("facet:prj_u.iterate/:Agents", id("p1", "module:a"))).toEqual([
+    "kind",
+    "platform",
+    "platformOrigin",
+    "owner",
+    "source",
+    "mainModule",
+    "generation",
+  ]);
 });
 
 test("a KV that cannot be read or written costs the producer's run and a logged warning, never the load", async () => {
@@ -269,9 +349,13 @@ test("literal modules: the key is their content hash unless the caller names a c
     source: { "package.json": '{"main":"worker.js"}', "worker.js": "export default 1" },
     cacheKey: "v7",
   });
-  expect(named).toMatchObject({
-    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:v7"]),
-  });
+  expect(JSON.parse(named.loaderId)).toEqual([
+    "worker",
+    PLATFORM_ID,
+    null,
+    "prj_u.iterate/",
+    "key:v7",
+  ]);
   expect(keys.at(-1)).toBe(named.loaderId);
   await expect(loadConfined(env, { source: { "lib.js": "export default 1" } })).rejects.toThrow(
     /no entry/,
@@ -281,7 +365,7 @@ test("literal modules: the key is their content hash unless the caller names a c
 test("a main module is one more element of the key, and a module identity names the code in place of the cacheKey: every source that answers it loads the same code for that module", async () => {
   const { env } = fakeLoaderEnv();
   const source = "itx.repos.get('/repos/config').modules()";
-  // the id past its kind, deploy, origin and owner
+  // the id past its kind, platform, origin and owner
   const keyOf = async (cacheKey: string, moduleIdentity?: string) => {
     const options = workerOptions(env, {
       source,
@@ -313,7 +397,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   // 1. the producer throws INSIDE getCode — workerd keeps that rejection under the id forever
   const first = await load();
   expect(first).toMatchObject({
-    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@dead"]),
+    loaderId: JSON.stringify(["worker", PLATFORM_ID, null, "prj_u.iterate/", "key:todo@dead"]),
   });
   await expect(warm.get(first.loaderId)).rejects.toThrow(/not landed/);
   expect(produced).toBe(1);
@@ -328,7 +412,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   const recovered = await load();
   expect(recovered).toMatchObject({
     loaderId: expect.stringContaining(
-      `${JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@dead"])}#1.`,
+      `${JSON.stringify(["worker", PLATFORM_ID, null, "prj_u.iterate/", "key:todo@dead"])}#1.`,
     ),
   });
   await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
@@ -379,7 +463,7 @@ test("WORKAROUND, under load: every caller that finds the id dead while its reco
       cacheKey: "c0ffee",
       invoke,
     });
-  const dead = JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:c0ffee"]);
+  const dead = JSON.stringify(["worker", PLATFORM_ID, null, "prj_u.iterate/", "key:c0ffee"]);
   // the first load's producer loses its connection, and again on its one repeat, inside getCode:
   // the id is dead
   await load();
@@ -461,7 +545,7 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
   const incarnation2 = {} as Fetcher;
   await expect(load(incarnation2)).resolves.toMatchObject({
     loaderId: expect.stringContaining(
-      `${JSON.stringify(["worker", "deploy-1", null, "prj_v.iterate/", "key:site@1"])}#1.`,
+      `${JSON.stringify(["worker", PLATFORM_ID, null, "prj_v.iterate/", "key:site@1"])}#1.`,
     ),
   });
   expect(produced).toBe(4);
@@ -526,7 +610,7 @@ test("prepare resolves the identity without asking the loader; load() is the one
   // the stored restart marker: respelling it restarts every facet once on its next wake
   expect(JSON.parse(prepared.loaderId)).toEqual([
     "facet",
-    "deploy-1",
+    PLATFORM_ID,
     null,
     ["prj_u.iterate/", "Counter"],
     expect.stringMatching(/^content:[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/),
@@ -768,15 +852,14 @@ const fakeLoaderEnv = ({ kv = fakeKv().kv }: { kv?: KVNamespace } = {}) => {
 
 type ConfinedWorkerOptions = Parameters<typeof prepareConfinedWorker>[0];
 
-/** A confined worker's options over `env`: a worker of `prj_u.iterate/` on deploy-1 with no platform
- *  origin, a fresh `itxEntrypoint` stand-in (the one cast) and literal modules nothing invokes, with
- *  what a row varies in `overrides`. */
+/** A confined worker's options over `env`: a worker of `prj_u.iterate/` with no platform origin, a
+ *  fresh `itxEntrypoint` stand-in (the one cast) and literal modules nothing invokes, with what a
+ *  row varies in `overrides`. */
 const workerOptions = (
   env: ConfinedWorkerOptions["env"],
   overrides: Partial<ConfinedWorkerOptions> & Pick<ConfinedWorkerOptions, "source">,
 ): ConfinedWorkerOptions => ({
   env,
-  deployId: "deploy-1",
   platformOrigin: null,
   itxEntrypoint: {} as Fetcher,
   kind: "worker",
@@ -839,7 +922,6 @@ const workersGetOverFailingLoader = (
   const itxEntrypoint = {} as Fetcher; // one stub per context incarnation, as the platform mints it
   const workers = workersRoot({
     env,
-    deployId: "deploy-1",
     projectId: "prj_u",
     path: "/",
     iterateContextName: `prj_u.iterate/${crypto.randomUUID()}`,
@@ -875,3 +957,15 @@ const settle = (call: unknown) =>
 
 /** An author's main module as the loader starts it: the platform's module imported first. */
 const loaded = (code: string) => `import "./node_modules/.platform/loaded-worker.js"; ${code}`;
+
+/** This build's part of every loader id (worker-loader.ts `platformCodeIdentity`): a SHA-256 of the
+ *  platform's code, the same for every load. */
+const PLATFORM_ID = JSON.parse(
+  (
+    await prepareConfinedWorker(
+      workerOptions(fakeLoaderEnv().env, {
+        source: { "package.json": '{"main":"worker.js"}', "worker.js": "export default 1" },
+      }),
+    )
+  ).loaderId,
+)[1] as string;

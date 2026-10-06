@@ -109,7 +109,6 @@ export function contextReach(args: {
       };
       return workersRoot({
         env,
-        deployId: iterateConfigOf(env).deployId,
         projectId,
         path,
         iterateContextName: nameOf(path),

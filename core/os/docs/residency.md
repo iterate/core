@@ -60,7 +60,17 @@ it). A facet started again before the context commits anything more avoids it. S
 platform makes (5, 6, `itx.facets.abort`, the call watchdog, a new loaded identity) is followed by a
 start under `blockConcurrencyWhile`, and a birth starts every facet the last incarnation called,
 before its first write: the reset ones after their abort, a claimed or first-party one as it is.
-FacetHost `FACET_START_WATCHDOG_MS` names every piece.
+A start that does not answer in 10 s is given up, and inside `blockConcurrencyWhile` that clock is
+a request's answer, never a timer of the context (FacetHost `FacetStartDeadline` says why). A start
+that fails logs `facet.start-failed` with `why` it ran
+(`birth`, `quiet`, `itx.facets.abort`, `loaded identity changed`, `call timed out`) and its
+`elapsedMs`. FacetHost `FACET_START_WATCHDOG_MS` names every piece.
+
+A loaded facet's identity is what it runs: its module graph (a published module's identity, a
+caller's key, or its content) and the platform's code (worker-loader.ts `platformCodeIdentity`),
+never the deploy. A commit that leaves the graph, such as an `AGENTS.md` edit, and a deploy that
+leaves the platform's code restart nothing. Each restart logs `facet.loaded-identity-changed`
+with the parts that moved: `source`, `platform`, or `generation` (the dead-load workaround).
 
 A birth that only an alarm caused needs the starts too. Its handler may write nothing, but the
 runtime deletes the fired alarm once the handler returns, and that is a commit. iterate/iterate#3100 skipped the
@@ -112,6 +122,9 @@ preview, 2026-09-23). So:
 | --------------------------------------------------------- | -------------------------------------------------------------- |
 | `itx/woken` payload `facetsReset`                         | 5, on the incarnation's wake record                            |
 | warn `facet.start-failed`, `facet.platform-failure-start` | a start after a reset or at birth that did not start the facet |
+| warn `facet-start-deadline.platform-failure-fetch`        | the start clock's request failed; a timer bounds the start     |
+| log `facet.loaded-identity-changed`                       | a restart onto other code; `changed` names what moved          |
+| log `worker-loader.built`, `worker-loader.produced`       | an isolate built; its modules produced, not read from ITX_KV   |
 | log `context.facets-reset-at-birth`                       | 5                                                              |
 | log `context.facets-reset-when-quiet`                     | 6                                                              |
 | alarm trace `deadlines.unclaimedFacetSweep`               | the DO's alarm pass                                            |
@@ -132,6 +145,8 @@ The unit tests are in core; the lint rule and the suites under `test/` are in it
   incarnation).
 - Workers suite, the sweep's clock: `facets.test.ts` also decides that loaded code's
   calls never restart it and a project host's HTTP always does.
+- Workers suite, a start's bound: `test/vitest/os-workers/facet-restart-watchdog-starved.test.ts`
+  (a restart under a pending timer, and the pin of workerd's timer order).
 - Deployed: `test/vitest/os/context-residency.e2e.test.ts` reads wakes across idles for 1–3, 5 and 6, the
   resets a birth names on its wake record, and that a careless facet is no longer running once its
   quiet minute is up.
