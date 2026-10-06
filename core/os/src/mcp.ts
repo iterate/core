@@ -213,14 +213,20 @@ async function buildServer(
  *  SDK's `createMcpHandler` builds a server per HTTP request), so each POST builds its own. */
 export async function mcpResponse(request: Request, env: Env, authorization: Authorization) {
   const instructed = await answersWithInstructions(request);
-  return createMcpHandler(() =>
-    buildServer(
-      env,
-      authorization,
-      platformAddressesOf(env, request).platformOrigin,
-      instructed,
-      parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),
-    ),
+  return createMcpHandler(
+    () =>
+      buildServer(
+        env,
+        authorization,
+        platformAddressesOf(env, request).platformOrigin,
+        instructed,
+        parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),
+      ),
+    // A `run` can last ten minutes (RUN_DEADLINE_MS). The SDK's default "auto" answers a 2026-07-28
+    // request as plain JSON, so its headers wait for the script. Claude Code gives up on a POST
+    // whose headers take 60 seconds ("The operation timed out."). "sse" sends the headers at once
+    // and a keep-alive every 15 seconds, as the 2025 handshake's stateless path already does.
+    { responseMode: "sse" },
   ).fetch(request);
 }
 
