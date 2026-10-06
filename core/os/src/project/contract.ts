@@ -228,7 +228,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/worker-update-failed": {
       description:
-        "Commit `commitOid` of `/repos/config` failed its publication as `generation`, and why: `main` moved on before it was published, a module that does not resolve, or a main module whose default export is no IterateConfigEntrypoint or does not construct. With `unavailable`, the platform could not finish it for now (esm.sh, a module lock, the probe's load): the commit is still owed, and published by the project's next incarnation. `itx.config` still names the publication before it. Only the platform appends it.",
+        "Commit `commitOid` of `/repos/config` failed its publication as `generation`, and why: `main` moved on before it was published, a module that does not resolve, or a main module whose default export is no IterateConfigEntrypoint or does not construct. With `unavailable`, the platform could not finish it for now (esm.sh, a module lock, the probe's load): the commit is still owed, and the platform runs its publication again 30 seconds later, twice, then in the project's next incarnation. `itx.config` still names the publication before it. Only the platform appends it.",
       payloadSchema: z.object({
         commitOid: z.string().min(1),
         generation: z.number().int().positive(),

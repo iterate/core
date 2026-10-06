@@ -49,13 +49,19 @@ import type { DomainConnectLink } from "./domain-connect.ts";
 import { configPointer, manifestOf, type ProjectPublisher } from "./publication.ts";
 
 /** How long one publication may take before the platform gives up on it for now: a publication
- *  resolves its npm dependencies from esm.sh, and a commit whose publication the platform could
- *  not finish stays owed to the project's next incarnation. */
+ *  resolves its npm dependencies from esm.sh. */
 const PUBLICATION_BUDGET_MS = 60_000;
 
 /** The waits before each attempt of one publication: at once, then after a platform failure 5 s
  *  and 30 s later, within PUBLICATION_BUDGET_MS. */
 const PUBLICATION_ATTEMPT_WAITS_MS = [0, 5_000, 30_000] as const;
+
+/** The waits before the same incarnation runs a publication again after the platform gave up on it
+ *  for now: twice, 30 s after each give-up, unless a newer commit is owed by then (it supersedes
+ *  this one) or the project is being deleted. Nothing else runs it while the context stays
+ *  resident, and a caller waiting on the commit keeps it resident. After the last give-up the
+ *  commit stays owed to the project's next incarnation. */
+const PUBLICATION_RERUN_WAITS_MS = [30_000, 30_000] as const;
 
 /** One attempt of a publication (`ProjectProcessor#attemptPublication`): its manifest admitted,
  *  or refused and why. */
@@ -167,7 +173,7 @@ export class ProjectProcessor extends StreamProcessor<
   /** The publication of the config repo: the commits owed one as the newest delivery showed them
    *  (the durable ground is `state.unpublishedCommits`, which learns of an outcome a delivery
    *  later), and the newest fact this incarnation answered or gave up on (the platform failed it
-   *  for its whole budget; the next incarnation tries again). One
+   *  for its whole budget every time it ran; the next incarnation tries again). One
    *  publication runs at a time and DRAINS, oldest first: a commit that lands while one is in
    *  flight is next, without waiting for another delivery. */
   #unpublished: ProjectState["unpublishedCommits"] = [];
@@ -484,8 +490,10 @@ export class ProjectProcessor extends StreamProcessor<
     // fact of `/repos/config` (cross-posted here by the repo facet) is answered, oldest first, as the
     // generation of its offset (`#publish`), so a return to a commit published before (B, C, then B
     // again) is a publication of its own, and a commit is owed until an outcome of ITS generation
-    // landed. An attempt lost with an incarnation is run again by the next. A state that owes
-    // nothing starts no append, and no background work to claim the context's alarm for.
+    // landed. A publication the platform gave up on for now is run again after
+    // PUBLICATION_RERUN_WAITS_MS, unless the project is being deleted; an attempt lost with an
+    // incarnation is run again by the next. A state that owes nothing starts no append, and no
+    // background work to claim the context's alarm for.
     this.#unpublished = state.unpublishedCommits;
     const publisher = this.publisher();
     if (publisher && this.#nextOwed() && !this.#publishing) {
@@ -496,7 +504,21 @@ export class ProjectProcessor extends StreamProcessor<
             // under the commit's own cause, not one deeper as a processor's other effects run: a
             // publication keeps the commit's depth, and init runs one deeper (src/cause.ts)
             const commit = owed;
-            await runningUnder(commit.cause, () => this.#publish(commit, publisher));
+            await runningUnder(commit.cause, async () => {
+              const rerunWaits = [...PUBLICATION_RERUN_WAITS_MS];
+              // a newer commit supersedes this one (main moved on: its publication could only be
+              // refused) and is next, so nothing waits behind a re-run; nor does a deletion
+              const stop = () =>
+                Boolean(this.#newestState?.deletion) ||
+                this.#unpublished.some(({ offset }) => offset > commit.offset);
+              while (!(await this.#publish(commit, publisher)) && rerunWaits.length > 0) {
+                // the wait, a second at a time, ends as soon as there is a reason to stop
+                for (let waited = 0; waited < rerunWaits[0]! && !stop(); waited += 1_000)
+                  await new Promise((resolve) => setTimeout(resolve, 1_000));
+                rerunWaits.shift();
+                if (stop()) break;
+              }
+            });
             this.#handledThrough = commit.offset;
           }
         } finally {
@@ -623,11 +645,11 @@ export class ProjectProcessor extends StreamProcessor<
    *  `project/worker-update-failed`. Both keyed by the generation, so an attempt run again lands
    *  nothing more. A platform failure is met again after 5 s and 30 s, within
    *  PUBLICATION_BUDGET_MS; then the platform gives up for now: `project/worker-update-failed` with
-   *  `unavailable`, the commit still owed. */
+   *  `unavailable`, the commit still owed. True once the outcome landed, false after a give-up. */
   async #publish(
     commit: { commitOid: string; offset: number },
     publisher: ProjectPublisher,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { commitOid } = commit;
     const generation = commit.offset;
     const giveUpAt = Date.now() + PUBLICATION_BUDGET_MS;
@@ -661,18 +683,21 @@ export class ProjectProcessor extends StreamProcessor<
       } finally {
         clearTimeout(budget);
       }
-      if (attempt.kind === "refused")
-        return landOnce(publisher, {
+      if (attempt.kind === "refused") {
+        await landOnce(publisher, {
           type: "events.iterate.com/project/worker-update-failed",
           idempotencyKey: `project/publication:${generation}`,
           payload: { commitOid, generation, error: attempt.error },
         });
+        return true;
+      }
       const { manifest } = attempt;
-      return landOnce(publisher, ...configPointer(commitOid, manifest), {
+      await landOnce(publisher, ...configPointer(commitOid, manifest), {
         type: "events.iterate.com/project/worker-updated",
         idempotencyKey: `project/publication:${generation}`,
         payload: { commitOid, generation, modules: manifest.modules },
       });
+      return true;
     }
     await publisher.appendAsPlatform({
       type: "events.iterate.com/project/worker-update-failed",
@@ -683,6 +708,7 @@ export class ProjectProcessor extends StreamProcessor<
         unavailable: true,
       },
     });
+    return false;
   }
 
   /** One attempt: `commitOid` refused when `main` has moved on from it, else its manifest admitted

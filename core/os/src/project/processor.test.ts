@@ -663,7 +663,7 @@ test.for([
   ]);
 });
 
-test("ProjectProcessor — a platform failure is met again after 5 s and 30 s with the same generation; one that outlasts the budget lands one give-up, unavailable, and this incarnation owes the tip on", async () => {
+test("ProjectProcessor — a platform failure is met again after 5 s and 30 s with the same generation; one that outlasts the budget lands a give-up, unavailable, and the publication runs again 30 s later, twice, before this incarnation owes the tip on", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const overloaded = () =>
@@ -683,21 +683,97 @@ test("ProjectProcessor — a platform failure is met again after 5 s and 30 s wi
   ]);
   expect(vi.getTimerCount()).toBe(0); // a pending timer would keep the context resident
 
+  // esm.sh fails all three attempts (0 s, 5 s, 35 s), then serves: the give-up, and 30 s later the
+  // publication, with no new delivery or incarnation to start it
+  const recoveringAfterGiveUp = fakePublisher({ aaa: {} });
+  recoveringAfterGiveUp.main = "aaa";
+  recoveringAfterGiveUp.failReadsTimes(3, overloaded);
+  deliver(processorPublishingWith(recoveringAfterGiveUp), owing(tip("aaa", 4)), unusedAppend);
+  await vi.advanceTimersByTimeAsync(35_000);
+  expect(recoveringAfterGiveUp.batches.map(summary)).toEqual([
+    ["project/worker-update-failed aaa@4"],
+  ]);
+  await vi.advanceTimersByTimeAsync(29_000);
+  expect(recoveringAfterGiveUp.batches).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(recoveringAfterGiveUp.batches.map(summary)).toEqual([
+    ["project/worker-update-failed aaa@4"],
+    ["itx.config ⇒ aaa@4", "project/worker-updated aaa@4"],
+  ]);
+  expect(vi.getTimerCount()).toBe(0);
+
   const down = fakePublisher({ aaa: {} });
   down.main = "aaa";
   down.failReadsTimes(Infinity, overloaded);
   const processor = processorPublishingWith(down);
   deliver(processor, owing(tip("aaa", 4)), unusedAppend);
-  await vi.advanceTimersByTimeAsync(60_000);
+  await vi.advanceTimersByTimeAsync(35_000);
   expect(down.batches.map(summary)).toEqual([["project/worker-update-failed aaa@4"]]);
   expect(down.batches[0]![0]).toMatchObject({
     payload: { unavailable: true, error: "esm.sh answered 503" },
   });
   expect(down.batches[0]![0]).not.toHaveProperty("idempotencyKey");
-  // this incarnation gave up on the tip: its own give-up's delivery starts nothing more
+  // its own give-up's delivery starts no second publication beside the one waiting to run again
   deliver(processor, owing(tip("aaa", 4)), unusedAppend);
-  await vi.advanceTimersByTimeAsync(60_000);
-  expect(down.batches).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  expect(down.batches.map(summary)).toEqual([
+    ["project/worker-update-failed aaa@4"],
+    ["project/worker-update-failed aaa@4"],
+    ["project/worker-update-failed aaa@4"],
+  ]);
+  expect(vi.getTimerCount()).toBe(0);
+  // this incarnation gave up on the tip: the last give-up's delivery starts nothing more
+  deliver(processor, owing(tip("aaa", 4)), unusedAppend);
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  expect(down.batches).toHaveLength(3);
+});
+
+test("ProjectProcessor — a newer commit owed after a give-up is published at once: nothing waits behind the run again, and the commit it supersedes is not run again", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const publisher = fakePublisher({ aaa: {}, bbb: {} });
+  publisher.main = "aaa";
+  publisher.failReadsTimes(3, () =>
+    Object.assign(new Error("esm.sh answered 503"), {
+      code: "UNAVAILABLE",
+      data: { kind: "overloaded" },
+    }),
+  );
+  const processor = processorPublishingWith(publisher);
+  deliver(processor, owing(tip("aaa", 4)), unusedAppend);
+  await vi.advanceTimersByTimeAsync(35_000);
+  expect(publisher.batches.map(summary)).toEqual([["project/worker-update-failed aaa@4"]]);
+  // a commit lands while the give-up waits to run again, and esm.sh serves again
+  publisher.main = "bbb";
+  deliver(processor, owing(tip("aaa", 4), tip("bbb", 7)), unusedAppend);
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(publisher.batches.map(summary)).toEqual([
+    ["project/worker-update-failed aaa@4"],
+    ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
+  ]);
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  expect(publisher.batches).toHaveLength(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("ProjectProcessor — a project being deleted does not run a publication again after the platform's give-up", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const down = fakePublisher({ aaa: {} });
+  down.main = "aaa";
+  down.failReadsTimes(Infinity, () =>
+    Object.assign(new Error("esm.sh answered 503"), {
+      code: "UNAVAILABLE",
+      data: { kind: "overloaded" },
+    }),
+  );
+  const processor = processorPublishingWith(down);
+  deliver(processor, owing(tip("aaa", 4)), unusedAppend);
+  await vi.advanceTimersByTimeAsync(35_000);
+  deliver(processor, { ...owing(tip("aaa", 4)), deletion: { offset: 6 } }, unusedAppend);
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  expect(down.batches.map(summary)).toEqual([["project/worker-update-failed aaa@4"]]);
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 test("ProjectProcessor — an event that changes the primary hostname holds the cursor until the control plane has it; one that changes nothing writes nothing", async () => {

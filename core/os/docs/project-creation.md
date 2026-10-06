@@ -39,8 +39,9 @@ subscription, the project's hosts serve its `fetch`, and a facet named by it (`i
 as its source) restarts on its next call when its own module's identity changed; a commit may drop a
 Durable Object class or its whole module, and a facet that names it fails its next call, naming it.
 A commit the probe refuses is `project/worker-update-failed` with why, and `itx.config` stays where
-it was; a platform failure is met again within a minute, then leaves the commit owed to the
-project's next incarnation. Probe a candidate with
+it was; a platform failure is met again within a minute, then the platform gives up for now
+(`project/worker-update-failed` with `unavailable`) and runs the publication again 30 s later,
+twice, before it leaves the commit owed to the project's next incarnation. Probe a candidate with
 `itx.workers.get({ source }).fetch(...)` before committing it.
 
 ## A config repo on GitHub
