@@ -35,12 +35,15 @@ const PR123 = "https://pr123-os.iterate-dev-preview.workers.dev";
 /** The smallest valid configuration: the key and one sign-in mechanism, as two override vars. */
 const MINIMAL = {
   ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
-  ITERATE__LOGIN__PASSWORD: "password",
+  ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD: "password",
+  ITERATE__LOGIN__ALLOW: '[{"everyone":{}}]',
 };
+/** `login.allow` admitting anyone, as a var. */
+const EVERYONE = MINIMAL.ITERATE__LOGIN__ALLOW;
 /** The same, as the one object. */
 const MINIMAL_BLOB = {
   ITERATE: JSON.stringify({
-    login: { password: "password" },
+    login: { methods: { password: { password: "password" } }, allow: [{ everyone: {} }] },
     secretsEncryption: { key: "secrets-key" },
   }),
 };
@@ -48,7 +51,7 @@ const MINIMAL_BLOB = {
  *  paths), the deploy id defaulted. */
 const MINIMAL_CONFIG = {
   urls: { os: "", mcp: "", dash: "https://dash.iterate.com", ingressRouting: { type: "paths" } },
-  login: { password: "password" },
+  login: { allow: [{ everyone: {} }], methods: { password: { password: "password" } } },
   posthogProjectKey: "",
   admins: [],
   adminBearer: "",
@@ -100,8 +103,8 @@ const iterateConfigRows: {
         '{"zone":"iterate.app","zoneId":"zone-1","dcvDelegationUuid":"dcv-1","reservedZones":["iterate.app","iterate.com"]}',
       ITERATE__CUSTOM_HOSTNAMES__CLOUDFLARE_API_TOKEN: "cloudflare-token",
       ITERATE__POSTHOG_PROJECT_KEY: "phc_test",
-      ITERATE__LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
-      ITERATE__LOGIN__GOOGLE: "{}",
+      ITERATE__LOGIN__METHODS__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
+      ITERATE__LOGIN__METHODS__GOOGLE: "{}",
       ITERATE__INTEGRATIONS__GOOGLE__OAUTH_CLIENT_ID: "google-id",
       ITERATE__INTEGRATIONS__GOOGLE__OAUTH_CLIENT_SECRET: "google-secret",
       ITERATE__SECRETS_ENCRYPTION__PREVIOUS_KEY: "the-old-key",
@@ -126,9 +129,12 @@ const iterateConfigRows: {
       },
       posthogProjectKey: "phc_test",
       login: {
-        password: "password",
-        emailCode: { from: "iterate <login@iterate.com>" },
-        google: { scopes: DEFAULT_GOOGLE_SIGN_IN_SCOPES },
+        allow: [{ everyone: {} }],
+        methods: {
+          password: { password: "password" },
+          emailCode: { from: "iterate <login@iterate.com>" },
+          google: { scopes: DEFAULT_GOOGLE_SIGN_IN_SCOPES },
+        },
       },
       admins: [],
       adminBearer: "admin-bearer",
@@ -167,70 +173,86 @@ const iterateConfigRows: {
     vars: { ...MINIMAL, ITERATE__URLS__INGRESS_ROUTING__TYPE: "wildcards" },
     throws: /urls\.ingressRouting\.type .*expected "subdomains" or "paths"/,
   },
-  // a mechanism to sign in with is required — a deployment nobody can sign in to is refused at boot
+  // how and who may sign in are required: a deployment open to anyone says so
   {
     vars: { ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key" },
-    throws: /^ITERATE login \(ITERATE__LOGIN\): no sign-in mechanism/,
+    throws: /^ITERATE login \(ITERATE__LOGIN\): required/,
   },
   {
-    vars: { ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key", ITERATE__LOGIN__PASSWORD: "  " },
-    throws: /no sign-in mechanism/,
+    vars: {
+      ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
+      ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD: "password",
+    },
+    throws: /^ITERATE login\.allow \(ITERATE__LOGIN__ALLOW\): required/,
+  },
+  // a mechanism to sign in with is required — a deployment nobody can sign in to is refused at boot
+  {
+    vars: { ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key", ITERATE__LOGIN__ALLOW: EVERYONE },
+    throws: /^ITERATE login\.methods \(ITERATE__LOGIN__METHODS\): no sign-in method/,
+  },
+  {
+    vars: {
+      ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
+      ITERATE__LOGIN__ALLOW: EVERYONE,
+      ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD: "  ",
+    },
+    // a blank var is unset, so the method is absent
+    throws: /no sign-in method/,
   },
   // one of the other two mechanisms alone is enough
   {
     vars: {
       ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
-      ITERATE__LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
+      ITERATE__LOGIN__ALLOW: EVERYONE,
+      ITERATE__LOGIN__METHODS__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
     },
     becomes: {
       ...MINIMAL_CONFIG,
-      login: { password: "", emailCode: { from: "iterate <login@iterate.com>" } },
+      login: {
+        ...MINIMAL_CONFIG.login,
+        methods: { emailCode: { from: "iterate <login@iterate.com>" } },
+      },
     },
   },
   // a provider's sign-in is its integration's client: on with it, off (and so no mechanism) without
   {
     vars: {
       ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
-      ITERATE__LOGIN__CLOUDFLARE: "{}",
+      ITERATE__LOGIN__ALLOW: EVERYONE,
+      ITERATE__LOGIN__METHODS__CLOUDFLARE: "{}",
       ITERATE__INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id",
       ITERATE__INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_SECRET: "cf-secret",
     },
     becomes: {
       ...MINIMAL_CONFIG,
-      login: { password: "", cloudflare: { scopes: DEFAULT_CLOUDFLARE_SCOPES } },
+      login: {
+        ...MINIMAL_CONFIG.login,
+        methods: { cloudflare: { scopes: DEFAULT_CLOUDFLARE_SCOPES } },
+      },
     },
   },
   {
-    vars: { ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key", ITERATE__LOGIN__CLOUDFLARE: "{}" },
-    throws: /no sign-in mechanism/,
+    vars: {
+      ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
+      ITERATE__LOGIN__ALLOW: EVERYONE,
+      ITERATE__LOGIN__METHODS__CLOUDFLARE: "{}",
+    },
+    throws: /no sign-in method/,
     warns: 1,
   },
   {
-    vars: { ...MINIMAL, ITERATE__LOGIN__GITHUB: "{}" },
+    vars: { ...MINIMAL, ITERATE__LOGIN__METHODS__GITHUB: "{}" },
     becomes: MINIMAL_CONFIG,
     warns: 1,
   },
-  // who may sign in: a JSON array, lowercased; a comma-separated list, an entry without an @ or an
-  // empty list is refused rather than silently admitting nobody or everybody
+  // who may sign in: a rule Access does not know, or an empty list, is refused
   {
-    vars: { ...MINIMAL, ITERATE__LOGIN__ALLOWED_EMAILS: '["*@Iterate.com", "a@b.dev"]' },
-    becomes: {
-      ...MINIMAL_CONFIG,
-      login: { password: "password", allowedEmails: ["*@iterate.com", "a@b.dev"] },
-    },
+    vars: { ...MINIMAL, ITERATE__LOGIN__ALLOW: '["*@iterate.com"]' },
+    throws: /login\.allow\.0 .*expected a rule/,
   },
   {
-    vars: { ...MINIMAL, ITERATE__LOGIN__ALLOWED_EMAILS: "*@iterate.com, *@nustom.com" },
-    throws:
-      /^ITERATE login\.allowedEmails \(ITERATE__LOGIN__ALLOWED_EMAILS\): expected a JSON array of email patterns/,
-  },
-  {
-    vars: { ...MINIMAL, ITERATE__LOGIN__ALLOWED_EMAILS: '["iterate.com"]' },
-    throws: /login\.allowedEmails\.0 .*expected email patterns/,
-  },
-  {
-    vars: { ...MINIMAL, ITERATE__LOGIN__ALLOWED_EMAILS: "[]" },
-    throws: /login\.allowedEmails .*nobody could sign in/,
+    vars: { ...MINIMAL, ITERATE__LOGIN__ALLOW: "[]" },
+    throws: /login\.allow .*nobody could sign in/,
   },
   // the platform admins: exact addresses, lowercased; a pattern is refused, never read as one
   {
@@ -253,13 +275,14 @@ const iterateConfigRows: {
       ITERATE__URLS__OS: "https://os.example.com",
       ITERATE__ADMINS: '["jonas@iterate.com"]',
     },
-    throws: /^ITERATE admins \(ITERATE__ADMINS\): not with login\.password/,
+    throws: /^ITERATE admins \(ITERATE__ADMINS\): not with login\.methods\.password/,
   },
   // …nor beside paths ingress, where a project's own code runs on the issuer's origin
   {
     vars: {
       ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
-      ITERATE__LOGIN__EMAIL_CODE__FROM: "login@example.com",
+      ITERATE__LOGIN__ALLOW: EVERYONE,
+      ITERATE__LOGIN__METHODS__EMAIL_CODE__FROM: "login@example.com",
       ITERATE__URLS__OS: "https://os.example.com",
       ITERATE__URLS__INGRESS_ROUTING: '{"type":"paths"}',
       ITERATE__ADMINS: '["jonas@iterate.com"]',
@@ -316,7 +339,10 @@ const iterateConfigRows: {
   // the key encrypts every project secret and signs every session: a blank one is refused at
   // first use, not a silent lock-out
   {
-    vars: { ITERATE__LOGIN__PASSWORD: "password" },
+    vars: {
+      ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD: "password",
+      ITERATE__LOGIN__ALLOW: EVERYONE,
+    },
     throws:
       /^ITERATE secretsEncryption\.key \(ITERATE__SECRETS_ENCRYPTION__KEY\): required, but unset or blank$/,
   },
@@ -370,7 +396,7 @@ const iterateConfigRows: {
   {
     vars: {
       ITERATE: JSON.stringify({
-        login: { password: "password" },
+        login: { methods: { password: { password: "password" } }, allow: [{ everyone: {} }] },
         secretsEncryption: { key: "secrets-key" },
         urls: { dash: "", ingressRouting: { type: "subdomains", hostname: "acme.test" } },
       }),
@@ -811,7 +837,12 @@ const expose = (config: IterateConfig) => ({
   admins: config.admins,
   login: {
     ...config.login,
-    password: config.login.password.exposeSecret(),
+    methods: {
+      ...config.login.methods,
+      ...(config.login.methods.password && {
+        password: { password: config.login.methods.password.password.exposeSecret() },
+      }),
+    },
   },
   adminBearer: config.adminBearer.exposeSecret(),
   secretsEncryption: {

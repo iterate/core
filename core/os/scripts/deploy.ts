@@ -14,8 +14,10 @@ import path from "node:path";
 import { z } from "zod";
 import { type IterateConfig, resourceNamesOf } from "../src/iterate-config.ts";
 import { build, type ConfigTemplate, templatesFromArgs } from "./build.ts";
+import { ensureCloudflareAccess } from "./cloudflare-access.ts";
 import {
   configFileInUse,
+  FOUND_BY_DEPLOY,
   HOW_TO_CHANGE_THE_CONFIG,
   readDeployment,
 } from "./iterate-config-file.ts";
@@ -112,18 +114,34 @@ export type DeployOptions = { templates: ConfigTemplate[]; check?: boolean };
  *  templates, the config in the environment. */
 export async function deploy({ templates, check = false }: DeployOptions) {
   const file = path.relative(root, configFileInUse());
-  const deployment = await readDeployment();
+  let deployment = await readDeployment();
   if (!deployment)
     throw new Error(
       `No deployment: the iterate config from ${file} has no \`cloudflare\` section. ${HOW_TO_CHANGE_THE_CONFIG}`,
     );
+  const env: Env = {
+    ...process.env,
+    CLOUDFLARE_ACCOUNT_ID: deployment.config.cloudflare!.accountId,
+  };
+  // Sign-in through Cloudflare Access: its application first, whose team and audience the Worker
+  // checks tokens against (./cloudflare-access.ts)
+  if (deployment.config.login.methods.cloudflareAccess) {
+    const found = ensureCloudflareAccess(
+      deployment.config,
+      (args) => JSON.parse(cf(args, env, true)),
+      { check },
+    );
+    process.env[FOUND_BY_DEPLOY] = JSON.stringify({
+      login: { methods: { cloudflareAccess: found } },
+    });
+    deployment = (await readDeployment())!;
+  }
   const { config, vars } = deployment;
   const cloudflare = config.cloudflare!;
   const names = resourceNamesOf(cloudflare);
   console.log(
     `the iterate config, from ${file}, as the Worker will read it:\n${printable(config)}\n${HOW_TO_CHANGE_THE_CONFIG}`,
   );
-  const env: Env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: cloudflare.accountId };
 
   await build({ templates });
   await viteBuild(root, {});

@@ -32,6 +32,7 @@
     "curve25519-js": "0.0.4",
     "es-module-lexer": "^2.1.0",
     "iterate": "workspace:*",
+    "jose": "catalog:",
     "lucide-react": "catalog:",
     "oauth4webapi": "catalog:",
     "pako": "catalog:",

@@ -25,6 +25,7 @@ import {
 } from "iterate/project-ingress";
 import type { OAuthIntegrationProvider } from "iterate/api";
 import { refuseNonPlatformWrites, sha256Hex } from "./caller.ts";
+import { EmailRule } from "./allowed-emails.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { PROJECT_CONTEXT_BIRTH_EVENTS } from "./project/context-birth-events.ts";
@@ -259,48 +260,70 @@ export const IterateConfig = z.object({
    *  posthog-js with it (issuer.functions.ts) and every `reportIssue` becomes a `$exception` in
    *  PostHog Error Tracking (posthog.ts). A public key, not a secret. Blank ⇒ no PostHog. */
   posthogProjectKey: z.string().trim().default(""),
-  /** How a person signs in. Each mechanism is on iff its block is present; `parseIterateConfig` refuses a
-   *  deployment with none (nobody could ever sign in). */
-  login: z
-    .object({
-      /** WHO MAY SIGN IN (allowed-emails.ts): email patterns, `*` for any run of characters —
-       *  `["*@iterate.com", "someone@example.com"]`, or the var
-       *  `ITERATE__LOGIN__ALLOWED_EMAILS='["*@iterate.com"]'`. Every mechanism refuses an address
-       *  it does not name, and a live grant for one stops working. Unset ⇒ everyone. */
-      allowedEmails: z
-        .array(
-          z
-            .string()
-            .trim()
-            .toLowerCase()
-            .regex(/^[^@\s]+@[^@\s]+$/, 'expected email patterns like "*@iterate.com"'),
-          { error: 'expected a JSON array of email patterns, like ["*@iterate.com"]' },
-        )
-        .min(1, "lists no pattern, so nobody could sign in — name one, or unset it")
-        .optional(),
-      /** A GLOBAL PASSWORD: anyone who knows it signs in as the email they type — the membership is
-       *  the password, the email is the name tag. The self-host default; also how the specs sign in.
-       *  Blank ⇒ off. */
-      password: redacted(z.string().trim().default("")),
-      /** A six-digit code mailed through the `EMAIL` binding (password-and-code-sign-in.ts) from `from`, an address on
-       *  a domain onboarded for Email Sending in the deployment's account. */
-      emailCode: z
-        .object({ from: z.string({ error: REQUIRED }).trim().min(1, REQUIRED) })
-        .optional(),
-      /** SIGN IN WITH A PROVIDER (identity.ts), each on iff its block is present AND the provider's
-       *  `integrations.<provider>` names the client: one OAuth client per provider serves signing in
-       *  and connecting, because a refresh token only works with the client that issued it. A
-       *  sign-in keeps its token as the person's own connection. `scopes` is what the sign-in asks
-       *  for (GitHub's are the App's permissions, so it has none). */
-      google: z
-        .object({
-          scopes: z.array(z.string().trim().min(1)).default(DEFAULT_GOOGLE_SIGN_IN_SCOPES),
+  /** How a person signs in, and who may. Required. Each mechanism is on iff its block is present;
+   *  `parseIterateConfig` refuses a deployment with none (nobody could ever sign in). */
+  login: z.object(
+    {
+      /** WHO MAY SIGN IN (allowed-emails.ts), rules that mirror Cloudflare Access's policy rules:
+       *  `[{ "email": "a@b.com" }, { "emailDomain": "b.com" }, { "everyone": {} }]`. A person may
+       *  sign in when one of them matches. Every method refuses an address the rules do not
+       *  admit, and a live grant for one stops working. Required, with no default: a deployment
+       *  open to anyone says so, `[{ "everyone": {} }]`. */
+      allow: z
+        .array(EmailRule, {
+          error: (issue) =>
+            issue.input === undefined
+              ? 'required — who may sign in, like [{ "email": "you@example.com" }], or [{ "everyone": {} }] for anyone'
+              : 'expected a JSON array of rules, like [{ "emailDomain": "iterate.com" }]',
         })
-        .optional(),
-      cloudflare: z
-        .object({ scopes: z.array(z.string().trim().min(1)).default(DEFAULT_CLOUDFLARE_SCOPES) })
-        .optional(),
-      github: z.object({}).optional(),
+        .min(1, 'lists no rule, so nobody could sign in — name one, or [{ "everyone": {} }]'),
+      /** WHO MAY NOT, even where an allow rule matches: the same rules, as Access's `exclude`. */
+      deny: z.array(EmailRule).optional(),
+      /** THE WAYS TO SIGN IN, each by name with its own settings beside it. The sign-in page offers
+       *  them in this object's key order (sign-in-methods.ts `signInMethodsOf`), and goes straight
+       *  to the one there is when it is a link. None ⇒ the deployment is refused. */
+      methods: z
+        .object({
+          /** CLOUDFLARE ACCESS (cloudflare-access-sign-in.ts): a one-time PIN Access mails, on
+           *  `/.auth/identity/cloudflare-access` alone. `{}` turns it on: `pnpm run deploy` makes
+           *  the Access application (scripts/cloudflare-access.ts) and fills `teamDomain` and `aud`;
+           *  until then the page does not offer it. */
+          cloudflareAccess: z
+            .object({
+              /** The Zero Trust team's origin, `https://<team>.cloudflareaccess.com`: the token's
+               *  issuer. */
+              teamDomain: optionalOrigin,
+              /** The Access application's audience tag, which every token it signs names. */
+              aud: z.string().trim().default(""),
+            })
+            .optional(),
+          /** A six-digit code mailed through the `EMAIL` binding (password-and-code-sign-in.ts)
+           *  from `from`, an address on a domain onboarded for Email Sending in the deployment's
+           *  account. */
+          emailCode: z
+            .object({ from: z.string({ error: REQUIRED }).trim().min(1, REQUIRED) })
+            .optional(),
+          /** A GLOBAL PASSWORD: anyone who knows it signs in as the email they type — the
+           *  membership is the password, the email is the name tag. Local dev's and the specs'. */
+          password: z
+            .object({ password: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)) })
+            .optional(),
+          /** SIGN IN WITH A PROVIDER, on when `integrations.<provider>` names its client. `scopes`
+           *  is what the sign-in asks for (GitHub's are the App's permissions, so it has none). See
+           *  identity.ts for why one client serves signing in and connecting. */
+          google: z
+            .object({
+              scopes: z.array(z.string().trim().min(1)).default(DEFAULT_GOOGLE_SIGN_IN_SCOPES),
+            })
+            .optional(),
+          github: z.object({}).optional(),
+          cloudflare: z
+            .object({
+              scopes: z.array(z.string().trim().min(1)).default(DEFAULT_CLOUDFLARE_SCOPES),
+            })
+            .optional(),
+        })
+        .prefault({}),
       /** AN ADMIN SIGNS IN THROUGH ANOTHER ISSUER (admin-sign-in.ts): the origin of an iterate
        *  deployment — prd, for a preview — whose word this one takes on who a browser is, for the
        *  addresses `admins` lists alone. The sign-in page offers "Continue with <its host>"; the
@@ -320,8 +343,9 @@ export const IterateConfig = z.object({
        *  Unset ⇒ no fake provider signs anyone in, no link pre-fills anyone, and no one-click local
        *  sign-in exists. */
       testEmailDomain: dnsName.optional(),
-    })
-    .prefault({}),
+    },
+    { error: REQUIRED },
+  ),
   /** THE PLATFORM ADMINS: exact email addresses, never a pattern — `["jonas@iterate.com"]`, or the
    *  var `ITERATE__ADMINS='["jonas@iterate.com"]'`. A person listed here may be granted the
    *  `admin` scope at consent (every project and person, 12 hours) and may sign any client in as
@@ -531,8 +555,8 @@ export function parseIterateConfigInput(input: unknown, deployId = "unversioned"
   // nobody's real data lives beside what could act as one: the global password (anyone who knows it
   // signs in as any email, a listed admin's too) or paths ingress (a project's own code runs on the
   // issuer's origin, where the issuer's cookie and its consent page are).
-  const beside = login.password.exposeSecret()
-    ? "login.password"
+  const beside = login.methods.password
+    ? "login.methods.password"
     : ingressRouting?.type === "paths"
       ? "paths ingress routing"
       : null;
@@ -549,25 +573,32 @@ export function parseIterateConfigInput(input: unknown, deployId = "unversioned"
     throw new Error(
       `${field(["login", "adminIssuer"])}: only for a preview or a test on https — urls.os must be an https workers.dev or .test origin, not ${JSON.stringify(urls.os)}`,
     );
-  // A provider's sign-in without its client is off, loudly: the rest of the deployment still runs.
-  const signIn = { ...login };
-  for (const provider of IdentityProvider.options)
-    if (signIn[provider] && !parsed.integrations[provider]) {
-      console.warn(
-        `${field(["login", provider])}: off — it signs in with integrations.${provider}'s client, which is unset`,
-      );
-      signIn[provider] = undefined;
-    }
-  if (
-    !signIn.password.exposeSecret() &&
-    !signIn.emailCode &&
-    !signIn.google &&
-    !signIn.cloudflare &&
-    !signIn.github
-  )
-    throw new Error(
-      `${field(["login"])}: no sign-in mechanism — set login.password, login.emailCode, or login.google, login.cloudflare or login.github with its integrations client`,
+  // The methods in the order they were written (the schema's output follows its own), each a
+  // provider's only with its client: without one it is off, loudly, and the rest still runs.
+  const written = z
+    .record(z.string(), z.unknown())
+    .safeParse(
+      z.object({ login: z.object({ methods: z.unknown() }) }).safeParse(input).data?.login.methods,
     );
+  const order = Object.keys(written.data || {});
+  const methods: typeof login.methods = {};
+  for (const [method, settings] of Object.entries(login.methods).sort(
+    ([a], [b]) => order.indexOf(a) - order.indexOf(b),
+  )) {
+    if (!settings) continue;
+    if (isIdentityProvider(method) && !parsed.integrations[method]) {
+      console.warn(
+        `${field(["login", "methods", method])}: off — it signs in with integrations.${method}'s client, which is unset`,
+      );
+      continue;
+    }
+    Object.assign(methods, { [method]: settings });
+  }
+  if (!Object.keys(methods).length)
+    throw new Error(
+      `${field(["login", "methods"])}: no sign-in method — set cloudflareAccess, emailCode, password, or google, github or cloudflare with its integrations client`,
+    );
+  const signIn = { ...login, methods };
   return { ...parsed, login: signIn, urls: { ...urls, ingressRouting }, deployId };
 }
 
@@ -600,6 +631,10 @@ export function resourceNamesOf(
     files: `${prefix}-files`,
     repos: `${prefix}-repos`,
   };
+}
+
+function isIdentityProvider(name: string): name is IdentityProvider {
+  return IdentityProvider.safeParse(name).success;
 }
 
 /** An origin where nobody's real data lives, so `login.testEmailDomain`, `login.adminIssuer` and

@@ -124,7 +124,8 @@ async function accountHoldingKey(usedMinutesAgo: number | null) {
   const appended: unknown[] = [];
   const env = {
     ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
-    ITERATE__LOGIN__PASSWORD: "password",
+    ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD: "password",
+    ITERATE__LOGIN__ALLOW: '[{"everyone":{}}]',
     OAUTH_KV: {
       get: async (key: string) =>
         key === `personal-access-token:${hash}` ? { userId, id: keyId } : null,

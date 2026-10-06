@@ -1,32 +1,41 @@
-// ── who may sign in ── `login.allowedEmails` (iterate-config.ts): the email patterns a deployment
-// admits, each an address with `*` for any run of characters (`*@iterate.com`, `jonas@*`), matched
-// whole and case-insensitively. Unset ⇒ every verified email. Checked at each sign-in before the
-// person is found or created (identity.ts, password-and-code-sign-in.ts) and at every grant's
-// admission and refresh (oauth.ts): a grant for an address the list no longer names stops working
-// on its next request.
+// ── who may sign in ── `login.allow` and `login.deny` (iterate-config.ts), rules that mirror
+// Cloudflare Access's (scripts/cloudflare-access.ts writes them as the Access policy): an address,
+// a domain (exactly, not its subdomains), or everyone. Checked at each sign-in and at every grant's
+// admission and refresh (oauth.ts).
+import { dnsName } from "iterate/app-config";
+import { z } from "zod";
 
-/** Whether `patterns` admit `email`; `undefined` (no list) admits everyone. */
-export function emailAllowed(patterns: readonly string[] | undefined, email: string): boolean {
-  if (!patterns) return true;
+/** One rule, as Cloudflare Access names it but in camelCase; values lowercased. */
+export const EmailRule = z.union(
+  [
+    z.strictObject({
+      email: z
+        .string()
+        .trim()
+        .toLowerCase()
+        .regex(/^[^@\s]+@[^@\s]+$/, "expected an email address"),
+    }),
+    z.strictObject({ emailDomain: dnsName }),
+    z.strictObject({ everyone: z.strictObject({}) }),
+  ],
+  {
+    error:
+      'expected a rule: { "email": "a@b.com" }, { "emailDomain": "b.com" } or { "everyone": {} }',
+  },
+);
+export type EmailRule = z.infer<typeof EmailRule>;
+
+/** Whether `rules` admit `email`: some `allow` rule matches and no `deny` rule does. The same
+ *  decision the Access policy makes from the same rules. */
+export function emailAllowed(
+  rules: { allow: readonly EmailRule[]; deny?: readonly EmailRule[] },
+  email: string,
+): boolean {
   const address = email.trim().toLowerCase();
-  return patterns.some((pattern) => patternRegExpOf(pattern).test(address));
-}
-
-const regExpByPattern = new Map<string, RegExp>();
-
-function patternRegExpOf(pattern: string): RegExp {
-  let regExp = regExpByPattern.get(pattern);
-  if (!regExp) {
-    const source = pattern
-      .trim()
-      .toLowerCase()
-      .split("*")
-      .map((literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join(".*");
-    regExp = new RegExp(`^${source}$`, "s");
-    regExpByPattern.set(pattern, regExp);
-  }
-  return regExp;
+  const matches = (rule: EmailRule) =>
+    "everyone" in rule ||
+    ("email" in rule ? rule.email === address : address.split("@")[1] === rule.emailDomain);
+  return rules.allow.some(matches) && !(rules.deny || []).some(matches);
 }
 
 /** What a refused person reads on the sign-in page. */

@@ -2,7 +2,7 @@
 // do. The route (routes/login.tsx) renders the first and hands POST /login to the second.
 
 import { errorCode, sameOriginPath, deploymentEnvironment } from "iterate/lib";
-import { ADMIN_SIGN_IN_PATH } from "./admin-sign-in.ts";
+import { signInMethodsOf } from "./sign-in-methods.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import {
   clearLoginCookie,
@@ -28,7 +28,7 @@ export async function loginState(
   const { platformOrigin } = platformAddressesOf(env, request);
   const next = sameOriginPath(search.next || "/login", platformOrigin);
   const session = await browserAuthorization(env, request);
-  return {
+  const state = {
     // which deployment this is (a PR's preview, local dev, production), which the page names
     environment: deploymentEnvironment(new URL(platformOrigin).hostname),
     next,
@@ -43,24 +43,27 @@ export async function loginState(
     error: search.error || null,
     // the email the refused post carried, so the page keeps what was typed
     email: search.email || "",
-    password: Boolean(config.login.password.exposeSecret()),
     passwordSelected: search.method === "password",
-    // The code form needs both its configuration and the mailbox binding.
-    emailSignIn: Boolean(env.EMAIL && config.login.emailCode),
-    google: config.login.google ? `/.auth/identity?next=${encodeURIComponent(next)}` : null,
-    cloudflare: config.login.cloudflare
-      ? `/.auth/identity/cloudflare?next=${encodeURIComponent(next)}`
-      : null,
-    github: config.login.github ? `/.auth/identity/github?next=${encodeURIComponent(next)}` : null,
-    // an admin through another issuer (admin-sign-in.ts): prd, on a preview
-    adminIssuer: config.login.adminIssuer
-      ? {
-          host: new URL(config.login.adminIssuer).host,
-          href: `${ADMIN_SIGN_IN_PATH}?${new URLSearchParams({ next })}`,
-        }
-      : null,
+    // every way in, in the config's order (sign-in-methods.ts); the code form needs the mailbox
+    // binding too
+    methods: signInMethodsOf(config, { next, mail: Boolean(env.EMAIL) }),
     // where a signed-in person with nowhere else to go is sent (the landing page's pointer)
     dash: config.urls.dash || null,
+  };
+  // One way in, a link (the self-host's Cloudflare Access): the page sends a signed-out person
+  // straight to it, but not back after a refusal (the page shows why) nor when a link asked for a
+  // provider
+  const [only] = state.methods;
+  return {
+    ...state,
+    straightTo:
+      state.methods.length === 1 &&
+      only?.kind === "link" &&
+      !state.signedInAs &&
+      !state.error &&
+      !state.providerHint
+        ? only.href
+        : null,
   };
 }
 

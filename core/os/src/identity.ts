@@ -35,7 +35,7 @@
 // that binding, the state and PKCE in the flow cookie are what keep another browser's callback,
 // or another person's, from adding an account to them. The control plane links the subject to them
 // (catalog.ts `addIdentity`: refused while it signs in to someone else, or while they have another
-// account of the provider); their email and their session stay as they are, `login.allowedEmails`
+// account of the provider); their email and their session stay as they are, `login.allow` and `login.deny`
 // is not asked (the account's own email is what it admits), the token is kept as a sign-in's is,
 // and the browser goes back to `next` — with `error` on it when refused.
 //
@@ -133,31 +133,31 @@ type SignedIn = {
  *  refresh endpoint. */
 function signInClientOf(config: IterateConfig, provider: IdentityProvider) {
   const { google, cloudflare, github } = config.integrations;
-  if (provider === "google" && google && config.login.google) {
+  if (provider === "google" && google && config.login.methods.google) {
     const endpoints = googleEndpointsOf(google.googleOrigin);
     return {
       clientId: google.oauthClientId,
       clientSecret: google.oauthClientSecret.exposeSecret(),
-      scopes: config.login.google.scopes,
+      scopes: config.login.methods.google.scopes,
       issuer: new URL(google.googleOrigin || "https://accounts.google.com"),
       fake: Boolean(google.googleOrigin),
       urls: endpoints.urls,
       tokenEndpoint: endpoints.tokenEndpoint,
     };
   }
-  if (provider === "cloudflare" && cloudflare && config.login.cloudflare) {
+  if (provider === "cloudflare" && cloudflare && config.login.methods.cloudflare) {
     const endpoints = cloudflareEndpointsOf(cloudflare.cloudflareOrigin);
     return {
       clientId: cloudflare.oauthClientId,
       clientSecret: cloudflare.oauthClientSecret.exposeSecret(),
-      scopes: config.login.cloudflare.scopes,
+      scopes: config.login.methods.cloudflare.scopes,
       issuer: new URL(endpoints.issuer),
       fake: Boolean(cloudflare.cloudflareOrigin),
       urls: endpoints.urls,
       tokenEndpoint: endpoints.tokenEndpoint,
     };
   }
-  if (provider === "github" && github && config.login.github) {
+  if (provider === "github" && github && config.login.methods.github) {
     const apiOrigin = githubApiOriginOf(github.githubOrigin);
     return {
       clientId: github.oauthClientId,
@@ -398,7 +398,7 @@ export async function identityResponse(request: Request, env: Env) {
         );
       user = person;
     } else {
-      if (!emailAllowed(config.login.allowedEmails, identity.email))
+      if (!emailAllowed(config.login, identity.email))
         throw new SignInRefused(EMAIL_NOT_ALLOWED_MESSAGE, "email-not-allowed");
       // The provider and its stable subject together name the person (the control plane's rule:
       // link once by verified email, then by the subject); an email change cannot change the actor.

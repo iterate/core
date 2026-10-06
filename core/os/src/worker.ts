@@ -41,6 +41,7 @@ import {
   adminSignInResponse,
 } from "./admin-sign-in.ts";
 import { localSignInResponse } from "./local-sign-in.ts";
+import { cloudflareAccessSignInResponse } from "./cloudflare-access-sign-in.ts";
 import { iterateConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./iterate-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
 import { serveProjectFileRequest } from "./context/file-urls.ts";
@@ -456,6 +457,10 @@ async function routeRequest(
   // Local dev's one click (local-sign-in.ts, `pnpm getin`): on a laptop's platform alone.
   const localSignIn = await localSignInResponse(request, env);
   if (localSignIn) return localSignIn;
+  // Sign-in through Cloudflare Access (cloudflare-access-sign-in.ts), whose application guards
+  // this one path alone: where `login.methods.cloudflareAccess` is set up.
+  const accessSignIn = await cloudflareAccessSignInResponse(request, env);
+  if (accessSignIn) return accessSignIn;
   // posthog-js's `api_host` on the issuer's own pages (routes/__root.tsx): PostHog EU through
   // this origin.
   if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });

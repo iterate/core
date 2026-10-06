@@ -38,11 +38,11 @@ const key = (id: string) => `login-code:${id}`;
 const reservedDomain = /@(example\.(com|net|org)|[^@]+\.(test|example|invalid|localhost))$/i;
 
 /** The address as the control plane keys it: trimmed, lowercased, an email at all, and one the
- *  deployment's `login.allowedEmails` admits. */
+ *  deployment's the sign-in rules (`login.allow`, `login.deny`) admit. */
 function addressOf(env: Env, email: string): string {
   const address = email.trim().toLowerCase();
   if (!z.email().safeParse(address).success) throw codedError("INVALID_INPUT", "Enter an email.");
-  if (!emailAllowed(iterateConfigOf(env).login.allowedEmails, address))
+  if (!emailAllowed(iterateConfigOf(env).login, address))
     throw codedError("INVALID_INPUT", EMAIL_NOT_ALLOWED_MESSAGE);
   return address;
 }
@@ -75,7 +75,7 @@ export async function signInWithPassword(
   password: string,
   client: string | null,
 ): Promise<{ user: UserRecord } | { error: string }> {
-  const secret = iterateConfigOf(env).login.password.exposeSecret();
+  const secret = iterateConfigOf(env).login.methods.password?.password.exposeSecret();
   if (!secret) throw codedError("UNAUTHENTICATED", "Password sign-in is not offered here.");
   const address = addressOf(env, email);
   const keys = [
@@ -140,7 +140,8 @@ export async function startLoginCode(
   client: string | null,
 ): Promise<{ setCookie: string }> {
   const config = iterateConfigOf(env);
-  if (!(env.EMAIL && config.login.emailCode))
+  const emailCode = config.login.methods.emailCode;
+  if (!(env.EMAIL && emailCode))
     throw codedError("UNAUTHENTICATED", "Email sign-in is not offered here.");
   const address = addressOf(env, email);
   if (reservedDomain.test(address))
@@ -161,7 +162,7 @@ export async function startLoginCode(
   try {
     const sent = await env.EMAIL.send({
       to: address,
-      from: config.login.emailCode.from,
+      from: emailCode.from,
       subject: `${code} is your iterate sign-in code`,
       text: `${code}\n\nEnter this code to sign in to iterate. It expires in 10 minutes.\n\nIf you did not try to sign in, ignore this email.`,
       html: `<p style="font:15px/1.5 ui-sans-serif,system-ui,sans-serif;color:#18181b;margin:0 0 8px">Enter this code to sign in to iterate:</p><p style="font:600 32px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2em;color:#18181b;margin:0 0 16px">${code}</p><p style="font:13px/1.5 ui-sans-serif,system-ui,sans-serif;color:#71717a;margin:0">It expires in 10 minutes. If you did not try to sign in, ignore this email.</p>`,
@@ -206,7 +207,7 @@ export async function finishLoginCode(
   }
   await env.OAUTH_KV.delete(key(id));
   // the list may have changed since the code went out
-  if (!emailAllowed(iterateConfigOf(env).login.allowedEmails, challenge.email))
+  if (!emailAllowed(iterateConfigOf(env).login, challenge.email))
     return { error: EMAIL_NOT_ALLOWED_MESSAGE, restart: true };
   return { user: await new ControlPlane(env).ensureUser(challenge.email) };
 }

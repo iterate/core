@@ -3,7 +3,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { configVarNameOf, unknownKeysOf } from "iterate/app-config";
+import { configVarNameOf, deepMerge, unknownKeysOf } from "iterate/app-config";
 import { z } from "zod";
 import {
   ITERATE_CONFIG_PREFIX,
@@ -28,6 +28,13 @@ export function configFileInUse() {
   return existsSync(local) ? local : path.join(root, "iterate.config.ts");
 }
 
+/** The variable the deploy puts what it found on the account in (./deploy.ts: the Access
+ *  application's team and audience), merged over the config file's export. Set by the deploy
+ *  alone, so the build's own read (../cloudflare.config.ts) sees it too. */
+export const FOUND_BY_DEPLOY = "ITERATE_FOUND_BY_DEPLOY";
+
+const PlainObject = z.record(z.string(), z.unknown());
+
 /** A deployment: its config, parsed, and the Worker's variables. */
 export type Deployment = { config: IterateConfig; vars: WorkerVars };
 
@@ -36,12 +43,14 @@ export type Deployment = { config: IterateConfig; vars: WorkerVars };
  *  config throws, naming the field and how to change it. */
 export async function readDeployment(file = configFileInUse()): Promise<Deployment | undefined> {
   const module: { default?: unknown } = await import(pathToFileURL(file).href);
-  const exported = z.record(z.string(), z.unknown()).safeParse(module.default ?? {});
+  const exported = PlainObject.safeParse(module.default ?? {});
   if (!exported.success)
     throw new Error(
       `${path.relative(root, file)} must export the iterate config, an object, as its default`,
     );
-  const input = exported.data;
+  // what the deploy found on the account for this config: its Access application (./deploy.ts)
+  const found = PlainObject.safeParse(JSON.parse(process.env[FOUND_BY_DEPLOY] || "{}"));
+  const input = deepMerge(exported.data, found.success ? found.data : {});
   if (!input.cloudflare) return undefined;
   try {
     const config = parseIterateConfigInput(input);

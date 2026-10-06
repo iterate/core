@@ -36,7 +36,7 @@ export async function localSignInResponse(request: Request, env: Env): Promise<R
     return plainRefusal("Open this link yourself: a web page cannot sign you in here.");
   const email = (url.searchParams.get("email") || "").trim().toLowerCase();
   const [local, domain] = email.split("@");
-  if (!local || domain !== login.testEmailDomain || !emailAllowed(login.allowedEmails, email))
+  if (!local || domain !== login.testEmailDomain || !emailAllowed(login, email))
     return plainRefusal(
       `Only a test person, an address under ${login.testEmailDomain}, signs in here.`,
     );

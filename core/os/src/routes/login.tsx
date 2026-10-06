@@ -1,11 +1,11 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { Fragment } from "react";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { environmentFaviconHref, type DeploymentEnvironment } from "iterate/lib";
 import { FieldSeparator } from "../components/ui/field.tsx";
 import { IterateLogo } from "../components/iterate-logo.tsx";
 import { ErrorMessage, StandaloneCard, StandalonePage } from "../components/standalone-page.tsx";
 import { CodeSignInForm } from "../components/login/code-sign-in-form.tsx";
 import { EmailSignInForm } from "../components/login/email-sign-in-form.tsx";
-import { signInProvidersOf } from "../components/login/providers.ts";
 import { RecommendedSignIn, SignInProviders } from "../components/login/sign-in-providers.tsx";
 import { SignedIn } from "../components/login/signed-in.tsx";
 import { getLoginState } from "../issuer.functions.ts";
@@ -16,7 +16,12 @@ import { loginFormResponse } from "../login.server.ts";
 export const Route = createFileRoute("/login")({
   validateSearch: loginSearchOf,
   loaderDeps: ({ search }) => search,
-  loader: ({ deps }) => getLoginState({ data: deps }),
+  loader: async ({ deps }) => {
+    const state = await getLoginState({ data: deps });
+    // Cloudflare Access is the only way in: straight there, unless a sign-in just came back refused
+    if (state.straightTo) throw redirect({ href: state.straightTo });
+    return state;
+  },
   head: ({ loaderData }) => ({
     meta: [
       { title: `Sign in to ${loaderData ? deploymentNameOf(loaderData.environment) : "iterate"}` },
@@ -91,38 +96,48 @@ function DeploymentIcon({ environment }: { environment: DeploymentEnvironment })
   );
 }
 
-/** Every sign-in this deployment offers: the email form (or, once a code is sent, its entry) and
- *  the OAuth providers — or, when the link suggested one of them (`provider_hint`), that one alone
- *  and the way back to the rest. */
+/** Every sign-in this deployment offers, as the config lists them (sign-in-methods.ts): the email
+ *  form (or, once a code is sent, its entry) and the links, in order — or, when the link suggested
+ *  one of them (`provider_hint`), that one alone and the way back to the rest. */
 function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginState>> }) {
-  const providers = signInProvidersOf(state);
+  const links = state.methods.flatMap((method) => (method.kind === "link" ? [method] : []));
   const recommended = state.codeSentTo
     ? undefined
-    : providers.find((provider) => provider.key === state.providerHint);
+    : links.find((provider) => provider.key === state.providerHint);
   if (recommended) return <RecommendedSignIn provider={recommended} everyWay={state.everyWay} />;
-  const formEnabled = state.password || state.emailSignIn;
-  const providersEnabled = providers.length > 0;
-  if (!formEnabled && !providersEnabled)
+  if (!state.methods.length)
     return <p className="text-sm">Sign-in is not configured for this deployment.</p>;
+  // consecutive links share one list; a separator between the form and the links
+  const groups: Array<(typeof state.methods)[number] | typeof links> = [];
+  for (const method of state.methods) {
+    const last = groups.at(-1);
+    if (method.kind === "link" && Array.isArray(last)) last.push(method);
+    else groups.push(method.kind === "link" ? [method] : method);
+  }
   return (
     <>
-      {state.codeSentTo ? (
-        <CodeSignInForm next={state.next} codeSentTo={state.codeSentTo} />
-      ) : formEnabled ? (
-        <EmailSignInForm
-          next={state.next}
-          email={state.email}
-          passwordEnabled={state.password}
-          codeEnabled={state.emailSignIn}
-          passwordSelected={state.passwordSelected}
-        />
-      ) : null}
-      {providersEnabled && (formEnabled || state.codeSentTo) ? (
-        <FieldSeparator className="text-xs *:data-[slot=field-separator-content]:bg-card">
-          or continue with
-        </FieldSeparator>
-      ) : null}
-      {providersEnabled ? <SignInProviders providers={providers} /> : null}
+      {groups.map((group, index) => (
+        <Fragment key={index}>
+          {index > 0 ? (
+            <FieldSeparator className="text-xs *:data-[slot=field-separator-content]:bg-card">
+              or continue with
+            </FieldSeparator>
+          ) : null}
+          {Array.isArray(group) ? (
+            <SignInProviders providers={group} />
+          ) : group.kind === "email" && state.codeSentTo ? (
+            <CodeSignInForm next={state.next} codeSentTo={state.codeSentTo} />
+          ) : group.kind === "email" ? (
+            <EmailSignInForm
+              next={state.next}
+              email={state.email}
+              passwordEnabled={group.password}
+              codeEnabled={group.code}
+              passwordSelected={state.passwordSelected}
+            />
+          ) : null}
+        </Fragment>
+      ))}
     </>
   );
 }

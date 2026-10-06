@@ -59,13 +59,14 @@ import base from "./iterate.config.ts";
 export default {
   ...base,
   cloudflare: { accountId: "<your Cloudflare account id>", resourcePrefix: "iterate" },
+  login: { methods: { cloudflareAccess: {} }, allow: [{ email: "you@example.com" }] },
 } satisfies IterateConfigInput;
 ```
 
 ```sh
 # core/os/.secrets (chmod 600)
 ITERATE__SECRETS_ENCRYPTION__KEY=<openssl rand -hex 32>
-ITERATE__LOGIN__PASSWORD=<openssl rand -hex 16>
+ITERATE__ADMIN_BEARER=<openssl rand -hex 32>
 ```
 
 A section the file sets replaces the environment's whole: spread `base.<section>` into it to keep
@@ -114,16 +115,25 @@ can never act as whoever opens it.
 For apps on an origin of their own, or people who don't all trust each other, give the deployment
 a [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
 
-## Other sign-in methods
+## Sign-in
 
-The recipe signs people in with one password (`login.password`). To add Google, Cloudflare or
-GitHub sign-in, or mailed codes, add `login.google`, `login.cloudflare`, `login.github` or
-`login.emailCode` to the config (`iterate.config.local.ts`, or `ITERATE`), and deploy again. A provider's sign-in is `{}` (or `{ scopes }`)
-and signs in with that provider's integration client, which the person's connection then uses too:
-`integrations.cloudflare` takes `{ oauthClientId, oauthClientSecret }` from your own OAuth client;
-register `<your-origin>/.auth/identity/cloudflare/callback` and
-`<your-origin>/api/integrations/cloudflare/callback`, and configure the client for
-`response_types: ["code", "id_token"]` and the `user-details.read` scope.
+`login.methods` lists the ways people sign in, in the sign-in page's order. `login.allow`
+(required) and `login.deny` say who may, in rules that mirror Cloudflare Access's:
+`{ "email": "a@b.com" }`, `{ "emailDomain": "b.com" }` (that domain exactly) or `{ "everyone": {} }`.
+
+- `cloudflareAccess: {}`, the default: Cloudflare mails a one-time code, so no password and no mail
+  domain. The deploy makes an Access application on `/.auth/identity/cloudflare-access` alone, its
+  policy `login.allow` and `login.deny`, and the account's Zero Trust organization if it has none.
+  Each person who signs in takes one Zero Trust seat.
+- `emailCode: { from }`: a mailed code from an address on a domain onboarded for Email Sending.
+- `password: { password }` (secret: `ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD`): one password
+  for everyone, the email only a name tag. For local dev and test deployments.
+- `google: {}`, `github: {}`, `cloudflare: {}` (or `{ scopes }`): sign-in with that provider's
+  integration client, which the person's connection then uses too. `integrations.cloudflare` takes
+  `{ oauthClientId, oauthClientSecret }` from your own OAuth client; register
+  `<your-origin>/.auth/identity/cloudflare/callback` and
+  `<your-origin>/api/integrations/cloudflare/callback`, and configure the client for
+  `response_types: ["code", "id_token"]` and the `user-details.read` scope.
 
 ## Integrations
 

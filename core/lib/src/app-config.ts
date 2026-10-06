@@ -5,7 +5,7 @@
 // value left out takes its schema's default.
 //
 // Any key can also be set ALONE as a var: the name, then the path, `__` before every segment and
-// each segment in SNAKE_CASE: `ITERATE__URLS__OS`, `ITERATE__LOGIN__PASSWORD`,
+// each segment in SNAKE_CASE: `ITERATE__URLS__OS`, `ITERATE__SECRETS_ENCRYPTION__KEY`,
 // `ITERATE_APP__URLS__OS`. The parser merges it on top of the object, so a deployment's vars and its
 // secrets compose, and a laptop's gitignored `.dev.vars` names one local origin without restating
 // the rest. A blank var is unset. A key the schema does not name, in the object or as a var, is
@@ -158,7 +158,7 @@ function objectOf(value: string | undefined, prefix: string): PlainObject {
 }
 
 /** The `<prefix>__*` overrides as one nested object: `__` separates path segments and each
- *  segment's SNAKE_CASE becomes camelCase (`ITERATE__LOGIN__EMAIL_CODE__FROM` → `login.emailCode.from`).
+ *  segment's SNAKE_CASE becomes camelCase (`ITERATE__LOGIN__METHODS__EMAIL_CODE__FROM` → `login.methods.emailCode.from`).
  *  A value that reads as JSON (`true`, `false`, `null`, an object, an array, a quoted string) is
  *  parsed; anything else is the string itself. The shallower path goes first, so a field
  *  (`ITERATE__CUSTOM_HOSTNAMES__CLOUDFLARE_API_TOKEN`) lands on the object its parent sets
@@ -211,14 +211,15 @@ function overrideValueOf(value: string): unknown {
 }
 
 /** `overrides` over `base`, plain objects merged key by key; anything else replaced whole, and an
- *  undefined override leaves the base's value. */
+ *  undefined override leaves the base's value (at any depth). */
 export function deepMerge(base: PlainObject, overrides: PlainObject): PlainObject {
   const merged = { ...base };
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) continue;
     const existing = merged[key];
-    merged[key] =
-      isPlainObject(existing) && isPlainObject(value) ? deepMerge(existing, value) : value;
+    merged[key] = isPlainObject(value)
+      ? deepMerge(isPlainObject(existing) ? existing : {}, value)
+      : value;
   }
   return merged;
 }

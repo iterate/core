@@ -118,7 +118,7 @@ another account of that provider. `session.info().signInProviders` says which pr
 added. It keeps the token as a sign-in does, and the person stays signed in as they were, back on
 `next` (`?error=` when refused). Their email never changes, then or on a later sign-in with the
 added account (the one email write, queries/users.sql `updateUserEmail`, refuses it in its `where`),
-and `login.allowedEmails` asks nothing of the added account's
+and `login.allow` asks nothing of the added account's
 own address; signing in with it later is an ordinary sign-in, which does.
 
 A project uses a member's own account when they connect it there, on the project's root:

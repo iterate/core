@@ -147,7 +147,7 @@ export default defineConfig(async ({ mode }) => {
         AI: bindings.ai({ dev: { remote: true } }),
         BROWSER: bindings.browser({ dev: { remote: true } }),
         // Email Sending: the sign-in code's way out (src/password-and-code-sign-in.ts), from
-        // `login.emailCode.from`.
+        // `login.methods.emailCode.from`.
         EMAIL: bindings.sendEmail(),
         // The Worker Loader that runs each project's confined config worker and agents.
         LOADER: bindings.workerLoader(),
@@ -196,8 +196,12 @@ function localDevConfig() {
         dash: "",
       },
       login: {
-        password: "dev",
-        emailCode: { from: "iterate <login@localhost>" },
+        methods: {
+          password: { password: "dev" },
+          emailCode: { from: "iterate <login@localhost>" },
+        },
+        // a laptop's platform: anyone with the password
+        allow: [{ everyone: {} }],
         // the test people's (getin's, the specs'): a sign-in link naming one pre-fills an admin's
         // "Sign in as someone else" (consent.ts), and it opens `pnpm getin`'s one-click
         // `/.auth/local-sign-in` (src/local-sign-in.ts)

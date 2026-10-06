@@ -532,7 +532,7 @@ export class SessionRpcTarget extends RpcTarget {
       // as identity.ts `signInClientOf`: the sign-in's block, and the integration's client it uses
       signInProviders: IdentityProvider.options.filter(
         (provider) =>
-          Boolean(this.#input.iterateConfig.login[provider]) &&
+          Boolean(this.#input.iterateConfig.login.methods[provider]) &&
           Boolean(this.#input.iterateConfig.integrations[provider]),
       ),
     };

@@ -74,17 +74,22 @@ import base from "./iterate.config.ts";
 export default {
   ...base,
   cloudflare: { accountId: "<the account from step 2>", resourcePrefix: "iterate" },
+  // sign-in: Cloudflare Access mails a one-time code to an address it admits
+  login: { methods: { cloudflareAccess: {} }, allow: [{ email: "<the user's email>" }] },
 } satisfies IterateConfigInput;
 ```
 
 `resourcePrefix` is `iterate`, unless the account already has an iterate; it names the Worker and
 its D1, R2 and Artifacts namespace.
 
+People sign in with Cloudflare Access: they type their email, and Cloudflare mails them a one-time
+code. No password exists and no mail domain is needed. `login.allow` says who may sign in:
+`{ email: "a@b.com" }` for one address, `{ emailDomain: "b.com" }` for everyone at a domain. Ask the user for their email; add others
+they name.
+
 `core/os/.secrets` (mode 600) holds the secrets, one `NAME=value` line each. Each name is the
 variable of a config field:
 
-- `ITERATE__LOGIN__PASSWORD`: generated, letters and digits. Anyone who has it can sign in as any
-  email they type.
 - `ITERATE__ADMIN_BEARER`: `openssl rand -hex 32`. Operator access to every project over `/api`
   (`/mcp` refuses it). You use it to find the user's project.
 - `ITERATE__SECRETS_ENCRYPTION__KEY`: `openssl rand -hex 32`. It encrypts project secrets at rest; losing it
@@ -92,10 +97,7 @@ variable of a config field:
 
 Leave every other field to its default: projects as paths on the Worker's own workers.dev origin,
 iterate's dash. Generate the values with a script that writes the file and prints nothing. Never
-print them in chat. When the user needs the password, copy it:
-`sed -n 's/^ITERATE__LOGIN__PASSWORD=//p' core/os/.secrets | tr -d '\n' | pbcopy`. Then tell them
-it's on their clipboard, and that it came from `core/os/.secrets` (give its absolute path) so they
-can find it later.
+print them in chat.
 
 To change a value or a default later, set it in the environment (`ITERATE`, `ITERATE__*`) or in
 `iterate.config.local.ts`. The user may keep the secrets in a secrets manager instead (Doppler,
@@ -109,8 +111,10 @@ details.
 pnpm run deploy
 ```
 
-It checks the config, builds the Worker, makes the D1 database and the R2 bucket by name, deploys,
-and migrates the D1, which holds the users, organizations and projects. It prints the Worker's
+It checks the config, makes the sign-in's Cloudflare Access application, builds the Worker, makes
+the D1 database and the R2 bucket by name, deploys, and migrates the D1, which holds the users,
+organizations and projects. If Cloudflare refuses to make the Zero Trust organization, the deploy
+prints a link where the user turns Zero Trust on once; then deploy again. It prints the Worker's
 `workers.dev` URL: that is the origin. The Artifacts namespace is made by the first project.
 `pnpm run deploy --check` runs everything but the deploy, touching nothing.
 
@@ -121,7 +125,8 @@ To update: `git pull`, `pnpm install`, `pnpm run deploy`.
 Signing in at the origin creates nothing: the organization and project are created on the consent
 page, when an app connects. So send the user to the dash's connect page,
 `https://dash.iterate.com/.auth/connect?issuer=<origin>` (the origin's landing page links there too).
-They click Continue, sign in with any email and the password, then name the organization and project
+They click Continue, sign in with their email and the code Cloudflare mails them, then name the
+organization and project
 on the consent page. Wait for them, then find the slug and the email they signed in with yourself,
 with the admin bearer, which `--env-file=.secrets` reads so it never appears in a command (from
 `iterate/core/os`, where the SDK resolves). Ask only if there are several:
@@ -142,45 +147,11 @@ drop the issuer too, so don't send the user through them.
 
 ## 7. Verify
 
-`/mcp` takes a person's bearer, so verify it as the user: sign in with their email and the password,
-and mint a personal access token for their project that expires in an hour (what the dash's
-Sessions page does). From `iterate/core/os`, where capnweb resolves, with the password from
-`.secrets`:
-
-```bash
-TOKEN=$(node --env-file=.secrets --eval 'import("capnweb").then(async ({ newHttpBatchRpcSession }) => {
-  const [origin, email, slug] = process.argv.slice(1);
-  const login = await fetch(`${origin}/login`, { method: "POST", redirect: "manual", headers: { origin },
-    body: new URLSearchParams({ email, password: process.env.ITERATE__LOGIN__PASSWORD, next: "/" }) });
-  const cookie = login.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
-  const account = () => newHttpBatchRpcSession(new Request(`${origin}/api`, { headers: { origin, cookie } }))
-    .authenticate({ type: "from-server-cookie" });
-  const project = (await account().projects.list()).find((p) => p.slug === slug);
-  const { token } = await account().grants.mint({ name: "setup check", projects: [project.id], expiresAt: Date.now() + 3600_000 });
-  console.log(token); })' <origin> <email> <slug>)
-```
-
-`/mcp` is stateless streamable HTTP. The token reaches one project, so `project` may be omitted:
-
-```bash
-jq -nc --arg s 'async (itx) => ({ who: await itx.whoami(), files: await itx.repos.get("/repos/config").listFiles() })' \
-  '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"run",arguments:{script:$s}}}' |
-curl -s <origin>/mcp -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -H 'accept: application/json, text/event-stream' -d @-
-```
-
-Expect the project's id, slug and URL, plus the config repo's files. Then revoke the key: it is the
-user's, and the check is done. A key can end itself (`logout`), so no sign-in is needed:
-
-```bash
-TOKEN=$TOKEN node --eval 'import("capnweb").then(async ({ newHttpBatchRpcSession }) => {
-  await newHttpBatchRpcSession(new Request(`${process.argv[1]}/api`, { headers: { authorization: `Bearer ${process.env.TOKEN}` } }))
-    .authenticate({ type: "bearer", token: process.env.TOKEN }).logout(); })' <origin>
-```
-
-`repo /repos/config: not created` means project creation failed. Check the project's page in the
-dash for the reason; without Artifacts access (step 3) it is Artifacts'. Once that is fixed, have
-the user create the project again from the dash's projects page. That starts a new attempt.
+Step 6's admin check proved `/api`. `/mcp` takes a person's bearer, so the agent you connect in
+step 8 is the check: its first `run` call proves `/mcp` as the user. `repo /repos/config: not
+created` there means project creation failed. Check the project's page in the dash for the reason;
+without Artifacts access (step 3) it is Artifacts'. Once that is fixed, have the user create the
+project again from the dash's projects page. That starts a new attempt.
 
 ## 8. Connect the user's agents
 
@@ -190,7 +161,7 @@ the user create the project again from the dash's projects page. That starts a n
   user's other clients; the final message tells them how.
 - Registering may open the sign-in page by itself (e.g. `codex mcp add` does). If it does, don't also
   `open` it or run a separate login command: that pops open the same page twice and confuses the user.
-- The user signs the client in through the browser (any email plus the password). E.g. in Claude
+- The user signs the client in through the browser (their email and the code Cloudflare mails). E.g. in Claude
   Code: `/mcp`, pick the server, authenticate; after that, `claude mcp list`/`codex mcp list` shows it as connected.
 - Then try the server's `run` tool in this session straight away. Some hosts attach a newly added
   server once it's signed in (e.g. Claude Desktop's Code tab does), so look for it among your tools
@@ -198,7 +169,7 @@ the user create the project again from the dash's projects page. That starts a n
   needed when the token reaches one project. If the tool isn't there, the client only loads servers
   at startup. Tell the user to start a new session and ask it to run the same check.
 - Finish with one message that has some things to get started with (for links, show them in full so the user gets familiar with them):
-  - `<origin>/mcp` (remote HTTP) for other clients, where the password lives, and that each client signs in the same way;
+  - `<origin>/mcp` (remote HTTP) for other clients, and that each client signs in the same way (their email and a mailed code);
   - the dash: `https://dash.iterate.com/.auth/connect?issuer=<origin>`;
   - voice: `https://voice.iterate.com/.auth/connect?issuer=<origin>`, to talk to the project from
     the laptop mic; the page asks for an OpenAI key the first time.

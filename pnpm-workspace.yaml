@@ -21,6 +21,7 @@ catalog:
   class-variance-authority: ^0.7.1
   cn: ^0.4.0
   esbuild: ^0.28.2
+  jose: 6.2.12
   json5: ^2.2.3
   lucide-react: ^1.48.0
   oauth4webapi: ^3.8.8

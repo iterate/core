@@ -53,7 +53,7 @@ device. It is not an OAuth token, so it has no single audience, and one key work
   no `content-length`, such as server-sent events) on a project's host, which the edge relays for
   any bearer with a grant (`src/project-host-lease.ts`). Two things run to their end: an MCP
   `run` already executing (at most ten minutes), and a response of known length already being
-  sent. A key also stops working, like any grant, once the deployment's `login.allowedEmails` no
+  sent. A key also stops working, like any grant, once the deployment's sign-in rules (`login.allow`, `login.deny`) no
   longer names its person's email.
 - **Refusals.** A refused key is logged as `oauth.refusal` with `category: "protected-resource"`
   and a `reason`: `token_unknown_or_expired` for a malformed, forged, revoked or expired key, and

@@ -14,7 +14,11 @@ import { readDeployment, workerVarsOf } from "./iterate-config-file.ts";
 /** A deployment's config as a file writes it: plain fields beside secret ones, one of them blank. */
 const INPUT = {
   cloudflare: { accountId: "account-1", resourcePrefix: "acme-os" },
-  login: { password: "p" },
+  // two ways in, the password's secret inside its method's settings
+  login: {
+    methods: { emailCode: { from: "iterate <login@acme.test>" }, password: { password: "p" } },
+    allow: [{ emailDomain: "acme.test" }],
+  },
   secretsEncryption: { key: "the-key", previousKey: "" },
   adminBearer: "the-bearer",
   integrations: {
@@ -37,12 +41,16 @@ test("workerVarsOf: each set secret field is a secret of its own, named by its p
     "ITERATE__INTEGRATIONS__GITHUB__OAUTH_CLIENT_SECRET",
     "ITERATE__INTEGRATIONS__GITHUB__PRIVATE_KEY",
     "ITERATE__INTEGRATIONS__GITHUB__WEBHOOK_SECRET",
-    "ITERATE__LOGIN__PASSWORD",
+    "ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD",
     "ITERATE__SECRETS_ENCRYPTION__KEY",
   ]);
   expect(JSON.parse(vars.ITERATE)).toEqual({
     cloudflare: { accountId: "account-1", resourcePrefix: "acme-os" },
-    login: {},
+    // the methods, in order, without the password's secret
+    login: {
+      methods: { emailCode: { from: "iterate <login@acme.test>" }, password: {} },
+      allow: [{ emailDomain: "acme.test" }],
+    },
     secretsEncryption: {},
     integrations: { github: { appId: "1", appSlug: "acme", oauthClientId: "Iv1.acme" } },
   });
@@ -51,6 +59,9 @@ test("workerVarsOf: each set secret field is a secret of its own, named by its p
   expect(onWorker.integrations.github?.webhookSecret.exposeSecret()).toBe("true");
   expect(onWorker.integrations.github?.privateKey.exposeSecret()).toBe("key line 1\nkey line 2");
   expect(onWorker.secretsEncryption.key.exposeSecret()).toBe("the-key");
+  expect(onWorker.login.methods.password?.password.exposeSecret()).toBe("p");
+  expect(Object.keys(onWorker.login.methods)).toEqual(["emailCode", "password"]);
+  expect(vars.ITERATE).not.toContain('"p"');
 });
 
 test("workerVarsOf: a key the schema does not name, an array's element's too, never reaches the plain var", () => {
@@ -69,7 +80,10 @@ test("workerVarsOf: a key the schema does not name, an array's element's too, ne
       ...INPUT.cloudflare,
       workerRoutes: [{ pattern: "os.acme.test/*", zone: "acme.test" }],
     },
-    login: {},
+    login: {
+      methods: { emailCode: { from: "iterate <login@acme.test>" }, password: {} },
+      allow: [{ emailDomain: "acme.test" }],
+    },
     secretsEncryption: {},
     integrations: { github: { appId: "1", appSlug: "acme", oauthClientId: "Iv1.acme" } },
   });
@@ -86,7 +100,7 @@ test("readDeployment: a malformed config names the field, both its spellings, an
   await expect(
     readDeployment(
       configFile(
-        'export default { cloudflare: { accountId: "a", resourcePrefix: "acme-os" }, login: { password: "p" } };',
+        'export default { cloudflare: { accountId: "a", resourcePrefix: "acme-os" }, login: { methods: { password: { password: "p" } }, allow: [{ everyone: {} }] } };',
       ),
     ),
   ).rejects.toThrow(

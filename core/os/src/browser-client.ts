@@ -4,12 +4,16 @@ import { oauthResponse } from "./api.ts";
 import type { Env } from "./env.ts";
 import { authorizationForToken } from "./oauth.ts";
 
-/** Platform cookies never enter userspace or its outgoing requests. */
+/** Platform cookies never enter userspace or its outgoing requests: the issuer's, and the token
+ *  Cloudflare Access sets for its sign-in path (cloudflare-access-sign-in.ts), which project code
+ *  on the same origin could replay. */
 export function appCookies(cookie: string | null) {
   return (cookie || "")
     .split(";")
     .map((part) => part.trim())
-    .filter((part) => part && !part.startsWith("__Host-itx-"))
+    .filter(
+      (part) => part && !part.startsWith("__Host-itx-") && !part.startsWith("CF_Authorization="),
+    )
     .join("; ");
 }
 

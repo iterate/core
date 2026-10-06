@@ -57,6 +57,9 @@ catalogs:
     esbuild:
       specifier: ^0.28.2
       version: 0.28.2
+    jose:
+      specifier: 6.2.12
+      version: 6.2.12
     json5:
       specifier: ^2.2.3
       version: 2.2.3
@@ -214,6 +217,9 @@ importers:
       iterate:
         specifier: workspace:*
         version: link:../lib
+      jose:
+        specifier: 'catalog:'
+        version: 6.2.12
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(react@19.3.0)

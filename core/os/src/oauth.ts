@@ -146,7 +146,7 @@ function grantAdminsStillListed(
 }
 
 /** Whether `grant` still admits its bearer: its token unexpired, its deadline not passed, its
- * person's email one `login.allowedEmails` admits, its admins still listed (`grantAdminsStillListed`),
+ * person's email one the sign-in rules (`login.allow`, `login.deny`) admit, its admins still listed (`grantAdminsStillListed`),
  * and no end on the person's account. A fresh read of the account on each admission — never memoized: provider
  * KV expiry/deletion alone cannot deny a token during propagation or a refresh racing with logout,
  * and a memo here would let a revoked grant through for its life. (The live socket's 30 s
@@ -161,7 +161,7 @@ async function liveGrantAccount(env: Env, grant: AccessGrant): Promise<AccountSt
   if (
     grant.expiresAt <= Date.now() ||
     grant.deadline <= Date.now() ||
-    !emailAllowed(iterateConfigOf(env).login.allowedEmails, grant.email) ||
+    !emailAllowed(iterateConfigOf(env).login, grant.email) ||
     !grantAdminsStillListed(env, grant)
   )
     return null;
@@ -454,7 +454,7 @@ async function authorizationOf(
 /** A personal access token's admission: the index holds the bearer's SHA-256 under the key it
  *  names (personal-access-token.ts), then a fresh read of the person's account on every request, as
  *  `grantIsLive` makes for an OAuth grant: the key's record, with that SHA-256, not ended, not
- *  expired, and for an email `login.allowedEmails` admits. The bearer acts as the person, with
+ *  expired, and for an email the sign-in rules (`login.allow`, `login.deny`) admit. The bearer acts as the person, with
  *  `iterate` alone, on the projects the key covers: a key manages no sessions and no
  *  organizations, so a leaked one mints no other. A malformed, forged or unknown key, a wrong
  *  secret or a revoked key (its index entry gone) is `token_unknown_or_expired`, like a token the
@@ -481,10 +481,7 @@ async function personalAccessTokenAdmission(
     return { ok: false, reason: "token_unknown_or_expired" };
   const expiresAt = key.expiresAt ?? Infinity;
   if (expiresAt <= Date.now()) return { ok: false, reason: "token_unknown_or_expired" };
-  if (
-    account.endedGrants[named.id] ||
-    !emailAllowed(iterateConfigOf(env).login.allowedEmails, key.email)
-  )
+  if (account.endedGrants[named.id] || !emailAllowed(iterateConfigOf(env).login, key.email))
     return { ok: false, reason: "grant_not_live" };
   const grant: AccessGrant = {
     kind: "personal",
@@ -537,7 +534,7 @@ async function grantLifetime(
     grant.kind === "issuer" && input.grantType === GrantType.AUTHORIZATION_CODE;
   if (!signInsOwnExchange && (await accountStateOf(env, input.userId)).endedGrants[input.grantId])
     throw refused("grant_ended", "The session is no longer active.");
-  if (!emailAllowed(iterateConfigOf(env).login.allowedEmails, grant.email))
+  if (!emailAllowed(iterateConfigOf(env).login, grant.email))
     throw refused("email_not_allowed", "The session is no longer active.");
   if (!grantAdminsStillListed(env, { ...grant, scope: input.scope }))
     throw refused("admin_not_listed", "The session is no longer active.");

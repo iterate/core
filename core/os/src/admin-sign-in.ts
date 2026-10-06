@@ -138,7 +138,7 @@ export async function adminSignInCallbackResponse(request: Request, env: Env, is
     console.warn({ event: "admin-sign-in.refused-not-admin", email: checked.email });
     return refused(`${checked.email} is not an admin here. Sign in another way.`, checked.next);
   }
-  if (!emailAllowed(config.login.allowedEmails, checked.email))
+  if (!emailAllowed(config.login, checked.email))
     return refused(EMAIL_NOT_ALLOWED_MESSAGE, checked.next);
   const user = await watchSignInStep(
     "ensure-user",
