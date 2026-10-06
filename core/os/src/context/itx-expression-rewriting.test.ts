@@ -1453,6 +1453,7 @@ test.for([
     args: [UPGRADE],
     loads: {
       workersOf: "/provider",
+      callerPath: "/agents/a",
       spec: { source: { "worker.js": "source" } },
       steps: [["fetch", UPGRADE]],
     },
@@ -1466,17 +1467,22 @@ test.for([
       ],
     },
     call: "itx.cd('/').config.deliverEvent(1)",
-    loads: { workersOf: "/", steps: [["deliverEvent", 1]] },
+    loads: { workersOf: "/", callerPath: "/x/y", steps: [["deliverEvent", 1]] },
   },
   {
     name: "a literal source in the root's rule, through the parent link",
     own: ["itx ⇒ itx.cd('/')"],
     others: { "/": ["itx.voice ⇒ itx.builtins.workers.get({ source: { 'worker.js': 'v' } })"] },
     call: "itx.voice.run()",
-    loads: { workersOf: "/", spec: { source: { "worker.js": "v" } }, steps: [["run"]] },
+    loads: {
+      workersOf: "/",
+      callerPath: "/agents/a",
+      spec: { source: { "worker.js": "v" } },
+      steps: [["run"]],
+    },
   },
 ])(
-  "workers.get through another context's rule loads here with that context's authority — $name",
+  "workers.get through another context's rule loads here with that context's authority, and knows where the call came from — $name",
   async ({ call, args = [], loads, ...options }) => {
     const { resolver, located } = acrossContexts(options);
     expect(await resolver.invoke(call, ...args)).toMatchObject(loads);

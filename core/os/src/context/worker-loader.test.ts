@@ -6,6 +6,7 @@ import type { ItxExpression, ItxExpressionStep } from "iterate/expression";
 import { codedError, errorCode } from "iterate/lib";
 import { failureKind } from "iterate/platform-retry";
 import { expect, test, vi } from "vitest";
+import type { Caller } from "../caller.ts";
 import { workersRoot } from "./built-ins.ts";
 import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec } from "./paths.ts";
@@ -688,6 +689,22 @@ test.for([
   },
 );
 
+test("an RPC method is called through callWithCause with the context the call came from: the caller's stamped path, else the context the worker speaks for; never on fetch", async () => {
+  const fromChild = workersGetOverFailingLoader(0, defect, {
+    principal: null,
+    app: true,
+    path: "/child",
+  });
+  expect(await fromChild.call(["hello"])).toBe("hello");
+  await fromChild.call(["fetch", new Request("https://site.test/")]);
+  const fromHere = workersGetOverFailingLoader(0, defect);
+  expect(await fromHere.call(["hello"])).toBe("hello");
+  expect({ fromChild: fromChild.callerPaths, fromHere: fromHere.callerPaths }).toEqual({
+    fromChild: ["/child"],
+    fromHere: ["/"],
+  });
+});
+
 /** The site ingress's producer expression: the config repo's tree at one commit. */
 const site: ItxExpression = [
   "itx",
@@ -781,13 +798,19 @@ const loadConfined = async (...args: Parameters<typeof workerOptions>) => {
  *  through the resolve step's awaits), whatever its depth in microtasks. */
 const settled = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-/** `itx.workers.get(spec)` of a fresh context, one `call(step)` per call, over a Worker Loader whose
- *  first `failingEntries` entries (by id, in the order it was asked for them) reject every call with
- *  `failure`, and whose later ones answer: a fetch with its request's method, an RPC `hello` with
- *  "hello". `generations` is the generation of each entry a call was served, in order. */
-const workersGetOverFailingLoader = (failingEntries: number, failure: Error) => {
+/** `itx.workers.get(spec)` of a fresh context at `/`, one `call(step)` per call by `caller`, over a
+ *  Worker Loader whose first `failingEntries` entries (by id, in the order it was asked for them)
+ *  reject every call with `failure`, and whose later ones answer: a fetch with its request's method,
+ *  an RPC `hello` with "hello". `generations` is the generation of each entry a call was served, in
+ *  order; `callerPaths` the path each RPC method's `callWithCause` was handed. */
+const workersGetOverFailingLoader = (
+  failingEntries: number,
+  failure: Error,
+  caller: Caller = { principal: null, app: true },
+) => {
   const entries: string[] = [];
   const generations: number[] = [];
+  const callerPaths: unknown[] = [];
   const env = {
     LOADER: {
       get: (id: string) => {
@@ -797,10 +820,16 @@ const workersGetOverFailingLoader = (failingEntries: number, failure: Error) => 
           if (entries.indexOf(id) < failingEntries) throw failure;
           return value;
         };
+        const methods: Record<string, () => Promise<string>> = { hello: () => answer("hello") };
         return {
           getEntrypoint: () => ({
             fetch: async (request: Request) => new Response(await answer(request.method)),
-            hello: () => answer("hello"),
+            ...methods,
+            // as loaded-worker.ts gives every loaded WorkerEntrypoint, for the one-step walks here
+            callWithCause: (_cause: unknown, [[method]]: [string][], callerPath: unknown) => {
+              callerPaths.push(callerPath);
+              return methods[method]!();
+            },
           }),
         };
       },
@@ -817,7 +846,7 @@ const workersGetOverFailingLoader = (failingEntries: number, failure: Error) => 
     platformOrigin: () => null,
     itxEntrypoint: () => itxEntrypoint,
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
-    caller: () => ({ principal: null, app: true }),
+    caller: () => caller,
     delivery: () => undefined,
     cause: () => undefined,
     namedWorker: () => Promise.reject(new Error("a literal source names no worker")),
@@ -825,6 +854,7 @@ const workersGetOverFailingLoader = (failingEntries: number, failure: Error) => 
   const source = { "package.json": '{"main":"worker.js"}', "worker.js": "export default {}" };
   return {
     generations,
+    callerPaths,
     call: (step: ItxExpressionStep) => workers.get({ source }).invoke([step]),
   };
 };

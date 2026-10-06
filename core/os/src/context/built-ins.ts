@@ -2463,7 +2463,9 @@ export function workersRoot(deps: {
   platformOrigin: () => string | null;
   itxEntrypoint: () => Fetcher;
   invoke: (call: ItxExpression) => Promise<unknown>;
-  /** Who makes the call: what a loaded worker's `fetch` reads off its Request. */
+  /** Who makes the call: what a loaded worker's `fetch` reads off its Request, and where every
+   *  other method's call came from (`Caller.path`, else `path`), which the worker reads as
+   *  `callerPath()` (iterate/sdk). */
   caller: () => Caller;
   /** The delivery authority of the call being made (caller.ts `Caller.delivery`), read as it is
    *  made: a context's Durable Object's ambient caller's; the stateless entrypoint has none. */
@@ -2491,8 +2493,10 @@ export function workersRoot(deps: {
         // which every other method is called through. A loaded worker's `fetch` reads who is
         // asking off its Request (iterate/principal): the call's own caller, stamped here — never
         // what the Request says, which `fetch(url, { headers })` would let the code that called it
-        // write.
+        // write. Every other method gets the context the call came from beside its cause, never
+        // as an argument the caller wrote.
         const cause = deps.cause();
+        const callerPath = deps.caller().path || path;
         const args =
           method === "fetch" ? [callerStampedRequest(callArgs, deps.caller(), cause)] : callArgs;
         // A handler's one-event hooks are the delivery loop's to call, as a subscriber's
@@ -2551,9 +2555,9 @@ export function workersRoot(deps: {
             if (typeof fn !== "function")
               throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
             const called =
-              method === "fetch" || !cause
+              method === "fetch"
                 ? Reflect.apply(fn, entrypoint, args)
-                : entrypoint.callWithCause!(cause, [[method, ...args]]);
+                : entrypoint.callWithCause!(cause, [[method, ...args]], callerPath);
             if (method !== "deliverEvent") return await called;
             // A handler's own refusal — a name it called that nothing resolves, a verb it may
             // not call — is its event's failure, retried on that event's ladder: never the

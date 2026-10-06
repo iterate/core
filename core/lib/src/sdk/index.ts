@@ -34,7 +34,7 @@ import {
 // (../cause.ts).
 import { causeOfRequest, runCausedBy } from "../cause.ts";
 import { auth } from "./auth.ts";
-import { walkUnderCause, type RpcSteps } from "./call-with-cause.ts";
+import { currentCallerPath, walkUnderCause, type RpcSteps } from "./call-with-cause.ts";
 // The hosts' `this.getItx()` is this (itx-scope.ts says why a scope is never kept).
 import { itxScope } from "./itx-scope.ts";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
@@ -312,10 +312,11 @@ export abstract class IterateConfigEntrypoint<
     await this.processEvent({ event, itx });
   }
 
-  /** THE CALL UNDER A CAUSE (`walkUnderCause`) every method but `fetch` is called through. On no
-   *  list: only the platform calls it (core/os context/built-ins.ts `workers`). */
-  callWithCause(cause: unknown, steps: RpcSteps): Promise<unknown> {
-    return walkUnderCause(this, cause, steps);
+  /** THE CALL UNDER A CAUSE (`walkUnderCause`) every method but `fetch` is called through, with the
+   *  context it came from (`callerPath`). On no list: only the platform calls it (core/os
+   *  context/built-ins.ts `workers`). */
+  callWithCause(cause: unknown, steps: RpcSteps, callerPath?: string): Promise<unknown> {
+    return walkUnderCause(this, cause, steps, callerPath);
   }
 
   /** `using itx = this.getItx()`: the project root's scope, released with every call made through
@@ -323,6 +324,17 @@ export abstract class IterateConfigEntrypoint<
    *  not a method: Workers RPC reaches an entrypoint's methods, and a caller must never get the
    *  scope (sdk/index.test.ts). */
   protected readonly getItx = (): IterateContextApi & Disposable => itxScope(this.env.ITX);
+
+  /** THE CONTEXT A METHOD WAS CALLED FROM, inside a method other than `fetch`: the context whose
+   *  code or session made the call, as the platform stamps it (core/os caller.ts `Caller.path`),
+   *  never an argument a caller chooses (packages/voice worker.ts says why it needs one). A field,
+   *  as `getItx` is. */
+  protected readonly callerPath = (): string => {
+    const path = currentCallerPath();
+    if (!path)
+      throw new Error("callerPath() is known only inside a method the platform called, not fetch");
+    return path;
+  };
 
   /** THE AUTHOR HOOK: every durable event of every context of the project from its first
    *  publication on (what was committed while no config was published may be passed over), one per

@@ -1174,10 +1174,15 @@ export class ItxExpressionResolver {
       const portable = PORTABLE_ROOT_SET.has(root);
       const ownIdentity =
         IDENTITY_ROOTS.has(root) && at === this.#path && Object.hasOwn(this.#builtIns, root);
-      // A worker runs under the hops the call made to reach it, its own `cd`s back here included.
+      // A worker runs under the hops the call made to reach it, its own `cd`s back here included,
+      // and knows the call's origin, as a located call does (built-ins.ts `workersRoot`).
       const route =
         root === "workers" && !(liveRules && hops === 0)
-          ? walked({ workers: this.#reach.workersOf(at, caller, hops) }, fixedPoint, at)
+          ? walked(
+              { workers: this.#reach.workersOf(at, { ...caller, path: origin }, hops) },
+              fixedPoint,
+              at,
+            )
           : liveRules ||
               (portable && Object.hasOwn(this.#builtIns, root)) ||
               root === "cd" ||

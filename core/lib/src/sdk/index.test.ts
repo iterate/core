@@ -58,6 +58,19 @@ test("callWithCause refuses getItx: no caller gets the scope", async () => {
   });
 });
 
+test("callerPath() names the context the platform handed callWithCause, for that call alone, and is unknown outside one", async () => {
+  const entrypoint = configEntrypoint([]);
+  const [child, root] = await Promise.all([
+    entrypoint.callWithCause(undefined, [["whoAsked"]], "/child"),
+    entrypoint.callWithCause(undefined, [["whoAsked"]], "/"),
+  ]);
+  expect({ child, root }).toEqual({ child: "/child", root: "/" });
+  await expect(entrypoint.whoAsked()).rejects.toThrow(/only inside a method the platform called/);
+  await expect(entrypoint.callWithCause(undefined, [["whoAsked"]])).rejects.toThrow(
+    /only inside a method the platform called/,
+  );
+});
+
 /** A config entrypoint over a fake `env.ITX` whose root logs each call and each release; `handler`
  *  overrides `processEvent` when given. */
 function configEntrypoint(
@@ -94,6 +107,10 @@ function configEntrypoint(
     async appendThroughGetItx(path: string) {
       using itx = this.getItx();
       await itx.cd(path).append({ type: "events.iterate.com/test/pong-sent" });
+    }
+    async whoAsked() {
+      await Promise.resolve(); // across an await, as a method that calls out first reads it
+      return this.callerPath();
     }
   })({} as never, env as never);
   // the shim's base class keeps no constructor arguments; the runtime's sets `env` from them

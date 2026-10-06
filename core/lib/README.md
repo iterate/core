@@ -91,6 +91,19 @@ accessor (`() => this.getItx()`), never a scope; work that outlives the call run
 processor's `runInBackground` claim. Lint refuses a raw `ITX.get()` and a `getItx()` no `using`
 binds in this repository (`iterate/no-raw-itx-get`).
 
+A config worker's `getItx()` is the root's scope whoever called it: every context linked to the
+root inherits the root's rules, so a script in `/child` that calls `itx.voice.setupVoiceAgent(…)`
+runs the worker as the root. Inside any method but `fetch`, `this.callerPath()` names the context
+the call came from (`/child`), as the platform stamps it, so what the worker creates for the caller
+can hold no more than the caller does:
+
+```js
+async setupVoiceAgent({ streamPath }) {
+  using itx = this.getItx();
+  await itx.agents.at(this.callerPath()).create(streamPath); // linked to the caller, not to `/`
+}
+```
+
 ## Who wrote an event
 
 Anyone in a project can append any event to any context, and every event says where it came from.

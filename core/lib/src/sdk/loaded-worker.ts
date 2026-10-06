@@ -2,8 +2,10 @@
 // platform's own isolate never does (core/os context/module-resolution.ts `enteredThroughPlatform`).
 // Its outbound `fetch` carries the cause it runs under (../cause.ts), and every `WorkerEntrypoint`
 // it exports, an SDK host or not, gets:
-//   callWithCause(cause, steps) — the walk the platform makes every call but `fetch` through
-//                                 (call-with-cause.ts), so a method runs under its own call's cause;
+//   callWithCause(cause, steps, callerPath)
+//                               — the walk the platform makes every call but `fetch` through
+//                                 (call-with-cause.ts), so a method runs under its own call's cause
+//                                 and knows which context the call came from;
 //   getItx()                    — `using itx = this.getItx()`: `env.ITX`'s scope, released when the
 //                                 block ends (itx-scope.ts).
 // Workers RPC reaches anything on the prototype, `getItx` included, so the platform refuses a
@@ -20,8 +22,8 @@ carryCauseOnFetch();
 // Non-enumerable data properties (defineProperties' default); an SDK host's own shadow them.
 Object.defineProperties(WorkerEntrypoint.prototype, {
   callWithCause: {
-    value(this: WorkerEntrypoint, cause: unknown, steps: RpcSteps) {
-      return walkUnderCause(this, cause, steps);
+    value(this: WorkerEntrypoint, cause: unknown, steps: RpcSteps, callerPath?: string) {
+      return walkUnderCause(this, cause, steps, callerPath);
     },
     writable: true,
     configurable: true,

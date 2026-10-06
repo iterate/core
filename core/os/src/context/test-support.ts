@@ -67,8 +67,9 @@ export function oneContextReach({
         const expired = snapshotsRead.length <= expiredReads;
         return { rules: rulesOf[path] || [], expiresAt: expired ? Date.now() - 1 : FAR };
       },
-      workersOf: (path: string) => ({
-        get: (spec: unknown) => new InvokeHandle((steps) => ({ workersOf: path, spec, steps })),
+      workersOf: (path: string, caller: Caller) => ({
+        get: (spec: unknown) =>
+          new InvokeHandle((steps) => ({ workersOf: path, callerPath: caller.path, spec, steps })),
       }),
       located: async (path: string, expression: ItxExpression, args: unknown[], caller: Caller) => {
         located.push({ path, expression, args, caller });

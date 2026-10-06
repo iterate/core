@@ -7,7 +7,7 @@ import {
   type ProcessorState,
 } from "../stream/processor.ts";
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
-import type { AgentHandleApi, AgentsApi } from "./api.ts";
+import type { AgentHandleApi, AgentsRootApi } from "./api.ts";
 import { AgentContract } from "./contract.ts";
 import { AgentCollectionRpcTarget } from "./collection.ts";
 
@@ -59,11 +59,11 @@ export class AgentCatalogProcessor extends StreamProcessor<
 }
 
 /** The agents app's collection facet — what the `itx.agents` rule names (install.ts): the
- *  published `AgentsApi` (api.ts) at the project's root, plus `at(base)`, the collection an agent's
- *  own `itx.agents` rule reaches. */
+ *  published `AgentsRootApi` (api.ts) at the project's root, `AgentsApi` plus `at(base)`, the
+ *  collection an agent's own `itx.agents` rule reaches. */
 export class AgentCollectionDurableObject
   extends StreamProcessorDurableObject<AgentCatalogState>
-  implements AgentsApi
+  implements AgentsRootApi
 {
   /** The processor's reads, and `itx.agents`: the collection's verbs and `at(base)` (collection.ts). */
   static override publicMethods = [...super.publicMethods, "list", "get", "create", "delete", "at"];

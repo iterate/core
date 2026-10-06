@@ -40,6 +40,16 @@ export interface AgentsApi {
   delete(path: string): Promise<{ path: string }>;
 }
 
+/** The root's own `itx.agents` (catalog.ts `AgentCollectionDurableObject`), as code holding the
+ *  root's scope reaches it. */
+export interface AgentsRootApi extends AgentsApi {
+  /** The collection as the context `base` sees it: what it creates is linked to `base`, and a
+   *  relative path means `base`'s (collection.ts). Each agent's own `itx.agents` row is the root's
+   *  `at(<agent>)`; root code acting for another context passes that context, as voice's
+   *  `setupVoiceAgent` does. */
+  at(base: string): AgentsApi;
+}
+
 declare module "iterate/api" {
   interface InstalledAppRoots {
     agents: AgentsApi;
