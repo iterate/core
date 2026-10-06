@@ -63,9 +63,10 @@ export async function rpcResponse(
     cause: parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),
     onProjectAccess: (projectId) => projects.add(projectId),
     // A session's `itx.telemetry` (the dash polls it) resolves here: a read of the warehouse wakes
-    // no context. A call that names no cause begins a chain, as a context's own `invoke` does.
+    // no context. `itx.images` also resolves here (context/images.ts says why). A call that names no
+    // cause begins a chain, as a context's own `invoke` does.
     statelessResolverOf: (address, caller, expression) =>
-      expression[1] === "telemetry"
+      expression[1] === "telemetry" || expression[1] === "images"
         ? statelessResolverFor({
             env,
             namespace: env.ITERATE_CONTEXT,

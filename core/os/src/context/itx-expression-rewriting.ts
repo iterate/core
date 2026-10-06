@@ -66,6 +66,8 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   ai: 'Workers AI, verbatim: `ai.run(model, inputs, options?)` · `ai.models({ search?, task? })`; files as Markdown: `ai.toMarkdown({ name, blob } | [ … ], { conversionOptions? })` → { name, mimeType, format, tokens, data } (or `format: "error"`) for PDF, Office (docx, xlsx), ODF, CSV, HTML, XML and pictures (described), `blob` the bytes or a text, or `{ name, data }` with base64, at most 10 MiB a call; `ai.toMarkdown().supported()` lists the formats; web search through AI Gateway, billed to its credits: `ai.websearch({ gatewayId: "default", query, provider?: "ceramic" | "exa" | "linkup", limit? })` → { items: [{ url, title, description? }] }; AI Gateway: `ai.gateway(id).run(request)` · `getLog(logId)` · `patchLog(logId, { score?, feedback? })` · `getUrl(provider?)`',
   browser:
     'Cloudflare Browser Run. One-shot: `browser.quickAction("markdown", { url })` (also "content", "screenshot", "pdf", "links", "json", "snapshot", "scrape"). A session, to click and type: `browser.openPage({ url })` → { sessionId, targetId, url, title, loaded }; `browser.cdp(sessionId, method, params)` runs one Chrome DevTools Protocol command on its page (`Runtime.evaluate` with { expression, returnByValue: true, awaitPromise: true } to read or click, `Input.insertText`, `Page.captureScreenshot`); `browser.navigate(sessionId, url)`; `browser.devtools.listTargets(sessionId)` · `newTarget(sessionId, url)` for tabs; `browser.getLiveView(sessionId)` → a link to watch it; `browser.closeSession(sessionId)` when done (an open session is billed until its keepAlive, five minutes by default, runs out)',
+  images:
+    'Cloudflare Images, the binding\'s own chain: `images.input(src).transform({ width: 800 }).draw(overlay, opts).output({ format: "image/webp" }).response()` (one round trip; also `.image()`, `.contentType()`, and `.writeTo(itx.files.get(path))`), `images.text(content, { font: { url } })`, `images.info(src)` (free). A `src` is bytes, a ReadableStream, an http(s) URL (fetched by the platform through egress), or `itx.files.get(path)`; at most 20 MB. Each transformation is billed once per month per unique image and parameters',
   r2: "the object store, verbatim (`files` is the friendlier surface)",
   cfArtifacts: "the Artifacts binding, project-scoped (`repos` is the friendlier surface)",
   append: "write events to this log: `itx.append({ type, payload })`",
@@ -151,6 +153,7 @@ const PORTABLE_ROOTS = [
   "r2",
   "ai",
   "browser",
+  "images",
   "cfArtifacts",
   "fetch",
   "email",

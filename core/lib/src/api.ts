@@ -19,9 +19,17 @@ import type {
   AiWebSearchRequest,
   ConversionRequestOptions,
   ConversionResponse,
+  ImageDrawOptions,
+  ImageInfoResponse,
+  ImageInputOptions,
+  ImageOutputOptions,
+  ImageTransform,
+  ImageTransformationOutputOptions,
+  ImageTransformationResponseOptions,
   R2HTTPMetadata,
   R2Range,
   SupportedFileFormat,
+  TextOptions,
   UniversalGatewayOptions,
 } from "@cloudflare/workers-types";
 import type { InvokeHandle, ItxExpression, ItxExpressionInput } from "./expression.ts";
@@ -548,6 +556,49 @@ export type CfBrowserApi = {
     activateTarget(sessionId: string, targetId: string): Promise<{ message: string }>;
     closeTarget(sessionId: string, targetId: string): Promise<{ message: string }>;
   };
+};
+
+/** Where an `itx.images` image comes from: its bytes, a `ReadableStream` of them, an http(s) URL
+ *  (fetched by the platform through the project's egress, so the bytes never visit you), or a file
+ *  handle (`itx.files.get(path)`). At most 20 MB, the Images binding's own limit. */
+export type CfImageSource =
+  | Uint8Array
+  | ArrayBuffer
+  | ReadableStream<Uint8Array>
+  | string
+  | URL
+  | Pick<FileHandle, "bytes">;
+
+/** A file `itx.images` writes into: `itx.files.get(path)`. */
+export type CfImagesFile = Pick<FileHandle, "put">;
+
+/** What `itx.images.input(…)` and `.text(…)` answer, and every `.transform(…)` and `.draw(…)` on it:
+ *  the Images binding's `ImageTransformer`, a plan nothing has run yet. `draw`'s overlay is any
+ *  `CfImageSource`. Chain freely: `input(x).transform(a).output(o).response()` is one round trip. */
+export type CfImageTransformer = {
+  transform(transform: ImageTransform): CfImageTransformer;
+  draw(image: CfImageSource, options?: ImageDrawOptions): CfImageTransformer;
+  output(options: ImageOutputOptions): Promise<CfImageTransformationResult>;
+};
+
+/** The binding's `ImageTransformationResult`. The image is made when `response`, `image` or
+ *  `writeTo` runs (and again each time you call one, which Images bills once per unique image and
+ *  parameters per month); `contentType` is the output format and runs nothing. */
+export type CfImageTransformationResult = {
+  response(options?: ImageTransformationResponseOptions): Promise<Response>;
+  contentType(): Promise<string>;
+  image(options?: ImageTransformationOutputOptions): Promise<ReadableStream<Uint8Array>>;
+  /** The image into a file, without visiting the caller; answers the stored file's record. */
+  writeTo(file: CfImagesFile): Promise<FileRecord>;
+};
+
+/** `itx.images`: the Cloudflare Images binding (`env.IMAGES`), same method names and options, over
+ *  `CfImageSource`s. `info` is free; every unique transformation is billed once a month. Not wrapped
+ *  yet: `hosted`. A caller's non-image fails as `INVALID_INPUT`. */
+export type CfImagesApi = {
+  info(image: CfImageSource, options?: ImageInputOptions): Promise<ImageInfoResponse>;
+  input(image: CfImageSource, options?: ImageInputOptions): CfImageTransformer;
+  text(content: string, options: TextOptions): CfImageTransformer;
 };
 
 /** A token for an Artifacts repo's git remote. */
@@ -1199,6 +1250,8 @@ export interface IterateContextApi {
   ai: ItxAiApi;
   /** Cloudflare Browser Run. */
   browser: CfBrowserApi;
+  /** Cloudflare Images: `info` and `transform` over image bytes. */
+  images: CfImagesApi;
   /** Cloudflare Artifacts, project-scoped (`repos` is the friendlier surface). */
   cfArtifacts: CfArtifactsApi;
   /** Files stored in the project's object store, by path (`r2` underneath). */

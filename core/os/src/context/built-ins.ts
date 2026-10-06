@@ -107,6 +107,7 @@ import {
 } from "./worker-loader.ts";
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
 import { cfBrowser } from "./browser.ts";
+import { cfImages } from "./images.ts";
 import { projectScopedArtifacts, type ArtifactsNamespace } from "./cf-artifacts.ts";
 
 /** What a lend's borrower path is told of its lender (`itx.secrets.acceptLend`): the lend, the
@@ -306,6 +307,9 @@ export interface BuiltInScope extends LibraryRoots {
    *  RESULT; `.openPage`, `.cdp`, `.navigate` and `.closeSession` drive a session that stays open
    *  between calls; `.fetch(input, init)` is the raw CDP endpoint. */
   browser: IterateContextApi["browser"];
+  /** Cloudflare Images: `.transform(bytes, { transforms, output })` returns the encoded bytes,
+   *  `.info(bytes)` the format and dimensions. */
+  images: IterateContextApi["images"];
   /** THE ARTIFACTS PROXY (cf-artifacts.ts `projectScopedArtifacts`): Cloudflare Artifacts, project-scoped and
    *  addressed BY THE REPO'S PATH — the binding's own verbs only: `create`, `get` (a handle with
    *  `createToken` and `remote()`), `list`, `delete`. Git itself is the repo facet's (src/repo/, the
@@ -571,6 +575,7 @@ export interface BuildBuiltInsDeps {
     /** The one R2 bucket, every owner's objects under its own prefix — the built-in root `itx.r2`. */
     FILES: R2Bucket;
     BROWSER: BrowserRun;
+    IMAGES: ImagesBinding;
     ARTIFACTS: ArtifactsNamespace;
     DB: D1Database;
     /** Email Sending — `itx.email`; absent where a deployment has no mailbox. */
@@ -2366,6 +2371,7 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
     },
     ai: deps.ai,
     browser: cfBrowser(env.BROWSER),
+    images: cfImages(env.IMAGES, { fetch: (request) => deps.egress(request) }),
     cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
     email: {
       send: async (input) => {
@@ -2433,6 +2439,7 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
     | "r2"
     | "ai"
     | "browser"
+    | "images"
     | "cfArtifacts"
     | "email"
     | "telemetry"

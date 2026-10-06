@@ -146,6 +146,9 @@ export default defineConfig(async ({ mode }) => {
         ARTIFACTS: bindings.artifacts({ namespace: names.repos, dev: { remote: true } }),
         AI: bindings.ai({ dev: { remote: true } }),
         BROWSER: bindings.browser({ dev: { remote: true } }),
+        // Images, `itx.images` (context/images.ts). `cf dev` runs a low-fidelity offline version
+        // (width, height, rotate, format); the deployed binding is the real one.
+        IMAGES: bindings.images(),
         // Email Sending: the sign-in code's way out (src/password-and-code-sign-in.ts), from
         // `login.methods.emailCode.from`.
         EMAIL: bindings.sendEmail(),

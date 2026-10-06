@@ -223,6 +223,8 @@ export interface Env extends IterateConfigEnv {
   AI: Ai;
   /** Browser Run — the built-in root `itx.browser` (context/built-ins.ts). */
   BROWSER: BrowserRun;
+  /** Images — the built-in root `itx.images` (context/images.ts). */
+  IMAGES: ImagesBinding;
   /** The one R2 bucket — the built-in root `itx.r2`, every owner under its own prefix (context/built-ins.ts). */
   FILES: R2Bucket;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
