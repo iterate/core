@@ -2481,6 +2481,9 @@ export function workersRoot(deps: {
   /** The worker a source expression with no cacheKey NAMES, resolved from the context `workers`
    *  speaks for, as a facet's is (facet-host.ts `FacetHostDeps.namedWorker`). */
   namedWorker: (source: ItxExpressionInput) => Promise<NamedWorker>;
+  /** Whether the spec `get` is called with is the config pointer's, which only the platform writes:
+   *  the resolver's route ran through it (itx-expression-rewriting.ts `runsThePublishedConfig`). */
+  vouched?: boolean;
 }): BuiltInScope["workers"] {
   const { projectId, path, iterateContextName } = deps;
   return {
@@ -2518,8 +2521,15 @@ export function workersRoot(deps: {
         assertLoadedCodePlacement("workers.get", { projectId, path });
         // A source expression with no cacheKey NAMES a worker (iterate/api `workers.get`): the code
         // that rule's spec loads, `mainModule` under its published identity — resolved as the call
-        // is, so the call after a publication runs the new code.
-        const named = namesAWorker(spec) ? await deps.namedWorker(spec.source) : undefined;
+        // is, so the call after a publication runs the new code. The config pointer's own spec,
+        // which a route through it hands here whole (`vouched`: a delivery to `itx.config`, the
+        // ingress), loads the same way: its main module under its identity, so a commit that leaves
+        // that module's graph produces, builds and loads nothing.
+        const named = namesAWorker(spec)
+          ? await deps.namedWorker(spec.source)
+          : deps.vouched
+            ? { spec, vouched: true, invoke: deps.invoke }
+            : undefined;
         const worker = named
           ? { ...namedWorkerLoad(named, spec.mainModule, "workers.get"), invoke: named.invoke }
           : { source: spec.source, cacheKey: spec.cacheKey, invoke: deps.invoke };

@@ -1223,7 +1223,6 @@ export class SecretFacet extends StreamProcessorDurableObject<
               PinnedOutbound: (options: { props: { urls: string[] } }) => Fetcher;
             }
           ).PinnedOutbound({ props: { urls } }),
-          deployId: iterateConfigOf(this.env).deployId,
           context: this.#address().context,
           urls,
           source: refresh.source,

@@ -157,6 +157,22 @@ function answerReminder(note: string, owed: { offset: number; why: string }): st
   return `${note} That would end your turn, but nothing has been said yet for ${owed.why} @${String(owed.offset)}, which expects an answer (words written beside a call do not count: some readers hold them back). If it needs a message or a report, write it now as your final message, with no call. If it needs none, or \`sendMessage\` already sent it, reply with nothing.`;
 }
 
+/** The note a failed model request leaves for the next turn: the attempt, the provider's words as
+ *  one sentence (their own end mark kept, a period added when they end without one), and whether
+ *  the loop retries. */
+export function failedRequestNote(input: {
+  requestOffset: number;
+  attempt: number;
+  maxAttempts: number;
+  errorMessage: string;
+}): string {
+  const reason = input.errorMessage.slice(0, 500).trimEnd();
+  const sentence = /[.!?]$/.test(reason) ? reason : `${reason}.`;
+  const next =
+    input.attempt < input.maxAttempts ? "Retrying." : "Giving up until the next message.";
+  return `The model request @${String(input.requestOffset)} failed (attempt ${String(input.attempt)} of ${String(input.maxAttempts)}): ${sentence} ${next}`;
+}
+
 /** A script body that is already a complete async function, passed through unwrapped
  *  (codemode-format.ts's rule). */
 const ASYNC_FUNCTION_BODY_RE = /^(?:async\s*(?:function|\()|\(?async\s*\()/;
@@ -1125,7 +1141,12 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       // reduce's; `agent` actor, so it resets no breaker).
       const lost =
         result.status === "failed"
-          ? `The model request @${String(requestOffset)} failed (attempt ${String(state.consecutiveLlmFailures)} of ${String(state.config.llmRequestRetryPolicy.maxAttempts)}): ${result.errorMessage.slice(0, 500)}. ${state.consecutiveLlmFailures < state.config.llmRequestRetryPolicy.maxAttempts ? "Retrying." : "Giving up until the next message."}`
+          ? failedRequestNote({
+              requestOffset,
+              attempt: state.consecutiveLlmFailures,
+              maxAttempts: state.config.llmRequestRetryPolicy.maxAttempts,
+              errorMessage: result.errorMessage,
+            })
           : result.status === "cancelled" && result.reason === "expired"
             ? `The model request @${String(requestOffset)} expired before it finished; that turn was dropped.`
             : null;

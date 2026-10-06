@@ -132,7 +132,7 @@ test("a restart whose clock fails logs that once, and a timer of the context sti
   await vi.advanceTimersByTimeAsync(10_000);
   await aborting;
   expect(warned.mock.calls).toMatchObject([
-    [{ event: "facet-start-deadline.platform-failure-fetch", message: "no loopback" }],
+    [{ event: "critical-section-deadline.platform-failure-fetch", message: "no loopback" }],
     [{ event: "facet.start-failed", why: "itx.facets.abort", elapsedMs: 10_000 }],
   ]);
 });
@@ -150,7 +150,7 @@ test("a birth with no facet to start opens no critical section and asks the cloc
  *  host minted, in order. `work` is a call the facet holds until `failHeldWork` rejects the oldest
  *  one held: the fake's abort and `delete` (its hosting row removed) cut off nothing by themselves,
  *  so a test says when the runtime's rejection arrives. The start watchdog's clock
- *  (`FacetStartDeadline`) answers when `answerClock` says, or fails with `clockFails`; `locks`
+ *  (`CriticalSectionDeadline`) answers when `answerClock` says, or fails with `clockFails`; `locks`
  *  counts the host's `blockConcurrencyWhile` calls and `clockRequests` the clock's. */
 function namedFacets({ clockFails = false } = {}) {
   const kv = new Map<string, unknown>();
@@ -227,7 +227,7 @@ function namedFacets({ clockFails = false } = {}) {
         return run;
       },
       exports: {
-        FacetStartDeadline: {
+        CriticalSectionDeadline: {
           fetch: () => {
             clockRequests++;
             if (clockFails) return Promise.reject(new Error("no loopback"));

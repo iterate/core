@@ -502,7 +502,12 @@ test("ProjectProcessor — the publication: a commit fact publishes its commit, 
       idempotencyKey: "project/config-pointer:7",
       payload: {
         match: "itx.config",
-        target: ["itx", "builtins", "workers", ["get", { source, cacheKey: "bbb", manifest }]],
+        target: [
+          "itx",
+          "builtins",
+          "workers",
+          ["get", { source, cacheKey: "bbb", mainModule: "worker.ts", manifest }],
+        ],
       },
     },
     { idempotencyKey: "project/publication:7" },

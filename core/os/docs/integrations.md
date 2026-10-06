@@ -275,4 +275,5 @@ A refused fetch fails the refresh even if the code catches it, and `secret/refre
 before the code's module runs. A thrown error comes back with every string of the material cut
 out. Only the returned object is kept. The source is sealed in the record, so changing it is a
 `set`. The catalog shows its SHA-256, and the Dash shows "refreshed by code (<sha>)". Each
-(deployment, secret, pin, source) gets its own isolate, and each is one billed Dynamic Worker.
+(secret, pin, source) gets its own isolate, and each is one billed Dynamic Worker. Its id names the
+jail's own code too, never the deploy: a deploy that leaves the jail as it was mints no new one.

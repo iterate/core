@@ -411,6 +411,23 @@ function entersOwnRoot(call: ItxExpression): boolean {
 const withoutBuiltIns = (call: ItxExpression): ItxExpression =>
   isBuiltInsRooted(call) ? call.slice(2) : call.slice(1);
 
+/** Whether `fixedPoint` runs the worker a config pointer in `rules` names: it begins with that
+ *  rule's target, `itx.builtins.workers.get(spec)` — a delivery to `itx.config`, the ingress. Only
+ *  the platform writes a config pointer (caller.ts `isConfigPointerMatch`), so that spec is the
+ *  platform's and its manifest counts (built-ins.ts `workersRoot`), as it does for a worker's name
+ *  (`ItxExpressionResolver.namedWorker`). */
+function runsThePublishedConfig(
+  rules: readonly ItxExpressionRewriteRule[],
+  fixedPoint: ItxExpression,
+): boolean {
+  const steps = withoutBuiltIns(fixedPoint);
+  return rules.some((rule) => {
+    if (!rule.target || !isConfigPointerMatch(rule.match)) return false;
+    const target = withoutBuiltIns(rule.target);
+    return jsonEqual(target, steps.slice(0, target.length));
+  });
+}
+
 // ── THE ONE EVENT: build it, the caller appends it ──
 
 /** Validate + normalize the payload of a LITERAL `events.iterate.com/itx/rewrite-rule-configured`
@@ -938,7 +955,8 @@ export type ResolverReach = {
     args: unknown[],
     caller: Caller,
   ) => Promise<unknown>;
-  workersOf: (path: string, caller: Caller, hops: number) => unknown;
+  /** `vouched`: the spec its `get` is called with is the config pointer's (`runsThePublishedConfig`). */
+  workersOf: (path: string, caller: Caller, hops: number, vouched: boolean) => unknown;
 };
 
 export class ItxExpressionResolver {
@@ -1181,11 +1199,14 @@ export class ItxExpressionResolver {
       const ownIdentity =
         IDENTITY_ROOTS.has(root) && at === this.#path && Object.hasOwn(this.#builtIns, root);
       // A worker runs under the hops the call made to reach it, its own `cd`s back here included,
-      // and knows the call's origin, as a located call does (built-ins.ts `workersRoot`).
+      // and knows the call's origin, as a located call does (built-ins.ts `workersRoot`). The worker
+      // the config pointer names is vouched for (`runsThePublishedConfig`), so it loads that way at
+      // this context's own hop 0 too: only `workersOf` is told.
+      const vouched = root === "workers" && runsThePublishedConfig(rules, fixedPoint);
       const route =
-        root === "workers" && !(liveRules && hops === 0)
+        root === "workers" && (vouched || !(liveRules && hops === 0))
           ? walked(
-              { workers: this.#reach.workersOf(at, { ...caller, path: origin }, hops) },
+              { workers: this.#reach.workersOf(at, { ...caller, path: origin }, hops, vouched) },
               fixedPoint,
               at,
             )

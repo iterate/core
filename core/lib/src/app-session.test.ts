@@ -73,6 +73,56 @@ test("ordinary app sessions retain their existing origin client", async () => {
   expect(url.searchParams.get("client_id")).toBe("https://notes.example/.auth/client.json");
 });
 
+test("an expiry that waited behind a sign-in keeps the session the sign-in made; an expired one ends", async () => {
+  const { session } = fixture();
+  const authorize = new URL(
+    await session.begin(
+      {
+        origin: "https://notes.example",
+        issuer: "https://issuer.example",
+        resource: "https://issuer.example/api",
+        scopes: ["iterate"],
+      },
+      "/",
+    ),
+  );
+  let answer = (_response: Response) => {};
+  const asked = new Promise<void>((resolve) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        resolve();
+        return new Promise<Response>((settle) => (answer = settle));
+      }),
+    );
+  });
+  const callback = new URLSearchParams({
+    code: "code",
+    state: authorize.searchParams.get("state")!,
+    iss: "https://issuer.example",
+  });
+  const completing = session.complete(callback.toString());
+  await asked;
+  // the pending flow's alarm fires while its code exchange is in flight
+  const expiring = session.alarm();
+  answer(
+    Response.json({
+      access_token: "access",
+      refresh_token: "refresh",
+      token_type: "Bearer",
+      expires_in: 3600,
+    }),
+  );
+  expect(await completing).toEqual({ next: "/" });
+  await expiring;
+  expect(await session.bearer()).toBe("access");
+
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31 * 24 * 3600_000);
+  await session.alarm();
+  expect(await session.bearer()).toBeNull();
+  vi.restoreAllMocks();
+});
+
 function fixture() {
   const values = new Map<string, unknown>();
   const session = new BrowserSession(
@@ -88,7 +138,6 @@ function fixture() {
         },
         deleteAlarm: async () => {},
       },
-      blockConcurrencyWhile: async <T>(work: () => Promise<T>) => work(),
     } as unknown as DurableObjectState,
     {},
   );

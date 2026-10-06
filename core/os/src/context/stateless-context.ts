@@ -100,7 +100,7 @@ export function contextReach(args: {
         () => ambient().delivery,
       );
     },
-    workersOf: (path: string, caller: Caller, hops: number) => {
+    workersOf: (path: string, caller: Caller, hops: number, vouched: boolean) => {
       // the cause of the call being made, read as it is made (a row's target is resolved once and
       // called for each delivery), plus the contexts it crossed to get here (cause.ts)
       const cause = () => {
@@ -126,6 +126,7 @@ export function contextReach(args: {
         caller: () => caller,
         delivery: () => ambient().delivery,
         cause,
+        vouched,
       });
     },
   };

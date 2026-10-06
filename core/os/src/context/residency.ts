@@ -10,8 +10,8 @@
 //   - THE UNCLAIMED-FACET SWEEP: a loaded facet left running without a claim is reset once the
 //     context has been quiet from OUTSIDE its loaded code (FacetHost `resetUnclaimedLoadedFacets`).
 //   - THE BIRTH RESET: the same reset, run as an incarnation is born, for the facets the last one
-//     left running — and a start of every facet it called, before the birth writes anything
-//     (FacetHost `startFacetsTheLastIncarnationRan`).
+//     left running — and a start of every facet that has started here, before the birth writes
+//     anything (FacetHost `startFacetsTheLastIncarnationRan`).
 // The sweep's deadline is decided by one pure rule (`decideQuietDeadline`). How these three relate to
 // the three session-release mechanisms in the SDK and the step walk: core/os/docs/residency.md.
 
@@ -252,8 +252,8 @@ export class Residency {
   #facetsResetAtBirth: string[] = [];
 
   /** THE BIRTH RESET, run once in the DO's constructor before it serves anything or writes
-   *  anything: every facet the last incarnation called is started, and a loaded one it left
-   *  running without a claim is reset first — it ends here, before this incarnation reaches it.
+   *  anything: every facet that has started here is started, and a loaded one left running
+   *  without a claim is reset first — it ends here, before this incarnation reaches it.
    *  Named on this incarnation's wake record, and logged: the sweep's own wake writes no record. */
   async resetUnclaimedFacetsAtBirth(): Promise<void> {
     this.#facetsResetAtBirth = await this.#deps.facetHost.startFacetsTheLastIncarnationRan();

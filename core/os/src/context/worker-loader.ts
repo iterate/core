@@ -354,8 +354,9 @@ export async function prepareConfinedWorker(
     // that publishes it, and every deploy, reads the same answer, the files of whichever commit ran
     // the producer first, whose graph from `mainModule` is the one the identity hashes
     // (`moduleIdentityOf`). A caller's key names the code with its expression. Never the deploy:
-    // a platform change to what a producer answers is a new key prefix. A KV failure is a miss:
-    // the producer runs, as it always did.
+    // a platform change to what a producer answers is a new key prefix, and
+    // produced-modules-prefix.test.ts fails on a change to the code that decides it until the
+    // prefix is decided. A KV failure is a miss: the producer runs.
     const cacheFailed = (action: "get" | "put") => (error: unknown) => {
       console.warn({
         event: "worker-loader.platform-failure-module-cache",

@@ -94,7 +94,7 @@ import {
 } from "./context/paths.ts";
 import { LEND_USE_HEADER, LENT_AS_HEADER, verifyLendUse } from "./secrets.ts";
 import { mcpWebhookOf } from "./integrations/mcp.ts";
-import { expressionFetchErrorAnswer } from "./unavailable.ts";
+import { expressionFetchErrorAnswer, unavailableError } from "./unavailable.ts";
 import { metrics } from "./metrics.ts";
 import { sendEvents, type EventsRow } from "./platform-hook.ts";
 import {
@@ -120,6 +120,7 @@ import { buildBuiltIns, projectConfigDeps, type TelemetryQuery } from "./context
 import { nameActiveSpan } from "./iterate-context.ts";
 import { contextReach, itxEntrypointFor } from "./context/stateless-context.ts";
 import { FacetHost } from "./context/facet-host.ts";
+import { criticalSectionDeadline } from "./context/critical-section-deadline.ts";
 import type { NamedWorker } from "./context/worker-loader.ts";
 import { firstPartyFacetClassOf } from "./first-party-facets.ts";
 import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
@@ -251,6 +252,12 @@ export interface Env extends IterateConfigEnv {
 /** How far the clock of the machine a context wakes on may be from the one it last ran on: a wake
  *  takes the lease of everything the last incarnation served as ending this much later. */
 const SNAPSHOT_CLOCK_SLACK_MS = 250;
+
+/** How long a root's first birth waits for the control plane to say whether its project was
+ *  deleted (`#refuseBirthOfDeletedProjectRoot`). The birth holds blockConcurrencyWhile, which the
+ *  runtime resets at 30 s, and this wait and a birth's facet starts (FacetHost
+ *  FACET_START_WATCHDOG_MS, 10 s) together stay under that. */
+const DELETED_PROJECT_QUESTION_DEADLINE_MS = 10_000;
 
 /** A revocation fence (`#takeRevocationFence`): until when a rule write waits, on this context's
  *  clock, and the names the commits behind it took away. */
@@ -497,18 +504,43 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  `deletedProject`). A deleted project's root is not born: the tables the stream opened as this
    *  instance was built go, and every entry point answers `#unborn` first (`#unbornStill`), nothing
    *  run and nothing written — a refusal like any other, where a reset would log an error for
-   *  every request that reaches it. A question that failed fails the birth, the store left as
-   *  empty, and resets this instance, so the next request asks again. Answers whether the birth
-   *  was refused. */
+   *  every request that reaches it. A question that failed, or that the control plane did not
+   *  answer within DELETED_PROJECT_QUESTION_DEADLINE_MS (UNAVAILABLE, overloaded), fails the birth:
+   *  a root that cannot learn whether its project was deleted is not born, the store left as
+   *  empty, and this instance resets, so the next request asks again. Answers whether the birth was
+   *  refused. */
   async #refuseBirthOfDeletedProjectRoot(): Promise<boolean> {
     const { projectId, path } = this.#durableObjectAddress;
     if (path !== "/" || projectId === GLOBAL_PROJECT_ID) return false;
     if (this.#stream.highestDurableOffset() !== 0) return false;
-    const answer = await this.#controlPlane.deletedProject(projectId).then(
-      (deleted) => ({ deleted }),
-      (error: unknown) => ({ error }),
-    );
+    // The birth holds blockConcurrencyWhile, so its deadline is one that holds there.
+    const asked = new AbortController();
+    const answer = await Promise.race([
+      this.#controlPlane.deletedProject(projectId).then(
+        (deleted) => ({ deleted }),
+        (error: unknown) => ({ error }),
+      ),
+      criticalSectionDeadline(
+        this.ctx.exports,
+        DELETED_PROJECT_QUESTION_DEADLINE_MS,
+        asked.signal,
+        this.#durableObjectAddress.name,
+      ).then(() => ({
+        unanswered: true,
+        error: unavailableError(
+          "overloaded",
+          `The control plane failed deletedProject: no answer within ${DELETED_PROJECT_QUESTION_DEADLINE_MS} ms`,
+        ),
+      })),
+    ]);
+    asked.abort();
     if ("deleted" in answer && !answer.deleted) return false;
+    if ("unanswered" in answer)
+      console.warn({
+        event: "control-plane.platform-failure-read-deadline",
+        method: "deletedProject",
+        waitedMs: DELETED_PROJECT_QUESTION_DEADLINE_MS,
+      });
     await this.ctx.storage.deleteAll();
     await this.ctx.storage.sync();
     if ("error" in answer) throw answer.error;

@@ -35,8 +35,9 @@ The context DO forwards its entry points to it and reads the sweep's deadline ba
 | A borrowed rpc stub, the library's socket                          | a subscribe callback, an `itx.connectToCapnweb(url)` WebSocket session       | 4: returned or closed 30 s after its last use                                                         |
 
 A facet needs 5 and 6 on top of 1 because the context cannot end a session from its side: the
-facet holds the value. Both reset only a facet called since its last start (its `facet-ran:<name>`
-row, written on its first call of an incarnation): one nobody called is not running. A loaded facet that keeps any value from its `env.ITX` keeps running after
+facet holds the value. Both reset every loaded facet that has started here and holds no claim (its
+`facet-ran:<name>` row, written at its first start, by a call or by the platform, and kept until the
+facet is deleted). A loaded facet that keeps any value from its `env.ITX` keeps running after
 its context is evicted, billed per instance, and the next incarnation reuses that same instance
 (measured 2026-09-23: 19 minutes and counting, or until the next deploy). 5 and 6 are the net for a
 project's own code; first-party code never relies on them. Every first-party facet, worker, config
@@ -58,11 +59,17 @@ storage caused object to be reset", and the whole context resets
 (`test/vitest/os/facet-abort-storage-reset.e2e.test.ts` pins
 it). A facet started again before the context commits anything more avoids it. So every abort the
 platform makes (5, 6, `itx.facets.abort`, the call watchdog, a new loaded identity) is followed by a
-start under `blockConcurrencyWhile`, and a birth starts every facet the last incarnation called,
-before its first write: the reset ones after their abort, a claimed or first-party one as it is.
+start under `blockConcurrencyWhile`, and a birth starts every facet that has started here, before
+its first write: the reset ones after their abort, a claimed or first-party one as it is. That
+includes a facet only the last birth started. An instance can write with no call, from its
+constructor or from work it keeps, and an `itx.abort()` or a deploy can then stop it. When the
+next birth did not start such a facet, a storage reset hit 150 of 322 contexts after an
+`itx.abort()`; when it did, none of 320 (previews, 2026-10-06, Workers Logs; the outside-calls rows
+of `test/vitest/os/facet-restart-window.probe.e2e.test.ts`). So the `facet-ran:<name>` row stays
+until the facet is deleted, and every birth starts every facet hosted here that has started once.
 A start that does not answer in 10 s is given up, and inside `blockConcurrencyWhile` that clock is
-a request's answer, never a timer of the context (FacetHost `FacetStartDeadline` says why). A start
-that fails logs `facet.start-failed` with `why` it ran
+a request's answer, never a timer of the context (`src/context/critical-section-deadline.ts` says
+why). A start that fails logs `facet.start-failed` with `why` it ran
 (`birth`, `quiet`, `itx.facets.abort`, `loaded identity changed`, `call timed out`) and its
 `elapsedMs`. FacetHost `FACET_START_WATCHDOG_MS` names every piece.
 
@@ -122,7 +129,7 @@ preview, 2026-09-23). So:
 | --------------------------------------------------------- | -------------------------------------------------------------- |
 | `itx/woken` payload `facetsReset`                         | 5, on the incarnation's wake record                            |
 | warn `facet.start-failed`, `facet.platform-failure-start` | a start after a reset or at birth that did not start the facet |
-| warn `facet-start-deadline.platform-failure-fetch`        | the start clock's request failed; a timer bounds the start     |
+| warn `critical-section-deadline.platform-failure-fetch`   | the start clock's request failed; a timer bounds the start     |
 | log `facet.loaded-identity-changed`                       | a restart onto other code; `changed` names what moved          |
 | log `worker-loader.built`, `worker-loader.produced`       | an isolate built; its modules produced, not read from ITX_KV   |
 | log `context.facets-reset-at-birth`                       | 5                                                              |

@@ -36,8 +36,10 @@ caller waits for its commit's outcome by its oid:
 of that outcome (5 s, `src/context/rule-snapshots.ts`) every context resolves through the new
 pointer: every context's events reach that worker's `processEvent` through their birth
 subscription, the project's hosts serve its `fetch`, and a facet named by it (`itx.cd('/').config`
-as its source) restarts on its next call when its own module's identity changed; a commit may drop a
-Durable Object class or its whole module, and a facet that names it fails its next call, naming it.
+as its source) restarts on its next call when its own module's identity changed. The worker itself
+loads under its main module's identity, so a commit that leaves that module's graph, such as an
+`AGENTS.md` edit, reads, builds and loads nothing again. A commit may drop a Durable Object class
+or its whole module, and a facet that names it fails its next call, naming it.
 A commit the probe refuses is `project/worker-update-failed` with why, and `itx.config` stays where
 it was; a platform failure is met again within a minute, then the platform gives up for now
 (`project/worker-update-failed` with `unavailable`) and runs the publication again 30 s later,

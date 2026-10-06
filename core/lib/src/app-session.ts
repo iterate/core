@@ -27,8 +27,11 @@ type StoredSession = Pending | Active;
 
 /** Each app binds this same class. Token exchange and logout use the issuer's
  * public protocol, so separately deployed apps need no platform bindings.
- * The input gate serializes refresh and logout across tabs. */
+ * One queue serializes sign-in, refresh, logout and expiry across tabs (`#serial`). */
 export class BrowserSession extends DurableObject {
+  /** The operation that runs last, settled either way: the next one starts after it. */
+  #last: Promise<unknown> = Promise.resolve();
+
   begin(host: BrowserHost, next: string) {
     return this.#serial(async () => {
       if (await this.ctx.storage.get("session")) throw new Error("Browser session already exists");
@@ -198,7 +201,13 @@ export class BrowserSession extends DurableObject {
     // Pending flows expire in ten minutes; active grants have the same absolute
     // thirty-day lifetime at the issuer (which also ends one unused for a week: its
     // refresh then answers `invalid_grant`). No refresh token survives this bound.
-    await this.#clear();
+    // An expiry that waited in the queue behind a sign-in or a refresh reads the bound that one
+    // set: a session it renewed is kept, and the alarm moves to its new bound.
+    await this.#serial(async () => {
+      const data = await this.ctx.storage.get<StoredSession>("session");
+      if (data && data.until > Date.now()) await this.ctx.storage.setAlarm(data.until);
+      else await this.#clear();
+    });
   }
   async #bearer() {
     const data = await this.ctx.storage.get<StoredSession>("session");
@@ -300,19 +309,17 @@ export class BrowserSession extends DurableObject {
       ? error
       : new Error(`Iterate token exchange failed (${status}). Try again.`);
   }
-  /** An operation failure must not reset the DO or fail other tabs' requests. */
+  /** `work`, once every operation before it settled, so two tabs never spend one refresh token.
+   *  Its failure is its caller's alone. A queue in memory, because the object is one instance and a
+   *  reset ends the queue with it. Not `blockConcurrencyWhile`, so token timeouts can fire; see
+   *  core/os/src/context/critical-section-deadline.ts for why. */
   #serial<T>(work: () => Promise<T>): Promise<T> {
-    return this.ctx
-      .blockConcurrencyWhile(() =>
-        work().then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        ),
-      )
-      .then((result) => {
-        if ("error" in result) throw result.error;
-        return result.value;
-      });
+    const result = this.#last.then(work);
+    this.#last = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
   }
 
   async #clear() {

@@ -11,7 +11,9 @@
 // admitted commit, `itx.config`: every context's birth row delivers to it
 // (./context-birth-events.ts) and every facet of the project's config names it (iterate/api
 // `FacetSpec`); only the platform writes it (caller.ts `refuseNonPlatformWrites`), so only its manifest
-// counts.
+// counts. The pointer names the main module too (`mainModule`), so the config worker itself loads
+// under that module's identity, as a facet named by the pointer does (built-ins.ts `workersRoot`): a
+// commit that leaves the main module's graph as it was builds nothing.
 // The follower (processor.ts) appends the pointer and `project/worker-updated` in one batch, as the
 // platform; a commit that fails here is `project/worker-update-failed`, and the pointer stays where
 // it was.
@@ -39,14 +41,15 @@ export type ProjectPublisher = {
   appendAsPlatform(...events: StreamEventInput[]): Promise<unknown>;
 };
 
-/** The manifest of commit `commitOid` as publication `generation`, admitted by the probe — or a
- *  throw that says why it is not admitted. A platform failure on the way (a read of the repo, a
- *  module lock, the probe's load) throws as itself: the follower meets it again. */
+/** The manifest of commit `commitOid` as publication `generation`, admitted by the probe, and its
+ *  main module (package.json's `main`) — or a throw that says why it is not admitted. A platform
+ *  failure on the way (a read of the repo, a module lock, the probe's load) throws as itself: the
+ *  follower meets it again. */
 export async function manifestOf(
   commitOid: string,
   generation: number,
   publisher: Pick<ProjectPublisher, "files" | "identityOf" | "probe">,
-): Promise<WorkerManifest> {
+): Promise<{ mainModule: string; manifest: WorkerManifest }> {
   const files = await publisher.files(commitOid);
   const { entry } = readPackage(files, "the config repo");
   if (Object.hasOwn(files, PROBE_MODULE))
@@ -71,16 +74,21 @@ export async function manifestOf(
       { identity, classes: answer.classes[module] ?? [] },
     ]),
   );
-  return { generation, modules: manifest };
+  return { mainModule: entry, manifest: { generation, modules: manifest } };
 }
 
 /** THE POINTER on `/`, its rows keyed by its generation: `itx.config` names the config repo's
- *  worker at `commitOid` — its modules read at that commit where it is loaded, cached under the
- *  commit — with its manifest. Its producer reads them through `itx.config.modules`, which names the
- *  repo facet at the fixed point: a row on `itx.config…` is the platform's alone
- *  (itx-expression-rewriting.ts `refuseConfigPointerRows`), so no rule anyone appends re-points what
- *  loads under the published identity. */
-export function configPointer(commitOid: string, manifest: WorkerManifest): StreamEventInput[] {
+ *  worker at `commitOid` — its main module `mainModule`, its modules read at that commit where it is
+ *  loaded — with its manifest, so it loads under its main module's identity there
+ *  (worker-loader.ts `namedWorkerLoad`). Its producer reads them through `itx.config.modules`, which
+ *  names the repo facet at the fixed point: a row on `itx.config…` is the platform's alone
+ *  (caller.ts `refuseNonPlatformWrites`), so no rule anyone appends re-points what loads under the
+ *  published identity. */
+export function configPointer(
+  commitOid: string,
+  mainModule: string,
+  manifest: WorkerManifest,
+): StreamEventInput[] {
   const rule = (match: string, key: string, target: unknown, description: string) => ({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     idempotencyKey: `project/${key}:${manifest.generation}`,
@@ -113,6 +121,7 @@ export function configPointer(commitOid: string, manifest: WorkerManifest): Stre
           {
             source: ["itx", "config", ["modules", { commitOid }]],
             cacheKey: commitOid,
+            mainModule,
             manifest,
           },
         ],

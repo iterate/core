@@ -14,8 +14,13 @@
 //     observers), so the prelude, which runs before the code's own module, replaces every `console`
 //     method with a no-op; a thrown error is caught in the jail and comes back as a value, which the
 //     facet redacts of every string in the material before it lands on the `secret/refreshed` fact.
-//   • isolation: one isolate per (deployment, secret, pin, source), so module state never carries
-//     one secret's material into another's login, and a new pin is a new `globalOutbound`.
+//   • isolation: one isolate per (secret, pin, source), so module state never carries one secret's
+//     material into another's login, and a new pin is a new `globalOutbound`. Its id names what
+//     it runs, the jail's own code included (`JAIL_CODE`), and never the deployment: the Worker
+//     Loader keeps no isolate across its parent's deploy and builds it again under the same id
+//     (context/worker-loader.ts `prepareConfinedWorker` says how that was measured), so an isolate
+//     never holds an older deployment's `PinnedOutbound`, and a deploy that changes no jail code
+//     mints no new billed id.
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import type { SecretMaterial } from "iterate/api";
@@ -100,13 +105,18 @@ const JailAnswer = z.object({
 /** The most one login may spend, per call: a few requests and a little parsing. */
 const EXCHANGE_LIMITS = { cpuMs: 1_000, subRequests: 16 };
 
+/** Node compat stays off: exchange code needs `fetch` and the material, nothing more. */
+const JAIL_COMPATIBILITY_FLAGS = ["no_nodejs_compat", "no_nodejs_compat_v2"];
+
+/** Everything the platform puts in a jail beside the exchange code: part of every jail's id. */
+const JAIL_CODE = [COMPATIBILITY_DATE, JAIL_COMPATIBILITY_FLAGS, EXCHANGE_LIMITS, JAIL, PRELUDE];
+
 /** Load `source` in the jail for the secret `context`, pinned to `urls`, and run its `exchange` on
  *  `material`: the next material, or an Error whose message holds no string of the material. */
 export async function runExchangeCode(input: {
   loader: WorkerLoader;
   /** `PinnedOutbound` minted with `urls` (the facet's `ctx.exports`): the code's whole egress. */
   pinnedOutbound: Fetcher;
-  deployId: string;
   context: string;
   urls: string[];
   source: string;
@@ -114,11 +124,11 @@ export async function runExchangeCode(input: {
 }): Promise<Record<string, unknown>> {
   const { urls, source, material } = input;
   // ⚠️ every distinct id is a billed Dynamic Worker (context/worker-loader.ts): low cardinality —
-  // one per deployment, secret, pin and source, never per refresh.
-  const id = `secret-exchange:${await sha256Hex(JSON.stringify([input.deployId, input.context, urls, source]))}`;
+  // one per secret, pin and source, and the jail's code, never per refresh or per deploy.
+  const id = `secret-exchange:${await sha256Hex(JSON.stringify([JAIL_CODE, input.context, urls, source]))}`;
   const worker = input.loader.get(id, () => ({
     compatibilityDate: COMPATIBILITY_DATE,
-    compatibilityFlags: ["no_nodejs_compat", "no_nodejs_compat_v2"],
+    compatibilityFlags: JAIL_COMPATIBILITY_FLAGS,
     mainModule: "jail.js",
     modules: { "jail.js": JAIL, "prelude.js": PRELUDE, "exchange.js": source },
     env: {},

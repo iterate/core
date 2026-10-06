@@ -1490,6 +1490,52 @@ test.for([
   },
 );
 
+const POINTER = `itx.config ⇒ itx.builtins.workers.get({ source: 'itx.config.modules({ commitOid: "c1" })', cacheKey: 'c1', mainModule: 'worker.ts' })`;
+test.for([
+  {
+    name: "a delivery to the root's pointer from any context",
+    at: "/x/y",
+    others: { "/": [POINTER] },
+    call: "itx.cd('/').config.deliverEvent(1)",
+    vouched: true,
+  },
+  {
+    name: "the ingress, through the root's snapshot at hop 0",
+    at: "/",
+    stateless: true as const,
+    others: { "/": [POINTER] },
+    call: "itx.config.deliverEvent(1)",
+    vouched: true,
+  },
+  {
+    name: "the root's own live table at hop 0",
+    at: "/",
+    own: [POINTER],
+    call: "itx.config.deliverEvent(1)",
+    vouched: true,
+  },
+  {
+    name: "the same spec under a name anyone may write",
+    at: "/x/y",
+    others: { "/": [POINTER.replace("itx.config", "itx.forged")] },
+    call: "itx.cd('/').forged.deliverEvent(1)",
+    vouched: false,
+  },
+  {
+    name: "another worker of the root's",
+    at: "/x/y",
+    others: { "/": [POINTER, "itx.voice ⇒ itx.builtins.workers.get({ source: { 'w.js': 'v' } })"] },
+    call: "itx.cd('/').voice.deliverEvent(1)",
+    vouched: false,
+  },
+])(
+  "a worker the config pointer names is vouched for, so its manifest counts where it loads — $name",
+  async ({ call, vouched, ...options }) => {
+    const { resolver } = acrossContexts(options);
+    expect(await resolver.invoke(call)).toMatchObject({ workersOf: "/", vouched });
+  },
+);
+
 test("what lives in another context is one call there, the call as it entered that context, stamped with where it came from; its snapshot is not read", async () => {
   const { resolver, located, snapshotsRead } = acrossContexts({ at: "/a" });
   expect(await resolver.invoke("itx.cd('/b').append({ type: 'x' })")).toEqual({ locatedAt: "/b" });

@@ -63,10 +63,10 @@ const PUBLICATION_ATTEMPT_WAITS_MS = [0, 5_000, 30_000] as const;
  *  commit stays owed to the project's next incarnation. */
 const PUBLICATION_RERUN_WAITS_MS = [30_000, 30_000] as const;
 
-/** One attempt of a publication (`ProjectProcessor#attemptPublication`): its manifest admitted,
- *  or refused and why. */
+/** One attempt of a publication (`ProjectProcessor#attemptPublication`): its main module and
+ *  manifest admitted, or refused and why. */
 type PublicationAttempt =
-  | { kind: "admitted"; manifest: WorkerManifest }
+  | { kind: "admitted"; mainModule: string; manifest: WorkerManifest }
   | { kind: "refused"; error: string };
 
 /** The files of a config-repo template, which seed a project created from one: the host passes
@@ -702,8 +702,8 @@ export class ProjectProcessor extends StreamProcessor<
         });
         return true;
       }
-      const { manifest } = attempt;
-      await landOnce(publisher, ...configPointer(commitOid, manifest), {
+      const { mainModule, manifest } = attempt;
+      await landOnce(publisher, ...configPointer(commitOid, mainModule, manifest), {
         type: "events.iterate.com/project/worker-updated",
         idempotencyKey: `project/publication:${generation}`,
         payload: { commitOid, generation, modules: manifest.modules },
@@ -736,7 +736,7 @@ export class ProjectProcessor extends StreamProcessor<
         error: `main moved on to ${head || "no commit (unborn)"} before this commit was published`,
       };
     try {
-      return { kind: "admitted", manifest: await manifestOf(commitOid, generation, publisher) };
+      return { kind: "admitted", ...(await manifestOf(commitOid, generation, publisher)) };
     } catch (error) {
       if (isPlatformFailureKind(failureKind(error))) throw error;
       return { kind: "refused", error: error instanceof Error ? error.message : String(error) };

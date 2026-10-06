@@ -244,6 +244,58 @@ test("a module's identity is its graph: an AGENTS.md or a module it does not imp
   ).toMatchObject({ size: 3 });
 });
 
+test("the config pointer's worker, reached through the pointer, loads under its main module's identity: a commit that leaves that module's graph asks for the same isolate and, cold, reads ITX_KV; one that changes it is built again; the same spec no route vouched for loads under its commit", async () => {
+  const kv = fakeKv().kv;
+  let produced = 0;
+  const invoke = async () => {
+    produced += 1;
+    return { "package.json": '{"main":"worker.js"}', "worker.js": "export default {}" };
+  };
+  /** The pointer of commit `commitOid`, whose worker.js publishes `identity` (publication.ts). */
+  const pointer = (commitOid: string, identity: string) => ({
+    source: ["itx", "config", ["modules", { commitOid }]] satisfies ItxExpression,
+    cacheKey: commitOid,
+    mainModule: "worker.js",
+    manifest: { generation: 1, modules: { "worker.js": { identity, classes: [] } } },
+  });
+  const one = configWorkerOver({ kv, invoke, vouched: true });
+  await one.call(pointer("c1", "worker-a"));
+  // an AGENTS.md commit: the same id, so the warm isolate answers
+  await one.call(pointer("c2", "worker-a"));
+  expect({ ids: new Set(one.ids).size, built: one.built(), produced }).toEqual({
+    ids: 1,
+    built: 1,
+    produced: 1,
+  });
+  expect(JSON.parse(one.ids[0]!)).toEqual([
+    "worker",
+    PLATFORM_ID,
+    null,
+    "prj_u.iterate/",
+    "module:worker-a",
+    "worker.js",
+  ]);
+  // that isolate idled out (or a deploy): the cold load reads the answer ITX_KV kept
+  const cold = configWorkerOver({ kv, invoke, vouched: true });
+  await cold.call(pointer("c2", "worker-a"));
+  expect({ id: cold.ids[0], built: cold.built(), produced }).toEqual({
+    id: one.ids[0],
+    built: 1,
+    produced: 1,
+  });
+  // a commit to a module worker.js imports: a new identity, produced and built once more
+  await one.call(pointer("c3", "worker-b"));
+  expect({ ids: new Set(one.ids).size, built: one.built(), produced }).toEqual({
+    ids: 2,
+    built: 2,
+    produced: 2,
+  });
+  // the same spec where no route vouched for it: its manifest names nothing
+  const unvouched = configWorkerOver({ kv, invoke, vouched: false });
+  await unvouched.call(pointer("c2", "worker-a"));
+  expect(JSON.parse(unvouched.ids[0]!)).toMatchObject({ 4: "key:c2" });
+});
+
 test("a loaded identity that moved says which of its parts moved: the platform's code, the source, the dead-load generation, or every part of a row an older spelling wrote", () => {
   const id = (platform: string, source: string, generation = "") =>
     JSON.stringify(["facet", platform, null, ["prj_u.iterate/", "Agents"], source, "agents.ts"]) +
@@ -938,6 +990,54 @@ const workersGetOverFailingLoader = (
     generations,
     callerPaths,
     call: (step: ItxExpressionStep) => workers.get({ source }).invoke([step]),
+  };
+};
+
+/** `itx.workers.get(spec).ids()` on `/` of one project, over a fake Worker Loader that runs
+ *  `getCode` once per new id (`built`, `ids`) and answers every call: the platform's isolate
+ *  lifetime, with `kv` its ITX_KV and `invoke` the producer's dispatch. `vouched`: the resolver's
+ *  route ran through the config pointer (itx-expression-rewriting.ts `runsThePublishedConfig`). */
+const configWorkerOver = ({
+  kv,
+  invoke,
+  vouched,
+}: {
+  kv: KVNamespace;
+  invoke: () => Promise<unknown>;
+  vouched: boolean;
+}) => {
+  const ids: string[] = [];
+  const warm = new Map<string, Promise<unknown>>();
+  const env = {
+    LOADER: {
+      get: (id: string, getCode: () => Promise<unknown>) => {
+        ids.push(id);
+        if (!warm.has(id)) warm.set(id, getCode());
+        const answer = async () => warm.get(id); // the call waits for the isolate's code
+        return { getEntrypoint: () => ({ ids: answer, callWithCause: answer }) };
+      },
+    },
+    ITX_KV: kv,
+  } as unknown as ConfinedWorkerOptions["env"];
+  const itxEntrypoint = {} as Fetcher;
+  const workers = workersRoot({
+    env,
+    projectId: "prj_u",
+    path: "/",
+    iterateContextName: "prj_u.iterate/",
+    platformOrigin: () => null,
+    itxEntrypoint: () => itxEntrypoint,
+    invoke,
+    caller: () => ({ principal: null }),
+    delivery: () => undefined,
+    cause: () => undefined,
+    namedWorker: () => Promise.reject(new Error("the pointer's spec names no worker")),
+    vouched,
+  });
+  return {
+    ids,
+    built: () => warm.size,
+    call: (spec: Parameters<typeof workers.get>[0]) => workers.get(spec).invoke([["ids"]]),
   };
 };
 

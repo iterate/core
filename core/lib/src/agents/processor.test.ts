@@ -7,7 +7,7 @@
 import { expect, test, vi } from "vitest";
 import { reduceProcessor } from "../stream/test-support.ts";
 import { type AgentState } from "./contract.ts";
-import { AgentProcessor, raceAbort } from "./processor.ts";
+import { AgentProcessor, failedRequestNote, raceAbort } from "./processor.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
 const requested = { type: "events.iterate.com/agent/create-requested", payload: {} };
@@ -425,6 +425,39 @@ test.for<{ name: string; source?: { origin: string }; from?: string; label?: str
     { ...user("hi"), payload: { ...user("hi").payload, from }, source, path: "/agents/b" },
   ]);
   expect(contextItems.at(-1)).toMatchObject({ content: "hi", from: label });
+});
+
+// ── the note a failed model request leaves for the next turn ──
+
+test.for<{ name: string; attempt: number; errorMessage: string; note: string }>([
+  {
+    name: "a provider's message that ends with a period keeps that one period",
+    attempt: 1,
+    errorMessage: "openai: Our servers are currently overloaded. Please try again later.",
+    note: "The model request @14 failed (attempt 1 of 3): openai: Our servers are currently overloaded. Please try again later. Retrying.",
+  },
+  {
+    name: "a message with no end mark gets a period",
+    attempt: 2,
+    errorMessage: "stream idle for 25000 ms",
+    note: "The model request @14 failed (attempt 2 of 3): stream idle for 25000 ms. Retrying.",
+  },
+  {
+    name: "a question mark or an exclamation mark ends the sentence too; trailing whitespace goes",
+    attempt: 1,
+    errorMessage: "Did you mean gpt-6?\n",
+    note: "The model request @14 failed (attempt 1 of 3): Did you mean gpt-6? Retrying.",
+  },
+  {
+    name: "the last attempt gives up",
+    attempt: 3,
+    errorMessage: "Rate limited!",
+    note: "The model request @14 failed (attempt 3 of 3): Rate limited! Giving up until the next message.",
+  },
+])("failedRequestNote: $name", ({ attempt, errorMessage, note }) => {
+  expect(failedRequestNote({ requestOffset: 14, attempt, maxAttempts: 3, errorMessage })).toBe(
+    note,
+  );
 });
 
 // ── the assistant's output, parsed (the codemode-tag grammar, codemode-format.ts) ──
