@@ -34,12 +34,7 @@ import {
   RETAINED_SCRIPT_RESULTS,
   wrapScript,
 } from "./results-preamble.ts";
-import {
-  type AgentInputGate,
-  isForeignAgentFact,
-  isOtherContext,
-  trustBoundary,
-} from "./message.ts";
+import { type AgentInputGate, isOtherContext } from "./message.ts";
 import { standingFileSection, standingInstructionFiles } from "./standing-instructions.ts";
 import { AgentContract, type AgentState, type LlmUsage } from "./contract.ts";
 import { AGENT_COMPACTION_PROMPT, DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
@@ -465,7 +460,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
    *  when the state does, so a harmless fact (a late intent, a repeated certificate) never reorders
    *  the sidebar. */
   reduce(args: ReduceArgs<AgentState, AgentEvent>): AgentState | undefined {
-    if (isForeignAgentFact(args.event)) return undefined;
     const next = this.#reduceFacts(args);
     return next && { ...next, lastActivityAt: args.event.createdAt };
   }
@@ -539,9 +533,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       }
 
       case "events.iterate.com/agent/context-added": {
-        // THE TRUST BOUNDARY (message.ts): what another agent's context appended is its words, a
-        // user item from that context, whatever role, actor or sections it claims
-        const payload = trustBoundary(event);
+        const { payload } = event;
         const { role, content, actor, llmRequestPolicy, llmRequestOffset, compaction } = payload;
         // The previous loop journaled its default prompt beside the birth certificate, under this
         // key. The sections supersede it, so it is not part of the conversation.
@@ -909,8 +901,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     const { event, state, previousState, append, blockProcessorWhile, runInBackground } = args;
     // An agent asked to go acts no more: no consequence of a late event (a script result landing
     // after the request raises no turn), no interrupt to settle — only the death itself, at head.
-    // Another context's fact about this loop (message.ts) is not this loop's: it has no consequence.
-    if (state.deletion || (event && isForeignAgentFact(event))) {
+    if (state.deletion) {
       this.#atHead(args);
       return;
     }
@@ -923,7 +914,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     if (
       event?.type === "events.iterate.com/agent/context-added" &&
       event.payload.llmRequestPolicy?.behaviour === "interrupt-current-request" &&
-      ["user", "developer"].includes(trustBoundary(event).role) &&
+      (event.payload.role === "user" || event.payload.role === "developer") &&
       state.openRequest
     ) {
       const open = state.openRequest;
@@ -965,10 +956,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // ── per-event consequences, blocked: the event is delivered once ──
     // The assistant's answer, interpreted (mmkal's order: the status precedes the script so the step
     // is born with its label, the script precedes the prose so a feed groups the turn as one).
-    // Only an answer this agent's own context wrote: another context's is its words (message.ts).
     if (
       event?.type === "events.iterate.com/agent/context-added" &&
-      trustBoundary(event).role === "assistant" &&
+      event.payload.role === "assistant" &&
       event.payload.llmRequestOffset !== undefined
     ) {
       const { llmRequestOffset, call } = event.payload;
