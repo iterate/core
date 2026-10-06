@@ -3,7 +3,8 @@ import type { ConsentScope } from "iterate/oauth-scopes";
 import { Button } from "../ui/button.tsx";
 import { ConsentActions, StepHeading, type ConsentOutcome } from "./consent-step.tsx";
 import { PermissionChoices } from "./permission-choices.tsx";
-import { ProjectChoices, type ProjectRow, type ProjectSelection } from "./project-choices.tsx";
+import { ProjectChoices } from "./project-choices.tsx";
+import { grantedProjects, type ProjectRow, type ProjectSelection } from "./project-selection.ts";
 import { ProjectFields } from "./project-fields.tsx";
 
 /** The consent itself, on one screen: which projects the client may reach (and a project made on
@@ -38,9 +39,7 @@ export function AuthorizeStep({
   const { draft, disabled, onDraftChange } = fields;
   const [authorizing, setAuthorizing] = useState(false);
   const granted = {
-    projects: selection.all
-      ? ["*"]
-      : projects.filter((project) => !selection.excluded.has(project.id)).map(({ id }) => id),
+    projects: grantedProjects(projects, selection),
     scopes: scopes.filter((scope) => scope.required || !declined.has(scope.name)),
   };
   return (

@@ -10,7 +10,7 @@ import { switchAccountHref } from "../../login-search.ts";
 import { AuthorizeStep } from "./authorize-step.tsx";
 import { ClientHeading } from "./client-heading.tsx";
 import { OnboardingStep } from "./onboarding-step.tsx";
-import type { ProjectSelection } from "./project-choices.tsx";
+import type { ProjectSelection } from "./project-selection.ts";
 import type { ProjectDraft } from "./project-fields.tsx";
 import { SignedInAccount } from "./signed-in-account.tsx";
 import { SomeoneElseStep } from "./someone-else-step.tsx";
@@ -35,9 +35,11 @@ export function ConsentCard({
   const [pending, startTransition] = useTransition();
   // a link that named someone (`impersonation.suggested`) opens on signing in as them
   const [someoneElse, setSomeoneElse] = useState(Boolean(view.impersonation?.suggested));
+  // consent starts on full access; a client bound to one project has only that project to grant
   const [selection, setSelection] = useState<ProjectSelection>({
-    all: !view.projectBound,
+    future: !view.projectBound,
     excluded: new Set(),
+    listed: false,
   });
   const [declined, setDeclined] = useState<ReadonlySet<string>>(new Set());
   const [draft, setDraft] = useState<ProjectDraft>({
