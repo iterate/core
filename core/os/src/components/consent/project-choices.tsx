@@ -9,23 +9,26 @@ import type { ProjectRow, ProjectSelection } from "./project-selection.ts";
 /** "Full access", ticked to begin with, and under it, once it has been unticked, a box for each
  *  project, one for future projects, and the New project toggle. Unticking "Full access" unticks
  *  every box, ticking it ticks every box, and ticking them all one by one ticks it. A client bound
- *  to one project has none of this: its project is listed ticked, and stays so. */
+ *  to one project has none of this: its project is listed ticked, and stays so. `fixed` projects
+ *  stay ticked too: the bound client's, and a first project the screen is about to make, the one
+ *  thing there is to grant. */
 export function ProjectChoices({
   projects,
   projectBound,
+  fixed,
   selection,
-  creating,
+  newProject,
   disabled,
   onSelectionChange,
-  onCreatingChange,
 }: {
   projects: ProjectRow[];
   projectBound: boolean;
+  fixed: boolean;
   selection: ProjectSelection;
-  creating: boolean;
+  /** the New project toggle, where the screen offers one */
+  newProject: { open: boolean; onOpenChange: (open: boolean) => void } | null;
   disabled: boolean;
   onSelectionChange: (selection: ProjectSelection) => void;
-  onCreatingChange: (creating: boolean) => void;
 }) {
   // The label around a checkbox names it too (Base UI); these name each project "<slug> in <org>",
   // and the others by their title alone, described by the note beside it.
@@ -50,7 +53,7 @@ export function ProjectChoices({
             onCheckedChange={(full) =>
               onSelectionChange({
                 future: full,
-                excluded: new Set(full ? [] : projects.map((project) => project.id)),
+                excluded: new Set(full || fixed ? [] : projects.map((project) => project.id)),
                 listed: true,
               })
             }
@@ -71,7 +74,7 @@ export function ProjectChoices({
                 className="mt-1 rounded-none border-foreground/30 data-disabled:opacity-50"
                 aria-labelledby={`${id}-${project.id}-slug ${id}-${project.id}-in ${id}-${project.id}-org`}
                 checked={!selection.excluded.has(project.id)}
-                disabled={disabled || projectBound}
+                disabled={disabled || fixed}
                 onCheckedChange={(checked) => tick(project.id, checked)}
               />
               <span className="flex min-w-0 flex-wrap items-baseline gap-x-3">
@@ -114,17 +117,19 @@ export function ProjectChoices({
                   )}
                 </span>
               </Label>
-              <Button
-                type="button"
-                variant="link"
-                className={cn(linkClass, "self-start")}
-                aria-expanded={creating}
-                disabled={disabled}
-                onClick={() => onCreatingChange(!creating)}
-              >
-                <span aria-hidden="true">+</span>
-                New project
-              </Button>
+              {newProject ? (
+                <Button
+                  type="button"
+                  variant="link"
+                  className={cn(linkClass, "self-start")}
+                  aria-expanded={newProject.open}
+                  disabled={disabled}
+                  onClick={() => newProject.onOpenChange(!newProject.open)}
+                >
+                  <span aria-hidden="true">+</span>
+                  New project
+                </Button>
+              ) : null}
             </>
           )}
         </div>

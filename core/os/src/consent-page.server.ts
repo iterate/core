@@ -9,6 +9,7 @@ import { errorCode, withTimeout } from "iterate/lib";
 import { iterateConfigOf, platformAddressesOf } from "./iterate-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { ConsentRpcTarget } from "./consent.ts";
+import { projectSlug } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { templates } from "./generated/config-templates.js";
 import { signInHref } from "./login-search.ts";
@@ -79,23 +80,25 @@ export const NewConsentProject = z.object({
   ]),
 });
 
-/** Create a project on the consent page — in a new organization when the person named one. A
- *  refused project still reports the organization made for it, so the retry uses it; a session
- *  that has ended is redirected to sign in again. */
+/** Create a project on the consent page — in a new organization when the person named one — and
+ *  answer its id, which a first consent grants at once (onboarding-step.tsx). A refused project
+ *  still reports the organization made for it, so the retry uses it; a session that has ended is
+ *  redirected to sign in again. */
 export async function createConsentProject(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
   input: z.infer<typeof NewConsentProject>,
-): Promise<{ orgId?: string; error?: string }> {
+): Promise<{ orgId: string; projectId: string } | { orgId?: string; error: string }> {
   const signedIn = await issuerSignIn(request, env);
   if (!signedIn) throw redirect({ href: signInToAuthorize(input.authorization) });
   const teardown = new SessionTeardown();
+  const controlPlane = new ControlPlane(env);
   const session = new SessionRpcTarget(
     {
       contextNamespace: env.ITERATE_CONTEXT,
       waitUntil: (promise) => ctx.waitUntil(promise),
-      controlPlane: new ControlPlane(env),
+      controlPlane,
       iterateConfig: iterateConfigOf(env),
       platformOrigin: platformAddressesOf(env, request).platformOrigin,
     },
@@ -121,7 +124,11 @@ export async function createConsentProject(
       orgId,
       configRepoTemplate: templates[0].reference,
     });
-    return { orgId };
+    // read past what this isolate keeps: the slug may have named another project before
+    const project = await controlPlane.getProject(projectSlug(input.slug), true);
+    if (project?.orgId !== orgId)
+      throw new Error(`The project ${input.slug} was created and is not in ${orgId}'s catalog.`);
+    return { orgId, projectId: project.id };
   } catch (error) {
     const code = errorCode(error);
     if (code !== "INVALID_INPUT" && code !== "PROJECT_NAME_TAKEN" && code !== "FORBIDDEN")

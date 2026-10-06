@@ -16,10 +16,11 @@ import { SignedInAccount } from "./signed-in-account.tsx";
 import { SomeoneElseStep } from "./someone-else-step.tsx";
 
 /** The consent page for a request the platform accepted: one screen with the projects the client
- *  may reach, the permissions it asked for and Authorize (authorize-step.tsx). Two views stand in
- *  for it: a first project for someone with none, and, for a platform admin, "Sign in as someone
- *  else…", which a link naming someone opens on. Choices live here, so a refreshed description
- *  (after a project is created) and a trip to another view never drop one. */
+ *  may reach, the permissions it asked for and Authorize (authorize-step.tsx). For someone with no
+ *  project the same screen makes one as it authorizes (onboarding-step.tsx). For a platform admin,
+ *  "Sign in as someone else…" stands in for it, and a link naming someone opens on that. Choices
+ *  live here, so a refreshed description (after a project is created) and a trip to another view
+ *  never drop one. */
 export function ConsentCard({
   view,
   authorization,
@@ -49,6 +50,8 @@ export function ConsentCard({
     orgId: view.orgs[0]?.id ?? "",
     organizationName: view.orgs.length ? "" : view.suggestedOrganizationName,
   });
+  // a first project, made a moment ago: the grant about to be posted names it
+  const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
 
@@ -74,43 +77,70 @@ export function ConsentCard({
     headingRef.current?.focus();
   }
 
-  /** Create the drafted project (and its new organization, when one is named), then refresh the
-   *  description. The first project goes straight on to the consent. */
+  /** The drafted project (and its new organization, when one is named), created. A refusal is
+   *  shown, with the organization made for it kept for the retry and the slug's own box opened;
+   *  null is a session that has ended: `useServerFn` has already navigated to sign-in and
+   *  resolves with nothing, so the page has nothing left to do. */
+  async function createDraft() {
+    const result = await createProject({
+      data: {
+        authorization,
+        slug,
+        organization: draft.orgId ? { id: draft.orgId } : { name: draft.organizationName },
+      },
+    });
+    if (!result) return null;
+    if (!("error" in result)) return result;
+    // `sync`: "Creating project…" stays up until the description shows the organization made,
+    // rather than ending on the old one (docs/frontend-development.md#act-mutations).
+    await router.invalidate({ sync: true });
+    setDraft((current) => ({ ...current, open: true, orgId: result.orgId || current.orgId }));
+    setError(result.error);
+    return null;
+  }
+
+  /** The New project form: create the project, then list it. */
   function submitDraft(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     // cleared first, so a refusal (even the same one again) is a new alert that takes focus
-    const invalid = draftError(slug, draft);
+    const invalid = draftError(slug, organizationName);
     setError(invalid);
     if (invalid) return;
-    const first = onboarding;
     startTransition(async () => {
       try {
-        const result = await createProject({
-          data: {
-            authorization,
-            slug,
-            organization: draft.orgId ? { id: draft.orgId } : { name: draft.organizationName },
-          },
-        });
-        // An ended session is redirected to sign-in: useServerFn has already navigated there and
-        // resolves with nothing, so this page has nothing left to update.
-        if (!result) return;
-        // `sync`: "Creating project…" stays up until the description shows the new project, rather
-        // than ending on the old one (docs/frontend-development.md#act-mutations).
+        const created = await createDraft();
+        if (!created) return;
         await router.invalidate({ sync: true });
-        // An organization made for a refused project stays chosen for the retry.
-        const orgId = result.orgId || draft.orgId;
-        if (result.error) {
-          setDraft((current) => ({ ...current, orgId }));
-          setError(result.error);
-          return;
-        }
-        // Rendered at once: after a first project the refreshed description has replaced the
-        // first-project view with the consent, whose heading takes focus.
-        flushSync(() =>
-          setDraft({ open: false, slug: "", followsName: true, orgId, organizationName: "" }),
-        );
-        if (first) headingRef.current?.focus();
+        setDraft({
+          open: false,
+          slug: "",
+          followsName: true,
+          orgId: created.orgId,
+          organizationName: "",
+        });
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    });
+  }
+
+  /** A first consent's one button: create the project, then post the form, which grants it. The
+   *  post is the form's own (a plain POST to this very authorization URL), sent only once the
+   *  project exists. */
+  function createAndAuthorize(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const invalid = draftError(slug, organizationName);
+    setError(invalid);
+    // a name that makes no slug is fixed in the slug's own box
+    if (invalid) return setDraft((current) => ({ ...current, open: true }));
+    startTransition(async () => {
+      try {
+        const created = await createDraft();
+        if (!created) return;
+        // rendered at once: the form holds the new project's id before it is posted
+        flushSync(() => setCreatedProjectId(created.projectId));
+        form.submit();
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
@@ -158,7 +188,14 @@ export function ConsentCard({
           headingRef={headingRef}
           outcome={outcome}
           fields={fields}
-          onCreateProject={submitDraft}
+          organizationName={organizationName}
+          selection={selection}
+          scopes={view.scopes}
+          declined={declined}
+          createdProjectId={createdProjectId}
+          onSelectionChange={setSelection}
+          onDeclinedChange={setDeclined}
+          onCreateAndAuthorize={createAndAuthorize}
         />
       ) : (
         <AuthorizeStep
@@ -180,8 +217,8 @@ export function ConsentCard({
 }
 
 /** Why the drafted project cannot be created yet, or null when it can. */
-function draftError(slug: string, draft: ProjectDraft) {
+function draftError(slug: string, organizationName: string) {
+  if (!organizationName.trim()) return "Enter an organization name.";
   if (!slug.trim()) return "Enter a project name.";
-  if (!draft.orgId && !draft.organizationName.trim()) return "Enter an organization name.";
   return null;
 }

@@ -49,11 +49,15 @@ export function AuthorizeStep({
         <ProjectChoices
           projects={projects}
           projectBound={projectBound}
+          fixed={projectBound}
           selection={selection}
-          creating={draft.open}
+          newProject={
+            projectBound
+              ? null
+              : { open: draft.open, onOpenChange: (open) => onDraftChange({ ...draft, open }) }
+          }
           disabled={disabled}
           onSelectionChange={onSelectionChange}
-          onCreatingChange={(open) => onDraftChange({ ...draft, open })}
         />
         {draft.open ? (
           // Its own form, beside Authorize's and not inside it: Enter in a field creates the
@@ -64,7 +68,7 @@ export function AuthorizeStep({
             className="flex max-w-md flex-col gap-4 border p-4"
           >
             <h3>New project</h3>
-            <ProjectFields {...fields} focusSlug />
+            <ProjectFields {...fields} />
             <Button
               type="submit"
               variant="outline"

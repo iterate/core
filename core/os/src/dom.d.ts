@@ -10,3 +10,6 @@ interface HTMLInputElement {
 interface HTMLSelectElement {
   value: string;
 }
+interface HTMLFormElement {
+  submit(): void;
+}
