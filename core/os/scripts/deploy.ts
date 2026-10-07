@@ -15,6 +15,7 @@ import { z } from "zod";
 import { type IterateConfig, resourceNamesOf } from "../src/iterate-config.ts";
 import { build, type ConfigTemplate, templatesFromArgs } from "./build.ts";
 import { ensureCloudflareAccess } from "./cloudflare-access.ts";
+import { checkoutPins, imageReferences } from "./images.ts";
 import {
   configFileInUse,
   FOUND_BY_DEPLOY,
@@ -106,6 +107,22 @@ function gitHead() {
   }
 }
 
+/** The images this deployment runs: each pinned image as its digest-pinned reference in the
+ *  account's registry. The pins are the caller's (`ITERATE_IMAGE_PINS`, a JSON object: iterate's
+ *  deploy tooling reads its own), else this checkout's `images/<name>/digest`. Nothing is read from
+ *  the registry and nothing is built: `pnpm run images` (./images.ts) updates a pin when asked. */
+function imagesOfDeployment(accountId: string): Record<string, string> {
+  const pins = process.env.ITERATE_IMAGE_PINS
+    ? z.record(z.string(), z.string()).parse(JSON.parse(process.env.ITERATE_IMAGE_PINS))
+    : checkoutPins();
+  const { found, unpinned } = imageReferences(accountId, pins);
+  for (const name of unpinned)
+    console.warn(
+      `⚠ ${name} is pinned to no build: its sandboxes start Cloudflare's managed image. \`pnpm run images\` builds and pins it.`,
+    );
+  return found;
+}
+
 /** What a deploy takes: the templates the build offers (`--template`, or iterate's own tooling's
  *  `configTemplates`), and `check` to change nothing. */
 export type DeployOptions = { templates: ConfigTemplate[]; check?: boolean };
@@ -119,6 +136,10 @@ export async function deploy({ templates, check = false }: DeployOptions) {
     throw new Error(
       `No deployment: the iterate config from ${file} has no \`cloudflare\` section. ${HOW_TO_CHANGE_THE_CONFIG}`,
     );
+  // The images this deployment runs, as the pins say (./images.ts)
+  process.env.ITERATE_IMAGES = JSON.stringify(
+    imagesOfDeployment(deployment.config.cloudflare!.accountId),
+  );
   const env: Env = {
     ...process.env,
     CLOUDFLARE_ACCOUNT_ID: deployment.config.cloudflare!.accountId,

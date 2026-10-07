@@ -98,6 +98,21 @@ signs everyone out. Keep `core/os/.secrets`, or your secrets manager's copy: it 
    can read; no value is printed or put on a command line. An `ITERATE__*` secret the config no
    longer sets is blanked by the same upload, then deleted.
 
+## The sandbox image
+
+A sandbox starts from `iterate-dev-image` (`images/iterate-dev-image/Dockerfile`): Node 24 on Debian with
+git, gh, Chromium, ffmpeg, pnpm, the Claude, Codex and Grok CLIs, `cf`, doppler, the iterate CLI and a
+clone of `iterate/core`. An image changes only when you ask. `pnpm run images` (Docker, `linux/amd64`)
+builds each `images/<name>/` once, pushes it to your account's registry
+(`registry.cloudflare.com/<account>/<name>`), has Cloudflare prepare it, and writes the digest it pins to
+`images/<name>/digest`: commit that file. `pnpm run deploy` only reads the pins: no registry call, no
+build, no time, and it gives the container the digest-pinned reference of each pinned image, so a
+deployment runs the image it was deployed with. Editing the Dockerfile changes nothing until
+`pnpm run images` runs again; `pnpm run images --check` builds nothing and fails when your registry does
+not hold a pinned digest. With no image pinned, sandboxes start Cloudflare's managed
+`cloudflare/debian-trixie` (Node 24; no git, curl or Chromium). The first start of a new image on a
+Cloudflare host pulls it (up to about 30 seconds); later starts take about a second.
+
 ## Project apps
 
 `https://<worker>.<your-subdomain>.workers.dev/projects/<project>/<routingSlug>/`, and

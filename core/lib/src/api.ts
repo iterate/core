@@ -985,8 +985,9 @@ export type SandboxContainerApi = InvokeHandle & {
  *  and every call of `files` start the container when none runs, from the disk last saved, on
  *  `standard-1` unless `start({ instance })` says otherwise. Memory and running processes do not
  *  survive a stop; the disk does, for 30 days after its last restore and only on the image it was
- *  saved from (Cloudflare's managed `cloudflare/debian-trixie`: Node 24, Debian; no git, curl or
- *  Python). NOTHING RUNS FOR NOTHING: a sandbox unused for `idleAfterMs` (five minutes by default; a
+ *  saved from (the platform's `iterate-dev-image`: Node 24 on Debian with git, gh, Chromium, ffmpeg,
+ *  pnpm, the Claude, Codex and Grok CLIs, the cf CLI, doppler and the iterate CLI; `start({ image:
+ *  "cloudflare/debian-trixie" })` is Cloudflare's lean one). NOTHING RUNS FOR NOTHING: a sandbox unused for `idleAfterMs` (five minutes by default; a
  *  command, a file call or a stream being read is use; a call left open counts for an hour at most)
  *  is saved and stopped, a sandbox in use has its disk saved every 15 minutes, and Cloudflare stops
  *  the container two hours after it last answered, whatever else fails. THE ONLY WAY OUT IS THE
@@ -1003,8 +1004,7 @@ export type SandboxHandle = InvokeHandle & {
   /** `container.start(options)` with the sandbox's disk: make the container run, from the disk last
    *  saved unless `image` asks for a fresh one (which leaves that disk behind). Running already:
    *  nothing happens. A disk Cloudflare will not restore (the image was replaced, or 30 days passed)
-   *  FAILS the start rather than start empty; `start({ image: "cloudflare/debian-trixie" })` is the
-   *  way out. */
+   *  FAILS the start rather than start empty; `start({ image: "iterate-dev-image" })` is the way out. */
   start(options?: SandboxStartOptions): Promise<void>;
   /** `container.exec(argv, options)` then `process.output()`: run a command and wait for it
    *  (a shell is `["bash", "-c", "…"]`). A nonzero exit is an answer, not a failure. Output over

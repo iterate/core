@@ -53,19 +53,40 @@ export type SandboxStarted = z.infer<typeof SandboxStarted>;
  *  stopped (it crashed, or Cloudflare stopped it), and so a disk since the last snapshot is lost. */
 const SandboxStopped = z.object({ reason: z.enum(["requested", "idle", "unknown"]) });
 
-/** `sandbox/exec-finished`'s payload: the command (cut to a screenful: it may carry a secret, so a
- *  command takes its secrets from the environment), how it ended, and how much it printed. The
- *  output itself is the caller's, never the log's. */
-const SandboxExecFinished = z.object({
+/** The command as the log keeps it: cut to a screenful. It may carry a secret, so a command takes
+ *  its secrets from the environment (`env` is never logged). */
+const SandboxExecStarted = z.object({
   command: z.string(),
-  exitCode: z.number().int(),
+  cwd: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+/** `sandbox/exec-finished`'s payload: the command settled, with the offset of the `exec-started`
+ *  it settles, how it ended (an `exitCode`, or an `error` when no exit came: a timeout, a container
+ *  that died), how long it took, how much it printed, and the start and end of that output. */
+const SandboxExecFinished = z.object({
+  startedOffset: z.number().int().nonnegative(),
+  command: z.string(),
+  exitCode: z.number().int().optional(),
+  error: z.string().optional(),
   durationMs: z.number().int().nonnegative(),
   stdoutBytes: z.number().int().nonnegative(),
   stderrBytes: z.number().int().nonnegative(),
+  /** What the log kept of each stream: all of a short one, else its two ends (exec-record.ts). */
+  stdout: z.string(),
+  stderr: z.string(),
+  /** A stream's middle was left out: its `…Bytes` say how much it printed. */
+  truncated: z.boolean(),
 });
 
-/** The image a start names none for: Cloudflare's managed one (Node 24, Debian; no git or curl). */
-export const SANDBOX_IMAGE = "cloudflare/debian-trixie";
+/** The image a start names none for: the platform's own, built from `core/os/images/<name>` and
+ *  named so in the container's `images` (Node 24, Debian, with git, gh, Chromium, ffmpeg and the
+ *  agent CLIs). A name of an image is always `<what>-image`. Where no image is built (a local run),
+ *  it starts `SANDBOX_BASE_IMAGE`. */
+export const SANDBOX_IMAGE = "iterate-dev-image";
+/** Cloudflare's managed image (Node 24, Debian slim; no git or curl), which `start({ image })` can
+ *  name for a lean machine. */
+export const SANDBOX_BASE_IMAGE = "cloudflare/debian-trixie";
 
 /** How long a sandbox may go unused before it is parked, by default. */
 const SANDBOX_DEFAULT_IDLE_AFTER_MS = 5 * 60_000;
@@ -140,8 +161,14 @@ export const SandboxContract = defineProcessorContract({
         "A knob of the sandbox set: how long it may sit unused before its disk is saved and its container stopped.",
       payloadSchema: SandboxConfigured,
     },
+    "events.iterate.com/sandbox/exec-started": {
+      description:
+        "A command was started in the container (`exec`). Its `exec-finished` names this event's offset.",
+      payloadSchema: SandboxExecStarted,
+    },
     "events.iterate.com/sandbox/exec-finished": {
-      description: "A command ran in the container and ended.",
+      description:
+        "A command settled: how it ended (exit code, or the error that kept it from one), how long it took, how much it printed, and the start and end of its output. `startedOffset` is the `exec-started` it settles.",
       payloadSchema: SandboxExecFinished,
     },
     [SANDBOX_IDLE_CHECK]: {

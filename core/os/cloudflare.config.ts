@@ -6,6 +6,7 @@
 // when it has none.
 import { bindings, defineConfig, defineContainer, exports, triggers } from "cf/config";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
+import { z } from "zod";
 import { readDeployment } from "./scripts/iterate-config-file.ts";
 import { resourceNamesOf } from "./src/iterate-config.ts";
 import { TEST_EMAIL_DOMAIN } from "./src/test-email-domain.ts";
@@ -49,11 +50,19 @@ export default defineConfig(async ({ mode }) => {
       : "os-local-build";
   // The sandboxes' containers (src/sandbox/container.ts). A Containers application's name is the
   // account's, so a deployment's carries its Worker's. The `durable-object` scheduling policy lets
-  // the class pick image and size at each start, and is the only one that takes disk snapshots. It
-  // names no image: sandboxes start from Cloudflare's managed `cloudflare/debian-trixie`.
+  // the class pick image and size at each start, and is the only one that takes disk snapshots.
+  // `images` are the pinned builds scripts/deploy.ts hands over (scripts/images.ts owns them).
+  const images = z
+    .record(z.string(), z.string())
+    .parse(JSON.parse(process.env.ITERATE_IMAGES || "{}"));
   const sandboxContainer = defineContainer({
     name: `${worker}-sandbox`,
     schedulingPolicy: "durable-object",
+    ...(Object.keys(images).length > 0 && {
+      images: Object.fromEntries(
+        Object.entries(images).map(([name, image]) => [name, { reference: image }]),
+      ),
+    }),
   });
   return {
     accountId: cloudflare?.accountId,

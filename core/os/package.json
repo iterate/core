@@ -16,7 +16,8 @@
     "db:check": "rm -f .sqlfu/app.db && sqlfu migrate --yes && sqlfu check",
     "db:draft": "sqlfu draft",
     "db:migrate": "cf d1 migrations apply 00000000-0000-4000-8000-000000000000 --local --persist-to .cloudflare/state --dir src/control-plane/db/migrations",
-    "deploy": "node --env-file-if-exists=.secrets scripts/deploy.ts"
+    "deploy": "node --env-file-if-exists=.secrets scripts/deploy.ts",
+    "images": "node --env-file-if-exists=.secrets scripts/images.ts"
   },
   "dependencies": {
     "@base-ui/react": "catalog:",

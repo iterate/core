@@ -17,6 +17,7 @@ import {
   type SandboxState,
 } from "./contract.ts";
 import { SandboxFiles } from "./files.ts";
+import { outputForLog } from "./exec-record.ts";
 import { SandboxProcessor } from "./processor.ts";
 
 /** How often the project's connections are read again for a sandbox's environment. */
@@ -214,10 +215,12 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     const snapshotId = image
       ? undefined
       : source?.id || containerSnapshot?.id || state.snapshot?.id;
+    const instance = rest.instance || source?.instance || state.instance || undefined;
     const startOptions: SandboxStartOptions = {
       ...rest,
-      // the size of the last start that named one, unless this one names another
-      instance: rest.instance || state.instance || undefined,
+      // the size this start names, else the one the disk came from (a disk does not run on a smaller
+      // size than it was saved on), else this sandbox's own
+      instance,
       ...(snapshotId
         ? { containerSnapshot: { id: snapshotId } }
         : { image: image || SANDBOX_IMAGE }),
@@ -240,14 +243,14 @@ export class SandboxFacet extends StreamProcessorDurableObject<
       fromSandbox: from,
       snapshotSize: source?.size,
       discardedSnapshotId: image || from ? state.snapshot?.id : undefined,
-      instance: rest.instance,
+      instance: startOptions.instance,
     });
   }
 
   /** The snapshot of another sandbox of this project, which `start({ from })` restores. It is read
    *  through this sandbox's own itx, so a path in another project is never reachable (a snapshot id
    *  restores in any object of the container class: ids are never taken from a caller). */
-  async #snapshotOf(path: string): Promise<SandboxSnapshot> {
+  async #snapshotOf(path: string): Promise<SandboxSnapshot & { instance?: SandboxInstance }> {
     if (path === this.#path)
       throw new Error(`sandbox ${path}: start({ from }) names another sandbox`);
     using itx = this.getItx();
@@ -268,7 +271,11 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     if (!id) throw none();
     // the same path, ending at `size`: a number whenever an id exists
     const size = (await sibling.invoke([["snapshot"], "state", "snapshot", "size"])) as number;
-    return { id, size };
+    // the size the sibling last ran on: its disk comes back on that one
+    const instance = SandboxInstance.optional().parse(
+      (await sibling.invoke([["snapshot"], "state", "instance"])) ?? undefined,
+    );
+    return { id, size, instance };
   }
 
   /** Where the sandbox stands, read through the head of the log: a snapshot a park recorded a
@@ -278,9 +285,14 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     return (await this.snapshot()).state;
   }
 
-  async #append(fact: string, payload: Record<string, unknown>): Promise<void> {
+  async #append(fact: string, payload: Record<string, unknown>): Promise<number> {
     using itx = this.getItx();
-    await itx.append({ type: `events.iterate.com/sandbox/${fact}`, payload });
+    // the RPC type of an append's answer is `never` (its events hold `unknown`); each one has its `offset`
+    const [event] = (await itx.append({
+      type: `events.iterate.com/sandbox/${fact}`,
+      payload,
+    })) as { offset: number }[];
+    return event!.offset;
   }
 
   /** Save the disk and record it; the container goes on. */
@@ -338,19 +350,52 @@ export class SandboxFacet extends StreamProcessorDurableObject<
   ): Promise<{ exitCode: number; stdout: Uint8Array; stderr: Uint8Array }> {
     const argv = Command.parse(command);
     const { stdin, ...rest } = ExecOptions.parse(options || {});
+    const logged = argv.join(" ").slice(0, COMMAND_LOG_CHARS);
+    const startedOffset = await this.#append("exec-started", {
+      command: logged,
+      cwd: rest.cwd,
+      timeoutMs: rest.timeoutMs,
+    });
     const startedAt = Date.now();
-    const result = await this.#use((container) =>
-      container.exec(argv, {
-        ...rest,
-        stdin: stdin ? (typeof stdin === "string" ? textEncoder.encode(stdin) : stdin) : undefined,
-      }),
-    );
+    let result: { exitCode: number; stdout: Uint8Array; stderr: Uint8Array };
+    try {
+      result = await this.#use((container) =>
+        container.exec(argv, {
+          ...rest,
+          stdin: stdin
+            ? typeof stdin === "string"
+              ? textEncoder.encode(stdin)
+              : stdin
+            : undefined,
+        }),
+      );
+    } catch (error) {
+      // no exit came: the call settles all the same, so a started command is never left open
+      await this.#append("exec-finished", {
+        startedOffset,
+        command: logged,
+        error: error instanceof Error ? error.message : String(error),
+        durationMs: Date.now() - startedAt,
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        stdout: "",
+        stderr: "",
+        truncated: false,
+      });
+      throw error;
+    }
+    const stdout = outputForLog(result.stdout);
+    const stderr = outputForLog(result.stderr);
     await this.#append("exec-finished", {
-      command: argv.join(" ").slice(0, COMMAND_LOG_CHARS),
+      startedOffset,
+      command: logged,
       exitCode: result.exitCode,
       durationMs: Date.now() - startedAt,
       stdoutBytes: result.stdout.byteLength,
       stderrBytes: result.stderr.byteLength,
+      stdout: stdout.text,
+      stderr: stderr.text,
+      truncated: stdout.omitted + stderr.omitted > 0,
     });
     return result;
   }

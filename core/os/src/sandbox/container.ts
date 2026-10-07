@@ -19,7 +19,7 @@ import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 // the tool as text; `node` strips its types
 import filesTool from "../../../lib/src/cli/fs.ts?raw";
-import { SANDBOX_IMAGE, SANDBOX_MAX_BUSY_MS } from "./contract.ts";
+import { SANDBOX_BASE_IMAGE, SANDBOX_IMAGE, SANDBOX_MAX_BUSY_MS } from "./contract.ts";
 
 /** The CA the container's HTTPS interception signs with: what a TLS client must trust for a request
  *  to reach the project's egress. */
@@ -34,12 +34,16 @@ const TRUST_INTERCEPT_CA = {
   CURL_CA_BUNDLE: INTERCEPT_CA,
   GIT_SSL_CAINFO: INTERCEPT_CA,
 };
+/** Chromium keeps its own trust store, an NSS database, which `certutil` (libnss3-tools) fills. The
+ *  CA is new at every start, so a start replaces the entry an earlier one made. */
+const NSS_DATABASE = "sql:/root/.pki/nssdb";
 /** What the container runs: a process that stays (the image's own command is a Node REPL, which
- *  ends at once and the container with it), once the system's store trusts the interception CA. */
+ *  ends at once and the container with it), once the system's store, and Chromium's where the image
+ *  has `certutil`, trust the interception CA. */
 const SANDBOX_ENTRYPOINT = [
   "sh",
   "-c",
-  `if [ -f ${INTERCEPT_CA} ] && command -v update-ca-certificates >/dev/null 2>&1; then cp ${INTERCEPT_CA} /usr/local/share/ca-certificates/ && update-ca-certificates >/dev/null 2>&1; fi; exec sleep infinity`,
+  `if [ -f ${INTERCEPT_CA} ] && command -v update-ca-certificates >/dev/null 2>&1; then cp ${INTERCEPT_CA} /usr/local/share/ca-certificates/ && update-ca-certificates >/dev/null 2>&1; fi; if [ -f ${INTERCEPT_CA} ] && command -v certutil >/dev/null 2>&1; then mkdir -p /root/.pki/nssdb && { [ -f /root/.pki/nssdb/cert9.db ] || certutil -d ${NSS_DATABASE} -N --empty-password; } && { certutil -d ${NSS_DATABASE} -D -n iterate-egress || true; } && certutil -d ${NSS_DATABASE} -A -t "C,," -n iterate-egress -i ${INTERCEPT_CA}; fi >/dev/null 2>&1; exec sleep infinity`,
 ];
 /** How long a start may take before it counts as failed. */
 const START_TIMEOUT_MS = 90_000;
@@ -287,6 +291,15 @@ export class SandboxContainer extends DurableObject {
     return (await this.ctx.storage.get<number>("usedAt")) ?? 0;
   }
 
+  /** The reference a start's `image` names: `iterate-dev-image` is the platform's own as this
+   *  deployment built it (its `images`), Cloudflare's managed one where it built none; anything
+   *  else is itself. */
+  #imageNamed(name: string): string {
+    return name === SANDBOX_IMAGE
+      ? this.#container.images[SANDBOX_IMAGE] || SANDBOX_BASE_IMAGE
+      : name;
+  }
+
   /** Make a container run; false when one did already. A snapshot that Cloudflare will not restore
    *  FAILS the start, leaving the container stopped: falling back to the image would lose the disk
    *  without a word. The facet's start; the raw `start` goes through `invoke`. */
@@ -298,25 +311,48 @@ export class SandboxContainer extends DurableObject {
       return false;
     }
     this.#toolReady = false;
+    const began = Date.now();
     const { image, containerSnapshot, ...rest } = options;
     // the egress is registered first: a name looked up before it is would time out
     await this.#intercept();
     container.start({
       entrypoint: SANDBOX_ENTRYPOINT,
-      instance: SANDBOX_INSTANCE,
       ...rest,
+      // after `rest`: a start that names none, with the key present and undefined, would otherwise
+      // take Cloudflare's smallest size (`lite`, a 2 GB disk) instead of ours
+      instance: rest.instance || SANDBOX_INSTANCE,
       env: { ...TRUST_INTERCEPT_CA, ...rest.env },
       enableInternet: false,
-      ...(containerSnapshot ? { containerSnapshot } : { image: image || SANDBOX_IMAGE }),
+      ...(containerSnapshot
+        ? { containerSnapshot }
+        : { image: this.#imageNamed(image || SANDBOX_IMAGE) }),
     });
     try {
       await container.setInactivityTimeout(INACTIVITY_BACKSTOP_MS);
       await this.#untilAnswering();
     } catch (error) {
+      const why = await this.#whyStopped();
       await container.destroy("start failed").catch(() => undefined);
-      throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `${message} (${Date.now() - began} ms after the start began; the container: ${why})`,
+        { cause: error },
+      );
     }
     return true;
+  }
+
+  /** What `monitor()` says of a container that did not come up: how it ended, or that it never
+   *  began. A start's failure is otherwise only "the container has not been started". */
+  async #whyStopped(): Promise<string> {
+    const answer = await Promise.race([
+      this.#container.monitor().then(
+        () => "exited",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve("no word in 3 s"), 3_000)),
+    ]);
+    return answer;
   }
 
   /** Every HTTP and HTTPS request of the container is answered by the project's egress
