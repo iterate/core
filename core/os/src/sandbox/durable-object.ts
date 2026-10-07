@@ -194,10 +194,24 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     }
   }
 
-  /** Start the container, once for every caller that asks while it starts. */
+  /** Start the container, once for every caller that asks while it starts. A caller waits at most 50
+   *  seconds: the platform ends a call at a minute without an answer, and a start that pulls a new
+   *  image onto a host can take longer. A start still going then ends the call with a retryable
+   *  error, and goes on: the next call finds the container up. */
   async #up(options: z.input<typeof StartOptions>): Promise<void> {
     this.#starting ??= this.#start(options).finally(() => (this.#starting = undefined));
-    return this.#starting;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const slow = new Promise<"slow">((resolve) => {
+      timer = setTimeout(() => resolve("slow"), 50_000);
+    });
+    try {
+      if ((await Promise.race([this.#starting.then(() => "up" as const), slow])) === "slow")
+        throw new Error(
+          `sandbox ${this.#path} is still starting (the first start of an image on a host pulls it): the start goes on, so try again`,
+        );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Start the container from what `options` name, else from the disk the log recorded, else from
