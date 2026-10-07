@@ -30,6 +30,19 @@ older. To update: `git pull`, `pnpm install`, `pnpm run deploy`.
 `pnpm run deploy --check` builds and checks everything and runs `cf deploy --dry-run`. Nothing on
 the account changes.
 
+A deployment last deployed from iterate/core before 2026-10-05 still has empty Durable Object
+namespaces for eight old classes: `AccountDurableObject`, `EmailDurableObject`,
+`InstanceDurableObject`, `OrganizationDurableObject`, `ProjectDurableObject`, `RepoDurableObject`,
+`SecretDurableObject` and `WorkspaceDurableObject`. Cloudflare refuses a deploy that drops them
+without a tombstone. Deploy once from the last commit that has their tombstones, which deletes
+them, then deploy the latest:
+
+```sh
+git checkout "$(git log -1 --format=%H -S RETIRED_FACET_CLASSES -- core/os/cloudflare.config.ts)~1"
+pnpm install && pnpm run deploy
+git checkout main && pnpm install && pnpm run deploy
+```
+
 ## The config
 
 One object configures a deployment, the iterate config

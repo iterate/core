@@ -25,18 +25,6 @@ const LOCAL_RESOURCES = {
   repos: "os-dev-repos",
 };
 
-/** The first-party facets' former class names (src/first-party-facets.ts). */
-const RETIRED_FACET_CLASSES = [
-  "AccountDurableObject",
-  "EmailDurableObject",
-  "InstanceDurableObject",
-  "OrganizationDurableObject",
-  "ProjectDurableObject",
-  "RepoDurableObject",
-  "SecretDurableObject",
-  "WorkspaceDurableObject",
-];
-
 export default defineConfig(async ({ mode }) => {
   const local = mode === "development" || mode === "test";
   const deployment = local ? undefined : await readDeployment();
@@ -132,15 +120,6 @@ export default defineConfig(async ({ mode }) => {
           storage: "sqlite",
           container: sandboxContainer,
         }),
-        // TRANSITION: the facets' former class names, which had empty namespaces of their own. A
-        // deploy refuses to drop a namespace that is not declared, so each is retired here. Remove
-        // these lines once a deploy reports them as stale tombstones.
-        ...Object.fromEntries(
-          RETIRED_FACET_CLASSES.map((className) => [
-            className,
-            exports.durableObject({ state: "deleted" }),
-          ]),
-        ),
       },
       env: {
         // THE context DO: one per {projectId, path} — the stream, the routing table, and every
