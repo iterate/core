@@ -197,6 +197,7 @@
     "json5": "catalog:",
     "oauth4webapi": "catalog:",
     "trpc-cli": "catalog:",
+    "uqr": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
   },
@@ -212,6 +213,7 @@
     "@cloudflare/workers-types": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
+    "jsqr": "catalog:",
     "react": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:",

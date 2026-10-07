@@ -107,7 +107,7 @@ export async function refreshOAuthSession(input: { issuer: string; session: Stor
 /** A bounded request. oauth4webapi sends only HTTPS unless told otherwise
  *  (https://github.com/panva/oauth4webapi/blob/main/docs/variables/allowInsecureRequests.md); a
  *  local issuer (`pnpm dev`) is plain http. */
-function requestOptions(issuer: string) {
+export function requestOptions(issuer: string) {
   return {
     signal: AbortSignal.timeout(30_000),
     [oauth.allowInsecureRequests]: isLocalOrigin(issuer),
@@ -129,7 +129,7 @@ async function tokenResponse(step: string, request: () => Promise<oauth.TokenEnd
   }
 }
 
-function sessionFromTokens(
+export function sessionFromTokens(
   tokens: oauth.TokenEndpointResponse,
   clientId: string,
   started: number,

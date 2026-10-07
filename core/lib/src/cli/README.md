@@ -7,6 +7,7 @@ the `iterate` command the examples below use.
 ```sh
 npx iterate                               # offline help
 npx iterate login                         # browser OAuth with project consent
+npx iterate login --device                # approve from a phone or another computer
 npx iterate projects list
 npx iterate orgs list
 npx iterate ping
@@ -36,6 +37,63 @@ no key. `mcp claude` prints a command that reads the key from
 `$ITERATE_BEARER_TOKEN`, never the key itself. See
 [credentials](../../../os/docs/credentials.md).
 `ITERATE_SKIP_BROWSER_OPEN=1` prints the login URL without opening a browser.
+
+### Login without a browser
+
+`iterate login --device` signs in a computer whose browser nobody sees, such as
+a remote machine or an agent's. The person opens the printed page on any device,
+or scans the QR code, checks the code, approves, and picks the projects. The CLI
+polls for five minutes at most. It is the default over SSH (`SSH_CONNECTION`),
+on Linux with no display, and under a coding agent; `ITERATE_LOGIN_FLOW=browser`
+or `=device` overrides that. It grants `iterate` on `/api` alone, so the `tokens`
+commands still sign in in a browser on this computer. Every login prints whom it
+signed in. `--expect-user` ends and discards a session for anyone else.
+
+```text
+$ iterate login --device --expect-user me@example.com
+To sign in, open this page in a browser on any device:
+
+  https://os.iterate.com/oauth2/device
+
+and enter the code:  WDJB-MJHT
+
+Or scan this QR code, or open the link under it. Both fill in the code:
+
+  █████████████████████████████████████████
+  █████████████████████████████████████████
+  ████ ▄▄▄▄▄ █ ██▀▀  ▀▄ ▄▀█▄█▄▀█ ▄▄▄▄▄ ████
+  ████ █   █ █  ▀█ █▄██▄ ▄█▄   █ █   █ ████
+  ████ █▄▄▄█ █▀  █▄███▀█▄▀█▀▄▄██ █▄▄▄█ ████
+  ████▄▄▄▄▄▄▄█▄█ ▀▄▀▄▀ ▀▄▀ ▀ ▀ █▄▄▄▄▄▄▄████
+  ████  ▀▀▄▄▄▀▀█▄█▄ ▀█▀▄▀▀█ █▀█▀█ █▄ ▄▄████
+  █████ ▄▀ ▄▄▀▀ ▄█▀█▀█▄  ▀█▀█ ▄▀█ ▀▀▄▄█████
+  ████ ▀▀█ ▄▄ ▀█▀▄▀▄▄▄█ ▄▄█▄▄▀▄█▄ ▄▄█▄▄████
+  ████▄▀  ▄ ▄█▄▄▄ ▄ ▄ ▄  █  ▀▄ ▄██  ▄▄█████
+  ████ █▀█▄▀▄▄ ▀██▄ ▀█ ██▄▄▄▄ ▄▀▄▀▄▀██▄████
+  █████▀ █  ▄▀▄ ▀█▀█▀  ▀ ▀▄ █▄  █▄ ▀▄▄█████
+  ████▀█▀▀▄▄▄ ▄▀█▄▀▄▄▄▀█▀▄█▄    ▄ ▄▀██▄████
+  ██████▄█  ▄▄▄▄▄ ▄ ▄▄  ▄█ ▀▀  ▄ ▀▄█▄▄█████
+  ████▄▄▄▄▄▄▄█ ███▄ ▀▄▀▀▀▄█ ▄▄ ▄▄▄ ▀█ █████
+  ████ ▄▄▄▄▄ █▀▄▀█▀█▀ █▀█▀  ▄█ █▄█ █▄▄█████
+  ████ █   █ █▄ █▄▀▄▄▄▀█▀█▀▄▄▀▄▄ ▄ ▄▀▄█████
+  ████ █▄▄▄█ █▀▀▀ ▄ ▄ █▀██ ▀▄▀ █▄▀▄▀▄██████
+  ████▄▄▄▄▄▄▄█▄▄▄█▄▄█▄█▄▄▄▄▄▄▄▄██▄▄███▄████
+  █████████████████████████████████████████
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+  https://os.iterate.com/oauth2/device?user_code=WDJB-MJHT
+
+The code expires in 5 minutes. Waiting for approval...
+message: "Logged in as me@example.com"
+```
+
+In a terminal with colors, the QR code is drawn as `qrencode -t ANSI` draws it:
+each module is two spaces on a black or bright white background, so it reads
+the same in any theme and at any line height (76 columns by 37 rows). The
+transcript shows the form without colors, for a pipe, `NO_COLOR` or
+`TERM=dumb`: half blocks in the text color, which scan in a dark terminal whose
+lines touch. `FORCE_COLOR=1` forces the colors, for example under an agent whose
+output shows them. The link under the code works everywhere.
 
 ## Files of this machine
 

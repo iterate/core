@@ -23,6 +23,7 @@ catalog:
   esbuild: ^0.28.2
   jose: 6.2.12
   json5: ^2.2.3
+  jsqr: 1.4.0
   lucide-react: ^1.48.0
   oauth4webapi: ^3.8.8
   pako: ^3.0.2
@@ -37,6 +38,7 @@ catalog:
   tsdown: 0.23.0
   tw-animate-css: ^1.4.0
   typescript: ^7.0.2
+  uqr: 0.1.3
   vite: ^8.3.0
   vitest: ^4.1.11
   ws: 8.21.3

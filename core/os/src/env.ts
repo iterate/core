@@ -15,6 +15,10 @@ export interface Env extends DurableObjectEnv {
   /** Static assets for the Start client and the consent page. The Worker handles platform requests
    *  first, then asks this binding for public files (issuer-pages.ts). */
   ASSETS: Fetcher;
+  /** The device login's rate limits (device-login/, cloudflare.config.ts). */
+  DEVICE_LOGIN_START_LIMIT: RateLimit;
+  DEVICE_LOGIN_POLL_LIMIT: RateLimit;
+  DEVICE_LOGIN_LOOKUP_LIMIT: RateLimit;
 }
 
 /** A worker handler with a REQUIRED fetch: the issuer's pages behind the platform's OAuth routes

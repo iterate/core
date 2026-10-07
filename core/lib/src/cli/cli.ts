@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname } from "node:path";
 import process from "node:process";
 import repl from "node:repl";
@@ -10,6 +11,8 @@ import { connectIterate } from "../node.ts";
 import type { SessionCredentials } from "../api.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import { runFs } from "./fs.ts";
+import { deviceLogin, showsColors } from "./device-login/index.ts";
+import { loginFlowFor, unexpectedUser, type LoginFlow } from "./device-login/flow.ts";
 import { oauthLogin, refreshOAuthSession } from "./oauth.ts";
 import { importProvidedFile, nameOfFile, runProvide } from "./provide.ts";
 import { runTunnel } from "./tunnel.ts";
@@ -217,14 +220,24 @@ const openBrowserForLogin = async (url: URL) => {
   if (!isAgent && process.env.ITERATE_SKIP_BROWSER_OPEN !== "1") await openUrlInBrowser(url.href);
 };
 
-const loginToResolvedConfig = async (resolved: { name: string; config: Config }) => {
+/** Sign in the way `flow` says (device-login/flow.ts), check who it signed in against `expectUser`,
+ *  and only then store the session: a session for someone else is ended, never saved. */
+const loginToResolvedConfig = async (
+  resolved: { name: string; config: Config },
+  { flow, expectUser }: { flow: LoginFlow; expectUser?: string },
+) => {
   const { config } = resolved;
 
   console.error(`Logging in to ${config.osBaseUrl}...`);
-  const oauthResult = await oauthLogin({
-    issuer: config.osBaseUrl,
-    openBrowser: openBrowserForLogin,
-  });
+  const oauthResult =
+    flow === "device"
+      ? await deviceLogin({
+          issuer: config.osBaseUrl,
+          deviceName: `iterate CLI on ${hostname()}`,
+          print: (line) => console.error(line),
+          colors: showsColors(process.stderr.isTTY, process.env),
+        })
+      : await oauthLogin({ issuer: config.osBaseUrl, openBrowser: openBrowserForLogin });
 
   // Update in-memory config so subsequent verification and calls see the token.
   config.session = oauthResult;
@@ -233,10 +246,15 @@ const loginToResolvedConfig = async (resolved: { name: string; config: Config })
     baseUrl: config.osBaseUrl,
     auth: { type: "bearer", token: oauthResult.token },
   });
-  await connection.session.whoami();
+  const principal = await connection.session.whoami();
+  const unexpected = unexpectedUser(principal.email, expectUser);
+  if (unexpected) {
+    await connection.session.logout();
+    throw new Error(unexpected);
+  }
 
   updateConfigSession(resolved.name, oauthResult);
-  return oauthResult;
+  return { ...oauthResult, email: principal.email };
 };
 
 const launcherProcedures = {
@@ -246,12 +264,28 @@ const launcherProcedures = {
     return { message: "Iterate session valid", principal: await owned.session.whoami() };
   }),
   login: os
-    .input(z.object({}))
+    .input(
+      z.object({
+        device: z
+          .boolean()
+          .optional()
+          .describe(
+            "Approve from a browser on any device: print a URL and a code, and wait. The default over SSH, on Linux with no display, and under a coding agent",
+          ),
+        expectUser: z
+          .string()
+          .optional()
+          .describe("Refuse and end a session for anyone but this email"),
+      }),
+    )
     .meta({ description: "Authenticate with Iterate via browser OAuth" })
-    .handler(async () => {
-      const session = await loginToResolvedConfig(resolveConfig(process.cwd(), { throw: true }));
+    .handler(async ({ input }) => {
+      const session = await loginToResolvedConfig(resolveConfig(process.cwd(), { throw: true }), {
+        flow: loginFlowFor({ device: input.device, env: process.env, platform: process.platform }),
+        expectUser: input.expectUser,
+      });
       return {
-        message: "Logged in successfully",
+        message: `Logged in as ${session.email}`,
         expiresAt: session.expiresAt,
         scope: session.scope,
       };

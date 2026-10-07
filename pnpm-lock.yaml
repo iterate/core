@@ -63,6 +63,9 @@ catalogs:
     json5:
       specifier: ^2.2.3
       version: 2.2.3
+    jsqr:
+      specifier: 1.4.0
+      version: 1.4.0
     lucide-react:
       specifier: ^1.48.0
       version: 1.48.0
@@ -105,6 +108,9 @@ catalogs:
     typescript:
       specifier: ^7.0.2
       version: 7.0.2
+    uqr:
+      specifier: 0.1.3
+      version: 0.1.3
     vite:
       specifier: ^8.3.0
       version: 8.3.0
@@ -144,6 +150,9 @@ importers:
       trpc-cli:
         specifier: 'catalog:'
         version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.22))(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+      uqr:
+        specifier: 'catalog:'
+        version: 0.1.3
       ws:
         specifier: 8.21.3
         version: 8.21.3
@@ -163,6 +172,9 @@ importers:
       '@types/ws':
         specifier: 'catalog:'
         version: 8.18.1
+      jsqr:
+        specifier: 'catalog:'
+        version: 1.4.0
       react:
         specifier: 'catalog:'
         version: 19.3.0
@@ -2960,6 +2972,9 @@ packages:
   jsonfile@6.2.1:
     resolution: {integrity: sha512-zwOTdL3rFQ/lRdBnntKVOX6k5cKJwEc1HdilT71BWEu7J41gXIB2MRp+vxduPSwZJPWBxEzv4yH1wYLJGUHX4Q==}
 
+  jsqr@1.4.0:
+    resolution: {integrity: sha512-dxLob7q65Xg2DvstYkRpkYtmKm2sPJ9oFhrhmudT1dZvNFFTlroai3AWSpLey/w5vMcLBXRgOJsbXpdN9HzU/A==}
+
   kleur@3.0.3:
     resolution: {integrity: sha512-eTIzlVOSUR+JxdDFepEYcBMtZ9Qqdef+rnzWdRZuMbOywu5tO2w2N7rqjoANZ5k9vywhL6Br1VRjUIgTQx4E8w==}
     engines: {node: '>=6'}
@@ -4074,6 +4089,9 @@ packages:
     hasBin: true
     peerDependencies:
       browserslist: '>= 4.21.0'
+
+  uqr@0.1.3:
+    resolution: {integrity: sha512-0rjE8iEJe4YmT9TOhwsZtqCMRLc5DXZUI2UEYUUg63ikBkqqE5EYWaI0etFe/5KUcmcYwLih2RND1kq+hrUJXA==}
 
   use-sync-external-store@1.7.0:
     resolution: {integrity: sha512-6L+EeigHMQhdaIPNIFUKwfWJSwWFQ8gJbJ2DLOs5sDIegTwR9fRxvnM3uciHKjIZhFz+KAv2emhWMRvDmMcY8A==}
@@ -6858,6 +6876,8 @@ snapshots:
     optionalDependencies:
       graceful-fs: 4.2.11
 
+  jsqr@1.4.0: {}
+
   kleur@3.0.3: {}
 
   kleur@4.1.5: {}
@@ -7928,6 +7948,8 @@ snapshots:
       browserslist: 4.29.0
       escalade: 3.2.0
       picocolors: 1.1.1
+
+  uqr@0.1.3: {}
 
   use-sync-external-store@1.7.0(react@19.3.0):
     dependencies:

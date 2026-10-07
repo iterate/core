@@ -5,6 +5,8 @@ import { issuerRequestContext } from "./issuer-request-context.server.ts";
 import { loginSearchOf } from "./login-search.ts";
 import { loginState } from "./login.server.ts";
 import { createConsentProject, describeConsent, NewConsentProject } from "./consent-page.server.ts";
+import { describeDevicePage } from "./device-login/page.server.ts";
+import { DevicePageSearch } from "./device-login/protocol.ts";
 import { iterateConfigOf, platformAddressesOf } from "./iterate-config.ts";
 
 /** A server function's input, parsed. Start answers a thrown validation error with a 500 and an
@@ -44,6 +46,13 @@ export const getConsent = createServerFn({ method: "GET" })
     return describeConsent(getRequest(), env, ctx, data.authorization);
   });
 
+export const getDeviceLoginPage = createServerFn({ method: "GET" })
+  .inputValidator(inputOf(DevicePageSearch))
+  .handler(async ({ data }) => {
+    setResponseHeader("cache-control", "no-store");
+    return describeDevicePage(getRequest(), issuerRequestContext().env, data);
+  });
+
 export const createProjectForConsent = createServerFn({ method: "POST" })
   .inputValidator(inputOf(NewConsentProject))
   .handler(async ({ data }) => {
@@ -63,5 +72,6 @@ export const issuerServerFunctions = [
   getLandingState,
   getLoginState,
   getConsent,
+  getDeviceLoginPage,
   createProjectForConsent,
 ];

@@ -18,6 +18,7 @@ const issuerPageMethods = new Map([
   ["/", ["GET", "HEAD"]],
   ["/login", ["GET", "HEAD", "POST"]],
   ["/oauth2/auth", ["GET", "HEAD", "POST"]],
+  ["/oauth2/device", ["GET", "HEAD", "POST"]],
 ]);
 
 const publicFiles = new Set([

@@ -165,6 +165,20 @@ export default defineConfig(async ({ mode }) => {
         // Email Sending: the sign-in code's way out (src/password-and-code-sign-in.ts), from
         // `login.methods.emailCode.from`.
         EMAIL: bindings.sendEmail(),
+        // The device login's rate limits (src/device-login/). A namespace is the account's, so
+        // deployments on one account share its counters. https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/
+        DEVICE_LOGIN_START_LIMIT: bindings.rateLimit({
+          namespace: "8628001",
+          simple: { limit: 10, period: 60 },
+        }),
+        DEVICE_LOGIN_POLL_LIMIT: bindings.rateLimit({
+          namespace: "8628002",
+          simple: { limit: 3, period: 10 },
+        }),
+        DEVICE_LOGIN_LOOKUP_LIMIT: bindings.rateLimit({
+          namespace: "8628003",
+          simple: { limit: 20, period: 60 },
+        }),
         // The Worker Loader that runs each project's confined config worker and agents.
         LOADER: bindings.workerLoader(),
         // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO survives

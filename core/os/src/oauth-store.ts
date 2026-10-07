@@ -3,6 +3,7 @@
 // grant (`grant:<userId>:<grantId>`) lives in the control plane's D1 (control-plane/oauth-grants.ts),
 // because the provider rewrites it on the code exchange and on every refresh and the next refresh
 // must read that write, which KV does not promise across locations. Every other key stays in KV.
+// The device logins keep their own `device:` rows in the same table (device-login/store.ts).
 //
 // WHY THIS EXISTS, AND WHEN IT GOES: the library has no storage option. Its refresh-token rotation
 // on eventually consistent KV is cloudflare/workers-oauth-provider#214, and cloudflare/workers-oauth-provider#312 (pluggable storage

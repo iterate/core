@@ -18,7 +18,7 @@ import { SessionRpcTarget, SessionTeardown } from "./session.ts";
 
 /** The browser's issuer session — the only grant that may approve access or act on the consent
  *  page. Anything else (no cookie, an ended session) is not signed in to the issuer. */
-async function issuerSignIn(request: Request, env: Env) {
+export async function issuerSignIn(request: Request, env: Env) {
   const signedIn = await browserAuthorization(env, request);
   if (signedIn?.grant?.kind !== "issuer") return null;
   return { ...signedIn, grant: signedIn.grant };

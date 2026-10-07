@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
 import { Route as LoginRouteImport } from "./routes/login.tsx";
 import { Route as Oauth2AuthRouteImport } from "./routes/oauth2.auth.tsx";
+import { Route as Oauth2DeviceRouteImport } from "./routes/oauth2.device.tsx";
 
 const IndexRoute = IndexRouteImport.update({
   id: "/",
@@ -28,35 +29,44 @@ const Oauth2AuthRoute = Oauth2AuthRouteImport.update({
   path: "/oauth2/auth",
   getParentRoute: () => rootRouteImport,
 } as any);
+const Oauth2DeviceRoute = Oauth2DeviceRouteImport.update({
+  id: "/oauth2/device",
+  path: "/oauth2/device",
+  getParentRoute: () => rootRouteImport,
+} as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
   "/login": typeof LoginRoute;
   "/oauth2/auth": typeof Oauth2AuthRoute;
+  "/oauth2/device": typeof Oauth2DeviceRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
   "/login": typeof LoginRoute;
   "/oauth2/auth": typeof Oauth2AuthRoute;
+  "/oauth2/device": typeof Oauth2DeviceRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/login": typeof LoginRoute;
   "/oauth2/auth": typeof Oauth2AuthRoute;
+  "/oauth2/device": typeof Oauth2DeviceRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/login" | "/oauth2/auth";
+  fullPaths: "/" | "/login" | "/oauth2/auth" | "/oauth2/device";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/login" | "/oauth2/auth";
-  id: "__root__" | "/" | "/login" | "/oauth2/auth";
+  to: "/" | "/login" | "/oauth2/auth" | "/oauth2/device";
+  id: "__root__" | "/" | "/login" | "/oauth2/auth" | "/oauth2/device";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute;
   LoginRoute: typeof LoginRoute;
   Oauth2AuthRoute: typeof Oauth2AuthRoute;
+  Oauth2DeviceRoute: typeof Oauth2DeviceRoute;
 }
 
 declare module "@tanstack/react-router" {
@@ -82,6 +92,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof Oauth2AuthRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    "/oauth2/device": {
+      id: "/oauth2/device";
+      path: "/oauth2/device";
+      fullPath: "/oauth2/device";
+      preLoaderRoute: typeof Oauth2DeviceRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
   }
 }
 
@@ -89,6 +106,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
   Oauth2AuthRoute: Oauth2AuthRoute,
+  Oauth2DeviceRoute: Oauth2DeviceRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

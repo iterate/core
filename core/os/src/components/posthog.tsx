@@ -42,9 +42,16 @@ function posthogInitOptions() {
 /** `text` with the secret in each URL path that carries one replaced by its route parameter:
  *  `/invitations/<token>` (the Dash's invitation link, which joins its organization) becomes
  *  `/invitations/:token`, URL-encoded too (`?next=%2Finvitations%2F<token>`, the Dash's step-up
- *  link). A new route whose path holds a secret adds its pattern here. */
+ *  link). A new route whose path holds a secret adds its pattern here. The query values of a
+ *  device login (src/device-login/) go too: its `user_code`, and the `state` (the device code's
+ *  hash) and `code` of its authorization, plain or URL-encoded inside `next`. */
 function redactSecretPaths(text: string) {
-  return text.replace(/((?:\/|%2F)invitations(?:\/|%2F))[^/?#&"'\s%]+/gi, "$1:token");
+  return text
+    .replace(/((?:\/|%2F)invitations(?:\/|%2F))[^/?#&"'\s%]+/gi, "$1:token")
+    .replace(
+      /((?:[?&]|%3F|%26)(?:user_code|state|code)(?:=|%3D))(?:(?!%26)[^&#"'\s])+/gi,
+      "$1:redacted",
+    );
 }
 
 /** `value` with `redactSecretPaths` applied to every string and object key in it, except a replay

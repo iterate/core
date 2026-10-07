@@ -1,6 +1,7 @@
 import { insufficientScope, OAuthResourceServer } from "@cloudflare/workers-oauth-provider";
 import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
 import { reportIssue } from "iterate/lib";
+import { deviceLoginResponse } from "./device-login/index.ts";
 import { platformAddressesOf, type PlatformAddresses } from "./iterate-config.ts";
 import type { Env, Handler } from "./env.ts";
 import {
@@ -28,7 +29,7 @@ const AUTHORIZATION_SERVER_PATHS = new Set([
  *  metadata, challenges a request without a token, and validates one for its own resource alone);
  *  the authorization server's own endpoints; and everything else to `defaultHandler`. The
  *  library's docs/resource-servers.md: "You own routing". */
-export function oauthResponse(
+export async function oauthResponse(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
@@ -56,6 +57,11 @@ export function oauthResponse(
     ).fetch(request, env, ctx);
   if (isResourceRequest(addresses.userinfo, url))
     return resourceServer(addresses, addresses.userinfo, userinfoResponse).fetch(request, env, ctx);
+  // the device login (RFC 8628), which the library lacks, answers its own requests before it
+  const deviceLogin =
+    url.origin === addresses.platformOrigin &&
+    (await deviceLoginResponse(request, env, addresses, ctx));
+  if (deviceLogin) return deviceLogin;
   if (url.origin === addresses.platformOrigin && AUTHORIZATION_SERVER_PATHS.has(url.pathname))
     return authorizationServerFetch(env, addresses, request, ctx);
   return defaultHandler.fetch(request, env, ctx);

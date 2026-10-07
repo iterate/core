@@ -7,7 +7,8 @@
 // (https://developers.cloudflare.com/kv/concepts/how-kv-works/). D1 does, because every query goes
 // to its primary: without the Sessions API "all queries will continue to be executed only by the
 // primary database" (https://developers.cloudflare.com/d1/best-practices/read-replication/), so
-// `withSession` must never appear under src/control-plane/.
+// `withSession` must never appear under src/control-plane/. The device logins' `device:` rows
+// (device-login/store.ts) share the table, and its purge.
 //
 // The provider's KV semantics are kept (oauth-store.ts is the KV-shaped face): an expiry, absolute
 // or relative, after which a row reads as absent (purged on the next write); a key-ordered,
