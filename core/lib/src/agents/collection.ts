@@ -159,7 +159,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     // copied it.
     const catalog = await this.catalog();
     if (!catalog.deleted[path] && !catalog.agents[path])
-      throw new Error(`agent ${path}: not created — nothing to delete`);
+      throw codedError("NOT_CREATED", `agent ${path}: not created — nothing to delete`, { path });
     const rows = async () => (await context.processors.list()) as unknown as { name: string }[];
     if (catalog.deleted[path] && !(await rows()).some((row) => row.name === "agent"))
       return { path };
@@ -179,7 +179,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     }
     if (state.deletion?.status !== "deleted") {
       if (state.creation?.status !== "created")
-        throw new Error(`agent ${path}: not created — nothing to delete`);
+        throw codedError("NOT_CREATED", `agent ${path}: not created — nothing to delete`, { path });
       let requestedAtOffset: number;
       if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
       else {
@@ -308,8 +308,10 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
     const catalog = await this.catalog();
     if (catalog.deleted[path]) throw dead;
     if (!catalog.agents[path])
-      throw new Error(
+      throw codedError(
+        "NOT_CREATED",
         `agent ${path}: not created — itx.agents.create(${JSON.stringify(path)}) first`,
+        { path },
       );
     throw new Error(
       `agent ${path}: its context has no \`agent\` processor — itx.agents.create(${JSON.stringify(path)}) binds it again`,

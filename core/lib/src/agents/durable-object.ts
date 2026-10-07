@@ -1,5 +1,6 @@
 // durable-object.ts — one agent's facet, loaded into a project through the public SDK: the processor
 // (processor.ts) and `message()`, a person's words.
+import { codedError } from "../lib.ts";
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { StreamEvent } from "../stream/processor.ts";
 import type { AgentHandleApi } from "./api.ts";
@@ -99,8 +100,10 @@ export class AgentDurableObject extends StreamProcessorDurableObject<AgentState>
     const { state } = await this.snapshot();
     if (state.deletion) throw new Error(`agent ${path}: deleted`);
     if (state.creation?.status !== "created")
-      throw new Error(
+      throw codedError(
+        "NOT_CREATED",
         `agent ${path}: not created — itx.agents.create(${JSON.stringify(path)}) first`,
+        { path },
       );
     return path;
   }

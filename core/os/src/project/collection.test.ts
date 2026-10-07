@@ -1,10 +1,12 @@
 // src/project/collection.test.ts — THE TERMINAL WAIT of `itx.repos.create` / `itx.workspaces.create`
 // (collection.ts `#terminalFact`), driven with a fake context: the entity's certificate is waited for
 // 30 s in 5 s slices, each a fresh call, so a wait the platform left on a replaced instance — which
-// never sees the new instance's appends — costs one slice, not the creation. The sagas themselves
-// are the e2e's (test/vitest/os/repos.e2e.test.ts, test/vitest/os/workspaces.e2e.test.ts).
+// never sees the new instance's appends — costs one slice, not the creation. Also the refusal of a
+// `delete` with nothing to delete. The sagas themselves are the e2e's
+// (test/vitest/os/repos.e2e.test.ts, test/vitest/os/workspaces.e2e.test.ts).
 
 import { errorCode } from "iterate/lib";
+import { failureKind } from "iterate/platform-retry";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 
@@ -68,6 +70,20 @@ test("a failure is the creation's answer, thrown with its error", async () => {
   await expect(collection(context).create(path, { creator: "/" })).rejects.toThrow(
     `repo ${path}: creation failed — boom`,
   );
+});
+
+test("a delete of an entity never created refuses NOT_CREATED, which the failure model reads as refused", async () => {
+  const context = fakeContext([]);
+  const error = await collection(context)
+    .delete(path)
+    .catch((caught: unknown) => caught);
+  expect(error).toMatchObject({
+    code: "NOT_CREATED",
+    data: { path },
+    message: `repo ${path}: not created — nothing to delete`,
+  });
+  expect(failureKind(error)).toBe("refused");
+  expect(context).toMatchObject({ appended: [], waits: [] });
 });
 
 /** The context's wake record: an incarnation's first event. */

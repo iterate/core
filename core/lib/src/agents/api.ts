@@ -26,13 +26,14 @@ export interface AgentHandleApi {
    *  next turn (or, with `{ trigger: false }`, context it reads on that turn), answered so a caller
    *  can wait for what follows it. Sent from another agent, the model reads them
    *  as `[from <sender's context>]` — the collection's base, which the sender's own `itx.agents` row
-   *  pins (collection.ts); from anywhere else they read as a person's. A deleted agent, or one never
-   *  created, refuses. */
+   *  pins (collection.ts); from anywhere else they read as a person's. A deleted agent refuses, and
+   *  so does one never created (NOT_CREATED). */
   message(input: AgentMessageInput, options?: AgentMessageOptions): Promise<StreamEvent>;
 }
 
 /** `itx.agents` — installed by rewrite rule on the project's root and on each agent's context.
- *  `create` and `delete` are sagas on the agent's path (a deleted agent is not re-creatable). */
+ *  `create` and `delete` are sagas on the agent's path (a deleted agent is not re-creatable; a
+ *  `delete` of an agent never created refuses, NOT_CREATED). */
 export interface AgentsApi {
   list(): Promise<{ path: string; createdAt: string }[]>;
   get(path: string): AgentHandleApi;

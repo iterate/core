@@ -193,7 +193,9 @@ export class EntityCollectionRpcTarget extends RpcTarget {
     const state = await this.#state(context);
     if (state.deletion?.status !== "deleted") {
       if (state.creation?.status !== "created")
-        throw new Error(`${this.slug} ${path}: not created — nothing to delete`);
+        throw codedError("NOT_CREATED", `${this.slug} ${path}: not created — nothing to delete`, {
+          path,
+        });
       let requestedAtOffset: number;
       if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
       else {

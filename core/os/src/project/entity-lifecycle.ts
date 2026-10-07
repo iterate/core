@@ -10,6 +10,7 @@
 // and a contract importing it back would evaluate a cycle.
 
 import { z } from "zod";
+import { codedError } from "iterate/lib";
 import {
   type ProcessEventArgs,
   type ProcessorContract,
@@ -261,7 +262,9 @@ export function assertCreated(
 ): void {
   if (deletion) throw new Error(`${slug} ${path}: deleted`);
   if (creation?.status !== "created")
-    throw new Error(
+    throw codedError(
+      "NOT_CREATED",
       `${slug} ${path}: not created — itx.${entityPlural(slug)}.create(${JSON.stringify(path)}) first`,
+      { path },
     );
 }

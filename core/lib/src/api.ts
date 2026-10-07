@@ -1036,7 +1036,8 @@ export type SandboxHandle = InvokeHandle & {
  *  caller's context writes first, then the processor row, the request, the terminal fact — created,
  *  or create-failed thrown), `delete(path)` the deletion saga (the request, `deleted` cross-posted to
  *  `/`, the row disabled). A relative `path` means the caller's. `get` and `list` reach the whole
- *  project; `create` and `delete` only paths strictly beneath the caller's context (FORBIDDEN). */
+ *  project; `create` and `delete` only paths strictly beneath the caller's context (FORBIDDEN). An
+ *  entity whose creation has not landed refuses its handle's verbs and `delete` (NOT_CREATED). */
 export type EntityCollectionApi<Handle> = {
   get(path: string): Handle;
   list(): Promise<{ path: string; createdAt: string }[]>;
