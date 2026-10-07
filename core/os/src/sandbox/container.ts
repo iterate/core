@@ -231,6 +231,20 @@ export class SandboxContainer extends DurableObject {
     const container = ctx.container;
     if (container?.running)
       void ctx.blockConcurrencyWhile(() => container.setInactivityTimeout(INACTIVITY_BACKSTOP_MS));
+    void ctx.blockConcurrencyWhile(async () => {
+      this.#defaults = (await ctx.storage.get<Record<string, string>>("env")) || {};
+    });
+  }
+
+  /** What every command of this container is run with, beside the trust for the egress's CA: the
+   *  facet sets it (the project's GitHub connection, as placeholders). A command's own env wins. */
+  #defaults: Record<string, string> = {};
+  async defaults(env: Record<string, string>): Promise<void> {
+    this.#defaults = env;
+    await this.ctx.storage.put("env", env);
+  }
+  #envOf(given?: Record<string, string>): Record<string, string> {
+    return { ...TRUST_INTERCEPT_CA, ...this.#defaults, ...given };
   }
 
   /** The container, which this class's configuration makes `ctx.container` present. */
@@ -393,7 +407,7 @@ export class SandboxContainer extends DurableObject {
   ): { args: unknown[]; source?: ReadableStream<Uint8Array> } {
     if (first && member === "exec") {
       const { stdin, ...options } = ExecStepOptions.parse(args[1] ?? {});
-      const given = { ...options, env: { ...TRUST_INTERCEPT_CA, ...options.env } };
+      const given = { ...options, env: this.#envOf(options.env) };
       return stdin instanceof ReadableStream
         ? { args: [args[0], { ...given, stdin: "pipe" }], source: stdin }
         : { args: [args[0], stdin === undefined ? given : { ...given, stdin }] };
@@ -448,7 +462,7 @@ export class SandboxContainer extends DurableObject {
       const process = watched(
         await this.#container.exec(command, {
           cwd: options.cwd,
-          env: { ...TRUST_INTERCEPT_CA, ...options.env },
+          env: this.#envOf(options.env),
           user: options.user,
           stdin: options.stdin ? new Blob([options.stdin]).stream() : undefined,
           stdout: "pipe",

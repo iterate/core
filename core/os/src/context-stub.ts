@@ -38,6 +38,12 @@ export function contextStub(
   { readsRunSettlements = true }: { readsRunSettlements?: boolean } = {},
 ) {
   return {
+    /** The context's own `fetch`, on a fresh stub: the FETCH CHANNEL, the only hop that carries a
+     *  WebSocket (context/fetch-upgrade.ts says why `invoke` cannot). Never repeated: a request has a
+     *  body that is read once, and its answer may hold a socket. */
+    fetch(request: Request): Promise<Response> {
+      return namespace.getByName(address.name).fetch(request);
+    },
     /** `givenUp`: the caller stopped waiting for this call's answer, so the call left pending is
      *  released and never repeated. */
     async invoke(

@@ -21,6 +21,17 @@ export const SandboxSnapshot = z.object({
 });
 export type SandboxSnapshot = z.infer<typeof SandboxSnapshot>;
 
+/** A container's size: one of Cloudflare's instance types, or a custom one. */
+export const SandboxInstance = z.union([
+  z.enum(["lite", "standard-1", "standard-2", "standard-3", "standard-4"]),
+  z.object({
+    vcpu: z.number().positive(),
+    memoryMib: z.number().positive(),
+    diskMb: z.number().positive(),
+  }),
+]);
+export type SandboxInstance = z.infer<typeof SandboxInstance>;
+
 /** `sandbox/started`'s payload: where the disk came from. `discardedSnapshotId` names the snapshot a
  *  start from an image on request (`start({ image })`) left behind: the reduce forgets it. A snapshot
  *  Cloudflare will not restore (its image has been replaced, or it expired) fails the start: nothing
@@ -28,7 +39,13 @@ export type SandboxSnapshot = z.infer<typeof SandboxSnapshot>;
 export const SandboxStarted = z.object({
   from: z.enum(["image", "snapshot"]),
   snapshotId: z.string().min(1).optional(),
+  /** The sandbox whose snapshot this start restored (`start({ from })`), when it was not its own. */
+  fromSandbox: z.string().min(1).optional(),
+  /** That snapshot's size: it becomes this sandbox's own disk until it saves another. */
+  snapshotSize: z.number().int().nonnegative().optional(),
   discardedSnapshotId: z.string().min(1).optional(),
+  /** The size the caller named; the sandbox starts on it again until a start names another. */
+  instance: SandboxInstance.optional(),
 });
 export type SandboxStarted = z.infer<typeof SandboxStarted>;
 
@@ -77,6 +94,8 @@ export const SandboxState = EntityCreationAndDeletionState.extend({
   /** When the disk was last saved, or the container last started from it (epoch ms): the checkpoint's
    *  clock. */
   savedAt: z.number().int().nullable().default(null),
+  /** The size the last start that named one asked for: restarts keep it (null: the platform's default). */
+  instance: SandboxInstance.nullable().default(null),
   idleAfterMs: z.number().int().positive().default(SANDBOX_DEFAULT_IDLE_AFTER_MS),
 });
 export type SandboxState = z.infer<typeof SandboxState>;

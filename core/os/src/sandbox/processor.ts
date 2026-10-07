@@ -56,13 +56,18 @@ export class SandboxProcessor extends EntityLifecycleProcessor<SandboxState> {
     const { state, event } = args;
     switch (event.type) {
       case "events.iterate.com/sandbox/started": {
-        const { discardedSnapshotId } = SandboxStarted.parse(event.payload);
+        const { discardedSnapshotId, instance, fromSandbox, snapshotId, snapshotSize } =
+          SandboxStarted.parse(event.payload);
         const discarded = !!discardedSnapshotId && state.snapshot?.id === discardedSnapshotId;
+        // another sandbox's snapshot, restored here, is this one's disk from now on
+        const adopted =
+          fromSandbox && snapshotId ? { id: snapshotId, size: snapshotSize || 0 } : null;
         return {
           ...state,
           running: true,
           savedAt: Date.parse(event.createdAt),
-          snapshot: discarded ? null : state.snapshot,
+          snapshot: adopted || (discarded ? null : state.snapshot),
+          instance: instance || state.instance,
         };
       }
       case "events.iterate.com/sandbox/snapshotted":

@@ -893,10 +893,11 @@ export type WorkspaceHandle = InvokeHandle & {
  *  image it was taken from, and for 30 days after its last restore. */
 export type SandboxSnapshot = { id: string; size: number; name?: string };
 
-/** What `start` takes: `ctx.container.start`'s options, but for `enableInternet` (refused: a
- *  sandbox's only way out is the project's egress) and a `containerSnapshot`, which can only be the
- *  snapshot the sandbox's own log records. */
-export type SandboxStartOptions = {
+/** What the container API's `start` takes: `ctx.container.start`'s options, but for
+ *  `enableInternet` (refused: a sandbox's only way out is the project's egress) and a
+ *  `containerSnapshot`, which can only be the snapshot the sandbox's own log records. A start that
+ *  names a size (`instance`) is remembered: the sandbox starts on it again until one names another. */
+export type SandboxContainerStartOptions = {
   image?: string;
   containerSnapshot?: { id: string };
   entrypoint?: string[];
@@ -910,6 +911,12 @@ export type SandboxStartOptions = {
     | { vcpu: number; memoryMib: number; diskMb: number };
   labels?: Record<string, string>;
 };
+
+/** What the sandbox's own `start` takes: the container API's, and `from`, the path of another
+ *  sandbox of this project whose snapshot this one starts from (a golden toolset made once, then
+ *  started many times). That snapshot is this sandbox's disk from then on. One of `image`,
+ *  `containerSnapshot` and `from` at most. */
+export type SandboxStartOptions = SandboxContainerStartOptions & { from?: string };
 
 /** What a sandbox's `files.stat` and `files.lstat` answer (the `iterate fs` tool's, run in the
  *  container). */
@@ -963,7 +970,7 @@ export type SandboxFilesApi = {
 export type SandboxContainerApi = InvokeHandle & {
   readonly running: Promise<boolean>;
   readonly images: Promise<Record<string, string>>;
-  start(options?: SandboxStartOptions): Promise<void>;
+  start(options?: SandboxContainerStartOptions): Promise<void>;
   monitor(): Promise<void>;
   destroy(reason?: string): Promise<void>;
   signal(signo: number): Promise<void>;
@@ -984,8 +991,12 @@ export type SandboxContainerApi = InvokeHandle & {
  *  is saved and stopped, a sandbox in use has its disk saved every 15 minutes, and Cloudflare stops
  *  the container two hours after it last answered, whatever else fails. THE ONLY WAY OUT IS THE
  *  PROJECT'S EGRESS: the container starts with the internet off, and every HTTP and HTTPS request it
- *  makes, to any name or address, is answered by the project's own `itx.fetch` (its rewrite rules;
- *  `getSecret("/secrets/…")` placeholders are substituted there). `apt-get` works through it. A call
+ *  makes, to any name or address, WebSocket handshakes included, is answered by the project's own
+ *  `itx.fetch` (its rewrite rules;
+ *  `getSecret("/secrets/…")` placeholders are substituted there). `apt-get` works through it. A
+ *  project's GitHub connection is in every command's environment as placeholders (`GH_TOKEN`, and a
+ *  git credential helper that answers with it): with `git` and `gh` installed, cloning, pushing and
+ *  opening pull requests need no setup, and no token ever enters the container. A call
  *  that does not answer within a minute fails: run longer work in the background and poll. Where the
  *  sandbox stands is `(await handle.snapshot()).state`. */
 export type SandboxHandle = InvokeHandle & {

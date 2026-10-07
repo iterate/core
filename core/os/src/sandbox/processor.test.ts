@@ -92,6 +92,38 @@ const rows: {
     },
   },
   {
+    name: "a start that names a size remembers it, and a start that names none keeps it",
+    events: [
+      requested,
+      created,
+      started({ from: "image", instance: "standard-4" }),
+      stopped,
+      started(),
+      stopped,
+      started({ from: "image", instance: "standard-2" }),
+    ],
+    state: { ...born, running: true, snapshot: null, savedAt: aNumber, instance: "standard-2" },
+  },
+  {
+    name: "a start without a size, before any named one, leaves the size to the platform",
+    events: [requested, created, started()],
+    state: { ...born, running: true, snapshot: null, savedAt: aNumber, instance: null },
+  },
+  {
+    name: "another sandbox's snapshot, restored here, is this sandbox's disk from then on",
+    events: [
+      requested,
+      created,
+      started({
+        from: "snapshot",
+        snapshotId: "theirs",
+        fromSandbox: "/sandboxes/base",
+        snapshotSize: 500,
+      }),
+    ],
+    state: { ...born, running: true, snapshot: { id: "theirs", size: 500 }, savedAt: aNumber },
+  },
+  {
     name: "configured patches the idle period; a field left out stays",
     events: [
       requested,

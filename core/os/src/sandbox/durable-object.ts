@@ -11,6 +11,7 @@ import {
   SANDBOX_IMAGE,
   SANDBOX_MAX_BUSY_MS,
   SandboxConfigured,
+  SandboxInstance,
   SandboxContract,
   SandboxSnapshot,
   type SandboxState,
@@ -18,6 +19,8 @@ import {
 import { SandboxFiles } from "./files.ts";
 import { SandboxProcessor } from "./processor.ts";
 
+/** How often the project's connections are read again for a sandbox's environment. */
+const PLANT_EVERY_MS = 60_000;
 /** The most of a command line the log keeps. */
 const COMMAND_LOG_CHARS = 500;
 
@@ -31,20 +34,15 @@ const StartOptions = z
     containerSnapshot: z.object({ id: z.string().min(1) }).optional(),
     entrypoint: z.array(z.string()).min(1).optional(),
     env: z.record(z.string(), z.string()).optional(),
-    instance: z
-      .union([
-        z.enum(["lite", "standard-1", "standard-2", "standard-3", "standard-4"]),
-        z.object({
-          vcpu: z.number().positive(),
-          memoryMib: z.number().positive(),
-          diskMb: z.number().positive(),
-        }),
-      ])
-      .optional(),
+    instance: SandboxInstance.optional(),
     labels: z.record(z.string(), z.string()).optional(),
+    /** The path of another sandbox of this project whose snapshot this one starts from. */
+    from: z.string().min(1).optional(),
     // strict: `enableInternet` is refused, not ignored: a sandbox's only way out is the project's egress
   })
   .strict();
+/** `start` of the container API itself: Cloudflare's options, which have no `from`. */
+const ContainerStartOptions = StartOptions.omit({ from: true });
 /** What `exec` takes beside the command (`ctx.container.exec`'s options an RPC carries). */
 const ExecOptions = z.object({
   cwd: z.string().min(1).optional(),
@@ -139,9 +137,59 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     const leave = this.#enter();
     try {
       await this.#up({});
+      await this.#plant();
       return await work(this.#container);
     } finally {
       leave();
+    }
+  }
+
+  /** What the project's GitHub connection makes of a command's environment: `gh` reads `GH_TOKEN`,
+   *  and git asks for a password through a credential helper that answers with it, so cloning,
+   *  pushing and opening pull requests with `gh` work with nothing set up. A command sees only the
+   *  placeholder: the platform's egress puts the token into the request, for github.com alone (the
+   *  secret is pinned to it). A project without a connection gets nothing planted. */
+  async #githubEnv(): Promise<Record<string, string>> {
+    using itx = this.getItx();
+    // `secrets.list` answers each secret's path, pins and refresh kind, never its value
+    // the itx surface types a secret's listing loosely; these are the fields read here, and a secret without them is skipped
+    const secrets = (await itx.secrets.list()) as {
+      path: string;
+      urls: string[];
+      refresh?: string;
+    }[];
+    const github = secrets.filter((secret) => secret.urls.includes("https://github.com"));
+    const secret =
+      github.find((candidate) => candidate.refresh === "github-app-installation") || github[0];
+    if (!secret) return {};
+    // an App installation's secret holds the minted token as a field of its material
+    const field = secret.refresh === "github-app-installation" ? ', { field: "accessToken" }' : "";
+    return {
+      GH_TOKEN: `getSecret("${secret.path}"${field})`,
+      GH_PROMPT_DISABLED: "1",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
+      GIT_CONFIG_VALUE_0:
+        '!f() { test "$1" = get && echo username=x-access-token && echo "password=$GH_TOKEN"; }; f',
+    };
+  }
+
+  /** Give the container the environment its project's connections make (at most once a minute: a
+   *  connection made meanwhile reaches a running sandbox within it). A failure to read them is
+   *  logged and the command runs without. */
+  #plantedAt = 0;
+  async #plant(): Promise<void> {
+    if (Date.now() - this.#plantedAt < PLANT_EVERY_MS) return;
+    this.#plantedAt = Date.now();
+    try {
+      await this.#container.defaults(await this.#githubEnv());
+    } catch (error) {
+      console.warn({
+        event: "sandbox.environment-unavailable",
+        path: this.#path,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -157,14 +205,19 @@ export class SandboxFacet extends StreamProcessorDurableObject<
   async #start(options: z.input<typeof StartOptions>): Promise<void> {
     const state = await this.#state();
     assertCreated("sandbox", this.#path, state);
-    const { image, containerSnapshot, ...rest } = StartOptions.parse(options);
+    const { image, containerSnapshot, from, ...rest } = StartOptions.parse(options);
     assertOwnSnapshot(this.#path, state, containerSnapshot);
-    if (image && containerSnapshot)
-      throw new Error(`sandbox ${this.#path}: start takes an image or a snapshot, not both`);
-    // `image` is a request to leave the recorded disk behind
-    const snapshotId = image ? undefined : containerSnapshot?.id || state.snapshot?.id;
+    if ([image, containerSnapshot, from].filter(Boolean).length > 1)
+      throw new Error(`sandbox ${this.#path}: start takes one of image, containerSnapshot or from`);
+    const source = from ? await this.#snapshotOf(from) : undefined;
+    // `image` and `from` are requests to leave the recorded disk behind
+    const snapshotId = image
+      ? undefined
+      : source?.id || containerSnapshot?.id || state.snapshot?.id;
     const startOptions: SandboxStartOptions = {
       ...rest,
+      // the size of the last start that named one, unless this one names another
+      instance: rest.instance || state.instance || undefined,
       ...(snapshotId
         ? { containerSnapshot: { id: snapshotId } }
         : { image: image || SANDBOX_IMAGE }),
@@ -179,11 +232,43 @@ export class SandboxFacet extends StreamProcessorDurableObject<
       );
     }
     if (!started) return;
+    // a fresh container reads the project's connections again before its first command
+    this.#plantedAt = 0;
     await this.#append("started", {
       from: snapshotId ? "snapshot" : "image",
       snapshotId,
-      discardedSnapshotId: image ? state.snapshot?.id : undefined,
+      fromSandbox: from,
+      snapshotSize: source?.size,
+      discardedSnapshotId: image || from ? state.snapshot?.id : undefined,
+      instance: rest.instance,
     });
+  }
+
+  /** The snapshot of another sandbox of this project, which `start({ from })` restores. It is read
+   *  through this sandbox's own itx, so a path in another project is never reachable (a snapshot id
+   *  restores in any object of the container class: ids are never taken from a caller). */
+  async #snapshotOf(path: string): Promise<SandboxSnapshot> {
+    if (path === this.#path)
+      throw new Error(`sandbox ${path}: start({ from }) names another sandbox`);
+    using itx = this.getItx();
+    // two reads of plain values: an object answered over RPC is a stub that cannot outlive this scope
+    const sibling = itx.sandboxes.get(path);
+    const none = (cause?: unknown) =>
+      new Error(
+        `sandbox ${path} has no snapshot to start from: it does not exist, or has not saved its disk yet (a stop saves it, or snapshotContainer)`,
+        { cause },
+      );
+    // a sandbox with no snapshot has nothing to walk into: that is this answer, and nothing else
+    // `invoke` answers `unknown`: the path walks to the snapshot's `id` (a string) or null when none is saved
+    const id = await (
+      sibling.invoke([["snapshot"], "state", "snapshot", "id"]) as Promise<string | null>
+    ).catch((error: unknown) => {
+      throw none(error);
+    });
+    if (!id) throw none();
+    // the same path, ending at `size`: a number whenever an id exists
+    const size = (await sibling.invoke([["snapshot"], "state", "snapshot", "size"])) as number;
+    return { id, size };
   }
 
   /** Where the sandbox stands, read through the head of the log: a snapshot a park recorded a
@@ -288,9 +373,22 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     const [first] = parsed;
     const verb = typeof first === "string" ? first : first?.[0];
     if (verb === "start" && Array.isArray(first))
-      assertOwnSnapshot(this.#path, state, StartOptions.parse(first[1] ?? {}).containerSnapshot);
+      assertOwnSnapshot(
+        this.#path,
+        state,
+        ContainerStartOptions.parse(first[1] ?? {}).containerSnapshot,
+      );
     // `invoke` answers a `Fetcher` for `getTcpPort`, which the stub's type (a promise) cannot say
     const stub = this.#container as unknown as { invoke(steps: unknown): Promise<unknown> };
+    // a raw `start` that names no size starts on the one this sandbox last asked for
+    const toInvoke =
+      verb === "start" &&
+      Array.isArray(first) &&
+      state.instance &&
+      !ContainerStartOptions.parse(first[1] ?? {}).instance
+        ? // the `ContainerStartOptions.parse` in the condition proved `first[1]` is an options object or absent
+          [["start", { ...(first[1] as object), instance: state.instance }], ...parsed.slice(1)]
+        : parsed;
     // a `monitor` is a wait: not a use, and a stop does not hold it off
     if (verb === "monitor") return stub.invoke(parsed);
     while (this.#stopping) await this.#stopping;
@@ -304,14 +402,18 @@ export class SandboxFacet extends StreamProcessorDurableObject<
       });
     const leave = this.#enter();
     try {
-      const answer = await stub.invoke(parsed);
+      await this.#plant();
+      const answer = await stub.invoke(toInvoke);
       if (Array.isArray(first)) {
         if (verb === "start") {
-          const { image, containerSnapshot } = StartOptions.parse(first[1] ?? {});
+          const { image, containerSnapshot, instance } = ContainerStartOptions.parse(
+            first[1] ?? {},
+          );
           await this.#append("started", {
             from: containerSnapshot ? "snapshot" : "image",
             snapshotId: containerSnapshot?.id,
             discardedSnapshotId: image ? state.snapshot?.id : undefined,
+            instance,
           });
         }
         if (verb === "snapshotContainer")

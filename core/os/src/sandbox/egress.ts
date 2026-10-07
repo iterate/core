@@ -9,10 +9,17 @@
 // THE CALL IS A CALL, never a request to the context's own `fetch`: that one routes on headers
 // (`x-itx-expression` names an itx expression and runs it as the caller; a lend header asks for a
 // borrowed secret), and a container controls every header it sends. `invoke(["itx", ["fetch", …]])` takes
-// the request as an argument and nothing else from it.
+// the request as an argument and nothing else from it. A WebSocket handshake is the one exception
+// (`#upgrade`): a socket cannot cross an RPC call, so it takes the context's fetch channel with its
+// headers made ours.
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { contextStub } from "../context-stub.ts";
-import { DurableObjectNameCodec } from "../context/paths.ts";
+import { DurableObjectNameCodec, type DurableObjectAddress } from "../context/paths.ts";
+import {
+  encodeFetchExpression,
+  ITX_EXPRESSION_FETCH_HEADER,
+  stampCallerHeaders,
+} from "../context/rpc-stubs.ts";
 import type { Env } from "../iterate-context-durable-object.ts";
 
 /** What a request from a sandbox's container is answered by. Minted from the container's Durable
@@ -21,6 +28,8 @@ import type { Env } from "../iterate-context-durable-object.ts";
 export class SandboxEgress extends WorkerEntrypoint<Env, { iterateContextName: string }> {
   override async fetch(request: Request): Promise<Response> {
     const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket")
+      return this.#upgrade(request, address);
     // the platform's own call, as the project's code: no principal speaks for it
     const answer = await contextStub(this.env.ITERATE_CONTEXT, address, "sandbox-egress").invoke(
       ["itx", ["fetch", request]],
@@ -29,6 +38,32 @@ export class SandboxEgress extends WorkerEntrypoint<Env, { iterateContextName: s
     );
     // `invoke` is untyped over RPC; the context's `fetch` answers the `Response` it was given
     return withKnownLength(answer as Response, request);
+  }
+
+  /** A WebSocket handshake cannot take the call above: workerd's RPC cannot carry a Response that holds
+   *  a socket (context/fetch-upgrade.ts). It takes the context's own `fetch`, a fetch channel, which
+   *  the platform's egress is end to end (context/egress.ts), so the 101 and its socket come back to
+   *  the container. The expression header names `itx.fetch`, as the call above does: the project's
+   *  rewrite rules and the secret in a header are the handshake's, as for any request. That `fetch`
+   *  believes the `x-itx-*` stamps it is sent, and a container writes every header it sends, so every
+   *  one is dropped and the stamps are this entrypoint's. */
+  async #upgrade(request: Request, address: DurableObjectAddress): Promise<Response> {
+    const headers = new Headers(request.headers);
+    for (const name of [...headers.keys()])
+      if (/^x-(itx|iterate)-/i.test(name)) headers.delete(name);
+    stampCallerHeaders(headers, { principal: null, path: address.path });
+    headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(["itx"]));
+    const answer = await contextStub(this.env.ITERATE_CONTEXT, address, "sandbox-egress").fetch(
+      new Request(request, { headers }),
+    );
+    if (answer.status !== 101 || !answer.webSocket) return answer;
+    // `Upgrade` and `Connection` are hop-by-hop, and the interception adds its own to the 101 it
+    // sends the container. An answer that keeps its copies gives two of each ("websocket,
+    // websocket"), which a strict client such as Node's WebSocket refuses.
+    const answered = new Headers(answer.headers);
+    answered.delete("upgrade");
+    answered.delete("connection");
+    return new Response(null, { status: 101, webSocket: answer.webSocket, headers: answered });
   }
 }
 
