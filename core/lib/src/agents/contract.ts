@@ -36,7 +36,7 @@ const TriggerSource = z.enum(["external", "agent-loop"]);
 /** What a model call cost, normalized: the provider's totals, and the cached/reasoning breakdowns
  *  when it reports them. */
 /** Why an LLM request stopped short: a person typed over it, or it ran past its deadline. The
- *  Agents UI reads it too (src/lib/events/agent-ui-reducer.ts). */
+ *  agent chat reads it too (packages/ui `agent-chat/agent-ui-reducer.ts`). */
 export const AgentLlmRequestCancelReason = z.enum(["interrupted-by-user-input", "expired"]);
 export type AgentLlmRequestCancelReason = z.infer<typeof AgentLlmRequestCancelReason>;
 
