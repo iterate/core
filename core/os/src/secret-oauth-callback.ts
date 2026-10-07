@@ -26,6 +26,7 @@ import { moveOfferLanding } from "./integrations/connections.ts";
 import type { FinishConnectAnswer, FinishConnectInput } from "./integrations/verbs.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { isSecretOAuthState } from "./secret-oauth.ts";
+import { callbackPage } from "./callback-page.ts";
 
 /** The human at a callback: their platform session — a browser cookie, or a bearer — or null. */
 export async function callbackAuthorization(
@@ -76,28 +77,23 @@ async function reachesSecretOwner(
  *  completes it is admitted the way a project host admits a visitor — the same platform session (a
  *  browser cookie, or a bearer) — and must reach the owner (`reachesSecretOwner`): a stranger who saw
  *  the authorize URL cannot plant their own provider account into someone else's secret. The
- *  secret's facet then exchanges the code; a failure is a plain-text 4xx with the reason, never a
- *  credential. */
+ *  secret's facet then exchanges the code; a failure is a 4xx page that says why (callback-page.ts),
+ *  never a credential. */
 export async function secretOAuthCallback(
   request: Request,
   env: Env,
   addresses: PlatformAddresses,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const answer = (status: number, text: string) =>
-    new Response(`${text}\n`, {
-      status,
-      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
-    });
   const claims = await verifyClaims(
     url.searchParams.get("state") ?? "",
     await sessionSigningSecretOf(iterateConfigOf(env)),
   );
   if (!isSecretOAuthState(claims) || claims.exp <= Date.now())
-    return answer(400, "This link is not one the platform issued, or it has expired.");
+    return callbackPage(400, "This link is not one the platform issued, or it has expired.");
   const authorization = await callbackAuthorization(request, env, addresses);
   if (!authorization)
-    return answer(
+    return callbackPage(
       401,
       "Sign in to iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
     );
@@ -105,14 +101,17 @@ export async function secretOAuthCallback(
   try {
     owner = secretOwnerOf(claims.context);
   } catch (error) {
-    return answer(400, error instanceof Error ? error.message : String(error));
+    return callbackPage(400, error instanceof Error ? error.message : String(error));
   }
   if (!(await reachesSecretOwner(new ControlPlane(env), authorization.reach, owner)))
-    return answer(403, `Your session cannot access the secrets of ${owner.kind} ${owner.id}.`);
+    return callbackPage(
+      403,
+      `Your session cannot access the secrets of ${owner.kind} ${owner.id}.`,
+    );
   const denied = url.searchParams.get("error");
-  if (denied) return answer(400, `The provider declined: ${denied}`);
+  if (denied) return callbackPage(400, `The provider declined: ${denied}`);
   const code = url.searchParams.get("code");
-  if (!code) return answer(400, "The provider sent no authorization code.");
+  if (!code) return callbackPage(400, "The provider sent no authorization code.");
   const provider = OAUTH_INTEGRATION_PROVIDERS.find(
     (name) => url.pathname === `/api/integrations/${name}/callback`,
   );
@@ -162,7 +161,7 @@ export async function secretOAuthCallback(
       })) as FinishConnectAnswer);
     }
   } catch (error) {
-    return answer(
+    return callbackPage(
       400,
       `${provider ? `Connecting ${provider}` : `Storing the tokens for ${owner.path}`} failed: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -175,7 +174,7 @@ export async function secretOAuthCallback(
       status: 303,
       headers: { location: claims.next, "cache-control": "no-store" },
     });
-  return answer(
+  return callbackPage(
     200,
     `Done: the secret ${owner.path} of ${owner.kind} ${owner.id} holds the tokens. You can close this tab.`,
   );

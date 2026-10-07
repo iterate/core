@@ -14,6 +14,7 @@ import {
   sessionSigningSecretOf,
   type IterateConfigEnv,
 } from "../iterate-config.ts";
+import { callbackPage } from "../callback-page.ts";
 import { bytesFromBase64url, signClaims, type PlatformFactType } from "../caller.ts";
 import type { Cause } from "../cause.ts";
 import { facetStateOf } from "../context-stub.ts";
@@ -145,12 +146,9 @@ export async function moveOfferLanding(
     ? ((await controlPlane.getProject(holderProjectId))?.slug ?? null)
     : null;
   if (!landing)
-    return new Response(
-      `The ${INTEGRATION_PROVIDER_NAMES[move.provider]} account ${move.account} is connected to ${holderSlug || "another project"}. Connect it from the Dash's Integrations page to move it here.\n`,
-      {
-        status: 409,
-        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
-      },
+    return callbackPage(
+      409,
+      `The ${INTEGRATION_PROVIDER_NAMES[move.provider]} account ${move.account} is connected to ${holderSlug || "another project"}. Connect it from the Dash's Integrations page to move it here.`,
     );
   const offer: IntegrationMoveOffer = { kind: "integration-move", ...offered, holderSlug };
   const url = new URL(landing);

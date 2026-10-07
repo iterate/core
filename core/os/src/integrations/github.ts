@@ -31,6 +31,7 @@ import {
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
+import { callbackPage } from "../callback-page.ts";
 import { callbackAuthorization } from "../secret-oauth-callback.ts";
 import { nextUrlOf, SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord, verifySecretHmac } from "../secrets.ts";
@@ -468,15 +469,10 @@ export async function githubCallbackRoute(
 ): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname !== GITHUB_CALLBACK_PATH) return null;
-  const answer = (status: number, text: string) =>
-    new Response(`${text}\n`, {
-      status,
-      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
-    });
   const signedState = url.searchParams.get("state");
   if (!signedState)
     // an installation GitHub updated (`setup_action=update`) carries no state of ours
-    return answer(200, "GitHub updated the app's installation. You can close this tab.");
+    return callbackPage(200, "GitHub updated the app's installation. You can close this tab.");
   const claims = await verifyClaims(
     signedState,
     await sessionSigningSecretOf(iterateConfigOf(env)),
@@ -488,17 +484,17 @@ export async function githubCallbackRoute(
     typeof claims.exp !== "number" ||
     claims.exp <= Date.now()
   )
-    return answer(400, "This link is not one the platform issued, or it has expired.");
+    return callbackPage(400, "This link is not one the platform issued, or it has expired.");
   const authorization = await callbackAuthorization(request, env, addresses);
   if (!authorization)
-    return answer(
+    return callbackPage(
       401,
       "Sign in to iterate in this browser first, then open this link again — the installation connects to a project you must be a member of.",
     );
   if (!(await new ControlPlane(env).reachesProject(authorization.reach, claims.projectId)))
-    return answer(403, `Your session cannot access project ${claims.projectId}.`);
+    return callbackPage(403, `Your session cannot access project ${claims.projectId}.`);
   const param = (name: string) => url.searchParams.get(name) || undefined;
-  if (param("error")) return answer(400, `GitHub declined: ${param("error")}`);
+  if (param("error")) return callbackPage(400, `GitHub declined: ${param("error")}`);
   let redirect: string | null;
   let move: Awaited<ReturnType<typeof acceptGithubCallback>>["move"];
   try {
@@ -527,7 +523,7 @@ export async function githubCallbackRoute(
       { principal: null },
     )) as Awaited<ReturnType<typeof acceptGithubCallback>>);
   } catch (error) {
-    return answer(
+    return callbackPage(
       400,
       `Connecting GitHub failed: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -539,7 +535,7 @@ export async function githubCallbackRoute(
       status: 303,
       headers: { location: redirect, "cache-control": "no-store" },
     });
-  return answer(200, "Done: GitHub is connected. You can close this tab.");
+  return callbackPage(200, "Done: GitHub is connected. You can close this tab.");
 }
 
 const GITHUB_WEBHOOK_PATH = /^\/api\/integrations\/github\/webhook(?:\/([^/]+)\/([^/]+))?$/;
