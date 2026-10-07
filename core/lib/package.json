@@ -52,7 +52,9 @@
     "./agents/contract": "./src/agents/contract.ts",
     "./agents/processor": "./src/agents/processor.ts",
     "./agents/codemode-format": "./src/agents/codemode-format.ts",
-    "./node": "./src/node.ts"
+    "./node": "./src/node.ts",
+    "./theme.css": "./src/theme/theme.css",
+    "./tokens.css": "./src/theme/tokens.css"
   },
   "publishConfig": {
     "access": "public",
@@ -178,12 +180,15 @@
       "./node": {
         "types": "./dist/node.d.mts",
         "import": "./dist/node.mjs"
-      }
+      },
+      "./theme.css": "./src/theme/theme.css",
+      "./tokens.css": "./src/theme/tokens.css"
     }
   },
   "files": [
     "bin",
     "dist",
+    "src/theme",
     "README.md"
   ],
   "scripts": {

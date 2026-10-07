@@ -21,7 +21,8 @@ pages people see (`/`, `/login`, the `/oauth2/auth` consent) are server-rendered
 `src/routes/` using core/os's own components: shadcn's in `src/components/ui/`, written by its CLI
 and never edited
 ([packages/ui/AGENTS.md](https://github.com/iterate/packages/blob/main/packages/ui/AGENTS.md#vendored-shadcn-components)),
-and ours beside them. Its UI is the auth flow and nothing more: a component only another app needs,
+and ours beside them. Their look is `iterate/theme.css` (`core/lib/src/theme/`), which
+`src/styles.css` imports. Its UI is the auth flow and nothing more: a component only another app needs,
 or anything first-party and opinionated (stream views, app shells), belongs in packages/ui
 ([iterate/packages](https://github.com/iterate/packages)). The Worker's Cloudflare config is
 `cloudflare.config.ts`, which `cf` and the Cloudflare Vite plugin read; the build writes the Worker

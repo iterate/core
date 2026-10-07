@@ -1,98 +1,10 @@
 /* core/os's stylesheet, for the issuer's pages (sign-in, consent): Tailwind, tw-animate, shadcn's own
    layer (the data-* variants Base UI's attributes need; the `shadcn` devDependency pins it with the
-   CLI) and the tokens the vendored components in src/components/ui/ are written against.
+   CLI) and the look, which is iterate/theme.css.
    https://ui.shadcn.com/docs/tailwind-v4 */
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "iterate/theme.css";
 
 @source "../src/**/*.{ts,tsx}";
-
-/* Light mode only (docs/frontend-development.md): the vendored components keep upstream's `dark:`
-   classes, and this variant never matches, so none of them ship. */
-@custom-variant dark (@media not all);
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-link: var(--link);
-  --radius-sm: 0;
-  --radius-md: 0;
-  --radius-lg: 0;
-  --radius-xl: 0;
-  --font-sans: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  /* One size and two weights. The vendored components ask for `text-sm` and `font-medium`; here
-     those are the body's, so a button or a label reads as the text around it. `text-xs` is the one
-     smaller size, for a note under a line. */
-  --text-xs: 0.8125rem;
-  --text-xs--line-height: 1.5;
-  --text-sm: 1rem;
-  --text-sm--line-height: 1.55;
-  --text-base: 1rem;
-  --text-base--line-height: 1.55;
-  --font-weight-medium: 400;
-  --font-weight-semibold: 700;
-}
-
-/* The look of www.iterate.com, which took it from captun.sh: monospace, black on white, square
-   corners, one light border, one grey fill. */
-:root {
-  --radius: 0;
-  --background: #ffffff;
-  --foreground: #111111;
-  --card: #ffffff;
-  --card-foreground: #111111;
-  --popover: #ffffff;
-  --popover-foreground: #111111;
-  --primary: #111111;
-  --primary-foreground: #ffffff;
-  --secondary: #f4f4f4;
-  --secondary-foreground: #111111;
-  --muted: #f4f4f4;
-  --muted-foreground: #555555;
-  --accent: #f4f4f4;
-  --accent-foreground: #111111;
-  --destructive: #a40000;
-  --border: #dddddd;
-  --input: #dddddd;
-  --ring: #111111;
-  --link: #0645ad;
-}
-
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-
-  body {
-    @apply bg-background text-base text-foreground;
-  }
-
-  h1 {
-    font-size: 1.75rem;
-    line-height: 1.3;
-    font-weight: 700;
-  }
-
-  h2,
-  h3 {
-    font-weight: 700;
-  }
-}

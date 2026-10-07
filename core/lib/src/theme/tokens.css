@@ -1,0 +1,27 @@
+/* The look's values, as plain custom properties: nothing here needs Tailwind, so a page with no
+   build can use the file as it is. theme.css gives them their Tailwind names.
+
+   The look of www.iterate.com, which took it from captun.sh: monospace, black on white, square
+   corners, one light border, one grey fill. */
+:root {
+  --radius: 0;
+  --background: #ffffff;
+  --foreground: #111111;
+  --card: #ffffff;
+  --card-foreground: #111111;
+  --popover: #ffffff;
+  --popover-foreground: #111111;
+  --primary: #111111;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f4;
+  --secondary-foreground: #111111;
+  --muted: #f4f4f4;
+  --muted-foreground: #555555;
+  --accent: #f4f4f4;
+  --accent-foreground: #111111;
+  --destructive: #a40000;
+  --border: #dddddd;
+  --input: #dddddd;
+  --ring: #111111;
+  --link: #0645ad;
+}
