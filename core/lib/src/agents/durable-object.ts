@@ -5,7 +5,7 @@ import type { StreamEvent } from "../stream/processor.ts";
 import type { AgentHandleApi } from "./api.ts";
 import { type AgentInputGate, messagePayload } from "./message.ts";
 import type { AgentState, FileAttachment } from "./contract.ts";
-import { AgentProcessor } from "./processor.ts";
+import { type AgentConfigPatch, AgentProcessor } from "./processor.ts";
 
 // Not `implements Pick<AgentHandleApi, "message">`: the facet's `message` takes the sender (the
 // collection's base) between the published input and its options (collection.ts relays all three).
@@ -19,9 +19,22 @@ export class AgentDurableObject extends StreamProcessorDurableObject<AgentState>
    *  `agents.ts` sets it. None: every such message is a trigger, as before. */
   static messageGate: AgentInputGate | undefined;
 
+  /** The Markdown files of the config repo an agent reads as standing instructions, which a
+   *  config repo's `agents.ts` may change: it gets the agent's path and the default list
+   *  (standing-instructions.ts) and answers the list to use. None: the default. */
+  static standingFiles: ((path: string, files: string[]) => string[]) | undefined;
+
+  /** The configuration every agent born in this project starts with, as an `agent/configured`
+   *  patch (`llm.apiKeys` of a project that brings its own credentials, say). Appended at birth,
+   *  before the certificate; an agent born earlier keeps what its log holds. None: the contract's
+   *  defaults. */
+  static defaultConfig: AgentConfigPatch | undefined;
+
   processor = new AgentProcessor({
     getItx: () => this.getItx(),
     messageGate: () => AgentDurableObject.messageGate,
+    standingFiles: () => AgentDurableObject.standingFiles,
+    defaultConfig: () => AgentDurableObject.defaultConfig,
   });
 
   /** The context this facet is hosted on IS the agent: its path is the one name it goes by, here

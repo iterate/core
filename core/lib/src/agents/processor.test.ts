@@ -7,7 +7,8 @@
 import { expect, test, vi } from "vitest";
 import { reduceProcessor } from "../stream/test-support.ts";
 import { type AgentState } from "./contract.ts";
-import { AgentProcessor, failedRequestNote, raceAbort } from "./processor.ts";
+import { AgentProcessor, failedRequestNote } from "./processor.ts";
+import { raceAbort } from "./responses-keys.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
 const requested = { type: "events.iterate.com/agent/create-requested", payload: {} };
@@ -17,6 +18,21 @@ const deleteRequested = { type: "events.iterate.com/agent/delete-requested", pay
 const deleted = { type: "events.iterate.com/agent/deleted", payload: { path: "/agents/support" } };
 /** Born: the request, then the certificate (offsets 1 and 2 of every row below). */
 const born = [requested, created];
+/** The config of an agent nothing has configured: the contract's defaults. */
+const defaultConfig = {
+  llm: { model: "gpt-6.1-sol", reasoningEffort: "medium", apiKeys: [] },
+  maxAutonomousTurns: 50,
+  llmRequestExpiryMs: 600_000,
+  llmRequestDebounceMs: 250,
+  llmRequestRetryPolicy: { maxAttempts: 3, backoffBaseMs: 2_000, backoffMaxMs: 60_000 },
+  scriptResultHistoryLimit: 30_000,
+  compactionTriggerFraction: 0.5,
+  idleCompactionAfterMs: 0,
+  idleCompactionMinNewTokens: 30_000,
+  idleSummariesMaxChars: 40_000,
+  keepWarmForMs: 0,
+  keepWarmEveryMs: 25 * 60_000,
+};
 const system = {
   type: "events.iterate.com/agent/context-added",
   payload: { role: "system", content: "Be terse." },
@@ -353,7 +369,7 @@ test.for<{
     ],
     state: {
       config: {
-        llm: { model: "gpt-6-luna", reasoningEffort: "medium" },
+        llm: { model: "gpt-6-luna", reasoningEffort: "medium", apiKeys: [] },
         maxAutonomousTurns: 2,
         llmRequestExpiryMs: 600_000,
         llmRequestDebounceMs: 250,
@@ -367,6 +383,47 @@ test.for<{
         keepWarmEveryMs: 25 * 60_000,
       },
     },
+  },
+  {
+    name: "configured sets the API key stack; a later change of model keeps it, and an empty stack clears it",
+    events: [
+      ...born,
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: {
+          config: { llm: { apiKeys: ['getSecret("/secrets/a")', 'getSecret("/secrets/b")'] } },
+        },
+      },
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { model: "gpt-6-luna" } } },
+      },
+    ],
+    state: {
+      config: {
+        ...defaultConfig,
+        llm: {
+          model: "gpt-6-luna",
+          reasoningEffort: "medium",
+          apiKeys: ['getSecret("/secrets/a")', 'getSecret("/secrets/b")'],
+        },
+      },
+    },
+  },
+  {
+    name: "an empty API key stack goes back to the AI Gateway",
+    events: [
+      ...born,
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { apiKeys: ['getSecret("/secrets/a")'] } } },
+      },
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { apiKeys: [] } } },
+      },
+    ],
+    state: { config: defaultConfig },
   },
   {
     name: "words with dont-trigger-request are seen, never answered; a malformed item is skipped",

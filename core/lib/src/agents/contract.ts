@@ -74,7 +74,7 @@ const Sections = z.record(z.string(), z.string().nullable());
 export const AgentContract = defineProcessorContract({
   slug: "agent",
   // Bumping the version re-reduces every agent's log from offset 0 (stream/processor.ts).
-  version: "15",
+  version: "16",
   description:
     "An agent: a conversation on its own context, driven by a model that acts through one tool, run(script), against itx; each request's input extends the previous one, so the provider's prompt cache holds the conversation.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -111,6 +111,8 @@ export const AgentContract = defineProcessorContract({
           .object({
             model: z.string().min(1).default("gpt-6.1-sol"),
             reasoningEffort: z.string().min(1).default("medium"),
+            // Empty uses the deployment's AI Gateway; otherwise see responses-keys.ts for key handling.
+            apiKeys: z.array(z.string().min(1)).default([]),
           })
           .prefault({}),
         /** Consecutive self-triggered turns (script results, corrections) before the loop pauses. */
@@ -314,6 +316,7 @@ export const AgentContract = defineProcessorContract({
             .object({
               model: z.string().min(1).optional(),
               reasoningEffort: z.string().min(1).optional(),
+              apiKeys: z.array(z.string().min(1)).optional(),
             })
             .optional(),
           maxAutonomousTurns: z.number().int().positive().optional(),
@@ -554,6 +557,7 @@ export const AgentContract = defineProcessorContract({
   emits: [
     "events.iterate.com/agent/created",
     "events.iterate.com/agent/create-failed",
+    "events.iterate.com/agent/configured",
     "events.iterate.com/agent/deleted",
     "events.iterate.com/agent/context-added",
     "events.iterate.com/agent/web-message-sent",

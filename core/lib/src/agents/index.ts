@@ -5,3 +5,5 @@
 export { AgentCollectionDurableObject } from "./catalog.ts";
 export { AgentDurableObject } from "./durable-object.ts";
 export type { AgentHandleApi, AgentMessageInput, AgentsApi, AgentsRootApi } from "./api.ts";
+export type { AgentInputGate } from "./message.ts";
+export type { AgentConfigPatch } from "./processor.ts";

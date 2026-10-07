@@ -50,6 +50,7 @@ import {
   stableCapabilityTree,
 } from "./render.ts";
 import { requestCostUsd } from "./pricing.ts";
+import { postResponses, raceAbort } from "./responses-keys.ts";
 
 /** THE AI GATEWAY the agent's model calls go through — `default`, the gateway Cloudflare creates on
  *  an account's first authenticated request; unified billing pays the provider, no key anywhere. A
@@ -361,43 +362,6 @@ async function drainSse(
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
-/** Race an un-abortable dial against the caller's signal: the caller regains control the moment it
- *  aborts (an interruption, the expiry, the idle watchdog). A Response or stream the orphaned dial
- *  answers after that is cancelled, so the provider stops and no unread body holds the edge's
- *  invocation open; a stream already open is cancelled by `drainSse` itself. */
-export function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
-  const cancelLateBody = () =>
-    void work.then(
-      (late) => {
-        const body = late instanceof Response ? late.body : late;
-        if (body instanceof ReadableStream) void body.cancel(signal.reason).catch(() => undefined);
-      },
-      () => undefined,
-    );
-  if (signal.aborted) {
-    cancelLateBody();
-    return Promise.reject(signal.reason || new Error("aborted"));
-  }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      reject(signal.reason || new Error("aborted"));
-      cancelLateBody();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    // The listener goes in the same turn the dial settles: an answer handed over is its reader's.
-    work.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error);
-      },
-    );
-  });
-}
-
 type AgentEvent = ConsumedEvent<typeof AgentContract>;
 /** What one model call answered: the rendered text (prose, then the call as a `<codemode>` block),
  *  its parts, the response's own items and the usage. */
@@ -422,7 +386,18 @@ type CachedAgentProcessorDeps = {
   /** The project's gate on words another agent sent (message.ts), read when it is needed: the
    *  facet class's `messageGate`, which the config's agents.ts sets. */
   messageGate?: () => AgentInputGate | undefined;
+  /** The project's own list of standing files for an agent, read when it is needed: the facet
+   *  class's `standingFiles`. */
+  standingFiles?: () => ((path: string, files: string[]) => string[]) | undefined;
+  /** The configuration a new agent starts with, read at its birth: the facet class's `defaultConfig`. */
+  defaultConfig?: () => AgentConfigPatch | undefined;
 };
+
+/** What `agent/configured` merges into the agent's config. */
+export type AgentConfigPatch = Extract<
+  AgentEmitted,
+  { type: "events.iterate.com/agent/configured" }
+>["payload"]["config"];
 
 export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   readonly contract = AgentContract;
@@ -517,6 +492,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             llm: {
               model: patch.llm?.model || state.config.llm.model,
               reasoningEffort: patch.llm?.reasoningEffort || state.config.llm.reasoningEffort,
+              apiKeys: patch.llm?.apiKeys || state.config.llm.apiKeys,
             },
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
@@ -1299,6 +1275,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       const answer = await this.#stream({
         model,
         effort: state.config.llm.reasoningEffort,
+        apiKeys: state.config.llm.apiKeys,
         input: [
           ...(await this.#requestInput(state, check.afterRequestOffset, model, append)),
           { role: "user", content: KEEP_WARM_PROMPT },
@@ -1354,6 +1331,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             idempotencyKey: `agent/created:${path}`,
           };
           await this.#postToTheCatalog(certificate); // the project catalog first
+          // the project's starting configuration, before the certificate: a retry appends it once
+          const defaults = this.deps.defaultConfig?.();
+          if (defaults)
+            await append({
+              type: "events.iterate.com/agent/configured",
+              payload: { config: defaults },
+              idempotencyKey: `agent/default-config:${path}`,
+            });
           // this path last: the certificate closes the obligation. The instructions are the
           // sections, snapshotted by the first request (`#syncSections`).
           await append(certificate);
@@ -1655,6 +1640,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         const request = {
           model: open.model,
           effort: state.config.llm.reasoningEffort,
+          apiKeys: state.config.llm.apiKeys,
           cacheKey: promptCacheKey(path),
           signal: controller.signal,
           onDelta,
@@ -1749,7 +1735,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     const whoami = await this.#identity();
     const { path } = whoami;
     const sections: Record<string, string> = { system: DEFAULT_AGENT_SYSTEM_PROMPT };
-    for (const file of standingInstructionFiles(path)) {
+    const defaultFiles = standingInstructionFiles(path);
+    for (const file of this.deps.standingFiles?.()?.(path, defaultFiles) ?? defaultFiles) {
       try {
         using itx = this.deps.getItx();
         // the handle first: a pipelined `get` that refuses (a project with no config repo) would
@@ -1893,6 +1880,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       const answer = await this.#stream({
         model,
         effort: state.config.llm.reasoningEffort,
+        apiKeys: state.config.llm.apiKeys,
         input: items,
         cacheKey: promptCacheKey(path),
         signal: AbortSignal.timeout(state.config.llmRequestExpiryMs),
@@ -1932,9 +1920,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
    *  (text and thinking it adds, both "" for any other event, which keeps the idle watchdog fed
    *  while a long script's arguments stream); the call answers once the stream ends with the
    *  response's own items (stored for exact replay), its prose, its first `run` call, and the
-   *  usage. An `openai/…` Workers AI partner model through `itx.ai` and the account's AI Gateway:
-   *  Cloudflare's billing, no key, and the gateway's spend limits partition on the metadata
-   *  (project, stream path). `store: false` with the encrypted reasoning included: nothing lives on the provider's side,
+   *  usage. With no `apiKeys`, an `openai/…` Workers AI partner model through `itx.ai` and the
+   *  account's AI Gateway: Cloudflare's billing, no key, and the gateway's spend limits partition on
+   *  the metadata (project, stream path). With `apiKeys`, the project's own credentials, straight at
+   *  api.openai.com (responses-keys.ts). `store: false` with the encrypted reasoning included: nothing lives on the provider's side,
    *  and the reasoning comes back on the next request (render.ts). */
   async #stream({
     model,
@@ -1944,10 +1933,13 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     onDelta,
     toolChoice = "auto",
     effort,
+    apiKeys,
   }: {
     model: string;
     /** The Responses API's `reasoning.effort` (the agent's config, `llm.reasoningEffort`). */
     effort: string;
+    /** The agent's `llm.apiKeys`: empty goes through the AI Gateway. */
+    apiKeys: readonly string[];
     input: InputItem[];
     /** The provider's prompt-cache routing key (promptCacheKey). */
     cacheKey: string;
@@ -1959,40 +1951,46 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       throw new Error(
         `model ${model}: the agent speaks OpenAI's Responses API only; configure an OpenAI model`,
       );
-    const { projectId, path } = await this.#identity();
     using itx = this.deps.getItx();
-    const raw: unknown = await raceAbort(
-      signal,
-      itx.ai.run(
-        // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a
-        // partner model's name (`openai/…`) is not among them though the binding takes any model
-        // the account can reach, and a partner model takes the PROVIDER's request body (here the
-        // Responses API's), which no catalog input type names.
-        `openai/${model}` as Parameters<Ai["run"]>[0],
-        {
-          input,
-          tools: [RUN_TOOL],
-          tool_choice: toolChoice,
-          parallel_tool_calls: false,
-          stream: true,
-          store: false,
-          include: ["reasoning.encrypted_content"],
-          prompt_cache_key: cacheKey,
-          reasoning: { effort, summary: "auto" },
-        } as never,
-        {
-          returnRawResponse: true,
-          gateway: {
-            id: AI_GATEWAY_ID,
-            skipCache: true,
-            metadata: { projectId, streamPath: path, context: "agent-turn" },
+    const body = {
+      input,
+      tools: [RUN_TOOL],
+      tool_choice: toolChoice,
+      parallel_tool_calls: false,
+      stream: true,
+      store: false,
+      include: ["reasoning.encrypted_content"],
+      prompt_cache_key: cacheKey,
+      reasoning: { effort, summary: "auto" },
+    };
+    let response: Response;
+    if (apiKeys.length > 0) {
+      response = await postResponses(itx, { model, ...body }, apiKeys, signal);
+    } else {
+      const { projectId, path } = await this.#identity();
+      const raw: unknown = await raceAbort(
+        signal,
+        itx.ai.run(
+          // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a
+          // partner model's name (`openai/…`) is not among them though the binding takes any model
+          // the account can reach, and a partner model takes the PROVIDER's request body (here the
+          // Responses API's), which no catalog input type names.
+          `openai/${model}` as Parameters<Ai["run"]>[0],
+          body as never,
+          {
+            returnRawResponse: true,
+            gateway: {
+              id: AI_GATEWAY_ID,
+              skipCache: true,
+              metadata: { projectId, streamPath: path, context: "agent-turn" },
+            },
           },
-        },
-      ),
-    );
-    if (!(raw instanceof Response))
-      throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
-    const response = raw;
+        ),
+      );
+      if (!(raw instanceof Response))
+        throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
+      response = raw;
+    }
     if (!response.ok || !response.body)
       throw new Error(
         `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,

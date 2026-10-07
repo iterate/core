@@ -38,3 +38,37 @@ Importing `iterate/agents` registers `itx.agents` on iterate/api's `InstalledApp
 - `contract.ts` — an agent's events and state; `processor.ts` — the reduce and the loop;
   `render.ts` — each request as OpenAI reads it; `processor.test.ts` — the processor's spec.
 - `catalog.ts`, `collection.ts` — `itx.agents`; `durable-object.ts` — one agent.
+- `responses-keys.ts` — the model call with a stack of API keys.
+
+## Your own credentials
+
+By default an agent's model calls go through the deployment's AI Gateway: no key, billed to the
+deployment. A project that brings its own credentials sets `llm.apiKeys`, an ordered list. Each
+entry is the text after `Bearer `, normally a `getSecret(...)` placeholder that egress swaps for the
+secret's value on the way to api.openai.com:
+
+```ts
+// agents.ts
+import { AgentDurableObject } from "iterate/agents";
+
+AgentDurableObject.defaultConfig = {
+  llm: {
+    apiKeys: [
+      'getSecret("/secrets/chatgpt", { field: "accessToken" })', // a ChatGPT plan, tried first
+      'getSecret("/secrets/openai")', // the project's API key, when the first does not answer
+    ],
+  },
+};
+```
+
+A request goes to the first key. A key that answers anything but 2xx, or throws because its secret
+is missing, is logged by its position and the next key gets the same request. When none answers, the
+last answer is the failure the agent reports. Every key gets the body a ChatGPT plan's token takes:
+the fields it refuses (`max_output_tokens`, `temperature`, `top_p`, …) and the explicit cache
+breakpoint are left out, which an API key never needs.
+
+`defaultConfig` is appended to a new agent's log at birth as an `agent/configured` event. An agent
+born before holds what its log holds: append `agent/configured` once to change it.
+`AgentDurableObject.standingFiles = (path, files) => files` changes the Markdown files an agent reads
+as standing instructions (`files` is the default list for `path`), and `messageGate` gates words
+from other agents.
