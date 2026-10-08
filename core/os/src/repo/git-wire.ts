@@ -885,9 +885,10 @@ export function createGitWireTransport(input: {
             ? input.fetch(request)
             : fetch(request, { signal: abandoned.signal }));
           if (!response.ok) {
-            // The answer's first words say why (a refusal from GitHub, or from the caller's own
-            // rules for egress); read no further than a few KiB, since an unread body keeps its
-            // connection.
+            // The answer's first words say why: a refusal from GitHub, or from the caller's egress
+            // (a secret pinned to another origin). A request the caller's rules refuse is never
+            // sent, and its refusal is thrown, not answered. Read no further than a few KiB, since
+            // an unread body keeps its connection.
             const why = await readCapped(response, 4_096).catch(() => new Uint8Array());
             const text = textDecoder.decode(why.subarray(0, 200)).trim();
             throw new HttpAnswerError(
