@@ -334,8 +334,10 @@ export type SecretOAuthOptions = {
    *  the platform's origin or the Dash's. Not with `redirect`, whose page is the landing. */
   next?: string;
   /** YOUR OWN CALLBACK, a page of this project's: `routingSlug`'s host (the apex when absent) at
-   *  `path`, composed under the deployment's ingress (never a primary hostname), so it is the
-   *  project's own by construction. Register that URL at the provider as the app's redirect URI.
+   *  `path`, composed by the deployment's static rules alone: on the hostname its config pins to
+   *  the project when it has one, else under its ingress, never on a hostname the project claimed,
+   *  so it is the project's own by construction and holds still whatever the project claims or
+   *  releases later. Register that URL at the provider as the app's redirect URI.
    *  The provider sends the human there with `code` and `state`, and the page, for members only
    *  (`auth.require`), hands both to `completeOAuth`, which exchanges the code inside the secret's
    *  facet: the page never sees a token. Without it, the provider sends the human to the platform's
@@ -1533,6 +1535,10 @@ export interface IterateSessionApi {
     platformOrigin: string;
     /** how projects are reached over HTTP (project-ingress.ts `projectUrlOf`); null ⇒ no ingress */
     ingressRouting: IngressRouting;
+    /** the hostnames this deployment's config pins to projects, each naming its project by id or
+     *  slug (project-ingress.ts `pinnedHostnameOf`): a project's primary hostname before any it
+     *  claimed, which `itx.url` and the dash's buttons compose on */
+    projectHostnames: { hostname: string; project: string }[];
     /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
     mcpOrigin: string;
     /** the providers whose iterate app this deployment holds (ITERATE `integrations`): a

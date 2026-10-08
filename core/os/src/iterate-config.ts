@@ -229,7 +229,11 @@ export const IterateConfig = z.object({
        *  (project/custom-hostnames.ts): each hostname is its project's apex, and one label under it
        *  names a routing slug, as a project's own hostname does (`gmail.templestein.com` is
        *  `gmail--templestein`). For a zone this deployment's own routes serve: no Cloudflare for
-       *  SaaS. The platform and MCP origins stay the platform's. Default: none. */
+       *  SaaS. The platform and MCP origins stay the platform's. The first entry naming a project
+       *  is its primary hostname before any it claimed (iterate/project-ingress
+       *  `pinnedHostnameOf`): `itx.url`, `whoami().projectUrl`, the Dash's buttons, a package's
+       *  OAuth redirect (`beginOAuth`'s `redirect`) and the edge's redirect from the ingress form
+       *  of a host all compose on it. Default: none. */
       projectHostnames: z
         .array(z.object({ hostname: dnsName, project: z.string().trim().min(1, REQUIRED) }))
         .default([]),

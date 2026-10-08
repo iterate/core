@@ -8,6 +8,7 @@ import {
   type IngressRouting,
   type ProjectAddress,
   customHostnameCandidatesOf,
+  pinnedHostnameOf,
   primaryHostnameUrlOf,
   projectPublicUrlOf,
   projectWildcardHostOf,
@@ -409,3 +410,35 @@ test.for([
     ).toBe(url);
   },
 );
+
+// ── pinnedHostnameOf — the deployment's config names a project by id or by slug; the first wins ──
+const PINNED = [
+  { hostname: "templestein.com", project: "prj_0000000000000000000000000000000a" },
+  { hostname: "second.example", project: "prj_0000000000000000000000000000000a" },
+  { hostname: "by-slug.example", project: "jeeves" },
+];
+test.for([
+  {
+    project: { id: "prj_0000000000000000000000000000000a", slug: "jeeves" },
+    hostname: "templestein.com",
+    why: "the first entry naming the id, before a later one and before one naming the slug",
+  },
+  {
+    project: { id: "prj_0000000000000000000000000000000b", slug: "jeeves" },
+    hostname: "by-slug.example",
+    why: "an entry naming the slug",
+  },
+  {
+    project: { id: "prj_0000000000000000000000000000000b", slug: null },
+    hostname: null,
+    why: "no slug known and no entry naming the id",
+  },
+  { project: { id: "prj_0000000000000000000000000000000c" }, hostname: null, why: "no entry" },
+])("pinnedHostnameOf: $why", ({ project, hostname }) => {
+  expect(pinnedHostnameOf(PINNED, project)).toBe(hostname);
+});
+test("pinnedHostnameOf: no entries, no hostname", () => {
+  expect(
+    pinnedHostnameOf([], { id: "prj_0000000000000000000000000000000a", slug: "x" }),
+  ).toBeNull();
+});

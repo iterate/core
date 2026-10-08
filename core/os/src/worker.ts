@@ -12,6 +12,7 @@ import { forwardIssues, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import {
   ITERATE_BASE_PATH_HEADER,
   ITERATE_ROUTING_SLUG_HEADER,
+  pinnedHostnameOf,
   primaryHostnameUrlOf,
 } from "iterate/project-ingress";
 import { proxyPosthogRequest } from "./posthog-proxy.ts";
@@ -351,10 +352,13 @@ async function routeRequest(
     // to the project's own hostname, which the admission's row carries (edge.ts `getProject`),
     // after the browser adapter so a sign-in under way finishes where it started.
     const redirect = primaryHostnameRedirectOf(request, { routing, platformOrigin });
+    // the hostname the deployment's config pins to the project first, then the one it claimed
+    const primaryHostname =
+      pinnedHostnameOf(iterateConfig.urls.projectHostnames, project) ?? project.primaryHostname;
     const location =
       redirect &&
-      project.primaryHostname &&
-      primaryHostnameUrlOf(project.primaryHostname, {
+      primaryHostname &&
+      primaryHostnameUrlOf(primaryHostname, {
         routingSlug: redirect.routingSlug,
         path: `${url.pathname}${url.search}`,
       });

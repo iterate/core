@@ -178,6 +178,21 @@ export function primaryHostnameUrlOf(
   return url.hostname === hostname ? url : null;
 }
 
+/** THE HOSTNAME A DEPLOYMENT'S CONFIG PINS TO A PROJECT (core/os iterate-config.ts
+ *  `urls.projectHostnames`, each entry naming its project by id or by slug): the first entry's that
+ *  names `project`, or null. It is the project's primary hostname before any it claimed itself: the
+ *  operator's own zone, served by the deployment's own routes, which no project can claim or
+ *  release. Pure. */
+export function pinnedHostnameOf(
+  entries: readonly { hostname: string; project: string }[],
+  project: { id: string; slug?: string | null },
+): string | null {
+  const own = entries.find(
+    (entry) => entry.project === project.id || (!!project.slug && entry.project === project.slug),
+  );
+  return own?.hostname || null;
+}
+
 /** THE PUBLIC URL of `routingSlug` (null ⇒ the apex) at `path` in `project` — the one rule behind
  *  `itx.url` and `itx.whoami().projectUrl`: on the project's `primaryHostname` when it has one
  *  (`primaryHostnameUrlOf`), else under the deployment's ingress (`projectUrlOf`). Null as those

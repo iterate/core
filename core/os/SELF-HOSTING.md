@@ -224,7 +224,9 @@ Routes).
 project a domain of its own: `example.org` is the project's apex, and `notes.example.org` is its
 `notes` app, as with a hostname the project adds itself. Name the project by its id (`prj_…`): an
 entry that names its slug stops serving it when the project is renamed, so `projects.rename`
-refuses to rename a project the config names by its slug. Route `example.org/*` and
+refuses to rename a project the config names by its slug. The pinned hostname is the project's
+primary hostname before any it claims on the Dash: `itx.url`, the Dash's buttons, a package's OAuth
+redirect and the redirect from the project's ingress hosts all go to it. Route `example.org/*` and
 `*.example.org/*` on that zone to the Worker. The platform's own origin stays the platform's, even on the same zone (the
 platform on `iterate.example.org`, its projects on `*.iterate.example.org`). A more specific route
 on the zone wins over the wildcard, but a Custom Domain does not: give each Custom Domain on the

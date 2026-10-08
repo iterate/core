@@ -36,6 +36,8 @@ import type {
 import {
   type IngressRouting,
   ITERATE_ROUTING_SLUG_HEADER,
+  pinnedHostnameOf,
+  primaryHostnameUrlOf,
   projectPublicUrlOf,
   projectUrlOf,
 } from "iterate/project-ingress";
@@ -551,8 +553,12 @@ async function assertDeliveryCaller(
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the operations only it can serve. */
 export interface BuildBuiltInsDeps {
   projectInfo: () => Promise<{ projectSlug?: string }>;
-  /** This project's primary hostname (project/contract.ts `primaryHostname`), or null. */
+  /** The hostname this project claimed as its primary (project/contract.ts `primaryHostname`),
+   *  or null. */
   primaryHostname: () => Promise<string | null>;
+  /** The hostname the deployment's config pins to this project (iterate-config.ts
+   *  `urls.projectHostnames`), or null: its primary before any it claimed. */
+  pinnedHostname: () => Promise<string | null>;
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
@@ -908,10 +914,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const assertPlatformCaller = (verb: string) => {
     if (!deps.caller().platform) throw codedError("FORBIDDEN", `itx.${verb} is the platform's own`);
   };
-  /** The URL of a page of this project's — `beginOAuth`'s `redirect` — composed under the deployment's
-   *  ingress alone (never a primary hostname, whose exact labels another project may claim), so the
-   *  URL the provider gets is this project's by construction and holds still when a hostname is set
-   *  later. A person's or an organization's secret comes back to the platform's callback alone. */
+  /** The URL of a page of this project's — `beginOAuth`'s `redirect` — composed by the rules its
+   *  contract states (core/lib/src/api.ts `SecretOAuthOptions.redirect`). A person's or an
+   *  organization's secret comes back to the platform's callback alone. */
   const redirectUriOf = async (place: unknown, platformOrigin: string): Promise<string> => {
     if (owner.kind !== "project")
       throw codedError(
@@ -929,13 +934,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       })
       .parse(place);
     const { projectSlug } = await deps.projectInfo();
-    const url =
-      projectSlug &&
-      projectUrlOf(deps.ingressRouting, platformOrigin, {
-        project: projectSlug,
-        routingSlug,
-        path,
-      });
+    const pinned = await deps.pinnedHostname();
+    const url = pinned
+      ? primaryHostnameUrlOf(pinned, { routingSlug, path })
+      : projectSlug &&
+        projectUrlOf(deps.ingressRouting, platformOrigin, {
+          project: projectSlug,
+          routingSlug,
+          path,
+        });
     if (!url)
       throw codedError(
         "INVALID_INPUT",
@@ -2249,10 +2256,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
 export function buildIdentityRoots(
   deps: Pick<
     BuildBuiltInsDeps,
-    "projectId" | "path" | "projectInfo" | "platformOrigin" | "primaryHostname" | "ingressRouting"
+    | "projectId"
+    | "path"
+    | "projectInfo"
+    | "platformOrigin"
+    | "primaryHostname"
+    | "pinnedHostname"
+    | "ingressRouting"
   >,
 ): Pick<BuiltInScope, "whoami" | "url"> {
   const { projectId, path } = deps;
+  // the hostname the deployment pins to the project first, then the one it claimed, else none
+  const hostname = async () => (await deps.pinnedHostname()) ?? (await deps.primaryHostname());
   return {
     whoami: async () => {
       const project = await deps.projectInfo();
@@ -2262,7 +2277,7 @@ export function buildIdentityRoots(
         project.projectSlug && platformOrigin
           ? projectPublicUrlOf(deps.ingressRouting, platformOrigin, {
               project: project.projectSlug,
-              primaryHostname: await deps.primaryHostname(),
+              primaryHostname: await hostname(),
             })
           : null;
       return { projectId, path, ...project, ...(url && { projectUrl: url.href }) };
@@ -2277,10 +2292,10 @@ export function buildIdentityRoots(
       const slug = (await deps.projectInfo()).projectSlug;
       if (!slug)
         throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
-      // on the project's primary hostname when it has one, else under the deployment's ingress
+      // on the project's primary hostname when it has one, pinned or claimed, else under the ingress
       const url = projectPublicUrlOf(deps.ingressRouting, platformOrigin, {
         project: slug,
-        primaryHostname: await deps.primaryHostname(),
+        primaryHostname: await hostname(),
         routingSlug: target.routingSlug || null,
         path: target.path,
       });
@@ -2301,6 +2316,7 @@ export function buildIdentityRoots(
  *  its isolate keeps it (control-plane/edge.ts), so a rename reaches both within `KEPT_MS`. */
 export function projectConfigDeps(
   iterateConfig: IterateConfig,
+  projectId: string,
   projectSlug: () => Promise<string | null | undefined>,
 ) {
   return {
@@ -2308,6 +2324,11 @@ export function projectConfigDeps(
       const slug = await projectSlug();
       return slug ? { projectSlug: slug } : {};
     },
+    pinnedHostname: async () =>
+      pinnedHostnameOf(iterateConfig.urls.projectHostnames, {
+        id: projectId,
+        slug: await projectSlug(),
+      }),
     ingressRouting: iterateConfig.urls.ingressRouting,
     projectWildcard: iterateConfig.urls.projectWildcard,
     signingSecret: () => sessionSigningSecretOf(iterateConfig),

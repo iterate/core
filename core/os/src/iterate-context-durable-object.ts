@@ -1128,7 +1128,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
   readonly #builtIns = buildBuiltIns({
-    ...projectConfigDeps(this.#iterateConfig, () => this.#projectSlug()),
+    ...projectConfigDeps(this.#iterateConfig, this.#durableObjectAddress.projectId, () =>
+      this.#projectSlug(),
+    ),
     primaryHostname: async () =>
       (await this.#controlPlane.getProject(this.#durableObjectAddress.projectId))
         ?.primaryHostname ?? null,

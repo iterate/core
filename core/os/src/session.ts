@@ -524,6 +524,7 @@ export class SessionRpcTarget extends RpcTarget {
       scopes: this.#authority.scopes ?? [],
       platformOrigin: this.#input.platformOrigin,
       ingressRouting: this.#input.iterateConfig.urls.ingressRouting,
+      projectHostnames: this.#input.iterateConfig.urls.projectHostnames,
       mcpOrigin: this.#input.iterateConfig.urls.mcp,
       iterateAppProviders: IntegrationProvider.options.filter((provider) =>
         Boolean(this.#input.iterateConfig.integrations[provider]),

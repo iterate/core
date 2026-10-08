@@ -192,7 +192,11 @@ export function statelessResolverFor(args: {
     projectId === GLOBAL_PROJECT_ID
       ? Promise.resolve(null)
       : (catalogRow ||= new ControlPlane(env).getProject(projectId));
-  const projectDeps = projectConfigDeps(iterateConfig, async () => (await project())?.slug);
+  const projectDeps = projectConfigDeps(
+    iterateConfig,
+    projectId,
+    async () => (await project())?.slug,
+  );
   // The built-ins speak for the caller the resolver runs under: the library's hops (`cd` to the
   // catalog, a repo) go as the platform's, never as the loaded code they serve. Every portable root
   // but the connectors, whose live connections the context's library memoizes and its residency
