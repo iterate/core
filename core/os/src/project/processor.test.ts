@@ -10,7 +10,7 @@ import { reduceProcessor } from "iterate/stream/test-support";
 import { runningCause, runningUnder } from "../cause.ts";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
 import { ownershipRecordOf } from "./custom-hostnames.ts";
-import { ProjectProcessor } from "./processor.ts";
+import { ProjectProcessor, type ProjectHostnames } from "./processor.ts";
 import type { ProjectState } from "./contract.ts";
 
 const requested = {
@@ -42,12 +42,21 @@ const empty: ProjectState = {
   primaryHostname: null,
 };
 
+/** A person's chain, as their request carries it. */
+const CHAIN = { chain: "a person's chain", depth: 0 };
+/** The stamp a schedule's firing puts on the request it appends. */
+const LOOK = { key: '["project/hostname-recheck","www.acme.test"]', scheduledAtOffset: 2, at: "" };
+
 const reduceRows: {
   name: string;
   events: {
     type: string;
     payload?: unknown;
-    source?: { platform?: true; cause?: { chain: string; depth: number } };
+    source?: {
+      platform?: true;
+      cause?: { chain: string; depth: number };
+      schedule?: { key: string; scheduledAtOffset: number; at: string };
+    };
   }[];
   state: ProjectState;
 }[] = [
@@ -174,6 +183,117 @@ const reduceRows: {
           error: null,
           connectedAt: null,
           claimed: true,
+          checks: 0,
+          recheck: null,
+        },
+      },
+    },
+  },
+  {
+    name: "an answer that leaves the hostname on its way names the platform's next look, 30 s on, under the request's cause with the answer as its parent; the look's request is one check and owed like a person's; its answer names the next",
+    events: [
+      { ...hostname("add-requested"), source: { cause: CHAIN } },
+      addSettled(1, "pending"),
+      { ...hostname("add-requested"), source: { cause: CHAIN, schedule: LOOK } },
+      addSettled(3, "pending"),
+    ],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": {
+          requested: null,
+          cloudflare: observation("pending"),
+          error: null,
+          connectedAt: null,
+          claimed: true,
+          checks: 1,
+          recheck: { at: "1970-01-01T00:00:34.000Z", cause: { ...CHAIN, parent: "/@4" } },
+        },
+      },
+    },
+  },
+  {
+    name: "a person's request starts the checks over and drops the look; a look for a hostname owed a request, one live, or one unknown is nothing",
+    events: [
+      hostname("add-requested"),
+      addSettled(1, "pending"),
+      { ...hostname("add-requested"), source: { schedule: LOOK } },
+      addSettled(3, "pending"),
+      hostname("add-requested"),
+      { ...hostname("add-requested"), source: { schedule: LOOK } },
+      addSettled(5, "active"),
+      { ...hostname("add-requested"), source: { schedule: LOOK } },
+      {
+        type: "events.iterate.com/project/hostname-add-requested",
+        payload: { hostname: "other.acme.test" },
+        source: { schedule: LOOK },
+      },
+    ],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": {
+          requested: null,
+          cloudflare: observation("active"),
+          error: null,
+          connectedAt: null,
+          claimed: true,
+          checks: 0,
+          recheck: null,
+        },
+      },
+    },
+  },
+  {
+    name: "the twentieth look's answer names the next five minutes on; the thirtieth's names none",
+    events: [hostname("add-requested"), addSettled(1, "pending"), ...looks(20)],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": {
+          requested: null,
+          cloudflare: observation("pending"),
+          error: null,
+          connectedAt: null,
+          claimed: true,
+          checks: 20,
+          recheck: { at: "1970-01-01T00:05:42.000Z" },
+        },
+      },
+    },
+  },
+  {
+    name: "past thirty looks the platform stops: a person's request starts them again",
+    events: [hostname("add-requested"), addSettled(1, "pending"), ...looks(30)],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": {
+          requested: null,
+          cloudflare: observation("pending"),
+          error: null,
+          connectedAt: null,
+          claimed: true,
+          checks: 30,
+          recheck: null,
+        },
+      },
+    },
+  },
+  {
+    name: "a remove asked drops the look",
+    events: [hostname("add-requested"), addSettled(1, "pending"), hostname("remove-requested")],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": {
+          requested: { verb: "remove", offset: 3 },
+          cloudflare: observation("pending"),
+          error: null,
+          connectedAt: null,
+          claimed: true,
+          checks: 0,
+          recheck: null,
         },
       },
     },
@@ -195,6 +315,8 @@ const reduceRows: {
           error: "boom",
           connectedAt: null,
           claimed: true,
+          checks: 0,
+          recheck: null,
         },
       },
     },
@@ -227,6 +349,8 @@ const reduceRows: {
           error: null,
           connectedAt: expect.any(String),
           claimed: true,
+          checks: 0,
+          recheck: { at: "1970-01-01T00:00:33.000Z" },
         },
       },
     },
@@ -243,6 +367,8 @@ const reduceRows: {
           error: null,
           connectedAt: null,
           claimed: true,
+          checks: 0,
+          recheck: null,
         },
       },
     },
@@ -265,6 +391,8 @@ const reduceRows: {
           error: null,
           connectedAt: null,
           claimed: false,
+          checks: 0,
+          recheck: null,
         },
       },
     },
@@ -347,6 +475,8 @@ const reduceRows: {
           error: null,
           connectedAt: null,
           claimed: false,
+          checks: 0,
+          recheck: null,
         },
       },
       primaryHostname: "www.acme.test",
@@ -364,6 +494,8 @@ const reduceRows: {
           error: null,
           connectedAt: null,
           claimed: true,
+          checks: 0,
+          recheck: { at: "1970-01-01T00:00:32.000Z" },
         },
       },
     },
@@ -397,6 +529,8 @@ const reduceRows: {
           error: null,
           connectedAt: null,
           claimed: true,
+          checks: 0,
+          recheck: { at: "1970-01-01T00:00:35.000Z" },
         },
       },
     },
@@ -410,7 +544,13 @@ const reduceRows: {
     ],
     state: {
       ...empty,
-      hostnames: { "www.acme.test": { ...liveHostname(), claimed: false } },
+      hostnames: {
+        "www.acme.test": {
+          ...liveHostname(),
+          claimed: false,
+          recheck: { at: "1970-01-01T00:00:32.000Z" },
+        },
+      },
     },
   },
   {
@@ -799,6 +939,8 @@ test("ProjectProcessor — an event that changes the primary hostname holds the 
       heldElsewhere: async () => false,
       proof: proven,
       setPrimaryHostname: async (hostname) => void written.push(hostname),
+      scheduleRecheck: async () => {},
+      cancelRecheck: async () => {},
       provider: null,
       connect: async () => null,
       dnsZone: async () => null,
@@ -838,6 +980,10 @@ test("ProjectProcessor — a hostname add claims once proven, provisions and ans
       heldElsewhere: async (name) => name.startsWith("taken."),
       proof: async (name) => ({ ...(await proven(name)), proven: !/^(shop|done)\./.test(name) }),
       setPrimaryHostname: async () => {},
+
+      scheduleRecheck: async () => {},
+
+      cancelRecheck: async () => {},
       connect: async (name) => ({ provider: "Cloudflare", url: `https://dc.test/apply/${name}` }),
       dnsZone: async () => ({ zone: "acme.test", provider: "cloudflare" }),
       provider: {
@@ -872,6 +1018,8 @@ test("ProjectProcessor — a hostname add claims once proven, provisions and ans
         error: null,
         connectedAt: null,
         claimed: held,
+        checks: 0,
+        recheck: null,
       },
     };
     deliver(on, { ...empty, hostnames }, async (...events) => {
@@ -960,6 +1108,10 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
       heldElsewhere: async () => false,
       proof: proven,
       setPrimaryHostname: async () => {},
+
+      scheduleRecheck: async () => {},
+
+      cancelRecheck: async () => {},
       connect: async () => null,
       dnsZone: async () => null,
       provider: {
@@ -983,6 +1135,8 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
             error: null,
             connectedAt: null,
             claimed: false,
+            checks: 0,
+            recheck: null,
           },
         },
       },
@@ -1015,6 +1169,10 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
       heldElsewhere: async () => false,
       proof: proven,
       setPrimaryHostname: async () => {},
+
+      scheduleRecheck: async () => {},
+
+      cancelRecheck: async () => {},
       connect: async () => null,
       dnsZone: async () => null,
       provider: {
@@ -1040,6 +1198,8 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
             error: null,
             connectedAt: null,
             claimed: false,
+            checks: 0,
+            recheck: null,
           },
         },
       },
@@ -1051,6 +1211,94 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
   finish();
   await settle();
   expect(calls).toEqual(["claim www.acme.test", "claim www.acme.test"]);
+});
+
+test("ProjectProcessor — the platform's own re-checks: the look state names is scheduled once, under the cause of the request that began the checks; the same look again sets nothing; one that fired is not cancelled; one state drops unfired is; a fresh incarnation sets the look again", async () => {
+  const calls: { verb: string; hostname: string; at?: string; depth?: number }[] = [];
+  const reach = (): ProjectHostnames => ({
+    reservedZones: [],
+    claim: async () => {},
+    release: async () => {},
+    heldElsewhere: async () => false,
+    proof: proven,
+    setPrimaryHostname: async () => {},
+    connect: async () => null,
+    dnsZone: async () => null,
+    provider: null,
+    scheduleRecheck: async (hostname, at) =>
+      void calls.push({ verb: "set", hostname, at, depth: runningCause()?.depth }),
+    cancelRecheck: async (hostname) => void calls.push({ verb: "cancel", hostname }),
+  });
+  const incarnation = () =>
+    new ProjectProcessor(
+      () => {
+        throw new Error("unused");
+      },
+      () => Promise.reject(new Error("unused")),
+      reach,
+    );
+  const look = { at: "1970-01-01T00:00:32.000Z", cause: { ...CHAIN, parent: "/@2" } };
+  const onItsWay = (recheck: typeof look | null, requested = false): ProjectState => ({
+    ...empty,
+    hostnames: {
+      "www.acme.test": {
+        requested: requested ? { verb: "add", offset: 3 } : null,
+        cloudflare: observation("pending"),
+        error: null,
+        connectedAt: null,
+        claimed: true,
+        checks: 0,
+        recheck,
+      },
+    },
+  });
+  // the engine runs the pass one deeper than the answer's delivery; the look is set at the request's depth
+  const processor = incarnation();
+  runningUnder({ ...CHAIN, depth: 1 }, () => deliver(processor, onItsWay(look), unusedAppend));
+  await settle();
+  expect(calls).toEqual([{ verb: "set", hostname: "www.acme.test", at: look.at, depth: 0 }]);
+  deliver(processor, onItsWay(look), unusedAppend);
+  await settle();
+  expect(calls).toHaveLength(1);
+  // the look fired: its request lands (state owes it, the look gone), and nothing is cancelled
+  processor.processEvent({
+    event: {
+      type: "events.iterate.com/project/hostname-add-requested",
+      payload: { hostname: "www.acme.test" },
+      offset: 3,
+      createdAt: "1970-01-01T00:00:32.000Z",
+      path: "/",
+      source: { origin: "/", cause: CHAIN, schedule: LOOK },
+    } as never,
+    state: onItsWay(null, true),
+    previousState: onItsWay(look),
+    delivery: { caughtUp: true },
+    append: (async () => []) as never,
+    blockProcessorWhile: () => {},
+    runInBackground: (work) => void work(),
+  });
+  await settle();
+  expect(calls).toHaveLength(1);
+  // a person asked while the look was pending: state drops it unfired, and it is cancelled once
+  const second = incarnation();
+  const answers = async () => [];
+  deliver(second, onItsWay(look), unusedAppend);
+  deliver(second, onItsWay(null, true), answers);
+  deliver(second, onItsWay(null, true), answers);
+  await settle();
+  expect(calls.slice(1)).toEqual([
+    { verb: "set", hostname: "www.acme.test", at: look.at, depth: 0 },
+    { verb: "cancel", hostname: "www.acme.test" },
+  ]);
+  // the hostname removed with a look pending: cancelled
+  const third = incarnation();
+  deliver(third, onItsWay(look), unusedAppend);
+  deliver(third, empty, unusedAppend);
+  await settle();
+  expect(calls.slice(3)).toEqual([
+    { verb: "set", hostname: "www.acme.test", at: look.at, depth: 0 },
+    { verb: "cancel", hostname: "www.acme.test" },
+  ]);
 });
 
 // THE DELETION SAGA — driven by hand like the effects above, over a fake reach (processor.ts
@@ -1070,6 +1318,10 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
       heldElsewhere: async () => false,
       proof: proven,
       setPrimaryHostname: async () => {},
+
+      scheduleRecheck: async () => {},
+
+      cancelRecheck: async () => {},
       connect: async () => null,
       dnsZone: async () => null,
       provider: {
@@ -1105,6 +1357,8 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
         error: null,
         connectedAt: null,
         claimed: true,
+        checks: 0,
+        recheck: null,
       },
     },
   };
@@ -1443,6 +1697,15 @@ function hostname(verb: "add-requested" | "remove-requested") {
   };
 }
 
+/** `count` of the platform's looks after a request at offset 1 and its answer at 2: each a scheduled
+ *  request and its answer, 30 s apart in the harness's clock (an offset is a second). */
+function looks(count: number) {
+  return Array.from({ length: count }, (_, look) => [
+    { ...hostname("add-requested"), source: { schedule: LOOK } },
+    addSettled(2 * look + 3, "pending"),
+  ]).flat();
+}
+
 /** An add's answer: `claimed` whether the project holds the claim after it (by default, when it
  *  reached Cloudflare); `undefined` spells an answer from before the ownership proof. */
 function addSettled(
@@ -1479,6 +1742,8 @@ function liveHostname() {
     error: null,
     connectedAt: null,
     claimed: true,
+    checks: 0,
+    recheck: null,
   };
 }
 

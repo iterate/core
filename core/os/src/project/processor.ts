@@ -63,6 +63,29 @@ const PUBLICATION_ATTEMPT_WAITS_MS = [0, 5_000, 30_000] as const;
  *  commit stays owed to the project's next incarnation. */
 const PUBLICATION_RERUN_WAITS_MS = [30_000, 30_000] as const;
 
+/** THE PLATFORM'S OWN RE-CHECKS of a hostname on its way to live, after a person's request (the
+ *  page's add or "Check now", the return from the DNS provider's Domain Connect page): every 30 s
+ *  for the first 20 (ten minutes: a CNAME seen, a certificate issued), then every five minutes, 30
+ *  in all; the person's next request starts them over. Each is a one-shot schedule on `/` that the
+ *  answer before it set (durable-object.ts `scheduleRecheck`), so it runs with the page closed and
+ *  the context asleep. */
+const HOSTNAME_RECHECK = {
+  soonMs: 30_000,
+  soon: 20,
+  laterMs: 5 * 60_000,
+  checks: 30,
+} as const;
+
+/** When the platform looks again after an answer at `settledAt` left the hostname on its way, with
+ *  `checks` of its own run since a person asked; null past the bound. */
+const recheckAtOf = (settledAt: string, checks: number) =>
+  checks >= HOSTNAME_RECHECK.checks
+    ? null
+    : new Date(
+        Date.parse(settledAt) +
+          (checks < HOSTNAME_RECHECK.soon ? HOSTNAME_RECHECK.soonMs : HOSTNAME_RECHECK.laterMs),
+      ).toISOString();
+
 /** One attempt of a publication (`ProjectProcessor#attemptPublication`): its main module and
  *  manifest admitted, or refused and why. */
 type PublicationAttempt =
@@ -92,6 +115,11 @@ export type ProjectHostnames = {
     hostname: string,
   ): Promise<{ record: CustomHostnameObservation["records"][number]; proven: boolean }>;
   setPrimaryHostname(hostname: string | null): Promise<void>;
+  /** The platform's next look at `hostname` at `at` (ISO): a one-shot schedule on `/` that appends
+   *  its `hostname-add-requested` then, under the running cause; set again, it replaces the one
+   *  pending. `cancelRecheck` drops the one pending, if any. */
+  scheduleRecheck(hostname: string, at: string): Promise<void>;
+  cancelRecheck(hostname: string): Promise<void>;
   provider: CustomHostnameProvider | null;
   /** The signed Domain Connect link that writes `hostname`'s records at its DNS provider, or null
    *  (domain-connect.ts `domainConnectLinkOf`). */
@@ -166,6 +194,9 @@ export class ProjectProcessor extends StreamProcessor<
    *  lands, without waiting for another delivery. The durable ground is `state.hostnames[…].requested`. */
   #hostnameWork = new Set<string>();
   #newestHostnames: ProjectState["hostnames"] = {};
+  /** The next look this incarnation set a schedule for, by hostname (its `recheck.at`), until it
+   *  fires or state drops it; the durable ground is `state.hostnames[…].recheck`. */
+  #scheduledRechecks = new Map<string, string>();
 
   /** This incarnation's creation attempt, so one at-head pass does not start a second; the durable
    *  ground is `state.creation`. */
@@ -211,17 +242,33 @@ export class ProjectProcessor extends StreamProcessor<
         if (state.deletion) return undefined;
         return { ...state, deletion: { offset: event.offset } };
       case "events.iterate.com/project/hostname-add-requested": {
-        const known = state.hostnames[event.payload.hostname];
+        const { hostname } = event.payload;
+        const known = state.hostnames[hostname];
+        const requested = { verb: "add" as const, offset: event.offset, cause: event.source.cause };
+        // the platform's own look (a schedule's firing): one more, for a hostname still on its way
+        // and owed nothing; a person's request starts the count over
+        if (event.source.schedule) {
+          if (!known?.cloudflare || known.requested || hostnameIsLive(known)) return undefined;
+          return {
+            ...state,
+            hostnames: {
+              ...state.hostnames,
+              [hostname]: { ...known, requested, checks: known.checks + 1, recheck: null },
+            },
+          };
+        }
         return {
           ...state,
           hostnames: {
             ...state.hostnames,
-            [event.payload.hostname]: {
-              requested: { verb: "add", offset: event.offset },
+            [hostname]: {
+              requested,
               cloudflare: known?.cloudflare || null,
               error: null,
               connectedAt: event.payload.connected ? event.createdAt : known?.connectedAt || null,
               claimed: known?.claimed || false,
+              checks: 0,
+              recheck: null,
             },
           },
         };
@@ -233,12 +280,30 @@ export class ProjectProcessor extends StreamProcessor<
         const known = state.hostnames[hostname];
         if (!known || known.requested?.verb === "remove") return undefined;
         const requested = known.requested?.offset === requestOffset ? null : known.requested;
-        const settled = {
+        const answered = {
           ...known,
           requested,
           cloudflare: cloudflare || known.cloudflare,
           error,
           claimed: event.payload.claimed ?? Boolean(cloudflare || known.cloudflare),
+        };
+        // still on its way, nothing owed: the platform looks again, under the cause of the request
+        // it answers (its parent this answer), so a run of them stays at one depth
+        const at =
+          !requested && answered.cloudflare && !hostnameIsLive(answered)
+            ? recheckAtOf(event.createdAt, answered.checks)
+            : null;
+        const settled = {
+          ...answered,
+          recheck: at
+            ? {
+                at,
+                cause: known.requested?.cause && {
+                  ...known.requested.cause,
+                  parent: `${event.path}@${event.offset}`,
+                },
+              }
+            : null,
         };
         return {
           ...state,
@@ -261,7 +326,8 @@ export class ProjectProcessor extends StreamProcessor<
             ...state.hostnames,
             [event.payload.hostname]: {
               ...known,
-              requested: { verb: "remove", offset: event.offset },
+              requested: { verb: "remove", offset: event.offset, cause: event.source.cause },
+              recheck: null,
             },
           },
         };
@@ -417,6 +483,12 @@ export class ProjectProcessor extends StreamProcessor<
       blockProcessorWhile(
         async () => await this.hostnames()?.setPrimaryHostname(state.primaryHostname),
       );
+    // a look that fired is no longer pending: nothing to cancel when its request lands
+    if (
+      event?.type === "events.iterate.com/project/hostname-add-requested" &&
+      event.source.schedule
+    )
+      this.#scheduledRechecks.delete(event.payload.hostname);
     if (!delivery.caughtUp) return;
     // THE DELETION SAGA — state-derived, at head, in the background, and alone: a project being
     // deleted starts none of the sagas below, and this one first waits out any this incarnation
@@ -497,6 +569,13 @@ export class ProjectProcessor extends StreamProcessor<
         }
       });
     }
+    // THE PLATFORM'S OWN RE-CHECKS — state-derived, at head, in the background: the next look each
+    // hostname on its way is owed (`recheck`, which the answer before it named) is a one-shot
+    // schedule on `/`, set once per answer — a fresh incarnation sets it again, and the same
+    // instant replaces it — and cancelled once state drops it unfired (a person asked meanwhile,
+    // a remove, live by their check). The schedule's request runs under the cause of the request
+    // that began the checks, so thirty of them stay at one depth (src/cause.ts).
+    this.#scheduleRechecks(state, runInBackground);
     // THE PUBLICATION OF THE CONFIG REPO — state-derived, at head, in the background: each commit
     // fact of `/repos/config` (cross-posted here by the repo facet) is answered, oldest first, as the
     // generation of its offset (`#publish`), so a return to a commit published before (B, C, then B
@@ -745,6 +824,37 @@ export class ProjectProcessor extends StreamProcessor<
       if (isPlatformFailureKind(failureKind(error))) throw error;
       return { kind: "refused", error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  #scheduleRechecks(
+    state: ProjectState,
+    runInBackground: (work: () => Promise<unknown>) => void,
+  ): void {
+    let hostnames: ProjectHostnames | null | undefined;
+    const reach = () => (hostnames ||= this.hostnames());
+    for (const [hostname, entry] of Object.entries(state.hostnames)) {
+      const scheduled = this.#scheduledRechecks.get(hostname);
+      if (entry.recheck && entry.recheck.at !== scheduled) {
+        const { at, cause } = entry.recheck;
+        const reached = reach();
+        if (!reached) return;
+        this.#scheduledRechecks.set(hostname, at);
+        runInBackground(() => runningUnder(cause, () => reached.scheduleRecheck(hostname, at)));
+      } else if (!entry.recheck && scheduled) {
+        const reached = reach();
+        if (!reached) return;
+        this.#scheduledRechecks.delete(hostname);
+        runInBackground(() => reached.cancelRecheck(hostname));
+      }
+    }
+    // a hostname gone from state (removed) with a look pending
+    for (const hostname of [...this.#scheduledRechecks.keys()])
+      if (!state.hostnames[hostname]) {
+        const reached = reach();
+        if (!reached) return;
+        this.#scheduledRechecks.delete(hostname);
+        runInBackground(() => reached.cancelRecheck(hostname));
+      }
   }
 
   /** Claim the hostname once it is proven the project's (or again, when the project holds it), then

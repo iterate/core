@@ -11,6 +11,7 @@
 // and by the first `list()`, which hosts the facet without a row.
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import { INTEGRATIONS_PATH } from "iterate/integrations";
+import { sha256Hex } from "../caller.ts";
 import { runningCause } from "../cause.ts";
 import { downloadPublicGithubTemplate } from "../repo/github-template.ts";
 import { iterateConfigOf, type IterateConfigEnv } from "../iterate-config.ts";
@@ -188,8 +189,48 @@ export class ProjectFacet extends StreamProcessorDurableObject<
     const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     const controlPlane = new ControlPlane(this.env);
     const config = iterateConfigOf(this.env);
+    // The platform's own re-checks (processor.ts `HOSTNAME_RECHECK`): through the fixed point, past
+    // the project's rewrite rules, as the platform. The key names the hostname while it fits a
+    // schedule key: 200 characters, where a hostname may be 253.
+    const root = this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName);
+    const recheckKeyOf = async (hostname: string) => [
+      "project/hostname-recheck",
+      hostname.length <= 160 ? hostname : await sha256Hex(hostname),
+    ];
+    const asPlatform = () => ({ principal: null, platform: true as const, cause: runningCause() });
     return {
       reservedZones: config.customHostnames?.reservedZones || [],
+      scheduleRecheck: async (hostname, at) => {
+        await root.invoke(
+          [
+            "itx",
+            "builtins",
+            "schedules",
+            [
+              "set",
+              {
+                key: await recheckKeyOf(hostname),
+                when: { at },
+                events: [
+                  {
+                    type: "events.iterate.com/project/hostname-add-requested",
+                    payload: { hostname },
+                  },
+                ],
+              },
+            ],
+          ],
+          [],
+          asPlatform(),
+        );
+      },
+      cancelRecheck: async (hostname) => {
+        await root.invoke(
+          ["itx", "builtins", "schedules", ["cancel", await recheckKeyOf(hostname)]],
+          [],
+          asPlatform(),
+        );
+      },
       claim: (hostname) => controlPlane.claimHostname(projectId, hostname),
       release: (hostname) => controlPlane.releaseHostname(projectId, hostname),
       heldElsewhere: async (hostname) => {

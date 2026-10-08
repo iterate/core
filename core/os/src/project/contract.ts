@@ -23,6 +23,14 @@ import { WorkerManifest } from "../context/worker-manifest.ts";
 /** A publication's modules (context/worker-manifest.ts). */
 const PublishedModules = WorkerManifest.shape.modules;
 
+/** An event's cause as the state keeps it (src/cause.ts): the chain, how deep, and the event whose
+ *  handling wrote it. */
+const EventCause = z.object({
+  chain: z.string(),
+  depth: z.number(),
+  parent: z.string().optional(),
+});
+
 /** Where a custom hostname stands at Cloudflare (custom-hostnames.ts reads it off the API). */
 export const CustomHostnameObservation = z.object({
   /** Cloudflare's hostname status: `pending` until the CNAME is seen, then `active`. */
@@ -96,9 +104,7 @@ export const ProjectContract = defineProcessorContract({
         z.object({
           commitOid: z.string().min(1),
           offset: z.number().int().positive(),
-          cause: z
-            .object({ chain: z.string(), depth: z.number(), parent: z.string().optional() })
-            .optional(),
+          cause: EventCause.optional(),
         }),
       )
       .default([]),
@@ -110,14 +116,19 @@ export const ProjectContract = defineProcessorContract({
      *  (@iterate-com/voice `voiceVersion`). Null until the first publication. */
     publishedCommit: z.string().min(1).nullable().default(null),
     /** THE CUSTOM HOSTNAMES (custom-hostnames.ts), by hostname: the request the processor owes (an
-     *  add — which is also a re-check — or a remove, by the OFFSET of the request), Cloudflare's last
-     *  observation (null until provisioned), and the last failure's words. */
+     *  add — which is also a re-check — or a remove, by the OFFSET of the request, with its cause),
+     *  Cloudflare's last observation (null until provisioned), the last failure's words, and the
+     *  platform's own re-checks while the hostname is on its way (processor.ts `HOSTNAME_RECHECK`). */
     hostnames: z
       .record(
         z.string(),
         z.object({
           requested: z
-            .object({ verb: z.enum(["add", "remove"]), offset: z.number().int().positive() })
+            .object({
+              verb: z.enum(["add", "remove"]),
+              offset: z.number().int().positive(),
+              cause: EventCause.optional(),
+            })
             .nullable(),
           cloudflare: CustomHostnameObservation.nullable(),
           error: z.string().nullable(),
@@ -129,6 +140,17 @@ export const ProjectContract = defineProcessorContract({
            *  (custom-hostnames.ts `ownershipRecordOf`) names the project. Until then the hostname
            *  is not the project's, whatever Cloudflare says. */
           claimed: z.boolean().default(false),
+          /** THE PLATFORM'S OWN CHECKS since a person last asked: each is a `hostname-add-requested`
+           *  a schedule appended (`source.schedule`); `HOSTNAME_RECHECK.checks` of them end the run. */
+          checks: z.number().int().nonnegative().default(0),
+          /** THE NEXT LOOK: when the platform asks again on its own (ISO) and the cause its request
+           *  runs under — the request that began the checks, so thirty of them stay at one depth
+           *  (src/cause.ts). Null when it will not: live, a request owed, nothing at Cloudflare, or
+           *  past the bound. */
+          recheck: z
+            .object({ at: z.string(), cause: EventCause.optional() })
+            .nullable()
+            .default(null),
         }),
       )
       .default({}),
@@ -187,7 +209,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/hostname-add-requested": {
       description:
-        "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor creates the wildcard Cloudflare for SaaS custom hostname, claims it in the control plane's hostname table once the ownership TXT record `_iterate.<hostname>` names the project, then lands hostname-add-settled. Again for a hostname already added re-reads Cloudflare's status.",
+        "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor creates the wildcard Cloudflare for SaaS custom hostname, claims it in the control plane's hostname table once the ownership TXT record `_iterate.<hostname>` names the project, then lands hostname-add-settled. Again for a hostname already added re-reads Cloudflare's status. While the hostname is on its way the platform appends it on its own schedule (`source.schedule`), 30 times at most after a person's request, which starts them over.",
       payloadSchema: z.object({
         hostname: z.string().min(1),
         /** Asked on the way back from the DNS provider's Domain Connect page. */
