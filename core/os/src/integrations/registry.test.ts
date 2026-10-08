@@ -11,7 +11,7 @@ const telegram = {
   title: "Telegram",
   description: "A bot for private chats and groups.",
   status: { kind: "ok" as const },
-  actions: [{ label: "Connect", routingSlug: "telegram", path: "/_/" }],
+  actions: [{ label: "Connect", routingSlug: "telegram", path: "/" }],
 };
 const bot = {
   account: "@jeeves_bot",
@@ -73,7 +73,7 @@ test.for([
       card("telegram", telegram),
       card("telegram", { title: "x".repeat(81), actions: [] }),
       card("telegram", { title: "Telegram", colour: "blue" }),
-      card("telegram", { title: "Telegram", actions: [{ label: "Go", path: "/_/", extra: 1 }] }),
+      card("telegram", { title: "Telegram", actions: [{ label: "Go", path: "/", extra: 1 }] }),
       card("a".repeat(64), telegram),
       connection("telegram", "jeeves", {
         account: "@jeeves_bot",
