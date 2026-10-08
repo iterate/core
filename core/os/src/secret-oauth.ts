@@ -27,6 +27,7 @@
 // the flow and what `redirect` excludes; context/built-ins.ts `secrets.beginOAuth` composes the URL.
 
 import * as oauth from "oauth4webapi";
+import { z } from "zod";
 import type { ClientAuth, SecretOAuthClient } from "iterate/api";
 import { codedError } from "iterate/lib";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
@@ -61,9 +62,16 @@ export type NormalizedSecretOAuthOptions = {
   extra: Record<string, string>;
   next: string | null;
   expectAccount: string | null;
+  /** The endpoint that names the account the tokens are for, and the JSON paths of its id and
+   *  name (iterate/api `SecretOAuthOptions.account`): null when the token response names it. */
+  account: AccountLookup | null;
   /** The project's own callback page (the header): null for the platform's callback. */
   redirectUri: string | null;
 };
+
+/** An endpoint within the pin that names an account, called with the new access token, and where
+ *  in its JSON the account's id and name are (`data.id`, `data.username`). */
+export type AccountLookup = { url: string; id: string; name: string | null };
 
 /** The pending attempt, kept by the secret's facet between the redirect out and the code
  *  back: everything the exchange needs and nothing a browser ever sees. */
@@ -157,6 +165,7 @@ export function normalizeSecretOAuth(
     throw new Error(
       `secrets.beginOAuth: tokenEndpoint ${tokenEndpoint.origin} is outside the pin ${urls.join(", ")} — the tokens only ever go toward a pinned host`,
     );
+  const account = accountLookupOf(options.account, urls, Boolean(client));
   const extra: Record<string, string> = {};
   if (isRecord(options.extra))
     for (const [key, value] of Object.entries(options.extra)) extra[key] = String(value);
@@ -184,8 +193,65 @@ export function normalizeSecretOAuth(
       typeof options.expectAccount === "string" && options.expectAccount
         ? options.expectAccount
         : null,
+    account,
     redirectUri,
   };
+}
+
+/** `account` checked: absent, or `{ url, id, name? }` — an http(s) endpoint within the pin (the new
+ *  token goes to it), and the JSON paths. Not with the deployment's own client. */
+const AccountLookupInput = z.object({
+  url: z.url({ protocol: /^https?$/ }),
+  id: z.string().min(1),
+  name: z.string().min(1).optional(),
+});
+function accountLookupOf(
+  value: unknown,
+  urls: string[],
+  platformClient: boolean,
+): AccountLookup | null {
+  if (value === undefined) return null;
+  const parsed = AccountLookupInput.safeParse(value);
+  if (!parsed.success)
+    throw codedError(
+      "INVALID_INPUT",
+      "secrets.beginOAuth: account is { url, id, name? } — the endpoint that names the account, and the JSON paths of its id and name",
+    );
+  if (platformClient)
+    throw codedError(
+      "INVALID_INPUT",
+      "secrets.beginOAuth: account is for a client of your own — the deployment's app names its own accounts",
+    );
+  const url = new URL(parsed.data.url);
+  if (!urls.includes(url.origin))
+    throw codedError(
+      "INVALID_INPUT",
+      `secrets.beginOAuth: account.url ${url.origin} is outside the pin ${urls.join(", ")} — the token only ever goes toward a pinned host`,
+    );
+  return { url: url.href, id: parsed.data.id, name: parsed.data.name || null };
+}
+
+/** The account an endpoint's JSON names, by the lookup's paths: a non-empty id, and the name when
+ *  the path finds a string. Throws when the id is missing. */
+export function accountOf(
+  json: unknown,
+  lookup: AccountLookup,
+): { id: string; name: string | null } {
+  const found = jsonPathOf(json, lookup.id);
+  const id = typeof found === "number" ? String(found) : typeof found === "string" ? found : "";
+  if (!id) throw new Error(`the account endpoint named no account at ${lookup.id}`);
+  const name = lookup.name ? jsonPathOf(json, lookup.name) : null;
+  return { id, name: typeof name === "string" && name ? name : null };
+}
+
+/** The value at a dotted path (`data.id`) in parsed JSON, or undefined. */
+function jsonPathOf(json: unknown, path: string): unknown {
+  let value = json;
+  for (const key of path.split(".")) {
+    if (!isRecord(value)) return undefined;
+    value = value[key];
+  }
+  return value;
 }
 
 /** `client` checked: absent, or `{ platform }` naming an OAuth integration's provider. */
@@ -262,7 +328,8 @@ export async function completeSecretOAuth(
       },
     }),
   );
-  if (options.expectAccount) {
+  // with `account`, the facet checks the account off that endpoint, not off the token response
+  if (options.expectAccount && !options.account) {
     const refusal = consentAccountRefusal(
       options.expectAccount,
       await response

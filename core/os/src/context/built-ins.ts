@@ -1347,13 +1347,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           };
           // A facet call answers `unknown` over the hop; this is the platform's own
           // SecretFacet.completeOAuth's declared answer.
-          const { urls, refresh, scopes, held } = (await secretFacet([
+          const { urls, refresh, scopes, account, held } = (await secretFacet([
             "completeOAuth",
             attempt,
           ])) as {
             urls: string[];
             refresh?: SecretRefresh["kind"];
             scopes: string[];
+            account?: { id: string; name: string | null };
             held?: HeldToken;
           };
           // held aside, not stored: nothing on the log until a move admits it (`admitHeldToken`)
@@ -1362,8 +1363,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             type: "events.iterate.com/secret/set",
             payload: { path: secretPath, urls, refresh },
           });
-          // what the provider granted, for the connection the callback finishes (integrations/verbs.ts)
-          return { path: secretPath, scopes };
+          // what the provider granted, for the connection the callback finishes (integrations/verbs.ts),
+          // and the account an `account` endpoint named
+          return { path: secretPath, scopes, account };
         }),
       admitHeldToken: (secretPath, input) => {
         assertPlatformCaller("secrets.admitHeldToken");

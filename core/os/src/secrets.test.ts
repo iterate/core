@@ -687,6 +687,7 @@ test("normalizeSecretOAuth: the pin defaults to the token endpoint's origin, mus
     extra: { access_type: "offline" },
     next: null,
     expectAccount: null,
+    account: null,
     redirectUri: null,
   });
   expect(() =>

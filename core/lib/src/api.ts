@@ -352,9 +352,16 @@ export type SecretOAuthOptions = {
   urls?: string[];
   extra?: Record<string, string>;
   /** The account the tokens must be for — an existing connection's, asked for more: the provider's
-   *  id for it (a Slack team, an OpenID `sub`), read off the token response. Another account's
-   *  tokens are refused before anything is stored. */
+   *  id for it (a Slack team, an OpenID `sub`), read off the token response, or off `account`'s
+   *  endpoint when given. Another account's tokens are refused before anything is stored. */
   expectAccount?: string;
+  /** Where the provider names the account the new tokens are for, when its token response does
+   *  not (X; any provider without an ID token): a JSON endpoint within `urls`, which the secret's
+   *  facet calls once with the new access token before anything is stored, and the paths of the
+   *  account's id and, when it has one, its name (`data.id`, `data.username`). `completeOAuth`
+   *  answers the account, and `expectAccount` is checked against its id. Not with `client`: the
+   *  deployment's app names its own accounts. */
+  account?: { url: string; id: string; name?: string };
 };
 
 /** How a lend to every project went, project by project: how many borrow it, the projects that
@@ -1195,12 +1202,13 @@ export interface IterateContextApi {
      *  it signed for this very secret and still stands, exchanges the code inside the secret's facet
      *  (the PKCE verifier and the client secret live there), stores the tokens and lands
      *  `secret/set`. Answers the scopes the provider says it granted. The same callback again, a
-     *  refreshed tab, answers the same and exchanges nothing twice. An attempt begun without
-     *  `redirect` (the platform's callback, a deployment app's) is refused here. */
+     *  refreshed tab, answers the same and exchanges nothing twice. With `account`, answers the
+     *  account the tokens are for too. An attempt begun without `redirect` (the platform's
+     *  callback, a deployment app's) is refused here. */
     completeOAuth(
       path: string,
       input: { code: string; state: string },
-    ): Promise<{ path: string; scopes: string[] }>;
+    ): Promise<{ path: string; scopes: string[]; account?: { id: string; name: string | null } }>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
     /** Build the authenticated Dash link (`/collect-secret/<slug>`, a page of its own) where a

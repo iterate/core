@@ -20,7 +20,7 @@ import {
 
 /** X has no ID token: account identity comes from the authorized /2/users/me response.
  * https://docs.x.com/x-api/users/get-my-user */
-export const XUserResponse = z.object({
+const XUserResponse = z.object({
   data: z.object({ id: z.string().regex(/^\d+$/), username: z.string().min(1) }),
 });
 

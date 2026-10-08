@@ -60,7 +60,7 @@ import { ControlPlane } from "../control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { MOVE_OFFER_TTL_MS, type HeldToken } from "../integrations/connections.ts";
 import { grantedScopesOf, lendVerdict, slackTeamOfTokenResponse } from "../integrations/rules.ts";
-import { xEndpointsOf, XUserResponse } from "../integrations/x.ts";
+import { xEndpointsOf } from "../integrations/x.ts";
 import { googleEndpointsOf } from "../integrations/google.ts";
 import { githubApiOriginOf } from "../integrations/github.ts";
 import { cloudflareEndpointsOf } from "../integrations/cloudflare.ts";
@@ -71,10 +71,11 @@ import {
   type MaterialKeys,
 } from "../secret-at-rest.ts";
 import {
+  accountOf,
   beginSecretOAuth,
   completeSecretOAuth,
-  secretOAuthCallbackPathOf,
   SECRET_OAUTH_TTL_MS,
+  secretOAuthCallbackPathOf,
   type NormalizedSecretOAuthOptions,
   type PendingSecretOAuth,
   type SecretOAuthState,
@@ -781,6 +782,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
     urls: string[];
     refresh?: SecretRefresh["kind"];
     scopes: string[];
+    account?: { id: string; name: string | null };
     held?: HeldToken;
   }> {
     // project code completes only an attempt begun with its own redirectUri — a replay of one the
@@ -820,9 +822,21 @@ export class SecretFacet extends StreamProcessorDurableObject<
     let scopes: string[] = [];
     const answered: { team: ReturnType<typeof slackTeamOfTokenResponse> } = { team: null };
     const { client, expectAccount } = pending.options;
-    const xClient = client?.platform === "x";
+    // The account the tokens are for, named by an endpoint rather than the token response: the
+    // caller's `account` (a client of the project's own), or X's /2/users/me for the deployment's
+    // X client, which has no ID token (https://docs.x.com/x-api/users/get-my-user). The exchange
+    // then checks `expectAccount` here, not off the token response.
+    const lookup =
+      pending.options.account ||
+      (client?.platform === "x" && expectAccount
+        ? {
+            url: xEndpointsOf(new URL(pending.options.tokenEndpoint).origin).userEndpoint,
+            id: "data.id",
+            name: "data.username",
+          }
+        : null);
     const record = await completeSecretOAuth(
-      xClient ? { ...pending, options: { ...pending.options, expectAccount: null } } : pending,
+      lookup ? { ...pending, options: { ...pending.options, expectAccount: null } } : pending,
       input.code,
       async (exchange) => {
         if (!originPinned(exchange.url, pending.options.urls))
@@ -839,14 +853,14 @@ export class SecretFacet extends StreamProcessorDurableObject<
       credentials,
       this.#clientSecretOf,
     );
-    // X has no ID token: verify the new credential before the revision fence and the write.
-    // https://docs.x.com/x-api/users/get-my-user
-    if (xClient && expectAccount) {
-      const endpoint = xEndpointsOf(new URL(pending.options.tokenEndpoint).origin).userEndpoint;
-      if (!originPinned(endpoint, record.urls))
-        throw new Error("X identity endpoint is outside the pin");
+    // The account, verified before the revision fence and the write: another account's tokens
+    // are never stored.
+    let account: { id: string; name: string | null } | undefined;
+    if (lookup) {
+      if (!originPinned(lookup.url, record.urls))
+        throw new Error(`the account endpoint ${new URL(lookup.url).origin} is outside the pin`);
       const identity = await dispatch(
-        new Request(endpoint, {
+        new Request(lookup.url, {
           headers: {
             authorization: `Bearer ${secretMaterialStringOf(record.material, "accessToken")}`,
           },
@@ -855,13 +869,13 @@ export class SecretFacet extends StreamProcessorDurableObject<
       );
       if (!identity.ok) {
         await identity.body?.cancel();
-        throw new Error(`X account lookup answered ${identity.status}`);
+        throw new Error(`the account lookup answered ${identity.status}`);
       }
-      const { data } = XUserResponse.parse(await identity.json());
-      if (data.id !== expectAccount)
+      account = accountOf(await identity.json(), lookup);
+      if (expectAccount && account.id !== expectAccount)
         throw codedError(
           "IDENTITY_CONFLICT",
-          "X authorized a different account; connect it as a new connection instead.",
+          `the provider authorized a different account (${account.id}) than this connection's (${expectAccount}); connect it as a new connection instead`,
         );
     }
     const slackTeam = client?.platform === "slack" ? answered.team : null;
@@ -901,9 +915,15 @@ export class SecretFacet extends StreamProcessorDurableObject<
       nonce: input.nonce,
       revision,
       scopes,
+      account,
       ...(pending.options.redirectUri && { userspaceRedirect: true }),
     });
-    return { urls: record.urls, refresh: record.refresh?.kind, scopes };
+    return {
+      urls: record.urls,
+      refresh: record.refresh?.kind,
+      scopes,
+      account,
+    };
   }
 
   /** What the attempt `nonce` completed, while the record is still the one it wrote (a replay's
@@ -914,12 +934,14 @@ export class SecretFacet extends StreamProcessorDurableObject<
     urls: string[];
     refresh?: SecretRefresh["kind"];
     scopes: string[];
+    account?: { id: string; name: string | null };
     userspaceRedirect: boolean;
   } | null> {
     const completed = await this.ctx.storage.get<{
       nonce: string;
       revision: number;
       scopes: string[];
+      account?: { id: string; name: string | null };
       userspaceRedirect?: boolean;
     }>("completed");
     if (completed?.nonce !== nonce) return null;
@@ -932,6 +954,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
       urls: stored.record.urls,
       refresh: stored.record.refresh?.kind,
       scopes: completed.scopes,
+      account: completed.account,
       userspaceRedirect: completed.userspaceRedirect === true,
     };
   }
