@@ -6,7 +6,9 @@ know the service. It teaches you how to find out what you need, and then walks y
 through the connection one step at a time. Do the steps in order.
 
 When you finish, three things are true: the project holds the service's credential as a secret, one
-read-only call has shown that it works, and the project's `AGENTS.md` says how to use it.
+read-only call has shown that it works, and the project's `AGENTS.md` says how to use it. To give a
+service a page, a webhook or a card on the Dash, and to share that with other projects, write a
+package instead: <https://github.com/jonastemplestein/iterategrations/blob/main/adding-an-integration.md>.
 
 ## How you run code in the project
 

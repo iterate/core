@@ -54,16 +54,13 @@ import {
   slackMoveOfferedAgain,
 } from "./slack.ts";
 
+/** A connect through the deployment's app at the provider. */
 export type ConnectInput = {
   provider: IntegrationProvider;
   connection: string;
-  client: "iterate" | "project";
   next?: string;
   /** More permissions than the client's default (Google, Cloudflare, Slack, X). */
   scopes?: string[];
-  /** A GitHub App of the project's own: its public half. */
-  appSlug?: string;
-  clientId?: string;
   /** GitHub: an installation the App already has, connected without GitHub's configure page (the
    *  human authorizes the App at once, coming back to `platformOrigin`'s callback). */
   installationId?: string;
@@ -333,9 +330,8 @@ export async function disconnectIntegration(
   const path = connectionPathOf(provider, connection);
   const row = integrations[path];
   const controlPlane = new ControlPlane(scope.env);
-  // the connection since took another account, or the same one through its own app (or none):
-  // nothing of the moved one is left here
-  if (moved && (row?.externalId !== moved.externalId || row.client !== "iterate")) return;
+  // the connection since took another account (or none): nothing of the moved one is left here
+  if (moved && row?.externalId !== moved.externalId) return;
   // …or it holds the account's route again (a move back): the move away is undone, not its cleanup
   if (moved) {
     const route = await controlPlane.integrationRouteOf(provider, moved.externalId);
@@ -508,7 +504,7 @@ async function moveHere(scope: IntegrationScope, input: { offer: string }) {
     }
     try {
       if (provider === "github")
-        await connectGithubInstallation(scope, connection, attempt, externalId, account, "held");
+        await connectGithubInstallation(scope, connection, externalId, account, "held");
       else await connectMovedSlackTeam(scope, connection, attempt, move);
     } catch (error) {
       try {
@@ -518,7 +514,7 @@ async function moveHere(scope: IntegrationScope, input: { offer: string }) {
         // before this one returned, so it goes again.
         const holderNamesIt = async () => {
           const row = await connectionRowThroughHeadOf(env, holder.projectId, holder.path);
-          return row?.client === "iterate" && row.externalId === externalId;
+          return row?.externalId === externalId;
         };
         const restored =
           (await holderNamesIt()) &&
@@ -537,7 +533,7 @@ async function moveHere(scope: IntegrationScope, input: { offer: string }) {
             holder.projectId,
             holder.path,
           );
-        if (before?.client === "iterate" && before.externalId !== externalId)
+        if (before && before.externalId !== externalId)
           await controlPlane.routeIntegration(provider, before.externalId, projectId, path);
       } catch (rollbackError) {
         reportIssue("integrations.move-rollback", rollbackError, {

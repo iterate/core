@@ -282,6 +282,36 @@ export type IterateConfigProcessEventArgs<App extends keyof InstalledAppRoots = 
   itx: IterateContextApiWith<App>;
 };
 
+/** WHAT A PROJECT HOSTS BESIDE ITS OWN CODE — an integration package (iterate-telegram,
+ *  iterate-github, …: github.com/jonastemplestein/iterategrations), two hooks the config repo's
+ *  `worker.ts` lists in `const integrations: Integration[]` and dispatches to
+ *  (core/configs/default/worker.ts). A package's install hook is its `project/worker-updated` case:
+ *  there it registers its card on the project's `/integrations` context (iterate/integrations),
+ *  keyed by that event's path and offset, so the Dash lists it after every publish and a retry
+ *  appends nothing new. A package keeps nothing across calls: not the host, not a scope, not a
+ *  handle. */
+export type Integration = {
+  /** The host it answers (`telegram` for `telegram--<project>`): the worker hands it the requests
+   *  on that routing slug and no other, so a package never sees another's requests, and an error
+   *  in one page breaks no other host. */
+  routingSlug?: string;
+  /** A request on `routingSlug`. `host` is the worker: `using itx = host.getItx()` for the
+   *  project's scope, and for a members-only page the gate every private page needs:
+   *  `const denied = host.auth.require(request); if (denied) return denied;`. A webhook needs no
+   *  gate: it proves itself with a signature (`itx.secrets.verifyHmac`) or a secret in its URL
+   *  (`itx.secrets.verifyEquals`). */
+  fetch?(
+    request: Request,
+    host: Pick<IterateConfigEntrypoint, "getItx" | "auth">,
+  ): Promise<Response>;
+  /** Every durable event of the project, as `processEvent` is handed it: unordered, at least once,
+   *  so each reaction is an append keyed by the event's path and offset. Return for an event the
+   *  package does not handle: a hook that throws fails the whole worker's handling of that event,
+   *  which the platform retries, and one that throws on every event slows the project's own cases
+   *  to a trickle. */
+  processEvent?(args: IterateConfigProcessEventArgs): Promise<void>;
+};
+
 /** Stateless config entrypoint, the default export of a project's config repo; its init handles
  *  `events.iterate.com/project/worker-updated` (core/configs/default/worker.ts). */
 export abstract class IterateConfigEntrypoint<
@@ -295,8 +325,9 @@ export abstract class IterateConfigEntrypoint<
    *  ```js
    *  if (!request.headers.get("x-itx-principal"))
    *    return new Response("Sign in\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
-   *  ``` */
-  protected readonly auth = auth;
+   *  ```
+   *  Public, so a package the worker hosts (`Integration`) reaches it through the worker. */
+  readonly auth = auth;
 
   constructor(ctx: ExecutionContext, env: Env) {
     super(ctx, env);
@@ -323,8 +354,9 @@ export abstract class IterateConfigEntrypoint<
   /** `using itx = this.getItx()`: the project root's scope, released with every call made through
    *  it when the block ends (`FacetDurableObject.getItx` says why nothing is kept past it). A field,
    *  not a method: Workers RPC reaches an entrypoint's methods, and a caller must never get the
-   *  scope (sdk/index.test.ts). */
-  protected readonly getItx = (): IterateContextApi & Disposable => itxScope(this.env.ITX);
+   *  scope (sdk/index.test.ts). Public, so a package the worker hosts (`Integration`) reaches it
+   *  through the worker. */
+  readonly getItx = (): IterateContextApi & Disposable => itxScope(this.env.ITX);
 
   /** THE CONTEXT A METHOD WAS CALLED FROM, inside a method other than `fetch`: the context whose
    *  code or session made the call, as the platform stamps it (core/os caller.ts `Caller.path`),

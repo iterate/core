@@ -1,5 +1,5 @@
-// X connections use PKCE and rotating OAuth 2.0 tokens in the existing secret infrastructure.
-// Account identity comes from /users/me; personal connections require Iterate's client.
+// X connections use PKCE and rotating OAuth 2.0 tokens in the existing secret infrastructure,
+// through the deployment's X client. Account identity comes from /users/me.
 import { codedError } from "iterate/lib";
 import { z } from "zod";
 import { iterateConfigOf, DEFAULT_X_SCOPES } from "../iterate-config.ts";
@@ -35,39 +35,25 @@ export function xEndpointsOf(origin?: string | null) {
   };
 }
 
-/** Begin consent, retaining already granted scopes on a reconnect. */
+/** Begin consent through the deployment's X client, retaining already granted scopes on a reconnect. */
 export async function connectX(
   scope: IntegrationScope,
   input: {
     connection: string;
-    client: ConnectionAttempt["client"];
     next?: string;
     scopes?: readonly string[];
     existing?: IntegrationConnectionRow;
     connectToProject?: ConnectionAttempt["connectToProject"];
   },
 ) {
-  if (scope.rootPath !== "/" && input.client !== "iterate")
-    throw codedError("INVALID_INPUT", "Link your X identity through Iterate's X app.");
   const app = iterateConfigOf(scope.env).integrations.x;
+  if (!app) throw codedError("INVALID_INPUT", "This deployment has no X OAuth client.");
   using itx = scope.getItx();
-  let origin: string | undefined;
-  if (input.client === "iterate") {
-    if (!app) throw codedError("INVALID_INPUT", "This deployment has no X OAuth client.");
-    origin = app.xOrigin;
-  } else {
-    const secrets = await itx.secrets.list();
-    const pin = secrets.find((secret) => secret.path === tokenSecretPathOf("x", input.connection))
-      ?.urls[0];
-    if (!pin)
-      throw codedError("INVALID_INPUT", "Set this connection's X client ID and secret first.");
-    origin = pin === "https://api.x.com" ? undefined : pin;
-  }
-  const endpoints = xEndpointsOf(origin);
+  const endpoints = xEndpointsOf(app.xOrigin);
   const scopes = [
     ...new Set([
       ...DEFAULT_X_SCOPES,
-      ...(input.client === "iterate" ? app?.scopes || [] : []),
+      ...app.scopes,
       ...(input.existing?.scopes || []),
       ...(input.scopes || []),
     ]),
@@ -76,7 +62,7 @@ export async function connectX(
     tokenSecretPathOf("x", input.connection),
     {
       ...endpoints,
-      client: input.client === "iterate" ? { platform: "x" } : { project: "x" },
+      client: { platform: "x" },
       clientAuth: "client_secret_basic",
       scope: scopes.join(" "),
       next: input.next,
@@ -84,8 +70,7 @@ export async function connectX(
     },
   );
   await scope.storage.put<ConnectionAttempt>(consentAttemptKeyOf("x", input.connection, nonce), {
-    client: input.client,
-    origin: origin || "",
+    origin: app.xOrigin || "",
     until: Date.now() + SECRET_OAUTH_TTL_MS,
     connectToProject: input.connectToProject,
   });
@@ -117,15 +102,14 @@ export async function finishXConnect(
     appendConnected(scope, {
       provider: "x",
       connection,
-      client: attempt.client,
       account: `@${data.username}`,
       externalId: data.id,
       scopes: grantedScopes,
     });
   // Iterate's app routes an X account to ONE project connection, as for Slack and GitHub: a second
   // connection of the same account, here or in another project, is refused, and the token the
-  // callback stored for it goes. A person's own account and a project's own client are not routed.
-  if (attempt.client !== "iterate" || scope.rootPath !== "/") return { row: await connected() };
+  // callback stored for it goes. A person's own account is not routed.
+  if (scope.rootPath !== "/") return { row: await connected() };
   const path = connectionPathOf("x", connection);
   // a reconnect's callback replaced the live token already: only a connection with no row is new
   const isNew = !(await connectionRowOf(scope.env, scope.projectId, path));

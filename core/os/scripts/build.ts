@@ -30,6 +30,7 @@ const PLATFORM_ENTRIES = [
   "iterate/stream/contract",
   "iterate/stream/run",
   "iterate/email",
+  "iterate/integrations",
   "iterate/api",
   "iterate/lib",
   "iterate/expression",

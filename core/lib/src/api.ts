@@ -206,7 +206,9 @@ export type SecretRefresh =
    *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is the deployment's
    *  (`{ platform: "github" }`, minted only for an installation the control plane routes to this
    *  project) or the project's own, whose `appId` and `privateKey` the material holds
-   *  (`{ project: "github" }`). */
+   *  (`{ project: "github" }`); either may be a `getSecret("/secrets/<name>", { field })`
+   *  placeholder naming another of the owner's secrets pinned to `apiOrigin`, so one secret holding
+   *  the App's key serves every installation's secret. */
   | {
       kind: "github-app-installation";
       apiOrigin: string;
@@ -307,11 +309,9 @@ export type OAuthIntegrationProvider = Exclude<IntegrationProvider, "github">;
 /** The providers a person signs in with, each through iterate's app there. */
 export type SignInProvider = Exclude<IntegrationProvider, "slack" | "x">;
 
-/** Whose OAuth app a secret's `beginOAuth` goes through: the deployment's (`platform`) or the
- *  project's own registered for that provider (`project`). */
-export type SecretOAuthClient =
-  | { platform: OAuthIntegrationProvider }
-  | { project: OAuthIntegrationProvider };
+/** Whose OAuth app a secret's `beginOAuth` goes through when it is not a client passed in the
+ *  clear: the deployment's own at that provider (an integration connected through it). */
+export type SecretOAuthClient = { platform: OAuthIntegrationProvider };
 
 /** What `secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the OAuth client
  *  (the project's own in the clear, or an integration's `client`), the scope, the pin, and any extra
@@ -330,8 +330,19 @@ export type SecretOAuthOptions = {
    *  a placeholder that names no such secret. */
   clientSecret?: string;
   client?: SecretOAuthClient;
-  /** An absolute URL on the platform's origin or the Dash's. */
+  /** Where the platform's callback sends the human once the tokens are stored: an absolute URL on
+   *  the platform's origin or the Dash's. Not with `redirect`, whose page is the landing. */
   next?: string;
+  /** YOUR OWN CALLBACK, a page of this project's: `routingSlug`'s host (the apex when absent) at
+   *  `path`, composed under the deployment's ingress (never a primary hostname), so it is the
+   *  project's own by construction. Register that URL at the provider as the app's redirect URI.
+   *  The provider sends the human there with `code` and `state`, and the page, for members only
+   *  (`auth.require`), hands both to `completeOAuth`, which exchanges the code inside the secret's
+   *  facet: the page never sees a token. Without it, the provider sends the human to the platform's
+   *  callback. Not with `client`: the deployment's app comes back to the callback registered for it.
+   *  The URL follows the project: a rename moves the page, and the URI registered at the provider
+   *  must follow. */
+  redirect?: { routingSlug?: string; path: string };
   /** How the token endpoint wants the client credential. */
   clientAuth?: ClientAuth;
   scope?: string;
@@ -1164,7 +1175,7 @@ export interface IterateContextApi {
       path: string,
       material: SecretMaterial,
       /** `merge`: the material's fields go over the ones already stored, whose pin must be `urls`
-       *  (a strategy added to a secret someone else filled — a project's own GitHub App's). */
+       *  (a strategy added to a secret a person filled through `collectFromUser`). */
       options: { urls: string[]; refresh?: SecretRefresh; merge?: boolean },
     ): Promise<{ path: string }>;
     /** OAuth's first tokens: the provider's authorize URL to send a human to. The provider
@@ -1177,6 +1188,17 @@ export interface IterateContextApi {
       path: string,
       options: SecretOAuthOptions,
     ): Promise<{ authorizationUrl: string; nonce: string }>;
+    /** OAuth's second step, from your own callback page (`beginOAuth`'s `redirect`): the `code`
+     *  and the `state` the provider sent back, as they came. The platform checks the state is one
+     *  it signed for this very secret and still stands, exchanges the code inside the secret's facet
+     *  (the PKCE verifier and the client secret live there), stores the tokens and lands
+     *  `secret/set`. Answers the scopes the provider says it granted. The same callback again, a
+     *  refreshed tab, answers the same and exchanges nothing twice. An attempt begun without
+     *  `redirect` (the platform's callback, a deployment app's) is refused here. */
+    completeOAuth(
+      path: string,
+      input: { code: string; state: string },
+    ): Promise<{ path: string; scopes: string[] }>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
     /** Build the authenticated Dash link (`/collect-secret/<slug>`, a page of its own) where a
@@ -1207,19 +1229,20 @@ export interface IterateContextApi {
     revokeLend(path: string, lendId: string): Promise<{ lendId: string }>;
   };
   /** Connect and disconnect this context's owner — a project (its root), or a person
-   *  (`session.user`) — and a provider. `connect` answers where to send the human (and the
-   *  connection's name; again for one that exists asks for more `scopes` on the same account):
-   *  through the deployment's app, or with `client: "project"` through the project's own, whose
-   *  credentials `/secrets/<provider>-<connection>` already holds (a GitHub App's also needs its
-   *  `appSlug` and `clientId`). GitHub's `installationId` connects an installation the App already
-   *  has, without GitHub's configure page. On a project, `account` connects one of YOUR accounts
-   *  instead — the address the provider gives it, as `session.user`'s `state.integrations` lists
-   *  it: with no `authorizationUrl` when it already holds what the project asks for, else one that
-   *  asks the provider to add it. The project then uses it as `/secrets/<provider>-<connection>`
-   *  while it stays connected and you stay a member. `disconnect` revokes the token where the
-   *  provider allows and removes the connection, its secret and its webhook route; an account of
-   *  yours disconnected from a project stays yours. `requestFromUser` answers a Dash link asking
-   *  the signed-in person to connect the provider to this project. */
+   *  (`session.user`) — and a provider THROUGH THE DEPLOYMENT'S OWN APP there (`session.info()`'s
+   *  `iterateAppProviders`; a project's own app at a provider is a package the project hosts,
+   *  iterate/sdk `Integration`, which registers itself in `iterate/integrations`). `connect` answers
+   *  where to send the human, and the connection's name; again for one that exists asks for more
+   *  `scopes` on the same account. GitHub's `installationId` connects an installation the App
+   *  already has, without GitHub's configure page. On a project, `account` connects one of YOUR
+   *  accounts instead — the address the provider gives it, as `session.user`'s
+   *  `state.integrations` lists it: with no `authorizationUrl` when it already holds what the
+   *  project asks for, else one that asks the provider to add it. The project then uses it as
+   *  `/secrets/<provider>-<connection>` while it stays connected and you stay a member.
+   *  `disconnect` revokes the token where the provider allows and removes the connection, its secret
+   *  and its webhook route; an account of yours disconnected from a project stays yours.
+   *  `requestFromUser` answers a Dash link asking the signed-in person to connect the provider to
+   *  this project. */
   integrations: {
     connect(
       provider: IntegrationProvider,
@@ -1228,19 +1251,6 @@ export interface IterateContextApi {
             scopes?: string[];
             next?: string;
             connection?: string;
-            client?: "iterate";
-            installationId?: string;
-            appSlug?: never;
-            clientId?: never;
-            account?: never;
-          }
-        | {
-            scopes?: string[];
-            next?: string;
-            connection: string;
-            client: "project";
-            appSlug?: string;
-            clientId?: string;
             installationId?: string;
             account?: never;
           }
@@ -1249,9 +1259,6 @@ export interface IterateContextApi {
             next?: string;
             account: string;
             connection?: never;
-            client?: never;
-            appSlug?: never;
-            clientId?: never;
             installationId?: never;
           },
     ): Promise<{ authorizationUrl?: string; connection: string }>;
@@ -1529,7 +1536,8 @@ export interface IterateSessionApi {
     /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
     mcpOrigin: string;
     /** the providers whose iterate app this deployment holds (ITERATE `integrations`): a
-     *  project connects through iterate's app only there, and brings its own app anywhere */
+     *  project connects through iterate's app only there; its own app at a provider is a package
+     *  it hosts (iterate/sdk `Integration`), which registers itself in `iterate/integrations` */
     iterateAppProviders: IntegrationProvider[];
     /** what iterate's app asks for there, by provider — what a project needs of your account before
      *  it uses it (`integrations.connect(provider, { account })`) */

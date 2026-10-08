@@ -1,16 +1,47 @@
-# Integrations: Slack, Google, Cloudflare, GitHub
+# Integrations
 
 Paths are relative to `core/os`.
 
-A project connects a provider account through iterate's own app (its keys are ITERATE
-`integrations.{slack,google,github}`) or its own app. A connection is a
-name the project picks (`src/integrations/`):
+## Packages, and the registry the Dash reads
+
+An integration is a package the project hosts: two hooks its config repo's `worker.ts` places in
+its own (`iterate/sdk` `Integration`, core/configs/default/worker.ts), one answering the requests
+on the package's routing slug, the other every event of the project. A package serves its own
+setup page and webhook on the project's host, keeps its credentials through `itx.secrets`
+(`collectFromUser`, `beginOAuth` with its own `redirect` page, `verifyHmac`), and the platform knows
+nothing of the provider: github.com/jonastemplestein/iterategrations holds Telegram, a project's
+own GitHub App, Monzo, Pebble and more, one folder each, and the guide to writing and publishing
+one (`adding-an-integration.md`).
+
+What a package tells the Dash is the two facts of `iterate/integrations`, appended on the project's
+`/integrations` context from its install hook (keyed by that event's path and offset): its card, and a
+row per connection, each the whole thing again when anything changes and `null` to take it away (a
+card's null takes its rows). The first-party `integration` facet there folds them within a 1 MiB
+budget, and the engine folds no malformed payload. Every publication of the config repo enables the
+facet's row first (project/processor.ts `#attemptPublication`), so the install hooks the publication
+sets off land in a facet pushed every commit; the Dash's Integrations page shows the cards live, every
+button a link the Dash composes for this deployment's routing (`iterate/project-ingress`
+`projectPublicUrlOf`).
+
+A package's own OAuth app comes back to a page of the package's: `itx.secrets.beginOAuth(path, {
+…, redirect: { routingSlug, path } })` names it, and the platform composes its URL under the
+deployment's ingress, so it is the project's own by construction; the package registers that URL at
+the provider. The page, for members only (`host.auth.require`), hands the `code` and `state` the
+provider sent back to `itx.secrets.completeOAuth(path, { code, state })`; the exchange runs in the
+secret's facet, so the page never sees a token, and the same callback again (a refreshed tab)
+answers the same and exchanges nothing twice. The platform's callback, `/.secrets/oauth/callback`,
+still completes an attempt begun without `redirect`; project code is refused those
+(src/secret/durable-object.ts `completeOAuth`).
+
+## The deployment's own apps: Slack, Google, Cloudflare, GitHub, X
+
+A project connects a provider account through the deployment's own app there (its keys are ITERATE
+`integrations.{slack,google,cloudflare,github,x}`; `session.info().iterateAppProviders` lists them).
+A connection is a name the project picks (`src/integrations/`):
 
 - its credential is the secret `/secrets/<provider>-<connection>`. Outbound calls use the real SDK
   with `getSecret("/secrets/<provider>-<connection>", { field: "accessToken" })` as the token,
-  through egress. For a project's own app, the same secret also holds the app's credentials
-  (`clientId`, `clientSecret`, and Slack's `signingSecret` or GitHub's `appId`, `privateKey` and
-  `webhookSecret`). iterate's client secret never enters project material: the secret facet
+  through egress. iterate's client secret never enters project material: the secret facet
   attaches it from ITERATE, and only toward that app's provider.
 - its record is two platform facts on the project root, `events.iterate.com/<provider>/connected`
   and `…/disconnected`, which the project processor folds into `state.integrations` (the Dash's
@@ -20,9 +51,8 @@ name the project picks (`src/integrations/`):
 
 ```ts
 const { authorizationUrl, connection } = await itx.integrations.connect("slack", {
-  // or "google", "cloudflare", "github"
+  // or "google", "cloudflare", "github", "x"
   connection: "acme", // optional: a fresh name when absent
-  client: "iterate", // the default; or "project": the app in /secrets/slack-acme
   next: "https://dash.iterate.com/…",
 });
 // the human consents; the provider's callback stores the credential, names the account,
@@ -47,10 +77,9 @@ mints only for an installation the control plane routes to this project.
 A GitHub installation iterate's App already has connects without GitHub's configure page (which
 asks for sudo and carries no state of ours back): `itx.integrations.connect("github",
 { installationId, … })` sends the human straight to authorize the App, back to the platform origin
-the call reached, and the code proves they administer it as above. A project's own GitHub App also
-passes its public half, `{ client: "project", connection, appSlug, clientId }`. The Dash lists
-those installations from the person's GitHub sign-in (`GET /user/installations` with its token,
-through their own egress).
+the call reached, and the code proves they administer it as above. The Dash lists those
+installations from the person's GitHub sign-in (`GET /user/installations` with its token, through
+their own egress).
 
 An account another project holds is not refused, for either provider with webhook routes. A GitHub
 installation is offered once the human proved they administer it. A Slack workspace is offered once
@@ -83,13 +112,12 @@ reads the workspace its record names). The human need not be a member of the hol
 iterate's apps each receive every account's webhooks on one URL
 (`POST /api/integrations/slack/webhook` and `/interactivity-webhook`, and
 `POST /api/integrations/github/webhook`). The control plane's `integration_routes` sends each
-delivery on: an account belongs to one connection, and the first to connect it wins. A project's
-own app posts to `…/webhook/<projectId>/<connection>` and signs with the secret's key. A delivery
-for another team or installation is ignored. The status codes follow one rule (`rules.ts`). A bad
-signature is a 401. A delivery that is signed but unusable is a 200 with `ignored`. A failed append
-throws, so the provider retries. A deployment without the app answers 503. A per-PR preview's apps
-are the dummy pet shop's fakes (`scripts/preview-{slack,google,github}-app.ts`), which
-`test/vitest/os/integrations.e2e.test.ts` drives.
+delivery on: an account belongs to one connection, and the first to connect it wins. The status
+codes follow one rule (`rules.ts`). A bad signature is a 401. A delivery that is signed but unusable
+is a 200 with `ignored`. A failed append throws, so the provider retries. A deployment without the
+app answers 503. A per-PR preview's apps are the dummy pet shop's fakes
+(`scripts/os/preview-{slack,google,github,x}-app.ts`), which `test/vitest/os/integrations.e2e.test.ts`
+drives.
 
 ## Sign-in keeps tokens · your accounts in a project
 
@@ -150,7 +178,7 @@ response says were granted (`grantedScopesOf`, never the ones asked), and connec
 project only when those cover what it needs, the human who consented is the person with the `account`
 scope, and — for an account the project already had — the project has not disconnected it
 meanwhile. The project then lists it as `<provider>/connected { ownerUserId, ownerEmail }` on its
-root (`client` stays the OAuth app's, iterate's), and its path `/secrets/<provider>-<connection>`
+root, and its path `/secrets/<provider>-<connection>`
 holds only a pointer to the person's secret: one token, whose every use is forwarded to the person's
 context over its `fetch`, signed with the deployment's key in `x-itx-lend-use` (60 s; every egress
 strips `x-itx-lend*`, so no caller can speak for one). The person's secret facet admits the use
@@ -174,12 +202,14 @@ account and refuses another account's tokens. `itx.integrations.disconnect(provi
 on `session.user` disconnects the person's own connection, and every project's use of it ends.
 `itx.integrations.requestFromUser(provider, { scopes? })` answers a Dash link
 (`?connect=<provider>`) that asks a person to connect their account, or another, to the project. On
-the Dash's Integrations page each provider's one action is Connect: a sheet that offers the person's
-own accounts first ("Use ada@example.com", or what the provider will ask to add), then another
-account through iterate's app (`ConnectButton`, `packages/ui`), then "Use your own app". It offers
-iterate's app only for the providers in `session.info().iterateAppProviders` (ITERATE
-`integrations`); a deployment without them, such as a self-host, connects through "Use your own
-app". GitHub's callback URL is the origin the callback request reached, so it needs no `urls.os`.
+the Dash's Integrations page the registered packages come first, each a card with its connections
+and buttons that link to the package's own pages; below them the deployment's own apps, each
+provider's one action Connect: a sheet that offers the person's own accounts first ("Use
+ada@example.com", or what the provider will ask to add), then another account through iterate's app
+(`ConnectButton`, `packages/ui`). A provider is shown where the deployment has its app
+(`session.info().iterateAppProviders`), or where the project still lists a connection to it; a
+self-host with none sees the packages and "Other services" alone. GitHub's callback URL is the
+origin the callback request reached, so it needs no `urls.os`.
 
 ## Instance lends
 

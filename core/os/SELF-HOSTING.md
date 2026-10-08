@@ -165,32 +165,30 @@ a [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
 
 ## Integrations
 
-A self-host has none of iterate's apps, so the Dash's Integrations page offers Slack, Google and
-GitHub only through **Use your own app**, once per project connection. The sheet shows the URLs to
-paste into the provider's console, then keeps the credentials you paste into it in the project's
-secret `/secrets/<provider>-<connection>`:
+An integration is a package the project hosts
+([jonastemplestein/iterategrations](https://github.com/jonastemplestein/iterategrations): a
+Telegram bot, your own GitHub App, Monzo, Pebble, and more, one folder each with a recipe for a
+coding agent). Adding one is a dependency of the project's config repo and one element of the
+`integrations` array in its `worker.ts`. The package serves its own setup page and webhook on the
+project's host (`<slug>--<project>.<your-domain>`, or `<origin>/projects/<project>/<slug>/` without
+a domain) and registers itself with the Dash's Integrations page, which shows its card, its
+connections and a button to each page. No provider has to live in the deployment for that, so a
+self-host connects to anything the hosted platform does.
 
-- **Slack**: an app at api.slack.com/apps. The redirect URL
-  (`<origin>/api/integrations/slack/callback`) goes under OAuth & Permissions, the webhook URL
-  (`<origin>/api/integrations/slack/webhook/<projectId>/<connection>`) under Event Subscriptions
-  once connected, and the interactivity URL
-  (`<origin>/api/integrations/slack/interactivity-webhook/<projectId>/<connection>`) under
-  Interactivity & Shortcuts. Paste the client ID, client secret and signing secret.
-- **Google**: an OAuth client (Web application) in Google Cloud Console, with
-  `<origin>/api/integrations/google/callback` as an authorized redirect URI. Paste the client ID and
-  secret.
-- **GitHub**: a GitHub App whose Callback URL is `<origin>/api/integrations/github/callback`, with
-  "Request user authorization (OAuth) during installation" ticked, and whose webhook URL is
-  `<origin>/api/integrations/github/webhook/<projectId>/<connection>`. Paste the App ID, slug,
-  client ID, client secret, private key (.pem) and webhook secret.
-
-Connecting Cloudflare, a person's own Google or Cloudflare connection, and signing in with Google,
-Cloudflare or GitHub all need that provider's app in the config as `integrations.<provider>` (the
-keys are in `src/iterate-config.ts`). Register its redirect URIs: `<origin>/.auth/identity/callback`
-(Google), `<origin>/.auth/identity/cloudflare/callback` (Cloudflare) or
+The deployment's own apps at providers (`integrations.<provider>` in the config: Slack, Google,
+Cloudflare, GitHub, X) are what iterate's hosted platform holds so a project connects with one
+click; a self-host usually has none, and needs none. Signing in with Google, Cloudflare or GitHub
+does need that provider's app in the config as `integrations.<provider>` (the keys are in
+`src/iterate-config.ts`), registered with `<origin>/.auth/identity/callback` (Google),
+`<origin>/.auth/identity/cloudflare/callback` (Cloudflare) or
 `<origin>/.auth/identity/github/callback` (GitHub) for sign-in, and
 `<origin>/api/integrations/<provider>/callback` for connecting. The Dash shows a provider's
 one-click connect only when the deployment has its app.
+
+Your own OAuth app at any service, with no package: `itx.secrets.beginOAuth` with the client in
+the clear ([connect-a-service.md](public/connect-a-service.md), the recipe a coding agent follows).
+Its redirect URI is `<origin>/.secrets/oauth/callback`, or a page of the project's own when the
+call names `redirect` (a routing slug and a path of the project's).
 
 ## Custom domain: own origins for apps and tunnels
 

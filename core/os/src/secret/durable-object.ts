@@ -577,9 +577,11 @@ export class SecretFacet extends StreamProcessorDurableObject<
 
   /** OAUTH, step one: keep the pending attempt, hand back the authorize URL. The `state` is a
    *  platform-signed claim naming this context, a nonce only this attempt knows and `next`; the
-   *  redirect URI is the platform's callback for the client (secret-oauth.ts). A new attempt replaces an unfinished one;
-   *  the record, if any, stays until the exchange writes over it. Nothing lands on any log until the
-   *  exchange succeeds — an abandoned attempt leaves no trace. */
+   *  redirect URI is the platform's callback for the client, or the project's own page
+   *  (`redirectUri`, secret-oauth.ts), which the built-in composed under the project's ingress. A new
+   *  attempt replaces an unfinished one; the record, if any, stays until the exchange writes over
+   *  it. Nothing lands on any log until the exchange succeeds — an abandoned attempt leaves no
+   *  trace. */
   async beginOAuth(
     options: NormalizedSecretOAuthOptions,
     /** the platform origin the callback hangs under — the caller's (a facet knows none itself) */
@@ -594,13 +596,14 @@ export class SecretFacet extends StreamProcessorDurableObject<
       exp: Date.now() + SECRET_OAUTH_TTL_MS,
       next: options.next,
     };
-    const { clientId, clientSecret } = await this.#oauthClientOf(options);
+    const { clientId, clientSecret } = this.#oauthClientOf(options);
     // a placeholder that cannot resolve is refused now, before a human is sent to consent
     await this.#clientSecretOf(clientSecret, options.tokenEndpoint);
     const { pending, authorizationUrl } = await beginSecretOAuth(
       { ...options, clientId },
       {
-        redirectUri: `${platformOrigin}${secretOAuthCallbackPathOf(options.client)}`,
+        redirectUri:
+          options.redirectUri || `${platformOrigin}${secretOAuthCallbackPathOf(options.client)}`,
         state: await signClaims(state, await sessionSigningSecretOf(config)),
         nonce,
       },
@@ -613,37 +616,25 @@ export class SecretFacet extends StreamProcessorDurableObject<
     return { authorizationUrl, nonce };
   }
 
-  /** The OAuth client an attempt exchanges with, and the material kept beside its tokens: the one
-   *  passed in the clear; the deployment's app (`{ platform }`), refused toward any endpoint but its
-   *  own provider's — the exchange, and every refresh after it, would carry its secret there; or
-   *  the project's own app, which this secret's material holds (`{ project }`). */
-  async #oauthClientOf(options: {
+  /** The OAuth client an attempt exchanges with: the one passed in the clear, or the deployment's
+   *  app (`{ platform }`), refused toward any endpoint but its own provider's — the exchange, and
+   *  every refresh after it, would carry its secret there. */
+  #oauthClientOf(options: {
     client: NormalizedSecretOAuthOptions["client"] | { platform: OAuthPlatform };
     clientId: string;
     clientSecret: string;
     authorizationEndpoint?: string;
     tokenEndpoint: string;
-  }): Promise<{ clientId: string; clientSecret: string; kept: Record<string, unknown> }> {
+  }): { clientId: string; clientSecret: string } {
     const { client } = options;
-    if (!client)
-      return { clientId: options.clientId, clientSecret: options.clientSecret, kept: {} };
-    if ("platform" in client) {
-      const app = this.#platformOAuthApp(client.platform);
-      for (const endpoint of [options.authorizationEndpoint, options.tokenEndpoint])
-        if (endpoint && !app.origins.includes(new URL(endpoint).origin))
-          throw new Error(
-            `secrets: the platform's ${client.platform} app is at ${app.origins.join(", ")} — not ${new URL(endpoint).origin}`,
-          );
-      return { clientId: app.clientId, clientSecret: app.clientSecret, kept: {} };
-    }
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    const kept = stored ? (await this.#opened(stored)).material : undefined;
-    if (!isRecord(kept) || typeof kept.clientId !== "string" || !kept.clientId)
-      throw new Error(
-        `${this.#address().path} holds no ${client.project} app — set it to { clientId, clientSecret, … } first`,
-      );
-    const clientSecret = typeof kept.clientSecret === "string" ? kept.clientSecret : "";
-    return { clientId: kept.clientId, clientSecret, kept };
+    if (!client) return { clientId: options.clientId, clientSecret: options.clientSecret };
+    const app = this.#platformOAuthApp(client.platform);
+    for (const endpoint of [options.authorizationEndpoint, options.tokenEndpoint])
+      if (endpoint && !app.origins.includes(new URL(endpoint).origin))
+        throw new Error(
+          `secrets: the platform's ${client.platform} app is at ${app.origins.join(", ")} — not ${new URL(endpoint).origin}`,
+        );
+    return { clientId: app.clientId, clientSecret: app.clientSecret };
   }
 
   /** The deployment's app at a provider (ITERATE `integrations.<provider>`) and the origins its
@@ -775,29 +766,46 @@ export class SecretFacet extends StreamProcessorDurableObject<
    *  strategy kind the record was stored with — what the fact carries; never the material. IDEMPOTENT for the attempt
    *  it completed: the same callback again (a refreshed tab, or the built-in retrying after its fact
    *  append failed) runs no second exchange and answers the same pin, as long as the record is still
-   *  the one this attempt wrote — so the log can always catch up with a live facet. `exchanged` says
-   *  which happened: THIS call wrote the record (the caller may undo it if its fact append fails), or
-   *  a replay found it. `held` says the record was NOT written: iterate's Slack app's token for a
+   *  the one this attempt wrote — so the log can always catch up with a live facet. `held` says the
+   *  record was NOT written: iterate's Slack app's token for a
    *  workspace another project holds waits aside (`HeldExchange`) — the same callback again answers
-   *  it again. */
-  async completeOAuth(input: { code: string; nonce: string }): Promise<{
+   *  it again. `viaPlatformCallback` is the platform callback's own mark: project code (a page of
+   *  the project's, through `itx.secrets.completeOAuth`) completes only an attempt begun with its
+   *  own `redirectUri`, never a deployment app's, whose finish routes accounts and offers moves
+   *  (secret-oauth-callback.ts). */
+  async completeOAuth(input: {
+    code: string;
+    nonce: string;
+    viaPlatformCallback?: boolean;
+  }): Promise<{
     urls: string[];
     refresh?: SecretRefresh["kind"];
-    exchanged: boolean;
     scopes: string[];
     held?: HeldToken;
   }> {
+    // project code completes only an attempt begun with its own redirectUri — a replay of one the
+    // platform's callback completed, and a held exchange, are the callback's as much as the attempt
+    const projectCodeRefused = () =>
+      codedError(
+        "FORBIDDEN",
+        "secrets.completeOAuth: this attempt comes back to the platform's callback, which completes it — only an attempt begun with redirect is completed from a page of the project's",
+      );
     const replayed = await this.#completed(input.nonce);
-    if (replayed) return { ...replayed, exchanged: false };
+    if (replayed) {
+      if (!input.viaPlatformCallback && !replayed.userspaceRedirect) throw projectCodeRefused();
+      const { userspaceRedirect: _userspace, ...answer } = replayed;
+      return answer;
+    }
     const kept = await this.ctx.storage.get<HeldExchange>("held");
-    if (kept?.nonce === input.nonce && kept.until > Date.now())
+    if (kept?.nonce === input.nonce && kept.until > Date.now()) {
+      if (!input.viaPlatformCallback) throw projectCodeRefused();
       return {
         urls: kept.record.urls,
         refresh: kept.record.refresh?.kind,
-        exchanged: false,
         scopes: kept.scopes,
         held: { externalId: kept.team.id, account: kept.team.name, until: kept.until },
       };
+    }
     const pending = await this.ctx.storage.get<PendingSecretOAuth>("pending");
     if (!pending || pending.nonce !== input.nonce)
       throw new Error("no pending attempt matches this callback — begin again");
@@ -805,13 +813,14 @@ export class SecretFacet extends StreamProcessorDurableObject<
       await this.ctx.storage.delete("pending");
       throw new Error("the attempt expired — begin again");
     }
+    if (!input.viaPlatformCallback && !pending.options.redirectUri) throw projectCodeRefused();
     const started = await this.ctx.storage.get<number>("revision");
-    const credentials = await this.#oauthClientOf(pending.options);
+    const credentials = this.#oauthClientOf(pending.options);
     // What the provider says it granted, and the Slack workspace, off the token response (rules.ts).
     let scopes: string[] = [];
     const answered: { team: ReturnType<typeof slackTeamOfTokenResponse> } = { team: null };
     const { client, expectAccount } = pending.options;
-    const xClient = client && ("platform" in client ? client.platform : client.project) === "x";
+    const xClient = client?.platform === "x";
     const record = await completeSecretOAuth(
       xClient ? { ...pending, options: { ...pending.options, expectAccount: null } } : pending,
       input.code,
@@ -855,8 +864,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
           "X authorized a different account; connect it as a new connection instead.",
         );
     }
-    const slackTeam =
-      client && "platform" in client && client.platform === "slack" ? answered.team : null;
+    const slackTeam = client?.platform === "slack" ? answered.team : null;
     if (slackTeam) record.routedAccount = { provider: "slack", externalId: slackTeam.id };
     // read before the fence, which only storage awaits may follow
     const hold = Boolean(slackTeam && (await this.#routedToAnotherProject(slackTeam.id)));
@@ -883,26 +891,36 @@ export class SecretFacet extends StreamProcessorDurableObject<
       return {
         urls: record.urls,
         refresh: record.refresh?.kind,
-        exchanged: true,
         scopes,
         held: { externalId: slackTeam.id, account: slackTeam.name, until },
       };
     }
     await this.write(record);
     const revision = await this.ctx.storage.get<number>("revision");
-    await this.ctx.storage.put("completed", { nonce: input.nonce, revision, scopes });
-    return { urls: record.urls, refresh: record.refresh?.kind, exchanged: true, scopes };
+    await this.ctx.storage.put("completed", {
+      nonce: input.nonce,
+      revision,
+      scopes,
+      ...(pending.options.redirectUri && { userspaceRedirect: true }),
+    });
+    return { urls: record.urls, refresh: record.refresh?.kind, scopes };
   }
 
   /** What the attempt `nonce` completed, while the record is still the one it wrote (a replay's
-   *  answer), or null; one it completed that was written or cleared since is refused. */
-  async #completed(
-    nonce: string,
-  ): Promise<{ urls: string[]; refresh?: SecretRefresh["kind"]; scopes: string[] } | null> {
+   *  answer), or null; one it completed that was written or cleared since is refused. Says whether
+   *  the attempt was begun with the project's own `redirectUri` (`completeOAuth` admits project
+   *  code to that replay alone; a record from before the mark is the platform callback's). */
+  async #completed(nonce: string): Promise<{
+    urls: string[];
+    refresh?: SecretRefresh["kind"];
+    scopes: string[];
+    userspaceRedirect: boolean;
+  } | null> {
     const completed = await this.ctx.storage.get<{
       nonce: string;
       revision: number;
       scopes: string[];
+      userspaceRedirect?: boolean;
     }>("completed");
     if (completed?.nonce !== nonce) return null;
     const stored = await this.ctx.storage.get<Stored>("stored");
@@ -914,6 +932,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
       urls: stored.record.urls,
       refresh: stored.record.refresh?.kind,
       scopes: completed.scopes,
+      userspaceRedirect: completed.userspaceRedirect === true,
     };
   }
 
@@ -938,7 +957,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
     nonce: string;
   }): Promise<{ urls: string[]; refresh?: SecretRefresh["kind"] }> {
     const replayed = await this.#completed(input.nonce);
-    if (replayed) return replayed;
+    if (replayed) return { urls: replayed.urls, refresh: replayed.refresh };
     const held = await this.ctx.storage.get<HeldExchange>("held");
     if (held?.nonce !== input.nonce)
       throw new Error("no token is held for this consent any more — connect again");
@@ -1210,8 +1229,17 @@ export class SecretFacet extends StreamProcessorDurableObject<
           ...(isRecord(record.material) && record.material),
           accessToken: await this.#githubInstallationToken(refresh, record, pinnedDispatch),
         };
-      else if (refresh.kind === "oauth-refresh-token" && refresh.client)
+      else if (refresh.kind === "oauth-refresh-token" && refresh.client?.platform)
         next = await this.#platformRefresh(refresh, refresh.client, record, pinnedDispatch);
+      else if (refresh.kind === "oauth-refresh-token" && refresh.client)
+        // A record from before own-app mode left the platform names `client: { project }` and holds
+        // that client's `clientId` and `clientSecret` beside the tokens: a client in the clear.
+        next = await refreshSecretMaterial(
+          { ...refresh, client: undefined },
+          record.material,
+          pinnedDispatch,
+          this.#clientSecretOf,
+        );
       else if (refresh.kind === "worker")
         // Exchange code runs in its jail (exchange-jail.ts), its egress the pin alone. The cast:
         // `ctx.exports` is typed from the generated worker types, which do not see the entrypoint
@@ -1269,7 +1297,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
     const material = isRecord(record.material) ? record.material : {};
     if (typeof material.refreshToken !== "string" || !material.refreshToken)
       throw new Error(`${refresh.kind}: the secret's material has no "refreshToken"`);
-    const credentials = await this.#oauthClientOf({
+    const credentials = this.#oauthClientOf({
       client,
       clientId: "",
       clientSecret: "",
@@ -1290,8 +1318,11 @@ export class SecretFacet extends StreamProcessorDurableObject<
 
   /** A GitHub App installation's token: an App JWT (@octokit/auth-app) traded at the
    *  installation's `access_tokens`. The project's own App signs with the `appId` and `privateKey`
-   *  this secret's material holds. The deployment's App signs with ITERATE's key, at its own
-   *  GitHub only, and only for an installation the control plane routes to THIS project — so no
+   *  this secret's material holds — each either the value, or a `getSecret("/secrets/<name>",
+   *  { field })` placeholder naming another of the owner's secrets pinned to the API's origin,
+   *  read there at every mint as a client secret is (`#clientSecretOf`), so one secret holding the
+   *  App's key serves every installation's. The deployment's App signs with ITERATE's key, at its
+   *  own GitHub only, and only for an installation the control plane routes to THIS project — so no
    *  project mints for an installation another project connected. */
   async #githubInstallationToken(
     refresh: Extract<SecretRefresh, { kind: "github-app-installation" }>,
@@ -1303,7 +1334,10 @@ export class SecretFacet extends StreamProcessorDurableObject<
       const material = isRecord(record.material) ? record.material : {};
       if (typeof material.appId !== "string" || typeof material.privateKey !== "string")
         throw new Error(`${refresh.kind}: the secret's material holds no "appId" and "privateKey"`);
-      app = { appId: material.appId, privateKey: material.privateKey };
+      app = {
+        appId: await this.#clientSecretOf(material.appId, refresh.apiOrigin),
+        privateKey: await this.#clientSecretOf(material.privateKey, refresh.apiOrigin),
+      };
     } else {
       const github = iterateConfigOf(this.env).integrations.github;
       if (!github)

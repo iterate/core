@@ -249,7 +249,6 @@ const rows: {
         type: "events.iterate.com/google/connected",
         payload: {
           connection: "42",
-          client: "iterate",
           account: "ada@example.com",
           externalId: "42",
           scopes: ["openid"],
@@ -258,7 +257,7 @@ const rows: {
       },
       {
         type: "events.iterate.com/github/connected",
-        payload: { connection: "7", client: "iterate", account: "ada", externalId: "7" },
+        payload: { connection: "7", account: "ada", externalId: "7" },
         source: platform,
       },
       {
@@ -268,7 +267,7 @@ const rows: {
       },
       {
         type: "events.iterate.com/cloudflare/connected",
-        payload: { connection: "evil", client: "iterate", account: "x", externalId: "x" },
+        payload: { connection: "evil", account: "x", externalId: "x" },
       },
       lent("lend_a", "prj_1"),
       lent("lend_b", "prj_2"),
@@ -296,7 +295,6 @@ const rows: {
         "/integrations/google/42": {
           provider: "google",
           connection: "42",
-          client: "iterate",
           account: "ada@example.com",
           externalId: "42",
           scopes: ["openid"],

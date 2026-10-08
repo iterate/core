@@ -232,6 +232,7 @@ export { BrowserSession } from "iterate/app-session";
 export { AccountFacet } from "./account/durable-object.ts";
 export { EmailFacet } from "./email/durable-object.ts";
 export { InstanceFacet } from "./instance/durable-object.ts";
+export { IntegrationFacet } from "./integrations/registry.ts";
 export { OrganizationFacet } from "./organization/durable-object.ts";
 export { ProjectFacet } from "./project/durable-object.ts";
 export { RepoFacet } from "./repo/durable-object.ts";

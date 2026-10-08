@@ -21,8 +21,6 @@ export const IntegrationConnectionRow = z.object({
    *  log `/integrations/<provider>/<connection>`. A person's connection is named by the account's
    *  stable id at the provider, never its email. */
   connection: z.string().min(1),
-  /** Which OAuth app the token was issued to: iterate's (the deployment's) or the project's own. */
-  client: z.enum(["iterate", "project"]),
   /** What the provider calls the account: a Slack workspace's name, a Google or Cloudflare address,
    *  a GitHub login, or an X handle. */
   account: z.string(),

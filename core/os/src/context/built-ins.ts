@@ -34,14 +34,21 @@ import type {
   TelemetryRows,
 } from "iterate/api";
 import {
+  type IngressRouting,
   ITERATE_ROUTING_SLUG_HEADER,
   projectPublicUrlOf,
-  type IngressRouting,
+  projectUrlOf,
 } from "iterate/project-ingress";
 import { missingScopes } from "iterate/integration-scopes";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import type { Cause } from "../cause.ts";
-import { refusePlatformIdempotencyKeys, sha256Hex, stampCaller, type Caller } from "../caller.ts";
+import {
+  refusePlatformIdempotencyKeys,
+  sha256Hex,
+  stampCaller,
+  verifyClaims,
+  type Caller,
+} from "../caller.ts";
 import { verifyOnBehalfOf } from "../on-behalf-of.ts";
 import { sessionSigningSecretOf, type IterateConfig } from "../iterate-config.ts";
 import { Kept } from "../kept.ts";
@@ -81,7 +88,7 @@ import {
   matchFetchRoute,
   type FetchRouteTable,
 } from "../fetch-routes.ts";
-import { normalizeSecretOAuth } from "../secret-oauth.ts";
+import { isSecretOAuthState, normalizeSecretOAuth } from "../secret-oauth.ts";
 import { unavailableError } from "../unavailable.ts";
 import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
 import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
@@ -122,18 +129,16 @@ export type BorrowedSecret = {
   integration?: { provider: string; account: string; externalId: string };
 };
 
-/** THE PLATFORM'S OWN `itx.secrets` VERBS — deliberately NOT in the published `IterateContextApi`
- *  (iterate/api): the other halves of an OAuth connect and of a lend, which the platform's own hops
- *  call (`assertPlatformCaller`; `completeOAuth` is reached from the OAuth callback alone), and
- *  `revokeLend`'s platform-only options (a published `revokeLend(path, lendId)` is this one with
- *  them absent). */
+/** THE PLATFORM'S OWN `itx.secrets` VERBS, beyond the published `IterateContextApi` (iterate/api):
+ *  `completeOAuth`'s answer to the platform's callback, the other halves of a move and of a lend,
+ *  which the platform's own hops call (`assertPlatformCaller`), and `revokeLend`'s platform-only
+ *  options (a published `revokeLend(path, lendId)` is this one with them absent). */
 type PlatformSecretsVerbs = {
-  /** The platform's callback completes the attempt through here — the exchange in the secret's
-   *  facet, then the facts, on the secret's path like `set` and `delete`. You never call this:
-   *  the code and the nonce reach only the callback. */
+  /** iterate/api `completeOAuth`, as the platform's callback calls it too: its mark on the call
+   *  (`Caller.platform`) admits an attempt begun without `redirect`, and `held` comes back to it alone. */
   completeOAuth(
     path: string,
-    input: { code: string; nonce: string },
+    input: { code: string; state: string },
   ): Promise<{ path: string; scopes: string[]; held?: HeldToken }>;
   /** The platform's move of a Slack workspace here (integrations/verbs.ts `confirmIntegrationMove`):
    *  the token its consent's exchange held aside (secret/durable-object.ts `admitHeldToken`) stored,
@@ -463,30 +468,17 @@ const _rootsArePublished: RootsArePublished = true;
 void _rootsArePublished;
 
 /** `integrations.connect`'s options (iterate/api `IterateContextApi["integrations"]`): one of the
- *  caller's own accounts, or a connection of the owner's through iterate's app or its own. */
+ *  caller's own accounts, or a connection of the owner's through the deployment's app. */
 const IntegrationConnectOptions = z
-  .object({
+  .strictObject({
     scopes: z.array(z.string().min(1)).optional(),
     next: z.string().optional(),
     connection: z.string().optional(),
     account: z.string().min(1).optional(),
-    client: z.enum(["iterate", "project"]).default("iterate"),
-    appSlug: z.string().optional(),
-    clientId: z.string().optional(),
     installationId: z.string().optional(),
   })
-  .refine(
-    (picked) =>
-      !picked.account ||
-      (!picked.connection &&
-        picked.client === "iterate" &&
-        !picked.appSlug &&
-        !picked.clientId &&
-        !picked.installationId),
-    { message: "account (one of yours) takes only scopes and next" },
-  )
-  .refine((picked) => picked.client === "iterate" || picked.connection, {
-    message: 'client "project" connects the app in /secrets/<provider>-<connection>: name it',
+  .refine((picked) => !picked.account || (!picked.connection && !picked.installationId), {
+    message: "account (one of yours) takes only scopes and next",
   });
 
 /** An `R2Object` as data, the owner prefix off its key. */
@@ -875,7 +867,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           {
             provider,
             connection: account.connection,
-            client: "iterate",
             scopes: input.scopes,
             next: input.next,
             connectToProject: {
@@ -916,6 +907,41 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   };
   const assertPlatformCaller = (verb: string) => {
     if (!deps.caller().platform) throw codedError("FORBIDDEN", `itx.${verb} is the platform's own`);
+  };
+  /** The URL of a page of this project's — `beginOAuth`'s `redirect` — composed under the deployment's
+   *  ingress alone (never a primary hostname, whose exact labels another project may claim), so the
+   *  URL the provider gets is this project's by construction and holds still when a hostname is set
+   *  later. A person's or an organization's secret comes back to the platform's callback alone. */
+  const redirectUriOf = async (place: unknown, platformOrigin: string): Promise<string> => {
+    if (owner.kind !== "project")
+      throw codedError(
+        "INVALID_INPUT",
+        "itx.secrets.beginOAuth: redirect names a page of a project's — this secret's owner is not a project, so the platform's callback completes its OAuth",
+      );
+    const { routingSlug, path } = z
+      .strictObject({
+        routingSlug: z.string().optional(),
+        // one leading slash, no fragment: a redirect URI carries none (RFC 6749 §3.1.2)
+        path: z
+          .string()
+          .regex(/^\/(?!\/)[^#]*$/, "a path starts with one / and has no #")
+          .max(512),
+      })
+      .parse(place);
+    const { projectSlug } = await deps.projectInfo();
+    const url =
+      projectSlug &&
+      projectUrlOf(deps.ingressRouting, platformOrigin, {
+        project: projectSlug,
+        routingSlug,
+        path,
+      });
+    if (!url)
+      throw codedError(
+        "INVALID_INPUT",
+        `itx.secrets.beginOAuth: redirect ${JSON.stringify(place)} is no page of this project's`,
+      );
+    return url.href;
   };
   /** The `secret` processor row on the secret's context — the facet hosted with a row, so the
    *  engine pushes it every fact (idempotent: a second enable of the same row is a no-op). */
@@ -1254,12 +1280,20 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             "itx.secrets.beginOAuth: this call carries no platform origin for the callback URL — call it from a session",
           );
         return onSecretContext(secretPath, ["beginOAuth", secretPath, options], async (secret) => {
+          const { redirect, ...given } = options;
+          const normalized = normalizeSecretOAuth(
+            {
+              ...given,
+              redirectUri: redirect ? await redirectUriOf(redirect, platformOrigin) : undefined,
+            },
+            [platformOrigin, deps.dashOrigin].filter(Boolean),
+          );
           await enableSecretRow(secret);
-          return (await secretFacet([
-            "beginOAuth",
-            normalizeSecretOAuth(options, [platformOrigin, deps.dashOrigin].filter(Boolean)),
-            platformOrigin,
-          ])) as { authorizationUrl: string; nonce: string };
+          // a facet call answers `unknown` over the hop: this is SecretFacet.beginOAuth's declared answer
+          return (await secretFacet(["beginOAuth", normalized, platformOrigin])) as {
+            authorizationUrl: string;
+            nonce: string;
+          };
         });
       },
       // The facet FIRST here (the exchange most often fails on the provider's side — a junk code, a
@@ -1271,12 +1305,47 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // catches the log up. Until then `list()` does not show the secret while egress already honours it.
       completeOAuth: (secretPath, input) =>
         onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
+          // the attempt is the one the signed state names; whose call it is — the platform
+          // callback's, or a page of the project's — is the caller's mark, which no client sets
+          const parsed = z
+            .object({ code: z.string().min(1), state: z.string().min(1) })
+            .safeParse(input);
+          if (!parsed.success)
+            throw codedError(
+              "INVALID_INPUT",
+              `itx.secrets.completeOAuth: ${z.prettifyError(parsed.error)}`,
+            );
+          const { code, state } = parsed.data;
+          const claims = await verifyClaims(state, await deps.signingSecret());
+          if (!isSecretOAuthState(claims))
+            throw codedError(
+              "INVALID_INPUT",
+              "itx.secrets.completeOAuth: this state is not one the platform issued for a secret's OAuth",
+            );
+          if (claims.exp <= Date.now())
+            throw codedError(
+              "INVALID_INPUT",
+              "itx.secrets.completeOAuth: this attempt has expired — begin again",
+            );
+          // the verb runs on the secret's own context (`onSecretContext`): the one the state names
+          if (claims.context !== iterateContextName)
+            throw codedError(
+              "INVALID_INPUT",
+              `itx.secrets.completeOAuth: this state was issued for another secret than ${secretPath}`,
+            );
+          const attempt = {
+            code,
+            nonce: claims.nonce,
+            viaPlatformCallback: deps.caller().platform === true,
+          };
           // A facet call answers `unknown` over the hop; this is the platform's own
           // SecretFacet.completeOAuth's declared answer.
-          const { urls, refresh, scopes, held } = (await secretFacet(["completeOAuth", input])) as {
+          const { urls, refresh, scopes, held } = (await secretFacet([
+            "completeOAuth",
+            attempt,
+          ])) as {
             urls: string[];
             refresh?: SecretRefresh["kind"];
-            exchanged: boolean;
             scopes: string[];
             held?: HeldToken;
           };
@@ -1763,11 +1832,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               {
                 provider: IntegrationProvider.parse(provider),
                 connection,
-                client: input.client,
                 scopes: input.scopes,
                 next: input.next,
-                appSlug: input.appSlug,
-                clientId: input.clientId,
                 installationId: input.installationId,
                 platformOrigin,
               } satisfies ConnectInput,

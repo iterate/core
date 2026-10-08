@@ -70,7 +70,7 @@ const field = (path: readonly PropertyKey[]) => fieldNameOf(path, ITERATE_CONFIG
 
 /** The bot scopes a Slack connection asks for unless told otherwise: the scopes iterate's Slack app
  *  is registered with. */
-export const DEFAULT_SLACK_BOT_SCOPES = [
+const DEFAULT_SLACK_BOT_SCOPES = [
   "channels:history",
   "channels:join",
   "channels:manage",
@@ -115,7 +115,7 @@ export const DEFAULT_X_SCOPES = [
 
 /** The scopes a Google connection asks for unless told otherwise: the scopes iterate's Google
  *  client's consent screen is verified for. */
-export const DEFAULT_GOOGLE_SCOPES = [
+const DEFAULT_GOOGLE_SCOPES = [
   "openid",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",

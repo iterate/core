@@ -5,14 +5,17 @@ that copy: later template changes never overwrite it. Every build of core offers
 and each depends on nothing outside core, so they are also the plainest examples of how a project
 is configured.
 
-- `default/` — the homepage, the agents app, and inbound email handed to agents. `agents.ts`
-  re-exports the agents app's two classes from `iterate/agents`; the init case of `worker.ts`
-  (`project/worker-updated`) calls `installAgents(itx)`, which names that module of the published
-  config, so a commit that doesn't change it leaves the agents running; its `email/received` case
-  gives each email thread from a member an agent of its own. It sets no schedule: an idle project
-  sleeps. Its init case holds a heartbeat, commented out: uncommented, a schedule that appends
-  `heartbeat` on `/` every five minutes and wakes the project each time. The dash and the consent
-  page start a person's project from this one.
+- `default/` — the homepage, the agents app, inbound email handed to agents, and the place for the
+  integration packages the project hosts. `agents.ts` re-exports the agents app's two classes from
+  `iterate/agents`; the init case of `worker.ts` (`project/worker-updated`) calls
+  `installAgents(itx)`, which names that module of the published config, so a commit that doesn't
+  change it leaves the agents running; its `email/received` case gives each email thread from a
+  member an agent of its own. Its `integrations` array lists the packages (`Integration` from
+  `iterate/sdk`): `fetch` hands each the requests on its routing slug, `processEvent` hands each
+  every event after the project's own cases. It sets no schedule: an idle project sleeps. Its init
+  case holds a heartbeat, commented out: uncommented, a schedule that appends `heartbeat` on `/`
+  every five minutes and wakes the project each time. The dash and the consent page start a
+  person's project from this one.
 - `minimal/` — the homepage and an empty `processEvent`: no agents, no schedules. A creation that
   names no template gets this one.
 

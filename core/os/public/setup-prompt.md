@@ -202,15 +202,18 @@ voice and Kit pages work. iterate's voice template
 
 ## Integrations
 
-A self-host has none of iterate's Slack, Google, Cloudflare or GitHub apps. If the user wants an
-agent in Slack, Gmail or a GitHub repo, send them to the dash's project Integrations page and its
-**Use your own app** button: it shows the redirect/callback, webhook and (Slack) interactivity URLs
-to paste into the provider's console, and takes the app's credentials (client ID and secret; Slack's
-signing secret; GitHub's App ID, slug, private key and webhook secret). `core/os/SELF-HOSTING.md`
-has the steps per provider. Signing in with Google, Cloudflare or GitHub needs `login.<provider>`
-and that provider's app in the iterate config as `integrations.<provider>`, registered with
-`<origin>/.auth/identity/callback` (Google), `<origin>/.auth/identity/cloudflare/callback`
-(Cloudflare) or `<origin>/.auth/identity/github/callback` (GitHub).
+An integration is a package the user's project hosts
+(https://github.com/jonastemplestein/iterategrations, one folder each with a recipe you follow): a
+Telegram bot, the user's own GitHub App, Monzo, Pebble, and more. Adding one is an element of the
+`integrations` array in the config repo's `worker.ts` (each recipe's `add-to-a-project.md` script
+does it); its setup page and webhook live on the project's host, and the dash's project
+Integrations page lists what the project registered, with a button to each page. Writing a new
+package, and publishing it so an agent can add it: https://github.com/jonastemplestein/iterategrations/blob/main/adding-an-integration.md. A self-host has
+none of iterate's Slack, Google, Cloudflare or GitHub apps, and needs none. Signing in with Google,
+Cloudflare or GitHub needs `login.<provider>` and that provider's app in the iterate config as
+`integrations.<provider>`, registered with `<origin>/.auth/identity/callback` (Google),
+`<origin>/.auth/identity/cloudflare/callback` (Cloudflare) or
+`<origin>/.auth/identity/github/callback` (GitHub).
 
 Google, Cloudflare or email-code sign-in, integrations, and custom domains:
 `core/os/SELF-HOSTING.md`.

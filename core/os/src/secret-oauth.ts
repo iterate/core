@@ -18,12 +18,13 @@
 // AN INTEGRATION'S CONNECT (src/integrations/) names whose app instead of passing a client in the
 // clear: `client: { platform: "slack" }` is the deployment's own (ITERATE `integrations.<provider>`,
 // read inside the secret's facet and never copied into the record — the record holds the tokens, and
-// a refresh names the same client), `client: { project: "slack" }` the project's own, whose
-// credentials this secret already holds (`clientId`, `clientSecret`, and whatever else the app needs,
-// such as Slack's `signingSecret`), kept beside the tokens. Either way the redirect URI is the
-// provider's `/api/integrations/<provider>/callback`, whose handler finishes the connection. `next`
-// is where the callback sends the human once the tokens are stored: the platform's origin or the
-// Dash's, nowhere else (`nextUrlOf`).
+// a refresh names the same client). Its redirect URI is the provider's
+// `/api/integrations/<provider>/callback`, whose handler finishes the connection. `next` is where
+// the callback sends the human once the tokens are stored: the platform's origin or the Dash's,
+// nowhere else (`nextUrlOf`).
+//
+// A PROJECT'S OWN CALLBACK: iterate/api `SecretOAuthOptions.redirect` and `secrets.completeOAuth` say
+// the flow and what `redirect` excludes; context/built-ins.ts `secrets.beginOAuth` composes the URL.
 
 import * as oauth from "oauth4webapi";
 import type { ClientAuth, SecretOAuthClient } from "iterate/api";
@@ -60,13 +61,17 @@ export type NormalizedSecretOAuthOptions = {
   extra: Record<string, string>;
   next: string | null;
   expectAccount: string | null;
+  /** The project's own callback page (the header): null for the platform's callback. */
+  redirectUri: string | null;
 };
 
 /** The pending attempt, kept by the secret's facet between the redirect out and the code
  *  back: everything the exchange needs and nothing a browser ever sees. */
 export type PendingSecretOAuth = {
   options: NormalizedSecretOAuthOptions;
-  /** The exact redirect URI the authorize URL carried — the exchange must repeat it (RFC 6749 §4.1.3). */
+  /** The exact redirect URI the authorize URL carried — the exchange must repeat it (RFC 6749 §4.1.3).
+   *  `options.redirectUri` set means it is the project's own page: the attempt project code may
+   *  complete (`itx.secrets.completeOAuth`); null, only the platform's callback completes it. */
   redirectUri: string;
   codeVerifier: string;
   /** Pairs the callback with THIS attempt (a replayed or foreign state cannot complete it). */
@@ -90,15 +95,16 @@ export type SecretOAuthState = {
   next?: string | null;
 };
 
-/** The platform's one redirect URI for every project secret's OAuth — registered once per provider. */
+/** The platform's redirect URI for a secret's OAuth begun without `redirect` — registered once per
+ *  provider. */
 export const SECRET_OAUTH_CALLBACK_PATH = "/.secrets/oauth/callback";
 
-/** The redirect URI path of an attempt: an integration's is its provider's callback, the URL
- *  iterate's Slack app and Google client are registered with, and every other attempt's
- *  `SECRET_OAUTH_CALLBACK_PATH`. worker.ts serves all of them with the same callback. */
+/** The redirect URI path of an attempt on the platform: a deployment app's is its provider's
+ *  callback, the URL iterate's Slack app and Google client are registered with, and every other
+ *  attempt's `SECRET_OAUTH_CALLBACK_PATH`. worker.ts serves all of them with the same callback. */
 export function secretOAuthCallbackPathOf(client: SecretOAuthClient | null): string {
   if (!client) return SECRET_OAUTH_CALLBACK_PATH;
-  return `/api/integrations/${"platform" in client ? client.platform : client.project}/callback`;
+  return `/api/integrations/${client.platform}/callback`;
 }
 
 /** `next` checked: an absolute URL on one of `origins` (the platform's and the Dash's), never an
@@ -134,6 +140,18 @@ export function normalizeSecretOAuth(
     throw new Error("secrets.beginOAuth: pass client, or clientId (and clientSecret), not both");
   if (!client && (typeof options.clientId !== "string" || !options.clientId))
     throw new Error("secrets.beginOAuth: clientId (or client) is required");
+  // the project's own page, composed by the built-in (context/built-ins.ts `secrets.beginOAuth`)
+  const redirectUri = typeof options.redirectUri === "string" ? options.redirectUri : null;
+  if (redirectUri && client)
+    throw codedError(
+      "INVALID_INPUT",
+      "secrets.beginOAuth: the deployment's app comes back to the callback registered for it — redirect is for a client of your own",
+    );
+  if (redirectUri && options.next !== undefined)
+    throw codedError(
+      "INVALID_INPUT",
+      "secrets.beginOAuth: with redirect your page is the landing — no next",
+    );
   const urls = options.urls === undefined ? [tokenEndpoint.origin] : originsOf(options.urls);
   if (!urls.includes(tokenEndpoint.origin))
     throw new Error(
@@ -166,20 +184,18 @@ export function normalizeSecretOAuth(
       typeof options.expectAccount === "string" && options.expectAccount
         ? options.expectAccount
         : null,
+    redirectUri,
   };
 }
 
-/** `client` checked: absent, or `{ platform }` / `{ project }` naming an OAuth integration's provider. */
+/** `client` checked: absent, or `{ platform }` naming an OAuth integration's provider. */
 function secretOAuthClientOf(value: unknown): SecretOAuthClient | null {
   if (value === undefined) return null;
-  const provider = (key: string) =>
-    isRecord(value) && OAUTH_INTEGRATION_PROVIDERS.find((name) => name === value[key]);
-  const platform = provider("platform");
+  const platform =
+    isRecord(value) && OAUTH_INTEGRATION_PROVIDERS.find((name) => name === value.platform);
   if (platform) return { platform };
-  const project = provider("project");
-  if (project) return { project };
   throw new Error(
-    `secrets.beginOAuth: client is { platform } or { project } naming one of ${OAUTH_INTEGRATION_PROVIDERS.join(", ")}, got ${JSON.stringify(value)}`,
+    `secrets.beginOAuth: client is { platform } naming one of ${OAUTH_INTEGRATION_PROVIDERS.join(", ")}, got ${JSON.stringify(value)} — a client of your own goes in clientId and clientSecret, with redirect for your page`,
   );
 }
 
@@ -217,20 +233,17 @@ export async function beginSecretOAuth(
 
 /** The code exchange: the pending attempt + the provider's code → the secret's record, with the
  *  `oauth-refresh-token` strategy pointing at the same token endpoint. `credentials` are the client's
- *  as the host resolved them (by default the ones passed in the clear), and `kept` the material the secret already holds that stays beside the
- *  tokens (a project's own app's). `clientSecretOf` is what the exchange sends for the client
+ *  as the host resolved them (by default the ones passed in the clear). `clientSecretOf` is what the exchange sends for the client
  *  secret: the host resolves a placeholder there, and the record keeps the placeholder. The
- *  deployment's client (`{ platform }`) is never written into
- *  the record: its tokens alone, and a refresh — when the provider issued a refresh token — that
- *  names the same client. */
+ *  deployment's client (`{ platform }`) is never written into the record: its tokens alone, and a
+ *  refresh — when the provider issued a refresh token — that names the same client. */
 export async function completeSecretOAuth(
   pending: PendingSecretOAuth,
   code: string,
   fetchFn: (request: Request) => Promise<Response>,
-  credentials: { clientId: string; clientSecret: string; kept: Record<string, unknown> } = {
+  credentials: { clientId: string; clientSecret: string } = {
     clientId: pending.options.clientId,
     clientSecret: pending.options.clientSecret,
-    kept: {},
   },
   clientSecretOf = clientSecretAsHeld,
 ): Promise<SecretRecord> {
@@ -265,7 +278,7 @@ export async function completeSecretOAuth(
     tokenEndpoint: options.tokenEndpoint,
     clientAuth: options.clientAuth,
   };
-  if (options.client && "platform" in options.client)
+  if (options.client)
     return {
       material: tokens,
       urls: options.urls,
@@ -273,7 +286,6 @@ export async function completeSecretOAuth(
     };
   return {
     material: {
-      ...credentials.kept,
       clientId: credentials.clientId,
       clientSecret: credentials.clientSecret, // "" for a public client — the refresh grant then sends client_id alone
       ...tokens,

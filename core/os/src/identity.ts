@@ -685,7 +685,6 @@ async function keepSignInToken(
       type: `events.iterate.com/${provider}/connected`,
       payload: {
         connection,
-        client: "iterate",
         account: signedIn.account,
         externalId: signedIn.identity.sub,
         ...(signedIn.scopes.length > 0 && { scopes: signedIn.scopes }),

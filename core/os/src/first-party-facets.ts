@@ -12,6 +12,7 @@ export const FIRST_PARTY_FACET_CLASSES = {
   account: "AccountFacet",
   email: "EmailFacet",
   instance: "InstanceFacet",
+  integration: "IntegrationFacet",
   organization: "OrganizationFacet",
   project: "ProjectFacet",
   repo: "RepoFacet",

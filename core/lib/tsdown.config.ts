@@ -29,6 +29,7 @@ export default defineConfig([
       "stream/contract": "src/stream/contract.ts",
       "stream/run": "src/stream/run.ts",
       email: "src/email.ts",
+      integrations: "src/integrations.ts",
       agents: "src/agents/index.ts",
       "agents/install": "src/agents/install.ts",
       "agents/contract": "src/agents/contract.ts",

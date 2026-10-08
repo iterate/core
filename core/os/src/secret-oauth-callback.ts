@@ -116,15 +116,20 @@ export async function secretOAuthCallback(
     (name) => url.pathname === `/api/integrations/${name}/callback`,
   );
   // On the secret's own context — `itx.secrets.completeOAuth` (built-ins.ts) runs the exchange in
-  // the secret's facet and lands the facts, in the order every other write to that path takes; the
-  // platform's own call, no principal.
+  // the secret's facet and lands the facts, in the order every other write to that path takes: the
+  // same `{ code, state }` a page of the project's hands it, under the platform's own mark.
   let move: FinishConnectAnswer["move"];
   try {
     // the built-in's own answer (context/built-ins.ts `completeOAuth`)
     const { scopes, held } = (await env.ITERATE_CONTEXT.getByName(claims.context).invoke(
-      ["itx", "builtins", "secrets", ["completeOAuth", owner.path, { code, nonce: claims.nonce }]],
+      [
+        "itx",
+        "builtins",
+        "secrets",
+        ["completeOAuth", owner.path, { code, state: url.searchParams.get("state") ?? "" }],
+      ],
       [],
-      { principal: null },
+      { principal: null, platform: true },
     )) as { scopes: string[]; held?: FinishConnectInput["held"] };
     if (provider && owner.kind !== "organizations") {
       // The platform's own call on the owner's root: its facet (a project's `project`, a person's

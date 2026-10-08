@@ -687,6 +687,7 @@ test("normalizeSecretOAuth: the pin defaults to the token endpoint's origin, mus
     extra: { access_type: "offline" },
     next: null,
     expectAccount: null,
+    redirectUri: null,
   });
   expect(() =>
     normalizeSecretOAuth({ ...PROVIDER, clientId: "c", urls: ["https://api.example"] }),
@@ -903,14 +904,34 @@ test.for([
     becomes: { clientId: "", clientSecret: "", client: { platform: "slack" } },
   },
   {
-    row: "the project's own Google client, held by the secret",
+    row: "a client of the project's own, held by another secret, is not a client option",
     options: { client: { project: "google" } },
-    becomes: { clientId: "", client: { project: "google" } },
+    refused: /client is \{ platform \}/,
   },
   {
     row: "next on the Dash",
     options: { clientId: "c", next: "https://dash.example/projects/p/integrations?x=1" },
     becomes: { next: "https://dash.example/projects/p/integrations?x=1" },
+  },
+  {
+    row: "the project's own callback page, kept as given",
+    options: { clientId: "c", redirectUri: "https://github--p.example/callback?x=1" },
+    becomes: { redirectUri: "https://github--p.example/callback?x=1", next: null },
+  },
+  {
+    row: "no redirectUri: the platform's callback",
+    options: { clientId: "c" },
+    becomes: { redirectUri: null },
+  },
+  {
+    row: "a redirectUri with the deployment's app",
+    options: { client: { platform: "slack" }, redirectUri: "https://github--p.example/callback" },
+    refused: /redirect is for a client of your own/,
+  },
+  {
+    row: "a redirectUri beside next",
+    options: { clientId: "c", redirectUri: "https://p.example/cb", next: "https://os.example/" },
+    refused: /your page is the landing/,
   },
   {
     row: "a client beside a clientId",
@@ -948,16 +969,13 @@ test.for([
   else expect(normalize()).toMatchObject(becomes!);
 });
 
-test("secretOAuthCallbackPathOf: an integration's client comes back to its provider's callback, every other attempt to the one secret callback", () => {
+test("secretOAuthCallbackPathOf: a deployment app's attempt comes back to its provider's callback, every other attempt to the one secret callback", () => {
   expect(secretOAuthCallbackPathOf({ platform: "slack" })).toBe("/api/integrations/slack/callback");
-  expect(secretOAuthCallbackPathOf({ project: "google" })).toBe(
-    "/api/integrations/google/callback",
-  );
   expect(secretOAuthCallbackPathOf(null)).toBe("/.secrets/oauth/callback");
 });
 
 // THE RECORD AN INTEGRATION'S EXCHANGE WRITES: the client and the tokens ⇒ the record. iterate's
-// client never enters the material; a project's own app stays beside its tokens.
+// client never enters the material.
 test.for([
   {
     row: "iterate's Slack app, no refresh token",
@@ -978,33 +996,12 @@ test.for([
       },
     },
   },
-  {
-    row: "the project's own Slack app: its credentials kept beside the token",
-    client: { project: "slack" },
-    tokens: { access_token: "xoxb" },
-    record: {
-      material: {
-        clientId: "own",
-        clientSecret: "own-s",
-        signingSecret: "sig",
-        accessToken: "xoxb",
-      },
-      refresh: { kind: "oauth-refresh-token", clientAuth: "client_secret_basic" },
-    },
-  },
 ])("completeSecretOAuth, an integration's record: $row", async ({ client, tokens, record }) => {
   const { pending } = await beginSecretOAuth(
     { ...normalizeSecretOAuth({ ...PROVIDER, client }), clientId: "resolved" },
     { redirectUri: "https://os.example/cb", state: "st", nonce: "n" },
   );
-  const credentials =
-    "platform" in client
-      ? { clientId: "iterate", clientSecret: "iterate-s", kept: {} }
-      : {
-          clientId: "own",
-          clientSecret: "own-s",
-          kept: { clientId: "own", clientSecret: "own-s", signingSecret: "sig" },
-        };
+  const credentials = { clientId: "iterate", clientSecret: "iterate-s" };
   const provider = scripted(() => Response.json(tokens));
   expect(await completeSecretOAuth(pending, "code", provider.fetchFn, credentials)).toEqual({
     urls: ["https://auth.example"],

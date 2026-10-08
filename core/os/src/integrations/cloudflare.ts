@@ -45,7 +45,6 @@ export async function connectCloudflare(
   scope: IntegrationScope,
   input: {
     connection: string;
-    client: ConnectionAttempt["client"];
     next?: string;
     scopes?: readonly string[];
     /** The connection, when it exists: the consent must come back as its account. */
@@ -55,10 +54,10 @@ export async function connectCloudflare(
   },
 ): Promise<{ authorizationUrl: string }> {
   const cloudflare = iterateConfigOf(scope.env).integrations.cloudflare;
-  if (input.client !== "iterate" || !cloudflare)
+  if (!cloudflare)
     throw codedError(
       "INVALID_INPUT",
-      "Cloudflare connects through this deployment's Cloudflare client (ITERATE integrations.cloudflare) alone.",
+      "This deployment has no Cloudflare client (ITERATE integrations.cloudflare).",
     );
   const endpoints = cloudflareEndpointsOf(cloudflare.cloudflareOrigin);
   const asked = [...new Set([...cloudflare.scopes, ...(input.scopes || [])])];
@@ -77,7 +76,6 @@ export async function connectCloudflare(
     },
   );
   const attempt: ConnectionAttempt = {
-    client: "iterate",
     origin: cloudflare.cloudflareOrigin || "",
     until: Date.now() + SECRET_OAUTH_TTL_MS,
     connectToProject: input.connectToProject,
@@ -111,7 +109,6 @@ export async function finishCloudflareConnect(
     row: await appendConnected(scope, {
       provider: "cloudflare",
       connection,
-      client: "iterate",
       account: typeof user.email === "string" ? user.email : user.id,
       externalId: user.id,
       scopes: grantedScopes,

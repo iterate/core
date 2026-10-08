@@ -1,15 +1,16 @@
-// src/integrations/google.ts — GOOGLE: a connection is one Google account (connections.ts). Its
-// tokens, and for a project's own OAuth client its `clientId` and `clientSecret`, live in
-// `/secrets/google-<connection>`, an `oauth-refresh-token` secret: with iterate's client the refresh
-// attaches that client inside the secret's facet (secret/durable-object.ts), with the project's the
-// material holds it. Offline access with a consent prompt, so Google issues a refresh token; granted
-// scopes included, so asking for more on an existing connection keeps what it had.
+// src/integrations/google.ts — GOOGLE: a connection is one Google account (connections.ts),
+// through the deployment's own Google client (ITERATE `integrations.google`). Its tokens live in
+// `/secrets/google-<connection>`, an `oauth-refresh-token` secret whose refresh attaches that client
+// inside the secret's facet (secret/durable-object.ts). Offline access with a consent prompt, so
+// Google issues a refresh token; granted scopes included, so asking for more on an existing
+// connection keeps what it had. (A project's own Google client is `itx.secrets.beginOAuth` with
+// the client in the clear, from a package the project hosts: core/os/public/connect-a-service.md.)
 //   connectGoogle      → the consent URL (`itx.secrets.beginOAuth`)
 //   finishGoogleConnect → userinfo names the account, then `google/connected` on `/`
 //   revokeGoogle       → a disconnect's grant revoked (verbs.ts `PROVIDERS`)
 // Google sends no webhooks here, so nothing is routed.
 import { codedError } from "iterate/lib";
-import { iterateConfigOf, DEFAULT_GOOGLE_SCOPES } from "../iterate-config.ts";
+import { iterateConfigOf } from "../iterate-config.ts";
 import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord } from "../secrets.ts";
 import type { IntegrationConnectionRow } from "./contract.ts";
@@ -22,7 +23,7 @@ import {
   type IntegrationScope,
 } from "./connections.ts";
 
-/** Google's token endpoint origin — what a project's own Google client's secret is pinned to. */
+/** Google's token endpoint origin, the first origin a Google connection's secret is pinned to. */
 const GOOGLE_TOKEN_ORIGIN = "https://oauth2.googleapis.com";
 
 /** WHERE GOOGLE ANSWERS: Google's own endpoints when `googleOrigin` is unset, else every path at
@@ -52,39 +53,24 @@ export function googleEndpointsOf(googleOrigin?: string | null) {
 }
 
 /** Where Google answers — null for Google itself — and the scopes asked for: iterate's client's
- *  (`googleOrigin` is a fake's on a preview), or the pin the project's own client's secret was set
- *  with (Google's token origin, or a fake's). */
-async function googleClientOf(
-  scope: IntegrationScope,
-  client: ConnectionAttempt["client"],
-  connection: string,
-): Promise<{ origin: string | null; scopes: readonly string[] }> {
-  if (client === "iterate") {
-    const google = iterateConfigOf(scope.env).integrations.google;
-    if (!google)
-      throw codedError(
-        "INVALID_INPUT",
-        "This deployment has no Google client (ITERATE integrations.google) — use your own.",
-      );
-    return { origin: google.googleOrigin || null, scopes: google.scopes };
-  }
-  const secretPath = tokenSecretPathOf("google", connection);
-  using itx = scope.getItx();
-  const secrets = await itx.secrets.list();
-  const pin = secrets.find((secret) => secret.path === secretPath)?.urls[0];
-  if (!pin)
+ *  (`googleOrigin` is a fake's on a preview). */
+function googleClientOf(scope: IntegrationScope): {
+  origin: string | null;
+  scopes: readonly string[];
+} {
+  const google = iterateConfigOf(scope.env).integrations.google;
+  if (!google)
     throw codedError(
       "INVALID_INPUT",
-      `Set ${secretPath} to your Google OAuth client's { clientId, clientSecret }, pinned to ${GOOGLE_TOKEN_ORIGIN}, first.`,
+      "This deployment has no Google client (ITERATE integrations.google).",
     );
-  return { origin: pin === GOOGLE_TOKEN_ORIGIN ? null : pin, scopes: DEFAULT_GOOGLE_SCOPES };
+  return { origin: google.googleOrigin || null, scopes: google.scopes };
 }
 
 export async function connectGoogle(
   scope: IntegrationScope,
   input: {
     connection: string;
-    client: ConnectionAttempt["client"];
     next?: string;
     /** More scopes than the client's default: an incremental consent keeps what was granted. */
     scopes?: readonly string[];
@@ -95,8 +81,8 @@ export async function connectGoogle(
     connectToProject?: ConnectionAttempt["connectToProject"];
   },
 ): Promise<{ authorizationUrl: string }> {
-  const { connection, client, existing } = input;
-  const { origin, scopes } = await googleClientOf(scope, client, connection);
+  const { connection, existing } = input;
+  const { origin, scopes } = googleClientOf(scope);
   const endpoints = googleEndpointsOf(origin);
   const asked = [...new Set([...scopes, ...(input.scopes || [])])];
   using itx = scope.getItx();
@@ -105,7 +91,7 @@ export async function connectGoogle(
     {
       authorizationEndpoint: endpoints.authorizationEndpoint,
       tokenEndpoint: endpoints.tokenEndpoint,
-      client: client === "iterate" ? { platform: "google" } : { project: "google" },
+      client: { platform: "google" },
       scope: asked.join(" "),
       urls: endpoints.urls,
       extra: {
@@ -119,7 +105,6 @@ export async function connectGoogle(
     },
   );
   const attempt: ConnectionAttempt = {
-    client,
     origin: origin || "",
     until: Date.now() + SECRET_OAUTH_TTL_MS,
     connectToProject: input.connectToProject,
@@ -162,7 +147,6 @@ export async function finishGoogleConnect(
     row: await appendConnected(scope, {
       provider: "google",
       connection,
-      client: attempt.client,
       account: typeof userinfo.email === "string" ? userinfo.email : userinfo.id,
       externalId: userinfo.id,
       scopes: grantedScopes,
@@ -170,17 +154,23 @@ export async function finishGoogleConnect(
   };
 }
 
-/** Revoking the refresh token ends the whole grant; a grant already dead is the goal. */
+/** Revoking the refresh token ends the whole grant; a grant already dead is the goal, so the revoke
+ *  is best effort (a deployment that dropped its Google client has nothing to revoke with). */
 export async function revokeGoogle(
   scope: IntegrationScope,
   connection: string,
   row: IntegrationConnectionRow | undefined,
 ) {
-  if (row)
-    await googleClientOf(scope, row.client, connection)
-      .then(({ origin }) =>
-        googleCall(scope, googleEndpointsOf(origin).revocationEndpoint, connection, "refreshToken"),
-      )
-      .then((response) => response.body?.cancel())
-      .catch(() => {});
+  if (!row) return;
+  try {
+    const response = await googleCall(
+      scope,
+      googleEndpointsOf(googleClientOf(scope).origin).revocationEndpoint,
+      connection,
+      "refreshToken",
+    );
+    await response.body?.cancel();
+  } catch {
+    // best effort: a grant already dead is the goal
+  }
 }

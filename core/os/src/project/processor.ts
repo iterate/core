@@ -736,7 +736,11 @@ export class ProjectProcessor extends StreamProcessor<
         error: `main moved on to ${head || "no commit (unborn)"} before this commit was published`,
       };
     try {
-      return { kind: "admitted", ...(await manifestOf(commitOid, generation, publisher)) };
+      const built = await manifestOf(commitOid, generation, publisher);
+      // before the outcome lands: the install hooks it sets off register the packages there. Part
+      // of the attempt, so a platform failure here is retried and timed like the probe's.
+      await publisher.enableIntegrationsRow();
+      return { kind: "admitted", ...built };
     } catch (error) {
       if (isPlatformFailureKind(failureKind(error))) throw error;
       return { kind: "refused", error: error instanceof Error ? error.message : String(error) };

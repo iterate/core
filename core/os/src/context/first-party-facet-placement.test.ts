@@ -88,6 +88,10 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "email", context: "prj_1:/", allowed: false },
   { facet: "email", context: "prj_1:/integrations/email/x", allowed: false },
   { facet: "email", context: "global:/integrations/email", allowed: false },
+  // 9. `integration` — a project's /integrations, and nowhere else.
+  { facet: "integration", context: "prj_1:/integrations", allowed: true },
+  { facet: "integration", context: "prj_1:/", allowed: false },
+  { facet: "integration", context: "global:/integrations", allowed: false },
 ];
 
 /** 6., the stateless worker (`itx.workers.get({ source })`, and `itx.run`'s script through it). */

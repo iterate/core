@@ -49,6 +49,7 @@ import {
 import { AccountFacet } from "../account/durable-object.ts";
 import { EmailFacet } from "../email/durable-object.ts";
 import { InstanceFacet } from "../instance/durable-object.ts";
+import { IntegrationFacet } from "../integrations/registry.ts";
 import { type FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import { OrganizationFacet } from "../organization/durable-object.ts";
 import { ProjectFacet } from "../project/durable-object.ts";
@@ -172,6 +173,7 @@ const FIRST_PARTY_FACET_PUBLIC_METHODS = {
   account: AccountFacet.publicMethods,
   email: EmailFacet.publicMethods,
   instance: InstanceFacet.publicMethods,
+  integration: IntegrationFacet.publicMethods,
   organization: OrganizationFacet.publicMethods,
   project: ProjectFacet.publicMethods,
   repo: RepoFacet.publicMethods,

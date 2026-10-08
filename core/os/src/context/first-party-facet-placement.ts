@@ -38,7 +38,10 @@
 //      catalog (built-ins.ts `ownerRootFacet`), which only the operator reaches.
 //   8. `email` — a project's `/integrations/email`, and nowhere else: where the platform records
 //      the project's mail (integrations/email.ts).
+//   9. `integration` — a project's `/integrations`, and nowhere else: where the project's packages
+//      register themselves (iterate/integrations; integrations/registry.ts).
 import { codedError } from "iterate/lib";
+import { INTEGRATIONS_PATH } from "iterate/integrations";
 import type { FIRST_PARTY_FACET_CLASSES } from "../first-party-facets.ts";
 import { EMAIL_PATH } from "../email/contract.ts";
 import { SECRET_PATH } from "../secrets.ts";
@@ -101,6 +104,12 @@ const FIRST_PARTY_FACET_PLACEMENT_RULES = {
   email: {
     where: `a project's ${EMAIL_PATH}`,
     mayBeHostedOn: ({ projectId, path }) => projectId !== GLOBAL_PROJECT_ID && path === EMAIL_PATH,
+  },
+  // 9.
+  integration: {
+    where: `a project's ${INTEGRATIONS_PATH}`,
+    mayBeHostedOn: ({ projectId, path }) =>
+      projectId !== GLOBAL_PROJECT_ID && path === INTEGRATIONS_PATH,
   },
 } satisfies Record<
   keyof typeof FIRST_PARTY_FACET_CLASSES,

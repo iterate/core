@@ -489,6 +489,8 @@ test("ProjectProcessor — the publication: a commit fact publishes its commit, 
     ["itx.config ⇒ aaa@5", "project/worker-updated aaa@5"],
     ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
   ]);
+  // the integrations registry's row, before each publication landed
+  expect(publisher).toMatchObject({ rowsEnabled: 2 });
   // the pointer reads the commit's modules through `itx.config.modules`, which only the platform writes
   const repo = ["itx", "builtins", ["cd", "/repos/config"], "builtins", "facets", ["get", "repo"]];
   const source = ["itx", "config", ["modules", { commitOid: "bbb" }]];
@@ -1362,6 +1364,11 @@ function fakePublisher(commits: Record<string, FakeCommit>) {
       publisher.batches.push(events);
       return [];
     },
+    /** How often the `integration` row was enabled: once per publication that lands. */
+    rowsEnabled: 0,
+    enableIntegrationsRow: async () => {
+      publisher.rowsEnabled += 1;
+    },
   };
   return publisher;
 }
@@ -1486,7 +1493,6 @@ function integrationRow(provider: "slack" | "google" | "github", connection: str
   return {
     provider,
     connection,
-    client: "iterate" as const,
     account: `Acme ${provider}`,
     externalId: "X1",
   };

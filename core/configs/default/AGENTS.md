@@ -24,6 +24,19 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
   (`blog` for `blog--<project>`, absent on the apex), so route on it with a plain `if`. A request
   a fetch route takes never reaches it: the platform sends it to the route's target first
   (`iterate tunnel <port>` sets a route per tunnel; `itx.fetchRoutes.set` sets one by hand).
+- `integrations` lists the integration packages this project hosts (`Integration` from
+  `iterate/sdk`: a Telegram bot, your own GitHub App, and more, one folder each in
+  https://github.com/jonastemplestein/iterategrations, whose recipes add one). Each is one element,
+  from its package (`telegram()`, `github()`). `fetch` hands a package the requests on its own
+  routing slug, and `processEvent` hands every package every event after the project's own cases:
+  a package's install hook is its `project/worker-updated` case, where it registers its card on
+  `/integrations` for the Dash's Integrations page (`iterate/integrations`; writing a package of
+  your own: https://github.com/jonastemplestein/iterategrations/blob/main/adding-an-integration.md). A hook returns for an
+  event it does not handle: one that throws fails this event for the whole worker, which the
+  platform retries, and a hook that throws on every event slows the project's own cases to a
+  trickle. A package serves its
+  own setup page and webhook on its host and keeps its credentials through `itx.secrets`; the
+  Dash shows what it registered and links to its page.
 
 The agents app is `iterate/agents`, which comes from the platform like the rest of `iterate/*`:
 the project runs the deployment's own build, and a platform deploy upgrades it. `agents.ts`

@@ -10,12 +10,14 @@
 // ordinary bundled worker code, enabled as a row on `/` by `session.projects.create` (session.ts) —
 // and by the first `list()`, which hosts the facet without a row.
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import { INTEGRATIONS_PATH } from "iterate/integrations";
 import { runningCause } from "../cause.ts";
 import { downloadPublicGithubTemplate } from "../repo/github-template.ts";
 import { iterateConfigOf, type IterateConfigEnv } from "../iterate-config.ts";
 import { canBackRepo, projectScopedArtifacts } from "../context/cf-artifacts.ts";
 import { moduleIdentityOf } from "../context/worker-loader.ts";
 import { CONTEXT_DESTROYED, DurableObjectNameCodec } from "../context/paths.ts";
+import { contextStub } from "../context-stub.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { Env as ContextEnv } from "../iterate-context-durable-object.ts";
@@ -116,6 +118,21 @@ export class ProjectFacet extends StreamProcessorDurableObject<
           platform: true,
           cause: runningCause(),
         }),
+      // the platform's own enable (a first-party name takes `consumes` at most, built-ins.ts
+      // `processors.enable`); a row already there is a no-op
+      enableIntegrationsRow: async () => {
+        const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
+        // through the stub, so a platform failure of the hop is retried as the attempt's others are
+        await contextStub(
+          this.env.ITERATE_CONTEXT,
+          DurableObjectNameCodec.address({ projectId, path: INTEGRATIONS_PATH }),
+          "publication",
+        ).invoke(["itx", "builtins", "processors", ["enable", "integration"]], [], {
+          principal: null,
+          platform: true,
+          cause: runningCause(),
+        });
+      },
     };
   }
 
@@ -273,11 +290,11 @@ export class ProjectFacet extends StreamProcessorDurableObject<
     };
   }
 
-  /** CONNECT (integrations/verbs.ts; `itx.integrations.connect`): where to send a human to consent —
-   *  through iterate's app (`client: "iterate"`) or the project's own, whose credentials
-   *  `/secrets/<provider>-<connection>` already holds. The provider's callback stores the credential
-   *  and finishes the connection, then sends the human to `next` (the platform's or the Dash's
-   *  origin). Again for a connection that exists asks for more `scopes` on the same account. */
+  /** CONNECT (integrations/verbs.ts; `itx.integrations.connect`): where to send a human to consent
+   *  through the deployment's app at the provider. The provider's callback stores the credential in
+   *  `/secrets/<provider>-<connection>` and finishes the connection, then sends the human to `next`
+   *  (the platform's or the Dash's origin). Again for a connection that exists asks for more
+   *  `scopes` on the same account. */
   connectIntegration(input: ConnectInput): Promise<{ authorizationUrl: string }> {
     return this.#onConnection(input?.provider, input?.connection, (integrations) =>
       connectIntegration(this.#integrationScope(), integrations, input),

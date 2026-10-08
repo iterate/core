@@ -338,6 +338,7 @@ async function deliver(
     identityOf: unread,
     probe: unread,
     appendAsPlatform: async () => [],
+    enableIntegrationsRow: async () => {},
   };
   const processor = new ProjectProcessor(
     () => fixture.itx as never,

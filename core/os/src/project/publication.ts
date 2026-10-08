@@ -39,6 +39,10 @@ export type ProjectPublisher = {
   /** One batch on `/` as the platform's own facts (`source.platform`): the only writer of
    *  `itx.config`, `project/worker-updated` and `project/worker-update-failed`. */
   appendAsPlatform(...events: StreamEventInput[]): Promise<unknown>;
+  /** The `integration` facet's row on `/integrations` (integrations/registry.ts), enabled before
+   *  a publication lands: the install hooks it sets off register the project's packages there, and
+   *  a row makes every registration a push to the facet and on to the Dash. Idempotent. */
+  enableIntegrationsRow(): Promise<void>;
 };
 
 /** The manifest of commit `commitOid` as publication `generation`, admitted by the probe, and its

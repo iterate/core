@@ -40,11 +40,11 @@ export type IntegrationScope = {
   storage: DurableObjectStorage;
 };
 
-/** A connect in flight, kept by the owner's facet until the provider's callback finishes it (or a
- *  disconnect drops it, so a late callback finishes nothing): whose app, where the provider answers,
- *  and until when. GitHub's also carries its nonce and what its callback needs. */
+/** A connect in flight through the deployment's app, kept by the owner's facet until the
+ *  provider's callback finishes it (or a disconnect drops it, so a late callback finishes nothing):
+ *  where the provider answers, and until when. GitHub's also carries its nonce and what its
+ *  callback needs. */
 export type ConnectionAttempt = {
-  client: "iterate" | "project";
   origin: string;
   until: number;
   /** A person's connect a project asked for (`itx.integrations.connect(provider, { account })` on
@@ -307,8 +307,7 @@ export async function routedWhile<T>(
     return await land();
   } catch (error) {
     await controlPlane.releaseIntegrationRoutes(projectId, path);
-    if (before?.client === "iterate")
-      await controlPlane.routeIntegration(provider, before.externalId, projectId, path);
+    if (before) await controlPlane.routeIntegration(provider, before.externalId, projectId, path);
     throw error;
   }
 }

@@ -1,9 +1,10 @@
-// src/integrations/slack.ts — SLACK: a connection is one workspace (connections.ts). Its bot token,
-// and for a project's own app the app's `clientId`, `clientSecret` and `signingSecret`, live in
+// src/integrations/slack.ts — SLACK: a connection is one workspace (connections.ts), through the
+// deployment's own Slack app (ITERATE `integrations.slack`). Its bot token lives in
 // `/secrets/slack-<connection>`; outbound calls carry
-// `getSecret("/secrets/slack-<connection>", { field: "accessToken" })` through egress.
-//   connectSlack      → the consent URL (`itx.secrets.beginOAuth` with iterate's app,
-//                       `client: { platform: "slack" }`, or the project's, `{ project: "slack" }`)
+// `getSecret("/secrets/slack-<connection>", { field: "accessToken" })` through egress. (A project's
+// own Slack app is a package the project hosts, iterate/sdk `Integration`: its consent through
+// `itx.secrets.beginOAuth` with the client in the clear, its webhook on the project's own host.)
+//   connectSlack      → the consent URL (`itx.secrets.beginOAuth`, `client: { platform: "slack" }`)
 //   finishSlackConnect → the callback stored the token: `auth.test` names the workspace, iterate's
 //                       app routes it here (control-plane/catalog.ts), `slack/connected` lands on `/`;
 //                       or, for a workspace another project holds, the secret held the token aside
@@ -11,14 +12,13 @@
 //   connectMovedSlackTeam → the move (verbs.ts `confirmIntegrationMove`): the held token stored here
 //   revokeSlack       → a disconnect's `auth.revoke` (verbs.ts `PROVIDERS`), when its release of
 //                       the workspace's route wins
-//   slackWebhookRoute → Slack's inbound requests, on the URLs the apps are registered with:
-//     POST /api/integrations/slack/{webhook,interactivity-webhook}                       iterate's app
-//     POST /api/integrations/slack/{webhook,interactivity-webhook}/<projectId>/<connection>  own app
+//   slackWebhookRoute → Slack's inbound requests, on the URLs the app is registered with:
+//     POST /api/integrations/slack/{webhook,interactivity-webhook}
 // A signed request lands on `<project>:/integrations/slack/<connection>` as
 // `slack/webhook-received`, keyed `slack-webhook:<event_id|trigger_id>` (the codes: rules.ts).
 import { codedError, errorCode } from "iterate/lib";
 import { z } from "zod";
-import { iterateConfigOf, DEFAULT_SLACK_BOT_SCOPES } from "../iterate-config.ts";
+import { iterateConfigOf } from "../iterate-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -31,7 +31,6 @@ import {
   attemptKeyOf,
   consentAttemptKeyOf,
   connectionPathOf,
-  connectionRowOf,
   ignoredWebhook,
   ownerEgress,
   routedWhile,
@@ -43,40 +42,7 @@ import {
   type MovableAttempt,
   type MoveOffered,
 } from "./connections.ts";
-import {
-  slackPayloadOf,
-  slackSignatureValid,
-  slackTeamIdOf,
-  type HmacHexMatches,
-} from "./rules.ts";
-
-/** Where Slack answers, and the bot scopes asked for: iterate's app's (`slackOrigin` is a fake's on
- *  a preview), or the pin the project's own app's secret was set with. */
-async function slackAppOf(
-  scope: IntegrationScope,
-  client: ConnectionAttempt["client"],
-  connection: string,
-): Promise<{ origin: string; scopes: readonly string[] }> {
-  if (client === "iterate") {
-    const slack = iterateConfigOf(scope.env).integrations.slack;
-    if (!slack)
-      throw codedError(
-        "INVALID_INPUT",
-        "This deployment has no Slack app (ITERATE integrations.slack) — use your own.",
-      );
-    return { origin: slack.slackOrigin, scopes: slack.scopes };
-  }
-  const secretPath = tokenSecretPathOf("slack", connection);
-  using itx = scope.getItx();
-  const secrets = await itx.secrets.list();
-  const pin = secrets.find((secret) => secret.path === secretPath)?.urls[0];
-  if (!pin)
-    throw codedError(
-      "INVALID_INPUT",
-      `Set ${secretPath} to your Slack app's { clientId, clientSecret, signingSecret }, pinned to https://slack.com, first.`,
-    );
-  return { origin: pin, scopes: DEFAULT_SLACK_BOT_SCOPES };
-}
+import { slackPayloadOf, slackSignatureValid, slackTeamIdOf } from "./rules.ts";
 
 /** The bot token's Slack Web API call, through egress. */
 function slackApi(scope: IntegrationScope, origin: string, method: string, connection: string) {
@@ -96,7 +62,6 @@ export async function connectSlack(
   scope: IntegrationScope,
   input: {
     connection: string;
-    client: ConnectionAttempt["client"];
     next?: string;
     /** More bot scopes than the app's default: a reinstall asks for the union. */
     scopes?: readonly string[];
@@ -104,15 +69,22 @@ export async function connectSlack(
     existing?: IntegrationConnectionRow;
   },
 ): Promise<{ authorizationUrl: string }> {
-  const { connection, client } = input;
-  const { origin, scopes } = await slackAppOf(scope, client, connection);
+  const { connection } = input;
+  // iterate's app at Slack (`slackOrigin` is a fake's on a preview)
+  const slack = iterateConfigOf(scope.env).integrations.slack;
+  if (!slack)
+    throw codedError(
+      "INVALID_INPUT",
+      "This deployment has no Slack app (ITERATE integrations.slack).",
+    );
+  const { slackOrigin: origin, scopes } = slack;
   using itx = scope.getItx();
   const { authorizationUrl, nonce } = await itx.secrets.beginOAuth(
     tokenSecretPathOf("slack", connection),
     {
       authorizationEndpoint: `${origin}/oauth/v2/authorize`,
       tokenEndpoint: `${origin}/api/oauth.v2.access`,
-      client: client === "iterate" ? { platform: "slack" } : { project: "slack" },
+      client: { platform: "slack" },
       clientAuth: "client_secret_post",
       scope: [...new Set([...scopes, ...(input.scopes || [])])].join(","),
       // files.slack.com serves a shared file's download (url_private)
@@ -121,7 +93,10 @@ export async function connectSlack(
       expectAccount: input.existing?.externalId,
     },
   );
-  const attempt: ConnectionAttempt = { client, origin, until: Date.now() + SECRET_OAUTH_TTL_MS };
+  const attempt: ConnectionAttempt = {
+    origin,
+    until: Date.now() + SECRET_OAUTH_TTL_MS,
+  };
   await scope.storage.put(consentAttemptKeyOf("slack", connection, nonce), attempt);
   // a new consent supersedes an offer to move a workspace here (its held token went with `beginOAuth`)
   await scope.storage.delete(attemptKeyOf("slack", connection));
@@ -150,7 +125,6 @@ export async function finishSlackConnect(
         heldTokenNonce: held.nonce,
       };
       const offered: MovableAttempt = {
-        client: attempt.client,
         origin: attempt.origin,
         until: held.until,
         nonce: crypto.randomUUID(),
@@ -173,20 +147,18 @@ export async function finishSlackConnect(
           throw new Error(
             `Slack's auth.test names workspace ${identity.teamId}, not ${held.externalId}`,
           );
-        return slackConnected(scope, connection, attempt, identity);
+        return slackConnected(scope, connection, identity);
       },
     );
     return { row };
   }
   const identity = await slackIdentityOf(scope, attempt.origin, connection);
-  const connected = () => slackConnected(scope, connection, attempt, identity);
   // iterate's app routes the team here while `connected` lands; a failure puts the routes back
-  if (attempt.client !== "iterate") return { row: await connected() };
   const path = connectionPathOf("slack", connection);
   const row = await routedWhile(
     env,
     { provider: "slack", externalId: identity.teamId, projectId, path },
-    connected,
+    () => slackConnected(scope, connection, identity),
   );
   return { row };
 }
@@ -243,7 +215,7 @@ export async function connectMovedSlackTeam(
   const identity = await slackIdentityOf(scope, attempt.origin, connection);
   if (identity.teamId !== move.externalId)
     throw new Error(`Slack's auth.test names workspace ${identity.teamId}, not ${move.externalId}`);
-  await slackConnected(scope, connection, attempt, identity);
+  await slackConnected(scope, connection, identity);
 }
 
 /** The held token stored in the connection's secret (secret/durable-object.ts `admitHeldToken`): the
@@ -306,13 +278,11 @@ const SlackAuthTest = z.object({
 function slackConnected(
   scope: IntegrationScope,
   connection: string,
-  attempt: ConnectionAttempt,
   identity: { teamId: string; team: string },
 ) {
   return appendConnected(scope, {
     provider: "slack",
     connection,
-    client: attempt.client,
     account: identity.team,
     externalId: identity.teamId,
   });
@@ -323,8 +293,7 @@ function slackConnected(
  *  connection of the workspace: only the connection that still held the route may, which its own
  *  release answers (one statement: a move of the route and this release never both win), and only
  *  while no project routed the workspace since — read again, fresh, right before the revoke. A
- *  project's own app routes nothing. A token already dead is the goal, so the revoke is
- *  best-effort. */
+ *  token already dead is the goal, so the revoke is best-effort. */
 export async function revokeSlack(
   scope: IntegrationScope,
   connection: string,
@@ -334,59 +303,30 @@ export async function revokeSlack(
   const controlPlane = new ControlPlane(scope.env);
   const path = connectionPathOf("slack", connection);
   const revokes =
-    row.client === "project" ||
-    ((await controlPlane.releaseIntegrationRoute("slack", row.externalId, scope.projectId, path)) &&
-      !(await controlPlane.integrationRouteOf("slack", row.externalId)));
-  if (revokes)
-    await slackAppOf(scope, row.client, connection)
-      .then(({ origin }) => slackApi(scope, origin, "auth.revoke", connection))
-      .then((response) => response.body?.cancel())
-      .catch(() => {});
+    (await controlPlane.releaseIntegrationRoute("slack", row.externalId, scope.projectId, path)) &&
+    !(await controlPlane.integrationRouteOf("slack", row.externalId));
+  // a deployment that dropped its Slack app leaves nothing to revoke with: the disconnect completes
+  const origin = iterateConfigOf(scope.env).integrations.slack?.slackOrigin;
+  if (!revokes || !origin) return;
+  try {
+    const response = await slackApi(scope, origin, "auth.revoke", connection);
+    await response.body?.cancel();
+  } catch {
+    // best effort: a token already dead is the goal
+  }
 }
 
-const SLACK_WEBHOOK_PATH =
-  /^\/api\/integrations\/slack\/(webhook|interactivity-webhook)(?:\/([^/]+)\/([^/]+))?$/;
+const SLACK_WEBHOOK_PATH = /^\/api\/integrations\/slack\/(webhook|interactivity-webhook)$/;
 
 /** A Slack request's response (rules.ts), or null when the path is not Slack's. */
 export async function slackWebhookRoute(request: Request, env: Env): Promise<Response | null> {
   const match = SLACK_WEBHOOK_PATH.exec(new URL(request.url).pathname);
   if (!match) return null;
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
-  const [, endpoint, ownProjectId, ownConnection] = match;
-  let hmacHexMatches: HmacHexMatches;
-  let own: { projectId: string; path: string; externalId: string } | null = null;
-  if (ownProjectId && ownConnection) {
-    // A PROJECT'S OWN APP: the URL names the connection, which must be recorded as the project's
-    // own before any secret is touched (a context is created on first touch).
-    const project = await new ControlPlane(env).getProject(ownProjectId);
-    const path = connectionPathOf("slack", ownConnection);
-    const row = project && (await connectionRowOf(env, project.id, path));
-    if (!project || row?.client !== "project") return ignoredWebhook("unknown-connection");
-    own = { projectId: project.id, path, externalId: row.externalId };
-    hmacHexMatches = async (payload, signature) =>
-      (await env.ITERATE_CONTEXT.getByName(
-        DurableObjectNameCodec.stringify({ projectId: project.id, path: "/" }),
-      ).invoke(
-        [
-          "itx",
-          "builtins",
-          "secrets",
-          [
-            "verifyHmac",
-            tokenSecretPathOf("slack", ownConnection),
-            { payload, signature, field: "signingSecret" },
-          ],
-        ],
-        [],
-        { principal: null },
-      )) === true;
-  } else {
-    const slack = iterateConfigOf(env).integrations.slack;
-    if (!slack)
-      return Response.json({ error: "Slack integration is not configured." }, { status: 503 });
-    hmacHexMatches = (payload, signature) =>
-      verifySecretHmac(slack.webhookSigningSecret.exposeSecret(), { payload, signature });
-  }
+  const [, endpoint] = match;
+  const slack = iterateConfigOf(env).integrations.slack;
+  if (!slack)
+    return Response.json({ error: "Slack integration is not configured." }, { status: 503 });
   const rawBody = await request.text();
   const timestamp = request.headers.get("x-slack-request-timestamp");
   const signed = await slackSignatureValid({
@@ -394,7 +334,8 @@ export async function slackWebhookRoute(request: Request, env: Env): Promise<Res
     timestamp,
     signature: request.headers.get("x-slack-signature"),
     nowSeconds: Math.floor(Date.now() / 1000),
-    hmacHexMatches,
+    hmacHexMatches: (payload, signature) =>
+      verifySecretHmac(slack.webhookSigningSecret.exposeSecret(), { payload, signature }),
   });
   if (!signed) return Response.json({ error: "Invalid Slack signature." }, { status: 401 });
   const body = slackPayloadOf(rawBody, endpoint === "interactivity-webhook");
@@ -402,12 +343,8 @@ export async function slackWebhookRoute(request: Request, env: Env): Promise<Res
   if (!body) return ignoredWebhook("unparseable-payload");
   const teamId = slackTeamIdOf(body);
   if (!teamId) return ignoredWebhook("no-team-id");
-  const route = own
-    ? own.externalId === teamId
-      ? own
-      : null
-    : await new ControlPlane(env).integrationRouteOf("slack", teamId);
-  if (!route) return ignoredWebhook(own ? "other-team" : "unrouted-team");
+  const route = await new ControlPlane(env).integrationRouteOf("slack", teamId);
+  if (!route) return ignoredWebhook("unrouted-team");
   const eventId = typeof body.event_id === "string" ? body.event_id : null;
   const triggerId = typeof body.trigger_id === "string" ? body.trigger_id : null;
   try {

@@ -99,8 +99,9 @@ where, and why the operator bearer is `/api`'s alone.
 
 ## Integrations
 
-How a project connects Slack, Google, Cloudflare and GitHub (iterate's apps or its own), uses a
-member's own accounts, borrows the deployment's keys, holds a WebSocket through a secret, and logs
-in to vendors without OAuth: [integrations](docs/integrations.md).
+How a project hosts integration packages (a Telegram bot, its own GitHub App) and what they
+register for the Dash, connects Slack, Google, Cloudflare, GitHub and X through the deployment's
+own apps, uses a member's own accounts, borrows the deployment's keys, holds a WebSocket through a
+secret, and logs in to vendors without OAuth: [integrations](docs/integrations.md).
 
 For a deployment in another Cloudflare account, follow [self-hosting](SELF-HOSTING.md).

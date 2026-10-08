@@ -1,7 +1,17 @@
 import { installAgents } from "iterate/agents/install";
 import { EmailContract, type EmailState } from "iterate/email";
 import { errorCode } from "iterate/lib";
-import { IterateConfigEntrypoint, type IterateConfigProcessEventArgs } from "iterate/sdk";
+import {
+  IterateConfigEntrypoint,
+  type Integration,
+  type IterateConfigProcessEventArgs,
+} from "iterate/sdk";
+
+// The integration packages this project hosts (a Telegram bot, your own GitHub App, …): one
+// element each, from its package. Every request on a package's routing slug and every event of
+// the project reaches it below: AGENTS.md, and the recipes at
+// https://github.com/jonastemplestein/iterategrations.
+const integrations: Integration[] = [];
 
 export default class extends IterateConfigEntrypoint {
   // How events arrive and what each case does: AGENTS.md.
@@ -21,18 +31,18 @@ export default class extends IterateConfigEntrypoint {
         //   when: { everyMs: 5 * 60_000 },
         //   events: [{ type: "heartbeat" }],
         // });
-        return;
+        break;
       }
       case "events.iterate.com/itx/woken":
         // a context woke: its alarm fired or a caller reached it (event.payload.cause)
-        return;
+        break;
       case "events.iterate.com/email/received": {
         // The platform's record of mail, on `/integrations/email`: only a member's own domain's
         // reaches an agent (AGENTS.md says why).
         const email = EmailContract.events["events.iterate.com/email/received"].payloadSchema.parse(
           event.payload,
         );
-        if (!email.sender.member || !email.sender.direct || email.automated) return;
+        if (!email.sender.member || !email.sender.direct || email.automated) break;
         // The thread the `email` facet folded this message into, once it has.
         const threads = itx.cd("/integrations/email").facets.get<{
           waitUntilProcessed(input: { offset: number }): Promise<void>;
@@ -66,14 +76,24 @@ export default class extends IterateConfigEntrypoint {
           .catch((error: unknown) => {
             if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
           });
-        return;
+        break;
       }
     }
+    // Every package, after the project's own cases; the hook contract is iterate/sdk `Integration`.
+    // The map is async, so a hook that throws before its first await fails like one that rejects.
+    const hooks = await Promise.allSettled(
+      integrations.map(async (integration) => integration.processEvent?.({ event, itx })),
+    );
+    const failed = hooks.find((hook) => hook.status === "rejected");
+    if (failed) throw failed.reason;
   }
 
-  // Every host of the project, routed on `x-iterate-routing-slug`: AGENTS.md.
+  // Every host of the project, routed on `x-iterate-routing-slug`: AGENTS.md. A package answers
+  // the requests on its own routing slug.
   async fetch(request: Request) {
     const routingSlug = request.headers.get("x-iterate-routing-slug");
+    const integration = integrations.find((candidate) => candidate.routingSlug === routingSlug);
+    if (integration?.fetch) return integration.fetch(request, this);
     if (!routingSlug) {
       using itx = this.getItx();
       const { projectSlug } = await itx.whoami();
