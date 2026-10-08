@@ -184,6 +184,38 @@ export function normalizeSecretRecord(
   return { material, urls, refresh };
 }
 
+/** How many fields a set may call public, and how long each may be: a public field is a short
+ *  identifier (an OAuth client's ID, a GitHub App's slug), and its value rides the `secret/set`
+ *  fact into the owner root's catalog. */
+const PUBLIC_FIELDS_MAX = 10;
+const PUBLIC_FIELD_MAX_CHARS = 1024;
+
+/** The values of the material's fields `names` call public (`itx.secrets.set`'s `public`, a
+ *  collection form's public parts): top-level string fields of an object material, by name — what
+ *  the `secret/set` fact carries and the catalog answers. */
+export function publicFieldsOf(material: unknown, names: unknown): Record<string, string> {
+  if (!Array.isArray(names) || !names.every((name) => typeof name === "string"))
+    throw new Error("secrets: public is a list of the material's field names");
+  if (names.length > PUBLIC_FIELDS_MAX)
+    throw new Error(`secrets: public names at most ${PUBLIC_FIELDS_MAX} fields`);
+  if (!isRecord(material))
+    throw new Error("secrets: public names fields of an object material — a string has none");
+  return Object.fromEntries(
+    names.map((name) => {
+      const value = material[name];
+      if (typeof value !== "string")
+        throw new Error(
+          `secrets: public field ${JSON.stringify(name)} is not a string field of the material`,
+        );
+      if (value.length > PUBLIC_FIELD_MAX_CHARS)
+        throw new Error(
+          `secrets: public field ${JSON.stringify(name)} is ${value.length} chars, over the ${PUBLIC_FIELD_MAX_CHARS}-char ceiling`,
+        );
+      return [name, value];
+    }),
+  );
+}
+
 // ── the placeholder grammar ── for a URL or a header:
 // `getSecret("/secrets/NAME")` is the whole stored value; `getSecret("/secrets/NAME", { field: "a.b" })`
 // is one dotted field of a JSON-valued secret. Double quotes, whitespace free inside the

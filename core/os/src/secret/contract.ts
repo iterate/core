@@ -70,8 +70,9 @@ const BorrowedFrom = z.object({
 
 /** The catalog an owner root keeps — every secret set under it, by its path (`/secrets/<name>`,
  *  what the placeholder spells; the context lives under that root): the pin, the refresh strategy's
- *  kind, and when it was first set — never a value. What `itx.secrets.list()` reads; the `project`,
- *  `account`, `organization` and `instance` states each carry one. */
+ *  kind, when it was first set and its public fields — never a secret value. What
+ *  `itx.secrets.list()` reads; the `project`, `account`, `organization` and `instance` states each
+ *  carry one. */
 export const SecretCatalog = z.record(
   z.string(),
   z.object({
@@ -80,6 +81,8 @@ export const SecretCatalog = z.record(
     /** Exchange code's (`refresh` "worker") source, as its SHA-256 hex: which code refreshes it. */
     refreshSourceSha256: z.string().optional(),
     createdAt: z.string(),
+    /** The material's public fields (`secret/set` `public`), by name: values that are no secret. */
+    public: z.record(z.string(), z.string()).optional(),
     /** A borrowed secret (`secret/borrowed`): no material here, every use forwarded to the lender. */
     borrowed: BorrowedFrom.optional(),
     /** The live lends of this secret, by lend id: the project it is lent to (or `every-project`),
@@ -132,7 +135,7 @@ export const SecretContract = defineProcessorContract({
   events: {
     "events.iterate.com/secret/set": {
       description:
-        "Material was written — by `itx.secrets.set`, or by the OAuth exchange a `beginOAuth` began — and this is it, sealed: the record with its material encrypted under the deployment's key, beside the pin (origins), the strategy kind and, for exchange code, its source's hash. On the secret's path, and cross-posted to the owner's root for the catalog — hence it names the path (the one the placeholder spells).",
+        "Material was written — by `itx.secrets.set`, or by the OAuth exchange a `beginOAuth` began — and this is it, sealed: the record with its material encrypted under the deployment's key, beside the pin (origins), the strategy kind, for exchange code its source's hash, and the values of the fields the set called public (an OAuth client's ID), which are no secret and in the clear. On the secret's path, and cross-posted to the owner's root for the catalog — hence it names the path (the one the placeholder spells).",
       payloadSchema: z.object({
         path: z.string().min(1),
         urls: z.array(z.string()).min(1),
@@ -141,6 +144,8 @@ export const SecretContract = defineProcessorContract({
         refreshSourceSha256: z.string().optional(),
         /** The material, sealed. Absent on a fact from before the facts carried it. */
         sealed: SealedCell.optional(),
+        /** The public fields' values, by name (`set`'s `public`): the catalog row's. Absent, none. */
+        public: z.record(z.string(), z.string()).optional(),
       }),
     },
     "events.iterate.com/secret/resealed": {
@@ -236,14 +241,15 @@ export function reduceSecretCatalog(
 ): SecretCatalog | undefined {
   switch (event.type) {
     case "events.iterate.com/secret/set": {
-      const { path, urls, refresh, refreshSourceSha256 } = event.payload;
+      const { path, urls, refresh, refreshSourceSha256, public: publicFields } = event.payload;
       const known = secrets[path];
       if (
         known &&
         !known.borrowed &&
         known.refresh === refresh &&
         known.refreshSourceSha256 === refreshSourceSha256 &&
-        jsonEqual(known.urls, urls)
+        jsonEqual(known.urls, urls) &&
+        jsonEqual(known.public || null, publicFields || null)
       )
         return undefined;
       return {
@@ -254,6 +260,7 @@ export function reduceSecretCatalog(
           refreshSourceSha256,
           createdAt: known?.createdAt || event.createdAt,
           ...(known?.lends && { lends: known.lends }),
+          public: publicFields,
         },
       };
     }

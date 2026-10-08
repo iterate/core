@@ -32,6 +32,7 @@ import {
   verifyLendUse,
   verifySecretEquals,
   verifySecretHmac,
+  publicFieldsOf,
 } from "./secrets.ts";
 
 // ── substitution ── `substituteProjectSecrets`, as a table: `{ url?, headers?, resolve?, becomes }`
@@ -594,6 +595,27 @@ test("normalizeSecretRecord: the pin is required and stored as origins (deduped)
 // ── the strategies ── `refreshSecretMaterial(strategy, material, fetch)`: a scripted fetch records
 // the exchange and answers; the NEXT material is what the Durable Object would store.
 type Exchange = { url: string; headers: Record<string, string>; body: string };
+
+test("publicFieldsOf: the named top-level string fields of an object material, by name; a string material, an absent or non-string field, too many names or an overlong value are refused", () => {
+  expect(publicFieldsOf({ clientId: "id-1", clientSecret: "s", n: 1 }, ["clientId"])).toEqual({
+    clientId: "id-1",
+  });
+  expect(() => publicFieldsOf("value", ["clientId"])).toThrow(/object material/);
+  expect(() => publicFieldsOf({ clientId: "id-1" }, ["nope"])).toThrow(
+    /"nope" is not a string field/,
+  );
+  expect(() => publicFieldsOf({ n: 1 }, ["n"])).toThrow(/"n" is not a string field/);
+  expect(() => publicFieldsOf({ a: "x" }, "a")).toThrow(/list of the material's field names/);
+  expect(() =>
+    publicFieldsOf(
+      { a: "x" },
+      Array.from({ length: 11 }, () => "a"),
+    ),
+  ).toThrow(/at most 10/);
+  expect(() => publicFieldsOf({ a: "x".repeat(1025) }, ["a"])).toThrow(
+    /over the 1024-char ceiling/,
+  );
+});
 
 test("oauth-refresh-token: a confidential client refreshes with HTTP Basic and keeps the rotated refresh token", async () => {
   const { exchanges, fetchFn } = scripted(() =>

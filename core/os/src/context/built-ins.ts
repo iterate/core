@@ -66,7 +66,13 @@ import {
 } from "../stream/scheduled-appends.ts";
 import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
-import { assertSecretPath, hmacSha256Hex, normalizeSecretRecord, originsOf } from "../secrets.ts";
+import {
+  assertSecretPath,
+  hmacSha256Hex,
+  normalizeSecretRecord,
+  originsOf,
+  publicFieldsOf,
+} from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
 import { IntegrationConnectionRow, IntegrationProvider } from "../integrations/contract.ts";
@@ -1248,6 +1254,19 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       set: (secretPath, material, options) =>
         onSecretContext(secretPath, ["set", secretPath, material, options], async (secret) => {
           const record = normalizeSecretRecord(material, options);
+          const named = options?.public ? publicFieldsOf(material, options.public) : undefined;
+          // a merge keeps the public fields the catalog's row has, under the ones named now
+          const kept =
+            options?.merge === true
+              ? (
+                  await facetStateOf<{ secrets: SecretCatalog }>(
+                    deps.context(owner.rootPath),
+                    ownerRootFacet(),
+                    hopCaller(),
+                  )
+                ).secrets[secretPath]?.public
+              : undefined;
+          const publicFields = named || kept ? { ...kept, ...named } : undefined;
           await enableSecretRow(secret);
           // Material of its own over a borrowed path ends the borrow at the lender first, as a
           // delete does: the lend would otherwise stay live there with no borrower.
@@ -1274,6 +1293,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
                 refreshSourceSha256: await sha256Hex(record.refresh.source),
               }),
               sealed,
+              public: publicFields,
             },
           });
           await secretFacet(["waitUntilProcessed", { offset }]);
@@ -1516,6 +1536,22 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
                   name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
                   label: z.string().trim().min(1).max(80),
                   multiline: z.boolean().optional(),
+                  public: z.boolean().optional(),
+                  placeholder: z.string().trim().min(1).max(120).optional(),
+                  // HTML's pattern attribute, which the browser compiles with the `v` flag
+                  pattern: z
+                    .string()
+                    .min(1)
+                    .max(500)
+                    .refine((pattern) => {
+                      try {
+                        new RegExp(pattern, "v");
+                        return true;
+                      } catch {
+                        return false;
+                      }
+                    }, "pattern is a regular expression, as HTML's pattern attribute takes it")
+                    .optional(),
                 }),
               )
               .min(1)

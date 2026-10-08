@@ -11,7 +11,10 @@ setup page and webhook on the project's host, keeps its credentials through `itx
 (`collectFromUser`, `beginOAuth` with its own `redirect` page, `verifyHmac`), and the platform knows
 nothing of the provider: github.com/jonastemplestein/iterategrations holds Telegram, a project's
 own GitHub App, Monzo, Pebble and more, one folder each, and the guide to writing and publishing
-one (`adding-an-integration.md`).
+one (`adding-an-integration.md`). A part of a credential that is no secret — an OAuth client's ID, a
+GitHub App's ID and slug — is a public field of the same secret (`collectFromUser` `fields[].public`,
+`set`'s `public`): one form takes the whole client, the catalog (`secrets.list()`) answers the public
+parts, and the package keeps no copy of them in its kv.
 
 What a package tells the Dash is the two facts of `iterate/integrations`, appended on the project's
 `/integrations` context from its install hook (keyed by that event's path and offset): its card, and a

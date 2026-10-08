@@ -242,8 +242,9 @@ export type SealedSecretCell = {
   material: { algorithm: "AES-256-GCM+SECRET-V1"; iv: string; ciphertext: string };
 };
 
-/** A secret's catalog entry — `secrets.list()` — its path, the pin, the strategy's KIND and when
- *  it was first set; never a value (the owner root's fold of the `secret/set` certificates). */
+/** A secret's catalog entry — `secrets.list()` — its path, the pin, the strategy's KIND, when it
+ *  was first set and its public fields; never a secret value (the owner root's fold of the
+ *  `secret/set` certificates). */
 export type SecretCatalogEntry = {
   path: string;
   urls: string[];
@@ -251,6 +252,9 @@ export type SecretCatalogEntry = {
   /** For exchange code (`refresh.kind` "worker"): the SHA-256 of its source, hex — which code it is. */
   refreshSourceSha256?: string;
   createdAt: string;
+  /** The material's public fields (`set`'s `public`, a collection form's public parts), by name:
+   *  an OAuth client's `clientId` beside the secret that holds its `clientSecret`. */
+  public?: Record<string, string>;
   /** A path that forwards every use to a secret elsewhere: a person's account connected to this
    *  project (`integrations.connect(provider, { account })`), or the deployment's own secret its
    *  operator lent (`itx.secrets.lend`) — whose, under which lend, and the connection it is. */
@@ -279,9 +283,20 @@ export type CollectSecretInput = {
 };
 
 /** One part of a secret a collection page asks for: its name in the JSON secret
- *  (`[A-Za-z_][A-Za-z0-9_]*`), the label the person reads, and whether its value is several lines
- *  (a PEM private key). */
-export type CollectSecretField = { name: string; label: string; multiline?: boolean };
+ *  (`[A-Za-z_][A-Za-z0-9_]*`), the label the person reads, whether its value is several lines
+ *  (a PEM private key), and whether it is PUBLIC. A public part is no secret (an OAuth client's
+ *  ID, a GitHub App's ID and slug): it is entered on the same form as the parts that are, and the
+ *  catalog answers its value (`SecretCatalogEntry.public`), so the code that needs it reads it
+ *  there and keeps no copy. `placeholder` and `pattern` are the input's (HTML's `pattern`
+ *  attribute: the whole value must match; it is compiled with the `v` flag). */
+export type CollectSecretField = {
+  name: string;
+  label: string;
+  multiline?: boolean;
+  public?: boolean;
+  placeholder?: string;
+  pattern?: string;
+};
 
 /** A secret collection link. Sending this asks the person to authenticate to the intended
  * Iterate instance; it is not itself permission to write a secret. */
@@ -1194,18 +1209,21 @@ export interface IterateContextApi {
    *  `getSecret("/secrets/<name>")` in a URL or a header substitutes to the value at egress, and only
    *  towards the ORIGINS in `urls` (required: a secret is always pinned). `set` stores a string or a
    *  JSON object (`refresh` names the strategy that re-mints an expiring credential); `delete`
-   *  forgets it (re-settable); `list` is the catalog — paths, pins, strategy kinds, when first set —
-   *  never a value. Every change is one fact on the secret's path (`secret/set`, `secret/deleted`),
-   *  attributed to the caller and cross-posted to the root, so the log says who set what and when;
-   *  a fact that writes material carries it sealed (`SealedSecretCell`), so the log is the secret
-   *  and the deployment's key reads it. */
+   *  forgets it (re-settable); `list` is the catalog — paths, pins, strategy kinds, when first set,
+   *  public fields — never a secret value. Every change is one fact on the secret's path
+   *  (`secret/set`, `secret/deleted`), attributed to the caller and cross-posted to the root, so the
+   *  log says who set what and when; a fact that writes material carries it sealed
+   *  (`SealedSecretCell`), so the log is the secret and the deployment's key reads it. */
   secrets: {
     set(
       path: string,
       material: SecretMaterial,
       /** `merge`: the material's fields go over the ones already stored, whose pin must be `urls`
-       *  (a strategy added to a secret a person filled through `collectFromUser`). */
-      options: { urls: string[]; refresh?: SecretRefresh; merge?: boolean },
+       *  (a strategy added to a secret a person filled through `collectFromUser`). `public`: the
+       *  names of the material's top-level string fields that are no secret (an OAuth client's
+       *  `clientId`): the `secret/set` fact carries their values and the catalog answers them
+       *  (`SecretCatalogEntry.public`). A merge keeps the ones the catalog has, under the new. */
+      options: { urls: string[]; refresh?: SecretRefresh; merge?: boolean; public?: string[] },
     ): Promise<{ path: string }>;
     /** OAuth's first tokens: the provider's authorize URL to send a human to. The provider
      *  redirects them to the platform's callback (they must be signed in as someone who reaches the
