@@ -65,6 +65,11 @@ const IntegrationAction = z.union([
 export const IntegrationCard = z.strictObject({
   title: z.string().min(1).max(80),
   description: z.string().max(400).optional(),
+  /** A square image the Dash shows beside the title: an https URL (the service's own mark). */
+  icon: z
+    .url({ protocol: /^https$/ })
+    .max(2048)
+    .optional(),
   status: IntegrationStatus.optional(),
   /** The card's buttons (Connect, Set up, …), at most four. */
   actions: z.array(IntegrationAction).max(4).default([]),
