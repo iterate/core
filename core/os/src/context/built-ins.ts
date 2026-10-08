@@ -30,6 +30,7 @@ import type {
   FacetSpec,
   IterateContextApi,
   R2ObjectRecord,
+  SealedSecretCell,
   SecretRefresh,
   TelemetryRows,
 } from "iterate/api";
@@ -274,10 +275,9 @@ export interface BuiltInScope extends LibraryRoots {
    *  `beginOAuth`, `delete`, and a `list` of paths, pins and strategy kinds, never a value. Every
    *  verb runs ON THE SECRET'S PATH (so the log's order is the value's) and lands its fact there —
    *  `secret/set { path, urls, refresh? }`, `secret/deleted { path }` — attributed like any append
-   *  (`source.principal`), and cross-posts it to the owner's root, whose catalog `list()` reads; the
-   *  value never enters a log. The facet's own facts: `secret/used` per dispatch, `secret/refreshed`
-   *  per refresh outcome. The secret's state (whether material is stored, by the offset of the fact
-   *  that says so) is `itx.cd(path).facets.get("secret").snapshot()`. `set`'s `merge` lays the
+   *  (`source.principal`), and cross-posts it to the owner's root, whose catalog `list()` reads. A
+   *  fact that writes material carries it sealed (iterate/api `SealedSecretCell`); the facet's own
+   *  facts and its state are secret/contract.ts. `set`'s `merge` lays the
    *  material's fields over the stored ones; `beginOAuth` hands back the provider's authorize URL
    *  (secret-oauth.ts); `verifyHmac` checks a webhook's signature in the secret's facet, one bit
    *  back; `lend` / `revokeLend` lend the deployment's own secret (the operator's) to projects. */
@@ -974,9 +974,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       platform: true,
     });
   };
-  const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
-    await secret.append(stampCaller(event, deps.caller(), path));
+  const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<number> => {
+    const [landed] = await secret.append(stampCaller(event, deps.caller(), path));
     await crossPostSecretFact(event);
+    return landed!.offset;
   };
   /** A person's account the project stops using — its path's lend ended: the project deleted the
    *  path (a disconnect), or the person disconnected their account or left — is
@@ -1241,9 +1242,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     ...buildPortableBuiltIns(deps),
     ...buildIdentityRoots(deps),
     secrets: {
-      // The fact is appended FIRST: a refused append (a paused stream) leaves no value behind; a
-      // facet failure after it leaves a fact whose value egress cannot find — loud ("no stored
-      // project secret"), not silent. The facts carry the pin and the strategy KIND, never the material.
+      // THE FACT IS THE WRITE (secret/durable-object.ts `seal` says why a refused append leaves the
+      // material as it was): `set` answers once the facet has folded its own fact, so the next use
+      // finds the material, and then has the facet drop what the write superseded (`written`).
       set: (secretPath, material, options) =>
         onSecretContext(secretPath, ["set", secretPath, material, options], async (secret) => {
           const record = normalizeSecretRecord(material, options);
@@ -1257,7 +1258,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               secretPath,
               (await secretFacet(["clear"])) as Parameters<typeof endLendsOf>[2],
             );
-          await secretFact(secret, {
+          // the facet call is untyped; SecretFacet.seal answers the cell
+          const sealed = (await secretFacet([
+            "seal",
+            record,
+            options?.merge === true,
+          ])) as SealedSecretCell;
+          const offset = await secretFact(secret, {
             type: "events.iterate.com/secret/set",
             payload: {
               path: secretPath,
@@ -1266,9 +1273,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               ...(record.refresh?.kind === "worker" && {
                 refreshSourceSha256: await sha256Hex(record.refresh.source),
               }),
+              sealed,
             },
           });
-          await secretFacet(["write", record, options?.merge === true]);
+          await secretFacet(["waitUntilProcessed", { offset }]);
+          await secretFacet(["written", { offset }]);
           return { path: secretPath };
         }),
       // No fact here: the log learns of the secret when the exchange succeeds, so an abandoned
@@ -1347,7 +1356,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           };
           // A facet call answers `unknown` over the hop; this is the platform's own
           // SecretFacet.completeOAuth's declared answer.
-          const { urls, refresh, scopes, account, held } = (await secretFacet([
+          const { urls, refresh, scopes, account, held, sealed } = (await secretFacet([
             "completeOAuth",
             attempt,
           ])) as {
@@ -1356,13 +1365,20 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             scopes: string[];
             account?: { id: string; name: string | null };
             held?: HeldToken;
+            sealed?: SealedSecretCell;
           };
-          // held aside, not stored: nothing on the log until a move admits it (`admitHeldToken`)
+          // held aside, not on the log: nothing lands until a move admits it (`admitHeldToken`)
           if (held) return { path: secretPath, scopes, held };
-          await secretFact(secret, {
-            type: "events.iterate.com/secret/set",
-            payload: { path: secretPath, urls, refresh },
-          });
+          // no cell: a replay of an attempt whose fact landed, which lands nothing again (a second
+          // set of that cell would roll back a mint since)
+          if (sealed) {
+            const offset = await secretFact(secret, {
+              type: "events.iterate.com/secret/set",
+              payload: { path: secretPath, urls, refresh, sealed },
+            });
+            await secretFacet(["waitUntilProcessed", { offset }]);
+            await secretFacet(["written", { offset }]);
+          }
           // what the provider granted, for the connection the callback finishes (integrations/verbs.ts),
           // and the account an `account` endpoint named
           return { path: secretPath, scopes, account };
@@ -1375,14 +1391,20 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           async (secret) => {
             // A facet call answers `unknown` over the hop; this is the platform's own
             // SecretFacet.admitHeldToken's declared answer.
-            const { urls, refresh } = (await secretFacet(["admitHeldToken", input])) as {
+            const { urls, refresh, sealed } = (await secretFacet(["admitHeldToken", input])) as {
               urls: string[];
               refresh?: SecretRefresh["kind"];
+              sealed?: SealedSecretCell;
             };
-            await secretFact(secret, {
-              type: "events.iterate.com/secret/set",
-              payload: { path: secretPath, urls, refresh },
-            });
+            // no cell: the admit's fact landed already (a retry), so nothing lands again
+            if (sealed) {
+              const offset = await secretFact(secret, {
+                type: "events.iterate.com/secret/set",
+                payload: { path: secretPath, urls, refresh, sealed },
+              });
+              await secretFacet(["waitUntilProcessed", { offset }]);
+              await secretFacet(["written", { offset }]);
+            }
             return { path: secretPath };
           },
         );

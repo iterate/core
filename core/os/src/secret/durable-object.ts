@@ -1,7 +1,7 @@
 // src/secret/durable-object.ts — THE SECRET: the `secret` facet on the context at `/secrets/<name>`
-// (contract.ts) — the material's ONE keeper (this facet's own storage: the record with its material
-// ENCRYPTED, a write counter, the pending OAuth attempt) and the one code that ever sees it in the
-// clear: `fetch(request)`. A request naming this secret arrives from a context's egress
+// (contract.ts says whose the material is: the log's, sealed in its facts). This facet is the one
+// code that opens the current cell and sees the material in the clear: `fetch(request)`. Its own
+// storage holds only the in-flight bookkeeping: the pending OAuth attempt, a held exchange, lends. A request naming this secret arrives from a context's egress
 // (iterate-context-durable-object.ts `#egress`: forwarded to this path, and there to this facet), the
 // placeholder is substituted HERE, the pin checked, the request dispatched — and when the pinned host
 // answers 401, or the material has no `accessToken` yet, the refresh strategy re-mints in this same
@@ -16,10 +16,11 @@
 // test/vitest/os-workers/secret-sockets-over-lends.test.ts).
 //
 // The verbs `itx.secrets` runs (context/built-ins.ts — ON THIS PATH, so the log's order is the
-// storage's, and through the facet host's platform entry: a caller's itx expression reaches the reads
-// alone, `publicMethods`): `write(record)` and `clear()` store and forget the value; the FACTS (`secret/set`,
-// `secret/deleted`, on this path and cross-posted to the owner's root) are the built-in's, attributed
-// to the caller — a facet's own appends speak for the project, so they are not made here.
+// value's, and through the facet host's platform entry: a caller's itx expression reaches the reads
+// alone, `publicMethods`): `seal(record)` answers the cell the built-in's `secret/set` carries, and
+// `clear()` forgets the bookkeeping; the FACTS (`secret/set`, `secret/deleted`, on this path and
+// cross-posted to the owner's root) are the built-in's, attributed to the caller — a facet's own
+// appends speak for the project, so only its own outcomes are made here.
 // `beginOAuth` keeps the pending attempt and hands back the authorize URL; `completeOAuth` exchanges
 // the code into the record (secret-oauth.ts). A client secret another of the owner's secrets holds is
 // read from that secret's facet at the exchange and at every refresh (`clientSecretFor`), never
@@ -43,6 +44,7 @@ import type {
   SecretHmacVerification,
   SecretMaterial,
   SecretRefresh,
+  SealedSecretCell,
 } from "iterate/api";
 import { codedError, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { signClaims, verifyAdminSecret } from "../caller.ts";
@@ -101,7 +103,12 @@ import {
   verifySecretHmac,
   type SecretRecord,
 } from "../secrets.ts";
-import { SecretContract, type LendRevokedReason, type SecretState } from "./contract.ts";
+import {
+  SecretContract,
+  type LendRevokedReason,
+  type SecretRefreshKind,
+  type SecretState,
+} from "./contract.ts";
 import { runExchangeCode } from "./exchange-jail.ts";
 import {
   SecretKeyAgreement,
@@ -118,31 +125,67 @@ type OAuthPlatform = NonNullable<
   Extract<SecretRefresh, { kind: "oauth-refresh-token" }>["client"]
 >["platform"];
 
-/** What sits in storage. `stored` is the record with the revision it was written at — its material
- *  ENCRYPTED (secret-at-rest.ts), bound to this context, the pin and that revision; `revision` is
- *  THE WRITE COUNTER every change bumps (`write`, `clear`, `beginOAuth`) — a refresh commits only
- *  against the revision it read, and a code exchange only against the counter it started at, so a
- *  write or a clear racing either never has its outcome overwritten by a mint or an exchange from
- *  before it. The counter is never reset: a `clear` bumps it too, so a delete followed by a new
- *  write can never present the number a stale mint is waiting for. `pending` is the OAuth attempt in
- *  flight; `completed` the last one finished (its nonce and the revision it wrote), so its callback
- *  completes idempotently instead of exchanging twice. */
-type Stored = {
+/** THE CURRENT MATERIAL, as the reduce keeps it: the offset of the write that put it there and the
+ *  sealed cell that fact carried. The offset is what a refresh and a code exchange are fenced on
+ *  (processor.ts says how a write that landed meanwhile wins). `pending` is the OAuth attempt in
+ *  flight; `completed` the last one finished (its nonce and the nonce of the cell it wrote), so its
+ *  callback completes idempotently instead of exchanging twice. */
+type Material = {
+  /** The fact the current cell came in on: a set, or the mint or reseal that followed it. */
+  offset: number;
+  /** The write that began it (`setAt`, contract.ts): what an attempt is fenced on. */
+  setAt: number;
+  /** The nonce of the cell that write carried: whether a write this facet sealed is the one. */
+  setNonce?: string;
+  cell: SealedSecretCell;
+};
+
+/** THE OAUTH ATTEMPT IN FLIGHT (storage `pending`): what `beginOAuth` began, and the write
+ *  lineage it began on (`setAt`). A write since ends it: `written` drops it, and its exchange
+ *  refuses to land over the write; a mint or a reseal meanwhile is no write. */
+type PendingAttempt = PendingSecretOAuth & { basedOn: number | null };
+
+/** A MINT WHOSE FACT HAS YET TO LAND (storage `minted`): the cell `#doRefresh` sealed, and the
+ *  write it refreshed. A provider may have rotated the refresh token on that mint, so the cell is
+ *  kept until its `secret/refreshed` lands (`#material` lands it on the next read) or a write
+ *  supersedes it (`written`, or a newer offset). */
+type Minted = { cell: SealedSecretCell; basedOn: number; kind: SecretRefreshKind };
+
+/** A cell from before the facts carried them (storage `stored`): the record sealed and bound to a
+ *  write counter. Opened once and sealed again with a nonce on its first read (`#material`), then
+ *  forgotten. */
+type LegacyStored = {
   record: Omit<SecretRecord, "material"> & { material: EncryptedMaterial };
   revision: number;
 };
 
 /** A CONSENT'S EXCHANGE HELD ASIDE (storage `held`): iterate's Slack app's token for a workspace
- *  another project's connection holds, never stored here (`completeOAuth`'s gate) — it waits,
+ *  another project's connection holds, never on the log (`completeOAuth`'s gate) — it waits,
  *  unused, until that workspace's move here admits it (`admitHeldToken`), before `until`. Its
- *  material encrypted like `stored`'s, at the revision it was held at: any write since (`write`,
- *  `clear`, a new `beginOAuth`) drops it, and so do the move's failure (`dropHeldToken`) and its
- *  expiry (`revive`, on the context's alarm). */
-type HeldExchange = Stored & {
+ *  material sealed like a fact's, with the material's offset as it stood (`basedOn`): any write
+ *  since (`seal`, `clear`, a new `beginOAuth`) drops it, and so do the move's failure
+ *  (`dropHeldToken`) and its expiry (`revive`, on the context's alarm). */
+type HeldExchange = {
+  cell: SealedSecretCell;
+  basedOn: number | null;
   nonce: string;
   scopes: string[];
   until: number;
   team: { id: string; name: string };
+};
+
+/** THE LAST OAUTH ATTEMPT FINISHED (storage `completed`): its nonce, the cell it sealed and the
+ *  material's offset as it stood (`basedOn`), the scopes granted, and whether the attempt was begun
+ *  with the project's own redirect. The cell is kept here until its fact lands: a replay answers
+ *  it again while it is the material, or while nothing landed since the attempt started (its fact
+ *  was refused, and the replay lands it); once a write landed in between, the replay is refused. */
+type Completed = {
+  nonce: string;
+  cell: SealedSecretCell;
+  basedOn: number | null;
+  scopes: string[];
+  account?: { id: string; name: string | null };
+  userspaceRedirect?: boolean;
 };
 
 /** THE LENDS of this secret (storage `lends`), by lend id: the project it is lent to (or
@@ -172,7 +215,7 @@ type Borrowed = { lender: string; lenderPath: string; lendId: string };
 
 /** THE FIELDS A REFRESH STRATEGY MINTS into a secret's material (secrets.ts `refreshSecretMaterial`,
  *  `#githubInstallationToken`, exchange code's `accessToken`): a merge that changes the strategy
- *  drops them (`write`). */
+ *  drops them (`seal`). */
 const MINTED_FIELDS: string[] = ["accessToken", "expiresAt"];
 
 /** How long a use trusts an installation's route read for an earlier use (`#assertInstallationRouted`):
@@ -189,8 +232,8 @@ export class SecretFacet extends StreamProcessorDurableObject<
   } & IterateConfigEnv,
   ItxEntrypointScope
 > {
-  /** The secret's READS alone — whether material was set and whether it was deleted, by the offsets
-   *  of the facts that say so. Everything else here is the platform's: `write`, `clear`,
+  /** The secret's READS alone — the current cell, and whether the secret was deleted, by the facts
+   *  that say so. Everything else here is the platform's: `seal`, `clear`,
    *  `beginOAuth`, `completeOAuth`, `verifyHmac` and `clientSecretFor` are `itx.secrets`'s
    *  (context/built-ins.ts, whose verbs append the attributed facts), `fetch` is egress's and
    *  `exportForProjectSeed` the operator's native RPC — each reaches this facet through the facet
@@ -210,7 +253,10 @@ export class SecretFacet extends StreamProcessorDurableObject<
    *  together on the same material share ONE mint). A caller holding a NEWER revision — a write
    *  landed while a mint for the old material was running, and the fence will drop that mint — is
    *  never coalesced onto it: its own mint queues behind the running one. */
-  #refreshing: { revision: number; promise: Promise<void> } | undefined;
+  #refreshing: { offset: number; promise: Promise<void> } | undefined;
+
+  /** The one reseal in flight (`#reseal`), by the offset of the cell it reseals. */
+  #resealing: { offset: number; promise: Promise<number> } | undefined;
 
   /** When each iterate-App installation's route to this project was last read for a use
    *  (`#assertInstallationRouted`), by installation id. */
@@ -228,20 +274,22 @@ export class SecretFacet extends StreamProcessorDurableObject<
     return { context, path: pathUnderOwner(resourceScope(projectId, path), path) };
   }
 
-  /** Replace the record whole — material always travels with its complete policy, so a value
-   *  never inherits a pin or a strategy it was not set with — or, with `merge`, the record's fields
-   *  over the stored material's, under the same pin. What a strategy MINTED belongs to that
-   *  strategy: a merge that changes or removes `refresh` drops it (`MINTED_FIELDS`), so a token
-   *  minted under one strategy — an installation's, which its route guards — never outlives it
-   *  under another, or under none. The caller (`itx.secrets.set`) has appended the fact already;
-   *  this is the value. */
-  async write(record: SecretRecord, merge = false): Promise<void> {
-    const stored = merge ? await this.ctx.storage.get<Stored>("stored") : undefined;
-    if (stored) {
-      // the pin travels with the material it guards: a merge never moves stored material elsewhere
-      if ([...stored.record.urls].sort().join() !== [...record.urls].sort().join())
-        throw new Error(`secrets: a merge keeps the pin ${stored.record.urls.join(", ")}`);
-      const opened = await this.#opened(stored);
+  /** THE CELL A WRITE CARRIES (`itx.secrets.set` puts it in its `secret/set`): the record whole —
+   *  material always travels with its complete policy, so a value never inherits a pin or a strategy
+   *  it was not set with — or, with `merge`, the record's fields over the current material's, under
+   *  the same pin. What a strategy MINTED belongs to that strategy: a merge that changes or removes
+   *  `refresh` drops it (`MINTED_FIELDS`), so a token minted under one strategy — an installation's,
+   *  which its route guards — never outlives it under another, or under none. Nothing is kept or
+   *  dropped here: the fact is the write, the reduce keeps its cell, and `written` cleans up once
+   *  it landed, so a refused fact leaves everything as it was. */
+  async seal(record: SecretRecord, merge = false): Promise<SealedSecretCell> {
+    const current = merge ? await this.#material() : null;
+    if (current) {
+      const { cell } = current;
+      // the pin travels with the material it guards: a merge never moves material elsewhere
+      if ([...cell.urls].sort().join() !== [...record.urls].sort().join())
+        throw new Error(`secrets: a merge keeps the pin ${cell.urls.join(", ")}`);
+      const { record: opened } = await this.#open(current);
       const kept = isRecord(opened.material) ? { ...opened.material } : {};
       if (!jsonEqual(opened.refresh || null, record.refresh || null))
         for (const field of MINTED_FIELDS) delete kept[field];
@@ -252,82 +300,198 @@ export class SecretFacet extends StreamProcessorDurableObject<
         routedAccount: opened.routedAccount,
       };
     }
-    const revision = await this.#bump();
-    await this.ctx.storage.put<Stored>("stored", await this.#sealed(record, revision));
-    // A write supersedes any OAuth attempt in flight, a held one included: its callback must not
-    // overwrite this material; and material of its own replaces a borrowed record.
-    await this.ctx.storage.delete(["pending", "held", "borrowed"]);
+    return this.#sealCell(record);
   }
 
-  /** The record as storage holds it: the material encrypted under the deployment's key, bound to
-   *  this context, the pin and the revision it is written at. */
-  async #sealed(record: SecretRecord, revision: number): Promise<Stored> {
+  /** A WRITE LANDED at `offset` (the built-in's `secret/set` folded): what it supersedes goes — an
+   *  OAuth attempt begun on older material, a token held on it (its callback must not write over
+   *  this material), a mint of it whose fact had not landed, a cell from before the facts carried
+   *  them, and a borrow (material of its own replaces the lender's, as the reduce says; `fetch`
+   *  forwards on the borrow only while storage holds it). Each attempt, token or mint is fenced on
+   *  the material's offset it began on, so one begun on this very write, in the moment since it
+   *  became visible, stays; and one left behind by a crash in between dies on its own fence. */
+  async written(input: { offset: number }): Promise<void> {
+    const stale = (basedOn: number | null) => basedOn === null || basedOn < input.offset;
+    const gone: string[] = ["stored", "revision", "borrowed"];
+    const pending = await this.ctx.storage.get<PendingAttempt>("pending");
+    if (pending && stale(pending.basedOn)) gone.push("pending");
+    const held = await this.ctx.storage.get<HeldExchange>("held");
+    if (held && stale(held.basedOn)) gone.push("held");
+    const minted = await this.ctx.storage.get<Minted>("minted");
+    if (minted && stale(minted.basedOn)) gone.push("minted");
+    await this.ctx.storage.delete(gone);
+  }
+
+  /** The record as a fact carries it: the material encrypted under the deployment's key, bound to
+   *  this context, the pin and a nonce minted for this one write. */
+  async #sealCell(record: SecretRecord): Promise<SealedSecretCell> {
+    const { context } = this.#address();
+    const nonce = crypto.randomUUID();
     const material = await encryptSecretMaterial(
       record.material,
-      { context: this.#address().context, urls: record.urls, revision },
+      { context, urls: record.urls, nonce },
       this.#keys(),
     );
-    return { record: { ...record, material }, revision };
+    return {
+      context,
+      urls: record.urls,
+      refresh: record.refresh,
+      routedAccount: record.routedAccount,
+      nonce,
+      material,
+    };
   }
 
-  /** The stored record with its material in the clear, for this facet's own use only. A record
-   *  the previous key opened (a rotation in progress) is written back under the current key here,
-   *  so a rotation completes one read at a time. A record neither key opens — one under a key that
-   *  is gone, or bound elsewhere — is a refusal that names the fix. */
-  async #opened(stored: Stored): Promise<SecretRecord> {
+  /** THE CURRENT MATERIAL: the cell the reduce keeps for the latest write, or null while none is
+   *  stored (never set, deleted, or borrowed). A write from before the facts carried cells left its
+   *  cell in storage, bound to a write counter: it is opened once, sealed again with a nonce, and
+   *  put on the log as a `secret/resealed` of that write, so the log holds it from then on. */
+  async #material(): Promise<Material | null> {
+    const { state } = await super.snapshot();
+    if (!state.material || state.borrowed) return null;
+    const { setAt, setNonce } = state.material;
+    // a mint whose fact did not land (`#doRefresh`): landed now, while the write it refreshed is
+    // still the material, and the log read again for where it sits; stale once a write landed
+    // since. A refused append (a paused stream) keeps the mint, and the material is the minted
+    // cell on the write it refreshed — the tokens a provider rotated to, never the ones it
+    // retired — until a read lands it.
+    const minted = await this.ctx.storage.get<Minted>("minted");
+    if (minted) {
+      if (minted.basedOn !== state.material.offset) await this.ctx.storage.delete("minted");
+      else {
+        const landed = await this.#fact({
+          type: "events.iterate.com/secret/refreshed",
+          payload: { kind: minted.kind, ok: true, sealed: minted.cell, basedOn: minted.basedOn },
+        });
+        if (landed === null)
+          return { offset: state.material.offset, setAt, setNonce, cell: minted.cell };
+        await this.waitUntilProcessed({ offset: landed });
+        await this.ctx.storage.delete("minted");
+        return this.#material();
+      }
+    }
+    if (state.material.sealed) {
+      // a cell from before, superseded by one on the log, goes
+      if (await this.ctx.storage.get("stored"))
+        await this.ctx.storage.delete(["stored", "revision"]);
+      return { offset: state.material.offset, setAt, setNonce, cell: state.material.sealed };
+    }
+    const legacy = await this.ctx.storage.get<LegacyStored>("stored");
+    if (!legacy) return null;
     const { context, path } = this.#address();
-    const binding = { context, urls: stored.record.urls, revision: stored.revision };
     let opened: Awaited<ReturnType<typeof decryptSecretMaterial>>;
     try {
-      opened = await decryptSecretMaterial(stored.record.material, binding, this.#keys());
+      opened = await decryptSecretMaterial(
+        legacy.record.material,
+        { context, urls: legacy.record.urls, revision: legacy.revision },
+        this.#keys(),
+      );
     } catch {
       throw new SecretRefused(
         `itx.fetch: the stored material of ${path} cannot be opened (a rotated key, or another context's record) — set the secret again`,
       );
     }
-    const record = { ...stored.record, material: opened.material };
-    if (opened.rotated) {
-      const current = await this.ctx.storage.get<Stored>("stored");
-      if (current?.revision === stored.revision)
-        await this.ctx.storage.put<Stored>("stored", {
-          ...stored,
-          ...(await this.#sealed(record, stored.revision)),
-        });
+    const cell = await this.#sealCell({ ...legacy.record, material: opened.material });
+    const landed = await this.#fact({
+      type: "events.iterate.com/secret/resealed",
+      payload: { sealed: cell, basedOn: state.material.offset },
+    });
+    if (landed === null) return { offset: state.material.offset, setAt, cell };
+    await this.waitUntilProcessed({ offset: landed });
+    await this.ctx.storage.delete(["stored", "revision"]);
+    // the log says where the cell sits now (a write that landed first wins)
+    return this.#material();
+  }
+
+  /** THE STATE, read by anyone the facet admits (the owner's `itx.cd(path).facets.get("secret")`,
+   *  the Dash, a backup): a cell from before the facts carried them is put on the log first
+   *  (`#material`), so every read of a secret's state is its migration, and an operator sweep that
+   *  reads each secret's state migrates a deployment. */
+  override async snapshot(): Promise<{ offset: number; state: SecretState }> {
+    await this.#material();
+    return super.snapshot();
+  }
+
+  /** The current record with its material in the clear, for this facet's own use only, and the
+   *  offset its cell sits at now. A cell the previous key opened (a rotation in progress) is sealed
+   *  again under the current key and put on the log as a `secret/resealed` of this write, so a
+   *  rotation completes one read at a time: the offset answered is then the reseal's, which a
+   *  mint of this read is fenced on. A cell neither key opens — one under a key that is gone, or
+   *  bound elsewhere — is a refusal that names the fix. */
+  async #open({ offset, cell }: Material): Promise<{ record: SecretRecord; offset: number }> {
+    // THIS facet's address is the binding, never the cell's own claim: a cell copied from another
+    // secret's log into a fact on this path does not open
+    const { context, path } = this.#address();
+    const binding = { context, urls: cell.urls, nonce: cell.nonce };
+    let opened: Awaited<ReturnType<typeof decryptSecretMaterial>>;
+    try {
+      if (cell.context !== context) throw new Error("another context's cell");
+      opened = await decryptSecretMaterial(cell.material, binding, this.#keys());
+    } catch {
+      throw new SecretRefused(
+        `itx.fetch: the stored material of ${path} cannot be opened (a rotated key, or another context's record) — set the secret again`,
+      );
     }
-    return record;
+    const record: SecretRecord = {
+      material: opened.material,
+      urls: cell.urls,
+      refresh: cell.refresh,
+      routedAccount: cell.routedAccount,
+    };
+    if (opened.rotated) offset = await this.#reseal(offset, record);
+    return { record, offset };
+  }
+
+  /** THE RESEAL of a rotated cell (`#open`): one per cell at a time, shared by every open of it
+   *  meanwhile, so a second does not land a reseal the reduce would drop. Answers the offset the
+   *  cell sits at once its fact landed, read from the log: the reseal's, or the one it began on
+   *  when the fact was refused (a paused stream) or a write landed first and the reduce dropped it
+   *  (whatever is fenced on that offset then drops too, and reads again). */
+  #reseal(offset: number, record: SecretRecord): Promise<number> {
+    const inFlight = this.#resealing;
+    if (inFlight?.offset === offset) return inFlight.promise;
+    const promise = (async () => {
+      const cell = await this.#sealCell(record);
+      const landed = await this.#fact({
+        type: "events.iterate.com/secret/resealed",
+        payload: { sealed: cell, basedOn: offset },
+      });
+      if (landed === null) return offset;
+      await this.waitUntilProcessed({ offset: landed });
+      const { state } = await super.snapshot();
+      return state.material?.sealed?.nonce === cell.nonce ? state.material.offset : offset;
+    })().finally(() => {
+      if (this.#resealing?.promise === promise) this.#resealing = undefined;
+    });
+    this.#resealing = { offset, promise };
+    return promise;
   }
 
   #keys(): MaterialKeys {
     return atRestKeysOf(iterateConfigOf(this.env));
   }
 
-  /** Operator recovery exports only the current encrypted value, with its original AAD.
-   * The credential arrives over native RPC, never through project-authored rewrites. Ordinary
-   * facet callers cannot export a cell, even if they own the project. */
+  /** Operator recovery exports the current cell as the log holds it (the seed is the operator's
+   *  tool, scripts/os/project-seed.ts); the credential arrives over native RPC, never through
+   *  project-authored rewrites. The same cell is on the secret's log for its owner to read. */
   async exportForProjectSeed(adminSecret: unknown) {
     if (
       typeof adminSecret !== "string" ||
       !(await verifyAdminSecret(adminSecret, iterateConfigOf(this.env).adminBearer.exposeSecret()))
     )
       throw codedError("FORBIDDEN", "Secret recovery exports require operator authority.");
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    if (!stored)
+    const current = await this.#material();
+    if (!current)
       throw codedError("INVALID_INPUT", "This secret has no current material to back up.");
-    const { context, path } = this.#address();
-    return { context, path, revision: stored.revision, ...stored.record };
+    const { path } = this.#address();
+    return { path, ...current.cell };
   }
 
-  /** The write counter, bumped: the number the write that follows is fenced by. */
-  async #bump(): Promise<number> {
-    const revision = ((await this.ctx.storage.get<number>("revision")) ?? 0) + 1;
-    await this.ctx.storage.put("revision", revision);
-    return revision;
-  }
-
-  /** Forget the record and any attempt — a write like any other (the counter moves on, so a mint or
-   *  an exchange started before the clear cannot land after it, even under a new write). */
+  /** Forget the bookkeeping of the material the built-in's `secret/deleted` drops: any attempt, a
+   *  held exchange, the lends (ended, for the built-in to tell the other side) and a borrow. A
+   *  mint or an exchange started before the delete names a write the fact superseded, so it cannot
+   *  land after it (the reduce drops it), even under a new write. */
   async clear(): Promise<{ lends: EndedLends; borrowed: Borrowed | null }> {
-    await this.#bump();
     const lends: EndedLends = {};
     const ending = (await this.ctx.storage.get<EndingLends>("ending")) ?? {};
     for (const [lendId, lend] of Object.entries(
@@ -338,7 +502,15 @@ export class SecretFacet extends StreamProcessorDurableObject<
     }
     const borrowed = (await this.ctx.storage.get<Borrowed>("borrowed")) ?? null;
     await this.ctx.storage.put<EndingLends>("ending", ending);
-    await this.ctx.storage.delete(["stored", "pending", "held", "completed", "lends", "borrowed"]);
+    await this.ctx.storage.delete([
+      "stored",
+      "revision",
+      "pending",
+      "held",
+      "completed",
+      "lends",
+      "borrowed",
+    ]);
     // what the clear ended, for the built-in to end on the other side (context/built-ins.ts `delete`)
     return { lends, borrowed };
   }
@@ -365,8 +537,8 @@ export class SecretFacet extends StreamProcessorDurableObject<
 
   /** Keep a lend: the pin of the material it lends, for the borrower's catalog. */
   async lend(input: { lendId: string; to: string; as: string }): Promise<{ urls: string[] }> {
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    if (!stored)
+    const current = await this.#material();
+    if (!current)
       throw codedError(
         "INVALID_INPUT",
         `${this.#address().path} holds no material of its own to lend`,
@@ -376,7 +548,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
       ...lends,
       [input.lendId]: { to: input.to, as: input.as },
     });
-    return { urls: stored.record.urls };
+    return { urls: current.cell.urls };
   }
 
   /** The live lend of this secret to `projectId`, as `as`, or null: a person's account connected to
@@ -402,11 +574,11 @@ export class SecretFacet extends StreamProcessorDurableObject<
     borrowed: boolean,
   ): Promise<{ as: string; urls: string[] } | null> {
     const lend = ((await this.ctx.storage.get<Lends>("lends")) ?? {})[lendId];
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    if (!lend || lend.to !== "every-project" || !stored) return null;
+    const current = await this.#material();
+    if (!lend || lend.to !== "every-project" || !current) return null;
     if (borrowed) await this.ctx.storage.put(borrowerKey(lendId, projectId), true);
     else await this.ctx.storage.delete(borrowerKey(lendId, projectId));
-    return { as: lend.as, urls: stored.record.urls };
+    return { as: lend.as, urls: current.cell.urls };
   }
 
   /** The lend ended: what it was and the projects it ended for, or null when it is already gone. A
@@ -453,7 +625,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
   /** This path borrows: it holds the lend alone, and every use is forwarded to the lender. */
   async borrow(borrowed: Borrowed): Promise<void> {
     // coded: a lend to every project skips a project that keeps its own (built-ins.ts `lendInto`)
-    if (await this.ctx.storage.get<Stored>("stored"))
+    if (await this.#material())
       throw codedError(
         "INVALID_INPUT",
         `${this.#address().path} holds a secret of its own — delete it first`,
@@ -462,7 +634,6 @@ export class SecretFacet extends StreamProcessorDurableObject<
     const held = await this.ctx.storage.get<Borrowed>("borrowed");
     if (held && held.lendId !== borrowed.lendId)
       throw new Error(`${this.#address().path} borrows another lend already — delete it first`);
-    await this.#bump();
     await this.ctx.storage.put<Borrowed>("borrowed", borrowed);
   }
 
@@ -471,7 +642,6 @@ export class SecretFacet extends StreamProcessorDurableObject<
   async dropBorrowed(lendId: string): Promise<boolean> {
     const borrowed = await this.ctx.storage.get<Borrowed>("borrowed");
     if (borrowed?.lendId !== lendId) return false;
-    await this.#bump();
     await this.ctx.storage.delete("borrowed");
     return true;
   }
@@ -509,9 +679,9 @@ export class SecretFacet extends StreamProcessorDurableObject<
    *  with no key at the field, answers false rather than describing itself; the comparison is
    *  constant-time. */
   async verifyHmac(input: SecretHmacVerification): Promise<boolean> {
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    if (!stored) return false;
-    const { material } = await this.#opened(stored);
+    const current = await this.#material();
+    if (!current) return false;
+    const { material } = (await this.#open(current)).record;
     return verifySecretHmac(material, input);
   }
 
@@ -519,9 +689,9 @@ export class SecretFacet extends StreamProcessorDurableObject<
    *  the pin not consulted, exactly as `verifyHmac`: a secret never set or a material with no string
    *  at the field answers false, and the comparison is constant-time. */
   async verifyEquals(input: SecretEqualsVerification): Promise<boolean> {
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    if (!stored) return false;
-    const { material } = await this.#opened(stored);
+    const current = await this.#material();
+    if (!current) return false;
+    const { material } = (await this.#open(current)).record;
     return verifySecretEquals(material, input);
   }
 
@@ -559,9 +729,9 @@ export class SecretFacet extends StreamProcessorDurableObject<
   /** This secret's object material in the clear, or a refusal when it holds none — a borrowed secret
    *  keeps no material here. */
   async #materialRecord(): Promise<Record<string, unknown>> {
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    if (!stored) throw codedError("SECRET_NOT_SET", "key-ops: this secret holds no key material");
-    const { material } = await this.#opened(stored);
+    const current = await this.#material();
+    if (!current) throw codedError("SECRET_NOT_SET", "key-ops: this secret holds no key material");
+    const { material } = (await this.#open(current)).record;
     if (!isRecord(material))
       throw codedError("INVALID_INPUT", "key-ops: material is not an object of key fields");
     return material;
@@ -609,8 +779,12 @@ export class SecretFacet extends StreamProcessorDurableObject<
         nonce,
       },
     );
-    await this.#bump(); // a new attempt is a write: an exchange started before it will not land
-    await this.ctx.storage.put<PendingSecretOAuth>("pending", pending);
+    // a new attempt replaces the one in flight: an exchange started before it finds no pending
+    // attempt of its nonce when it comes to write (`completeOAuth`'s fence)
+    await this.ctx.storage.put<PendingAttempt>("pending", {
+      ...pending,
+      basedOn: (await this.#material())?.setAt ?? null,
+    });
     await this.ctx.storage.delete("held");
     // the nonce names this attempt to whoever finishes it (integrations/verbs.ts): the callback
     // carries it, signed, in `state`
@@ -722,22 +896,22 @@ export class SecretFacet extends StreamProcessorDurableObject<
    *  every other. Only material of its own: a borrowed secret is refused. Never in `publicMethods`. */
   async clientSecretFor(input: { origin: string; field?: string }): Promise<string> {
     const { path } = this.#address();
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    if (!stored)
+    const current = await this.#material();
+    if (!current)
       throw codedError(
         "INVALID_INPUT",
         (await this.ctx.storage.get<Borrowed>("borrowed"))
           ? `secrets: ${path} is borrowed — a client secret is one of the owner's own secrets`
           : `secrets: ${path} holds no secret — collect the client secret there first (itx.secrets.collectFromUser)`,
       );
-    if (!originPinned(input.origin, stored.record.urls))
+    if (!originPinned(input.origin, current.cell.urls))
       throw codedError(
         "INVALID_INPUT",
-        `secrets: the secret ${path} is pinned to ${stored.record.urls.join(", ")}, not ${input.origin} — the token endpoint's origin — so it is never sent there as a client secret`,
+        `secrets: the secret ${path} is pinned to ${current.cell.urls.join(", ")}, not ${input.origin} — the token endpoint's origin — so it is never sent there as a client secret`,
       );
     let record: SecretRecord;
     try {
-      record = await this.#opened(stored);
+      record = (await this.#open(current)).record;
       await this.#assertInstallationRouted(record.refresh);
       await this.#assertWorkspaceNotMoved(record.routedAccount);
     } catch (error) {
@@ -784,6 +958,10 @@ export class SecretFacet extends StreamProcessorDurableObject<
     scopes: string[];
     account?: { id: string; name: string | null };
     held?: HeldToken;
+    /** The record written, sealed: what the built-in's `secret/set` carries (a replay whose fact
+     *  was refused answers the same cell, so the retried fact carries it). Absent for a held
+     *  token, and for a replay whose fact landed: nothing lands again. */
+    sealed?: SealedSecretCell;
   }> {
     // project code completes only an attempt begun with its own redirectUri — a replay of one the
     // platform's callback completed, and a held exchange, are the callback's as much as the attempt
@@ -799,16 +977,18 @@ export class SecretFacet extends StreamProcessorDurableObject<
       return answer;
     }
     const kept = await this.ctx.storage.get<HeldExchange>("held");
-    if (kept?.nonce === input.nonce && kept.until > Date.now()) {
+    // a token held before the facts carried cells has no cell to admit: that consent starts over
+    if (kept && !kept.cell) await this.ctx.storage.delete("held");
+    if (kept?.cell && kept.nonce === input.nonce && kept.until > Date.now()) {
       if (!input.viaPlatformCallback) throw projectCodeRefused();
       return {
-        urls: kept.record.urls,
-        refresh: kept.record.refresh?.kind,
+        urls: kept.cell.urls,
+        refresh: kept.cell.refresh?.kind,
         scopes: kept.scopes,
         held: { externalId: kept.team.id, account: kept.team.name, until: kept.until },
       };
     }
-    const pending = await this.ctx.storage.get<PendingSecretOAuth>("pending");
+    const pending = await this.ctx.storage.get<PendingAttempt>("pending");
     if (!pending || pending.nonce !== input.nonce)
       throw new Error("no pending attempt matches this callback — begin again");
     if (pending.until <= Date.now()) {
@@ -816,7 +996,14 @@ export class SecretFacet extends StreamProcessorDurableObject<
       throw new Error("the attempt expired — begin again");
     }
     if (!input.viaPlatformCallback && !pending.options.redirectUri) throw projectCodeRefused();
-    const started = await this.ctx.storage.get<number>("revision");
+    // the write lineage as it stands when the exchange starts: what the write is fenced against
+    // (a mint or a reseal meanwhile is no write). An attempt begun before a write landed is over,
+    // whether or not `written` dropped it.
+    const startedOn = (await this.#material())?.setAt ?? null;
+    if (pending.basedOn !== startedOn) {
+      await this.ctx.storage.delete("pending");
+      throw new Error("the secret was changed since this attempt began — begin again");
+    }
     const credentials = this.#oauthClientOf(pending.options);
     // What the provider says it granted, and the Slack workspace, off the token response (rules.ts).
     let scopes: string[] = [];
@@ -888,13 +1075,19 @@ export class SecretFacet extends StreamProcessorDurableObject<
       using itx = this.getItx();
       await itx.processors.claim(this.ctx.props.name, until);
     }
-    if ((await this.ctx.storage.get<number>("revision")) !== started)
+    // THE FENCE: a write that landed meanwhile, or a newer attempt that replaced this one, wins
+    const stillPending = await this.ctx.storage.get<PendingAttempt>("pending");
+    if (
+      ((await this.#material())?.setAt ?? null) !== startedOn ||
+      stillPending?.nonce !== input.nonce
+    )
       throw new Error(
         "the secret was changed while the provider was answering — the tokens were discarded; begin again",
       );
     if (slackTeam && hold) {
       const held: HeldExchange = {
-        ...(await this.#sealed(record, started ?? 0)),
+        cell: await this.#sealCell(record),
+        basedOn: startedOn,
         nonce: input.nonce,
         scopes,
         until,
@@ -909,53 +1102,58 @@ export class SecretFacet extends StreamProcessorDurableObject<
         held: { externalId: slackTeam.id, account: slackTeam.name, until },
       };
     }
-    await this.write(record);
-    const revision = await this.ctx.storage.get<number>("revision");
-    await this.ctx.storage.put("completed", {
+    const sealed = await this.seal(record);
+    await this.ctx.storage.put<Completed>("completed", {
       nonce: input.nonce,
-      revision,
+      cell: sealed,
+      basedOn: startedOn,
       scopes,
       account,
       ...(pending.options.redirectUri && { userspaceRedirect: true }),
     });
-    return {
-      urls: record.urls,
-      refresh: record.refresh?.kind,
-      scopes,
-      account,
-    };
+    // the attempt is complete: its replay answers from `completed`
+    await this.ctx.storage.delete("pending");
+    return { urls: record.urls, refresh: record.refresh?.kind, scopes, account, sealed };
   }
 
-  /** What the attempt `nonce` completed, while the record is still the one it wrote (a replay's
-   *  answer), or null; one it completed that was written or cleared since is refused. Says whether
-   *  the attempt was begun with the project's own `redirectUri` (`completeOAuth` admits project
-   *  code to that replay alone; a record from before the mark is the platform callback's). */
+  /** What the attempt `nonce` completed, while its cell is still the material (a replay's answer,
+   *  and nothing to land) or its fact has yet to land (the cell the replayed fact carries), or
+   *  null; one it completed that was written or cleared since is refused. Says whether the attempt was begun with the
+   *  project's own `redirectUri` (`completeOAuth` admits project code to that replay alone; a
+   *  record from before the mark is the platform callback's). */
   async #completed(nonce: string): Promise<{
     urls: string[];
     refresh?: SecretRefresh["kind"];
     scopes: string[];
     account?: { id: string; name: string | null };
     userspaceRedirect: boolean;
+    /** The cell it wrote, while its fact has yet to land: what the retried fact carries. */
+    sealed?: SealedSecretCell;
   } | null> {
-    const completed = await this.ctx.storage.get<{
-      nonce: string;
-      revision: number;
-      scopes: string[];
-      account?: { id: string; name: string | null };
-      userspaceRedirect?: boolean;
-    }>("completed");
+    const completed = await this.ctx.storage.get<Completed>("completed");
     if (completed?.nonce !== nonce) return null;
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    if (stored?.revision !== completed.revision)
+    // one from before the facts carried cells holds no cell to answer or land: its consent is over
+    if (!completed.cell) {
+      await this.ctx.storage.delete("completed");
+      return null;
+    }
+    const current = await this.#material();
+    // landed: the current lineage began with the cell this attempt sealed (the log says so, not a
+    // stamp), and the replay lands nothing — a second set of the cell would roll back a mint since;
+    // still to land: nothing wrote since the attempt began, so the replay lands it
+    const landed = current?.setNonce === completed.cell.nonce;
+    const stillToLand = (current?.setAt ?? null) === completed.basedOn;
+    if (!landed && !stillToLand)
       throw new Error(
         "this attempt completed, but the secret was written or cleared since — begin again",
       );
     return {
-      urls: stored.record.urls,
-      refresh: stored.record.refresh?.kind,
+      urls: completed.cell.urls,
+      refresh: completed.cell.refresh?.kind,
       scopes: completed.scopes,
       account: completed.account,
       userspaceRedirect: completed.userspaceRedirect === true,
+      ...(!landed && { sealed: completed.cell }),
     };
   }
 
@@ -972,36 +1170,45 @@ export class SecretFacet extends StreamProcessorDurableObject<
   }
 
   /** THE HELD TOKEN ADMITTED (the platform's move of its workspace here, integrations/verbs.ts
-   *  `confirmIntegrationMove`, once the route is this project's): the record written like any other,
-   *  while nothing was written since it was held and before it expires, then marked `completed` — so
-   *  the same call again, after the built-in's fact failed, answers the same without a second write.
-   *  Answers the pin and the strategy kind, what the fact carries. */
+   *  `confirmIntegrationMove`, once the route is this project's): the record sealed like any
+   *  write's, while nothing was written since it was held and before it expires, then marked
+   *  `completed` — so the same call again, after the built-in's fact failed, answers the same
+   *  without a second write. Answers the pin, the strategy kind and the cell the fact carries;
+   *  a replay answers the same cell while the fact has yet to land, and no cell once it has. */
   async admitHeldToken(input: {
     nonce: string;
-  }): Promise<{ urls: string[]; refresh?: SecretRefresh["kind"] }> {
+  }): Promise<{ urls: string[]; refresh?: SecretRefresh["kind"]; sealed?: SealedSecretCell }> {
     const replayed = await this.#completed(input.nonce);
-    if (replayed) return { urls: replayed.urls, refresh: replayed.refresh };
+    if (replayed)
+      return { urls: replayed.urls, refresh: replayed.refresh, sealed: replayed.sealed };
     const held = await this.ctx.storage.get<HeldExchange>("held");
-    if (held?.nonce !== input.nonce)
+    // one held before the facts carried cells has no cell to admit
+    if (held?.nonce !== input.nonce || !held.cell)
       throw new Error("no token is held for this consent any more — connect again");
     await this.ctx.storage.delete("held");
-    const revision = (await this.ctx.storage.get<number>("revision")) ?? 0;
-    if (held.until <= Date.now() || revision !== held.revision)
+    if (held.until <= Date.now() || ((await this.#material())?.setAt ?? null) !== held.basedOn)
       throw new Error(
         "the token held for this consent expired, or the secret was written since — connect again",
       );
+    const { cell } = held;
     const { material } = await decryptSecretMaterial(
-      held.record.material,
-      { context: this.#address().context, urls: held.record.urls, revision: held.revision },
+      cell.material,
+      { context: cell.context, urls: cell.urls, nonce: cell.nonce },
       this.#keys(),
     );
-    await this.write({ ...held.record, material });
-    await this.ctx.storage.put("completed", {
+    const sealed = await this.seal({
+      material,
+      urls: cell.urls,
+      refresh: cell.refresh,
+      routedAccount: cell.routedAccount,
+    });
+    await this.ctx.storage.put<Completed>("completed", {
       nonce: input.nonce,
-      revision: await this.ctx.storage.get<number>("revision"),
+      cell: sealed,
+      basedOn: held.basedOn,
       scopes: held.scopes,
     });
-    return { urls: held.record.urls, refresh: held.record.refresh?.kind };
+    return { urls: cell.urls, refresh: cell.refresh?.kind, sealed };
   }
 
   /** THE REVIVE the context's alarm owes this facet — also for a held token's offer running out
@@ -1031,9 +1238,14 @@ export class SecretFacet extends StreamProcessorDurableObject<
       await this.ctx.storage.delete("held");
       return "held";
     }
-    const completed = await this.ctx.storage.get<{ nonce: string; revision: number }>("completed");
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    if (completed?.nonce !== input.nonce || stored?.revision !== completed.revision) return "gone";
+    const completed = await this.ctx.storage.get<Completed>("completed");
+    const current = await this.#material();
+    if (
+      completed?.nonce !== input.nonce ||
+      !completed.cell ||
+      current?.setNonce !== completed.cell.nonce
+    )
+      return "gone";
     return this.clear();
   }
 
@@ -1081,11 +1293,12 @@ export class SecretFacet extends StreamProcessorDurableObject<
     // refresh (or a write that won the revision fence) the pin may have moved, and the retried
     // request must honour the pin the new material was set with.
     const read = async () => {
-      const stored = await this.ctx.storage.get<Stored>("stored");
-      if (!stored) return null;
-      if (!originPinned(request.url, stored.record.urls))
-        throw pinRefusal(path, request.url, stored.record.urls);
-      return { revision: stored.revision, record: await this.#opened(stored) };
+      const current = await this.#material();
+      if (!current) return null;
+      if (!originPinned(request.url, current.cell.urls))
+        throw pinRefusal(path, request.url, current.cell.urls);
+      // the offset the cell sits at after the open (a rotation reseals it): what a mint is fenced on
+      return this.#open(current);
     };
     const used = (response: Response): Response => {
       this.ctx.waitUntil(
@@ -1140,7 +1353,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
         // No accessToken yet with a strategy configured: mint first (the first-use case), then go.
         if (!(error instanceof SecretRefused) || !retry || !error.mintable || !stored) throw error;
         try {
-          await this.#refresh(stored.revision);
+          await this.#refresh(stored.offset);
         } catch (cause) {
           throw new SecretRefused(
             `${error.message}; the refresh failed: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -1160,7 +1373,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
       const response = await dispatch(substituted);
       if (response.status !== 401 || !retry || !stored) return answer(response);
       try {
-        await this.#refresh(stored.revision);
+        await this.#refresh(stored.offset);
       } catch {
         // The provider (or the material) refused the refresh: the 401 is the caller's answer.
         return used(response);
@@ -1214,31 +1427,34 @@ export class SecretFacet extends StreamProcessorDurableObject<
     this.#workspaceRouteReadAt.set(routed.externalId, Date.now());
   }
 
-  #refresh(revision: number): Promise<void> {
+  #refresh(offset: number): Promise<void> {
     const inFlight = this.#refreshing;
-    if (inFlight?.revision === revision) return inFlight.promise;
-    // A different revision is running (or none): run this one after it settles, never alongside.
+    if (inFlight?.offset === offset) return inFlight.promise;
+    // A different write is being refreshed (or none): run this one after it settles, never alongside.
     const previous = inFlight?.promise.catch(() => {}) ?? Promise.resolve();
     const promise = previous
-      .then(() => this.#doRefresh(revision))
+      .then(() => this.#doRefresh(offset))
       .finally(() => {
         if (this.#refreshing?.promise === promise) this.#refreshing = undefined;
       });
-    this.#refreshing = { revision, promise };
+    this.#refreshing = { offset, promise };
     return promise;
   }
 
   /** Run the strategy against the record AS READ NOW; commit only if nothing was written meanwhile
-   *  (the revision fence) — a stale mint must never resurrect material a write replaced. The
-   *  outcome, either way, is a fact on this path: `secret/refreshed { kind, ok, error? }`. */
-  async #doRefresh(revision: number): Promise<void> {
-    const stored = await this.ctx.storage.get<Stored>("stored");
-    // A write landed first: whatever it stored (new material, or no strategy any more) is the
+   *  (the offset fence) — a stale mint must never resurrect material a write replaced. The outcome,
+   *  either way, is a fact on this path: `secret/refreshed { kind, ok, error? }`, and one that
+   *  minted carries the new material sealed, as the write it refreshed (`basedOn`); the reduce
+   *  keeps it while that write is still the material. */
+  async #doRefresh(offset: number): Promise<void> {
+    const current = await this.#material();
+    // A write landed first: whatever it holds (new material, or no strategy any more) is the
     // answer, and the caller re-reads it — so the fence comes before any look at the strategy.
-    if (stored?.revision !== revision) return;
-    const record = await this.#opened(stored);
+    if (current?.offset !== offset) return;
+    // a rotation reseals the cell on this open: the mint is then of the reseal
+    const { record, offset: at } = await this.#open(current);
     const { refresh, urls } = record;
-    if (!refresh) throw new Error("no refresh strategy"); // unreachable: this revision was read with one
+    if (!refresh) throw new Error("no refresh strategy"); // unreachable: this write was read with one
     // Refresh moves bytes only toward pinned hosts, like any use.
     const pinnedDispatch = (exchange: Request) => {
       if (!originPinned(exchange.url, urls))
@@ -1297,16 +1513,21 @@ export class SecretFacet extends StreamProcessorDurableObject<
       });
       throw error;
     }
-    const current = await this.ctx.storage.get<Stored>("stored");
-    if (current?.revision !== revision) return;
-    await this.ctx.storage.put<Stored>("stored", {
-      ...current,
-      ...(await this.#sealed({ ...record, material: next }, revision)),
-    });
-    await this.#fact({
+    if ((await this.#material())?.offset !== at) return;
+    // the mint is kept until its fact lands: a provider may have rotated the refresh token on it
+    const minted: Minted = {
+      cell: await this.#sealCell({ ...record, material: next }),
+      basedOn: at,
+      kind: refresh.kind,
+    };
+    await this.ctx.storage.put<Minted>("minted", minted);
+    const landed = await this.#factOrThrow({
       type: "events.iterate.com/secret/refreshed",
-      payload: { kind: refresh.kind, ok: true },
+      payload: { kind: refresh.kind, ok: true, sealed: minted.cell, basedOn: at },
     });
+    // the retry that follows reads the material again: only once the reduce holds the new cell
+    await this.waitUntilProcessed({ offset: landed });
+    await this.ctx.storage.delete("minted");
   }
 
   /** The refresh grant with the deployment's client (`oauth-refresh-token` + `client`): its
@@ -1410,12 +1631,27 @@ export class SecretFacet extends StreamProcessorDurableObject<
   /** A fact about this secret onto its own log — a use, a refresh's outcome — the platform's own
    *  append through this facet's loopback (no principal). Best-effort: what it records already
    *  happened, and a lost fact must not fail the request that caused it. */
-  async #fact(event: EventInput<typeof SecretContract>): Promise<void> {
+  /** This facet's own fact on its path, one the material depends on: the offset it landed at, or
+   *  the append's failure thrown. */
+  async #factOrThrow(event: EventInput<typeof SecretContract>): Promise<number> {
+    using itx = this.getItx();
+    // the scope's append is typed for its caller's spelling; it answers the appended events
+    const [landed] = (await itx.append(event)) as unknown as { offset: number }[];
+    if (!landed) throw new Error(`secret: ${event.type} did not land`);
+    return landed.offset;
+  }
+
+  /** This facet's own fact on its path, best-effort: the offset it landed at, or null when the
+   *  append failed (reported, never thrown: a dispatch's answer does not wait on its fact). */
+  async #fact(event: EventInput<typeof SecretContract>): Promise<number | null> {
     try {
       using itx = this.getItx();
-      await itx.append(event);
+      // the scope's append is typed for its caller's spelling; it answers the appended events
+      const [landed] = (await itx.append(event)) as unknown as { offset: number }[];
+      return landed?.offset ?? null;
     } catch (error) {
       reportIssue("secret.fact-append-failed", error, { type: event.type });
+      return null;
     }
   }
 }

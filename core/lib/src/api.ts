@@ -224,6 +224,24 @@ export type SecretRefresh =
    *  is kept. The source is part of the record, so changing it is a `set` like the material's. */
   | { kind: "worker"; source: string };
 
+/** A SECRET'S SEALED CELL — what every fact that writes material carries (`secret/set`, a
+ *  `secret/refreshed` that minted, `secret/resealed`): the record with its material sealed under
+ *  the deployment's secrets key and bound to this one secret and write (core/os
+ *  src/secret-at-rest.ts says how, and what opens it). The log is the secret: a backup of it and
+ *  the key is everything. `itx.cd(path).facets.get("secret").snapshot()` answers the current one
+ *  as `state.material.sealed`. */
+export type SealedSecretCell = {
+  /** The secret's context name (its Durable Object's), the first part of the cell's binding. */
+  context: string;
+  urls: string[];
+  refresh: SecretRefresh | null;
+  /** The workspace whose iterate's-Slack-app token this is, kept with the record. */
+  routedAccount?: { provider: "slack"; externalId: string };
+  /** Minted for this write: the last part of the binding. */
+  nonce: string;
+  material: { algorithm: "AES-256-GCM+SECRET-V1"; iv: string; ciphertext: string };
+};
+
 /** A secret's catalog entry — `secrets.list()` — its path, the pin, the strategy's KIND and when
  *  it was first set; never a value (the owner root's fold of the `secret/set` certificates). */
 export type SecretCatalogEntry = {
@@ -1178,7 +1196,9 @@ export interface IterateContextApi {
    *  JSON object (`refresh` names the strategy that re-mints an expiring credential); `delete`
    *  forgets it (re-settable); `list` is the catalog — paths, pins, strategy kinds, when first set —
    *  never a value. Every change is one fact on the secret's path (`secret/set`, `secret/deleted`),
-   *  attributed to the caller and cross-posted to the root, so the log says who set what and when. */
+   *  attributed to the caller and cross-posted to the root, so the log says who set what and when;
+   *  a fact that writes material carries it sealed (`SealedSecretCell`), so the log is the secret
+   *  and the deployment's key reads it. */
   secrets: {
     set(
       path: string,

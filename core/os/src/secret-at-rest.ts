@@ -1,11 +1,14 @@
-// secret-at-rest.ts — a project secret's material AT REST: AES-256-GCM under the deployment's key
+// secret-at-rest.ts — a project secret's material SEALED: AES-256-GCM under the deployment's key
 // (`ITERATE__SECRETS_ENCRYPTION__KEY`, iterate-config.ts), the ciphertext BOUND to the one place it may be read
 // back from — the secret's context (its Durable Object name: the project and the path), the pin it
-// was stored with, and the revision it was written at (the additional authenticated data).
-// A ciphertext copied into another context, under another pin, or back over a later write does not
-// open. Rotation: `previous` opens what `current` cannot; the caller re-encrypts
-// under `current` when told it happened, so a rotation completes one read at a time and the old key
-// can be dropped once every record has been touched.
+// was sealed with, and a nonce minted for that one write (the additional authenticated data). The
+// sealed cell rides the secret's facts (secret/contract.ts), so a backup of the log is the secret,
+// and only a holder of the key reads it. A ciphertext copied into another context, under another
+// pin, or presented as another write does not open. Rotation: `previous` opens what `current`
+// cannot; the caller seals it again under `current` when told it happened, so a rotation completes
+// one read at a time and the old key can be dropped once every live cell has been touched. Cells
+// from before the facts carried them were bound to a write counter instead (`revision`); they open
+// the same way, once, and are sealed again with a nonce.
 
 import type { SecretMaterial } from "iterate/api";
 
@@ -19,8 +22,12 @@ export type EncryptedMaterial = {
 };
 
 /** Where a ciphertext is allowed to open: the secret's context (its Durable Object name), the pin,
- *  and the write. */
-type MaterialBinding = { context: string; urls: string[]; revision: number };
+ *  and the write — its nonce, or the counter a cell from before the facts carried them was bound
+ *  to. */
+export type MaterialBinding = { context: string; urls: string[] } & (
+  | { nonce: string }
+  | { revision: number }
+);
 
 /** The deployment's keys: any strings — the AES key is the SHA-256 of each. `previous` is set only
  *  while rotating. */
@@ -79,15 +86,14 @@ export async function decryptSecretMaterial(
  *  the same set of origins in any spelling is the same binding). Copied into a plain ArrayBuffer —
  *  what WebCrypto's BufferSource asks for. */
 function additionalDataOf(binding: MaterialBinding): Uint8Array<ArrayBuffer> {
+  const urls = [...new Set(binding.urls)].sort();
   return Uint8Array.from(
     new TextEncoder().encode(
-      JSON.stringify([
-        "iterate-secret",
-        1,
-        binding.context,
-        [...new Set(binding.urls)].sort(),
-        binding.revision,
-      ]),
+      JSON.stringify(
+        "nonce" in binding
+          ? ["iterate-secret", 2, binding.context, urls, binding.nonce]
+          : ["iterate-secret", 1, binding.context, urls, binding.revision],
+      ),
     ),
   );
 }

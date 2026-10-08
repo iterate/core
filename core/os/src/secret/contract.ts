@@ -2,13 +2,13 @@
 // the placeholder spells (`getSecret("/secrets/<name>")` in an outbound request's URL or headers),
 // under the RESOURCE OWNER's root (a project's `/`; a user's own secret lives at
 // `/users/<id>/secrets/<name>`, an organization's under `/organizations/<id>`, and the deployment's
-// own — the operator's, lent to projects — at `global:/secrets/<name>`). Its VALUE is in the
-// `secret` facet's storage on that path — encrypted at rest, never on a log; its facts are on that
-// path's log, and THIS FILE is the only place they are spelled. The rest of the folder derives from
-// it: processor.ts reduces these events (no saga — a value cannot ride an event, so the write is a
-// VERB, `itx.secrets.set`, context/built-ins.ts, which runs on this path, lands the facts itself and
-// puts the value in the facet), durable-object.ts is the facet — the material's one keeper, and the
-// one code that substitutes it into a request and dispatches it (a context's egress forwards a
+// own — the operator's, lent to projects — at `global:/secrets/<name>`). Its VALUE RIDES ITS FACTS,
+// sealed (iterate/api `SealedSecretCell` says what a cell is; secret-at-rest.ts seals one), and
+// THIS FILE is the only place the facts are spelled. The rest of the folder derives from it:
+// processor.ts reduces these events into the current cell (the write is still a VERB,
+// `itx.secrets.set`, context/built-ins.ts, which runs on this path: the facet seals, the verb lands
+// the fact, the reduce keeps it), durable-object.ts is the facet — the one code that opens the cell,
+// substitutes the material into a request and dispatches it (a context's egress forwards a
 // placeholder-bearing request to it, a WebSocket upgrade included). The catalog is the owner root's:
 // `secret/set` and `secret/deleted` are cross-posted there and folded by the `project`, `account`,
 // `organization` or `instance` processor — what `itx.secrets.list()` reads; the catalog's shape and
@@ -24,7 +24,25 @@ import {
   defineProcessorContract,
   type ProcessorState,
 } from "iterate/stream/processor";
-import type { SecretRefresh } from "iterate/api";
+import type { SealedSecretCell, SecretRefresh } from "iterate/api";
+
+/** The sealed cell as a fact carries it (iterate/api `SealedSecretCell`): the record's own fields,
+ *  the material as ciphertext, and the nonce of the write. The strategy is checked where a record
+ *  is made (secrets.ts `normalizeSecretRecord`); here it is carried. */
+const SealedCell = z.object({
+  context: z.string().min(1),
+  urls: z.array(z.string()).min(1),
+  refresh: z.custom<SecretRefresh | null>((value) => !value || Object.hasOwn(value, "kind")),
+  routedAccount: z
+    .object({ provider: z.literal("slack"), externalId: z.string().min(1) })
+    .optional(),
+  nonce: z.string().min(1),
+  material: z.object({
+    algorithm: z.literal("AES-256-GCM+SECRET-V1"),
+    iv: z.string().min(1),
+    ciphertext: z.string().min(1),
+  }),
+}) satisfies z.ZodType<SealedSecretCell>;
 
 /** The refresh strategies implemented (secrets.ts), by kind: what a `set` names, a `refreshed`
  *  reports and the catalog keeps — pinned to the SDK's `SecretRefresh`, so a strategy added there
@@ -80,16 +98,31 @@ export type LendRevokedReason = z.infer<typeof LendRevokedReason>;
 
 export const SecretContract = defineProcessorContract({
   slug: "secret",
-  version: "3",
+  version: "4",
   description:
-    "A secret: whether material is stored (or borrowed) and whether the secret was deleted, by the offsets of the facts that say so — never a value.",
+    "A secret: its current material as the sealed cell of the fact that wrote it (or the lend it is borrowed on), and whether the secret was deleted, by the offsets of the facts that say so — a value only under the deployment's key.",
   /** THE REDUCED STATE — what the reduce keeps between events: the write that put the current
-   *  material there, as the OFFSET of the `secret/set` that says so (read that event for the pin and
-   *  the strategy kind), and where deletion stands the same way. It is what `snapshot()` answers and
-   *  what `itx.secrets.delete` reads before it acts. */
+   *  material there, as the OFFSET of the fact that says so and the SEALED CELL it carried (the pin
+   *  and the strategy are the cell's), and where deletion stands the same way. It is what
+   *  `snapshot()` answers, what the facet opens, and what `itx.secrets.delete` reads before it acts. */
   stateSchema: z.object({
-    /** The latest `secret/set`; null while no material is stored (never set, or deleted). */
-    material: z.object({ offset: z.number().int().positive() }).nullable().default(null),
+    /** The latest write; null while no material is stored (never set, or deleted). `offset` is the
+     *  fact that put the current cell there (a set, or the mint or reseal that followed it);
+     *  `setAt` the `secret/set` (or `secret/borrowed`) that began it, which a mint or a reseal
+     *  keeps: the write lineage an OAuth attempt is fenced on. `sealed` is the cell: absent for a
+     *  borrowed secret (no material here), and for a write from before the facts carried cells,
+     *  which the facet seals again on its next read. */
+    material: z
+      .object({
+        offset: z.number().int().positive(),
+        setAt: z.number().int().positive(),
+        /** The nonce of the cell the lineage's `secret/set` carried, kept across mints and reseals:
+         *  how the facet tells that a write it sealed is the one that landed. */
+        setNonce: z.string().optional(),
+        sealed: SealedCell.optional(),
+      })
+      .nullable()
+      .default(null),
     /** The `secret/deleted` that emptied it; null while the secret lives — and cleared again by a
      *  later `secret/set`: unlike a repo, a secret is re-settable after its deletion. */
     deletion: z.object({ offset: z.number().int().positive() }).nullable().default(null),
@@ -99,13 +132,23 @@ export const SecretContract = defineProcessorContract({
   events: {
     "events.iterate.com/secret/set": {
       description:
-        "Material was written — by `itx.secrets.set`, or by the OAuth exchange a `beginOAuth` began. Never the value: the pin (origins), the strategy kind and, for exchange code, its source's hash. On the secret's path, and cross-posted to the owner's root for the catalog — hence it names the path (the one the placeholder spells).",
+        "Material was written — by `itx.secrets.set`, or by the OAuth exchange a `beginOAuth` began — and this is it, sealed: the record with its material encrypted under the deployment's key, beside the pin (origins), the strategy kind and, for exchange code, its source's hash. On the secret's path, and cross-posted to the owner's root for the catalog — hence it names the path (the one the placeholder spells).",
       payloadSchema: z.object({
         path: z.string().min(1),
         urls: z.array(z.string()).min(1),
         refresh: SecretRefreshKind.optional(),
-        /** Exchange code's source (`refresh` "worker"), as its SHA-256 hex — never the source. */
+        /** Exchange code's source (`refresh` "worker"), as its SHA-256 hex. */
         refreshSourceSha256: z.string().optional(),
+        /** The material, sealed. Absent on a fact from before the facts carried it. */
+        sealed: SealedCell.optional(),
+      }),
+    },
+    "events.iterate.com/secret/resealed": {
+      description:
+        "The current material sealed again, by the facet: under the current key after a rotation, or with a nonce for a cell from before the facts carried it. `basedOn` is the offset of the write it reseals; a reseal of a write that is no longer current is a harmless fact.",
+      payloadSchema: z.object({
+        sealed: SealedCell,
+        basedOn: z.number().int().positive(),
       }),
     },
     "events.iterate.com/secret/deleted": {
@@ -115,11 +158,13 @@ export const SecretContract = defineProcessorContract({
     },
     "events.iterate.com/secret/refreshed": {
       description:
-        "The refresh strategy ran — on a 401 from the pinned host, or on first use with no access token yet — and this is how it went; the facet appends it itself. A fact, not state.",
+        "The refresh strategy ran — on a 401 from the pinned host, or on first use with no access token yet — and this is how it went; the facet appends it itself. One that minted carries the new material sealed and names the write it refreshed (`basedOn`): it is the current material unless a write landed meanwhile, and then it is a harmless fact.",
       payloadSchema: z.object({
         kind: SecretRefreshKind,
         ok: z.boolean(),
         error: z.string().optional(),
+        sealed: SealedCell.optional(),
+        basedOn: z.number().int().positive().optional(),
       }),
     },
     "events.iterate.com/secret/used": {
@@ -164,6 +209,8 @@ export const SecretContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/secret/set",
+    "events.iterate.com/secret/resealed",
+    "events.iterate.com/secret/refreshed",
     "events.iterate.com/secret/deleted",
     "events.iterate.com/secret/lent",
     "events.iterate.com/secret/borrowed",

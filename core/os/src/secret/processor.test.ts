@@ -29,6 +29,27 @@ const refreshed = {
   type: "events.iterate.com/secret/refreshed",
   payload: { kind: "oauth-refresh-token", ok: true },
 };
+/** A cell as a fact carries it; `nonce` tells one write's from another's. */
+const cellOf = (nonce: string) => ({
+  context: "prj_1.iterate/secrets/shop",
+  urls: ["https://shop.example"],
+  refresh: null,
+  nonce,
+  material: { algorithm: "AES-256-GCM+SECRET-V1" as const, iv: "aXY=", ciphertext: "Y2lwaGVy" },
+});
+const sealedSet = {
+  type: "events.iterate.com/secret/set",
+  payload: { path: "/secrets/shop", urls: ["https://shop.example"], sealed: cellOf("w1") },
+};
+/** A mint that refreshed the write at `basedOn`. */
+const minted = (basedOn: number, nonce: string) => ({
+  type: "events.iterate.com/secret/refreshed",
+  payload: { kind: "oauth-refresh-token", ok: true, sealed: cellOf(nonce), basedOn },
+});
+const resealed = (basedOn: number, nonce: string) => ({
+  type: "events.iterate.com/secret/resealed",
+  payload: { sealed: cellOf(nonce), basedOn },
+});
 
 const rows: {
   name: string;
@@ -43,12 +64,65 @@ const rows: {
   {
     name: "a set puts material there, at its offset",
     events: [set],
-    state: { material: { offset: 1 }, deletion: null, borrowed: null },
+    state: { material: { offset: 1, setAt: 1 }, deletion: null, borrowed: null },
+  },
+  {
+    name: "a set carries its cell, which the state keeps",
+    events: [sealedSet],
+    state: {
+      material: { offset: 1, setAt: 1, setNonce: "w1", sealed: cellOf("w1") },
+      deletion: null,
+      borrowed: null,
+    },
+  },
+  {
+    name: "a mint of the current write is the material, at the mint's offset",
+    events: [sealedSet, minted(1, "m1")],
+    state: {
+      material: { offset: 2, setAt: 1, setNonce: "w1", sealed: cellOf("m1") },
+      deletion: null,
+      borrowed: null,
+    },
+  },
+  {
+    name: "a mint of a write a set replaced meanwhile changes nothing: the set is the material",
+    events: [
+      sealedSet,
+      { ...sealedSet, payload: { ...sealedSet.payload, sealed: cellOf("w2") } },
+      minted(1, "m1"),
+    ],
+    state: {
+      material: { offset: 2, setAt: 2, setNonce: "w2", sealed: cellOf("w2") },
+      deletion: null,
+      borrowed: null,
+    },
+  },
+  {
+    name: "a reseal of the current write (a rotation) is the material; one of an older write is not",
+    events: [sealedSet, resealed(1, "r1"), resealed(1, "r2")],
+    state: {
+      material: { offset: 2, setAt: 1, setNonce: "w1", sealed: cellOf("r1") },
+      deletion: null,
+      borrowed: null,
+    },
+  },
+  {
+    name: "a refresh that failed, and one with no cell, change nothing",
+    events: [
+      sealedSet,
+      { ...refreshed, payload: { ...refreshed.payload, ok: false, error: "401" } },
+      refreshed,
+    ],
+    state: {
+      material: { offset: 1, setAt: 1, setNonce: "w1", sealed: cellOf("w1") },
+      deletion: null,
+      borrowed: null,
+    },
   },
   {
     name: "a second set is the latest write (a rotation, a strategy added)",
     events: [set, setWithRefresh],
-    state: { material: { offset: 2 }, deletion: null, borrowed: null },
+    state: { material: { offset: 2, setAt: 2 }, deletion: null, borrowed: null },
   },
   {
     name: "a deletion empties it, at its offset",
@@ -58,7 +132,7 @@ const rows: {
   {
     name: "re-settable: a set after the deletion brings the secret back and clears the deletion",
     events: [set, deleted, set],
-    state: { material: { offset: 3 }, deletion: null, borrowed: null },
+    state: { material: { offset: 3, setAt: 3 }, deletion: null, borrowed: null },
   },
   {
     name: "dies once: a second deletion after the certificate is a harmless fact",
@@ -68,12 +142,12 @@ const rows: {
   {
     name: "the use and refresh facts (not consumed) and an unrelated event leave the state as it was",
     events: [set, used, refreshed, { type: "note" }],
-    state: { material: { offset: 1 }, deletion: null, borrowed: null },
+    state: { material: { offset: 1, setAt: 1 }, deletion: null, borrowed: null },
   },
   {
     name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",
     events: [set, { type: "events.iterate.com/secret/set", payload: { path: 1, urls: [] } }],
-    state: { material: { offset: 1 }, deletion: null, borrowed: null },
+    state: { material: { offset: 1, setAt: 1 }, deletion: null, borrowed: null },
   },
   {
     name: "a lend arriving is the borrowed path's material; its own revocation empties it",
@@ -83,7 +157,7 @@ const rows: {
   {
     name: "a borrowed path stands on its lend until that lend is revoked",
     events: [borrowed("lend_a"), revoked("lend_b")],
-    state: { material: { offset: 1 }, deletion: null, borrowed: { lendId: "lend_a" } },
+    state: { material: { offset: 1, setAt: 1 }, deletion: null, borrowed: { lendId: "lend_a" } },
   },
   {
     name: "on the lender's path a lend and its revocation leave the material as it was",
@@ -95,7 +169,7 @@ const rows: {
       },
       revoked("lend_a"),
     ],
-    state: { material: { offset: 1 }, deletion: null, borrowed: null },
+    state: { material: { offset: 1, setAt: 1 }, deletion: null, borrowed: null },
   },
 ];
 for (const { name, events, state } of rows)
