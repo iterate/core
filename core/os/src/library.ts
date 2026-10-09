@@ -2,8 +2,9 @@
 // live connections. The connectors (library/capnweb.ts, mcp.ts, openapi.ts) are userspace-shaped —
 // written against `itx.fetch` alone, so a userspace worker could carry them unchanged; MCP's events
 // also need the webhook the platform mints for this context (`mcpWebhook`). `run` and the
-// entity roots (`repos`, `workspaces`) are platform sugar spelled at the fixed point,
-// `itx.builtins` — the word loaded code may not say; `files` is a path namespace over `itx.r2`.
+// entity roots (`repos`, `workspaces`, `sandboxes`, `deployments`) are platform sugar spelled at
+// the fixed point, `itx.builtins` — the word loaded code may not say; `files` is a path namespace
+// over `itx.r2`.
 //
 // THE LIBRARY RULE: a library module takes `itx` and nothing else, so at runtime this file and
 // library/*.ts import only npm packages a userspace worker could bundle too
@@ -41,6 +42,8 @@ import { WorkspaceContract } from "./workspace/contract.ts";
 import type { WorkspaceFacet, workspaceVerbs } from "./workspace/durable-object.ts";
 import { SandboxContract } from "./sandbox/contract.ts";
 import type { SandboxFacet, sandboxVerbs } from "./sandbox/durable-object.ts";
+import { DeploymentContract } from "./deployment/contract.ts";
+import type { DeploymentFacet, deploymentVerbs } from "./deployment/durable-object.ts";
 import type { EntitySlug } from "./project/entity-lifecycle.ts";
 import { connectToCapnweb } from "./library/capnweb.ts";
 import { connectToMcp, type McpWebhook } from "./library/mcp.ts";
@@ -100,6 +103,13 @@ export interface LibraryRoots {
     > &
       Pick<SandboxHandle, "container">
   >;
+  /** A deployment (src/deployment/): one deployment of core/os on Cloudflare, at any path.
+   *  `get(path)` is the handle — the facet's verbs (`plan`, `deploy`, `destroy`), plus the typed
+   *  `append` of the deployment's own events; `list()`, `create(path)` and `delete(path)` are the
+   *  collection's on the `project` facet at `/`. */
+  deployments: EntityRoot<
+    EntityHandle<DeploymentFacet, (typeof deploymentVerbs)[number], typeof DeploymentContract>
+  >;
   /** THE FILES: project file storage as a PATH namespace over `itx.r2`
    *  — a file is its path (leading slash), its bytes and a content type; last write wins, no
    *  events. `get(path)` is a handle: `.put({ contentType, data })` (data: bytes, or a string that
@@ -110,10 +120,10 @@ export interface LibraryRoots {
   files: IterateContextApi["files"];
 }
 
-/** An entity root (`itx.repos`, `itx.workspaces`): the published collection (iterate/api
- *  `EntityCollectionApi`) with `get(path)` typed as the facet it dispatches to — narrower than the
- *  published handle, which the edge's `implements IterateContextApi` (iterate-context.ts) checks it
- *  against. */
+/** An entity root (`itx.repos`, `itx.workspaces`, `itx.sandboxes`, `itx.deployments`): the
+ *  published collection (iterate/api `EntityCollectionApi`) with `get(path)` typed as the facet it
+ *  dispatches to — narrower than the published handle, which the edge's `implements
+ *  IterateContextApi` (iterate-context.ts) checks it against. */
 type EntityRoot<Handle> = EntityCollectionApi<InvokeHandle & Handle>;
 
 /** What an entity handle's dotted members reach: the facet's own `Verbs`, and the typed `append` of
@@ -184,6 +194,7 @@ export function buildLibrary(
       repos: entityRoot(itx, deps, "repo", "repos", RepoContract),
       workspaces: entityRoot(itx, deps, "workspace", "workspaces", WorkspaceContract),
       sandboxes: entityRoot(itx, deps, "sandbox", "sandboxes", SandboxContract),
+      deployments: entityRoot(itx, deps, "deployment", "deployments", DeploymentContract),
       files: {
         get: (path) => fileHandle(itx, path),
         list: async (prefix = "") => {
@@ -460,11 +471,12 @@ export async function settlementOfScriptRun(
   }
 }
 
-// ── the entities ── `itx.repos`, `itx.workspaces`: a repo (src/repo/) and a workspace
-// (src/workspace/) are each a FACET hosted on their own context, and ONE
-// SHAPE here. `get(path)` is the HANDLE — pure addressing: a first-party facet is hosted on its first
-// call and addressed after (the DO's startup memo), so nothing is appended to get one; every call on
-// the handle is one dotted expression on that facet, run in the sibling under ITS rules (a test lends
+// ── the entities ── `itx.repos`, `itx.workspaces`, `itx.sandboxes`, `itx.deployments`: a repo
+// (src/repo/), a workspace (src/workspace/), a sandbox (src/sandbox/) and a deployment
+// (src/deployment/) are each a FACET hosted on their own context, and ONE SHAPE here. `get(path)`
+// is the HANDLE — pure addressing: a first-party facet is hosted on its first call and addressed
+// after (the DO's startup memo), so nothing is appended to get one; every call on the handle is one
+// dotted expression on that facet, run in the sibling under ITS rules (a test lends
 // a fake `itx.cfArtifacts` on a repo's context) — EXCEPT `append(...events)`, THE TYPED WRITE: the
 // entity's own events, each validated against its contract and appended on the context at `path`
 // under the CALLER's principal, never through the facet (a facet's appends are the processor's,
@@ -490,7 +502,7 @@ function entityRoot<Handle>(
   itx: LibraryItx,
   deps: LibraryDeps,
   name: EntitySlug,
-  collection: "repos" | "workspaces" | "sandboxes",
+  collection: "repos" | "workspaces" | "sandboxes" | "deployments",
   contract: EntityContract,
 ): EntityRoot<Handle> {
   // CREATING AND DELETING REACH ONLY STRICTLY BENEATH THE CALLER'S ORIGIN (`Caller.path`, stamped by
@@ -605,7 +617,7 @@ function entityHandle(
         for (const { idempotencyKey } of parsed)
           if (
             idempotencyKey &&
-            /^(?:itx|project|repo|workspace|sandbox|secret)[/@]/.test(idempotencyKey)
+            /^(?:itx|project|repo|workspace|sandbox|deployment|secret)[/@]/.test(idempotencyKey)
           )
             throw codedError(
               "FORBIDDEN",

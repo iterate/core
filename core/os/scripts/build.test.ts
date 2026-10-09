@@ -14,7 +14,7 @@ test("the build reaches nothing outside core/", async () => {
       "core/os/vite.config.ts",
       "core/os/cloudflare.config.ts",
       "core/os/scripts/build.ts",
-      "core/os/scripts/deploy.ts",
+      "core/os/alchemy.run.ts",
     ],
     bundle: true,
     packages: "external",

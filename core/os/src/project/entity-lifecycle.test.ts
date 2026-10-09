@@ -7,12 +7,13 @@
 
 import { expect, test } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";
+import { DeploymentContract } from "../deployment/contract.ts";
 import { RepoContract } from "../repo/contract.ts";
 import { SandboxContract } from "../sandbox/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { EntityLifecycleProcessor } from "./entity-lifecycle.ts";
 
-for (const contract of [RepoContract, WorkspaceContract, SandboxContract]) {
+for (const contract of [RepoContract, WorkspaceContract, SandboxContract, DeploymentContract]) {
   const slug = contract.slug;
   const path = `/${slug}s/x`;
   const requested = { type: `events.iterate.com/${slug}/create-requested`, payload: {} };
@@ -109,7 +110,8 @@ for (const contract of [RepoContract, WorkspaceContract, SandboxContract]) {
         },
         () => path,
       );
-      // A repo's state also carries its origin (repo/contract.ts), and a sandbox's its container's, untouched by the lifecycle.
+      // A repo's state also carries its origin (repo/contract.ts), a sandbox's its container's and a
+      // deployment's its run (deployment/contract.ts), untouched by the lifecycle.
       expect(reduceProcessor(processor, events)).toEqual({ ...contract.initialState(), ...state });
     });
 }

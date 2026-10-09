@@ -1098,7 +1098,64 @@ export type SandboxHandle = InvokeHandle & {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
 };
 
-/** An entity collection root (`itx.repos`, `itx.workspaces`, `itx.sandboxes`): `get(path)` the entity's handle,
+/** What a deployment's `plan` and `deploy` take, and nothing else: an unknown key is refused
+ *  (INVALID_INPUT). */
+export type DeploymentRunInput = {
+  /** The release: a zip of bundle/, assets/ and migrations/ in the project's files, by its path
+   *  (`/releases/<sha256>.zip` by convention), and its SHA-256 as 64 lowercase hex digits, which
+   *  each attempt checks before it unzips the release. */
+  release: { file: string; sha256: string };
+  /** The whole iterate config, as one JSON string, its secrets inline: the object `pnpm run deploy`
+   *  reads from iterate.config.ts and .secrets, with `cloudflare.apiToken`, the account's API token
+   *  the deploy runs with and the Worker keeps. Its Worker must be the one that the deployment's
+   *  path names. The facet parses it as the Worker does (a malformed field is refused by name) and
+   *  keeps it in its own storage under an id of its own, never on the log: a run's fact names the
+   *  release, the images, the account and that id. A destroy and the deletion's teardown run with
+   *  the config of the last plan or deploy that opened a run. */
+  config: string;
+  /** Image name ⇒ its reference in the account's registry, pinned by digest
+   *  (`registry.cloudflare.com/<account>/<name>@sha256:<digest>`). With none, a sandbox starts
+   *  Cloudflare's managed image. */
+  images?: Record<string, string>;
+  /** The release's version, which the message of the Worker version names. */
+  version?: string;
+};
+
+/** `itx.deployments.get(path)`: one deployment of core/os on Cloudflare (the deployment facet in
+ *  core/os), run by Alchemy in the facet. The path's last segment is the Worker's name and
+ *  Alchemy's stage. The config a run deploys, secrets and token included, is the run's input, kept
+ *  in the facet's storage. A RUN IS A FACT: each verb appends `deployment/run-requested`
+ *  and answers its offset at once, which is the run's id. The run lands on the path's log
+ *  (`attempt-started`, `release-staged`, `run-planned`, `resource-applied`) and ends with one
+ *  `deployment/run-settled`, which `itx.cd(path).waitForEvent({ type:
+ *  "events.iterate.com/deployment/run-settled", payload: { requestOffset }, afterOffset:
+ *  requestOffset })` follows. It says how the run ended: `succeeded` (with the Worker's `url` after
+ *  a deploy), `refused` (an expected outcome: the request opened no run, or the release, the
+ *  secret, the config or the token's reach refused it), `failed` (any other error, Cloudflare's
+ *  answers among them: `error` names each by its tag; run it again) or `unavailable` (the
+ *  attempt's own deadline, or the platform failed the facet's own calls; run it again), and
+ *  `error` says why, with every secret value masked. If anything goes wrong, the stack is run
+ *  again: an attempt lost with its incarnation starts again at once, four attempts at most.
+ *  ONE RUN AT A TIME: a verb refuses RUN_IN_PROGRESS while a run is open. Every verb
+ *  refuses until the deployment is created and once its deletion is asked.
+ *  `itx.deployments.delete(path)` first destroys what the runs deployed: a destroy that fails keeps
+ *  the deployment, and `delete` answers WAIT_TIMEOUT. Where the deployment stands is
+ *  `(await handle.snapshot()).state`. */
+export type DeploymentHandle = InvokeHandle & {
+  /** Plan a deploy of the release: Alchemy's plan of each resource lands as `run-planned`, and
+   *  nothing changes. */
+  plan(input: DeploymentRunInput): Promise<{ requestOffset: number }>;
+  /** Deploy the release: plan, then apply. */
+  deploy(input: DeploymentRunInput): Promise<{ requestOffset: number }>;
+  /** Destroy what the deployment's state holds, with the config its last plan or deploy kept.
+   *  Refused (INVALID_INPUT) when no plan or deploy ran here. */
+  destroy(): Promise<{ requestOffset: number }>;
+  /** Append the deployment's own events on its context; its lifecycle facts are the
+   *  collection's. */
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+};
+
+/** An entity collection root (`itx.repos`, `itx.workspaces`, `itx.sandboxes`, `itx.deployments`): `get(path)` the entity's handle,
  *  `list()` the project catalog, `create(path)` the creation saga on that path (the parent link the
  *  caller's context writes first, then the processor row, the request, the terminal fact — created,
  *  or create-failed thrown), `delete(path)` the deletion saga (the request, `deleted` cross-posted to
@@ -1467,6 +1524,8 @@ export interface IterateContextApi {
   workspaces: EntityCollectionApi<WorkspaceHandle>;
   /** Linux containers with a disk: `create(path)` once, then `get(path).exec("make test")`. */
   sandboxes: EntityCollectionApi<SandboxHandle>;
+  /** Deployments of core/os on Cloudflare: `create(path)` once, then `get(path).deploy({ … })`. */
+  deployments: EntityCollectionApi<DeploymentHandle>;
   /** Workers AI's binding (`ItxAiApi`), under this context's capability rules. */
   ai: ItxAiApi;
   /** Cloudflare Browser Run. */

@@ -10,7 +10,9 @@
     "vitest.config.ts",
     "vitest.global-setup.ts",
     "sqlfu.config.ts",
-    "scripts/*.ts"
+    "scripts/*.ts",
+    "alchemy.run.ts",
+    "alchemy/*.ts"
   ],
-  "exclude": ["scripts/project-seed-format.ts"]
+  "exclude": ["scripts/project-seed-format.ts", "alchemy/*.test.ts"]
 }

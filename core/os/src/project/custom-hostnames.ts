@@ -91,14 +91,15 @@ const WILDCARD_SSL = {
   settings: { min_tls_version: "1.2" },
 };
 
-/** The provider over Cloudflare's API with the deployment's token — null when the deployment has no
- *  `customHostnames` block or no token (a hostname is then refused, never half-provisioned). */
+/** The provider over Cloudflare's API with the account's token (`cloudflare.apiToken`) — null when
+ *  the deployment has no `customHostnames` block or no `cloudflare` section (a hostname is then
+ *  refused, never half-provisioned). */
 export function cloudflareCustomHostnameProvider(
-  config: Pick<IterateConfig, "customHostnames">,
+  config: Pick<IterateConfig, "customHostnames" | "cloudflare">,
   fetcher: typeof fetch = (input, init) => fetch(input, init),
 ): CustomHostnameProvider | null {
   const saas = config.customHostnames;
-  const token = saas?.cloudflareApiToken.exposeSecret();
+  const token = config.cloudflare?.apiToken.exposeSecret();
   if (!saas || !token) return null;
   const cloudflare = async <T>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetcher(

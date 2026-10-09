@@ -56,6 +56,7 @@ type ErrorCode =
   | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (core/os context/facet-host.ts)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
   | "NOT_FAST_FORWARD" // a repo's pull or push without `force` where neither main contains the other (core/os repo/durable-object.ts) — `data` is { ours, theirs }
+  | "RUN_IN_PROGRESS" // a deployment's plan, deploy or destroy while its last run is open (core/os deployment/durable-object.ts): one run at a time, so follow the open run to its `deployment/run-settled`, then ask again
   | "TIMEOUT" // lib.ts withTimeout: the call did not answer within its deadline
   | "GONE" // a target that says it is gone for good (an HTTP webhook's 410): the delivery halts its row, which an operator's resume reopens
   | "LOOP_LIMIT" // code reacting to code too many hand-offs deep (core/os cause.ts): the act is refused for good, never retried

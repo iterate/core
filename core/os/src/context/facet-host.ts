@@ -47,6 +47,7 @@ import {
   type CoreState,
 } from "../stream/core-processor.ts";
 import { AccountFacet } from "../account/durable-object.ts";
+import { DeploymentFacet } from "../deployment/durable-object.ts";
 import { EmailFacet } from "../email/durable-object.ts";
 import { InstanceFacet } from "../instance/durable-object.ts";
 import { IntegrationFacet } from "../integrations/registry.ts";
@@ -171,6 +172,7 @@ export const UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS = 60_000;
  *  typecheck. */
 const FIRST_PARTY_FACET_PUBLIC_METHODS = {
   account: AccountFacet.publicMethods,
+  deployment: DeploymentFacet.publicMethods,
   email: EmailFacet.publicMethods,
   instance: InstanceFacet.publicMethods,
   integration: IntegrationFacet.publicMethods,

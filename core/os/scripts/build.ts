@@ -3,8 +3,8 @@
 // (`--template`, or `build({ templates })` from iterate's deploy tooling). Vite builds the Worker
 // and Start client after this step (cloudflare.config.ts, into .cloudflare/output/); Vitest runs
 // that built Worker.
-import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { build as esbuild } from "esbuild";
@@ -140,6 +140,26 @@ export async function build(options: { templates: ConfigTemplate[] }) {
   );
 }
 
+/** THE RELEASE `pnpm build` makes, as ../alchemy/stack.ts takes it: one directory, Vite's build of
+ *  the Worker (the Cloudflare Vite plugin's Build Output: `bundle/`, the entry with its sibling
+ *  modules, and `assets/`) with the control plane's D1 migrations copied beside them, and the commit
+ *  that labels the Worker version (none outside a git checkout). ../alchemy.run.ts deploys it. A
+ *  project's deployment facet deploys it from a zip of it in the project's files
+ *  (../src/deployment/run.ts; SELF-HOSTING.md, "Deploy from an iterate project"). */
+export function releaseOf() {
+  // this checkout's path, so a deploy from another checkout plans `update DB` once
+  // (../alchemy/stack.ts `StackInput`)
+  const dir = path.join(root, ".cloudflare/output/v0/workers/default");
+  const migrations = path.join(dir, "migrations");
+  rmSync(migrations, { recursive: true, force: true });
+  cpSync(path.join(root, "src/control-plane/db/migrations"), migrations, { recursive: true });
+  const commit = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  return { dir, version: commit.status === 0 ? commit.stdout.trim() : undefined };
+}
+
 const coreConfigs = path.resolve(root, "../configs");
 
 /**
@@ -239,8 +259,7 @@ export async function templatesFromArgs(args: string[]) {
 }
 
 // `pnpm build [--template <reference>]… [--template-root <checkout>]`: the generated modules, then
-// `vite build`, for the deployment the iterate config's `cloudflare` section names
-// (src/iterate-config.ts), or a local build.
+// `vite build`: the release (`releaseOf`), whichever deployment it goes to.
 if (import.meta.main) {
   const { templates } = await templatesFromArgs(process.argv.slice(2));
   await build({ templates });

@@ -388,6 +388,20 @@ export class ProjectProcessor extends StreamProcessor<
         const { [event.payload.path]: _gone, ...sandboxes } = state.sandboxes;
         return { ...state, sandboxes };
       }
+      case "events.iterate.com/deployment/created":
+        if (state.deployments[event.payload.path]) return undefined;
+        return {
+          ...state,
+          deployments: {
+            ...state.deployments,
+            [event.payload.path]: { createdAt: event.createdAt },
+          },
+        };
+      case "events.iterate.com/deployment/deleted": {
+        if (!state.deployments[event.payload.path]) return undefined;
+        const { [event.payload.path]: _gone, ...deployments } = state.deployments;
+        return { ...state, deployments };
+      }
       case "events.iterate.com/secret/set":
       case "events.iterate.com/secret/deleted":
       case "events.iterate.com/secret/lent":

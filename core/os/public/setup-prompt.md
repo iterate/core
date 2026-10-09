@@ -34,12 +34,11 @@ so say which flow a page is for when you open it.
 Start with one message that lists these, before you run anything:
 
 1. **A Cloudflare account with Workers Paid and R2 enabled**, ideally a new account just for
-   iterate. The deployment takes the account's Zero Trust organization, a Worker, D1, R2, KV and
-   Artifacts, and a sign-in application; an account of its own keeps all that, and its bill, apart
-   from anything else. https://dash.cloudflare.com/sign-up makes one. Workers Paid and R2 each need
-   a payment method on the account; [Enable Workers Paid and R2](#enable-workers-paid-and-r2) says
-   where. Workers Paid also brings Cloudflare Artifacts (open beta), the git repos every project's
-   code lives in.
+   iterate. The deployment takes a Worker, D1, R2, KV, Artifacts and the sandboxes' containers; an
+   account of its own keeps all that, and its bill, apart from anything else.
+   https://dash.cloudflare.com/sign-up makes one. Workers Paid and R2 each need a payment method on
+   the account; [Enable Workers Paid and R2](#enable-workers-paid-and-r2) says where. Workers Paid
+   also brings Cloudflare Artifacts (open beta), the git repos every project's code lives in.
 2. **Ideally, a domain to burn**: a domain whose zone is active on that Cloudflare account and that
    nothing else uses. iterate then takes all of it:
    - `iterate.<domain>`: the OS itself (sign-in, consent, `/api`, `/mcp`);
@@ -50,11 +49,11 @@ Start with one message that lists these, before you run anything:
    app shares that origin with the OS. That is fine for one person, or people who all trust each
    other; `core/os/SELF-HOSTING.md` (Project apps) says why.
 
-3. **Who may sign in. You MUST ask this; it is a required question.** Sign-in is Cloudflare
-   Access's email code: a person types their email, and Cloudflare mails a one-time code to it.
-   Ask which email addresses, and which whole email domains, may sign in. Never guess the list,
-   never fill it from git config or the Cloudflare login, and never allow everyone. Don't write the
-   config (step 4) until the user has answered.
+3. **Who may sign in. You MUST ask this; it is a required question.** Sign-in is a password: a
+   person types their email and the deployment's one password, which you generate in step 4 and the
+   user keeps in their password manager. Ask which email addresses, and which whole email domains,
+   may sign in. Never guess the list, never fill it from git config or the Cloudflare login, and
+   never allow everyone. Don't write the config (step 4) until the user has answered.
 
 Ask for the domain, if they have one, in the same message. Then end your turn, and start step 1
 when the user answers.
@@ -68,15 +67,12 @@ id (step 2), put it in the link instead.
   **Workers Paid**. It is a monthly subscription; the deploy fails without it, as the config
   declares paid-plan limits.
 - **R2**: https://dash.cloudflare.com/?to=/:account/r2/overview, then **Purchase R2 Plan** (it has
-  a free tier; Cloudflare still asks for a payment method). `cf r2 buckets list` answers
+  a free tier; Cloudflare still asks for a payment method). The R2 check in step 3 answers
   `10042 Please enable R2 through the Cloudflare Dashboard` until this is done.
 - **A domain** (optional): https://dash.cloudflare.com/?to=/:account/add-site adds a domain the user
   already owns (they change its nameservers at the registrar to the two Cloudflare names); or
   https://dash.cloudflare.com/?to=/:account/domains/register buys one. The zone must show
   **Active** before you deploy.
-- **Zero Trust** (free, for the email sign-in): the deploy turns it on itself. If Cloudflare refuses,
-  the deploy prints a link to https://one.dash.cloudflare.com/, where the user chooses the free
-  plan once.
 
 ## 1. Get the code
 
@@ -88,30 +84,55 @@ cd iterate && pnpm install
 The deployment offers core's project templates (`core/configs/`). A new project, the user's first
 included, starts from `default`: the agents app. A bare homepage (`minimal`) is always offered too.
 
-Run every `cf` command as `pnpm --dir core/os exec cf …`, from `iterate/`: that is the project's own
-`cf`, which reads `core/os/cloudflare.config.ts`. A `cf` installed globally may be older.
+Run every later command from `iterate/core/os`. [Alchemy](https://alchemy.run) deploys the
+platform: `pnpm run deploy` builds it and runs Alchemy's CLI there.
 
-## 2. Log in to Cloudflare
+## 2. The Cloudflare API token
 
-- Always run `pnpm --dir core/os exec cf auth login --force --no-browser`, even if `cf` already has
-  a login: you can't know which account the user wants. Run it in the background, with its output
-  in a file. It prints a link and a code: `open` the link and show the user the code. The user
-  signs in to the dash as the right Cloudflare user, enters the code, picks the account and allows
-  it. So don't ask which account up front. The command exits once they're done.
-- `pnpm --dir core/os exec cf accounts list` then shows the account. Ask only if it shows several.
-  With several, `cf` refuses every later command until it knows which: export
-  `CLOUDFLARE_ACCOUNT_ID=<the account>` in each shell that runs `cf` or the deploy.
+- `open` https://dash.cloudflare.com/profile/api-tokens. The user signs in as the right Cloudflare
+  user and chooses **Create Token**, then **Create Custom Token**. Tell them to name it `iterate`
+  and give it these permissions, all on the **Account** unless the row says **Zone**:
+  - **Edit**: Workers Scripts, Workers KV Storage, Workers R2 Storage, D1, Containers, Artifacts
+  - **Read**: Account Settings, Workers Tail, Workers Observability
+  - With a domain, on the **Zone**, **Edit**: Workers Routes, DNS
+
+  Under **Account Resources** they include the account to deploy to (and the zone under **Zone
+  Resources** with a domain), so don't ask which account up front. They create the token and copy
+  it. End your turn while they do this.
+
+- Write the token into `core/os/.secrets` from the clipboard, so it never appears in chat:
+  `(umask 077 && printf 'ITERATE__CLOUDFLARE__API_TOKEN=%s\n' "$(pbpaste)" > .secrets)` on macOS
+  (on Linux, `wl-paste` or `xclip -o -selection clipboard`). If you can't read the clipboard, the
+  user pastes it after `ITERATE__CLOUDFLARE__API_TOKEN=` in that file themselves. The token is
+  part of the deployment's config (`cloudflare.apiToken`): the deploy runs with it, and the Worker
+  keeps it.
+- List the account the token reaches; its id goes into the config in step 4. Ask only if it lists
+  several:
+
+  ```bash
+  (set -a && . ./.secrets && curl -s https://api.cloudflare.com/client/v4/accounts \
+    -H "Authorization: Bearer $ITERATE__CLOUDFLARE__API_TOKEN")
+  ```
 
 ## 3. Check the account (before deploying)
 
-- `pnpm --dir core/os exec cf r2 buckets list` must succeed. If not, the user enables R2
+With the account id from step 2:
+
+```bash
+(set -a && . ./.secrets && for route in r2/buckets artifacts/namespaces; do
+  curl -s "https://api.cloudflare.com/client/v4/accounts/<account id>/$route" \
+    -H "Authorization: Bearer $ITERATE__CLOUDFLARE__API_TOKEN"; echo
+done)
+```
+
+- `r2/buckets` must answer `"success":true`. If not, the user enables R2
   ([links](#enable-workers-paid-and-r2)).
-- `pnpm --dir core/os exec cf artifacts namespaces list` must succeed. `10004 Access denied` means
-  the account has no Artifacts, which comes with Workers Paid: the user turns Workers Paid on
+- `artifacts/namespaces` must answer `"success":true`. `10004 Access denied` means the account has
+  no Artifacts, which comes with Workers Paid: the user turns Workers Paid on
   ([links](#enable-workers-paid-and-r2)). Without Artifacts, sign-in and MCP work, but project
   creation fails.
-- With a domain: `pnpm --dir core/os exec cf zones list --name <domain>` must show it on this
-  account, `"status": "active"`.
+- With a domain: `curl -s "https://api.cloudflare.com/client/v4/zones?name=<domain>"` with the same
+  header must show it on this account, `"status":"active"`, and its `id` is the zone id for step 4.
 - Workers Paid has no check of its own: the Artifacts check above fails without it, and a
   successful deploy proves it.
 
@@ -122,7 +143,8 @@ values.
 
 `core/os/iterate.config.local.ts` holds the values that are not secret. It imports
 `iterate.config.ts`, which reads the config from the environment and `.secrets`, and overrides what
-it needs. Without a domain:
+it needs. A section the file sets replaces the environment's whole, so spread `base.cloudflare`
+(the token) and `base.login` (the password) into it. Without a domain:
 
 ```ts
 import type { IterateConfigInput } from "./src/iterate-config.ts";
@@ -130,9 +152,13 @@ import base from "./iterate.config.ts";
 
 export default {
   ...base,
-  cloudflare: { accountId: "<the account from step 2>", resourcePrefix: "iterate" },
-  // sign-in: Cloudflare Access mails a one-time code to an address it admits
-  login: { methods: { cloudflareAccess: {} }, allow: [{ email: "<the user's email>" }] },
+  cloudflare: {
+    ...base.cloudflare,
+    accountId: "<the account from step 2>",
+    resourcePrefix: "iterate",
+  },
+  // sign-in: the password in .secrets, for the addresses `allow` admits
+  login: { ...base.login, allow: [{ email: "<the user's email>" }] },
 } satisfies IterateConfigInput;
 ```
 
@@ -142,6 +168,7 @@ With a domain, the OS moves to `iterate.<domain>`, and the Worker takes the whol
 export default {
   ...base,
   cloudflare: {
+    ...base.cloudflare,
     accountId: "<the account from step 2>",
     resourcePrefix: "iterate",
     workerRoutes: [
@@ -150,21 +177,23 @@ export default {
     ],
   },
   urls: { ...base.urls, os: "https://iterate.<domain>" },
-  login: { methods: { cloudflareAccess: {} }, allow: [{ email: "<the user's email>" }] },
+  login: { ...base.login, allow: [{ email: "<the user's email>" }] },
 } satisfies IterateConfigInput;
 ```
 
 A route answers only where DNS does. Give the zone two proxied records, `<domain>` and
 `*.<domain>` (the wildcard covers `iterate.<domain>`). Cloudflare's free Universal SSL certificate
 covers both. First list what the zone has on those names
-(`pnpm --dir core/os exec cf dns records list --zone <domain>`); if anything is there, show it to the
-user and ask before you delete it (`cf dns records delete <id> --zone <domain> --force`). Then:
+(`GET https://api.cloudflare.com/client/v4/zones/<zone id>/dns_records`, with the token's header);
+if anything is there, show it to the user and ask before you delete it
+(`DELETE …/dns_records/<record id>`). Then:
 
 ```bash
-for name in '<domain>' '*.<domain>'; do
-  pnpm --dir core/os exec cf dns records create --zone '<domain>' \
-    --body "{\"type\":\"AAAA\",\"name\":\"$name\",\"content\":\"100::\",\"proxied\":true}"
-done
+(set -a && . ./.secrets && for name in '<domain>' '*.<domain>'; do
+  curl -s -X POST "https://api.cloudflare.com/client/v4/zones/<zone id>/dns_records" \
+    -H "Authorization: Bearer $ITERATE__CLOUDFLARE__API_TOKEN" -H "Content-Type: application/json" \
+    -d "{\"type\":\"AAAA\",\"name\":\"$name\",\"content\":\"100::\",\"proxied\":true}"; echo
+done)
 ```
 
 The first project gets `<domain>` and `*.<domain>` in step 6. Further projects live at
@@ -173,58 +202,74 @@ The first project gets `<domain>` and `*.<domain>` in step 6. Further projects l
 `resourcePrefix` is `iterate`, unless the account already has an iterate; it names the Worker and
 its D1, R2 and Artifacts namespace.
 
-People sign in with Cloudflare Access: they type their email, and Cloudflare mails them a one-time
-code. No password exists and no mail domain is needed. Keep this method. `login.allow` is the
-user's answer to the required question (who may sign in), one rule each: `{ email: "a@b.com" }` for
-one address, `{ emailDomain: "b.com" }` for everyone at that domain. The deploy makes it the Access
-policy too. No answer, no config: ask again.
+People sign in with a password: they type their email and the password. Keep this method.
+`login.allow` is the user's answer to the required question (who may sign in), one rule each:
+`{ email: "a@b.com" }` for one address, `{ emailDomain: "b.com" }` for everyone at that domain. No
+answer, no config: ask again. A shared password suits people who trust each other;
+`core/os/SELF-HOSTING.md` ("Sign-in") has a mailed code and the provider sign-ins for anyone else.
 
-`core/os/.secrets` (mode 600) holds the secrets, one `NAME=value` line each. Each name is the
-variable of a config field:
+`core/os/.secrets` (mode 600) holds the rest, one `NAME=value` line each, after the token line from
+step 2:
 
+- `ALCHEMY_STAGE`: the Worker's name, `iterate` (the `resourcePrefix`). Every Alchemy command acts
+  on it.
+- `DO_NOT_TRACK=1`: Alchemy's CLI sends its authors no telemetry.
 - `ITERATE__ADMIN_BEARER`: `openssl rand -hex 32`. Operator access to every project over `/api`
   (`/mcp` refuses it). You use it to find the user's project and to add voice.
 - `ITERATE__SECRETS_ENCRYPTION__KEY`: `openssl rand -hex 32`. It encrypts project secrets at rest;
   losing it loses them.
+- `ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD`: `openssl rand -base64 18`. The sign-in password.
+  Tell the user where it is (that line of `core/os/.secrets`) and to keep it in their password
+  manager.
 
-Leave every other field to its default. Generate the values with a script that writes the file and
-prints nothing. Never print them in chat.
+Leave every other field to its default. Generate the values with a script that appends them to the
+file and prints nothing. Never print them in chat.
 
 To change a value or a default later, set it in the environment (`ITERATE`, `ITERATE__*`) or in
-`iterate.config.local.ts`. The user may keep the secrets in a secrets manager instead (Doppler,
-Infisical, 1Password): `iterate.config.ts` reads them from the environment, so
-`doppler run -- pnpm run deploy` works with no `.secrets`. `core/os/SELF-HOSTING.md` has the
-details.
+`iterate.config.local.ts`; keep a secret a variable of its own in `.secrets`. The user may keep the
+secrets in a secrets manager instead (Doppler, Infisical, 1Password): `iterate.config.ts` reads
+them from the environment, so `doppler run -- pnpm run deploy` works with no `.secrets`.
+`core/os/SELF-HOSTING.md` has the details.
 
 ## 5. Deploy
 
 ```bash
-pnpm run deploy
+(set -a && . ./.secrets && curl -s -X POST \
+  "https://api.cloudflare.com/client/v4/accounts/<account id>/artifacts/namespaces" \
+  -H "Authorization: Bearer $ITERATE__CLOUDFLARE__API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"namespace":"iterate-repos"}')
+mkdir -p -m 700 .alchemy
+pnpm run deploy --yes
 ```
 
-It checks the config, makes the sign-in's Cloudflare Access application, builds the Worker, makes
-the D1 database and the R2 bucket by name, deploys, and migrates the D1, which holds the users,
-organizations and projects. If Cloudflare refuses to make the Zero Trust organization, the deploy
-prints a link where the user turns Zero Trust on once; then deploy again. Without a domain, it
-prints the Worker's `workers.dev` URL: that is the origin. With one, the origin is
-`https://iterate.<domain>`. The Artifacts namespace is made by the first project.
-`pnpm run deploy --check` runs everything but the deploy, touching nothing.
+The first command makes the Artifacts namespace `<resourcePrefix>-repos`, where every project's
+code lives: a project's creation fails until it exists. It answers `"success":true`, or 409 with
+code 10201 when the namespace exists. Without Artifacts access it fails; go on if the user wants
+to. `mkdir -p -m 700 .alchemy` makes the folder of Alchemy's state private: the state holds every
+secret, and Alchemy writes its files readable by every user of the machine.
+
+`pnpm run deploy --yes` builds the Worker, checks the config, and applies Alchemy's plan without
+asking: it makes the D1 database, the KV namespaces, the R2 bucket, the sandboxes' containers and
+the Worker, and migrates the D1, which holds the users, organizations and projects. Without a
+domain, it prints the Worker's `workers.dev` URL: that is the origin. With one, the origin is
+`https://iterate.<domain>`. Alchemy's state is in `core/os/.alchemy/`: keep it beside `.secrets`.
 
 Check the origin before you send the user to it: `curl -s <origin>/version` prints the deploy's
 version id and the origin. A new domain's certificate can take a few minutes; wait for it.
 
-To update: `git pull`, `pnpm install`, `pnpm run deploy`.
+To update: `git pull`, `pnpm install`, then `pnpm run deploy` in `core/os`, which shows the plan
+and asks before it applies.
 
 ## 6. First sign-in and project
 
 Signing in at the origin creates nothing: the organization and project are created on the consent
 page, when an app connects. Send the user to the dash's connect page for the origin,
 `https://dash.iterate.com/.auth/connect?issuer=<origin, URL-encoded>`; opening the origin itself
-goes there too. They click Continue, sign in with their email and the code Cloudflare mails them,
-then name the organization and project on the consent page. Wait for them, then find the project
-and the email they signed in with yourself, with the admin bearer, which `--env-file=.secrets`
-reads so it never appears in a command (from `iterate/core/os`, where the SDK resolves). Ask only
-if there are several:
+goes there too. They click Continue, sign in with their email and the password, then name the
+organization and project on the consent page. Wait for them, then find the project and the email
+they signed in with yourself, with the admin bearer, which `--env-file=.secrets` reads so it never
+appears in a command (from `iterate/core/os`, where the SDK resolves). Ask only if there are
+several:
 
 ```bash
 node --env-file=.secrets --eval 'import("iterate/node").then(async ({ connectIterate }) => {
@@ -295,9 +340,9 @@ project secret.
 - Registering may open the sign-in page by itself (e.g. `codex mcp add` does). If it does, don't
   also `open` it or run a separate login command: that pops open the same page twice and confuses
   the user.
-- The user signs the client in through the browser (their email and the code Cloudflare mails).
-  E.g. in Claude Code: `/mcp`, pick the server, authenticate; after that,
-  `claude mcp list`/`codex mcp list` shows it as connected.
+- The user signs the client in through the browser (their email and the password). E.g. in Claude
+  Code: `/mcp`, pick the server, authenticate; after that, `claude mcp list`/`codex mcp list` shows
+  it as connected.
 - Then try the server's `run` tool in this session straight away. Some hosts attach a newly added
   server once it's signed in (e.g. Claude Desktop's Code tab does), so look for it among your tools
   (e.g. Claude Code's deferred tools). Call it with `async (itx) => itx.whoami()`: no `project`
@@ -324,10 +369,10 @@ gets familiar with them):
 - the project's homepage: `https://<domain>/` with a domain, `<origin>/projects/<project>/`
   without;
 - `<origin>/mcp` (remote HTTP) for other clients, and that each client signs in the same way (their
-  email and a mailed code);
+  email and the password);
 - where the config and secrets are (`iterate/core/os/iterate.config.local.ts`,
   `iterate/core/os/.secrets`), that `.secrets` is the only copy, and how to update
-  (`git pull`, `pnpm install`, `pnpm run deploy`).
+  (`git pull`, `pnpm install`, then `pnpm run deploy` in `core/os`).
 
 ## Integrations
 

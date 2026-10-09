@@ -3,7 +3,9 @@
 // Worker (Access in front of everything breaks WebSockets, MCP, OAuth, the CLI and webhooks). Access
 // mails the person a one-time PIN, then sends the request on with a token it signs
 // (`Cf-Access-Jwt-Assertion`). This route checks that token itself and signs the browser in to the
-// issuer as a password sign-in does. The deploy makes the application (scripts/cloudflare-access.ts).
+// issuer as a password sign-in does. The application is made by hand (SELF-HOSTING.md, "Sign-in"),
+// and the config names its team and audience: a deploy refuses the method without both
+// (alchemy/stack.ts).
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { sameOriginPath } from "iterate/lib";
 import { emailAllowed, EMAIL_NOT_ALLOWED_MESSAGE } from "./allowed-emails.ts";
@@ -42,8 +44,8 @@ export async function verifyAccessToken(
 }
 
 /** `GET /.auth/identity/cloudflare-access?next=`: the person Access let through, signed in to the
- *  issuer and sent on to `next` (same origin); null where `login.methods.cloudflareAccess` is off or not set
- *  up. A missing or refused token lands back on the sign-in page with why: it fails closed. */
+ *  issuer and sent on to `next` (same origin); null where `login.methods.cloudflareAccess` is off.
+ *  A missing or refused token lands back on the sign-in page with why: it fails closed. */
 export async function cloudflareAccessSignInResponse(
   request: Request,
   env: Env,
@@ -52,7 +54,7 @@ export async function cloudflareAccessSignInResponse(
   if (url.pathname !== CLOUDFLARE_ACCESS_SIGN_IN_PATH || request.method !== "GET") return null;
   const { login } = iterateConfigOf(env);
   const application = login.methods.cloudflareAccess;
-  if (!application?.teamDomain || !application.aud) return null;
+  if (!application) return null;
   const { platformOrigin } = platformAddressesOf(env, request);
   const next = sameOriginPath(url.searchParams.get("next") || "/login", platformOrigin);
   const refused = (error: string) =>

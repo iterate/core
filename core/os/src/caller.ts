@@ -99,8 +99,8 @@ export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
  *  refuses it (a run that never settles, a repo never born). On a global context `account/…` and
  *  `organization/…` are the platform's facts (grants.ts, session.ts), whoever else writes; on a
  *  project's, `itx/…` (a run's settlement, a child's announcement, the apex), `project/…`, an
- *  entity's lifecycle and a secret's lends are, and loaded code — anyone's, since anyone appends
- *  anywhere — writes none of them. */
+ *  entity's lifecycle, a deployment's run and a secret's lends are, and loaded code — anyone's,
+ *  since anyone appends anywhere — writes none of them. */
 export function refusePlatformIdempotencyKeys(
   events: readonly { idempotencyKey?: string }[],
   caller: Caller,
@@ -108,7 +108,7 @@ export function refusePlatformIdempotencyKeys(
 ): void {
   const platformKey = onGlobalContext
     ? !caller.platform && /^(?:account|organization)\//
-    : caller.app && /^(?:itx|project|repo|workspace|secret)[/@]/;
+    : caller.app && /^(?:itx|project|repo|workspace|sandbox|deployment|secret)[/@]/;
   if (!platformKey) return;
   for (const { idempotencyKey } of events)
     if (idempotencyKey && platformKey.test(idempotencyKey))

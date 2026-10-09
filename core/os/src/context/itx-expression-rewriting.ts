@@ -102,6 +102,8 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
   sandboxes:
     'Linux containers with a disk that is saved when idle and restored on the next use: `sandboxes.create(path)` once, then `sandboxes.get(path).exec(["bash", "-c", "ls -la"], { cwd?, env?, stdin?, timeoutMs? })` → { exitCode, stdout, stderr } (bytes) · `.files.read(path)` (a stream) · `.files.write(path, string | bytes | stream)` · `stat` · `lstat` · `readDirectory` · `mkdir` · `rename` · `remove` · `.container.<the container API>`, every member under its own name: `.container.snapshotContainer()`, `.container.exec(argv).stdout`, `.container.destroy()`, `.container.setInactivityTimeout(ms)`, `.container.monitor()` · `.configure({ idleAfterMs })` · `sandboxes.list()`. Debian with Node 24, git, gh, Chromium, ffmpeg, pnpm, the Claude, Codex and Grok CLIs, cf, doppler and the iterate CLI, and a clone of iterate/core in /work/core; `apt-get update && apt-get install` work through the egress (a call that does not answer within a minute fails: run longer work in the background). The default instance is standard-1; `start({ instance })` names another. The only way out is the egress of the project: every HTTP and HTTPS request of the container is answered by `itx.fetch`. An idle sandbox is saved and stopped after five minutes; a disk Cloudflare cannot restore fails the start (`start({ image: "iterate-dev-image" })` discards it)',
+  deployments:
+    "deployments of core/os on Cloudflare, run by Alchemy in their facet: `deployments.create(\"/deployments/<worker>\")` once, then `deployments.get(path).deploy({ release, config, secretNames, images?, version? })` → { requestOffset } · `.plan(…)` · `.destroy()`; the run lands on the path's log and ends with `events.iterate.com/deployment/run-settled`; the project secret `/secrets/<worker>`, pinned to https://api.cloudflare.com, holds `CLOUDFLARE_API_TOKEN` and the Worker's secrets",
   files:
     "project files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
   telemetry:
@@ -163,6 +165,7 @@ const PORTABLE_ROOTS = [
   "repos",
   "workspaces",
   "sandboxes",
+  "deployments",
   "files",
   "connectToMcp",
   "connectToOpenApi",

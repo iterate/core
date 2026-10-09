@@ -143,8 +143,10 @@ const SAAS = {
   reservedZones: [],
 };
 
-function config(token: string): Pick<IterateConfig, "customHostnames"> {
+function config(token: string): Pick<IterateConfig, "customHostnames" | "cloudflare"> {
   return {
-    customHostnames: { ...SAAS, cloudflareApiToken: { exposeSecret: () => token } as never },
+    customHostnames: SAAS,
+    // the account's token is all the provider reads of the section
+    cloudflare: { apiToken: { exposeSecret: () => token } } as never,
   };
 }

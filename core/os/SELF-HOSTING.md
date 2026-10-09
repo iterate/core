@@ -1,4 +1,4 @@
-# Self-hosting Iterate
+# Self-hosting iterate
 
 One Cloudflare Worker is the whole platform: the sign-in and consent pages, the OAuth server,
 `/api`, `/mcp`, and the Durable Objects your projects live in. It deploys into your own Cloudflare
@@ -16,19 +16,32 @@ it by hand too. This page is the reference for what it does.
 
 ## Deploy
 
+[Alchemy](https://alchemy.run) deploys the platform. Clone and install, then work in `core/os`:
+
 ```sh
 git clone https://github.com/iterate/core iterate && cd iterate
 pnpm install
-pnpm --dir core/os exec cf auth login   # or set CLOUDFLARE_API_TOKEN
-# write your config: core/os/iterate.config.local.ts and core/os/.secrets ("The config")
-pnpm run deploy
+cd core/os
+# write iterate.config.local.ts and .secrets ("The config"), and make the Artifacts namespace once
+pnpm run deploy        # the build, then Alchemy's plan; it asks before it applies
 ```
 
-Use the project's own `cf` (`pnpm --dir core/os exec cf …`): a `cf` installed globally may be
-older. To update: `git pull`, `pnpm install`, `pnpm run deploy`.
+`pnpm run deploy --yes` applies without asking. To update: `git pull`, `pnpm install`,
+`pnpm run deploy`. The other commands act on the same deployment:
 
-`pnpm run deploy --check` builds and checks everything and runs `cf deploy --dry-run`. Nothing on
-the account changes.
+```sh
+pnpm build && pnpm alchemy plan   # what a deploy would change; it changes nothing
+pnpm build && pnpm alchemy dev    # deploy, then deploy again on each change
+pnpm alchemy logs --tail          # the Worker's logs as they arrive; without --tail, the last hour's
+pnpm alchemy destroy              # delete the deployment ("Destroy")
+```
+
+`alchemy dev` deploys the Worker your people use, again on each change to a module that
+`alchemy.run.ts` imports (its header says what reloads it). Ctrl-C stops it; the Worker keeps its
+last deploy. The package scripts `deploy`, `alchemy` and `images` load `core/os/.secrets` first; a
+variable already in the environment keeps its value. Each command acts on one stage, Alchemy's name
+for one deployment, which must be the Worker's name (`cloudflare.workerName`, else
+`resourcePrefix`): `ALCHEMY_STAGE` in `.secrets` names it, or `--stage <worker>`.
 
 A deployment last deployed from iterate/core before 2026-10-05 still has empty Durable Object
 namespaces for eight old classes: `AccountDurableObject`, `EmailDurableObject`,
@@ -43,6 +56,41 @@ pnpm install && pnpm run deploy
 git checkout main && pnpm install && pnpm run deploy
 ```
 
+### The API token
+
+One token, the config's `cloudflare.apiToken` (`ITERATE__CLOUDFLARE__API_TOKEN` in `.secrets`): the
+deploy runs with it, and the Worker keeps it for what it does on the account at runtime (a project's
+custom hostnames). A second token scoped to the runtime's permissions alone would be safer, and is
+work for later. Make it at https://dash.cloudflare.com/profile/api-tokens (**Create Custom Token**),
+with your account under **Account Resources** and these permissions:
+
+| Permission                      | Level | For                                                           |
+| ------------------------------- | ----- | ------------------------------------------------------------- |
+| Account · Workers Scripts       | Edit  | the Worker, its Durable Objects, its workers.dev URL          |
+| Account · Workers KV Storage    | Edit  | the two KV namespaces                                         |
+| Account · Workers R2 Storage    | Edit  | the files bucket                                              |
+| Account · D1                    | Edit  | the control plane's database                                  |
+| Account · Containers            | Edit  | the sandboxes' containers, and `pnpm run images`              |
+| Account · Artifacts             | Edit  | the repos' namespace                                          |
+| Account · Workers Tail          | Read  | `alchemy logs --tail`                                         |
+| Account · Workers Observability | Read  | `alchemy logs`                                                |
+| Zone · Workers Routes           | Edit  | a custom domain: its zone                                     |
+| Zone · SSL and Certificates     | Edit  | projects' custom hostnames (`customHostnames`): the SaaS zone |
+| Account · Secrets Store         | Edit  | `ITERATE_STATE_STORE=cloudflare`                              |
+
+### State
+
+Alchemy records what it made, with each resource's id, in a state store. By default that is
+`core/os/.alchemy/`: plain JSON that holds every secret's value, as `.secrets` does. Git ignores
+it; never commit it, and keep it beside `.secrets`, because a destroy deletes only what the state
+names. Alchemy writes its files readable by every user of the machine, so make the folder private
+before the first deploy: `mkdir -m 700 .alchemy` in `core/os` (`chmod -R go-rwx .alchemy` for
+one that exists). With `ITERATE_STATE_STORE=cloudflare` the state lives in your account instead, in
+Alchemy's state store (the Worker `alchemy-state-store`, its key in the account's Secrets Store),
+so CI or a second machine can deploy too. The first deploy offers to make the store, and `--yes`
+makes it without asking. Choose the store before the first deploy and keep it: the two share
+nothing.
+
 ## The config
 
 One object configures a deployment, the iterate config
@@ -55,14 +103,13 @@ sign-in, admins, integrations and keys. A field you leave out takes its default.
 
 - [`iterate.config.ts`](iterate.config.ts), committed, reads it from the environment. `ITERATE` is
   the whole object as JSON. Any one field can also be set alone, `__` before each part of its path
-  (`ITERATE__URLS__OS`, `ITERATE__SECRETS_ENCRYPTION__KEY`), and wins over the object. `pnpm run deploy`,
-  and every `cf` command run in `core/os`, loads `core/os/.secrets` (gitignored, `NAME=value` lines)
-  when it exists; a variable already in the environment keeps its value.
+  (`ITERATE__URLS__OS`, `ITERATE__SECRETS_ENCRYPTION__KEY`), and wins over the object.
 - `iterate.config.local.ts`, gitignored, is used instead when it exists. It is yours: it imports
   `iterate.config.ts` and overrides what you need, with types.
 
-A self-host usually has both: the non-secret values in `iterate.config.local.ts`, the secrets in
-`.secrets` by their variable names.
+Any field goes in either place, and the file's value wins. Keep each secret a variable of its own,
+in `core/os/.secrets` (gitignored, `NAME=value` lines) or your secrets manager, not in a file you
+may share.
 
 ```ts
 // core/os/iterate.config.local.ts
@@ -72,44 +119,68 @@ import base from "./iterate.config.ts";
 export default {
   ...base,
   cloudflare: { accountId: "<your Cloudflare account id>", resourcePrefix: "iterate" },
-  login: { methods: { cloudflareAccess: {} }, allow: [{ email: "you@example.com" }] },
+  login: { ...base.login, allow: [{ email: "you@example.com" }] },
 } satisfies IterateConfigInput;
 ```
 
 ```sh
 # core/os/.secrets (chmod 600)
+ITERATE__CLOUDFLARE__API_TOKEN=<the token>
+ALCHEMY_STAGE=iterate
+# without it, Alchemy's CLI sends each command's traces, metrics and logs to otel.alchemy.run
+DO_NOT_TRACK=1
 ITERATE__SECRETS_ENCRYPTION__KEY=<openssl rand -hex 32>
 ITERATE__ADMIN_BEARER=<openssl rand -hex 32>
+ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD=<openssl rand -base64 18>
 ```
 
 A section the file sets replaces the environment's whole: spread `base.<section>` into it to keep
-the environment's fields. Without `iterate.config.local.ts`, any secrets manager that injects
-environment variables works: `doppler run -- pnpm run deploy`, `infisical run -- …`,
-`op run --env-file=core/os/.env.op -- …`.
+the environment's fields, as `login` does above to keep the password. Without
+`iterate.config.local.ts`, any secrets manager that injects environment variables works:
+`doppler run -- pnpm run deploy`, `infisical run -- …`, `op run --env-file=.env.op -- …`.
 
-Cloudflare's credentials are not part of the config: `cf auth login`, or `CLOUDFLARE_API_TOKEN`.
-(`customHostnames.cloudflareApiToken` is the Worker's own token, for projects' custom hostnames.)
+Of the other `cloudflare` fields, `d1Location` is fixed when the D1 is made (a change replaces it
+with an empty one), and `protectData: true` keeps the data through a destroy ("Destroy").
 
 The key, `secretsEncryption.key`, encrypts every project secret. Losing it loses them, and changing it
 signs everyone out. Keep `core/os/.secrets`, or your secrets manager's copy: it is the only one.
 
 ## What the deploy does
 
-`pnpm run deploy` (`scripts/deploy.ts`):
+`pnpm run deploy` runs `scripts/build.ts` (the generated modules, then Vite's build of the Worker
+into `.cloudflare/output/`), then `alchemy deploy` over `alchemy.run.ts`:
 
-1. Reads the config, parses it as the Worker will, and prints it with secrets redacted. A key the
-   schema does not name is warned about and left out.
-2. Builds the Worker.
-3. Looks up the D1 `<prefix>-db`. A deploy binds the D1, the R2 bucket `<prefix>-files` and the
-   KV namespaces by name and creates, empty, those that do not exist, so it says loudly when the D1
-   is missing: with a wrong prefix, an existing deployment would start empty. The first repo the
-   Worker creates makes the Artifacts namespace `<prefix>-repos`.
-4. Migrates the D1 (a new one right after the deploy), then runs `cf deploy`. Each field the schema
-   marks secret becomes a Worker secret of its own, named by its path
-   (`ITERATE__INTEGRATIONS__GITHUB__OAUTH_CLIENT_SECRET`); the rest becomes the plain var `ITERATE`,
-   which the dashboard shows. The Worker merges them back. The secrets go through a file only you
-   can read; no value is printed or put on a command line. An `ITERATE__*` secret the config no
-   longer sets is blanked by the same upload, then deleted.
+1. It parses the config as the Worker will: a malformed field fails the deploy, naming itself, and
+   a key the schema does not name is warned about and left out.
+2. `alchemy/stack.ts` declares the deployment. It refuses a stage that is not the Worker's name,
+   and credentials for an account other than `cloudflare.accountId`.
+3. Alchemy compares the declaration with the state, prints each resource's action (create, update,
+   replace, delete or noop), and asks. `pnpm alchemy plan` stops here.
+4. It applies: the D1 `<prefix>-db`, migrated before the Worker that binds it uploads; the KV
+   namespaces, by title; the R2 bucket `<prefix>-files`; the sandboxes' container application
+   `<worker>-sandbox`; and the Worker with its Durable Objects, routes and bindings. It prints the
+   Worker's URL.
+5. Each field the schema marks secret becomes a Worker secret named by its path
+   (`ITERATE__INTEGRATIONS__GITHUB__OAUTH_CLIENT_SECRET`), with the config's value; the rest
+   becomes the plain var `ITERATE`, which the dashboard shows. The Worker merges them back. No value
+   is printed or put on a command line, and a secret the config stops setting leaves the Worker.
+
+A second deploy with nothing changed plans every resource as `noop`.
+
+## The Artifacts namespace
+
+Every project's code lives in an Artifacts git repo, in the namespace `<prefix>-repos`. The Worker
+binds it, but neither the deploy nor a repo create makes it: a project's creation fails until it
+exists. Make it once, before the first project (here for `resourcePrefix: "iterate"`):
+
+```sh
+(set -a && . ./.secrets && curl -s -X POST \
+  "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/artifacts/namespaces" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"namespace":"iterate-repos"}')
+```
+
+It answers `"success":true`, or 409 with code 10201 when the namespace exists.
 
 ## The sandbox image
 
@@ -149,19 +220,35 @@ a [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
 (required) and `login.deny` say who may, in rules that mirror Cloudflare Access's:
 `{ "email": "a@b.com" }`, `{ "emailDomain": "b.com" }` (that domain exactly) or `{ "everyone": {} }`.
 
-- `cloudflareAccess: {}`, the default: Cloudflare mails a one-time code, so no password and no mail
-  domain. The deploy makes an Access application on `/.auth/identity/cloudflare-access` alone, its
-  policy `login.allow` and `login.deny`, and the account's Zero Trust organization if it has none.
-  Each person who signs in takes one Zero Trust seat.
+- `password: { password }` (secret: `ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD`), the self-host
+  default: one password for everyone, the email only a name tag. It needs no domain and no
+  dashboard step. It suits people who share one password: whoever has it signs in as any address
+  `login.allow` admits.
 - `emailCode: { from }`: a mailed code from an address on a domain onboarded for Email Sending.
-- `password: { password }` (secret: `ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD`): one password
-  for everyone, the email only a name tag. For local dev and test deployments.
+  Each person proves their own address.
 - `google: {}`, `github: {}`, `cloudflare: {}` (or `{ scopes }`): sign-in with that provider's
   integration client, which the person's connection then uses too. `integrations.cloudflare` takes
   `{ oauthClientId, oauthClientSecret }` from your own OAuth client; register
   `<your-origin>/.auth/identity/cloudflare/callback` and
   `<your-origin>/api/integrations/cloudflare/callback`, and configure the client for
   `response_types: ["code", "id_token"]` and the `user-details.read` scope.
+- `cloudflareAccess: { teamDomain, aud }`: Cloudflare Access mails a one-time code, so no password
+  and no mail domain. Each person who signs in takes one Zero Trust seat. You make its Access
+  application by hand: Alchemy's has no setting that keeps the `CF_Authorization` cookie on the
+  sign-in path, and without it the cookie reaches every path of the host, where paths routing
+  serves projects' own code. The config requires both `teamDomain` and `aud`. In the Cloudflare
+  dashboard:
+  1. Turn Zero Trust on for the account (the free plan is enough). Its team domain is
+     `https://<team>.cloudflareaccess.com`.
+  2. Add the One-time PIN login method.
+  3. Add a self-hosted application on `<host>/.auth/identity/cloudflare-access` alone, where
+     `<host>` is the Worker's (`<worker>.<subdomain>.workers.dev`, or `urls.os`'s). Allow the
+     One-time PIN method only, turn on **Apply instant authentication**, and set the session
+     duration to 24 hours.
+  4. Give it one Allow policy: `login.allow`'s rules as Include, `login.deny`'s as Exclude.
+  5. Under Advanced settings, Cookie settings, turn on **Cookie Path Attribute**.
+  6. Set `teamDomain` to the team domain and `aud` to the application's **Application Audience
+     (AUD) Tag**, then deploy.
 
 ## Integrations
 
@@ -199,11 +286,12 @@ and `iterate tunnel` works private or `--public`, at the root of its own origin.
 
 What it takes:
 
-1. **The zone** for `<your-domain>` on the same Cloudflare account as the Worker.
+1. **The zone** for `<your-domain>` on the same Cloudflare account as the Worker, and the token's
+   Zone · Workers Routes · Edit on it.
 2. **Your routes in `cloudflare.workerRoutes`**:
    `[{"pattern":"*.<your-domain>/*","zone":"<your-domain>"}]`. The wildcard also covers
    `os.<your-domain>`. A route answers only where DNS does: make a proxied record
-   `*.<your-domain>` (any target, such as AAAA `100::`).
+   `*.<your-domain>` (any target, such as AAAA `100::`) by hand. The deploy makes no DNS record.
 3. **A certificate for `*.<your-domain>`.** Cloudflare's Universal SSL covers the apex and one
    wildcard level, which is why a project host is one label under `<your-domain>`:
    `<routingSlug>--<project>`, or the apex `<project>`.
@@ -214,9 +302,9 @@ Deploy again. `/mcp` then lives at
 `https://os.<your-domain>/mcp`; reconnect your MCP client there. Keep `cloudflare.workersDev` on
 while anything still uses the workers.dev origin.
 
-A deploy adds and keeps the routes it names, and does not remove one you take out of
-`cloudflare.workerRoutes`: delete it in the Cloudflare dashboard (the Worker's Settings, Domains &
-Routes).
+A deploy makes the Worker's routes match `cloudflare.workerRoutes`: it adds the routes the list
+names and deletes the Worker's routes it does not name. It refuses a route that another Worker
+holds: remove the route from that Worker first.
 
 ### A project's own domain
 
@@ -232,6 +320,48 @@ platform on `iterate.example.org`, its projects on `*.iterate.example.org`). A m
 on the zone wins over the wildcard, but a Custom Domain does not: give each Custom Domain on the
 zone a route of its own to its Worker (`app.example.org/*`), or the wildcard takes it.
 
+## Destroy
+
+`pnpm alchemy destroy` deletes every resource the state names: the Worker with every Durable Object
+(every project's data) and its routes, the D1, the KV namespaces, the R2 bucket (emptied first) and
+the container application. It asks first, unless `--yes`. It needs no build, because it plans from
+the state alone, but the config must still parse. The Artifacts namespace stays, because Alchemy
+did not make it: delete its repos, then the namespace (in the dashboard: Storage & databases,
+Artifacts).
+
+With `cloudflare.protectData: true`, a destroy deletes nothing: Alchemy forgets the resources, which
+keep serving and keep their data, and the next deploy takes them back (`src/iterate-config.ts`
+says how). A destroy reads each resource's removal policy from the state, which only a deploy
+writes: to delete a protected deployment, deploy it once with `protectData` off, then destroy it.
+
+## Deploy from an iterate project
+
+A project on one deployment (the host) can deploy another (the target). The project's deployment
+facet (`src/deployment/`, `itx.deployments`) runs the stack that `pnpm run deploy` runs, with
+Alchemy's state in the facet's own SQLite, so no machine keeps it. Nothing takes over resources that
+exist without that state: give the target names nothing on the account holds, and make its
+Artifacts namespace once
+("The Artifacts namespace"). In the host's project, by convention:
+
+- **The config**: the target's whole iterate config, as one JSON string with its secrets inline,
+  `cloudflare.apiToken` among them ("The API token", on the target's account): the object
+  `pnpm run deploy` would read from `iterate.config.ts` and `.secrets`. It is the run's input. The
+  facet keeps the latest in its own storage, and its facts, log lines and errors mask every value,
+  but Alchemy's state keeps the Worker's secrets in plaintext ("State"). Whoever can use the
+  project can reach them: give it only to people who may deploy.
+- **The release**: the build's directory (`.cloudflare/output/v0/workers/default/`: `bundle/`,
+  `assets/`, and `migrations/` copied from `src/control-plane/db/`) as one zip, at
+  `/releases/<sha256>.zip` in the project's files.
+
+Create the deployment once, `itx.deployments.create("/deployments/<worker>")`, then ask for a run:
+`itx.deployments.get(path).deploy({ release, config })` answers its `requestOffset`. Follow the
+facts that name it on the path's log: `attempt-started`, `release-staged`, `run-planned` and
+`resource-applied`, until `run-settled` says how the run ended. `DeploymentHandle` in
+[`../lib/src/api.ts`](../lib/src/api.ts) documents each verb, each status and `delete`. iterate's
+own tooling does all of this as `pnpm os deploy --env <name> --project <host>/<slug>`, and the
+deployments playground, `packages/spa/public/deployments.html` in
+[iterate/packages](https://github.com/iterate/packages), does it from a browser.
+
 ## Local development
 
 `pnpm --dir core/os dev` (or `pnpm --dir core/os exec cf dev`) serves the platform on
@@ -239,5 +369,5 @@ zone a route of its own to its Worker (`app.example.org/*`), or the wildcard tak
 `<project>.localhost:8788`. D1, KV and R2 stay on disk, and so does Images (an offline version
 that knows `width`, `height`, `rotate` and `format` only; `text` and `draw` need a deployment); Workers AI, Browser Run and Artifacts have
 no local version and reach the account set in `CLOUDFLARE_ACCOUNT_ID`, in the namespace
-`os-dev-repos`. `itx.sandboxes` runs its containers in Docker (any Docker-compatible engine), so a sandbox verb needs one running; nothing else does. A deployment needs Cloudflare Containers on its account (the `SandboxContainer` class, `schedulingPolicy: "durable-object"`). Local dev never reads `iterate.config.local.ts` or `.secrets`: they are a
+`os-dev-repos`. `itx.sandboxes` runs its containers in Docker (any Docker-compatible engine), so a sandbox verb needs one running; nothing else does. A deployment runs its sandboxes on Cloudflare Containers. Local dev never reads `iterate.config.local.ts` or `.secrets`: they are a
 deployment's config.

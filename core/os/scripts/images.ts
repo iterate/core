@@ -9,8 +9,9 @@
 // time. Changing the Dockerfile changes nothing until this command runs. It builds the image once
 // (Docker, `linux/amd64`) for each account named, pushes it to that account's registry
 // (`registry.cloudflare.com/<account>/<name>`), has Cloudflare prepare it for the Containers
-// runtime, and answers the account's new digests for the caller to pin: a commit to make. The deploy hands the references to the container's `images` (cloudflare.config.ts), so an
-// image is tied to the deployment that references it. `--check` builds nothing: it fails when an
+// runtime, and answers the account's new digests for the caller to pin: a commit to make. The
+// deploy hands the references to the sandbox container's `images` (alchemy/stack.ts), so an image
+// is tied to the deployment that references it. `--check` builds nothing: it fails when an
 // account's registry does not hold a pinned digest.
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -64,6 +65,23 @@ export function imageReferences(accountId: string, pins: ImagePins) {
     else unpinned.push(name);
   }
   return { found, unpinned };
+}
+
+/** The images a deployment runs: each pinned image as its digest-pinned reference in the account's
+ *  registry. The pins are the caller's (`ITERATE_IMAGE_PINS`, a JSON object: iterate's deploy
+ *  tooling reads its own), else this checkout's `images/<name>/digest`. Nothing is read from the
+ *  registry and nothing is built: this command updates a pin when asked. The Alchemy CLI's entry
+ *  (../alchemy.run.ts) takes its images from here. */
+export function imagesOfDeployment(accountId: string): Record<string, string> {
+  const pins = process.env.ITERATE_IMAGE_PINS
+    ? z.record(z.string(), z.string()).parse(JSON.parse(process.env.ITERATE_IMAGE_PINS))
+    : checkoutPins();
+  const { found, unpinned } = imageReferences(accountId, pins);
+  for (const name of unpinned)
+    console.warn(
+      `⚠ ${name} is pinned to no build: its sandboxes start Cloudflare's managed image. \`pnpm run images\` builds and pins it.`,
+    );
+  return found;
 }
 
 type Registry = ImageAccount & { username: string; password: string };
@@ -208,10 +226,13 @@ if (import.meta.main)
   await (async () => {
     const deployment = await readDeployment();
     const accountId = deployment?.config.cloudflare?.accountId;
-    const token = process.env.CLOUDFLARE_API_TOKEN;
+    // the config's token, as the deploy runs with (SELF-HOSTING.md "The API token"), unless the
+    // environment names one
+    const token =
+      process.env.CLOUDFLARE_API_TOKEN || deployment?.config.cloudflare?.apiToken.exposeSecret();
     if (!accountId || !token)
       throw new Error(
-        "an account to build for (the iterate config's cloudflare.accountId) and CLOUDFLARE_API_TOKEN",
+        "an account to build for (the iterate config's cloudflare.accountId) and its token (cloudflare.apiToken, or CLOUDFLARE_API_TOKEN)",
       );
     const accounts = [{ accountId, token }];
     if (process.argv.includes("--check"))

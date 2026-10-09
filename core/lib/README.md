@@ -150,6 +150,44 @@ const state = reduceProcessor(new PresenceProcessor(), [{ type: "tick" }, { type
 `memoryStream`, `memoryStorage` and `settle` drive a whole `ProcessorEngine` against an
 in-memory log (`src/stream/processor.test.ts` shows how).
 
+## A multi-step run
+
+A processor whose work takes steps (a deployment's run, a project's creation) is still one
+contract, one state, one `reduce` and one `processEvent`. core/os `src/deployment/` is the worked
+example.
+
+1. **The request is a fact.** A verb appends `<x>-requested` and answers its offset, which is the
+   run's id. The fact holds every input the run needs, or names what the facet keeps for it in
+   its own storage (a deployment's config): the next incarnation reads the log and that storage,
+   never the call.
+2. **Each step lands a fact**, keyed by the request's offset and the attempt
+   (`<slug>/<fact>:<requestOffset>:<attempt>`), so a repeated append lands once. A keyed payload
+   holds no key whose value is `undefined`: the stream compares a repeated append with the stored
+   JSON, which has no such key.
+3. **The state says where the run stands:** the request, the attempt, the last step and the offset
+   of its fact. `snapshot()` shows it, and a page can watch it live.
+4. **`processEvent` advances from the state at head.** At `delivery.caughtUp`, a run that no work of
+   this incarnation drives gets one driver in `runInBackground`. The driver's claim revives the
+   facet if the facet dies. A run found mid-attempt lost its incarnation, or its driver's own fact
+   did not land, so the driver starts the next attempt at once: if anything goes wrong, the work is
+   run again.
+5. **Every step is safe to repeat.** An attempt starts again from its first step, and each effect
+   accepts its own earlier success. Facts record progress; they do not skip work that dies with an
+   incarnation (`/tmp`, an open plan).
+6. **Attempts are counted in facts and bounded.** An `attempt-started` fact lands before each
+   attempt. An attempt that ends settles the run at once, whatever its outcome: no retry waits
+   inside the processor, the caller runs it again. Only an attempt that ended before it settled the
+   run (its incarnation died) is run again, a bounded number of times, under the engine's five
+   deaths, so that a run whose attempts all die is still revived to settle.
+7. **One terminal fact,** `<x>-settled { requestOffset, status, error? }`, keyed by the request. Its
+   `status` is one of four: `succeeded`; `refused`, an expected outcome; `failed`, any other error
+   (run it again); `unavailable`, the platform's failure (run it again). A request that opens no run is settled
+   `refused` while it is processed, in `blockProcessorWhile`: no state remembers the request, so no
+   later pass could settle it. A caller follows with
+   `waitForEvent({ type, payload: { requestOffset }, afterOffset })`.
+8. **Test it as tables:** events through `reduceProcessor`, states through `processEvent` with a fake
+   effect on a fake clock, and a re-reduce row.
+
 ## Node connections
 
 `iterate/node` exposes a connection owner for Iterate scripts and live
@@ -188,8 +226,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   prefix.
 - **A domain namespace** is the singular name of the kind of context whose log the event belongs
   to, which is the defining contract's slug when there is one: `account`, `organization`,
-  `project`, `repo`, `workspace`, `sandbox`, `secret`, `agent`, `voice-agent`. A fact cross-posted to another
-  log keeps its own namespace: `repo/created` on `/` is still a repo fact.
+  `project`, `repo`, `workspace`, `sandbox`, `deployment`, `secret`, `agent`, `voice-agent`. A fact
+  cross-posted to another log keeps its own namespace: `repo/created` on `/` is still a repo fact.
 - **An integration** uses its own name as its namespace, for example `chrome`, `slack`, `google`,
   `github`.
 - **`test`** holds types that only tests append. Production code never matches a `test/*` type. A
@@ -207,7 +245,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   takes one of three shapes:
   - `<x>-settled` is the one terminal fact when the asker reads a result. It names
     `requestOffset` and carries the outcome: succeeded, failed or cancelled, a status, or an error.
-    Examples: `itx/run-*`, `agent/llm-request-*`, `project/hostname-add-*`.
+    Examples: `itx/run-*`, `agent/llm-request-*`, `project/hostname-add-*`, `deployment/run-*`.
   - `<verb-ed>` or `<verb>-failed` is used when success is a fact that other logs wait on, like a
     certificate: `create-requested` → `created` or `create-failed`, `delete-requested` → `deleted`,
     `hostname-remove-requested` → `hostname-removed`. A failure that is retried rather than
@@ -217,7 +255,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 - **One verb pair per kind of change:**
   - `added` / `removed` for membership in a set: `organization/member-added`,
     `organization/project-added`, hostnames.
-  - `created` / `deleted` for an entity with a lifecycle: projects, repos, workspaces, sandboxes, agents.
+  - `created` / `deleted` for an entity with a lifecycle: projects, repos, workspaces, sandboxes,
+    deployments, agents.
   - `set` / `deleted` for a keyed value: `secret/*`.
   - `set` / `cancelled` for a schedule: `itx/schedule-*`. Each occurrence is `fired` or `failed`.
   - `-configured` for one fact that sets a row or clears it with `null`
@@ -243,15 +282,15 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   platform's Durable Objects (device firmware, a published SDK, a project's config repo),
   rename it only in a change that migrates that store too.
 
-| Namespace                                                           | Defined in                                                                                                                                                                                                                                                                                         |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `itx`                                                               | `core/os/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `core/os/src/context/built-ins.ts`, `core/os/src/fetch-routes.ts`, `core/os/src/iterate-context-durable-object.ts`, `core/lib/src/stream/{run,processor}.ts` |
-| `account`, `organization`, `project`, `repo`, `workspace`, `secret` | `core/os/src/<name>/contract.ts` (repo and workspace also use `project/entity-lifecycle.ts`)                                                                                                                                                                                                       |
-| `agent`                                                             | `core/lib/src/agents/contract.ts`                                                                                                                                                                                                                                                                  |
-| `voice-agent`                                                       | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                |
-| `chrome`                                                            | `packages/browser-extension/public/panel.js`                                                                                                                                                                                                                                                       |
-| `email`                                                             | `core/lib/src/email.ts`                                                                                                                                                                                                                                                                            |
-| `integration`                                                       | `core/lib/src/integrations.ts` (the registry a project's packages write into; its fold is `core/os/src/integrations/registry.ts`)                                                                                                                                                                  |
-| `test`                                                              | tests only                                                                                                                                                                                                                                                                                         |
+| Namespace                                                                                    | Defined in                                                                                                                                                                                                                                                                                         |
+| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `itx`                                                                                        | `core/os/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `core/os/src/context/built-ins.ts`, `core/os/src/fetch-routes.ts`, `core/os/src/iterate-context-durable-object.ts`, `core/lib/src/stream/{run,processor}.ts` |
+| `account`, `organization`, `project`, `repo`, `workspace`, `sandbox`, `deployment`, `secret` | `core/os/src/<name>/contract.ts` (repo, workspace, sandbox and deployment also use `project/entity-lifecycle.ts`)                                                                                                                                                                                  |
+| `agent`                                                                                      | `core/lib/src/agents/contract.ts`                                                                                                                                                                                                                                                                  |
+| `voice-agent`                                                                                | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                |
+| `chrome`                                                                                     | `packages/browser-extension/public/panel.js`                                                                                                                                                                                                                                                       |
+| `email`                                                                                      | `core/lib/src/email.ts`                                                                                                                                                                                                                                                                            |
+| `integration`                                                                                | `core/lib/src/integrations.ts` (the registry a project's packages write into; its fold is `core/os/src/integrations/registry.ts`)                                                                                                                                                                  |
+| `test`                                                                                       | tests only                                                                                                                                                                                                                                                                                         |
 
 `note/added` is only an example in the Agents composer; no contract defines `note`.

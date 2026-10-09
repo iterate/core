@@ -1,60 +1,25 @@
-// cloudflare.config.ts — THE PLATFORM WORKER'S CLOUDFLARE CONFIG, read by `cf` and the Cloudflare
-// Vite plugin: the sign-in and consent pages, the OAuth server, `/api`, `/mcp`, and the Durable
-// Objects the projects live in. Modes: `development` (`cf dev`) and `test` (the suites in test/)
-// bind local resources and need no config; any other (a build, `cf deploy`) deploys where the
-// iterate config's `cloudflare` section says (scripts/iterate-config-file.ts), or builds locally
-// when it has none.
-import { bindings, defineConfig, defineContainer, exports, triggers } from "cf/config";
+// cloudflare.config.ts — THE PLATFORM WORKER ON THIS MACHINE, read by `cf` and the Cloudflare Vite
+// plugin: the sign-in and consent pages, the OAuth server, `/api`, `/mcp`, and the Durable Objects
+// the projects live in. Every mode binds the same local resources: `development` (`vite dev`,
+// which `pnpm dev` runs) with its own iterate config, `test` (the suites in test/) with none,
+// because each suite sets its own, and `production` (`vite build`). A deployment takes only the
+// build from here: Alchemy uploads it with the bindings and settings alchemy/stack.ts declares, and
+// alchemy/stack.test.ts holds this binding table to that one.
+import { bindings, defineConfig, defineContainer, exports } from "cf/config";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
-import { z } from "zod";
-import { loadSecretsFile, readDeployment } from "./scripts/iterate-config-file.ts";
-import { resourceNamesOf } from "./src/iterate-config.ts";
 import { TEST_EMAIL_DOMAIN } from "./src/test-email-domain.ts";
 
-/** The resources a Worker with no deployment binds: local dev's and the suites'. `cf dev` keeps
- *  D1, KV and R2 on disk under .cloudflare/state/; Artifacts, Workers AI and Browser Run have no
- *  local simulator and reach the real products on the account `cf` is signed in to, so local runs
- *  have a namespace of their own, `os-dev-repos`, and never write into a deployment's. The local
- *  D1 has a fixed id because `cf d1 migrations apply --local` takes an id, not a name: package.json
- *  `db:migrate` names the same one. */
-const LOCAL_RESOURCES = {
-  worker: "os",
-  db: "os-dev-db",
-  dbId: "00000000-0000-4000-8000-000000000000",
-  files: "os-files",
-  repos: "os-dev-repos",
-};
-
-export default defineConfig(async ({ mode }) => {
-  const local = mode === "development" || mode === "test";
-  if (!local) loadSecretsFile();
-  const deployment = local ? undefined : await readDeployment();
-  const cloudflare = deployment?.config.cloudflare;
-  const telemetry = cloudflare?.telemetry;
-  const names = cloudflare ? resourceNamesOf(cloudflare) : LOCAL_RESOURCES;
-  const worker = cloudflare
-    ? names.worker
-    : mode === "development"
-      ? LOCAL_RESOURCES.worker
-      : "os-local-build";
-  // The sandboxes' containers (src/sandbox/container.ts). A Containers application's name is the
-  // account's, so a deployment's carries its Worker's. The `durable-object` scheduling policy lets
-  // the class pick image and size at each start, and is the only one that takes disk snapshots.
-  // `images` are the pinned builds scripts/deploy.ts hands over (scripts/images.ts owns them).
-  const images = z
-    .record(z.string(), z.string())
-    .parse(JSON.parse(process.env.ITERATE_IMAGES || "{}"));
+export default defineConfig(({ mode }) => {
+  // `cf dev` keeps each Durable Object class on disk under this name (.cloudflare/state/v3/do/)
+  const worker = "os";
+  // The sandboxes' containers (src/sandbox/container.ts). The `durable-object` scheduling policy
+  // lets the class pick image and size at each start, and is the only one that takes disk
+  // snapshots.
   const sandboxContainer = defineContainer({
     name: `${worker}-sandbox`,
     schedulingPolicy: "durable-object",
-    ...(Object.keys(images).length > 0 && {
-      images: Object.fromEntries(
-        Object.entries(images).map(([name, image]) => [name, { reference: image }]),
-      ),
-    }),
   });
   return {
-    accountId: cloudflare?.accountId,
     containers: [sandboxContainer],
     worker: {
       name: worker,
@@ -79,38 +44,6 @@ export default defineConfig(async ({ mode }) => {
       ],
       // Worker-first: assets stay off project hosts, and the Worker gates consent.
       assets: { runWorkerFirst: true },
-      // subrequests: a capnweb WebSocket session is pumped by ONE long-lived invocation, and every
-      // edge->DO `invoke` it makes counts against that invocation for the session's whole life — the
-      // 10,000 default is hit by an ordinary long-lived client (3 appends/s for ~1 h). cpuMs: a cold
-      // re-reduce over a long log, or a large per-commit fan-out, is CPU-bound on the DO's one
-      // thread; 5 min (the paid maximum) gives 10x the 30 s default. Neither is billed until used.
-      limits: { subrequests: 1_000_000, cpuMs: 300_000 },
-      // Every log line and trace, kept; with a telemetry warehouse, exported to it too
-      // (docs/telemetry.md), and the traces kept there alone: its `spans` table holds each one, and
-      // from 2026-12-01 Cloudflare bills stored traces by the GB.
-      observability: {
-        enabled: true,
-        headSamplingRate: 1,
-        logs: {
-          enabled: true,
-          headSamplingRate: 1,
-          persist: true,
-          invocationLogs: true,
-          ...(telemetry && { destinations: ["telemetry-logs"] }),
-        },
-        traces: {
-          enabled: true,
-          headSamplingRate: 1,
-          persist: !telemetry,
-          ...(telemetry && { destinations: ["telemetry-traces"] }),
-        },
-      },
-      // both always said: with a route and no `workersDev`, Cloudflare turns workers.dev off
-      workersDev: cloudflare?.workersDev ?? true,
-      // Never per-version preview URLs: unset, cf turns them on with workers.dev, and each version
-      // would answer on its own origin against the deployment's data
-      previewUrls: false,
-      triggers: (cloudflare?.workerRoutes || []).map((route) => triggers.fetch(route)),
       // The Durable Object namespaces, SQLite-backed. The first-party facets
       // (src/first-party-facets.ts) are exported classes too, but each lives inside a context's
       // storage and is minted through `ctx.exports`: they need none.
@@ -130,22 +63,23 @@ export default defineConfig(async ({ mode }) => {
           exportName: "IterateContextDurableObject",
         }),
         BROWSER_SESSION: bindings.durableObject({ worker, exportName: "BrowserSession" }),
-        // THE CONTROL PLANE: the deployment's users, identities, organizations, memberships,
-        // projects, invitations, custom hostnames and OAuth grants (src/control-plane/db/). Bound by
-        // name; scripts/deploy.ts migrates it from src/control-plane/db/migrations.
-        DB: bindings.d1({ name: names.db, ...(!cloudflare && { id: LOCAL_RESOURCES.dbId }) }),
+        // THE CONTROL PLANE: the users, identities, organizations, memberships, projects,
+        // invitations, custom hostnames and OAuth grants (src/control-plane/db/). Its id is fixed
+        // because `cf d1 migrations apply --local` takes an id, not a name: package.json
+        // `db:migrate` names the same one.
+        DB: bindings.d1({ name: "os-dev-db", id: "00000000-0000-4000-8000-000000000000" }),
         // The OAuth provider's tokens and DCR clients, the sign-in challenges and the personal
-        // access tokens' index; and `itx.kv`, project-prefixed. Cloudflare makes each on the first
-        // deploy.
+        // access tokens' index; and `itx.kv`, project-prefixed.
         OAUTH_KV: bindings.kv(),
         ITX_KV: bindings.kv(),
         // `itx.r2`, and `itx.files` on top.
-        FILES: bindings.r2({ name: names.files }),
+        FILES: bindings.r2({ name: "os-files" }),
         // Cloudflare Artifacts, the ONE namespace every project's repos live in, project-scoped as
         // `itx.cfArtifacts` (context/built-ins.ts puts every repo name under `${projectId}.`).
         // Workers AI, `itx.ai` (src/itx-ai.ts); Browser Run, `itx.browser`. None of the three has a
-        // local simulator: `cf dev` reaches the real product on its account.
-        ARTIFACTS: bindings.artifacts({ namespace: names.repos, dev: { remote: true } }),
+        // local simulator: `cf dev` reaches the real product on the account it is signed in to, so
+        // local runs have a namespace of their own and never write into a deployment's.
+        ARTIFACTS: bindings.artifacts({ namespace: "os-dev-repos", dev: { remote: true } }),
         AI: bindings.ai({ dev: { remote: true } }),
         BROWSER: bindings.browser({ dev: { remote: true } }),
         // Images, `itx.images` (context/images.ts). `cf dev` runs a low-fidelity offline version
@@ -176,25 +110,9 @@ export default defineConfig(async ({ mode }) => {
         CF_VERSION_METADATA: bindings.versionMetadata(),
         // The Start client and the consent page (issuer-pages.ts).
         ASSETS: bindings.assets(),
-        // The Worker's own name, which its custom metrics and `events` rows say wrote them.
+        // The Worker's own name, which its custom metrics and `events` rows say wrote them. Neither
+        // has a local destination: the telemetry bindings are a deployment's alone.
         WORKER_NAME: bindings.text(worker),
-        // TELEMETRY (docs/telemetry.md). Custom metrics (src/metrics.ts) need no warehouse: Workers
-        // Analytics Engine makes the dataset on its first write, so every deployment writes them.
-        // With a warehouse, the platform hook sends each durable event to its `events` stream, and
-        // `itx.telemetry` runs a project's SQL through its Worker's `TelemetryQuery`.
-        ...(deployment && {
-          TELEMETRY_METRICS: bindings.analyticsEngineDataset({ name: "iterate_metrics" }),
-        }),
-        ...(telemetry && {
-          TELEMETRY_EVENTS: bindings.pipeline({ name: telemetry.eventsStream }),
-          TELEMETRY: bindings.worker({
-            worker: telemetry.workerName,
-            exportName: "TelemetryQuery",
-          }),
-        }),
-        // THE ITERATE CONFIG: a deployment's plain var (`cf deploy` uploads its secrets), `cf dev`'s
-        // own; a suite sets its own
-        ...(deployment && { ITERATE: bindings.text(deployment.vars.ITERATE) }),
         ...(mode === "development" && { ITERATE: localDevConfig() }),
       },
     },

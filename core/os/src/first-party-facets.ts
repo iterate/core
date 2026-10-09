@@ -10,6 +10,7 @@
 // WHERE each one may be hosted is context/first-party-facet-placement.ts's rules.
 export const FIRST_PARTY_FACET_CLASSES = {
   account: "AccountFacet",
+  deployment: "DeploymentFacet",
   email: "EmailFacet",
   instance: "InstanceFacet",
   integration: "IntegrationFacet",

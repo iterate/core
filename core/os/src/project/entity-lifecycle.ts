@@ -1,13 +1,14 @@
-// src/project/entity-lifecycle.ts — THE ENTITY LIFECYCLE, spelled once for the repo and the
-// workspace: where creation and deletion stand (the reduced state), the five facts that move them
-// (`entityLifecycle(slug)`, spread into each contract), the processor that reduces them and runs the
-// two sagas (`EntityLifecycleProcessor`, hosted by each entity's facet), and the guard every facet
-// verb reads first (`assertCreated`). The slug is all that varies — and what the entity provisions at
-// birth and tears down at death: a repo its Artifacts repo, a workspace nothing (the overlay is the
-// facet's own storage, born with it and deleted with it). The collection (collection.ts) reads the
-// state off the facet's `snapshot()` before it asks for either. It cannot live in contract.ts: the
-// project contract imports the entity contracts (repo, workspace, secret) for its `processorDeps`,
-// and a contract importing it back would evaluate a cycle.
+// src/project/entity-lifecycle.ts — THE ENTITY LIFECYCLE, spelled once for the repo, the workspace,
+// the sandbox and the deployment: where creation and deletion stand (the reduced state), the five
+// facts that move them (`entityLifecycle(slug)`, spread into each contract), the processor that
+// reduces them and runs the two sagas (`EntityLifecycleProcessor`, hosted by each entity's facet),
+// and the guard every facet verb reads first (`assertCreated`). The slug is all that varies — and
+// what the entity provisions at birth and tears down at death: a repo its Artifacts repo, a workspace
+// nothing (the overlay is the facet's own storage, born with it and deleted with it), a deployment at
+// death what its runs deployed. The collection (collection.ts) reads the state off the facet's
+// `snapshot()` before it asks for either. It cannot live in contract.ts: the project contract
+// imports the entity contracts (repo, workspace, secret) for its `processorDeps`, and a contract
+// importing it back would evaluate a cycle.
 
 import { z } from "zod";
 import { codedError } from "iterate/lib";
@@ -20,11 +21,17 @@ import {
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 
 /** The entity kinds: each has a facet on its own path, the lifecycle below and a catalog on `/`. */
-export type EntitySlug = "repo" | "workspace" | "sandbox";
+export type EntitySlug = "repo" | "workspace" | "sandbox" | "deployment";
 
-const PLURALS = { repo: "repos", workspace: "workspaces", sandbox: "sandboxes" } as const;
+const PLURALS = {
+  repo: "repos",
+  workspace: "workspaces",
+  sandbox: "sandboxes",
+  deployment: "deployments",
+} as const;
 
-/** The collection's name (`itx.repos`, `itx.workspaces`, `itx.sandboxes`) and the project catalog's key. */
+/** The collection's name (`itx.repos`, `itx.workspaces`, `itx.sandboxes`, `itx.deployments`) and
+ *  the project catalog's key. */
 export function entityPlural<const Slug extends EntitySlug>(slug: Slug): (typeof PLURALS)[Slug] {
   return PLURALS[slug];
 }
@@ -68,7 +75,7 @@ export function entityLifecycle<const Slug extends EntitySlug>(slug: Slug) {
     `events.iterate.com/${slug}/${fact}` as const;
   const events = {
     [type("create-requested")]: {
-      description: `Someone asked for this ${slug} (\`itx.${entityPlural(slug)}.create(path)\`). No payload: the context it lands on IS the ${slug}. The collection writes the child's parent link \`itx ⇒ itx.builtins.cd(creator)\` before this request, the creator being the context that called, so the link is part of the birth and nothing re-points a born context. The processor provisions what the ${slug} needs (a repo's Artifacts repo; a workspace, nothing; a sandbox, nothing: its container starts on first use) and lands created or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.`,
+      description: `Someone asked for this ${slug} (\`itx.${entityPlural(slug)}.create(path)\`). No payload: the context it lands on IS the ${slug}. The collection writes the child's parent link \`itx ⇒ itx.builtins.cd(creator)\` before this request, the creator being the context that called, so the link is part of the birth and nothing re-points a born context. The processor provisions what the ${slug} needs (a repo's Artifacts repo; a workspace, nothing; a sandbox, nothing: its container starts on first use; a deployment, nothing: a run deploys it) and lands created or create-failed; a request after a failure is a new attempt, one after the certificate a harmless fact.`,
       payloadSchema: NoPayload,
     },
     [type("created")]: {

@@ -231,6 +231,7 @@ export { BrowserSession } from "iterate/app-session";
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.
 export { AccountFacet } from "./account/durable-object.ts";
+export { DeploymentFacet } from "./deployment/durable-object.ts";
 export { EmailFacet } from "./email/durable-object.ts";
 export { InstanceFacet } from "./instance/durable-object.ts";
 export { IntegrationFacet } from "./integrations/registry.ts";

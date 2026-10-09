@@ -59,9 +59,10 @@ const MINIMAL_CONFIG = {
   deployId: "unversioned",
 };
 
-/** A cloudflare section with only its two required fields, its defaults filled in. */
+/** A cloudflare section with only its three required fields, its defaults filled in. */
 const ACME_CLOUDFLARE = {
   accountId: "account-1",
+  apiToken: "cf-token",
   resourcePrefix: "acme-os",
   workerRoutes: [],
   workersDev: true,
@@ -101,7 +102,6 @@ const iterateConfigRows: {
       ITERATE__URLS__PROJECT_WILDCARD: '{"hostname":"Iterate.com","project":"iterate"}',
       ITERATE__CUSTOM_HOSTNAMES:
         '{"zone":"iterate.app","zoneId":"zone-1","dcvDelegationUuid":"dcv-1","reservedZones":["iterate.app","iterate.com"]}',
-      ITERATE__CUSTOM_HOSTNAMES__CLOUDFLARE_API_TOKEN: "cloudflare-token",
       ITERATE__POSTHOG_PROJECT_KEY: "phc_test",
       ITERATE__LOGIN__METHODS__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
       ITERATE__LOGIN__METHODS__GOOGLE: "{}",
@@ -125,7 +125,6 @@ const iterateConfigRows: {
         zoneId: "zone-1",
         dcvDelegationUuid: "dcv-1",
         reservedZones: ["iterate.app", "iterate.com"],
-        cloudflareApiToken: "cloudflare-token",
       },
       posthogProjectKey: "phc_test",
       login: {
@@ -379,7 +378,8 @@ const iterateConfigRows: {
   {
     vars: {
       ...MINIMAL,
-      ITERATE__CLOUDFLARE: '{"accountId":"account-1","resourcePrefix":"acme-os"}',
+      ITERATE__CLOUDFLARE:
+        '{"accountId":"account-1","apiToken":"cf-token","resourcePrefix":"acme-os"}',
     },
     becomes: { ...MINIMAL_CONFIG, cloudflare: ACME_CLOUDFLARE },
   },
@@ -387,7 +387,8 @@ const iterateConfigRows: {
   {
     vars: {
       ...MINIMAL,
-      ITERATE__CLOUDFLARE: '{"accountId":"account-1","resourcePrefix":"Acme_OS"}',
+      ITERATE__CLOUDFLARE:
+        '{"accountId":"account-1","apiToken":"cf-token","resourcePrefix":"Acme_OS"}',
     },
     throws:
       /^ITERATE cloudflare\.resourcePrefix \(ITERATE__CLOUDFLARE__RESOURCE_PREFIX\): expected lowercase letters/,
@@ -847,14 +848,14 @@ const request = (url: string | Request, env: Record<string, unknown> = origins) 
 /** Secrets are `Redacted` (they never print); expose them for a value comparison against the plain
  *  strings above. */
 const expose = (config: IterateConfig) => ({
-  cloudflare: config.cloudflare,
+  cloudflare: config.cloudflare && {
+    ...config.cloudflare,
+    apiToken: config.cloudflare.apiToken.exposeSecret(),
+  },
   // projects' own hostnames, shown when the config sets any
   urls: (({ projectHostnames, ...urls }) =>
     projectHostnames.length ? { ...urls, projectHostnames } : urls)(config.urls),
-  customHostnames: config.customHostnames && {
-    ...config.customHostnames,
-    cloudflareApiToken: config.customHostnames.cloudflareApiToken.exposeSecret(),
-  },
+  customHostnames: config.customHostnames,
   posthogProjectKey: config.posthogProjectKey,
   admins: config.admins,
   login: {

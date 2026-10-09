@@ -32,16 +32,14 @@ export function signInMethodsOf(
       if (!form) views.push((form = { kind: "email", password: false, code: false }));
       if (name === "password") form.password = true;
       else form.code = true;
-    } else if (name === "cloudflareAccess") {
-      const { teamDomain, aud } = config.login.methods.cloudflareAccess!;
-      if (teamDomain && aud)
-        link(
-          "cloudflare-access",
-          "email (Cloudflare Access)",
-          `${CLOUDFLARE_ACCESS_SIGN_IN_PATH}?${query}`,
-          "/cloudflare-logo.svg",
-        );
-    } else if (name === "google")
+    } else if (name === "cloudflareAccess")
+      link(
+        "cloudflare-access",
+        "email (Cloudflare Access)",
+        `${CLOUDFLARE_ACCESS_SIGN_IN_PATH}?${query}`,
+        "/cloudflare-logo.svg",
+      );
+    else if (name === "google")
       link(
         "google",
         INTEGRATION_PROVIDER_NAMES.google,

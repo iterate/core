@@ -10,11 +10,13 @@
 import { z } from "zod";
 import {
   appConfigInputOf,
+  configVarNameOf,
   dnsName,
   fieldNameOf,
   httpOrigin,
   optionalOrigin,
   parseAppConfig,
+  unknownKeysOf,
 } from "iterate/app-config";
 import {
   customHostnameCandidatesOf,
@@ -63,7 +65,7 @@ const DEFAULT_DASH = "https://dash.iterate.com";
 const REQUIRED = "required, but unset or blank";
 
 /** The iterate config's variables: the object is `ITERATE`, one field `ITERATE__<PATH>`. */
-export const ITERATE_CONFIG_PREFIX = { prefix: "ITERATE" };
+const ITERATE_CONFIG_PREFIX = { prefix: "ITERATE" };
 
 /** A field as a message names it: `ITERATE urls.os (ITERATE__URLS__OS)`. */
 const field = (path: readonly PropertyKey[]) => fieldNameOf(path, ITERATE_CONFIG_PREFIX);
@@ -155,19 +157,39 @@ const resourceName = z
  *  check keys against. Every object `prefault`s to `{}` so a deployment that names none of a
  *  block's keys still gets the block. */
 export const IterateConfig = z.object({
-  /** WHERE IT DEPLOYS: what ../cloudflare.config.ts makes the Worker from. Unset ⇒ nowhere: local
-   *  dev, the suites, and a local build, which nothing deploys. */
+  /** WHERE IT DEPLOYS: what ../alchemy/stack.ts makes the Worker and its resources from. Unset ⇒
+   *  nowhere: local dev, the suites, and a local build, which nothing deploys. */
   cloudflare: z
     .object({
       /** The account the Worker and its resources live in. */
       accountId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+      /** THE ACCOUNT'S API TOKEN (SELF-HOSTING.md "The API token"): the deploy runs with it, and the
+       *  Worker keeps it for what it does on the account at runtime (a project's custom hostnames,
+       *  project/custom-hostnames.ts). One token, with every permission both need. A token scoped
+       *  to the runtime's permissions alone would be safer, and is work for later. */
+      apiToken: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
       /** The prefix of what the Worker binds by name: D1 `<prefix>-db`, R2 `<prefix>-files`,
        *  Artifacts `<prefix>-repos` (`resourceNamesOf`). No other Worker may bind them. */
       resourcePrefix: resourceName,
-      /** The Worker's name. Default: `resourcePrefix`. */
+      /** The Worker's name, which the two KV namespaces' titles follow: `<workerName>-oauth-kv` and
+       *  `<workerName>-itx-kv`. Default: `resourcePrefix`. */
       workerName: resourceName.optional(),
+      /** Where the control plane's D1 primary runs, fixed when the D1 is made
+       *  (https://developers.cloudflare.com/d1/configuration/data-location/). Unset ⇒ near whoever
+       *  makes it. Setting or changing it once Alchemy has made the D1 REPLACES the D1 with a new,
+       *  empty one. */
+      d1Location: z.enum(["wnam", "enam", "weur", "eeur", "apac", "oc"]).optional(),
+      /** KEEP THE DATA (prd's): Alchemy deletes none of the deployment's resources when a plan
+       *  would delete or replace one: the D1, the KV namespaces, the R2 bucket, and the Worker with
+       *  its Durable Objects and its sandboxes' container application. A destroy forgets them all
+       *  and leaves them on the account, where a later deploy under the same names refuses what
+       *  exists. iterate's deploy tooling keeps the Artifacts namespace too. To erase the
+       *  deployment, deploy once with this off, then destroy. Unset ⇒ off: a destroy deletes
+       *  everything. */
+      protectData: z.boolean().optional(),
       /** The Worker's routes, each a pattern on a zone of the account (the zone's name or id).
-       *  Default: none. A deploy adds the routes it names and removes none. */
+       *  Default: none. A deploy also removes a route of the Worker's that the list no longer
+       *  names. */
       workerRoutes: z
         .array(
           z.object({
@@ -249,9 +271,6 @@ export const IterateConfig = z.object({
       zoneId: z.string().trim().min(1, REQUIRED),
       dcvDelegationUuid: z.string().trim().min(1, REQUIRED),
       reservedZones: z.array(dnsName).default([]),
-      /** The Cloudflare API token the Worker provisions them with (edit on `zone`). Blank ⇒ none: a
-       *  custom hostname is then refused with that reason rather than half-provisioned. */
-      cloudflareApiToken: redacted(z.string().trim().default("")),
     })
     .optional(),
   /** DOMAIN CONNECT (project/domain-connect.ts): the private half of the key our template's apply
@@ -289,16 +308,17 @@ export const IterateConfig = z.object({
       methods: z
         .object({
           /** CLOUDFLARE ACCESS (cloudflare-access-sign-in.ts): a one-time PIN Access mails, on
-           *  `/.auth/identity/cloudflare-access` alone. `{}` turns it on: `pnpm run deploy` makes
-           *  the Access application (scripts/cloudflare-access.ts) and fills `teamDomain` and `aud`;
-           *  until then the page does not offer it. */
+           *  `/.auth/identity/cloudflare-access` alone, through an Access application made by hand
+           *  (SELF-HOSTING.md, "Sign-in"), which `teamDomain` and `aud` name. Both are required:
+           *  the deploy makes no application, as Alchemy's Access.Application has no setting that
+           *  keeps the cookie on the sign-in path. */
           cloudflareAccess: z
             .object({
               /** The Zero Trust team's origin, `https://<team>.cloudflareaccess.com`: the token's
                *  issuer. */
-              teamDomain: optionalOrigin,
+              teamDomain: z.string({ error: REQUIRED }).trim().min(1, REQUIRED).pipe(httpOrigin),
               /** The Access application's audience tag, which every token it signs names. */
-              aud: z.string().trim().default(""),
+              aud: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
             })
             .optional(),
           /** A six-digit code mailed through the `EMAIL` binding (password-and-code-sign-in.ts)
@@ -607,8 +627,8 @@ export function parseIterateConfigInput(input: unknown, deployId = "unversioned"
 }
 
 /** The config's SECRETS: each field the schema marks secret (`redacted`), its path and its value
- *  (blank when unset). scripts/deploy.ts uploads each set one as a Worker secret of its own,
- *  `ITERATE__<PATH>`, and the rest of the config as the plain var `ITERATE`. */
+ *  (blank when unset). `deploymentOf` makes each set one a variable of its own, `ITERATE__<PATH>`,
+ *  which ../alchemy/stack.ts binds as a Worker secret. */
 export function secretFieldsOf(config: IterateConfig): Array<{ path: string[]; value: string }> {
   const found: Array<{ path: string[]; value: string }> = [];
   const walk = (value: unknown, path: string[]) => {
@@ -624,16 +644,51 @@ export function secretFieldsOf(config: IterateConfig): Array<{ path: string[]; v
   return found;
 }
 
-/** The names a deployment's Worker and the resources it binds by name go by. */
+/** A deployment: its iterate config as written, parsed (a malformed field throws, naming itself),
+ *  and as the Worker's variables. Each host makes one: ../scripts/iterate-config-file.ts from the
+ *  config file, ./deployment/run.ts from a run's variables. */
+export function deploymentOf(input: Record<string, unknown>) {
+  const config = parseIterateConfigInput(input);
+  return { config, vars: workerVarsOf(input, config) };
+}
+
+/** The config as the Worker gets it: `input` as the plain var `ITERATE`, without its secret fields
+ *  and the keys the schema does not name (the parse warned about each); and each set secret field
+ *  of `config`, input's parse, as a variable of its own, its value JSON so the parser reads it back
+ *  exactly. */
+function workerVarsOf(input: Record<string, unknown>, config: IterateConfig) {
+  const fields = secretFieldsOf(config);
+  const plain = structuredClone(input);
+  for (const field of [...unknownKeysOf(input, IterateConfig), ...fields.map(({ path }) => path)]) {
+    let parent: unknown = plain;
+    for (const key of field.slice(0, -1))
+      parent = typeof parent === "object" && parent ? Reflect.get(parent, key) : undefined;
+    if (typeof parent === "object" && parent) Reflect.deleteProperty(parent, field.at(-1)!);
+  }
+  const secrets = Object.fromEntries(
+    fields
+      .filter(({ value }) => value)
+      .map(({ path, value }) => [
+        configVarNameOf(path, ITERATE_CONFIG_PREFIX),
+        JSON.stringify(value),
+      ]),
+  );
+  return { ITERATE: JSON.stringify(plain), secrets };
+}
+
+/** The names a deployment's Worker and the resources it binds go by. */
 export function resourceNamesOf(
   cloudflare: Pick<NonNullable<IterateConfig["cloudflare"]>, "resourcePrefix" | "workerName">,
 ) {
   const prefix = cloudflare.resourcePrefix;
+  const worker = cloudflare.workerName || prefix;
   return {
-    worker: cloudflare.workerName || prefix,
+    worker,
     db: `${prefix}-db`,
     files: `${prefix}-files`,
     repos: `${prefix}-repos`,
+    oauthKv: `${worker}-oauth-kv`,
+    itxKv: `${worker}-itx-kv`,
   };
 }
 

@@ -53,7 +53,8 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "secret", context: "global:/secrets", allowed: false },
   { facet: "secret", context: "global:/notes/secrets/api-key", allowed: false },
   { facet: "secret", context: "global:/", allowed: false },
-  // 5. `repo`, `workspace`, `sandbox` — any context of a project; never the global namespace.
+  // 5. `repo`, `workspace`, `sandbox`, `deployment` — any context of a project; never the global
+  // namespace.
   { facet: "repo", context: "prj_1:/repos/config", allowed: true },
   { facet: "repo", context: "prj_1:/", allowed: true },
   { facet: "repo", context: "prj_1:/deep/path", allowed: true },
@@ -69,6 +70,10 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "sandbox", context: "prj_1:/", allowed: true },
   { facet: "sandbox", context: "global:/users/user_1", allowed: false },
   { facet: "sandbox", context: "global:/", allowed: false },
+  { facet: "deployment", context: "prj_1:/deployments/acme-os", allowed: true },
+  { facet: "deployment", context: "prj_1:/", allowed: true },
+  { facet: "deployment", context: "global:/users/user_1", allowed: false },
+  { facet: "deployment", context: "global:/", allowed: false },
   // 6. Loaded code — any other facet name — runs inside a project, never in the global namespace.
   { facet: "presence", context: "prj_1:/", allowed: true },
   { facet: "agents", context: "prj_1:/agents", allowed: true },

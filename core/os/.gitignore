@@ -13,3 +13,7 @@
 # commit them: .secrets holds the only copy of the secrets encryption key.
 /iterate.config.local.ts
 /.secrets
+
+# Alchemy's local state (alchemy.run.ts). It holds each secret in plaintext, as .secrets does: never
+# commit it.
+/.alchemy/

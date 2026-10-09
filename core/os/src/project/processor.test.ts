@@ -31,6 +31,7 @@ const empty: ProjectState = {
   repos: {},
   workspaces: {},
   sandboxes: {},
+  deployments: {},
   contexts: {},
   secrets: {},
   configRepoTip: null,
@@ -115,6 +116,7 @@ const reduceRows: {
       repos: { "/repos/config": { createdAt: expect.any(String) } },
       workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
       sandboxes: {},
+      deployments: {},
       contexts: {},
       secrets: {},
       configRepoTip: null,
@@ -169,6 +171,20 @@ const reduceRows: {
         "/repos/config": { createdAt: expect.any(String) },
         "/vendor/lib": { createdAt: expect.any(String) },
       },
+    },
+  },
+  {
+    name: "a deployment's certificate adds its entry once, by path; its death certificate drops it",
+    events: [
+      deploymentBorn("/deployments/acme-os"),
+      deploymentBorn("/deployments/acme-os"),
+      deploymentBorn("/deployments/beta-os"),
+      deploymentDeleted("/deployments/beta-os"),
+      deploymentDeleted("/deployments/beta-os"),
+    ],
+    state: {
+      ...empty,
+      deployments: { "/deployments/acme-os": { createdAt: expect.any(String) } },
     },
   },
   {
@@ -1534,6 +1550,14 @@ function repoBorn(path: string) {
 
 function workspaceBorn(path: string) {
   return { type: "events.iterate.com/workspace/created", payload: { path } };
+}
+
+function deploymentBorn(path: string) {
+  return { type: "events.iterate.com/deployment/created", payload: { path } };
+}
+
+function deploymentDeleted(path: string) {
+  return { type: "events.iterate.com/deployment/deleted", payload: { path } };
 }
 
 function committed(path: string, commitOid: string) {

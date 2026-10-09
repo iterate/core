@@ -8,12 +8,12 @@ import { join } from "node:path";
 const CAPTURED_COMMAND_OUTPUT_LIMIT = 64 * 1024;
 
 /**
- * `vite build` of one app for one environment, into a fresh output folder: the Cloudflare Vite
- * plugin snapshots that environment's Worker config beside the code, and that snapshot is what
- * deploys. The apps on top build into dist/ (`CLOUDFLARE_ENV` selects the environment); core/os
- * builds into .cloudflare/output/ from cloudflare.config.ts (the iterate config's `cloudflare`
- * section selects the deployment). Its output streams as it runs; a failure's error carries the
- * last 40 lines, so a report of it (the PR preview's `deploy failed`) says why.
+ * `vite build` of one app for one environment, into a fresh output folder. The apps on top build
+ * into dist/ (`CLOUDFLARE_ENV` selects the environment), and the Worker config the Cloudflare Vite
+ * plugin snapshots beside the code is what deploys. core/os builds into .cloudflare/output/ (./build.ts
+ * `releaseOf`), and Alchemy uploads that code with the bindings ../alchemy/stack.ts declares, not
+ * the snapshot's. Its output streams as it runs; a failure's error carries the last 40 lines, so a
+ * report of it (the PR preview's `deploy failed`) says why.
  */
 export async function viteBuild(appRoot: string, env: Record<string, string>) {
   for (const output of ["dist", ".cloudflare/output"])

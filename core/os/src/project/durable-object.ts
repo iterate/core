@@ -1,10 +1,11 @@
 // src/project/durable-object.ts — THE PROJECT: the `project` facet on the context at `/`, THE CATALOG
 // HOST. It hosts the project processor (processor.ts: the project's own creation saga, its custom
-// hostnames, and the catalog folded from the certificates cross-posted to `/`), and THE COLLECTIONS hang off it as methods —
-// `repos`, `workspaces` (collection.ts, one instance per entity): each reads the catalog
-// from this facet's `snapshot()` for `list()` and runs the entity's creation saga for `create(path)`,
-// reached as `itx.repos.list()` / `itx.repos.create(path)` through the library (library.ts, one
-// dispatch on this facet: `repos().list()`). And THE INTEGRATIONS (src/integrations/): a project's
+// hostnames, and the catalog folded from the certificates cross-posted to `/`), and THE COLLECTIONS
+// hang off it as methods — `repos`, `workspaces`, `sandboxes`, `deployments` (collection.ts, one
+// instance per entity): each reads the catalog from this facet's `snapshot()` for `list()` and runs
+// the entity's creation saga for `create(path)`, reached as `itx.repos.list()` /
+// `itx.repos.create(path)` through the library (library.ts, one dispatch on this facet:
+// `repos().list()`). And THE INTEGRATIONS (src/integrations/): a project's
 // connections to Slack, Google and GitHub, connected and disconnected here and finished here when
 // the provider's callback comes back. Hosted from `ctx.exports` (first-party-facets.ts):
 // ordinary bundled worker code, enabled as a row on `/` by `session.projects.create` (session.ts) —
@@ -56,17 +57,18 @@ export class ProjectFacet extends StreamProcessorDurableObject<
     IterateConfigEnv,
   ItxEntrypointScope
 > {
-  /** The processor's reads, the two collections `itx.repos` / `itx.workspaces` reach (library.ts),
-   *  and the integrations' verbs a Dash form or a callback calls. `acceptGithubCallback` is GitHub's
-   *  callback's (integrations/github.ts) and acts only for its attempt's nonce, which only GitHub's
-   *  redirect carries. Connect, finish and disconnect are not published: `itx.integrations`
-   *  (context/built-ins.ts) reaches them, and the platform's callback finishes through it
-   *  (secret-oauth-callback.ts, `integrations.finishConnect`). */
+  /** The processor's reads, the collections `itx.repos`, `itx.workspaces`, `itx.sandboxes` and
+   *  `itx.deployments` reach (library.ts), and the integrations' verbs a Dash form or a callback
+   *  calls. `acceptGithubCallback` is GitHub's callback's (integrations/github.ts) and acts only
+   *  for its attempt's nonce, which only GitHub's redirect carries. Connect, finish and disconnect
+   *  are not published: `itx.integrations` (context/built-ins.ts) reaches them, and the platform's
+   *  callback finishes through it (secret-oauth-callback.ts, `integrations.finishConnect`). */
   static override publicMethods = [
     ...super.publicMethods,
     "repos",
     "workspaces",
     "sandboxes",
+    "deployments",
     "confirmIntegrationMove",
     "acceptGithubCallback",
   ];
@@ -291,6 +293,11 @@ export class ProjectFacet extends StreamProcessorDurableObject<
   /** `itx.sandboxes`: the catalog's sandboxes, and a sandbox's creation on its path. */
   sandboxes(): EntityCollectionRpcTarget {
     return this.#collection("sandbox");
+  }
+
+  /** `itx.deployments`: the catalog's deployments, and a deployment's creation on its path. */
+  deployments(): EntityCollectionRpcTarget {
+    return this.#collection("deployment");
   }
 
   /** Each connection's integration verbs, one at a time (`#onConnection`): the tail of its chain. */

@@ -1,14 +1,14 @@
 // THE vitest config for core/os's own tests: simple in-process unit tests (src/**/*.test.ts,
-// scripts/*.test.ts). Every test that stages the platform (workerd, the Workers pool, a running
-// worker, a browser) is test/'s, outside core/os. The global setup refreshes the generated modules
-// the tests import.
+// scripts/*.test.ts, alchemy/*.test.ts). Every test that stages the platform (workerd, the Workers
+// pool, a running worker, a browser) is test/'s, outside core/os. The global setup refreshes the
+// generated modules the tests import.
 
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["src/**/*.test.ts", "scripts/*.test.ts"],
+    include: ["src/**/*.test.ts", "scripts/*.test.ts", "alchemy/*.test.ts"],
     // The console's reporter, and whichever others the environment names by path: iterate's CI
     // adds its telemetry reporter (.depot/workflows/test.yml), which lives outside core/os.
     reporters: [

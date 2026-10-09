@@ -17,9 +17,11 @@ catalog:
   '@types/react-dom': ^19.3.0
   '@types/ws': ^8.18.1
   '@vitejs/plugin-react': ^6.1.1
+  alchemy: 2.0.0-beta.81
   capnweb: npm:@iterate-com/capnweb@0.12.3
   class-variance-authority: ^0.7.1
   cn: ^0.4.0
+  effect: 4.0.1
   esbuild: ^0.28.2
   jose: 6.2.12
   json5: ^2.2.3
@@ -73,8 +75,10 @@ onlyBuiltDependencies:
   - workerd
 
 overrides:
+  workerd: 1.20261001.1
   ws: 'catalog:'
 
 patchedDependencies:
   '@iterate-com/capnweb@0.12.3': patches/@iterate-com__capnweb@0.12.3.patch
+  alchemy@2.0.0-beta.81: patches/alchemy@2.0.0-beta.81.patch
   zod@4.6.5: patches/zod@4.6.5.patch

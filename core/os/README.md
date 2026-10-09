@@ -24,7 +24,7 @@ and never edited
 and ours beside them. Their look is `iterate/theme.css` (`core/lib/src/theme/`), which
 `src/styles.css` imports. Its UI is the auth flow and nothing more: a component only another app needs,
 or anything first-party and opinionated (stream views, app shells), belongs in packages/ui
-([iterate/packages](https://github.com/iterate/packages)). The Worker's Cloudflare config is
+([iterate/packages](https://github.com/iterate/packages)). The Worker's local Cloudflare config is
 `cloudflare.config.ts`, which `cf` and the Cloudflare Vite plugin read; the build writes the Worker
 and its config to `.cloudflare/output/`, which the tests and deploys use. The end-to-end and browser
 suites that run against a deployment are iterate's, outside core.
@@ -33,9 +33,11 @@ suites that run against a deployment are iterate's, outside core.
 
 One object configures a deployment, the iterate config (`src/iterate-config.ts`): its
 `cloudflare` section says where the Worker deploys, the rest what the Worker does. `pnpm run deploy`
-(`scripts/deploy.ts`) reads it from the environment (`iterate.config.ts`) or a gitignored
-`iterate.config.local.ts`, builds the Worker from `cloudflare.config.ts`, migrates the D1 and runs
-`cf deploy`. [Self-hosting](SELF-HOSTING.md) explains the config and the deploy. iterate's own
+builds the Worker with Vite, then runs `alchemy deploy` over `alchemy.run.ts`, which reads the
+config from the environment (`iterate.config.ts`) or a gitignored `iterate.config.local.ts`.
+`alchemy/stack.ts` declares the Worker and every resource it binds, and a project's deployment
+facet (`src/deployment/`, `itx.deployments`) runs that stack too, with its state in its SQLite.
+[Self-hosting](SELF-HOSTING.md) explains the config and both deploys. iterate's own
 deployments, production and one per tested commit of a pull request, are configured and deployed
 by iterate's tooling, outside core.
 
@@ -59,7 +61,7 @@ pnpm --dir core/os db:generate  # the typed queries; commit what changes
 pnpm --dir core/os db:migrate   # this worktree's local D1 (`pnpm --dir core/os dev` runs it too)
 ```
 
-A deployment's D1 is migrated before the code that reads it uploads (`pnpm run deploy` applies the
+A deployment's D1 is migrated before the code that reads it uploads (Alchemy applies the
 migrations, then deploys): a migration must keep the running version working until then. D1 Time Travel restores a database to any minute of the last 30 days.
 
 ## Projects and MCP

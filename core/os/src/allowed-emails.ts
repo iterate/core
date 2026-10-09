@@ -1,7 +1,7 @@
 // ── who may sign in ── `login.allow` and `login.deny` (iterate-config.ts), rules that mirror
-// Cloudflare Access's (scripts/cloudflare-access.ts writes them as the Access policy): an address,
-// a domain (exactly, not its subdomains), or everyone. Checked at each sign-in and at every grant's
-// admission and refresh (oauth.ts).
+// Cloudflare Access's policy rules: an address, a domain (exactly, not its subdomains), or
+// everyone. Checked at each sign-in, one through Cloudflare Access too
+// (cloudflare-access-sign-in.ts), and at every grant's admission and refresh (oauth.ts).
 import { dnsName } from "iterate/app-config";
 import { z } from "zod";
 
@@ -25,8 +25,8 @@ export const EmailRule = z.union(
 );
 export type EmailRule = z.infer<typeof EmailRule>;
 
-/** Whether `rules` admit `email`: some `allow` rule matches and no `deny` rule does. The same
- *  decision the Access policy makes from the same rules. */
+/** Whether `rules` admit `email`: some `allow` rule matches and no `deny` rule does, as an Access
+ *  policy's `include` and `exclude` decide. */
 export function emailAllowed(
   rules: { allow: readonly EmailRule[]; deny?: readonly EmailRule[] },
   email: string,
