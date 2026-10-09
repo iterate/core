@@ -1,4 +1,4 @@
-// alchemy/stack.test.ts — THE STACK AS A DEPLOYMENT'S FACET COMPILES IT: stack.ts over engine.ts's
+// src/deployment/stack.test.ts — THE STACK AS A DEPLOYMENT'S FACET COMPILES IT: @iterate-com/deployer's stack over its engine's
 // providers and host, as ../src/deployment/run.ts composes them, with a fake token and in-memory
 // state. Compiling calls no API, so a row here sees what the stack decides before any plan; what
 // Cloudflare makes of a plan and an apply is the live proofs' (tasks/alchemy-native-deploy.md).
@@ -7,10 +7,10 @@ import { type CompiledStack, Stack } from "alchemy/Stack";
 import { inMemoryState } from "alchemy/State";
 import * as Effect from "effect/Effect";
 import { expect, test } from "vitest";
-import cloudflareConfig from "../cloudflare.config.ts";
-import { deploymentOf, type IterateConfigInput } from "../src/iterate-config.ts";
-import { cloudflareProviders, hostLayer } from "./engine.ts";
-import { iterateStack } from "./stack.ts";
+import { cloudflareProviders, hostLayer } from "@iterate-com/deployer/engine";
+import { iterateStack } from "@iterate-com/deployer/stack";
+import cloudflareConfig from "../../cloudflare.config.ts";
+import { deploymentOf, type IterateConfigInput } from "../iterate-config.ts";
 
 // fake ids, built at run time (lint/public-copies.test.ts)
 const account = "a".repeat(32);

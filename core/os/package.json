@@ -24,6 +24,7 @@
     "@base-ui/react": "catalog:",
     "@cloudflare/workers-oauth-provider": "catalog:",
     "@effect/platform-node": "4.0.1",
+    "@iterate-com/deployer": "workspace:*",
     "@modelcontextprotocol/client": "catalog:",
     "@modelcontextprotocol/server": "catalog:",
     "@octokit/auth-app": "8.3.1",

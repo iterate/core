@@ -1,0 +1,10 @@
+{
+  // The tests run on Node (vitest.config.ts): node:sqlite stands in for a Durable Object's SQLite,
+  // and a temporary directory for its file system.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types/experimental", "node"],
+    "noEmit": true
+  },
+  "include": ["src/**/*.test.ts", "vitest.config.ts"]
+}

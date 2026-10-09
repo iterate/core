@@ -35,7 +35,7 @@ One object configures a deployment, the iterate config (`src/iterate-config.ts`)
 `cloudflare` section says where the Worker deploys, the rest what the Worker does. `pnpm run deploy`
 builds the Worker with Vite, then runs `alchemy deploy` over `alchemy.run.ts`, which reads the
 config from the environment (`iterate.config.ts`) or a gitignored `iterate.config.local.ts`.
-`alchemy/stack.ts` declares the Worker and every resource it binds, and a project's deployment
+`core/deployer/src/stack.ts` declares the Worker and every resource it binds, and a project's deployment
 facet (`src/deployment/`, `itx.deployments`) runs that stack too, with its state in its SQLite.
 [Self-hosting](SELF-HOSTING.md) explains the config and both deploys. iterate's own
 deployments, production and one per tested commit of a pull request, are configured and deployed

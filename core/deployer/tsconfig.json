@@ -1,0 +1,10 @@
+{
+  // Worker code, typed against the Cloudflare types: the engine runs inside a Durable Object, and
+  // the stack under Alchemy's CLI on Node too. The tests are tsconfig.tests.json's.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types/experimental"]
+  },
+  "include": ["src", "tsdown.config.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

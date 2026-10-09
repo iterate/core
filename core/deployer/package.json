@@ -1,0 +1,63 @@
+{
+  "name": "@iterate-com/deployer",
+  "version": "0.1.0",
+  "description": "An iterate deployment on Cloudflare as an Alchemy stack, and the engine that runs it inside a Durable Object: what core/os deploys with, from Alchemy's CLI and from a project's deployment facet",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/core",
+    "directory": "core/deployer"
+  },
+  "exports": {
+    "./engine": "./src/engine.ts",
+    "./names": "./src/names.ts",
+    "./stack": "./src/stack.ts",
+    "./state-sql": "./src/state-sql.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      "./engine": {
+        "types": "./dist/engine.d.mts",
+        "import": "./dist/engine.mjs"
+      },
+      "./names": {
+        "types": "./dist/names.d.mts",
+        "import": "./dist/names.mjs"
+      },
+      "./stack": {
+        "types": "./dist/stack.d.mts",
+        "import": "./dist/stack.mjs"
+      },
+      "./state-sql": {
+        "types": "./dist/state-sql.d.mts",
+        "import": "./dist/state-sql.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.1",
+    "alchemy": "catalog:",
+    "effect": "catalog:"
+  },
+  "peerDependencies": {
+    "iterate": "*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "iterate": "workspace:*",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -40,6 +40,7 @@ test("core/os depends on only these workspace packages", () => {
       .map(([name]) => name),
   ).toMatchInlineSnapshot(`
     [
+      "@iterate-com/deployer",
       "iterate",
     ]
   `);

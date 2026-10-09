@@ -10,7 +10,7 @@
 // (Docker, `linux/amd64`) for each account named, pushes it to that account's registry
 // (`registry.cloudflare.com/<account>/<name>`), has Cloudflare prepare it for the Containers
 // runtime, and answers the account's new digests for the caller to pin: a commit to make. The
-// deploy hands the references to the sandbox container's `images` (alchemy/stack.ts), so an image
+// deploy hands the references to the sandbox container's `images` (core/deployer/src/stack.ts), so an image
 // is tied to the deployment that references it. `--check` builds nothing: it fails when an
 // account's registry does not hold a pinned digest.
 import { execFileSync } from "node:child_process";

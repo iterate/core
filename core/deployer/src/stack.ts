@@ -1,8 +1,8 @@
-// alchemy/stack.ts — ONE ITERATE DEPLOYMENT AS AN ALCHEMY STACK: the platform Worker and the
-// resources it binds. A pure function of `StackInput`: the host picks the state store, the
-// credentials and the ConfigProvider, ../alchemy.run.ts for Alchemy's CLI, ../src/deployment/run.ts
-// for a deployment's facet. ../cloudflare.config.ts is cf dev's twin of the binding table below;
-// stack.test.ts keeps the two in step.
+// stack.ts — ONE ITERATE DEPLOYMENT AS AN ALCHEMY STACK: the platform Worker and the resources it
+// binds. A pure function of `StackInput`: the host picks the state store, the credentials and the
+// ConfigProvider, core/os/alchemy.run.ts for Alchemy's CLI, core/os/src/deployment/run.ts for a
+// deployment's facet. core/os/cloudflare.config.ts is cf dev's twin of the binding table below;
+// core/os/src/deployment/stack.test.ts keeps the two in step.
 import * as Cloudflare from "alchemy/Cloudflare";
 import { remote } from "alchemy/ProviderMode";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
@@ -11,21 +11,26 @@ import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
-import { type deploymentOf, resourceNamesOf } from "../src/iterate-config.ts";
+import { type CloudflareSection, resourceNamesOf } from "./names.ts";
 
 /** What a host hands the stack. */
 export type StackInput = {
-  /** The iterate config, parsed and split as the Worker reads it (../src/iterate-config.ts
-   *  `deploymentOf`). The stack reads which secret fields are set, never their values: each binds
-   *  as `Config.Redacted` of its variable, which Alchemy resolves from the host's ConfigProvider. */
-  deployment: ReturnType<typeof deploymentOf>;
-  /** `dir`, absolute: the release directory (../scripts/build.ts `releaseOf`), `bundle/index.js`
-   *  the Worker's entry (its sibling modules upload with it, byte for byte), `assets/`, and the D1
-   *  `migrations/`, the same path on every run (./engine.ts `stageRelease`). `version` labels the
-   *  Worker version. */
+  /** The iterate config, parsed and split as the Worker reads it (core/os/src/iterate-config.ts
+   *  `deploymentOf`): its `cloudflare` section, and the Worker's variables, `ITERATE` the plain
+   *  config and each set secret field as a variable of its own. The stack reads which secret
+   *  fields are set, never their values: each binds as `Config.Redacted` of its variable, which
+   *  Alchemy resolves from the host's ConfigProvider. */
+  deployment: {
+    config: { cloudflare?: CloudflareSection };
+    vars: { ITERATE: string; secrets: Record<string, string> };
+  };
+  /** `dir`, absolute: the release directory (core/os/scripts/build.ts `releaseOf`),
+   *  `bundle/index.js` the Worker's entry (its sibling modules upload with it, byte for byte),
+   *  `assets/`, and the D1 `migrations/`, the same path on every run (./engine.ts `stageRelease`).
+   *  `version` labels the Worker version. */
   release: { dir: string; version: string | undefined };
-  /** image name ⇒ digest-pinned reference in the account's registry (../scripts/images.ts). None ⇒
-   *  a sandbox starts Cloudflare's managed image. */
+  /** image name ⇒ digest-pinned reference in the account's registry (core/os/scripts/images.ts).
+   *  None ⇒ a sandbox starts Cloudflare's managed image. */
   images: Record<string, string>;
 };
 
@@ -47,8 +52,8 @@ export const iterateStack = ({ deployment: { config, vars }, release, images }: 
       return yield* refuse(
         `cloudflare.accountId is ${cloudflare.accountId}, but the credentials reach ${accountId}`,
       );
-    // protectData's retention, piped onto each resource (../src/iterate-config.ts says which and
-    // why).
+    // protectData's retention, piped onto each resource (core/os/src/iterate-config.ts says which
+    // and why).
     const protect = RemovalPolicy.retain(cloudflare.protectData === true);
     // The warehouse (docs/telemetry.md), which internal-packages/telemetry deploys: no resource
     // here owns it.

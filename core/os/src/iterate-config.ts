@@ -8,6 +8,7 @@
 // name) is the code's, beside its consumer, never config.
 
 import { z } from "zod";
+import { D1_LOCATIONS } from "@iterate-com/deployer/names";
 import {
   appConfigInputOf,
   configVarNameOf,
@@ -157,7 +158,7 @@ const resourceName = z
  *  check keys against. Every object `prefault`s to `{}` so a deployment that names none of a
  *  block's keys still gets the block. */
 export const IterateConfig = z.object({
-  /** WHERE IT DEPLOYS: what ../alchemy/stack.ts makes the Worker and its resources from. Unset ⇒
+  /** WHERE IT DEPLOYS: what core/deployer/src/stack.ts makes the Worker and its resources from. Unset ⇒
    *  nowhere: local dev, the suites, and a local build, which nothing deploys. */
   cloudflare: z
     .object({
@@ -178,7 +179,7 @@ export const IterateConfig = z.object({
        *  (https://developers.cloudflare.com/d1/configuration/data-location/). Unset ⇒ near whoever
        *  makes it. Setting or changing it once Alchemy has made the D1 REPLACES the D1 with a new,
        *  empty one. */
-      d1Location: z.enum(["wnam", "enam", "weur", "eeur", "apac", "oc"]).optional(),
+      d1Location: z.enum(D1_LOCATIONS).optional(),
       /** KEEP THE DATA (prd's): Alchemy deletes none of the deployment's resources when a plan
        *  would delete or replace one: the D1, the KV namespaces, the R2 bucket, and the Worker with
        *  its Durable Objects and its sandboxes' container application. A destroy forgets them all
@@ -628,7 +629,7 @@ export function parseIterateConfigInput(input: unknown, deployId = "unversioned"
 
 /** The config's SECRETS: each field the schema marks secret (`redacted`), its path and its value
  *  (blank when unset). `deploymentOf` makes each set one a variable of its own, `ITERATE__<PATH>`,
- *  which ../alchemy/stack.ts binds as a Worker secret. */
+ *  which core/deployer/src/stack.ts binds as a Worker secret. */
 export function secretFieldsOf(config: IterateConfig): Array<{ path: string[]; value: string }> {
   const found: Array<{ path: string[]; value: string }> = [];
   const walk = (value: unknown, path: string[]) => {
@@ -676,21 +677,9 @@ function workerVarsOf(input: Record<string, unknown>, config: IterateConfig) {
   return { ITERATE: JSON.stringify(plain), secrets };
 }
 
-/** The names a deployment's Worker and the resources it binds go by. */
-export function resourceNamesOf(
-  cloudflare: Pick<NonNullable<IterateConfig["cloudflare"]>, "resourcePrefix" | "workerName">,
-) {
-  const prefix = cloudflare.resourcePrefix;
-  const worker = cloudflare.workerName || prefix;
-  return {
-    worker,
-    db: `${prefix}-db`,
-    files: `${prefix}-files`,
-    repos: `${prefix}-repos`,
-    oauthKv: `${worker}-oauth-kv`,
-    itxKv: `${worker}-itx-kv`,
-  };
-}
+/** The names a deployment's Worker and the resources it binds go by: the deployer's
+ *  (@iterate-com/deployer names.ts), which the stack reads too. */
+export { resourceNamesOf } from "@iterate-com/deployer/names";
 
 function isIdentityProvider(name: string): name is IdentityProvider {
   return IdentityProvider.safeParse(name).success;

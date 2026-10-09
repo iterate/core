@@ -3,8 +3,8 @@
 // the projects live in. Every mode binds the same local resources: `development` (`vite dev`,
 // which `pnpm dev` runs) with its own iterate config, `test` (the suites in test/) with none,
 // because each suite sets its own, and `production` (`vite build`). A deployment takes only the
-// build from here: Alchemy uploads it with the bindings and settings alchemy/stack.ts declares, and
-// alchemy/stack.test.ts holds this binding table to that one.
+// build from here: Alchemy uploads it with the bindings and settings core/deployer/src/stack.ts declares, and
+// src/deployment/stack.test.ts holds this binding table to that one.
 import { bindings, defineConfig, defineContainer, exports } from "cf/config";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { TEST_EMAIL_DOMAIN } from "./src/test-email-domain.ts";

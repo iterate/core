@@ -5,7 +5,7 @@
 // (`Cf-Access-Jwt-Assertion`). This route checks that token itself and signs the browser in to the
 // issuer as a password sign-in does. The application is made by hand (SELF-HOSTING.md, "Sign-in"),
 // and the config names its team and audience: a deploy refuses the method without both
-// (alchemy/stack.ts).
+// (core/deployer/src/stack.ts).
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { sameOriginPath } from "iterate/lib";
 import { emailAllowed, EMAIL_NOT_ALLOWED_MESSAGE } from "./allowed-emails.ts";

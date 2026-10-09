@@ -152,7 +152,7 @@ into `.cloudflare/output/`), then `alchemy deploy` over `alchemy.run.ts`:
 
 1. It parses the config as the Worker will: a malformed field fails the deploy, naming itself, and
    a key the schema does not name is warned about and left out.
-2. `alchemy/stack.ts` declares the deployment. It refuses a stage that is not the Worker's name,
+2. `core/deployer/src/stack.ts` declares the deployment. It refuses a stage that is not the Worker's name,
    and credentials for an account other than `cloudflare.accountId`.
 3. Alchemy compares the declaration with the state, prints each resource's action (create, update,
    replace, delete or noop), and asks. `pnpm alchemy plan` stops here.

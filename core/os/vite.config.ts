@@ -29,7 +29,7 @@ export default defineConfig({
     tailwindcss(),
   ],
   // THE WORKER'S import.meta: workerd leaves `import.meta.url` undefined and has no
-  // `import.meta.resolve`, and Alchemy's engine (alchemy/engine.ts, in the lazy chunk that
+  // `import.meta.resolve`, and Alchemy's engine (core/deployer/src/engine.ts, in the lazy chunk that
   // src/deployment/run.ts starts) needs both as its modules load: alchemy's
   // lib/Cloudflare/LocalRuntime.js and lib/Local/RpcProviderProxy.js call `import.meta.resolve`,
   // and fdir calls `createRequire(import.meta.url)`. `define` replaces expressions, never strings,

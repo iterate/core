@@ -11,7 +11,7 @@ const CAPTURED_COMMAND_OUTPUT_LIMIT = 64 * 1024;
  * `vite build` of one app for one environment, into a fresh output folder. The apps on top build
  * into dist/ (`CLOUDFLARE_ENV` selects the environment), and the Worker config the Cloudflare Vite
  * plugin snapshots beside the code is what deploys. core/os builds into .cloudflare/output/ (./build.ts
- * `releaseOf`), and Alchemy uploads that code with the bindings ../alchemy/stack.ts declares, not
+ * `releaseOf`), and Alchemy uploads that code with the bindings core/deployer/src/stack.ts declares, not
  * the snapshot's. Its output streams as it runs; a failure's error carries the last 40 lines, so a
  * report of it (the PR preview's `deploy failed`) says why.
  */

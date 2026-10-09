@@ -2,7 +2,7 @@
 // THE LAZY CHUNK: durable-object.ts imports it with `import()` as an attempt starts, and it is the
 // one module of src/ that imports Alchemy and Effect (.oxlintrc.json), so a cold isolate and every
 // other facet never evaluate either. In order: the token's reach, the release staged from the
-// project's files, then the stack (../../alchemy/) planned, applied or destroyed over Alchemy's
+// project's files, then the stack (@iterate-com/deployer) planned, applied or destroyed over Alchemy's
 // state in the facet's SQLite, each step reported as its fact.
 //
 // THE CONFIG IS THE FACET'S (durable-object.ts): the Worker's variables and the account's API token,
@@ -34,9 +34,9 @@ import {
   ReleaseRefused,
   runStack,
   stageRelease,
-} from "../../alchemy/engine.ts";
-import { iterateStack } from "../../alchemy/stack.ts";
-import { sqlState, type StateSql } from "../../alchemy/state-sql.ts";
+} from "@iterate-com/deployer/engine";
+import { iterateStack } from "@iterate-com/deployer/stack";
+import { sqlState, type StateSql } from "@iterate-com/deployer/state-sql";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { deploymentOf, iterateConfigFromEnv } from "../iterate-config.ts";
 import type { DeploymentRunRequested } from "./contract.ts";
@@ -54,7 +54,7 @@ const KEPT_CHARS = 8_000;
 const STACK = "iterate";
 
 /** Where an attempt stages its release, `<RELEASES>/<stage>`: the same path on every run
- *  (../../alchemy/engine.ts `stageRelease`). workerd gives each request its own /tmp. */
+ *  (@iterate-com/deployer/engine `stageRelease`). workerd gives each request its own /tmp. */
 const RELEASES = "/tmp/release";
 
 /** The statuses of a resource whose apply is done (alchemy Report.ts `ApplyStatus`), each a
@@ -117,7 +117,7 @@ export async function attemptRun(input: {
                     payload: { fqn: event.fqn, type: event.type, status: event.status },
                   })
                 : Effect.void;
-            // the stack's output: a deploy's is the Worker's URL (../../alchemy/stack.ts)
+            // the stack's output: a deploy's is the Worker's URL (@iterate-com/deployer/stack)
             const { output } = event;
             if (Predicate.hasProperty(output, "url") && typeof output.url === "string")
               url = output.url;
