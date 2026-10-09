@@ -3,7 +3,7 @@
   // the stack under Alchemy's CLI on Node too. The tests are tsconfig.tests.json's.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["@cloudflare/workers-types/experimental"]
+    "types": ["@cloudflare/workers-types/experimental", "node"]
   },
   "include": ["src", "tsdown.config.ts"],
   "exclude": ["src/**/*.test.ts"]

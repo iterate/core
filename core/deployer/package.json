@@ -10,6 +10,7 @@
     "directory": "core/deployer"
   },
   "exports": {
+    "./attempt": "./src/attempt.ts",
     "./engine": "./src/engine.ts",
     "./names": "./src/names.ts",
     "./stack": "./src/stack.ts",
@@ -21,6 +22,10 @@
   "publishConfig": {
     "access": "public",
     "exports": {
+      "./attempt": {
+        "types": "./dist/attempt.d.mts",
+        "import": "./dist/attempt.mjs"
+      },
       "./engine": {
         "types": "./dist/engine.d.mts",
         "import": "./dist/engine.mjs"
