@@ -1561,6 +1561,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
                 "field names are unique",
               )
               .optional(),
+            redirectUrl: z
+              .url({ protocol: /^https?$/ })
+              .refine((value) => {
+                const url = new URL(value);
+                return !url.username && !url.password;
+              }, "redirectUrl is an http(s) URL without credentials")
+              .optional(),
           })
           .parse(input);
         const secretPath = assertSecretPath(collected.path);
@@ -1603,6 +1610,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         if (collected.description)
           url.searchParams.set("description", JSON.stringify(collected.description));
         if (collected.fields) url.searchParams.set("fields", JSON.stringify(collected.fields));
+        if (collected.redirectUrl)
+          url.searchParams.set("redirectUrl", new URL(collected.redirectUrl).href);
         const callingPath = deps.caller().path;
         // The agent whose `message()` wakes the next turn: an `/agents/**` caller is that agent.
         if (callingPath?.startsWith("/agents/")) url.searchParams.set("agent", callingPath);

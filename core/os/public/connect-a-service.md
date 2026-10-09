@@ -203,6 +203,10 @@ async (itx) =>
 
 A field with `multiline: true` takes several lines, such as a PEM private key.
 
+`redirectUrl` sends the person on once the secret is saved, as an OAuth redirect does: give the URL of the
+page that asked for it, such as one of the project's own pages. The form shows its host before
+they save.
+
 **3b.** Send the person this message, with the real link and the real keys page. Put the link on a
 line of its own, exactly as returned: no backticks, no link text.
 

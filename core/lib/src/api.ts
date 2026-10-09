@@ -280,6 +280,10 @@ export type CollectSecretInput = {
    *  `getSecret(path, { field: name })`: an OAuth app's `clientSecret` (which `beginOAuth` takes as
    *  a placeholder), a webhook's `signingSecret`. Without it, one Value. */
   fields?: CollectSecretField[];
+  /** Where the page sends the person once the secret is saved, as an OAuth redirect does: an
+   *  absolute http(s) URL without credentials, such as the project's page that asked. The page
+   *  shows its host before the person saves. Without it, the page says the tab can close. */
+  redirectUrl?: string;
 };
 
 /** One part of a secret a collection page asks for: its name in the JSON secret
