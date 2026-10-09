@@ -28,6 +28,15 @@ export function configFileInUse() {
   return existsSync(local) ? local : path.join(root, "iterate.config.ts");
 }
 
+/** core/os/.secrets into the environment, a variable already set keeping its value: what
+ *  `pnpm run deploy` loads with `--env-file-if-exists`, for a `cf` command run on its own, which reads
+ *  the config too (../cloudflare.config.ts). Not when `ITERATE_CONFIG_FILE` names the config file:
+ *  that is iterate's own deploy tooling, which takes nothing from this checkout's .secrets. */
+export function loadSecretsFile(file = path.join(root, ".secrets")) {
+  if (process.env.ITERATE_CONFIG_FILE?.trim()) return;
+  if (existsSync(file)) process.loadEnvFile(file);
+}
+
 /** The variable the deploy puts what it found on the account in (./deploy.ts: the Access
  *  application's team and audience), merged over the config file's export. Set by the deploy
  *  alone, so the build's own read (../cloudflare.config.ts) sees it too. */

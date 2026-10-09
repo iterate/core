@@ -17,7 +17,7 @@ import {
 } from "iterate/project-ingress";
 import { proxyPosthogRequest } from "./posthog-proxy.ts";
 import { parseCause, crossingOneMore, newChain, requestCausedBy, type Cause } from "./cause.ts";
-import { primaryHostnameRedirectOf } from "./primary-hostname-redirect.ts";
+import { isPageNavigation, primaryHostnameRedirectOf } from "./primary-hostname-redirect.ts";
 import { ITX_GRANT_HEADER, type Caller } from "./caller.ts";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
@@ -509,6 +509,20 @@ async function routeRequest(
   // on `/api/<anything>` would pass the `/api` resource's gate (its paths are the resource's,
   // api.ts) and reach Cap'n Web.
   if (url.pathname.startsWith("/api")) return new Response("Not found", { status: 404 });
+
+  // A browser that opens the platform origin's `/` goes on to the dash's connect page for this
+  // issuer, which lists the projects and links the other apps. `/?landing=1` keeps the landing page.
+  if (
+    url.pathname === "/" &&
+    !url.search &&
+    request.method === "GET" &&
+    iterateConfig.urls.dash &&
+    isPageNavigation(request)
+  )
+    return Response.redirect(
+      `${iterateConfig.urls.dash}/.auth/connect?${new URLSearchParams({ issuer: platformOrigin })}`,
+      302,
+    );
 
   // Everything else on the platform origin is OAuth (api.ts, oauth.ts: the authorization
   // server's token and registration endpoints and metadata, each resource's metadata) with the

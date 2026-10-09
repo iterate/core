@@ -11,7 +11,7 @@ served at https://os.iterate.com/setup-prompt.md. Tell Claude Code, Codex or ope
 
 From an empty folder it deploys into the Cloudflare account you pick, creates your first project,
 checks it, connects itself over MCP, and hands you the dash, voice and kit links. Its requirements
-are at the top: Workers Paid, R2, and access to Cloudflare Artifacts (a closed beta). You can follow
+are at the top: Workers Paid (which brings Cloudflare Artifacts, in open beta) and R2. You can follow
 it by hand too. This page is the reference for what it does.
 
 ## Deploy
@@ -55,9 +55,9 @@ sign-in, admins, integrations and keys. A field you leave out takes its default.
 
 - [`iterate.config.ts`](iterate.config.ts), committed, reads it from the environment. `ITERATE` is
   the whole object as JSON. Any one field can also be set alone, `__` before each part of its path
-  (`ITERATE__URLS__OS`, `ITERATE__SECRETS_ENCRYPTION__KEY`), and wins over the object. `pnpm run deploy`
-  loads `core/os/.secrets` (gitignored, `NAME=value` lines) when it exists; a variable already in
-  the environment keeps its value.
+  (`ITERATE__URLS__OS`, `ITERATE__SECRETS_ENCRYPTION__KEY`), and wins over the object. `pnpm run deploy`,
+  and every `cf` command run in `core/os`, loads `core/os/.secrets` (gitignored, `NAME=value` lines)
+  when it exists; a variable already in the environment keeps its value.
 - `iterate.config.local.ts`, gitignored, is used instead when it exists. It is yours: it imports
   `iterate.config.ts` and overrides what you need, with types.
 

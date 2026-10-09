@@ -9,7 +9,7 @@ import {
   parseIterateConfig,
   parseIterateConfigInput,
 } from "../src/iterate-config.ts";
-import { readDeployment, workerVarsOf } from "./iterate-config-file.ts";
+import { loadSecretsFile, readDeployment, workerVarsOf } from "./iterate-config-file.ts";
 
 /** A deployment's config as a file writes it: plain fields beside secret ones, one of them blank. */
 const INPUT = {
@@ -109,6 +109,23 @@ test("readDeployment: a malformed config names the field, both its spellings, an
 });
 
 /** A config file in a scratch folder, exporting `source`. */
+test("loadSecretsFile: a cf command reads .secrets, keeps what the environment set, and iterate's own deploy tooling reads none", () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), "secrets-")), ".secrets");
+  writeFileSync(file, "ITERATE__TEST_SECRETS_A=from-file\nITERATE__TEST_SECRETS_B=from-file\n");
+  vi.stubEnv("ITERATE__TEST_SECRETS_A", undefined);
+  vi.stubEnv("ITERATE__TEST_SECRETS_B", "from-environment");
+  vi.stubEnv("ITERATE_CONFIG_FILE", "iterate.config.ts");
+  loadSecretsFile(file);
+  expect(process.env.ITERATE__TEST_SECRETS_A).toBeUndefined();
+  vi.stubEnv("ITERATE_CONFIG_FILE", undefined);
+  loadSecretsFile(file);
+  expect(process.env).toMatchObject({
+    ITERATE__TEST_SECRETS_A: "from-file",
+    ITERATE__TEST_SECRETS_B: "from-environment",
+  });
+  vi.unstubAllEnvs();
+});
+
 function configFile(source: string) {
   const file = path.join(mkdtempSync(path.join(tmpdir(), "iterate-config-")), "iterate.config.ts");
   writeFileSync(file, source);

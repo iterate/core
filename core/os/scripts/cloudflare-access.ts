@@ -50,6 +50,22 @@ export function accessApplicationOf(input: {
 }
 
 const Organization = z.object({ auth_domain: z.string().min(1) });
+const Worker = z.object({
+  name: z.string(),
+  subdomain: z.object({ url: z.string() }).partial().optional(),
+});
+
+/** `worker`'s host on the account's workers.dev subdomain. `cf` has no command for the subdomain
+ *  itself, so it is read off a Worker the account already serves there (`<name>.<subdomain>.workers.dev`). */
+function workersDevHostOf(worker: string, cf: Cf, accountId: string) {
+  for (const { name, subdomain } of z.array(Worker).parse(cf(["workers", "list"]))) {
+    const host = subdomain?.url ? new URL(subdomain.url).host : "";
+    if (host.startsWith(`${name}.`)) return `${worker}.${host.slice(name.length + 1)}`;
+  }
+  throw new Error(
+    `login.methods.cloudflareAccess: the account has no Worker on its workers.dev subdomain yet, so the sign-in's host is unknown. Pick the subdomain at https://dash.cloudflare.com/${accountId}/workers-and-pages (create any Worker there, such as Hello World), or set urls.os, and deploy again.`,
+  );
+}
 const IdentityProvider = z.object({ id: z.string(), type: z.string() });
 const Application = z.object({ id: z.string(), name: z.string(), aud: z.string() });
 
@@ -101,7 +117,7 @@ export function ensureCloudflareAccess(
     // urls.os's host, else the Worker's on the account's workers.dev subdomain
     host: config.urls.os
       ? new URL(config.urls.os).host
-      : `${worker}.${z.object({ subdomain: z.string() }).parse(cf(["workers", "subdomains", "get"])).subdomain}.workers.dev`,
+      : workersDevHostOf(worker, cf, cloudflare.accountId),
     identityProviderId: pin.id,
     policy: accessPolicyOf(config.login),
   });

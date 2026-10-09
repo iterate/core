@@ -18,17 +18,20 @@ export function primaryHostnameRedirectOf(
   if (ingress.routing?.type !== "subdomains") return undefined;
   if (request.method !== "GET" && request.method !== "HEAD") return undefined;
   if (request.headers.get("upgrade")) return undefined;
-  const mode = request.headers.get("sec-fetch-mode");
-  const destination = request.headers.get("sec-fetch-dest");
-  // a browser says what a request is; without Fetch Metadata, one that asks for HTML is a page
-  const navigation =
-    mode || destination
-      ? mode === "navigate" && destination === "document"
-      : (request.headers.get("accept") ?? "").includes("text/html");
-  if (!navigation) return undefined;
+  if (!isPageNavigation(request)) return undefined;
   const url = new URL(request.url);
   if (url.origin === ingress.platformOrigin) return undefined;
   const address = projectAddressOf(ingress.routing, url, ingress.platformOrigin);
   if (!address || address.routingSlug === FILES_ROUTING_SLUG) return undefined;
   return { routingSlug: address.routingSlug };
+}
+
+/** A browser's top-level navigation to a page. A browser says what a request is; without Fetch
+ *  Metadata, one that asks for HTML is a page. */
+export function isPageNavigation(request: Request): boolean {
+  const mode = request.headers.get("sec-fetch-mode");
+  const destination = request.headers.get("sec-fetch-dest");
+  return mode || destination
+    ? mode === "navigate" && destination === "document"
+    : (request.headers.get("accept") ?? "").includes("text/html");
 }

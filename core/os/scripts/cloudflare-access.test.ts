@@ -57,7 +57,10 @@ test.for<{ name: string; existing: object[]; command: string[] }>([
   const answers: Record<string, unknown> = {
     "zero-trust organization get": { auth_domain: "acme.cloudflareaccess.com" },
     "zero-trust identity-providers list": [{ id: "pin-1", type: "onetimepin" }],
-    "workers subdomains get": { subdomain: "acme-sub" },
+    "workers list": [
+      { name: "other" },
+      { name: "web", subdomain: { url: "https://web.acme-sub.workers.dev" } },
+    ],
     "zero-trust access applications list": existing,
     [`zero-trust access applications ${command.join(" ")}`]: {
       id: "app-1",

@@ -772,6 +772,28 @@ test.for<{ name: string; path: string; init: RequestInit; status: number }>([
   },
 );
 
+// The root sends a browser's navigation on to the dash's connect page for this issuer; any other
+// request for it, and `/?landing=1`, still gets the landing page.
+test("public protocol origins: a browser that opens the root goes on to the dash", async () => {
+  const opened = await request(
+    new Request("https://os.iterate.com/", {
+      headers: { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" },
+    }),
+  );
+  expect(opened).toMatchObject({ status: 302 });
+  expect(opened.headers.get("location")).toBe(
+    "https://dash.iterate.com/.auth/connect?issuer=https%3A%2F%2Fos.iterate.com",
+  );
+  const fetched = new Request("https://os.iterate.com/", {
+    headers: { accept: "text/html", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" },
+  });
+  expect(await request(fetched)).toMatchObject({ status: 200 });
+  const landing = new Request("https://os.iterate.com/?landing=1", {
+    headers: { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" },
+  });
+  expect(await request(landing)).toMatchObject({ status: 200 });
+});
+
 test("public protocol origins: /favicon.svg is production's logo, and a preview's purple PR badge", async () => {
   const assetPaths: string[] = [];
   const favicon = (origin: string) =>

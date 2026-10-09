@@ -7,7 +7,7 @@
 import { bindings, defineConfig, defineContainer, exports, triggers } from "cf/config";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { z } from "zod";
-import { readDeployment } from "./scripts/iterate-config-file.ts";
+import { loadSecretsFile, readDeployment } from "./scripts/iterate-config-file.ts";
 import { resourceNamesOf } from "./src/iterate-config.ts";
 import { TEST_EMAIL_DOMAIN } from "./src/test-email-domain.ts";
 
@@ -27,6 +27,7 @@ const LOCAL_RESOURCES = {
 
 export default defineConfig(async ({ mode }) => {
   const local = mode === "development" || mode === "test";
+  if (!local) loadSecretsFile();
   const deployment = local ? undefined : await readDeployment();
   const cloudflare = deployment?.config.cloudflare;
   const telemetry = cloudflare?.telemetry;
