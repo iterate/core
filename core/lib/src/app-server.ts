@@ -164,10 +164,33 @@ function gatePage(input: {
   );
 }
 
+/** The answer to the connect form's POST: a page that moves on to `location` by itself (a meta
+ *  refresh), never a redirect. Chromium holds a form submission's WHOLE redirect chain to the
+ *  page's `form-action`, and the issuer's sign-in may redirect on to an origin no gate page can
+ *  name: an issuer whose one sign-in is Cloudflare Access sends `/login` straight to its team's
+ *  `*.cloudflareaccess.com`. A refresh is a navigation of its own, outside the form's chain. */
+function onwardPage(location: string, headers: Record<string, string> = {}): Response {
+  const href = text(location);
+  return new Response(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${href}"><title>Signing in</title></head><body><p><a href="${href}">Continue</a></p></body></html>`,
+    {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        "Referrer-Policy": "no-referrer",
+        "X-Frame-Options": "DENY",
+        ...headers,
+      },
+    },
+  );
+}
+
 /** The head and the CSP of a gate page: the deployment's own issuer dresses it (its stylesheet, its
  *  logo); any other issuer gets the inline dress and nothing of its own on this origin. `formIssuer`
  *  is the issuer the page's form ends up at: Chromium applies `form-action` to a submission's WHOLE
- *  redirect chain, and the gate's POSTs 303 onward to that issuer's authorize endpoint. */
+ *  redirect chain, which the connect form's POST now ends at once (`onwardPage`); a sign-out's POST
+ *  still redirects on to that issuer. */
 function dressOf(
   issuer: string,
   defaultIssuer: string,
@@ -395,13 +418,9 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     }
     const host = await held();
     if (host?.issuer === named.origin)
-      return new Response(null, {
-        status: 303,
-        headers: {
-          Location: `/.auth/login?${new URLSearchParams({ next, scope: parsed.data.join(" ") })}`,
-          "Cache-Control": "no-store",
-        },
-      });
+      return onwardPage(
+        `/.auth/login?${new URLSearchParams({ next, scope: parsed.data.join(" ") })}`,
+      );
     if (host) {
       // a deliberate switch: end the sign-in at the issuer it was with (best effort — that issuer
       // may be gone), then forget it here either way
@@ -422,15 +441,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       },
       next,
     );
-    return new Response(null, {
-      status: 302,
-      headers: {
-        Location: location,
-        "Set-Cookie": setCookie,
-        "Cache-Control": "no-store",
-        "Referrer-Policy": "no-referrer",
-      },
-    });
+    return onwardPage(location, { "Set-Cookie": setCookie });
   }
 
   if (url.pathname === "/.auth/login") {

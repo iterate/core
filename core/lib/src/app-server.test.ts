@@ -107,6 +107,23 @@ test("the connect page lets its form redirect on to the issuer it names", async 
   );
 });
 
+test("the connect form's POST moves on to the issuer's authorize endpoint by a refresh, never a redirect", async () => {
+  // why a refresh and not a redirect: `onwardPage` in app-server.ts
+  const { response, calls } = connected("/.auth/connect", {
+    method: "POST",
+    headers: { origin: "https://notes.example" },
+    body: new URLSearchParams({ issuer: ISSUER, next: "/projects/acme", scope: "iterate" }),
+  });
+  const answer = await response;
+  expect(answer).toMatchObject({ status: 200 });
+  expect(answer?.headers.get("location")).toBeNull();
+  expect(answer?.headers.get("set-cookie")).toContain("__Host-itx-session=");
+  expect(await answer?.text()).toContain(
+    `<meta http-equiv="refresh" content="0;url=${ISSUER}/oauth2/auth?state=x">`,
+  );
+  expect(calls).toEqual(["end", `begin ${ISSUER}`]);
+});
+
 test("a sign-out from a connected issuer bound for an ordinary page carries no scope", async () => {
   const { response } = connected("/.auth/logout?next=%2Fprojects%2Facme", {
     method: "POST",
