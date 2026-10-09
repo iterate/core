@@ -69,7 +69,6 @@ import { cloudflareEndpointsOf } from "../integrations/cloudflare.ts";
 import {
   decryptSecretMaterial,
   encryptSecretMaterial,
-  type EncryptedMaterial,
   type MaterialKeys,
 } from "../secret-at-rest.ts";
 import {
@@ -150,14 +149,6 @@ type PendingAttempt = PendingSecretOAuth & { basedOn: number | null };
  *  kept until its `secret/refreshed` lands (`#material` lands it on the next read) or a write
  *  supersedes it (`written`, or a newer offset). */
 type Minted = { cell: SealedSecretCell; basedOn: number; kind: SecretRefreshKind };
-
-/** A cell from before the facts carried them (storage `stored`): the record sealed and bound to a
- *  write counter. Opened once and sealed again with a nonce on its first read (`#material`), then
- *  forgotten. */
-type LegacyStored = {
-  record: Omit<SecretRecord, "material"> & { material: EncryptedMaterial };
-  revision: number;
-};
 
 /** A CONSENT'S EXCHANGE HELD ASIDE (storage `held`): iterate's Slack app's token for a workspace
  *  another project's connection holds, never on the log (`completeOAuth`'s gate) — it waits,
@@ -305,14 +296,14 @@ export class SecretFacet extends StreamProcessorDurableObject<
 
   /** A WRITE LANDED at `offset` (the built-in's `secret/set` folded): what it supersedes goes — an
    *  OAuth attempt begun on older material, a token held on it (its callback must not write over
-   *  this material), a mint of it whose fact had not landed, a cell from before the facts carried
-   *  them, and a borrow (material of its own replaces the lender's, as the reduce says; `fetch`
-   *  forwards on the borrow only while storage holds it). Each attempt, token or mint is fenced on
-   *  the material's offset it began on, so one begun on this very write, in the moment since it
-   *  became visible, stays; and one left behind by a crash in between dies on its own fence. */
+   *  this material), a mint of it whose fact had not landed, and a borrow (material of its own
+   *  replaces the lender's, as the reduce says; `fetch` forwards on the borrow only while storage
+   *  holds it). Each attempt, token or mint is fenced on the material's offset it began on, so one
+   *  begun on this very write, in the moment since it became visible, stays; and one left behind
+   *  by a crash in between dies on its own fence. */
   async written(input: { offset: number }): Promise<void> {
     const stale = (basedOn: number | null) => basedOn === null || basedOn < input.offset;
-    const gone: string[] = ["stored", "revision", "borrowed"];
+    const gone: string[] = ["borrowed"];
     const pending = await this.ctx.storage.get<PendingAttempt>("pending");
     if (pending && stale(pending.basedOn)) gone.push("pending");
     const held = await this.ctx.storage.get<HeldExchange>("held");
@@ -343,9 +334,8 @@ export class SecretFacet extends StreamProcessorDurableObject<
   }
 
   /** THE CURRENT MATERIAL: the cell the reduce keeps for the latest write, or null while none is
-   *  stored (never set, deleted, or borrowed). A write from before the facts carried cells left its
-   *  cell in storage, bound to a write counter: it is opened once, sealed again with a nonce, and
-   *  put on the log as a `secret/resealed` of that write, so the log holds it from then on. */
+   *  stored (never set, deleted, or borrowed). A write whose fact carries no cell has no material
+   *  anywhere: a use is refused by name, and the fix is to set the secret again. */
   async #material(): Promise<Material | null> {
     const { state } = await super.snapshot();
     if (!state.material || state.borrowed) return null;
@@ -370,46 +360,11 @@ export class SecretFacet extends StreamProcessorDurableObject<
         return this.#material();
       }
     }
-    if (state.material.sealed) {
-      // a cell from before, superseded by one on the log, goes
-      if (await this.ctx.storage.get("stored"))
-        await this.ctx.storage.delete(["stored", "revision"]);
+    if (state.material.sealed)
       return { offset: state.material.offset, setAt, setNonce, cell: state.material.sealed };
-    }
-    const legacy = await this.ctx.storage.get<LegacyStored>("stored");
-    if (!legacy) return null;
-    const { context, path } = this.#address();
-    let opened: Awaited<ReturnType<typeof decryptSecretMaterial>>;
-    try {
-      opened = await decryptSecretMaterial(
-        legacy.record.material,
-        { context, urls: legacy.record.urls, revision: legacy.revision },
-        this.#keys(),
-      );
-    } catch {
-      throw new SecretRefused(
-        `itx.fetch: the stored material of ${path} cannot be opened (a rotated key, or another context's record) — set the secret again`,
-      );
-    }
-    const cell = await this.#sealCell({ ...legacy.record, material: opened.material });
-    const landed = await this.#fact({
-      type: "events.iterate.com/secret/resealed",
-      payload: { sealed: cell, basedOn: state.material.offset },
-    });
-    if (landed === null) return { offset: state.material.offset, setAt, cell };
-    await this.waitUntilProcessed({ offset: landed });
-    await this.ctx.storage.delete(["stored", "revision"]);
-    // the log says where the cell sits now (a write that landed first wins)
-    return this.#material();
-  }
-
-  /** THE STATE, read by anyone the facet admits (the owner's `itx.cd(path).facets.get("secret")`,
-   *  the Dash, a backup): a cell from before the facts carried them is put on the log first
-   *  (`#material`), so every read of a secret's state is its migration, and an operator sweep that
-   *  reads each secret's state migrates a deployment. */
-  override async snapshot(): Promise<{ offset: number; state: SecretState }> {
-    await this.#material();
-    return super.snapshot();
+    throw new SecretRefused(
+      `itx.fetch: the material of ${this.#address().path} is from before the facts carried it and was never migrated — set the secret again`,
+    );
   }
 
   /** The current record with its material in the clear, for this facet's own use only, and the
@@ -502,15 +457,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
     }
     const borrowed = (await this.ctx.storage.get<Borrowed>("borrowed")) ?? null;
     await this.ctx.storage.put<EndingLends>("ending", ending);
-    await this.ctx.storage.delete([
-      "stored",
-      "revision",
-      "pending",
-      "held",
-      "completed",
-      "lends",
-      "borrowed",
-    ]);
+    await this.ctx.storage.delete(["pending", "held", "completed", "lends", "borrowed"]);
     // what the clear ended, for the built-in to end on the other side (context/built-ins.ts `delete`)
     return { lends, borrowed };
   }
@@ -977,9 +924,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
       return answer;
     }
     const kept = await this.ctx.storage.get<HeldExchange>("held");
-    // a token held before the facts carried cells has no cell to admit: that consent starts over
-    if (kept && !kept.cell) await this.ctx.storage.delete("held");
-    if (kept?.cell && kept.nonce === input.nonce && kept.until > Date.now()) {
+    if (kept?.nonce === input.nonce && kept.until > Date.now()) {
       if (!input.viaPlatformCallback) throw projectCodeRefused();
       return {
         urls: kept.cell.urls,
@@ -1132,11 +1077,6 @@ export class SecretFacet extends StreamProcessorDurableObject<
   } | null> {
     const completed = await this.ctx.storage.get<Completed>("completed");
     if (completed?.nonce !== nonce) return null;
-    // one from before the facts carried cells holds no cell to answer or land: its consent is over
-    if (!completed.cell) {
-      await this.ctx.storage.delete("completed");
-      return null;
-    }
     const current = await this.#material();
     // landed: the current lineage began with the cell this attempt sealed (the log says so, not a
     // stamp), and the replay lands nothing — a second set of the cell would roll back a mint since;
@@ -1182,8 +1122,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
     if (replayed)
       return { urls: replayed.urls, refresh: replayed.refresh, sealed: replayed.sealed };
     const held = await this.ctx.storage.get<HeldExchange>("held");
-    // one held before the facts carried cells has no cell to admit
-    if (held?.nonce !== input.nonce || !held.cell)
+    if (held?.nonce !== input.nonce)
       throw new Error("no token is held for this consent any more — connect again");
     await this.ctx.storage.delete("held");
     if (held.until <= Date.now() || ((await this.#material())?.setAt ?? null) !== held.basedOn)
@@ -1240,11 +1179,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
     }
     const completed = await this.ctx.storage.get<Completed>("completed");
     const current = await this.#material();
-    if (
-      completed?.nonce !== input.nonce ||
-      !completed.cell ||
-      current?.setNonce !== completed.cell.nonce
-    )
+    if (completed?.nonce !== input.nonce || current?.setNonce !== completed.cell.nonce)
       return "gone";
     return this.clear();
   }

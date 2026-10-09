@@ -21,10 +21,8 @@ const Path = z
 export const EncryptedSecretSeed = z.object({
   path: z.string().regex(/^\/secrets\/[a-zA-Z0-9._-]+$/),
   context: z.string().min(1),
-  /** The binding's last part (secret-at-rest.ts): the write's nonce, or the counter a cell from
-   *  before the facts carried cells was bound to. */
-  nonce: z.string().min(1).optional(),
-  revision: z.number().int().positive().optional(),
+  /** The binding's last part (secret-at-rest.ts): the write's nonce. */
+  nonce: z.string().min(1),
   urls: z.array(z.url()).min(1),
   refresh: z.unknown(),
   material: z.object({
@@ -128,10 +126,8 @@ export async function openProjectSeed(raw: unknown, keys: MaterialKeys) {
       throw new Error(`Secret ${secret.path} is bound to another project or path.`);
     let material;
     try {
-      const { context, urls, nonce, revision } = secret;
-      // a cell from before the facts carried them is bound to its write counter instead
-      const binding = nonce ? { context, urls, nonce } : { context, urls, revision: revision ?? 0 };
-      ({ material } = await decryptSecretMaterial(secret.material, binding, keys));
+      const { context, urls, nonce } = secret;
+      ({ material } = await decryptSecretMaterial(secret.material, { context, urls, nonce }, keys));
     } catch {
       throw new Error(
         `Cannot decrypt ${secret.path}: the secrets encryption key or authenticated binding does not match. Nothing has been restored.`,

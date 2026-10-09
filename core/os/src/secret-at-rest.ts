@@ -6,9 +6,7 @@
 // and only a holder of the key reads it. A ciphertext copied into another context, under another
 // pin, or presented as another write does not open. Rotation: `previous` opens what `current`
 // cannot; the caller seals it again under `current` when told it happened, so a rotation completes
-// one read at a time and the old key can be dropped once every live cell has been touched. Cells
-// from before the facts carried them were bound to a write counter instead (`revision`); they open
-// the same way, once, and are sealed again with a nonce.
+// one read at a time and the old key can be dropped once every live cell has been touched.
 
 import type { SecretMaterial } from "iterate/api";
 
@@ -22,12 +20,8 @@ export type EncryptedMaterial = {
 };
 
 /** Where a ciphertext is allowed to open: the secret's context (its Durable Object name), the pin,
- *  and the write — its nonce, or the counter a cell from before the facts carried them was bound
- *  to. */
-export type MaterialBinding = { context: string; urls: string[] } & (
-  | { nonce: string }
-  | { revision: number }
-);
+ *  and the write, by its nonce. */
+export type MaterialBinding = { context: string; urls: string[]; nonce: string };
 
 /** The deployment's keys: any strings — the AES key is the SHA-256 of each. `previous` is set only
  *  while rotating. */
@@ -89,11 +83,7 @@ function additionalDataOf(binding: MaterialBinding): Uint8Array<ArrayBuffer> {
   const urls = [...new Set(binding.urls)].sort();
   return Uint8Array.from(
     new TextEncoder().encode(
-      JSON.stringify(
-        "nonce" in binding
-          ? ["iterate-secret", 2, binding.context, urls, binding.nonce]
-          : ["iterate-secret", 1, binding.context, urls, binding.revision],
-      ),
+      JSON.stringify(["iterate-secret", 2, binding.context, urls, binding.nonce]),
     ),
   );
 }

@@ -2,7 +2,7 @@
 // A secret IS its path `/secrets/<name>`: the placeholder substitution as a table (`resolve` is handed
 // the PATH), the record normalization, the two refresh strategies against a scripted fetch, the OAuth
 // first-token flow's two halves (the signed state names the secret's CONTEXT), and the material at
-// rest (bound to the context, the pin and the revision).
+// rest (bound to the context, the pin and the write's nonce).
 
 import { createHmac } from "node:crypto";
 import { expect, test } from "vitest";
@@ -1198,7 +1198,7 @@ test.for([
 const binding = {
   context: "prj_1.iterate/secrets/tok",
   urls: ["https://a.example", "https://b.example"],
-  revision: 3,
+  nonce: "nonce-3",
 };
 const keys = { current: "key-one" };
 
@@ -1221,13 +1221,13 @@ test("encryptSecretMaterial / decryptSecretMaterial: a string and an object roun
   }
 });
 
-test("the binding: another context (another owner's, or another name's, Durable Object), another pin or another revision does not open it; the pin's spelling order does not matter", async () => {
+test("the binding: another context (another owner's, or another name's, Durable Object), another pin or another write's nonce does not open it; the pin's spelling order does not matter", async () => {
   const encrypted = await encryptSecretMaterial("v", binding, keys);
   for (const elsewhere of [
     { ...binding, context: "prj_2.iterate/secrets/tok" },
     { ...binding, context: "prj_1.iterate/secrets/other" },
     { ...binding, urls: ["https://a.example"] },
-    { ...binding, revision: 4 },
+    { ...binding, nonce: "nonce-4" },
   ])
     await expect(decryptSecretMaterial(encrypted, elsewhere, keys)).rejects.toThrow();
   expect(

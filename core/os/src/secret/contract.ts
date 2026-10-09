@@ -113,8 +113,7 @@ export const SecretContract = defineProcessorContract({
      *  fact that put the current cell there (a set, or the mint or reseal that followed it);
      *  `setAt` the `secret/set` (or `secret/borrowed`) that began it, which a mint or a reseal
      *  keeps: the write lineage an OAuth attempt is fenced on. `sealed` is the cell: absent for a
-     *  borrowed secret (no material here), and for a write from before the facts carried cells,
-     *  which the facet seals again on its next read. */
+     *  borrowed secret (no material here), or when the write's fact carried none. */
     material: z
       .object({
         offset: z.number().int().positive(),
@@ -142,7 +141,7 @@ export const SecretContract = defineProcessorContract({
         refresh: SecretRefreshKind.optional(),
         /** Exchange code's source (`refresh` "worker"), as its SHA-256 hex. */
         refreshSourceSha256: z.string().optional(),
-        /** The material, sealed. Absent on a fact from before the facts carried it. */
+        /** The material, sealed. Optional: a log's history may hold a set that carried none. */
         sealed: SealedCell.optional(),
         /** The public fields' values, by name (`set`'s `public`): the catalog row's. Absent, none. */
         public: z.record(z.string(), z.string()).optional(),
@@ -150,7 +149,7 @@ export const SecretContract = defineProcessorContract({
     },
     "events.iterate.com/secret/resealed": {
       description:
-        "The current material sealed again, by the facet: under the current key after a rotation, or with a nonce for a cell from before the facts carried it. `basedOn` is the offset of the write it reseals; a reseal of a write that is no longer current is a harmless fact.",
+        "The current material sealed again, by the facet, under the current key after a rotation. `basedOn` is the offset of the write it reseals; a reseal of a write that is no longer current is a harmless fact.",
       payloadSchema: z.object({
         sealed: SealedCell,
         basedOn: z.number().int().positive(),
