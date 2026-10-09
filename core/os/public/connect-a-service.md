@@ -471,6 +471,10 @@ says it expired, run D2 again and send the new link.
 - **The app signs its webhooks** (Slack's signing secret, GitHub's webhook secret): add the
   field in D1b, and check a webhook with
   `itx.secrets.verifyHmac("/secrets/<service>-app", { payload, signature, field: "signingSecret" })`.
+- **The service proves your webhook with a challenge** (X's CRC: answer `sha256=` and the base64
+  HMAC-SHA256 of its `crc_token` under the client secret): sign it with
+  `itx.secrets.signHmac("/secrets/<service>-app", { payload: crcToken, field: "clientSecret", encoding: "base64" })`.
+  The signature comes back; the secret never does.
 - **Extra authorize parameters** go in `extra`, when the service's docs ask for them (Google wants
   `{ access_type: "offline", prompt: "consent" }` before it issues a refresh token).
 

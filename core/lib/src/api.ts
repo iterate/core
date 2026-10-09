@@ -316,6 +316,16 @@ export type SecretHmacVerification = {
   field?: string;
 };
 
+/** What `secrets.signHmac(path, input)` signs: the bytes to sign (a string is its UTF-8 bytes),
+ *  which field of a JSON material is the key (the whole material when omitted), and how the
+ *  signature is written: `hex` (the default) or `base64`. X's webhook check wants
+ *  `sha256=<base64>` of its `crc_token`. */
+export type SecretHmacSigning = {
+  payload: string | Uint8Array;
+  field?: string;
+  encoding?: "hex" | "base64";
+};
+
 /** What `secrets.verifyEquals(path, input)` checks: the candidate string a request presented (a
  *  static header token, say), and which field of a JSON material is the secret (the whole
  *  material when omitted). */
@@ -1263,6 +1273,11 @@ export interface IterateContextApi {
      *  constant-time, run in the secret's facet. A secret never set (or a material with no key at
      *  the field) answers false, never a description. */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
+    /** The HMAC-SHA256 of `payload` under a secret, WITHOUT revealing it: the signature comes back,
+     *  the key never does, run in the secret's facet. For a provider that proves an endpoint by a
+     *  challenge only the key's holder can answer (X's CRC). A secret never set, or a material with
+     *  no key at the field, is refused (`SECRET_NOT_SET`). */
+    signHmac(path: string, input: SecretHmacSigning): Promise<string>;
     /** A presented string compared with a secret WITHOUT revealing it, for a credential a caller can
      *  only send as it is (a webhook's static header token): one bit back, constant-time, run in the
      *  secret's facet. A secret never set (or no string at the field) answers false. A replayable

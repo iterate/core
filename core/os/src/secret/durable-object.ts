@@ -97,6 +97,8 @@ import {
   secretPathsIn,
   signLendUse,
   substituteProjectSecrets,
+  SecretHmacSigningInput,
+  signSecretHmac,
   substituteSecretInFrame,
   verifySecretEquals,
   verifySecretHmac,
@@ -225,7 +227,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
 > {
   /** The secret's READS alone — the current cell, and whether the secret was deleted, by the facts
    *  that say so. Everything else here is the platform's: `seal`, `clear`,
-   *  `beginOAuth`, `completeOAuth`, `verifyHmac` and `clientSecretFor` are `itx.secrets`'s
+   *  `beginOAuth`, `completeOAuth`, `verifyHmac`, `signHmac` and `clientSecretFor` are `itx.secrets`'s
    *  (context/built-ins.ts, whose verbs append the attributed facts), `fetch` is egress's and
    *  `exportForProjectSeed` the operator's native RPC — each reaches this facet through the facet
    *  host's platform entry. */
@@ -630,6 +632,21 @@ export class SecretFacet extends StreamProcessorDurableObject<
     if (!current) return false;
     const { material } = (await this.#open(current)).record;
     return verifySecretHmac(material, input);
+  }
+
+  /** THE SIGN OPERATION (for a provider's challenge, X's CRC): the HMAC-SHA256 of `payload` under
+   *  this secret's material, opened HERE. Only the signature comes out, and no request goes
+   *  anywhere, so the pin is not consulted. Unlike a verification, the caller is the project's own
+   *  code, so a secret never set or a material with no key at the field is refused by name. */
+  async signHmac(input: unknown): Promise<string> {
+    const parsed = SecretHmacSigningInput.parse(input);
+    const current = await this.#material();
+    if (!current) throw codedError("SECRET_NOT_SET", "signHmac: this secret holds no material");
+    const { material } = (await this.#open(current)).record;
+    const signature = await signSecretHmac(material, parsed);
+    if (!signature)
+      throw codedError("SECRET_NOT_SET", "signHmac: this secret holds no key at that field");
+    return signature;
   }
 
   /** THE EQUALS OPERATION: is `value` this secret's string (at `field`)? Opened HERE, one bit out,

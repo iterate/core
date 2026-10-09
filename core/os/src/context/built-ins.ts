@@ -286,7 +286,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  facts and its state are secret/contract.ts. `set`'s `merge` lays the
    *  material's fields over the stored ones; `beginOAuth` hands back the provider's authorize URL
    *  (secret-oauth.ts); `verifyHmac` checks a webhook's signature in the secret's facet, one bit
-   *  back; `lend` / `revokeLend` lend the deployment's own secret (the operator's) to projects. */
+   *  back; `signHmac` signs a provider's challenge there, the signature back and never the key; `lend` / `revokeLend` lend the deployment's own secret (the operator's) to projects. */
   secrets: Omit<IterateContextApi["secrets"], "revokeLend"> & PlatformSecretsVerbs;
   /** THE INTEGRATIONS (src/integrations/), the one way a caller connects and disconnects this
    *  context's owner — a project's root, or a person's own context (`session.user`). `connect` and
@@ -961,7 +961,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const enableSecretRow = (secret: ReachableContext) =>
     secret.invoke(["itx", "builtins", "processors", ["enable", "secret"]], [], hopCaller());
   /** The secret's facet on its own context — `write`, `clear`, `beginOAuth`, `completeOAuth`,
-   *  `verifyHmac`, `snapshot` (secret/durable-object.ts) — reached through the platform's own call:
+   *  `verifyHmac`, `signHmac`, `snapshot` (secret/durable-object.ts) — reached through the platform's own call:
    *  a caller's itx expression reaches its reads alone. Hosted on its first call. Every verb runs it
    *  inside `onSecretContext`'s `here`, which runs on the secret's own context. */
   /** One call on the context's first-party `secret` facet. A facet call answers `unknown`; the casts
@@ -1622,6 +1622,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           secretPath,
           ["verifyHmac", secretPath, input],
           () => secretFacet(["verifyHmac", input]) as Promise<boolean>,
+        ),
+      signHmac: (secretPath, input) =>
+        onSecretContext(
+          secretPath,
+          ["signHmac", secretPath, input],
+          // the facet call is untyped; the secret facet's signHmac answers the signature's string
+          () => secretFacet(["signHmac", input]) as Promise<string>,
         ),
       verifyEquals: (secretPath, input) =>
         onSecretContext(

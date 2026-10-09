@@ -27,6 +27,7 @@ import {
   secretMaterialStringOf,
   secretPathsReferenced,
   signLendUse,
+  signSecretHmac,
   substituteProjectSecrets,
   substituteSecretInFrame,
   verifyLendUse,
@@ -335,6 +336,34 @@ test("hmacSha256Hex agrees with node's HMAC over a string and over bytes", async
   expect(await hmacSha256Hex("whsec_k", "1700000000.{}")).toBe(oracle("whsec_k", "1700000000.{}"));
   const bytes = new TextEncoder().encode("raw body ☃");
   expect(await hmacSha256Hex("k", bytes)).toBe(oracle("k", bytes));
+});
+
+test("signSecretHmac signs with the key at a field, in hex by default or base64, what verifySecretHmac accepts; no key, no signature", async () => {
+  const oracle = (key: string, payload: string | Uint8Array) =>
+    createHmac("sha256", key).update(payload);
+  expect(await signSecretHmac("k", { payload: "crc_token" })).toBe(
+    oracle("k", "crc_token").digest("hex"),
+  );
+  const client = { clientId: "id", clientSecret: "cs" };
+  expect(
+    await signSecretHmac(client, {
+      payload: "crc_token",
+      field: "clientSecret",
+      encoding: "base64",
+    }),
+  ).toBe(oracle("cs", "crc_token").digest("base64"));
+  const bytes = new TextEncoder().encode("raw body ☃");
+  expect(await signSecretHmac("k", { payload: bytes, encoding: "base64" })).toBe(
+    oracle("k", bytes).digest("base64"),
+  );
+  const signature = await signSecretHmac("whsec", { payload: "body" });
+  expect(await verifySecretHmac("whsec", { payload: "body", signature: signature || "" })).toBe(
+    true,
+  );
+  expect(
+    await signSecretHmac({ clientId: "id" }, { payload: "x", field: "clientSecret" }),
+  ).toBeNull();
+  expect(await signSecretHmac(client, { payload: "x" })).toBeNull(); // an object material names its key by field
 });
 
 test.for([

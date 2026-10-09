@@ -17,11 +17,13 @@
 import type {
   ClientAuth,
   SecretEqualsVerification,
+  SecretHmacSigning,
   SecretHmacVerification,
   SecretMaterial,
   SecretRefresh,
 } from "iterate/api";
 import { codedError } from "iterate/lib";
+import { z } from "zod";
 import { secretsEqual, signClaims, verifyClaims } from "./caller.ts";
 import { IntegrationProvider } from "./integrations/contract.ts";
 import { basicAuthorization } from "./repo/git-wire.ts";
@@ -527,6 +529,28 @@ export async function verifySecretHmac(
   const signature = input.signature.trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(signature)) return false;
   return secretsEqual(await hmacSha256Hex(key, input.payload), signature);
+}
+
+/** What `itx.secrets.signHmac` passes to the secret's facet, parsed there: it arrives untyped. */
+export const SecretHmacSigningInput = z.object({
+  payload: z.union([z.string(), z.instanceof(Uint8Array)]),
+  field: z.string().min(1).optional(),
+  encoding: z.enum(["hex", "base64"]).optional(),
+});
+
+/** THE SIGN OPERATION, pure: the HMAC-SHA256 of `payload` under the key `material` holds (at
+ *  `field`), in hex or base64. The signature leaves; the key never does. A material with no key at
+ *  the field signs nothing: null. */
+export async function signSecretHmac(
+  material: SecretMaterial,
+  input: SecretHmacSigning,
+): Promise<string | null> {
+  const key = secretMaterialStringOf(material, input.field);
+  if (!key) return null;
+  const hex = await hmacSha256Hex(key, input.payload);
+  if (input.encoding !== "base64") return hex;
+  const bytes = Uint8Array.from(hex.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
+  return btoa(String.fromCharCode(...bytes));
 }
 
 /** THE EQUALS OPERATION, pure: is `value` the string `material` holds (at `field`)? One bit out; the

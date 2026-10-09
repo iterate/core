@@ -8,7 +8,7 @@ An integration is a package the project hosts: two hooks its config repo's `work
 its own (`iterate/sdk` `Integration`, core/configs/default/worker.ts), one answering the requests
 on the package's routing slug, the other every event of the project. A package serves its own
 setup page and webhook on the project's host, keeps its credentials through `itx.secrets`
-(`collectFromUser`, `beginOAuth` with its own `redirect` page, `verifyHmac`), and the platform knows
+(`collectFromUser`, `beginOAuth` with its own `redirect` page, `verifyHmac`, `signHmac`), and the platform knows
 nothing of the provider: github.com/jonastemplestein/iterategrations holds Telegram, a project's
 own GitHub App, Monzo, Pebble and more, one folder each, and the guide to writing and publishing
 one (`adding-an-integration.md`). A part of a credential that is no secret — an OAuth client's ID, a

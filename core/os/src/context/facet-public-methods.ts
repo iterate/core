@@ -17,7 +17,7 @@
 //   3. What feeds a facet is on no list: `processEventBatch`, `catchUpFromLog` and `revive` are the
 //      delivery loop's and the alarm's. The `secret` facet lists its reads alone: its value is
 //      written, cleared and exchanged by `itx.secrets` (whose verbs append the attributed facts),
-//      verified by `itx.secrets.verifyHmac`, used by egress and exported over the operator's RPC.
+//      verified and signed with by `itx.secrets.verifyHmac` and `signHmac`, used by egress and exported over the operator's RPC.
 //   4. A first-party class's list is read off the class; a loaded class's is asked of the facet once
 //      per startup memo (`listPublicMethods()`, which the shells answer). A loaded class that extends
 //      neither shell answers no list, so nothing on it is reached by expression.
