@@ -15,7 +15,7 @@ import { expect, test } from "vitest";
 const PINNED = {
   prefix: "produced-modules-2",
   // allow-high-entropy-next-line: a SHA-256 of this repo's own source, not a secret
-  code: "c527427aea0f47504766edf199cf46a7859ae71dc41a1859e7ffde360490ba92",
+  code: "f52d5c20814e06b661bff16b162dd65690bb07ff4e361a1fa1a5819860540268",
 };
 
 test("the code that decides what a producer answers changes only with the produced-modules prefix", () => {

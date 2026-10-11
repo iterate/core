@@ -78,6 +78,10 @@ type Transport = ReturnType<typeof createGitWireTransport>;
 /** A git token as this facet keeps it: reused until `until` (epoch ms) minus the margin. */
 type StoredToken = { token: string; until: number };
 type TipSnapshot = { manifest: RepoManifest; objects: Map<string, RawGitObject> };
+/** A commit's files, by path. */
+type Snapshot = { tip: string | null; files: Record<string, string> };
+/** Where the tip's snapshot is kept (`#remember`). */
+const KEPT_SNAPSHOT = "snapshot";
 /** The caller's own `itx.fetch`, which a pull or push reaches its remote through. */
 type Egress = (request: Request) => Promise<Response>;
 /** A commit's fact, owed from the moment its push is sent until both appends have landed, under the
@@ -247,35 +251,37 @@ export class RepoFacet extends StreamProcessorDurableObject<
    *  pushed (project/processor.ts), and Artifacts answered that fetch, right after the push, 500 or
    *  503 (2026-09-24, the latency guard: 2 of the 8 creations that failed in ~1,470). */
   #snapshotMemo: { tip: string | null; files: Record<string, string> } | null = null;
-  /** The read AT a commit in flight, one per commitOid: every caller asking for that commit while it
-   *  runs waits on it, since its files cannot change. Dropped when it settles, so a rejection is the
-   *  next caller's to retry. The memo alone is set only once a read COMPLETES: on prd at 14:36 UTC on
-   *  2026-09-24 ~915 concurrent `modules({ commitOid })` calls for one config worker each fetched the
-   *  same pack. The loader now asks once per context (worker-loader.ts), but callers of one commit
-   *  still overlap here: several contexts, and a `getCode` Cloudflare may run more than once. */
-  #snapshotReadsAtCommit = new Map<
+  /** The read in flight, one per commitOid and one for the tip (""): every caller asking for that
+   *  commit while it runs waits on it, since its files cannot change, and the tip's callers share one
+   *  ls-refs and at most one fetch (an agent reads its standing files side by side). Dropped when it
+   *  settles, so a rejection is the next caller's to retry. The memo alone is set only once a read
+   *  COMPLETES, so without the share every concurrent caller of one commit fetches the same pack.
+   *  The loader asks once per context (worker-loader.ts), but callers of one commit still overlap
+   *  here: several contexts, and a `getCode` Cloudflare may run more than once. */
+  #snapshotReads = new Map<
     string,
     Promise<{ tip: string | null; files: Record<string, string> }>
   >();
   async #fresh(commitOid?: string): Promise<{ tip: string | null; files: Record<string, string> }> {
-    if (!commitOid) return this.#fetchSnapshot();
-    if (this.#snapshotMemo?.tip === commitOid) return this.#snapshotMemo;
-    let read = this.#snapshotReadsAtCommit.get(commitOid);
+    if (commitOid && this.#snapshotMemo?.tip === commitOid) return this.#snapshotMemo;
+    const key = commitOid || "";
+    let read = this.#snapshotReads.get(key);
     if (!read) {
-      read = this.#fetchSnapshot(commitOid).finally(() =>
-        this.#snapshotReadsAtCommit.delete(commitOid),
-      );
-      this.#snapshotReadsAtCommit.set(commitOid, read);
+      read = this.#fetchSnapshot(commitOid).finally(() => this.#snapshotReads.delete(key));
+      this.#snapshotReads.set(key, read);
     }
     return read;
   }
-  /** The snapshot at `commitOid`, or at the remote's tip: the memo when it is that tip, else one fetch. */
+  /** The snapshot at `commitOid`, or at the remote's tip: the memo when it is that tip, then the one
+   *  an earlier incarnation kept, else one fetch. */
   async #fetchSnapshot(
     commitOid?: string,
   ): Promise<{ tip: string | null; files: Record<string, string> }> {
     const transport = await this.#transport("read");
     const tip = commitOid || (await transport.tipOf(REF)) || null;
     if (this.#snapshotMemo && this.#snapshotMemo.tip === tip) return this.#snapshotMemo;
+    const kept = tip ? await this.ctx.storage.get<Snapshot>(KEPT_SNAPSHOT) : undefined;
+    if (kept?.tip === tip) return (this.#snapshotMemo = kept);
     const files: Record<string, string> = {};
     if (tip) {
       const { manifest, objects } = await this.#tipSnapshot(transport, tip);
@@ -287,7 +293,30 @@ export class RepoFacet extends StreamProcessorDurableObject<
         files[file] = textDecoder.decode(blob.payload);
       }
     }
-    return (this.#snapshotMemo = { tip, files });
+    return this.#remember({ tip, files });
+  }
+
+  /** THE TIP'S SNAPSHOT, KEPT: the memo, and a stored copy (`KEPT_SNAPSHOT`) the next incarnation
+   *  answers a read from with one ls-refs instead of a fetch of the whole tip. An agent reads its
+   *  standing files before every request, so without the copy its first read after an eviction
+   *  waits for the whole tip (1.6–2.7 s, measured 2026-10-10). A commit's files never change, so
+   *  the copy is right whenever its tip is the remote's, and a copy of an older commit costs one
+   *  fetch at most. One too large for a stored value is not kept. */
+  async #remember(snapshot: Snapshot): Promise<Snapshot> {
+    this.#snapshotMemo = snapshot;
+    // a stored value is at most 2 MB: every path and file at up to two bytes a character, and each
+    // entry's framing. A copy that does not fit, or whose write fails, is not kept: the next
+    // incarnation fetches the tip, and the read or push that remembered it still answers.
+    let bytes = 0;
+    for (const [path, text] of Object.entries(snapshot.files))
+      bytes += 2 * (path.length + text.length) + 64;
+    try {
+      if (snapshot.tip && bytes <= 1_800_000)
+        await this.ctx.storage.put(KEPT_SNAPSHOT, snapshot, { allowUnconfirmed: true });
+    } catch (error) {
+      console.warn("[repo] the tip's snapshot was not kept", { tip: snapshot.tip, bytes, error });
+    }
+    return snapshot;
   }
 
   /** Every verb starts here (`assertCreated`), answering the repo's path. */
@@ -491,7 +520,9 @@ export class RepoFacet extends StreamProcessorDurableObject<
       await this.ctx.storage.delete("commit-fact"); // nothing landed, nothing owed
       throw new Error(`repo ${path}: the commit was refused: ${refused}`);
     }
-    this.#snapshotMemo = this.#pushedSnapshot(commitOid, manifest, objects, written);
+    const pushed = this.#pushedSnapshot(commitOid, manifest, objects, written);
+    if (pushed) await this.#remember(pushed);
+    else this.#snapshotMemo = null;
     await this.#commitFact(committed);
     return { commitOid, changedPaths };
   }

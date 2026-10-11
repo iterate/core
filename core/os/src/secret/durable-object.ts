@@ -9,10 +9,12 @@
 // never raced by two contexts. A WebSocket upgrade is a dispatch like any other: the 101 and its
 // socket ride the fetch channel back through the parent to the caller — this facet HOLDS no socket,
 // it dials one and hands it back, so the socket lives as long as the dial does (measured 2026-09-21,
-// test/vitest/os-workers/facets.test.ts: the frames round-trip; the facet's abort
-// closes it, 1006). The one exception is an upgrade whose FRAMES carry the credential (Discord's
-// IDENTIFY; secrets.ts `SECRET_FRAMES_HEADER`): this facet holds the upstream socket and pumps
-// frames, substituting its placeholder in client text frames (`proxyFrames`,
+// test/vitest/os-workers/facets.test.ts: the frames round-trip; the facet's abort closes it, 1006).
+// Its context's eviction does not close it (measured 2026-10-11). The two hops through this facet
+// cost a frame about 1 ms and a dial about 6 ms (measured 2026-10-11), so egress does not dial past
+// it: the material stays here. The one exception is an upgrade whose FRAMES carry the credential
+// (Discord's IDENTIFY; secrets.ts `SECRET_FRAMES_HEADER`): this facet holds the upstream socket and
+// pumps frames, substituting its placeholder in client text frames (`proxyFrames`,
 // test/vitest/os-workers/secret-sockets-over-lends.test.ts).
 //
 // The verbs `itx.secrets` runs (context/built-ins.ts — ON THIS PATH, so the log's order is the
@@ -1612,7 +1614,8 @@ export class SecretFacet extends StreamProcessorDurableObject<
  *  client→server text frame with this secret's placeholders substituted (secrets.ts
  *  `substituteSecretInFrame`), everything else relayed as is, and each side's close the other's. A
  *  frame naming another secret closes both, 1008. The socket pins this facet (and so its context)
- *  for as long as it is open — as a passed-through 101 already does — plus the frame pump's CPU. */
+ *  for as long as it is open, plus the frame pump's CPU. A passed-through 101 pins neither: workerd
+ *  pumps it natively, and the context can be evicted while it carries frames (see the header). */
 function proxyFrames(upstream: Response, paths: string[], material: SecretMaterial): Response {
   const outbound = upstream.webSocket!;
   const [caller, inbound] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
@@ -1654,16 +1657,39 @@ function proxyFrames(upstream: Response, paths: string[], material: SecretMateri
   });
 }
 
+/** How long the terminal fetch waits for the upstream's answer (its headers, or its 101): less than
+ *  the host's call watchdog (facet-host.ts FACET_CALL_WATCHDOG_MS, 60 s), so one slow upstream is a
+ *  504 to its own caller and never a restart of this facet, which closes every socket it dialled. */
+const UPSTREAM_ANSWER_MS = 50_000;
+
 /** The terminal fetch. A substituted secret follows NO redirect: a 3xx to another origin would carry
  *  the credential there (the Fetch standard strips `Authorization` on a cross-origin redirect, not
  *  other headers) — the caller sees the 3xx. A network failure is answered generically: the runtime's
- *  own error quotes the request URL, which may by now carry the substituted secret. */
+ *  own error quotes the request URL, which may by now carry the substituted secret. No abort signal
+ *  bounds the wait: a signal's socket closes with it (workerd `AbortableWebSocket`), and an upgrade's
+ *  socket outlives this request. A late answer dies with this facet's request. */
 const dispatch = async (request: Request): Promise<Response> => {
+  const { origin } = new URL(request.url);
+  let overdue: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await fetch(request, { redirect: "manual" });
+    return await Promise.race([
+      fetch(request, { redirect: "manual" }),
+      new Promise<Response>((answer) => {
+        overdue = setTimeout(
+          () =>
+            answer(
+              new Response(
+                `itx.fetch: the pinned host ${origin} sent no answer within ${String(UPSTREAM_ANSWER_MS / 1000)} s\n`,
+                { status: 504 },
+              ),
+            ),
+          UPSTREAM_ANSWER_MS,
+        );
+      }),
+    ]);
   } catch {
-    throw new SecretRefused(
-      `itx.fetch: the pinned host ${new URL(request.url).origin} could not be reached`,
-    );
+    throw new SecretRefused(`itx.fetch: the pinned host ${origin} could not be reached`);
+  } finally {
+    clearTimeout(overdue);
   }
 };

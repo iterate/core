@@ -113,6 +113,10 @@ export const AgentContract = defineProcessorContract({
             reasoningEffort: z.string().min(1).default("medium"),
             // Empty uses the deployment's AI Gateway; otherwise see responses-keys.ts for key handling.
             apiKeys: z.array(z.string().min(1)).default([]),
+            // The Responses API's `service_tier`, unset by default. "priority" streams answers
+            // about 1.5× as fast for a higher price, on an API key and a plan's token alike (a
+            // plan's token still answers "default").
+            serviceTier: z.enum(["auto", "default", "flex", "priority"]).optional(),
           })
           .prefault({}),
         /** Consecutive self-triggered turns (script results, corrections) before the loop pauses. */
@@ -123,8 +127,10 @@ export const AgentContract = defineProcessorContract({
           .int()
           .positive()
           .default(10 * 60_000),
-        /** The debounce window: a request waits this long after its trigger for more content — a second
-         *  message inside the window moves the trigger and ONE request answers both. */
+        /** The debounce window: a request waits this long after a person's words for more — a second
+         *  message inside the window moves the trigger and ONE request answers both. The loop's own
+         *  input (a script's result) starts its turn at once, so a message that lands just after that
+         *  turn began waits for the next one; one that lands while the script runs joins it. */
         llmRequestDebounceMs: z.number().int().nonnegative().default(250),
         /** Consecutive model failures before the loop pauses; between attempts, the backoff —
          *  `backoffBaseMs · 2^(failures−1)`, capped at `backoffMaxMs` — folded into the debounce window. */
@@ -317,6 +323,7 @@ export const AgentContract = defineProcessorContract({
               model: z.string().min(1).optional(),
               reasoningEffort: z.string().min(1).optional(),
               apiKeys: z.array(z.string().min(1)).optional(),
+              serviceTier: z.enum(["auto", "default", "flex", "priority"]).optional(),
             })
             .optional(),
           maxAutonomousTurns: z.number().int().positive().optional(),

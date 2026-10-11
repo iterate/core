@@ -385,13 +385,18 @@ test.for<{
     },
   },
   {
-    name: "configured sets the API key stack; a later change of model keeps it, and an empty stack clears it",
+    name: "configured sets the API key stack and service tier; a later change of model keeps them, and an empty stack clears it",
     events: [
       ...born,
       {
         type: "events.iterate.com/agent/configured",
         payload: {
-          config: { llm: { apiKeys: ['getSecret("/secrets/a")', 'getSecret("/secrets/b")'] } },
+          config: {
+            llm: {
+              apiKeys: ['getSecret("/secrets/a")', 'getSecret("/secrets/b")'],
+              serviceTier: "priority",
+            },
+          },
         },
       },
       {
@@ -406,6 +411,7 @@ test.for<{
           model: "gpt-6-luna",
           reasoningEffort: "medium",
           apiKeys: ['getSecret("/secrets/a")', 'getSecret("/secrets/b")'],
+          serviceTier: "priority",
         },
       },
     },
@@ -601,6 +607,43 @@ test.for([
     await vi.waitFor(() => expect(watch).toMatchObject({ cancelled: interrupted }));
   },
 );
+
+test("the debounce waits for more of a person's words, never after the loop's own: a turn its script's result asks for starts at once", async () => {
+  for (const [actor, sleeps] of [
+    [{ type: "user" }, [250]],
+    [{ type: "agent" }, []],
+  ] as const) {
+    const slept: number[] = [];
+    const agent = new AgentProcessor({
+      getItx: () => {
+        throw new Error("the debounce reaches no itx");
+      },
+      now: () => 3_000, // the trigger's own time: offset 3, as the harness stamps it
+      sleep: async (ms) => void slept.push(ms),
+    });
+    const input = {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: actor.type === "user" ? "user" : "developer", content: "next", actor },
+    };
+    const state = reduceProcessor(agent, [...born, input] as never) as AgentState;
+    const background: Array<() => Promise<unknown>> = [];
+    const appended: unknown[] = [];
+    agent.processEvent({
+      event: { ...input, offset: 3, createdAt: new Date(3_000).toISOString() },
+      state,
+      previousState: state,
+      append: async (...events: unknown[]) => void appended.push(...events),
+      blockProcessorWhile: () => undefined,
+      runInBackground: (work: () => Promise<unknown>) => void background.push(work),
+      delivery: { caughtUp: true },
+    } as never);
+    await Promise.all(background.map((work) => work()));
+    expect(slept).toEqual(sleeps);
+    expect(appended).toMatchObject([
+      { type: "events.iterate.com/agent/llm-request-requested", payload: { triggerOffset: 3 } },
+    ]);
+  }
+});
 
 test("raceAbort: a dial that answers before any abort hands its body over unread, and a later abort leaves it to the reader", async () => {
   const controller = new AbortController();

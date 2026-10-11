@@ -205,7 +205,7 @@ function requestStamp(createdAt: string): string {
 }
 
 /** The coalescing window: how much streamed text rides one `llm-response-frame` append — ~7
- *  repaints a second, and one commit per window instead of per token. */
+ *  repaints a second, and one commit per window instead of per token. The first closes at once. */
 const FRAME_WINDOW_MS = 150;
 /** A window whose text grew past this lands early rather than as one oversized append. */
 const FRAME_WINDOW_MAX_CHARS = 64_000;
@@ -380,6 +380,10 @@ type CachedAgentProcessorDeps = {
   /** The host's scope accessor: `itx.ai`, `itx.files`, `itx.whoami()` — the effects this loop
    *  reaches through the context, under its rules (a test lends a fake `itx.ai` there). */
   getItx: () => IterateContextApi & Disposable;
+  /** The isolate's own `fetch`, which a loaded isolate's egress serves (a socket's upgrade included,
+   *  which `itx.fetch` cannot carry): the key stack's requests (responses-keys.ts). A test lends a
+   *  fake. None: the global `fetch`, read at the call. */
+  fetch?: (request: Request) => Promise<Response>;
   /** The clock and the wait, injected only so a unit test can make the debounce instant. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -493,6 +497,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               model: patch.llm?.model || state.config.llm.model,
               reasoningEffort: patch.llm?.reasoningEffort || state.config.llm.reasoningEffort,
               apiKeys: patch.llm?.apiKeys || state.config.llm.apiKeys,
+              serviceTier: patch.llm?.serviceTier || state.config.llm.serviceTier,
             },
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
@@ -1274,8 +1279,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       const { path } = await this.#identity();
       const answer = await this.#stream({
         model,
-        effort: state.config.llm.reasoningEffort,
-        apiKeys: state.config.llm.apiKeys,
+        llm: state.config.llm,
         input: [
           ...(await this.#requestInput(state, check.afterRequestOffset, model, append)),
           { role: "user", content: KEEP_WARM_PROMPT },
@@ -1290,9 +1294,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         idempotencyKey: this.idempotencyKey(`keep-warm/${String(checkOffset)}`),
         payload: {
           afterRequestOffset: check.afterRequestOffset,
-          ...(answer.usage && {
-            usage: { ...answer.usage, costUsd: requestCostUsd(model, answer.usage) },
-          }),
+          usage: answer.usage,
         },
       });
     } catch (error) {
@@ -1472,8 +1474,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         );
         return;
       }
-      // THE DEBOUNCE: wait for more content, plus the failure backoff — one window,
-      // anchored at the trigger. The delayed append IS the intent (no wake event): more words inside
+      // THE DEBOUNCE: wait for more of a person's words, plus the failure backoff — one window,
+      // anchored at the trigger. The loop's own input (a script's result) brings no more words:
+      // its turn waits for the backoff alone. The delayed append IS the intent (no wake event): more words inside
       // the window move the trigger; the old trigger's intent then lands as a harmless fact (the
       // reduce opens a request only for the trigger it names) and the moved trigger's own intent, a
       // window later, opens the one request for them all — the prompt is built from the log at run
@@ -1482,7 +1485,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       // (expiresAt anchored at the trigger's time, never `now`): identical bodies dedupe on the key.
       // A droppable attempt: dying mid-window, the revival pass re-runs this with the window long
       // closed and appends at once.
-      const windowMs = state.config.llmRequestDebounceMs + retryBackoffMs(state);
+      const windowMs =
+        (trigger.source === "external" ? state.config.llmRequestDebounceMs : 0) +
+        retryBackoffMs(state);
       // THE HOLD: while this loop's own script runs, the turn waits for its result (the
       // settlement's delivery re-runs this pass and the result moves the trigger), so the call is
       // answered before anything else is read — up to HOLD_FOR_RUN_MS after the oldest run began.
@@ -1634,13 +1639,13 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           return closeWindow();
         if (windowOpen) return;
         windowOpen = true;
-        void this.#sleep(FRAME_WINDOW_MS).then(closeWindow);
+        // the first window closes at once: the answer starts showing with its first words
+        void this.#sleep(sequence === 0 ? 0 : FRAME_WINDOW_MS).then(closeWindow);
       };
       try {
         const request = {
           model: open.model,
-          effort: state.config.llm.reasoningEffort,
-          apiKeys: state.config.llm.apiKeys,
+          llm: state.config.llm,
           cacheKey: promptCacheKey(path),
           signal: controller.signal,
           onDelta,
@@ -1678,11 +1683,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       }
       // An answer that arrived after the interruption is the interrupt path's story too.
       if (controller.signal.reason instanceof InterruptedError) return;
-      const { text, call, providerItems } = answer;
-      const usage = answer.usage && {
-        ...answer.usage,
-        costUsd: requestCostUsd(open.model, answer.usage),
-      };
+      const { text, call, providerItems, usage } = answer;
       await settle(
         { status: "succeeded", text, usage },
         // an empty answer adds no assistant message: nothing was said
@@ -1734,31 +1735,43 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   async #currentSections(state: AgentState): Promise<Record<string, string>> {
     const whoami = await this.#identity();
     const { path } = whoami;
-    const sections: Record<string, string> = { system: DEFAULT_AGENT_SYSTEM_PROMPT };
     const defaultFiles = standingInstructionFiles(path);
-    for (const file of this.deps.standingFiles?.()?.(path, defaultFiles) ?? defaultFiles) {
-      try {
-        using itx = this.deps.getItx();
-        // the handle first: a pipelined `get` that refuses (a project with no config repo) would
-        // reject a second promise nobody awaits
-        const repo = await itx.repos.get("/repos/config");
-        const text = await repo.readFile(file);
-        if (text) sections[file] = standingFileSection(file, text);
-      } catch {
-        if (state.sections[file]) sections[file] = state.sections[file]!;
-      }
-    }
+    const files = this.deps.standingFiles?.()?.(path, defaultFiles) ?? defaultFiles;
+    // read side by side, before every request; placed in their order below
+    const [texts, tree] = await Promise.all([
+      Promise.all(
+        files.map(async (file) => {
+          try {
+            using itx = this.deps.getItx();
+            // the handle first: a pipelined `get` that refuses (a project with no config repo) would
+            // reject a second promise nobody awaits
+            const repo = await itx.repos.get("/repos/config");
+            const text = await repo.readFile(file);
+            return text ? standingFileSection(file, text) : undefined;
+          } catch {
+            return state.sections[file];
+          }
+        }),
+      ),
+      (async () => {
+        try {
+          using itx = this.deps.getItx();
+          return stableCapabilityTree(await itx.cd(path).rewriteRules.list());
+        } catch (error) {
+          // a fully masked agent denies introspection too: no tree. Anything else keeps the last one.
+          return errorCode(error) === "NO_ITX_EXPRESSION_MATCH"
+            ? null
+            : state.sections["capability-tree"];
+        }
+      })(),
+    ]);
+    const sections: Record<string, string> = { system: DEFAULT_AGENT_SYSTEM_PROMPT };
+    files.forEach((file, index) => {
+      if (texts[index]) sections[file] = texts[index];
+    });
     const pinned = preambleSection(state.preamble, state.preambleQuarantined);
     if (pinned) sections.preamble = pinned;
-    try {
-      using itx = this.deps.getItx();
-      const tree = stableCapabilityTree(await itx.cd(path).rewriteRules.list());
-      if (tree) sections["capability-tree"] = tree;
-    } catch (error) {
-      // a fully masked agent denies introspection too: no tree. Anything else keeps the last one.
-      if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH" && state.sections["capability-tree"])
-        sections["capability-tree"] = state.sections["capability-tree"]!;
-    }
+    if (tree) sections["capability-tree"] = tree;
     sections.identity = `CURRENT PROJECT: ${JSON.stringify(whoami)}`;
     return sections;
   }
@@ -1879,8 +1892,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       ];
       const answer = await this.#stream({
         model,
-        effort: state.config.llm.reasoningEffort,
-        apiKeys: state.config.llm.apiKeys,
+        llm: state.config.llm,
         input: items,
         cacheKey: promptCacheKey(path),
         signal: AbortSignal.timeout(state.config.llmRequestExpiryMs),
@@ -1888,10 +1900,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         toolChoice: "none",
       });
       if (!answer.prose) throw new Error("the model wrote an empty summary");
-      const usage = answer.usage && {
-        ...answer.usage,
-        costUsd: requestCostUsd(model, answer.usage),
-      };
+      const { usage } = answer;
       await appendUnlessLost(append, {
         type: "events.iterate.com/agent/context-added",
         idempotencyKey: this.idempotencyKey(`compact/${String(requestOffset)}`),
@@ -1923,7 +1932,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
    *  usage. With no `apiKeys`, an `openai/…` Workers AI partner model through `itx.ai` and the
    *  account's AI Gateway: Cloudflare's billing, no key, and the gateway's spend limits partition on
    *  the metadata (project, stream path). With `apiKeys`, the project's own credentials, straight at
-   *  api.openai.com (responses-keys.ts). `store: false` with the encrypted reasoning included: nothing lives on the provider's side,
+   *  api.openai.com through the isolate's `fetch`, on the agent's WebSocket when one is open
+   *  (responses-keys.ts). `store: false` with the encrypted reasoning included: nothing lives on the provider's side,
    *  and the reasoning comes back on the next request (render.ts). */
   async #stream({
     model,
@@ -1932,14 +1942,12 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     signal,
     onDelta,
     toolChoice = "auto",
-    effort,
-    apiKeys,
+    llm,
   }: {
     model: string;
-    /** The Responses API's `reasoning.effort` (the agent's config, `llm.reasoningEffort`). */
-    effort: string;
-    /** The agent's `llm.apiKeys`: empty goes through the AI Gateway. */
-    apiKeys: readonly string[];
+    /** The agent's `llm` config: its reasoning effort, its keys (empty goes through the AI
+     *  Gateway) and its service tier. */
+    llm: AgentState["config"]["llm"];
     input: InputItem[];
     /** The provider's prompt-cache routing key (promptCacheKey). */
     cacheKey: string;
@@ -1961,11 +1969,13 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       store: false,
       include: ["reasoning.encrypted_content"],
       prompt_cache_key: cacheKey,
-      reasoning: { effort, summary: "auto" },
+      reasoning: { effort: llm.reasoningEffort, summary: "auto" },
+      service_tier: llm.serviceTier, // unset sends none: JSON drops it
     };
     let response: Response;
-    if (apiKeys.length > 0) {
-      response = await postResponses(itx, { model, ...body }, apiKeys, signal);
+    if (llm.apiKeys.length > 0) {
+      const send = this.deps.fetch || ((request: Request) => fetch(request));
+      response = await postResponses(send, { model, ...body }, llm.apiKeys, signal);
     } else {
       const { projectId, path } = await this.#identity();
       const raw: unknown = await raceAbort(
@@ -1996,6 +2006,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
       );
     let usage: LlmUsage | undefined;
+    let servedTier: string | undefined;
     const done: OutputItem[] = [];
     let output: OutputItem[] | undefined;
     await drainSse(response.body, signal, (raw) => {
@@ -2009,12 +2020,17 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       else if (type === "response.completed" || type === "response.incomplete") {
         const finished = z
           .looseObject({
-            response: z.looseObject({ usage: z.unknown(), output: z.array(OutputItem).optional() }),
+            response: z.looseObject({
+              usage: z.unknown(),
+              output: z.array(OutputItem).optional(),
+              service_tier: z.string().optional().catch(undefined),
+            }),
           })
           .safeParse(raw);
         if (finished.success) {
           usage = normalizeUsage(finished.data.response.usage) ?? usage;
           output = finished.data.response.output;
+          servedTier = finished.data.response.service_tier;
         }
       } else if (type === "response.failed" || type === "error") {
         const failure = z
@@ -2050,8 +2066,17 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       }
       call = { callId, status: run.status, script: run.script };
     }
+    // priced at the standard tier's rates (pricing.ts): a request another tier served has no price
+    const standard = !servedTier || servedTier === "default" || servedTier === "auto";
+    const costUsd = usage && standard ? requestCostUsd(model, usage) : undefined;
     // An empty answer is the model choosing to say nothing (a chief of staff's input that needs no
     // reply): the turn ends quietly, never a failure that would retry and pause the agent.
-    return { text: answerText(prose, call), prose, call, providerItems: items, usage };
+    return {
+      text: answerText(prose, call),
+      prose,
+      call,
+      providerItems: items,
+      usage: usage && { ...usage, costUsd },
+    };
   }
 }
