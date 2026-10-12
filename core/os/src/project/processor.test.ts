@@ -5,6 +5,7 @@
 // test/vitest/os/session.e2e.test.ts.
 
 import { expect, onTestFinished, test, vi } from "vitest";
+import { codedError } from "iterate/lib";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { reduceProcessor } from "iterate/stream/test-support";
 import { runningCause, runningUnder } from "../cause.ts";
@@ -680,6 +681,36 @@ test("ProjectProcessor — the publication: a commit fact publishes its commit, 
   await settle();
   expect(publisher.batches.map(summary).slice(-1)).toEqual([
     ["itx.config ⇒ aaa@9", "project/worker-updated aaa@9"],
+  ]);
+});
+
+test("ProjectProcessor — while the project is created, its publication's batch points the ingress too: creation waits out one fence, and the saga's keyed ingress is a repeat that waits it out", async () => {
+  const publisher = fakePublisher({ aaa: {} });
+  publisher.main = "aaa";
+  const creating: ProjectState = {
+    ...owing(tip("aaa", 5)),
+    creation: { status: "requested", offset: 1 },
+  };
+  deliver(processorPublishingWith(publisher), creating, unusedAppend);
+  await settle();
+  expect(publisher.batches[0]!.map(({ type, idempotencyKey }) => [type, idempotencyKey])).toEqual([
+    ["events.iterate.com/itx/rewrite-rule-configured", "project/config-modules:5"],
+    ["events.iterate.com/itx/rewrite-rule-configured", "project/config-pointer:5"],
+    ["events.iterate.com/itx/ingress-configured", "itx/ingress-configured"],
+    ["events.iterate.com/project/worker-updated", "project/publication:5"],
+  ]);
+  expect(publisher.batches[0]![2]).toMatchObject({ payload: { target: ["itx", "config"] } });
+
+  // someone else's event under the ingress's key refuses that batch whole: it lands without it, and
+  // the saga's own append meets the conflict
+  const refused = fakePublisher({ aaa: {} });
+  refused.main = "aaa";
+  refused.nextAppend = () =>
+    Promise.reject(codedError("IDEMPOTENCY_CONFLICT", "itx/ingress-configured is taken"));
+  deliver(processorPublishingWith(refused), creating, unusedAppend);
+  await settle();
+  expect(refused.batches.map(summary)).toEqual([
+    ["itx.config ⇒ aaa@5", "project/worker-updated aaa@5"],
   ]);
 });
 

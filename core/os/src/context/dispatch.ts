@@ -205,24 +205,28 @@ const isRpcResultWithDisposer = (value: unknown): value is Disposable =>
  *     nor named — a stream, a Response, data holding a stub — which stays the holder's to release. */
 export function itxAnswerDetachedFromSession(
   result: unknown,
-  expression: ItxExpression,
+  call: ItxExpressionInput,
   args: unknown[] = [],
 ): unknown {
-  const last = expression.at(-1);
-  const reference: ItxHandleReference = {
-    [ITX_HANDLE_REFERENCE_KEY]:
-      args.length === 0
-        ? expression
-        : typeof last === "string" && expression.length > 1
-          ? [...expression.slice(0, -1), [last, ...args]]
-          : [...expression, ["", ...args]],
+  // Normalized only for a live answer: most answers are data, and the shape check walks every arg.
+  const reference = (): ItxHandleReference => {
+    const expression = normalizedItxExpression(call);
+    const last = expression.at(-1);
+    return {
+      [ITX_HANDLE_REFERENCE_KEY]:
+        args.length === 0
+          ? expression
+          : typeof last === "string" && expression.length > 1
+            ? [...expression.slice(0, -1), [last, ...args]]
+            : [...expression, ["", ...args]],
+    };
   };
   if (holdsRpcSession(result)) {
     releaseRpcSessions([result]);
-    return reference;
+    return reference();
   }
   if (result instanceof RpcTarget || typeof result === "function" || isItxHandleReference(result))
-    return reference;
+    return reference();
   if (!isRpcResultWithDisposer(result)) return result;
   let copy: unknown;
   try {

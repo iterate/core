@@ -171,7 +171,7 @@ test("sweep: armed when a loaded facet is materialized, one alarm write per quie
   }).toEqual({ reconciles: 1, deadlines: { unclaimedFacetSweep: T + SWEEP } });
 });
 
-test("the alarm's overdue watch hears when the first inbound call starts and the last one settles, never between", () => {
+test("the alarm's overdue watch hears when the first inbound call starts and the last one settles, never between, and never for a call begun and ended in one turn", () => {
   const fixture = residencyFixture();
   fixture.residency.inboundCallStarted("other");
   fixture.residency.inboundCallStarted("other");
@@ -180,7 +180,7 @@ test("the alarm's overdue watch hears when the first inbound call starts and the
   fixture.residency.inboundCallEnded(true);
   fixture.residency.inboundCallInOneTurn();
   expect({ heldChanges: fixture.heldChanges, held: fixture.residency.holdsResident() }).toEqual({
-    heldChanges: [true, false, true, false],
+    heldChanges: [true, false],
     held: false,
   });
 });

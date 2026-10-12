@@ -14,7 +14,9 @@ are [core's configs](../../configs/README.md) and any others its build is given 
 project from the one whose folder is `default`.
 
 Once the seed's publication has landed, admitted or refused (below), the processor points the
-project's ingress at its published config, `itx.config`, once, and emits `project/created`. Interrupted attempts reuse the repository and seed commit; existing repositories
+project's ingress at its published config, `itx.config`, once, and emits `project/created`. An admitted
+first publication carries the ingress in its own batch, so creation waits out one snapshot fence, not
+two. Interrupted attempts reuse the repository and seed commit; existing repositories
 and later edits are preserved. A failure emits `project/create-failed`, and a later create call can
 start another attempt.
 

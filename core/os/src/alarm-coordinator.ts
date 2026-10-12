@@ -96,6 +96,8 @@ export class AlarmCoordinator {
    *  the backoff of a pass that keeps failing). Cleared when the next pass starts. */
   #passThrew = false;
   #overdueTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The check the pending `#overdueTimer` fires for. */
+  #overdueTimerCheckAt: number | null = null;
   readonly #deps: AlarmCoordinatorDeps;
 
   constructor(deps: AlarmCoordinatorDeps) {
@@ -165,11 +167,18 @@ export class AlarmCoordinator {
 
   /** Point the watch's timer at the next check while an inbound call holds the actor; none while
    *  idle (a pending timer holds off eviction). The DO calls it when its first inbound call starts
-   *  and its last one settles; every reconcile re-points it. */
+   *  and its last one settles; every reconcile re-points it. So a context whose calls never overlap
+   *  sets and clears a timer per call: 5–7% of a voice context's CPU samples (measured 2026-10-09).
+   *  A tick kept while held would save that, but it outlives the last call, which delays
+   *  eviction. */
   watch(): void {
-    this.#stopOverdueTimer();
     const checkAt = this.#overdueCheckAt();
-    if (checkAt === null || !this.#deps.held()) return;
+    if (checkAt === null || !this.#deps.held()) return this.#stopOverdueTimer();
+    // Already pointed there: every commit and every call reconciles, and a timer set again for the
+    // same time is a clear and a set for nothing.
+    if (this.#overdueTimer !== undefined && this.#overdueTimerCheckAt === checkAt) return;
+    this.#stopOverdueTimer();
+    this.#overdueTimerCheckAt = checkAt;
     this.#overdueTimer = setTimeout(
       () => {
         this.#overdueTimer = undefined;
@@ -237,6 +246,7 @@ export class AlarmCoordinator {
   }
 
   #stopOverdueTimer() {
+    if (this.#overdueTimer === undefined) return;
     clearTimeout(this.#overdueTimer);
     this.#overdueTimer = undefined;
   }

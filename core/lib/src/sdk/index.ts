@@ -32,11 +32,12 @@ import {
 } from "../stream/processor.ts";
 // The hosts' `callWithCause` and `fetch` run what they call under the cause the platform hands them
 // (../cause.ts).
-import { causeOfRequest, runCausedBy } from "../cause.ts";
+import { causeOfRequest, currentCause, runCausedBy } from "../cause.ts";
 import { auth } from "./auth.ts";
 import { currentCallerPath, walkUnderCause, type RpcSteps } from "./call-with-cause.ts";
 // The hosts' `this.getItx()` is this (itx-scope.ts says why a scope is never kept).
 import { itxScope } from "./itx-scope.ts";
+import { DirectAppendHolder, type DirectAppend } from "./direct-append.ts";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
 // through the context's own egress, and `newWorkersRpcResponse`, the SERVER half, so a loaded worker
 // can serve a capnweb API over its `fetch`. The HTTP batch is exported ON PURPOSE beside the
@@ -212,10 +213,19 @@ export abstract class StreamProcessorDurableObject<
 
   // ── what the platform calls: the delivery loop's push and catch-up, the alarm's revive ──
 
-  /** THE push: the context hands over each committed batch with its scanned-range proof. */
-  processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
+  /** THE push: the context hands over each committed batch with its scanned-range proof, and its
+   *  own `append` for this facet's engine (direct-append.ts). */
+  processEventBatch(
+    events: StreamEvent[],
+    range: ScannedRange,
+    directAppend?: DirectAppend,
+  ): Promise<void> {
+    if (directAppend) this.#directAppend.hold(directAppend);
     return this.#engine.processEventBatch(events, range);
   }
+
+  readonly #directAppend = new DirectAppendHolder();
+
   /** Catch up from the log (the delivery loop's, when a row is configured or resumed). */
   catchUpFromLog(): Promise<void> {
     return this.#engine.catchUpFromLog();
@@ -255,6 +265,8 @@ export abstract class StreamProcessorDurableObject<
         // A stub scope's answers are pipelined shapes by type and plain data on the wire (the
         // engine awaits them): the engine's own types, asserted.
         append: async (...events) => {
+          const appended = await this.#directAppend.append(currentCause(), events);
+          if (appended) return appended;
           using itx = this.getItx();
           return (await itx.append(...events)) as StreamEvent[];
         },

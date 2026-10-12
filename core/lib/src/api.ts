@@ -1207,6 +1207,8 @@ export interface IterateContextApi {
     | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
     | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  /** `append`, answered with each event's offset alone: the events do not travel back. */
+  appendOffsets(...events: StreamEventInput[]): Promise<number[]>;
   /** This project's public URL over HTTP: the apex, or a routing slug's host (`blog--<project>`, or
    *  `blog.<primary hostname>` once the project has a primary hostname),
    *  at `path`. Only from a session, which carries the origin to compose it with. */

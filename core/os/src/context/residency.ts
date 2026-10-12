@@ -123,8 +123,10 @@ export class Residency {
   /** An inbound call that runs in ONE synchronous turn (`append`, `read`, a lend, a socket event):
    *  begun and ended at once — the clock does not move inside a turn. */
   inboundCallInOneTurn(): void {
-    this.inboundCallStarted("other");
-    this.inboundCallEnded(false);
+    // Started and ended in one turn: whether a call holds the actor is the same after it as
+    // before, so the watch has nothing to hear.
+    this.#inboundCalls.other += 1;
+    this.#lastOutsideActivityEndedAt = Date.now();
   }
 
   /** The census so far: this incarnation's inbound calls by kind. */

@@ -63,6 +63,13 @@ const PUBLICATION_ATTEMPT_WAITS_MS = [0, 5_000, 30_000] as const;
  *  commit stays owed to the project's next incarnation. */
 const PUBLICATION_RERUN_WAITS_MS = [30_000, 30_000] as const;
 
+/** The project's ingress pointed at its published config: the core's apex target, once (keyed). */
+const ingressToConfig = () => ({
+  type: "events.iterate.com/itx/ingress-configured" as const,
+  idempotencyKey: "itx/ingress-configured",
+  payload: { target: ["itx", "config"] },
+});
+
 /** THE PLATFORM'S OWN RE-CHECKS of a hostname on its way to live, after a person's request (the
  *  page's add or "Check now", the return from the DNS provider's Domain Connect page): every 30 s
  *  for the first 20 (ten minutes: a CNAME seen, a certificate issued), then every five minutes, 30
@@ -642,6 +649,15 @@ export class ProjectProcessor extends StreamProcessor<
     this.#creating = true;
     runInBackground(async () => {
       try {
+        // The integrations row the publication needs, started now beside the seed: a context born
+        // inside the publication reads the root's table just before the ingress below, whose answer
+        // then waits out that read's whole lease (`SNAPSHOT_TTL_MS`, context/rule-snapshots.ts) —
+        // 5 s of every creation. The publication's own enable stays the guarantee; it is a no-op
+        // once the row is there.
+        if (publisher)
+          void publisher.enableIntegrationsRow().catch((caught: unknown) => {
+            console.warn(`the integrations row, started early: ${String(caught)}`);
+          });
         if (!state.configRepoTip) {
           await this.#seed(state);
           // Its commit's fact reaches `/`, the follower publishes it, and the publication's fact
@@ -651,12 +667,9 @@ export class ProjectProcessor extends StreamProcessor<
         // A CREATED PROJECT ANSWERS ON ITS HOSTS: its first publication has landed, then the
         // ingress is pointed at its published config, whichever commit that is, once — a routing
         // change, which answers only once no host can be served from a snapshot older than it — and
-        // then the certificate.
-        await append({
-          type: "events.iterate.com/itx/ingress-configured",
-          idempotencyKey: "itx/ingress-configured",
-          payload: { target: ["itx", "config"] },
-        });
+        // then the certificate. The publication's batch already pointed it (`#publish`), so this
+        // append changes nothing and only waits out that batch's fence.
+        await append(ingressToConfig());
         await append({
           type: "events.iterate.com/project/created",
           payload: {},
@@ -743,13 +756,14 @@ export class ProjectProcessor extends StreamProcessor<
   /** ONE OUTCOME for the commit fact `commit`, as generation `commit.offset` (publication.ts). A
    *  commit that is `main`'s head as an attempt begins and that the probe admits is published: the
    *  pointer and `project/worker-updated` in ONE batch as the platform, so no state of `/` holds
-   *  either without the other. Every context resolves through the pointer within SNAPSHOT_TTL_MS
-   *  of that batch (context/rule-snapshots.ts), and the append answers once it does. A commit the
-   *  probe refuses, or one main moved on from (anyone may append a fact), is
-   *  `project/worker-update-failed`. Both keyed by the generation, so an attempt run again lands
-   *  nothing more. A platform failure is met again after 5 s and 30 s, within
-   *  PUBLICATION_BUDGET_MS; then the platform gives up for now: `project/worker-update-failed` with
-   *  `unavailable`, the commit still owed. True once the outcome landed, false after a give-up. */
+   *  either without the other (and the ingress, while the project is created). Every context
+   *  resolves through the pointer within SNAPSHOT_TTL_MS of that batch (context/rule-snapshots.ts),
+   *  and the append answers once it does. A commit the probe refuses, or one main moved on from
+   *  (anyone may append a fact), is `project/worker-update-failed`. Both keyed by the generation,
+   *  so an attempt run again lands nothing more. A platform failure is met again after 5 s and
+   *  30 s, within PUBLICATION_BUDGET_MS; then the platform gives up for now:
+   *  `project/worker-update-failed` with `unavailable`, the commit still owed. True once the outcome
+   *  landed, false after a give-up. */
   async #publish(
     commit: { commitOid: string; offset: number },
     publisher: ProjectPublisher,
@@ -796,11 +810,26 @@ export class ProjectProcessor extends StreamProcessor<
         return true;
       }
       const { mainModule, manifest } = attempt;
-      await landOnce(publisher, ...configPointer(commitOid, mainModule, manifest), {
+      const pointer = configPointer(commitOid, mainModule, manifest);
+      const outcome = {
         type: "events.iterate.com/project/worker-updated",
         idempotencyKey: `project/publication:${generation}`,
         payload: { commitOid, generation, modules: manifest.modules },
-      });
+      };
+      // A project being created gets its ingress in this batch too, so creation waits out one
+      // fence, taken at this commit: a read of the root's table after it (this batch's own
+      // deliveries make some) delays nothing, where it held the saga's ingress append for up to
+      // SNAPSHOT_TTL_MS. The saga's append of it is then a repeat, which waits that fence out.
+      // Should its key name another event (anyone may append one), the batch is refused whole and
+      // lands without it.
+      if (this.#newestState?.creation?.status === "requested")
+        try {
+          await publisher.appendAsPlatform(...pointer, ingressToConfig(), outcome);
+          return true;
+        } catch (error) {
+          if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
+        }
+      await landOnce(publisher, ...pointer, outcome);
       return true;
     }
     await publisher.appendAsPlatform({

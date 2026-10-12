@@ -71,6 +71,8 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   r2: "the object store, verbatim (`files` is the friendlier surface)",
   cfArtifacts: "the Artifacts binding, project-scoped (`repos` is the friendlier surface)",
   append: "write events to this log: `itx.append({ type, payload })`",
+  appendOffsets:
+    "write events to this log and answer their offsets only, not the events: `itx.appendOffsets({ type, payload })` → [offset]",
   schedules:
     "durable future appends: `schedules.set({ key, when, events })` · `schedules.cancel(key)`",
   readEvents: "read this log: `(await itx.readEvents(afterOffset, limit)).events`",
@@ -128,6 +130,7 @@ export const CONTEXT_ROOTS = [
   "whoami",
   "url",
   "append",
+  "appendOffsets",
   "abort",
   "readEvents",
   "waitForEvent",
@@ -180,9 +183,8 @@ const PORTABLE_ROOT_SET: ReadonlySet<string> = new Set<string>(PORTABLE_ROOTS);
  *  owner's own, and every context in it has every root — `/users/<id>/x` reads its owner's kv and
  *  shares its owner's secrets catalog. Read by the resolver, the reduce and `list()`. */
 export function implicitRootsAt(projectId: string, path: string): ReadonlySet<string> {
-  return projectId === GLOBAL_PROJECT_ID || resolveContextPath("/", path) === "/"
-    ? BUILT_IN_ROOT_SET
-    : CONTEXT_ROOT_SET;
+  // every caller passes a canonical path (an address's, an event's, a resolved `cd`'s)
+  return projectId === GLOBAL_PROJECT_ID || path === "/" ? BUILT_IN_ROOT_SET : CONTEXT_ROOT_SET;
 }
 
 /** One rewrite rule as the table stores it: a canonical match prefix and the target it rewrites to
@@ -399,7 +401,7 @@ const IDENTITY_ROOTS: ReadonlySet<string> = new Set(["whoami", "url"]);
 /** Does a call entering another context name one of that context's own roots — one that is neither
  *  portable nor more addressing (`cd`) nor loaded code with an authority (`workers`) nor who the
  *  context is (`IDENTITY_ROOTS`)? Then it runs there, and that context resolves it. */
-function entersOwnRoot(call: ItxExpression): boolean {
+export function entersOwnRoot(call: ItxExpression): boolean {
   const root = itxExpressionStepName(withoutBuiltIns(call)[0]);
   return (
     !!root &&
@@ -965,15 +967,20 @@ export type ResolverReach = {
 export class ItxExpressionResolver {
   /** The built-ins: a plain record whose keys (kv, append, readEvents, cd, …) are the physical-layer
    *  roots — `itx.builtins.<root>` reaches them directly; `itx.<root>` reaches them through an implicit
-   *  row where one exists (`implicitRootsAt`) unless the context's table says otherwise. */
-  readonly #builtIns: Record<string, unknown>;
+   *  row where one exists (`implicitRootsAt`) unless the context's table says otherwise. Built on
+   *  first use: a call routed to a context walks none of them. */
+  get #builtIns(): Record<string, unknown> {
+    return (this.#builtInsBuilt ??= this.#buildBuiltIns());
+  }
+  readonly #buildBuiltIns: () => Record<string, unknown>;
+  #builtInsBuilt?: Record<string, unknown>;
   readonly #rewriteRules: (() => readonly ItxExpressionRewriteRule[]) | undefined;
   readonly #path: string;
   readonly #caller: () => Caller;
   readonly #reach: ResolverReach;
 
   constructor(args: {
-    builtIns: Record<string, unknown>;
+    builtIns: Record<string, unknown> | (() => Record<string, unknown>);
     /** This context's own table, read live — absent for the stateless entrypoint, which resolves
      *  through its snapshot (context/rule-snapshots.ts). */
     rewriteRules?: () => readonly ItxExpressionRewriteRule[];
@@ -983,7 +990,8 @@ export class ItxExpressionResolver {
     caller: () => Caller;
     reach: ResolverReach;
   }) {
-    this.#builtIns = args.builtIns;
+    const { builtIns } = args;
+    this.#buildBuiltIns = typeof builtIns === "function" ? builtIns : () => builtIns;
     this.#rewriteRules = args.rewriteRules;
     this.#path = args.path;
     this.#caller = args.caller;

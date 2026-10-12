@@ -337,6 +337,9 @@ export interface BuiltInScope extends LibraryRoots {
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
   append: IterateContextApi["append"];
+  /** `append`, answered with the offsets alone: what a writer of large events (a microphone's
+   *  frames) asks for, so the events do not travel back on every hop. */
+  appendOffsets: IterateContextApi["appendOffsets"];
   /** RESET THIS CONTEXT — Cloudflare's `ctx.abort`, asked for: the Durable Object's in-memory state
    *  is discarded and the next call builds a fresh incarnation from durable storage (a new
    *  `itx/woken`). The FACT comes first — `itx/aborted { reason?, callerPath?, app? }`,
@@ -689,23 +692,24 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // STABLE RETRY EFFECTS (cause.ts): during a delivery, an event without a key of its own is keyed
     // by the delivery, where it lands and what it is — the same on every attempt
     const writeKey = caller.cause?.writeKey;
-    const keyed = await Promise.all(
-      events.map(async (event) =>
-        writeKey && !event.idempotencyKey
-          ? {
-              ...event,
-              idempotencyKey: `${writeKey}:append:${path}:${(await sha256Hex(JSON.stringify(event))).slice(0, 16)}`,
-            }
-          : event,
-      ),
-    );
-    // who a script runs for, from its cause's signed token (on-behalf-of.ts): nobody's when forged
-    const onBehalfOf = await verifyOnBehalfOf(
-      caller.cause?.onBehalfOf,
-      projectId,
-      await deps.signingSecret(),
-      Date.now(),
-    );
+    const keyed = writeKey
+      ? await Promise.all(
+          events.map(async (event) =>
+            event.idempotencyKey
+              ? event
+              : {
+                  ...event,
+                  idempotencyKey: `${writeKey}:append:${path}:${(await sha256Hex(JSON.stringify(event))).slice(0, 16)}`,
+                },
+          ),
+        )
+      : events;
+    // who a script runs for, from its cause's signed token (on-behalf-of.ts): nobody's when forged,
+    // and with no token nobody's, without reading the secret
+    const token = caller.cause?.onBehalfOf;
+    const onBehalfOf = token
+      ? await verifyOnBehalfOf(token, projectId, await deps.signingSecret(), Date.now())
+      : undefined;
     return ownContext().append(
       ...keyed.map((event) => stampCaller(event, { ...caller, onBehalfOf }, path)),
     );
@@ -2049,6 +2053,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       },
     },
     append,
+    // `itx.append` through this context's table, so a wall or a mask on `append` is this verb's too
+    appendOffsets: async (...events) => {
+      const appended = await deps.invokeAs(deps.caller(), ["itx", ["append", ...events]]);
+      // the cast: `itx.append` answers the committed events, and a call through the table is typed
+      // `unknown` (the same answer the `append` above gives)
+      return (appended as StreamEvent[]).map(({ offset }) => offset);
+    },
     abort: async (reasonInput) => {
       const reason = abortReasonOf(reasonInput, "itx.abort");
       // WHO ASKED, beyond what the append stamps (`source.principal`): the context the call started

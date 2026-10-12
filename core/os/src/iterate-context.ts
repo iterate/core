@@ -26,6 +26,7 @@ import * as cloudflareWorkers from "cloudflare:workers";
 import {
   InvokeHandle,
   canonicalItxExpressionPrefix,
+  itxExpressionStepName,
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
@@ -56,6 +57,7 @@ import {
   type IterateContextDurableObjectStub,
 } from "./context/rpc-stub-relay.ts";
 import {
+  entersOwnRoot,
   normalizeRewriteRuleConfigured,
   type ItxExpressionResolver,
 } from "./context/itx-expression-rewriting.ts";
@@ -154,6 +156,10 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  context at an address for a caller, for the calls it takes; a call it declines, or every call
    *  where there is none, goes to the context the handle names. */
   readonly #statelessResolverOf: StatelessReach | undefined;
+  /** A loaded worker's handle (`ItxEntrypoint`): what the context answers is copied and its session
+   *  released here, at this hop, as the resolver's answers are (context/dispatch.ts
+   *  `itxAnswerDetachedFromSession`), so loaded code that keeps an answer keeps nothing open. */
+  readonly #detachAnswers: boolean;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -163,8 +169,10 @@ export class IterateContextRpcTarget extends RpcTarget {
     caller: Caller,
     globalPaths = false,
     statelessResolverOf?: StatelessReach,
+    detachAnswers = false,
   ) {
     super();
+    this.#detachAnswers = detachAnswers;
     this.#globalPaths = globalPaths;
     this.#contextNamespace = contextNamespace;
     this.#durableObjectAddress = durableObjectAddress;
@@ -197,7 +205,10 @@ export class IterateContextRpcTarget extends RpcTarget {
       this.#durableObjectAddress,
       "itx",
     ).invoke(itxExpression, args, this.#caller);
-    return materializeItxHandleReference(result, (expression) => this.invoke(expression));
+    return materializeItxHandleReference(
+      this.#detachAnswers ? itxAnswerDetachedFromSession(result, itxExpression, args) : result,
+      (expression) => this.invoke(expression),
+    );
   }
 
   /** Another context of THIS project. Absolute by convention (`cd("/agents/support")`); relative
@@ -254,6 +265,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       this.#caller,
       this.#globalPaths,
       this.#statelessResolverOf,
+      this.#detachAnswers,
     );
   }
 
@@ -636,14 +648,22 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
       (p) => this.ctx.waitUntil(p),
       this.#caller(address, parseCause(cause)),
       false,
-      (at, caller) =>
-        statelessResolverFor({
-          env: this.env,
-          namespace: this.env.ITERATE_CONTEXT,
-          address: at,
-          caller,
-          ctx: this.ctx,
-        }),
+      // A call that enters the context's own root (an append, a facet, a subscription) runs in the
+      // context: the resolver would read no table and send it on as it came (`#route`'s `own()`),
+      // after building every portable root (about 0.5 ms of CPU a call, measured 2026-10-09). It
+      // goes straight there instead, its answer detached here as the resolver's is. A terminal
+      // fetch keeps the resolver's fetch channel and retry.
+      (at, caller, expression) =>
+        entersOwnRoot(expression) && itxExpressionStepName(expression.at(-1)) !== "fetch"
+          ? undefined
+          : statelessResolverFor({
+              env: this.env,
+              namespace: this.env.ITERATE_CONTEXT,
+              address: at,
+              caller,
+              ctx: this.ctx,
+            }),
+      true,
     );
   }
 

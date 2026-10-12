@@ -108,6 +108,36 @@ export function namedWorkerLoad(
   where: string,
   className?: string,
 ): { source: WorkerSource; cacheKey?: string; moduleIdentity?: string; generation?: number } {
+  // Pure in its inputs, and a facet's push asks it on every call with the spec the named worker's
+  // resolution answered (the context's `#namedWorker` keeps that object while it lasts): the
+  // manifest is parsed once per spec.
+  const memoKey = `${named.vouched}\0${mainModule || ""}\0${className || ""}`;
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- a WeakMap key must be an object, and the spec is data a rule carried: a primitive one is parsed, never remembered
+  const spec = named.spec && typeof named.spec === "object" ? named.spec : undefined;
+  const memo = spec && namedWorkerLoads.get(spec);
+  const known = memo && memo.get(memoKey);
+  if (known) return known;
+  const loaded = parseNamedWorkerLoad(named, mainModule, where, className);
+  if (spec)
+    namedWorkerLoads.set(
+      spec,
+      (memo || new Map<string, ReturnType<typeof parseNamedWorkerLoad>>()).set(memoKey, loaded),
+    );
+  return loaded;
+}
+
+/** `namedWorkerLoad`'s answers, by the spec object they were parsed from. */
+const namedWorkerLoads = new WeakMap<
+  object,
+  Map<string, ReturnType<typeof parseNamedWorkerLoad>>
+>();
+
+function parseNamedWorkerLoad(
+  named: { spec: unknown; vouched: boolean },
+  mainModule: string | undefined,
+  where: string,
+  className?: string,
+): { source: WorkerSource; cacheKey?: string; moduleIdentity?: string; generation?: number } {
   const { source, cacheKey, manifest: given } = NamedWorkerSpec.parse(named.spec);
   const manifest = named.vouched && given !== undefined ? WorkerManifest.parse(given) : undefined;
   if (!manifest || !mainModule) return { source, cacheKey, generation: manifest?.generation };
@@ -170,6 +200,14 @@ function generationId(base: string, generation: number): string {
  *  length: djb2 alone collides on two-character differences (`"Aa"` and `"B@"`), and one shared hash
  *  is one shared isolate. A guard against an accidental collision, not a crafted one (trusted clients). */
 const contentHashByWorkerModules = new WeakMap<WorkerModules, string>();
+/** Subrequests per invocation of a loaded worker: core/os's own (core/deployer/src/stack.ts
+ *  `limits`). */
+const LOADED_WORKER_SUBREQUESTS = 1_000_000;
+
+/** The modules whose package.json `prepareConfinedWorker` has read: a facet's spec hands the same
+ *  object over on every push. */
+const packageReadOf = new WeakSet<WorkerModules>();
+
 export function contentHashOfWorkerModules(modules: WorkerModules): string {
   let hash = contentHashByWorkerModules.get(modules);
   if (!hash) {
@@ -339,7 +377,11 @@ export async function prepareConfinedWorker(
   let getModules: () => Promise<WorkerModules> | WorkerModules;
   if (isWorkerModules(source)) {
     const modules = requireFiles(source);
-    readPackage(modules, where); // refused where it is handed in, not late in a cold load
+    // refused where it is handed in, not late in a cold load; once per modules object
+    if (!packageReadOf.has(modules)) {
+      readPackage(modules, where);
+      packageReadOf.add(modules);
+    }
     sourceVersion = named || `content:${contentHashOfWorkerModules(modules)}`;
     getModules = () => modules;
   } else {
@@ -486,10 +528,15 @@ export async function prepareConfinedWorker(
         // pays that. `applySdkCompatibilityFlags` force-adds the flags the SDK cannot run without
         // (`nodejs_als`, which carries a call's cause; `allow_irrevocable_stub_storage`, which lets
         // loaded code persist its `env.ITX` stub — workers-and-facets.e2e pins it) and refuses a list
-        // that disables either. No `limits`: trusted clients. The platform bounds a DO to 10 distinct
-        // dynamic workers with in-flight requests — the pins' release keeps a context under it.
+        // that disables either. No CPU limit: trusted clients. The platform bounds a DO to 10
+        // distinct dynamic workers with in-flight requests — the pins' release keeps a context under it.
         compatibilityDate: COMPATIBILITY_DATE,
         compatibilityFlags: applySdkCompatibilityFlags(resolved.compatibilityFlags, opts.where),
+        // A loaded worker's invocation lasts as long as the work it starts: a voice agent's speaker
+        // sender appends every frame of a call from one background task, each append a subrequest.
+        // Under the plan's default of 10,000 per invocation, a call ends at its 10,000th speaker
+        // frame (`Too many subrequests by single Worker invocation`): about 17 minutes of speech.
+        limits: { subRequests: LOADED_WORKER_SUBREQUESTS },
         mainModule: resolved.mainModule,
         modules: resolved.modules,
         env: { ITX: opts.itxEntrypoint },

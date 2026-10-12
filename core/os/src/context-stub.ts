@@ -210,9 +210,22 @@ function isIdempotentItxCall(itxExpression: ItxExpression, args: unknown[]): boo
   let steps = itxExpression.slice(itxExpression[1] === "builtins" ? 2 : 1);
   while (Array.isArray(steps[0]) && steps[0][0] === "cd") steps = steps.slice(1);
   const [call] = steps;
-  if (steps.length === 1 && Array.isArray(call) && call[0] === "append")
+  if (
+    steps.length === 1 &&
+    Array.isArray(call) &&
+    (call[0] === "append" || call[0] === "appendOffsets")
+  )
     return (
-      call.length > 1 && call.slice(1).every((event) => KeyedDurableEvent.safeParse(event).success)
+      call.length > 1 &&
+      call
+        .slice(1)
+        // an ephemeral (a voice frame) is never keyed, so no parse builds its refusal. The cast:
+        // the events are unvalidated here, and reading one optional field of any value is safe
+        .every(
+          (event) =>
+            (event as { ephemeral?: unknown } | null)?.ephemeral !== true &&
+            KeyedDurableEvent.safeParse(event).success,
+        )
     );
   return IDEMPOTENT_CALLS.has(steps.map(itxExpressionStepName).join("."));
 }

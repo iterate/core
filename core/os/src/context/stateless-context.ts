@@ -203,32 +203,31 @@ export function statelessResolverFor(args: {
   // releases — made here, one would be opened per round trip and held by no one: the resolver sends
   // a call to one to the context.
   const resolverUnder = (callerNow: Caller) => {
-    const {
-      connectToMcp: _mcp,
-      connectToOpenApi: _openApi,
-      connectToCapnweb: _capnweb,
-      ...builtIns
-    } = buildPortableBuiltIns({
-      ...projectDeps,
-      projectId,
-      path,
-      ai: itxAiFor(args.ctx, projectId),
-      env,
-      context,
-      egress: (request) =>
-        egress(request, {
-          projectId,
-          path,
-          cause: callerNow.cause,
-          secretFetch: (secretPath, outbound) => context(secretPath).fetch(outbound),
-        }),
-      caller: () => withOrigin(callerNow),
-      invokeAs: (callerThere, call) => resolverUnder(callerThere).invoke(call),
-      library,
-    });
-    return new ItxExpressionResolver({
-      reach,
-      builtIns: {
+    const build = () => {
+      const {
+        connectToMcp: _mcp,
+        connectToOpenApi: _openApi,
+        connectToCapnweb: _capnweb,
+        ...builtIns
+      } = buildPortableBuiltIns({
+        ...projectDeps,
+        projectId,
+        path,
+        ai: itxAiFor(args.ctx, projectId),
+        env,
+        context,
+        egress: (request) =>
+          egress(request, {
+            projectId,
+            path,
+            cause: callerNow.cause,
+            secretFetch: (secretPath, outbound) => context(secretPath).fetch(outbound),
+          }),
+        caller: () => withOrigin(callerNow),
+        invokeAs: (callerThere, call) => resolverUnder(callerThere).invoke(call),
+        library: library(),
+      });
+      return {
         ...builtIns,
         ...buildIdentityRoots({
           ...projectDeps,
@@ -237,7 +236,12 @@ export function statelessResolverFor(args: {
           platformOrigin: () => platformOrigin,
           primaryHostname: async () => (await project())?.primaryHostname ?? null,
         }),
-      },
+      };
+    };
+    return new ItxExpressionResolver({
+      reach,
+      // built when a route first walks one: most calls end in a context and walk none
+      builtIns: build,
       path,
       caller: () => withOrigin(callerNow),
     });
@@ -250,10 +254,12 @@ export function statelessResolverFor(args: {
   const libraryItx = new InvokeHandle((steps) =>
     resolverUnder(libraryCaller).invoke(["itx", ...steps]),
   ) as unknown as LibraryItx;
-  const library = buildLibrary(libraryItx, {
-    caller: () => withOrigin(caller),
-    path,
-    mcpWebhook: (server) => mcpWebhookOf(iterateConfig, platformOrigin, address, server),
-  }).roots;
+  let libraryRoots: ReturnType<typeof buildLibrary>["roots"] | undefined;
+  const library = () =>
+    (libraryRoots ||= buildLibrary(libraryItx, {
+      caller: () => withOrigin(caller),
+      path,
+      mcpWebhook: (server) => mcpWebhookOf(iterateConfig, platformOrigin, address, server),
+    }).roots);
   return resolverUnder(caller);
 }

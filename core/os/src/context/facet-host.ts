@@ -324,6 +324,22 @@ export class FacetHost {
   readonly #namedWorkerInstalled = new Map<string, NamedWorkerStarted>();
   /** The facets whose `facet-ran:<name>` row this incarnation has read or written (`#markRan`). */
   readonly #ranThisIncarnation = new Set<string>();
+  /** The `facet:<name>:loader-id` and `facet:<name>:named-worker` rows, read once per incarnation
+   *  and written through (this host is their only writer): every push materializes, and reads both. */
+  readonly #rows = new Map<string, unknown>();
+  #row<T>(key: string): T | undefined {
+    if (!this.#rows.has(key)) this.#rows.set(key, this.#deps.ctx.storage.kv.get(key));
+    // the cast: kv answers `unknown`, and each row holds the one type its only writer puts there
+    return this.#rows.get(key) as T | undefined;
+  }
+  #putRow(key: string, value: unknown): void {
+    this.#deps.ctx.storage.kv.put(key, value);
+    this.#rows.set(key, value);
+  }
+  #deleteRow(key: string): void {
+    this.#deps.ctx.storage.kv.delete(key);
+    this.#rows.delete(key); // a name recreated later reads its row once again
+  }
 
   constructor(deps: FacetHostDeps) {
     this.#deps = deps;
@@ -784,6 +800,16 @@ export class FacetHost {
     return facetHandle;
   }
 
+  /** Whether the facet a handle names runs loaded code (its calls are `Caller.app`, as its
+   *  `env.ITX` stamps them) rather than a first-party class (the platform at this context). By name,
+   *  as `#materialize` decides it: a row's handle carries no spec. */
+  hostsLoadedCode(facetHandle: FacetHandle): boolean {
+    const facetAddress = this.#facetAddressByFacetHandle.get(facetHandle);
+    if (!facetAddress)
+      throw new Error("facet: a FacetHandle this context's facet host never minted");
+    return !firstPartyFacetClassOf(facetAddress.name);
+  }
+
   /** THE PLATFORM'S WAY IN, checked against no list, which no walk can land on: the facet `name`, or
    *  the one a FacetHandle names — the delivery loop's row target, pushed `processEventBatch(events,
    *  range)` and caught up with `catchUpFromLog()`. Also the alarm's revive, the `itx.secrets`
@@ -1157,9 +1183,7 @@ export class FacetHost {
         // it. The row is read once per incarnation and written once the facet started under the
         // new identity (a write between the abort and the start is what the platform defect
         // needs); this incarnation's own view is `#loaderIdByName`.
-        const recordedLoaderId = this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) as
-          | string
-          | undefined;
+        const recordedLoaderId = this.#row<string>(`facet:${name}:loader-id`);
         const previousLoaderId = this.#loaderIdByName.get(name) ?? recordedLoaderId;
         this.#loaderIdByName.set(name, loaderId);
         // Whether the facet runs under this identity already: a restart whose start failed leaves it
@@ -1187,11 +1211,10 @@ export class FacetHost {
               );
           }
         }
-        if (this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) !== loaderId)
+        if (this.#row(`facet:${name}:loader-id`) !== loaderId)
           recordLoadedIdentity = () => {
-            this.#deps.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
-            if (worker.started)
-              this.#deps.ctx.storage.kv.put(`facet:${name}:named-worker`, worker.started);
+            this.#putRow(`facet:${name}:loader-id`, loaderId);
+            if (worker.started) this.#putRow(`facet:${name}:named-worker`, worker.started);
           };
         if (!platformStart && started) {
           recordLoadedIdentity?.();
@@ -1284,11 +1307,7 @@ export class FacetHost {
     return (
       matches(this.#namedWorkerInstalled.get(name)) ??
       // kv answers `unknown`; `recordLoadedIdentity` is the only writer of the row.
-      matches(
-        this.#deps.ctx.storage.kv.get(`facet:${name}:named-worker`) as
-          | NamedWorkerStarted
-          | undefined,
-      )
+      matches(this.#row<NamedWorkerStarted>(`facet:${name}:named-worker`))
     );
   }
 
@@ -1493,8 +1512,8 @@ export class FacetHost {
     this.#claimFacetAlarm(name, null);
     this.#facetRevived(name);
     this.#deps.ctx.storage.kv.delete(`facet:${name}`);
-    this.#deps.ctx.storage.kv.delete(`facet:${name}:loader-id`);
-    this.#deps.ctx.storage.kv.delete(`facet:${name}:named-worker`);
+    this.#deleteRow(`facet:${name}:loader-id`);
+    this.#deleteRow(`facet:${name}:named-worker`);
     this.#deps.ctx.storage.kv.delete(`facet:${name}:restarts`);
     this.#deps.ctx.storage.kv.delete(`facet-ran:${name}`);
     this.#facetStartupMemoByName.delete(name);

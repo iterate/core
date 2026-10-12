@@ -57,7 +57,11 @@ import {
   stampCaller,
   type Caller,
 } from "./caller.ts";
-import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.ts";
+import {
+  RpcStubHandle,
+  itxAnswerDetachedFromSession,
+  type FacetHandle,
+} from "./context/dispatch.ts";
 import { mintOnBehalfOf, type OnBehalfOf } from "./on-behalf-of.ts";
 import { normalizeControlEvent, type CoreState } from "./stream/core-processor.ts";
 import {
@@ -258,6 +262,9 @@ const SNAPSHOT_CLOCK_SLACK_MS = 250;
  *  runtime resets at 30 s, and this wait and a birth's facet starts (FacetHost
  *  FACET_START_WATCHDOG_MS, 10 s) together stay under that. */
 const DELETED_PROJECT_QUESTION_DEADLINE_MS = 10_000;
+
+/** A facet's direct appends between two runs of this context's event loop (`#directAppendFor`). */
+const DIRECT_APPENDS_PER_YIELD = 8;
 
 /** A revocation fence (`#takeRevocationFence`): until when a rule write waits, on this context's
  *  clock, and the names the commits behind it took away. */
@@ -603,15 +610,28 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         (event) => event.type !== "events.iterate.com/itx/alarm-trace",
       );
       if (events.length === 0) return;
-      this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () => {
-        this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
-        this.#startRequestedRuns(events);
-      });
+      const deliveryMayHaveClaimed = this.#callerStorage.run(
+        this.#withPlatformOrigin({ principal: null }),
+        () => {
+          const claimed = this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
+          this.#startRequestedRuns(events);
+          return claimed;
+        },
+      );
       const woken = events.find((event) => event.type === "events.iterate.com/itx/woken");
       if (woken) this.#announceToAncestors(woken.source?.cause);
       this.#measureSize();
       this.#unsetWhatNamesDeadRpcStubs(events);
-      this.#alarmCoordinator.reconcile();
+      // A batch of ephemerals that no cursor row delivers and that requests no run moves no
+      // deadline: it reduces nothing into core state, and a push it starts reconciles for itself
+      // when it fails. A voice call's frames are such batches.
+      if (
+        deliveryMayHaveClaimed ||
+        events.some(
+          (event) => !event.ephemeral || event.type === "events.iterate.com/itx/run-requested",
+        )
+      )
+        this.#alarmCoordinator.reconcile();
     },
   });
 
@@ -740,13 +760,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (!this.#snapshotChangeNeedsCommitWait(before, after, pending?.takenAway)) return;
     const until = Math.max(pending?.until ?? 0, this.#snapshotLeaseUntil);
     if (until <= Date.now()) return; // nothing served that could still be used
-    this.ctx.storage.kv.put<RevocationFence>("rule-revocation-fence", {
+    this.#fence = {
       until,
       takenAway: [
         ...(pending?.takenAway || []),
         ...namesTakenAway(before.itxExpressionRewriteRules, after.itxExpressionRewriteRules),
       ],
-    });
+    };
+    this.ctx.storage.kv.put<RevocationFence>("rule-revocation-fence", this.#fence);
   }
 
   /** Does a commit change a snapshot in a way that waits (context/rule-snapshots.ts)? A rule change
@@ -772,9 +793,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** The fence a commit took that has not passed yet. */
   #pendingFence(): RevocationFence | undefined {
-    const fence = this.ctx.storage.kv.get<RevocationFence>("rule-revocation-fence");
-    return fence && fence.until > Date.now() ? fence : undefined;
+    if (this.#fence === undefined)
+      this.#fence = this.ctx.storage.kv.get<RevocationFence>("rule-revocation-fence") ?? null;
+    return this.#fence && this.#fence.until > Date.now() ? this.#fence : undefined;
   }
+
+  /** The stored fence, read once per incarnation and written through (`#takeRevocationFence` is its
+   *  only writer): every append reads it, twice, and from storage those reads were 10–11% of a
+   *  voice context's CPU samples (measured 2026-10-09). Unread until the first append; null for
+   *  none. */
+  #fence: RevocationFence | null | undefined;
 
   /** THE LEASE on this context's rule snapshots (context/rule-snapshots.ts), in memory: none at a
    *  birth. */
@@ -1292,6 +1320,37 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     ]);
   }
 
+  /** A FACET'S DIRECT APPEND, handed over with every push (core/lib sdk/direct-append.ts): the
+   *  facet's engine appends through it into this context under the caller its `env.ITX` would
+   *  stamp — `invoke`, as every caller arrives. Once every DIRECT_APPENDS_PER_YIELD appends this
+   *  context's event loop runs: the appends are in-process, so a burst of them would otherwise hold
+   *  its pushes to subscribers until the burst ends (a 60 s spoken answer's first frame reached the
+   *  device 0.2–0.5 s late, measured 2026-10-10). A count, since a Worker's clock stands still
+   *  between calls that do no I/O. */
+  #directAppendFor(facetHandle: FacetHandle) {
+    const caller = {
+      principal: null,
+      platformOrigin: this.#platformOrigin,
+      ...(this.#facetHost.hostsLoadedCode(facetHandle)
+        ? { app: true as const }
+        : { path: this.#durableObjectAddress.path }),
+    };
+    return async (cause: unknown, events: StreamEventInput[]): Promise<unknown> => {
+      const appended = this.invoke(["itx", ["append", ...events]], [], {
+        ...caller,
+        cause: parseCause(cause) || newChain("loaded code"),
+      });
+      if (++this.#directAppends % DIRECT_APPENDS_PER_YIELD !== 0) return appended;
+      // started before the yield, so an append sent after it never lands first
+      const [answer] = await Promise.all([
+        appended,
+        new Promise((resolve) => setTimeout(resolve, 0)),
+      ]);
+      return answer;
+    };
+  }
+  #directAppends = 0;
+
   readonly #subscriptionDelivery = new SubscriptionDelivery({
     stream: this.#stream,
     // The RESOLVER's `evaluate`, not this class's `invoke`: the loop's evaluation is the kernel's own
@@ -1302,7 +1361,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ),
     // A facet row's push and catch-up: the facet host's platform entries, past the facet's list.
     pushEventBatchToFacet: (facetHandle, events, range) =>
-      this.#facetHost.callFacetAsPlatform(facetHandle, [["processEventBatch", events, range]]),
+      this.#facetHost.callFacetAsPlatform(facetHandle, [
+        ["processEventBatch", events, range, this.#directAppendFor(facetHandle)],
+      ]),
     catchUpFacetFromLog: (facetHandle, cause) =>
       this.#facetHost.callFacetAsPlatform(facetHandle, [["catchUpFromLog"]], cause),
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
@@ -1705,7 +1766,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // /api, a loaded worker's or a facet's `env.ITX`), /mcp, a sibling's `cd` — arrives through this
     // method, so this actor enforces it here, whatever the caller disposes: a live answer leaves as
     // the expression that names it, data a hop below answered with leaves as a copy.
-    return itxAnswerDetachedFromSession(result, normalizedItxExpression(call), args);
+    return itxAnswerDetachedFromSession(result, call, args);
   }
 
   /** A DELIVERY'S SEND, AT MOST ONCE (integrations/email.ts): the event this log already recorded
@@ -1753,10 +1814,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  nothing through that context. The contexts its route crosses count toward the call's hops
    *  (cause.ts). */
   async #namedWorker(source: ItxExpressionInput): Promise<NamedWorker> {
-    const { at, spec, vouched } = await this.#callerStorage.run(
-      this.#withPlatformOrigin({ principal: null, cause: this.#caller.cause }),
-      () => this.#itxExpressionResolver.namedWorker(source),
-    );
+    // A facet whose source names a worker (a voice agent's `itx.cd('/').config`) resolves it on
+    // every push: about 12% of a voice context's CPU samples (measured 2026-10-09). The answer
+    // depends on this context's own table and the snapshots it read, so it is kept while the table
+    // is the same committed object and until the first snapshot expires.
+    const rules = this.#stream.coreReducedState.itxExpressionRewriteRules;
+    const key = JSON.stringify(source);
+    let known = this.#namedWorkers.get(key);
+    if (!known || known.rules !== rules || Date.now() >= known.validUntil) {
+      const resolved = await this.#callerStorage.run(
+        this.#withPlatformOrigin({ principal: null, cause: this.#caller.cause }),
+        () => this.#itxExpressionResolver.namedWorker(source),
+      );
+      known = { rules, ...resolved };
+      if (this.#namedWorkers.size >= 100) this.#namedWorkers.clear();
+      this.#namedWorkers.set(key, known);
+    }
+    const { at, spec, vouched } = known;
     const { cause } = this.#caller;
     return {
       spec,
@@ -1767,6 +1841,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           : this.#reach.loadedCodeAt(at, cause)(call),
     };
   }
+
+  /** `#namedWorker`'s resolutions, by source: each with the table it read and when it expires. */
+  readonly #namedWorkers = new Map<
+    string,
+    { rules: object; at: string; spec: unknown; vouched: boolean; validUntil: number }
+  >();
 
   #invokeInProcess(call: ItxExpressionInput, args: unknown[], caller: Caller): Promise<unknown> {
     return this.#callerStorage.run(this.#withPlatformOrigin(caller), () =>

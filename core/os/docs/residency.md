@@ -32,6 +32,7 @@ The context DO forwards its entry points to it and reads the sweep's deadline ba
 | A call that rejected                                               | a facet method threw; the promise keeps its session                          | 3: the walk releases the rejected answer                                                              |
 | Values code got through `getItx` (all first-party code, templates) | `itx.cd(path)` in `itx.cd(path).append(…)`                                   | 1: `using` disposes every call made through the scope, not only the last, and every handle it awaited |
 | Values a loaded facet got from `env.ITX` directly                  | a project's own facet that calls `env.ITX.get()` itself and keeps the result | 5 and 6: an unclaimed loaded facet is reset                                                           |
+| A facet's direct append (`core/lib/src/sdk/direct-append.ts`)      | the context's own `append`, which every push hands its facet                 | the SDK lets go 1 s after its last use; a loaded facet that keeps it itself: 5 and 6, unless claimed  |
 | A borrowed rpc stub, the library's socket                          | a subscribe callback, an `itx.connectToCapnweb(url)` WebSocket session       | 4: returned or closed 30 s after its last use                                                         |
 
 A facet needs 5 and 6 on top of 1 because the context cannot end a session from its side: the

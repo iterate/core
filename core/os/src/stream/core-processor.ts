@@ -136,6 +136,28 @@ function resolveThroughState(state: CoreState, target: ItxExpression): ItxExpres
   );
 }
 
+/** `resolveThroughState` for COMMITTED state only, remembered: the delivery loop asks it of every
+ *  row on every commit, and the answer is pure. A committed table and a row's target are never
+ *  changed (a batch drafts a copy of a table before it writes one, `draftOf`), so a commit that
+ *  leaves both alone resolves nothing again. Never inside a reduce: its draft table changes from
+ *  one event to the next. */
+function resolveThroughCommittedState(
+  state: CoreState,
+  target: ItxExpression,
+): ItxExpression | undefined {
+  const rules = state.itxExpressionRewriteRules;
+  const roots = implicitRootsAt(state.projectId || "", state.path || "/");
+  const known = committedFixedPoints.get(target);
+  if (known?.rules === rules && known.roots === roots) return known.fixedPoint;
+  const fixedPoint = resolveThroughState(state, target);
+  committedFixedPoints.set(target, { rules, roots, fixedPoint });
+  return fixedPoint;
+}
+const committedFixedPoints = new WeakMap<
+  ItxExpression,
+  { rules: object; roots: ReadonlySet<string>; fixedPoint: ItxExpression | undefined }
+>();
+
 /** M1: split a configured target into the SOURCE-LESS target the reduce stores (the ORIGINAL
  *  spelling, minus the spec — a target re-resolves at every delivery, so the reduce never freezes
  *  its resolution) and the `hostedFacet` marker (the facet's name, class and cacheKey). A non-hosting
@@ -182,7 +204,7 @@ function elideHostedFacetSource(
  *  loop). A target that cannot be resolved yet (a `subscribe` before its `provide`) cannot own
  *  progress: the stream keeps its cursor, as for any plain target. */
 export function targetOwnsProgress(state: CoreState, row: Subscription): boolean {
-  const resolved = resolveThroughState(state, row.target);
+  const resolved = resolveThroughCommittedState(state, row.target);
   if (!resolved) return false;
   return !!(builtInsGetStep(resolved, "facets") || builtInsGetStep(resolved, "rpcStubs"));
 }
@@ -192,7 +214,7 @@ export function targetOwnsProgress(state: CoreState, row: Subscription): boolean
  *  stream (context/built-ins.ts)? Its deliveries climb the longer ladder (subscription-delivery.ts
  *  `#ladder`). */
 export function targetIsAnotherService(state: CoreState, row: Subscription): boolean {
-  const resolved = resolveThroughState(state, row.target);
+  const resolved = resolveThroughCommittedState(state, row.target);
   return (
     resolved?.[1] === "builtins" && (resolved[2] === "webhooks" || resolved[2] === "platformHook")
   );
