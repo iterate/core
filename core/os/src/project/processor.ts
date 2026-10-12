@@ -3,9 +3,9 @@
 // workspace is born once; a secret's latest `set` is its
 // row — and a death certificate drops the entry; the config repo's commits, whose latest is the tip
 // the project follows), and its EFFECTS, each run from state at head. THE CREATION SAGA: the config
-// repo (`itx.repos.create("/repos/config")`, the same collection a caller uses), its seed committed
-// when `main` is unborn (the default template, below), the project's ingress pointed at its
-// published config (`itx/ingress-configured` to `itx.config`, the core's, once), then the
+// repo (`itx.builtins.repos.create("/repos/config")`, the collection a caller uses), its seed
+// committed when `main` is unborn (the default template, below), the project's ingress pointed at
+// its published config (`itx/ingress-configured` to `itx.config`, the core's, once), then the
 // certificate, once the seed's publication has landed. THE PUBLICATION OF THE CONFIG REPO: every
 // `repo/commit-completed` from `/repos/config` gets ONE outcome on `/`, as the generation of its
 // fact's offset — its commit published (publication.ts) if it is `main`'s head as its attempt
@@ -46,7 +46,7 @@ import { unavailableError } from "../unavailable.ts";
 import { ProjectContract, type CustomHostnameObservation, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
 import type { DomainConnectLink } from "./domain-connect.ts";
-import { configPointer, manifestOf, type ProjectPublisher } from "./publication.ts";
+import { configPointer, configRepoCall, manifestOf, type ProjectPublisher } from "./publication.ts";
 
 /** How long one publication may take before the platform gives up on it for now: a publication
  *  resolves its npm dependencies from esm.sh. */
@@ -689,12 +689,12 @@ export class ProjectProcessor extends StreamProcessor<
   /** THE SEED: the config repo, and the template committed onto its unborn `main` — or `main` as it
    *  is, born by an earlier attempt or another commit. */
   async #seed(state: ProjectState): Promise<void> {
-    // its own block: the template's download below outlasts it
+    // its own block: the template's download below outlasts it. The repo at the fixed point, as
+    // publication.ts `configRepoCall` says why.
     {
       using itx = this.getItx();
-      await itx.repos.create("/repos/config");
+      await itx.invoke(["itx", "builtins", "repos", ["create", "/repos/config"]]);
     }
-    const config = (itx: ItxEntrypointScope) => itx.repos.get("/repos/config");
     // THE SEED LANDS ONLY ON AN UNBORN `main` (`parent: null`), so it is committed without a read
     // of the tip first — one Artifacts round trip less on every creation, and the one that hung
     // 22.8 s (2026-09-24, the latency guard). A born `main` refuses it: an attempt of this saga
@@ -724,17 +724,19 @@ export class ProjectProcessor extends StreamProcessor<
         "The config template",
       );
       using itx = this.getItx();
-      // Over the loopback stub the commit's answer types as an RPC result; the wire copied it.
-      const seeded = (await config(itx).commitFiles({
-        message: reference ? `seed: ${reference}` : "seed: minimal project config",
-        changes,
-        parent: null,
-      })) as unknown as { commitOid: string | null };
+      // `invoke` answers `unknown`; the repo facet's `commitFiles` answers the commit it made.
+      const seeded = (await itx.invoke(
+        configRepoCall("commitFiles", {
+          message: reference ? `seed: ${reference}` : "seed: minimal project config",
+          changes,
+          parent: null,
+        }),
+      )) as { commitOid: string | null };
       commitOid = seeded.commitOid;
     } catch (error) {
       using itx = this.getItx();
-      // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
-      commitOid = (await config(itx).tip()) as unknown as string | null;
+      // `invoke` answers `unknown`; the repo facet's `tip` answers main's commit or null.
+      commitOid = (await itx.invoke(configRepoCall("tip"))) as string | null;
       if (!commitOid) throw error;
       console.info({
         event: "project.seed-on-born-main",

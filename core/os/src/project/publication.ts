@@ -18,6 +18,7 @@
 // platform; a commit that fails here is `project/worker-update-failed`, and the pointer stays where
 // it was.
 
+import type { ItxExpression } from "iterate/expression";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
 import { readPackage } from "../context/module-resolution.ts";
@@ -81,6 +82,26 @@ export async function manifestOf(
   return { mainModule: entry, manifest: { generation, modules: manifest } };
 }
 
+/** The config repo's facet, at the fixed point all the way: what the pointer's producer reads
+ *  (`itx.config.modules`, below), and how the creation's seed and every publication reach the
+ *  repo. Through `itx.repos` a stateless hop reads `/`'s rule table first, and a read in the
+ *  SNAPSHOT_TTL_MS before a publication's commit holds that commit's answer, and a creation's
+ *  `project/created`, as long. */
+const CONFIG_REPO_FACET: ItxExpression = [
+  "itx",
+  "builtins",
+  ["cd", "/repos/config"],
+  "builtins",
+  "facets",
+  ["get", "repo"],
+];
+
+/** One call of the config repo's facet (`CONFIG_REPO_FACET`): `verb` with `args`. */
+export const configRepoCall = (verb: string, ...args: unknown[]): ItxExpression => [
+  ...CONFIG_REPO_FACET,
+  [verb, ...args],
+];
+
 /** THE POINTER on `/`, its rows keyed by its generation: `itx.config` names the config repo's
  *  worker at `commitOid` — its main module `mainModule`, its modules read at that commit where it is
  *  loaded — with its manifest, so it loads under its main module's identity there
@@ -102,15 +123,7 @@ export function configPointer(
     rule(
       "itx.config.modules",
       "config-modules",
-      [
-        "itx",
-        "builtins",
-        ["cd", "/repos/config"],
-        "builtins",
-        "facets",
-        ["get", "repo"],
-        "modules",
-      ],
+      [...CONFIG_REPO_FACET, "modules"],
       "the config repo's files at a commit, as the published config's producer reads them",
     ),
     rule(

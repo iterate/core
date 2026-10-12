@@ -307,8 +307,14 @@ function project(
     files = { ...files, ...changed };
     tipOid = "c".repeat(40);
   };
+  // the saga's calls at the fixed point: the collection's `create`, and the repo facet's verbs
+  // (publication.ts `configRepoCall`)
   const itx = {
-    repos: { create: vi.fn(async () => {}), get: () => repo },
+    invoke: vi.fn(async (expression: unknown[]) => {
+      const [verb, ...args] = expression.at(-1) as [keyof typeof repo | "create", ...unknown[]];
+      if (verb === "create") return undefined;
+      return (repo[verb] as (...input: unknown[]) => Promise<unknown>)(...args);
+    }),
     [Symbol.dispose]: () => {},
   };
   const append = vi.fn(async (...events: { type: string }[]) => {
