@@ -31,14 +31,15 @@ export async function viteBuild(appRoot: string, env: Record<string, string>) {
 export async function runStreamingCaptured(
   command: string,
   args: string[],
-  opts: { cwd: string; env?: Record<string, string> },
+  /** `env` on top of this process's environment, or, with `inheritEnv: false`, alone. */
+  opts: { cwd: string; env?: Record<string, string>; inheritEnv?: boolean },
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null; output: string }> {
   console.log(`$ ${command} ${args.join(" ")}`);
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
       stdio: ["inherit", "pipe", "pipe"],
-      env: { ...process.env, ...opts.env },
+      env: opts.inheritEnv === false ? opts.env : { ...process.env, ...opts.env },
     });
     let output = "";
     const relay = (destination: NodeJS.WriteStream) => (chunk: Uint8Array) => {
