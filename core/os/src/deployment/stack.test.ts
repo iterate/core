@@ -3,6 +3,7 @@
 // state. Compiling calls no API, so a row here sees what the stack decides before any plan; what
 // Cloudflare makes of a plan and an apply is the live proofs' (tasks/alchemy-native-deploy.md).
 // cf dev's binding table (../cloudflare.config.ts) is held to the stack's here too.
+import { findProviderByType } from "alchemy/Provider";
 import { type CompiledStack, Stack } from "alchemy/Stack";
 import { inMemoryState } from "alchemy/State";
 import * as Effect from "effect/Effect";
@@ -29,8 +30,32 @@ test.for([
   const resource = { removal, mode: "live" };
   const resources = { DB: resource, OAUTH_KV: resource, ITX_KV: resource, FILES: resource };
   expect(deployed(await compile({ cloudflare }))).toMatchObject({
-    resources: { ...resources, Worker: resource, SandboxContainer: resource },
+    resources: {
+      ...resources,
+      Worker: resource,
+      "SandboxContainer-Containers": resource,
+      SandboxContainer: resource,
+    },
   });
+});
+
+test("each pinned image is a Container of the sandboxes' class, under the image's name", async () => {
+  const image = `registry.cloudflare.com/${account}/iterate-dev-image@sha256:${"0".repeat(64)}`;
+  const stack = await compile({ images: { "iterate-dev-image": image } });
+  expect(stack.resources["iterate-dev-image"]?.Props).toMatchObject({
+    schedulingPolicy: "durable_object",
+    image,
+  });
+});
+
+// Alchemy's CLI loads every provider; the facet's engine names the ones the stack needs.
+test("the facet's engine has a provider for each resource the stack declares", async () => {
+  const stack = await compile({});
+  await Effect.runPromise(
+    Effect.forEach(Object.values(stack.resources), (resource) =>
+      findProviderByType(resource.Type, "live"),
+    ).pipe(Effect.provideContext(stack.services)),
+  );
 });
 
 test("each set secret binds as secret_text, its value from the host's variables", async () => {
@@ -91,11 +116,13 @@ function compile({
   config = {},
   stage = "acme-os",
   credentialsAccount = account,
+  images = {},
 }: {
   cloudflare?: Partial<NonNullable<IterateConfigInput["cloudflare"]>>;
   config?: Partial<IterateConfigInput>;
   stage?: string;
   credentialsAccount?: string;
+  images?: Record<string, string>;
 }) {
   const deployment = deploymentOf({
     cloudflare: {
@@ -118,7 +145,7 @@ function compile({
         providers: cloudflareProviders("a-fake-token", credentialsAccount),
         state: inMemoryState(),
       },
-      iterateStack({ deployment, release, images: {} }),
+      iterateStack({ deployment, release, images }),
     ).pipe(Effect.scoped, Effect.provide(hostLayer(stage, { ITERATE, ...secrets }))),
   );
 }

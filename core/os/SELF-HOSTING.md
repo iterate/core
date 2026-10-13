@@ -148,7 +148,8 @@ signs everyone out. Keep `core/os/.secrets`, or your secrets manager's copy: it 
 ## What the deploy does
 
 `pnpm run deploy` runs `scripts/build.ts` (the generated modules, then Vite's build of the Worker
-into `.cloudflare/output/`), then `alchemy deploy` over `alchemy.run.ts`:
+into `.cloudflare/output/`), then `alchemy deploy` over `alchemy.run.ts`. Alchemy's CLI needs Node
+24.11.1 or newer:
 
 1. It parses the config as the Worker will: a malformed field fails the deploy, naming itself, and
    a key the schema does not name is warned about and left out.
@@ -157,9 +158,8 @@ into `.cloudflare/output/`), then `alchemy deploy` over `alchemy.run.ts`:
 3. Alchemy compares the declaration with the state, prints each resource's action (create, update,
    replace, delete or noop), and asks. `pnpm alchemy plan` stops here.
 4. It applies: the D1 `<prefix>-db`, migrated before the Worker that binds it uploads; the KV
-   namespaces, by title; the R2 bucket `<prefix>-files`; the sandboxes' container application
-   `<worker>-sandbox`; and the Worker with its Durable Objects, routes and bindings. It prints the
-   Worker's URL.
+   namespaces, by title; the R2 bucket `<prefix>-files`; the sandboxes' container application; and
+   the Worker with its Durable Objects, routes and bindings. It prints the Worker's URL.
 5. Each field the schema marks secret becomes a Worker secret named by its path
    (`ITERATE__INTEGRATIONS__GITHUB__OAUTH_CLIENT_SECRET`), with the config's value; the rest
    becomes the plain var `ITERATE`, which the dashboard shows. The Worker merges them back. No value

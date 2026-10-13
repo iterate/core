@@ -106,6 +106,7 @@ export const cloudflareProviders = (apiToken: string, accountId: string) =>
     Cloudflare.R2.BucketProvider(),
     Cloudflare.Workers.WorkerProvider(),
     Cloudflare.Containers.ContainerProvider(),
+    Cloudflare.Containers.DurableObjectApplicationProvider(),
   ).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
@@ -187,8 +188,9 @@ export const stageRelease = Effect.fn("alchemy.stageRelease")(function* (
 });
 
 /** The Docker service the Container provider takes, with no Docker behind it: a Worker cannot spawn
- *  the CLI, and the provider calls it only for an application with an image of its own, which the
- *  sandboxes' lacks (./stack.ts). A member that is called dies, naming itself. */
+ *  the CLI, and the provider calls it only to build or copy an image. The sandboxes' images are
+ *  references into the account's registry, deployed as they are (./stack.ts). A member that is
+ *  called dies, naming itself. */
 const noDocker = Layer.succeed(Docker)(
   new Proxy(
     {},

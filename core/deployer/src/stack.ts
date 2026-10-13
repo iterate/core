@@ -126,16 +126,21 @@ export const iterateStack = ({ deployment: { config, vars }, release, images }: 
         BROWSER_SESSION: Cloudflare.DurableObject("BROWSER_SESSION", {
           className: "BrowserSession",
         }),
-        // The sandboxes' containers: an application named after the Worker, with no image of its
-        // own and the pinned images in the Worker version (the patch's `images`). The Worker never
-        // reads the binding: the sandbox facet mints from `ctx.exports.SandboxContainer`.
-        SANDBOX_CONTAINER: Cloudflare.Container("SandboxContainer", {
-          className: "SandboxContainer",
-          name: `${names.worker}-sandbox`,
-          schedulingPolicy: "durable_object",
-          images: Object.fromEntries(
-            Object.entries(images).map(([name, reference]) => [name, { reference }]),
-          ),
+        // The sandboxes' class and its containers: an imageless Container gives the class its
+        // `ctx.container` whatever is pinned, and each pinned image is a Container of its own, which
+        // `ctx.container.images` holds under the image's name (core/os/src/sandbox/container.ts
+        // picks one at a start). The imageless one is `SandboxContainer`, the id Alchemy's state
+        // holds a deployment's application under since before 2.0.0-beta.83: under it, a deploy
+        // updates that row in place (alchemy's ContainerProvider.ts `diffDurableObjectContainer`);
+        // under another, the row's delete would take the application the class adopted. The Worker
+        // never reads the binding: the sandbox facet mints from `ctx.exports.SandboxContainer`.
+        SANDBOX_CONTAINER: Cloudflare.DurableObject("SandboxContainer", {
+          containers: [
+            Cloudflare.Container("SandboxContainer", { schedulingPolicy: "durable_object" }),
+            ...Object.entries(images).map(([name, image]) =>
+              Cloudflare.Container(name, { schedulingPolicy: "durable_object", image }),
+            ),
+          ],
         }),
         DB: db,
         OAUTH_KV: oauthKv,
