@@ -1131,7 +1131,7 @@ export type DeploymentRunInput = {
  *  "events.iterate.com/deployment/run-settled", payload: { requestOffset }, afterOffset:
  *  requestOffset })` follows. It says how the run ended: `succeeded` (with the Worker's `url` after
  *  a deploy), `refused` (an expected outcome: the request opened no run, or the release, the
- *  secret, the config or the token's reach refused it), `failed` (any other error, Cloudflare's
+ *  config or the token's reach refused it), `failed` (any other error, Cloudflare's
  *  answers among them: `error` names each by its tag; run it again) or `unavailable` (the
  *  attempt's own deadline, or the platform failed the facet's own calls; run it again), and
  *  `error` says why, with every secret value masked. If anything goes wrong, the stack is run

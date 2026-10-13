@@ -60,8 +60,8 @@ export const iterateStack = ({ deployment: { config, vars }, release, images }: 
     const telemetry = cloudflare.telemetry;
     const warehouse = telemetry && { logs: ["telemetry-logs"], traces: ["telemetry-traces"] };
 
-    // The control plane, migrated before the Worker that binds it uploads. Its history is
-    // __alchemy_migrations; wrangler's d1_migrations converts once (alchemy's D1/Database.ts).
+    // The control plane, migrated before the Worker that binds it uploads; its history is Alchemy's
+    // __alchemy_migrations table.
     const db = yield* Cloudflare.D1.Database("DB", {
       name: names.db,
       migrations: `${release.dir}/migrations`,
@@ -129,11 +129,8 @@ export const iterateStack = ({ deployment: { config, vars }, release, images }: 
         // The sandboxes' class and its containers: an imageless Container gives the class its
         // `ctx.container` whatever is pinned, and each pinned image is a Container of its own, which
         // `ctx.container.images` holds under the image's name (core/os/src/sandbox/container.ts
-        // picks one at a start). The imageless one is `SandboxContainer`, the id Alchemy's state
-        // holds a deployment's application under since before 2.0.0-beta.83: under it, a deploy
-        // updates that row in place (alchemy's ContainerProvider.ts `diffDurableObjectContainer`);
-        // under another, the row's delete would take the application the class adopted. The Worker
-        // never reads the binding: the sandbox facet mints from `ctx.exports.SandboxContainer`.
+        // picks one at a start). The Worker never reads the binding: the sandbox facet mints from
+        // `ctx.exports.SandboxContainer`.
         SANDBOX_CONTAINER: Cloudflare.DurableObject("SandboxContainer", {
           containers: [
             Cloudflare.Container("SandboxContainer", { schedulingPolicy: "durable_object" }),

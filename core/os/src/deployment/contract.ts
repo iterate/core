@@ -1,6 +1,6 @@
 // src/deployment/contract.ts — A DEPLOYMENT: one deployment of core/os on Cloudflare, a domain object
 // on the context at any path of a project (`/deployments/<worker>` by convention: the path's last
-// segment is the Worker's name, Alchemy's stage and the name of its secret). Its facts live on that
+// segment is the Worker's name and Alchemy's stage). Its facts live on that
 // path's log, and THIS FILE is the only place they are spelled: the entity lifecycle every entity
 // shares (src/project/entity-lifecycle.ts), and THE RUN, a saga (core/lib README, "A multi-step
 // run"): the request, each attempt, the steps of each attempt, and the one settlement.
@@ -73,7 +73,7 @@ export const DeploymentRunSettled = z.object({
   requestOffset: Offset,
   /** How the run ended (docs/engineering-invariants.md, "Failures and retries"): `refused` is an
    *  expected outcome (the request opened no run, the deployment's deletion was asked, or the
-   *  release, the config, the secret or the token's reach refused it); `failed` is any other
+   *  release, the config or the token's reach refused it); `failed` is any other
    *  error, our own defect or an answer of Cloudflare's, which `error` names by its tag, or
    *  attempts that kept ending before they settled the run: run it again; `unavailable` is the
    *  platform's failure: run it again too. */

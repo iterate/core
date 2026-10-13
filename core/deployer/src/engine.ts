@@ -1,4 +1,4 @@
-// alchemy/engine.ts — ALCHEMY'S ENGINE INSIDE A DURABLE OBJECT, and nothing of iterate. Alchemy's own
+// engine.ts — ALCHEMY'S ENGINE INSIDE A DURABLE OBJECT, and nothing of iterate. Alchemy's own
 // deploy() and destroy() load Node services, a file logger and profile stores that workerd cannot,
 // and Cloudflare.providers() wires Docker and profile credentials. So a host composes the engine:
 // `runStack` over its `Stack(...)`, `hostLayer`, `cloudflareProviders` over one API token,

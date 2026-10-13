@@ -43,19 +43,6 @@ variable already in the environment keeps its value. Each command acts on one st
 for one deployment, which must be the Worker's name (`cloudflare.workerName`, else
 `resourcePrefix`): `ALCHEMY_STAGE` in `.secrets` names it, or `--stage <worker>`.
 
-A deployment last deployed from iterate/core before 2026-10-05 still has empty Durable Object
-namespaces for eight old classes: `AccountDurableObject`, `EmailDurableObject`,
-`InstanceDurableObject`, `OrganizationDurableObject`, `ProjectDurableObject`, `RepoDurableObject`,
-`SecretDurableObject` and `WorkspaceDurableObject`. Cloudflare refuses a deploy that drops them
-without a tombstone. Deploy once from the last commit that has their tombstones, which deletes
-them, then deploy the latest:
-
-```sh
-git checkout "$(git log -1 --format=%H -S RETIRED_FACET_CLASSES -- core/os/cloudflare.config.ts)~1"
-pnpm install && pnpm run deploy
-git checkout main && pnpm install && pnpm run deploy
-```
-
 ### The API token
 
 One token, the config's `cloudflare.apiToken` (`ITERATE__CLOUDFLARE__API_TOKEN` in `.secrets`): the
@@ -330,9 +317,10 @@ did not make it: delete its repos, then the namespace (in the dashboard: Storage
 Artifacts).
 
 With `cloudflare.protectData: true`, a destroy deletes nothing: Alchemy forgets the resources, which
-keep serving and keep their data, and the next deploy takes them back (`src/iterate-config.ts`
-says how). A destroy reads each resource's removal policy from the state, which only a deploy
-writes: to delete a protected deployment, deploy it once with `protectData` off, then destroy it.
+keep serving and keep their data, and a later deploy under the same names refuses what exists
+(`src/iterate-config.ts`). A destroy reads each resource's removal policy from the state, which only
+a deploy writes: to delete a protected deployment, deploy it once with `protectData` off, then
+destroy it.
 
 ## Deploy from an iterate project
 

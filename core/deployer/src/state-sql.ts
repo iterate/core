@@ -1,4 +1,4 @@
-// alchemy/state-sql.ts — ALCHEMY'S STATE IN A DURABLE OBJECT'S SQLITE: the `State` service over
+// state-sql.ts — ALCHEMY'S STATE IN A DURABLE OBJECT'S SQLITE: the `State` service over
 // `ctx.storage.sql`, so a stack's state lives in the Durable Object that runs it (./engine.ts).
 // Like the engine, it imports nothing of iterate. Two tables, as Alchemy's own PostgresState keeps
 // them: one row per resource and one per stack output, each the JSON of Alchemy's state encoding.

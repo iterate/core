@@ -450,8 +450,8 @@ async function routeRequest(
   if (url.origin !== platformOrigin)
     return new Response("Unknown platform origin", { status: 421 });
 
-  // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a smoke
-  // waits for (`wrangler deploy` prints it) — and the origin this deployment answers on.
+  // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a deploy's
+  // readiness check waits for — and the origin this deployment answers on.
   if (url.pathname === "/version") return new Response(`${deployId} ${platformOrigin}\n`);
   // An admin's sign-in through another issuer (admin-sign-in.ts), prd's for a preview: its start,
   // that issuer's answer, and this deployment's client metadata document, which the issuer

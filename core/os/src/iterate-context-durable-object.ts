@@ -238,8 +238,9 @@ export interface Env extends IterateConfigEnv {
    *  `itx.email` (context/built-ins.ts). Simulated by wrangler dev and the test configs; absent where
    *  a deployment has no mailbox. */
   EMAIL?: SendEmail;
-  /** This Worker's own name, which the runtime does not tell it: every config names it
-   *  (scripts/generate-wrangler-config.ts), and every telemetry row and data point carries it. */
+  /** This Worker's own name, which the runtime does not tell it: every deployment binds it
+   *  (core/deployer/src/stack.ts) and the test configs set it, and every telemetry row and data
+   *  point carries it. */
   WORKER_NAME: string;
   /** The Basin Pipelines stream that fills its account's `events` table (docs/telemetry.md), which
    *  the platform hook sends every durable event to; bound only where the account has a telemetry
