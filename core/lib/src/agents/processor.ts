@@ -50,7 +50,14 @@ import {
   stableCapabilityTree,
 } from "./render.ts";
 import { requestCostUsd } from "./pricing.ts";
-import { postResponses, raceAbort } from "./responses-keys.ts";
+import {
+  type KeyFailure,
+  postResponses,
+  raceAbort,
+  type StreamAttempt,
+  wellFormedBody,
+  withStreamAttempt,
+} from "./responses-keys.ts";
 
 /** THE AI GATEWAY the agent's model calls go through — `default`, the gateway Cloudflare creates on
  *  an account's first authenticated request; unified billing pays the provider, no key anywhere. A
@@ -209,10 +216,6 @@ function requestStamp(createdAt: string): string {
 const FRAME_WINDOW_MS = 150;
 /** A window whose text grew past this lands early rather than as one oversized append. */
 const FRAME_WINDOW_MAX_CHARS = 64_000;
-/** The idle watchdog: a stream that carries nothing for this long fails the attempt, so a stalled
- *  provider never wedges a turn until its expiry. Short, because a person may be waiting on the
- *  line: a low-effort reasoning model streams within seconds, and a stall is retried at once. */
-const STREAM_IDLE_BUDGET_MS = 25_000;
 
 /** The context windows of the models this loop names; a conservative floor for the rest. OpenAI's
  *  figures are the operating window (where pricing doubles), not the documented one. */
@@ -310,11 +313,12 @@ const FunctionCallItem = z.looseObject({
 /** `run`'s arguments, when they are the JSON the tool declares. */
 const RunArguments = z.looseObject({ status: z.string().catch(""), script: z.string() });
 
-/** Read an SSE body frame by frame, handing each `data:` JSON to `onEvent`; the reader is cancelled
- *  when `signal` aborts, so nothing lands after the caller has settled. */
+/** Read an SSE body frame by frame, handing each `data:` JSON to `onEvent`. Every chunk, a keepalive
+ *  comment included, is the attempt's sign of life; the reader is cancelled when the attempt's
+ *  signal aborts, so nothing lands after the caller has settled. */
 async function drainSse(
   body: ReadableStream<Uint8Array>,
-  signal: AbortSignal,
+  { signal, alive }: StreamAttempt,
   onEvent: (event: unknown) => void,
 ): Promise<void> {
   const reader = body.getReader();
@@ -341,8 +345,14 @@ async function drainSse(
   };
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      // workerd's own streams reject a read their cancellation interrupts: the abort's reason is the
+      // failure, not the cancellation
+      const { done, value } = await reader.read().catch((error: unknown) => {
+        if (!signal.aborted) throw error;
+        throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+      });
       if (done) break;
+      alive();
       buffered += decoder.decode(value, { stream: true });
       const frames = buffered.split(/\r?\n\r?\n/);
       buffered = frames.pop() || "";
@@ -372,6 +382,8 @@ type StreamAnswer = {
   providerItems: unknown[];
   usage?: LlmUsage;
 };
+/** What a turn's requests repaired and which keys failed, for its settlement. */
+type RequestNotes = { repairedStrings: number; failedKeys: Array<Omit<KeyFailure, "keys">> };
 type AgentArgs = ProcessEventArgs<AgentState, AgentEvent, AgentEmitted>;
 /** What the loop appends: each type the contract emits, its payload as the catalog spells it. */
 type AgentEmitted = EmittedEventInput<typeof AgentContract>;
@@ -498,6 +510,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               reasoningEffort: patch.llm?.reasoningEffort || state.config.llm.reasoningEffort,
               apiKeys: patch.llm?.apiKeys || state.config.llm.apiKeys,
               serviceTier: patch.llm?.serviceTier || state.config.llm.serviceTier,
+              streamIdleTimeoutMs:
+                patch.llm?.streamIdleTimeoutMs ?? state.config.llm.streamIdleTimeoutMs,
             },
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
@@ -1552,15 +1566,12 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   ): Promise<void> {
     const startedAt = this.#now();
     const { controller } = inFlight;
-    // Two clocks fail a stalled stream, never wedge it: the request's own expiry, and the idle
-    // budget since the last provider event.
+    // Two clocks fail a stalled stream, never wedge it: the request's own expiry here, which ends
+    // the turn, and each answer's idle budget (`llm.streamIdleTimeoutMs`, `#stream`), which ends
+    // that answer and hands the request to the next key.
     const expiry = setTimeout(
       () => controller.abort(new Error("the model did not finish before the request expired")),
       Math.max(1_000, open.expiresAt - startedAt),
-    );
-    let idle = setTimeout(
-      () => controller.abort(new Error("the model stream stalled")),
-      STREAM_IDLE_BUDGET_MS,
     );
     try {
       const { path } = await raceAbort(controller.signal, this.#identity());
@@ -1578,11 +1589,19 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       let thinkingDelta = "";
       let windowOpen = false;
       let sequence = 0;
+      let attempt = -1;
+      const notes: RequestNotes = { repairedStrings: 0, failedKeys: [] };
       let windows = Promise.resolve();
       const closeWindow = () => {
         windowOpen = false;
         if (!responseDelta && !thinkingDelta) return;
-        const payload = { llmRequestOffset, responseDelta, thinkingDelta, sequence: sequence++ };
+        const payload = {
+          llmRequestOffset,
+          responseDelta,
+          thinkingDelta,
+          sequence: sequence++,
+          ...(attempt > 0 && { attempt }),
+        };
         responseDelta = "";
         thinkingDelta = "";
         windows = windows
@@ -1615,6 +1634,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: {
               requestOffset: llmRequestOffset,
               durationMs: this.#now() - startedAt,
+              ...(notes.repairedStrings > 0 && { repairedStrings: notes.repairedStrings }),
+              ...(notes.failedKeys.length > 0 && { failedKeys: notes.failedKeys }),
               result,
             },
           },
@@ -1622,14 +1643,16 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         );
       };
       let answer: StreamAnswer;
+      // Each answer starts over: what a failed one streamed is neither kept nor shown with the next.
+      const onAnswer = () => {
+        attempt += 1;
+        inFlight.partialText = "";
+        responseDelta = "";
+        thinkingDelta = "";
+      };
       const onDelta = (text: string, thinking: string) => {
         if (controller.signal.aborted) return;
-        clearTimeout(idle);
-        idle = setTimeout(
-          () => controller.abort(new Error("the model stream stalled")),
-          STREAM_IDLE_BUDGET_MS,
-        );
-        if (!text && !thinking) return; // a bookkeeping event: alive, nothing to show
+        if (!text && !thinking) return;
         // The partial accrues BEFORE buffering: an interrupt keeps the whole streamed text even
         // when its last window never landed.
         inFlight.partialText += text;
@@ -1648,6 +1671,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           llm: state.config.llm,
           cacheKey: promptCacheKey(path),
           signal: controller.signal,
+          notes,
+          onAnswer,
           onDelta,
         };
         try {
@@ -1723,7 +1748,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       );
     } finally {
       clearTimeout(expiry);
-      clearTimeout(idle);
       this.#llmRequestsInFlight.delete(open.requestedAtOffset);
     }
   }
@@ -1925,33 +1949,38 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     }
   }
 
-  /** One STREAMED Responses API call with the one tool: every provider event reaches `onDelta`
-   *  (text and thinking it adds, both "" for any other event, which keeps the idle watchdog fed
-   *  while a long script's arguments stream); the call answers once the stream ends with the
-   *  response's own items (stored for exact replay), its prose, its first `run` call, and the
-   *  usage. With no `apiKeys`, an `openai/…` Workers AI partner model through `itx.ai` and the
-   *  account's AI Gateway: Cloudflare's billing, no key, and the gateway's spend limits partition on
-   *  the metadata (project, stream path). With `apiKeys`, the project's own credentials, straight at
-   *  api.openai.com through the isolate's `fetch`, on the agent's WebSocket when one is open
-   *  (responses-keys.ts). `store: false` with the encrypted reasoning included: nothing lives on the provider's side,
-   *  and the reasoning comes back on the next request (render.ts). */
+  /** One STREAMED Responses API call with the one tool, read by `readAnswer`. With no `apiKeys`, an
+   *  `openai/…` Workers AI partner model through `itx.ai` and the account's AI Gateway: Cloudflare's
+   *  billing, no key, and the gateway's spend limits partition on the metadata (project, stream
+   *  path). With `apiKeys`, the project's own credentials, straight at api.openai.com through the
+   *  isolate's `fetch`, on the agent's WebSocket when one is open, each key in turn until one's
+   *  answer completes (responses-keys.ts). Either way each answer has `llm.streamIdleTimeoutMs` of
+   *  silence before it fails, measured from its request. `store: false` with the encrypted
+   *  reasoning included: nothing lives on the provider's side, and the reasoning comes back on the
+   *  next request (render.ts). */
   async #stream({
     model,
     input,
     cacheKey,
     signal,
+    notes,
+    onAnswer,
     onDelta,
     toolChoice = "auto",
     llm,
   }: {
     model: string;
     /** The agent's `llm` config: its reasoning effort, its keys (empty goes through the AI
-     *  Gateway) and its service tier. */
+     *  Gateway), its service tier and its idle budget. */
     llm: AgentState["config"]["llm"];
     input: InputItem[];
     /** The provider's prompt-cache routing key (promptCacheKey). */
     cacheKey: string;
     signal: AbortSignal;
+    /** Where a turn's request records what it repaired and which keys failed. */
+    notes?: RequestNotes;
+    /** An answer begins: a later one replaces what an earlier, failed one streamed. */
+    onAnswer?(): void;
     onDelta(text: string, thinking: string): void;
     toolChoice?: "auto" | "none";
   }): Promise<StreamAnswer> {
@@ -1959,8 +1988,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       throw new Error(
         `model ${model}: the agent speaks OpenAI's Responses API only; configure an OpenAI model`,
       );
-    using itx = this.deps.getItx();
-    const body = {
+    const { body, repaired } = wellFormedBody({
       input,
       tools: [RUN_TOOL],
       tool_choice: toolChoice,
@@ -1971,15 +1999,32 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       prompt_cache_key: cacheKey,
       reasoning: { effort: llm.reasoningEffort, summary: "auto" },
       service_tier: llm.serviceTier, // unset sends none: JSON drops it
-    };
-    let response: Response;
+    });
+    // an expected repair of the input, not a fault: counted, and nothing of the text is logged
+    if (repaired > 0) console.info({ event: "agent.request-strings-repaired", strings: repaired });
+    if (notes) notes.repairedStrings = repaired;
+    const read = (response: Response, attempt: StreamAttempt) =>
+      readAnswer(model, response, attempt, { onAnswer, onDelta });
     if (llm.apiKeys.length > 0) {
       const send = this.deps.fetch || ((request: Request) => fetch(request));
-      response = await postResponses(send, { model, ...body }, llm.apiKeys, signal);
-    } else {
-      const { projectId, path } = await this.#identity();
-      const raw: unknown = await raceAbort(
+      return postResponses(
+        send,
+        { model, ...body },
+        llm.apiKeys,
         signal,
+        llm.streamIdleTimeoutMs,
+        read,
+        ({ keys, ...failure }) => {
+          console.warn({ event: "agent.api-key-failed", keys, ...failure });
+          notes?.failedKeys.push(failure);
+        },
+      );
+    }
+    const { projectId, path } = await this.#identity();
+    return withStreamAttempt(signal, llm.streamIdleTimeoutMs, async (attempt) => {
+      using itx = this.deps.getItx();
+      const raw: unknown = await raceAbort(
+        attempt.signal,
         itx.ai.run(
           // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a
           // partner model's name (`openai/…`) is not among them though the binding takes any model
@@ -1999,84 +2044,98 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       );
       if (!(raw instanceof Response))
         throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
-      response = raw;
-    }
-    if (!response.ok || !response.body)
-      throw new Error(
-        `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
-      );
-    let usage: LlmUsage | undefined;
-    let servedTier: string | undefined;
-    const done: OutputItem[] = [];
-    let output: OutputItem[] | undefined;
-    await drainSse(response.body, signal, (raw) => {
-      const event = ResponsesEvent.safeParse(raw);
-      if (!event.success) return;
-      const { type, delta, item } = event.data;
-      if (type === "response.output_text.delta") onDelta(delta || "", "");
-      else if (type === "response.reasoning_summary_text.delta") onDelta("", delta || "");
-      else onDelta("", "");
-      if (type === "response.output_item.done" && item) done.push(item);
-      else if (type === "response.completed" || type === "response.incomplete") {
-        const finished = z
-          .looseObject({
-            response: z.looseObject({
-              usage: z.unknown(),
-              output: z.array(OutputItem).optional(),
-              service_tier: z.string().optional().catch(undefined),
-            }),
-          })
-          .safeParse(raw);
-        if (finished.success) {
-          usage = normalizeUsage(finished.data.response.usage) ?? usage;
-          output = finished.data.response.output;
-          servedTier = finished.data.response.service_tier;
-        }
-      } else if (type === "response.failed" || type === "error") {
-        const failure = z
-          .looseObject({
-            error: z.looseObject({ message: z.string() }).optional(),
-            response: z
-              .looseObject({ error: z.looseObject({ message: z.string() }).optional() })
-              .optional(),
-          })
-          .safeParse(raw);
-        throw new Error(
-          `openai: ${failure.success ? failure.data.error?.message || failure.data.response?.error?.message || type : type}`,
-        );
-      }
+      return read(raw, attempt);
     });
-    const items = (output && output.length > 0 ? output : done).filter(
-      (item) =>
-        item.type === "reasoning" || item.type === "message" || item.type === "function_call",
-    );
-    const prose = items
-      .map((item) => (item.type === "message" ? messageText(item) : ""))
-      .join("")
-      .trim();
-    const first = items.find((item) => item.type === "function_call");
-    let call: StreamAnswer["call"];
-    if (first) {
-      const { call_id: callId, arguments: args } = FunctionCallItem.parse(first);
-      let run = { status: "", script: args };
-      try {
-        run = RunArguments.parse(JSON.parse(args));
-      } catch {
-        // arguments that are not `run`'s JSON are the script itself
-      }
-      call = { callId, status: run.status, script: run.script };
-    }
-    // priced at the standard tier's rates (pricing.ts): a request another tier served has no price
-    const standard = !servedTier || servedTier === "default" || servedTier === "auto";
-    const costUsd = usage && standard ? requestCostUsd(model, usage) : undefined;
-    // An empty answer is the model choosing to say nothing (a chief of staff's input that needs no
-    // reply): the turn ends quietly, never a failure that would retry and pause the agent.
-    return {
-      text: answerText(prose, call),
-      prose,
-      call,
-      providerItems: items,
-      usage: usage && { ...usage, costUsd },
-    };
   }
+}
+
+/** ONE ANSWER read to its end: the text and thinking it adds reach `onDelta` as they stream; the
+ *  answer is the response's own items (stored for exact replay), its prose, its first `run` call,
+ *  and the usage. An answer that is not 2xx, a `response.failed` or `error` event, or a stream that
+ *  ends before the response does fails it. */
+async function readAnswer(
+  model: string,
+  response: Response,
+  attempt: StreamAttempt,
+  { onAnswer, onDelta }: { onAnswer?(): void; onDelta(text: string, thinking: string): void },
+): Promise<StreamAnswer> {
+  if (!response.ok || !response.body)
+    throw new Error(
+      `openai/${model} ${String(response.status)}: ${(await raceAbort(attempt.signal, response.text())).slice(0, 400)}`,
+    );
+  onAnswer?.();
+  let usage: LlmUsage | undefined;
+  let servedTier: string | undefined;
+  let finished = false;
+  const done: OutputItem[] = [];
+  let output: OutputItem[] | undefined;
+  await drainSse(response.body, attempt, (raw) => {
+    const event = ResponsesEvent.safeParse(raw);
+    if (!event.success) return;
+    const { type, delta, item } = event.data;
+    if (type === "response.output_text.delta") onDelta(delta || "", "");
+    else if (type === "response.reasoning_summary_text.delta") onDelta("", delta || "");
+    else if (type === "response.output_item.done" && item) done.push(item);
+    else if (type === "response.completed" || type === "response.incomplete") {
+      finished = true;
+      const ended = z
+        .looseObject({
+          response: z.looseObject({
+            usage: z.unknown(),
+            output: z.array(OutputItem).optional(),
+            service_tier: z.string().optional().catch(undefined),
+          }),
+        })
+        .safeParse(raw);
+      if (ended.success) {
+        usage = normalizeUsage(ended.data.response.usage) ?? usage;
+        output = ended.data.response.output;
+        servedTier = ended.data.response.service_tier;
+      }
+    } else if (type === "response.failed" || type === "error") {
+      const failure = z
+        .looseObject({
+          error: z.looseObject({ message: z.string() }).optional(),
+          response: z
+            .looseObject({ error: z.looseObject({ message: z.string() }).optional() })
+            .optional(),
+        })
+        .safeParse(raw);
+      throw new Error(
+        `openai: ${failure.success ? failure.data.error?.message || failure.data.response?.error?.message || type : type}`,
+      );
+    }
+  });
+  if (!finished) throw new Error("openai: the stream ended before the response did");
+  const items = (output && output.length > 0 ? output : done).filter(
+    (item) => item.type === "reasoning" || item.type === "message" || item.type === "function_call",
+  );
+  const prose = items
+    .map((item) => (item.type === "message" ? messageText(item) : ""))
+    .join("")
+    .trim();
+  const first = items.find((item) => item.type === "function_call");
+  let call: StreamAnswer["call"];
+  if (first) {
+    const { call_id: callId, arguments: args } = FunctionCallItem.parse(first);
+    let run = { status: "", script: args };
+    try {
+      run = RunArguments.parse(JSON.parse(args));
+    } catch {
+      // arguments that are not `run`'s JSON are the script itself
+    }
+    call = { callId, status: run.status, script: run.script };
+  }
+  // priced at the standard tier's rates (pricing.ts): a request another tier served has no price
+  const standard = !servedTier || servedTier === "default" || servedTier === "auto";
+  const costUsd = usage && standard ? requestCostUsd(model, usage) : undefined;
+  // An empty answer is the model choosing to say nothing (a chief of staff's input that needs no
+  // reply): the turn ends quietly, never a failure that would retry and pause the agent.
+  return {
+    text: answerText(prose, call),
+    prose,
+    call,
+    providerItems: items,
+    usage: usage && { ...usage, costUsd },
+  };
 }

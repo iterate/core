@@ -54,67 +54,121 @@ export function bodyForKeys(body: Record<string, unknown>): Record<string, unkno
   );
 }
 
-/** One Responses API request, sent with each key in turn until one answers 2xx. A key that answers
- *  anything else, or throws (its secret is missing), is logged by its position and skipped. When
- *  none answers 2xx, the last failed answer comes back unread, so the caller reports what OpenAI
- *  said; a stack that only threw rethrows its last error. `signal` is the turn's: once it aborts, the request in
- * flight is abandoned and no later key is sent. `send` is the isolate's `fetch` (egress). */
-export async function postResponses(
+/** `body` as OpenAI's JSON parser takes it: every string well formed, so a lone UTF-16 surrogate
+ *  (half of an emoji that a `slice` cut) is sent as U+FFFD; and how many strings that changed.
+ *  JSON.stringify writes a lone surrogate as an escape OpenAI refuses as invalid JSON, so a single
+ *  one anywhere in the conversation fails every request. What is stored is unchanged. */
+export function wellFormedBody(body: Record<string, unknown>): {
+  body: Record<string, unknown>;
+  repaired: number;
+} {
+  let repaired = 0;
+  const json = JSON.stringify(body, (_field, value: unknown) => {
+    if (typeof value !== "string" || value.isWellFormed()) return value;
+    repaired += 1;
+    return value.toWellFormed();
+  });
+  return { body: JSON.parse(json), repaired };
+}
+
+/** A key whose answer failed: its position in the stack (from 1), the stack's size, and the error. */
+export type KeyFailure = { key: number; keys: number; error: string };
+
+/** ONE ATTEMPT at a streamed answer: a signal that aborts with the caller's (an interruption, the
+ *  expiry), or on its own once the provider has sent nothing for the idle budget, and `alive`, which
+ *  the reader calls on every chunk the provider sends. */
+export type StreamAttempt = { signal: AbortSignal; alive(): void };
+
+/** `run` as one attempt whose idle budget, `idleMs`, starts now: the request is sent inside it, so a
+ *  provider that never answers stalls it too. A stall aborts the attempt alone, never `signal`. */
+export async function withStreamAttempt<T>(
+  signal: AbortSignal,
+  idleMs: number,
+  run: (attempt: StreamAttempt) => Promise<T>,
+): Promise<T> {
+  const idle = new AbortController();
+  const stall = () =>
+    idle.abort(new Error(`the model stream stalled: nothing for ${String(idleMs / 1000)} s`));
+  let timer = setTimeout(stall, idleMs);
+  try {
+    return await run({
+      signal: AbortSignal.any([signal, idle.signal]),
+      alive() {
+        clearTimeout(timer);
+        timer = setTimeout(stall, idleMs);
+      },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** One Responses API request, sent with each key in turn until one's answer is read to its end by
+ *  `read`. An attempt that fails for any reason but `signal` — an answer that is not 2xx (`read`
+ *  says so), a throw (its secret is missing, a dropped connection), an error event, or a stream that
+ *  sends nothing for `idleMs` — is reported to `onKeyFailed` (its position and the error, never the
+ *  key), and the next key gets the same request; `read` starts afresh, so nothing
+ *  of the failed answer is kept. When none succeeds, the last failure is thrown. `signal` is the
+ *  turn's: once it aborts, the attempt in flight is abandoned and no later key is sent. `send` is
+ *  the isolate's `fetch` (egress). */
+export async function postResponses<T>(
   send: (request: Request) => Promise<Response>,
   body: Record<string, unknown>,
   apiKeys: readonly string[],
   signal: AbortSignal,
-  log: (message: string) => void = console.warn,
-): Promise<Response> {
+  idleMs: number,
+  read: (response: Response, attempt: StreamAttempt) => Promise<T>,
+  onKeyFailed: (failure: KeyFailure) => void = (failure) =>
+    console.warn({ event: "agent.api-key-failed", ...failure }),
+): Promise<T> {
   const forKeys = bodyForKeys(body);
   const json = JSON.stringify(forKeys);
   // A plan's token reads a cached prefix only within a session: without one, an agent's turns read
   // none of the turn before. An API key ignores it. The session also names the agent's socket.
   const session = typeof body.prompt_cache_key === "string" ? body.prompt_cache_key : undefined;
-  let failure: Response | undefined;
-  let thrown: unknown;
+  let failure: unknown = new Error("llm.apiKeys is empty");
   for (const [position, apiKey] of apiKeys.entries()) {
-    const label = `API key ${String(position + 1)} of ${String(apiKeys.length)}`;
     // An abort ends the call: no later key is tried for a turn that was cancelled or expired.
     if (signal.aborted) throw signal.reason || new Error("aborted");
     try {
-      // anything the socket cannot do, this key's request does over HTTP
-      const streamed =
-        body.stream === true && session
-          ? await viaSocket(send, apiKey, session, forKeys, signal).catch((error: unknown) => {
-              if (signal.aborted) throw error;
-              return undefined;
-            })
-          : undefined;
-      if (streamed) return streamed;
-      const response = await raceAbort(
-        signal,
-        send(
-          new Request(RESPONSES_URL, {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${apiKey}`,
-              "content-type": "application/json",
-              ...(typeof body.prompt_cache_key === "string" && {
-                session_id: body.prompt_cache_key,
+      return await withStreamAttempt(signal, idleMs, async (attempt) => {
+        // anything the socket cannot do, this key's request does over HTTP
+        const streamed =
+          body.stream === true && session
+            ? await viaSocket(send, apiKey, session, forKeys, attempt.signal).catch(
+                (error: unknown) => {
+                  if (attempt.signal.aborted) throw error;
+                  return undefined;
+                },
+              )
+            : undefined;
+        const response =
+          streamed ||
+          (await raceAbort(
+            attempt.signal,
+            send(
+              new Request(RESPONSES_URL, {
+                method: "POST",
+                headers: {
+                  authorization: `Bearer ${apiKey}`,
+                  "content-type": "application/json",
+                  ...(typeof body.prompt_cache_key === "string" && {
+                    session_id: body.prompt_cache_key,
+                  }),
+                },
+                body: json,
               }),
-            },
-            body: json,
-          }),
-        ),
-      );
-      if (response.ok) return response;
-      log(`[agent] ${label} answered ${String(response.status)}`);
-      await failure?.body?.cancel();
-      failure = response;
+            ),
+          ));
+        return await read(response, attempt);
+      });
     } catch (error) {
       if (signal.aborted) throw error;
-      log(`[agent] ${label} threw: ${String(error)}`);
-      thrown = error;
+      onKeyFailed({ key: position + 1, keys: apiKeys.length, error: String(error).slice(0, 300) });
+      failure = error;
     }
   }
-  if (failure) return failure;
-  throw thrown ?? new Error("llm.apiKeys is empty");
+  throw failure;
 }
 
 /** How long an agent's socket stays open after its last answer: the next step of a reply finds it

@@ -74,7 +74,7 @@ const Sections = z.record(z.string(), z.string().nullable());
 export const AgentContract = defineProcessorContract({
   slug: "agent",
   // Bumping the version re-reduces every agent's log from offset 0 (stream/processor.ts).
-  version: "16",
+  version: "17",
   description:
     "An agent: a conversation on its own context, driven by a model that acts through one tool, run(script), against itx; each request's input extends the previous one, so the provider's prompt cache holds the conversation.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -117,6 +117,10 @@ export const AgentContract = defineProcessorContract({
             // about 1.5× as fast for a higher price, on an API key and a plan's token alike (a
             // plan's token still answers "default").
             serviceTier: z.enum(["auto", "default", "flex", "priority"]).optional(),
+            // How long a model's answer may send nothing before that attempt fails and the next
+            // API key, if any, gets the request (responses-keys.ts). Medium reasoning on a long
+            // conversation can think for 30 s without a byte (measured 2026-10-13).
+            streamIdleTimeoutMs: z.number().int().positive().default(60_000),
           })
           .prefault({}),
         /** Consecutive self-triggered turns (script results, corrections) before the loop pauses. */
@@ -324,6 +328,7 @@ export const AgentContract = defineProcessorContract({
               reasoningEffort: z.string().min(1).optional(),
               apiKeys: z.array(z.string().min(1)).optional(),
               serviceTier: z.enum(["auto", "default", "flex", "priority"]).optional(),
+              streamIdleTimeoutMs: z.number().int().positive().optional(),
             })
             .optional(),
           maxAutonomousTurns: z.number().int().positive().optional(),
@@ -438,7 +443,7 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-response-frame": {
       description:
-        "EPHEMERAL, never stored: one coalescing window of the answer being written for the request it names — the text and the thinking it adds, which a feed appends to what it has shown. The settled event carries the durable text.",
+        "EPHEMERAL, never stored: one coalescing window of the answer being written for the request it names — the text and the thinking it adds, which a feed appends to what it has shown of the same attempt. The settled event carries the durable text.",
       ephemeral: true,
       payloadSchema: z.object({
         llmRequestOffset: z.number().int().positive(),
@@ -448,6 +453,10 @@ export const AgentContract = defineProcessorContract({
         thinkingDelta: z.string(),
         /** The window's ordinal within the response — a redelivered window is told from a new one. */
         sequence: z.number().int().nonnegative(),
+        /** Which answer to the request the window belongs to, from 0 (absent: 0). An answer that
+         *  failed part way is followed by the next key's, numbered one higher: a feed drops what it
+         *  showed of an earlier answer, and a late window of one. */
+        attempt: z.number().int().nonnegative().optional(),
       }),
     },
     "events.iterate.com/agent/llm-request-settled": {
@@ -456,6 +465,14 @@ export const AgentContract = defineProcessorContract({
       payloadSchema: z.object({
         requestOffset: z.number().int().positive(),
         durationMs: z.number().nonnegative().optional(),
+        /** How many strings of the request were sent repaired: a lone UTF-16 surrogate as U+FFFD
+         *  (responses-keys.ts `wellFormedBody`). The conversation keeps them as they were. */
+        repairedStrings: z.number().int().positive().optional(),
+        /** The API keys whose answer failed before this outcome, in the order they were tried: each
+         *  one's position in `llm.apiKeys` and its error. */
+        failedKeys: z
+          .array(z.object({ key: z.number().int().positive(), error: z.string() }))
+          .optional(),
         result: z.discriminatedUnion("status", [
           z.object({
             status: z.literal("succeeded"),

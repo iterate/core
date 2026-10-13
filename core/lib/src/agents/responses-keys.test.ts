@@ -2,9 +2,15 @@
 // when a request rides the agent's socket.
 
 import { expect, test } from "vitest";
-import { bodyForKeys, postResponses } from "./responses-keys.ts";
+import {
+  bodyForKeys,
+  postResponses,
+  type StreamAttempt,
+  wellFormedBody,
+} from "./responses-keys.ts";
 
 const live = new AbortController().signal;
+const IDLE_MS = 60_000;
 
 test("the body drops what a plan's token refuses, and the explicit cache breakpoint", () => {
   expect(
@@ -30,64 +36,101 @@ test("the body drops what a plan's token refuses, and the explicit cache breakpo
   });
 });
 
-test("the first key that answers 2xx serves the request, and the others are never sent", async () => {
+test("a lone UTF-16 surrogate anywhere in the body is sent as U+FFFD, and a whole emoji is kept", () => {
+  const { body, repaired } = wellFormedBody({
+    input: [
+      { role: "user", content: [{ type: "input_text", text: "cut mid-emoji \uD83C" }] },
+      { type: "function_call", name: "run", arguments: '{"script":"\uDF89 alone"}' },
+      { role: "user", content: [{ type: "input_text", text: "whole 🎉" }] },
+    ],
+  });
+  expect(body).toEqual({
+    input: [
+      { role: "user", content: [{ type: "input_text", text: "cut mid-emoji \uFFFD" }] },
+      { type: "function_call", name: "run", arguments: '{"script":"\uFFFD alone"}' },
+      { role: "user", content: [{ type: "input_text", text: "whole 🎉" }] },
+    ],
+  });
+  expect(repaired).toBe(2);
+  // what OpenAI refuses: JSON.stringify's escape of a lone surrogate
+  expect(JSON.stringify(body)).not.toMatch(/\\ud[89a-f]/i);
+});
+
+test("the first key whose answer is read to its end serves the request, and the others are never sent", async () => {
   const { send, seen } = egress(200);
-  const response = await postResponses(send, { model: "gpt-test" }, KEYS, live);
-  expect(response).toMatchObject({ status: 200 });
+  expect(await postResponses(send, { model: "gpt-test" }, KEYS, live, IDLE_MS, readText)).toBe(
+    "answer 200",
+  );
   expect(seen).toHaveLength(1);
   expect(seen[0]?.authorization).toBe(`Bearer ${KEYS[0]}`);
 });
 
 test("every key is sent the prompt-cache key as the session, which a plan's token caches under", async () => {
   const { send, seen } = egress(429, 200);
-  await postResponses(send, { prompt_cache_key: "/agents/a" }, KEYS, live, () => undefined);
+  await postResponses(
+    send,
+    { prompt_cache_key: "/agents/a" },
+    KEYS,
+    live,
+    IDLE_MS,
+    readText,
+    () => undefined,
+  );
   expect(seen.map((one) => one.session)).toEqual(["/agents/a", "/agents/a"]);
   const bare = egress(200);
-  await postResponses(bare.send, {}, KEYS, live);
+  await postResponses(bare.send, {}, KEYS, live, IDLE_MS, readText);
   expect(bare.seen[0]).toMatchObject({ session: null });
 });
 
 test("a key that answers an error, or throws, hands the same body to the next key", async () => {
   for (const first of [429, new Error("no such secret")]) {
     const { send, seen } = egress(first, 200);
-    const log: string[] = [];
-    const response = await postResponses(
+    const log: unknown[] = [];
+    const answer = await postResponses(
       send,
       { model: "gpt-test", temperature: 1 },
       KEYS,
       live,
+      IDLE_MS,
+      readText,
       (line) => log.push(line),
     );
-    expect(response).toMatchObject({ status: 200 });
+    expect(answer).toBe("answer 200");
     expect(seen.map((one) => one.authorization)).toEqual(KEYS.map((key) => `Bearer ${key}`));
     expect(seen[1]?.body).toEqual({ model: "gpt-test" });
-    expect(log).toEqual([expect.stringContaining("API key 1 of 2")]);
+    expect(log).toEqual([{ key: 1, keys: 2, error: expect.any(String) }]);
+    expect(JSON.stringify(log)).not.toContain("secrets/");
   }
 });
 
-test("when no key answers 2xx, the last failed answer comes back unread", async () => {
-  const { send } = egress(401, 503);
-  const response = await postResponses(send, { model: "gpt-test" }, KEYS, live, () => undefined);
-  expect(response).toMatchObject({ status: 503 });
-  expect(await response.text()).toBe("answer 503");
-});
-
-test("a stack that only throws rethrows, and an empty stack says so", async () => {
+test("when no key succeeds, the last failure is thrown, and an empty stack says so", async () => {
+  const quiet = () => undefined;
   await expect(
-    postResponses(egress(new Error("a"), new Error("b")).send, {}, KEYS, live, () => undefined),
+    postResponses(egress(401, 503).send, {}, KEYS, live, IDLE_MS, readText, quiet),
+  ).rejects.toThrow("503: answer 503");
+  await expect(
+    postResponses(
+      egress(new Error("a"), new Error("b")).send,
+      {},
+      KEYS,
+      live,
+      IDLE_MS,
+      readText,
+      quiet,
+    ),
   ).rejects.toThrow("b");
-  await expect(postResponses(egress().send, {}, [], live, () => undefined)).rejects.toThrow(
-    "llm.apiKeys is empty",
-  );
+  await expect(
+    postResponses(egress().send, {}, [], live, IDLE_MS, readText, quiet),
+  ).rejects.toThrow("llm.apiKeys is empty");
 });
 
 test("an abort before the call sends nothing, and an abort during a key's request ends the call without trying the next key", async () => {
   const early = new AbortController();
   early.abort(new Error("expired"));
   const idle = egress(200);
-  await expect(postResponses(idle.send, {}, KEYS, early.signal, () => undefined)).rejects.toThrow(
-    "expired",
-  );
+  await expect(
+    postResponses(idle.send, {}, KEYS, early.signal, IDLE_MS, readText, () => undefined),
+  ).rejects.toThrow("expired");
   expect(idle).toMatchObject({ seen: [] });
 
   const controller = new AbortController();
@@ -96,10 +139,79 @@ test("an abort before the call sends nothing, and an abort during a key's reques
     sent += 1;
     return new Promise<Response>(() => undefined);
   };
-  const call = postResponses(hung, {}, KEYS, controller.signal, () => undefined);
+  const call = postResponses(hung, {}, KEYS, controller.signal, IDLE_MS, readText, () => undefined);
   controller.abort(new Error("interrupted"));
   await expect(call).rejects.toThrow("interrupted");
   expect(sent).toBe(1);
+});
+
+test("a key whose accepted answer goes silent past the idle budget is cancelled, and the next key answers", async () => {
+  const stalled = held(["data: {}\n\n"]);
+  const answers = [stalled.response, new Response("the backup's answer")];
+  const seen: string[] = [];
+  const log: unknown[] = [];
+  const answer = await postResponses(
+    async (request) => {
+      seen.push(request.headers.get("authorization") || "");
+      return answers[seen.length - 1]!;
+    },
+    {},
+    KEYS,
+    live,
+    50,
+    readText,
+    (line) => log.push(line),
+  );
+  expect(answer).toBe("the backup's answer");
+  expect(seen).toEqual(KEYS.map((key) => `Bearer ${key}`));
+  expect(String(stalled.cancelled)).toContain("the model stream stalled: nothing for 0.05 s");
+  expect(log).toEqual([
+    expect.objectContaining({ key: 1, error: expect.stringContaining("stalled") }),
+  ]);
+});
+
+test("the idle budget starts with the request: a key that never answers stalls too", async () => {
+  let sent = 0;
+  const answer = await postResponses(
+    async () => (++sent === 1 ? new Promise<Response>(() => undefined) : new Response("second")),
+    {},
+    KEYS,
+    live,
+    50,
+    readText,
+    () => undefined,
+  );
+  expect({ answer, sent }).toEqual({ answer: "second", sent: 2 });
+});
+
+test("every chunk an answer sends keeps it alive past the idle budget, and the caller's abort mid-answer tries no other key", async () => {
+  const chunks = held([]);
+  let sent = 0;
+  const controller = new AbortController();
+  const call = postResponses(
+    async () => {
+      sent += 1;
+      return chunks.response;
+    },
+    {},
+    KEYS,
+    controller.signal,
+    50,
+    readText,
+    () => undefined,
+  );
+  // 150 ms, three budgets, with a keepalive every 30 ms: never idle
+  for (let tick = 0; tick < 5; tick++) {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    chunks.push(": keepalive\n\n");
+  }
+  expect(chunks.cancelled).toBeUndefined();
+  controller.abort(new Error("interrupted"));
+  await expect(call).rejects.toThrow("interrupted");
+  expect({ sent, cancelled: String(chunks.cancelled) }).toEqual({
+    sent: 1,
+    cancelled: "Error: interrupted",
+  });
 });
 
 test("a streamed request rides the agent's socket, opened once and kept for the next, and reads as the HTTP stream would", async () => {
@@ -110,8 +222,8 @@ test("a streamed request rides the agent's socket, opened once and kept for the 
     { type: "response.completed", response: { output: [] } },
   ]);
   const body = { model: "gpt-test", temperature: 1, stream: true, prompt_cache_key: "/agents/s" };
-  const first = await postResponses(send, body, [key], live);
-  expect(await first.text()).toBe(
+  const first = await postResponses(send, body, [key], live, IDLE_MS, readText);
+  expect(first).toBe(
     [
       { type: "response.created" },
       { type: "response.output_text.delta", delta: "hi" },
@@ -120,7 +232,7 @@ test("a streamed request rides the agent's socket, opened once and kept for the 
       .map((event) => `data: ${JSON.stringify(event)}\n\n`)
       .join(""),
   );
-  await (await postResponses(send, body, [key], live)).text();
+  await postResponses(send, body, [key], live, IDLE_MS, readText);
   expect({ upgrades, posts }).toEqual({
     upgrades: [{ authorization: `Bearer ${key}`, session: "/agents/s" }],
     posts: 0,
@@ -137,33 +249,45 @@ test("a refused upgrade, or an error before the answer begins, sends the request
   const body = { stream: true, prompt_cache_key: "/agents/h" };
   const refused = openAi("refuse");
   const key = 'getSecret("/secrets/refused")';
-  expect(await postResponses(refused.send, body, [key], live)).toMatchObject({ status: 200 });
+  expect(await postResponses(refused.send, body, [key], live, IDLE_MS, readText)).toBe(
+    "answered over HTTP",
+  );
   // a refused key goes over HTTP alone for a while: no second upgrade
-  await postResponses(refused.send, body, [key], live);
+  await postResponses(refused.send, body, [key], live, IDLE_MS, readText);
   expect({ upgrades: refused.upgrades.length, posts: refused.posts }).toEqual({
     upgrades: 1,
     posts: 2,
   });
 
   const failing = openAi(() => [{ type: "error", status: 401, error: { message: "expired" } }]);
-  const answer = await postResponses(failing.send, body, ['getSecret("/secrets/e")'], live);
-  expect({ status: answer.status, posts: failing.posts }).toEqual({ status: 200, posts: 1 });
+  const answer = await postResponses(
+    failing.send,
+    body,
+    ['getSecret("/secrets/e")'],
+    live,
+    IDLE_MS,
+    readText,
+  );
+  expect({ answer, posts: failing.posts }).toEqual({ answer: "answered over HTTP", posts: 1 });
   expect(failing.sockets[0]?.closed).toBe(true);
 });
 
-test("a socket that closes during the answer fails its stream, and the next request opens another", async () => {
+test("a socket that closes during the answer fails that key's attempt, and the next request opens another", async () => {
   const { send, upgrades, sockets } = openAi((socket) => {
     setTimeout(() => socket.close()); // after the answer has begun
     return [{ type: "response.created" }];
   });
   const body = { stream: true, prompt_cache_key: "/agents/c" };
   const key = 'getSecret("/secrets/closing")';
-  const answer = await postResponses(send, body, [key], live);
   // its code, its age (whatever the clock read) and which of its requests it carried
-  await expect(answer.text()).rejects.toThrow(
+  await expect(
+    postResponses(send, body, [key], live, IDLE_MS, readText, () => undefined),
+  ).rejects.toThrow(
     /the socket closed during the answer \(1006; open \d+\.\d s, request 1 on it\)/,
   );
-  await postResponses(send, body, [key], live).catch(() => undefined);
+  await postResponses(send, body, [key], live, IDLE_MS, readText, () => undefined).catch(
+    () => undefined,
+  );
   expect({ upgrades: upgrades.length, closed: sockets[0]?.closed }).toEqual({
     upgrades: 2,
     closed: true,
@@ -249,6 +373,51 @@ function egress(...answers: Array<number | Error>) {
       const answer = answers[seen.length - 1];
       if (answer instanceof Error) throw answer;
       return new Response(`answer ${String(answer)}`, { status: answer });
+    },
+  };
+}
+
+/** A reader cut to the contract the processor's keeps with the key stack: a non-2xx answer fails the
+ *  attempt, and every chunk of a 2xx one is a sign of life until the body ends. */
+async function readText(response: Response, { signal, alive }: StreamAttempt): Promise<string> {
+  if (!response.ok) throw new Error(`${String(response.status)}: ${await response.text()}`);
+  const reader = response.body!.getReader();
+  signal.addEventListener("abort", () => void reader.cancel(signal.reason).catch(() => undefined));
+  const decoder = new TextDecoder();
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read().catch((error: unknown) => {
+      throw signal.aborted ? signal.reason : error;
+    });
+    if (signal.aborted) throw signal.reason;
+    if (done) return text;
+    alive();
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
+/** A 200 whose body sends `chunks`, then whatever `push` adds, and never ends; `cancelled` is the
+ *  reason its reader cancelled it with. */
+function held(chunks: string[]) {
+  const encoder = new TextEncoder();
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const watch: { cancelled?: unknown } = {};
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        stream = controller;
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      },
+      cancel(reason) {
+        watch.cancelled = reason;
+      },
+    }),
+  );
+  return {
+    response,
+    push: (chunk: string) => stream.enqueue(encoder.encode(chunk)),
+    get cancelled() {
+      return watch.cancelled;
     },
   };
 }

@@ -5,8 +5,9 @@
 // (test/vitest/agents/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 
 import { expect, test, vi } from "vitest";
-import { reduceProcessor } from "../stream/test-support.ts";
-import { type AgentState } from "./contract.ts";
+import { ProcessorEngine } from "../stream/processor.ts";
+import { memoryStorage, memoryStream, reduceProcessor } from "../stream/test-support.ts";
+import { AgentContract, type AgentState } from "./contract.ts";
 import { AgentProcessor, failedRequestNote } from "./processor.ts";
 import { raceAbort } from "./responses-keys.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
@@ -20,7 +21,12 @@ const deleted = { type: "events.iterate.com/agent/deleted", payload: { path: "/a
 const born = [requested, created];
 /** The config of an agent nothing has configured: the contract's defaults. */
 const defaultConfig = {
-  llm: { model: "gpt-6.1-sol", reasoningEffort: "medium", apiKeys: [] },
+  llm: {
+    model: "gpt-6.1-sol",
+    reasoningEffort: "medium",
+    apiKeys: [],
+    streamIdleTimeoutMs: 60_000,
+  },
   maxAutonomousTurns: 50,
   llmRequestExpiryMs: 600_000,
   llmRequestDebounceMs: 250,
@@ -369,7 +375,12 @@ test.for<{
     ],
     state: {
       config: {
-        llm: { model: "gpt-6-luna", reasoningEffort: "medium", apiKeys: [] },
+        llm: {
+          model: "gpt-6-luna",
+          reasoningEffort: "medium",
+          apiKeys: [],
+          streamIdleTimeoutMs: 60_000,
+        },
         maxAutonomousTurns: 2,
         llmRequestExpiryMs: 600_000,
         llmRequestDebounceMs: 250,
@@ -412,7 +423,29 @@ test.for<{
           reasoningEffort: "medium",
           apiKeys: ['getSecret("/secrets/a")', 'getSecret("/secrets/b")'],
           serviceTier: "priority",
+          streamIdleTimeoutMs: 60_000,
         },
+      },
+    },
+  },
+  {
+    name: "configured sets the stream idle budget; a later change of model keeps it, and a patch without one keeps the last",
+    events: [
+      ...born,
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { streamIdleTimeoutMs: 120_000 } } },
+      },
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { model: "gpt-6-luna" }, maxAutonomousTurns: 9 } },
+      },
+    ],
+    state: {
+      config: {
+        ...defaultConfig,
+        llm: { ...defaultConfig.llm, model: "gpt-6-luna", streamIdleTimeoutMs: 120_000 },
+        maxAutonomousTurns: 9,
       },
     },
   },
@@ -583,6 +616,32 @@ test.for<{ name: string; content: string; expected: object }>([
   },
 ])("parseCodemodeResponse: $name", ({ content, expected }) => {
   expect(parseCodemodeResponse(content)).toMatchObject(expected);
+});
+
+test("a checkpoint written before the stream idle budget existed is reduced again: the agent reads the default, or what its log configured", async () => {
+  for (const [patch, budget] of [
+    [{ llm: { model: "gpt-6-luna" } }, 60_000],
+    [{ llm: { streamIdleTimeoutMs: 120_000 } }, 120_000],
+  ] as const) {
+    const mem = memoryStream("/agents/support");
+    const configured = { type: "events.iterate.com/agent/configured", payload: { config: patch } };
+    mem.stream.append(...([...born, configured] as never[]));
+    // the state the contract's version 16 wrote: its llm config had no idle budget
+    const { config, ...rest } = reduceProcessor(processor(), [...born, configured]) as AgentState;
+    const { streamIdleTimeoutMs: _, ...llm } = config.llm;
+    const storage = memoryStorage();
+    storage.write(
+      AgentContract.slug,
+      { reducerVersion: "16", reducedThroughOffset: 3 },
+      { ...rest, config: { ...config, llm } },
+      true,
+    );
+    const { state } = await new ProcessorEngine(processor(), {
+      stream: mem.stream,
+      storage,
+    }).snapshot();
+    expect(state.config.llm).toMatchObject({ streamIdleTimeoutMs: budget });
+  }
 });
 
 test.for([

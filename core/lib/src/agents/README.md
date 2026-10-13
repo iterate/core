@@ -57,13 +57,22 @@ AgentDurableObject.defaultConfig = {
       'getSecret("/secrets/chatgpt", { field: "accessToken" })', // a ChatGPT plan, tried first
       'getSecret("/secrets/openai")', // the project's API key, when the first does not answer
     ],
+    streamIdleTimeoutMs: 120_000, // how long an answer may send nothing; 60 s by default
   },
 };
 ```
 
-A request goes to the first key. A key that answers anything but 2xx, or throws because its secret
-is missing, is logged by its position and the next key gets the same request. When none answers, the
-last answer is the failure the agent reports. Every key gets the body a ChatGPT plan's token takes:
+A request goes to the first key. A key whose answer fails before it completes is named, with its
+error, in the request's `llm-request-settled` event (`failedKeys`), and the next key gets the same
+request: an answer that is not 2xx, a throw (its secret is missing), an error event, a stream that
+ends early, or one that sends nothing for `llm.streamIdleTimeoutMs`. Nothing of the failed answer is
+kept, and a feed starts the next one afresh. The person's next words or the request's expiry stop
+the stack. When no key succeeds, the last failure is the one the agent reports. Without keys, the AI
+Gateway's answer has the same idle budget.
+
+Every string of a request is sent well formed: a lone UTF-16 surrogate (half an emoji that a
+`slice` cut) goes as U+FFFD, which the settlement counts (`repairedStrings`). The conversation keeps
+what was written. Every key gets the body a ChatGPT plan's token takes:
 the fields it refuses (`max_output_tokens`, `temperature`, `top_p`, …) and the explicit cache
 breakpoint are left out, which an API key never needs.
 
