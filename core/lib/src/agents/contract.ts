@@ -494,8 +494,11 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/token-usage-reported": {
       description:
-        "What the last successful request cost against the model's context window (the platform's vocabulary; a feed shows the context's fullness).",
+        "What a successful request cost: a turn's against the model's context window (the platform's vocabulary; a feed shows the context's fullness), or a compaction's summary.",
       payloadSchema: z.object({
+        /** Whose request: a turn's (also when absent), or a compaction's, whose input is the
+         *  history it replaced, not what the context holds now. */
+        kind: z.enum(["turn", "compaction"]).optional(),
         model: z.string().min(1),
         maxContextTokens: z.number().int().positive(),
         inputTokens: z.number().int().nonnegative(),

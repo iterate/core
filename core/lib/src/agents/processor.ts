@@ -6,7 +6,8 @@
 //
 // - a message that arrives while this loop's own script is still running waits for its result
 //   (up to HOLD_FOR_RUN_MS), so a call is always followed by its output;
-// - every request's usage carries cache writes and its dollar cost (pricing.ts); a compaction's too.
+// - every request's usage carries cache writes and its dollar cost (pricing.ts), and a turn's and
+//   a compaction's each land as `agent/token-usage-reported`, told apart by its `kind`.
 //
 // The event log spells an answer's content as its prose plus the call rendered as a `<codemode>`
 // block, the format the Agents app, the relays and voice read.
@@ -223,6 +224,21 @@ function contextWindowTokens(model: string): number {
   if (/^gpt-(6|5)/.test(model)) return 272_000;
   if (model.startsWith("@cf/meta/llama-4-scout")) return 131_072;
   return 128_000;
+}
+
+/** `agent/token-usage-reported`'s payload: what one request on `model` cost, a turn's or a
+ *  compaction's. */
+function usageReport(kind: "turn" | "compaction", model: string, usage: LlmUsage) {
+  return {
+    kind,
+    model,
+    maxContextTokens: contextWindowTokens(model),
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cachedInputTokens: usage.cachedInputTokens,
+    cacheWriteInputTokens: usage.cacheWriteInputTokens,
+    costUsd: usage.costUsd,
+  };
 }
 
 /** The abort reason an interruption carries, so the runner tells it from a clock. */
@@ -1733,15 +1749,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               {
                 type: "events.iterate.com/agent/token-usage-reported",
                 idempotencyKey: this.idempotencyKey(`usage/${String(llmRequestOffset)}`),
-                payload: {
-                  model: open.model,
-                  maxContextTokens: contextWindowTokens(open.model),
-                  inputTokens: usage.inputTokens,
-                  outputTokens: usage.outputTokens,
-                  cachedInputTokens: usage.cachedInputTokens,
-                  cacheWriteInputTokens: usage.cacheWriteInputTokens,
-                  costUsd: usage.costUsd,
-                },
+                payload: usageReport("turn", open.model, usage),
               } satisfies AgentEmitted,
             ]
           : []),
@@ -1925,25 +1933,39 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       });
       if (!answer.prose) throw new Error("the model wrote an empty summary");
       const { usage } = answer;
-      await appendUnlessLost(append, {
-        type: "events.iterate.com/agent/context-added",
-        idempotencyKey: this.idempotencyKey(`compact/${String(requestOffset)}`),
-        payload: {
-          role: "developer",
-          content: keepsEarlierSummaries
-            ? `[The conversation after the summaries above was compacted through @${String(requestOffset)} while idle (~${String(historyTokensSinceSummary(state))} tokens). Summary:]\n\n${answer.prose}`
-            : idle
-              ? `[Earlier conversation history was compacted through @${String(requestOffset)} while idle (~${String(usedTokens)} tokens). Summary:]\n\n${answer.prose}`
-              : `[Earlier conversation history was compacted through @${String(requestOffset)} (~${String(usedTokens)} tokens > ${String(thresholdTokens)}). Summary:]\n\n${answer.prose}`,
-          actor: { type: "agent" },
-          compaction: {
-            replacesHistoryThrough: requestOffset,
-            ...(keepsEarlierSummaries && { keepsEarlierSummaries: true }),
-            usage,
+      // the summary, and beside it what it cost as every request reports it, so one event type
+      // counts all of an agent's model spend
+      await appendUnlessLost(
+        append,
+        {
+          type: "events.iterate.com/agent/context-added",
+          idempotencyKey: this.idempotencyKey(`compact/${String(requestOffset)}`),
+          payload: {
+            role: "developer",
+            content: keepsEarlierSummaries
+              ? `[The conversation after the summaries above was compacted through @${String(requestOffset)} while idle (~${String(historyTokensSinceSummary(state))} tokens). Summary:]\n\n${answer.prose}`
+              : idle
+                ? `[Earlier conversation history was compacted through @${String(requestOffset)} while idle (~${String(usedTokens)} tokens). Summary:]\n\n${answer.prose}`
+                : `[Earlier conversation history was compacted through @${String(requestOffset)} (~${String(usedTokens)} tokens > ${String(thresholdTokens)}). Summary:]\n\n${answer.prose}`,
+            actor: { type: "agent" },
+            compaction: {
+              replacesHistoryThrough: requestOffset,
+              ...(keepsEarlierSummaries && { keepsEarlierSummaries: true }),
+              usage,
+            },
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
           },
-          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
-      });
+        ...(usage
+          ? [
+              {
+                type: "events.iterate.com/agent/token-usage-reported",
+                idempotencyKey: this.idempotencyKey(`compact-usage/${String(requestOffset)}`),
+                payload: usageReport("compaction", model, usage),
+              } satisfies AgentEmitted,
+            ]
+          : []),
+      );
     } catch (error) {
       console.error("[agent] compaction failed", { error, requestOffset });
     }
