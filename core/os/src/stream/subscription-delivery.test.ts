@@ -1071,6 +1071,7 @@ test("alarm claim: a refusal from a snapshot older than the attempt claims until
   const rig = incarnation((printed) => {
     if (printed !== "itx.far") return undefined;
     throw Object.assign(codedError("NO_ITX_EXPRESSION_MATCH", "no rewrite rule matches at /"), {
+      readAt: snapshotSentAt,
       validUntil: snapshotSentAt + SNAPSHOT_TTL_MS,
     });
   });
@@ -1683,16 +1684,21 @@ test.for([
 test.for([
   { name: "the root's own table", refusedForMs: undefined },
   { name: "the root's snapshot, from another context", refusedForMs: 5_000 },
+  {
+    name: "the root's snapshot, read for UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS",
+    refusedForMs: 1_000,
+    readAgoMs: 0,
+  },
 ])(
   "fan-out: while the project's config is unpublished ($name refuses `itx.config`), the config row passes every event over — no record, no claim, no probe — and delivers from the commit that publishes it",
-  async ({ refusedForMs }) => {
+  async ({ refusedForMs, readAgoMs }) => {
     let published = false;
     const told: string[] = [];
     const config = sink(told);
     const rig = incarnation(
       (printed) => (published && printed === CONFIG_HEAD ? config("itx.sink") : undefined),
       undefined,
-      { refusedForMs, refusal: { unpublishedConfig: true } },
+      { refusedForMs, readAgoMs, refusal: { unpublishedConfig: true } },
     );
     configure(rig, { name: "config", target: `${CONFIG_HEAD}.deliverEvent`, ordered: false });
     rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
@@ -2212,6 +2218,7 @@ function incarnation(
     validForMs = Infinity,
     routeOf = (printed) => printed,
     refusedForMs,
+    readAgoMs = SNAPSHOT_TTL_MS - (refusedForMs ?? 0),
     refusal = {},
     wake = { cause: "call", caller: "other" },
     birthEvents = [],
@@ -2223,6 +2230,9 @@ function incarnation(
     routeOf?: (printedExpression: string) => string;
     /** A refusal came from another context's snapshot, which lasts this long (its `validUntil`). */
     refusedForMs?: number;
+    /** How long ago that snapshot was read (its `readAt`): by default, a SNAPSHOT_TTL_MS lifetime
+     *  ago. */
+    readAgoMs?: number;
     /** What else a refusal says, as the resolver marks it (`unpublishedConfig`). */
     refusal?: Record<string, unknown>;
     /** Why this incarnation woke, as the DO's first handler records it. */
@@ -2272,7 +2282,9 @@ function incarnation(
             "NO_ITX_EXPRESSION_MATCH",
             `no rewrite rule matches ${JSON.stringify(printed)} (default-deny)`,
           ),
-          refusedForMs === undefined ? {} : { validUntil: Date.now() + refusedForMs },
+          refusedForMs === undefined
+            ? {}
+            : { readAt: Date.now() - readAgoMs, validUntil: Date.now() + refusedForMs },
           refusal,
         );
       return { value, validUntil: Date.now() + validForMs, routedTo: routeOf(printed) };

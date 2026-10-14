@@ -4,7 +4,8 @@
 // (worker.ts `serveProjectHost`), read and fenced as the rules are. Where a call runs is the resolver's
 // (itx-expression-rewriting.ts `ItxExpressionResolver.invoke`); the tables its chain crosses are
 // SNAPSHOTS: read from their owner (`IterateContextDurableObject.rulesSnapshot`), kept per isolate
-// by the owner's Durable Object name, and used for SNAPSHOT_TTL_MS from when the read was SENT —
+// by the owner's Durable Object name, and used for SNAPSHOT_TTL_MS from when the read was SENT (a
+// project root that has published no config, UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS) —
 // checked after every wait for one, and again before a route assembled from several runs. Reads are
 // lazy (only when a resolution needs the table), conditional on the version the isolate holds (an
 // unchanged table answers its version alone) and single-flight per owner, and no call waits on one
@@ -50,6 +51,13 @@ import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
  *  something away waits for its answer. */
 export const SNAPSHOT_TTL_MS = 5_000;
 
+/** How long a snapshot of a project's root lasts while the root has published no config, as while
+ *  the project is created. Its new contexts read it then, on their events (the `config` birth row,
+ *  project/context-birth-events.ts), and its first publication (the config pointer and the
+ *  ingress) waits out the last of those reads. Well above a read's round trip, which must fit
+ *  inside it (`get`). */
+export const UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS = 1_000;
+
 /** What `rulesSnapshot(ifVersion)` answers: the table's version, and its rows unless the reader
  *  already holds that version. A row may carry a worker's whole source, at most
  *  SOURCE_MAX_CHARS (itx-expression-rewriting.ts), which a reader needs to load it
@@ -60,18 +68,22 @@ export type RulesSnapshotAnswer = {
   version: string;
   rules?: ItxExpressionRewriteRule[];
   routing?: SnapshotRouting;
+  /** How long it lasts from its read: SNAPSHOT_TTL_MS, or UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS. An
+   *  owner a deploy has not reached yet says nothing: SNAPSHOT_TTL_MS. */
+  ttlMs?: number;
 };
 
 /** Where a context sends its project's web requests (core state `fetchRoutes`, `ingressTarget`):
  *  a root's alone are ever read. */
 export type SnapshotRouting = { fetchRoutes: FetchRouteTable; ingressTarget: ItxExpression | null };
 
-/** A snapshot this isolate holds: the rows, their version, the routing, and the moment they may no
- *  longer be used — SNAPSHOT_TTL_MS from when its read was sent. */
+/** A snapshot this isolate holds: the rows, their version, the routing, when its read was sent, and
+ *  the moment they may no longer be used — its lifetime after that. */
 export type RuleSnapshot = {
   version: string;
   rules: readonly ItxExpressionRewriteRule[];
   routing: SnapshotRouting;
+  readAt: number;
   expiresAt: number;
 };
 
@@ -84,7 +96,8 @@ export const MAX_HELD_SNAPSHOTS = 1_000;
  *  from several — before it is UNAVAILABLE. */
 export const SNAPSHOT_REREADS = 3;
 
-/** A read of an owner in flight: its answer, and when that answer can no longer be used. */
+/** A read of an owner in flight: its answer, and when that answer can no longer be used at the
+ *  latest. */
 type SnapshotRead = { answer: Promise<RuleSnapshot>; expiresAt: number };
 
 /** One isolate's snapshots, by the owner's Durable Object name. `read` asks the owner. */
@@ -153,7 +166,8 @@ export class RuleSnapshotCache {
     read: (ifVersion: string | undefined) => Promise<RulesSnapshotAnswer>,
     held: RuleSnapshot | undefined,
   ): SnapshotRead {
-    const expiresAt = this.#now() + SNAPSHOT_TTL_MS;
+    const readAt = this.#now();
+    const expiresAt = readAt + SNAPSHOT_TTL_MS;
     const answer = retryPlatformFailures(() => read(held?.version), {
       area: "rule-snapshot",
       schedule: ONCE_NOW,
@@ -177,9 +191,15 @@ export class RuleSnapshotCache {
           throw new Error(
             `the rule snapshot of ${name} answered version ${answered.version} without its rows`,
           );
-        const snapshot = { version: answered.version, rules, routing, expiresAt };
+        const snapshot = {
+          version: answered.version,
+          rules,
+          routing,
+          readAt,
+          expiresAt: readAt + (answered.ttlMs ?? SNAPSHOT_TTL_MS),
+        };
         // A read given up on may answer after a later one: its snapshot never replaces the newer.
-        if ((this.#held.get(name)?.expiresAt || 0) > expiresAt) return snapshot;
+        if ((this.#held.get(name)?.readAt ?? -Infinity) > readAt) return snapshot;
         this.#held.delete(name);
         this.#held.set(name, snapshot);
         if (this.#held.size > MAX_HELD_SNAPSHOTS)

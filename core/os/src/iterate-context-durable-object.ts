@@ -52,6 +52,7 @@ import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
+  isConfigPointerMatch,
   refuseNonPlatformWrites,
   sha256Hex,
   stampCaller,
@@ -130,7 +131,11 @@ import { firstPartyFacetClassOf } from "./first-party-facets.ts";
 import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
 import { Residency } from "./context/residency.ts";
 import { egress } from "./context/egress.ts";
-import { SNAPSHOT_TTL_MS, type RulesSnapshotAnswer } from "./context/rule-snapshots.ts";
+import {
+  SNAPSHOT_TTL_MS,
+  UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS,
+  type RulesSnapshotAnswer,
+} from "./context/rule-snapshots.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
 /** WHO THIS CONTEXT IS: its name, when it was reached by name (every caller but one); reached by
@@ -816,7 +821,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  takes something away waits out. A DO-only Workers-RPC verb, off the itx surface: the rows are
    *  the addressing every context of the project may already resolve through. A READ RECORDS
    *  NOTHING (cause.ts): no wake of a context that slept, no birth of one never born, which answers
-   *  its empty table as `unborn`. */
+   *  its empty table as `unborn`. Each answer says how long it lasts: SNAPSHOT_TTL_MS, or
+   *  UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS for a project root that has published no config. */
   rulesSnapshot(ifVersion?: string): RulesSnapshotAnswer {
     this.#nameActiveSpan();
     // A read of this context's rules on another's behalf: counted, and no wake of this context's —
@@ -824,19 +830,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // of its rows.
     if (this.#unborn) throw this.#unborn;
     this.#residency.inboundCallInOneTurn();
-    this.#snapshotLeaseUntil = Math.max(this.#snapshotLeaseUntil, Date.now() + SNAPSHOT_TTL_MS);
     const { snapshotVersion, itxExpressionRewriteRules, fetchRoutes, ingressTarget } =
       this.#stream.coreReducedState;
+    const rules = Object.values(itxExpressionRewriteRules);
+    const { projectId, path } = this.#durableObjectAddress;
+    const unpublishedRoot =
+      path === "/" &&
+      projectId !== GLOBAL_PROJECT_ID &&
+      !rules.some(({ match }) => isConfigPointerMatch(match));
+    const ttlMs = unpublishedRoot ? UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS : SNAPSHOT_TTL_MS;
+    this.#snapshotLeaseUntil = Math.max(this.#snapshotLeaseUntil, Date.now() + ttlMs);
     let life = this.ctx.storage.kv.get<string>("life"); // `destroy`'s `deleteAll` takes it
     if (!life && this.#stream.highestDurableOffset() > 0)
       this.ctx.storage.kv.put("life", (life = crypto.randomUUID()));
     const version = `${life || "unborn"}:${snapshotVersion}`;
-    if (ifVersion === version) return { version };
-    return {
-      version,
-      rules: Object.values(itxExpressionRewriteRules),
-      routing: { fetchRoutes, ingressTarget },
-    };
+    if (ifVersion === version) return { version, ttlMs };
+    return { version, rules, routing: { fetchRoutes, ingressTarget }, ttlMs };
   }
 
   /** The bookkeeping of an entry point that runs in ONE synchronous turn (`append`, `read`, a lend,

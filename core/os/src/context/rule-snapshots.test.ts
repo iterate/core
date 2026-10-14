@@ -13,6 +13,7 @@ import {
   MAX_HELD_SNAPSHOTS,
   RuleSnapshotCache,
   SNAPSHOT_TTL_MS,
+  UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS,
   type RulesSnapshotAnswer,
 } from "./rule-snapshots.ts";
 import { rule } from "./test-support.ts";
@@ -36,6 +37,24 @@ test("a snapshot serves until SNAPSHOT_TTL_MS after its read, then is re-read by
   clock.now = 2 * SNAPSHOT_TTL_MS;
   expect(await cache.get("/", owner.read)).toMatchObject({ rules: [rule("itx.tool ⇒ itx.r2")] });
   expect(owner).toMatchObject({ reads: [undefined, "v1", "v1"] });
+});
+
+test("a snapshot lasts the lifetime its owner answers, from its read: an unpublished root's is read again after UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS, by version", async () => {
+  const { cache, clock, owner } = setup();
+  owner.rules = [rule("itx.tool ⇒ itx.kv")];
+  owner.ttlMs = UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS;
+  expect(await cache.get("/", owner.read)).toMatchObject({
+    readAt: 0,
+    expiresAt: UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS,
+  });
+  clock.now = UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS;
+  owner.ttlMs = undefined;
+  expect(await cache.get("/", owner.read)).toMatchObject({
+    rules: [rule("itx.tool ⇒ itx.kv")],
+    readAt: UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS,
+    expiresAt: UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS + SNAPSHOT_TTL_MS,
+  });
+  expect(owner).toMatchObject({ reads: [undefined, "v1"] });
 });
 
 test("reads are single-flight per owner: concurrent resolutions share one read", async () => {
@@ -201,13 +220,15 @@ test("what a change takes away is every row removed or re-pointed but a mask and
 });
 
 /** An owner answering `rulesSnapshot(ifVersion)`, recording each read's version, and a clock:
- *  `delayed` reads answer in order on `answer()`, `onRead` runs as one answers, `resets` fail first. */
+ *  `delayed` reads answer in order on `answer()`, `onRead` runs as one answers, `resets` fail first,
+ *  `ttlMs` is the lifetime it answers. */
 function setup() {
   const clock = { now: 0 };
   const pending: (() => void)[] = [];
   const owner = {
     version: "v1",
     rules: [] as ItxExpressionRewriteRule[],
+    ttlMs: undefined as number | undefined,
     reads: [] as (string | undefined)[],
     fail: false,
     resets: 0,
@@ -220,12 +241,14 @@ function setup() {
       owner.onRead();
       if (owner.fail) throw new Error("owner down");
       if (owner.resets-- > 0) throw new Error("Durable Object reset because its code was updated.");
+      const ttl = owner.ttlMs === undefined ? {} : { ttlMs: owner.ttlMs };
       return ifVersion === owner.version
-        ? { version: owner.version }
+        ? { version: owner.version, ...ttl }
         : {
             version: owner.version,
             rules: owner.rules,
             routing: { fetchRoutes: {}, ingressTarget: null },
+            ...ttl,
           };
     },
   };

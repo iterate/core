@@ -953,7 +953,7 @@ export async function describeRewriteRules(args: {
 export type ResolverReach = {
   projectId: string;
   recordLoopLimit: (path: string, cause: Cause, message: string) => void;
-  snapshotOf: (path: string) => Promise<Pick<RuleSnapshot, "rules" | "expiresAt">>;
+  snapshotOf: (path: string) => Promise<Pick<RuleSnapshot, "rules" | "readAt" | "expiresAt">>;
   located: (
     path: string,
     expression: ItxExpression,
@@ -1154,6 +1154,7 @@ export class ItxExpressionResolver {
       ({ kind: "located", at: there, expression: target, extraArgs, caller: callerThere }) as const;
     const own = () => located(this.#path, expression, caller);
     let validUntil = Infinity;
+    let readAt = Infinity;
     let at = this.#path;
     let entered = expression;
     // THE HOP COUNT (cause.ts): every context this call crosses, carried on to where it lands.
@@ -1168,6 +1169,7 @@ export class ItxExpressionResolver {
         else if (!isBuiltInsRooted(entered)) {
           const snapshot = await this.#reach.snapshotOf(at);
           validUntil = Math.min(validUntil, snapshot.expiresAt);
+          readAt = Math.min(readAt, snapshot.readAt);
           rules = snapshot.rules;
         }
         try {
@@ -1180,12 +1182,13 @@ export class ItxExpressionResolver {
           if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
           if (hops === 0 && !liveRules) return { route: own(), validUntil, rules };
           // A refusal the snapshots gave stands only as long as they do (subscription-delivery.ts
-          // evaluates a dangling row once more then). A refusal of the config pointer, which only a
-          // publication writes, says the project has published no config: the config birth row
-          // passes its event over.
+          // evaluates a dangling row once more then), and is as old as the oldest (`readAt`). A
+          // refusal of the config pointer, which only a publication writes, says the project has
+          // published no config: the config birth row passes its event over.
           if (hops > 0 && error instanceof Error)
             Object.assign(error, {
               validUntil,
+              readAt,
               ...(isConfigPointerMatch(entered) && { unpublishedConfig: true }),
             });
           throw error;

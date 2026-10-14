@@ -49,7 +49,6 @@ import type { StreamPage } from "iterate/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
 import { deepestCause, recordRefusal, type Cause } from "../cause.ts";
 import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
-import { SNAPSHOT_TTL_MS } from "../context/rule-snapshots.ts";
 import type { Metrics } from "../metrics.ts";
 import {
   type CoreState,
@@ -1303,16 +1302,13 @@ export class SubscriptionDelivery {
             // No rung, no halt, no attempt spent: the row waits for its rule — the commit that lands
             // it kicks every cursor row, and this loop evaluates the target anew then. A commit in
             // ANOTHER context kicks nothing here: when another context's snapshot, read before this
-            // attempt, refused it (its `validUntil`, itx-expression-rewriting.ts
+            // attempt, refused it (its `readAt` and `validUntil`, itx-expression-rewriting.ts
             // `ItxExpressionResolver#route`), the row claims until that snapshot expires and is
             // evaluated once more — a snapshot read since that refuses it leaves no claim.
             if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") {
               const { nextAttemptAtMs: _spent, ...settled } = cursorBeforeAttempt;
-              const { validUntil } = error as { validUntil?: unknown };
-              const staleUntil =
-                typeof validUntil === "number" && validUntil < attemptStartedAt + SNAPSHOT_TTL_MS
-                  ? validUntil
-                  : undefined;
+              const { readAt, validUntil } = refusalMarks(error);
+              const staleUntil = readAt < attemptStartedAt ? validUntil : undefined;
               this.#adoptCursor(
                 name,
                 staleUntil === undefined ? settled : { ...settled, nextAttemptAtMs: staleUntil },
@@ -1772,17 +1768,11 @@ export class SubscriptionDelivery {
     const delivery = record.deliveries.get(event.offset);
     if (!delivery) return this.#pumpFanOut(name);
     const code = errorCode(error);
-    // The resolver's marks on a refusal (itx-expression-rewriting.ts `ItxExpressionResolver#route`):
-    // any rejection may carry them or not, so both are read as unknown and checked where used.
-    const { validUntil, unpublishedConfig } = (error ?? {}) as {
-      validUntil?: unknown;
-      unpublishedConfig?: unknown;
-    };
+    const { readAt, validUntil, unpublishedConfig } = refusalMarks(error);
     // A snapshot read before the event may predate a publication that came before it: the row waits
     // that snapshot out (dangling, below) and asks again.
-    const readBeforeEvent =
-      typeof validUntil === "number" && validUntil - SNAPSHOT_TTL_MS < Date.parse(event.createdAt);
-    if (code === "NO_ITX_EXPRESSION_MATCH" && unpublishedConfig === true && !readBeforeEvent) {
+    const readBeforeEvent = readAt < Date.parse(event.createdAt);
+    if (code === "NO_ITX_EXPRESSION_MATCH" && unpublishedConfig && !readBeforeEvent) {
       // nothing is owed to a config that is not published: the row delivers from the commit that
       // publishes it
       if (record.deliveries.delete(event.offset))
@@ -1800,8 +1790,7 @@ export class SubscriptionDelivery {
         fanOut.dangling = true;
         // another context's snapshot refused it: a read after it expires may name it (a refusal
         // no snapshot gave stands until something changes, `Infinity`: no time to wait for)
-        fanOut.refusedUntil =
-          typeof validUntil === "number" && Number.isFinite(validUntil) ? validUntil : undefined;
+        fanOut.refusedUntil = Number.isFinite(validUntil) ? validUntil : undefined;
       } else
         this.#haltRow(name, row.configuredAtOffset, fanOut.admittedThroughOffset, attempt, error);
       return this.#pumpFanOut(name);
@@ -2017,6 +2006,29 @@ function isDeliveryFact(event: StreamEvent): boolean {
 /** A wake record: delivered at most once (the fan-out section's WAKE RULE). */
 function isWake(event: StreamEvent): boolean {
   return event.type === "events.iterate.com/itx/woken";
+}
+
+/** THE RESOLVER'S MARKS on a refusal (itx-expression-rewriting.ts `ItxExpressionResolver#route`):
+ *  when the oldest snapshot it rests on was read, until when it stands, and whether it refused the
+ *  config pointer. A refusal no snapshot gave (a live table's) is current and stands until something
+ *  changes: `Infinity` both. */
+function refusalMarks(error: unknown): {
+  readAt: number;
+  validUntil: number;
+  unpublishedConfig: boolean;
+} {
+  // Any rejection reaches here, marked or not: each mark is read as unknown and kept only if it is
+  // what the resolver writes.
+  const marks = (error ?? {}) as {
+    readAt?: unknown;
+    validUntil?: unknown;
+    unpublishedConfig?: unknown;
+  };
+  return {
+    readAt: typeof marks.readAt === "number" ? marks.readAt : Infinity,
+    validUntil: typeof marks.validUntil === "number" ? marks.validUntil : Infinity,
+    unpublishedConfig: marks.unpublishedConfig === true,
+  };
 }
 
 /** An error's message, clipped: it lands in a delivery record and a dead letter, and a target that
