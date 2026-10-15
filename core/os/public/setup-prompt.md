@@ -88,15 +88,24 @@ platform: `pnpm run deploy` builds it and runs Alchemy's CLI there.
 ## 2. Sign in to Cloudflare
 
 One sign-in of `cf` (Cloudflare's CLI, which the clone has) does the Cloudflare side of the setup:
-it makes the deploy token, and in step 3 it buys a domain if the user wants one and lets the domain
-mail sign-in codes. You delete it at the end of step 3. With `CLOUDFLARE_API_TOKEN` unset (cf would
-use it instead), run in the background:
+it makes the deploy token, in step 3 it buys a domain if the user wants one, and in step 5 it sets
+up the domain's mail. You delete it at the end of step 5. With `CLOUDFLARE_API_TOKEN` unset (cf
+would use it instead), run in the background:
 
 ```bash
-pnpm exec cf auth create iterate-<folder> --no-browser \
-  --scopes account:read account_api_tokens:create user:read registrar:read registrar:write \
-  zone:read email_sending:write offline
+pnpm exec cf auth create iterate-<folder> --no-browser --scopes \
+  account:read user:read offline account_api_tokens:create registrar:read registrar:write \
+  account-settings.read workers_scripts:write workers-scripts.write workers_kv:write \
+  workers-kv-storage.write workers-r2.write d1:write d1.write containers:write containers.write \
+  artifacts.write workers_tail:read workers-tail.read workers_observability:read \
+  workers-observability.read workers_routes:write workers-routes.write dns_records:edit dns.write \
+  zone:read zone.read email_routing:write email-routing-rule.write email_sending:write \
+  email-sending.write
 ```
+
+A token it makes holds no more than the sign-in does, so the sign-in asks for every permission the
+deploy token gets (cf knows each in two spellings, and the list has both), the registrar's, and the
+mail's.
 
 It prints Cloudflare's consent link and a code, and exits once the user allows it. Don't leave the
 page to cf, which may have no browser it can open: `open` the link yourself (it carries the code),
@@ -221,14 +230,14 @@ whether anything uses it. Show the user the list and ask: one of these, a new on
 or none. For a domain that has records, show them too, and ask which of these iterate does with it.
 End your turn.
 
-- **Take it over**, as a new domain always is: every name under it, as your first message said. A
-  site already there stops answering: step 4 shows the records it would replace before deleting
-  them.
-- **Share it**, when the user keeps a site there: the OS on `iterate.<domain>` alone. In step 4,
-  route only `iterate.<domain>/*`, make only the record `iterate.<domain>`, set `urls.os` alone,
-  and skip step 6's `projectHostnames`. Projects then live at
-  `https://iterate.<domain>/projects/<project>/`, and their apps share the OS's origin, as without
-  a domain.
+- **Take it over**, as a new domain always is: every name under it and its mail, as your first
+  message said. A site or mail already there stops answering: step 4 shows the records it would
+  replace before deleting them, and step 5 the mail records.
+- **Share it**, when the user keeps a site or mail there: the OS on `iterate.<domain>` alone. In
+  step 4, route only `iterate.<domain>/*`, make only the record `iterate.<domain>`, set `urls.os`
+  alone, and skip the domain's own mail in step 5 and step 6's `projectHostnames`. Projects then
+  live at `https://iterate.<domain>/projects/<project>/`, and their apps share the OS's origin, as
+  without a domain.
 - A `pending` zone is waiting for its nameservers to change at the registrar. Wait for `active`,
   which can take hours.
 - A domain the user owns elsewhere: add-site ([links](#enable-workers-paid-and-r2)), then the same
@@ -281,32 +290,6 @@ token can't, and mustn't: the Worker keeps it, and a deployment must not be able
 
 4. Tell the user to look for ICANN's mail to the registrant address and confirm it within 15 days.
    If they don't, the domain is put on hold, and the OS's origin stops answering.
-
-### Sign-in codes by mail
-
-With a domain, taken over or shared, let the deployment mail its sign-in codes from
-`login@mail.<domain>`: a subdomain of its own, so no project's mail can pass for them. This adds
-sending records under `mail.<domain>` only, and leaves the domain's own mail alone:
-
-```bash
-CLOUDFLARE_ACCOUNT_ID=<account id> pnpm exec cf --profile iterate-<folder> -z <domain> \
-  email-sending subdomains create --name mail.<domain>
-```
-
-`email-sending subdomains list`, then `email-sending subdomains dns status <its id>` (same prefix),
-shows when its records are in place. Wait for them before you sign out: a code mailed before then
-is refused.
-
-### Sign out of Cloudflare
-
-Once the domain is settled (picked, bought or none) and can mail its codes, delete step 2's
-sign-in. The deploy token is
-all the rest of the setup needs, and nothing that can make tokens or buy domains stays on the
-machine:
-
-```bash
-pnpm exec cf auth delete iterate-<folder>
-```
 
 ## 4. The iterate config
 
@@ -379,16 +362,16 @@ if anything is there, show it to the user and ask before you delete it
 done)
 ```
 
-Each project is then `<project>.<domain>`, and its apps `<app>--<project>.<domain>`. No project may
-be called `iterate`, `mcp` or `www`: the
-deployment answers on those names itself. In step 6, `www.<domain>` becomes the first project's
-homepage.
+Each project is then `<project>.<domain>`, its apps `<app>--<project>.<domain>`, and when iterate
+took the domain over, its address `<project>@<domain>` (step 5 sets up the mail). No project may be
+called `iterate`, `mcp` or `www`: the deployment answers on those names itself. In step 6,
+`www.<domain>` becomes the first project's homepage.
 
 `resourcePrefix` is `iterate`, unless the account already has an iterate; it names the Worker and
 its D1, R2 and Artifacts namespace.
 
 Without a domain, people sign in with a password: their email and the password. With one, the
-config adds a six-digit code mailed from `login@mail.<domain>` (step 3): the sign-in page leads with
+config adds a six-digit code mailed from `login@mail.<domain>` (step 5): the sign-in page leads with
 it, and the password stays the alternate, should mail fail. Keep these methods.
 `login.allow` is the user's answer in step 2 (who may sign in), one rule each:
 `{ email: "a@b.com" }` for one address, `{ emailDomain: "b.com" }` for everyone at that domain. No
@@ -452,6 +435,43 @@ version id and the origin. A new domain's certificate can take a few minutes; wa
 
 To update: `git pull`, `pnpm install`, then `pnpm run deploy` in `core/os`, which shows the plan
 and asks before it applies.
+
+### Mail on the domain
+
+With a domain, now that the Worker exists, set up its mail. Each command with
+`CLOUDFLARE_ACCOUNT_ID=<account id> pnpm exec cf --profile iterate-<folder> -z <domain>` in front.
+
+Sign-in codes, taken over or shared: the deployment mails them from `login@mail.<domain>`, a
+subdomain of its own, so no project's mail can pass for them. This adds sending records under
+`mail.<domain>` only:
+
+```bash
+email-sending subdomains create --name mail.<domain>
+```
+
+When iterate took the domain over, every project's address too, `<project>@<domain>`: mail to it
+lands on the project's `/integrations/email`, and the project sends from it. If the zone already
+has MX records, show them to the user and ask first: these replace them.
+
+```bash
+email-routing enable    # the domain's MX and SPF records; `--name` is for a subdomain, so none here
+email-routing rules catch-all update --enabled --matchers '[{"type":"all"}]' \
+  --actions '[{"type":"worker","value":["<resourcePrefix>"]}]'    # every address, to the Worker
+email-sending subdomains create --name <domain>    # its DKIM, return path and DMARC records
+```
+
+`email-sending subdomains list`, then `email-sending subdomains dns status <its id>` for each,
+shows when the sending records are in place. Wait for them before step 6: a mail sent before then
+is refused (`destination address is not a verified address`).
+
+### Sign out of Cloudflare
+
+Delete step 2's sign-in (without a domain, straight after step 3). The deploy token is all the rest
+of the setup needs, and nothing that can make tokens or buy domains stays on the machine:
+
+```bash
+pnpm exec cf auth delete iterate-<folder>
+```
 
 ## 6. First sign-in and project
 
@@ -567,6 +587,8 @@ gets familiar with them):
   Assistant Voice Preview Edition) over USB from Chrome or Edge, so it talks to the project too;
 - the project's homepage: `https://www.<domain>/` when iterate took the domain over (with its
   apps at `https://<app>--<project>.<domain>/`), `<origin>/projects/<project>/` otherwise;
+- when iterate took the domain over, the project's address, `<project>@<domain>`: mail to it lands
+  on the project, which can answer from it;
 - with a domain you bought: that it renews every year on the account's card (or, if the API refused
   auto-renew, that they turn it on), and, until they have, that they must confirm ICANN's mail;
 - `<mcp>` (remote HTTP) for other clients, and that each client signs in the same way (the mailed
@@ -578,10 +600,10 @@ gets familiar with them):
 ## A domain later
 
 A deployment that started on workers.dev can move to a domain. Sign in to Cloudflare (step 2's `cf
-auth create`; a deploy token without zone permissions needs replacing too), pick or buy one and sign
-out (step 3), add the domain's parts of step 4, and run `pnpm run deploy`. Keep
-`cloudflare.workersDev` on (the default) until nothing uses the old origin. `urls.os` is the OAuth
-issuer, so every sign-in moves with it: the user connects the dash again at
+auth create`; a deploy token without zone permissions needs replacing too), pick or buy one (step
+3), add the domain's parts of step 4, run `pnpm run deploy`, then set up its mail and sign out (step
+5). Keep `cloudflare.workersDev` on (the default) until nothing uses the old origin. `urls.os` is
+the OAuth issuer, so every sign-in moves with it: the user connects the dash again at
 `https://dash.iterate.com/.auth/connect?issuer=<new origin>`, and each MCP client is added again at
 the new MCP URL (`https://mcp.<domain>`) and signs in. Users and projects stay; their addresses move
 to `<project>.<domain>`. Then make `www.<domain>` the first project's homepage (step 6) and deploy
