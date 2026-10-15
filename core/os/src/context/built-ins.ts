@@ -600,9 +600,6 @@ export interface BuildBuiltInsDeps {
   /** The domain one project owns outright (iterate-config.ts `urls.projectWildcard`: iterate.com, the
    *  `iterate` project's): that project may send from any address on it (`itx.email.send`). */
   projectWildcard: { hostname: string; project: string } | undefined;
-  /** The domain projects' mail is on (email/contract.ts `emailDomainOf`): a project's address is
-   *  `<slug>@<emailDomain>`. Null ⇒ no project has an address. */
-  emailDomain: string | null;
   /** The Dash that this platform instance names for human administration. */
   dashOrigin: string;
   /** The deployment's platform admins (iterate-config.ts `admins`): with the admin bearer, the
@@ -2423,7 +2420,6 @@ export function projectConfigDeps(
       }),
     ingressRouting: iterateConfig.urls.ingressRouting,
     projectWildcard: iterateConfig.urls.projectWildcard,
-    emailDomain: emailDomainOf(iterateConfig.urls),
     signingSecret: () => sessionSigningSecretOf(iterateConfig),
   } satisfies Partial<BuildBuiltInsDeps>;
 }
@@ -2440,7 +2436,6 @@ type PortableBuiltInsDeps = Pick<
   | "env"
   | "ingressRouting"
   | "projectWildcard"
-  | "emailDomain"
   | "signingSecret"
   | "context"
   | "egress"
@@ -2556,12 +2551,12 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
     cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
     email: {
       send: async (input) => {
-        const domain = deps.emailDomain;
+        const domain = emailDomainOf(deps.ingressRouting);
         const slug = owner.kind === "project" ? (await deps.projectInfo()).projectSlug : undefined;
         if (!domain || !slug || !env.EMAIL)
           throw codedError(
             "INVALID_CONTEXT",
-            "itx.email: only a project has an address, on a deployment with a mail domain (urls.emailDomain, or projects as subdomains) that can send mail",
+            "itx.email: only a project has an address, on a deployment whose projects are subdomains and that can send mail",
           );
         const wildcard = deps.projectWildcard;
         return sendEmail(

@@ -304,13 +304,6 @@ homepage: the bare `<your-domain>` and the project's `<project>.<your-domain>` g
 apps keep `<routingSlug>--<project>.<your-domain>`, one label under `www` being past the
 certificate. For nicer app names, give the project [a domain of its own](#a-projects-own-domain).
 
-**Mail.** Every project has an address, `<project>@<your-domain>`: mail to it lands on the
-project's `/integrations/email`, and the project sends from that address alone (`itx.email.send`).
-On the zone, Email Routing's catch-all delivers to the Worker, and the domain is onboarded for
-Email Sending; the [setup recipe](public/setup-prompt.md) ("Mail on the domain") does both. The mail
-domain is the hostname projects are subdomains of; `urls.emailDomain` names another, or gives one
-to a deployment whose projects are paths.
-
 A deploy makes the Worker's routes match `cloudflare.workerRoutes`: it adds the routes the list
 names and deletes the Worker's routes it does not name. It refuses a route that another Worker
 holds: remove the route from that Worker first.

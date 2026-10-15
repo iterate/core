@@ -66,12 +66,21 @@ test("iterateConfigFromEnv: a local config spreads its sections and overrides th
   const local = {
     ...base,
     cloudflare: { ...base.cloudflare, accountId: "account-1", resourcePrefix: "iterate" },
-    urls: { ...base.urls, os: "https://iterate.acme.test", emailDomain: "acme.test" },
+    urls: {
+      ...base.urls,
+      os: "https://iterate.acme.test",
+      mcp: "https://mcp.acme.test",
+      ingressRouting: { type: "subdomains", hostname: "acme.test" },
+    },
     login: { ...base.login, allow: [{ email: "a@acme.test" }] },
   } satisfies IterateConfigInput;
   expect(deploymentOf(local).config).toMatchObject({
     cloudflare: { accountId: "account-1", resourcePrefix: "iterate" },
-    urls: { os: "https://iterate.acme.test", emailDomain: "acme.test" },
+    urls: {
+      os: "https://iterate.acme.test",
+      mcp: "https://mcp.acme.test",
+      ingressRouting: { type: "subdomains", hostname: "acme.test" },
+    },
     login: { allow: [{ email: "a@acme.test" }] },
   });
 });

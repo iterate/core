@@ -260,11 +260,6 @@ export const IterateConfig = z.object({
       projectHostnames: z
         .array(z.object({ hostname: dnsName, project: z.string().trim().min(1, REQUIRED) }))
         .default([]),
-      /** THE DOMAIN PROJECTS' MAIL IS ON (email/contract.ts `emailDomainOf`): `<slug>@<emailDomain>`
-       *  reaches project `<slug>`, and that project sends from it. Its Email Routing catch-all
-       *  delivers to this deployment's Worker, and it is onboarded for Email Sending. Unset ⇒ the
-       *  hostname projects are subdomains of (`ingressRouting`), and none under paths routing. */
-      emailDomain: dnsName.optional(),
     })
     .prefault({}),
   /** CUSTOM HOSTNAMES a project adds itself (project/custom-hostnames.ts): each a wildcard

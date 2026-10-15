@@ -58,7 +58,7 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   const wildcard = urls.projectWildcard;
   const viaWildcard = !!recipient && !!wildcard && recipient[2] === wildcard.hostname;
   let projectRef: string | undefined;
-  if (recipient && recipient[2] === emailDomainOf(urls)) projectRef = recipient[1];
+  if (recipient && recipient[2] === emailDomainOf(urls.ingressRouting)) projectRef = recipient[1];
   else if (viaWildcard) projectRef = wildcard.project;
   const controlPlane = new ControlPlane(env);
   const project = projectRef ? await controlPlane.getProject(projectRef) : null;

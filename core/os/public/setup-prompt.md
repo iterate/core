@@ -43,10 +43,9 @@ get ready while you work, and carry on without waiting:
   [Enable Workers Paid and R2](#enable-workers-paid-and-r2) has the links. Workers Paid also brings
   Cloudflare Artifacts (open beta), the git repos every project's code lives in.
 - **A domain** (optional): iterate can take over a domain of theirs, or one you buy them in step 3:
-  `iterate.<domain>` for the OS and `mcp.<domain>` for MCP; for each project `<project>.<domain>`,
-  its apps at `<app>--<project>.<domain>` and its mail at `<project>@<domain>`; and
-  `www.<domain>` (where `<domain>` goes too) for their first project's homepage. Without one,
-  everything runs on
+  `iterate.<domain>` for the OS and `mcp.<domain>` for MCP; for each project `<project>.<domain>`
+  and its apps at `<app>--<project>.<domain>`; and `www.<domain>` (where `<domain>` goes too) for
+  their first project's homepage. Without one, everything runs on
   `https://iterate.<subdomain>.workers.dev`, where project apps share the OS's origin. That is fine
   for one person, or people who all trust each other; `core/os/SELF-HOSTING.md` (Project apps)
   says why.
@@ -89,14 +88,13 @@ platform: `pnpm run deploy` builds it and runs Alchemy's CLI there.
 ## 2. Sign in to Cloudflare
 
 One sign-in of `cf` (Cloudflare's CLI, which the clone has) does the Cloudflare side of the setup:
-it makes the deploy token, in step 3 it buys a domain if the user wants one, and in step 5 it sets
-up the domain's mail. You delete it at the end of step 5. With `CLOUDFLARE_API_TOKEN` unset (cf
-would use it instead), run in the background:
+it makes the deploy token, and in step 3 it buys a domain if the user wants one. You delete it at
+the end of step 3. With `CLOUDFLARE_API_TOKEN` unset (cf would use it instead), run in the
+background:
 
 ```bash
 pnpm exec cf auth create iterate-<folder> --no-browser \
-  --scopes account:read account_api_tokens:create user:read registrar:read registrar:write \
-  zone:read email_routing:write email_sending:write offline
+  --scopes account:read account_api_tokens:create user:read registrar:read registrar:write offline
 ```
 
 It prints Cloudflare's consent link and a code, and exits once the user allows it. Don't leave the
@@ -221,12 +219,12 @@ whether anything uses it. Show the user the list and ask: one of these, a new on
 or none. For a domain that has records, show them too, and ask which of these iterate does with it.
 End your turn.
 
-- **Take it over**, as a new domain always is: every name under it and its mail, as your first
-  message said. A site or mail already there stops answering: step 4 shows the records it would
-  replace before deleting them, and step 5 the mail records.
-- **Share it**, when the user keeps a site or mail there: the OS on `iterate.<domain>` alone. In
-  step 4, route only `iterate.<domain>/*`, make only the record `iterate.<domain>`, set `urls.os`
-  alone, and skip step 5's mail and step 6's `projectHostnames`. Projects then live at
+- **Take it over**, as a new domain always is: every name under it, as your first message said. A
+  site already there stops answering: step 4 shows the records it would replace before deleting
+  them.
+- **Share it**, when the user keeps a site there: the OS on `iterate.<domain>` alone. In step 4,
+  route only `iterate.<domain>/*`, make only the record `iterate.<domain>`, set `urls.os` alone,
+  and skip step 6's `projectHostnames`. Projects then live at
   `https://iterate.<domain>/projects/<project>/`, and their apps share the OS's origin, as without
   a domain.
 - A `pending` zone is waiting for its nameservers to change at the registrar. Wait for `active`,
@@ -281,6 +279,16 @@ token can't, and mustn't: the Worker keeps it, and a deployment must not be able
 
 4. Tell the user to look for ICANN's mail to the registrant address and confirm it within 15 days.
    If they don't, the domain is put on hold, and the OS's origin stops answering.
+
+### Sign out of Cloudflare
+
+Once the domain is settled (picked, bought or none), delete step 2's sign-in. The deploy token is
+all the rest of the setup needs, and nothing that can make tokens or buy domains stays on the
+machine:
+
+```bash
+pnpm exec cf auth delete iterate-<folder>
+```
 
 ## 4. The iterate config
 
@@ -349,9 +357,8 @@ if anything is there, show it to the user and ask before you delete it
 done)
 ```
 
-Each project is then `<project>.<domain>`, its apps `<app>--<project>.<domain>`, and its address
-`<project>@<domain>`: mail to it lands on the project's `/integrations/email`, and the project sends
-from it (step 5 sets up the mail). No project may be called `iterate`, `mcp` or `www`: the
+Each project is then `<project>.<domain>`, and its apps `<app>--<project>.<domain>`. No project may
+be called `iterate`, `mcp` or `www`: the
 deployment answers on those names itself. In step 6, `www.<domain>` becomes the first project's
 homepage.
 
@@ -419,34 +426,6 @@ version id and the origin. A new domain's certificate can take a few minutes; wa
 
 To update: `git pull`, `pnpm install`, then `pnpm run deploy` in `core/os`, which shows the plan
 and asks before it applies.
-
-### Mail on the domain
-
-When iterate took the domain over (step 3), now that the Worker exists, route the domain's mail to
-it and let it send.
-If the zone already has MX records, show them to the user and ask first: these replace them. Each
-command with `CLOUDFLARE_ACCOUNT_ID=<account id> pnpm exec cf --profile iterate-<folder> -z <domain>`
-in front:
-
-```bash
-email-routing enable    # the domain's MX and SPF records; `--name` is for a subdomain, so none here
-email-routing rules catch-all update --enabled --matchers '[{"type":"all"}]' \
-  --actions '[{"type":"worker","value":["<resourcePrefix>"]}]'    # every address, to the Worker
-email-sending subdomains create --name <domain>    # its DKIM, return path and DMARC records
-```
-
-`email-sending subdomains list` then `email-sending subdomains dns status <its id>` shows whether
-the sending records are in place. A send before they are is refused with
-`destination address is not a verified address`; wait for them and send again.
-
-### Sign out of Cloudflare
-
-Delete step 2's sign-in. The deploy token is all the rest of the setup needs, and nothing that can
-make tokens or buy domains stays on the machine:
-
-```bash
-pnpm exec cf auth delete iterate-<folder>
-```
 
 ## 6. First sign-in and project
 
@@ -561,8 +540,6 @@ gets familiar with them):
   Assistant Voice Preview Edition) over USB from Chrome or Edge, so it talks to the project too;
 - the project's homepage: `https://www.<domain>/` when iterate took the domain over (with its
   apps at `https://<app>--<project>.<domain>/`), `<origin>/projects/<project>/` otherwise;
-- when iterate took the domain over, the project's address, `<project>@<domain>`: mail to it lands
-  on the project, which can answer from it;
 - with a domain you bought: that it renews every year on the account's card (or, if the API refused
   auto-renew, that they turn it on), and, until they have, that they must confirm ICANN's mail;
 - `<mcp>` (remote HTTP) for other clients, and that each client signs in the same way (their
@@ -575,8 +552,7 @@ gets familiar with them):
 
 A deployment that started on workers.dev can move to a domain. Sign in to Cloudflare (step 2's
 `cf auth create`; a deploy token without zone permissions needs replacing too), pick or buy one
-(step 3), add the domain's parts of step 4, run `pnpm run deploy`, set up its mail and sign out
-(step 5). Keep `cloudflare.workersDev` on (the default) until nothing uses the old origin.
+and sign out (step 3), add the domain's parts of step 4, and run `pnpm run deploy`. Keep `cloudflare.workersDev` on (the default) until nothing uses the old origin.
 `urls.os` is the OAuth issuer, so every sign-in moves with it: the user connects the dash again at
 `https://dash.iterate.com/.auth/connect?issuer=<new origin>`, and each MCP client is added again at
 the new MCP URL (`https://mcp.<domain>`) and signs in. Users and projects stay; their addresses
