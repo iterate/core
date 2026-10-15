@@ -88,13 +88,14 @@ platform: `pnpm run deploy` builds it and runs Alchemy's CLI there.
 ## 2. Sign in to Cloudflare
 
 One sign-in of `cf` (Cloudflare's CLI, which the clone has) does the Cloudflare side of the setup:
-it makes the deploy token, and in step 3 it buys a domain if the user wants one. You delete it at
-the end of step 3. With `CLOUDFLARE_API_TOKEN` unset (cf would use it instead), run in the
-background:
+it makes the deploy token, and in step 3 it buys a domain if the user wants one and lets the domain
+mail sign-in codes. You delete it at the end of step 3. With `CLOUDFLARE_API_TOKEN` unset (cf would
+use it instead), run in the background:
 
 ```bash
 pnpm exec cf auth create iterate-<folder> --no-browser \
-  --scopes account:read account_api_tokens:create user:read registrar:read registrar:write offline
+  --scopes account:read account_api_tokens:create user:read registrar:read registrar:write \
+  zone:read email_sending:write offline
 ```
 
 It prints Cloudflare's consent link and a code, and exits once the user allows it. Don't leave the
@@ -111,9 +112,10 @@ Wait for the command. Then see who signed in:
 pnpm exec cf --profile iterate-<folder> auth whoami
 ```
 
-It shows the Cloudflare user's `email` and the `accounts` the sign-in reaches. Sign-in to iterate
-is a password: a person types their email and the deployment's one password, which you generate in
-step 4 and the user keeps in their password manager. Ask in one message, e.g.:
+It shows the Cloudflare user's `email` and the `accounts` the sign-in reaches. With a domain, a
+person signs in to iterate with a six-digit code mailed to their address; without one, with their
+email and the deployment's one password, which you generate in step 4 and the user keeps in their
+password manager. Ask in one message, e.g.:
 
 > Signed in to Cloudflare as `<email>`, account `<name>`. I'll let `<email>` sign in to iterate.
 > Say yes, or name other email addresses or whole email domains to let in too.
@@ -280,9 +282,25 @@ token can't, and mustn't: the Worker keeps it, and a deployment must not be able
 4. Tell the user to look for ICANN's mail to the registrant address and confirm it within 15 days.
    If they don't, the domain is put on hold, and the OS's origin stops answering.
 
+### Sign-in codes by mail
+
+With a domain, taken over or shared, let the deployment mail its sign-in codes from
+`login@mail.<domain>`: a subdomain of its own, so no project's mail can pass for them. This adds
+sending records under `mail.<domain>` only, and leaves the domain's own mail alone:
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=<account id> pnpm exec cf --profile iterate-<folder> -z <domain> \
+  email-sending subdomains create --name mail.<domain>
+```
+
+`email-sending subdomains list`, then `email-sending subdomains dns status <its id>` (same prefix),
+shows when its records are in place. Wait for them before you sign out: a code mailed before then
+is refused.
+
 ### Sign out of Cloudflare
 
-Once the domain is settled (picked, bought or none), delete step 2's sign-in. The deploy token is
+Once the domain is settled (picked, bought or none) and can mail its codes, delete step 2's
+sign-in. The deploy token is
 all the rest of the setup needs, and nothing that can make tokens or buy domains stays on the
 machine:
 
@@ -338,7 +356,11 @@ export default {
     mcp: "https://mcp.<domain>",
     ingressRouting: { type: "subdomains", hostname: "<domain>" },
   },
-  login: { ...base.login, allow: [{ email: "<the user's email>" }] },
+  login: {
+    ...base.login,
+    methods: { ...base.login.methods, emailCode: { from: "iterate <login@mail.<domain>>" } },
+    allow: [{ email: "<the user's email>" }],
+  },
 } satisfies IterateConfigInput;
 ```
 
@@ -365,11 +387,13 @@ homepage.
 `resourcePrefix` is `iterate`, unless the account already has an iterate; it names the Worker and
 its D1, R2 and Artifacts namespace.
 
-People sign in with a password: they type their email and the password. Keep this method.
+Without a domain, people sign in with a password: their email and the password. With one, the
+config adds a six-digit code mailed from `login@mail.<domain>` (step 3): the sign-in page leads with
+it, and the password stays the alternate, should mail fail. Keep these methods.
 `login.allow` is the user's answer in step 2 (who may sign in), one rule each:
 `{ email: "a@b.com" }` for one address, `{ emailDomain: "b.com" }` for everyone at that domain. No
-answer, no config: ask again. A shared password suits people who trust each other;
-`core/os/SELF-HOSTING.md` ("Sign-in") has a mailed code and the provider sign-ins for anyone else.
+answer, no config: ask again. A shared password alone suits people who trust each other;
+`core/os/SELF-HOSTING.md` ("Sign-in") has the provider sign-ins too.
 
 `core/os/.secrets` (mode 600) holds the rest, one `NAME=value` line each, after the token line from
 step 2:
@@ -381,12 +405,14 @@ step 2:
   (`/mcp` refuses it). You use it to find the user's project and to add voice.
 - `ITERATE__SECRETS_ENCRYPTION__KEY`: `openssl rand -hex 32`. It encrypts project secrets at rest;
   losing it loses them.
-- `ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD`: `openssl rand -base64 18`. The sign-in password.
+- `ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD`: `openssl rand -base64 18`. The sign-in password
+  (with a domain, the alternate to the mailed code).
 
 Leave every other field to its default. Generate the values with a script that appends them to the
 file and prints nothing. Never print them in chat.
 
-Whenever the user is about to sign in (steps 6 and 8), copy the password to their clipboard:
+Without a domain, whenever the user is about to sign in (steps 6 and 8), copy the password to their
+clipboard:
 `sed -n 's/^ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD=//p' .secrets | tr -d '\n' | pbcopy` on
 macOS (on Linux, `wl-copy` or `xclip -selection clipboard` in place of `pbcopy`). Tell them it's on
 their clipboard, that it lives in `.secrets` (give its absolute path), and to save it in their
@@ -433,8 +459,9 @@ Signing in at the origin creates nothing: the organization and project are creat
 page, when an app connects. Send the user to the dash's connect page for the origin,
 `https://dash.iterate.com/.auth/connect?issuer=<origin, URL-encoded>&login_hint=<their email,
 URL-encoded>` (the hint fills the email in on the sign-in page); opening the origin itself goes
-there too. Copy the password to their clipboard first (step 4). They click Continue, sign in with
-their email and the password, then name the
+there too. They click Continue and sign in: with a domain, with the code mailed to them (the link
+fills their email in); without one, with their email and the password, which you copy to their
+clipboard first (step 4). Then they name the
 organization and project on the consent page (with a domain taken over, the project's name is its
 `<project>.<domain>`, and `iterate`, `mcp` and `www` are taken). Wait for them, then find the project and the email
 they signed in with yourself, with the admin bearer, which `--env-file=.secrets` reads so it never
@@ -511,8 +538,8 @@ project secret.
 - Registering may open the sign-in page by itself (e.g. `codex mcp add` does). If it does, don't
   also `open` it or run a separate login command: that pops open the same page twice and confuses
   the user.
-- The user signs the client in through the browser (their email and the password; copy it to their
-  clipboard again first, step 4). E.g. in Claude
+- The user signs the client in through the browser, as in step 6 (the mailed code, or the password
+  on their clipboard). E.g. in Claude
   Code: `/mcp`, pick the server, authenticate; after that, `claude mcp list`/`codex mcp list` shows
   it as connected.
 - Then try the server's `run` tool in this session straight away. Some hosts attach a newly added
@@ -542,22 +569,23 @@ gets familiar with them):
   apps at `https://<app>--<project>.<domain>/`), `<origin>/projects/<project>/` otherwise;
 - with a domain you bought: that it renews every year on the account's card (or, if the API refused
   auto-renew, that they turn it on), and, until they have, that they must confirm ICANN's mail;
-- `<mcp>` (remote HTTP) for other clients, and that each client signs in the same way (their
-  email and the password);
+- `<mcp>` (remote HTTP) for other clients, and that each client signs in the same way (the mailed
+  code, or their email and the password);
 - where the config and secrets are (`iterate/core/os/iterate.config.local.ts`,
   `iterate/core/os/.secrets`), that `.secrets` is the only copy, and how to update
   (`git pull`, `pnpm install`, then `pnpm run deploy` in `core/os`).
 
 ## A domain later
 
-A deployment that started on workers.dev can move to a domain. Sign in to Cloudflare (step 2's
-`cf auth create`; a deploy token without zone permissions needs replacing too), pick or buy one
-and sign out (step 3), add the domain's parts of step 4, and run `pnpm run deploy`. Keep `cloudflare.workersDev` on (the default) until nothing uses the old origin.
-`urls.os` is the OAuth issuer, so every sign-in moves with it: the user connects the dash again at
+A deployment that started on workers.dev can move to a domain. Sign in to Cloudflare (step 2's `cf
+auth create`; a deploy token without zone permissions needs replacing too), pick or buy one and sign
+out (step 3), add the domain's parts of step 4, and run `pnpm run deploy`. Keep
+`cloudflare.workersDev` on (the default) until nothing uses the old origin. `urls.os` is the OAuth
+issuer, so every sign-in moves with it: the user connects the dash again at
 `https://dash.iterate.com/.auth/connect?issuer=<new origin>`, and each MCP client is added again at
-the new MCP URL (`https://mcp.<domain>`) and signs in. Users and projects stay; their addresses
-move to `<project>.<domain>`. Then make `www.<domain>` the first project's homepage (step 6) and
-deploy again.
+the new MCP URL (`https://mcp.<domain>`) and signs in. Users and projects stay; their addresses move
+to `<project>.<domain>`. Then make `www.<domain>` the first project's homepage (step 6) and deploy
+again.
 
 ## Integrations
 

@@ -72,7 +72,11 @@ test("iterateConfigFromEnv: a local config spreads its sections and overrides th
       mcp: "https://mcp.acme.test",
       ingressRouting: { type: "subdomains", hostname: "acme.test" },
     },
-    login: { ...base.login, allow: [{ email: "a@acme.test" }] },
+    login: {
+      ...base.login,
+      methods: { ...base.login.methods, emailCode: { from: "iterate <login@mail.acme.test>" } },
+      allow: [{ email: "a@acme.test" }],
+    },
   } satisfies IterateConfigInput;
   expect(deploymentOf(local).config).toMatchObject({
     cloudflare: { accountId: "account-1", resourcePrefix: "iterate" },
@@ -81,7 +85,10 @@ test("iterateConfigFromEnv: a local config spreads its sections and overrides th
       mcp: "https://mcp.acme.test",
       ingressRouting: { type: "subdomains", hostname: "acme.test" },
     },
-    login: { allow: [{ email: "a@acme.test" }] },
+    login: {
+      methods: { emailCode: { from: "iterate <login@mail.acme.test>" } },
+      allow: [{ email: "a@acme.test" }],
+    },
   });
 });
 

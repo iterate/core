@@ -216,7 +216,9 @@ For apps on an origin of their own, give the deployment a
   dashboard step. It suits people who share one password: whoever has it signs in as any address
   `login.allow` admits.
 - `emailCode: { from }`: a mailed code from an address on a domain onboarded for Email Sending.
-  Each person proves their own address.
+  Each person proves their own address. The [setup recipe](public/setup-prompt.md) turns it on with
+  a domain, from `login@mail.<your-domain>`, a sending subdomain no project sends from, and keeps
+  the password as the alternate.
 - `google: {}`, `github: {}`, `cloudflare: {}` (or `{ scopes }`): sign-in with that provider's
   integration client, which the person's connection then uses too. `integrations.cloudflare` takes
   `{ oauthClientId, oauthClientSecret }` from your own OAuth client; register
