@@ -93,7 +93,7 @@ up the domain's mail. You delete it at the end of step 5. With `CLOUDFLARE_API_T
 would use it instead), run in the background:
 
 ```bash
-pnpm exec cf auth create iterate-<folder> --no-browser --scopes \
+pnpm exec cf auth create iterate-<folder> --browser=false --scopes \
   account:read user:read offline account_api_tokens:create registrar:read registrar:write \
   account-settings.read workers_scripts:write workers-scripts.write workers_kv:write \
   workers-kv-storage.write workers-r2.write d1:write d1.write containers:write containers.write \
@@ -105,7 +105,7 @@ pnpm exec cf auth create iterate-<folder> --no-browser --scopes \
 
 A token it makes holds no more than the sign-in does, so the sign-in asks for every permission the
 deploy token gets (cf knows each in two spellings, and the list has both), the registrar's, and the
-mail's.
+mail's. `--browser=false`, not `--no-browser`: cf refuses the second form.
 
 It prints Cloudflare's consent link and a code, and exits once the user allows it. Don't leave the
 page to cf, which may have no browser it can open: `open` the link yourself (it carries the code),
@@ -159,7 +159,7 @@ const group = (wanted) => {
 const onAccount = `com.cloudflare.api.account.${account}`;
 const policies = [
   { effect: "allow", resources: { [onAccount]: "*" }, permission_groups: ["Workers Scripts Write",
-    "Workers KV Storage Write", "Workers R2 Storage Write", "D1 Write", "Containers Write",
+    "Workers KV Storage Write", "Workers R2 Storage Write", "D1 Write", "Workers Containers Write",
     "Artifacts Write", "Account Settings Read", "Workers Tail Read", "Workers Observability Read",
   ].map(group) },
   // every zone of the account, so a domain bought in step 3 is covered too
@@ -185,7 +185,8 @@ If cf refuses to list permission groups or make the token, the user makes it by 
 Token**, named `iterate-<folder>`, with these permissions on the **Account** unless the row says
 **Zone**, and **All zones from an account** under **Zone Resources**:
 
-- **Edit**: Workers Scripts, Workers KV Storage, Workers R2 Storage, D1, Containers, Artifacts
+- **Edit**: Workers Scripts, Workers KV Storage, Workers R2 Storage, D1, Workers Containers,
+  Artifacts
 - **Read**: Account Settings, Workers Tail, Workers Observability
 - On the **Zone**: **Edit** Workers Routes and DNS, **Read** Zone
 
@@ -394,8 +395,8 @@ step 2:
 Leave every other field to its default. Generate the values with a script that appends them to the
 file and prints nothing. Never print them in chat.
 
-Without a domain, whenever the user is about to sign in (steps 6 and 8), copy the password to their
-clipboard:
+Whenever the user is about to sign in (steps 6 and 8), copy the password to their clipboard: without
+a domain it is how they sign in, and with one it is the way in if the code doesn't come:
 `sed -n 's/^ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD=//p' .secrets | tr -d '\n' | pbcopy` on
 macOS (on Linux, `wl-copy` or `xclip -selection clipboard` in place of `pbcopy`). Tell them it's on
 their clipboard, that it lives in `.secrets` (give its absolute path), and to save it in their
@@ -479,9 +480,11 @@ Signing in at the origin creates nothing: the organization and project are creat
 page, when an app connects. Send the user to the dash's connect page for the origin,
 `https://dash.iterate.com/.auth/connect?issuer=<origin, URL-encoded>&login_hint=<their email,
 URL-encoded>` (the hint fills the email in on the sign-in page); opening the origin itself goes
-there too. They click Continue and sign in: with a domain, with the code mailed to them (the link
-fills their email in); without one, with their email and the password, which you copy to their
-clipboard first (step 4). Then they name the
+there too. Copy the password to their clipboard first (step 4). They click Continue and sign in:
+with a domain, with the code mailed to them (the link fills their email in); without one, with
+their email and the password. The first mail from a new domain often lands in spam: if the code
+isn't in their inbox within a minute, they look there, or use the password instead (the page
+offers it, and it is on their clipboard). Then they name the
 organization and project on the consent page (with a domain taken over, the project's name is its
 `<project>.<domain>`, and `iterate`, `mcp` and `www` are taken). Wait for them, then find the project and the email
 they signed in with yourself, with the admin bearer, which `--env-file=.secrets` reads so it never
@@ -558,8 +561,8 @@ project secret.
 - Registering may open the sign-in page by itself (e.g. `codex mcp add` does). If it does, don't
   also `open` it or run a separate login command: that pops open the same page twice and confuses
   the user.
-- The user signs the client in through the browser, as in step 6 (the mailed code, or the password
-  on their clipboard). E.g. in Claude
+- The user signs the client in through the browser, as in step 6 (the mailed code, or the password,
+  which you copy to their clipboard again first). E.g. in Claude
   Code: `/mcp`, pick the server, authenticate; after that, `claude mcp list`/`codex mcp list` shows
   it as connected.
 - Then try the server's `run` tool in this session straight away. Some hosts attach a newly added

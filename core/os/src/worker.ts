@@ -457,6 +457,7 @@ async function routeRequest(
   // fails the grammar (`site--prj_1`, `a.b.c`, `--x`) names no project host and must not fall
   // through to the control plane — a working platform origin on a name the platform never chose. 421.
   if (
+    url.origin !== platformOrigin &&
     routing?.type === "subdomains" &&
     url.hostname.toLowerCase().replace(/\.$/, "").endsWith(`.${routing.hostname}`)
   )

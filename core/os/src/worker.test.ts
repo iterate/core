@@ -591,6 +591,22 @@ test("public protocol origins: the issuer stays on the control plane when its zo
   expect(await response.text()).toBe("unversioned https://os.iterate.com\n");
 });
 
+test("public protocol origins: the platform answers inside its project subdomain zone", async () => {
+  const vars = {
+    ...MINIMAL,
+    ITERATE__URLS__OS: "https://iterate.family.test",
+    ITERATE__URLS__MCP: "https://mcp.family.test",
+    ITERATE__URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"family.test"}',
+  };
+  const response = await request("https://iterate.family.test/version", vars);
+  expect(response).toMatchObject({ status: 200 });
+  expect(await response.text()).toBe("unversioned https://iterate.family.test\n");
+  expect(await request("https://iterate.family.test/login", vars)).toMatchObject({ status: 200 });
+  expect(await request("https://invalid.name.family.test/version", vars)).toMatchObject({
+    status: 421,
+  });
+});
+
 // ── projectHostOf ── the platform and MCP origins are never a project host, even under the wildcard
 const subdomains = {
   ...MINIMAL,
