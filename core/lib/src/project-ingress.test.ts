@@ -396,6 +396,20 @@ test.for([
     target: { routingSlug: "a--b" },
     url: null,
   },
+  // a primary under the subdomain routing's own hostname is the apex alone: one label more is a
+  // project there, so a routing slug keeps the ingress form
+  {
+    primaryHostname: "www.iterate.app",
+    routing: subdomains,
+    target: { path: "/a" },
+    url: "https://www.iterate.app/a",
+  },
+  {
+    primaryHostname: "www.iterate.app",
+    routing: subdomains,
+    target: { routingSlug: "blog", path: "/a" },
+    url: "https://blog--templestein.iterate.app/a",
+  },
 ] satisfies {
   primaryHostname: string | null;
   routing: IngressRouting;

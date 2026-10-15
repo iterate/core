@@ -8,7 +8,10 @@
 //
 //   import type { IterateConfigInput } from "./src/iterate-config.ts";
 //   import base from "./iterate.config.ts";
-//   export default { ...base, cloudflare: { accountId: "…", resourcePrefix: "my-iterate" } } satisfies IterateConfigInput;
+//   export default {
+//     ...base,
+//     cloudflare: { ...base.cloudflare, accountId: "…", resourcePrefix: "my-iterate" },
+//   } satisfies IterateConfigInput;
 import { iterateConfigFromEnv } from "./src/iterate-config.ts";
 
 export default iterateConfigFromEnv(process.env);

@@ -14,6 +14,7 @@ import {
   ITERATE_ROUTING_SLUG_HEADER,
   pinnedHostnameOf,
   primaryHostnameUrlOf,
+  routingSlugsHangUnder,
 } from "iterate/project-ingress";
 import { proxyPosthogRequest } from "./posthog-proxy.ts";
 import { parseCause, crossingOneMore, newChain, requestCausedBy, type Cause } from "./cause.ts";
@@ -43,7 +44,12 @@ import {
 } from "./admin-sign-in.ts";
 import { localSignInResponse } from "./local-sign-in.ts";
 import { cloudflareAccessSignInResponse } from "./cloudflare-access-sign-in.ts";
-import { iterateConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./iterate-config.ts";
+import {
+  bareDomainHomeOf,
+  iterateConfigOf,
+  platformAddressesOf,
+  sessionSigningSecretOf,
+} from "./iterate-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
 import { serveProjectFileRequest } from "./context/file-urls.ts";
 import { FILES_ROUTING_SLUG } from "./fetch-routes.ts";
@@ -323,6 +329,17 @@ async function routeRequest(
     const projectId = project.id;
     // the request is the project's from here (iterate-context.ts `nameActiveSpan`)
     nameActiveSpan({ projectId });
+    // WWW: `www.<a project's own hostname>` is that hostname, as across the web, never an app called
+    // www. Any request goes there, a 308 keeping its method, path and query. The ingress forms
+    // (`www--<project>.<base>`, `/projects/<project>/www/`) keep `www` a routing slug.
+    if (projectHost.routingSlug === "www" && url.hostname.startsWith("www."))
+      return new Response(null, {
+        status: 308,
+        headers: {
+          location: `${url.protocol}//${url.host.slice("www.".length)}${url.pathname}${url.search}`,
+          "cache-control": "no-store",
+        },
+      });
     // THE FILES HOST (context/file-urls.ts): `files--<project>` serves a signed file URL straight
     // from the bucket, before any session or DO — the token in the URL is the authorization.
     if (projectHost.routingSlug === FILES_ROUTING_SLUG) {
@@ -356,9 +373,11 @@ async function routeRequest(
     // the hostname the deployment's config pins to the project first, then the one it claimed
     const primaryHostname =
       pinnedHostnameOf(iterateConfig.urls.projectHostnames, project) ?? project.primaryHostname;
+    // a routing slug stays on the ingress form when it cannot hang under the primary hostname
     const location =
       redirect &&
       primaryHostname &&
+      (!redirect.routingSlug || routingSlugsHangUnder(primaryHostname, routing)) &&
       primaryHostnameUrlOf(primaryHostname, {
         routingSlug: redirect.routingSlug,
         path: `${url.pathname}${url.search}`,
@@ -446,9 +465,21 @@ async function routeRequest(
     });
 
   // A platform request, then — on the platform origin (a deployment with `urls.os` set answers there
-  // and on its project hosts, nowhere else).
-  if (url.origin !== platformOrigin)
+  // and on its project hosts, nowhere else). The bare domain of subdomain routing goes to the
+  // project its `www.` name is pinned to (iterate-config.ts `bareDomainHomeOf`), path and query
+  // kept.
+  if (url.origin !== platformOrigin) {
+    const home = bareDomainHomeOf(iterateConfig, url);
+    if (home)
+      return new Response(null, {
+        status: 308,
+        headers: {
+          location: `${url.protocol}//${home}${url.pathname}${url.search}`,
+          "cache-control": "no-store",
+        },
+      });
     return new Response("Unknown platform origin", { status: 421 });
+  }
 
   // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a deploy's
   // readiness check waits for — and the origin this deployment answers on.

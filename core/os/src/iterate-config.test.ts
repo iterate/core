@@ -9,7 +9,10 @@ import { readDeployment } from "../scripts/iterate-config-file.ts";
 import {
   deploymentOf,
   type IterateConfigInput,
+  iterateConfigFromEnv,
   parseIterateConfig,
+  parseIterateConfigInput,
+  reservedProjectSlugsOf,
   resourceNamesOf,
   secretFieldsOf,
 } from "./iterate-config.ts";
@@ -49,6 +52,59 @@ test("deploymentOf: the Worker parses its variables back into the config the dep
   // JSON shows every plain field, in order, and each secret as REDACTED; secretFieldsOf, their values
   expect(JSON.stringify(onWorker)).toBe(JSON.stringify(config));
   expect(secretFieldsOf(onWorker)).toEqual(secretFieldsOf(config));
+});
+
+test("iterateConfigFromEnv: a local config spreads its sections and overrides their fields, as the setup recipe's does", () => {
+  // .secrets as the setup recipe writes it (public/setup-prompt.md, steps 2 and 4)
+  const base = iterateConfigFromEnv({
+    ITERATE__CLOUDFLARE__API_TOKEN: "cf-token",
+    ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD: "p",
+    ITERATE__SECRETS_ENCRYPTION__KEY: "key",
+    ITERATE__ADMIN_BEARER: "bearer",
+  });
+  // its iterate.config.local.ts: `satisfies` makes this file's typecheck check the recipe's shape
+  const local = {
+    ...base,
+    cloudflare: { ...base.cloudflare, accountId: "account-1", resourcePrefix: "iterate" },
+    urls: { ...base.urls, os: "https://iterate.acme.test", emailDomain: "acme.test" },
+    login: { ...base.login, allow: [{ email: "a@acme.test" }] },
+  } satisfies IterateConfigInput;
+  expect(deploymentOf(local).config).toMatchObject({
+    cloudflare: { accountId: "account-1", resourcePrefix: "iterate" },
+    urls: { os: "https://iterate.acme.test", emailDomain: "acme.test" },
+    login: { allow: [{ email: "a@acme.test" }] },
+  });
+});
+
+test("reservedProjectSlugsOf: the labels under the projects' domain that the deployment answers on itself", () => {
+  const selfHost = parseIterateConfigInput({
+    ...configInput(),
+    urls: {
+      os: "https://iterate.acme.test",
+      mcp: "https://mcp.acme.test",
+      ingressRouting: { type: "subdomains", hostname: "acme.test" },
+      // a pin under the domain is kept; one of its own elsewhere is not
+      projectHostnames: [
+        { hostname: "www.acme.test", project: "home" },
+        { hostname: "home.example", project: "home" },
+      ],
+    },
+  });
+  expect(Object.fromEntries(reservedProjectSlugsOf(selfHost))).toEqual({
+    iterate: "iterate.acme.test",
+    mcp: "mcp.acme.test",
+    www: "www.acme.test",
+  });
+  // prd's own names are not under its projects' domain
+  const prd = parseIterateConfigInput({
+    ...configInput(),
+    urls: {
+      os: "https://os.iterate.com",
+      mcp: "https://mcp.iterate.com",
+      ingressRouting: { type: "subdomains", hostname: "iterate.app" },
+    },
+  });
+  expect(Object.fromEntries(reservedProjectSlugsOf(prd))).toEqual({});
 });
 
 test("resourceNamesOf: the KV titles follow the Worker's name, the other resources the prefix", () => {

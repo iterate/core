@@ -260,6 +260,11 @@ export const IterateConfig = z.object({
       projectHostnames: z
         .array(z.object({ hostname: dnsName, project: z.string().trim().min(1, REQUIRED) }))
         .default([]),
+      /** THE DOMAIN PROJECTS' MAIL IS ON (email/contract.ts `emailDomainOf`): `<slug>@<emailDomain>`
+       *  reaches project `<slug>`, and that project sends from it. Its Email Routing catch-all
+       *  delivers to this deployment's Worker, and it is onboarded for Email Sending. Unset ⇒ the
+       *  hostname projects are subdomains of (`ingressRouting`), and none under paths routing. */
+      emailDomain: dnsName.optional(),
     })
     .prefault({}),
   /** CUSTOM HOSTNAMES a project adds itself (project/custom-hostnames.ts): each a wildcard
@@ -523,11 +528,14 @@ export type IterateConfig = Omit<z.output<typeof IterateConfig>, "urls"> & {
 export type IterateConfigInput = z.input<typeof IterateConfig>;
 
 /** The iterate config `env` holds, before the schema: `ITERATE` with every `ITERATE__*` merged on
- *  top. What core/os/iterate.config.ts exports. The cast to the input type is unchecked, so that an
- *  iterate.config.local.ts can spread it and override fields with types; it is safe because nothing
- *  reads the object before a parse (`parseIterateConfigInput`) checks it whole. */
-export function iterateConfigFromEnv(env: object): IterateConfigInput {
-  return appConfigInputOf(env, ITERATE_CONFIG_PREFIX) as IterateConfigInput;
+ *  top. What core/os/iterate.config.ts exports. The cast is unchecked, so that an
+ *  iterate.config.local.ts can spread it and each section (`...base.cloudflare`) and override
+ *  fields with types: every section reads as present, as the environment holds it. It is safe
+ *  because nothing reads the object before a parse (`parseIterateConfigInput`) checks it whole. */
+export function iterateConfigFromEnv(env: object) {
+  return appConfigInputOf(env, ITERATE_CONFIG_PREFIX) as {
+    [Section in keyof IterateConfigInput]-?: NonNullable<IterateConfigInput[Section]>;
+  };
 }
 
 /** The slice of `env` the configuration reads: the version-metadata binding, the `ITERATE` object
@@ -797,6 +805,11 @@ export function projectHostOf(
   // platform's, never project `os`. Under paths the platform origin carries `/projects/…` too.
   if (url.origin === config.urls.mcp) return null;
   if (url.origin === platformOrigin && config.urls.ingressRouting?.type !== "paths") return null;
+  // A hostname the config pins exactly is its project's apex, even under the subdomain routing's
+  // hostname: `www.misherate.com` pinned to misha is misha's, never a project called www.
+  const pinned = config.urls.projectHostnames.find((entry) => entry.hostname === url.hostname);
+  if (pinned && url.origin !== platformOrigin)
+    return { routingSlug: null, project: pinned.project, basePath: "" };
   const routed = projectAddressOf(config.urls.ingressRouting, url, platformOrigin);
   if (routed) return routed;
   if (url.origin === platformOrigin) return null;
@@ -807,4 +820,37 @@ export function projectHostOf(
   }
   const wildcard = projectWildcardHostOf(url.hostname, config.urls.projectWildcard);
   return wildcard && { ...wildcard, basePath: "" };
+}
+
+/** WHERE THE BARE DOMAIN GOES under subdomain routing, whose names are projects: to its `www.` name
+ *  when the config pins that to a project (`misherate.com` to `www.misherate.com`), which is then
+ *  the deployment's homepage. Null elsewhere: the bare domain names no project. Pure. */
+export function bareDomainHomeOf(config: IterateConfig, url: URL): string | null {
+  const routing = config.urls.ingressRouting;
+  if (routing?.type !== "subdomains" || url.hostname !== routing.hostname) return null;
+  const www = `www.${routing.hostname}`;
+  return config.urls.projectHostnames.some((entry) => entry.hostname === www) ? www : null;
+}
+
+/** THE PROJECT SLUGS THIS DEPLOYMENT KEEPS, with the name each is kept for: under subdomain
+ *  routing, the label of every name one under the routing's hostname that the deployment answers
+ *  on itself, its platform and MCP origins and the hostnames its config pins
+ *  (`iterate.misherate.com`, `mcp.misherate.com`, `www.misherate.com`). A project of that slug
+ *  could never be reached at its apex. None under paths routing, and none on prd, whose own names
+ *  are not under iterate.app. Pure. */
+export function reservedProjectSlugsOf(config: IterateConfig): Map<string, string> {
+  const routing = config.urls.ingressRouting;
+  const reserved = new Map<string, string>();
+  if (routing?.type !== "subdomains") return reserved;
+  const hostnames = [
+    ...[config.urls.os, config.urls.mcp].filter(Boolean).map((origin) => new URL(origin).hostname),
+    ...config.urls.projectHostnames.map((entry) => entry.hostname),
+  ];
+  for (const hostname of hostnames) {
+    const label = hostname.endsWith(`.${routing.hostname}`)
+      ? hostname.slice(0, -routing.hostname.length - 1)
+      : "";
+    if (label && !label.includes(".")) reserved.set(label, hostname);
+  }
+  return reserved;
 }

@@ -105,7 +105,11 @@ import base from "./iterate.config.ts";
 
 export default {
   ...base,
-  cloudflare: { accountId: "<your Cloudflare account id>", resourcePrefix: "iterate" },
+  cloudflare: {
+    ...base.cloudflare,
+    accountId: "<your Cloudflare account id>",
+    resourcePrefix: "iterate",
+  },
   login: { ...base.login, allow: [{ email: "you@example.com" }] },
 } satisfies IterateConfigInput;
 ```
@@ -198,8 +202,8 @@ path sends a visitor to the platform's sign-in and back. Signed file URLs
 (`/projects/<project>/files/…`) work for anyone holding one, and are served sandboxed so a file
 can never act as whoever opens it.
 
-For apps on an origin of their own, or people who don't all trust each other, give the deployment
-a [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
+For apps on an origin of their own, give the deployment a
+[custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
 
 ## Sign-in
 
@@ -244,8 +248,9 @@ An integration is a package the project hosts
 Telegram bot, your own GitHub App, Monzo, Pebble, and more, one folder each with a recipe for a
 coding agent). Adding one is a dependency of the project's config repo and one element of the
 `integrations` array in its `worker.ts`. The package serves its own setup page and webhook on the
-project's host (`<slug>--<project>.<your-domain>`, or `<origin>/projects/<project>/<slug>/` without
-a domain) and registers itself with the Dash's Integrations page, which shows its card, its
+project's host (`<slug>--<project>.<your-domain>` with a custom domain,
+`<slug>.<its own domain>` on a project's own domain, `<origin>/projects/<project>/<slug>/` without
+one) and registers itself with the Dash's Integrations page, which shows its card, its
 connections and a button to each page. No provider has to live in the deployment for that, so a
 self-host connects to anything the hosted platform does.
 
@@ -266,28 +271,45 @@ call names `redirect` (a routing slug and a path of the project's).
 
 ## Custom domain: own origins for apps and tunnels
 
-With a domain, each project app gets an origin of its own, `<routingSlug>--<project>.<your-domain>`,
-and the project's config worker answers at `<project>.<your-domain>`. The platform's sign-in stays
-on `os.<your-domain>`, out of the apps' reach. Apps can be public, a dev server can serve at `/`,
-and `iterate tunnel` works private or `--public`, at the root of its own origin.
+With a domain, every project gets names of its own under it, each an origin of its own:
+`<project>.<your-domain>` is its homepage, and `<routingSlug>--<project>.<your-domain>` each of its
+apps. The platform's sign-in moves to `iterate.<your-domain>` and its MCP to `mcp.<your-domain>`,
+out of the apps' reach: no project's code runs on the platform's origin. Apps can be public, a dev
+server can serve at `/`, and `iterate tunnel` works private or `--public`, at the root of its own
+origin. The [setup recipe](public/setup-prompt.md) sets this up.
 
 What it takes:
 
 1. **The zone** for `<your-domain>` on the same Cloudflare account as the Worker, and the token's
    Zone · Workers Routes · Edit on it.
-2. **Your routes in `cloudflare.workerRoutes`**:
-   `[{"pattern":"*.<your-domain>/*","zone":"<your-domain>"}]`. The wildcard also covers
-   `os.<your-domain>`. A route answers only where DNS does: make a proxied record
-   `*.<your-domain>` (any target, such as AAAA `100::`) by hand. The deploy makes no DNS record.
-3. **A certificate for `*.<your-domain>`.** Cloudflare's Universal SSL covers the apex and one
-   wildcard level, which is why a project host is one label under `<your-domain>`:
-   `<routingSlug>--<project>`, or the apex `<project>`.
-4. **The URLs**: `urls.os` = `https://os.<your-domain>` and `urls.ingressRouting` =
+2. **Your routes in `cloudflare.workerRoutes`**: `<your-domain>/*` and `*.<your-domain>/*`, each
+   with `"zone":"<your-domain>"`. A route answers only where DNS does: make proxied records
+   `<your-domain>` and `*.<your-domain>` (any target, such as AAAA `100::`) by hand. The deploy
+   makes no DNS record.
+3. **A certificate.** Cloudflare's Universal SSL covers the apex and one wildcard level, which is
+   why every host here is one label under `<your-domain>`, and an app's is
+   `<routingSlug>--<project>`.
+4. **The URLs**: `urls.os` = `https://iterate.<your-domain>`, `urls.mcp` =
+   `https://mcp.<your-domain>`, and `urls.ingressRouting` =
    `{"type":"subdomains","hostname":"<your-domain>"}`.
 
-Deploy again. `/mcp` then lives at
-`https://os.<your-domain>/mcp`; reconnect your MCP client there. Keep `cloudflare.workersDev` on
-while anything still uses the workers.dev origin.
+Deploy again. MCP then lives at `https://mcp.<your-domain>`; reconnect your MCP client there. Keep
+`cloudflare.workersDev` on while anything still uses the workers.dev origin. No project may be
+called `iterate`, `mcp` or `www` here: a project's slug is refused when the deployment answers on
+`<slug>.<your-domain>` itself (`reservedProjectSlugsOf`).
+
+**A homepage on `www`.** `urls.projectHostnames` =
+`[{"hostname":"www.<your-domain>","project":"<its id>"}]` makes `www.<your-domain>` that project's
+homepage: the bare `<your-domain>` and the project's `<project>.<your-domain>` go there, and its
+apps keep `<routingSlug>--<project>.<your-domain>`, one label under `www` being past the
+certificate. For nicer app names, give the project [a domain of its own](#a-projects-own-domain).
+
+**Mail.** Every project has an address, `<project>@<your-domain>`: mail to it lands on the
+project's `/integrations/email`, and the project sends from that address alone (`itx.email.send`).
+On the zone, Email Routing's catch-all delivers to the Worker, and the domain is onboarded for
+Email Sending; the [setup recipe](public/setup-prompt.md) ("Mail on the domain") does both. The mail
+domain is the hostname projects are subdomains of; `urls.emailDomain` names another, or gives one
+to a deployment whose projects are paths.
 
 A deploy makes the Worker's routes match `cloudflare.workerRoutes`: it adds the routes the list
 names and deletes the Worker's routes it does not name. It refuses a route that another Worker
@@ -297,7 +319,8 @@ holds: remove the route from that Worker first.
 
 `urls.projectHostnames: [{ "hostname": "example.org", "project": "<id or slug>" }]` gives one
 project a domain of its own: `example.org` is the project's apex, and `notes.example.org` is its
-`notes` app, as with a hostname the project adds itself. Name the project by its id (`prj_…`): an
+`notes` app, as with a hostname the project adds itself. `www.example.org` is no app: it redirects
+to `example.org`. Name the project by its id (`prj_…`): an
 entry that names its slug stops serving it when the project is renamed, so `projects.rename`
 refuses to rename a project the config names by its slug. The pinned hostname is the project's
 primary hostname before any it claims on the Dash: `itx.url`, the Dash's buttons, a package's OAuth

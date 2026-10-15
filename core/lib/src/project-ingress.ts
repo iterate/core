@@ -193,10 +193,20 @@ export function pinnedHostnameOf(
   return own?.hostname || null;
 }
 
+/** Whether a project's routing slugs hang under its primary hostname, `<routingSlug>.<hostname>`.
+ *  Not when the hostname is the subdomain routing's own or a name under it (`www.misherate.com`
+ *  under `misherate.com`): one label more is a project of its own there, or a level past the
+ *  wildcard certificate. That hostname is the project's apex alone, and its routing slugs keep the
+ *  ingress form, `<routingSlug>--<project>.<base>`. Pure. */
+export function routingSlugsHangUnder(primaryHostname: string, routing: IngressRouting): boolean {
+  if (routing?.type !== "subdomains") return true;
+  return primaryHostname !== routing.hostname && !primaryHostname.endsWith(`.${routing.hostname}`);
+}
+
 /** THE PUBLIC URL of `routingSlug` (null ⇒ the apex) at `path` in `project` — the one rule behind
  *  `itx.url` and `itx.whoami().projectUrl`: on the project's `primaryHostname` when it has one
- *  (`primaryHostnameUrlOf`), else under the deployment's ingress (`projectUrlOf`). Null as those
- *  answer null. Pure. */
+ *  and the routing slug hangs under it (`primaryHostnameUrlOf`, `routingSlugsHangUnder`), else
+ *  under the deployment's ingress (`projectUrlOf`). Null as those answer null. Pure. */
 export function projectPublicUrlOf(
   routing: IngressRouting,
   platformOrigin: string,
@@ -207,7 +217,8 @@ export function projectPublicUrlOf(
     path?: string;
   },
 ): URL | null {
-  return target.primaryHostname
-    ? primaryHostnameUrlOf(target.primaryHostname, target)
+  const primary = target.primaryHostname;
+  return primary && (!target.routingSlug || routingSlugsHangUnder(primary, routing))
+    ? primaryHostnameUrlOf(primary, target)
     : projectUrlOf(routing, platformOrigin, target);
 }

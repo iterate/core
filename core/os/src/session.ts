@@ -37,11 +37,16 @@ import {
   type MemberRecord,
   type OrganizationRecord,
   type ProjectRecord,
+  projectSlug,
   type UserRecord,
 } from "./control-plane/catalog.ts";
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
 import { OrganizationRole } from "./organization/contract.ts";
-import { iterateAppScopesOf, type IterateConfig } from "./iterate-config.ts";
+import {
+  iterateAppScopesOf,
+  type IterateConfig,
+  reservedProjectSlugsOf,
+} from "./iterate-config.ts";
 import { contextStub, facetStateOf } from "./context-stub.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
 import { IntegrationProvider } from "./integrations/contract.ts";
@@ -415,6 +420,18 @@ function publishProjectAdded(
     ],
     [{ account: caller.principal!.actor }, [membership]],
   ]);
+}
+
+/** A slug the deployment keeps for a name it answers on itself (iterate-config.ts
+ *  `reservedProjectSlugsOf`) is taken, for a new project and a rename alike: a project of that slug
+ *  could never be reached at its apex. */
+function refuseKeptSlug(config: IterateConfig, slug: string) {
+  const keptFor = reservedProjectSlugsOf(config).get(slug);
+  if (keptFor)
+    throw codedError(
+      "PROJECT_NAME_TAKEN",
+      `The project name '${slug}' is taken: ${keptFor} is this deployment's own.`,
+    );
 }
 
 /** The facts more than one verb lands (their shapes are the organization contract's,
@@ -1080,6 +1097,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
           )
         : undefined;
       const { input: sessionInput, caller } = this.#session;
+      refuseKeptSlug(sessionInput.iterateConfig, projectSlug(data.project));
       const created = await waits.time("controlPlaneCreate", () =>
         sessionInput.controlPlane.createProject(caller, {
           project: data.project,
@@ -1215,6 +1233,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
   async rename(project: string, input: { slug: string }): Promise<ProjectRecord> {
     const { input: sessionInput, caller } = this.#session;
     const { slug } = z.object({ slug: z.string() }).parse(input);
+    refuseKeptSlug(sessionInput.iterateConfig, slug);
     const id = await this.#reachableId("rename", project);
     const current = await sessionInput.controlPlane.getProject(id, true);
     const { projectHostnames, projectWildcard } = sessionInput.iterateConfig.urls;
