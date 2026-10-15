@@ -333,6 +333,10 @@ zone a route of its own to its Worker (`app.example.org/*`), or the wildcard tak
 
 ## Destroy
 
+To remove everything the [setup recipe](public/setup-prompt.md) made, the zone's records and mail
+and the deploy token included, have your agent follow [`public/teardown-prompt.md`](public/teardown-prompt.md).
+What follows is Alchemy's part.
+
 `pnpm alchemy destroy` deletes every resource the state names: the Worker with every Durable Object
 (every project's data) and its routes, the D1, the KV namespaces, the R2 bucket (emptied first) and
 the container application. It asks first, unless `--yes`. It needs no build, because it plans from

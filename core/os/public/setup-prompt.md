@@ -19,6 +19,9 @@ Opening the deployment's origin (`https://iterate.<domain>`, or
 `https://iterate.<subdomain>.workers.dev` without a domain) in a browser goes to the dash, signed
 in through that deployment. The dash links the other apps.
 
+To remove everything this makes later, follow [`teardown-prompt.md`](teardown-prompt.md), beside
+this file and served at `<origin>/teardown-prompt.md`.
+
 Work in the directory you were started in. Its name, `<folder>`, names what this setup makes on the
 user's machine and Cloudflare account, `iterate-<folder>`, so setups from two folders don't clash.
 
@@ -598,7 +601,9 @@ gets familiar with them):
   code, or their email and the password);
 - where the config and secrets are (`iterate/core/os/iterate.config.local.ts`,
   `iterate/core/os/.secrets`), that `.secrets` is the only copy, and how to update
-  (`git pull`, `pnpm install`, then `pnpm run deploy` in `core/os`).
+  (`git pull`, `pnpm install`, then `pnpm run deploy` in `core/os`);
+- that `iterate/core/os/public/teardown-prompt.md` removes everything again, for their agent to
+  follow.
 
 ## A domain later
 

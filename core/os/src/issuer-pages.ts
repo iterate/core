@@ -34,6 +34,8 @@ const publicFiles = new Set([
   "/setup-prompt.md",
   // the recipe an agent follows to connect a service to a project (the MCP server and the Dash point at it)
   "/connect-a-service.md",
+  // the prompt an agent follows to remove what /setup-prompt.md made
+  "/teardown-prompt.md",
 ]);
 
 /** Start answers a page request that does not accept HTML with a 500; it is a 406. */
