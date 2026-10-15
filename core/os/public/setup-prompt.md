@@ -94,15 +94,18 @@ up the domain's mail. You delete it at the end of step 5. With `CLOUDFLARE_API_T
 would use it instead), run in the background:
 
 ```bash
-pnpm exec cf auth create iterate-<folder> \
+pnpm exec cf auth create iterate-<folder> --no-browser \
   --scopes account:read account_api_tokens:create user:read registrar:read registrar:write \
   zone:read email_routing:write email_sending:write offline
 ```
 
-It opens Cloudflare's consent page, and exits once the user allows it. Meanwhile, tell the user the
-page is Cloudflare's, for the iterate setup. It opens as whoever is signed in at
-dash.cloudflare.com: if that's not the user they want, they sign out there first. They allow it and
-pick the account for iterate (with Workers Paid and R2, as your first message said).
+It prints Cloudflare's consent link and a code, and exits once the user allows it. Don't leave the
+page to cf, which may have no browser it can open: `open` the link yourself (it carries the code),
+and give the user the link and the code to check against the page. Tell them the page is
+Cloudflare's, for the iterate setup. It opens as whoever is signed in at dash.cloudflare.com: if
+that's not the user they want, they sign out there first. They allow it and pick the account for
+iterate (with Workers Paid and R2, as your first message said). The link expires after a few
+minutes; if it does, run the command again.
 
 Wait for the command. Then see who signed in:
 
