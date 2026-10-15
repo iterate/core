@@ -107,6 +107,14 @@ function nextPathOf(next: string | null, origin: string): string {
   return url.pathname + url.search;
 }
 
+/** The query of a sign-in's next step, the link's `login_hint` kept when it named one (LOGIN HINT
+ *  in `/.auth/login`). */
+function signInQuery(fields: Record<string, string>, loginHint: string | null) {
+  const query = new URLSearchParams(fields);
+  if (loginHint) query.set("login_hint", loginHint);
+  return query;
+}
+
 /** What the app's own sign-in currently is, for the Sign-in-again page to show: who it is signed in
  *  as, and the projects it reaches — its grant, the thing that turned out not to include the project
  *  the page named. One bounded HTTP-batch read of the platform (the logout path's shape), best
@@ -269,10 +277,11 @@ function connectPage(input: {
   origin: string;
   next: string;
   scope: string | null;
+  loginHint: string | null;
   held: { issuer: string } | null;
   defaultIssuer: string;
 }): Response {
-  const { url, origin, next, scope, held, defaultIssuer } = input;
+  const { url, origin, next, scope, loginHint, held, defaultIssuer } = input;
   const host = new URL(origin).host;
   const ends =
     held && held.issuer !== origin
@@ -283,7 +292,7 @@ function connectPage(input: {
     title: `Connect to ${host}`,
     head: dress.head,
     csp: dress.csp,
-    body: `${dress.mark}<h1>Connect ${text(url.host)} to <code>${text(host)}</code>?</h1><p>This app will sign you in through <strong>${text(host)}</strong> and show what that platform holds. Continue only if that is your own iterate platform.</p>${ends}<form method="post" action="/.auth/connect"><input type="hidden" name="issuer" value="${text(origin)}"><input type="hidden" name="next" value="${text(next)}">${scope ? `<input type="hidden" name="scope" value="${text(scope)}">` : ""}<button class="primary" type="submit">Continue</button><a class="quiet" href="/">Cancel</a></form>`,
+    body: `${dress.mark}<h1>Connect ${text(url.host)} to <code>${text(host)}</code>?</h1><p>This app will sign you in through <strong>${text(host)}</strong> and show what that platform holds. Continue only if that is your own iterate platform.</p>${ends}<form method="post" action="/.auth/connect"><input type="hidden" name="issuer" value="${text(origin)}"><input type="hidden" name="next" value="${text(next)}">${scope ? `<input type="hidden" name="scope" value="${text(scope)}">` : ""}${loginHint ? `<input type="hidden" name="login_hint" value="${text(loginHint)}">` : ""}<button class="primary" type="submit">Continue</button><a class="quiet" href="/">Cancel</a></form>`,
   });
 }
 
@@ -378,13 +387,14 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       if ("error" in named) return refusalPage(issuer, named.error);
       const next = nextPathOf(url.searchParams.get("next"), url.origin);
       const scope = url.searchParams.get("scope");
+      const loginHint = url.searchParams.get("login_hint");
       const host = await held();
       // the deployment's own issuer needs no asking when this browser is not bound elsewhere
       if (named.origin === issuer && (!host || host.issuer === issuer))
         return new Response(null, {
           status: 303,
           headers: {
-            Location: `/.auth/login?${new URLSearchParams({ next, scope: scope || "" })}`,
+            Location: `/.auth/login?${signInQuery({ next, scope: scope || "" }, loginHint)}`,
             "Cache-Control": "no-store",
           },
         });
@@ -393,6 +403,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         origin: named.origin,
         next,
         scope,
+        loginHint,
         held: host,
         defaultIssuer: issuer,
       });
@@ -412,6 +423,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       .filter(Boolean);
     const parsed = OAuthScopes.safeParse(posted.length ? posted : config.scopes || []);
     if (!parsed.success) return refusalPage(issuer, "Unsupported permission.");
+    const loginHint = String(form.get("login_hint") || "");
     if (named.origin !== issuer) {
       const refused = await issuerAnswersAt(named.origin);
       if (refused) return refusalPage(issuer, refused);
@@ -419,7 +431,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     const host = await held();
     if (host?.issuer === named.origin)
       return onwardPage(
-        `/.auth/login?${new URLSearchParams({ next, scope: parsed.data.join(" ") })}`,
+        `/.auth/login?${signInQuery({ next, scope: parsed.data.join(" ") }, loginHint)}`,
       );
     if (host) {
       // a deliberate switch: end the sign-in at the issuer it was with (best effort — that issuer
@@ -441,7 +453,9 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       },
       next,
     );
-    return onwardPage(location, { "Set-Cookie": setCookie });
+    const authorize = new URL(location);
+    if (loginHint) authorize.searchParams.set("login_hint", loginHint);
+    return onwardPage(authorize.href, { "Set-Cookie": setCookie });
   }
 
   if (url.pathname === "/.auth/login") {
@@ -454,6 +468,8 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     );
     if (!parsed.success) return new Response("Unsupported permission", { status: 400 });
     const scopes = parsed.data;
+    // whom the link that started this sign-in was for (LOGIN HINT below)
+    const loginHint = url.searchParams.get("login_hint");
     // A link may NAME an issuer; only the connect page's POST may bind one. So a login link that
     // names one lands on that page (which also says no to a bad one) — a click is always required.
     const requested = url.searchParams.get("issuer");
@@ -466,7 +482,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         return new Response(null, {
           status: 303,
           headers: {
-            Location: `/.auth/connect?${new URLSearchParams({ issuer: requested, next, scope: scope || "" })}`,
+            Location: `/.auth/connect?${signInQuery({ issuer: requested, next, scope: scope || "" }, loginHint)}`,
             "Cache-Control": "no-store",
           },
         });
@@ -527,11 +543,11 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     );
     // A LOGIN HINT rides on to the issuer as OpenID Connect's `login_hint` (Core 1.0 §3.1.2.1,
     // https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest): whom the link that
-    // started this sign-in was for. A hint, never a credential: the platform's consent page
-    // pre-fills an admin's "Sign in as someone else…" with it, which the admin still confirms
-    // (core/os consent.ts). A browser still signed in above never gets this far, so the hint
-    // changes nothing about a session that already works.
-    const loginHint = url.searchParams.get("login_hint");
+    // started this sign-in was for, through the connect page too (`signInQuery`). A hint, never a
+    // credential: the platform's sign-in page fills in its email with it (core/os
+    // login.server.ts), and its consent page pre-fills an admin's "Sign in as someone else…",
+    // which the admin still confirms (core/os consent.ts). A browser still signed in above never
+    // gets this far, so the hint changes nothing about a session that already works.
     const authorize = new URL(location);
     if (loginHint) authorize.searchParams.set("login_hint", loginHint);
     if (providerHint) authorize.searchParams.set("provider_hint", providerHint);

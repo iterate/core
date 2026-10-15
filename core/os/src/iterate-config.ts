@@ -365,8 +365,8 @@ export const IterateConfig = z.object({
        *  (local-sign-in.ts), which signs its test people in with no password. Refused
        *  (`parseIterateConfig`) unless `urls.os` is a preview's, a laptop's or a test's. A per-commit
        *  deployment's config sets it, and local dev's (cloudflare.config.ts).
-       *  Unset ⇒ no fake provider signs anyone in, no link pre-fills anyone, and no one-click local
-       *  sign-in exists. */
+       *  Unset ⇒ no fake provider signs anyone in, no link pre-fills an admin's choice, and no
+       *  one-click local sign-in exists. */
       testEmailDomain: dnsName.optional(),
     },
     { error: REQUIRED },

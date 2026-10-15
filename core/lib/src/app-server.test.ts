@@ -189,6 +189,44 @@ test("a login hint and a provider hint ride on to the issuer's authorization URL
   expect(await location("/.auth/login?next=%2F")).toBe(`${ISSUER}/oauth2/auth?state=x`);
 });
 
+test("a connect link's login hint rides through the connect page to the issuer's authorization URL", async () => {
+  const hint = "ada@someorg.example";
+  // a login link that names another issuer goes by the connect page, the hint kept
+  const login = await connected(
+    `/.auth/login?${new URLSearchParams({ issuer: CONNECTED, next: "/projects/acme", login_hint: hint })}`,
+  ).response;
+  const connect = `/.auth/connect?${new URLSearchParams({ issuer: CONNECTED, next: "/projects/acme", scope: "", login_hint: hint })}`;
+  expect(login?.headers.get("location")).toBe(connect);
+  // the connect page's Continue carries it
+  const page = await connected(connect).response;
+  expect(await page?.text()).toContain(`<input type="hidden" name="login_hint" value="${hint}">`);
+  // and the POST sets it on the authorization it starts (posted for the deployment's own issuer
+  // here: another must first answer over the network, `issuerAnswersAt`)
+  const post = await connected("/.auth/connect", {
+    method: "POST",
+    headers: { origin: "https://notes.example" },
+    body: new URLSearchParams({ issuer: ISSUER, next: "/projects/acme", login_hint: hint }),
+  }).response;
+  expect(await post?.text()).toContain(
+    `content="0;url=${ISSUER}/oauth2/auth?state=x&#38;login_hint=ada%40someorg.example"`,
+  );
+  // a browser bound nowhere goes straight on to sign in at the deployment's own issuer, hint and all
+  const fresh = await appAuth(
+    new Request(
+      `https://notes.example/.auth/connect?${new URLSearchParams({ issuer: ISSUER, login_hint: hint })}`,
+    ),
+    {
+      sessions: {} as DurableObjectNamespace<BrowserSession>,
+      issuer: ISSUER,
+      resource: `${ISSUER}/api`,
+      api: () => new Response(""),
+    },
+  );
+  expect(fresh?.headers.get("location")).toBe(
+    `/.auth/login?${new URLSearchParams({ next: "/", scope: "", login_hint: hint })}`,
+  );
+});
+
 test("on the issuer's own origin, a signed-out login goes to its sign-in page with the provider hint", async () => {
   const config = {
     sessions: { getByName: () => ({}) } as unknown as DurableObjectNamespace<BrowserSession>,

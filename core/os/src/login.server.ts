@@ -41,8 +41,9 @@ export async function loginState(
     switchAccount: switchAccountHref(next),
     codeSentTo: session ? null : await loginCodePending(env, request),
     error: search.error || null,
-    // the email the refused post carried, so the page keeps what was typed
-    email: search.email || "",
+    // the email the refused post carried, so the page keeps what was typed; before anything is
+    // typed, whom the link that started this sign-in named
+    email: search.email || loginHintOf(next, platformOrigin),
     passwordSelected: search.method === "password",
     // every way in, in the config's order (sign-in-methods.ts); the code form needs the mailbox
     // binding too
@@ -65,6 +66,16 @@ export async function loginState(
         ? only.href
         : null,
   };
+}
+
+/** The OpenID Connect `login_hint` of the authorization this sign-in returns to (`next`, the
+ *  consent page's `/oauth2/auth?…`), or "": whom the link that started it named
+ *  (iterate/app-server.ts `/.auth/login` and `/.auth/connect` pass a link's on). A convenience,
+ *  never a credential: the page only fills in the email, and the person still proves who they are. */
+function loginHintOf(next: string, platformOrigin: string) {
+  const authorization = new URL(next, platformOrigin);
+  if (authorization.pathname !== "/oauth2/auth") return "";
+  return authorization.searchParams.get("login_hint")?.trim() || "";
 }
 
 /** The sign-in page's POSTs — plain forms, no script in the loop. `method` switches between the
