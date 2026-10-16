@@ -26,9 +26,13 @@ Work in the directory you were started in. Its name, `<folder>`, names what this
 user's machine and Cloudflare account, `iterate-<folder>`, so setups from two folders don't clash.
 
 Whenever the user has to act somewhere else (the browser, or e.g. typing `/mcp` into their client),
-end your turn or wait on a background command. Don't ask a blocking question: it takes over their
-prompt box. Ask in plain text and end your turn instead. When you ask, say what to answer: "Say
-done" once they have done something, "Say yes" to accept what you propose.
+watch for the result yourself rather than asking them to report back: a background command that
+exits when they're done (`cf auth create`), or a check you repeat every few seconds (the account
+checks in step 3, the admin bearer's project list in step 6, `claude mcp list`/`codex mcp list` in
+step 8). Give it up to five minutes, and only then ask them to say done. Don't ask a blocking
+question: it takes over their prompt box. Ask in plain text and end your turn instead. When you
+ask, say what to answer: "Say done" once they have done something, "Say yes" to accept what you
+propose. A choice that is theirs (who may sign in, the domain, a purchase) is always asked.
 
 One browser flow at a time, in order: Cloudflare's sign-in (step 2), the dash sign-in and project
 (step 6), then each client's OAuth (step 8). Steps 6 and 8 show the same iterate sign-in and consent
@@ -111,12 +115,12 @@ deploy token gets (cf knows each in two spellings, and the list has both), the r
 mail's. `--browser=false`, not `--no-browser`: cf refuses the second form.
 
 It prints Cloudflare's consent link and a code, and exits once the user allows it. Don't leave the
-page to cf, which may have no browser it can open: `open` the link yourself (it carries the code),
-and give the user the link and the code to check against the page. Tell them the page is
-Cloudflare's, for the iterate setup. It opens as whoever is signed in at dash.cloudflare.com: if
-that's not the user they want, they sign out there first. They allow it and pick the account for
-iterate (with Workers Paid and R2, as your first message said). The link expires after a few
-minutes; if it does, run the command again.
+page to cf, which may have no browser it can open: `open` the link yourself, and put the code in
+your message, not just the link: the page asks for it ("Code from your terminal"). Tell them the
+page is Cloudflare's, for the iterate setup. It opens as whoever is signed in at
+dash.cloudflare.com: if that's not the user they want, they sign out there first. They allow it and
+pick the account for iterate (with Workers Paid and R2, as your first message said). The link
+expires after a few minutes; if it does, run the command again.
 
 Wait for the command. Then see who signed in:
 
@@ -433,6 +437,8 @@ asking: it makes the D1 database, the KV namespaces, the R2 bucket, the sandboxe
 the Worker, and migrates the D1, which holds the users, organizations and projects. Without a
 domain, it prints the Worker's `workers.dev` URL: that is the origin. With one, the origin is
 `https://iterate.<domain>`. Alchemy's state is in `core/os/.alchemy/`: keep it beside `.secrets`.
+A warning that Docker isn't running doesn't matter: with no image pinned, the sandboxes use
+Cloudflare's managed image, and the deploy goes on without Docker.
 
 Check the origin before you send the user to it: `curl -s <origin>/version` prints the deploy's
 version id and the origin. A new domain's certificate can take a few minutes; wait for it.
