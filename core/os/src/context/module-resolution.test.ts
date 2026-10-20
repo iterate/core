@@ -9,7 +9,8 @@
 // packages left external) handled; a pkg.pr.new dependency loads only at a full commit, and a branch
 // or PR ref is refused naming the pin; an alias (`npm:<package>@<version>`, or a pkg.pr.new URL of
 // another package) loads the package it names under the listed name; what cannot work in a loaded
-// worker is refused by name; and
+// worker is refused by name, except an import() of a computed specifier, which is left for the
+// runtime to resolve or reject; and
 // the loader starts every worker from a generated main that evaluates the platform's module first.
 // Like tsc, stripping elides an import whose bindings are never used as values.
 import { parse } from "es-module-lexer/js";
@@ -64,11 +65,6 @@ test.for([
     /no such file/,
   ],
   [
-    "a computed dynamic import",
-    { "package.json": '{"main":"worker.js"}', "worker.js": "const m = 'x'; await import(m);" },
-    /computed specifier/,
-  ],
-  [
     "a URL import",
     { "package.json": '{"main":"worker.js"}', "worker.js": `import "https://esm.sh/zod";` },
     /import packages by name/,
@@ -110,6 +106,36 @@ test.for([
   ],
 ] as const)("refuses %s", async ([, source, message]) => {
   await expect(resolve(source)).rejects.toThrow(message);
+});
+
+test("an import() of a computed specifier is left as written, in the author's modules and esm.sh's, for the runtime to reject; the literal imports beside it resolve", async () => {
+  // pi-ai's shape: a computed import keeps browser bundlers off node:fs, and its caller catches.
+  const esm = fakeEsm({
+    "/lazy-node@1": `import { other } from "/lazy-node@1.0.0/es2022/other.mjs"; const importNodeModule = (specifier) => import(rewrite(specifier)); export const fs = () => importNodeModule("node:fs").catch(() => other);`,
+    "/lazy-node@1.0.0/es2022/other.mjs": `export const other = "no fs";`,
+  });
+  const modules = await resolve(
+    {
+      "worker.js": `import { fs } from "lazy-node"; import { helper } from "./helper.js"; const name = "./plugin-" + helper; export const plugin = () => import(name); export const lazy = () => import(\`./lazy.ts\`); export default fs;`,
+      "helper.js": `export const helper = "a";`,
+      // a template literal with nothing to compute is a string literal, resolved like one
+      "lazy.ts": `export const lazy: string = "lazy";`,
+      "package.json": JSON.stringify({ main: "worker.js", dependencies: { "lazy-node": "1" } }),
+    },
+    esm,
+  );
+  expect(modules).toMatchObject({
+    "worker.js": expect.stringMatching(/import\(name\).*import\("\.\/lazy\.js"\)/),
+    "node_modules/lazy-node.js": expect.stringContaining("import(rewrite(specifier))"),
+  });
+  expect(Object.keys(modules).sort()).toEqual([
+    "helper.js",
+    "lazy.js",
+    "node_modules/.esm/lazy-node@1.0.0/es2022/other.js",
+    "node_modules/lazy-node.js",
+    "worker.js",
+  ]);
+  expectLinked(modules);
 });
 
 test("a worker whose compatibilityFlags list nodejs_compat keeps its node: builtins for the runtime", async () => {

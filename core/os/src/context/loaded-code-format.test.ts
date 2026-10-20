@@ -9,7 +9,7 @@ import { expect, test } from "vitest";
 const PINNED = {
   format: 1,
   // allow-high-entropy-next-line: a SHA-256 of this repo's own source, not a secret
-  code: "ad6ce464f86ee1ac029888c9e78e0384db8ab794cd47b6175e2d2521cb3fe223",
+  code: "aa6e241b3df5d9f2c701fe18a55e155cde2333b58562f78e9bfad4f8772e62c8",
 };
 
 test("the code that turns a source into modules changes only with LOADED_CODE_FORMAT", () => {

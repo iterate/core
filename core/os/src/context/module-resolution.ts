@@ -133,7 +133,11 @@ function rewriteSpecifiers(code: string, edits: SpecifierEdit[]): string {
   return out;
 }
 
-/** Imports of one module, with non-literal dynamic imports refused (they cannot be resolved ahead). */
+/** Imports of one module. An `import()` of a computed specifier is not one: it is left as written,
+ *  and when it runs it resolves against the loaded modules (by their loaded names) and the
+ *  runtime's, or rejects, as in any Worker. Packages do it on purpose: pi-ai's
+ *  `importNodeModule(specifier)` keeps bundlers off `node:fs` and catches the rejection. A template
+ *  literal with nothing in it to compute is a string literal. */
 function importsOf(code: string, name: string, where: string): SpecifierEdit[] {
   let imports;
   try {
@@ -144,11 +148,10 @@ function importsOf(code: string, name: string, where: string): SpecifierEdit[] {
   const out: SpecifierEdit[] = [];
   for (const imp of imports) {
     if (imp.d === -2) continue; // import.meta
-    if (!imp.n)
-      throw new Error(
-        `${where}: ${name} has a dynamic import() of a computed specifier; only string literals can be resolved`,
-      );
-    out.push({ specifier: imp.n, start: imp.s, end: imp.e, dynamic: imp.d > -1 });
+    const template = code.slice(imp.s, imp.e).match(/^`([^`\\$]*)`$/)?.[1];
+    const specifier = imp.n || template;
+    if (!specifier) continue;
+    out.push({ specifier, start: imp.s, end: imp.e, dynamic: imp.d > -1 });
   }
   return out;
 }
