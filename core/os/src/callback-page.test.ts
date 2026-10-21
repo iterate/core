@@ -15,8 +15,7 @@ test.for([
     name: "a success is the same page, not marked",
     status: 200,
     text: "Done: GitHub is connected. You can close this tab.",
-    message:
-      '<main class="issuer-card"><img class="issuer-mark" src="/iterate-logo.svg" alt="" width="56" height="56"><p>Done: GitHub is connected. You can close this tab.</p></main>',
+    message: "<main><p>Done: GitHub is connected. You can close this tab.</p></main>",
   },
   {
     name: "markup in the text stays text: a provider's `error` parameter cannot add any",

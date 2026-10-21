@@ -9,9 +9,9 @@ export type AuthenticatedApp = {
   api: RpcStub<IterateSessionApi>;
   info: ReturnType<IterateSessionApi["info"]>;
   /** The page names a project this sign-in does not include — its `/projects/<ref>` is absent from
-   *  `api.projects.list()`: leave for `/.auth/login`, whose page offers to sign in again (the
-   *  project ticked at consent, or another account) and returns to this very URL. Never settles,
-   *  like `authenticate`'s own leave for login. */
+   *  `api.projects.list()`: leave for `/.auth/login`, whose page offers to sign in again (back to
+   *  this very URL), to switch account, or to continue without it. Never settles, like
+   *  `authenticate`'s own leave for login. */
   signInFor(project: string): Promise<never>;
   /** Plain data, read the fastest way there is: over the socket once it is open, before that as one
    *  capnweb HTTP batch on `POST /api` (a few hundred milliseconds sooner on a first load). `fn`

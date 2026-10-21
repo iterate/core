@@ -28,8 +28,6 @@ const publicFiles = new Set([
   "/github-logo.svg",
   // the browser extension's OAuth client logo_uri (packages/browser-extension/public/panel.js)
   "/client-logos/browser-extension.svg",
-  // the stylesheet apps' own sign-in pages link from their issuer (iterate/app-server)
-  "/issuer.css",
   // the prompt an agent follows to deploy and connect a platform of the person's own
   "/setup-prompt.md",
   // the recipe an agent follows to connect a service to a project (the MCP server and the Dash point at it)
@@ -102,9 +100,9 @@ export const issuerHandler: Handler = {
   },
 };
 
-/** This deployment's tab icon, for pages on other origins: the SDK's gate pages
- *  (iterate/app-server) link their issuer's. Production's is the logo itself; a per-PR preview
- *  or local dev draws its badge (iterate/lib), read from the host this
+/** This deployment's tab icon, for the plain pages: the SDK's gate pages (iterate/app-server) link
+ *  their issuer's, and the callback pages (callback-page.ts) this one. Production's is the logo
+ *  itself; a per-PR preview or local dev draws its badge (iterate/lib), read from the host this
  *  request reached, as the issuer's own pages do. */
 function favicon(request: Request, env: Env) {
   const url = new URL(request.url);

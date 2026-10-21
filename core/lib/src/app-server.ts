@@ -12,6 +12,7 @@ import type { BrowserHost, BrowserSession } from "./app-session.ts";
 import type { IterateApi } from "./api.ts";
 import { cookieValueOf, isSameOriginBrowserRequest, sameOriginPath } from "./lib.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
+import { plainPageCssHash, standalonePage } from "./standalone-page.ts";
 
 /** The port separates local apps sharing localhost's cookie jar. */
 export function sessionCookieName(url: URL) {
@@ -97,7 +98,7 @@ export async function issuerAnswersAt(origin: string): Promise<string | null> {
 
 /** `next` as a same-origin path with any `issuer` query parameter removed — an issuer rides in
  *  through `/.auth/connect` and nowhere else, so a `next` can never carry one back into a login
- *  (the Sign-in-again form returns to the very login URL that showed it). Untouched when there is
+ *  (the Sign-in-again page's forms return to the login URL that showed it). Untouched when there is
  *  none to remove, so what a page sent stays byte for byte. */
 function nextPathOf(next: string | null, origin: string): string {
   const path = sameOriginPath(next || "/", origin);
@@ -113,6 +114,25 @@ function signInQuery(fields: Record<string, string>, loginHint: string | null) {
   const query = new URLSearchParams(fields);
   if (loginHint) query.set("login_hint", loginHint);
   return query;
+}
+
+/** What the login a `next` names asked for, when `next` is this gate's own login URL: the
+ *  Sign-in-again page's forms post one to logout, which hands it on whole to the connect page of a
+ *  connected issuer. */
+function loginParamOf(next: string, origin: string, name: string) {
+  const url = new URL(next, origin);
+  return url.pathname === "/.auth/login" ? url.searchParams.get(name) : null;
+}
+
+/** Where a fresh sign-in sends the browser: the issuer's authorization endpoint, or, for a login
+ *  that asked to pick the account (`prompt=select_account`, OpenID Connect's word for it:
+ *  https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest), the issuer's sign-in page
+ *  first. That page names who the issuer is signed in as and has its own Switch account, then goes
+ *  on to the authorization. Only a POST from the issuer's own page ends the issuer's session, so
+ *  this origin can take the person no further than that page. */
+function signInLocationOf(authorize: URL, prompt: string | null) {
+  if (prompt !== "select_account") return authorize.href;
+  return `${authorize.origin}/login?${new URLSearchParams({ next: authorize.pathname + authorize.search })}`;
 }
 
 /** What the app's own sign-in currently is, for the Sign-in-again page to show: who it is signed in
@@ -145,27 +165,32 @@ const scopeLabels: Record<string, string> = {
 
 const text = (value: string) => value.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
-/** The gate's own pages, dressed without asking anyone: the issuer's stylesheet is loaded only when
- *  the issuer is the deployment's own (a stylesheet is a document's dress, and an issuer a person
- *  typed does not get to dress a page on this origin). */
-const inlinePageCss = `body{margin:0;min-height:100svh;display:grid;place-items:center;font:15px/1.5 ui-sans-serif,system-ui,sans-serif;color:#18181b;background:#fafafa}main{width:min(28rem,calc(100% - 2rem));padding:2rem;background:#fff;border:1px solid #e4e4e7;border-radius:12px}h1{font-size:1.25rem;margin:0 0 .75rem}p{margin:0 0 .75rem}.muted{color:#71717a}code{font:.9em ui-monospace,SFMono-Regular,Menlo,monospace}button,.button{display:inline-block;padding:.55rem 1rem;border:0;border-radius:8px;background:#18181b;color:#fff;font:inherit;cursor:pointer;text-decoration:none}a.quiet{color:#71717a;margin-left:1rem}`;
-
-/** A page of the gate's own: `head` is what the head carries beyond the title, `body` the card. */
+/** A page of the gate's own, in the look of the issuer's pages (standalone-page.ts): its one
+ *  stylesheet inline and allowed by its hash. It loads the deployment's own tab icon and nothing
+ *  else, so an issuer a person typed puts nothing on this origin. `formIssuer` is the issuer the
+ *  page's form ends up at: Chromium applies `form-action` to a submission's WHOLE redirect chain,
+ *  which the connect form's POST ends at once (`onwardPage`); a sign-out's POST still redirects on
+ *  to that issuer. */
 function gatePage(input: {
   title: string;
-  head: string;
   body: string;
-  csp: string;
-  status?: number;
+  status: number;
+  defaultIssuer: string;
+  formIssuer: string;
 }): Response {
+  const { defaultIssuer } = input;
   return new Response(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${text(input.title)}</title>${input.head}</head><body><main class="issuer-card">${input.body}</main></body></html>`,
+    standalonePage({
+      title: input.title,
+      head: `<link rel="icon" href="${defaultIssuer}/favicon.svg" type="image/svg+xml">`,
+      body: input.body,
+    }),
     {
-      status: input.status ?? 200,
+      status: input.status,
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
-        "Content-Security-Policy": input.csp,
+        "Content-Security-Policy": `default-src 'none'; style-src ${plainPageCssHash}; img-src ${defaultIssuer}; form-action 'self' ${input.formIssuer}; frame-ancestors 'none'`,
         "X-Frame-Options": "DENY",
       },
     },
@@ -194,38 +219,23 @@ function onwardPage(location: string, headers: Record<string, string> = {}): Res
   );
 }
 
-/** The head and the CSP of a gate page: the deployment's own issuer dresses it (its stylesheet, its
- *  logo); any other issuer gets the inline dress and nothing of its own on this origin. `formIssuer`
- *  is the issuer the page's form ends up at: Chromium applies `form-action` to a submission's WHOLE
- *  redirect chain, which the connect form's POST now ends at once (`onwardPage`); a sign-out's POST
- *  still redirects on to that issuer. */
-function dressOf(
-  issuer: string,
-  defaultIssuer: string,
-  formIssuer: string = issuer,
-): { head: string; csp: string; mark: string } {
-  const formAction = `form-action 'self' ${formIssuer}`;
-  if (issuer === defaultIssuer)
-    return {
-      head: `<link rel="stylesheet" href="${issuer}/issuer.css"><link rel="icon" href="${issuer}/favicon.svg" type="image/svg+xml">`,
-      csp: `default-src 'none'; style-src ${issuer}; img-src ${issuer}; ${formAction}; frame-ancestors 'none'`,
-      mark: `<img class="issuer-mark" src="${issuer}/iterate-logo.svg" alt="" width="56" height="56">`,
-    };
-  return {
-    head: `<style>${inlinePageCss}</style>`,
-    csp: `default-src 'none'; style-src 'unsafe-inline'; ${formAction}; frame-ancestors 'none'`,
-    mark: "",
-  };
-}
-
 /** The sign-in this browser holds does not cover what the page needs: a project the page named
  *  (`?project=`, the page's own word — its `/projects/<ref>` was absent from the session's list; the
  *  page is not verified, it only offers a sign-out the person must click) or a permission the app
  *  asks for. One page for both, on the app's origin because ending its session is a same-origin
  *  POST. It shows who the app is signed in as, through which issuer, and the projects that sign-in
- *  reaches (its grant), then one button that ends this app's session and comes straight back to
- *  `/.auth/login`, which starts a fresh one — the issuer still knows the person, so they land on
- *  consent: the project to tick, or Switch account — and returns to the page that sent them. */
+ *  reaches (its grant), then the ways on:
+ *   - Sign in again ends this app's session and comes straight back to `/.auth/login`, which
+ *     starts a fresh one. The issuer still knows the person, so they land on consent.
+ *   - Switch account does the same with `prompt=select_account` (`signInLocationOf`). On the
+ *     issuer's own origin it is left out: the session there is the issuer's, so Sign in again
+ *     already asks who to sign in as.
+ *   - Continue without it links to the nearest page that needs neither: the app's home for a
+ *     project, the login's `next` for a permission.
+ *  Both forms return to this login WITHOUT `project`. The project is why this page showed; whether
+ *  the next sign-in reaches it is for the page it returns to. At a connected issuer the callback
+ *  lands on this login URL itself, where a `project` would show this page again whatever the new
+ *  sign-in reaches. */
 async function signInAgainPage(input: {
   url: URL;
   issuer: string;
@@ -259,13 +269,27 @@ async function signInAgainPage(input: {
   ]
     .filter(Boolean)
     .join(" ");
-  const dress = dressOf(issuer, defaultIssuer);
-  const back = nextPathOf(url.pathname + url.search, url.origin);
+  const issuerIsThisOrigin = issuer === url.origin;
+  const advice = issuerIsThisOrigin
+    ? "Signing in again asks who to sign in as."
+    : project
+      ? `At consent, “Full access” includes every project this account reaches. If <code>${text(project)}</code> is another account’s, switch account.`
+      : "At consent, keep the permission ticked. If this account cannot grant it, switch account.";
+  const login = new URL(nextPathOf(url.pathname + url.search, url.origin), url.origin).searchParams;
+  login.delete("project");
+  login.delete("prompt");
+  const signOutTo = (query: URLSearchParams) =>
+    `/.auth/logout?next=${encodeURIComponent(`/.auth/login?${query}`)}`;
+  const switchAccount = issuerIsThisOrigin
+    ? ""
+    : `<form method="post" action="${signOutTo(new URLSearchParams([...login, ["prompt", "select_account"]]))}"><button class="link" type="submit">Switch account</button></form>`;
+  const onward = project ? "/" : nextPathOf(url.searchParams.get("next"), url.origin);
   return gatePage({
     title: "Sign in again",
-    head: dress.head,
-    csp: dress.csp,
-    body: `${dress.mark}<h1>Sign in again</h1><p>Your sign-in to <strong>${text(url.host)}</strong> ${lacks}.</p><p class="muted">${signedIn}</p><p class="muted">Signing in again brings you back here. At consent, tick the project — or switch account.</p><form method="post" action="/.auth/logout?next=${encodeURIComponent(back)}"><button class="primary" type="submit">Sign in again</button></form>`,
+    status: 200,
+    defaultIssuer,
+    formIssuer: issuer,
+    body: `<h1>Sign in again</h1><p>Your sign-in to <strong>${text(url.host)}</strong> ${lacks}.</p><p class="muted">${signedIn}</p><p class="muted">${advice}</p><div class="actions"><form method="post" action="${signOutTo(login)}"><button type="submit">Sign in again</button></form>${switchAccount}<a href="${text(onward)}">Continue without it</a></div>`,
   });
 }
 
@@ -287,24 +311,23 @@ function connectPage(input: {
     held && held.issuer !== origin
       ? `<p class="muted">This ends your current sign-in through <strong>${text(new URL(held.issuer).host)}</strong>.</p>`
       : "";
-  const dress = dressOf(defaultIssuer, defaultIssuer, origin);
   return gatePage({
     title: `Connect to ${host}`,
-    head: dress.head,
-    csp: dress.csp,
-    body: `${dress.mark}<h1>Connect ${text(url.host)} to <code>${text(host)}</code>?</h1><p>This app will sign you in through <strong>${text(host)}</strong> and show what that platform holds. Continue only if that is your own iterate platform.</p>${ends}<form method="post" action="/.auth/connect"><input type="hidden" name="issuer" value="${text(origin)}"><input type="hidden" name="next" value="${text(next)}">${scope ? `<input type="hidden" name="scope" value="${text(scope)}">` : ""}${loginHint ? `<input type="hidden" name="login_hint" value="${text(loginHint)}">` : ""}<button class="primary" type="submit">Continue</button><a class="quiet" href="/">Cancel</a></form>`,
+    status: 200,
+    defaultIssuer,
+    formIssuer: origin,
+    body: `<h1>Connect ${text(url.host)} to <code>${text(host)}</code>?</h1><p>This app will sign you in through <strong>${text(host)}</strong> and show what that platform holds. Continue only if that is your own iterate platform.</p>${ends}<form class="actions" method="post" action="/.auth/connect"><input type="hidden" name="issuer" value="${text(origin)}"><input type="hidden" name="next" value="${text(next)}">${scope ? `<input type="hidden" name="scope" value="${text(scope)}">` : ""}${loginHint ? `<input type="hidden" name="login_hint" value="${text(loginHint)}">` : ""}<button type="submit">Continue</button><a href="/">Cancel</a></form>`,
   });
 }
 
 /** A refusal of the gate's own, as a page the person can read. */
 function refusalPage(defaultIssuer: string, message: string, status = 400): Response {
-  const dress = dressOf(defaultIssuer, defaultIssuer);
   return gatePage({
     title: "Cannot connect",
-    head: dress.head,
-    csp: dress.csp,
     status,
-    body: `${dress.mark}<h1>Cannot connect</h1><p>${text(message)}</p><p><a class="button" href="/">Back</a></p>`,
+    defaultIssuer,
+    formIssuer: defaultIssuer,
+    body: `<h1>Cannot connect</h1><p>${text(message)}</p><p><a href="/">Back</a></p>`,
   });
 }
 
@@ -455,7 +478,9 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     );
     const authorize = new URL(location);
     if (loginHint) authorize.searchParams.set("login_hint", loginHint);
-    return onwardPage(authorize.href, { "Set-Cookie": setCookie });
+    return onwardPage(signInLocationOf(authorize, loginParamOf(next, url.origin, "prompt")), {
+      "Set-Cookie": setCookie,
+    });
   }
 
   if (url.pathname === "/.auth/login") {
@@ -554,7 +579,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     return new Response(null, {
       status: 302,
       headers: {
-        Location: authorize.href,
+        Location: signInLocationOf(authorize, url.searchParams.get("prompt")),
         "Set-Cookie": setCookie,
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
@@ -600,9 +625,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     // its own `scope` (a login that names none, the shell's Switch account and Stop impersonating,
     // asks for the app's own: `AppAuth.scopes`).
     const next = nextPathOf(url.searchParams.get("next"), url.origin);
-    const nextUrl = new URL(next, url.origin);
-    const scope =
-      nextUrl.pathname === "/.auth/login" ? nextUrl.searchParams.get("scope") || "" : "";
+    const scope = loginParamOf(next, url.origin, "scope") || "";
     const headers = new Headers({
       Location:
         ended && ended.issuer !== issuer && !config.loginPage

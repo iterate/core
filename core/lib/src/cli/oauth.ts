@@ -11,6 +11,7 @@ import * as oauth from "oauth4webapi";
 import { isLocalOrigin } from "../lib.ts";
 import { authorizationCodeRequest, authorizationServer } from "../client/oauth.ts";
 import type { OAuthScope } from "../oauth-scopes.ts";
+import { standalonePage } from "../standalone-page.ts";
 import type { StoredSession } from "./config.ts";
 
 /** The platform API's audience (the RFC 8707 resource) at `osBaseUrl`, local port included. */
@@ -148,24 +149,9 @@ export function sessionFromTokens(
 }
 
 /** The page the browser lands on at the redirect, in the look of the issuer's sign-in and consent
- *  pages (core/os `styles.css`, `StandalonePage`): monospace, black on white, one left-aligned
- *  column. Inlined, because this page comes from the terminal's localhost. */
+ *  pages. Its stylesheet is inline (../standalone-page.ts): it comes from the terminal's localhost. */
 function redirectPage(title: string, message: string) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title}</title>
-<style>
-body { margin: 0; background: #ffffff; color: #111111; font: 1rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-main { box-sizing: border-box; display: flex; flex-direction: column; gap: 1.5rem; max-width: 52.5rem; margin: 0 auto; padding: 3.5rem 1.25rem 6.5rem; }
-h1 { margin: 0; font-size: 1.75rem; line-height: 1.3; }
-p { margin: 0; }
-</style>
-</head>
-<body><main><h1>${title}</h1><p>${message}</p></main></body>
-</html>`;
+  return standalonePage({ title, head: "", body: `<h1>${title}</h1><p>${message}</p>` });
 }
 
 /** The loopback redirect (https://www.rfc-editor.org/rfc/rfc8252#section-7.3): `/callback` on an

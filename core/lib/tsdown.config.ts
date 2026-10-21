@@ -44,6 +44,7 @@ export default defineConfig([
       "config-repo-template": "src/config-repo-template.ts",
       "integration-scopes": "src/integration-scopes.ts",
       oauth: "src/client/oauth.ts",
+      "standalone-page": "src/standalone-page.ts",
     },
     format: "esm",
     fixedExtension: true,

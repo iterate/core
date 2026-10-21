@@ -54,6 +54,7 @@
     "./agents/processor": "./src/agents/processor.ts",
     "./agents/codemode-format": "./src/agents/codemode-format.ts",
     "./node": "./src/node.ts",
+    "./standalone-page": "./src/standalone-page.ts",
     "./theme.css": "./src/theme/theme.css",
     "./tokens.css": "./src/theme/tokens.css"
   },
@@ -186,6 +187,10 @@
       "./node": {
         "types": "./dist/node.d.mts",
         "import": "./dist/node.mjs"
+      },
+      "./standalone-page": {
+        "types": "./dist/standalone-page.d.mts",
+        "import": "./dist/standalone-page.mjs"
       },
       "./theme.css": "./src/theme/theme.css",
       "./tokens.css": "./src/theme/tokens.css"

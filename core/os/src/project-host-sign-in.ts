@@ -23,7 +23,7 @@
 //      `Sec-Fetch-Dest: document`; with neither header, an `Accept` naming text/html):
 //        anonymous  → 302 to `<login>?next=<path>`
 //        non-member → 302 to `<login>?project=<slug>&next=<path>`, iterate/app-server's
-//                     "Sign in again" page: tick the project at consent, or switch account
+//                     "Sign in again" page: sign in again, switch account, or go on without it
 //      `<path>` is the path and query the browser addressed (a paths-routed base path included),
 //      always a path on the host's own origin (iterate/lib `sameOriginPath`).
 //   7. Anything else (a fetch, a write, an upgrade): anonymous → the 401 passes; non-member → 403 (a

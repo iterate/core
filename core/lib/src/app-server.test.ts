@@ -1,13 +1,12 @@
 // app-server.test.ts — the browser-auth gate's `/.auth/login` with a session the platform still
 // honours: through to `next` when the sign-in covers what the page asked for, else the "Sign in
-// again" page (a project the page named, or a permission the app asks for), which names who the app
-// is signed in as and the permissions the grant holds, and whose one button is a same-origin POST
-// that ends this app's session and returns to the very same login URL. The page's "signed in as /
-// reaches" read of the platform is best effort: here `resource` is an offline loopback, so those two
-// lines are absent and the network-free permissions line (from the held scopes) is what we assert.
+// again" page (`signInAgainPage` in app-server.ts says what it offers). Here `resource` is an
+// offline loopback, so the page's best-effort "signed in as / reaches" lines are absent, and the
+// permissions line, from the held scopes, is what these tests assert.
 import { expect, test } from "vitest";
 import { appAuth } from "./app-server.ts";
 import type { BrowserSession } from "./app-session.ts";
+import { plainPageCss, plainPageCssHash } from "./theme/plain-page-css.gen.ts";
 
 const ISSUER = "https://os.example";
 const CONNECTED = "https://iterate.someorg.example";
@@ -21,31 +20,72 @@ test("covers what the page asked for → straight to next", async () => {
 
 test.for([
   {
-    lacks: "a project the page named",
+    name: "a project the page named",
     path: "/.auth/login?next=%2Fprojects%2Facme&scope=iterate&project=acme",
     says: "does not include a project called <code>acme</code>",
+    // without `project`: the page this login returns to judges the fresh sign-in
+    returnsTo: "/.auth/login?next=%2Fprojects%2Facme&scope=iterate",
+    // the app's home, not the page that asked for the project
+    onward: "/",
   },
   {
-    lacks: "a permission the app asks for",
-    path: "/.auth/login?next=%2F&scope=iterate%20account",
+    name: "a permission the app asks for",
+    path: "/.auth/login?next=%2Fsettings&scope=iterate%20account",
     says: "does not include a permission this app asks for",
+    returnsTo: "/.auth/login?next=%2Fsettings&scope=iterate+account",
+    // where the login was going, which the app serves without the permission
+    onward: "/settings",
   },
-])("$lacks → the Sign in again page", async ({ path, says }) => {
+])("$name → the Sign in again page", async ({ path, says, returnsTo, onward }) => {
   const response = await login(path, ["iterate"]);
   expect(response?.status).toBe(200);
   expect(response?.headers.get("cache-control")).toBe("no-store");
   const html = await response!.text();
   expect(html).toContain("<h1>Sign in again</h1>");
   expect(html).toContain(`Your sign-in to <strong>notes.example</strong> ${says}.`);
-  expect(html).toContain(`href="${ISSUER}/issuer.css"`);
   // the grant it holds, in the person's words — network-free, from the held scopes
   expect(html).toContain("Permissions: your projects.");
-  // the button ends this app's session and comes back to this same login URL
-  expect(html).toContain(`action="/.auth/logout?next=${encodeURIComponent(path)}"`);
-  // Chromium checks form-action along the submission's whole redirect chain, which ends at the issuer
-  expect(response?.headers.get("content-security-policy")).toContain(
-    `form-action 'self' ${ISSUER};`,
+  // Sign in again ends this app's session and comes back to this login
+  expect(html).toContain(
+    `action="/.auth/logout?next=${encodeURIComponent(returnsTo)}"><button type="submit">Sign in again</button>`,
   );
+  // Switch account does too, and that login asks the issuer who to sign in as
+  expect(html).toContain(
+    `action="/.auth/logout?next=${encodeURIComponent(`${returnsTo}&prompt=select_account`)}"><button class="link" type="submit">Switch account</button>`,
+  );
+  expect(html).toContain(`<a href="${onward}">Continue without it</a>`);
+  // the stylesheet and the CSP that `gatePage` describes
+  expect(html).toContain(`<style>${plainPageCss}</style>`);
+  expect(response?.headers.get("content-security-policy")).toBe(
+    `default-src 'none'; style-src ${plainPageCssHash}; img-src ${ISSUER}; form-action 'self' ${ISSUER}; frame-ancestors 'none'`,
+  );
+});
+
+test("on the issuer's own origin Sign in again already asks who to sign in as, so there is no Switch account", async () => {
+  const sessions = {
+    getByName: () => ({
+      bearer: async () => "token",
+      scopes: async () => ["iterate"],
+      host: async () => ({ issuer: ISSUER, resource: "http://127.0.0.1:1/api" }),
+    }),
+  } as unknown as DurableObjectNamespace<BrowserSession>;
+  const response = await appAuth(
+    new Request(`${ISSUER}/.auth/login?next=%2Fprojects%2Facme%2Fnotes%2F&project=acme`, {
+      headers: { cookie: "__Host-itx-session=00000000-0000-4000-8000-000000000001" },
+    }),
+    {
+      sessions,
+      issuer: ISSUER,
+      resource: "http://127.0.0.1:1/api",
+      api: () => new Response(""),
+      loginPage: "/login",
+    },
+  );
+  const html = await response!.text();
+  expect(html).toContain("Signing in again asks who to sign in as.");
+  expect(html).toContain('<button type="submit">Sign in again</button>');
+  expect(html).not.toContain("Switch account");
+  expect(html).toContain('<a href="/">Continue without it</a>');
 });
 
 test("the permissions line names every held scope", async () => {
@@ -163,6 +203,40 @@ test("a login that names no scope asks for the app's own, so Switch account and 
   const login = await appAuth(new Request("https://admin.example/.auth/login?next=/"), config);
   expect(login?.status).toBe(302);
   expect(begun).toEqual([["iterate", "admin"]]);
+});
+
+test("a login that asks to pick the account goes to the issuer's sign-in page first, at the default issuer and through the connect page", async () => {
+  const sessions = {
+    getByName: () => ({
+      host: async () => null,
+      begin: async (host: { issuer: string }) => `${host.issuer}/oauth2/auth?state=x`,
+    }),
+  } as unknown as DurableObjectNamespace<BrowserSession>;
+  const config = {
+    sessions,
+    issuer: ISSUER,
+    resource: `${ISSUER}/api`,
+    api: () => new Response(""),
+  };
+  // where Switch account's logout lands: the issuer's page names who it is signed in as, has its
+  // own Switch account, and goes on to the authorization
+  const switchAccount = "/.auth/login?next=%2Fprojects%2Facme&scope=iterate&prompt=select_account";
+  const viaSignIn = `${ISSUER}/login?next=${encodeURIComponent("/oauth2/auth?state=x")}`;
+  const login = await appAuth(new Request(`https://notes.example${switchAccount}`), config);
+  expect(login?.headers.get("location")).toBe(viaSignIn);
+  // A sign-out from a connected issuer hands that login URL to the connect page, whose POST starts
+  // the sign-in. The issuer named here is the deployment's own, which needs no discovery read.
+  const connect = await appAuth(
+    new Request("https://notes.example/.auth/connect", {
+      method: "POST",
+      headers: { origin: "https://notes.example" },
+      body: new URLSearchParams({ issuer: ISSUER, next: switchAccount }),
+    }),
+    config,
+  );
+  expect(await connect?.text()).toContain(
+    `<meta http-equiv="refresh" content="0;url=${viaSignIn}">`,
+  );
 });
 
 test("a login hint and a provider hint ride on to the issuer's authorization URL, and a login without them adds none", async () => {

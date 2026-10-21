@@ -760,7 +760,6 @@ test.for<{ name: string; path: string; init: RequestInit; status: number }>([
     init: { method: "POST", headers: { origin: "https://evil.example" } },
     status: 403,
   },
-  { name: "the issuer's stylesheet", path: "/issuer.css", init: {}, status: 200 },
   { name: "a client logo", path: "/client-logos/browser-extension.svg", init: {}, status: 200 },
   { name: "a script that is not a public file", path: "/authorize.js", init: {}, status: 404 },
   { name: "capnweb's script", path: "/capnweb.js", init: {}, status: 404 },
