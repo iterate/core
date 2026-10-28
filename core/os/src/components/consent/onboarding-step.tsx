@@ -7,10 +7,11 @@ import { ProjectChoices } from "./project-choices.tsx";
 import { ProjectFields } from "./project-fields.tsx";
 import type { ProjectSelection } from "./project-selection.ts";
 
-/** The consent for someone with no project yet: the same screen (authorize-step.tsx) with the
- *  project it is about to make in place of a list. One button makes the organization and the
- *  project and then grants access (consent-card.tsx `createAndAuthorize`), so the form's `project`
- *  field is `*` for full access, or the new project's id once there is one (`createdProjectId`). */
+/** The consent for someone with no project yet, to a client that cannot create organizations
+ *  itself: the same screen (authorize-step.tsx) with the project it is about to make in place of a
+ *  list. One button makes the organization and the project and then grants access (consent-card.tsx
+ *  `createAndAuthorize`), so the form's `project` field is `*` for full access, or the new
+ *  project's id once there is one (`createdProjectId`). */
 export function OnboardingStep({
   headingRef,
   outcome,

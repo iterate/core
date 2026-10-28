@@ -17,7 +17,8 @@ import { SomeoneElseStep } from "./someone-else-step.tsx";
 
 /** The consent page for a request the platform accepted: one screen with the projects the client
  *  may reach, the permissions it asked for and Authorize (authorize-step.tsx). For someone with no
- *  project the same screen makes one as it authorizes (onboarding-step.tsx). For a platform admin,
+ *  project the same screen makes one as it authorizes (onboarding-step.tsx), unless the client may
+ *  create organizations itself. For a platform admin,
  *  "Sign in as someone else…" stands in for it, and a link naming someone opens on that. Choices
  *  live here, so a refreshed description (after a project is created) and a trip to another view
  *  never drop one. */
@@ -63,7 +64,12 @@ export function ConsentCard({
     slug: project.slug,
     orgName: orgNames.get(project.orgId) ?? project.orgId,
   }));
-  const onboarding = !view.projectBound && !view.projects.length;
+  // A client that may create organizations (the Dash) makes a first one itself, once it knows
+  // what the person came for: an invitation link joins someone else's instead.
+  const clientMakesOrganizations = view.scopes.some(
+    (scope) => scope.name === "organizations:write",
+  );
+  const onboarding = !view.projectBound && !view.projects.length && !clientMakesOrganizations;
   const organizationName = draft.orgId ? (orgNames.get(draft.orgId) ?? "") : draft.organizationName;
   const slug = onboarding && draft.followsName ? projectSlug(organizationName) : draft.slug;
   const switchAccount = switchAccountHref(`/oauth2/auth${authorization}`);
