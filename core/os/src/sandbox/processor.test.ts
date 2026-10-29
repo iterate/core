@@ -157,47 +157,82 @@ for (const { name, events, state } of rows)
     });
   });
 
-test("the check saga: a running sandbox gets one check, and a second delivery sets no other", async () => {
+test("the check saga: a running sandbox gets one interval, twice per idle period, and a second delivery sets no other", async () => {
   using sandbox = harness();
   const { processor, schedules } = sandbox;
   await deliver(processor, { running: true }, null);
   await deliver(processor, { running: true }, null);
-  expect(schedules).toEqual([{ key: "idle", afterMs: IDLE_AFTER_MS }]);
+  expect(schedules).toEqual([{ set: "idle", everyMs: IDLE_AFTER_MS / 2 }]);
 });
 
-test("the check saga: the first check is the checkpoint period away when that comes before the idle period", async () => {
+test("the check saga: the interval is half the checkpoint period when that comes before the idle period, and never under a second", async () => {
+  using longIdle = harness();
+  await deliver(longIdle.processor, { running: true, idleAfterMs: 3_600_000 }, null);
+  using shortIdle = harness();
+  await deliver(shortIdle.processor, { running: true, idleAfterMs: 1_000 }, null);
+  expect([longIdle.schedules, shortIdle.schedules]).toEqual([
+    [{ set: "idle", everyMs: SANDBOX_CHECKPOINT_AFTER_MS / 2 }],
+    [{ set: "idle", everyMs: 1_000 }],
+  ]);
+});
+
+test("the check saga: a new idle period sets a new interval; the same period again sets nothing", async () => {
   using sandbox = harness();
   const { processor, schedules } = sandbox;
-  await deliver(processor, { running: true, idleAfterMs: 3_600_000 }, null);
-  expect(schedules).toEqual([{ key: "idle", afterMs: SANDBOX_CHECKPOINT_AFTER_MS }]);
+  await deliver(processor, { running: true }, null);
+  await deliver(processor, { running: true, idleAfterMs: 600_000 }, configured(600_000));
+  await deliver(processor, { running: true, idleAfterMs: 600_000 }, configured(600_000));
+  expect(schedules).toEqual([
+    { set: "idle", everyMs: IDLE_AFTER_MS / 2 },
+    { set: "idle", everyMs: 300_000 },
+  ]);
 });
 
-test("the check saga: a sandbox that is not running sets none, and one that stops is armed again when it next runs", async () => {
+test("the check saga: a sandbox that is not running sets none; one that stops has its interval cancelled, and gets a new one when it next runs", async () => {
   using sandbox = harness();
   const { processor, schedules } = sandbox;
   await deliver(processor, { running: false }, null);
   expect(schedules).toEqual([]);
   await deliver(processor, { running: true }, null);
+  await deliver(processor, { running: false }, stopped);
   await deliver(processor, { running: false }, null);
   await deliver(processor, { running: true }, null);
-  expect(schedules).toHaveLength(2);
+  expect(schedules).toEqual([
+    { set: "idle", everyMs: IDLE_AFTER_MS / 2 },
+    { cancel: "idle" },
+    { set: "idle", everyMs: IDLE_AFTER_MS / 2 },
+  ]);
 });
 
-test("the check saga: a check that finds the container idle parks it, and sets nothing", async () => {
+test("the check saga: a tick on a sandbox that stopped, or is being deleted, cancels the interval, though no incarnation here set it", async () => {
+  using stoppedSandbox = harness();
+  await deliver(stoppedSandbox.processor, { running: false }, check());
+  using deletedSandbox = harness();
+  await deliver(
+    deletedSandbox.processor,
+    { running: true, deletion: { status: "deleted", offset: 9 } },
+    check(),
+  );
+  expect(
+    [stoppedSandbox, deletedSandbox].map(({ schedules, calls }) => ({ schedules, calls })),
+  ).toEqual([
+    { schedules: [{ cancel: "idle" }], calls: [] },
+    { schedules: [{ cancel: "idle" }], calls: [] },
+  ]);
+});
+
+test("the check saga: a tick that finds the container idle parks it, and sets nothing", async () => {
   using sandbox = harness({ usedAt: async () => NOW - IDLE_AFTER_MS - 1 });
   const { processor, schedules, calls } = sandbox;
   await deliver(processor, { running: true }, check());
   expect({ calls, schedules }).toEqual({ calls: ["park"], schedules: [] });
 });
 
-test("the check saga: a check that finds the container used sets the next check for the time left", async () => {
+test("the check saga: a tick that finds the container used does nothing: the interval goes on by itself", async () => {
   using sandbox = harness({ usedAt: async () => NOW - 100_000 });
   const { processor, schedules, calls } = sandbox;
   await deliver(processor, { running: true, savedAt: NOW - 100_000 }, check());
-  expect({ calls, schedules }).toEqual({
-    calls: [],
-    schedules: [{ key: "idle", afterMs: IDLE_AFTER_MS - 100_000 }],
-  });
+  expect({ calls, schedules }).toEqual({ calls: [], schedules: [] });
 });
 
 test("the check saga: a sandbox in use whose disk has gone unsaved for the checkpoint period is checkpointed, and the container goes on", async () => {
@@ -214,8 +249,40 @@ test("the check saga: a sandbox in use whose disk has gone unsaved for the check
     },
     check(),
   );
+  expect({ calls, schedules }).toEqual({ calls: ["checkpoint"], schedules: [] });
+});
+
+test("the check saga: a tick that comes while the last one's checkpoint still runs looks no further, and the next tick after it looks again", async () => {
+  let finishCheckpoints = () => {};
+  const checkpointsFinish = new Promise<void>((resolve) => (finishCheckpoints = resolve));
+  using sandbox = harness({
+    usedAt: async () => NOW - 60_000,
+    checkpoint: async () => {
+      sandbox.calls.push("checkpoint");
+      await checkpointsFinish;
+    },
+  });
+  const { processor, calls } = sandbox;
+  const unsaved = { running: true, savedAt: NOW - SANDBOX_CHECKPOINT_AFTER_MS - 1 };
+  const slow = deliver(processor, unsaved, check());
+  const meanwhile = deliver(processor, unsaved, check());
+  finishCheckpoints();
+  await Promise.all([slow, meanwhile]);
   expect(calls).toEqual(["checkpoint"]);
-  expect(schedules).toEqual([{ key: "idle", afterMs: SANDBOX_CHECKPOINT_AFTER_MS }]);
+  await deliver(processor, unsaved, check());
+  expect(calls).toEqual(["checkpoint", "checkpoint"]);
+});
+
+test("the check saga: an interval whose firing failed is set again, which revives it; another key's failure sets nothing", async () => {
+  using sandbox = harness();
+  const { processor, schedules } = sandbox;
+  await deliver(processor, { running: true }, null);
+  await deliver(processor, { running: true }, scheduleFailed("idle"));
+  await deliver(processor, { running: true }, scheduleFailed("another"));
+  expect(schedules).toEqual([
+    { set: "idle", everyMs: IDLE_AFTER_MS / 2 },
+    { set: "idle", everyMs: IDLE_AFTER_MS / 2 },
+  ]);
 });
 
 test("the check saga: no checkpoint when the container was not used since its disk was saved, or the save is recent", async () => {
@@ -242,14 +309,14 @@ test("the check saga: no checkpoint when the container was not used since its di
   expect([unusedSandbox.calls, recentSandbox.calls]).toEqual([[], []]);
 });
 
-test("the check saga: a park that finds the sandbox busy sets the next check a whole period out", async () => {
+test("the check saga: a park that finds the sandbox busy sets nothing: the next tick looks again", async () => {
   using sandbox = harness({
     usedAt: async () => NOW - IDLE_AFTER_MS,
     park: async () => false,
   });
   const { processor, schedules } = sandbox;
   await deliver(processor, { running: true }, check());
-  expect(schedules).toEqual([{ key: "idle", afterMs: IDLE_AFTER_MS }]);
+  expect(schedules).toEqual([]);
 });
 
 test("the check saga: a container that is not running is parked (the stop is recorded)", async () => {
@@ -266,18 +333,21 @@ test("the check saga: a deleted sandbox is never armed (its lifecycle saga is th
   expect(schedules).toEqual([]);
 });
 
-/** The scheduled checks the processor set, and what it was asked of the container. */
+/** The intervals the processor set and cancelled, and what it was asked of the container. */
 function harness(overrides: Partial<SandboxCheckDeps> = {}) {
   vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
-  const schedules: { key: unknown; afterMs: number }[] = [];
+  const schedules: ({ set: unknown; everyMs: number } | { cancel: unknown })[] = [];
   const calls: string[] = [];
   const processor = new SandboxProcessor(
     SandboxContract,
     () =>
       ({
         schedules: {
-          set: async (input: { key: unknown; when: { afterMs: number } }) => {
-            schedules.push({ key: input.key, afterMs: input.when.afterMs });
+          set: async (input: { key: unknown; when: { everyMs: number } }) => {
+            schedules.push({ set: input.key, everyMs: input.when.everyMs });
+          },
+          cancel: async (key: unknown) => {
+            schedules.push({ cancel: key });
           },
         },
         [Symbol.dispose]: () => undefined,
@@ -300,6 +370,14 @@ function harness(overrides: Partial<SandboxCheckDeps> = {}) {
 }
 
 const check = () => ({ type: SANDBOX_IDLE_CHECK, payload: {} });
+const scheduleFailed = (key: string) => ({
+  type: "events.iterate.com/itx/schedule-failed",
+  payload: { key, scheduledAtOffset: 5, at: new Date(NOW).toISOString(), error: "boom" },
+});
+const configured = (idleAfterMs: number) => ({
+  type: "events.iterate.com/sandbox/configured",
+  payload: { idleAfterMs },
+});
 
 function started(payload: object = { from: "image" }) {
   return { type: "events.iterate.com/sandbox/started", payload };

@@ -6,11 +6,16 @@
 // parked: its disk is snapshotted, then the container stops, and the next verb restores the disk. A
 // sandbox in use has its disk saved every SANDBOX_CHECKPOINT_AFTER_MS, so a container that crashes
 // loses at most that much (Cloudflare's own pattern, "Save a sandbox automatically"). Facets have
-// no alarms (core/lib sdk/index.ts), so the clock is a schedule on the context (`itx.schedules`),
-// armed whenever the processor sees the sandbox running and no check is set, and set again by each
-// check. The container's own clock decides (`usedAt`): it is the one place every verb leaves its
-// mark, whichever incarnation of this facet made it. State-derived, so an eviction costs nothing:
-// the at-head pass arms the next check.
+// no alarms (core/lib sdk/index.ts), so the clock is a schedule on the context (`itx.schedules`):
+// one interval for as long as the sandbox runs, set whenever the processor sees it running and has
+// set none, cancelled when it stops. Never a check that sets the next: that is code reacting to its
+// own output, one hand-off deeper each time (src/cause.ts), and one failed link would stop the
+// clock. Each tick only decides, by the container's own clock (`usedAt`): it is the one place every
+// verb leaves its mark, whichever incarnation of this facet made it. One tick decides at a time: a
+// tick that comes while the last one's park or checkpoint still runs looks no further. The interval
+// is durable, so an eviction costs nothing: it goes on ticking, a tick that finds the sandbox
+// stopped cancels one no incarnation remembers, and an interval whose firing failed is set again,
+// which revives it.
 import type { ProcessEventArgs, ProcessorContract, ReduceArgs } from "iterate/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { EntityLifecycleProcessor } from "../project/entity-lifecycle.ts";
@@ -36,9 +41,12 @@ export type SandboxCheckDeps = {
 export class SandboxProcessor extends EntityLifecycleProcessor<SandboxState> {
   readonly #getItx: () => ItxEntrypointScope & Disposable;
   readonly #check: SandboxCheckDeps;
-  /** This incarnation has a check set for the sandbox's current run. The durable ground is the
-   *  schedule itself, which the at-head pass sets again after an eviction. */
-  #armed = false;
+  /** The period this incarnation set the sandbox's interval at, for its current run: null when it
+   *  set none. The durable ground is the schedule itself, which the at-head pass sets again after
+   *  an eviction. */
+  #period: number | null = null;
+  /** A tick's park or checkpoint is running: a tick that comes meanwhile looks no further. */
+  #ticking = false;
 
   constructor(
     contract: ProcessorContract<SandboxState>,
@@ -92,59 +100,76 @@ export class SandboxProcessor extends EntityLifecycleProcessor<SandboxState> {
     const { state, event, delivery, runInBackground } = args;
     if (!delivery.caughtUp) return;
     if (!state.running || state.deletion) {
-      this.#armed = false;
+      // the run is over: its interval goes, and so does one an earlier incarnation set
+      if (this.#period !== null || event?.type === SANDBOX_IDLE_CHECK) {
+        this.#period = null;
+        runInBackground(() => this.#cancel());
+      }
       return;
     }
-    // a new period replaces a check set for the old one
-    if (event?.type === "events.iterate.com/sandbox/configured") this.#armed = false;
     if (event?.type === SANDBOX_IDLE_CHECK) {
-      runInBackground(() => this.#guarded(() => this.#run(state)));
+      if (this.#ticking) return;
+      this.#ticking = true;
+      runInBackground(async () => {
+        try {
+          await this.#run(state);
+        } finally {
+          this.#ticking = false;
+        }
+      });
       return;
     }
-    if (!this.#armed) {
-      this.#armed = true;
-      runInBackground(() => this.#guarded(() => this.#arm(nextCheckMs(state.idleAfterMs))));
+    // an interval whose firing failed fires no more until it is set again (context/built-ins.ts)
+    if (event?.type === "events.iterate.com/itx/schedule-failed" && event.payload?.key === "idle")
+      this.#period = null;
+    // a new idle period is a new interval
+    const period = checkPeriodMs(state.idleAfterMs);
+    if (this.#period !== period) {
+      this.#period = period;
+      runInBackground(() => this.#arm(period));
     }
   }
 
-  /** A failed attempt leaves nothing armed, so the next at-head pass sets the check again. */
-  async #guarded(attempt: () => Promise<void>): Promise<void> {
-    try {
-      await attempt();
-    } catch (error) {
-      this.#armed = false;
-      throw error;
-    }
-  }
-
-  /** One check: a container that is gone, or unused for the idle period, is parked; one in use is
-   *  checkpointed when its disk has gone unsaved for the checkpoint period; and the next check is
-   *  set for whichever comes first. */
+  /** One tick: a container that is gone, or unused for the idle period, is parked (a busy one is
+   *  looked at again next tick); one in use is checkpointed when its disk has gone unsaved for the
+   *  checkpoint period. It sets nothing: the interval goes on by itself. */
   async #run(state: SandboxState): Promise<void> {
     const { idleAfterMs } = state;
     const usedAt = await this.#check.usedAt();
     const now = Date.now();
     if (usedAt === null || now - usedAt >= idleAfterMs) {
-      if (await this.#check.park()) return;
-      return this.#arm(nextCheckMs(idleAfterMs));
+      await this.#check.park();
+      return;
     }
     const savedAt = state.savedAt ?? 0;
     if (usedAt > savedAt && now - savedAt >= SANDBOX_CHECKPOINT_AFTER_MS)
       await this.#check.checkpoint();
-    return this.#arm(Math.min(idleAfterMs - (now - usedAt), SANDBOX_CHECKPOINT_AFTER_MS));
   }
 
-  /** The sandbox's one check, `idle`: a key set again replaces the one before. */
-  async #arm(afterMs: number): Promise<void> {
+  /** The sandbox's one interval, `idle`: set again as it stands, it keeps its clock; at another
+   *  period, it replaces the one before. A failed attempt leaves nothing set, so the next at-head
+   *  pass sets it again. */
+  async #arm(everyMs: number): Promise<void> {
+    try {
+      using itx = this.#getItx();
+      await itx.schedules.set({
+        key: "idle",
+        when: { everyMs },
+        events: [{ type: SANDBOX_IDLE_CHECK, payload: {} }],
+      });
+    } catch (error) {
+      this.#period = null;
+      throw error;
+    }
+  }
+
+  async #cancel(): Promise<void> {
     using itx = this.#getItx();
-    await itx.schedules.set({
-      key: "idle",
-      when: { afterMs: Math.max(1_000, Math.ceil(afterMs)) },
-      events: [{ type: SANDBOX_IDLE_CHECK, payload: {} }],
-    });
+    await itx.schedules.cancel("idle");
   }
 }
 
-/** How soon the first check after a start (or a busy park) is: the idle period, or the checkpoint
- *  period when that comes first. */
-const nextCheckMs = (idleAfterMs: number) => Math.min(idleAfterMs, SANDBOX_CHECKPOINT_AFTER_MS);
+/** How often a running sandbox is looked at: twice per idle period (or per checkpoint period, when
+ *  that is shorter), so a park lands at most half an idle period late; at most once a second. */
+const checkPeriodMs = (idleAfterMs: number) =>
+  Math.max(1_000, Math.ceil(Math.min(idleAfterMs, SANDBOX_CHECKPOINT_AFTER_MS) / 2));

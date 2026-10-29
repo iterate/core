@@ -135,6 +135,8 @@ export const SandboxContract = defineProcessorContract({
     "events.iterate.com/sandbox/stopped",
     "events.iterate.com/sandbox/configured",
     SANDBOX_IDLE_CHECK,
+    // its interval's failed firing, which the processor sets again (processor.ts)
+    "events.iterate.com/itx/schedule-failed",
   ],
   version: "1",
   description:
