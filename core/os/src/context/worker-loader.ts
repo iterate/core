@@ -34,6 +34,7 @@ import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-r
 import { z } from "zod";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
 import { sha256Hex } from "../caller.ts";
+import { iterateConfigOf, type IterateConfigEnv } from "../iterate-config.ts";
 import { WorkerManifest } from "./worker-manifest.ts";
 import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
 import {
@@ -295,7 +296,7 @@ export function loadedIdentityChanges(previous: string, next: string): string[] 
 
 /** What `prepareConfinedWorker` needs. */
 type PrepareConfinedWorkerOptions = {
-  env: { LOADER: WorkerLoader; ITX_KV: KVNamespace };
+  env: { LOADER: WorkerLoader; ITX_KV: KVNamespace } & IterateConfigEnv;
   /** The platform origin the `itxEntrypoint` stub was minted with (null until a self-host's first
    *  stamped caller) — FOLDED INTO THE LOADER ID: a warm isolate keeps the `env.ITX` it captured, so
    *  one minted before the origin was known must not be reused once it is (the next `LOADER.get`
@@ -586,7 +587,7 @@ export function isLoadedWorkerPlatformFailure(error: unknown): error is Error {
 /** How the loader resolves a source (module-resolution.ts): this build's platform packages,
  *  the npm locks in ITX_KV, and the network for a dependency set no lock holds yet. */
 function resolveOptions(
-  env: { ITX_KV: KVNamespace },
+  env: { ITX_KV: KVNamespace } & IterateConfigEnv,
   where: string,
   mainModule: string | undefined,
 ): ResolveOptions {
@@ -598,6 +599,7 @@ function resolveOptions(
     fetch: (input, init) => fetch(input, init),
     where,
     mainModule,
+    esmOrigin: env.ITERATE && iterateConfigOf(env).urls.esm,
   };
 }
 
@@ -613,7 +615,7 @@ function resolveOptions(
 export async function moduleIdentityOf(
   files: WorkerModules,
   mainModule: string,
-  env: { ITX_KV: KVNamespace },
+  env: { ITX_KV: KVNamespace } & IterateConfigEnv,
   where: string,
 ): Promise<string> {
   const resolved = await resolveModules(files, resolveOptions(env, where, mainModule));

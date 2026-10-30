@@ -50,7 +50,13 @@ const MINIMAL_BLOB = {
 /** What MINIMAL becomes: every optional field blank or its default (iterate's dash, projects as
  *  paths), the deploy id defaulted. */
 const MINIMAL_CONFIG = {
-  urls: { os: "", mcp: "", dash: "https://dash.iterate.com", ingressRouting: { type: "paths" } },
+  urls: {
+    os: "",
+    mcp: "",
+    dash: "https://dash.iterate.com",
+    esm: "",
+    ingressRouting: { type: "paths" },
+  },
   login: { allow: [{ everyone: {} }], methods: { password: { password: "password" } } },
   posthogProjectKey: "",
   admins: [],
@@ -117,6 +123,7 @@ const iterateConfigRows: {
         os: "https://os.iterate.com",
         mcp: "https://mcp.iterate.com",
         dash: "https://dash.iterate.com",
+        esm: "",
         ingressRouting: { type: "subdomains", hostname: "iterate.app" },
         projectWildcard: { hostname: "iterate.com", project: "iterate" },
       },
@@ -407,6 +414,7 @@ const iterateConfigRows: {
       urls: {
         ...MINIMAL_CONFIG.urls,
         dash: "",
+        esm: "",
         ingressRouting: { type: "subdomains", hostname: "acme.test" },
       },
     },

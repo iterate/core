@@ -75,10 +75,10 @@ const page = (rpcPath: string) => `<!doctype html>
     <script type="importmap">
       {
         "imports": {
-          "preact": "https://esm.sh/preact@10.29.8",
-          "preact/hooks": "https://esm.sh/preact@10.29.8/hooks",
-          "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact",
-          "capnweb": "https://esm.sh/@iterate-com/capnweb@0.12.3"
+          "preact": "https://esm.iterate.com/preact@10.29.8",
+          "preact/hooks": "https://esm.iterate.com/preact@10.29.8/hooks",
+          "htm/preact": "https://esm.iterate.com/htm@3.1.1/preact?external=preact",
+          "capnweb": "https://esm.iterate.com/@iterate-com/capnweb@0.12.3"
         }
       }
     </script>

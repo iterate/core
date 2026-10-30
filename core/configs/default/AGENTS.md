@@ -65,15 +65,15 @@ from that package too, so any other React library loads with `?external=react,re
 <script type="importmap">
   {
     "imports": {
-      "@iterate-com/ui/": "https://esm.sh/@iterate-com/ui@<version>/",
-      "react": "https://esm.sh/@iterate-com/ui@<version>/react",
-      "react/": "https://esm.sh/@iterate-com/ui@<version>/react/",
-      "react-dom": "https://esm.sh/@iterate-com/ui@<version>/react-dom",
-      "react-dom/": "https://esm.sh/@iterate-com/ui@<version>/react-dom/"
+      "@iterate-com/ui/": "https://esm.iterate.com/@iterate-com/ui@<version>/",
+      "react": "https://esm.iterate.com/@iterate-com/ui@<version>/react",
+      "react/": "https://esm.iterate.com/@iterate-com/ui@<version>/react/",
+      "react-dom": "https://esm.iterate.com/@iterate-com/ui@<version>/react-dom",
+      "react-dom/": "https://esm.iterate.com/@iterate-com/ui@<version>/react-dom/"
     }
   }
 </script>
-<link rel="stylesheet" href="https://esm.sh/@iterate-com/ui@<version>/styles.css" />
+<link rel="stylesheet" href="https://esm.iterate.com/@iterate-com/ui@<version>/styles.css" />
 <script type="module">
   import { html, render, useState } from "@iterate-com/ui/page";
   import { ContextView } from "@iterate-com/ui/components/context-view/context-view";

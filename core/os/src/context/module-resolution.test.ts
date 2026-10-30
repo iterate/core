@@ -381,6 +381,74 @@ test.for<{ name: string; answer: () => Promise<Response>; failure: object }>([
   if (!("code" in failure)) expect(rejection).not.toHaveProperty("code");
 });
 
+test("a resolution builds on the deployment's own esm.sh, and the whole crawl on public esm.sh while that one fails", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const source = {
+    "worker.js": `import { a } from "lib-a"; export default { fetch: () => new Response(a) };`,
+    "package.json": JSON.stringify({ main: "worker.js", dependencies: { "lib-a": "1" } }),
+  };
+  const build = (from: string) =>
+    fakeEsm({
+      "/lib-a@1": `export * from "/lib-a@1/es2022/lib-a.mjs";`,
+      "/lib-a@1/es2022/lib-a.mjs": `export const a = "${from}";`,
+    });
+  const own = build("own");
+  const pub = build("public");
+  const origins = (failing: string | undefined) =>
+    (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith(failing || "\0")) return new Response("no space", { status: 500 });
+      return (url.origin === "https://esm.iterate.test" ? own : pub).fetch(input);
+    }) as typeof fetch;
+  const options = { platform, esmOrigin: "https://esm.iterate.test", where: "test" };
+
+  const healthy = await resolveModules(source, {
+    ...options,
+    store: memoryStore(),
+    fetch: origins(undefined),
+  });
+
+  expect(Object.values(healthy.modules).join()).toContain(`a = "own"`);
+  expect(pub).toMatchObject({ fetched: [] });
+  expect(warn).not.toHaveBeenCalled();
+
+  // the entry arrives and its build fails: nothing of the half crawl stays in the graph
+  own.fetched.length = 0;
+  const failing = await resolveModules(source, {
+    ...options,
+    store: memoryStore(),
+    fetch: (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      return origins(url.origin === "https://esm.iterate.test" ? "lib-a.mjs" : undefined)(input);
+    }) as typeof fetch,
+  });
+
+  expect(Object.values(failing.modules).join()).toContain(`a = "public"`);
+  expect(Object.values(failing.modules).join()).not.toContain(`a = "own"`);
+  expect(pub).toMatchObject({ fetched: [expect.anything(), expect.anything()] });
+  expect(warn).toHaveBeenCalledTimes(1);
+});
+
+test("a package the deployment's own esm.sh does not have is refused, not asked of public esm.sh", async () => {
+  const own = fakeEsm({});
+  await expect(
+    resolveModules(
+      {
+        "worker.js": `import "lib-a";`,
+        "package.json": JSON.stringify({ main: "worker.js", dependencies: { "lib-a": "1" } }),
+      },
+      {
+        platform,
+        esmOrigin: "https://esm.iterate.test",
+        store: memoryStore(),
+        fetch: own.fetch,
+        where: "test",
+      },
+    ),
+  ).rejects.toThrow(/answered 404/);
+  expect(own).toMatchObject({ fetched: [expect.anything()] });
+});
+
 test("esm.sh's own /node/ polyfills (capnweb's Buffer) load as ordinary modules", async () => {
   const esm = fakeEsm({
     "/uses-buffer@1": `import "/node/buffer.mjs"; export const b = 1;`,

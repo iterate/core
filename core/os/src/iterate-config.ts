@@ -226,6 +226,9 @@ export const IterateConfig = z.object({
        *  origin being headless. Default: iterate's, which signs in to any deployment. `""` ⇒ the
        *  page names no dash. */
       dash: z.union([z.literal(""), httpOrigin]).default(DEFAULT_DASH),
+      /** The deployment's own esm.sh, which module resolution tries before public esm.sh
+       *  (context/module-resolution.ts). Blank ⇒ public esm.sh alone. */
+      esm: optionalOrigin,
       /** How projects are reached over HTTP (project-ingress.ts): `subdomains` hangs
        *  `<routingSlug>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard on
        *  `hostname`; `paths` serves `<urls.os>/projects/<project>/<routingSlug>/…` from the one

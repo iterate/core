@@ -69,6 +69,9 @@ export type ResolveOptions = {
    *  of a source whose `main` is `worker.ts` loads `agents.ts`'s own graph. Its dependencies are
    *  still package.json's. */
   mainModule?: string;
+  /** The deployment's own esm.sh, which a resolution tries first (`resolveFromEsmOrigins`). Unset
+   *  ⇒ public esm.sh alone. */
+  esmOrigin?: string;
 };
 
 /** Where an entry is looked for when package.json names no `main`, in order. The platform, its
@@ -77,7 +80,7 @@ export type ResolveOptions = {
  *  Remove it once no such source remains; the module-resolution.test.ts rows that pin it then
  *  become refusals. */
 const ENTRY_FILES = ["worker.ts", "worker.js", "index.ts", "index.js"];
-const ESM_ORIGIN = "https://esm.sh";
+const PUBLIC_ESM_ORIGIN = "https://esm.sh";
 
 /** How long one esm.sh module may take to arrive before its resolution is the platform's failure. */
 const ESM_FETCH_TIMEOUT_MS = 20_000;
@@ -406,7 +409,7 @@ async function lockedDependencyGraph(
   const key = `module-lock-3/${await sha256Hex(JSON.stringify(lockInput))}`;
   const stored = await opts.store.get(key);
   if (stored) return JSON.parse(stored) as DependencyGraph;
-  const graph = await resolveFromEsm(lockInput, bases, opts);
+  const graph = await resolveFromEsmOrigins(lockInput, bases, opts);
   // This resolution has its graph; the lock is for the next one. A write the platform fails is
   // logged and skipped: KV allows one write per key per second, so a 429 says another resolution of
   // this set wrote the lock within the second, and after any other the next resolution writes it.
@@ -432,7 +435,7 @@ function esmModuleName(url: URL): string {
   return `node_modules/.esm${path}${query}.js`.replace(/\/+/g, "/");
 }
 
-/** esm.sh's URL for the package dependency `name` is listed as, at its version. The source imports
+/** esm.sh's path for the package dependency `name` is listed as, at its version. The source imports
  *  it by `name`, whichever package that is (npm installs an alias under the name it is listed by):
  *  - an npm version: `/<name>@<version>`;
  *  - an npm alias, `npm:<package>@<version>`: `/<package>@<version>`, its `latest` when it names no
@@ -448,9 +451,9 @@ function esmPackageBase(name: string, version: string, where: string): string {
       throw new Error(
         `${where}: package.json lists ${name} as ${version}; an alias names a package on npm and its version: npm:<package>@<version>`,
       );
-    return `${ESM_ORIGIN}/${alias[1]}@${alias[2] || "latest"}`;
+    return `/${alias[1]}@${alias[2] || "latest"}`;
   }
-  if (!version.startsWith("https://pkg.pr.new/")) return `${ESM_ORIGIN}/${name}@${version}`;
+  if (!version.startsWith("https://pkg.pr.new/")) return `/${name}@${version}`;
   const build = pkgPrNewBuildOf(version);
   if (!build)
     throw new Error(
@@ -460,7 +463,7 @@ function esmPackageBase(name: string, version: string, where: string): string {
     throw new Error(
       `${where}: package.json lists ${name} at ${JSON.stringify(build.ref)}, which is not a commit, so it could name another build tomorrow; pin the commit: https://pkg.pr.new/<owner>/<repo>/${build.name}@<40-hex sha> (a HEAD of the URL names it in x-commit-key)`,
     );
-  return `${ESM_ORIGIN}/pr/${build.owner}/${build.repo}/${build.name}@${build.ref}`;
+  return `/pr/${build.owner}/${build.repo}/${build.name}@${build.ref}`;
 }
 
 /** An esm.sh module's text, read whole; anything but a JavaScript 200 is refused. esm.sh out of
@@ -511,13 +514,38 @@ function npmSelfImportOf(specifier: string, importer: URL): string | undefined {
   return `/${own[1]}@${own[2]}${specifier.slice(own[1].length)}`;
 }
 
+/** The graph from the deployment's own esm.sh, or from public esm.sh when that one is the platform's
+ *  failure: a whole crawl on one origin, so one graph never mixes two builders. A source's own
+ *  failure is the same on either. */
+async function resolveFromEsmOrigins(
+  lock: { specifiers: string[]; externals: string[] },
+  bases: Record<string, string>,
+  opts: ResolveOptions,
+): Promise<DependencyGraph> {
+  if (!opts.esmOrigin) return resolveFromEsm(lock, bases, PUBLIC_ESM_ORIGIN, opts);
+  try {
+    return await resolveFromEsm(lock, bases, opts.esmOrigin, opts);
+  } catch (error) {
+    const kind = failureKind(error);
+    if (!isPlatformFailureKind(kind)) throw error;
+    logPlatformFailure("module-resolution", "esm-origin", kind, {
+      name: "esm-origin",
+      where: opts.where,
+      origin: opts.esmOrigin,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return resolveFromEsm(lock, bases, PUBLIC_ESM_ORIGIN, opts);
+  }
+}
+
 /** Crawl esm.sh from each specifier's entry, pipelined: a module is rewritten and its own imports
  *  fetched the moment it arrives (module names follow from URLs alone), so wall time is the graph's
  *  depth in round trips, not its size. */
 async function resolveFromEsm(
   lock: { specifiers: string[]; externals: string[] },
-  /** Each package's esm.sh URL (`esmPackageBase`). */
+  /** Each package's esm.sh path (`esmPackageBase`). */
   bases: Record<string, string>,
+  origin: string,
   opts: ResolveOptions,
 ): Promise<DependencyGraph> {
   const { where, platform } = opts;
@@ -563,7 +591,7 @@ async function resolveFromEsm(
             );
         } else if (specifier.startsWith("/") || isRelative(specifier)) {
           const child = new URL(specifier, url);
-          if (child.origin !== ESM_ORIGIN)
+          if (child.origin !== origin)
             throw new Error(`${url.pathname} imports ${child.href}, outside esm.sh`);
           const childName = esmModuleName(child);
           load(child.href, childName);
@@ -572,7 +600,7 @@ async function resolveFromEsm(
           // esm.sh's `/pr/` route spells a package's import of its OWN exported subpath bare, as
           // `<owner>/<repo>/<package>/<subpath>`, and its npm route as `<package>/<subpath>` for an
           // aliased platform package; the importing module's URL names the commit or version.
-          const child = new URL(`${self}?${query}`, ESM_ORIGIN);
+          const child = new URL(`${self}?${query}`, origin);
           const childName = esmModuleName(child);
           load(child.href, childName);
           edits.push({ ...edit, specifier: relativeSpecifier(name, childName) });
@@ -594,7 +622,7 @@ async function resolveFromEsm(
   for (const specifier of lock.specifiers) {
     const name = packageName(specifier);
     const base = bases[name]!;
-    load(`${base}${specifier.slice(name.length)}?${query}`, moduleOfSpecifier(specifier));
+    load(`${origin}${base}${specifier.slice(name.length)}?${query}`, moduleOfSpecifier(specifier));
   }
   while (inFlight.size) await Promise.all(inFlight);
   if (failures.length) {
