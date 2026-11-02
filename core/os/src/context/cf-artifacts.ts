@@ -175,13 +175,18 @@ export function repoPathOf(name: string): string {
   return `/${name.split("--").join("/")}`;
 }
 
-/** The Artifacts "repo does not exist" signal (API error 10200, "Repository not found") — the ONLY
- *  failure `create` reads as "not yet" and `delete` as "already gone"; an outage, an auth error or
- *  a call left unanswered (UNAVAILABLE, naming a repo whose name may hold those digits) surfaces as
- *  what it is. */
+/** The Artifacts "repo does not exist" signal (API error 10200, "Repository not found") — with
+ *  `isRepoBeingCreated`, the ONLY failure `create` reads as "not yet", and the one `delete` reads as
+ *  "already gone"; an outage, an auth error or a call left unanswered (UNAVAILABLE, naming a repo
+ *  whose name may hold those digits) surfaces as what it is. */
 const isRepoNotFound = (error: unknown): boolean =>
   errorCode(error) !== "UNAVAILABLE" &&
   /not found|10200/i.test(String((error as { message?: unknown })?.message ?? error));
+
+/** The Artifacts answer about a name whose create has not finished (`Repository "<name>" is
+ *  currently being created. The repository is not yet available. Retry after 5 seconds.`): a create
+ *  of it and a read of it get this, so `create` treats it as a taken name that does not read yet. */
+const isRepoBeingCreated = (error: unknown) => /currently being created/i.test(String(error));
 
 /** The Artifacts answer to a `create` whose name is taken ("repo already exists: <name>", API error
  *  10201). Taken is not the same as there: Artifacts deletes asynchronously (its REST delete answers
@@ -248,7 +253,8 @@ function retryingOnePlatformFailure<T>(
  *  `remote` only: the real handle's `fork(name)` takes an UNPREFIXED name — walked by the dispatcher
  *  regardless of the narrowed type — and would escape the wall, so it is withheld. The shape is the
  *  published one (iterate/api `CfArtifactsApi`). `create` answers only once the repo reads: a name
- *  Artifacts is still deleting is waited out (`TAKEN_NAME_WAIT_MS`), then refused with the reason;
+ *  Artifacts is still deleting or creating is waited out (`TAKEN_NAME_WAIT_MS`), then refused with
+ *  the reason;
  *  `delete` answers false on the binding's not-found signal (API error 10200), and any other
  *  failure surfaces. A call on the binding left unanswered `ARTIFACTS_ANSWER_MS` is asked again
  *  once, like any other platform failure of the binding.
@@ -265,7 +271,8 @@ export function projectScopedArtifacts(input: {
     create: async (path) => {
       const name = boundName(path);
       // The probe is what a read does — a handle AND a token, since either may be where the binding
-      // says "not found"; anything else (an outage, an auth failure) surfaces as what it is.
+      // says "not found" or "being created"; anything else (an outage, an auth failure) surfaces as
+      // what it is.
       const reads = () =>
         retryingOnePlatformFailure("probe", name, () =>
           withArtifactRepoHandle(input.namespace, name, "createToken", (handle) =>
@@ -273,16 +280,16 @@ export function projectScopedArtifacts(input: {
           ).then(
             () => true,
             (error) => {
-              if (!isRepoNotFound(error)) throw error;
+              if (!isRepoNotFound(error) && !isRepoBeingCreated(error)) throw error;
               return false;
             },
           ),
         );
       // CREATE FIRST, then read only a name the create found taken: a create that answers is the
       // binding's own word that the name is a live repo, and a taken name counts as the repo only once
-      // it reads. Until then it is a create that landed and does not read yet, or a deletion that has
-      // not landed (`isRepoAlreadyThere`): waited out, bounded (`TAKEN_NAME_WAIT_MS`) from the answer
-      // that first found it taken.
+      // it reads. Until then it is a create that landed and does not read yet (`isRepoBeingCreated`
+      // says so outright), or a deletion that has not landed (`isRepoAlreadyThere`): waited out,
+      // bounded (`TAKEN_NAME_WAIT_MS`) from the answer that first found it taken.
       let takenSince = 0;
       let created = false;
       for (let round = 1, waitMs = 1000; ; round++, waitMs = Math.min(waitMs * 2, 4000)) {
@@ -292,7 +299,7 @@ export function projectScopedArtifacts(input: {
             release(await answeredInTime(`create(${name})`, input.namespace.create(name)));
             return { created: true, taken: false };
           } catch (error) {
-            if (!isRepoAlreadyThere(error)) throw error;
+            if (!isRepoAlreadyThere(error) && !isRepoBeingCreated(error)) throw error;
             // after a failed create, the name may be taken by that create, landed all the same
             return { created: isRetry, taken: true };
           }

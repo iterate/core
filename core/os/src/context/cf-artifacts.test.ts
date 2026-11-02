@@ -360,7 +360,49 @@ test("a create Artifacts answers 10400 after 13.5 s, holding the name 7 s more, 
   ]);
 });
 
-test("a create answered anything but 'already exists' surfaces, and no one retries", async () => {
+// ── a create that has not finished ── `isRepoBeingCreated`, whichever verb Artifacts says it to.
+
+test("a repo Artifacts says it is still creating is waited out, at the retried create and at the probe, and ends created", async () => {
+  const recording = recordingNamespace();
+  const stillCreating = (name: string) =>
+    new Error(
+      `Repository "${name}" is currently being created. The repository is not yet available. Retry after 5 seconds.`,
+    );
+  let creates = 0;
+  let unreadable = 1;
+  const creating: ArtifactsNamespace = {
+    ...recording.namespace,
+    create: async (name) => {
+      creates++;
+      if (creates === 1) {
+        await recording.namespace.create(name);
+        throw new Error("An internal error occurred.");
+      }
+      if (creates > 2) return recording.namespace.create(name);
+      recording.calls.push({ method: "create (being created)", name });
+      throw stillCreating(name);
+    },
+    get: async (name) => {
+      if (unreadable-- <= 0) return recording.namespace.get(name);
+      recording.calls.push({ method: "get (being created)", name });
+      throw stillCreating(name);
+    },
+  };
+  expect(await settle(() => scoped(creating, "prj_a").create("/repos/config"))).toMatchObject({
+    value: { created: true },
+    retries: [{ verb: "create" }],
+    logs: [{ event: "cfartifacts.create-waited-for-taken-name", rounds: 2, outcome: "reads" }],
+  });
+  expect(recording.calls.map((call) => call.method)).toEqual([
+    "create", // lands, and answers a platform failure
+    "create (being created)", // the retry, a second later
+    "get (being created)",
+    "create", // taken
+    "get",
+  ]);
+});
+
+test("a create answered anything but 'already exists' or 'being created' surfaces, and no one retries", async () => {
   const refusing: ArtifactsNamespace = {
     ...recordingNamespace().namespace,
     create: async () => {
