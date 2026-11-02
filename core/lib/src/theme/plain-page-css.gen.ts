@@ -3,29 +3,30 @@
 
 /** tokens.css and plain-page.css: the text of a plain page's one `<style>`. */
 export const plainPageCss = `:root {
+color-scheme: light dark;
 --radius: 0;
---background: #ffffff;
---foreground: #111111;
---card: #ffffff;
---card-foreground: #111111;
---popover: #ffffff;
---popover-foreground: #111111;
---primary: #111111;
---primary-foreground: #ffffff;
---secondary: #f4f4f4;
---secondary-foreground: #111111;
---muted: #f4f4f4;
---muted-foreground: #555555;
---accent: #f4f4f4;
---accent-foreground: #111111;
---destructive: #a40000;
---success: #1a7f37;
---warning: #9a6700;
---info: #0e7490;
---border: #dddddd;
---input: #dddddd;
---ring: #111111;
---link: #0645ad;
+--background: light-dark(#ffffff, #111111);
+--foreground: light-dark(#111111, #eeeeee);
+--card: light-dark(#ffffff, #111111);
+--card-foreground: light-dark(#111111, #eeeeee);
+--popover: light-dark(#ffffff, #111111);
+--popover-foreground: light-dark(#111111, #eeeeee);
+--primary: light-dark(#111111, #eeeeee);
+--primary-foreground: light-dark(#ffffff, #111111);
+--secondary: light-dark(#f4f4f4, #222222);
+--secondary-foreground: light-dark(#111111, #eeeeee);
+--muted: light-dark(#f4f4f4, #222222);
+--muted-foreground: light-dark(#555555, #aaaaaa);
+--accent: light-dark(#f4f4f4, #222222);
+--accent-foreground: light-dark(#111111, #eeeeee);
+--destructive: light-dark(#a40000, #ff8080);
+--success: light-dark(#1a7f37, #75d994);
+--warning: light-dark(#9a6700, #e8bb63);
+--info: light-dark(#0e7490, #72cadd);
+--border: light-dark(#dddddd, #444444);
+--input: light-dark(#dddddd, #444444);
+--ring: light-dark(#111111, #eeeeee);
+--link: light-dark(#0645ad, #8ab4f8);
 }
 body {
 margin: 0;
@@ -141,4 +142,4 @@ gap: 0.75rem 1.25rem;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-EUBsntWMBhPV1HEBOW+YnInklNIKLMno1UWig6iFegw='";
+export const plainPageCssHash = "'sha256-jupqFOKdrafVAspH3ZHYAYUSEIc24wyPztZZba/2A5c='";

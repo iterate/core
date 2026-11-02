@@ -8,10 +8,6 @@
    Sharing a theme as a CSS file: https://tailwindcss.com/docs/theme#sharing-across-projects */
 @import "./tokens.css";
 
-/* Light mode only (docs/frontend-development.md): the vendored components keep upstream's `dark:`
-   classes, and this variant never matches, so none of them ship. */
-@custom-variant dark (@media not all);
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
