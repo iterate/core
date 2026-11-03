@@ -32,7 +32,7 @@ import {
   type ItxExpressionInput,
   installPrototypeInvokeFallback,
 } from "iterate/expression";
-import type { FetchRouteInput, IterateContextApi } from "iterate/api";
+import type { EventCopyTarget, FetchRouteInput, IterateContextApi } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { newChain, parseCause, type Cause } from "./cause.ts";
 import {
@@ -447,20 +447,27 @@ export class IterateContextRpcTarget extends RpcTarget {
       | ItxExpressionInput
       | ClientRpcStub
       | ((events: unknown[], range: unknown) => void)
+      | EventCopyTarget
       | null;
     consumes?: string[];
     /** Where the cursor starts (0 = the whole log); absent = from now. A push target ignores it. */
     afterOffset?: number;
     /** `false`: fan-out delivery (stream/subscription-delivery.ts). A push target ignores it. */
     ordered?: false;
+    /** Only for a copy target. iterate/api `subscribe` explains it. */
+    filter?: string;
   }): Promise<SubscriptionHandleRpcTarget> {
     // LOADED CODE may lend a live callback (its own, fed its own context's events); an expression
     // target is a ROW the delivery loop runs as the kernel — that is `itx.append`'s business, through
-    // the code's own table — and a removal likewise.
-    if (
-      this.#caller.app &&
-      (!input.target || typeof input.target === "string" || Array.isArray(input.target))
-    )
+    // the code's own table — and a removal and a copy target likewise. A copy target's `path` is a
+    // string, and reading `path` on a live stub gives another stub, so the cast only lets TypeScript
+    // read `path` off a union where most members don't declare it.
+    const isLiveCallback =
+      !!input.target &&
+      typeof input.target !== "string" &&
+      !Array.isArray(input.target) &&
+      typeof (input.target as { path?: unknown }).path !== "string";
+    if (this.#caller.app && !isLiveCallback)
       throw codedError(
         "FORBIDDEN",
         "loaded code writes a subscription row with itx.append({ type: 'events.iterate.com/itx/subscription-configured', payload: { name, target, consumes } }); subscribe lends a live callback only",
@@ -473,8 +480,9 @@ export class IterateContextRpcTarget extends RpcTarget {
       consumes: input.consumes,
       afterOffset: input.afterOffset,
       ordered: input.ordered,
+      filter: input.filter,
     };
-    if (input.target && typeof input.target !== "string" && !Array.isArray(input.target)) {
+    if (isLiveCallback) {
       // A LIVE callback: the row rides the pager upgrade exactly as `provide`'s rule does (built
       // first, so a name the reduce rejects throws with nothing lent).
       const row: StreamEventInput = {
@@ -498,9 +506,9 @@ export class IterateContextRpcTarget extends RpcTarget {
       // un-sets the row on the key's last pager close.
       return new SubscriptionHandleRpcTarget(name, () => lease.dispose());
     }
-    // An expression (or a removal): appended FIRST, then this session's lend under the name is
-    // recalled — the same order as `provide`, for the same reason.
-    const target = input.target as ItxExpressionInput | null; // the live-object branch returned above, so this is an expression or null
+    // An expression, a copy target or a removal: appended FIRST, then this session's lend under the
+    // name is recalled — the same order as `provide`, for the same reason.
+    const target = input.target as ItxExpressionInput | EventCopyTarget | null; // a live callback returned above
     const [committed] = (await this.#append({
       type: "events.iterate.com/itx/subscription-configured",
       payload: { name, target, ...delivery },

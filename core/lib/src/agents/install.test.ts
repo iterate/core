@@ -11,7 +11,11 @@ test("installAgents enables the catalog processor on the root, then writes the i
         "agents",
         {
           ...published("AgentCollectionDurableObject"),
-          consumes: ["events.iterate.com/agent/created", "events.iterate.com/agent/deleted"],
+          consumes: [
+            "events.iterate.com/agent/created",
+            "events.iterate.com/agent/deleted",
+            "events.iterate.com/agent/listing-updated",
+          ],
         },
       ],
       [

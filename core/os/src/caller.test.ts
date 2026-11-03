@@ -149,6 +149,37 @@ test.for<{ name: string; source?: object; caller: Caller; stamped: object }>([
     },
   },
   {
+    name: "a copy gets the `copiedFrom` that appendCopy put on the caller, not the one the writer passed",
+    source: { ...forged, copiedFrom: { path: "/forged" } },
+    caller: {
+      principal: null,
+      path: "/agents/a",
+      copiedFrom: {
+        path: "/agents/a",
+        offset: 7,
+        createdAt: "2026-11-02T10:00:00.000Z",
+        type: "test/said",
+        subscription: "row",
+      },
+    },
+    stamped: {
+      origin: "/agents/a",
+      copiedFrom: {
+        path: "/agents/a",
+        offset: 7,
+        createdAt: "2026-11-02T10:00:00.000Z",
+        type: "test/said",
+        subscription: "row",
+      },
+    },
+  },
+  {
+    name: "a writer's `copiedFrom` is dropped like the rest of its `source`",
+    source: { copiedFrom: { path: "/agents/a", offset: 1 } },
+    caller: { principal: null },
+    stamped: { origin: "/agents/b" },
+  },
+  {
     name: "the platform writing a fact on a person's behalf: attributed to them, and stamped `platform`",
     caller: { principal: { actor: "user_1" }, grant: "g", platform: true },
     stamped: { origin: "/agents/b", principal: { actor: "user_1" }, grant: "g", platform: true },

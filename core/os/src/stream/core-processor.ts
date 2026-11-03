@@ -10,7 +10,7 @@
 //   where the project apex goes itx/ingress-configured { target|null } → ingressTarget · snapshotVersion
 //   which requests go where   itx/fetch-route-configured { fetchRouteName, … } → fetchRoutes (every `match`) · snapshotVersion
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke) · snapshotVersion
-//   who is sent each commit   itx/subscription-configured { name, target|null, ordered?, ifConfiguredAtOffset? }
+//   who is sent each commit   itx/subscription-configured { name, target|null, ordered?, filter?, copy?, ifConfiguredAtOffset? }
 //                             | -delivery-halted | -delivery-resumed → subscriptions (the delivery loop)
 //   which scripts are running itx/run-requested { code } · run-settled { requestOffset, settlement } → scriptRuns, by the request's offset (the DO's runner; the wake record settles what a restart interrupted)
 //
@@ -40,10 +40,15 @@ import {
   type ItxExpression,
   print,
 } from "iterate/expression";
-import { jsonEqual } from "iterate/lib";
+import { jsonEqual, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
-import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/processor";
-import type { FacetSpec, RewriteRuleConfigured } from "iterate/api";
+import type {
+  EventCopiedFrom,
+  StreamEvent,
+  ReduceArgs,
+  StreamEventInput,
+} from "iterate/stream/processor";
+import type { EventCopyTarget, FacetSpec, RewriteRuleConfigured } from "iterate/api";
 import { RunEventCatalog, RunRequested } from "iterate/stream/run";
 import type { Cause } from "../cause.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
@@ -64,6 +69,7 @@ import {
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
 import { CoreEventCatalog } from "./core-events.ts";
+import { compileEventExpression } from "./event-expressions.ts";
 import {
   ScheduledAppendInput,
   ScheduledAppendCancelled,
@@ -302,6 +308,14 @@ export type Subscription = {
    *  Absent: the ordered queue. A target that owns its progress (a facet, a lent stub) is pushed
    *  either way and ignores it. */
   ordered?: false;
+  /** Set only on a COPY ROW: the `EventCopyTarget` it was configured with, which says where each
+   *  copy goes and what it changes. The row's `target` is then `itx.cd(path)`, evaluated only to
+   *  check that this context's rules still let it reach `path` (the copy-row section below). A copy
+   *  row is always fan-out. */
+  copy?: EventCopyTarget;
+  /** A copy row's JSONata filter. The row skips any event the filter doesn't answer exactly `true`
+   *  for. */
+  filter?: string;
   /** Set when this row HOSTS a facet (M1, `hostedFacetMarkerOf`): the facet's name, class, cacheKey
    *  and mainModule, but NOT the source — that stays in the durable log event and the
    *  `facet:<name>` kv memo, so a 100 KB processor never bloats the checkpoint blob rewritten on
@@ -604,8 +618,15 @@ export function reduceCoreEvent(
       const consumes = payload.consumes as string[] | undefined;
       const afterOffset = payload.afterOffset as number | undefined;
       const ordered = payload.ordered as false | undefined;
+      // `normalizeSubscriptionConfigured` checked the target and `filter`, and compiled each
+      // expression, before the event could be appended. It stores a copy target as written.
+      const copyTarget = CopyTarget.safeParse(payload.target);
+      const copy = copyTarget.success ? copyTarget.data : undefined;
+      const filter = payload.filter as string | undefined;
       // M1: a hosting target keeps its spelling but sheds its SOURCE here (`hostedFacet` says why).
-      const configuredTarget = normalizedItxExpression(payload.target as ItxExpressionInput); // stored as the parsed form
+      const configuredTarget: ItxExpression = copy
+        ? ["itx", ["cd", copy.path]]
+        : normalizedItxExpression(payload.target as ItxExpressionInput); // stored as the parsed form
       const { target, hostedFacet } = elideHostedFacetSource(
         configuredTarget,
         resolveThroughState(state, configuredTarget),
@@ -618,6 +639,10 @@ export function reduceCoreEvent(
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
         ...(afterOffset !== undefined && { afterOffset }),
         ...(ordered === false && { ordered }),
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
+        ...(copy && { copy }),
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
+        ...(filter && { filter }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
         ...(hostedFacet && { hostedFacet }),
       });
@@ -661,16 +686,60 @@ export function reduceCoreEvent(
 // absent = from the configure offset) and `ordered: false` for fan-out delivery. `configured`
 // REPLACES a same-named row; a `null` target REMOVES it. The halted and dead-letter facts are
 // appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
+//
+// A target of `{ path, type?, payload? }` makes a COPY ROW, which copies each event onto the log at
+// `path` (subscription-delivery.ts makes each copy). The event stores that target as written, and
+// the row keeps it as its `copy`. A copy row is always fan-out, and its `target` is `itx.cd(path)`,
+// which each delivery evaluates through this context's rewrite rules before it sends the copy, so:
+//   - a jail on this context stops every delivery, even a jail added after the row;
+//   - a sub-agent's rule that forwards its calls to its parent (`itx ⇒ itx.cd(parent)`) doesn't
+//     apply to `itx.cd(…)`, so a sub-agent's copy goes straight to `path` and never wakes the parent.
+// The platform then appends the copy at `path` itself, with `copiedFrom` on the caller
+// (iterate-context-durable-object.ts `appendCopy`).
+//
+// A copy is never one of the platform's own `itx/*` events, whether as the event copied or as the
+// `type` a rule gives the copy. Deliveries run as the kernel, so a copied rewrite rule or
+// subscription row would skip the check on what loaded code may write (itx-expression-rewriting.ts
+// `admitLoadedCodeRow`). The whole `itx/` namespace is refused on purpose: refusing more than the
+// control events costs nothing, and an `itx/*` event added later is covered without anyone
+// remembering to add it. Configuring a row refuses such a `type` (`CopyTarget` below), the delivery
+// loop never takes such an event (subscription-delivery.ts `fanOutAdmits`), and `deliverEvent`
+// checks once more for an event an operator's resume hands it.
+
+/** What a copy row passes to `appendCopy`. It leaves out the original's `offset`, which `append`
+ *  would treat as the offset the copy has to land at, and its `source`, which `copiedFrom`
+ *  replaces. */
+export type EventCopy = Pick<StreamEvent, "type" | "payload" | "metadata"> & {
+  copiedFrom: EventCopiedFrom;
+};
+
+/** The platform's check of the public `EventCopyTarget` type, stricter than the type can say. */
+const CopyTarget = z.strictObject({
+  type: z
+    .string()
+    .min(1)
+    .refine((type) => !type.startsWith("events.iterate.com/itx/"), {
+      error: "a copy is never an `itx/*` event",
+    })
+    .optional(),
+  payload: z.string({ error: "a copy's `payload` is a JSONata expression" }).min(1).optional(),
+  path: z.string().startsWith("/", { error: "a copy's path is absolute" }),
+}) satisfies z.ZodType<EventCopyTarget>;
+const FilterExpression = z
+  .string({ error: "a subscription's `filter` is a JSONata expression" })
+  .min(1)
+  .optional();
 
 /** The `subscription-configured` event for `input.name`. `ifConfiguredAtOffset` (with a null
  *  target) is a handle's undo: the reduce drops the row ONLY while it is still the one configured at
  *  that offset. */
 function normalizeSubscriptionConfigured(input: {
   name: string;
-  target: ItxExpressionInput | null;
+  target: ItxExpressionInput | EventCopyTarget | null;
   consumes?: string[];
   afterOffset?: number;
   ordered?: boolean;
+  filter?: string;
   ifConfiguredAtOffset?: number;
 }): Record<string, unknown> {
   const name = parseSubscriptionName(input.name);
@@ -686,19 +755,38 @@ function normalizeSubscriptionConfigured(input: {
   // Through the codec (`normalizedItxExpression`), so a target the reduce could not read fails LOUD
   // here, in the parser's words. STORED AS THE PARSED FORM: a target carries a facet's whole source as data, and
   // the reduce must never re-parse that through the string codec (its 2 KiB cap).
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- input.target is `string | ItxExpression | null`; its null is the explicit undo/mask sentinel, distinct from a malformed empty-string target that normalization must still reject
-  const target = input.target === null ? null : normalizedItxExpression(input.target);
-  if (target && target[0] !== "itx")
+  // A copy target is the one target that's an object: an expression is a string or an array. It's
+  // stored as written, with its path made absolute, so normalizing it again changes nothing.
+  const copy =
+    input.target && typeof input.target === "object" && !Array.isArray(input.target)
+      ? CopyTarget.parse(input.target)
+      : undefined;
+  const target: ItxExpression | EventCopyTarget | null = copy
+    ? { ...copy, path: resolveContextPath("/", copy.path) }
+    : // oxlint-disable-next-line iterate/simple-truthiness-check -- null removes the row; an empty string must reach the codec, which refuses it
+      input.target === null
+      ? null
+      : // The cast: an object target set `copy` above, so this is a string or an array, but
+        // TypeScript can't tell from a check that's in another statement.
+        normalizedItxExpression(input.target as ItxExpressionInput);
+  if (Array.isArray(target) && target[0] !== "itx")
     throw new Error(
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,
     );
+  const filter = FilterExpression.parse(input.filter);
+  if (!copy && filter) throw new Error("a subscription's `filter` is for a row with a copy target");
+  if (copy && ordered === true) throw new Error("a copy row is `ordered: false`");
+  // compiled now, so a bad expression is refused before the row is stored
+  for (const text of [filter, copy?.payload]) if (text) compileEventExpression(text);
   return {
     name,
     target,
     ...(target && input.consumes && { consumes: input.consumes }),
     ...(target && afterOffset !== undefined && { afterOffset }),
     // `true` is the default, the ordered queue: only the fan-out's `false` is stored
-    ...(target && ordered === false && { ordered }),
+    ...(target && (copy || ordered === false) && { ordered: false }),
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- the stored payload is compared with jsonEqual on an idempotent retry, which counts keys: an absent filter must stay absent
+    ...(filter && { filter }),
     ...(!target &&
       input.ifConfiguredAtOffset !== undefined && {
         ifConfiguredAtOffset: input.ifConfiguredAtOffset,

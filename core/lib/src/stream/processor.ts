@@ -766,6 +766,14 @@ export class ProcessorEngine<State> {
  *  it (`<path>@<offset>`), if any. */
 type EventCause = { chain: string; depth: number; parent?: string };
 
+/** Points at one event. `path` and `offset` alone pick it out; `createdAt` and `type` come along
+ *  because a reader almost always wants them too. */
+export type EventPointer = { path: string; offset: number; createdAt: string; type: string };
+
+/** The event that a copy was copied from (`source.copiedFrom`), and which subscription row copied
+ *  it. */
+export type EventCopiedFrom = EventPointer & { subscription: string };
+
 /** What `append` accepts: the event body, before the stream assigns its committed identity. The
  *  append method checks ONE rule by hand: `type` is a non-empty string. */
 export type StreamEventInput = {
@@ -812,6 +820,11 @@ export type StreamEventInput = {
      *  gate on `principal`, not this. Stamped by the platform; a writer's own is dropped. Why and
      *  how: core/os/src/on-behalf-of.ts. */
     onBehalfOf?: { principal: Principal; grant?: string; run: string };
+    /** Set when a subscription row copied this event here (`itx.subscribe` with a path target): the
+     *  event it's a copy of. The copy's own `createdAt` is when the copy landed, and copies can land
+     *  in any order, so read this for when and where the original happened. Stamped by the
+     *  platform; a writer's own is dropped. */
+    copiedFrom?: EventCopiedFrom;
     /** THE PLATFORM WROTE THIS FACT, on the principal's behalf:
      *  what a processor folding an account's or an organization's facts requires — a client can
      *  append any type to a context it holds, never this. */

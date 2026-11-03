@@ -755,7 +755,7 @@ export function admitLoadedCodeRow(
     );
   const target = payload?.target;
   if (!target) return; // a mask, an un-set (an empty string is the reduce's refusal, not this wall's)
-  if (typeof target !== "string" && !Array.isArray(target)) return; // a live object: the lend's own business
+  if (typeof target !== "string" && !Array.isArray(target)) return; // a live object (checked when it's lent), or a copy target, whose path may be anywhere in the project, as a `cd`'s may
   const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
   if (builtInsGetStep(expression, "rpcStubs")) return;
   admitLoadedCodeExpression(expression, landsAt);

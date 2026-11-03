@@ -35,6 +35,13 @@ deployment).
 Importing `iterate/agents` registers `itx.agents` on iterate/api's `InstalledAppRoots`:
 `itx as IterateContextApiWith<"agents">` types `create`, `get(path).message`, `list` and `delete`.
 
+`itx.agents.list()` reads a whole list from `/` in one go, with each agent's title and when it was
+last active, so showing a list of agents wakes none of them. Agents have no list code of their own.
+Each agent gets three subscription rows when it's created (`collection.ts` `CATALOG_ROWS`). They copy
+its title, the first line a person sends it, and each model request onto `/` as
+`agent/listing-updated` events (`itx.subscribe` with `target: { path: "/", … }`), and the catalog
+folds those. An agent created before those rows existed shows only its path.
+
 - `contract.ts` — an agent's events and state; `processor.ts` — the reduce and the loop;
   `render.ts` — each request as OpenAI reads it; `processor.test.ts` — the processor's spec.
 - `catalog.ts`, `collection.ts` — `itx.agents`; `durable-object.ts` — one agent.

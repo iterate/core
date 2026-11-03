@@ -35,7 +35,13 @@ export interface AgentHandleApi {
  *  `create` and `delete` are sagas on the agent's path (a deleted agent is not re-creatable; a
  *  `delete` of an agent never created refuses, NOT_CREATED). */
 export interface AgentsApi {
-  list(): Promise<{ path: string; createdAt: string }[]>;
+  /** Every agent, with what a list shows about it: its title (the name it gave itself, or else the
+   *  first line a person sent it; null until it has either) and when it was last active (null
+   *  until it has been). It reads only `/` and wakes no agent, so use it to show many agents
+   *  rather than reading each one. */
+  list(): Promise<
+    { path: string; createdAt: string; title: string | null; lastActivityAt: string | null }[]
+  >;
   get(path: string): AgentHandleApi;
   create(path: string): Promise<{ path: string }>;
   delete(path: string): Promise<{ path: string }>;

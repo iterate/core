@@ -17,6 +17,50 @@ import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
 import { agentsFacetSpec } from "./install.ts";
 
+/** The subscription rows every agent gets when it's created. They copy what a list shows about the
+ *  agent from its own log onto `/` as `agent/listing-updated` events, and the catalog folds them
+ *  (catalog.ts). That way a list reads only `/` and never wakes an agent, and the agent itself needs
+ *  no list code. An agent created before these rows existed never gets them, so lists show only its
+ *  path. They're appended as `subscription-configured` events because `subscribe` only lets loaded
+ *  code lend live callbacks. */
+const CATALOG_ROWS = [
+  // the name the agent gives itself
+  {
+    name: "catalog-title",
+    consumes: ["events.iterate.com/agent/summary-updated"],
+    filter: `$type(payload.title) = "string"`,
+    target: {
+      path: "/",
+      type: "events.iterate.com/agent/listing-updated",
+      payload: `{ "title": $substring(payload.title, 0, 120) }`,
+    },
+  },
+  // the first non-blank line of each message from a person (role "user", from a user or with no
+  // actor); the catalog keeps the earliest
+  {
+    name: "catalog-first-words",
+    consumes: ["events.iterate.com/agent/context-added"],
+    filter: `payload.role = "user" and $not(payload.actor.type != "user")`,
+    target: {
+      path: "/",
+      type: "events.iterate.com/agent/listing-updated",
+      payload: `{
+        "title": $substring(($split(payload.content, "\\n").$trim($))[$ != ""][0], 0, 120),
+        "fromWords": true
+      }`,
+    },
+  },
+  // each model request, when it starts and when it ends: the copy carries no title, only its time
+  {
+    name: "catalog-activity",
+    consumes: [
+      "events.iterate.com/agent/llm-request-requested",
+      "events.iterate.com/agent/llm-request-settled",
+    ],
+    target: { path: "/", type: "events.iterate.com/agent/listing-updated" },
+  },
+] satisfies Parameters<IterateContextApi["subscribe"]>[0][];
+
 /** How long `create` and `delete` wait for the agent's certificate in all. */
 const CERTIFICATE_WAIT_MS = 30_000;
 /** How long ONE call on the agent's context waits before it is asked again on a fresh call, so an
@@ -48,9 +92,15 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     return new AgentReference(this.getItx, path, this.catalog, this.base);
   }
 
-  /** Every agent born under the project, by path — the certificates cross-posted to `/`, folded. */
+  /** Every agent created under the project, by path, with what a list shows about it. It reads only
+   *  the catalog on `/` (catalog.ts); reading the agents themselves would wake every one. */
   async list() {
-    return Object.entries((await this.catalog()).agents).map(([path, row]) => ({ path, ...row }));
+    return Object.entries((await this.catalog()).agents).map(([path, row]) => ({
+      path,
+      createdAt: row.createdAt,
+      title: row.title || null,
+      lastActivityAt: row.lastActivityAt || null,
+    }));
   }
 
   /** Bring the agent at `path` into being: the `agent` processor row on that path, then
@@ -117,6 +167,11 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
           `itx.cd('/').agents.at(${JSON.stringify(path)})`,
           `agent-collection:${path}`,
         ),
+        ...CATALOG_ROWS.map((row) => ({
+          type: "events.iterate.com/itx/subscription-configured",
+          idempotencyKey: `agent-row:${row.name}:${path}`,
+          payload: row,
+        })),
       );
       // Append-result cast: see core/os/src/project/collection.ts for the loopback RPC typing
       // rationale.

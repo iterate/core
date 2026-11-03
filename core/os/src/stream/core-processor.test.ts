@@ -533,6 +533,135 @@ test("rewrite rules: a well-formed match the boundary accepts reduces even when 
   expect(Object.keys(reduced?.itxExpressionRewriteRules || {})).toHaveLength(1);
 });
 
+const SUBSCRIPTION_CONFIGURED = "events.iterate.com/itx/subscription-configured";
+
+test("a copy target is stored as written, with its path made absolute, on a fan-out row", () => {
+  const payload = (input: Record<string, unknown>) =>
+    normalizeControlEvent({ type: SUBSCRIPTION_CONFIGURED, payload: input }, "/agents/a").payload;
+
+  expect(
+    payload({
+      name: "catalog-title",
+      consumes: ["test/said"],
+      filter: `$type(payload.title) = "string"`,
+      target: { path: "/", type: "test/heard", payload: `{ "title": payload.title }` },
+    }),
+  ).toEqual({
+    name: "catalog-title",
+    consumes: ["test/said"],
+    filter: `$type(payload.title) = "string"`,
+    target: { path: "/", type: "test/heard", payload: `{ "title": payload.title }` },
+    ordered: false,
+  });
+  expect(payload({ name: "as-is", target: { path: "/inbox/../agents/b/" } })).toEqual({
+    name: "as-is",
+    target: { path: "/agents/b" },
+    ordered: false,
+  });
+});
+
+test("normalizing a copy row twice gives the same row, as happens when a schedule fires one", () => {
+  const once = normalizeControlEvent(
+    {
+      type: SUBSCRIPTION_CONFIGURED,
+      payload: { name: "row", filter: `true`, target: { path: "/", type: "test/heard" } },
+    },
+    "/agents/a",
+  );
+  expect(normalizeControlEvent(once, "/agents/a")).toEqual(once);
+});
+
+test("the reduce keeps a copy target as the row's `copy`, with `itx.cd(path)` as its target, and adds no field that wasn't set", () => {
+  const row = (payload: Record<string, unknown>) =>
+    reduceAll([
+      at(
+        1,
+        SUBSCRIPTION_CONFIGURED,
+        normalizeControlEvent({ type: SUBSCRIPTION_CONFIGURED, payload }, "/agents/a")
+          .payload as Record<string, unknown>,
+      ),
+    ]).subscriptions.row;
+
+  expect(row({ name: "row", target: { path: "/", type: "test/x" }, filter: `true` })).toEqual({
+    target: ["itx", ["cd", "/"]],
+    configuredAtOffset: 1,
+    ordered: false,
+    filter: `true`,
+    copy: { path: "/", type: "test/x" },
+  });
+  expect(row({ name: "row", target: "itx.sink.deliverEvent", ordered: false })).toEqual({
+    target: ["itx", "sink", "deliverEvent"],
+    configuredAtOffset: 1,
+    ordered: false,
+  });
+});
+
+test.for([
+  {
+    name: "a filter on a row that doesn't copy",
+    payload: { target: "itx.sink.deliverEvent", ordered: false, filter: `true` },
+    error: /for a row with a copy target/,
+  },
+  { name: "a bare path as a target", payload: { target: "/" }, error: /./ },
+  {
+    name: "a relative copy path",
+    payload: { target: { path: "agents/a" } },
+    error: /a copy's path is absolute/,
+  },
+  {
+    name: "a copy row with `ordered: true`",
+    payload: { target: { path: "/" }, ordered: true },
+    error: /`ordered: false`/,
+  },
+  {
+    name: "a filter that doesn't parse",
+    payload: { target: { path: "/" }, filter: `(` },
+    error: /parse/,
+  },
+  {
+    name: "a payload expression that doesn't parse",
+    payload: { target: { path: "/", payload: `{ "title": ( }` } },
+    error: /parse/,
+  },
+  {
+    name: "a payload that isn't one expression",
+    payload: { target: { path: "/", payload: { title: `payload.title` } } },
+    error: /`payload` is a JSONata expression/,
+  },
+  {
+    name: "a filter that reads __proto__",
+    payload: { target: { path: "/" }, filter: `payload.__proto__` },
+    error: /may not use the name __proto__/,
+  },
+  {
+    name: "a filter that isn't a string",
+    payload: { target: { path: "/" }, filter: 1 },
+    error: /filter/,
+  },
+  {
+    name: "a copy with an itx/* type",
+    payload: { target: { path: "/", type: "events.iterate.com/itx/rewrite-rule-configured" } },
+    error: /never an `itx\/\*` event/,
+  },
+  {
+    name: "a payload field that isn't an expression string",
+    payload: { target: { path: "/", payload: { title: 1 } } },
+    error: /string/,
+  },
+  {
+    name: "a target with a key it doesn't know",
+    payload: { target: { path: "/", as: "test/x" } },
+    error: /as/,
+  },
+])("refused when the row is configured: $name", ({ payload, error }) => {
+  expect(() =>
+    normalizeControlEvent(
+      { type: SUBSCRIPTION_CONFIGURED, payload: { name: "row", ...payload } },
+      "/agents/a",
+    ),
+  ).toThrow(error);
+});
+
 test("rewrite rules: a removal with `ifTarget` (a handle's undo) applies only while the row's target is still that — a replacement survives a stale undo, identity kept; a mask's undo names `null`", () => {
   const configure = (offset: number, target: string | null) =>
     at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx.x", target });

@@ -14,7 +14,9 @@
 //   • a row configured `ordered: false` is FAN-OUT delivery (the section at the bottom): one event
 //     per call (`deliverEvent(event)`), up to FAN_OUT_CALLS_IN_FLIGHT at once in any order, each
 //     event a delivery record of its own, retried on its own ladder and dead-lettered alone, so a
-//     failing event never holds up the others and never halts the row.
+//     failing event never holds up the others and never halts the row. A COPY ROW (one with
+//     `row.copy`, configured with a path target) is a fan-out row too: it appends a copy of each
+//     event at its path (`SubscriptionDeliveryDeps.appendCopy`) instead of calling its target.
 //
 // AT-LEAST-ONCE survives an eviction because a cursor row's claim on the DO's alarm is EXACTLY the
 // time its persisted cursor carries (`nextAttemptAtMs`; `deadlines()`, which alarm-coordinator.ts
@@ -38,7 +40,7 @@
 // recent-ephemerals ring (stream.ts), so it sees whatever the ring still holds when its loop reads.
 
 import type { ItxExpression } from "iterate/expression";
-import { errorCode, jsonEqual, reportIssue, withTimeout } from "iterate/lib";
+import { codedError, errorCode, jsonEqual, reportIssue, withTimeout } from "iterate/lib";
 import {
   durableLadderDelayMs,
   failureKind,
@@ -52,11 +54,13 @@ import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispat
 import type { Metrics } from "../metrics.ts";
 import {
   type CoreState,
+  type EventCopy,
   rowsPushingFacet,
   type Subscription,
   targetIsAnotherService,
   targetOwnsProgress,
 } from "./core-processor.ts";
+import { evaluateFilter, evaluatePayload } from "./event-expressions.ts";
 import {
   RECENT_EPHEMERALS_BUDGET_CHARS,
   type Stream,
@@ -244,6 +248,8 @@ type EvaluatedTargetHead = {
   /** Where it resolved: a head evaluated again that resolves elsewhere is a moved target. */
   routedTo: string;
   call: (events: StreamEvent[], range: ScannedRange) => Promise<void>;
+  /** Delivers one event. A copy row appends its copy of the event at its path instead, while the
+   *  delivery's cause and write key still come from the event itself. */
   deliverEvent: (event: StreamEvent) => Promise<void>;
 };
 
@@ -317,6 +323,10 @@ type SubscriptionDeliveryDeps = {
     call: () => Promise<T>,
     delivery?: string,
   ) => Promise<T>;
+  /** Appends a copy row's copy to the log at `path`, as the platform, with `source.copiedFrom`
+   *  stamped (caller.ts `Caller.copiedFrom`). It runs inside `runAsDelivery`, so the copy is caused
+   *  by the delivery and keyed by it. */
+  appendCopy: (path: string, copy: EventCopy) => Promise<void>;
   /** Ends this incarnation (the DO's `ctx.abort`, after its writes are durable): a fan-out row
    *  whose every slot holds a call that will not settle. */
   abortIncarnation: (reason: string) => void;
@@ -335,6 +345,7 @@ export class SubscriptionDelivery {
   readonly #catchUpFacetFromLog: SubscriptionDeliveryDeps["catchUpFacetFromLog"];
   readonly #reconcileAlarm: SubscriptionDeliveryDeps["reconcileAlarm"];
   readonly #runAsDelivery: SubscriptionDeliveryDeps["runAsDelivery"];
+  readonly #appendCopy: SubscriptionDeliveryDeps["appendCopy"];
   readonly #abortIncarnation: SubscriptionDeliveryDeps["abortIncarnation"];
   readonly #metrics: Metrics;
   /** What the loop remembers per row, by name (SubscriptionDeliveryRecord). */
@@ -359,6 +370,7 @@ export class SubscriptionDelivery {
     this.#catchUpFacetFromLog = deps.catchUpFacetFromLog;
     this.#reconcileAlarm = deps.reconcileAlarm;
     this.#runAsDelivery = deps.runAsDelivery;
+    this.#appendCopy = deps.appendCopy;
     this.#abortIncarnation = deps.abortIncarnation;
     this.#metrics = deps.metrics;
     // The persisted cursors and fan-out delivery records seed memory once, here — after this,
@@ -563,7 +575,7 @@ export class SubscriptionDelivery {
    *  (a materialization at configure, or a resume). A row SUPERSEDED while its target evaluated
    *  calls nothing; a lent rpc stub catches up by its own reads. */
   async #catchUpFacetRow(name: string, row: Subscription): Promise<void> {
-    const { head } = await this.#evaluateItxExpressionTargetHead(name, row.target);
+    const { head } = await this.#evaluateItxExpressionTargetHead(name, row);
     if (!this.#isStillTheRow(name, row)) return;
     if (!(head instanceof FacetHandle)) return;
     try {
@@ -967,7 +979,7 @@ export class SubscriptionDelivery {
       Date.now() < cached.validUntil
     )
       return cached;
-    const evaluated = await this.#evaluateItxExpressionTargetHead(name, row.target);
+    const evaluated = await this.#evaluateItxExpressionTargetHead(name, row);
     // A row removed or replaced meanwhile gets its answer and nothing more: the memo, the cursor
     // and the fan-out state under `name` are the replacement's.
     if (!this.#isStillTheRow(name, row)) return evaluated;
@@ -995,7 +1007,7 @@ export class SubscriptionDelivery {
    *  (`…get('presence').processEventBatch`) — on a facet, the facet host's push. */
   async #evaluateItxExpressionTargetHead(
     name: string,
-    target: ItxExpression,
+    { target, copy }: Subscription,
   ): Promise<EvaluatedTargetHead> {
     const last = target.at(-1);
     // A trailing name is a METHOD only past the root and one more step: a two-step target
@@ -1037,12 +1049,34 @@ export class SubscriptionDelivery {
       routedTo,
       call,
       // one delivery of one event by this row: the same on every attempt (the writes' key)
-      deliverEvent: (event) =>
-        this.#runAsDelivery(
-          [event],
-          () => invoke([event]),
-          `${name}:${event.path}@${event.offset}`,
-        ),
+      deliverEvent: async (event) => {
+        const key = `${name}:${event.path}@${event.offset}`;
+        if (copy) {
+          // `fanOutAdmits` never takes an `itx/*` event, but an operator's resume gets here without
+          // it (core-processor.ts's copy-row section says why a copy is never one).
+          if (event.type.startsWith("events.iterate.com/itx/"))
+            throw codedError("PERMANENT_FAILURE", `${event.type} is never copied`);
+          // A copy has only the payload its rule names: none at all without one.
+          const evaluated = evaluatePayload(copy.payload || "{}", event);
+          if ("error" in evaluated) throw evaluated.error; // fails this delivery like any other
+          const toSend: EventCopy = {
+            type: copy.type || event.type,
+            payload: evaluated.payload,
+            metadata: event.metadata,
+            copiedFrom: {
+              path: event.path,
+              offset: event.offset,
+              createdAt: event.createdAt,
+              type: event.type,
+              subscription: name,
+            },
+          };
+          // The head (`itx.cd(path)`) was evaluated only so this context's rules can stop a copy.
+          await this.#runAsDelivery([event], () => this.#appendCopy(copy.path, toSend), key);
+          return;
+        }
+        await this.#runAsDelivery([event], () => invoke([event]), key);
+      },
     };
   }
 
@@ -1398,6 +1432,14 @@ export class SubscriptionDelivery {
   // leaves nothing owed. THE LOOP RULE (`fanOutAdmits`): ephemerals and `subscription-delivery-*`
   // facts never — an ordered row alerts on dead letters. Only the call carrying the log's event runs with delivery authority
   // (`runAsDelivery`): evaluating the target never does.
+  //
+  // A COPY ROW is a fan-out row with a `copy` and maybe a `filter`. It never takes an `itx/*` event,
+  // whatever it consumes. An event its filter rejects is skipped, just like an event the row doesn't
+  // consume: no record, no slot. If the filter or a payload expression FAILS, that's an ordinary
+  // failed delivery, retried and dead-lettered as in the table above, and enough of them pause the
+  // row. So admission lets such an event through, and the call runs the same expression and fails
+  // with its error. The call checks the filter again itself, because a retry or a resume reaches it
+  // without going through admission.
 
   /** A fan-out row's state for `row`, made on first touch in this incarnation. */
   #fanOutRowFor(name: string, row: Subscription): FanOutRow {
@@ -1668,6 +1710,9 @@ export class SubscriptionDelivery {
     const operation = (async () => {
       const { deliverEvent } = await this.#evaluateTargetHeadForRow(name, row);
       if (!this.#isStillTheRow(name, row)) return false;
+      const filtered = evaluateFilter(row.filter, call.event);
+      if ("error" in filtered) throw filtered.error;
+      if (!filtered.passes) return true;
       await deliverEvent(call.event).catch((error: unknown) => this.#settleLoopLimit(error));
       return true;
     })();
@@ -1994,6 +2039,13 @@ function fanOutPaused(cursor: SubscriptionCursor | undefined): boolean {
  *  more chance to make more. */
 function fanOutAdmits(row: Subscription, event: StreamEvent, incarnation: number): boolean {
   if (event.ephemeral || isDeliveryFact(event) || !consumesEvent(row.consumes, event)) return false;
+  if (row.copy) {
+    // never a copy of an `itx/*` event (core-processor.ts's copy-row section says why)
+    if (event.type.startsWith("events.iterate.com/itx/")) return false;
+    // a filter that fails lets the event through, and the call fails with its error
+    const filtered = evaluateFilter(row.filter, event);
+    return "error" in filtered || filtered.passes;
+  }
   return !isWake(event) || (event.payload as { incarnation?: number }).incarnation === incarnation;
 }
 

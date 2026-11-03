@@ -25,6 +25,7 @@
     "@cloudflare/workers-oauth-provider": "catalog:",
     "@effect/platform-node": "4.0.1",
     "@iterate-com/deployer": "workspace:*",
+    "@mmkal/jsonata": "2.2.1",
     "@modelcontextprotocol/client": "catalog:",
     "@modelcontextprotocol/server": "catalog:",
     "@octokit/auth-app": "8.3.1",

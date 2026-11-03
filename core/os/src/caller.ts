@@ -7,7 +7,7 @@ import { INTEGRATION_PROVIDERS } from "iterate/api";
 import { itxExpressionStepName, type ItxExpressionPrefix } from "iterate/expression";
 import { codedError } from "iterate/lib";
 import type { Principal } from "iterate/principal";
-import type { StreamEventInput } from "iterate/stream/processor";
+import type { EventCopiedFrom, StreamEventInput } from "iterate/stream/processor";
 import { storedCause, type Cause } from "./cause.ts";
 import type { OnBehalfOf } from "./on-behalf-of.ts";
 
@@ -50,6 +50,11 @@ export type Caller = {
    *  what it names, so nothing the call reaches can hand a subscriber an event its log never held.
    *  It rides the delivery's own hops alone (context/built-ins.ts `callContext`). */
   delivery?: string;
+  /** Set ONLY by the delivery loop's `appendCopy` (iterate-context-durable-object.ts), on the caller
+   *  of the append that writes a copy row's copy. A context's `invoke` takes its caller from whoever
+   *  calls it, and only the platform can call it, so nothing else can set this. `stampCaller` turns
+   *  it into the event's `source.copiedFrom`, and drops whatever `source` a writer passes itself. */
+  copiedFrom?: EventCopiedFrom;
   /** WHY the call is made (cause.ts), stamped on every event it appends. Absent where a call begins
    *  a chain: the context it reaches begins one. */
   cause?: Cause;
@@ -74,7 +79,7 @@ export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 
 /** THE PROVENANCE STAMP: the event as the log stores it, its `source` the platform's. `origin` is
  *  the context the call started at (`Caller.path`, set at the first hop, else `here`, where the call
- *  runs); `cause`, `principal`, `grant` and `platform` are the admitted caller's. A writer's own `source` is
+ *  runs); `cause`, `principal`, `grant`, `platform` and `copiedFrom` are the admitted caller's. A writer's own `source` is
  *  dropped, all but `processor`, the SDK engine's label for which processor wrote it: the writer's
  *  word, filed under the stamped `origin`. `origin` names the context whose code ran, not who asked
  *  it to run: a `run-requested` anyone appends runs at the context it lands on, and what that script
@@ -91,6 +96,7 @@ export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   if (caller.principal && caller.grant) source.grant = caller.grant;
   if (caller.onBehalfOf) source.onBehalfOf = caller.onBehalfOf;
   if (caller.platform) source.platform = true;
+  if (caller.copiedFrom) source.copiedFrom = caller.copiedFrom;
   return { ...event, source };
 }
 

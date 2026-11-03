@@ -1389,6 +1389,29 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       caller.delivery = await sha256Hex(JSON.stringify(delivery ? events[0] : events));
       return this.#callerStorage.run(this.#withPlatformOrigin(caller), call);
     },
+    // The copy is appended at `path` through that context's own rewrite rules, as an
+    // `itx.cd(path).append` would be, with `copiedFrom` on the caller (caller.ts says why only this
+    // sets it). Called inside `runAsDelivery`, so it carries the delivery's cause and write key, and
+    // its origin is the context the original is on. A copy into this same context stays in process,
+    // as a `cd` to its own path does.
+    appendCopy: async (path, { copiedFrom, ...eventCopy }) => {
+      const context =
+        path === this.#durableObjectAddress.path ? this.#localContext : this.#reach.contextOf(path);
+      const appended = await context.invoke(
+        ["itx", ["append", eventCopy]],
+        [],
+        this.#withPlatformOrigin({
+          principal: null,
+          path: copiedFrom.path,
+          cause: this.#caller.cause,
+          copiedFrom,
+        }),
+      );
+      // An answer from another context holds its session until it's released (context-stub.ts
+      // moves the disposer onto it), and nothing here reads it. A failed release is reported, not
+      // thrown: the copy has landed.
+      releaseRpcSessions([appended]);
+    },
     abortIncarnation: (reason) => this.#abortAfterTheAnswer(reason),
     metrics: this.#metrics,
   });
@@ -1549,6 +1572,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
         ...(s.ordered === false && { ordered: false as const }),
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
+        ...(s.filter && { filter: s.filter }),
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
+        ...(s.copy && { copy: s.copy }),
         ...this.#subscriptionDelivery.fanOutView(name),
         // an absent facet stays ABSENT on the wire, like the fields around it
         ...(s.hostedFacet && {

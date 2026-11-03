@@ -100,6 +100,11 @@ export type SubscriptionListEntry = {
   ordered?: false;
   pending?: number;
   paused?: boolean;
+  /** Set on a copy row (one subscribed with an `EventCopyTarget`): which events it copies, and the
+   *  target as it was written. Its `target` is then `itx.cd(path)`, which only checks that this
+   *  context's rules still let it reach `path`. */
+  filter?: string;
+  copy?: EventCopyTarget;
   /** Set when this row hosts a facet (a processor). `restarts`: how many times the platform failed
    *  the facet at its start and the context restarted it under a fresh loaded identity (a platform
    *  defect the context works around; the count is the cheap way to ask "how often, here"). */
@@ -119,6 +124,15 @@ export type SubscriptionListEntry = {
   /** Set once delivery exhausted its retries: the offset it stopped after, and why. */
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
+
+/** A `subscribe` target that copies each event onto the log of the context at `path`. `type`
+ *  replaces the event's type in the copy, and can't be an `itx/*` type, since a copy is never one of
+ *  the platform's own events. `payload` is a JSONata expression evaluated against the original
+ *  event, and the JSON object it answers is the copy's payload, for example
+ *  `{ "title": $substring(payload.title, 0, 120) }`. Without it the copy's payload is empty: name
+ *  the fields to keep, or write `payload` to keep them all. Quote keys as in JSON: an unquoted key
+ *  is a path into the event. */
+export type EventCopyTarget = { path: string; type?: string; payload?: string };
 
 /** A loaded worker's source: its modules, literally, or an itx expression that produces them (then
  *  `cacheKey` names the build, and the caller owns "same key ⇒ same code"). */
@@ -1486,13 +1500,28 @@ export interface IterateContextApi {
    *  uses); `null` removes the row. The handle's dispose removes it too. */
   subscribe(input: {
     name?: string;
-    target: ItxExpressionInput | ((events: unknown[], range: unknown) => void) | null;
+    target:
+      | ItxExpressionInput
+      | ((events: unknown[], range: unknown) => void)
+      | EventCopyTarget
+      | null;
     consumes?: string[];
     afterOffset?: number;
     /** `false`: FAN-OUT delivery — one event per call (`deliverEvent(event)`), in any order, each
      *  retried and dead-lettered on its own. Absent: the ordered queue, the one that may take a
      *  dead letter (`itx/subscription-delivery-failed`): alert on dead letters from an ordered row. */
     ordered?: false;
+    /** With an `EventCopyTarget`, the row COPIES each event it takes onto the log at the target's
+     *  `path`. It's always `ordered: false`, and each copy gets a `source.copiedFrom` saying which
+     *  event it copies. `filter` is only for such a row: a JSONata expression over the event, and
+     *  only events it answers exactly `true` for are copied.
+     *
+     *  An expression that doesn't compile, or uses something forbidden (core/os
+     *  event-expressions.ts), makes `subscribe` throw. One that throws on a particular event fails
+     *  that event's delivery, which is retried like any other. `itx/*` events are never copied.
+     *  Copies can land in any order, so read `copiedFrom` to see when and where each original
+     *  happened. */
+    filter?: string;
   }): Promise<{ [Symbol.dispose](): void }>;
   /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`
    *  mean `target`, an expression, a live stub, or null to deny. `description` is the one line a

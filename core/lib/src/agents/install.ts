@@ -19,7 +19,11 @@ export async function installAgents(
   const spec = agentsFacetSpec("AgentCollectionDurableObject");
   await itx.processors.enable("agents", {
     ...spec,
-    consumes: ["events.iterate.com/agent/created", "events.iterate.com/agent/deleted"],
+    consumes: [
+      "events.iterate.com/agent/created",
+      "events.iterate.com/agent/deleted",
+      "events.iterate.com/agent/listing-updated",
+    ],
   });
   await itx.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",

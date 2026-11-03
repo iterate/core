@@ -20,7 +20,7 @@ import {
   type Wake,
 } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
-import { normalizeControlEvent } from "./core-processor.ts";
+import { type EventCopy, normalizeControlEvent } from "./core-processor.ts";
 
 const MiB = 1024 * 1024;
 /** The cause a rig's delivery runs under, as the DO's caller store holds it. */
@@ -1825,6 +1825,168 @@ test("fan-out: a dangling row's records keep no time while the in-flight budget 
   expect(rig.delivery.fanOutView("f")).toEqual({ pending: 0, paused: false });
 });
 
+// ── copy rows: fan-out rows that send a copy of each event to another context's `appendCopy` ──
+
+test("a copy row sends the target a copy, keyed and caused by the original event", async () => {
+  const rig = copyRig();
+  configure(rig, {
+    name: "row",
+    consumes: ["demo/said"],
+    target: { path: "/", type: "demo/heard", payload: `{ "text": payload.text }` },
+  });
+  const [said] = rig.stream.append({
+    type: "demo/said",
+    payload: { text: "hello", big: "x" },
+    metadata: { kept: true },
+  });
+  await drainDeliveries();
+
+  const { copies, deliveries } = rig;
+  expect(copies).toEqual([
+    {
+      type: "demo/heard",
+      payload: { text: "hello" },
+      metadata: { kept: true },
+      copiedFrom: {
+        path: "/",
+        offset: said!.offset,
+        createdAt: said!.createdAt,
+        type: "demo/said",
+        subscription: "row",
+      },
+    },
+  ]);
+  expect(deliveries).toEqual([{ caused: [said!.offset], key: `row:/@${said!.offset}` }]);
+  expect(rig.delivery.fanOutView("row")).toEqual({ pending: 0, paused: false });
+});
+
+test("a copy has only the payload its rule names: none without one, and all of it with `payload`", async () => {
+  const rig = copyRig();
+  configure(rig, { name: "bare", consumes: ["demo/said"], target: { path: "/" } });
+  configure(rig, {
+    name: "whole",
+    consumes: ["demo/said"],
+    target: { path: "/", payload: "payload" },
+  });
+  rig.stream.append({ type: "demo/said", payload: { text: "hello" } });
+  await drainDeliveries();
+
+  const payloadByRow = Object.fromEntries(
+    rig.copies.map((copy) => [copy.copiedFrom.subscription, copy.payload]),
+  );
+  expect(payloadByRow).toEqual({ bare: {}, whole: { text: "hello" } });
+  expect(rig.copies.map((copy) => copy.type)).toEqual(["demo/said", "demo/said"]);
+  expect(rig.copies[0]).not.toHaveProperty("offset");
+});
+
+test("an event the filter rejects is skipped like one the row doesn't consume: no call, no record", async () => {
+  const rig = copyRig();
+  configure(rig, {
+    name: "row",
+    consumes: ["demo/said"],
+    filter: `payload.n > 1`,
+    target: { path: "/", payload: "payload" },
+  });
+  rig.stream.append(...[1, 2, 3].map((n) => ({ type: "demo/said", payload: { n } })));
+  await drainDeliveries();
+
+  expect(rig.copies.map((copy) => copy.payload)).toEqual([{ n: 2 }, { n: 3 }]);
+  expect(rig.deliveries).toHaveLength(2);
+  expect(rig.stream.storage.listSubscriptionDeliveries()).toEqual([]);
+  expect(rig.delivery.cursor("row")).toMatchObject({
+    confirmedOffset: rig.stream.highestDurableOffset(),
+  });
+});
+
+test.for([
+  { name: "a filter that throws", row: { filter: `$error("no")`, target: { path: "/" } } },
+  {
+    name: "a payload expression that throws",
+    row: { target: { path: "/", payload: `{ "text": $error("no") }` } },
+  },
+])(
+  "$name fails that delivery like any other: it's retried, then dead-lettered, and later events still get copied",
+  async ({ row }) => {
+    const rig = copyRig();
+    configure(rig, { name: "row", consumes: ["demo/bad"], ...row });
+    configure(rig, { name: "good", consumes: ["demo/good"], target: { path: "/" } });
+    const [bad] = rig.stream.append({ type: "demo/bad", payload: {} });
+    await drainDeliveries();
+
+    expect(rig.stream.storage.listSubscriptionDeliveries()).toMatchObject([
+      [
+        "row",
+        { offset: bad!.offset, attempt: 1, leased: false, error: expect.stringMatching(/no/) },
+      ],
+    ]);
+    rig.stream.append({ type: "demo/good", payload: {} });
+    await drainDeliveries();
+    expect(rig.copies.map((copy) => copy.type)).toEqual(["demo/good"]);
+
+    for (let rung = 0; rung < 16; rung++) {
+      const due = Math.max(Date.now(), ...rig.delivery.deadlines().map(({ at }) => at));
+      vi.useFakeTimers({ now: due + 1, toFake: ["Date"] });
+      await rig.pass();
+      await drainDeliveries();
+      vi.useRealTimers();
+    }
+
+    const deadLetters = factsOf(rig, "events.iterate.com/itx/subscription-delivery-failed");
+    expect(deadLetters.map((event) => event.payload)).toMatchObject([
+      { name: "row", offset: bad!.offset, attempts: 15, error: expect.stringMatching(/no/) },
+    ]);
+    expect(rig.stream.storage.listSubscriptionDeliveries()).toEqual([]);
+    expect(rig.copies.map((copy) => copy.type)).toEqual(["demo/good"]);
+  },
+);
+
+test("a copy row never copies an `itx/*` event, even with `consumes: ['*']`: a copied control event would skip the checks on what loaded code may write", async () => {
+  const rig = copyRig();
+  configure(rig, { name: "row", consumes: ["*"], target: { path: "/" } });
+  rig.stream.append(
+    { type: "events.iterate.com/itx/paused", payload: { reason: "a copy would pause the target" } },
+    { type: "demo/said", payload: {} },
+  );
+  await drainDeliveries();
+  expect(rig.copies.map((copy) => copy.type)).toEqual(["demo/said"]);
+});
+
+test("an operator's resume that names an `itx/*` event dead-letters it instead of copying it", async () => {
+  const rig = copyRig();
+  configure(rig, { name: "row", consumes: ["*"], target: { path: "/" } });
+  const [control] = rig.stream.append({
+    type: "events.iterate.com/itx/child-created",
+    payload: { childPath: "/child" },
+  });
+  await drainDeliveries();
+  resume(rig, "row", control!.offset);
+  await drainDeliveries();
+
+  expect(rig).toMatchObject({ copies: [] });
+  expect(
+    factsOf(rig, "events.iterate.com/itx/subscription-delivery-failed").map(
+      (event) => event.payload,
+    ),
+  ).toMatchObject([
+    { name: "row", offset: control!.offset, error: expect.stringMatching(/never copied/) },
+  ]);
+});
+
+test("a copy past the loop limit is dropped, with one loop-limit fact and no dead letter", async () => {
+  const rig = copyRig(() => {
+    throw Object.assign(codedError("LOOP_LIMIT", "refused"), {
+      data: { chain: "a chain", depth: 9 },
+    });
+  });
+  configure(rig, { name: "row", consumes: ["demo/said"], target: { path: "/" } });
+  rig.stream.append({ type: "demo/said", payload: {} });
+  await drainDeliveries();
+
+  expect(rig.stream.storage.listSubscriptionDeliveries()).toEqual([]);
+  expect(factsOf(rig, "events.iterate.com/itx/subscription-delivery-failed")).toEqual([]);
+  expect(factsOf(rig, "events.iterate.com/itx/loop-limit")).toHaveLength(1);
+});
+
 test("fan-out, the loop rule: no fan-out row takes a dead letter or an ephemeral, through `*`, by name or by resume", async () => {
   const everything: string[] = [];
   const alerts: string[] = [];
@@ -2223,6 +2385,10 @@ function incarnation(
     wake = { cause: "call", caller: "other" },
     birthEvents = [],
     deployId,
+    onDelivery,
+    appendCopy = async () => {
+      throw new Error("this rig has no copy rows");
+    },
   }: {
     /** How long an evaluation may be reused: the lifetime of the snapshot it was read through. */
     validForMs?: number;
@@ -2241,6 +2407,10 @@ function incarnation(
     birthEvents?: StreamEventInput[];
     /** The deploy this incarnation runs as (a lease names it). */
     deployId?: string;
+    /** Told of each delivery as the loop runs it, with a fan-out call's write key. */
+    onDelivery?: (events: StreamEvent[], key?: string) => void;
+    /** Where a copy row's copies go: the other context's `appendCopy`, as the DO reaches it. */
+    appendCopy?: (path: string, copy: EventCopy) => Promise<void>;
   } = {},
 ) {
   const alarms: number[] = [];
@@ -2296,7 +2466,11 @@ function incarnation(
     catchUpFacetFromLog: async (facetHandle) => facetHandle.invoke([["catchUpFromLog"]]),
     reconcileAlarm: () => coordinator.reconcile(),
     // as the DO runs a delivery: one hand-off deeper than what it delivers (cause.ts)
-    runAsDelivery: (events, call) => causes.run(causeOfDelivery(events), call),
+    runAsDelivery: (events, call, key) => {
+      onDelivery?.(events, key);
+      return causes.run(causeOfDelivery(events), call);
+    },
+    appendCopy,
     abortIncarnation: (reason) => void aborts.push(reason),
     metrics: (name, value, label) => void measured.push({ name, value, label }),
   });
@@ -2524,6 +2698,24 @@ function fanOutRig({
       }
     },
   };
+}
+
+/** A rig whose rules let it reach `/` (`itx.cd('/')` resolves), and whose `/` keeps every copy it
+ *  gets in `copies` (or throws, if `onCopy` does). `deliveries` records how the loop ran each call:
+ *  the offsets that caused it, and its write key. */
+function copyRig(onCopy: (copy: EventCopy) => void = () => undefined) {
+  const copies: EventCopy[] = [];
+  const deliveries: { caused: number[]; key?: string }[] = [];
+  const rig = incarnation((printed) => (printed === "itx.cd('/')" ? {} : undefined), undefined, {
+    onDelivery: (events, key) =>
+      deliveries.push({ caused: events.map(({ offset }) => offset), key }),
+    appendCopy: async (path, copy) => {
+      if (path !== "/") throw new Error(`this rig has no context at ${path}`);
+      onCopy(copy);
+      copies.push(copy);
+    },
+  });
+  return { ...rig, copies, deliveries };
 }
 
 /** `from` through `to`, inclusive. */

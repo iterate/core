@@ -240,6 +240,9 @@ importers:
       '@iterate-com/deployer':
         specifier: workspace:*
         version: link:../deployer
+      '@mmkal/jsonata':
+        specifier: 2.2.1
+        version: 2.2.1
       '@modelcontextprotocol/client':
         specifier: 'catalog:'
         version: 2.1.0
@@ -1341,6 +1344,10 @@ packages:
     resolution: {integrity: sha512-4/0CvEdhi6+KjMxMaVbFM2n2Z44escBRoEYpR+gZg64DdetzGnYm8mcNLcoySaDJZNaBd6wz5DNdgRmcI4hXcg==}
     cpu: [x64]
     os: [win32]
+
+  '@mmkal/jsonata@2.2.1':
+    resolution: {integrity: sha512-MNmmvXS7QjdVKvrXD8Q2ZwpbseGVEFuB67+E9GPPfMY3+dzh9gcGmiJGXhut2ntdaHgFvahNch5x54U3oXCyug==}
+    engines: {node: '>= 8'}
 
   '@modelcontextprotocol/client@2.1.0':
     resolution: {integrity: sha512-mDVhoy5WjDb0U+4dQPzLcciC2erSex/GRVQqnoZdiuMoE3YiTZdiS7ezNcFwX4XEOWOaj7jZr0kLYnILnL8orA==}
@@ -6005,6 +6012,8 @@ snapshots:
 
   '@libsql/win32-x64-msvc@0.5.29':
     optional: true
+
+  '@mmkal/jsonata@2.2.1': {}
 
   '@modelcontextprotocol/client@2.1.0':
     dependencies:
