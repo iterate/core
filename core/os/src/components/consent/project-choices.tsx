@@ -6,12 +6,10 @@ import { Label } from "../ui/label.tsx";
 import { linkClass } from "../standalone-page.tsx";
 import type { ProjectRow, ProjectSelection } from "./project-selection.ts";
 
-/** "Full access", ticked to begin with, and under it, once it has been unticked, a box for each
- *  project, one for future projects, and the New project toggle. Unticking "Full access" unticks
- *  every box, ticking it ticks every box, and ticking them all one by one ticks it. A client bound
- *  to one project has none of this: its project is listed ticked, and stays so. `fixed` projects
- *  stay ticked too: the bound client's, and a first project the screen is about to make, the one
- *  thing there is to grant. */
+/** A box for each project, one for future projects, and the New project toggle: what "Full access"
+ *  (full-access.tsx) shows once it has been unticked. A client bound to one project has only its
+ *  project, listed ticked, and it stays so. `fixed` projects stay ticked too: the bound client's,
+ *  and a first project the screen is about to make, the one thing there is to grant. */
 export function ProjectChoices({
   projects,
   projectBound,
@@ -42,98 +40,75 @@ export function ProjectChoices({
   }
   return (
     <fieldset aria-label="Projects it may reach" className="flex flex-col gap-2">
-      {projectBound ? null : (
-        <Label className="items-start gap-3 leading-normal">
+      {projects.map((project) => (
+        <Label key={project.id} className="items-start gap-3 leading-normal">
           <Checkbox
             className="mt-1 rounded-none border-foreground/30 data-disabled:opacity-50"
-            aria-labelledby={`${id}-full`}
-            aria-describedby={`${id}-full-note`}
-            checked={selection.future && everyProject}
-            disabled={disabled}
-            onCheckedChange={(full) =>
-              onSelectionChange({
-                future: full,
-                excluded: new Set(full || fixed ? [] : projects.map((project) => project.id)),
-                listed: true,
-              })
-            }
+            aria-labelledby={`${id}-${project.id}-slug ${id}-${project.id}-in ${id}-${project.id}-org`}
+            checked={!selection.excluded.has(project.id)}
+            disabled={disabled || fixed}
+            onCheckedChange={(checked) => tick(project.id, checked)}
           />
-          <span className="flex flex-wrap items-baseline gap-x-3">
-            <span id={`${id}-full`}>Full access</span>
-            <span id={`${id}-full-note`} className="text-xs text-muted-foreground">
-              All projects, now and future
+          <span className="flex min-w-0 flex-wrap items-baseline gap-x-3">
+            <span id={`${id}-${project.id}-slug`} className="wrap-anywhere">
+              {project.slug}
+            </span>
+            <span id={`${id}-${project.id}-in`} className="sr-only">
+              in
+            </span>
+            <span
+              id={`${id}-${project.id}-org`}
+              className="text-xs wrap-anywhere text-muted-foreground"
+            >
+              {project.orgName}
             </span>
           </span>
         </Label>
-      )}
-      {projectBound || selection.listed ? (
-        <div className={cn("flex flex-col gap-2", !projectBound && "pl-7")}>
-          {projects.map((project) => (
-            <Label key={project.id} className="items-start gap-3 leading-normal">
-              <Checkbox
-                className="mt-1 rounded-none border-foreground/30 data-disabled:opacity-50"
-                aria-labelledby={`${id}-${project.id}-slug ${id}-${project.id}-in ${id}-${project.id}-org`}
-                checked={!selection.excluded.has(project.id)}
-                disabled={disabled || fixed}
-                onCheckedChange={(checked) => tick(project.id, checked)}
-              />
-              <span className="flex min-w-0 flex-wrap items-baseline gap-x-3">
-                <span id={`${id}-${project.id}-slug`} className="wrap-anywhere">
-                  {project.slug}
-                </span>
-                <span id={`${id}-${project.id}-in`} className="sr-only">
-                  in
-                </span>
-                <span
-                  id={`${id}-${project.id}-org`}
-                  className="text-xs wrap-anywhere text-muted-foreground"
-                >
-                  {project.orgName}
-                </span>
-              </span>
-            </Label>
-          ))}
-          {projectBound && !projects.length ? (
-            <p className="text-muted-foreground">You do not have access to this app’s project.</p>
-          ) : null}
-          {projectBound ? null : (
-            <>
-              {/* a rule above it: the one box that is not a project */}
-              <Label className="mt-1 max-w-md items-start gap-3 border-t pt-3 leading-normal">
-                <Checkbox
-                  className="mt-1 rounded-none border-foreground/30 data-disabled:opacity-50"
-                  aria-labelledby={`${id}-future`}
-                  aria-describedby={everyProject ? undefined : `${id}-future-note`}
-                  checked={selection.future}
-                  disabled={disabled || !everyProject}
-                  onCheckedChange={(future) => onSelectionChange({ ...selection, future })}
-                />
-                <span className="flex flex-wrap items-baseline gap-x-3">
-                  <span id={`${id}-future`}>Future projects</span>
-                  {everyProject ? null : (
-                    <span id={`${id}-future-note`} className="text-xs text-muted-foreground">
-                      Only with every project above
-                    </span>
-                  )}
-                </span>
-              </Label>
-              {newProject ? (
-                <Button
-                  type="button"
-                  variant="link"
-                  className={cn(linkClass, "self-start")}
-                  aria-expanded={newProject.open}
-                  disabled={disabled}
-                  onClick={() => newProject.onOpenChange(!newProject.open)}
-                >
-                  <span aria-hidden="true">+</span>
-                  New project
-                </Button>
-              ) : null}
-            </>
-          )}
-        </div>
+      ))}
+      {projectBound && !projects.length ? (
+        <p className="text-muted-foreground">You do not have access to this app’s project.</p>
       ) : null}
+      {projectBound ? null : (
+        <>
+          {/* a rule between it and the projects: the one box that is not a project */}
+          <Label
+            className={cn(
+              "max-w-md items-start gap-3 leading-normal",
+              projects.length && "mt-1 border-t pt-3",
+            )}
+          >
+            <Checkbox
+              className="mt-1 rounded-none border-foreground/30 data-disabled:opacity-50"
+              aria-labelledby={`${id}-future`}
+              aria-describedby={everyProject ? undefined : `${id}-future-note`}
+              checked={selection.future}
+              disabled={disabled || !everyProject}
+              onCheckedChange={(future) => onSelectionChange({ ...selection, future })}
+            />
+            <span className="flex flex-wrap items-baseline gap-x-3">
+              <span id={`${id}-future`}>Future projects</span>
+              {everyProject ? null : (
+                <span id={`${id}-future-note`} className="text-xs text-muted-foreground">
+                  Only with every project above
+                </span>
+              )}
+            </span>
+          </Label>
+          {newProject ? (
+            <Button
+              type="button"
+              variant="link"
+              className={cn(linkClass, "self-start")}
+              aria-expanded={newProject.open}
+              disabled={disabled}
+              onClick={() => newProject.onOpenChange(!newProject.open)}
+            >
+              <span aria-hidden="true">+</span>
+              New project
+            </Button>
+          ) : null}
+        </>
+      )}
     </fieldset>
   );
 }

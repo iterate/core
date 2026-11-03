@@ -5,16 +5,17 @@ export interface ProjectRow {
   orgName: string;
 }
 
-/** Which projects the client may reach. "Full access" is every box ticked: each project, and
- *  "Future projects". A grant holds every project or a list of them (consent.ts `approve`), so
- *  future projects come only with every project there is today: `future` is never true while a
- *  project is unticked. */
+/** Which projects the client may reach. "Full access" (full-access.tsx) is these boxes ticked,
+ *  each project and "Future projects", with every permission. A grant holds every project or a
+ *  list of them (consent.ts `approve`), so future projects come only with every project there is
+ *  today: `future` is never true while a project is unticked. */
 export interface ProjectSelection {
   /** "Future projects" */
   future: boolean;
   /** the projects unticked; a project created on the page starts ticked */
   excluded: ReadonlySet<string>;
-  /** the boxes under "Full access" show: unticking it shows them, and nothing hides them after */
+  /** the boxes under "Full access" show: unticking it shows them, a request for `admin` starts with
+   *  them shown (consent-card.tsx), and nothing hides them after */
   listed: boolean;
 }
 

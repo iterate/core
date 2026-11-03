@@ -37,11 +37,13 @@ export function ConsentCard({
   const [pending, startTransition] = useTransition();
   // a link that named someone (`impersonation.suggested`) opens on signing in as them
   const [someoneElse, setSomeoneElse] = useState(Boolean(view.impersonation?.suggested));
-  // consent starts on full access; a client bound to one project has only that project to grant
+  // consent starts on full access; a client bound to one project has only that project to grant.
+  // `admin` reaches further than "All projects" says, so a request for it is never hidden under
+  // the box: any client may ask a platform admin for it.
   const [selection, setSelection] = useState<ProjectSelection>({
     future: !view.projectBound,
     excluded: new Set(),
-    listed: false,
+    listed: view.scopes.some((scope) => scope.name === "admin"),
   });
   const [declined, setDeclined] = useState<ReadonlySet<string>>(new Set());
   const [draft, setDraft] = useState<ProjectDraft>({

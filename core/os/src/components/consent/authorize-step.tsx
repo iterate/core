@@ -2,6 +2,7 @@ import { useState, type FormEvent, type Ref } from "react";
 import type { ConsentScope } from "iterate/oauth-scopes";
 import { Button } from "../ui/button.tsx";
 import { ConsentActions, StepHeading, type ConsentOutcome } from "./consent-step.tsx";
+import { FullAccess } from "./full-access.tsx";
 import { PermissionChoices } from "./permission-choices.tsx";
 import { ProjectChoices } from "./project-choices.tsx";
 import { grantedProjects, type ProjectRow, type ProjectSelection } from "./project-selection.ts";
@@ -10,7 +11,9 @@ import { ProjectFields } from "./project-fields.tsx";
 /** The consent itself, on one screen: which projects the client may reach (and a project made on
  *  the spot when none fits), which of the permissions it asked for to grant, and Authorize — a
  *  plain POST to this very authorization URL carrying the choices as `project` and `scope` fields.
- *  Everything Authorize grants is on the screen when it is clicked. */
+ *  Everything Authorize grants is on the screen when it is clicked: "Full access", or the boxes
+ *  under it once it is unticked. A client bound to one project, and a request for `admin`, list
+ *  their boxes from the start. */
 export function AuthorizeStep({
   headingRef,
   outcome,
@@ -42,54 +45,89 @@ export function AuthorizeStep({
     projects: grantedProjects(projects, selection),
     scopes: scopes.filter((scope) => scope.required || !declined.has(scope.name)),
   };
+  const projectChoices = (
+    <>
+      <ProjectChoices
+        projects={projects}
+        projectBound={projectBound}
+        fixed={projectBound}
+        selection={selection}
+        newProject={
+          projectBound
+            ? null
+            : { open: draft.open, onOpenChange: (open) => onDraftChange({ ...draft, open }) }
+        }
+        disabled={disabled}
+        onSelectionChange={onSelectionChange}
+      />
+      {draft.open ? (
+        // Its own form, beside Authorize's and not inside it: Enter in a field creates the
+        // project, and Authorize never creates an unfinished draft.
+        <form
+          aria-label="New project"
+          onSubmit={onCreateProject}
+          className="flex max-w-md flex-col gap-4 border p-4"
+        >
+          <h3>New project</h3>
+          <ProjectFields {...fields} />
+          <Button
+            type="submit"
+            variant="outline"
+            size="lg"
+            className="h-11 self-start px-4"
+            disabled={disabled}
+          >
+            Create project
+          </Button>
+        </form>
+      ) : null}
+    </>
+  );
+  const permissionChoices = (
+    <PermissionChoices
+      scopes={scopes}
+      declined={declined}
+      disabled={disabled}
+      onDeclinedChange={onDeclinedChange}
+    />
+  );
   return (
     <>
-      <section className="flex flex-col gap-3">
-        <StepHeading ref={headingRef}>Projects</StepHeading>
-        <ProjectChoices
-          projects={projects}
-          projectBound={projectBound}
-          fixed={projectBound}
-          selection={selection}
-          newProject={
-            projectBound
-              ? null
-              : { open: draft.open, onOpenChange: (open) => onDraftChange({ ...draft, open }) }
-          }
-          disabled={disabled}
-          onSelectionChange={onSelectionChange}
-        />
-        {draft.open ? (
-          // Its own form, beside Authorize's and not inside it: Enter in a field creates the
-          // project, and Authorize never creates an unfinished draft.
-          <form
-            aria-label="New project"
-            onSubmit={onCreateProject}
-            className="flex max-w-md flex-col gap-4 border p-4"
+      {projectBound ? (
+        <>
+          <section className="flex flex-col gap-3">
+            <StepHeading ref={headingRef}>Projects</StepHeading>
+            {projectChoices}
+          </section>
+          <section className="flex flex-col gap-3">
+            <h2>Permissions</h2>
+            {permissionChoices}
+          </section>
+        </>
+      ) : (
+        <section className="flex flex-col gap-3">
+          <StepHeading ref={headingRef}>Access</StepHeading>
+          <FullAccess
+            projects={projects}
+            fixed={false}
+            selection={selection}
+            scopes={scopes}
+            declined={declined}
+            disabled={disabled}
+            onSelectionChange={onSelectionChange}
+            onDeclinedChange={onDeclinedChange}
           >
-            <h3>New project</h3>
-            <ProjectFields {...fields} />
-            <Button
-              type="submit"
-              variant="outline"
-              size="lg"
-              className="h-11 self-start px-4"
-              disabled={disabled}
-            >
-              Create project
-            </Button>
-          </form>
-        ) : null}
-      </section>
-      <section className="flex flex-col gap-3">
-        <h2>Permissions</h2>
-        <PermissionChoices
-          scopes={scopes}
-          declined={declined}
-          disabled={disabled}
-          onDeclinedChange={onDeclinedChange}
-        />
-      </section>
+            <section className="flex flex-col gap-3">
+              <h3>Projects</h3>
+              {projectChoices}
+            </section>
+            <section className="flex flex-col gap-3">
+              <h3>Permissions</h3>
+              {permissionChoices}
+            </section>
+          </FullAccess>
+        </section>
+      )}
       <form method="post" onSubmit={() => setAuthorizing(true)}>
         {granted.projects.map((project) => (
           <input key={project} type="hidden" name="project" value={project} />

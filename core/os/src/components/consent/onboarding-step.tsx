@@ -2,6 +2,7 @@ import type { FormEvent, Ref } from "react";
 import type { ConsentScope } from "iterate/oauth-scopes";
 import { Button } from "../ui/button.tsx";
 import { ConsentActions, StepHeading, type ConsentOutcome } from "./consent-step.tsx";
+import { FullAccess } from "./full-access.tsx";
 import { PermissionChoices } from "./permission-choices.tsx";
 import { ProjectChoices } from "./project-choices.tsx";
 import { ProjectFields } from "./project-fields.tsx";
@@ -41,6 +42,9 @@ export function OnboardingStep({
     projects: selection.future ? ["*"] : createdProjectId ? [createdProjectId] : [],
     scopes: scopes.filter((scope) => scope.required || !declined.has(scope.name)),
   };
+  const projects = [
+    { id: "first-project", slug: fields.slug || "my-project", orgName: organizationName },
+  ];
   return (
     <form method="post" onSubmit={onCreateAndAuthorize} className="flex flex-col gap-6">
       <section className="flex max-w-md flex-col gap-3">
@@ -48,27 +52,39 @@ export function OnboardingStep({
         <ProjectFields {...fields} />
       </section>
       <section className="flex flex-col gap-3">
-        <h2>Projects</h2>
-        <ProjectChoices
-          projects={[
-            { id: "first-project", slug: fields.slug || "my-project", orgName: organizationName },
-          ]}
-          projectBound={false}
+        <h2>Access</h2>
+        <FullAccess
+          projects={projects}
           fixed
           selection={selection}
-          newProject={null}
-          disabled={fields.disabled}
-          onSelectionChange={onSelectionChange}
-        />
-      </section>
-      <section className="flex flex-col gap-3">
-        <h2>Permissions</h2>
-        <PermissionChoices
           scopes={scopes}
           declined={declined}
           disabled={fields.disabled}
+          onSelectionChange={onSelectionChange}
           onDeclinedChange={onDeclinedChange}
-        />
+        >
+          <section className="flex flex-col gap-3">
+            <h3>Projects</h3>
+            <ProjectChoices
+              projects={projects}
+              projectBound={false}
+              fixed
+              selection={selection}
+              newProject={null}
+              disabled={fields.disabled}
+              onSelectionChange={onSelectionChange}
+            />
+          </section>
+          <section className="flex flex-col gap-3">
+            <h3>Permissions</h3>
+            <PermissionChoices
+              scopes={scopes}
+              declined={declined}
+              disabled={fields.disabled}
+              onDeclinedChange={onDeclinedChange}
+            />
+          </section>
+        </FullAccess>
       </section>
       {granted.projects.map((project) => (
         <input key={project} type="hidden" name="project" value={project} />
