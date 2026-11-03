@@ -19,6 +19,7 @@
 import { codedError, errorCode } from "iterate/lib";
 import { z } from "zod";
 import { iterateConfigOf } from "../iterate-config.ts";
+import { contextStub } from "../context-stub.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -221,8 +222,10 @@ export async function connectMovedSlackTeam(
 /** The held token stored in the connection's secret (secret/durable-object.ts `admitHeldToken`): the
  *  platform's own call, which no member's itx reaches. */
 async function admitHeldToken(scope: IntegrationScope, connection: string, nonce: string) {
-  await scope.env.ITERATE_CONTEXT.getByName(
-    DurableObjectNameCodec.stringify({ projectId: scope.projectId, path: "/" }),
+  await contextStub(
+    scope.env.ITERATE_CONTEXT,
+    DurableObjectNameCodec.address({ projectId: scope.projectId, path: "/" }),
+    "integrations",
   ).invoke(
     [
       "itx",
@@ -243,8 +246,10 @@ export async function dropHeldSlackToken(
   connection: string,
   nonce: string,
 ): Promise<void> {
-  await scope.env.ITERATE_CONTEXT.getByName(
-    DurableObjectNameCodec.stringify({ projectId: scope.projectId, path: "/" }),
+  await contextStub(
+    scope.env.ITERATE_CONTEXT,
+    DurableObjectNameCodec.address({ projectId: scope.projectId, path: "/" }),
+    "integrations",
   ).invoke(
     [
       "itx",

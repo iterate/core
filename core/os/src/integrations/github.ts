@@ -30,6 +30,7 @@ import {
   type PlatformAddresses,
   type IterateConfigEnv,
 } from "../iterate-config.ts";
+import { contextStub } from "../context-stub.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -455,8 +456,10 @@ export async function githubCallbackRoute(
   let move: Awaited<ReturnType<typeof acceptGithubCallback>>["move"];
   try {
     // The platform's own call on the project root; `invoke` is untyped across the DO hop.
-    ({ redirect, move } = (await env.ITERATE_CONTEXT.getByName(
-      DurableObjectNameCodec.stringify({ projectId: claims.projectId, path: "/" }),
+    ({ redirect, move } = (await contextStub(
+      env.ITERATE_CONTEXT,
+      DurableObjectNameCodec.address({ projectId: claims.projectId, path: "/" }),
+      "integrations",
     ).invoke(
       [
         "itx",

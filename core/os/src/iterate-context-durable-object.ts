@@ -84,7 +84,7 @@ import {
   settlementOfScriptRun,
   type LibraryItx,
 } from "./library.ts";
-import { waitForEventOnContext } from "./context-stub.ts";
+import { reachableContext, waitForEventOnContext } from "./context-stub.ts";
 import { Stream, type ReachableContext } from "./stream/stream.ts";
 import { ALARM_MAX_REARMS, AlarmCoordinator } from "./alarm-coordinator.ts";
 import { itxAiFor } from "./itx-ai.ts";
@@ -1174,7 +1174,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         ?.primaryHostname ?? null,
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
-    otherOwnerContext: (name) => this.env.ITERATE_CONTEXT.getByName(name),
+    otherOwnerContext: (name) =>
+      reachableContext(this.env.ITERATE_CONTEXT, DurableObjectNameCodec.parse(name), "itx", {
+        readsRunSettlements: false,
+      }),
     iterateContextName: this.#durableObjectAddress.name,
     ai: itxAiFor(this.ctx, this.#durableObjectAddress.projectId),
     env: this.env,
@@ -1777,6 +1780,40 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // method, so this actor enforces it here, whatever the caller disposes: a live answer leaves as
     // the expression that names it, data a hop below answered with leaves as a copy.
     return itxAnswerDetachedFromSession(result, call, args);
+  }
+
+  /** `invoke`, but a refusal (an error with a `code`) comes back as `{ ok: false, error }` instead of
+   *  being thrown. Any other error is still thrown. context-stub.ts calls this, never `invoke`,
+   *  because a thrown error can lose its `code` on the way to the caller: since workerd
+   *  v1.20261030.1, a caller that gets an error from an older runtime keeps only its message, and
+   *  Cloudflare rolls a release out gradually, so two contexts can be on different runtimes at once.
+   *  A return value arrives whatever the runtimes. */
+  async invokeSafe(
+    call: ItxExpressionInput,
+    args: unknown[] = [],
+    caller: Caller = { principal: null },
+  ) {
+    try {
+      // `invoke` answers anything; only its disposer, if it has one, is read here.
+      const data = (await this.invoke(call, args, caller)) as Partial<Disposable> | undefined;
+      // workerd keeps this context's session open until the caller runs the disposer on the
+      // object a call returns. An answer that still holds a session of its own
+      // (`itxAnswerDetachedFromSession` says when) hands its disposer up to the wrapper, and
+      // context-stub.ts moves it back down. Never add one to every answer: this context would stay
+      // open after every call.
+      return {
+        ok: true as const,
+        data,
+        ...(data?.[Symbol.dispose] && { [Symbol.dispose]: data[Symbol.dispose] }),
+      };
+    } catch (error) {
+      const code = errorCode(error);
+      if (error instanceof Error && code) {
+        const data = "data" in error ? error.data : undefined;
+        return { ok: false as const, error: { code, message: error.message, data } };
+      }
+      throw error;
+    }
   }
 
   /** A DELIVERY'S SEND, AT MOST ONCE (integrations/email.ts): the event this log already recorded

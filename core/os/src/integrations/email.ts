@@ -41,6 +41,7 @@ import {
 } from "../cause.ts";
 import { iterateConfigOf } from "../iterate-config.ts";
 import { sha256Hex, type Caller } from "../caller.ts";
+import { reachableContext } from "../context-stub.ts";
 import { DurableObjectNameCodec, resourceScope } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -109,8 +110,10 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
     email.headers.find(({ key }) => key === ITERATE_CAUSE_HEADER.toLowerCase())?.value,
   );
   await recordEmail(
-    env.ITERATE_CONTEXT.getByName(
-      DurableObjectNameCodec.stringify({ projectId: project.id, path: EMAIL_PATH }),
+    reachableContext(
+      env.ITERATE_CONTEXT,
+      DurableObjectNameCodec.address({ projectId: project.id, path: EMAIL_PATH }),
+      "integrations",
     ),
     {
       principal: null,

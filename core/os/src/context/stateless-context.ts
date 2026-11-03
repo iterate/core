@@ -6,14 +6,14 @@
 // (built-ins.ts `buildPortableBuiltIns`). Where each call runs is `ItxExpressionResolver.invoke`'s
 // contract, and how fresh a snapshot is context/rule-snapshots.ts's.
 
-import { InvokeHandle, normalizedItxExpression, type ItxExpression } from "iterate/expression";
+import { InvokeHandle, type ItxExpression } from "iterate/expression";
 import { crossingOneMore, type Cause } from "../cause.ts";
 import type { Caller } from "../caller.ts";
 import type { Env } from "../iterate-context-durable-object.ts";
 import { iterateConfigOf } from "../iterate-config.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import { mcpWebhookOf } from "../integrations/mcp.ts";
-import { contextStub } from "../context-stub.ts";
+import { reachableContext } from "../context-stub.ts";
 import { itxAiFor } from "../itx-ai.ts";
 import { buildLibrary, type LibraryItx } from "../library.ts";
 import {
@@ -55,8 +55,10 @@ export function contextReach(args: {
   const { env, namespace, projectId, platformOrigin, readsRunSettlements } = args;
   const ambient: () => Pick<Caller, "delivery" | "cause"> = args.ambient || (() => ({}));
   const nameOf = (path: string) => DurableObjectNameCodec.stringify({ projectId, path });
-  const contextOf = (path: string) => namespace.getByName(nameOf(path));
+  const stubOf = (path: string) => namespace.getByName(nameOf(path));
   const addressOf = (path: string) => DurableObjectNameCodec.address({ projectId, path });
+  const contextOf = (path: string) =>
+    reachableContext(namespace, addressOf(path), "itx", { readsRunSettlements });
   /** The resolver of the context at `path` for a caller of no one, the platform's or (`app`) its
    *  loaded code's, under `cause`. */
   const resolverAt = (path: string, cause: Cause | undefined, app?: true) =>
@@ -74,25 +76,19 @@ export function contextReach(args: {
     contextOf,
     loadedCodeAt,
     recordLoopLimit: (path: string, cause: Cause, message: string) =>
-      args.ctx.waitUntil(contextOf(path).recordLoopLimit(cause, message)),
+      args.ctx.waitUntil(stubOf(path).recordLoopLimit(cause, message)),
     snapshotOf: (path: string) =>
       ruleSnapshots.get(
         nameOf(path),
+        // The method answers a `RulesSnapshotAnswer`; workerd's RPC types wrap it in a type
+        // that no longer matches.
         (ifVersion) =>
-          contextOf(path).rulesSnapshot(ifVersion) as unknown as Promise<RulesSnapshotAnswer>,
+          stubOf(path).rulesSnapshot(ifVersion) as unknown as Promise<RulesSnapshotAnswer>,
       ),
     located: (path: string, expression: ItxExpression, callArgs: unknown[], caller: Caller) => {
       const callerThere = { ...caller, platformOrigin: caller.platformOrigin || platformOrigin() };
       return callContext(
-        () => ({
-          fetch: (request) => contextOf(path).fetch(request),
-          invoke: (target, targetArgs = [], targetCaller = callerThere) =>
-            contextStub(namespace, addressOf(path), "itx", { readsRunSettlements }).invoke(
-              normalizedItxExpression(target),
-              targetArgs,
-              targetCaller,
-            ),
-        }),
+        () => contextOf(path),
         expression,
         callArgs,
         callerThere,

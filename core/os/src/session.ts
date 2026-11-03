@@ -349,8 +349,10 @@ async function borrowEveryProjectLends(
   projectId: string,
   caller: Caller,
 ): Promise<void> {
-  const root = input.contextNamespace.getByName(
-    DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: "/" }),
+  const root = contextStub(
+    input.contextNamespace,
+    DurableObjectNameCodec.address({ projectId: GLOBAL_PROJECT_ID, path: "/" }),
+    "session",
   );
   try {
     await root.invoke(["itx", "builtins", "secrets", ["borrowEveryProjectLends", projectId]], [], {
@@ -1161,8 +1163,10 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     const { input: sessionInput, caller } = this.#session;
     const id = await this.#reachableId("delete", project);
     const doomed = await sessionInput.controlPlane.projectToDelete(caller, id);
-    const root = sessionInput.contextNamespace.getByName(
-      DurableObjectNameCodec.stringify({ projectId: id, path: "/" }),
+    const root = contextStub(
+      sessionInput.contextNamespace,
+      DurableObjectNameCodec.address({ projectId: id, path: "/" }),
+      "session",
     );
     await root.invoke(["itx", "builtins", "processors", ["enable", "project"]], [], caller);
     await root.invoke(

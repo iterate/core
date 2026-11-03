@@ -46,9 +46,9 @@ test("an organization's facts land on its own context, its processor enabled fir
 test("appendPlatformFacts `folded` waits on the owner's processor barrier through the last appended offset", async () => {
   const calls: unknown[][] = [];
   const context = {
-    invoke: async (...args: unknown[]) => {
+    invokeSafe: async (...args: unknown[]) => {
       calls.push(args);
-      if (calls.length === 2) return [{ offset: 7 }, { offset: 8 }];
+      return { ok: true, data: calls.length === 2 ? [{ offset: 7 }, { offset: 8 }] : undefined };
     },
   };
   const namespace = { getByName: () => context } as unknown as Parameters<
@@ -147,16 +147,16 @@ test.for([
   const issue = vi.spyOn(console, "error").mockImplementation(() => {});
   const { stream, events } = nodeSqliteStream();
   const left = [...failures];
-  const invoke = vi.fn(async (expression: ItxExpression) => {
+  const invokeSafe = vi.fn(async (expression: ItxExpression) => {
     const [verb, ...appended] = expression[2] as [string, ...StreamEventInput[]];
-    if (verb !== "append") return; // the owner's processor enable
+    if (verb !== "append") return { ok: true, data: undefined }; // the owner's processor enable
     const cut = left.shift();
     if (cut && !cut.afterLanding) throw platformError(cut.failure);
     const answer = stream.append(...appended);
     if (cut) throw platformError(cut.failure);
-    return answer;
+    return { ok: true, data: answer };
   });
-  const getByName = vi.fn(() => ({ invoke }));
+  const getByName = vi.fn(() => ({ invokeSafe }));
   const pending: Promise<unknown>[] = [];
   publishPlatformFacts(
     {
@@ -225,14 +225,15 @@ test("the session's own dispose(key) takes whatever is current; disposeAll takes
 const globalName = (path: string) =>
   DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path });
 
-/** A context namespace whose append (the second `invoke`, after the processor enable) rejects. */
+/** A context namespace whose append (the second call, after the processor enable) rejects. */
 function failingAppendNamespace() {
   const calls: unknown[][] = [];
   const names: string[] = [];
   const context = {
-    invoke: async (...args: unknown[]) => {
+    invokeSafe: async (...args: unknown[]) => {
       calls.push(args);
       if (calls.length === 2) throw new Error("append refused");
+      return { ok: true, data: undefined };
     },
   };
   const namespace = {

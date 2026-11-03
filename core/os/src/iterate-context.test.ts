@@ -169,12 +169,12 @@ test.for([
     vi.spyOn(console, "info").mockImplementation((line) => void logged.push(["info", line]));
     vi.spyOn(console, "warn").mockImplementation((line) => void logged.push(["warn", line]));
     const left = [...failures];
-    const invoke = vi.fn(async () => {
+    const invokeSafe = vi.fn(async () => {
       const failure = left.shift();
       if (failure) throw platformError(failure);
-      return "answered";
+      return { ok: true, data: "answered" };
     });
-    const getByName = vi.fn(() => ({ invoke }));
+    const getByName = vi.fn(() => ({ invokeSafe }));
     const context = new IterateContextRpcTarget(
       // The fake namespace answers the one method the edge calls on it.
       { getByName } as unknown as IterateContextNamespace,
@@ -189,7 +189,7 @@ test.for([
     );
     expect(settled).toMatchObject(outcome);
     const attempts = 1 + lines.filter(([, line]) => "retryInMs" in line).length;
-    expect(invoke).toHaveBeenCalledTimes(attempts);
+    expect(invokeSafe).toHaveBeenCalledTimes(attempts);
     expect(getByName).toHaveBeenCalledTimes(attempts); // each attempt on a fresh stub
     // Exact: the lines are the prd fault alarm's input.
     expect(logged).toEqual(lines);

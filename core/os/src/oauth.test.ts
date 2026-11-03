@@ -80,7 +80,12 @@ test("an account read still waiting after five seconds names the person while it
   let answer!: (snapshot: { offset: number; state: Partial<AccountState> }) => void;
   const env = {
     ITERATE_CONTEXT: {
-      getByName: () => ({ invoke: () => new Promise((resolve) => (answer = resolve)) }),
+      getByName: () => ({
+        invokeSafe: async () => ({
+          ok: true,
+          data: await new Promise((resolve) => (answer = resolve)),
+        }),
+      }),
     },
   } as unknown as Env;
   const read = accountStateOf(env, "user_held");
@@ -132,12 +137,12 @@ async function accountHoldingKey(usedMinutesAgo: number | null) {
     },
     ITERATE_CONTEXT: {
       getByName: () => ({
-        invoke: async (path: unknown[]) => {
+        invokeSafe: async (path: unknown[]) => {
           const [, , step] = path as [string, string, unknown];
-          if (step === "facets") return { offset: appended.length, state };
-          if (!Array.isArray(step)) return undefined;
+          if (step === "facets") return { ok: true, data: { offset: appended.length, state } };
+          if (!Array.isArray(step)) return { ok: true, data: undefined };
           appended.push(...step.slice(1));
-          return [{ offset: appended.length }];
+          return { ok: true, data: [{ offset: appended.length }] };
         },
       }),
     },

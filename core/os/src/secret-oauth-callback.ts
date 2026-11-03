@@ -13,6 +13,7 @@ import {
   type PlatformAddresses,
 } from "./iterate-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
+import { contextStub } from "./context-stub.ts";
 import {
   DurableObjectNameCodec,
   GLOBAL_PROJECT_ID,
@@ -121,7 +122,11 @@ export async function secretOAuthCallback(
   let move: FinishConnectAnswer["move"];
   try {
     // the built-in's own answer (context/built-ins.ts `completeOAuth`)
-    const { scopes, held } = (await env.ITERATE_CONTEXT.getByName(claims.context).invoke(
+    const { scopes, held } = (await contextStub(
+      env.ITERATE_CONTEXT,
+      DurableObjectNameCodec.parse(claims.context),
+      "secret-oauth",
+    ).invoke(
       [
         "itx",
         "builtins",
@@ -153,13 +158,14 @@ export async function secretOAuthCallback(
         },
       };
       // the built-in's own answer (context/built-ins.ts `finishConnect`)
-      ({ move } = (await env.ITERATE_CONTEXT.getByName(
-        owner.kind === "project"
-          ? DurableObjectNameCodec.stringify({ projectId: owner.id, path: "/" })
-          : DurableObjectNameCodec.stringify({
-              projectId: GLOBAL_PROJECT_ID,
-              path: `/users/${owner.id}`,
-            }),
+      ({ move } = (await contextStub(
+        env.ITERATE_CONTEXT,
+        DurableObjectNameCodec.address(
+          owner.kind === "project"
+            ? { projectId: owner.id, path: "/" }
+            : { projectId: GLOBAL_PROJECT_ID, path: `/users/${owner.id}` },
+        ),
+        "secret-oauth",
       ).invoke(["itx", "builtins", "integrations", ["finishConnect", finish]], [], {
         principal: null,
         platform: true,

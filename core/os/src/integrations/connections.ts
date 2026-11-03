@@ -17,7 +17,7 @@ import {
 import { callbackPage } from "../callback-page.ts";
 import { bytesFromBase64url, signClaims, type PlatformFactType } from "../caller.ts";
 import type { Cause } from "../cause.ts";
-import { facetStateOf } from "../context-stub.ts";
+import { contextStub, facetStateOf } from "../context-stub.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane, type Reach } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -206,11 +206,11 @@ export async function appendPlatformFact(
   event: StreamEventInput & { type: PlatformFactType },
   cause?: Cause,
 ): Promise<void> {
-  await env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path })).invoke(
-    ["itx", "builtins", ["append", event]],
-    [],
-    { principal: null, platform: true, cause },
-  );
+  await contextStub(
+    env.ITERATE_CONTEXT,
+    DurableObjectNameCodec.address({ projectId, path }),
+    "integrations",
+  ).invoke(["itx", "builtins", ["append", event]], [], { principal: null, platform: true, cause });
 }
 
 /** A connect's `<provider>/connected` on the owner's root: the row, less the provider its type
@@ -246,7 +246,11 @@ export async function connectionRowOf(
   path: string,
 ): Promise<IntegrationConnectionRow | null> {
   const state = await facetStateOf<ProjectState>(
-    env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path: "/" })),
+    contextStub(
+      env.ITERATE_CONTEXT,
+      DurableObjectNameCodec.address({ projectId, path: "/" }),
+      "integrations",
+    ),
     "project",
     { principal: null },
   );
@@ -266,8 +270,10 @@ export async function connectionRowThroughHeadOf(
   projectId: string,
   path: string,
 ): Promise<IntegrationConnectionRow | null> {
-  const root = env.ITERATE_CONTEXT.getByName(
-    DurableObjectNameCodec.stringify({ projectId, path: "/" }),
+  const root = contextStub(
+    env.ITERATE_CONTEXT,
+    DurableObjectNameCodec.address({ projectId, path: "/" }),
+    "integrations",
   );
   // `invoke` is untyped across the DO hop; `readEvents` answers the log's own page (iterate/api)
   const { scannedThroughOffset } = (await root.invoke(

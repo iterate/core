@@ -1,20 +1,27 @@
 // context-stub.ts — A CONTEXT DURABLE OBJECT AS THE PLATFORM'S OWN CODE CALLS IT, under the one
 // failure model (docs/engineering-invariants.md#failures-and-retries), so a call gets the same policy
 // whichever hop makes it: the edge (iterate-context.ts), /mcp, the owner contexts the session and
-// the token endpoint read and append to (session.ts `ownerContext`), and every call a context or
-// loaded code sends to the context it lives in (context/stateless-context.ts `contextReach`).
+// the token endpoint read and append to (session.ts `ownerContext`), every call a context or
+// loaded code sends to the context it lives in (context/stateless-context.ts `contextReach`), and
+// the platform's own calls on a context (integrations/, project/durable-object.ts).
 import { z } from "zod";
 import type { WaitForEventFilter } from "iterate/api";
-import { itxExpressionStepName, type ItxExpression } from "iterate/expression";
-import { releaseRpcSessions } from "iterate/lib";
+import {
+  itxExpressionStepName,
+  normalizedItxExpression,
+  type ItxExpression,
+} from "iterate/expression";
+import { codedError, releaseRpcSessions } from "iterate/lib";
 import type { StreamProcessorDurableObject } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import type { Caller } from "./caller.ts";
 import { DurableObjectNameCodec, type DurableObjectAddress } from "./context/paths.ts";
 import type { IterateContextNamespace } from "./iterate-context.ts";
+import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import { ScriptRunRequested, settlementOfScriptRun } from "./library.ts";
 import type { repoVerbs } from "./repo/durable-object.ts";
+import type { ReachableContext } from "./stream/stream.ts";
 import { unavailable } from "./unavailable.ts";
 import type { workspaceVerbs } from "./workspace/durable-object.ts";
 
@@ -24,10 +31,12 @@ import type { workspaceVerbs } from "./workspace/durable-object.ts";
  *  error-handling guide). A call that is idempotent (`isIdempotentItxCall`) and that a deploy's reset
  *  or a lost connection failed is made ONCE more, at once; an overloaded one never
  *  (`retryPlatformFailures`, its lines named `<area>.…`). A platform failure that stands is thrown
- *  as UNAVAILABLE, its message kept. A context answers `itx.run` with the request
- *  (library.ts `ScriptRunRequested`), and the call answers with the run's settlement, read here in
- *  slices of fresh calls (`settlementOfScriptRun`): no call is held on one instance for a run's
- *  length. `readsRunSettlements: false` is a context's Durable Object sending on the call it was
+ *  as UNAVAILABLE, its message kept. It calls the context's `invokeSafe`, which returns a refusal
+ *  instead of throwing it, and throws it again here (iterate-context-durable-object.ts
+ *  `invokeSafe` says why). A context answers `itx.run`
+ *  with the request (library.ts `ScriptRunRequested`), and the call answers with the run's
+ *  settlement, read here in slices of fresh calls (`settlementOfScriptRun`): no call is held on one
+ *  instance for a run's length. `readsRunSettlements: false` is a context's Durable Object sending on the call it was
  *  made (context/stateless-context.ts `contextReach`): it answers the request as it came, and its
  *  own caller's side reads the settlement, so no context between the two is held for the run
  *  either. */
@@ -56,16 +65,30 @@ export function contextStub(
       try {
         answer = await retryPlatformFailures(
           async () => {
-            const call = namespace.getByName(address.name).invoke(itxExpression, args, caller);
+            const call = namespace.getByName(address.name).invokeSafe(itxExpression, args, caller);
             // A call that threw, or that its caller gave up on, holds its session, and the context
             // with it, until its promise is released (context/dispatch.ts
             // `awaitAnswerReleasedIfRejected` says why).
             const release = () => releaseRpcSessions([call]);
             givenUp?.addEventListener("abort", release, { once: true });
             try {
-              // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call
-              // denotes whatever expression the caller spelled, so `unknown` is the honest contract.
-              return (await call) as unknown;
+              // workerd's RPC types turn the answer's union into `never`, so it is read as the
+              // method declares it.
+              const result = (await call) as Awaited<
+                ReturnType<IterateContextDurableObject["invokeSafe"]>
+              >;
+              // Thrown inside this attempt, so the retry logic treats it like any other error.
+              if (!result.ok) {
+                const { code, message, data } = result.error;
+                throw codedError(code, message, data);
+              }
+              // workerd puts the disposer that releases the context's session on the wrapper, but
+              // whoever gets an answer releases the answer itself (core/os/docs/residency.md), so
+              // it moves onto the answer. A primitive holds nothing to release; a stub has its own.
+              const { data, [Symbol.dispose]: dispose } = result;
+              if (dispose && data instanceof Object && !data[Symbol.dispose])
+                Object.defineProperty(data, Symbol.dispose, { value: dispose, configurable: true });
+              return data;
             } catch (error) {
               release();
               throw error;
@@ -98,6 +121,28 @@ export function contextStub(
         waitForEventOnContext(namespace, address.projectId),
       );
     },
+  };
+}
+
+/** What one context uses to call another (stream.ts `ReachableContext`). `invoke` goes through
+ *  `contextStub` above, so it keeps refusal codes and gets the same retries. The other methods each
+ *  use a fresh stub. */
+export function reachableContext(
+  namespace: Pick<IterateContextNamespace, "getByName">,
+  address: DurableObjectAddress,
+  area: string,
+  options?: { readsRunSettlements?: boolean },
+): ReachableContext {
+  const hop = contextStub(namespace, address, area, options);
+  const stub = () => namespace.getByName(address.name);
+  return {
+    fetch: hop.fetch,
+    append: (...events) => stub().append(...events),
+    read: (...page) => stub().read(...page),
+    reserveSend: (key) => stub().reserveSend(key),
+    releaseSend: (key) => stub().releaseSend(key),
+    invoke: (call, args = [], caller = { principal: null }) =>
+      hop.invoke(normalizedItxExpression(call), args, caller),
   };
 }
 

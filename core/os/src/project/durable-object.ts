@@ -87,7 +87,11 @@ export class ProjectFacet extends StreamProcessorDurableObject<
    *  of the fixed point `append` under `platform: true`, as every platform fact is written
    *  (session.ts, integrations/connections.ts `appendPlatformFact`). */
   #publisher(): ProjectPublisher {
-    const root = this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName);
+    const root = contextStub(
+      this.env.ITERATE_CONTEXT,
+      DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
+      "project",
+    );
     // The repo and the probe at the fixed point, as `configRepoCall` says why: a publication reads
     // no rule table of `/` before its own commit. `invoke` answers `unknown`; the casts are the
     // repo facet's own answers (`tip`: main's commit or null; `modules`: path → text).
@@ -196,7 +200,11 @@ export class ProjectFacet extends StreamProcessorDurableObject<
     // The platform's own re-checks (processor.ts `HOSTNAME_RECHECK`): through the fixed point, past
     // the project's rewrite rules, as the platform. The key names the hostname while it fits a
     // schedule key: 200 characters, where a hostname may be 253.
-    const root = this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName);
+    const root = contextStub(
+      this.env.ITERATE_CONTEXT,
+      DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
+      "project",
+    );
     const recheckKeyOf = async (hostname: string) => [
       "project/hostname-recheck",
       hostname.length <= 160 ? hostname : await sha256Hex(hostname),

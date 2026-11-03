@@ -17,7 +17,8 @@
 // `"code" in error`). Why this shape and no other: capnweb coerces custom error NAMES to a
 // builtin whitelist and drops subclass identity, but preserves ALL own enumerable properties
 // across the wire (verified at runtime against @iterate-com/capnweb 0.10.0) — and with
-// enhanced_error_serialization (our compat date) own props survive native Workers-RPC hops too.
+// enhanced_error_serialization (our compat date) own props usually survive native Workers-RPC hops
+// too (contexts call each other with `invokeSafe`: core/os iterate-context-durable-object.ts says why).
 // So: never classify by `name`, `instanceof`, or message regex across a hop; check the code.
 // Human messages stay verbatim and greppable — the code rides beside them, never instead.
 // workerd's own stamped flags (`.retryable`, `.overloaded`, `.durableObjectReset`) ride the same

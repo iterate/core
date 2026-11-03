@@ -16,6 +16,7 @@ import { codedError, errorCode, reportIssue, withTimeout } from "iterate/lib";
 import { z } from "zod";
 import { iterateConfigOf, sessionSigningSecretOf } from "../iterate-config.ts";
 import { verifyClaims } from "../caller.ts";
+import { contextStub } from "../context-stub.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import {
@@ -284,8 +285,10 @@ async function connectAccountToProject(
   consentedBy: FinishConnectInput["consentedBy"],
 ): Promise<void> {
   const secretPath = tokenSecretPathOf(row.provider, row.connection);
-  await scope.env.ITERATE_CONTEXT.getByName(
-    DurableObjectNameCodec.stringify({ projectId: scope.projectId, path: scope.rootPath }),
+  await contextStub(
+    scope.env.ITERATE_CONTEXT,
+    DurableObjectNameCodec.address({ projectId: scope.projectId, path: scope.rootPath }),
+    "integrations",
   ).invoke(
     [
       "itx",
@@ -409,8 +412,10 @@ export async function confirmIntegrationMove(
   try {
     await withTimeout(
       Promise.resolve(
-        scope.env.ITERATE_CONTEXT.getByName(
-          DurableObjectNameCodec.stringify({ projectId: holder.projectId, path: "/" }),
+        contextStub(
+          scope.env.ITERATE_CONTEXT,
+          DurableObjectNameCodec.address({ projectId: holder.projectId, path: "/" }),
+          "integrations",
         ).invoke(
           [
             "itx",

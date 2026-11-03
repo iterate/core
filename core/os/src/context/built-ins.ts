@@ -620,8 +620,8 @@ export interface BuildBuiltInsDeps {
   /** The worker a source expression with no cacheKey names, resolved from this context (the DO's
    *  `#namedWorker`): what `workers.get` of such a source loads. */
   namedWorker: (source: ItxExpressionInput) => Promise<NamedWorker>;
-  /** A context stream by CANONICAL path — the own-path parent adapter same-isolate, by-name DO
-   *  stubs otherwise. Both satisfy ReachableContext (uniform-async, real-typed — see stream/stream.ts). */
+  /** A context stream by CANONICAL path — the own-path parent adapter same-isolate,
+   *  `reachableContext` (context-stub.ts) otherwise. Both satisfy ReachableContext (uniform-async, real-typed — see stream/stream.ts). */
   context: (path: string) => ReachableContext;
   /** Another OWNER's context by its Durable Object name — a lend's other side, which crosses from a
    *  person's namespace to a project's. The platform's verbs alone spell one. */

@@ -1019,7 +1019,7 @@ class StreamStorage {
 /** A CONTEXT reachable over the wire — what `itx.cd('/x')` routes through. Named with the REAL
  *  event types and Promise-returning throughout, so every backing satisfies it structurally with
  *  ZERO casts: the IterateContextDurableObject itself (its own path hands `this`), a sibling
- *  `DurableObjectStub<IterateContextDurableObject>`, an off-platform `RpcTarget` over capnweb. */
+ *  (context-stub.ts `reachableContext`), an off-platform `RpcTarget` over capnweb. */
 export interface ReachableContext {
   fetch(request: Request): Promise<Response>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
