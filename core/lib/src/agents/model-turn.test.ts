@@ -1,9 +1,11 @@
 // model-turn.test.ts — one model turn against a fake `itx`: the request the loop sends, the first
-// response frame, and the usage it settles with, priced at the standard tier only; and each answer's
-// idle budget, with the key stack's fallback, on a fake clock. The whole loop on the worker is
+// response frame, and the usage it settles with, priced at the standard tier only; each answer's
+// idle budget, with the key stack's fallback, on a fake clock; and, over an engine's own delivery,
+// what a request reads once a summary landed after it was recorded. The whole loop on the worker is
 // test/vitest/agents/ (e2e) and agents-workers/ (an eviction mid-call).
 import { expect, test, vi } from "vitest";
-import type { StreamEvent } from "../stream/processor.ts";
+import { ProcessorEngine, type StreamEvent, type StreamEventInput } from "../stream/processor.ts";
+import { memoryStorage, memoryStream } from "../stream/test-support.ts";
 import { type AgentConfigPatch, AgentProcessor } from "./processor.ts";
 
 const PATH = "/agents/a";
@@ -278,7 +280,156 @@ test("a conversation that already holds half an emoji, in a person's words and i
   });
 });
 
+// ── a summary and the request after it, over the engine's own delivery ──
+
+test.for([
+  { delivery: "in the batch that brings the request" },
+  { delivery: "before a fresh incarnation revives the request" },
+])(
+  "a summary that lands after the open request it precedes, $delivery, still reaches that request: the model reads the summary and the new words",
+  async ({ delivery }) => {
+    const agent = agentOnLog(PATH, () => "Noted.");
+    const history = [
+      ...BORN,
+      words("Remember: my locker code is 4417."),
+      requested(3),
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: { requestOffset: 4, result: { status: "succeeded", text: "" } },
+      },
+    ];
+    // the person's next words and their request, then the summary of the history through @4,
+    // written meanwhile (an engine's live state takes offsets too, so they are counted at commit)
+    const race = (at: number) => [
+      words("What is my locker code?"),
+      requested(at),
+      {
+        type: "events.iterate.com/agent/context-added",
+        payload: {
+          role: "developer",
+          content:
+            "[Earlier conversation history was compacted through @4. Summary:]\n\nThe locker code is 4417.",
+          compaction: { replacesHistoryThrough: 4 },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      },
+    ];
+    const batch = delivery === "in the batch that brings the request";
+    agent.commit(...history);
+    if (batch) await agent.wake().catchUpFromLog();
+    const at = agent.nextOffset();
+    agent.commit(...race(at));
+    if (!batch) await agent.wake().revive();
+    await vi.waitFor(() => expect(agent.bodies).toHaveLength(1));
+    // the model got the request recorded before the summary landed, not one the loop recorded after
+    expect(
+      agent.events
+        .filter((event) => event.type === "events.iterate.com/agent/llm-request-settled")
+        .map((event) => (event.payload as { requestOffset: number }).requestOffset),
+    ).toEqual([4, at + 1]);
+    const input = JSON.stringify(agent.bodies[0]!.input);
+    expect({
+      summary: input.includes("The locker code is 4417."),
+      newWords: input.includes("What is my locker code?"),
+      oldWords: input.includes("Remember: my locker code is 4417."),
+    }).toEqual({ summary: true, newWords: true, oldWords: false });
+  },
+);
+
+test("a voice device's agent has its idle summary once the call goes quiet, and the next call's request reads it in place of the history", async () => {
+  const agent = agentOnLog("/agents/voice/kitchen", (body) =>
+    body.tool_choice === "none" ? "The locker code is 4417." : "Noted.",
+  );
+  agent.commit(...BORN, {
+    type: "events.iterate.com/agent/configured",
+    payload: {
+      config: {
+        llmRequestDebounceMs: 0,
+        idleCompactionAfterMs: 600_000,
+        idleCompactionMinNewTokens: 5,
+      },
+    },
+  });
+  await agent.wake().catchUpFromLog();
+  agent.commit(words("New call.\nPerson: Remember my locker code is 4417."));
+  await vi.waitFor(() => expect(agent.scheduled).toHaveLength(1));
+  // the agent's schedule fires: nothing happened since the request it names
+  const [{ events }] = agent.scheduled[0] as [{ events: Row[] }];
+  agent.commit(...events);
+  await vi.waitFor(() =>
+    expect(
+      agent.events.some((event) => (event.payload as { compaction?: unknown }).compaction),
+    ).toBe(true),
+  );
+  agent.commit(words("New call.\nPerson: What is my locker code?"));
+  await vi.waitFor(() => expect(agent.bodies).toHaveLength(3));
+  const input = JSON.stringify(agent.bodies[2]!.input);
+  expect({
+    summary: input.includes("while idle") && input.includes("The locker code is 4417."),
+    newWords: input.includes("What is my locker code?"),
+    oldWords: input.includes("Remember my locker code is 4417."),
+  }).toEqual({ summary: true, newWords: true, oldWords: false });
+});
+
 type Row = { type: string; payload?: unknown };
+
+const BORN: Row[] = [
+  { type: "events.iterate.com/agent/create-requested", payload: {} },
+  { type: "events.iterate.com/agent/created", payload: { path: PATH } },
+];
+const words = (content: string): Row => ({
+  type: "events.iterate.com/agent/context-added",
+  payload: { role: "user", content, actor: { type: "user" } },
+});
+const requested = (triggerOffset: number): Row => ({
+  type: "events.iterate.com/agent/llm-request-requested",
+  payload: { model: "gpt-6.1-sol", expiresAt: 600_000, triggerOffset },
+});
+
+/** The agent as a facet hosts it: its processor in an engine over an in-memory log at `path`, the
+ *  `itx` of agentWithModel with the agent's own schedule (`scheduled` keeps each call), and a model
+ *  that answers `answer(body)`. `commit` appends events in one batch, pushed to the incarnation
+ *  `wake` started last over the same log and checkpoint; `bodies` are the requests the model got. */
+function agentOnLog(path: string, answer: (body: Record<string, unknown>) => string) {
+  const log = memoryStream(path);
+  const storage = memoryStorage();
+  const bodies: Record<string, unknown>[] = [];
+  const scheduled: unknown[][] = [];
+  const itx = {
+    whoami: async () => ({ projectId: "prj_t", path, projectSlug: "t" }),
+    repos: {
+      get: async () => ({
+        readFile: async (file: string) => (file === "AGENTS.md" ? "Be brief." : null),
+      }),
+    },
+    cd: () => ({ rewriteRules: { list: async () => [] } }),
+    schedules: { set: async (...args: unknown[]) => void scheduled.push(args) },
+    ai: {
+      run: async (_model: string, body: Record<string, unknown>) => {
+        bodies.push(body);
+        return sse(answered(answer(body)));
+      },
+    },
+    [Symbol.dispose]: () => undefined,
+  };
+  return {
+    commit: (...rows: Row[]) => void log.stream.append(...(rows as StreamEventInput[])),
+    wake: () => {
+      const processor = new AgentProcessor({
+        getItx: () => itx as never,
+        now: () => 0,
+        sleep: async () => undefined,
+      });
+      const engine = new ProcessorEngine(processor, { stream: log.stream, storage });
+      log.engines.splice(0, log.engines.length, engine);
+      return engine;
+    },
+    nextOffset: () => (log.pushedEvents.at(-1)?.offset ?? 0) + 1,
+    bodies,
+    scheduled,
+    events: log.events,
+  };
+}
 
 /** An agent whose `itx` answers the few things a turn asks: who it is, its config repo (an
  *  AGENTS.md), its capability tree (none), and the model, which streams "forty-two" in two deltas

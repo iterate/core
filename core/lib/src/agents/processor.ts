@@ -86,11 +86,9 @@ The earlier summaries above stay in your context word for word, so do not repeat
 const KEEP_WARM_PROMPT =
   "[Keep-warm request from the platform, not from anyone: it only keeps this conversation in the prompt cache. Do nothing and reply with exactly: ok]";
 
-/** A voice call's agent: its call is over once it goes quiet, so it neither pings nor summarizes. */
-const isVoiceCall = (path: string) => path.startsWith("/agents/voice/");
 /** A long-lived agent (`/agents/<name>`), which pings to keep its history cached; a task's
  *  subagent or a thread goes cold, with an idle summary when it is worth one. */
-export const keepsWarm = (path: string) => /^\/agents\/[^/]+$/.test(path) && !isVoiceCall(path);
+export const keepsWarm = (path: string) => /^\/agents\/[^/]+$/.test(path);
 
 /** The conversation after the newest summary, in tokens, estimated from its characters: what an
  *  idle summary would take out of the next wake-up's uncached input. */
@@ -1204,7 +1202,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         const warm = keepsWarm(event.path) && state.config.keepWarmForMs > 0;
         if (
           state.config.idleCompactionAfterMs > 0 &&
-          !isVoiceCall(event.path) &&
           !covered &&
           (warm || historyTokensSinceSummary(state) >= state.config.idleCompactionMinNewTokens)
         )
@@ -1843,7 +1840,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
   /** THE INPUT of the request at `throughOffset`: its conversation (the items up to its stamp,
    *  plus the section item written for it), rendered by render.ts. A turn and the compaction of that
-   *  turn build the same input, so the summary request reads it from cache. */
+   *  turn build the same input, so the summary request reads it from cache. A summary counts by its
+   *  barrier, not its own offset: one that landed after the request was recorded (in the same
+   *  batch, or before a revival) has already replaced the history it covers in `state`. */
   async #requestInput(
     state: AgentState,
     throughOffset: number,
@@ -1857,6 +1856,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       ...state.contextItems.filter(
         (item) =>
           item.offset <= throughOffset ||
+          (item.compaction && item.compaction.replacesHistoryThrough <= throughOffset) ||
           (item.sections && item.llmRequestOffset === throughOffset),
       ),
       ...(update ? [update] : []),

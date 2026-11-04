@@ -166,8 +166,7 @@ export const AgentContract = defineProcessorContract({
          *  after its last request, with a ping every `keepWarmEveryMs` (a cache read refreshes
          *  OpenAI's 30 minutes), and only then has its idle summary: a ping costs a twenty-fifth of
          *  re-sending the history, and a quiet hour stays lossless. Off by default (0); the pings ride
-         *  the idle check, so they need `idleCompactionAfterMs` too. A voice call's agent does
-         *  neither: its call is over. */
+         *  the idle check, so they need `idleCompactionAfterMs` too. */
         keepWarmForMs: z.number().int().nonnegative().default(0),
         keepWarmEveryMs: z
           .number()

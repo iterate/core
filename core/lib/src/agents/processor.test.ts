@@ -704,6 +704,86 @@ test("the debounce waits for more of a person's words, never after the loop's ow
   }
 });
 
+test.for([
+  { name: "a long-lived agent keeps warm first", path: "/agents/support", warm: true },
+  { name: "a thread goes cold", path: "/agents/web/20261104-ab", warm: false },
+  { name: "a voice device's agent goes cold", path: "/agents/voice/kitchen", warm: false },
+  {
+    name: "a voice call's agent goes cold",
+    path: "/agents/voice/kitchen/20261104-ab",
+    warm: false,
+  },
+])(
+  "a settled request arms the idle check at any agent's path: $name, then has its idle summary",
+  async ({ path, warm }) => {
+    const scheduled: unknown[] = [];
+    const agent = new AgentProcessor({
+      getItx: () =>
+        ({
+          schedules: { set: async (...args: unknown[]) => void scheduled.push(args) },
+          [Symbol.dispose]: () => undefined,
+        }) as never,
+      now: () => 0,
+      sleep: () => Promise.resolve(),
+    });
+    // the project's starting configuration, which every agent born in it is given
+    const configured = {
+      type: "events.iterate.com/agent/configured",
+      payload: {
+        config: {
+          idleCompactionAfterMs: 600_000,
+          idleCompactionMinNewTokens: 5,
+          keepWarmForMs: 3_600_000,
+        },
+      },
+    };
+    const rows = [...born, configured, user("What is on my calendar today?"), llmRequested(4)];
+    const settledAt = "2026-11-04T12:00:00.000Z";
+    const event = {
+      ...settled(5, {
+        status: "succeeded",
+        text: "Nothing.",
+        usage: { inputTokens: 1_000, outputTokens: 10 },
+      }),
+      offset: 6,
+      path,
+      createdAt: settledAt,
+    };
+    const previousState = reduceProcessor(agent, rows as never) as AgentState;
+    const state = reduceProcessor(agent, [...rows, event] as never) as AgentState;
+    const background: Array<() => Promise<unknown>> = [];
+    agent.processEvent({
+      event,
+      state,
+      previousState,
+      append: async () => undefined,
+      blockProcessorWhile: () => undefined,
+      runInBackground: (work: () => Promise<unknown>) => void background.push(work),
+      delivery: { caughtUp: true },
+    } as never);
+    await Promise.all(background.map((work) => work()));
+    expect(scheduled).toEqual([
+      [
+        {
+          key: "idle-compaction",
+          when: { at: "2026-11-04T12:10:00.000Z" },
+          events: [
+            {
+              type: "events.iterate.com/agent/idle-check",
+              payload: {
+                afterRequestOffset: 5,
+                inputTokens: 1_000,
+                ...(warm && { keepWarmUntil: "2026-11-04T13:00:00.000Z" }),
+              },
+            },
+          ],
+        },
+        { idempotencyKey: "agent/idle-compaction/5" },
+      ],
+    ]);
+  },
+);
+
 test("raceAbort: a dial that answers before any abort hands its body over unread, and a later abort leaves it to the reader", async () => {
   const controller = new AbortController();
   const { body, watch } = watchedBody();
