@@ -1,8 +1,7 @@
-// stack.ts — ONE ITERATE DEPLOYMENT AS AN ALCHEMY STACK: the platform Worker and the resources it
-// binds. A pure function of `StackInput`: the host picks the state store, the credentials and the
-// ConfigProvider, core/os/alchemy.run.ts for Alchemy's CLI, core/os/src/deployment/run.ts for a
-// deployment's facet. core/os/cloudflare.config.ts is cf dev's twin of the binding table below;
-// core/os/src/deployment/stack.test.ts keeps the two in step.
+// scripts/stack.ts — ONE ITERATE DEPLOYMENT AS AN ALCHEMY STACK: the platform Worker and the
+// resources it binds. A pure function of `StackInput`: ../alchemy.run.ts, Alchemy's CLI entry, picks
+// the state store, the credentials and the ConfigProvider. ../cloudflare.config.ts is cf dev's twin
+// of the binding table below; ./stack.test.ts keeps the two in step.
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import { remote } from "alchemy/ProviderMode";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
@@ -11,11 +10,11 @@ import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
-import { type CloudflareSection, resourceNamesOf } from "./names.ts";
+import { type CloudflareSection, resourceNamesOf } from "../src/resource-names.ts";
 
 /** What a host hands the stack. */
 export type StackInput = {
-  /** The iterate config, parsed and split as the Worker reads it (core/os/src/iterate-config.ts
+  /** The iterate config, parsed and split as the Worker reads it (../src/iterate-config.ts
    *  `deploymentOf`): its `cloudflare` section, and the Worker's variables, `ITERATE` the plain
    *  config and each set secret field as a variable of its own. The stack reads which secret
    *  fields are set, never their values: each binds as `Config.Redacted` of its variable, which
@@ -24,19 +23,18 @@ export type StackInput = {
     config: { cloudflare?: CloudflareSection };
     vars: { ITERATE: string; secrets: Record<string, string> };
   };
-  /** `dir`, absolute: the release directory (core/os/scripts/build.ts `releaseOf`),
-   *  `bundle/index.js` the Worker's entry (its sibling modules upload with it, byte for byte),
-   *  `assets/`, and the D1 `migrations/`, the same path on every run (./engine.ts `stageRelease`).
-   *  `version` labels the Worker version. */
+  /** `dir`, absolute: the release directory (./build.ts `releaseOf`), `bundle/index.js` the
+   *  Worker's entry (its sibling modules upload with it, byte for byte), `assets/`, and the D1
+   *  `migrations/`. `version` labels the Worker version. */
   release: { dir: string; version: string | undefined };
-  /** image name ⇒ digest-pinned reference in the account's registry (core/os/scripts/images.ts).
+  /** image name ⇒ digest-pinned reference in the account's registry (./images.ts).
    *  None ⇒ a sandbox starts Cloudflare's managed image. */
   images: Record<string, string>;
 };
 
 /** The stack's body. Its stage must be the Worker's name: one state per deployment. It runs inside
  *  `remote()`, so `alchemy dev` keeps every resource live (a resource switched to local emulation
- *  is a replacement: alchemy's ProviderMode.ts), and every host plans the same binding data. */
+ *  is a replacement: alchemy's ProviderMode.ts), and every run plans the same binding data. */
 export const iterateStack = ({ deployment: { config, vars }, release, images }: StackInput) =>
   Effect.gen(function* () {
     const cloudflare = config.cloudflare;

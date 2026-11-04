@@ -140,7 +140,7 @@ into `.cloudflare/output/`), then `alchemy deploy` over `alchemy.run.ts`. Alchem
 
 1. It parses the config as the Worker will: a malformed field fails the deploy, naming itself, and
    a key the schema does not name is warned about and left out.
-2. `core/deployer/src/stack.ts` declares the deployment. It refuses a stage that is not the Worker's name,
+2. `core/os/scripts/stack.ts` declares the deployment. It refuses a stage that is not the Worker's name,
    and credentials for an account other than `cloudflare.accountId`.
 3. Alchemy compares the declaration with the state, prints each resource's action (create, update,
    replace, delete or noop), and asks. `pnpm alchemy plan` stops here.
@@ -321,34 +321,6 @@ keep serving and keep their data, and a later deploy under the same names refuse
 (`src/iterate-config.ts`). A destroy reads each resource's removal policy from the state, which only
 a deploy writes: to delete a protected deployment, deploy it once with `protectData` off, then
 destroy it.
-
-## Deploy from an iterate project
-
-A project on one deployment (the host) can deploy another (the target). The project's deployment
-facet (`src/deployment/`, `itx.deployments`) runs the stack that `pnpm run deploy` runs, with
-Alchemy's state in the facet's own SQLite, so no machine keeps it. Nothing takes over resources that
-exist without that state: give the target names nothing on the account holds, and make its
-Artifacts namespace once
-("The Artifacts namespace"). In the host's project, by convention:
-
-- **The config**: the target's whole iterate config, as one JSON string with its secrets inline,
-  `cloudflare.apiToken` among them ("The API token", on the target's account): the object
-  `pnpm run deploy` would read from `iterate.config.ts` and `.secrets`. It is the run's input. The
-  facet keeps the latest in its own storage, and its facts, log lines and errors mask every value,
-  but Alchemy's state keeps the Worker's secrets in plaintext ("State"). Whoever can use the
-  project can reach them: give it only to people who may deploy.
-- **The release**: the build's directory (`.cloudflare/output/v0/workers/default/`: `bundle/`,
-  `assets/`, and `migrations/` copied from `src/control-plane/db/`) as one zip, at
-  `/releases/<sha256>.zip` in the project's files.
-
-Create the deployment once, `itx.deployments.create("/deployments/<worker>")`, then ask for a run:
-`itx.deployments.get(path).deploy({ release, config })` answers its `requestOffset`. Follow the
-facts that name it on the path's log: `attempt-started`, `release-staged`, `run-planned` and
-`resource-applied`, until `run-settled` says how the run ended. `DeploymentHandle` in
-[`../lib/src/api.ts`](../lib/src/api.ts) documents each verb, each status and `delete`. iterate's
-own tooling does all of this as `pnpm os deploy --env <name> --project <host>/<slug>`, and the
-deployments playground, `packages/spa/public/deployments.html` in
-[iterate/packages](https://github.com/iterate/packages), does it from a browser.
 
 ## Local development
 

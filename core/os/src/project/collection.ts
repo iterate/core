@@ -1,5 +1,5 @@
-// src/project/collection.ts — THE COLLECTION: `itx.repos`, `itx.workspaces`, `itx.sandboxes`,
-// `itx.deployments`, one instance per entity, a member of the project facet on `/`
+// src/project/collection.ts — THE COLLECTION: `itx.repos`, `itx.workspaces`, `itx.sandboxes`, one
+// instance per entity, a member of the project facet on `/`
 // (durable-object.ts), where the catalog lives. `list()` reads the catalog;
 // `create(path, { creator })` is THE CREATION — the processor row on the path, the parent link and
 // the request, then the terminal fact; `delete(path)` is THE DELETION, its mirror — the request,

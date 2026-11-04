@@ -1,17 +1,20 @@
-// src/deployment/stack.test.ts — THE STACK AS A DEPLOYMENT'S FACET COMPILES IT: @iterate-com/deployer's stack over its engine's
-// providers and host, as ../src/deployment/run.ts composes them, with a fake token and in-memory
-// state. Compiling calls no API, so a row here sees what the stack decides before any plan; what
-// Cloudflare makes of a plan and an apply is the live proofs' (tasks/alchemy-native-deploy.md).
-// cf dev's binding table (../cloudflare.config.ts) is held to the stack's here too.
-import { findProviderByType } from "alchemy/Provider";
+// scripts/stack.test.ts — THE STACK THAT DEPLOYS core/os, COMPILED: ./stack.ts (what
+// ../alchemy.run.ts deploys) over a fake account and in-memory state. Compiling calls no API, so a
+// row here sees what the stack decides before any plan; what Cloudflare makes of a plan and an
+// apply is the deploys' own. cf dev's binding table (../cloudflare.config.ts) is held to the
+// stack's here too.
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { type CompiledStack, Stack } from "alchemy/Stack";
+import { Stage } from "alchemy/Stage";
 import { inMemoryState } from "alchemy/State";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import { expect, test } from "vitest";
-import { cloudflareProviders, hostLayer } from "@iterate-com/deployer/engine";
-import { iterateStack } from "@iterate-com/deployer/stack";
-import cloudflareConfig from "../../cloudflare.config.ts";
-import { deploymentOf, type IterateConfigInput } from "../iterate-config.ts";
+import cloudflareConfig from "../cloudflare.config.ts";
+import { deploymentOf, type IterateConfigInput } from "../src/iterate-config.ts";
+import { iterateStack } from "./stack.ts";
 
 // fake ids, built at run time (lint/public-copies.test.ts)
 const account = "a".repeat(32);
@@ -46,16 +49,6 @@ test("each pinned image is a Container of the sandboxes' class, under the image'
     schedulingPolicy: "durable_object",
     image,
   });
-});
-
-// Alchemy's CLI loads every provider; the facet's engine names the ones the stack needs.
-test("the facet's engine has a provider for each resource the stack declares", async () => {
-  const stack = await compile({});
-  await Effect.runPromise(
-    Effect.forEach(Object.values(stack.resources), (resource) =>
-      findProviderByType(resource.Type, "live"),
-    ).pipe(Effect.provideContext(stack.services)),
-  );
 });
 
 test("each set secret binds as secret_text, its value from the host's variables", async () => {
@@ -108,9 +101,8 @@ test("a deployment has each binding cf dev has, under the same compatibility fla
   });
 });
 
-/** The stack compiled as a deployment's attempt compiles it: the config below with `cloudflare`
- *  merged into its section and `config` over the whole, and the host's variables its ITERATE and
- *  each secret as a variable of its own. */
+/** The stack compiled for the config below, with `cloudflare` merged into its section and `config`
+ *  over the whole, and the host's variables its ITERATE and each secret as a variable of its own. */
 function compile({
   cloudflare = {},
   config = {},
@@ -138,15 +130,26 @@ function compile({
   const { ITERATE, secrets } = deployment.vars;
   // compiling reads no path of the release
   const release = { dir: "/r", version: "abc1234" };
+  // the account the credentials reach, which the stack checks against the config's
+  const environment = Layer.succeed(Cloudflare.CloudflareEnvironment)(
+    Effect.succeed({
+      type: "apiToken" as const,
+      apiToken: Redacted.make("a-fake-token"),
+      accountId: credentialsAccount,
+      source: { type: "env" as const },
+    }),
+  );
+  // the host's variables, each secret's alone: never the test process's environment
+  const host = Layer.mergeAll(
+    Layer.succeed(Stage)(stage),
+    ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ITERATE, ...secrets } })),
+  );
   return Effect.runPromise(
     Stack(
       "iterate",
-      {
-        providers: cloudflareProviders("a-fake-token", credentialsAccount),
-        state: inMemoryState(),
-      },
+      { providers: environment, state: inMemoryState() },
       iterateStack({ deployment, release, images }),
-    ).pipe(Effect.scoped, Effect.provide(hostLayer(stage, { ITERATE, ...secrets }))),
+    ).pipe(Effect.scoped, Effect.provide(host)),
   );
 }
 

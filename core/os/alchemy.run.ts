@@ -1,4 +1,4 @@
-// alchemy.run.ts — THE ALCHEMY CLI'S ENTRY FOR core/os: one iterate deployment (@iterate-com/deployer/stack), its
+// alchemy.run.ts — THE ALCHEMY CLI'S ENTRY FOR core/os: one iterate deployment (scripts/stack.ts), its
 // iterate config from the config file (scripts/iterate-config-file.ts), its release from this
 // checkout's build (scripts/build.ts `releaseOf`), its stage its Worker's name. From core/os:
 //
@@ -16,10 +16,10 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as ConfigProvider from "effect/ConfigProvider";
-import { iterateStack } from "@iterate-com/deployer/stack";
 import { releaseOf } from "./scripts/build.ts";
 import { imagesOfDeployment } from "./scripts/images.ts";
 import { HOW_TO_CHANGE_THE_CONFIG, readDeployment } from "./scripts/iterate-config-file.ts";
+import { iterateStack } from "./scripts/stack.ts";
 import { viteBuild } from "./scripts/vite-build.ts";
 
 const deployment = await readDeployment();

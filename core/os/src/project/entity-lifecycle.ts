@@ -1,11 +1,11 @@
-// src/project/entity-lifecycle.ts — THE ENTITY LIFECYCLE, spelled once for the repo, the workspace,
-// the sandbox and the deployment: where creation and deletion stand (the reduced state), the five
-// facts that move them (`entityLifecycle(slug)`, spread into each contract), the processor that
-// reduces them and runs the two sagas (`EntityLifecycleProcessor`, hosted by each entity's facet),
-// and the guard every facet verb reads first (`assertCreated`). The slug is all that varies — and
-// what the entity provisions at birth and tears down at death: a repo its Artifacts repo, a workspace
-// nothing (the overlay is the facet's own storage, born with it and deleted with it), a deployment at
-// death what its runs deployed. The collection (collection.ts) reads the state off the facet's
+// src/project/entity-lifecycle.ts — THE ENTITY LIFECYCLE, spelled once for the repo, the workspace
+// and the sandbox: where creation and deletion stand (the reduced state), the five facts that move
+// them (`entityLifecycle(slug)`, spread into each contract), the processor that reduces them and
+// runs the two sagas (`EntityLifecycleProcessor`, hosted by each entity's facet), and the guard
+// every facet verb reads first (`assertCreated`). The slug is all that varies — and what the entity
+// provisions at birth and tears down at death: a repo its Artifacts repo, a workspace nothing (the
+// overlay is the facet's own storage, born with it and deleted with it). The collection
+// (collection.ts) reads the state off the facet's
 // `snapshot()` before it asks for either. It cannot live in contract.ts: the project contract
 // imports the entity contracts (repo, workspace, secret) for its `processorDeps`, and a contract
 // importing it back would evaluate a cycle.
@@ -21,17 +21,16 @@ import {
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 
 /** The entity kinds: each has a facet on its own path, the lifecycle below and a catalog on `/`. */
-export type EntitySlug = "repo" | "workspace" | "sandbox" | "deployment";
+export type EntitySlug = "repo" | "workspace" | "sandbox";
 
 const PLURALS = {
   repo: "repos",
   workspace: "workspaces",
   sandbox: "sandboxes",
-  deployment: "deployments",
 } as const;
 
-/** The collection's name (`itx.repos`, `itx.workspaces`, `itx.sandboxes`, `itx.deployments`) and
- *  the project catalog's key. */
+/** The collection's name (`itx.repos`, `itx.workspaces`, `itx.sandboxes`) and the project
+ *  catalog's key. */
 export function entityPlural<const Slug extends EntitySlug>(slug: Slug): (typeof PLURALS)[Slug] {
   return PLURALS[slug];
 }

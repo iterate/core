@@ -24,7 +24,6 @@
     "@base-ui/react": "catalog:",
     "@cloudflare/workers-oauth-provider": "catalog:",
     "@effect/platform-node": "catalog:",
-    "@iterate-com/deployer": "workspace:*",
     "@mmkal/jsonata": "2.2.1",
     "@modelcontextprotocol/client": "catalog:",
     "@modelcontextprotocol/server": "catalog:",

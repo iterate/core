@@ -1,13 +1,13 @@
-// names.ts — WHAT A DEPLOYMENT IS CALLED ON CLOUDFLARE, from the `cloudflare` section of its iterate
-// config: the Worker, and each resource it binds. core/os's iterate config holds the section
-// (src/iterate-config.ts) and takes its names from here.
+// resource-names.ts — WHAT A DEPLOYMENT IS CALLED ON CLOUDFLARE, from the `cloudflare` section of
+// its iterate config: the Worker, and each resource it binds. The iterate config holds the section
+// (./iterate-config.ts) and takes its names from here, as the stack does (../scripts/stack.ts).
 
 /** Where a D1's primary may run: Cloudflare's location hints, which the D1 resource takes. */
 export const D1_LOCATIONS = ["wnam", "enam", "weur", "eeur", "apac", "oc"] as const;
 
-/** The `cloudflare` section of an iterate config, as the stack reads it (./stack.ts): where it
- *  deploys and what it is called. core/os's own schema has more (the API token among it); the stack
- *  needs none of that. */
+/** The `cloudflare` section of an iterate config, as the stack reads it (../scripts/stack.ts):
+ *  where it deploys and what it is called. The config's own schema has more (the API token among
+ *  it); the stack needs none of that. */
 export type CloudflareSection = {
   /** The account, 32 hex characters, which the credentials must reach. */
   accountId: string;

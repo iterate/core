@@ -201,7 +201,7 @@ function generationId(base: string, generation: number): string {
  *  length: djb2 alone collides on two-character differences (`"Aa"` and `"B@"`), and one shared hash
  *  is one shared isolate. A guard against an accidental collision, not a crafted one (trusted clients). */
 const contentHashByWorkerModules = new WeakMap<WorkerModules, string>();
-/** Subrequests per invocation of a loaded worker: core/os's own (core/deployer/src/stack.ts
+/** Subrequests per invocation of a loaded worker: core/os's own (core/os/scripts/stack.ts
  *  `limits`). */
 const LOADED_WORKER_SUBREQUESTS = 1_000_000;
 

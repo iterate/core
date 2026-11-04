@@ -152,14 +152,12 @@ in-memory log (`src/stream/processor.test.ts` shows how).
 
 ## A multi-step run
 
-A processor whose work takes steps (a deployment's run, a project's creation) is still one
-contract, one state, one `reduce` and one `processEvent`. core/os `src/deployment/` is the worked
-example.
+A processor whose work takes steps is still one contract, one state, one `reduce` and one
+`processEvent`.
 
 1. **The request is a fact.** A verb appends `<x>-requested` and answers its offset, which is the
    run's id. The fact holds every input the run needs, or names what the facet keeps for it in
-   its own storage (a deployment's config): the next incarnation reads the log and that storage,
-   never the call.
+   its own storage: the next incarnation reads the log and that storage, never the call.
 2. **Each step lands a fact**, keyed by the request's offset and the attempt
    (`<slug>/<fact>:<requestOffset>:<attempt>`), so a repeated append lands once. A keyed payload
    holds no key whose value is `undefined`: the stream compares a repeated append with the stored
@@ -256,7 +254,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   - `added` / `removed` for membership in a set: `organization/member-added`,
     `organization/project-added`, hostnames.
   - `created` / `deleted` for an entity with a lifecycle: projects, repos, workspaces, sandboxes,
-    deployments, agents.
+    agents.
   - `set` / `deleted` for a keyed value: `secret/*`.
   - `set` / `cancelled` for a schedule: `itx/schedule-*`. Each occurrence is `fired` or `failed`.
   - `-configured` for one fact that sets a row or clears it with `null`

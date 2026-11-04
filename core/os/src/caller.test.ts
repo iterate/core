@@ -254,7 +254,6 @@ test.for<{ key: string; who: keyof typeof writers; on: "a project" | "a global";
   { key: "repo/created:/repos/x", who: "loaded code", on: "a project", refused: true },
   { key: "workspace/deleted:/w", who: "loaded code", on: "a project", refused: true },
   { key: "sandbox/deleted:/sandboxes/s", who: "loaded code", on: "a project", refused: true },
-  { key: "deployment/run-settled:9", who: "loaded code", on: "a project", refused: true },
   { key: "secret/lent:l1", who: "loaded code", on: "a project", refused: true },
   { key: "agent/created:/agents/a", who: "loaded code", on: "a project" },
   { key: "itxx/mine", who: "loaded code", on: "a project" },

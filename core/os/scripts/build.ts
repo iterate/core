@@ -141,15 +141,13 @@ export async function build(options: { templates: ConfigTemplate[] }) {
   );
 }
 
-/** THE RELEASE `pnpm build` makes, as core/deployer/src/stack.ts takes it: one directory, Vite's build of
+/** THE RELEASE `pnpm build` makes, as core/os/scripts/stack.ts takes it: one directory, Vite's build of
  *  the Worker (the Cloudflare Vite plugin's Build Output: `bundle/`, the entry with its sibling
  *  modules, and `assets/`) with the control plane's D1 migrations copied beside them, and the commit
- *  that labels the Worker version (none outside a git checkout). ../alchemy.run.ts deploys it. A
- *  project's deployment facet deploys it from a zip of it in the project's files
- *  (../src/deployment/run.ts; SELF-HOSTING.md, "Deploy from an iterate project"). */
+ *  that labels the Worker version (none outside a git checkout). ../alchemy.run.ts deploys it. */
 export function releaseOf() {
   // this checkout's path, so a deploy from another checkout plans `update DB` once
-  // (core/deployer/src/stack.ts `StackInput`)
+  // (core/os/scripts/stack.ts `StackInput`)
   const dir = path.join(root, ".cloudflare/output/v0/workers/default");
   const migrations = path.join(dir, "migrations");
   rmSync(migrations, { recursive: true, force: true });

@@ -5,7 +5,6 @@ packages:
 
 catalog:
   '@alchemy.run/cloudflare': 2.0.0-beta.85
-  '@alchemy.run/docker': 2.0.0-beta.85
   '@base-ui/react': ^1.8.0
   '@cloudflare/workers-oauth-provider': 1.2.4
   '@cloudflare/workers-types': ^5.20261103.1

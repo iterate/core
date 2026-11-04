@@ -244,7 +244,7 @@ export interface Env extends IterateConfigEnv {
    *  a deployment has no mailbox. */
   EMAIL?: SendEmail;
   /** This Worker's own name, which the runtime does not tell it: every deployment binds it
-   *  (core/deployer/src/stack.ts) and the test configs set it, and every telemetry row and data
+   *  (core/os/scripts/stack.ts) and the test configs set it, and every telemetry row and data
    *  point carries it. */
   WORKER_NAME: string;
   /** The Basin Pipelines stream that fills its account's `events` table (docs/telemetry.md), which

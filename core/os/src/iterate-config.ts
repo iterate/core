@@ -8,7 +8,6 @@
 // name) is the code's, beside its consumer, never config.
 
 import { z } from "zod";
-import { D1_LOCATIONS } from "@iterate-com/deployer/names";
 import {
   appConfigInputOf,
   configVarNameOf,
@@ -27,6 +26,7 @@ import {
   type ProjectAddress,
 } from "iterate/project-ingress";
 import type { OAuthIntegrationProvider } from "iterate/api";
+import { D1_LOCATIONS } from "./resource-names.ts";
 import { refuseNonPlatformWrites, sha256Hex } from "./caller.ts";
 import { EmailRule } from "./allowed-emails.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
@@ -158,7 +158,7 @@ const resourceName = z
  *  check keys against. Every object `prefault`s to `{}` so a deployment that names none of a
  *  block's keys still gets the block. */
 export const IterateConfig = z.object({
-  /** WHERE IT DEPLOYS: what core/deployer/src/stack.ts makes the Worker and its resources from. Unset ⇒
+  /** WHERE IT DEPLOYS: what core/os/scripts/stack.ts makes the Worker and its resources from. Unset ⇒
    *  nowhere: local dev, the suites, and a local build, which nothing deploys. */
   cloudflare: z
     .object({
@@ -632,7 +632,7 @@ export function parseIterateConfigInput(input: unknown, deployId = "unversioned"
 
 /** The config's SECRETS: each field the schema marks secret (`redacted`), its path and its value
  *  (blank when unset). `deploymentOf` makes each set one a variable of its own, `ITERATE__<PATH>`,
- *  which core/deployer/src/stack.ts binds as a Worker secret. */
+ *  which core/os/scripts/stack.ts binds as a Worker secret. */
 export function secretFieldsOf(config: IterateConfig): Array<{ path: string[]; value: string }> {
   const found: Array<{ path: string[]; value: string }> = [];
   const walk = (value: unknown, path: string[]) => {
@@ -649,8 +649,8 @@ export function secretFieldsOf(config: IterateConfig): Array<{ path: string[]; v
 }
 
 /** A deployment: its iterate config as written, parsed (a malformed field throws, naming itself),
- *  and as the Worker's variables. Each host makes one: ../scripts/iterate-config-file.ts from the
- *  config file, ./deployment/run.ts from a run's variables. */
+ *  and as the Worker's variables. ../scripts/iterate-config-file.ts makes one from the config file,
+ *  scripts/os/deploy.ts from Doppler's. */
 export function deploymentOf(input: Record<string, unknown>) {
   const config = parseIterateConfigInput(input);
   return { config, vars: workerVarsOf(input, config) };
@@ -680,9 +680,9 @@ function workerVarsOf(input: Record<string, unknown>, config: IterateConfig) {
   return { ITERATE: JSON.stringify(plain), secrets };
 }
 
-/** The names a deployment's Worker and the resources it binds go by: the deployer's
- *  (@iterate-com/deployer names.ts), which the stack reads too. */
-export { resourceNamesOf } from "@iterate-com/deployer/names";
+/** The names a deployment's Worker and the resources it binds go by (./resource-names.ts), which
+ *  the stack reads too. */
+export { resourceNamesOf } from "./resource-names.ts";
 
 function isIdentityProvider(name: string): name is IdentityProvider {
   return IdentityProvider.safeParse(name).success;
