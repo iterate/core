@@ -261,11 +261,23 @@ function platformModuleOf(
  * THE resolution: authored source → loader modules and the main module's name. `source` is the files
  * a caller handed the loader (a repo's files, an inline map). Only what the entry reaches is loaded —
  * a test file or a README beside the worker costs nothing.
+ *
+ * `files` is the part of `source` the resolution read: package.json, the package's entry (which
+ * `readPackage` requires even when `mainModule` is another), and every file walked from the main
+ * module. Resolving `files` alone answers what resolving `source` answers: every other lookup is a
+ * candidate path that `source` lacks, so `files` lacks it too. A change that reads more of `source`
+ * adds what it reads here and bumps LOADED_CODE_FORMAT (worker-loader.ts), so that no memo of
+ * files kept before the change is read after it.
  */
 export async function resolveModules(
   source: ModuleMap,
   opts: ResolveOptions,
-): Promise<{ mainModule: string; modules: ModuleMap; compatibilityFlags: string[] | undefined }> {
+): Promise<{
+  mainModule: string;
+  modules: ModuleMap;
+  compatibilityFlags: string[] | undefined;
+  files: ModuleMap;
+}> {
   const { where, platform } = opts;
   const { entry: main, dependencies, compatibilityFlags } = readPackage(source, where);
   // Resolution only needs to know whether Node builtins pass through; the loader applies the full list.
@@ -348,7 +360,9 @@ export async function resolveModules(
 
   // 3. the platform modules the worker reaches, and nothing else.
   addPlatformModules(out, platformUsed, platform);
-  return { mainModule: outputName(entry), modules: out, compatibilityFlags };
+  const read = ["package.json", main, ...seen].filter((path) => Object.hasOwn(source, path));
+  const files = Object.fromEntries(read.map((path) => [path, source[path]!]));
+  return { mainModule: outputName(entry), modules: out, compatibilityFlags, files };
 }
 
 /** The platform modules `names` added to `out`, with every platform module they import. */

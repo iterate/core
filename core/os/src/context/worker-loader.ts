@@ -55,7 +55,7 @@ export type WorkerModules = Record<string, string>;
  *  a deleted project's entries go. */
 const PRODUCED_MODULES_TTL_SECONDS = 24 * 60 * 60;
 /** The most one KV value may be (Cloudflare's limit). A repo's whole tree can pass it while the
- *  modules the entry reaches do not, so an answer over it is simply not kept. */
+ *  files its entry's graph reads do not, so a value over it is simply not kept. */
 const KV_VALUE_MAX_BYTES = 25 * 1024 * 1024;
 /** Refuse a spec whose LITERAL source is over the ceiling (itx-expression-rewriting.ts
  *  `SOURCE_MAX_CHARS`) — the startup memo is one kv cell in the DO (re-read on every post-eviction
@@ -171,8 +171,11 @@ function parseNamedWorkerLoad(
  *  one (`recovery`), as the loader has every caller of a cold id wait on one `getCode`, so a burst of
  *  callers runs one producer against the repo facet, not one each. The recovery is kept beside the `itxEntrypoint` stub it was started for, which a context mints once
  *  per incarnation: a new incarnation never waits on a promise its dead predecessor left behind. */
-/** A source resolved into what the loader takes (module-resolution.ts). */
+/** A source resolved into what the loader takes, and the files the resolution read
+ *  (module-resolution.ts). */
 type ResolvedWorker = Awaited<ReturnType<typeof resolveModules>>;
+/** A resolved source as the loader starts it (module-resolution.ts `enteredThroughPlatform`). */
+type StartedWorker = ReturnType<typeof enteredThroughPlatform>;
 /** A source's files as `prepareConfinedWorker` obtained them, and for a producer's fresh answer how
  *  to keep it once it resolved (`produce`). */
 type ObtainedModules = { files: WorkerModules; keep?: (resolved: ResolvedWorker) => void };
@@ -181,7 +184,7 @@ const loaderIdGenerations = new Map<
   {
     generation: number;
     dead: boolean;
-    recovery?: { itxEntrypoint: Fetcher; modules: Promise<ResolvedWorker> };
+    recovery?: { itxEntrypoint: Fetcher; modules: Promise<StartedWorker> };
   }
 >();
 
@@ -258,9 +261,11 @@ function applySdkCompatibilityFlags(declared: string[] | undefined, where: strin
 
 /** How this file and module-resolution.ts turn a source into the modules an isolate runs. Bump it
  *  when a change to either, or to sucrase or es-module-lexer, changes what a source produces, as
- *  `module-lock-3` names the lock's rewrite rules. loaded-code-format.test.ts fails on a change to
- *  that code until it is decided here. */
-const LOADED_CODE_FORMAT = 1;
+ *  `module-lock-3` names the lock's rewrite rules, or makes a resolution read a file it did not: a
+ *  module identity's memo keeps only the files its resolution read, under this format
+ *  (`prepareConfinedWorker`). loaded-code-format.test.ts fails on a change to that code until it is
+ *  decided here. */
+export const LOADED_CODE_FORMAT = 1;
 let platformIdentity: Promise<string> | undefined;
 /** WHAT THE PLATFORM PUTS INTO EVERY LOADED ISOLATE, as one hash in every loader id: this build's
  *  platform packages at their content (PLATFORM_MODULES), the compatibility date, the flags the
@@ -404,17 +409,21 @@ export async function prepareConfinedWorker(
     // A producer's modules are kept in `ITX_KV` under what names the code, so a cold isolate reads
     // them there instead of waking the context that produces them (for a config's worker,
     // `/repos/config`). A published module identity names the code: every context of the project
-    // that loads it, every commit that publishes it and every deploy read one answer, the files of
-    // a commit whose graph from `mainModule` (and package.json's flags) is what the identity hashes
-    // (`moduleIdentityOf`) and all the loader takes of them. The project stays in the key, so a
+    // that loads it, every commit that publishes it and every deploy of one LOADED_CODE_FORMAT read
+    // one answer: the files the graph from `mainModule` read, which resolve as the whole commit
+    // does to the graph the identity hashes (`moduleIdentityOf`; why: `resolveModules`' `files`).
+    // The format is in the key: a resolution that reads a file an older one did not is a new
+    // format, so it never reads a memo that lacks that file. The project stays in the key, so a
     // context reads only its own project's files. The key spells `mainModule` as the source does:
     // `worker.ts` and `worker.js` holding one code load as one module, so they share an identity,
     // but each tree has only its own file. Files are kept under an identity only when the graph
     // this load resolved from that `mainModule` IS it (`keep`, below). A caller's key names the
-    // code with its expression and its owner: the key is that caller's promise, and an expression
-    // may read the owner's own state. Never the deploy: a platform change to what a producer
-    // answers is a new key prefix, and produced-modules-prefix.test.ts fails on a change to the
-    // code that decides it until the prefix is decided. A KV failure is a miss: the producer runs.
+    // code with its expression and its owner, and no main module,
+    // so its memo keeps every file the producer answered: the key is that caller's promise, and an
+    // expression may read the owner's own state. Never the deploy: a platform change to what a
+    // producer answers is a new key prefix, and produced-modules-prefix.test.ts fails on a change
+    // to the code that decides it until the prefix is decided. A KV failure is a miss: the
+    // producer runs.
     const cacheFailed = (action: "get" | "put") => (error: unknown) => {
       console.warn({
         event: "worker-loader.platform-failure-module-cache",
@@ -435,15 +444,17 @@ export async function prepareConfinedWorker(
         return false;
       }
     };
-    /** Keep a producer's answer under `kvKey` for the next cold load, once this load resolved it
-     *  (`produce`), and without this load waiting for it: the write lasts as long as a cold build
-     *  (a config repo's 1.6 MB, 1.2–1.8 s; measured 2026-11-04). Under an identity only files whose
+    /** Keep `files` under `kvKey` for the next cold load, once this load resolved them (`produce`),
+     *  and without this load waiting for it: a whole tree's write lasts as long as a cold build (a
+     *  config repo's 1.6 MB, 1.2–1.8 s; measured 2026-11-04). Under an identity only files whose
      *  resolved graph IS it are kept, hashed as a publication hashes it (`identityOfResolved`); other
      *  files load for this call, are never kept, and are logged. A write already in flight for the
      *  key in this isolate is the one (`keepsInFlight`), and a 429 says another isolate kept it
      *  within the second. Anything else failing is a warning, as a failed read is. */
-    const keep = (kvKey: string, value: string, resolved: ResolvedWorker) => {
+    const keep = (kvKey: string, files: WorkerModules, resolved: ResolvedWorker) => {
       if (keepsInFlight.has(kvKey)) return;
+      const value = JSON.stringify(files);
+      if (new TextEncoder().encode(value).byteLength > KV_VALUE_MAX_BYTES) return;
       keepsInFlight.add(kvKey);
       const kept = (async () => {
         if (opts.moduleIdentity) {
@@ -486,7 +497,7 @@ export async function prepareConfinedWorker(
       const kvKey = `produced-modules-2/${await sha256Hex(
         JSON.stringify(
           opts.moduleIdentity
-            ? [projectOf(opts.owner), named, mainModule]
+            ? [LOADED_CODE_FORMAT, projectOf(opts.owner), named, mainModule]
             : [opts.owner, named, producer],
         ),
       )}`;
@@ -511,10 +522,11 @@ export async function prepareConfinedWorker(
           ? { "package.json": '{"main":"worker.js"}', "worker.js": produced }
           : produced,
       );
-      const value = JSON.stringify(files);
-      if (!loadable(files) || new TextEncoder().encode(value).byteLength > KV_VALUE_MAX_BYTES)
-        return { files };
-      return { files, keep: (resolved) => keep(kvKey, value, resolved) };
+      if (!loadable(files)) return { files };
+      return {
+        files,
+        keep: (resolved) => keep(kvKey, opts.moduleIdentity ? resolved.files : files, resolved),
+      };
     };
   }
   // 2. the confined worker under the billed cacheKey. A JSON array, never `a:b:c`: a context name,
@@ -536,7 +548,7 @@ export async function prepareConfinedWorker(
   // Produce AND resolve: a source whose imports cannot resolve (a missing file, a parse error, esm.sh
   // down) fails here — in the recovery below that is before `load()` opens a new generation, so a
   // failure that persists mints no billed identity per retry.
-  const produce = async (): Promise<ResolvedWorker> => {
+  const produce = async (): Promise<StartedWorker> => {
     const { files, keep } = await getModules();
     const resolved = await resolveModules(files, resolveOptions(opts.env, where, mainModule));
     // A producer's fresh answer is kept only once it resolved: one that cannot load is never kept.
@@ -574,7 +586,7 @@ export async function prepareConfinedWorker(
   const loaderId = generationId(loaderIdBase, generation);
   const load = () =>
     opts.env.LOADER.get(loaderId, async () => {
-      let resolved: ResolvedWorker;
+      let resolved: StartedWorker;
       try {
         // Only on a cold isolate; resolution is locked per dependency set in ITX_KV, so a cold start
         // after the first one reads KV and never the network.

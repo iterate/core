@@ -197,6 +197,97 @@ test("a main module named by the caller is the entry in place of package.json's 
   );
 });
 
+test.for<{
+  name: string;
+  source: Record<string, string>;
+  mainModule: string | undefined;
+  files: string[];
+}>([
+  {
+    name: "package.json, its main, and the main module's graph by every spelling an import takes",
+    source: {
+      "package.json": JSON.stringify({ main: "worker.ts", dependencies: { "lazy-node": "1" } }),
+      "worker.ts": 'import "./site.ts"; export default 1;',
+      "site.ts": "export const site = 1;",
+      "agents.ts": `import { helper } from "./lib/helper"; import { a } from "./lib/a.js"; import { dir } from "./dir"; import { sdk } from "iterate/sdk"; import { fs } from "lazy-node"; const name = "./plugin-" + helper; export const plugin = () => import(name); export const lazy = () => import("./lazy.ts"); export class Agents { all = [a, dir, sdk, fs]; }`,
+      "lib/helper.ts": "export const helper = 1;",
+      "lib/helper.js": 'export const helper = "a later candidate";',
+      "lib/a.ts": "export const a = 1;",
+      "dir/index.ts": "export const dir = 1;",
+      "lazy.ts": "export const lazy = 1;",
+      // only the computed import could name it, and it never did: no loaded module is plugin-1.js
+      "plugin-1.ts": "export const plugin = 1;",
+      "AGENTS.md": "# How to work here",
+      "pnpm-lock.yaml": "lockfileVersion: '9.0'",
+    },
+    mainModule: "agents.ts",
+    files: [
+      "agents.ts",
+      "dir/index.ts",
+      "lazy.ts",
+      "lib/a.ts",
+      "lib/helper.ts",
+      "package.json",
+      "worker.ts",
+    ],
+  },
+  {
+    name: "the entry ENTRY_FILES finds, with no package.json, and the main module's graph",
+    source: {
+      "worker.ts": "export default 1;",
+      "worker.js": "export default 2;",
+      "index.ts": 'import "./lib.ts"; export default 3;',
+      "lib.ts": "export {};",
+    },
+    mainModule: "index.ts",
+    files: ["index.ts", "lib.ts", "worker.ts"],
+  },
+  {
+    name: "package.json and its main's graph, with no main module named",
+    source: {
+      "package.json": '{"main":"./src/app.ts"}',
+      "src/app.ts": 'import "../shared.ts"; export default 1;',
+      "shared.ts": "export {};",
+      "worker.ts": "export default 2;",
+    },
+    mainModule: undefined,
+    files: ["package.json", "shared.ts", "src/app.ts"],
+  },
+])(
+  "the files a resolution read are $name: every file a lookup found, and they resolve alone to what the whole source does",
+  async ({ source, mainModule, files }) => {
+    const esm = fakeEsm({ "/lazy-node@1": "export const fs = 1;" });
+    const options = { platform, store: memoryStore(), fetch: esm.fetch, where: "test", mainModule };
+    // every name a lookup of the source found: its text read, its presence asked, its keys listed
+    const found = new Set<string>();
+    const note = (name: string | symbol) => {
+      if (typeof name === "string" && Object.hasOwn(source, name)) found.add(name);
+    };
+    const watched = new Proxy(source, {
+      get(target, name) {
+        note(name);
+        return Reflect.get(target, name);
+      },
+      has(target, name) {
+        note(name);
+        return Reflect.has(target, name);
+      },
+      getOwnPropertyDescriptor(target, name) {
+        note(name);
+        return Reflect.getOwnPropertyDescriptor(target, name);
+      },
+      ownKeys(target) {
+        Object.keys(target).forEach(note);
+        return Reflect.ownKeys(target);
+      },
+    });
+    const resolved = await resolveModules(watched, options);
+    expect(Object.keys(resolved.files).sort()).toEqual(files);
+    expect([...found].sort()).toEqual(files);
+    expect(await resolveModules(resolved.files, options)).toEqual(resolved);
+  },
+);
+
 test("iterate/* and zod link this deployment's modules, and only the chunks they reach", async () => {
   const modules = await resolve({
     "package.json": '{"main":"worker.js"}',

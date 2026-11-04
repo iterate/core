@@ -2,6 +2,7 @@
 // compose one id share an isolate), a producer runs inside `getCode`, the dead-id WORKAROUND
 // (worker-loader.ts `loaderIdGenerations`), and `workers.get`'s recovery from the loader defect
 // (built-ins.ts), over a fake loader; the real one is the Workers suite's.
+import { createHash } from "node:crypto";
 import { waitUntil } from "cloudflare:workers";
 import type { ItxExpression, ItxExpressionStep } from "iterate/expression";
 import { codedError, errorCode } from "iterate/lib";
@@ -14,6 +15,7 @@ import { DurableObjectNameCodec } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
   isLoadedWorkerPlatformFailure,
+  LOADED_CODE_FORMAT,
   loadedIdentityChanges,
   moduleIdentityOf,
   prepareConfinedWorker,
@@ -270,6 +272,141 @@ test("what a producer answered under a published module identity is kept for eve
       "worker.js",
     ]),
   );
+});
+
+test("under a published module identity ITX_KV keeps the files its main module's graph read, not the commit's tree: a cold load that reads them loads what the producer's cold load did, under the same id", async () => {
+  const tree = {
+    "package.json": '{"main":"worker.ts"}',
+    "worker.ts": 'import "./site.ts"; export default {};',
+    "site.ts": "export const site = 1;",
+    "agents.ts":
+      'import { greeting } from "./greeting.ts"; export class Agents { hi() { return greeting; } }',
+    "greeting.ts": 'export const greeting = "hi";',
+    "AGENTS.md": "# How to work here\n".repeat(1_000),
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\n".repeat(10_000),
+  };
+  const identityOf = (files: Record<string, string>) =>
+    moduleIdentityOf(files, "agents.ts", { ITX_KV: fakeKv().kv }, "agents.ts");
+  const identity = await identityOf(tree);
+  const shared = fakeKv();
+  let produced = 0;
+  const coldIsolate = async () => {
+    const { env, warm } = fakeLoaderEnv({ kv: shared.kv }); // the last isolate idled out
+    const { loaderId } = await loadConfined(env, {
+      kind: "facet",
+      owner: ["prj_u.iterate/agents/first", "Agents"],
+      source: ["itx", "config", ["modules", { commitOid: "commit-1" }]],
+      cacheKey: "commit-1",
+      mainModule: "agents.ts",
+      moduleIdentity: identity,
+      invoke: async () => {
+        produced += 1;
+        return tree;
+      },
+    });
+    return { loaderId, code: await warm.get(loaderId) };
+  };
+  const fromProducer = await coldIsolate();
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+  const kept = JSON.parse(shared.values.get(shared.puts[0]!.key)!) as Record<string, string>;
+  expect(kept).toEqual({
+    "package.json": tree["package.json"],
+    "worker.ts": tree["worker.ts"], // package.json's main, which the loader reads for the entry
+    "agents.ts": tree["agents.ts"],
+    "greeting.ts": tree["greeting.ts"],
+  });
+  expect(await identityOf(kept)).toBe(identity);
+  const fromMemo = await coldIsolate();
+  expect({ produced, ...fromMemo }).toEqual({ produced: 1, ...fromProducer });
+});
+
+test("a module identity's memo is read only under the LOADED_CODE_FORMAT that kept it: a memo of another format, or one kept before the format joined the key, is never read, so a resolver that reads more never loads an older resolver's files", async () => {
+  const tree = {
+    "package.json": '{"main":"worker.ts"}',
+    "worker.ts": "export default {};",
+    "agents.ts": "export class Agents {}",
+  };
+  const context = "prj_u.iterate/agents/first";
+  const identity = await moduleIdentityOf(tree, "agents.ts", { ITX_KV: fakeKv().kv }, "agents.ts");
+  const parts = (...format: number[]) => [
+    ...format,
+    DurableObjectNameCodec.parse(context).projectId,
+    `module:${identity}`,
+    "agents.ts",
+  ];
+  const keyOf = (keyParts: unknown[]) =>
+    `produced-modules-2/${createHash("sha256").update(JSON.stringify(keyParts)).digest("hex")}`;
+  // A memo another resolver kept: it loads, but not what this resolver produces from the tree.
+  const otherResolvers = JSON.stringify({ ...tree, "agents.ts": "export class Other {}" });
+  const coldIsolate = async (kept: [string, string] | undefined) => {
+    const memo = fakeKv();
+    if (kept) memo.values.set(...kept);
+    const { env, warm } = fakeLoaderEnv({ kv: memo.kv });
+    let produced = 0;
+    const { loaderId } = await loadConfined(env, {
+      kind: "facet",
+      owner: [context, "Agents"],
+      source: ["itx", "config", ["modules", { commitOid: "commit-1" }]],
+      cacheKey: "commit-1",
+      mainModule: "agents.ts",
+      moduleIdentity: identity,
+      invoke: async () => {
+        produced += 1;
+        return tree;
+      },
+    });
+    const code = await warm.get(loaderId);
+    if (produced) await vi.waitFor(() => expect(memo.puts).toHaveLength(1));
+    return { produced, loaderId, code, keptUnder: memo.puts.map((put) => put.key) };
+  };
+  const fromProducer = await coldIsolate(undefined);
+  expect(fromProducer).toMatchObject({ keptUnder: [keyOf(parts(LOADED_CODE_FORMAT))] });
+  // The key this format reads: a memo there is believed, under the same id, so the loads below
+  // would load it too if they read it.
+  const believed = await coldIsolate([keyOf(parts(LOADED_CODE_FORMAT)), otherResolvers]);
+  expect(believed).toMatchObject({
+    produced: 0,
+    loaderId: fromProducer.loaderId,
+    code: { modules: { "agents.js": expect.stringContaining("export class Other {}") } },
+  });
+  for (const keyParts of [
+    parts(LOADED_CODE_FORMAT - 1),
+    parts(LOADED_CODE_FORMAT + 1),
+    parts(), // the key before the format joined it
+  ])
+    await expect(coldIsolate([keyOf(keyParts), otherResolvers])).resolves.toEqual(fromProducer);
+});
+
+test("under a caller's key ITX_KV keeps every file the producer answered: the key names no main module, so another entry of the source reads the same memo", async () => {
+  const tree = {
+    "package.json": '{"main":"worker.ts"}',
+    "worker.ts": "export default {};",
+    "agents.ts": "export class Agents {}",
+    "voice.ts": "export class Voice {}",
+  };
+  const shared = fakeKv();
+  let produced = 0;
+  const coldIsolate = async (mainModule: string) => {
+    const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+    const { loaderId } = await loadConfined(env, {
+      source: site,
+      cacheKey: "c0ffee",
+      mainModule,
+      invoke: async () => {
+        produced += 1;
+        return tree;
+      },
+    });
+    const code = await warm.get(loaderId);
+    await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+    return code;
+  };
+  await expect(coldIsolate("agents.ts")).resolves.toMatchObject({ mainModule: "agents.js" });
+  await expect(coldIsolate("voice.ts")).resolves.toMatchObject({ mainModule: "voice.js" });
+  expect({ produced, kept: JSON.parse(shared.values.get(shared.puts[0]!.key)!) }).toEqual({
+    produced: 1,
+    kept: tree,
+  });
 });
 
 test("one identity whose main module two sources spell `worker.ts` and `worker.js` is two memos: a tree kept for one spelling never loads for the other", async () => {

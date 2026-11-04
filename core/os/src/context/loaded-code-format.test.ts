@@ -9,7 +9,7 @@ import { expect, test } from "vitest";
 const PINNED = {
   format: 1,
   // allow-high-entropy-next-line: a SHA-256 of this repo's own source, not a secret
-  code: "8133c982c7be317bb057f5e63fbd537855719e444c483245682a508bd53b0479",
+  code: "dbaee9b9a29bf9ba12ea135c42e491a76414396761e736cfdae09dc5891be456",
 };
 
 test("the code that turns a source into modules changes only with LOADED_CODE_FORMAT", () => {
@@ -27,7 +27,7 @@ test("the code that turns a source into modules changes only with LOADED_CODE_FO
   const format = Number(/const LOADED_CODE_FORMAT = (\d+);/.exec(loader)?.[1]);
   expect(
     { format, code },
-    "worker-loader.ts, module-resolution.ts, sucrase or es-module-lexer changed: bump LOADED_CODE_FORMAT if the change can alter what a source produces, then update PINNED",
+    "worker-loader.ts, module-resolution.ts, sucrase or es-module-lexer changed: bump LOADED_CODE_FORMAT if the change can alter what a source produces, or makes the resolver read a source file it did not read before (a module identity's memo keeps only the files the resolver read, under the format), then update PINNED",
   ).toEqual(PINNED);
 });
 
