@@ -30,3 +30,7 @@ export class DurableObject<Env = unknown> {
   }
 }
 export const env = {};
+/** The runtime keeps the invocation alive until the promise settles; Node runs it to the end. */
+export function waitUntil(promise: Promise<unknown>): void {
+  void promise;
+}

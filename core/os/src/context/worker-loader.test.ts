@@ -200,19 +200,214 @@ test("what a producer answered under a published module identity is kept under t
       owner: ["prj_kv_module.iterate/", "Agents"],
       source: ["itx", "config", ["modules", { commitOid }]],
       cacheKey: commitOid,
+      mainModule: "worker.js",
       moduleIdentity,
       ...producer,
     });
     await warm.get(loaderId);
+    // what the producer answered is kept before the next cold isolate asks
+    await vi.waitFor(() => expect(shared.puts).toHaveLength(producer.produced()));
     return loaderId;
   };
-  const first = await coldIsolate("commit-1", "agents-a");
+  const [a, b] = [
+    await workerIdentityOf(producedFiles(1)),
+    await workerIdentityOf(producedFiles(2)),
+  ];
+  const first = await coldIsolate("commit-1", a);
   // an AGENTS.md commit: agents.ts publishes the same identity, so the same id and the same answer
-  expect(await coldIsolate("commit-2", "agents-a")).toBe(first);
+  expect(await coldIsolate("commit-2", a)).toBe(first);
   expect(producer.produced()).toBe(1);
   // agents.ts changed: a new identity, produced once more
-  expect(await coldIsolate("commit-3", "agents-b")).not.toBe(first);
+  expect(await coldIsolate("commit-3", b)).not.toBe(first);
   expect(producer.produced()).toBe(2);
+});
+
+test("what a producer answered under a published module identity is kept for every context of its project: a new context's cold load reads ITX_KV and runs no producer, in an isolate of its own; another project's context runs its own", async () => {
+  const shared = fakeKv();
+  let produced = 0;
+  // every commit of the identity answers the same files
+  const invoke = async () => {
+    produced += 1;
+    return producedFiles(1);
+  };
+  const identity = await workerIdentityOf(producedFiles(1));
+  const coldIsolate = async (iterateContextName: string) => {
+    const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+    const { loaderId } = await loadConfined(env, {
+      kind: "facet",
+      owner: [iterateContextName, "AgentDurableObject"],
+      source: ["itx", "config", ["modules", { commitOid: "commit-1" }]],
+      cacheKey: "commit-1",
+      mainModule: "worker.js",
+      moduleIdentity: identity,
+      invoke,
+    });
+    await warm.get(loaderId);
+    await vi.waitFor(() => expect(shared.puts).toHaveLength(produced));
+    return JSON.parse(loaderId) as unknown[];
+  };
+  const owners = [
+    "prj_u.iterate/agents/first",
+    "prj_u.iterate/agents/second",
+    "prj_other.iterate/agents/first",
+  ];
+  const ids: unknown[][] = [];
+  for (const owner of owners) ids.push(await coldIsolate(owner));
+  // prj_u's second context read the memo; prj_other never reads prj_u's files
+  expect({ produced, puts: shared.puts.length }).toEqual({
+    produced: 2,
+    puts: 2,
+  });
+  // the isolate is still each context's own (confinement): the ids differ in the owner alone
+  expect(ids).toEqual(
+    owners.map((owner) => [
+      "facet",
+      PLATFORM_ID,
+      null,
+      [owner, "AgentDurableObject"],
+      `module:${identity}`,
+      "worker.js",
+    ]),
+  );
+});
+
+test("one identity whose main module two sources spell `worker.ts` and `worker.js` is two memos: a tree kept for one spelling never loads for the other", async () => {
+  // the agents e2e config's worker.ts and freshPublishedCtx's worker.js: the same code, one identity
+  const code =
+    'import { IterateConfigEntrypoint } from "iterate/sdk";\nexport default class extends IterateConfigEntrypoint {}\n';
+  const spelled = {
+    "worker.ts": { "package.json": '{"main":"worker.ts"}', "worker.ts": code },
+    "worker.js": { "package.json": '{"main":"worker.js"}', "worker.js": code },
+  };
+  const kv = fakeKv().kv;
+  const identity = await moduleIdentityOf(spelled["worker.ts"], "worker.ts", { ITX_KV: kv }, "t");
+  expect(await workerIdentityOf(spelled["worker.js"])).toBe(identity);
+  const shared = fakeKv();
+  let produced = 0;
+  const coldIsolate = async (mainModule: keyof typeof spelled) => {
+    const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+    const { loaderId } = await loadConfined(env, {
+      owner: `prj_u.iterate/${mainModule}`, // one project: only the spelling differs
+      source: ["itx", "config", ["modules", { commitOid: "commit-1" }]],
+      cacheKey: "commit-1",
+      mainModule,
+      moduleIdentity: identity,
+      invoke: async () => {
+        produced += 1;
+        return spelled[mainModule];
+      },
+    });
+    const config = await warm.get(loaderId);
+    await vi.waitFor(() => expect(shared.puts).toHaveLength(produced));
+    return config;
+  };
+  await expect(coldIsolate("worker.ts")).resolves.toMatchObject({ mainModule: "worker.js" });
+  await expect(coldIsolate("worker.js")).resolves.toMatchObject({ mainModule: "worker.js" });
+  expect({ produced, keys: new Set(shared.puts.map((put) => put.key)).size }).toEqual({
+    produced: 2,
+    keys: 2,
+  });
+});
+
+test("files a producer answers under an identity they are not are never kept under it: the load runs them, ITX_KV gets nothing, and a warning names both identities", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const shared = fakeKv();
+  const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+  const published = await workerIdentityOf(producedFiles(0));
+  const { loaderId } = await loadConfined(env, {
+    kind: "facet",
+    owner: ["prj_u.iterate/agents/first", "AgentDurableObject"],
+    source: ["itx", "config", ["modules", { commitOid: "commit-1" }]],
+    cacheKey: "commit-1",
+    mainModule: "worker.js",
+    moduleIdentity: published,
+    ...fakeProducer(), // answers `export default 1`, not the published `export default 0`
+  });
+  await expect(warm.get(loaderId)).resolves.toMatchObject({
+    modules: { "worker.js": loaded("export default 1") },
+  });
+  await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+  expect(warn.mock.calls.map(([line]) => line)).toEqual([
+    {
+      event: "worker-loader.module-identity-mismatch",
+      name: ["prj_u.iterate/agents/first", "AgentDurableObject"],
+      where: "workers.get",
+      mainModule: "worker.js",
+      expected: published,
+      produced: await workerIdentityOf(producedFiles(1)),
+    },
+  ]);
+  expect(shared).toMatchObject({ puts: [] });
+});
+
+test.for([
+  { name: "never settles", put: () => new Promise<never>(() => {}), warned: [] },
+  {
+    name: "fails",
+    put: () => Promise.reject(new Error("KV PUT failed")),
+    warned: [
+      {
+        event: "worker-loader.platform-failure-module-cache",
+        action: "put",
+        message: "KV PUT failed",
+      },
+    ],
+  },
+  {
+    // KV takes one write per key per second: another isolate kept the key within it
+    name: "is refused 429",
+    put: () => Promise.reject(new Error("KV PUT failed: 429 Too Many Requests")),
+    warned: [],
+  },
+])(
+  "a cold load waits for no KV write: one that $name holds nothing, and the load answers",
+  async ({ name, put, warned }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const kv = { get: async () => null, put } as unknown as KVNamespace;
+    const { env, warm } = fakeLoaderEnv({ kv });
+    const { loaderId } = await loadConfined(env, {
+      // a key of its own: a write that never settles stays this isolate's write in flight
+      owner: `prj_kv_put.iterate/${name.replaceAll(" ", "-")}`,
+      source: site,
+      cacheKey: "c0ffee",
+      ...fakeProducer(),
+    });
+    await expect(warm.get(loaderId)).resolves.toMatchObject({
+      modules: { "worker.js": loaded("export default 1") },
+    });
+    await settled();
+    expect(warn.mock.calls.map(([line]) => line)).toMatchObject(warned);
+  },
+);
+
+test("an isolate writes a key once at a time: cold loads that all missed it start one write while it is in flight", async () => {
+  const shared = fakeKv();
+  let release!: () => void;
+  const landed = new Promise<void>((resolve) => (release = resolve));
+  const slowKv = {
+    get: async () => null,
+    put: async (...args: Parameters<KVNamespace["put"]>) => {
+      await landed;
+      return shared.kv.put(...args);
+    },
+  } as unknown as KVNamespace;
+  const producer = fakeProducer();
+  const coldIsolate = async () => {
+    const { env, warm } = fakeLoaderEnv({ kv: slowKv });
+    const { loaderId } = await loadConfined(env, {
+      owner: "prj_kv_single.iterate/",
+      source: site,
+      cacheKey: "c0ffee",
+      ...producer,
+    });
+    return warm.get(loaderId);
+  };
+  await Promise.all([coldIsolate(), coldIsolate(), coldIsolate()]);
+  expect(producer.produced()).toBe(3);
+  release();
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+  await settled();
+  expect(shared.puts).toHaveLength(1);
 });
 
 test("a module's identity is its graph: an AGENTS.md or a module it does not import leaves it, and a module it imports or its compatibility flags move it", async () => {
@@ -245,12 +440,23 @@ test("a module's identity is its graph: an AGENTS.md or a module it does not imp
 });
 
 test("the config pointer's worker, reached through the pointer, loads under its main module's identity: a commit that leaves that module's graph asks for the same isolate and, cold, reads ITX_KV; one that changes it is built again; the same spec no route vouched for loads under its commit", async () => {
-  const kv = fakeKv().kv;
-  let produced = 0;
-  const invoke = async () => {
-    produced += 1;
-    return { "package.json": '{"main":"worker.js"}', "worker.js": "export default {}" };
+  const shared = fakeKv();
+  const { kv } = shared;
+  const worker = { "package.json": '{"main":"worker.js"}', "worker.js": "export default {}" };
+  const commits: Record<string, Record<string, string>> = {
+    c1: worker,
+    c2: { ...worker, "AGENTS.md": "# How to work here, edited" },
+    c3: { ...worker, "worker.js": "export default { edited: true }" },
   };
+  let produced = 0;
+  /** The config repo's files at the commit the producer names (`itx.config.modules`). */
+  const invoke = async (call: ItxExpression) => {
+    produced += 1;
+    const [, , [, { commitOid }]] = call as [string, string, [string, { commitOid: string }]];
+    return commits[commitOid];
+  };
+  const [a, b] = [await workerIdentityOf(commits.c1!), await workerIdentityOf(commits.c3!)];
+  expect(await workerIdentityOf(commits.c2!)).toBe(a); // AGENTS.md is no module of worker.js's
   /** The pointer of commit `commitOid`, whose worker.js publishes `identity` (publication.ts). */
   const pointer = (commitOid: string, identity: string) => ({
     source: ["itx", "config", ["modules", { commitOid }]] satisfies ItxExpression,
@@ -259,9 +465,9 @@ test("the config pointer's worker, reached through the pointer, loads under its 
     manifest: { generation: 1, modules: { "worker.js": { identity, classes: [] } } },
   });
   const one = configWorkerOver({ kv, invoke, vouched: true });
-  await one.call(pointer("c1", "worker-a"));
+  await one.call(pointer("c1", a));
   // an AGENTS.md commit: the same id, so the warm isolate answers
-  await one.call(pointer("c2", "worker-a"));
+  await one.call(pointer("c2", a));
   expect({ ids: new Set(one.ids).size, built: one.built(), produced }).toEqual({
     ids: 1,
     built: 1,
@@ -272,19 +478,20 @@ test("the config pointer's worker, reached through the pointer, loads under its 
     PLATFORM_ID,
     null,
     "prj_u.iterate/",
-    "module:worker-a",
+    `module:${a}`,
     "worker.js",
   ]);
   // that isolate idled out (or a deploy): the cold load reads the answer ITX_KV kept
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
   const cold = configWorkerOver({ kv, invoke, vouched: true });
-  await cold.call(pointer("c2", "worker-a"));
+  await cold.call(pointer("c2", a));
   expect({ id: cold.ids[0], built: cold.built(), produced }).toEqual({
     id: one.ids[0],
     built: 1,
     produced: 1,
   });
   // a commit to a module worker.js imports: a new identity, produced and built once more
-  await one.call(pointer("c3", "worker-b"));
+  await one.call(pointer("c3", b));
   expect({ ids: new Set(one.ids).size, built: one.built(), produced }).toEqual({
     ids: 2,
     built: 2,
@@ -292,7 +499,7 @@ test("the config pointer's worker, reached through the pointer, loads under its 
   });
   // the same spec where no route vouched for it: its manifest names nothing
   const unvouched = configWorkerOver({ kv, invoke, vouched: false });
-  await unvouched.call(pointer("c2", "worker-a"));
+  await unvouched.call(pointer("c2", a));
   expect(JSON.parse(unvouched.ids[0]!)).toMatchObject({ 4: "key:c2" });
 });
 
@@ -849,17 +1056,26 @@ const site: ItxExpression = [
   ["modules", { commitOid: "c0ffee" }],
 ];
 
-/** A producer that answers valid modules and counts its runs. */
+/** A producer that answers valid modules and counts its runs: its n-th answer is
+ *  `producedFiles(n)`. */
 const fakeProducer = () => {
   let produced = 0;
   return {
     produced: () => produced,
-    invoke: async () => ({
-      "package.json": '{"main":"worker.js"}',
-      "worker.js": `export default ${++produced}`,
-    }),
+    invoke: async () => producedFiles(++produced),
   };
 };
+
+/** The files `fakeProducer` answers on its `n`-th run. */
+const producedFiles = (n: number) => ({
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": `export default ${n}`,
+});
+
+/** The identity a publication gives `files`' worker.js (worker-loader.ts `moduleIdentityOf`): what
+ *  a vouched manifest names, so the loader keeps a producer's answer under it. */
+const workerIdentityOf = (files: Record<string, string>) =>
+  moduleIdentityOf(files, "worker.js", { ITX_KV: fakeKv().kv }, "worker.js");
 
 /** A fake `env.ITX_KV` that keeps every value and records each `put`'s options. */
 const fakeKv = () => {
@@ -1003,7 +1219,7 @@ const configWorkerOver = ({
   vouched,
 }: {
   kv: KVNamespace;
-  invoke: () => Promise<unknown>;
+  invoke: (call: ItxExpression) => Promise<unknown>;
   vouched: boolean;
 }) => {
   const ids: string[] = [];
