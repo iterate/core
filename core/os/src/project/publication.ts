@@ -46,16 +46,14 @@ export type ProjectPublisher = {
   enableIntegrationsRow(): Promise<void>;
 };
 
-/** The manifest of commit `commitOid` as publication `generation`, admitted by the probe, and its
- *  main module (package.json's `main`) — or a throw that says why it is not admitted. A platform
- *  failure on the way (a read of the repo, a module lock, the probe's load) throws as itself: the
- *  follower meets it again. */
-export async function manifestOf(
-  commitOid: string,
-  generation: number,
-  publisher: Pick<ProjectPublisher, "files" | "identityOf" | "probe">,
-): Promise<{ mainModule: string; manifest: WorkerManifest }> {
-  const files = await publisher.files(commitOid);
+/** The config worker `files` make, admitted by the probe: its main module (package.json's `main`)
+ *  and each top-level module's identity and classes — or a throw that says why it is not admitted.
+ *  A platform failure on the way (a module lock, the probe's load) throws as itself: the follower
+ *  meets it again. */
+export async function probedConfig(
+  files: Record<string, string>,
+  publisher: Pick<ProjectPublisher, "identityOf" | "probe">,
+): Promise<{ mainModule: string; modules: WorkerManifest["modules"] }> {
   const { entry } = readPackage(files, "the config repo");
   if (Object.hasOwn(files, PROBE_MODULE))
     throw new Error(`${PROBE_MODULE} is the platform's publication probe: rename that file`);
@@ -73,13 +71,15 @@ export async function manifestOf(
     throw new Error(
       `${entry}'s default export does not construct: ${answer.constructError} — every delivery and every request constructs it`,
     );
-  const manifest = Object.fromEntries(
-    identities.map(([module, identity]) => [
-      module,
-      { identity, classes: answer.classes[module] ?? [] },
-    ]),
-  );
-  return { mainModule: entry, manifest: { generation, modules: manifest } };
+  return {
+    mainModule: entry,
+    modules: Object.fromEntries(
+      identities.map(([module, identity]) => [
+        module,
+        { identity, classes: answer.classes[module] ?? [] },
+      ]),
+    ),
+  };
 }
 
 /** The config repo's facet, at the fixed point all the way: what the pointer's producer reads

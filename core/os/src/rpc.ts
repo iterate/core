@@ -58,6 +58,7 @@ export async function rpcResponse(
     // A read unanswered in 5 s is UNAVAILABLE (overloaded), not a call held until D1's own 30 s
     // bound. About 1 in 2,000 D1 and DO calls take a fixed extra ~3.0 s (measured 2026-09-28).
     controlPlane: new ControlPlane(env, { readDeadlineMs: 5_000 }),
+    artifacts: env.ARTIFACTS,
     iterateConfig: iterateConfigOf(env),
     platformOrigin,
     cause: parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),

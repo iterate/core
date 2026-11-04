@@ -20,6 +20,64 @@ test("omitting a template seeds core/configs/minimal: a homepage, and no package
   expect(fixture.repo.tip).not.toHaveBeenCalled();
 });
 
+test("the seed asks for the config repo and pins the template at once: the commit waits for both", async () => {
+  const template = Promise.withResolvers<Array<{ path: string; content: string }>>();
+  const fixture = project(undefined, () => template.promise);
+  const repoMade = Promise.withResolvers<void>();
+  fixture.holds.set("repos.create", repoMade);
+  const seeding = deliver(fixture, requested(reference));
+  await vi.waitFor(() => expect(fixture).toMatchObject({ calls: ["repos.create"] }));
+  expect(fixture.downloadTemplate).toHaveBeenCalled();
+  template.resolve([
+    { path: "package.json", content: manifest },
+    { path: "worker.ts", content: worker },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(fixture.repo.commitFiles).not.toHaveBeenCalled();
+  repoMade.resolve();
+  await seeding;
+  expect(fixture).toMatchObject({ calls: ["repos.create", "facets.get.commitFiles"] });
+});
+
+test("the seed's commit is published from the probe of the files it committed: nothing is read back from the repo", async () => {
+  const fixture = project();
+  const commitOid = "b".repeat(40);
+  const publisher = {
+    head: async () => commitOid,
+    files: vi.fn(async (): Promise<Record<string, string>> => {
+      throw new Error("read back from the repo");
+    }),
+    identityOf: async (_files: Record<string, string>, module: string) => `identity:${module}`,
+    probe: vi.fn(async () => ({ configEntrypoint: true, constructError: null, classes: {} })),
+    appendAsPlatform: vi.fn(async (..._events: { type: string; payload?: unknown }[]) => []),
+    enableIntegrationsRow: async () => {},
+  };
+  const processor = new ProjectProcessor(
+    () => fixture.itx as never,
+    fixture.downloadTemplate,
+    () => null,
+    () => null,
+    () => publisher,
+  );
+  await run(processor, requested(), fixture.append);
+  const owed = { commitOid, offset: 7 };
+  await run(
+    processor,
+    { ...requested(), configRepoTip: owed, unpublishedCommits: [owed] },
+    fixture.append,
+  );
+  expect(publisher.files).not.toHaveBeenCalled();
+  expect(publisher.probe).toHaveBeenCalledTimes(1);
+  expect(publisher.appendAsPlatform.mock.calls[0]!.at(-1)).toMatchObject({
+    type: "events.iterate.com/project/worker-updated",
+    payload: {
+      commitOid,
+      generation: 7,
+      modules: { "worker.ts": { identity: "identity:worker.ts" } },
+    },
+  });
+});
+
 test("a preset the build was given is seeded from the build: nothing is downloaded", async () => {
   expect(templates).toContainEqual({ label: "Starter", reference: PRESET.reference });
   const fixture = project();
@@ -299,7 +357,7 @@ function project(
         const { changes } = input;
         files = Object.fromEntries(changes.map((file) => [file.path, file.content]));
         tipOid = "b".repeat(40);
-        return { commitOid: tipOid };
+        return { commitOid: tipOid, changedPaths: changes.map((file) => file.path) };
       },
     ),
   };
@@ -307,10 +365,19 @@ function project(
     files = { ...files, ...changed };
     tipOid = "c".repeat(40);
   };
-  // the saga's calls at the fixed point: the collection's `create`, and the repo facet's verbs
-  // (publication.ts `configRepoCall`)
+  // the saga's calls at the fixed point, by the names of their steps (`repos.create`): the
+  // collection's `create`, and the repo facet's verbs (publication.ts `configRepoCall`); a step held
+  // in `holds` answers once its promise resolves
+  const calls: string[] = [];
+  const holds = new Map<string, PromiseWithResolvers<void>>();
   const itx = {
     invoke: vi.fn(async (expression: unknown[]) => {
+      const name = expression
+        .map((step) => (Array.isArray(step) ? step[0] : step))
+        .filter((step) => !["itx", "builtins", "cd"].includes(step as string))
+        .join(".");
+      calls.push(name);
+      await holds.get(name)?.promise;
       const [verb, ...args] = expression.at(-1) as [keyof typeof repo | "create", ...unknown[]];
       if (verb === "create") return undefined;
       return (repo[verb] as (...input: unknown[]) => Promise<unknown>)(...args);
@@ -321,13 +388,42 @@ function project(
     order.push(...events.map((event) => event.type));
   });
   const downloadTemplate = vi.fn(download);
-  return { repo, itx, append, order, downloadTemplate, commitFromOutside, files: () => files };
+  return {
+    repo,
+    itx,
+    calls,
+    holds,
+    append,
+    order,
+    downloadTemplate,
+    commitFromOutside,
+    files: () => files,
+  };
 }
 
 /** The project's creation requested, of `template` when given. */
 function requested(template?: string): ProjectState {
   const creation = { status: "requested" as const, offset: 1, configRepoTemplate: template };
   return { ...ProjectContract.initialState(), creation };
+}
+
+/** One delivery of `state` at head to `processor`, every task it starts awaited. */
+async function run(
+  processor: ProjectProcessor,
+  state: ProjectState,
+  append: ReturnType<typeof project>["append"],
+) {
+  const tasks: Promise<unknown>[] = [];
+  processor.processEvent({
+    state,
+    previousState: state,
+    delivery: { caughtUp: true },
+    append,
+    runInBackground: (task: () => Promise<unknown>) => {
+      tasks.push(task());
+    },
+  } as never);
+  await Promise.all(tasks);
 }
 
 /** One delivery of `state` at head; a processor that `publishes` finds `main` unborn and lands what
@@ -353,15 +449,5 @@ async function deliver(
     () => null,
     () => (publishes ? publisher : null),
   );
-  const tasks: Promise<unknown>[] = [];
-  processor.processEvent({
-    state,
-    previousState: state,
-    delivery: { caughtUp: true },
-    append: fixture.append,
-    runInBackground: (run: () => Promise<unknown>) => {
-      tasks.push(run());
-    },
-  } as never);
-  await Promise.all(tasks);
+  await run(processor, state, fixture.append);
 }

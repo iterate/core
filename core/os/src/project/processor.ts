@@ -20,7 +20,8 @@
 // download (templates.test.ts); the effects are proven on the worker (test/vitest/os/session.e2e.test.ts: the
 // catalog, the apex answering the seed; test/vitest/os/website-publication.e2e.test.ts: a commit publishes).
 
-import { errorCode, resolveContextPath } from "iterate/lib";
+import type { ItxExpression } from "iterate/expression";
+import { errorCode, jsonEqual, resolveContextPath } from "iterate/lib";
 import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import {
   parseConfigRepoTemplateReference,
@@ -46,7 +47,12 @@ import { unavailableError } from "../unavailable.ts";
 import { ProjectContract, type CustomHostnameObservation, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
 import type { DomainConnectLink } from "./domain-connect.ts";
-import { configPointer, configRepoCall, manifestOf, type ProjectPublisher } from "./publication.ts";
+import {
+  configPointer,
+  configRepoCall,
+  probedConfig,
+  type ProjectPublisher,
+} from "./publication.ts";
 
 /** How long one publication may take before the platform gives up on it for now: a publication
  *  resolves its npm dependencies from esm.sh. */
@@ -92,6 +98,14 @@ const recheckAtOf = (settledAt: string, checks: number) =>
         Date.parse(settledAt) +
           (checks < HOSTNAME_RECHECK.soon ? HOSTNAME_RECHECK.soonMs : HOSTNAME_RECHECK.laterMs),
       ).toISOString();
+
+/** A commit's changes as the files they write, path → text. */
+const filesOf = (changes: { path: string; content: string }[]) =>
+  Object.fromEntries(changes.map((file) => [file.path, file.content]));
+
+/** Whether a commit changed exactly the paths of `changes`. */
+const samePaths = (changed: string[], changes: { path: string }[]) =>
+  jsonEqual([...changed].sort(), changes.map((file) => file.path).sort());
 
 /** One attempt of a publication (`ProjectProcessor#attemptPublication`): its main module and
  *  manifest admitted, or refused and why. */
@@ -217,6 +231,9 @@ export class ProjectProcessor extends StreamProcessor<
   #unpublished: ProjectState["unpublishedCommits"] = [];
   #handledThrough = 0;
   #publishing = false;
+  /** The probe of the seed's files, by the commit that holds exactly them (`#seed`): its
+   *  publication's first attempt reads it instead of the repo. */
+  #seedProbes = new Map<string, ReturnType<typeof probedConfig>>();
 
   override reduce({
     event,
@@ -659,7 +676,7 @@ export class ProjectProcessor extends StreamProcessor<
             console.warn(`the integrations row, started early: ${String(caught)}`);
           });
         if (!state.configRepoTip) {
-          await this.#seed(state);
+          await this.#seed(state, publisher);
           // Its commit's fact reaches `/`, the follower publishes it, and the publication's fact
           // lands the certificate.
           if (publisher) return;
@@ -686,57 +703,69 @@ export class ProjectProcessor extends StreamProcessor<
     });
   }
 
-  /** THE SEED: the config repo, and the template committed onto its unborn `main` — or `main` as it
-   *  is, born by an earlier attempt or another commit. */
-  async #seed(state: ProjectState): Promise<void> {
-    // its own block: the template's download below outlasts it. The repo at the fixed point, as
-    // publication.ts `configRepoCall` says why.
-    {
+  /** THE SEED: the config repo and the template's files at once — the files probed as a
+   *  publication would probe them (`#seedProbes`) — and the commit once both are there. The repo's
+   *  context and its Artifacts repo were begun with the project (session.ts `startCreationEarly`). */
+  async #seed(state: ProjectState, publisher: ProjectPublisher | null): Promise<void> {
+    // one stub a call: the template's download outlasts any one of them
+    const call = async (expression: ItxExpression) => {
       using itx = this.getItx();
-      await itx.invoke(["itx", "builtins", "repos", ["create", "/repos/config"]]);
-    }
-    // THE SEED LANDS ONLY ON AN UNBORN `main` (`parent: null`), so it is committed without a read
-    // of the tip first — one Artifacts round trip less on every creation, and the one that hung
-    // 22.8 s (2026-09-24, the latency guard). A born `main` refuses it: an attempt of this saga
-    // lost with an incarnation seeded it, or another commit got there first — `create` answers
-    // before this certificate, so the config repo may be written meanwhile (a voice delegation's
-    // website edit was, 2026-09-24, and the seed put the seed homepage back over it). Either
-    // way `main`'s tip is the project's config and what the ingress names; a failure that left
-    // `main` unborn — the template's download included — is the saga's own failure.
-    let commitOid: string | null;
+      return await itx.invoke(expression);
+    };
+    // At the fixed point, as publication.ts `configRepoCall` says why.
+    const repo = call(["itx", "builtins", "repos", ["create", "/repos/config"]]);
     const reference = state.creation?.configRepoTemplate;
-    try {
-      // The seed pins its dependencies of ours: a template's `main` (npm's dist-tag) or pkg.pr.new
-      // `…@main` means main's newest build, and the loader refuses a ref that moves
-      // (iterate/package-builds). One that cannot be pinned fails the creation, like a download that
-      // fails. A preset comes from
-      // the build (scripts/build.ts), with no GitHub request (`presetFiles`); no template is
-      // core/configs/minimal.
+    // The seed pins its dependencies of ours: a template's `main` (npm's dist-tag) or pkg.pr.new
+    // `…@main` means main's newest build, and the loader refuses a ref that moves
+    // (iterate/package-builds). One that cannot be pinned fails the creation, like a download that
+    // fails. A preset comes from the build (scripts/build.ts), with no GitHub request
+    // (`presetFiles`); no template is core/configs/minimal. The seed checks the template's entry
+    // with the loader's own rule (`readPackage`).
+    const files = (async () => {
       const changes = await pinDependencies(
         reference
           ? (presetFiles(reference) ??
               (await this.downloadTemplate(parseConfigRepoTemplateReference(reference))))
           : minimalConfigFiles,
       );
-      // The seed checks the template's entry with the loader's own rule (`readPackage`).
-      readPackage(
-        Object.fromEntries(changes.map((file) => [file.path, file.content])),
-        "The config template",
-      );
-      using itx = this.getItx();
-      // `invoke` answers `unknown`; the repo facet's `commitFiles` answers the commit it made.
-      const seeded = (await itx.invoke(
+      readPackage(filesOf(changes), "The config template");
+      return changes;
+    })();
+    const probed = publisher && files.then((changes) => probedConfig(filesOf(changes), publisher));
+    // its outcome, a refusal included, is the publication's to read; one no publication reads is
+    // no unhandled rejection
+    probed?.catch(() => {});
+    // THE SEED LANDS ONLY ON AN UNBORN `main` (`parent: null`), so it is committed without a read
+    // of the tip first: one Artifacts round trip less on every creation. A born `main` refuses it:
+    // an attempt of this saga lost with an incarnation seeded it, or another commit got there
+    // first — `create` answers before this certificate, so the config repo may be written
+    // meanwhile, and the seed must never put its files back over that write. Either way `main`'s
+    // tip is the project's config and what the ingress names; a failure that left `main` unborn —
+    // the template's download included — is the saga's own failure. The tip's read needs the repo,
+    // so both settle first.
+    const [repoMade, filesMade] = await Promise.allSettled([repo, files]);
+    if (repoMade.status === "rejected") throw repoMade.reason;
+    let commitOid: string | null;
+    try {
+      if (filesMade.status === "rejected") throw filesMade.reason;
+      const changes = filesMade.value;
+      // `invoke` answers `unknown`; the repo facet's `commitFiles` answers the commit it made and
+      // the paths it changed.
+      const seeded = (await call(
         configRepoCall("commitFiles", {
           message: reference ? `seed: ${reference}` : "seed: minimal project config",
           changes,
           parent: null,
         }),
-      )) as { commitOid: string | null };
+      )) as { commitOid: string | null; changedPaths: string[] };
       commitOid = seeded.commitOid;
+      // On an unborn `main` the commit holds exactly the files it changed: when those are the
+      // files probed, its publication reads them from the probe, not back from the repo.
+      if (probed && commitOid && samePaths(seeded.changedPaths, changes))
+        this.#seedProbes.set(commitOid, probed);
     } catch (error) {
-      using itx = this.getItx();
       // `invoke` answers `unknown`; the repo facet's `tip` answers main's commit or null.
-      commitOid = (await itx.invoke(configRepoCall("tip"))) as string | null;
+      commitOid = (await call(configRepoCall("tip"))) as string | null;
       if (!commitOid) throw error;
       console.info({
         event: "project.seed-on-born-main",
@@ -859,12 +888,17 @@ export class ProjectProcessor extends StreamProcessor<
         kind: "refused",
         error: `main moved on to ${head || "no commit (unborn)"} before this commit was published`,
       };
+    // the seed's commit was probed from the files it committed, once: an attempt run again probes
+    // what the repo holds
+    const seedProbe = this.#seedProbes.get(commitOid);
+    this.#seedProbes.delete(commitOid);
     try {
-      const built = await manifestOf(commitOid, generation, publisher);
+      const { mainModule, modules } = await (seedProbe ||
+        probedConfig(await publisher.files(commitOid), publisher));
       // before the outcome lands: the install hooks it sets off register the packages there. Part
       // of the attempt, so a platform failure here is retried and timed like the probe's.
       await publisher.enableIntegrationsRow();
-      return { kind: "admitted", ...built };
+      return { kind: "admitted", mainModule, manifest: { generation, modules } };
     } catch (error) {
       if (isPlatformFailureKind(failureKind(error))) throw error;
       return { kind: "refused", error: error instanceof Error ? error.message : String(error) };
@@ -980,6 +1014,9 @@ export class ProjectProcessor extends StreamProcessor<
         });
       }
     }
+    // The config repo's Artifacts repo is created with the project (session.ts
+    // `startCreationEarly`), before its context may have announced itself.
+    if (!destroyed.has("/repos/config")) await deletion.deleteRepo("/repos/config");
     for (const hostname of Object.keys(this.#newestState?.hostnames ?? {})) {
       const hostnames = this.hostnames();
       if (!(await hostnames?.heldElsewhere(hostname))) await hostnames?.provider?.remove(hostname);

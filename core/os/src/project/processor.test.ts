@@ -1495,6 +1495,35 @@ test("ProjectProcessor — the deletion: a context announced while a pass runs (
   ]);
 });
 
+test("ProjectProcessor — the deletion: the config repo's Artifacts repo, created with the project, is deleted though its context never announced itself", async () => {
+  const calls: string[] = [];
+  const state: ProjectState = {
+    ...reduceProcessor(processorWithoutHostnames(), [childCreated("/a")]),
+    deletion: { offset: 9 },
+  };
+  const processor = new ProjectProcessor(
+    () => {
+      throw new Error("unused");
+    },
+    () => Promise.reject(new Error("unused")),
+    () => null,
+    () => ({
+      destroyContext: async (path) => void calls.push(`destroy ${path}`),
+      deleteRepo: async (path) => void calls.push(`delete repo ${path}`),
+      deleteProjectStorage: async () => void calls.push("delete storage"),
+    }),
+  );
+  deliver(processor, state, async () => {});
+  await settle();
+  expect(calls).toEqual([
+    "destroy /a",
+    "delete repo /a",
+    "delete repo /repos/config",
+    "delete storage",
+    "destroy /",
+  ]);
+});
+
 test("ProjectProcessor — the deletion: a pass that keeps failing runs again after 5 s and 30 s, then records delete-failed, is reported, and stops in this incarnation; a later incarnation starts it again", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());

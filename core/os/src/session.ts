@@ -17,12 +17,14 @@ import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
 import type { Principal } from "iterate/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
+import { INTEGRATIONS_PATH } from "iterate/integrations";
 import { pinPublicGithubTemplate } from "./repo/github-template.ts";
 import { base64url, sha256Hex, verifyAdminSecret, type Caller } from "./caller.ts";
 import type { Cause } from "./cause.ts";
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { GrantsRpcTarget } from "./grants.ts";
+import { projectScopedArtifacts, type ArtifactsNamespace } from "./context/cf-artifacts.ts";
 import { CONTEXT_DESTROYED, DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import {
   IterateContextRpcTarget,
@@ -70,6 +72,9 @@ export interface SessionInput {
   waitUntil: WaitUntil;
   /** The control plane as the edge holds it: the catalog's reads and its commands. */
   controlPlane: ControlPlane;
+  /** Cloudflare Artifacts, where a new project's config repo is created early
+   *  (`startCreationEarly`). Absent, the repo's own provisioning creates it. */
+  artifacts?: ArtifactsNamespace;
   /** Configuration for operator authentication and context capabilities. */
   iterateConfig: IterateConfig;
   /** THE PLATFORM ORIGIN this session was reached on (iterate-config.ts `platformAddressesOf`) — what
@@ -338,6 +343,48 @@ class CreateWaits {
       ...attributes,
     });
   }
+}
+
+/** The contexts a new project's saga (project/processor.ts) creates first, beside its root. */
+const EARLY_CONTEXTS = ["/repos", "/repos/config", INTEGRATIONS_PATH];
+
+/** THE CREATION'S HEAD START, begun beside the root while it starts, each step one the saga does
+ *  again and finds done. A brand-new context's first call waits for Cloudflare's worldwide check of
+ *  its name and for an isolate to load this Worker (0.86–0.92 s each, measured 2026-11-04), so each
+ *  context the saga creates is called once now with `version`, which records nothing and births no
+ *  context. The config repo's Artifacts repo, the slowest step (1.25 s), is created now too: its
+ *  name derives from the path (context/cf-artifacts.ts), and the repo's own provisioning then finds
+ *  it there. In the background, and never fatal: the saga's own steps are the guarantee. */
+function startCreationEarly(input: SessionInput, projectId: string): void {
+  const early = (step: string, work: Promise<unknown>) =>
+    input.waitUntil(
+      work.catch((error: unknown) => {
+        console.warn({
+          event: "session.creation-head-start-failed",
+          step,
+          projectId,
+          error: String(error),
+        });
+      }),
+    );
+  for (const path of EARLY_CONTEXTS)
+    early(
+      path,
+      input.contextNamespace
+        .getByName(DurableObjectNameCodec.address({ projectId, path }).name)
+        .version(),
+    );
+  if (!input.artifacts) return;
+  const artifacts = projectScopedArtifacts({ namespace: input.artifacts, projectId });
+  // A deletion asked while this create is out may find no repo yet (project/processor.ts
+  // `#deletionPass`), so a create that lands for a project already deleted deletes what it made.
+  early(
+    "Artifacts repo",
+    artifacts.create("/repos/config").then(async () => {
+      if (await input.controlPlane.deletedProject(projectId))
+        await artifacts.delete("/repos/config");
+    }),
+  );
 }
 
 /** THE DEPLOYMENT'S LENDS TO EVERY PROJECT, borrowed by a project just created (context/built-ins.ts
@@ -1090,6 +1137,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
         }),
       );
       project = created;
+      startCreationEarly(sessionInput, created.id);
       // The project's own creation saga, on its root: enable the `project` processor, then request
       // it — the saga (src/project/processor.ts) seeds the config repo from the template and lands
       // the certificate. Idempotent: a request after the certificate is a harmless fact, one after a
