@@ -24,6 +24,8 @@ export type CloudflareSection = {
   workerRoutes?: { pattern: string; zone: string }[];
   /** Whether the Worker answers on workers.dev. */
   workersDev?: boolean;
+  /** How a deploy moves running Durable Objects onto the new code. Unset ⇒ Cloudflare's default. */
+  durableObjectCodeUpdates?: { mode: "immediate" } | { mode: "deferred"; maxDelaySeconds?: number };
   /** The telemetry warehouse the Worker sends to, which another deploy owns. */
   telemetry?: { workerName: string; eventsStream: string };
 };

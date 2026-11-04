@@ -92,10 +92,9 @@ export const iterateStack = ({ deployment: { config, vars }, release, images }: 
       // subrequests: one capnweb session is one long invocation, and each of its edge→DO calls
       // counts against it. cpuMs: a cold re-reduce of a long log is CPU-bound. Neither bills unused.
       limits: { subrequests: 1_000_000, cpuMs: 300_000 },
-      // A deploy restarts every Durable Object onto the new code at once. Deferred (Cloudflare's
-      // default), a context holding SQLite facets never hibernates (workerd#6800) and so runs the
-      // old code for the full 5 minutes, beside new code in every other object.
-      codeUpdateStrategy: { mode: "immediate" },
+      // How a deploy moves running Durable Objects onto the new code; unset is Cloudflare's
+      // default, deferred for at most 5 minutes (../src/iterate-config.ts says more).
+      codeUpdateStrategy: codeUpdateStrategyOf(cloudflare.durableObjectCodeUpdates),
       // Every log line and trace, kept. With a warehouse, both go to it too, and the traces stay
       // there alone: its `spans` table holds each one, and Cloudflare bills stored traces by the GB
       // from 2026-12-01.
@@ -195,6 +194,14 @@ export const iterateStack = ({ deployment: { config, vars }, release, images }: 
       });
     return { url: worker.url };
   }).pipe(remote());
+
+/** The config's `durableObjectCodeUpdates` as Alchemy's `codeUpdateStrategy`. */
+const codeUpdateStrategyOf = (
+  updates: CloudflareSection["durableObjectCodeUpdates"],
+): Cloudflare.WorkerCodeUpdateStrategy | undefined =>
+  updates?.mode === "deferred" && updates.maxDelaySeconds !== undefined
+    ? { mode: "deferred", maxDelay: `${updates.maxDelaySeconds} seconds` }
+    : updates && { mode: updates.mode };
 
 /** A refusal is a ConfigError, the body's error channel (alchemy's Stack.ts), whose message the CLI
  *  prints. Alchemy refuses its own configuration the same way. */

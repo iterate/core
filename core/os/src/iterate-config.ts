@@ -201,6 +201,21 @@ export const IterateConfig = z.object({
         .default([]),
       /** Serve the Worker on `<workerName>.<subdomain>.workers.dev`. Default: on. */
       workersDev: z.boolean().default(true),
+      /** How a deploy moves running Durable Objects onto the new code
+       *  (https://developers.cloudflare.com/durable-objects/deployments/durable-objects-code-updates/):
+       *  `immediate` resets each at once; `deferred` lets each keep its old code until it is next
+       *  idle, or for at most `maxDelaySeconds`, then resets it. A context holding SQLite facets
+       *  never hibernates (cloudflare/workerd#6800), but it is evicted after 70 to 140 s idle and
+       *  takes the new code on its next call. Unset ⇒ Cloudflare's default: deferred, 300 s. */
+      durableObjectCodeUpdates: z
+        .discriminatedUnion("mode", [
+          z.object({ mode: z.literal("immediate") }),
+          z.object({
+            mode: z.literal("deferred"),
+            maxDelaySeconds: z.number().int().min(0).max(86_400).optional(),
+          }),
+        ])
+        .optional(),
       /** The account's telemetry warehouse (docs/telemetry.md), which iterate's
        *  internal-packages/telemetry sets up: `workerName` is its Worker, the OTLP endpoint of the
        *  account's export destinations, whose `TelemetryQuery` runs `itx.telemetry`; `eventsStream`
