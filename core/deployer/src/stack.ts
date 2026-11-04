@@ -3,7 +3,7 @@
 // ConfigProvider, core/os/alchemy.run.ts for Alchemy's CLI, core/os/src/deployment/run.ts for a
 // deployment's facet. core/os/cloudflare.config.ts is cf dev's twin of the binding table below;
 // core/os/src/deployment/stack.test.ts keeps the two in step.
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { remote } from "alchemy/ProviderMode";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import { Stage } from "alchemy/Stage";
@@ -94,6 +94,10 @@ export const iterateStack = ({ deployment: { config, vars }, release, images }: 
       // subrequests: one capnweb session is one long invocation, and each of its edge→DO calls
       // counts against it. cpuMs: a cold re-reduce of a long log is CPU-bound. Neither bills unused.
       limits: { subrequests: 1_000_000, cpuMs: 300_000 },
+      // A deploy restarts every Durable Object onto the new code at once. Deferred (Cloudflare's
+      // default), a context holding SQLite facets never hibernates (workerd#6800) and so runs the
+      // old code for the full 5 minutes, beside new code in every other object.
+      codeUpdateStrategy: { mode: "immediate" },
       // Every log line and trace, kept. With a warehouse, both go to it too, and the traces stay
       // there alone: its `spans` table holds each one, and Cloudflare bills stored traces by the GB
       // from 2026-12-01.

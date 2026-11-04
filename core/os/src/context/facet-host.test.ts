@@ -96,16 +96,17 @@ test("a call in flight when its facet is deleted rejects NO_FACET only for the r
   await expect(cutOff).rejects.toMatchObject({ code: "NO_FACET" });
 });
 
-test("a restart whose start never answers ends when the start watchdog's clock answers, and its warn says why it ran and how long it took", async () => {
+test("a restart whose start never answers ends at the start watchdog, and its warn says why it ran and how long it took", async () => {
   const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
   onTestFinished(() => void warned.mockRestore());
   const facets = namedFacets();
   facets.publish(1);
   await facets.boot();
-  facets.holdNextResolution(); // the start never reaches its facet: only the clock can end it
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  facets.holdNextResolution(); // the start never reaches its facet: only the watchdog can end it
   const aborting = facets.abort("asked");
-  await settle();
-  facets.answerClock();
+  await vi.advanceTimersByTimeAsync(10_000);
   await aborting;
   expect(warned.mock.calls).toMatchObject([
     [
@@ -119,28 +120,10 @@ test("a restart whose start never answers ends when the start watchdog's clock a
   ]);
 });
 
-test("a restart whose clock fails logs that once, and a timer of the context still ends the start", async () => {
-  const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
-  onTestFinished(() => void warned.mockRestore());
-  const facets = namedFacets({ clockFails: true });
-  facets.publish(1);
-  await facets.boot();
-  vi.useFakeTimers();
-  onTestFinished(() => void vi.useRealTimers());
-  facets.holdNextResolution();
-  const aborting = facets.abort("under a failing clock");
-  await vi.advanceTimersByTimeAsync(10_000);
-  await aborting;
-  expect(warned.mock.calls).toMatchObject([
-    [{ event: "critical-section-deadline.platform-failure-fetch", message: "no loopback" }],
-    [{ event: "facet.start-failed", why: "itx.facets.abort", elapsedMs: 10_000 }],
-  ]);
-});
-
-test("a birth with no facet to start opens no critical section and asks the clock nothing", async () => {
+test("a birth with no facet to start opens no critical section", async () => {
   const facets = namedFacets();
   expect(await facets.birth()).toEqual([]);
-  expect(facets).toMatchObject({ locks: 0, clockRequests: 0 });
+  expect(facets).toMatchObject({ locks: 0 });
 });
 
 /** A context's facet host with one facet, `tally`, named by the root's published worker: `publish`
@@ -149,10 +132,9 @@ test("a birth with no facet to start opens no critical section and asks the cloc
  *  one call on it answering the identity its class was minted under, and `started` every class the
  *  host minted, in order. `work` is a call the facet holds until `failHeldWork` rejects the oldest
  *  one held: the fake's abort and `delete` (its hosting row removed) cut off nothing by themselves,
- *  so a test says when the runtime's rejection arrives. The start watchdog's clock
- *  (`CriticalSectionDeadline`) answers when `answerClock` says, or fails with `clockFails`; `locks`
- *  counts the host's `blockConcurrencyWhile` calls and `clockRequests` the clock's. */
-function namedFacets({ clockFails = false } = {}) {
+ *  so a test says when the runtime's rejection arrives. `locks` counts the host's
+ *  `blockConcurrencyWhile` calls. */
+function namedFacets() {
   const kv = new Map<string, unknown>();
   const started: string[] = [];
   const instances = new Map<
@@ -168,8 +150,6 @@ function namedFacets({ clockFails = false } = {}) {
   let restarts = Promise.resolve<unknown>(undefined);
   let releaseRestarts = () => {};
   let locks = 0;
-  let clockRequests = 0;
-  const clockAnswers: (() => void)[] = [];
   const named = async () => {
     if (failure) throw failure;
     const at = holdNext
@@ -226,17 +206,7 @@ function namedFacets({ clockFails = false } = {}) {
         restarts = run.catch(() => undefined);
         return run;
       },
-      exports: {
-        CriticalSectionDeadline: {
-          fetch: () => {
-            clockRequests++;
-            if (clockFails) return Promise.reject(new Error("no loopback"));
-            return new Promise<Response>((resolve) =>
-              clockAnswers.push(() => resolve(new Response(null, { status: 204 }))),
-            );
-          },
-        },
-      },
+      exports: {},
     },
     env: () => ({
       LOADER: {
@@ -271,10 +241,6 @@ function namedFacets({ clockFails = false } = {}) {
     get locks() {
       return locks;
     },
-    get clockRequests() {
-      return clockRequests;
-    },
-    answerClock: () => clockAnswers.splice(0).forEach((answer) => answer()),
     birth: () => host.startFacetsTheLastIncarnationRan(),
     publish: (next: number, identity = `agents-v${next}`) => {
       generation = next;

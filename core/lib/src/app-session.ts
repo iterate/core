@@ -311,8 +311,8 @@ export class BrowserSession extends DurableObject {
   }
   /** `work`, once every operation before it settled, so two tabs never spend one refresh token.
    *  Its failure is its caller's alone. A queue in memory, because the object is one instance and a
-   *  reset ends the queue with it. Not `blockConcurrencyWhile`, so token timeouts can fire; see
-   *  core/os/src/context/critical-section-deadline.ts for why. */
+   *  reset ends the queue with it. Not `blockConcurrencyWhile`, so the object serves other requests
+   *  while a refresh waits on the network. */
   #serial<T>(work: () => Promise<T>): Promise<T> {
     const result = this.#last.then(work);
     this.#last = result.then(

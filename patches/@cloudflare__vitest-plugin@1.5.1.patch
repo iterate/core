@@ -1,8 +1,8 @@
 diff --git a/dist/pool/index.d.mts b/dist/pool/index.d.mts
-index 130b334ba5b00fa61a525a54f0c09be1520afc25..fabf86f76e0fa90311a24688b9a3f6d6d86820ad 100644
+index 23de003..34058bb 100644
 --- a/dist/pool/index.d.mts
 +++ b/dist/pool/index.d.mts
-@@ -33,6 +33,9 @@ type SourcelessWorkerOptions = Omit<CompatibleWorkerOptions, "script" | "scriptP
+@@ -29,6 +29,9 @@ type SourcelessWorkerOptions = Omit<CompatibleWorkerOptions, "script" | "scriptP
  type WorkersPoolOptions = z.input<typeof WorkersPoolOptionsSchema> & {
    miniflare?: SourcelessWorkerOptions & {
      workers?: CompatibleWorkerOptions[];
@@ -13,14 +13,14 @@ index 130b334ba5b00fa61a525a54f0c09be1520afc25..fabf86f76e0fa90311a24688b9a3f6d6
  };
  type WorkersPoolOptionsWithDefines = WorkersPoolOptions & {
 diff --git a/dist/pool/index.mjs b/dist/pool/index.mjs
-index c9c238ffcf80884674a864d8b0cac26ef8b58e2c..0b16dc01fc59a320a6aa29be1a1441fdb10cb19f 100644
+index c82e2b1..5f57c6c 100644
 --- a/dist/pool/index.mjs
 +++ b/dist/pool/index.mjs
-@@ -64384,6 +64384,12 @@ function normalizeNewConfigOption(option) {
- async function parseCustomPoolOptions(rootPath, value, mode) {
+@@ -70228,6 +70228,12 @@ async function parseCustomPoolOptions(project, rootPath, value, mode, envDir) {
+ 	if (value?.experimental?.newConfig !== void 0) throw new TypeError("`experimental.newConfig` is now the `config` option. Replace `experimental: { newConfig: ... }` with `config: true`, or `config: \"<path>\"` for a custom path.");
  	const options = WorkersPoolOptionsSchema.parse(value);
  	options.miniflare ??= {};
-+	// iterate patch (apps/os/vitest.config.ts): `miniflare.resourcePersistencePath`, where the
++	// iterate patch (test/vitest.config.ts): `miniflare.resourcePersistencePath`, where the
 +	// runtime keeps its local storage, is one of Miniflare's shared options, not a Worker's: kept
 +	// here before the Worker options are parsed, and handed to Miniflare by
 +	// `buildProjectMiniflareOptions`.
@@ -29,17 +29,17 @@ index c9c238ffcf80884674a864d8b0cac26ef8b58e2c..0b16dc01fc59a320a6aa29be1a1441fd
  	const miniflareModuleRules = options.miniflare.modulesRules;
  	const errorRef = {};
  	const workers = options.miniflare?.workers;
-@@ -64470,6 +64476,7 @@ async function parseCustomPoolOptions(rootPath, value, mode) {
- 		options.miniflare.assets.routerConfig ??= {};
+@@ -70342,6 +70348,7 @@ async function parseCustomPoolOptions(project, rootPath, value, mode, envDir) {
  		options.miniflare.assets.routerConfig.has_user_worker = Boolean(options.main);
  	}
+ 	options.projectWorkers = resolveProjectWorkers(project, options, cloudflareConfig, remoteProxyConnectionString);
 +	options.resourcePersistencePath = resourcePersistencePath;
  	return options;
  }
  async function parseProjectOptions(project, poolOptions) {
-@@ -65098,6 +65105,7 @@ async function buildProjectMiniflareOptions(ctx, project, customOptions, main) {
+@@ -71003,6 +71010,7 @@ async function buildProjectMiniflareOptions(ctx, project, customOptions, main) {
  	}
- 	return convertV4MiniflareOptions({
+ 	return {
  		...SHARED_MINIFLARE_OPTIONS,
 +		resourcePersistencePath: customOptions.resourcePersistencePath,
  		verbose: customOptions.verbose ?? true,

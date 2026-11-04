@@ -110,7 +110,7 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
  *  first write (`startFacetsTheLastIncarnationRan`) — a start after that write does not. So the
  *  platform never stops a facet without starting it again: every abort of its own is a `#restart`,
  *  and a birth starts every facet that may have written since its last start (`facet-ran:<name>`
- *  rows). A start is one call, `listPublicMethods`, bounded by this watchdog, whose clock is
+ *  rows). A start is one call, `listPublicMethods`, bounded by this watchdog,
  *  `criticalSectionDeadline` (a birth waits on it, and a birth that outlasts 30 s resets the
  *  object); a start that fails is logged, never thrown, and the next birth or sweep starts it.
  *  Remove when that file's pin, a `createFailing` tagged `slow`, goes red because the raw fault no
@@ -186,7 +186,7 @@ const FIRST_PARTY_FACET_PUBLIC_METHODS = {
 
 type FacetHostDeps = {
   /** `ctx.facets` (the containers), `ctx.storage.kv` (memos, restart markers, restart counts,
-   *  claims, what ran), `ctx.exports` (the first-party classes, `CriticalSectionDeadline`),
+   *  claims, what ran), `ctx.exports` (the first-party classes),
    *  `ctx.blockConcurrencyWhile` (a restart, `#restart`). */
   ctx: Pick<DurableObjectState, "facets" | "storage" | "exports" | "blockConcurrencyWhile">;
   /** What `prepareConfinedWorker` reads of the env: the Worker Loader. Read at call time, off the
@@ -571,12 +571,7 @@ export class FacetHost {
       for (const { abort } of restarts) abort?.();
       const owed: (() => void)[] = [];
       const batch = new AbortController();
-      const deadline = criticalSectionDeadline(
-        this.#deps.ctx.exports,
-        FACET_START_WATCHDOG_MS,
-        batch.signal,
-        this.#deps.iterateContextName,
-      );
+      const deadline = criticalSectionDeadline(FACET_START_WATCHDOG_MS, batch.signal);
       const started = await Promise.all(
         restarts.map(({ name }) => this.#start(name, why, owed, deadline)),
       );

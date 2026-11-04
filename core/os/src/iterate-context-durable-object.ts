@@ -533,12 +533,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         (deleted) => ({ deleted }),
         (error: unknown) => ({ error }),
       ),
-      criticalSectionDeadline(
-        this.ctx.exports,
-        DELETED_PROJECT_QUESTION_DEADLINE_MS,
-        asked.signal,
-        this.#durableObjectAddress.name,
-      ).then(() => ({
+      criticalSectionDeadline(DELETED_PROJECT_QUESTION_DEADLINE_MS, asked.signal).then(() => ({
         unanswered: true,
         error: unavailableError(
           "overloaded",

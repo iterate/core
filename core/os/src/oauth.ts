@@ -396,6 +396,9 @@ function authorizationServer(env: Env, { platformOrigin, api, mcp, userinfo }: P
     // Inspector, Claude's connector) require dynamic registration, so the endpoint is always published.
     clientRegistrationEndpoint: CLIENT_REGISTRATION_ENDPOINT,
     clientIdMetadataDocumentEnabled: true,
+    // A redirect URI must be https or loopback http unless this is on. The iOS app registers
+    // `iterate://oauth/callback` (an RFC 8252 private-use scheme).
+    allowPrivateUseRedirectUris: true,
     scopesSupported: OAuthScope.options,
     accessTokenTTL: ACCESS_TOKEN_SECONDS,
     refreshTokenTTL: SESSION_IDLE_SECONDS,
@@ -511,6 +514,10 @@ async function personalAccessTokenAdmission(
  *  `refreshTokenIdleTTL`), and within a week of its deadline, 30 days after the sign-in or consent
  *  that made it, only until that deadline.
  *
+ *  A REFUSAL ENDS THE GRANT. The library revokes a grant and its tokens when this answers
+ *  `invalid_grant`, so a person refused by `login.allow` or `admins` signs in again once the
+ *  config lets them.
+ *
  *  THE SIGN-IN'S OWN CODE EXCHANGE READS NO ACCOUNT. An issuer grant's code is minted and exchanged
  *  by one sign-in, inside one request (issuer-session.ts `startIssuerSession`), before anything
  *  could end it; every use of its tokens reads the account (`grantIsLive`), and so does every
@@ -519,7 +526,7 @@ async function personalAccessTokenAdmission(
  *  to 09-28), past the 10 s the browser session gives the exchange. */
 async function grantLifetime(
   env: Env,
-  input: TokenExchangeCallbackOptions,
+  input: TokenExchangeCallbackOptions<Env>,
 ): Promise<TokenExchangeCallbackResult> {
   const refused = (reason: string, description: string) =>
     new OAuthError("invalid_grant", {
@@ -549,7 +556,7 @@ async function grantLifetime(
   };
   if (remaining >= SESSION_IDLE_SECONDS) return token;
   // The library honors `refreshTokenTTL` only at the code exchange and `refreshTokenIdleTTL` only at
-  // a refresh, and refuses either key anywhere else.
+  // a refresh, and ignores either key anywhere else.
   return input.grantType === GrantType.AUTHORIZATION_CODE
     ? { ...token, refreshTokenTTL: remaining }
     : { ...token, refreshTokenIdleTTL: remaining };

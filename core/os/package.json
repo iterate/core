@@ -23,7 +23,7 @@
   "dependencies": {
     "@base-ui/react": "catalog:",
     "@cloudflare/workers-oauth-provider": "catalog:",
-    "@effect/platform-node": "4.0.1",
+    "@effect/platform-node": "catalog:",
     "@iterate-com/deployer": "workspace:*",
     "@mmkal/jsonata": "2.2.1",
     "@modelcontextprotocol/client": "catalog:",
@@ -31,6 +31,7 @@
     "@octokit/auth-app": "8.3.1",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-start": "catalog:",
+    "@alchemy.run/cloudflare": "catalog:",
     "alchemy": "catalog:",
     "capnweb": "catalog:",
     "class-variance-authority": "catalog:",
@@ -56,14 +57,14 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "2.0.0-beta.sha-52b0dc0e9",
+    "@cloudflare/vite-plugin": "catalog:vite-plugin-2",
     "@cloudflare/workers-types": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
-    "cf": "1.0.0-beta.12",
+    "cf": "catalog:",
     "esbuild": "catalog:",
     "shadcn": "catalog:",
     "trpc-cli": "catalog:",

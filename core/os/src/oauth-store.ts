@@ -13,7 +13,7 @@
 // test/vitest/os-workers/oauth.test.ts ("the library's own grant storage…") runs the library with no
 // shim and fails until then.
 //
-// WHAT THIS ASSUMES OF THE LIBRARY (1.0.0; re-check on every upgrade):
+// WHAT THIS ASSUMES OF THE LIBRARY (1.2.4; re-check on every upgrade):
 //   • `grant:` keys are the only ones it rewrites while they matter. A `token:` key (an access
 //     token) is written once. A `client:` key (a dynamically registered client) is rewritten only
 //     by `updateClient`, which the platform never calls, and by the renewal of a registration past
@@ -25,6 +25,8 @@
 //     and `list` answers none: the library then reads each listed grant whole. Only
 //     `completeAuthorization`'s revocation of earlier grants lists with metadata, and every call
 //     here passes `revokeExistingGrants: false`.
+//   • `transaction:` keys (the consent helpers, unused here) and the `private_key_jwt` replay keys
+//     are written once each.
 //   • It calls these four members only, in the shapes below.
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import { ControlPlane } from "./control-plane/edge.ts";

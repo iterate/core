@@ -50,7 +50,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect/platform-node": "4.0.1",
+    "@effect/platform-node": "catalog:",
+    "@alchemy.run/cloudflare": "catalog:",
+    "@alchemy.run/docker": "catalog:",
     "alchemy": "catalog:",
     "effect": "catalog:"
   },

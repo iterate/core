@@ -2,19 +2,19 @@
 // deploy() and destroy() load Node services, a file logger and profile stores that workerd cannot,
 // and Cloudflare.providers() wires Docker and profile credentials. So a host composes the engine:
 // `runStack` over its `Stack(...)`, `hostLayer`, `cloudflareProviders` over one API token,
-// `stageRelease`, and ./state-sql.ts for the state. It imports only Alchemy, Effect and
-// @effect/platform-node (.oxlintrc.json); a Worker that loads it needs ../vite.config.ts's shims.
+// `stageRelease`, and ./state-sql.ts for the state. It imports only Alchemy (alchemy, @alchemy.run/cloudflare and
+// @alchemy.run/docker), Effect and @effect/platform-node (.oxlintrc.json); a Worker that loads it needs ../vite.config.ts's shims.
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import { apply } from "alchemy/Apply";
 import { ArtifactStore, createArtifactStore } from "alchemy/Artifacts";
-import * as Cloudflare from "alchemy/Cloudflare";
-import { Docker } from "alchemy/Docker";
+import * as Events from "alchemy/Events";
 import * as Plan from "alchemy/Plan";
-import { type ApplyStatus, Progress, type ProgressEvent } from "alchemy/Report";
 import type { CompiledStack } from "alchemy/Stack";
 import { Stage } from "alchemy/Stage";
 import { unzipFiles } from "alchemy/Util/zip";
+import * as Cloudflare from "@alchemy.run/cloudflare";
+import { Docker } from "@alchemy.run/docker";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -40,7 +40,7 @@ export type RunEvent =
       readonly _tag: "Applied";
       readonly fqn: string;
       readonly type: string;
-      readonly status: ApplyStatus;
+      readonly status: Events.ApplyStatus;
     }
   | { readonly _tag: "Output"; readonly output: unknown };
 
@@ -53,9 +53,14 @@ export const runStack = <E, R>(
 ) =>
   Stream.callback<RunEvent, unknown, R>((queue) => {
     const offer = (event: RunEvent) => Effect.asVoid(Queue.offer(queue, event));
-    const report = (event: ProgressEvent) =>
-      event._tag === "apply.resource.status"
-        ? offer({ _tag: "Applied", fqn: event.fqn, type: event.type, status: event.status })
+    const report = (event: Events.Event) =>
+      event.type === "apply.resource.status"
+        ? offer({
+            _tag: "Applied",
+            fqn: event.fqn,
+            type: event.resourceType,
+            status: event.status,
+          })
         : Effect.void;
     return Queue.into(queue)(
       Effect.gen(function* () {
@@ -72,10 +77,10 @@ export const runStack = <E, R>(
             })),
           });
           if (kind === "plan") return;
-          const output = yield* apply(plan, { session: { emit: report, done: () => Effect.void } });
+          const output = yield* apply(plan);
           yield* offer({ _tag: "Output", output });
         }).pipe(Effect.provideContext(compiled.services));
-      }).pipe(Effect.provideService(Progress, report)),
+      }).pipe(Events.onEvent(report)),
     );
   });
 
@@ -98,7 +103,7 @@ export const hostLayer = (
   );
 
 /** THE CREDENTIALS: the providers of the resources ./stack.ts declares, over one run's API token.
- *  Cloudflare.Credentials is distilled's own service, which alchemy/Cloudflare exports. */
+ *  Cloudflare.Credentials is distilled's own service, which @alchemy.run/cloudflare exports. */
 export const cloudflareProviders = (apiToken: string, accountId: string) =>
   Layer.mergeAll(
     Cloudflare.D1.DatabaseProvider(),

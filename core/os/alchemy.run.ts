@@ -14,7 +14,7 @@
 // waits for the next such change (a save that changes nothing reloads nothing); a change during an
 // apply interrupts it, and the next plan repeats it.
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as ConfigProvider from "effect/ConfigProvider";
 import { iterateStack } from "@iterate-com/deployer/stack";
 import { releaseOf } from "./scripts/build.ts";

@@ -68,9 +68,7 @@ next birth did not start such a facet, a storage reset hit 150 of 322 contexts a
 `itx.abort()`; when it did, none of 320 (previews, 2026-10-06, Workers Logs; the outside-calls rows
 of `test/vitest/os/facet-restart-window.probe.e2e.test.ts`). So the `facet-ran:<name>` row stays
 until the facet is deleted, and every birth starts every facet hosted here that has started once.
-A start that does not answer in 10 s is given up, and inside `blockConcurrencyWhile` that clock is
-a request's answer, never a timer of the context (`src/context/critical-section-deadline.ts` says
-why). A start that fails logs `facet.start-failed` with `why` it ran
+A start that does not answer in 10 s is given up (`src/context/critical-section-deadline.ts`). A start that fails logs `facet.start-failed` with `why` it ran
 (`birth`, `quiet`, `itx.facets.abort`, `loaded identity changed`, `call timed out`) and its
 `elapsedMs`. FacetHost `FACET_START_WATCHDOG_MS` names every piece.
 
@@ -130,7 +128,6 @@ preview, 2026-09-23). So:
 | --------------------------------------------------------- | -------------------------------------------------------------- |
 | `itx/woken` payload `facetsReset`                         | 5, on the incarnation's wake record                            |
 | warn `facet.start-failed`, `facet.platform-failure-start` | a start after a reset or at birth that did not start the facet |
-| warn `critical-section-deadline.platform-failure-fetch`   | the start clock's request failed; a timer bounds the start     |
 | log `facet.loaded-identity-changed`                       | a restart onto other code; `changed` names what moved          |
 | log `worker-loader.built`, `worker-loader.produced`       | an isolate built; its modules produced, not read from ITX_KV   |
 | log `context.facets-reset-at-birth`                       | 5                                                              |
