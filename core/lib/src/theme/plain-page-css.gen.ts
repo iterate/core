@@ -3,30 +3,30 @@
 
 /** tokens.css and plain-page.css: the text of a plain page's one `<style>`. */
 export const plainPageCss = `:root {
-color-scheme: light dark;
+color-scheme: dark;
 --radius: 0;
---background: light-dark(#ffffff, #111111);
---foreground: light-dark(#111111, #eeeeee);
---card: light-dark(#ffffff, #111111);
---card-foreground: light-dark(#111111, #eeeeee);
---popover: light-dark(#ffffff, #111111);
---popover-foreground: light-dark(#111111, #eeeeee);
---primary: light-dark(#111111, #eeeeee);
---primary-foreground: light-dark(#ffffff, #111111);
---secondary: light-dark(#f4f4f4, #222222);
---secondary-foreground: light-dark(#111111, #eeeeee);
---muted: light-dark(#f4f4f4, #222222);
---muted-foreground: light-dark(#555555, #aaaaaa);
---accent: light-dark(#f4f4f4, #222222);
---accent-foreground: light-dark(#111111, #eeeeee);
---destructive: light-dark(#a40000, #ff8080);
---success: light-dark(#1a7f37, #75d994);
---warning: light-dark(#9a6700, #e8bb63);
---info: light-dark(#0e7490, #72cadd);
---border: light-dark(#dddddd, #444444);
---input: light-dark(#dddddd, #444444);
---ring: light-dark(#111111, #eeeeee);
---link: light-dark(#0645ad, #8ab4f8);
+--background: #111111;
+--foreground: #eeeeee;
+--card: #111111;
+--card-foreground: #eeeeee;
+--popover: #111111;
+--popover-foreground: #eeeeee;
+--primary: #eeeeee;
+--primary-foreground: #111111;
+--secondary: #222222;
+--secondary-foreground: #eeeeee;
+--muted: #222222;
+--muted-foreground: #aaaaaa;
+--accent: #222222;
+--accent-foreground: #eeeeee;
+--destructive: #ff8080;
+--success: #75d994;
+--warning: #e8bb63;
+--info: #72cadd;
+--border: #444444;
+--input: #444444;
+--ring: #eeeeee;
+--link: #8ab4f8;
 }
 body {
 margin: 0;
@@ -142,4 +142,4 @@ gap: 0.75rem 1.25rem;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-jupqFOKdrafVAspH3ZHYAYUSEIc24wyPztZZba/2A5c='";
+export const plainPageCssHash = "'sha256-/XG73T47VmtVm6jWZnJz3w9tI7O1/vX16Y0fDooA6WM='";

@@ -8,6 +8,10 @@
    Sharing a theme as a CSS file: https://tailwindcss.com/docs/theme#sharing-across-projects */
 @import "./tokens.css";
 
+/* Every page is dark, so `dark:` always applies: the vendored components' dark-mode classes are the
+   ones that fit. */
+@custom-variant dark (&);
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
