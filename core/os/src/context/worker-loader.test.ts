@@ -2,6 +2,7 @@
 // compose one id share an isolate), a producer runs inside `getCode`, the dead-id WORKAROUND
 // (worker-loader.ts `loaderIdGenerations`), and `workers.get`'s recovery from the loader defect
 // (built-ins.ts), over a fake loader; the real one is the Workers suite's.
+import { waitUntil } from "cloudflare:workers";
 import type { ItxExpression, ItxExpressionStep } from "iterate/expression";
 import { codedError, errorCode } from "iterate/lib";
 import { failureKind } from "iterate/platform-retry";
@@ -547,6 +548,77 @@ test("a KV that cannot be read or written costs the producer's run and a logged 
   ]);
 });
 
+test("a cold load resolves its source once: while its module lock's read is held, keeping the answer starts no second resolution", async () => {
+  const files = {
+    "package.json": '{"main":"worker.js","dependencies":{"left-pad":"1.3.0"}}',
+    "worker.js": 'import leftPad from "left-pad"; export default leftPad;',
+  };
+  // the dependency set's lock, as module-resolution.ts keeps it: no network
+  const lock = JSON.stringify({
+    modules: { "node_modules/left-pad.js": "export default (text) => text;" },
+    platformModules: [],
+  });
+  const isLock = (key: string) => key.startsWith("module-lock-");
+  const locked = { get: async (key: string) => (isLock(key) ? lock : null) };
+  const identity = await moduleIdentityOf(
+    files,
+    "worker.js",
+    { ITX_KV: locked as unknown as KVNamespace },
+    "worker.js",
+  );
+  const shared = fakeKv();
+  let lockReads = 0;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const kv = {
+    get: async (key: string, type?: "json") => {
+      if (!isLock(key)) return shared.kv.get(key, type as "json");
+      lockReads += 1;
+      await held;
+      return lock;
+    },
+    put: shared.kv.put,
+  } as unknown as KVNamespace;
+  const { env, warm } = fakeLoaderEnv({ kv });
+  const { loaderId } = await loadConfined(env, {
+    kind: "facet",
+    owner: ["prj_lock_held.iterate/agents/first", "AgentDurableObject"],
+    source: ["itx", "config", ["modules", { commitOid: "commit-1" }]],
+    cacheKey: "commit-1",
+    mainModule: "worker.js",
+    moduleIdentity: identity,
+    invoke: async () => files,
+  });
+  await vi.waitFor(() => expect(lockReads).toBe(1));
+  // timers' turns while the read is held: a check that resolves the files again reads the lock here
+  await settled();
+  await settled();
+  release();
+  await expect(warm.get(loaderId)).resolves.toMatchObject({ mainModule: "worker.js" });
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+  expect(lockReads).toBe(1);
+});
+
+test("a waitUntil that throws (no invocation to hold) leaves the cold load answered and the write running detached", async () => {
+  const hold = vi.spyOn(waitUntil as unknown as { hold: () => void }, "hold");
+  hold.mockImplementation(() => {
+    throw new Error("waitUntil() called outside an invocation");
+  });
+  const shared = fakeKv();
+  const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+  const { loaderId } = await loadConfined(env, {
+    owner: "prj_wait_until_throws.iterate/",
+    source: site,
+    cacheKey: "c0ffee",
+    ...fakeProducer(),
+  });
+  await expect(warm.get(loaderId)).resolves.toMatchObject({
+    modules: { "worker.js": loaded("export default 1") },
+  });
+  expect(hold).toHaveBeenCalledTimes(1);
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+});
+
 test("an answer that cannot load is never kept or believed: the dead-id recovery asks the producer again", async () => {
   const owner = "prj_kv_unloadable.iterate/";
   const shared = fakeKv();
@@ -571,6 +643,39 @@ test("an answer that cannot load is never kept or believed: the dead-id recovery
   const cold = fakeLoaderEnv({ kv: shared.kv });
   await loadConfined(cold.env, { owner, source: site, cacheKey: "c0ffee", invoke });
   await vi.waitFor(() => expect(produced).toBe(3));
+});
+
+test("a key: producer's answer with a missing import is never kept: the next load runs the producer again and loads once its answer resolves", async () => {
+  const shared = fakeKv();
+  const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+  let produced = 0;
+  const invoke = async () => {
+    produced += 1;
+    // the first answer has an entry, so it reads as loadable, but its import names no file
+    return produced === 1
+      ? {
+          "package.json": '{"main":"worker.js"}',
+          "worker.js": 'import "./missing.js"; export default 1',
+        }
+      : producedFiles(2);
+  };
+  const load = () =>
+    loadConfined(env, {
+      owner: "prj_kv_missing_import.iterate/",
+      source: site,
+      cacheKey: "c0ffee",
+      invoke,
+    });
+  const first = await load();
+  await expect(warm.get(first.loaderId)).rejects.toThrow(/no such file/);
+  await settled();
+  expect(shared).toMatchObject({ puts: [] });
+  const recovered = await load();
+  await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
+    modules: { "worker.js": loaded("export default 2") },
+  });
+  expect(produced).toBe(2);
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
 });
 
 test("an answer over KV's value limit is not kept, and costs no warning: the worker still loads", async () => {

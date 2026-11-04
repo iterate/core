@@ -30,7 +30,12 @@ export class DurableObject<Env = unknown> {
   }
 }
 export const env = {};
-/** The runtime keeps the invocation alive until the promise settles; Node runs it to the end. */
+/** The runtime keeps the invocation alive until the promise settles; Node runs it to the end. A test
+ *  replaces `waitUntil.hold` (vi.spyOn) to see what a module hands over, or to throw as a runtime
+ *  with no invocation to hold would. */
 export function waitUntil(promise: Promise<unknown>): void {
-  void promise;
+  waitUntil.hold(promise);
 }
+waitUntil.hold = (promise: Promise<unknown>): void => {
+  void promise;
+};
