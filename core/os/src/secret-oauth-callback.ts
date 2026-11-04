@@ -6,6 +6,7 @@
 // (src/integrations/verbs.ts). The human goes on to the attempt's `next` when it named one — with
 // the offer to move the account here when another project holds it (Slack). Called by worker.ts.
 
+import { sameOriginPath } from "iterate/lib";
 import { verifyClaims } from "./caller.ts";
 import {
   iterateConfigOf,
@@ -28,6 +29,8 @@ import type { FinishConnectAnswer, FinishConnectInput } from "./integrations/ver
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { isSecretOAuthState } from "./secret-oauth.ts";
 import { callbackPage } from "./callback-page.ts";
+import { signInHref } from "./login-search.ts";
+import { isDocumentNavigation } from "./project-host-sign-in.ts";
 
 /** The human at a callback: their platform session — a browser cookie, or a bearer — or null. */
 export async function callbackAuthorization(
@@ -76,8 +79,14 @@ async function reachesSecretOwner(
 /** A secret's OAuth callback: the provider redirected the human here with `code` and the
  *  platform-signed `state` (secret-oauth.ts) naming the secret's context and the nonce. WHO
  *  completes it is admitted the way a project host admits a visitor — the same platform session (a
- *  browser cookie, or a bearer) — and must reach the owner (`reachesSecretOwner`): a stranger who saw
- *  the authorize URL cannot plant their own provider account into someone else's secret. The
+ *  browser cookie, or a bearer) — and must reach the owner (`reachesSecretOwner`): a stranger cannot
+ *  finish the attempt in their own browser. That does not bind the attempt to the browser that began
+ *  it: a stranger who saw the authorize URL can consent with their own provider account and get a
+ *  member's browser to open the resulting callback, which then stores the stranger's tokens. Only
+ *  `expectAccount` (a reconnect) refuses that today. A browser
+ *  with no session is sent to sign in, with this very callback (code and state) as the sign-in's
+ *  same-origin `next`; it comes back here signed in, and the same rule admits it or not. Nothing
+ *  before that touches the attempt, so the code is still the attempt's when it comes back. The
  *  secret's facet then exchanges the code; a failure is a 4xx page that says why (callback-page.ts),
  *  never a credential. */
 export async function secretOAuthCallback(
@@ -93,6 +102,18 @@ export async function secretOAuthCallback(
   if (!isSecretOAuthState(claims) || claims.exp <= Date.now())
     return callbackPage(400, "This link is not one the platform issued, or it has expired.");
   const authorization = await callbackAuthorization(request, env, addresses);
+  // No session in a browser: sign in here and come back to this callback, the platform's own page
+  // (`sameOriginPath`: never another origin). A bearer that did not verify, or a client that is no
+  // browser, gets the 401.
+  if (!authorization && !request.headers.has("authorization") && isDocumentNavigation(request))
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: signInHref(sameOriginPath(url.pathname + url.search, url.origin), null),
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
+      },
+    });
   if (!authorization)
     return callbackPage(
       401,

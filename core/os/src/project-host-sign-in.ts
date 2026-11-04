@@ -117,8 +117,9 @@ export function isIterateSignInChallenge(header: string | null): boolean {
 
 /** A browser loading a page into its window: GET or HEAD, `Sec-Fetch-Mode: navigate` with
  *  `Sec-Fetch-Dest: document` (a frame, an image or a fetch is not one); a client that sends
- *  neither header is a navigation when it asks for HTML. */
-function isDocumentNavigation(request: RequestShape): boolean {
+ *  neither header is a navigation when it asks for HTML. A secret's OAuth callback sends one to
+ *  sign in too (secret-oauth-callback.ts). */
+export function isDocumentNavigation(request: RequestShape): boolean {
   if (!["GET", "HEAD"].includes(request.method)) return false;
   if (request.headers.get("upgrade")?.toLowerCase() === "websocket") return false;
   const mode = request.headers.get("sec-fetch-mode");
