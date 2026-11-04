@@ -9,7 +9,11 @@
 // checked after every wait for one, and again before a route assembled from several runs. Reads are
 // lazy (only when a resolution needs the table), conditional on the version the isolate holds (an
 // unchanged table answers its version alone) and single-flight per owner, and no call waits on one
-// past its lifetime (`RuleSnapshotCache.get` says why).
+// past its lifetime (`RuleSnapshotCache.get` says why). A call that finds its snapshot past half
+// its lifetime uses it and reads the owner again in the background, once per snapshot, so an
+// isolate that keeps calling waits on no owner that answers within half a lifetime; the read is the
+// one the next call would otherwise wait on, bounded as that call's would be, its failure logged,
+// and its snapshot lasts from when it was sent, as every other does.
 //
 // A CONTEXT'S OWN TABLE: its Durable Object reads it live. Its loaded code, through the stateless
 // entrypoint, reads it as a snapshot like any other table — and a call that snapshot refuses goes
@@ -40,15 +44,20 @@
 // answer from what lives there.
 
 import type { ItxExpression } from "iterate/expression";
-import { releaseRpcSessions } from "iterate/lib";
-import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
+import { errorCode, releaseRpcSessions, reportIssue } from "iterate/lib";
+import {
+  failureKind,
+  isPlatformFailureKind,
+  ONCE_NOW,
+  retryPlatformFailures,
+} from "iterate/platform-retry";
 import type { FetchRouteTable } from "../fetch-routes.ts";
 import { unavailable, unavailableError } from "../unavailable.ts";
 import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
 
 /** How long a snapshot of another context's rule table may be used, from when its read was sent —
- *  the most a context's root is read per active isolate, and the longest a write that takes
- *  something away waits for its answer. */
+ *  half of it is the most often a context's root is read per active isolate, and all of it the
+ *  longest a write that takes something away waits for its answer. */
 export const SNAPSHOT_TTL_MS = 5_000;
 
 /** How long a snapshot of a project's root lasts while the root has published no config, as while
@@ -104,6 +113,8 @@ type SnapshotRead = { answer: Promise<RuleSnapshot>; expiresAt: number };
 export class RuleSnapshotCache {
   readonly #held = new Map<string, RuleSnapshot>();
   readonly #reading = new Map<string, SnapshotRead>();
+  /** The held snapshots the owner has been read behind: each is, once. */
+  readonly #readBehind = new WeakSet<RuleSnapshot>();
   readonly #now: () => number;
 
   constructor({ now = () => Date.now() } = {}) {
@@ -112,14 +123,30 @@ export class RuleSnapshotCache {
 
   /** The owner's table, usable now: the one held while it lasts, else the read in flight, else a
    *  new read naming the version held. A snapshot is used only while it lasts, checked after every
-   *  wait for one — a read in flight may answer after its lifetime, or never (`#answerInTime`). */
+   *  wait for one — a read in flight may answer after its lifetime, or never (`#answerInTime`).
+   *  One held past half its lifetime is used at once, and the owner is read again behind it — once
+   *  for that snapshot, and not while a read is already out. `keepAlive` is handed that read, bounded
+   *  as every read is (`#answerInTime`), so the request that sent it lasts until it answers or its
+   *  lifetime is over (a read whose request ended never answers, the cut-off case). One that fails
+   *  is logged (`logReadBehindFailure`); the held snapshot serves out its lifetime, and the first
+   *  call after it reads again, waiting as any call does: at most two reads per lifetime. */
   async get(
     name: string,
     read: (ifVersion: string | undefined) => Promise<RulesSnapshotAnswer>,
+    keepAlive: (reading: Promise<unknown>) => void = () => {},
   ): Promise<RuleSnapshot> {
     for (let reads = 0; reads < SNAPSHOT_REREADS; reads++) {
       const held = this.#held.get(name);
-      if (held && this.#now() < held.expiresAt) return held;
+      const now = this.#now();
+      if (held && now < held.expiresAt) {
+        const halfLife = (held.readAt + held.expiresAt) / 2;
+        if (now >= halfLife && !this.#readBehind.has(held) && !this.#reading.has(name)) {
+          this.#readBehind.add(held);
+          const behind = this.#answerInTime(name, this.#read(name, read, held));
+          keepAlive(behind.catch((error: unknown) => logReadBehindFailure(name, error)));
+        }
+        return held;
+      }
       const reading = this.#reading.get(name) || this.#read(name, read, held);
       const snapshot = await this.#answerInTime(name, reading);
       if (snapshot && this.#now() < snapshot.expiresAt) return snapshot;
@@ -215,7 +242,24 @@ export class RuleSnapshotCache {
   }
 }
 
+/** The failure of a read behind a held snapshot, which no call waits on: a platform failure logged
+ *  itself (`retryPlatformFailures`: `rule-snapshot.platform-failure-retry`, then `-gave-up`), a
+ *  refusal is an expected outcome (an owner whose project was deleted), at info, and anything else
+ *  is an issue: no caller sees it. */
+function logReadBehindFailure(name: string, error: unknown): void {
+  const kind = failureKind(error);
+  if (isPlatformFailureKind(kind)) return;
+  if (kind === "refused")
+    console.info({
+      event: "rule-snapshot.read-behind-refused",
+      context: name,
+      code: errorCode(error),
+      message: String(error),
+    });
+  else reportIssue("rule-snapshot.read-behind", error, { context: name });
+}
+
 /** THE ISOLATE'S snapshots: every context Durable Object and stateless entrypoint in this isolate
- *  shares them, so the root is read once per isolate per SNAPSHOT_TTL_MS however many contexts in
- *  it resolve through the root's table. */
+ *  shares them, so the root is read at most once per isolate per half a snapshot's lifetime however
+ *  many contexts in it resolve through the root's table. */
 export const ruleSnapshots = new RuleSnapshotCache();

@@ -84,6 +84,7 @@ export function contextReach(args: {
         // that no longer matches.
         (ifVersion) =>
           stubOf(path).rulesSnapshot(ifVersion) as unknown as Promise<RulesSnapshotAnswer>,
+        (reading) => args.ctx.waitUntil(reading),
       ),
     located: (path: string, expression: ItxExpression, callArgs: unknown[], caller: Caller) => {
       const callerThere = { ...caller, platformOrigin: caller.platformOrigin || platformOrigin() };

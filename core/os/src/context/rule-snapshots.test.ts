@@ -2,7 +2,7 @@
 // snapshots; the same across real contexts is test/vitest/os-workers/rule-snapshots.test.ts.
 import { expect, test, vi } from "vitest";
 import { parseItxExpressionPrefix, print } from "iterate/expression";
-import { withTimeout } from "iterate/lib";
+import { codedError, withTimeout } from "iterate/lib";
 import {
   implicitRootsAt,
   namesTakenAway,
@@ -25,7 +25,7 @@ test("a snapshot serves until SNAPSHOT_TTL_MS after its read, then is re-read by
     rules: owner.rules,
     expiresAt: SNAPSHOT_TTL_MS,
   });
-  clock.now = SNAPSHOT_TTL_MS - 1;
+  clock.now = SNAPSHOT_TTL_MS / 2 - 1; // past half its lifetime it is read behind (below)
   await cache.get("/", owner.read);
   clock.now = SNAPSHOT_TTL_MS;
   expect(await cache.get("/", owner.read)).toMatchObject({
@@ -37,6 +37,131 @@ test("a snapshot serves until SNAPSHOT_TTL_MS after its read, then is re-read by
   clock.now = 2 * SNAPSHOT_TTL_MS;
   expect(await cache.get("/", owner.read)).toMatchObject({ rules: [rule("itx.tool ⇒ itx.r2")] });
   expect(owner).toMatchObject({ reads: [undefined, "v1", "v1"] });
+});
+
+test("a busy owner delays no call while the held snapshot lasts: past half its lifetime a call is answered from it at once, and one read behind it, kept alive, replaces it", async () => {
+  const { cache, clock, owner } = setup();
+  const keptAlive: Promise<unknown>[] = [];
+  const keepAlive = (reading: Promise<unknown>) => keptAlive.push(reading);
+  await cache.get("/", owner.read, keepAlive);
+  owner.delayed = true; // from here the owner answers only on `answer()`, a second later
+  const at = (now: number) => {
+    clock.now = now;
+    return withTimeout(cache.get("/", owner.read, keepAlive), 100, `the call at ${now} ms`);
+  };
+  const sentAt = SNAPSHOT_TTL_MS / 2 + 500;
+  expect(await at(sentAt)).toMatchObject({ readAt: 0, expiresAt: SNAPSHOT_TTL_MS });
+  expect(await at(sentAt + 500)).toMatchObject({ readAt: 0 }); // the one read out, shared
+  expect(owner).toMatchObject({ reads: [undefined, "v1"] });
+  expect(keptAlive).toHaveLength(1);
+  clock.now = sentAt + 1_000;
+  owner.answer();
+  await keptAlive[0];
+  // the first snapshot has expired; the one read behind it lasts from when it was sent
+  expect(await at(SNAPSHOT_TTL_MS + 1)).toMatchObject({
+    readAt: sentAt,
+    expiresAt: sentAt + SNAPSHOT_TTL_MS,
+  });
+  expect(owner).toMatchObject({ reads: [undefined, "v1"] });
+});
+
+test("a read behind the held snapshot that fails costs no call and is made once: the snapshot serves out its lifetime, then the next call reads again", async () => {
+  const { cache, clock, owner } = setup();
+  vi.spyOn(console, "error").mockImplementation(() => {}); // the issue (below)
+  await cache.get("/", owner.read);
+  owner.fail = true;
+  const kept: Promise<unknown>[] = [];
+  for (let call = 0; call < 100; call++) {
+    clock.now = SNAPSHOT_TTL_MS / 2 + call * 20;
+    expect(await cache.get("/", owner.read, (reading) => kept.push(reading))).toMatchObject({
+      readAt: 0,
+    });
+    await Promise.all(kept); // caught: no unhandled rejection, and no read out
+  }
+  expect(kept).toHaveLength(1);
+  owner.fail = false;
+  clock.now = SNAPSHOT_TTL_MS;
+  expect(await cache.get("/", owner.read)).toMatchObject({ readAt: SNAPSHOT_TTL_MS });
+  expect(owner).toMatchObject({ reads: [undefined, "v1", "v1"] });
+});
+
+test("a read behind the held snapshot that never answers is given up when its lifetime is over, as a call's is, and kept alive no longer: the next call reads again", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const { cache, clock, owner } = setup();
+    const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await cache.get("/", owner.read);
+    owner.delayed = true; // never answered: the request that sent it is gone
+    const sentAt = SNAPSHOT_TTL_MS / 2;
+    clock.now = sentAt;
+    let keptAlive = false;
+    await cache.get("/", owner.read, (reading) => void reading.then(() => (keptAlive = true)));
+    clock.now = sentAt + SNAPSHOT_TTL_MS;
+    await vi.advanceTimersByTimeAsync(SNAPSHOT_TTL_MS);
+    expect(keptAlive).toBe(true);
+    expect(warns.mock.calls.map(([line]) => line)).toMatchObject([
+      { event: "rule-snapshot.platform-failure-read-deadline", context: "/" },
+    ]);
+    owner.delayed = false;
+    expect(await cache.get("/", owner.read)).toMatchObject({ readAt: sentAt + SNAPSHOT_TTL_MS });
+    expect(owner).toMatchObject({ reads: [undefined, "v1", "v1"] });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test.for([
+  {
+    failure: "an unexpected failure, an issue",
+    error: new Error("owner down"),
+    logged: { error: [{ event: "issue", failureSite: "rule-snapshot.read-behind", context: "/" }] },
+  },
+  {
+    failure: "a refusal, at info",
+    error: codedError("FORBIDDEN", "project prj_unit was deleted"),
+    logged: { info: [{ event: "rule-snapshot.read-behind-refused", code: "FORBIDDEN" }] },
+  },
+  {
+    failure: "a platform failure, by its retry alone",
+    error: Object.assign(new Error("connection lost"), { retryable: true }),
+    logged: {
+      warn: [
+        { event: "rule-snapshot.platform-failure-retry", kind: "disconnected" },
+        { event: "rule-snapshot.platform-failure-gave-up", kind: "disconnected" },
+      ],
+    },
+  },
+])(
+  "a read behind the held snapshot is logged, though no call waits on it: $failure",
+  async ({ error, logged }) => {
+    const { cache, clock, owner } = setup();
+    const lines: Record<string, unknown[]> = { error: [], warn: [], info: [] };
+    for (const level of ["error", "warn", "info"] as const)
+      vi.spyOn(console, level).mockImplementation((line) => void lines[level]!.push(line));
+    await cache.get("/", owner.read);
+    owner.failWith = error;
+    clock.now = SNAPSHOT_TTL_MS / 2;
+    const kept: Promise<unknown>[] = [];
+    expect(await cache.get("/", owner.read, (reading) => kept.push(reading))).toMatchObject({
+      readAt: 0,
+    });
+    await Promise.all(kept);
+    expect(lines).toMatchObject({ error: [], warn: [], info: [], ...logged });
+  },
+);
+
+test("a read behind the held snapshot is used only within its own lifetime: one that answers as that ends is read again", async () => {
+  const { cache, clock, owner } = setup();
+  await cache.get("/", owner.read);
+  owner.delayed = true;
+  clock.now = SNAPSHOT_TTL_MS / 2;
+  await cache.get("/", owner.read); // the read behind it, sent at TTL/2
+  clock.now = SNAPSHOT_TTL_MS + SNAPSHOT_TTL_MS / 2; // it answers just as its own lifetime ends
+  const next = cache.get("/", owner.read);
+  owner.answer();
+  await vi.waitFor(() => expect(owner.reads).toHaveLength(3));
+  owner.answer();
+  expect(await next).toMatchObject({ readAt: SNAPSHOT_TTL_MS + SNAPSHOT_TTL_MS / 2 });
 });
 
 test("a snapshot lasts the lifetime its owner answers, from its read: an unpublished root's is read again after UNPUBLISHED_ROOT_SNAPSHOT_TTL_MS, by version", async () => {
@@ -221,7 +346,7 @@ test("what a change takes away is every row removed or re-pointed but a mask and
 
 /** An owner answering `rulesSnapshot(ifVersion)`, recording each read's version, and a clock:
  *  `delayed` reads answer in order on `answer()`, `onRead` runs as one answers, `resets` fail first,
- *  `ttlMs` is the lifetime it answers. */
+ *  `fail` and `failWith` fail each, `ttlMs` is the lifetime it answers. */
 function setup() {
   const clock = { now: 0 };
   const pending: (() => void)[] = [];
@@ -231,6 +356,7 @@ function setup() {
     ttlMs: undefined as number | undefined,
     reads: [] as (string | undefined)[],
     fail: false,
+    failWith: undefined as unknown,
     resets: 0,
     delayed: false,
     onRead: () => {},
@@ -240,6 +366,7 @@ function setup() {
       if (owner.delayed) await new Promise<void>((resolve) => pending.push(resolve));
       owner.onRead();
       if (owner.fail) throw new Error("owner down");
+      if (owner.failWith !== undefined) throw owner.failWith;
       if (owner.resets-- > 0) throw new Error("Durable Object reset because its code was updated.");
       const ttl = owner.ttlMs === undefined ? {} : { ttlMs: owner.ttlMs };
       return ifVersion === owner.version

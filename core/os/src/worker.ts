@@ -149,7 +149,7 @@ function projectHostRequestTo(
 }
 
 /** A PROJECT HOST'S REQUEST, SERVED WHERE IT ARRIVED, never through the root's Durable Object: the
- *  root's snapshot (context/rule-snapshots.ts — at most one read per isolate per SNAPSHOT_TTL_MS)
+ *  root's snapshot (context/rule-snapshots.ts — at most one read per isolate per half its lifetime)
  *  says where it goes. A fetch route that matches runs its target as a config worker's forward of
  *  it ran, loaded code at `/` with the request's caller stamps stripped (iterate-context.ts
  *  `statelessExpressionFetch`), behind the route's sign-in; any other request goes to the project's
