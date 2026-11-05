@@ -20,12 +20,10 @@
 // clear: `client: { platform: "slack" }` is the deployment's own (ITERATE `integrations.<provider>`,
 // read inside the secret's facet and never copied into the record — the record holds the tokens, and
 // a refresh names the same client). Its redirect URI is the provider's
-// `/api/integrations/<provider>/callback`, whose handler finishes the connection. `next` is where
-// the callback sends the human once the tokens are stored: the platform's origin or the Dash's,
-// nowhere else (`nextUrlOf`).
+// `/api/integrations/<provider>/callback`, whose handler finishes the connection.
 //
-// A PROJECT'S OWN CALLBACK: iterate/api `SecretOAuthOptions.redirect` and `secrets.completeOAuth` say
-// the flow and what `redirect` excludes; context/built-ins.ts `secrets.beginOAuth` composes the URL.
+// Every attempt comes back to the platform's callback; `next` is checked by `nextUrlOf`. The
+// landing contract: iterate/api `SecretOAuthOptions.next`.
 
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
@@ -67,8 +65,6 @@ export type NormalizedSecretOAuthOptions = {
   /** The endpoint that names the account the tokens are for, and the JSON paths of its id and
    *  name (iterate/api `SecretOAuthOptions.account`): null when the token response names it. */
   account: AccountLookup | null;
-  /** The project's own callback page (the header): null for the platform's callback. */
-  redirectUri: string | null;
 };
 
 /** An endpoint within the pin that names an account, called with the new access token, and where
@@ -79,9 +75,7 @@ export type AccountLookup = { url: string; id: string; name: string | null };
  *  back: everything the exchange needs and nothing a browser ever sees. */
 export type PendingSecretOAuth = {
   options: NormalizedSecretOAuthOptions;
-  /** The exact redirect URI the authorize URL carried — the exchange must repeat it (RFC 6749 §4.1.3).
-   *  `options.redirectUri` set means it is the project's own page: the attempt project code may
-   *  complete (`itx.secrets.completeOAuth`); null, only the platform's callback completes it. */
+  /** The exact redirect URI the authorize URL carried — the exchange must repeat it (RFC 6749 §4.1.3). */
   redirectUri: string;
   codeVerifier: string;
   /** Pairs the callback with THIS attempt (a replayed or foreign state cannot complete it). */
@@ -109,8 +103,8 @@ export type SecretOAuthState = {
   start?: string;
 };
 
-/** The platform's redirect URI for a secret's OAuth begun without `redirect` — registered once per
- *  provider. */
+/** The platform's redirect URI for a secret's OAuth with a client of the project's own — registered
+ *  once per provider app. */
 export const SECRET_OAUTH_CALLBACK_PATH = "/.secrets/oauth/callback";
 
 /** The redirect URI path of an attempt on the platform: a deployment app's is its provider's
@@ -121,8 +115,8 @@ export function secretOAuthCallbackPathOf(client: SecretOAuthClient | null): str
   return `/api/integrations/${client.platform}/callback`;
 }
 
-/** `next` checked: an absolute URL on one of `origins` (the platform's and the Dash's), never an
- *  open redirect; null when absent. */
+/** `next` checked: an absolute URL on one of `origins` (the platform's, the Dash's, and the
+ *  project page's the built-in composed), never an open redirect; null when absent. */
 export function nextUrlOf(next: unknown, origins: readonly string[]): string | null {
   if (!next) return null;
   const url = URL.canParse(String(next)) ? new URL(String(next)) : null;
@@ -154,18 +148,6 @@ export function normalizeSecretOAuth(
     throw new Error("secrets.beginOAuth: pass client, or clientId (and clientSecret), not both");
   if (!client && (typeof options.clientId !== "string" || !options.clientId))
     throw new Error("secrets.beginOAuth: clientId (or client) is required");
-  // the project's own page, composed by the built-in (context/built-ins.ts `secrets.beginOAuth`)
-  const redirectUri = typeof options.redirectUri === "string" ? options.redirectUri : null;
-  if (redirectUri && client)
-    throw codedError(
-      "INVALID_INPUT",
-      "secrets.beginOAuth: the deployment's app comes back to the callback registered for it — redirect is for a client of your own",
-    );
-  if (redirectUri && options.next !== undefined)
-    throw codedError(
-      "INVALID_INPUT",
-      "secrets.beginOAuth: with redirect your page is the landing — no next",
-    );
   const urls = options.urls === undefined ? [tokenEndpoint.origin] : originsOf(options.urls);
   if (!urls.includes(tokenEndpoint.origin))
     throw new Error(
@@ -200,7 +182,6 @@ export function normalizeSecretOAuth(
         ? options.expectAccount
         : null,
     account,
-    redirectUri,
   };
 }
 
@@ -267,7 +248,7 @@ function secretOAuthClientOf(value: unknown): SecretOAuthClient | null {
     isRecord(value) && OAUTH_INTEGRATION_PROVIDERS.find((name) => name === value.platform);
   if (platform) return { platform };
   throw new Error(
-    `secrets.beginOAuth: client is { platform } naming one of ${OAUTH_INTEGRATION_PROVIDERS.join(", ")}, got ${JSON.stringify(value)} — a client of your own goes in clientId and clientSecret, with redirect for your page`,
+    `secrets.beginOAuth: client is { platform } naming one of ${OAUTH_INTEGRATION_PROVIDERS.join(", ")}, got ${JSON.stringify(value)} — a client of your own goes in clientId and clientSecret`,
   );
 }
 

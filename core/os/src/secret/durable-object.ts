@@ -178,8 +178,7 @@ type HeldExchange = {
 };
 
 /** THE LAST OAUTH ATTEMPT FINISHED (storage `completed`): its nonce, the cell it sealed and the
- *  material's offset as it stood (`basedOn`), the scopes granted, and whether the attempt was begun
- *  with the project's own redirect. The cell is kept here until its fact lands: a replay answers
+ *  material's offset as it stood (`basedOn`), the scopes granted and the account named. The cell is kept here until its fact lands: a replay answers
  *  it again while it is the material, or while nothing landed since the attempt started (its fact
  *  was refused, and the replay lands it); once a write landed in between, the replay is refused. */
 type Completed = {
@@ -191,7 +190,6 @@ type Completed = {
   basedOn: number | null;
   scopes: string[];
   account?: { id: string; name: string | null };
-  userspaceRedirect?: boolean;
 };
 
 /** A replay of a completed or held attempt with another code than the one it exchanged. */
@@ -727,10 +725,9 @@ export class SecretFacet extends StreamProcessorDurableObject<
   }
 
   /** OAUTH, step one: keep the pending attempt, hand back the start link the human opens
-   *  (secret-oauth-start.ts), or the provider's URL itself for a `redirect` attempt. The `state` is a
-   *  platform-signed claim naming this context, a nonce only this attempt knows and `next`; the
-   *  redirect URI is the platform's callback for the client, or the project's own page
-   *  (`redirectUri`, secret-oauth.ts), which the built-in composed under the project's ingress. A new
+   *  (secret-oauth-start.ts). The `state` is a platform-signed claim naming this context, a nonce
+   *  only this attempt knows and `next`; the redirect URI is the platform's callback for the
+   *  client. A new
    *  attempt replaces an unfinished one; the record, if any, stays until the exchange writes over
    *  it. Nothing lands on any log until the exchange succeeds — an abandoned attempt leaves no
    *  trace. */
@@ -755,26 +752,26 @@ export class SecretFacet extends StreamProcessorDurableObject<
     const { pending, authorizationUrl: providerUrl } = await beginSecretOAuth(
       { ...options, clientId },
       {
-        redirectUri:
-          options.redirectUri || `${platformOrigin}${secretOAuthCallbackPathOf(options.client)}`,
+        redirectUri: `${platformOrigin}${secretOAuthCallbackPathOf(options.client)}`,
         state: await signClaims(state, signingSecret),
         nonce,
       },
     );
     // the platform's callback admits a code only from the browser that opened the start link
-    // (secret-oauth-start.ts); the project's own page is the callback of a `redirect` attempt, and
-    // the human reaches the provider from it
-    const authorizationUrl = options.redirectUri
-      ? providerUrl
-      : await startLinkOf(platformOrigin, { context: state.context, nonce }, state.exp, this.env);
+    // (secret-oauth-start.ts)
+    const authorizationUrl = await startLinkOf(
+      platformOrigin,
+      { context: state.context, nonce },
+      state.exp,
+      this.env,
+    );
     // a new attempt replaces the one in flight: an exchange started before it finds no pending
     // attempt of its nonce when it comes to write (`completeOAuth`'s fence), and its start link
     // finds no provider's URL
     await this.ctx.storage.put<PendingAttempt>("pending", {
       ...pending,
       basedOn: (await this.#material())?.setAt ?? null,
-      // a `redirect` attempt has no start link: the project's page sends the human on
-      authorizationUrl: options.redirectUri ? undefined : providerUrl,
+      authorizationUrl: providerUrl,
     });
     await this.ctx.storage.delete("held");
     // the nonce names this attempt to whoever finishes it (integrations/verbs.ts): the callback
@@ -790,6 +787,33 @@ export class SecretFacet extends StreamProcessorDurableObject<
     if (!pending?.authorizationUrl || pending.nonce !== input?.nonce || pending.until <= Date.now())
       throw codedError("GONE", "no pending attempt matches this link — begin again");
     return pending.authorizationUrl;
+  }
+
+  /** What became of the attempt `nonce` (`itx.secrets.oauthResult`): the scopes granted and the
+   *  account named once it completed and its tokens are still the material; pending while it is in
+   *  flight or held aside (a Slack workspace awaiting its move); unavailable once it expired, was
+   *  replaced, or a write since superseded its tokens. Never a token, a cell or the provider's URL. */
+  async oauthResult(input: {
+    nonce: string;
+  }): Promise<
+    | { status: "pending" }
+    | { status: "complete"; scopes: string[]; account?: { id: string; name: string | null } }
+    | { status: "unavailable" }
+  > {
+    const nonce = String(input?.nonce || "");
+    const pending = await this.ctx.storage.get<PendingAttempt>("pending");
+    if (pending?.nonce === nonce && pending.until > Date.now()) return { status: "pending" };
+    const held = await this.ctx.storage.get<HeldExchange>("held");
+    if (held?.nonce === nonce && held.until > Date.now()) return { status: "pending" };
+    const completed = await this.#completed(nonce, null).catch(() => null);
+    if (!completed) return { status: "unavailable" };
+    // its fact has yet to land: the platform's callback lands it on its replay
+    if (completed.sealed) return { status: "pending" };
+    return {
+      status: "complete",
+      scopes: completed.scopes,
+      account: completed.account,
+    };
   }
 
   /** The OAuth client an attempt exchanges with: the one passed in the clear, or the deployment's
@@ -945,15 +969,9 @@ export class SecretFacet extends StreamProcessorDurableObject<
    *  the one this attempt wrote — so the log can always catch up with a live facet. `held` says the
    *  record was NOT written: iterate's Slack app's token for a
    *  workspace another project holds waits aside (`HeldExchange`) — the same callback again answers
-   *  it again. `viaPlatformCallback` is the platform callback's own mark: project code (a page of
-   *  the project's, through `itx.secrets.completeOAuth`) completes only an attempt begun with its
-   *  own `redirectUri`, never a deployment app's, whose finish routes accounts and offers moves
-   *  (secret-oauth-callback.ts). */
-  async completeOAuth(input: {
-    code: string;
-    nonce: string;
-    viaPlatformCallback?: boolean;
-  }): Promise<{
+   *  it again. Only the platform's callback calls it (secret-oauth-callback.ts, through the
+   *  platform-only `itx.secrets.completeOAuth`). */
+  async completeOAuth(input: { code: string; nonce: string }): Promise<{
     urls: string[];
     refresh?: SecretRefresh["kind"];
     scopes: string[];
@@ -964,23 +982,11 @@ export class SecretFacet extends StreamProcessorDurableObject<
      *  token, and for a replay whose fact landed: nothing lands again. */
     sealed?: SealedSecretCell;
   }> {
-    // project code completes only an attempt begun with its own redirectUri — a replay of one the
-    // platform's callback completed, and a held exchange, are the callback's as much as the attempt
-    const projectCodeRefused = () =>
-      codedError(
-        "FORBIDDEN",
-        "secrets.completeOAuth: this attempt comes back to the platform's callback, which completes it — only an attempt begun with redirect is completed from a page of the project's",
-      );
     const codeHash = await sha256Hex(input.code);
     const replayed = await this.#completed(input.nonce, codeHash);
-    if (replayed) {
-      if (!input.viaPlatformCallback && !replayed.userspaceRedirect) throw projectCodeRefused();
-      const { userspaceRedirect: _userspace, ...answer } = replayed;
-      return answer;
-    }
+    if (replayed) return replayed;
     const kept = await this.ctx.storage.get<HeldExchange>("held");
     if (kept?.nonce === input.nonce && kept.until > Date.now()) {
-      if (!input.viaPlatformCallback) throw projectCodeRefused();
       if (kept.codeHash && kept.codeHash !== codeHash) throw anotherConsent();
       return {
         urls: kept.cell.urls,
@@ -996,7 +1002,6 @@ export class SecretFacet extends StreamProcessorDurableObject<
       await this.ctx.storage.delete("pending");
       throw new Error("the attempt expired — begin again");
     }
-    if (!input.viaPlatformCallback && !pending.options.redirectUri) throw projectCodeRefused();
     // the write lineage as it stands when the exchange starts: what the write is fenced against
     // (a mint or a reseal meanwhile is no write). An attempt begun before a write landed is over,
     // whether or not `written` dropped it.
@@ -1112,7 +1117,6 @@ export class SecretFacet extends StreamProcessorDurableObject<
       basedOn: startedOn,
       scopes,
       account,
-      ...(pending.options.redirectUri && { userspaceRedirect: true }),
     });
     // the attempt is complete: its replay answers from `completed`
     await this.ctx.storage.delete("pending");
@@ -1122,9 +1126,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
   /** What the attempt `nonce` completed, while its cell is still the material (a replay's answer,
    *  and nothing to land) or its fact has yet to land (the cell the replayed fact carries), or
    *  null; one it completed that was written or cleared since is refused, and so is a replay with
-   *  another code than the one it exchanged. Says whether the attempt was begun with the
-   *  project's own `redirectUri` (`completeOAuth` admits project code to that replay alone; a
-   *  record from before the mark is the platform callback's). */
+   *  another code than the one it exchanged. */
   async #completed(
     nonce: string,
     /** The replayed code's SHA-256, or null for the held token's admission, which carries none. */
@@ -1134,7 +1136,6 @@ export class SecretFacet extends StreamProcessorDurableObject<
     refresh?: SecretRefresh["kind"];
     scopes: string[];
     account?: { id: string; name: string | null };
-    userspaceRedirect: boolean;
     /** The cell it wrote, while its fact has yet to land: what the retried fact carries. */
     sealed?: SealedSecretCell;
   } | null> {
@@ -1156,7 +1157,6 @@ export class SecretFacet extends StreamProcessorDurableObject<
       refresh: completed.cell.refresh?.kind,
       scopes: completed.scopes,
       account: completed.account,
-      userspaceRedirect: completed.userspaceRedirect === true,
       ...(!landed && { sealed: completed.cell }),
     };
   }

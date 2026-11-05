@@ -392,20 +392,14 @@ export type SecretOAuthOptions = {
   clientSecret?: string;
   client?: SecretOAuthClient;
   /** Where the platform's callback sends the human once the tokens are stored: an absolute URL on
-   *  the platform's origin or the Dash's. Not with `redirect`, whose page is the landing. */
-  next?: string;
-  /** YOUR OWN CALLBACK, a page of this project's: `routingSlug`'s host (the apex when absent) at
-   *  `path`, composed by the deployment's static rules alone: on the hostname its config pins to
-   *  the project when it has one, else under its ingress, never on a hostname the project claimed,
-   *  so it is the project's own by construction and holds still whatever the project claims or
-   *  releases later. Register that URL at the provider as the app's redirect URI.
-   *  The provider sends the human there with `code` and `state`, and the page, for members only
-   *  (`auth.require`), hands both to `completeOAuth`, which exchanges the code inside the secret's
-   *  facet: the page never sees a token. Without it, the provider sends the human to the platform's
-   *  callback. Not with `client`: the deployment's app comes back to the callback registered for it.
-   *  The URL follows the project: a rename moves the page, and the URI registered at the provider
-   *  must follow. */
-  redirect?: { routingSlug?: string; path: string };
+   *  the platform's origin or the Dash's, or a page of this project's, `{ routingSlug?, path }`:
+   *  `routingSlug`'s host (the apex when absent) at `path` (a query is fine), composed by the
+   *  deployment's static rules alone — on the hostname its config pins to the project when it has
+   *  one, else under its ingress — so it is the project's own by construction. That page reads what
+   *  the consent granted with `oauthResult`. Every attempt comes back to the platform's callback
+   *  first (`oauthCallbackUrl`, the redirect URI to register for a client of your own), which
+   *  completes it only in the browser that opened the start link. */
+  next?: string | { routingSlug?: string; path: string };
   /** How the token endpoint wants the client credential. */
   clientAuth?: ClientAuth;
   scope?: string;
@@ -1256,11 +1250,10 @@ export interface IterateContextApi {
       options: { urls: string[]; refresh?: SecretRefresh; merge?: boolean; public?: string[] },
     ): Promise<{ path: string }>;
     /** OAuth's first tokens: the link to send a human to — the platform's start link, which sends
-     *  their browser on to the provider's consent page (with `redirect`, the provider's authorize URL
-     *  itself). The human opens it in the browser that will consent: the provider redirects them to
-     *  the platform's callback, which completes only in the browser that opened the link (and they
-     *  must be signed in as someone who reaches the secret's owner); the secret's facet exchanges the
-     *  code, `secret/set` lands, and the callback redirects to `next`. The link stays good for an
+     *  their browser on to the provider's consent page. The human opens it in the browser that will
+     *  consent: the provider redirects them to the platform's callback, which completes only in the
+     *  browser that opened the link (and they must be signed in as someone who reaches the secret's
+     *  owner); the secret's facet exchanges the code, `secret/set` lands, and the callback redirects to `next`. The link stays good for an
      *  hour, and opens again on another device. It is short, a random id the platform looks up: the
      *  provider's URL, its `state` and the PKCE challenge stay on the platform. Only from a session,
      *  which carries the platform's origin. `nonce` names this attempt (the callback's signed `state`
@@ -1269,18 +1262,21 @@ export interface IterateContextApi {
       path: string,
       options: SecretOAuthOptions,
     ): Promise<{ authorizationUrl: string; nonce: string }>;
-    /** OAuth's second step, from your own callback page (`beginOAuth`'s `redirect`): the `code`
-     *  and the `state` the provider sent back, as they came. The platform checks the state is one
-     *  it signed for this very secret and still stands, exchanges the code inside the secret's facet
-     *  (the PKCE verifier and the client secret live there), stores the tokens and lands
-     *  `secret/set`. Answers the scopes the provider says it granted. The same callback again, a
-     *  refreshed tab, answers the same and exchanges nothing twice. With `account`, answers the
-     *  account the tokens are for too. An attempt begun without `redirect` (the platform's
-     *  callback, a deployment app's) is refused here. */
-    completeOAuth(
+    /** What became of the attempt `nonce` (`beginOAuth`'s answer), for the page `next` lands on:
+     *  `complete` with the scopes the provider granted and, with `account`, the account the tokens
+     *  are for; `pending` while it is in flight; `unavailable` once it expired, a newer attempt
+     *  replaced it, or a write since superseded its tokens. Never a token. */
+    oauthResult(
       path: string,
-      input: { code: string; state: string },
-    ): Promise<{ path: string; scopes: string[]; account?: { id: string; name: string | null } }>;
+      input: { nonce: string },
+    ): Promise<
+      | { status: "pending" }
+      | { status: "complete"; scopes: string[]; account?: { id: string; name: string | null } }
+      | { status: "unavailable" }
+    >;
+    /** The redirect URI to register at a provider for a client of your own: the platform's one
+     *  callback, `<platform origin>/.secrets/oauth/callback`. Only from a session. */
+    oauthCallbackUrl(): Promise<string>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
     /** Build the authenticated Dash link (`/collect-secret/<slug>`, a page of its own) where a

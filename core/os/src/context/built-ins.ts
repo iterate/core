@@ -69,6 +69,7 @@ import type { LibraryRoots } from "../library.ts";
 import {
   assertSecretPath,
   hmacSha256Hex,
+  isRecord,
   normalizeSecretRecord,
   originsOf,
   publicFieldsOf,
@@ -98,7 +99,11 @@ import {
   matchFetchRoute,
   type FetchRouteTable,
 } from "../fetch-routes.ts";
-import { isSecretOAuthState, normalizeSecretOAuth } from "../secret-oauth.ts";
+import {
+  SECRET_OAUTH_CALLBACK_PATH,
+  isSecretOAuthState,
+  normalizeSecretOAuth,
+} from "../secret-oauth.ts";
 import { unavailableError } from "../unavailable.ts";
 import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
 import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
@@ -935,14 +940,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const assertPlatformCaller = (verb: string) => {
     if (!deps.caller().platform) throw codedError("FORBIDDEN", `itx.${verb} is the platform's own`);
   };
-  /** The URL of a page of this project's — `beginOAuth`'s `redirect` — composed by the rules its
-   *  contract states (core/lib/src/api.ts `SecretOAuthOptions.redirect`). A person's or an
-   *  organization's secret comes back to the platform's callback alone. */
-  const redirectUriOf = async (place: unknown, platformOrigin: string): Promise<string> => {
+  /** The URL of a page of this project's — `beginOAuth`'s `next` as `{ routingSlug?, path }` —
+   *  composed by the rules its contract states (core/lib/src/api.ts `SecretOAuthOptions.next`): so
+   *  it is the project's own by construction, never an open redirect. Only a project's secret has
+   *  pages to land on. */
+  const projectPageUrlOf = async (place: unknown, platformOrigin: string): Promise<string> => {
     if (owner.kind !== "project")
       throw codedError(
         "INVALID_INPUT",
-        "itx.secrets.beginOAuth: redirect names a page of a project's — this secret's owner is not a project, so the platform's callback completes its OAuth",
+        "itx.secrets.beginOAuth: next names a page of a project's — this secret's owner is not a project; pass an absolute URL on the platform's or the Dash's origin",
       );
     const { routingSlug, path } = z
       .strictObject({
@@ -967,7 +973,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     if (!url)
       throw codedError(
         "INVALID_INPUT",
-        `itx.secrets.beginOAuth: redirect ${JSON.stringify(place)} is no page of this project's`,
+        `itx.secrets.beginOAuth: next ${JSON.stringify(place)} is no page of this project's`,
       );
     return url.href;
   };
@@ -1331,13 +1337,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             "itx.secrets.beginOAuth: this call carries no platform origin for the callback URL — call it from a session",
           );
         return onSecretContext(secretPath, ["beginOAuth", secretPath, options], async (secret) => {
-          const { redirect, ...given } = options;
+          // a page of the project's, composed here: the one origin beside the platform's and the
+          // Dash's that `next` may name
+          const page =
+            isRecord(options) && isRecord(options.next)
+              ? await projectPageUrlOf(options.next, platformOrigin)
+              : null;
           const normalized = normalizeSecretOAuth(
-            {
-              ...given,
-              redirectUri: redirect ? await redirectUriOf(redirect, platformOrigin) : undefined,
-            },
-            [platformOrigin, deps.dashOrigin].filter(Boolean),
+            page ? { ...options, next: page } : options,
+            [platformOrigin, deps.dashOrigin, page && new URL(page).origin].filter(
+              (origin): origin is string => Boolean(origin),
+            ),
           );
           await enableSecretRow(secret);
           // a facet call answers `unknown` over the hop: this is SecretFacet.beginOAuth's declared answer
@@ -1364,10 +1374,40 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             (await secretFacet(["oauthStartTarget", { nonce: String(input?.nonce) }])) as string,
         );
       },
-      completeOAuth: (secretPath, input) =>
-        onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
-          // the attempt is the one the signed state names; whose call it is — the platform
-          // callback's, or a page of the project's — is the caller's mark, which no client sets
+      // The redirect URI to register at a provider for a client of the project's own: the
+      // platform's one callback, on the caller's platform origin.
+      oauthCallbackUrl: () => {
+        const platformOrigin = deps.platformOrigin();
+        if (!platformOrigin)
+          throw codedError(
+            "INVALID_INPUT",
+            "itx.secrets.oauthCallbackUrl: this call carries no platform origin — call it from a session",
+          );
+        return Promise.resolve(`${platformOrigin}${SECRET_OAUTH_CALLBACK_PATH}`);
+      },
+      // What a page learns of its attempt once the platform's callback sent the human back to it
+      // (`next`): read off the secret's facet, never a token.
+      oauthResult: (secretPath, input) =>
+        onSecretContext(
+          secretPath,
+          ["oauthResult", secretPath, input],
+          // a facet call answers `unknown` over the hop: SecretFacet.oauthResult's declared answer
+          async () =>
+            (await secretFacet(["oauthResult", { nonce: String(input?.nonce || "") }])) as
+              | { status: "pending" }
+              | {
+                  status: "complete";
+                  scopes: string[];
+                  account?: { id: string; name: string | null };
+                }
+              | { status: "unavailable" },
+        ),
+      // The platform's callback alone (secret-oauth-callback.ts): it admitted the browser that
+      // started the attempt, so no other caller completes one.
+      completeOAuth: (secretPath, input) => {
+        assertPlatformCaller("secrets.completeOAuth");
+        return onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
+          // the attempt is the one the signed state names
           const parsed = z
             .object({ code: z.string().min(1), state: z.string().min(1) })
             .safeParse(input);
@@ -1394,11 +1434,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               "INVALID_INPUT",
               `itx.secrets.completeOAuth: this state was issued for another secret than ${secretPath}`,
             );
-          const attempt = {
-            code,
-            nonce: claims.nonce,
-            viaPlatformCallback: deps.caller().platform === true,
-          };
+          const attempt = { code, nonce: claims.nonce };
           // A facet call answers `unknown` over the hop; this is the platform's own
           // SecretFacet.completeOAuth's declared answer.
           const { urls, refresh, scopes, account, held, sealed } = (await secretFacet([
@@ -1427,7 +1463,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           // what the provider granted, for the connection the callback finishes (integrations/verbs.ts),
           // and the account an `account` endpoint named
           return { path: secretPath, scopes, account };
-        }),
+        });
+      },
       admitHeldToken: (secretPath, input) => {
         assertPlatformCaller("secrets.admitHeldToken");
         return onSecretContext(

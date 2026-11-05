@@ -739,7 +739,6 @@ test("normalizeSecretOAuth: the pin defaults to the token endpoint's origin, mus
     next: null,
     expectAccount: null,
     account: null,
-    redirectUri: null,
   });
   expect(() =>
     normalizeSecretOAuth({ ...PROVIDER, clientId: "c", urls: ["https://api.example"] }),
@@ -964,26 +963,6 @@ test.for([
     row: "next on the Dash",
     options: { clientId: "c", next: "https://dash.example/projects/p/integrations?x=1" },
     becomes: { next: "https://dash.example/projects/p/integrations?x=1" },
-  },
-  {
-    row: "the project's own callback page, kept as given",
-    options: { clientId: "c", redirectUri: "https://github--p.example/callback?x=1" },
-    becomes: { redirectUri: "https://github--p.example/callback?x=1", next: null },
-  },
-  {
-    row: "no redirectUri: the platform's callback",
-    options: { clientId: "c" },
-    becomes: { redirectUri: null },
-  },
-  {
-    row: "a redirectUri with the deployment's app",
-    options: { client: { platform: "slack" }, redirectUri: "https://github--p.example/callback" },
-    refused: /redirect is for a client of your own/,
-  },
-  {
-    row: "a redirectUri beside next",
-    options: { clientId: "c", redirectUri: "https://p.example/cb", next: "https://os.example/" },
-    refused: /your page is the landing/,
   },
   {
     row: "a client beside a clientId",

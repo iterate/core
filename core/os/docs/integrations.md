@@ -8,8 +8,8 @@ An integration is a package the project hosts: two hooks its config repo's `work
 its own (`iterate/sdk` `Integration`, core/configs/default/worker.ts), one answering the requests
 on the package's routing slug, the other every event of the project. A package serves its own
 setup page and webhook on the project's host, keeps its credentials through `itx.secrets`
-(`collectFromUser`, `beginOAuth` with its own `redirect` page, `verifyHmac`, `signHmac`), and the platform knows
-nothing of the provider: github.com/jonastemplestein/iterategrations holds Telegram, a project's
+(`collectFromUser`, `beginOAuth` landing on its own page with `next`, `oauthResult`, `verifyHmac`,
+`signHmac`), and the platform knows nothing of the provider: github.com/jonastemplestein/iterategrations holds Telegram, a project's
 own GitHub App, Monzo, Pebble and more, one folder each, and the guide to writing and publishing
 one (`adding-an-integration.md`). A part of a credential that is no secret — an OAuth client's ID, a
 GitHub App's ID and slug — is a public field of the same secret (`collectFromUser` `fields[].public`,
@@ -26,15 +26,16 @@ sets off land in a facet pushed every commit; the Dash's Integrations page shows
 button a link the Dash composes for this deployment's routing (`iterate/project-ingress`
 `projectPublicUrlOf`).
 
-A package's own OAuth app comes back to a page of the package's: `itx.secrets.beginOAuth(path, {
-…, redirect: { routingSlug, path } })` names it, and the platform composes its URL under the
-deployment's ingress, so it is the project's own by construction; the package registers that URL at
-the provider. The page, for members only (`host.auth.require`), hands the `code` and `state` the
-provider sent back to `itx.secrets.completeOAuth(path, { code, state })`; the exchange runs in the
-secret's facet, so the page never sees a token, and the same callback again (a refreshed tab)
-answers the same and exchanges nothing twice. The platform's callback, `/.secrets/oauth/callback`,
-still completes an attempt begun without `redirect`; project code is refused those
-(src/secret/durable-object.ts `completeOAuth`).
+A package's own OAuth app comes back to the platform's callback, like every other attempt:
+`itx.secrets.oauthCallbackUrl()` answers the one URL to register at the provider
+(`<platform origin>/.secrets/oauth/callback`). `itx.secrets.beginOAuth(path, { …, next: { routingSlug,
+path } })` answers a start link and a `nonce`; the platform composes `next` under the deployment's
+ingress, so it is the project's own page by construction. The human opens the start link, consents,
+and the callback completes the attempt only in the browser that opened it (and only for someone who
+reaches the project), then sends them to that page. The page reads what the consent granted with
+`itx.secrets.oauthResult(path, { nonce })`: `complete` with the scopes and the account an `account`
+endpoint named, `pending`, or `unavailable`; never a token. Project code completes no attempt itself
+(`completeOAuth` is the platform's own), so no page of a project's ever receives a code.
 
 ## The deployment's own apps: Slack, Google, Cloudflare, GitHub, X
 
@@ -102,15 +103,14 @@ link (its row names the project, the flow, the connection and the nonce), the ca
 the project's root (`itx.integrations.acceptConnect`, which only the platform may call; the project
 facet publishes none of a flow's methods). Adding another provider like GitHub is one entry there.
 
-A project's own package cannot add a flow yet: its OAuth app still comes back to its own page
-(`beginOAuth` with `redirect`, above), which binds nothing to the browser. The planned hook, which
-this shape is ready for: the package begins an attempt naming a handler of its own
+A project's own package needs no flow for plain OAuth: `beginOAuth` with `next` (above) gives it
+the start link, the browser binding and the admission. A flow is for a provider that is no plain
+token exchange (GitHub's install, then authorize). When a package needs one, the hook this shape is
+ready for: the package begins an attempt naming a handler of its own
 (`itx.integrations.beginConnect({ connection, authorizationUrl, handler })`, `handler` an itx
 expression like a fetch route's target); the platform stores the provider URL with the attempt,
 answers a start link, signs a `connect` state naming the project's flow, admits the callback the
-same way, and then invokes the handler, as the platform, with `{ params, consentedBy, start }`. The
-provider then calls back to a platform URL (`/api/integrations/<project flow id>/callback` or one
-generic path), which the package registers at the provider instead of its own page.
+same way, and then invokes the handler, as the platform, with `{ params, consentedBy, start }`.
 
 A GitHub installation iterate's App already has connects without GitHub's configure page (which
 asks for sudo and carries no state of ours back): `itx.integrations.connect("github",
