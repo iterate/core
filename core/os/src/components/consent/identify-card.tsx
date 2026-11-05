@@ -1,6 +1,7 @@
 import { useHydrated } from "@tanstack/react-router";
+import { cn } from "cn";
 import { Button } from "../ui/button.tsx";
-import { linkClass, StandalonePage } from "../standalone-page.tsx";
+import { disabledButtonClass, linkClass, StandalonePage } from "../standalone-page.tsx";
 import type { ConsentView } from "../../consent.ts";
 
 /** A client asking only who the person is (the `/oauth2/userinfo` resource): it learns their email
@@ -24,7 +25,10 @@ export function IdentifyCard({ view }: { view: Extract<ConsentView, { kind: "ide
         <Button
           type="submit"
           size="lg"
-          className="h-auto min-h-11 max-w-full shrink px-4 py-2 text-left whitespace-normal"
+          className={cn(
+            "h-auto min-h-11 max-w-full shrink px-4 py-2 text-left whitespace-normal",
+            disabledButtonClass,
+          )}
           disabled={!hydrated}
         >
           Continue as {view.email}

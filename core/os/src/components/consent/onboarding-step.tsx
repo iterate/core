@@ -1,6 +1,8 @@
 import type { FormEvent, Ref } from "react";
 import type { ConsentScope } from "iterate/oauth-scopes";
+import { cn } from "cn";
 import { Button } from "../ui/button.tsx";
+import { disabledButtonClass } from "../standalone-page.tsx";
 import { ConsentActions, StepHeading, type ConsentOutcome } from "./consent-step.tsx";
 import { FullAccess } from "./full-access.tsx";
 import { PermissionChoices } from "./permission-choices.tsx";
@@ -96,7 +98,10 @@ export function OnboardingStep({
         <Button
           type="submit"
           size="lg"
-          className="h-auto min-h-11 max-w-full shrink px-4 py-2 text-left whitespace-normal"
+          className={cn(
+            "h-auto min-h-11 max-w-full shrink px-4 py-2 text-left whitespace-normal",
+            disabledButtonClass,
+          )}
           disabled={fields.disabled}
         >
           Create project and authorize

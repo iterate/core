@@ -65,9 +65,6 @@ export function ProjectChoices({
           </span>
         </Label>
       ))}
-      {projectBound && !projects.length ? (
-        <p className="text-muted-foreground">You do not have access to this app’s project.</p>
-      ) : null}
       {projectBound ? null : (
         <>
           {/* a rule between it and the projects: the one box that is not a project */}

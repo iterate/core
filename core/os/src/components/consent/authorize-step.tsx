@@ -1,6 +1,8 @@
 import { useState, type FormEvent, type Ref } from "react";
 import type { ConsentScope } from "iterate/oauth-scopes";
+import { cn } from "cn";
 import { Button } from "../ui/button.tsx";
+import { disabledButtonClass } from "../standalone-page.tsx";
 import { ConsentActions, StepHeading, type ConsentOutcome } from "./consent-step.tsx";
 import { FullAccess } from "./full-access.tsx";
 import { PermissionChoices } from "./permission-choices.tsx";
@@ -13,7 +15,9 @@ import { ProjectFields } from "./project-fields.tsx";
  *  plain POST to this very authorization URL carrying the choices as `project` and `scope` fields.
  *  Everything Authorize grants is on the screen when it is clicked: "Full access", or the boxes
  *  under it once it is unticked. A client bound to one project, and a request for `admin`, list
- *  their boxes from the start. */
+ *  their boxes from the start. A client bound to a project outside the person's organizations has
+ *  nothing to authorize: the screen says why and what to do in Authorize's place, and Switch
+ *  account (signed-in-account.tsx) and Cancel stay. */
 export function AuthorizeStep({
   headingRef,
   outcome,
@@ -41,6 +45,7 @@ export function AuthorizeStep({
 }) {
   const { draft, disabled, onDraftChange } = fields;
   const [authorizing, setAuthorizing] = useState(false);
+  const outOfReach = projectBound && !projects.length;
   const granted = {
     projects: grantedProjects(projects, selection),
     scopes: scopes.filter((scope) => scope.required || !declined.has(scope.name)),
@@ -74,7 +79,7 @@ export function AuthorizeStep({
             type="submit"
             variant="outline"
             size="lg"
-            className="h-11 self-start px-4"
+            className={cn("h-11 self-start px-4", disabledButtonClass)}
             disabled={disabled}
           >
             Create project
@@ -97,7 +102,11 @@ export function AuthorizeStep({
         <>
           <section className="flex flex-col gap-3">
             <StepHeading ref={headingRef}>Projects</StepHeading>
-            {projectChoices}
+            {outOfReach ? (
+              <p>This app belongs to a project in an organization you are not a member of.</p>
+            ) : (
+              projectChoices
+            )}
           </section>
           <section className="flex flex-col gap-3">
             <h2>Permissions</h2>
@@ -128,24 +137,33 @@ export function AuthorizeStep({
           </FullAccess>
         </section>
       )}
-      <form method="post" onSubmit={() => setAuthorizing(true)}>
-        {granted.projects.map((project) => (
-          <input key={project} type="hidden" name="project" value={project} />
-        ))}
-        {granted.scopes.map((scope) => (
-          <input key={scope.name} type="hidden" name="scope" value={scope.name} />
-        ))}
+      {outOfReach ? (
         <ConsentActions {...outcome}>
-          <Button
-            type="submit"
-            size="lg"
-            className="h-11 px-4"
-            disabled={disabled || authorizing || !granted.projects.length}
-          >
-            Authorize
-          </Button>
+          <p className="basis-full">
+            To authorize it, switch to an account in that organization, or ask one of its owners for
+            an invitation.
+          </p>
         </ConsentActions>
-      </form>
+      ) : (
+        <form method="post" onSubmit={() => setAuthorizing(true)}>
+          {granted.projects.map((project) => (
+            <input key={project} type="hidden" name="project" value={project} />
+          ))}
+          {granted.scopes.map((scope) => (
+            <input key={scope.name} type="hidden" name="scope" value={scope.name} />
+          ))}
+          <ConsentActions {...outcome}>
+            <Button
+              type="submit"
+              size="lg"
+              className={cn("h-11 px-4", disabledButtonClass)}
+              disabled={disabled || authorizing || !granted.projects.length}
+            >
+              Authorize
+            </Button>
+          </ConsentActions>
+        </form>
+      )}
     </>
   );
 }

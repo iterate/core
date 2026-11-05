@@ -1,8 +1,9 @@
 import { useId, useState, type Ref } from "react";
+import { cn } from "cn";
 import { Button } from "../ui/button.tsx";
 import { Field, FieldLabel } from "../ui/field.tsx";
 import { Input } from "../ui/input.tsx";
-import { linkClass } from "../standalone-page.tsx";
+import { disabledButtonClass, linkClass } from "../standalone-page.tsx";
 import type { ConsentView } from "../../consent.ts";
 import { ConsentActions, StepHeading, type ConsentOutcome } from "./consent-step.tsx";
 
@@ -95,7 +96,10 @@ export function SomeoneElseStep({
           type="submit"
           form={formId}
           size="lg"
-          className="h-auto min-h-11 max-w-full shrink px-4 py-2 text-left whitespace-normal"
+          className={cn(
+            "h-auto min-h-11 max-w-full shrink px-4 py-2 text-left whitespace-normal",
+            disabledButtonClass,
+          )}
           disabled={!chosen || submitting}
         >
           Sign {clientName} in as {who} for an hour
