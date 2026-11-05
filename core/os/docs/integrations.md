@@ -77,11 +77,40 @@ leaves the old link nowhere to go. Slack and Google come back to
 facet exchanges the code, then the project facet names the account: Slack's `auth.test` or Google's
 userinfo. GitHub comes back to `/api/integrations/github/callback`, the App's Callback URL. With
 "Request user authorization (OAuth) during installation", GitHub sends the `code` beside the
-`installation_id` in one redirect. Without it, the callback sends the human on to authorize the App.
+`installation_id` in one redirect. Without it, the callback sends the human on to authorize the App,
+with PKCE (S256; the verifier stays with the attempt, so only this attempt's code is exchanged).
 The user token then has to show that the human administers the installation's account: it is their
 own user, or an organization they are an active admin of. After that it is discarded, and the
 secret's `github-app-installation` strategy mints installation tokens instead. With iterate's key it
 mints only for an installation the control plane routes to this project.
+
+Every connect callback admits the same way (`src/connect-callback.ts`), in one order: the signed
+`state` verifies and has not expired; the browser holds the cookie of the start its `state` names
+(a 403 otherwise, before any session, so a forwarded callback gets no sign-in prompt); a platform
+session, and for a signed-out page navigation a redirect to sign in and back to the same callback;
+the session reaches the attempt's owner; the provider did not answer `error`. Only then does the
+completion run.
+
+GitHub is a **connect flow** (`src/integrations/connect-flow.ts`): a connect whose completion is its
+own code, not a secret's token exchange. A flow is two functions in `CONNECT_FLOWS`
+(`src/integrations/flows.ts`): `startTarget`, the provider URL of the attempt in flight, which the
+start hop asks for, and `accept`, which gets the provider's query parameters and who was admitted,
+and answers where the human goes next (back to the provider under a fresh `connectStateOf` state that
+carries the same start, or to the landing). The platform does the rest for every flow: the start
+link (its row names the project, the flow, the connection and the nonce), the callback
+`GET /api/integrations/<flow>/callback`, the admission, and the call into `accept` as the platform on
+the project's root (`itx.integrations.acceptConnect`, which only the platform may call; the project
+facet publishes none of a flow's methods). Adding another provider like GitHub is one entry there.
+
+A project's own package cannot add a flow yet: its OAuth app still comes back to its own page
+(`beginOAuth` with `redirect`, above), which binds nothing to the browser. The planned hook, which
+this shape is ready for: the package begins an attempt naming a handler of its own
+(`itx.integrations.beginConnect({ connection, authorizationUrl, handler })`, `handler` an itx
+expression like a fetch route's target); the platform stores the provider URL with the attempt,
+answers a start link, signs a `connect` state naming the project's flow, admits the callback the
+same way, and then invokes the handler, as the platform, with `{ params, consentedBy, start }`. The
+provider then calls back to a platform URL (`/api/integrations/<project flow id>/callback` or one
+generic path), which the package registers at the provider instead of its own page.
 
 A GitHub installation iterate's App already has connects without GitHub's configure page (which
 asks for sudo and carries no state of ours back): `itx.integrations.connect("github",

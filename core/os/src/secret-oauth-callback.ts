@@ -6,39 +6,18 @@
 // (src/integrations/verbs.ts). The human goes on to the attempt's `next` when it named one — with
 // the offer to move the account here when another project holds it (Slack). Called by worker.ts.
 
-import { sameOriginPath } from "iterate/lib";
-import { verifyClaims } from "./caller.ts";
-import {
-  iterateConfigOf,
-  sessionSigningSecretOf,
-  type PlatformAddresses,
-} from "./iterate-config.ts";
-import { browserAuthorization } from "./browser-client.ts";
 import { contextStub } from "./context-stub.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
-import { ControlPlane, type Reach } from "./control-plane/edge.ts";
+import type { ControlPlane, Reach } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
-import { authorizationForToken } from "./oauth.ts";
+import type { PlatformAddresses } from "./iterate-config.ts";
 import { moveOfferLanding } from "./integrations/connections.ts";
 import type { FinishConnectAnswer, FinishConnectInput } from "./integrations/verbs.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { isSecretOAuthState, secretOwnerOf } from "./secret-oauth.ts";
 import { callbackPage } from "./callback-page.ts";
-import { signInHref } from "./login-search.ts";
-import { isDocumentNavigation } from "./project-host-sign-in.ts";
-import { notStartedHere, startedHere, withStartCleared } from "./secret-oauth-start.ts";
-
-/** The human at a callback: their platform session — a browser cookie, or a bearer — or null. */
-export async function callbackAuthorization(
-  request: Request,
-  env: Env,
-  addresses: PlatformAddresses,
-) {
-  const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
-  return bearer
-    ? authorizationForToken(env, bearer, addresses, "secret-oauth-callback")
-    : browserAuthorization(env, request);
-}
+import { withStartCleared } from "./secret-oauth-start.ts";
+import { admitCallback, callbackStateOf, notIssuedHere, refused } from "./connect-callback.ts";
 
 /** WHO may complete a secret's OAuth: a session that reaches the secret's owner — for a project's
  *  secret, a session reaching that project; for a user's own, that user; for an organization's, a
@@ -58,59 +37,34 @@ async function reachesSecretOwner(
 }
 
 /** A secret's OAuth callback: the provider redirected the human here with `code` and the
- *  platform-signed `state` (secret-oauth.ts) naming the secret's context and the nonce. The browser
- *  binding is checked first (secret-oauth-start.ts `startedHere`, which says why). WHO completes it is then admitted the way a project host admits a visitor — the
- *  same platform session (a browser cookie, or a bearer) — and must reach the owner
- *  (`reachesSecretOwner`). A browser with no session is sent to sign in, with this very callback
- *  (code and state) as the sign-in's same-origin `next`; it comes back here signed in, its start
- *  cookie still set, and the same rules admit it or not. Nothing before that touches the attempt,
- *  so the code is still the attempt's when it comes back. The secret's facet then exchanges the
- *  code; a failure is a 4xx page that says why (callback-page.ts), never a credential. */
+ *  platform-signed `state` (secret-oauth.ts) naming the secret's context and the nonce. The shared
+ *  admission (connect-callback.ts) admits the browser that started it, signed in, reaching the
+ *  secret's owner (`reachesSecretOwner`); the secret's facet then exchanges the code. A failure is a
+ *  4xx page that says why (callback-page.ts), never a credential. */
 export async function secretOAuthCallback(
   request: Request,
   env: Env,
   addresses: PlatformAddresses,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const claims = await verifyClaims(
-    url.searchParams.get("state") ?? "",
-    await sessionSigningSecretOf(iterateConfigOf(env)),
-  );
-  if (!isSecretOAuthState(claims) || claims.exp <= Date.now())
-    return callbackPage(400, "This link is not one the platform issued, or it has expired.");
-  const { start } = claims;
-  if (!start || !(await startedHere(request, start))) return notStartedHere();
-  const authorization = await callbackAuthorization(request, env, addresses);
-  // No session in a browser: sign in here and come back to this callback, the platform's own page
-  // (`sameOriginPath`: never another origin). A bearer that did not verify, or a client that is no
-  // browser, gets the 401.
-  if (!authorization && !request.headers.has("authorization") && isDocumentNavigation(request))
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location: signInHref(sameOriginPath(url.pathname + url.search, url.origin), null),
-        "cache-control": "no-store",
-        "referrer-policy": "no-referrer",
-      },
-    });
-  if (!authorization)
-    return callbackPage(
-      401,
-      "Sign in to iterate in this browser first, then open this link again — the tokens go into a project you must be a member of.",
-    );
+  const claims = await callbackStateOf(url, env, isSecretOAuthState);
+  if (!claims) return notIssuedHere();
   let owner: ReturnType<typeof secretOwnerOf>;
   try {
     owner = secretOwnerOf(claims.context);
   } catch (error) {
     return callbackPage(400, error instanceof Error ? error.message : String(error));
   }
-  if (!(await reachesSecretOwner(new ControlPlane(env), authorization.reach, owner)))
-    return callbackPage(
-      403,
-      `Your session cannot access the secrets of ${owner.kind} ${owner.id}.`,
-    );
-  const denied = url.searchParams.get("error");
-  if (denied) return callbackPage(400, `The provider declined: ${denied}`);
+  // connect-callback.ts: the start cookie, the session (or the sign-in detour), the owner's reach
+  const admitted = await admitCallback(request, env, addresses, {
+    start: claims.start,
+    owner: {
+      name: `the secrets of ${owner.kind} ${owner.id}`,
+      reachedBy: (controlPlane, reach) => reachesSecretOwner(controlPlane, reach, owner),
+    },
+  });
+  if (refused(admitted)) return admitted;
+  const { authorization, start } = admitted;
   const code = url.searchParams.get("code");
   if (!code) return callbackPage(400, "The provider sent no authorization code.");
   const provider = OAUTH_INTEGRATION_PROVIDERS.find(

@@ -11,9 +11,10 @@
 //
 // The link is short: a random id, `<origin>/.secrets/oauth/start/<id>`, whose row in the control
 // plane's key-value table (`oauth_grants`, D1: read-after-write across locations, its rows expiring
-// with the attempt) names the attempt (the secret's context, or GitHub's project and connection) and
+// with the attempt) names the attempt (the secret's context, or a connect flow's project, flow and
+// connection) and
 // its nonce. The row's key is the id's SHA-256, so the table holds no live link. The hop asks the attempt's owner, as the platform, for the provider's
-// URL it composed and stored (`itx.secrets.oauthStartTarget`, `itx.integrations.githubStartTarget`),
+// URL it composed and stored (`itx.secrets.oauthStartTarget`, `itx.integrations.connectStartTarget`),
 // so it follows only a URL the platform wrote, and the provider's URL, its `state` and the PKCE
 // challenge never appear in a link anyone shares. Called by worker.ts.
 
@@ -31,8 +32,9 @@ import { isDocumentNavigation } from "./project-host-sign-in.ts";
 
 export const SECRET_OAUTH_START_PATH = "/.secrets/oauth/start";
 
-/** The claim sets a start re-signs with its `start`: a secret's OAuth state and GitHub's. */
-const STARTABLE_KINDS = ["secret-oauth", "github-connect"];
+/** The claim sets a start re-signs with its `start`: a secret's OAuth state and a connect flow's
+ *  (integrations/connect-flow.ts). */
+const STARTABLE_KINDS = ["secret-oauth", "connect"];
 
 /** `__Host-itx-`: the edge strips it from project requests and from project responses
  *  (browser-client.ts `appCookies`, worker.ts), so project code on the platform origin can neither
@@ -42,10 +44,10 @@ const startCookieNameOf = async (start: string) =>
 const cookieAttributes = "HttpOnly; Secure; SameSite=Lax; Path=/";
 
 /** The attempt a start link names: a secret's (its context, the Durable Object name the callback's
- *  `state` carries too) or a GitHub connect's (its project and connection), with its nonce. */
+ *  `state` carries too) or a connect flow's (its project, flow and connection), with its nonce. */
 export type StartTarget =
   | { context: string; nonce: string }
-  | { projectId: string; connection: string; nonce: string };
+  | { projectId: string; flow: string; connection: string; nonce: string };
 
 /** A start link's row in `oauth_grants`, keyed by its id's SHA-256. */
 const startRowKeyOf = async (id: string) => `oauth-start:${await sha256Hex(id)}`;
@@ -54,7 +56,9 @@ const isStartTarget = (target: unknown): target is StartTarget =>
   isRecord(target) &&
   typeof target.nonce === "string" &&
   (typeof target.context === "string" ||
-    (typeof target.projectId === "string" && typeof target.connection === "string"));
+    (typeof target.projectId === "string" &&
+      typeof target.flow === "string" &&
+      typeof target.connection === "string"));
 
 /** The start link for the attempt `target`, on `platformOrigin`, valid until `exp` (epoch ms): a
  *  fresh random id and its row, which expires with the attempt (the table's purge deletes it). */
@@ -87,8 +91,8 @@ async function startTargetOf(env: Env, id: string): Promise<StartTarget | null> 
 }
 
 /** The provider's URL the link's attempt stored, asked of its owner as the platform: the secret's
- *  context, or the project's root for GitHub. Throws `GONE` when no attempt in flight has the link's
- *  nonce. */
+ *  context, or the project's root for a connect flow. Throws `GONE` when no attempt in flight has
+ *  the link's nonce. */
 async function providerUrlOf(env: Env, link: StartTarget): Promise<string> {
   const platform = { principal: null, platform: true } as const;
   if ("context" in link) {
@@ -110,7 +114,7 @@ async function providerUrlOf(env: Env, link: StartTarget): Promise<string> {
     )) as string;
   }
   // `invoke` is untyped across the DO hop: this is the built-in's own declared answer
-  // (context/built-ins.ts `integrations.githubStartTarget`)
+  // (context/built-ins.ts `integrations.connectStartTarget`)
   return (await contextStub(
     env.ITERATE_CONTEXT,
     DurableObjectNameCodec.address({ projectId: link.projectId, path: "/" }),
@@ -120,7 +124,7 @@ async function providerUrlOf(env: Env, link: StartTarget): Promise<string> {
       "itx",
       "builtins",
       "integrations",
-      ["githubStartTarget", { connection: link.connection, nonce: link.nonce }],
+      ["connectStartTarget", { flow: link.flow, connection: link.connection, nonce: link.nonce }],
     ],
     [],
     platform,

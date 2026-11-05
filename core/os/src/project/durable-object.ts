@@ -29,7 +29,8 @@ import {
   moveOfferConnectionOf,
   type IntegrationScope,
 } from "../integrations/connections.ts";
-import { acceptGithubCallback, githubStartTarget } from "../integrations/github.ts";
+import type { ConnectAnswer, ConnectCallback } from "../integrations/connect-flow.ts";
+import { connectFlowOf } from "../integrations/flows.ts";
 import {
   confirmIntegrationMove,
   connectIntegration,
@@ -58,17 +59,16 @@ export class ProjectFacet extends StreamProcessorDurableObject<
   ItxEntrypointScope
 > {
   /** The processor's reads, the collections `itx.repos`, `itx.workspaces` and `itx.sandboxes`
-   *  reach (library.ts), and the integrations' verbs a Dash form or a callback calls. `acceptGithubCallback` is GitHub's callback's (integrations/github.ts) and acts only
-   *  for its attempt's nonce, which only GitHub's redirect carries. Connect, finish and disconnect
-   *  are not published: `itx.integrations` (context/built-ins.ts) reaches them, and the platform's
-   *  callback finishes through it (secret-oauth-callback.ts, `integrations.finishConnect`). */
+   *  reach (library.ts), and the move offer a Dash form confirms. Connect, finish, a connect flow's
+   *  start and completion, and disconnect are not published: `itx.integrations`
+   *  (context/built-ins.ts) reaches them, and the platform's callbacks finish through it
+   *  (`integrations.finishConnect`, `integrations.acceptConnect`). */
   static override publicMethods = [
     ...super.publicMethods,
     "repos",
     "workspaces",
     "sandboxes",
     "confirmIntegrationMove",
-    "acceptGithubCallback",
   ];
 
   processor = new ProjectProcessor(
@@ -360,21 +360,26 @@ export class ProjectFacet extends StreamProcessorDurableObject<
     );
   }
 
-  /** The GitHub URL a connect's start link sends the browser on to: the platform's start hop alone
-   *  (context/built-ins.ts `integrations.githubStartTarget`), so not published. */
-  githubStartTarget(input: { connection: string; nonce: string }): Promise<string> {
-    return this.#onConnection("github", input?.connection, () =>
-      githubStartTarget(this.#integrationScope(), {
+  /** A connect flow's provider URL its start link sends the browser on to (integrations/
+   *  connect-flow.ts): the platform's start hop alone (context/built-ins.ts
+   *  `integrations.connectStartTarget`), so not published. */
+  connectStartTarget(input: { flow: string; connection: string; nonce: string }): Promise<string> {
+    const flow = connectFlowOf(input?.flow);
+    return this.#onConnection(input.flow, input?.connection, () =>
+      flow.startTarget(this.#integrationScope(), {
         connection: assertConnectionName(input?.connection),
         nonce: String(input?.nonce),
       }),
     );
   }
 
-  /** GitHub sent the human back (integrations/github.ts `githubCallbackRoute`). */
-  acceptGithubCallback(input: Parameters<typeof acceptGithubCallback>[1]) {
-    return this.#onConnection("github", input?.connection, () =>
-      acceptGithubCallback(this.#integrationScope(), {
+  /** A connect flow's provider sent the admitted human back: the flow's own completion, the
+   *  platform's callback alone (context/built-ins.ts `integrations.acceptConnect`), so not
+   *  published. */
+  acceptConnect(input: ConnectCallback & { flow: string }): Promise<ConnectAnswer> {
+    const flow = connectFlowOf(input?.flow);
+    return this.#onConnection(input.flow, input?.connection, () =>
+      flow.accept(this.#integrationScope(), {
         ...input,
         connection: assertConnectionName(input?.connection),
       }),

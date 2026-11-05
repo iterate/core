@@ -83,6 +83,7 @@ import {
   type HeldToken,
 } from "../integrations/connections.ts";
 import { sendEmail } from "../integrations/email.ts";
+import type { ConnectAnswer, ConnectCallback } from "../integrations/connect-flow.ts";
 import type {
   ConnectInput,
   FinishConnectAnswer,
@@ -212,9 +213,13 @@ type PlatformIntegrationsVerbs = {
     input: ConnectInput & { connectToProject: NonNullable<ConnectionAttempt["connectToProject"]> },
   ): Promise<{ authorizationUrl: string }>;
   finishConnect(input: FinishConnectInput): Promise<FinishConnectAnswer>;
-  /** The platform's start hop (secret-oauth-start.ts): the GitHub URL of the connect in flight whose
-   *  nonce its link names, on the project's root. You never call it. */
-  githubStartTarget(input: { connection: string; nonce: string }): Promise<string>;
+  /** The platform's start hop (secret-oauth-start.ts): the provider's URL of the connect flow's
+   *  attempt in flight whose nonce its link names (integrations/connect-flow.ts), on the project's
+   *  root. You never call it. */
+  connectStartTarget(input: { flow: string; connection: string; nonce: string }): Promise<string>;
+  /** The platform's connect-flow callback, once it admitted the human (integrations/connect-flow.ts):
+   *  the flow's own completion, on the project's root. You never call it. */
+  acceptConnect(input: ConnectCallback & { flow: string }): Promise<ConnectAnswer>;
   disconnect(
     provider: IntegrationProvider,
     connection: string,
@@ -1995,18 +2000,27 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           ["connectIntegration", connect, connectToProject],
         ]) as Promise<{ authorizationUrl: string }>;
       },
-      githubStartTarget: async (input) => {
-        assertPlatformCaller("integrations.githubStartTarget");
-        if (path !== owner.rootPath)
+      connectStartTarget: async (input) => {
+        assertPlatformCaller("integrations.connectStartTarget");
+        if (projectId === GLOBAL_PROJECT_ID || path !== owner.rootPath)
           throw codedError(
             "INVALID_CONTEXT",
-            "itx.integrations.githubStartTarget: the project's root",
+            "itx.integrations.connectStartTarget: a project's root",
           );
         // a facet call answers `unknown` over the hop: this is the project facet's own declared
-        // answer (integrations/github.ts `githubStartTarget`)
-        return (await deps.callFacetAsPlatform(integrationsFacet("githubStartTarget"), [
-          ["githubStartTarget", input],
+        // answer (integrations/connect-flow.ts `ConnectFlow.startTarget`)
+        return (await deps.callFacetAsPlatform("project", [
+          ["connectStartTarget", input],
         ])) as string;
+      },
+      acceptConnect: async (input) => {
+        assertPlatformCaller("integrations.acceptConnect");
+        if (projectId === GLOBAL_PROJECT_ID || path !== owner.rootPath)
+          throw codedError("INVALID_CONTEXT", "itx.integrations.acceptConnect: a project's root");
+        // the project facet's own declared answer (integrations/connect-flow.ts `ConnectFlow.accept`)
+        return (await deps.callFacetAsPlatform("project", [
+          ["acceptConnect", input],
+        ])) as ConnectAnswer;
       },
       finishConnect: async (input) => {
         assertPlatformCaller("integrations.finishConnect");

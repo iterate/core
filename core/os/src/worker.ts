@@ -28,7 +28,9 @@ import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { SECRET_OAUTH_START_PATH, secretOAuthStart } from "./secret-oauth-start.ts";
 import { receiveEmail } from "./integrations/email.ts";
 import { slackWebhookRoute } from "./integrations/slack.ts";
-import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.ts";
+import { githubWebhookRoute } from "./integrations/github.ts";
+import { connectCallbackPathOf, connectFlowCallback } from "./integrations/connect-flow.ts";
+import { CONNECT_FLOWS } from "./integrations/flows.ts";
 import { mcpWebhookRoute } from "./integrations/mcp.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { unavailableAnswer } from "./unavailable.ts";
@@ -476,7 +478,7 @@ async function routeRequest(
   // this origin.
   if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
 
-  // The start link of a secret's OAuth and of a GitHub connect (secret-oauth-start.ts).
+  // The start link of a secret's OAuth and of a connect flow (secret-oauth-start.ts).
   if (
     url.pathname === SECRET_OAUTH_START_PATH ||
     url.pathname.startsWith(`${SECRET_OAUTH_START_PATH}/`)
@@ -492,12 +494,18 @@ async function routeRequest(
     )
   )
     return secretOAuthCallback(request, env, addresses);
-  // Slack's, GitHub's and MCP servers' webhooks and GitHub's connect callback (src/integrations/).
+  // A connect flow's callback (integrations/connect-flow.ts): GitHub's App's, the URL it is
+  // registered with.
+  const flow = Object.entries(CONNECT_FLOWS).find(
+    ([name]) => url.pathname === connectCallbackPathOf(name),
+  );
+  if (flow && request.method === "GET")
+    return connectFlowCallback(request, env, addresses, flow[0], flow[1]);
+  // Slack's, GitHub's and MCP servers' webhooks (src/integrations/).
   const integrationResponse =
     (await slackWebhookRoute(request, env)) ||
     (await githubWebhookRoute(request, env)) ||
-    (await mcpWebhookRoute(request, env)) ||
-    (await githubCallbackRoute(request, env, addresses));
+    (await mcpWebhookRoute(request, env));
   if (integrationResponse) return integrationResponse;
   const identity = await identityResponse(request, env);
   if (identity) return identity;
