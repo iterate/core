@@ -302,6 +302,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#iterateConfig.deployId;
   }
 
+  /** A creation's head start (session.ts `startCreationEarly`): this object started, and one call of
+   *  its own `ItxEntrypoint` made and dropped. That entrypoint's first call from a new context waits
+   *  before it runs (0.24–0.47 s on prd, measured 2026-11-04) and a later one runs at once, so a
+   *  facet's first `itx` call then finds it warm. Records nothing and bears no context, as `version`
+   *  does. Native RPC only. */
+  async warm(): Promise<void> {
+    // `ctx.exports` types the loopback as a plain Fetcher; it is this worker's own `ItxEntrypoint`,
+    // whose `get()` answers the context's scope as a Workers-RPC stub, disposable like every stub.
+    const scope = await (this.#itxEntrypoint as unknown as { get(): Promise<Disposable> }).get();
+    scope[Symbol.dispose]();
+  }
+
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
    *  ever reached `getByName`; an id-addressed instance fails right here, before it can touch anything. */
   readonly #durableObjectAddress = iterateContextAddressOf(this.ctx);

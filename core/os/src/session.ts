@@ -350,11 +350,13 @@ const EARLY_CONTEXTS = ["/repos", "/repos/config", INTEGRATIONS_PATH];
 
 /** THE CREATION'S HEAD START, begun beside the root while it starts, each step one the saga does
  *  again and finds done. A brand-new context's first call waits for Cloudflare's worldwide check of
- *  its name and for an isolate to load this Worker (0.86–0.92 s each, measured 2026-11-04), so each
- *  context the saga creates is called once now with `version`, which records nothing and births no
- *  context. The config repo's Artifacts repo, the slowest step (1.25 s), is created now too: its
- *  name derives from the path (context/cf-artifacts.ts), and the repo's own provisioning then finds
- *  it there. In the background, and never fatal: the saga's own steps are the guarantee. */
+ *  its name and for an isolate to load this Worker (0.86–0.92 s each, measured 2026-11-04), and a
+ *  facet's first `itx` call there waits again for the context's `ItxEntrypoint`. So the root and
+ *  each context the saga creates are called once now with `warm`, which pays both and records
+ *  nothing (iterate-context-durable-object.ts). The config repo's Artifacts repo, the slowest step
+ *  (1.25 s), is created now too: its name derives from the path (context/cf-artifacts.ts), and the
+ *  repo's own provisioning then finds it there. In the background, and never fatal: the saga's own
+ *  steps are the guarantee. */
 function startCreationEarly(input: SessionInput, projectId: string): void {
   const early = (step: string, work: Promise<unknown>) =>
     input.waitUntil(
@@ -367,12 +369,13 @@ function startCreationEarly(input: SessionInput, projectId: string): void {
         });
       }),
     );
-  for (const path of EARLY_CONTEXTS)
+  // the root too: the creation starts it anyway, and its project facet calls `itx` first
+  for (const path of ["/", ...EARLY_CONTEXTS])
     early(
       path,
       input.contextNamespace
         .getByName(DurableObjectNameCodec.address({ projectId, path }).name)
-        .version(),
+        .warm(),
     );
   if (!input.artifacts) return;
   const artifacts = projectScopedArtifacts({ namespace: input.artifacts, projectId });
