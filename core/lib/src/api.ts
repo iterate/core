@@ -1255,12 +1255,15 @@ export interface IterateContextApi {
        *  (`SecretCatalogEntry.public`). A merge keeps the ones the catalog has, under the new. */
       options: { urls: string[]; refresh?: SecretRefresh; merge?: boolean; public?: string[] },
     ): Promise<{ path: string }>;
-    /** OAuth's first tokens: the provider's authorize URL to send a human to. The provider
-     *  redirects them to the platform's callback (they must be signed in as someone who reaches the
-     *  secret's owner), the secret's facet exchanges the code, `secret/set` lands, and the callback
-     *  redirects to `next`. Only from a session, which carries the platform's origin. `nonce`
-     *  names this attempt (the callback's signed `state` carries it); a later `beginOAuth` on the
-     *  same path replaces it. */
+    /** OAuth's first tokens: the link to send a human to — the platform's start link, which sends
+     *  their browser on to the provider's consent page (with `redirect`, the provider's authorize URL
+     *  itself). The human opens it in the browser that will consent: the provider redirects them to
+     *  the platform's callback, which completes only in the browser that opened the link (and they
+     *  must be signed in as someone who reaches the secret's owner); the secret's facet exchanges the
+     *  code, `secret/set` lands, and the callback redirects to `next`. The link stays good for an
+     *  hour, and opens again on another device. Only from a session, which carries the platform's
+     *  origin. `nonce` names this attempt (the callback's signed `state` carries it); a later
+     *  `beginOAuth` on the same path replaces it. */
     beginOAuth(
       path: string,
       options: SecretOAuthOptions,
@@ -1315,7 +1318,8 @@ export interface IterateContextApi {
    *  (`session.user`) — and a provider THROUGH THE DEPLOYMENT'S OWN APP there (`session.info()`'s
    *  `iterateAppProviders`; a project's own app at a provider is a package the project hosts,
    *  iterate/sdk `Integration`, which registers itself in `iterate/integrations`). `connect` answers
-   *  where to send the human, and the connection's name; again for one that exists asks for more
+   *  where to send the human (the platform's start link, as `secrets.beginOAuth`'s), and the
+   *  connection's name; again for one that exists asks for more
    *  `scopes` on the same account. GitHub's `installationId` connects an installation the App
    *  already has, without GitHub's configure page. On a project, `account` connects one of YOUR
    *  accounts instead — the address the provider gives it, as `session.user`'s

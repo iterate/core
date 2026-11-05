@@ -1,5 +1,6 @@
 // secret-oauth.ts — how a secret obtains its FIRST OAuth tokens, the pure half. `itx.secrets.beginOAuth(path,
-// options)` sends a human through the provider's consent page; the provider redirects to the
+// options)` sends a human through the platform's start link (secret-oauth-start.ts, which binds the
+// consent to their browser) to the provider's consent page; the provider redirects to the
 // platform's one callback (`SECRET_OAUTH_CALLBACK_PATH`, served by worker.ts) with a code; the
 // secret's facet exchanges the code (PKCE, RFC 7636) and becomes an ordinary `oauth-refresh-token`
 // secret — everything in secrets.ts applies from then on, and no code but that facet ever holds a
@@ -101,6 +102,10 @@ export type SecretOAuthState = {
   exp: number;
   /** Where the callback redirects once the tokens are stored. */
   next?: string | null;
+  /** The start that sent this browser to the provider (secret-oauth-start.ts): the callback admits
+   *  the code only from the browser holding that start's cookie. Absent from the state `beginOAuth`
+   *  signs, present in the one each start re-signs. */
+  start?: string;
 };
 
 /** The platform's redirect URI for a secret's OAuth begun without `redirect` — registered once per
@@ -371,6 +376,7 @@ export function isSecretOAuthState(claims: unknown): claims is SecretOAuthState 
     typeof claims.context === "string" &&
     typeof claims.nonce === "string" &&
     typeof claims.exp === "number" &&
-    typeof (claims.next ?? "") === "string"
+    typeof (claims.next ?? "") === "string" &&
+    typeof (claims.start ?? "") === "string"
   );
 }

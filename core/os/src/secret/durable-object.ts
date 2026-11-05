@@ -49,7 +49,8 @@ import type {
   SealedSecretCell,
 } from "iterate/api";
 import { codedError, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
-import { signClaims, verifyAdminSecret } from "../caller.ts";
+import { sha256Hex, signClaims, verifyAdminSecret } from "../caller.ts";
+import { startLinkOf } from "../secret-oauth-start.ts";
 import {
   iterateConfigOf,
   atRestKeysOf,
@@ -164,6 +165,8 @@ type HeldExchange = {
   cell: SealedSecretCell;
   basedOn: number | null;
   nonce: string;
+  /** The SHA-256 of the code it exchanged (`Completed.codeHash`). */
+  codeHash?: string;
   scopes: string[];
   until: number;
   team: { id: string; name: string };
@@ -176,12 +179,18 @@ type HeldExchange = {
  *  was refused, and the replay lands it); once a write landed in between, the replay is refused. */
 type Completed = {
   nonce: string;
+  /** The SHA-256 of the code it exchanged: a replay with another code is another consent. Absent
+   *  on a record written before it was kept, whose replay any code answers. */
+  codeHash?: string;
   cell: SealedSecretCell;
   basedOn: number | null;
   scopes: string[];
   account?: { id: string; name: string | null };
   userspaceRedirect?: boolean;
 };
+
+/** A replay of a completed or held attempt with another code than the one it exchanged. */
+const anotherConsent = () => new Error("another consent completed this attempt — begin again");
 
 /** THE LENDS of this secret (storage `lends`), by lend id: the project it is lent to (or
  *  `every-project`) and the path it is lent as there. A revoked lend is gone. A lend to every project
@@ -712,7 +721,8 @@ export class SecretFacet extends StreamProcessorDurableObject<
     return Buffer.from(node, "hex");
   }
 
-  /** OAUTH, step one: keep the pending attempt, hand back the authorize URL. The `state` is a
+  /** OAUTH, step one: keep the pending attempt, hand back the start link the human opens
+   *  (secret-oauth-start.ts), or the provider's URL itself for a `redirect` attempt. The `state` is a
    *  platform-signed claim naming this context, a nonce only this attempt knows and `next`; the
    *  redirect URI is the platform's callback for the client, or the project's own page
    *  (`redirectUri`, secret-oauth.ts), which the built-in composed under the project's ingress. A new
@@ -736,15 +746,22 @@ export class SecretFacet extends StreamProcessorDurableObject<
     const { clientId, clientSecret } = this.#oauthClientOf(options);
     // a placeholder that cannot resolve is refused now, before a human is sent to consent
     await this.#clientSecretOf(clientSecret, options.tokenEndpoint);
-    const { pending, authorizationUrl } = await beginSecretOAuth(
+    const signingSecret = await sessionSigningSecretOf(config);
+    const { pending, authorizationUrl: providerUrl } = await beginSecretOAuth(
       { ...options, clientId },
       {
         redirectUri:
           options.redirectUri || `${platformOrigin}${secretOAuthCallbackPathOf(options.client)}`,
-        state: await signClaims(state, await sessionSigningSecretOf(config)),
+        state: await signClaims(state, signingSecret),
         nonce,
       },
     );
+    // the platform's callback admits a code only from the browser that opened the start link
+    // (secret-oauth-start.ts); the project's own page is the callback of a `redirect` attempt, and
+    // the human reaches the provider from it
+    const authorizationUrl = options.redirectUri
+      ? providerUrl
+      : await startLinkOf(platformOrigin, providerUrl, state.exp, signingSecret);
     // a new attempt replaces the one in flight: an exchange started before it finds no pending
     // attempt of its nonce when it comes to write (`completeOAuth`'s fence)
     await this.ctx.storage.put<PendingAttempt>("pending", {
@@ -936,7 +953,8 @@ export class SecretFacet extends StreamProcessorDurableObject<
         "FORBIDDEN",
         "secrets.completeOAuth: this attempt comes back to the platform's callback, which completes it — only an attempt begun with redirect is completed from a page of the project's",
       );
-    const replayed = await this.#completed(input.nonce);
+    const codeHash = await sha256Hex(input.code);
+    const replayed = await this.#completed(input.nonce, codeHash);
     if (replayed) {
       if (!input.viaPlatformCallback && !replayed.userspaceRedirect) throw projectCodeRefused();
       const { userspaceRedirect: _userspace, ...answer } = replayed;
@@ -945,6 +963,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
     const kept = await this.ctx.storage.get<HeldExchange>("held");
     if (kept?.nonce === input.nonce && kept.until > Date.now()) {
       if (!input.viaPlatformCallback) throw projectCodeRefused();
+      if (kept.codeHash && kept.codeHash !== codeHash) throw anotherConsent();
       return {
         urls: kept.cell.urls,
         refresh: kept.cell.refresh?.kind,
@@ -1053,6 +1072,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
         cell: await this.#sealCell(record),
         basedOn: startedOn,
         nonce: input.nonce,
+        codeHash,
         scopes,
         until,
         team: slackTeam,
@@ -1069,6 +1089,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
     const sealed = await this.seal(record);
     await this.ctx.storage.put<Completed>("completed", {
       nonce: input.nonce,
+      codeHash,
       cell: sealed,
       basedOn: startedOn,
       scopes,
@@ -1082,10 +1103,15 @@ export class SecretFacet extends StreamProcessorDurableObject<
 
   /** What the attempt `nonce` completed, while its cell is still the material (a replay's answer,
    *  and nothing to land) or its fact has yet to land (the cell the replayed fact carries), or
-   *  null; one it completed that was written or cleared since is refused. Says whether the attempt was begun with the
+   *  null; one it completed that was written or cleared since is refused, and so is a replay with
+   *  another code than the one it exchanged. Says whether the attempt was begun with the
    *  project's own `redirectUri` (`completeOAuth` admits project code to that replay alone; a
    *  record from before the mark is the platform callback's). */
-  async #completed(nonce: string): Promise<{
+  async #completed(
+    nonce: string,
+    /** The replayed code's SHA-256, or null for the held token's admission, which carries none. */
+    codeHash: string | null,
+  ): Promise<{
     urls: string[];
     refresh?: SecretRefresh["kind"];
     scopes: string[];
@@ -1096,6 +1122,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
   } | null> {
     const completed = await this.ctx.storage.get<Completed>("completed");
     if (completed?.nonce !== nonce) return null;
+    if (codeHash && completed.codeHash && completed.codeHash !== codeHash) throw anotherConsent();
     const current = await this.#material();
     // landed: the current lineage began with the cell this attempt sealed (the log says so, not a
     // stamp), and the replay lands nothing — a second set of the cell would roll back a mint since;
@@ -1137,7 +1164,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
   async admitHeldToken(input: {
     nonce: string;
   }): Promise<{ urls: string[]; refresh?: SecretRefresh["kind"]; sealed?: SealedSecretCell }> {
-    const replayed = await this.#completed(input.nonce);
+    const replayed = await this.#completed(input.nonce, null);
     if (replayed)
       return { urls: replayed.urls, refresh: replayed.refresh, sealed: replayed.sealed };
     const held = await this.ctx.storage.get<HeldExchange>("held");
@@ -1162,6 +1189,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
     });
     await this.ctx.storage.put<Completed>("completed", {
       nonce: input.nonce,
+      codeHash: held.codeHash,
       cell: sealed,
       basedOn: held.basedOn,
       scopes: held.scopes,

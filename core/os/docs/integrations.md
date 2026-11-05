@@ -58,15 +58,18 @@ const { authorizationUrl, connection } = await itx.integrations.connect("slack",
   connection: "acme", // optional: a fresh name when absent
   next: "https://dash.iterate.com/…",
 });
-// the human consents; the provider's callback stores the credential, names the account,
-// routes it (iterate's app), appends slack/connected on / and redirects to `next`
+// the human opens authorizationUrl (the platform's start link) and consents in that browser; the
+// provider's callback stores the credential, names the account, routes it (iterate's app),
+// appends slack/connected on / and redirects to `next`
 await itx.integrations.disconnect("slack", "acme");
 ```
 
 `itx.integrations.connect` and `disconnect` are the one way to connect and disconnect: they run on the
 owner's root (a project's `/`, a person's `/users/<id>`), and the `project` and `account` facets
 publish neither method they call (`src/context/built-ins.ts`). The callback finishes the connection,
-so an agent or the CLI that starts a connect needs no second call. Slack and Google come back to
+so an agent or the CLI that starts a connect needs no second call. The link `connect` answers is the
+platform's start link (`src/secret-oauth-start.ts`): it sends the browser on to the provider, and
+each callback completes only in the browser that opened it. Slack and Google come back to
 `/api/integrations/<provider>/callback`, the URL iterate's apps are registered with. The secret
 facet exchanges the code, then the project facet names the account: Slack's `auth.test` or Google's
 userinfo. GitHub comes back to `/api/integrations/github/callback`, the App's Callback URL. With

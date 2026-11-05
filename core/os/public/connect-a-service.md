@@ -454,12 +454,12 @@ async (itx) =>
 
 It returns `{ authorizationUrl }`. Say, with the link on a line of its own:
 
-> Open this link and approve access:
+> Open this link in the browser where you approve access:
 >
 > <authorizationUrl>
 >
-> It comes back to iterate, and the page says whether it worked. If it says anything but **Done**,
-> send me what it says.
+> It comes back to iterate in the same browser, and the page says whether it worked. If it says
+> anything but **Done**, send me what it says.
 
 Then wait for the tokens the way 3c waits, with `path` set to `/secrets/<service>` (the path you
 passed to `beginOAuth`), without the `list()` check, and with a `timeoutMs` of up to 110_000 if your client
@@ -548,5 +548,6 @@ Read the error first: most say what's wrong.
 | `The operation timed out.`                                                            | Run the same script once more.                                                                                                                                                                                                                                      |
 | `The RPC receiver does not implement the method "…"`                                  | That name isn't there: check it against `listTools()` or `operations()`, and that you awaited the connection.                                                                                                                                                       |
 | The callback page says `This link is not one the platform issued, or it has expired.` | The consent link works for an hour. Run D2 again and send the new link.                                                                                                                                                                                             |
+| The callback page says `This sign-in was not started in this browser`                 | The person approved in another browser than the one that opened the link (a phone app can hand over to the system browser). Ask them to open the same link again in the browser where they approve.                                                                 |
 | The callback page says `no pending attempt matches this callback — begin again`       | Each D2 replaces the link before it, and the person opened an older one. Send the newest link again, and do not run D2 while they are still on one.                                                                                                                 |
 | The person pasted a key into the chat                                                 | Tell them to revoke it and make a new one, then send the collection link.                                                                                                                                                                                           |

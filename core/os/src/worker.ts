@@ -25,6 +25,7 @@ import { identityResponse } from "./identity.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { SECRET_OAUTH_CALLBACK_PATH, secretOAuthCallbackPathOf } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
+import { SECRET_OAUTH_START_PATH, secretOAuthStart } from "./secret-oauth-start.ts";
 import { receiveEmail } from "./integrations/email.ts";
 import { slackWebhookRoute } from "./integrations/slack.ts";
 import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.ts";
@@ -475,6 +476,8 @@ async function routeRequest(
   // this origin.
   if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
 
+  // The start link of a secret's OAuth and of a GitHub connect (secret-oauth-start.ts).
+  if (url.pathname === SECRET_OAUTH_START_PATH) return secretOAuthStart(request, env);
   // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
   // with the code. Its own reserved path, `/.secrets/`, beside `/version` — and an integration's,
   // the URL iterate's Slack app and Google client are registered with.

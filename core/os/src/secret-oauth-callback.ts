@@ -31,6 +31,7 @@ import { isSecretOAuthState } from "./secret-oauth.ts";
 import { callbackPage } from "./callback-page.ts";
 import { signInHref } from "./login-search.ts";
 import { isDocumentNavigation } from "./project-host-sign-in.ts";
+import { notStartedHere, startedHere, withStartCleared } from "./secret-oauth-start.ts";
 
 /** The human at a callback: their platform session — a browser cookie, or a bearer — or null. */
 export async function callbackAuthorization(
@@ -77,18 +78,14 @@ async function reachesSecretOwner(
 }
 
 /** A secret's OAuth callback: the provider redirected the human here with `code` and the
- *  platform-signed `state` (secret-oauth.ts) naming the secret's context and the nonce. WHO
- *  completes it is admitted the way a project host admits a visitor — the same platform session (a
- *  browser cookie, or a bearer) — and must reach the owner (`reachesSecretOwner`): a stranger cannot
- *  finish the attempt in their own browser. That does not bind the attempt to the browser that began
- *  it: a stranger who saw the authorize URL can consent with their own provider account and get a
- *  member's browser to open the resulting callback, which then stores the stranger's tokens. Only
- *  `expectAccount` (a reconnect) refuses that today. A browser
- *  with no session is sent to sign in, with this very callback (code and state) as the sign-in's
- *  same-origin `next`; it comes back here signed in, and the same rule admits it or not. Nothing
- *  before that touches the attempt, so the code is still the attempt's when it comes back. The
- *  secret's facet then exchanges the code; a failure is a 4xx page that says why (callback-page.ts),
- *  never a credential. */
+ *  platform-signed `state` (secret-oauth.ts) naming the secret's context and the nonce. The browser
+ *  binding is checked first (secret-oauth-start.ts `startedHere`, which says why). WHO completes it is then admitted the way a project host admits a visitor — the
+ *  same platform session (a browser cookie, or a bearer) — and must reach the owner
+ *  (`reachesSecretOwner`). A browser with no session is sent to sign in, with this very callback
+ *  (code and state) as the sign-in's same-origin `next`; it comes back here signed in, its start
+ *  cookie still set, and the same rules admit it or not. Nothing before that touches the attempt,
+ *  so the code is still the attempt's when it comes back. The secret's facet then exchanges the
+ *  code; a failure is a 4xx page that says why (callback-page.ts), never a credential. */
 export async function secretOAuthCallback(
   request: Request,
   env: Env,
@@ -101,6 +98,8 @@ export async function secretOAuthCallback(
   );
   if (!isSecretOAuthState(claims) || claims.exp <= Date.now())
     return callbackPage(400, "This link is not one the platform issued, or it has expired.");
+  const { start } = claims;
+  if (!start || !(await startedHere(request, start))) return notStartedHere();
   const authorization = await callbackAuthorization(request, env, addresses);
   // No session in a browser: sign in here and come back to this callback, the platform's own page
   // (`sameOriginPath`: never another origin). A bearer that did not verify, or a client that is no
@@ -199,15 +198,25 @@ export async function secretOAuthCallback(
     );
   }
   // Held by another project: the human's landing offers the move (`next` or nowhere).
-  if (move) return moveOfferLanding(env, authorization.reach, move, claims.next || null);
+  if (move)
+    return withStartCleared(
+      await moveOfferLanding(env, authorization.reach, move, claims.next || null),
+      start,
+    );
   // `next` was checked against the platform's and the Dash's origins before it was signed.
   if (claims.next)
-    return new Response(null, {
-      status: 303,
-      headers: { location: claims.next, "cache-control": "no-store" },
-    });
-  return callbackPage(
-    200,
-    `Done: the secret ${owner.path} of ${owner.kind} ${owner.id} holds the tokens. You can close this tab.`,
+    return withStartCleared(
+      new Response(null, {
+        status: 303,
+        headers: { location: claims.next, "cache-control": "no-store" },
+      }),
+      start,
+    );
+  return withStartCleared(
+    callbackPage(
+      200,
+      `Done: the secret ${owner.path} of ${owner.kind} ${owner.id} holds the tokens. You can close this tab.`,
+    ),
+    start,
   );
 }

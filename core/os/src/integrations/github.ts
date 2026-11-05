@@ -6,7 +6,9 @@
 // A project's own GitHub App is a package the project hosts (iterate/sdk `Integration`,
 // iterategrations `github/`): its setup page, callback and webhook on the project's own host, its
 // installations' tokens minted by the same strategy from the App key the project's secret holds.
-//   connectGithub        → the App's install page, with a platform-signed `state`
+//   connectGithub        → a start link (secret-oauth-start.ts) to the App's install page, with a
+//                          platform-signed `state`; both callbacks admit only the browser that
+//                          opened it
 //   githubCallbackRoute  → `GET /api/integrations/github/callback`, the App's Callback URL (and the
 //                          App's Setup URL): the project facet's `acceptGithubCallback`, which
 //     - with a `code` (GitHub's "Request user authorization (OAuth) during installation" sends it
@@ -36,6 +38,12 @@ import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
 import { callbackPage } from "../callback-page.ts";
 import { callbackAuthorization } from "../secret-oauth-callback.ts";
+import {
+  notStartedHere,
+  startedHere,
+  startLinkOf,
+  withStartCleared,
+} from "../secret-oauth-start.ts";
 import { nextUrlOf, SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord, verifySecretHmac } from "../secrets.ts";
 import {
@@ -86,17 +94,36 @@ type GithubConnectState = {
   connection: string;
   nonce: string;
   exp: number;
+  /** The start that sent this browser to GitHub (secret-oauth-start.ts), carried from the install
+   *  redirect into the authorize redirect's state. */
+  start?: string;
 };
 
-async function signedState(scope: IntegrationScope, connection: string, attempt: GithubAttempt) {
+async function signedState(
+  scope: IntegrationScope,
+  connection: string,
+  attempt: GithubAttempt,
+  start?: string,
+) {
   const state: GithubConnectState = {
     kind: "github-connect",
     projectId: scope.projectId,
     connection,
     nonce: attempt.nonce,
     exp: attempt.until,
+    start,
   };
   return signClaims(state, await sessionSigningSecretOf(iterateConfigOf(scope.env)));
+}
+
+/** The start link the human opens for GitHub's `url` (secret-oauth-start.ts). */
+async function startLinkFor(scope: IntegrationScope, origin: string, url: URL, until: number) {
+  return startLinkOf(
+    origin,
+    url.href,
+    until,
+    await sessionSigningSecretOf(iterateConfigOf(scope.env)),
+  );
 }
 
 export async function connectGithub(
@@ -108,6 +135,7 @@ export async function connectGithub(
      *  the App as themself at once, never GitHub's configure page, and comes back to
      *  `platformOrigin`'s callback with the code the admin proof needs. */
     installationId?: string;
+    /** The origin the start link and the callback hang under. */
     platformOrigin?: string;
   },
 ): Promise<{ authorizationUrl: string }> {
@@ -121,17 +149,17 @@ export async function connectGithub(
     // platform on (a self-host names no `urls.os`, and the project facet knows no request)
     next: input.next || null,
   };
+  const origin = URL.canParse(input.platformOrigin || "")
+    ? new URL(input.platformOrigin!).origin
+    : null;
+  if (!origin || origin !== input.platformOrigin)
+    throw codedError(
+      "INVALID_INPUT",
+      "GitHub: a connect names the platform origin its start link and callback hang under.",
+    );
   if (input.installationId) {
     if (!/^[a-zA-Z0-9_-]+$/.test(input.installationId))
       throw codedError("INVALID_INPUT", "GitHub: an installation id is letters, digits, - and _.");
-    const origin = URL.canParse(input.platformOrigin || "")
-      ? new URL(input.platformOrigin!).origin
-      : null;
-    if (!origin || origin !== input.platformOrigin)
-      throw codedError(
-        "INVALID_INPUT",
-        "GitHub: an installation's connect names the platform origin its callback hangs under.",
-      );
     const known: GithubAttempt = {
       ...attempt,
       installationId: input.installationId,
@@ -142,14 +170,14 @@ export async function connectGithub(
     authorize.searchParams.set("client_id", github.oauthClientId);
     authorize.searchParams.set("redirect_uri", known.redirectUri!);
     authorize.searchParams.set("state", await signedState(scope, connection, known));
-    return { authorizationUrl: authorize.href };
+    return { authorizationUrl: await startLinkFor(scope, origin, authorize, known.until) };
   }
   await scope.storage.put(attemptKeyOf("github", connection), attempt);
   const install = new URL(
     `${github.githubOrigin}/apps/${encodeURIComponent(github.appSlug)}/installations/new`,
   );
   install.searchParams.set("state", await signedState(scope, connection, attempt));
-  return { authorizationUrl: install.href };
+  return { authorizationUrl: await startLinkFor(scope, origin, install, attempt.until) };
 }
 
 /** GitHub's redirect back, as the callback hands it over (the header's three cases), with the
@@ -160,6 +188,8 @@ export async function acceptGithubCallback(
     platformOrigin: string;
     connection: string;
     nonce: string;
+    /** The start the callback's state carried, signed into the authorize redirect's. */
+    start?: string;
     installationId?: string;
     code?: string;
     setupAction?: string;
@@ -214,7 +244,7 @@ export async function acceptGithubCallback(
     const authorize = new URL(`${github.githubOrigin}/login/oauth/authorize`);
     authorize.searchParams.set("client_id", github.oauthClientId);
     authorize.searchParams.set("redirect_uri", callbackUrl);
-    authorize.searchParams.set("state", await signedState(scope, connection, next));
+    authorize.searchParams.set("state", await signedState(scope, connection, next, input.start));
     return { redirect: authorize.href };
   }
   const apiOrigin = githubApiOriginOf(githubAppOf(env).githubOrigin);
@@ -417,8 +447,9 @@ async function githubUserTokenOf(
 }
 
 /** Where GitHub sends the human back, or null when the path is not the callback's. The signed
- *  `state` names the project and the connection; the human must be signed in to a session that
- *  reaches that project, and the project facet does the rest (`acceptGithubCallback`). */
+ *  `state` names the project, the connection and the start: only the browser that opened the start
+ *  link is admitted (secret-oauth-start.ts `startedHere`), then only a session that reaches that
+ *  project, and the project facet does the rest (`acceptGithubCallback`). */
 export async function githubCallbackRoute(
   request: Request,
   env: Env,
@@ -442,6 +473,9 @@ export async function githubCallbackRoute(
     claims.exp <= Date.now()
   )
     return callbackPage(400, "This link is not one the platform issued, or it has expired.");
+  const { start } = claims;
+  if (typeof start !== "string" || !start || !(await startedHere(request, start)))
+    return notStartedHere();
   const authorization = await callbackAuthorization(request, env, addresses);
   if (!authorization)
     return callbackPage(
@@ -472,6 +506,7 @@ export async function githubCallbackRoute(
             platformOrigin: addresses.platformOrigin,
             connection: claims.connection,
             nonce: claims.nonce,
+            start,
             installationId: param("installation_id"),
             code: param("code"),
             setupAction: param("setup_action"),
@@ -487,14 +522,19 @@ export async function githubCallbackRoute(
       `Connecting GitHub failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  // a code completed the connection; without one, the human goes on to authorize, still this start's
+  const answered = async (response: Response) =>
+    param("code") ? withStartCleared(response, start) : response;
   // Held by another project: the human's landing offers the move.
-  if (move) return moveOfferLanding(env, authorization.reach, move, redirect);
+  if (move) return answered(await moveOfferLanding(env, authorization.reach, move, redirect));
   if (redirect)
-    return new Response(null, {
-      status: 303,
-      headers: { location: redirect, "cache-control": "no-store" },
-    });
-  return callbackPage(200, "Done: GitHub is connected. You can close this tab.");
+    return answered(
+      new Response(null, {
+        status: 303,
+        headers: { location: redirect, "cache-control": "no-store" },
+      }),
+    );
+  return answered(callbackPage(200, "Done: GitHub is connected. You can close this tab."));
 }
 
 const GITHUB_WEBHOOK_PATH = /^\/api\/integrations\/github\/webhook$/;

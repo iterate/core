@@ -1905,12 +1905,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             (facet === "account" && held.length === 1
               ? held[0]!.connection
               : crypto.randomUUID().slice(0, 8));
-          // GitHub sends an installation's human back under the platform origin this call reached
+          // GitHub's start link and callback hang under the platform origin this call reached
           const platformOrigin = deps.platformOrigin() || undefined;
-          if (input.installationId && !platformOrigin)
+          if (provider === "github" && !platformOrigin)
             throw codedError(
               "INVALID_CONTEXT",
-              "itx.integrations.connect: an installation's connect comes back to the platform origin a session reached — call it from a session",
+              "itx.integrations.connect: GitHub's connect comes back to the platform origin a session reached — call it from a session",
             );
           // the facet's `connectIntegration` answers where to send the human (integrations/verbs.ts)
           const { authorizationUrl } = (await deps.callFacetAsPlatform(facet, [
