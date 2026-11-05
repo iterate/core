@@ -371,6 +371,65 @@ test("a voice device's agent has its idle summary once the call goes quiet, and 
   }).toEqual({ summary: true, newWords: true, oldWords: false });
 });
 
+test("a long-lived agent keeps warm by default for two hours after its last request: a ping that hits re-arms with its cost, and one that misses ends the window", async () => {
+  const pings: Record<string, unknown>[] = [];
+  const agent = agentOnLog(
+    PATH,
+    () => "ok",
+    (body) => {
+      if (body.tool_choice !== "none") return { input_tokens: 100_000, output_tokens: 20 };
+      pings.push(body);
+      // the first ping reads the history from the cache, the second finds it gone
+      const cached = pings.length === 1 ? 99_000 : 0;
+      return {
+        input_tokens: 100_050,
+        output_tokens: 2,
+        input_tokens_details: { cached_tokens: cached },
+      };
+    },
+  );
+  agent.commit(...BORN, {
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llmRequestDebounceMs: 0 } },
+  });
+  await agent.wake().catchUpFromLog();
+  agent.commit(words("Hello."));
+  await vi.waitFor(() => expect(agent.scheduled).toHaveLength(1));
+  const due = (call: unknown[]) => {
+    const [{ when, events }] = call as [{ when: { at: string }; events: Row[] }];
+    return { at: Date.parse(when.at), events, check: events[0]!.payload as Record<string, never> };
+  };
+  const first = due(agent.scheduled[0]!);
+  const readAt = Date.parse(first.check.cacheReadAt);
+  expect({
+    nextPing: first.at - readAt,
+    window: Date.parse(first.check.keepWarmUntil) - readAt,
+  }).toEqual({ nextPing: 25 * 60_000, window: 2 * 3_600_000 });
+
+  agent.commit(...first.events);
+  await vi.waitFor(() => expect(agent.scheduled).toHaveLength(2));
+  expect(pings[0]).toMatchObject({ tool_choice: "none", max_output_tokens: 16 });
+  const second = due(agent.scheduled[1]!);
+  expect(second.check).toMatchObject({ keepWarmUntil: first.check.keepWarmUntil });
+  expect(second.check.keptWarmUsd).toBeGreaterThan(0);
+
+  agent.commit(...second.events);
+  await vi.waitFor(() =>
+    expect(
+      agent.events.filter((event) => event.type === "events.iterate.com/agent/cache-kept-warm"),
+    ).toHaveLength(2),
+  );
+  const kept = agent.events.filter(
+    (event) => event.type === "events.iterate.com/agent/cache-kept-warm",
+  );
+  expect(kept.map((event) => (event.payload as { stopped?: string }).stopped)).toEqual([
+    undefined,
+    "missed",
+  ]);
+  // idle compaction is off by default: the window ends with no further check
+  expect(agent.scheduled).toHaveLength(2);
+});
+
 type Row = { type: string; payload?: unknown };
 
 const BORN: Row[] = [
@@ -388,9 +447,14 @@ const requested = (triggerOffset: number): Row => ({
 
 /** The agent as a facet hosts it: its processor in an engine over an in-memory log at `path`, the
  *  `itx` of agentWithModel with the agent's own schedule (`scheduled` keeps each call), and a model
- *  that answers `answer(body)`. `commit` appends events in one batch, pushed to the incarnation
- *  `wake` started last over the same log and checkpoint; `bodies` are the requests the model got. */
-function agentOnLog(path: string, answer: (body: Record<string, unknown>) => string) {
+ *  that answers `answer(body)`, reporting `usage(body)` when given. `commit` appends events in one
+ *  batch, pushed to the incarnation `wake` started last over the same log and checkpoint; `bodies`
+ *  are the requests the model got. */
+function agentOnLog(
+  path: string,
+  answer: (body: Record<string, unknown>) => string,
+  usage?: (body: Record<string, unknown>) => Record<string, unknown>,
+) {
   const log = memoryStream(path);
   const storage = memoryStorage();
   const bodies: Record<string, unknown>[] = [];
@@ -407,7 +471,7 @@ function agentOnLog(path: string, answer: (body: Record<string, unknown>) => str
     ai: {
       run: async (_model: string, body: Record<string, unknown>) => {
         bodies.push(body);
-        return sse(answered(answer(body)));
+        return sse(answered(answer(body), undefined, usage?.(body)));
       },
     },
     [Symbol.dispose]: () => undefined,
@@ -553,7 +617,11 @@ const STALL = Symbol("stall");
 const KEYS = ["fake-plan-token", "fake-api-key"];
 
 /** An answer the way OpenAI streams it, ending with `prose` and, if given, a call of `run`. */
-function answered(prose: string, callId?: string): unknown[] {
+function answered(
+  prose: string,
+  callId?: string,
+  usage: Record<string, unknown> = { input_tokens: 9, output_tokens: 3 },
+): unknown[] {
   const output = [
     { type: "message", content: [{ type: "output_text", text: prose }] },
     ...(callId
@@ -571,7 +639,7 @@ function answered(prose: string, callId?: string): unknown[] {
     { type: "response.output_text.delta", delta: prose },
     {
       type: "response.completed",
-      response: { output, usage: { input_tokens: 9, output_tokens: 3 } },
+      response: { output, usage },
     },
   ];
 }

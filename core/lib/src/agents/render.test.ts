@@ -10,6 +10,7 @@ import {
   historyTokensSinceSummary,
   idleAction,
   keepsWarm,
+  keepWarmStop,
   promptCacheKey,
 } from "./processor.ts";
 import {
@@ -278,7 +279,10 @@ test("the cache key: the agent's path, a voice call's client for a voice call", 
 test("an idle check pings inside the keep-warm window, then compacts, and does nothing once anything happened", () => {
   const small = (rows: Row[]) => {
     const state = reduceProcessor(processor(), rows as never) as AgentState;
-    return { ...state, config: { ...state.config, idleCompactionMinNewTokens: 20 } };
+    return {
+      ...state,
+      config: { ...state.config, idleCompactionAfterMs: 600_000, idleCompactionMinNewTokens: 20 },
+    };
   };
   const state = small([...chain, settled(18)]);
   const now = Date.parse("2026-10-03T12:00:00Z");
@@ -302,11 +306,37 @@ test("an idle check pings inside the keep-warm window, then compacts, and does n
   expect(
     idleAction(small([...chain, settled(18), summary(18, "[summary]")]), until(2 * 3_600_000), now),
   ).toBeUndefined(); // already summarized
+  // a check that fires after the cache let the history go pings no more
+  const readAt = (msAgo: number) => new Date(now - msAgo).toISOString();
+  expect(
+    idleAction(state, { ...until(2 * 3_600_000), cacheReadAt: readAt(20 * 60_000) }, now),
+  ).toBe("keep-warm");
+  expect(
+    idleAction(state, { ...until(2 * 3_600_000), cacheReadAt: readAt(31 * 60_000) }, now),
+  ).toBe("compact");
+  // two quiet hours after the request (the default window) end the pings; with idle compaction
+  // off, nothing follows
+  const afterTwoHours = now + 2 * 3_600_000 - 20 * 60_000;
+  expect(idleAction(state, until(2 * 3_600_000), afterTwoHours)).toBe("compact");
+  const noCompaction = { ...state, config: { ...state.config, idleCompactionAfterMs: 0 } };
+  expect(idleAction(noCompaction, until(2 * 3_600_000), afterTwoHours)).toBeUndefined();
   expect([
     keepsWarm("/agents/chief-of-staff"),
     keepsWarm("/agents/chief-of-staff/marketing-cleanup"),
     keepsWarm("/agents/voice/whatsapp-447700900001/20261003"),
   ]).toEqual([true, false, false]);
+});
+
+test("a keep-warm ping is the window's last when it missed the cache, or when one more would cost more than the miss it avoids", () => {
+  const check = { afterRequestOffset: 18, inputTokens: 100_000 };
+  const hit = { inputTokens: 100_050, cachedInputTokens: 99_000, outputTokens: 2 };
+  // re-sending 100k tokens uncached costs $0.24 on gpt-6.1-sol; this ping costs about $0.012
+  expect(keepWarmStop("gpt-6.1-sol", check, hit)).toBeUndefined();
+  expect(keepWarmStop("gpt-6.1-sol", check, { ...hit, cachedInputTokens: 0 })).toBe("missed");
+  // the ping's own prompt is written each time; most of the input read is still a hit
+  expect(keepWarmStop("gpt-6.1-sol", check, { ...hit, cacheWriteInputTokens: 50 })).toBeUndefined();
+  expect(keepWarmStop("gpt-6.1-sol", { ...check, keptWarmUsd: 0.22 }, hit)).toBe("cost-cap");
+  expect(keepWarmStop("unpriced-model", check, hit)).toBeUndefined(); // the window still bounds it
 });
 
 test("an idle summary keeps the earlier summaries word for word, until a merge replaces them all", () => {

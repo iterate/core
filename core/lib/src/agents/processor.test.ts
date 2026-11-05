@@ -36,7 +36,7 @@ const defaultConfig = {
   idleCompactionAfterMs: 0,
   idleCompactionMinNewTokens: 30_000,
   idleSummariesMaxChars: 40_000,
-  keepWarmForMs: 0,
+  keepWarmForMs: 2 * 3_600_000,
   keepWarmEveryMs: 25 * 60_000,
 };
 const system = {
@@ -390,7 +390,7 @@ test.for<{
         idleCompactionAfterMs: 0,
         idleCompactionMinNewTokens: 30_000,
         idleSummariesMaxChars: 40_000,
-        keepWarmForMs: 0,
+        keepWarmForMs: 2 * 3_600_000,
         keepWarmEveryMs: 25 * 60_000,
       },
     },
@@ -733,7 +733,6 @@ test.for([
         config: {
           idleCompactionAfterMs: 600_000,
           idleCompactionMinNewTokens: 5,
-          keepWarmForMs: 3_600_000,
         },
       },
     };
@@ -766,14 +765,19 @@ test.for([
       [
         {
           key: "idle-compaction",
-          when: { at: "2026-11-04T12:10:00.000Z" },
+          // a ping interval after the request when it keeps warm, the idle delay otherwise
+          when: { at: warm ? "2026-11-04T12:25:00.000Z" : "2026-11-04T12:10:00.000Z" },
           events: [
             {
               type: "events.iterate.com/agent/idle-check",
               payload: {
                 afterRequestOffset: 5,
                 inputTokens: 1_000,
-                ...(warm && { keepWarmUntil: "2026-11-04T13:00:00.000Z" }),
+                ...(warm && {
+                  // the default window: two hours after the request
+                  keepWarmUntil: "2026-11-04T14:00:00.000Z",
+                  cacheReadAt: settledAt,
+                }),
               },
             },
           ],

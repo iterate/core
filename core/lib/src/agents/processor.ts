@@ -105,21 +105,67 @@ export function historyTokensSinceSummary(state: AgentState): number {
   return Math.round(chars / 3.6);
 }
 
+/** How long OpenAI keeps a prompt prefix cached after its last read or write. */
+const PROMPT_CACHE_LIFE_MS = 30 * 60_000;
+
+/** An idle check's payload (contract.ts `agent/idle-check`). */
+type IdleCheck = {
+  afterRequestOffset: number;
+  inputTokens: number;
+  keepWarmUntil?: string;
+  cacheReadAt?: string;
+  keptWarmUsd?: number;
+};
+
 /** What an idle check does at `now`: nothing if anything happened since the request it names (that
  *  is no longer the newest request, or something is open, running or waiting, or a summary covers
- *  it); a ping while the keep-warm window lasts past the next check; then a summary, when enough
- *  history came after the newest one to be worth it. */
+ *  it); a ping while the keep-warm window lasts past the next check and the cache still holds the
+ *  history (a late check finds it gone and pings no more); then, with idle compaction on, a
+ *  summary when enough history came after the newest one to be worth it. */
 export function idleAction(
   state: AgentState,
-  check: { afterRequestOffset: number; inputTokens: number; keepWarmUntil?: string },
+  check: IdleCheck,
   now: number,
 ): "keep-warm" | "compact" | undefined {
   if (!quietSince(state, check.afterRequestOffset)) return undefined;
-  if (check.keepWarmUntil && now + state.config.keepWarmEveryMs <= Date.parse(check.keepWarmUntil))
+  const cached = !check.cacheReadAt || now < Date.parse(check.cacheReadAt) + PROMPT_CACHE_LIFE_MS;
+  if (
+    check.keepWarmUntil &&
+    cached &&
+    now + state.config.keepWarmEveryMs <= Date.parse(check.keepWarmUntil)
+  )
     return "keep-warm";
+  if (state.config.idleCompactionAfterMs === 0) return undefined;
   return historyTokensSinceSummary(state) >= state.config.idleCompactionMinNewTokens
     ? "compact"
     : undefined;
+}
+
+/** Whether the ping that cost `usage` is the window's last (contract.ts `cache-kept-warm`'s
+ *  `stopped`): it read less than half its input from the cache, or one more ping would bring the
+ *  pings' total past what re-sending the history uncached costs (the miss they avoid), so warming
+ *  never costs more than one miss. The ping's own prompt is new input each time, which is why a
+ *  hit is judged by the share read, not by whether anything was written. */
+export function keepWarmStop(
+  model: string,
+  check: IdleCheck,
+  usage: LlmUsage,
+): "missed" | "cost-cap" | undefined {
+  if ((usage.cachedInputTokens ?? 0) * 2 < usage.inputTokens) return "missed";
+  const ping = usage.costUsd ?? requestCostUsd(model, usage);
+  const tokens = check.inputTokens;
+  const written = requestCostUsd(model, {
+    inputTokens: tokens,
+    cacheWriteInputTokens: tokens,
+    outputTokens: 0,
+  });
+  const read = requestCostUsd(model, {
+    inputTokens: tokens,
+    cachedInputTokens: tokens,
+    outputTokens: 0,
+  });
+  if (ping === undefined || written === undefined || read === undefined) return undefined;
+  return (check.keptWarmUsd ?? 0) + 2 * ping > written - read ? "cost-cap" : undefined;
 }
 
 /** Nothing happened since the request at `requestOffset`, and no summary covers it. */
@@ -1196,15 +1242,15 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         const history = state.contextItems.some(
           (item) => item.role !== "system" && item.offset < requestOffset,
         );
-        // GOING QUIET, armed: a check this long after the request, which pings or compacts if
-        // nothing happened since (the schedule is the agent's own; a newer request re-arms it)
+        // GOING QUIET, armed: a check, a ping interval after the request for an agent that keeps
+        // warm and `idleCompactionAfterMs` after it otherwise, which pings or compacts if nothing
+        // happened since (the schedule is the agent's own; a newer request re-arms it)
         const settledAt = Date.parse(event.createdAt);
         const warm = keepsWarm(event.path) && state.config.keepWarmForMs > 0;
-        if (
+        const compacts =
           state.config.idleCompactionAfterMs > 0 &&
-          !covered &&
-          (warm || historyTokensSinceSummary(state) >= state.config.idleCompactionMinNewTokens)
-        )
+          historyTokensSinceSummary(state) >= state.config.idleCompactionMinNewTokens;
+        if (!covered && (warm || compacts))
           runInBackground(() =>
             this.#armIdleCheck(
               {
@@ -1212,9 +1258,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
                 inputTokens: result.usage!.inputTokens,
                 ...(warm && {
                   keepWarmUntil: new Date(settledAt + state.config.keepWarmForMs).toISOString(),
+                  cacheReadAt: new Date(settledAt).toISOString(),
                 }),
               },
-              settledAt + state.config.idleCompactionAfterMs,
+              settledAt +
+                (warm ? state.config.keepWarmEveryMs : state.config.idleCompactionAfterMs),
               `idle-compaction/${String(requestOffset)}`,
             ),
           );
@@ -1273,11 +1321,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
   /** The idle check `check`, at `at`: the agent's own schedule, `idle-compaction`, which a newer
    *  request's check replaces. */
-  async #armIdleCheck(
-    check: { afterRequestOffset: number; inputTokens: number; keepWarmUntil?: string },
-    at: number,
-    key: string,
-  ): Promise<void> {
+  async #armIdleCheck(check: IdleCheck, at: number, key: string): Promise<void> {
     using itx = this.deps.getItx();
     await itx.schedules.set(
       {
@@ -1291,17 +1335,22 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
   /** THE KEEP-WARM PING: the named request's own input (so its cached prefix is what is read) and
    *  the ping, on the agent's model and effort (both part of the cache key), the tool declared
-   *  but not callable. Its cost lands as `cache-kept-warm`, and the next check is set a ping
-   *  interval later. Best effort: a failed ping still sets the next check, which then compacts or
-   *  pings again. */
+   *  but not callable, and at most 16 output tokens where the key takes the cap (a plan's token
+   *  refuses it, responses-keys.ts). Its cost lands as `cache-kept-warm`, and the next check is
+   *  set a ping interval later, carrying the pings' total. A ping that is the window's last
+   *  (`keepWarmStop`) sets instead a check due now with no window, which compacts while the
+   *  history is still cached, or none when idle compaction is off. Best effort: a failed ping
+   *  still sets the next check, which then compacts or pings again. */
   async #keepWarm(input: {
     state: AgentState;
-    check: { afterRequestOffset: number; inputTokens: number; keepWarmUntil?: string };
+    check: IdleCheck;
     checkOffset: number;
     append: AgentArgs["append"];
   }): Promise<void> {
     const { state, check, checkOffset, append } = input;
     const model = state.config.llm.model;
+    const key = `idle-compaction/${String(check.afterRequestOffset)}/${String(checkOffset)}`;
+    let next = check;
     try {
       const { path } = await this.#identity();
       const answer = await this.#stream({
@@ -1315,23 +1364,33 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         signal: AbortSignal.timeout(state.config.llmRequestExpiryMs),
         onDelta: () => undefined,
         toolChoice: "none",
+        maxOutputTokens: 16,
       });
+      const stopped = answer.usage && keepWarmStop(model, check, answer.usage);
       await appendUnlessLost(append, {
         type: "events.iterate.com/agent/cache-kept-warm",
         idempotencyKey: this.idempotencyKey(`keep-warm/${String(checkOffset)}`),
         payload: {
           afterRequestOffset: check.afterRequestOffset,
           usage: answer.usage,
+          stopped,
         },
       });
+      if (stopped) {
+        if (state.config.idleCompactionAfterMs > 0)
+          await this.#armIdleCheck({ ...check, keepWarmUntil: undefined }, Date.now(), key);
+        return;
+      }
+      const usd = answer.usage && (answer.usage.costUsd ?? requestCostUsd(model, answer.usage));
+      next = {
+        ...check,
+        cacheReadAt: new Date().toISOString(),
+        keptWarmUsd: (check.keptWarmUsd ?? 0) + (usd ?? 0),
+      };
     } catch (error) {
       console.error("[agent] keep-warm ping failed", { error, check });
     }
-    await this.#armIdleCheck(
-      check,
-      Date.now() + state.config.keepWarmEveryMs,
-      `idle-compaction/${String(check.afterRequestOffset)}/${String(checkOffset)}`,
-    );
+    await this.#armIdleCheck(next, Date.now() + state.config.keepWarmEveryMs, key);
   }
 
   // ── state-derived consequences, at head, in the background: re-derived by any later delivery ──
@@ -1989,6 +2048,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     onAnswer,
     onDelta,
     toolChoice = "auto",
+    maxOutputTokens,
     llm,
   }: {
     model: string;
@@ -2005,6 +2065,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     onAnswer?(): void;
     onDelta(text: string, thinking: string): void;
     toolChoice?: "auto" | "none";
+    /** The answer's cap, reasoning included; a key stack drops it (responses-keys.ts). */
+    maxOutputTokens?: number;
   }): Promise<StreamAnswer> {
     if (model.startsWith("@cf/"))
       throw new Error(
@@ -2021,6 +2083,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       prompt_cache_key: cacheKey,
       reasoning: { effort: llm.reasoningEffort, summary: "auto" },
       service_tier: llm.serviceTier, // unset sends none: JSON drops it
+      max_output_tokens: maxOutputTokens,
     });
     // an expected repair of the input, not a fault: counted, and nothing of the text is logged
     if (repaired > 0) console.info({ event: "agent.request-strings-repaired", strings: repaired });

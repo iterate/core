@@ -74,7 +74,7 @@ const Sections = z.record(z.string(), z.string().nullable());
 export const AgentContract = defineProcessorContract({
   slug: "agent",
   // Bumping the version re-reduces every agent's log from offset 0 (stream/processor.ts).
-  version: "17",
+  version: "18",
   description:
     "An agent: a conversation on its own context, driven by a model that acts through one tool, run(script), against itx; each request's input extends the previous one, so the provider's prompt cache holds the conversation.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -162,12 +162,18 @@ export const AgentContract = defineProcessorContract({
         idleCompactionAfterMs: z.number().int().nonnegative().default(0),
         idleCompactionMinNewTokens: z.number().int().positive().default(30_000),
         idleSummariesMaxChars: z.number().int().positive().default(40_000),
-        /** KEEP-WARM: a long-lived agent (`/agents/<name>`) keeps its history cached this long
-         *  after its last request, with a ping every `keepWarmEveryMs` (a cache read refreshes
-         *  OpenAI's 30 minutes), and only then has its idle summary: a ping costs a twenty-fifth of
-         *  re-sending the history, and a quiet hour stays lossless. Off by default (0); the pings ride
-         *  the idle check, so they need `idleCompactionAfterMs` too. */
-        keepWarmForMs: z.number().int().nonnegative().default(0),
+        /** KEEP-WARM: a long-lived agent (`/agents/<name>`) keeps its history cached at most this
+         *  long after its last activity, with a ping every `keepWarmEveryMs` (a cache read
+         *  refreshes OpenAI's 30 minutes): a ping costs about a twenty-fifth of re-sending the
+         *  history. Any input, run or request ends the pings, and the next request starts a new
+         *  window. Pings stop sooner when one misses the cache, or when one more would bring their
+         *  total past the cost of the miss they avoid. With `idleCompactionAfterMs` set, the idle
+         *  summary follows the last ping. 0 turns keep-warm off. */
+        keepWarmForMs: z
+          .number()
+          .int()
+          .nonnegative()
+          .default(2 * 3_600_000),
         keepWarmEveryMs: z
           .number()
           .int()
@@ -527,14 +533,24 @@ export const AgentContract = defineProcessorContract({
         inputTokens: z.number().int().nonnegative(),
         /** Until when pings keep the history cached (a long-lived agent's): ISO. */
         keepWarmUntil: z.string().optional(),
+        /** When the provider last read the history from its cache or wrote it there: the
+         *  request's settlement, then each ping's. ISO. A check that fires 30 minutes after it
+         *  finds the cache gone, and sends no ping. */
+        cacheReadAt: z.string().optional(),
+        /** What the window's pings have cost so far, in US dollars. */
+        keptWarmUsd: z.number().nonnegative().optional(),
       }),
     },
     "events.iterate.com/agent/cache-kept-warm": {
       description:
-        "A keep-warm ping: the request it names re-read from the provider's prompt cache, so the history stays cached 30 more minutes, and what that cost.",
+        "A keep-warm ping: the request it names re-read from the provider's prompt cache, so the history stays cached 30 more minutes, what that cost, and whether it was the window's last.",
       payloadSchema: z.object({
         afterRequestOffset: z.number().int().positive(),
         usage: LlmUsage.optional(),
+        /** Why this was the window's last ping: it read less than half its input from the cache
+         *  (`missed`), or one more would bring the pings' total past the cost of the miss they
+         *  avoid (`cost-cap`). */
+        stopped: z.enum(["missed", "cost-cap"]).optional(),
       }),
     },
     "events.iterate.com/agent/input-gated": {
