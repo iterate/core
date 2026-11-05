@@ -379,9 +379,9 @@ export class RepoFacet extends StreamProcessorDurableObject<
    *  append nothing: `changedPaths` is empty and `commitOid` the tip (null on an unborn repo). The
    *  push is compare-and-swapped on the tip the changes were applied to: a `main` that moved in the
    *  meantime refuses the commit — call again. `parent` names the tip the caller decided on (`null`:
-   *  an unborn `main`): a `main` anywhere else refuses the commit before anything is pushed, so a
-   *  decision made on an older read never lands on top of a commit it did not see (the project's
-   *  seed, project/processor.ts). */
+   *  an unborn `main`): a `main` anywhere else refuses the commit and nothing lands, so a decision
+   *  made on an older read never lands on top of a commit it did not see (the project's seed,
+   *  project/processor.ts). */
   commitFiles(input: {
     message: string;
     changes: RepoFileChange[];
@@ -444,7 +444,12 @@ export class RepoFacet extends StreamProcessorDurableObject<
       .parse(input.parent);
     this.#snapshotMemo = null; // whatever the outcome, the next read re-fetches — or reads the push's
     const transport = await this.#transport("write");
-    const tip = (await transport.tipOf(REF)) || null;
+    // A commit that names an unborn `main` (the project's seed) and finds no fact owed reads no tip:
+    // its push is compare-and-swapped on no commit, so a `main` born after all refuses it, said as
+    // the parent check below says it. One Artifacts round trip less on every creation.
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- `null` names an unborn main; an absent `parent` commits onto whatever main holds, so it reads the tip
+    const unbornNamed = parent === null && !(await this.ctx.storage.get<OwedFact>("commit-fact"));
+    const tip = unbornNamed ? null : (await transport.tipOf(REF)) || null;
     await this.#settleOwedFact(tip);
     // oxlint-disable-next-line iterate/simple-truthiness-check -- `parent` absent commits onto whatever main holds; `null` names an unborn main, which a born one refuses
     if (parent !== undefined && parent !== tip)
@@ -518,6 +523,11 @@ export class RepoFacet extends StreamProcessorDurableObject<
     // oxlint-disable-next-line iterate/simple-truthiness-check -- push() returns null only on success; an empty-string refusal reason (an `ng <ref>` line with no message) is still a refusal and must throw
     if (refused !== null) {
       await this.ctx.storage.delete("commit-fact"); // nothing landed, nothing owed
+      const born = unbornNamed && (await transport.tipOf(REF));
+      if (born)
+        throw new Error(
+          `repo ${path}: the commit was refused: main is at ${born}, not at the parent it names (unborn)`,
+        );
       throw new Error(`repo ${path}: the commit was refused: ${refused}`);
     }
     const pushed = this.#pushedSnapshot(commitOid, manifest, objects, written);
