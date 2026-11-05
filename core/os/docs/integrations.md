@@ -68,7 +68,8 @@ await itx.integrations.disconnect("slack", "acme");
 owner's root (a project's `/`, a person's `/users/<id>`), and the `project` and `account` facets
 publish neither method they call (`src/context/built-ins.ts`). The callback finishes the connection,
 so an agent or the CLI that starts a connect needs no second call. The link `connect` answers is the
-platform's start link (`src/secret-oauth-start.ts`): a short signed link that names the attempt.
+platform's start link (`src/secret-oauth-start.ts`): a short random id
+(`/.secrets/oauth/start/<id>`) whose row in the control plane's `oauth_grants` names the attempt.
 It looks up the provider's URL the attempt stored, sends the browser on to it, and each callback
 completes only in the browser that opened it. A newer connect, a disconnect or a finished attempt
 leaves the old link nowhere to go. Slack and Google come back to

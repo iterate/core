@@ -477,7 +477,11 @@ async function routeRequest(
   if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
 
   // The start link of a secret's OAuth and of a GitHub connect (secret-oauth-start.ts).
-  if (url.pathname === SECRET_OAUTH_START_PATH) return secretOAuthStart(request, env);
+  if (
+    url.pathname === SECRET_OAUTH_START_PATH ||
+    url.pathname.startsWith(`${SECRET_OAUTH_START_PATH}/`)
+  )
+    return secretOAuthStart(request, env);
   // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
   // with the code. Its own reserved path, `/.secrets/`, beside `/version` — and an integration's,
   // the URL iterate's Slack app and Google client are registered with.

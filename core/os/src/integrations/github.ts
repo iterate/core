@@ -135,7 +135,7 @@ async function startLinkFor(
     origin,
     { projectId: scope.projectId, connection, nonce: attempt.nonce },
     attempt.until,
-    await sessionSigningSecretOf(iterateConfigOf(scope.env)),
+    scope.env,
   );
 }
 

@@ -766,12 +766,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
     // the human reaches the provider from it
     const authorizationUrl = options.redirectUri
       ? providerUrl
-      : await startLinkOf(
-          platformOrigin,
-          { context: state.context, nonce },
-          state.exp,
-          signingSecret,
-        );
+      : await startLinkOf(platformOrigin, { context: state.context, nonce }, state.exp, this.env);
     // a new attempt replaces the one in flight: an exchange started before it finds no pending
     // attempt of its nonce when it comes to write (`completeOAuth`'s fence), and its start link
     // finds no provider's URL

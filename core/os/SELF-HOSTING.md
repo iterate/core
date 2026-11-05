@@ -266,7 +266,7 @@ Your own OAuth app at any service, with no package: `itx.secrets.beginOAuth` wit
 the clear ([connect-a-service.md](public/connect-a-service.md), the recipe a coding agent follows).
 Its redirect URI is `<origin>/.secrets/oauth/callback`, or a page of the project's own when the
 call names `redirect` (a routing slug and a path of the project's). The link it answers is
-`<origin>/.secrets/oauth/start`, which sends the browser on to the provider; the callback completes
+`<origin>/.secrets/oauth/start/<id>` (a random id), which sends the browser on to the provider; the callback completes
 only in the browser that opened it.
 
 ## Custom domain: own origins for apps and tunnels
