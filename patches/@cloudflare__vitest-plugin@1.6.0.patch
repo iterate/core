@@ -13,10 +13,10 @@ index 23de003..34058bb 100644
  };
  type WorkersPoolOptionsWithDefines = WorkersPoolOptions & {
 diff --git a/dist/pool/index.mjs b/dist/pool/index.mjs
-index c82e2b1..5f57c6c 100644
+index e1a1ec4..14d9627 100644
 --- a/dist/pool/index.mjs
 +++ b/dist/pool/index.mjs
-@@ -70228,6 +70228,12 @@ async function parseCustomPoolOptions(project, rootPath, value, mode, envDir) {
+@@ -70552,6 +70552,12 @@ async function parseCustomPoolOptions(project, rootPath, value, mode, envDir) {
  	if (value?.experimental?.newConfig !== void 0) throw new TypeError("`experimental.newConfig` is now the `config` option. Replace `experimental: { newConfig: ... }` with `config: true`, or `config: \"<path>\"` for a custom path.");
  	const options = WorkersPoolOptionsSchema.parse(value);
  	options.miniflare ??= {};
@@ -29,7 +29,7 @@ index c82e2b1..5f57c6c 100644
  	const miniflareModuleRules = options.miniflare.modulesRules;
  	const errorRef = {};
  	const workers = options.miniflare?.workers;
-@@ -70342,6 +70348,7 @@ async function parseCustomPoolOptions(project, rootPath, value, mode, envDir) {
+@@ -70673,6 +70679,7 @@ async function parseCustomPoolOptions(project, rootPath, value, mode, envDir) {
  		options.miniflare.assets.routerConfig.has_user_worker = Boolean(options.main);
  	}
  	options.projectWorkers = resolveProjectWorkers(project, options, cloudflareConfig, remoteProxyConnectionString);
@@ -37,7 +37,7 @@ index c82e2b1..5f57c6c 100644
  	return options;
  }
  async function parseProjectOptions(project, poolOptions) {
-@@ -71003,6 +71010,7 @@ async function buildProjectMiniflareOptions(ctx, project, customOptions, main) {
+@@ -71334,6 +71341,7 @@ async function buildProjectMiniflareOptions(ctx, project, customOptions, main) {
  	}
  	return {
  		...SHARED_MINIFLARE_OPTIONS,

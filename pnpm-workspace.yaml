@@ -85,7 +85,7 @@ onlyBuiltDependencies:
   - workerd
 
 overrides:
-  workerd: 1.20261103.1
+  workerd: 1.20261104.1
   ws: 'catalog:'
 
 patchedDependencies:
