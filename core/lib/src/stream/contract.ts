@@ -34,6 +34,10 @@ export type ProcessorContract<State = unknown> = {
    *  payload against it before reducing (a malformed payload for a KNOWN event is skipped, never
    *  folded). */
   payloadSchemaFor: (type: string) => z.ZodType | undefined;
+  /** The whole definition of a consumed event type, found as `payloadSchemaFor` finds its schema.
+   *  The engine reads its `ephemeral` too: it skips an ephemeral event of a type defined durable
+   *  (processor.ts `#validateNormalizeAndReduce` says why). */
+  eventDefinitionFor: (type: string) => EventDefinition | undefined;
 };
 
 /** One owned event: its description and the zod schema for its payload. `ephemeral: true` marks a
@@ -211,6 +215,8 @@ export function defineProcessorContract<
         throw new Error(`contract "${contract.slug}": event "${type}" is declared by two deps`);
       depEventTypes.add(type);
     }
+  const eventDefinitionFor = (type: string): EventDefinition | undefined =>
+    events[type] ?? processorDeps.map((dep) => dep.events[type]).find(Boolean);
   return {
     slug: contract.slug,
     version: contract.version,
@@ -223,7 +229,7 @@ export function defineProcessorContract<
     // `parse` is typed through `this`, which a type parameter leaves unresolved: it is the schema's
     // output all the same
     initialState: () => contract.stateSchema.parse({}) as z.output<StateSchema>,
-    payloadSchemaFor: (type: string) =>
-      (events[type] ?? processorDeps.map((dep) => dep.events[type]).find(Boolean))?.payloadSchema,
+    payloadSchemaFor: (type: string) => eventDefinitionFor(type)?.payloadSchema,
+    eventDefinitionFor,
   };
 }

@@ -58,6 +58,7 @@ import { Kept } from "../kept.ts";
 import { facetStateOf } from "../context-stub.ts";
 import { TARGET_FAILURE_CODES } from "../stream/subscription-delivery.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
+import { firstPartyRowConsumesOf } from "../first-party-row-filter.ts";
 import {
   ScheduleKey,
   ScheduledAppendInput,
@@ -2250,9 +2251,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           assertFacetSourceWithinCeiling(loaded, `processors.enable("${name}")`);
         }
         assertFacetPlacement(name, { projectId, path });
+        // A first-party row that names no filter takes its processor's (first-party-row-filter.ts).
+        const consumes = spec?.consumes || firstPartyRowConsumesOf(name);
         // IDEMPOTENT (the rule `provide` follows): a row already hosting this facet under
         // the same spec — its marker, as the reduce keeps it — appends nothing: every entity's
-        // `create()` enables its row on every call.
+        // `create()` enables its row on every call. A row stored without the filter takes it here.
         const { restarts: _restarts, ...existing } = deps.subscriptions.get(name)?.hostedFacet ?? {
           restarts: 0,
         };
@@ -2261,7 +2264,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           : hostedFacetMarkerOf({ name, ...facetSpecOf(loaded!) });
         if (
           jsonEqual(existing, requested) &&
-          jsonEqual(deps.subscriptions.get(name)?.consumes ?? null, spec?.consumes || null)
+          jsonEqual(deps.subscriptions.get(name)?.consumes ?? null, consumes || null)
         )
           return { name };
         await append({
@@ -2275,7 +2278,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               firstPartyClassName ? ["get", name] : ["get", name, facetSpecOf(loaded!)],
               "processEventBatch",
             ],
-            consumes: spec?.consumes,
+            consumes,
           },
         });
         return { name };

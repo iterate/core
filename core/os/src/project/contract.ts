@@ -303,7 +303,6 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/project/worker-updated",
     "events.iterate.com/project/worker-update-failed",
-    "events.iterate.com/itx/child-created",
     "events.iterate.com/slack/connected",
     "events.iterate.com/slack/disconnected",
     "events.iterate.com/google/connected",

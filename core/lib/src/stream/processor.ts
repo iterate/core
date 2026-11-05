@@ -633,13 +633,25 @@ export class ProcessorEngine<State> {
    *  promises. SHARED by the live flow and `#rereduceIfVersionChanged`, so the two can never diverge
    *  (a coercion applied live but not on replay would make a version bump rewrite state). A payload-less
    *  event validates as `{}` (the "empty defaults" convention the contract requires of its stateSchema);
-   *  a contract with no `events` catalog (the kernel-generic processors) folds unvalidated. */
+   *  a contract with no `events` catalog (the kernel-generic processors) folds unvalidated. An
+   *  ephemeral event whose type the contract defines DURABLE is skipped the same way: the log never
+   *  holds it, so a rebuild from the log would drop what it folded, and live state and the log would
+   *  disagree. A type defined `ephemeral: true`, or not defined at all, folds as before. */
   #validateNormalizeAndReduce(
     event: StreamEvent,
     state: State,
   ): { state: State; event: StreamEvent; valid: boolean } {
+    const definition = this.#contract.eventDefinitionFor(event.type);
+    if (event.ephemeral && definition && !definition.ephemeral) {
+      reportIssue(
+        "processor.reduce.ephemeral",
+        new Error(`"${event.type}" is a durable event; an ephemeral one is not reduced`),
+        { slug: this.#contract.slug, offset: event.offset, type: event.type },
+      );
+      return { state, event, valid: false }; // not folded, and the caller skips its effect
+    }
     // oxlint-disable-next-line iterate/simple-truthiness-check -- only a null/undefined payload defaults to {}; a falsy NON-object payload off the wire (0, false, "") must fail schema validation and be reported, not be folded as an empty object
-    const parsed = this.#contract.payloadSchemaFor(event.type)?.safeParse(event.payload ?? {});
+    const parsed = definition?.payloadSchema.safeParse(event.payload ?? {});
     if (parsed && !parsed.success) {
       reportIssue("processor.reduce.payload", parsed.error, {
         slug: this.#contract.slug,

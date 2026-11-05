@@ -1073,6 +1073,61 @@ test("a malformed event is skipped for the EFFECT hook too, and never wedges the
   expect(await p.snapshot()).toMatchObject({ state: { seen: [1, 2] } }); // and the batch advanced past it
 });
 
+test("an ephemeral event of a type the contract defines durable is neither reduced nor processed; a type defined ephemeral, or not defined, is", async () => {
+  const contract = defineProcessorContract({
+    slug: "ephemeral-of-durable",
+    version: "1",
+    description: "records the types its reduce and its effect hook see",
+    stateSchema: z.object({ reduced: z.array(z.string()).default([]) }),
+    events: {
+      "demo/durable": { description: "a durable event", payloadSchema: z.object({}) },
+      "demo/frame": {
+        description: "an ephemeral event",
+        payloadSchema: z.object({}),
+        ephemeral: true,
+      },
+    },
+    // Each type is named, so delivery hands the engine its ephemerals; "demo/undefined" has no definition.
+    consumes: ["demo/durable", "demo/frame", "demo/undefined"],
+    emits: [],
+  });
+  const effects: string[] = [];
+  class P extends StreamProcessor<z.infer<typeof contract.stateSchema>> {
+    contract = contract;
+    reduce({ event, state }: ReduceArgs<z.infer<typeof contract.stateSchema>>) {
+      return {
+        reduced: [...state.reduced, `${event.type}${event.ephemeral ? " (ephemeral)" : ""}`],
+      };
+    }
+    override processEvent({
+      event,
+    }: ProcessEventArgs<z.infer<typeof contract.stateSchema>>): undefined {
+      if (event) effects.push(`${event.type}${event.ephemeral ? " (ephemeral)" : ""}`);
+    }
+  }
+  const issues = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    const mem = memoryStream();
+    const p = new ProcessorEngine(new P(), { stream: mem.stream, storage: memoryStorage() });
+    mem.engines.push(p);
+    mem.stream.append({ type: "demo/durable", ephemeral: true }); // an untyped append made it ephemeral
+    mem.stream.append({ type: "demo/frame", ephemeral: true });
+    mem.stream.append({ type: "demo/undefined", ephemeral: true });
+    mem.stream.append({ type: "demo/durable" });
+    await settle();
+    const seen = ["demo/frame (ephemeral)", "demo/undefined (ephemeral)", "demo/durable"];
+    expect(effects).toEqual(seen);
+    expect(await p.snapshot()).toMatchObject({ state: { reduced: seen } });
+    expect(issues).toHaveBeenCalledTimes(1);
+    expect(issues.mock.calls[0]![0]).toMatchObject({
+      failureSite: "processor.reduce.ephemeral",
+      type: "demo/durable",
+    });
+  } finally {
+    issues.mockRestore();
+  }
+});
+
 test("a version replay reproduces the live coercion, not the raw input", async () => {
   const mem = memoryStream();
   const storage = memoryStorage();

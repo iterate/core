@@ -7,7 +7,8 @@
 // worker, and a reserved name refuses a spec (context/facet-host.ts `FacetHost#callFacet`,
 // context/built-ins.ts `processors.enable`); the reduce marks a hosting row for a reserved name
 // without a source (stream/core-processor.ts). Pinned: test/vitest/os-workers/facets.test.ts.
-// WHERE each one may be hosted is context/first-party-facet-placement.ts's rules.
+// WHERE each one may be hosted is context/first-party-facet-placement.ts's rules; WHAT its row
+// delivers is first-party-row-filter.ts's.
 export const FIRST_PARTY_FACET_CLASSES = {
   account: "AccountFacet",
   email: "EmailFacet",
