@@ -31,6 +31,7 @@ import * as oauth from "oauth4webapi";
 import { z } from "zod";
 import type { ClientAuth, SecretOAuthClient } from "iterate/api";
 import { codedError } from "iterate/lib";
+import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "./context/paths.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { consentAccountRefusal } from "./integrations/rules.ts";
 import {
@@ -379,4 +380,19 @@ export function isSecretOAuthState(claims: unknown): claims is SecretOAuthState 
     typeof (claims.next ?? "") === "string" &&
     typeof (claims.start ?? "") === "string"
   );
+}
+
+/** A secret's OWNER (context/paths.ts `resourceScope`), read off the secret's context (its Durable
+ *  Object name, what the callback's claims carry): a project's id, or the user's / the
+ *  organization's id whose own secret it is — the callback admits the human by it, and the start hop finds the attempt by it. `path` is the
+ *  path the placeholder spells, `/secrets/<name>`, relative to the owner's root. */
+export function secretOwnerOf(context: string): {
+  kind: "project" | "users" | "organizations";
+  id: string;
+  path: string;
+} {
+  const { projectId, path } = DurableObjectNameCodec.parse(context);
+  const owner = resourceScope(projectId, path);
+  if (owner.kind === "global") throw new Error("the global root owns no secrets");
+  return { kind: owner.kind, id: owner.ownerId, path: pathUnderOwner(owner, path) };
 }

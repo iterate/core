@@ -29,7 +29,7 @@ import {
   moveOfferConnectionOf,
   type IntegrationScope,
 } from "../integrations/connections.ts";
-import { acceptGithubCallback } from "../integrations/github.ts";
+import { acceptGithubCallback, githubStartTarget } from "../integrations/github.ts";
 import {
   confirmIntegrationMove,
   connectIntegration,
@@ -357,6 +357,17 @@ export class ProjectFacet extends StreamProcessorDurableObject<
   finishIntegrationConnect(input: FinishConnectInput): Promise<FinishConnectAnswer> {
     return this.#onConnection(input?.provider, input?.connection, (integrations) =>
       finishIntegrationConnect(this.#integrationScope(), integrations, input),
+    );
+  }
+
+  /** The GitHub URL a connect's start link sends the browser on to: the platform's start hop alone
+   *  (context/built-ins.ts `integrations.githubStartTarget`), so not published. */
+  githubStartTarget(input: { connection: string; nonce: string }): Promise<string> {
+    return this.#onConnection("github", input?.connection, () =>
+      githubStartTarget(this.#integrationScope(), {
+        connection: assertConnectionName(input?.connection),
+        nonce: String(input?.nonce),
+      }),
     );
   }
 

@@ -15,19 +15,14 @@ import {
 } from "./iterate-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { contextStub } from "./context-stub.ts";
-import {
-  DurableObjectNameCodec,
-  GLOBAL_PROJECT_ID,
-  pathUnderOwner,
-  resourceScope,
-} from "./context/paths.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { authorizationForToken } from "./oauth.ts";
 import { moveOfferLanding } from "./integrations/connections.ts";
 import type { FinishConnectAnswer, FinishConnectInput } from "./integrations/verbs.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
-import { isSecretOAuthState } from "./secret-oauth.ts";
+import { isSecretOAuthState, secretOwnerOf } from "./secret-oauth.ts";
 import { callbackPage } from "./callback-page.ts";
 import { signInHref } from "./login-search.ts";
 import { isDocumentNavigation } from "./project-host-sign-in.ts";
@@ -43,21 +38,6 @@ export async function callbackAuthorization(
   return bearer
     ? authorizationForToken(env, bearer, addresses, "secret-oauth-callback")
     : browserAuthorization(env, request);
-}
-
-/** A secret's OWNER (context/paths.ts `resourceScope`), read off the secret's context (its Durable
- *  Object name, what the callback's claims carry): a project's id, or the user's / the
- *  organization's id whose own secret it is — the callback admits the human by it. `path` is the
- *  path the placeholder spells, `/secrets/<name>`, relative to the owner's root. */
-function secretOwnerOf(context: string): {
-  kind: "project" | "users" | "organizations";
-  id: string;
-  path: string;
-} {
-  const { projectId, path } = DurableObjectNameCodec.parse(context);
-  const owner = resourceScope(projectId, path);
-  if (owner.kind === "global") throw new Error("the global root owns no secrets");
-  return { kind: owner.kind, id: owner.ownerId, path: pathUnderOwner(owner, path) };
 }
 
 /** WHO may complete a secret's OAuth: a session that reaches the secret's owner — for a project's

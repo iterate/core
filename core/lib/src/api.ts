@@ -1261,9 +1261,10 @@ export interface IterateContextApi {
      *  the platform's callback, which completes only in the browser that opened the link (and they
      *  must be signed in as someone who reaches the secret's owner); the secret's facet exchanges the
      *  code, `secret/set` lands, and the callback redirects to `next`. The link stays good for an
-     *  hour, and opens again on another device. Only from a session, which carries the platform's
-     *  origin. `nonce` names this attempt (the callback's signed `state` carries it); a later
-     *  `beginOAuth` on the same path replaces it. */
+     *  hour, and opens again on another device. It is short and names only the attempt: the
+     *  provider's URL, its `state` and the PKCE challenge stay on the platform. Only from a session,
+     *  which carries the platform's origin. `nonce` names this attempt (the callback's signed `state`
+     *  carries it); a later `beginOAuth` on the same path replaces it, and its link then sends nowhere. */
     beginOAuth(
       path: string,
       options: SecretOAuthOptions,

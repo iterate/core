@@ -85,6 +85,8 @@ type GithubAttempt = MovableAttempt & {
   /** The `redirect_uri` the authorize fallback named, which the code exchange repeats (RFC 6749
    *  4.1.3); an install redirect's code names none. */
   redirectUri?: string;
+  /** The GitHub URL the connect's start link sends the browser on to (`githubStartTarget`). */
+  authorizationUrl?: string;
 };
 
 /** The platform-signed `state` both GitHub redirects carry back. */
@@ -116,14 +118,38 @@ async function signedState(
   return signClaims(state, await sessionSigningSecretOf(iterateConfigOf(scope.env)));
 }
 
-/** The start link the human opens for GitHub's `url` (secret-oauth-start.ts). */
-async function startLinkFor(scope: IntegrationScope, origin: string, url: URL, until: number) {
+/** The attempt with GitHub's `url` kept for its start hop, stored, and the start link the human
+ *  opens for it (secret-oauth-start.ts). */
+async function startLinkFor(
+  scope: IntegrationScope,
+  origin: string,
+  connection: string,
+  attempt: GithubAttempt,
+  url: URL,
+) {
+  await scope.storage.put(attemptKeyOf("github", connection), {
+    ...attempt,
+    authorizationUrl: url.href,
+  });
   return startLinkOf(
     origin,
-    url.href,
-    until,
+    { projectId: scope.projectId, connection, nonce: attempt.nonce },
+    attempt.until,
     await sessionSigningSecretOf(iterateConfigOf(scope.env)),
   );
+}
+
+/** The GitHub URL of the connect in flight whose nonce a start link names: the platform's start hop
+ *  alone (context/built-ins.ts `integrations.githubStartTarget`). Refused once a newer connect
+ *  replaced it, it finished or it expired. */
+export async function githubStartTarget(
+  scope: IntegrationScope,
+  input: { connection: string; nonce: string },
+): Promise<string> {
+  const attempt = await scope.storage.get<GithubAttempt>(attemptKeyOf("github", input.connection));
+  if (!attempt?.authorizationUrl || attempt.nonce !== input.nonce || attempt.until <= Date.now())
+    throw codedError("GONE", "no GitHub connect in flight matches this link — begin again");
+  return attempt.authorizationUrl;
 }
 
 export async function connectGithub(
@@ -165,19 +191,17 @@ export async function connectGithub(
       installationId: input.installationId,
       redirectUri: `${origin}${GITHUB_CALLBACK_PATH}`,
     };
-    await scope.storage.put(attemptKeyOf("github", connection), known);
     const authorize = new URL(`${github.githubOrigin}/login/oauth/authorize`);
     authorize.searchParams.set("client_id", github.oauthClientId);
     authorize.searchParams.set("redirect_uri", known.redirectUri!);
     authorize.searchParams.set("state", await signedState(scope, connection, known));
-    return { authorizationUrl: await startLinkFor(scope, origin, authorize, known.until) };
+    return { authorizationUrl: await startLinkFor(scope, origin, connection, known, authorize) };
   }
-  await scope.storage.put(attemptKeyOf("github", connection), attempt);
   const install = new URL(
     `${github.githubOrigin}/apps/${encodeURIComponent(github.appSlug)}/installations/new`,
   );
   install.searchParams.set("state", await signedState(scope, connection, attempt));
-  return { authorizationUrl: await startLinkFor(scope, origin, install, attempt.until) };
+  return { authorizationUrl: await startLinkFor(scope, origin, connection, attempt, install) };
 }
 
 /** GitHub's redirect back, as the callback hands it over (the header's three cases), with the

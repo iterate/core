@@ -147,7 +147,12 @@ type Material = {
 /** THE OAUTH ATTEMPT IN FLIGHT (storage `pending`): what `beginOAuth` began, and the write
  *  lineage it began on (`setAt`). A write since ends it: `written` drops it, and its exchange
  *  refuses to land over the write; a mint or a reseal meanwhile is no write. */
-type PendingAttempt = PendingSecretOAuth & { basedOn: number | null };
+type PendingAttempt = PendingSecretOAuth & {
+  basedOn: number | null;
+  /** The provider's URL, for an attempt the platform's callback completes: what its start link's
+   *  hop sends the browser on to (`oauthStartTarget`, secret-oauth-start.ts). */
+  authorizationUrl?: string;
+};
 
 /** A MINT WHOSE FACT HAS YET TO LAND (storage `minted`): the cell `#doRefresh` sealed, and the
  *  write it refreshed. A provider may have rotated the refresh token on that mint, so the cell is
@@ -761,17 +766,35 @@ export class SecretFacet extends StreamProcessorDurableObject<
     // the human reaches the provider from it
     const authorizationUrl = options.redirectUri
       ? providerUrl
-      : await startLinkOf(platformOrigin, providerUrl, state.exp, signingSecret);
+      : await startLinkOf(
+          platformOrigin,
+          { context: state.context, nonce },
+          state.exp,
+          signingSecret,
+        );
     // a new attempt replaces the one in flight: an exchange started before it finds no pending
-    // attempt of its nonce when it comes to write (`completeOAuth`'s fence)
+    // attempt of its nonce when it comes to write (`completeOAuth`'s fence), and its start link
+    // finds no provider's URL
     await this.ctx.storage.put<PendingAttempt>("pending", {
       ...pending,
       basedOn: (await this.#material())?.setAt ?? null,
+      // a `redirect` attempt has no start link: the project's page sends the human on
+      authorizationUrl: options.redirectUri ? undefined : providerUrl,
     });
     await this.ctx.storage.delete("held");
     // the nonce names this attempt to whoever finishes it (integrations/verbs.ts): the callback
     // carries it, signed, in `state`
     return { authorizationUrl, nonce };
+  }
+
+  /** The provider's URL of the attempt in flight whose nonce a start link names
+   *  (secret-oauth-start.ts): the platform's start hop alone (`itx.secrets.oauthStartTarget`).
+   *  Refused once a newer attempt replaced it, it finished or it expired. */
+  async oauthStartTarget(input: { nonce: string }): Promise<string> {
+    const pending = await this.ctx.storage.get<PendingAttempt>("pending");
+    if (!pending?.authorizationUrl || pending.nonce !== input?.nonce || pending.until <= Date.now())
+      throw codedError("GONE", "no pending attempt matches this link — begin again");
+    return pending.authorizationUrl;
   }
 
   /** The OAuth client an attempt exchanges with: the one passed in the clear, or the deployment's

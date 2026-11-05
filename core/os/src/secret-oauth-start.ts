@@ -9,14 +9,20 @@
 // provider's URL never leaves the browser that opened the link. The same idiom as identity.ts's flow
 // cookie, reduced to one random value: the attempt's secrets stay in the secret's facet.
 //
-// The link is a signed `{ to, exp }`: `to` is the provider's URL the platform composed, so the hop
-// follows only a URL the platform wrote. Called by worker.ts.
+// The link is short: a signed claim naming the attempt (the secret's context, or GitHub's project and
+// connection) and its nonce. The hop asks the attempt's owner, as the platform, for the provider's
+// URL it composed and stored (`itx.secrets.oauthStartTarget`, `itx.integrations.githubStartTarget`),
+// so it follows only a URL the platform wrote, and the provider's URL, its `state` and the PKCE
+// challenge never appear in a link anyone shares. Called by worker.ts.
 
 import { cookieValueOf } from "iterate/lib";
 import { base64url, secretsEqual, sha256Hex, signClaims, verifyClaims } from "./caller.ts";
 import { callbackPage } from "./callback-page.ts";
+import { contextStub } from "./context-stub.ts";
+import { DurableObjectNameCodec } from "./context/paths.ts";
 import type { Env } from "./env.ts";
 import { iterateConfigOf, sessionSigningSecretOf } from "./iterate-config.ts";
+import { secretOwnerOf } from "./secret-oauth.ts";
 import { isRecord } from "./secrets.ts";
 import { isDocumentNavigation } from "./project-host-sign-in.ts";
 
@@ -32,40 +38,101 @@ const startCookieNameOf = async (start: string) =>
   `__Host-itx-oauth-start-${(await sha256Hex(start)).slice(0, 16)}`;
 const cookieAttributes = "HttpOnly; Secure; SameSite=Lax; Path=/";
 
+/** The attempt a start link names: a secret's (its context, the Durable Object name the callback's
+ *  `state` carries too) or a GitHub connect's (its project and connection), with its nonce. */
+export type StartTarget =
+  | { context: string; nonce: string }
+  | { projectId: string; connection: string; nonce: string };
+
 /** The signed `s` of a start link. `kind` keeps it apart from every other claim set the same key
  *  signs; a start link is never a callback's `state`, nor the reverse. */
-type OAuthStartLink = { kind: "oauth-start"; to: string; exp: number };
+type OAuthStartLink = StartTarget & { kind: "oauth-start"; exp: number };
 
-/** The start link for the provider's URL `to`, on `platformOrigin`, valid until `exp`. */
+const isStartLink = (link: unknown): link is OAuthStartLink =>
+  isRecord(link) &&
+  link.kind === "oauth-start" &&
+  typeof link.nonce === "string" &&
+  typeof link.exp === "number" &&
+  (typeof link.context === "string" ||
+    (typeof link.projectId === "string" && typeof link.connection === "string"));
+
+/** The start link for the attempt `target`, on `platformOrigin`, valid until `exp`. */
 export async function startLinkOf(
   platformOrigin: string,
-  to: string,
+  target: StartTarget,
   exp: number,
   signingSecret: string,
 ): Promise<string> {
-  const link: OAuthStartLink = { kind: "oauth-start", to, exp };
+  const link: OAuthStartLink = { kind: "oauth-start", ...target, exp };
   const url = new URL(SECRET_OAUTH_START_PATH, platformOrigin);
   url.searchParams.set("s", await signClaims(link, signingSecret));
   return url.href;
 }
 
+/** The provider's URL the link's attempt stored, asked of its owner as the platform: the secret's
+ *  context, or the project's root for GitHub. Throws `GONE` when no attempt in flight has the link's
+ *  nonce. */
+async function providerUrlOf(env: Env, link: OAuthStartLink): Promise<string> {
+  const platform = { principal: null, platform: true } as const;
+  if ("context" in link) {
+    // `invoke` is untyped across the DO hop: this is the built-in's own declared answer
+    // (context/built-ins.ts `secrets.oauthStartTarget`)
+    return (await contextStub(
+      env.ITERATE_CONTEXT,
+      DurableObjectNameCodec.parse(link.context),
+      "secret-oauth",
+    ).invoke(
+      [
+        "itx",
+        "builtins",
+        "secrets",
+        ["oauthStartTarget", secretOwnerOf(link.context).path, { nonce: link.nonce }],
+      ],
+      [],
+      platform,
+    )) as string;
+  }
+  // `invoke` is untyped across the DO hop: this is the built-in's own declared answer
+  // (context/built-ins.ts `integrations.githubStartTarget`)
+  return (await contextStub(
+    env.ITERATE_CONTEXT,
+    DurableObjectNameCodec.address({ projectId: link.projectId, path: "/" }),
+    "integrations",
+  ).invoke(
+    [
+      "itx",
+      "builtins",
+      "integrations",
+      ["githubStartTarget", { connection: link.connection, nonce: link.nonce }],
+    ],
+    [],
+    platform,
+  )) as string;
+}
+
 /** A browser opens a start link: a fresh `start` in the provider's `state` and in a cookie, then on
  *  to the provider. Anything but a page navigation (a link preview, a prefetch) gets a page and no
- *  cookie. */
+ *  cookie, and wakes no attempt. */
 export async function secretOAuthStart(request: Request, env: Env): Promise<Response> {
   const signingSecret = await sessionSigningSecretOf(iterateConfigOf(env));
   const link = await verifyClaims(new URL(request.url).searchParams.get("s") ?? "", signingSecret);
-  if (
-    !isRecord(link) ||
-    link.kind !== "oauth-start" ||
-    typeof link.to !== "string" ||
-    typeof link.exp !== "number" ||
-    link.exp <= Date.now()
-  )
+  if (!isStartLink(link) || link.exp <= Date.now())
     return callbackPage(400, "This link is not one the platform issued, or it has expired.");
   if (!isDocumentNavigation(request))
     return callbackPage(200, "Open this link in your browser to continue.");
-  const to = new URL(link.to);
+  let to: URL;
+  try {
+    to = new URL(await providerUrlOf(env, link));
+  } catch (error) {
+    // only the attempt's own "gone" is a dead link; a platform failure (a deploy's reset, an
+    // overload) propagates, so the human retries the same link instead of asking for a new one,
+    // which would replace an attempt a browser may already be completing
+    if (!isRecord(error) || error.code !== "GONE") throw error;
+    return callbackPage(
+      400,
+      "This link is no longer in flight: a newer link replaced it, or it already finished. Ask for a new one.",
+    );
+  }
   const state = await verifyClaims(to.searchParams.get("state") ?? "", signingSecret);
   if (!isRecord(state) || !STARTABLE_KINDS.includes(String(state.kind)))
     return callbackPage(400, "This link is not one the platform issued, or it has expired.");

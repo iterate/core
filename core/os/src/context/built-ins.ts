@@ -149,6 +149,9 @@ type PlatformSecretsVerbs = {
     path: string,
     input: { code: string; state: string },
   ): Promise<{ path: string; scopes: string[]; held?: HeldToken }>;
+  /** The platform's start hop (secret-oauth-start.ts): the provider's URL of the attempt in flight
+   *  whose nonce its link names. You never call it. */
+  oauthStartTarget(path: string, input: { nonce: string }): Promise<string>;
   /** The platform's move of a Slack workspace here (integrations/verbs.ts `confirmIntegrationMove`):
    *  the token its consent's exchange held aside (secret/durable-object.ts `admitHeldToken`) stored,
    *  then `secret/set`, like `completeOAuth`. You never call it. */
@@ -209,6 +212,9 @@ type PlatformIntegrationsVerbs = {
     input: ConnectInput & { connectToProject: NonNullable<ConnectionAttempt["connectToProject"]> },
   ): Promise<{ authorizationUrl: string }>;
   finishConnect(input: FinishConnectInput): Promise<FinishConnectAnswer>;
+  /** The platform's start hop (secret-oauth-start.ts): the GitHub URL of the connect in flight whose
+   *  nonce its link names, on the project's root. You never call it. */
+  githubStartTarget(input: { connection: string; nonce: string }): Promise<string>;
   disconnect(
     provider: IntegrationProvider,
     connection: string,
@@ -1343,6 +1349,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // was spent — the callback answers the error, and its replay (a refreshed tab; the facet
       // completes the attempt it completed idempotently, no second exchange) lands the facts and
       // catches the log up. Until then `list()` does not show the secret while egress already honours it.
+      oauthStartTarget: (secretPath, input) => {
+        assertPlatformCaller("secrets.oauthStartTarget");
+        return onSecretContext(
+          secretPath,
+          ["oauthStartTarget", secretPath, input],
+          // a facet call answers `unknown` over the hop: SecretFacet.oauthStartTarget's answer
+          async () =>
+            (await secretFacet(["oauthStartTarget", { nonce: String(input?.nonce) }])) as string,
+        );
+      },
       completeOAuth: (secretPath, input) =>
         onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
           // the attempt is the one the signed state names; whose call it is — the platform
@@ -1978,6 +1994,19 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return deps.callFacetAsPlatform("account", [
           ["connectIntegration", connect, connectToProject],
         ]) as Promise<{ authorizationUrl: string }>;
+      },
+      githubStartTarget: async (input) => {
+        assertPlatformCaller("integrations.githubStartTarget");
+        if (path !== owner.rootPath)
+          throw codedError(
+            "INVALID_CONTEXT",
+            "itx.integrations.githubStartTarget: the project's root",
+          );
+        // a facet call answers `unknown` over the hop: this is the project facet's own declared
+        // answer (integrations/github.ts `githubStartTarget`)
+        return (await deps.callFacetAsPlatform(integrationsFacet("githubStartTarget"), [
+          ["githubStartTarget", input],
+        ])) as string;
       },
       finishConnect: async (input) => {
         assertPlatformCaller("integrations.finishConnect");
