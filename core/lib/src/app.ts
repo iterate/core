@@ -1,5 +1,6 @@
 import { newHttpBatchRpcSession, newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type { IterateApi, IterateSessionApi } from "./api.ts";
+import { startHeartbeat, type Heartbeat } from "./client/heartbeat.ts";
 import { openSocketWithRetry, socketOnceOpen } from "./client/socket.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
 
@@ -65,30 +66,48 @@ export function createIterateClient(options: { scopes?: string[] } = {}): Iterat
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url;
   };
-  /** Adopt a connection as the live one until its socket closes. A close also forgets the settled
+  /** Adopt a connection as the live one until its socket closes or its heartbeat finds it dead
+   *  (client/heartbeat.ts; a browser cannot send a WebSocket ping). Either also forgets the settled
    *  `authenticate` — the next one probes `/api` again, so a session that ended elsewhere sends the
-   *  browser to log in instead of a retry that can only fail. */
+   *  browser to log in instead of a retry that can only fail. A page back in the foreground, or a
+   *  network back, beats at once. */
   function adopt(socket: WebSocket): Connection {
     const connection = connectionOn(socket);
     live = connection;
+    let heartbeat: Heartbeat | undefined;
+    const beatNow = () => heartbeat?.beatNow();
+    const onVisible = () => document.visibilityState === "visible" && beatNow();
     const forget = () => {
+      heartbeat?.stop();
+      window.removeEventListener("pagehide", dispose);
+      window.removeEventListener("online", beatNow);
+      document.removeEventListener("visibilitychange", onVisible);
       if (live !== connection) return;
       live = null;
       connecting = undefined;
     };
-    const dispose = () => {
+    function dispose() {
       forget();
       connection.dispose();
-    };
+    }
+    // from the open on: the upgrade's own attempts are client/socket.ts's to bound
     socket.addEventListener(
-      "close",
+      "open",
       () => {
-        forget();
-        window.removeEventListener("pagehide", dispose);
+        heartbeat = startHeartbeat({
+          beat: () => connection.api.whoami(),
+          onDead: (reason) => {
+            console.warn(`The connection to iterate is dead (${reason}). Reconnecting.`);
+            dispose();
+          },
+        });
       },
       { once: true },
     );
+    socket.addEventListener("close", forget, { once: true });
     window.addEventListener("pagehide", dispose, { once: true });
+    window.addEventListener("online", beatNow);
+    document.addEventListener("visibilitychange", onVisible);
     return connection;
   }
   // Every property read goes to the live connection — or to a fresh one when the last socket

@@ -54,6 +54,11 @@ function fakePage(status: number) {
     addEventListener: () => {},
     removeEventListener: () => {},
   });
+  vi.stubGlobal("document", {
+    visibilityState: "visible",
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  });
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const body = String(init?.body || "");
     if (!body) {

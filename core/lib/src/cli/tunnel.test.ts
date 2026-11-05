@@ -243,7 +243,9 @@ test("a tunnel whose connection closes reconnects, lends and routes again; it en
       ),
   ];
   const run = runTunnel({
-    connection: fake.connection(Promise.resolve({ code: 1006, reason: "no answer to a ping" })),
+    connection: fake.connection(
+      Promise.resolve({ code: 1006, reason: "no answer to a heartbeat for 15 s" }),
+    ),
     reconnect: () => {
       const next = reconnects.shift();
       if (!next) return Promise.reject(new Error("still offline"));
@@ -271,7 +273,7 @@ test("a tunnel whose connection closes reconnects, lends and routes again; it en
   });
   expect(stderr.mock.calls.map(([line]) => String(line))).toEqual([
     expect.stringContaining("Press Ctrl-C to stop."),
-    "The tunnel disconnected (1006: no answer to a ping). Reconnecting...",
+    "The tunnel disconnected (1006: no answer to a heartbeat for 15 s). Reconnecting...",
     "Could not reconnect: getaddrinfo ENOTFOUND os.example.com",
     "Reconnected: https://blog--p.example.com/ → http://localhost:5173",
     "The tunnel disconnected (1006: gone). Reconnecting...",
