@@ -455,7 +455,155 @@ test("a long-lived agent keeps warm by default for two hours after its last requ
   expect(agent.scheduled).toHaveLength(2);
 });
 
+type WarmedAgent = ReturnType<typeof agentOnLog>;
+
+test.for<{
+  name: string;
+  config?: AgentConfigPatch;
+  /** What the ping sends that the next request does not share: its own words, by default. */
+  unshared?: number;
+  prepare(agent: WarmedAgent): Promise<void>;
+}>([
+  {
+    name: "after earlier turns, with a call's brief since",
+    prepare: async (agent) => {
+      agent.commit(words("New call.\nPerson: My locker code is 4417."));
+      await vi.waitFor(() =>
+        expect(
+          agent.events.some(
+            (event) => event.type === "events.iterate.com/agent/llm-request-settled",
+          ),
+        ).toBe(true),
+      );
+      agent.commit(BRIEF);
+    },
+  },
+  {
+    name: "on a fresh agent, whose head no request has written",
+    prepare: async (agent) => agent.commit(BRIEF),
+  },
+  {
+    name: "up to a standing file that changed since the last request, which each renders last",
+    unshared: 2,
+    prepare: async (agent) => {
+      agent.commit(words("New call.\nPerson: My locker code is 4417."));
+      await vi.waitFor(() =>
+        expect(
+          agent.events.some(
+            (event) => event.type === "events.iterate.com/agent/llm-request-settled",
+          ),
+        ).toBe(true),
+      );
+      agent.commit(BRIEF);
+      agent.standingFile.text = "Be briefer.";
+    },
+  },
+  {
+    name: "after a summary, a prefix no request has cached",
+    config: { idleCompactionAfterMs: 600_000, idleCompactionMinNewTokens: 5 },
+    prepare: async (agent) => {
+      agent.commit(words("New call.\nPerson: My locker code is 4417."));
+      await vi.waitFor(() => expect(agent.scheduled).toHaveLength(1));
+      const [{ events }] = agent.scheduled[0] as [{ events: Row[] }];
+      agent.commit(...events);
+      await vi.waitFor(() =>
+        expect(
+          agent.events.some((event) => (event.payload as { compaction?: unknown }).compaction),
+        ).toBe(true),
+      );
+      agent.commit(BRIEF);
+    },
+  },
+])(
+  "a warm-up pings the conversation as it stands, $name: the next request's input starts with the ping's, and the ping changes neither the conversation nor the schedule",
+  async ({ config, unshared = 1, prepare }) => {
+    const agent = agentOnLog("/agents/voice/kitchen", (body) =>
+      body.tool_choice === "none" ? "The locker code is 4417." : "Noted.",
+    );
+    agent.commit(...BORN, {
+      type: "events.iterate.com/agent/configured",
+      payload: { config: { llmRequestDebounceMs: 0, ...config } },
+    });
+    await agent.wake().catchUpFromLog();
+    await prepare(agent);
+    const asked = agent.bodies.length;
+    const armed = agent.scheduled.length;
+    agent.commit(WARM_UP);
+    await vi.waitFor(() => expect(kept(agent)).toHaveLength(1));
+
+    const ping = agent.bodies[asked]!;
+    expect(ping).toMatchObject({ tool_choice: "none", max_output_tokens: 16 });
+    const pingInput = ping.input as unknown[];
+    expect(JSON.stringify(pingInput)).toContain("[call brief]");
+    const ask = agent.events.find((event) => event.type === WARM_UP.type)!;
+    expect(kept(agent)[0]!.payload).toMatchObject({ afterRequestOffset: ask.offset });
+    expect(kept(agent)[0]!.payload).not.toHaveProperty("stopped");
+    expect(
+      agent.events.filter(
+        (event) =>
+          event.offset > ask.offset && event.type === "events.iterate.com/agent/context-added",
+      ),
+    ).toEqual([]);
+    expect(agent.scheduled).toHaveLength(armed);
+
+    agent.commit(words("New call.\nPerson: What is my locker code?"));
+    await vi.waitFor(() => expect(agent.bodies).toHaveLength(asked + 2));
+    const next = agent.bodies[asked + 1]!;
+    expect(next).toMatchObject({ tool_choice: "auto" });
+    expect((next.input as unknown[]).slice(0, pingInput.length - unshared)).toEqual(
+      pingInput.slice(0, -unshared),
+    );
+  },
+);
+
+test("a paused agent sends no ping, and pings once resumed", async () => {
+  const agent = agentOnLog("/agents/voice/kitchen", () => "ok");
+  agent.commit(...BORN, CONFIGURED_WITHOUT_DEBOUNCE);
+  await agent.wake().catchUpFromLog();
+  agent.commit(
+    { type: "events.iterate.com/agent/paused", payload: { reason: "a test" } },
+    WARM_UP,
+    { type: "events.iterate.com/agent/resumed", payload: {} },
+    WARM_UP,
+  );
+  await vi.waitFor(() => expect(kept(agent)).toHaveLength(1));
+  expect(agent.bodies).toHaveLength(1);
+});
+
+test("a press while a warm-up's ping runs sends no second ping", async () => {
+  const release = Promise.withResolvers<void>();
+  const agent = agentOnLog("/agents/voice/kitchen", () => "ok", undefined, release.promise);
+  agent.commit(...BORN, CONFIGURED_WITHOUT_DEBOUNCE);
+  const engine = agent.wake();
+  await engine.catchUpFromLog();
+  agent.commit(WARM_UP);
+  await vi.waitFor(() => expect(agent.bodies).toHaveLength(1));
+  const second = agent.nextOffset();
+  agent.commit(WARM_UP);
+  await engine.waitUntilProcessed({ offset: second });
+  release.resolve();
+  await vi.waitFor(() => expect(kept(agent)).toHaveLength(1));
+  expect(agent.bodies).toHaveLength(1);
+});
+
 type Row = { type: string; payload?: unknown };
+
+const WARM_UP: Row = { type: "events.iterate.com/agent/warm-up-requested", payload: {} };
+const CONFIGURED_WITHOUT_DEBOUNCE: Row = {
+  type: "events.iterate.com/agent/configured",
+  payload: { config: { llmRequestDebounceMs: 0 } },
+};
+/** What a phone bridge tells a call's agent before the press: context, which starts no turn. */
+const BRIEF: Row = {
+  type: "events.iterate.com/agent/context-added",
+  payload: {
+    role: "user",
+    content: "[call brief] The owner rang you.",
+    llmRequestPolicy: { behaviour: "dont-trigger-request" },
+  },
+};
+const kept = ({ events }: WarmedAgent) =>
+  events.filter((event) => event.type === "events.iterate.com/agent/cache-kept-warm");
 
 const BORN: Row[] = [
   { type: "events.iterate.com/agent/create-requested", payload: {} },
@@ -479,16 +627,19 @@ function agentOnLog(
   path: string,
   answer: (body: Record<string, unknown>) => string,
   usage?: (body: Record<string, unknown>) => Record<string, unknown>,
+  /** Holds every model call until it settles. */
+  held?: Promise<void>,
 ) {
   const log = memoryStream(path);
   const storage = memoryStorage();
   const bodies: Record<string, unknown>[] = [];
   const scheduled: unknown[][] = [];
+  const standingFile = { text: "Be brief." };
   const itx = {
     whoami: async () => ({ projectId: "prj_t", path, projectSlug: "t" }),
     repos: {
       get: async () => ({
-        readFile: async (file: string) => (file === "AGENTS.md" ? "Be brief." : null),
+        readFile: async (file: string) => (file === "AGENTS.md" ? standingFile.text : null),
       }),
     },
     cd: () => ({ rewriteRules: { list: async () => [] } }),
@@ -496,6 +647,7 @@ function agentOnLog(
     ai: {
       run: async (_model: string, body: Record<string, unknown>) => {
         bodies.push(body);
+        await held;
         return sse(answered(answer(body), undefined, usage?.(body)));
       },
     },
@@ -517,6 +669,7 @@ function agentOnLog(
     bodies,
     scheduled,
     events: log.events,
+    standingFile,
   };
 }
 

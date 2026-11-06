@@ -547,10 +547,16 @@ export const AgentContract = defineProcessorContract({
         keptWarmUsd: z.number().nonnegative().optional(),
       }),
     },
+    "events.iterate.com/agent/warm-up-requested": {
+      description:
+        "Someone will need this agent in a moment, as a voice call's press says. An agent with nothing open sends one ping over its conversation as it stands, so the request to come finds its context awake, its socket open and its prompt cached. Best effort: the ping writes nothing to the conversation, and `agent/cache-kept-warm` reports it.",
+      payloadSchema: z.object({}),
+    },
     "events.iterate.com/agent/cache-kept-warm": {
       description:
-        "A keep-warm ping: the request it names re-read from the provider's prompt cache, so the history stays cached 30 more minutes, what that cost, and whether it was the window's last.",
+        "A ping: the history read from the provider's prompt cache, or written to it, so it stays cached 30 more minutes, what that cost, and whether it was the keep-warm window's last.",
       payloadSchema: z.object({
+        /** The request a keep-warm ping re-read, or the `warm-up-requested` a warm-up answers. */
         afterRequestOffset: z.number().int().positive(),
         usage: LlmUsage.optional(),
         /** Why this was the window's last ping: it read less than half its input from the cache
@@ -597,6 +603,7 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/preamble-entry-quarantined",
     "events.iterate.com/agent/summary-updated",
     "events.iterate.com/agent/idle-check",
+    "events.iterate.com/agent/warm-up-requested",
     "events.iterate.com/agent/answer-reminded",
     "events.iterate.com/agent/input-gated",
     "events.iterate.com/itx/run-requested",

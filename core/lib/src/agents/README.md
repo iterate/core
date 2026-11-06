@@ -47,6 +47,18 @@ folds those. An agent created before those rows existed shows only its path.
 - `catalog.ts`, `collection.ts` — `itx.agents`; `durable-object.ts` — one agent.
 - `responses-keys.ts` — the model call with a stack of API keys.
 
+## Warming up
+
+Code that knows an agent will be needed in a moment appends `agent/warm-up-requested` on its context:
+`@iterate-com/voice` copies each press of a call there. If nothing is open, the agent sends one ping
+over its conversation as it stands, so the request that follows finds its context awake, its socket
+open (with `llm.apiKeys`) and its prompt cached. The ping writes nothing to the conversation and
+changes no schedule, and `agent/cache-kept-warm` reports what it cost. A press that no request
+follows costs that one ping.
+
+It is best effort. The provider may miss its cache, and a context sleeps about 10 s after its last
+call, so a request long after the ping keeps only the cached prompt.
+
 ## Your own credentials
 
 By default an agent's model calls go through the deployment's AI Gateway: no key, billed to the

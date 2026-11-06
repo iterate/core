@@ -82,7 +82,7 @@ const IDLE_SUMMARY_SINCE_PROMPT = `${AGENT_COMPACTION_PROMPT}
 
 The earlier summaries above stay in your context word for word, so do not repeat anything in them. Summarize only what happened after them, the same way, and say where it updates or supersedes them. End with two short lists: PENDING and IDENTIFIERS (only new or changed ones). Keep it under 1,000 words.`;
 
-/** A KEEP-WARM PING's input after the request's own: it asks for nothing, and the answer is dropped. */
+/** A PING's input after the conversation's: it asks for nothing, and the answer is dropped. */
 const KEEP_WARM_PROMPT =
   "[Keep-warm request from the platform, not from anyone: it only keeps this conversation in the prompt cache. Do nothing and reply with exactly: ok]";
 
@@ -168,6 +168,17 @@ export function keepWarmStop(
   return (check.keptWarmUsd ?? 0) + 2 * ping > written - read ? "cost-cap" : undefined;
 }
 
+/** Nothing is open, running or waiting. */
+function nothingOpen(state: AgentState): boolean {
+  return (
+    !state.openRequest &&
+    !state.pendingLlmRequestTrigger &&
+    Object.keys(state.pendingRuns).length === 0 &&
+    !state.paused &&
+    !state.deletion
+  );
+}
+
 /** Nothing happened since the request at `requestOffset`, and no summary covers it. */
 function quietSince(state: AgentState, requestOffset: number): boolean {
   const newest = Math.max(
@@ -176,11 +187,7 @@ function quietSince(state: AgentState, requestOffset: number): boolean {
   );
   return (
     newest === requestOffset &&
-    !state.openRequest &&
-    !state.pendingLlmRequestTrigger &&
-    Object.keys(state.pendingRuns).length === 0 &&
-    !state.paused &&
-    !state.deletion &&
+    nothingOpen(state) &&
     !state.contextItems.some(
       (item) =>
         item.compaction &&
@@ -1333,6 +1340,20 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       });
     }
 
+    // WARMING UP: someone will need this agent in a moment (contract.ts `warm-up-requested`). With
+    // anything open it is warm already, and a summary in flight is about to change its prompt. Not
+    // gated on `delivery.caughtUp`: the live-state event after a batch moves the head past the ask.
+    if (
+      event?.type === "events.iterate.com/agent/warm-up-requested" &&
+      state.creation?.status === "created" &&
+      nothingOpen(state) &&
+      !this.#compacting &&
+      !this.#warming
+    ) {
+      this.#warming = true;
+      runInBackground(() => this.#warmUp(state, event.offset, append));
+    }
+
     this.#atHead(args);
   }
 
@@ -1350,14 +1371,55 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     );
   }
 
-  /** THE KEEP-WARM PING: the named request's own input (so its cached prefix is what is read) and
-   *  the ping, on the agent's model and effort (both part of the cache key), the tool declared
-   *  but not callable, and at most 16 output tokens where the key takes the cap (a plan's token
-   *  refuses it, responses-keys.ts). Its cost lands as `cache-kept-warm`, and the next check is
-   *  set a ping interval later, carrying the pings' total. A ping that is the window's last
-   *  (`keepWarmStop`) sets instead a check due now with no window, which compacts while the
-   *  history is still cached, or none when idle compaction is off. Best effort: a failed ping
-   *  still sets the next check, which then compacts or pings again. */
+  /** ONE PING: the input through `throughOffset` (so its cached prefix is what is read, or written
+   *  when there is none) and the ping's words, on the agent's model and effort (both part of the
+   *  cache key), the tool declared but not callable, and at most 16 output tokens where the key
+   *  takes the cap (a plan's token refuses it, responses-keys.ts). It reads what a request reads
+   *  and writes nothing to the conversation. Answers what it cost. */
+  async #ping(state: AgentState, throughOffset: number): Promise<LlmUsage | undefined> {
+    const model = state.config.llm.model;
+    const { path } = await this.#identity();
+    const { usage } = await this.#stream({
+      model,
+      llm: state.config.llm,
+      input: [
+        ...(await this.#requestInput(state, throughOffset, model, null)),
+        { role: "user", content: KEEP_WARM_PROMPT },
+      ],
+      cacheKey: promptCacheKey(path),
+      signal: AbortSignal.timeout(state.config.llmRequestExpiryMs),
+      onDelta: () => undefined,
+      toolChoice: "none",
+      maxOutputTokens: 16,
+    });
+    return usage;
+  }
+
+  /** THE WARM-UP: one ping over the conversation as it stands, reported as `cache-kept-warm`. That
+   *  conversation is a prefix of the request to come, up to any standing section changed since the
+   *  last request, which each renders last. Best effort: a failed ping leaves that request as cold
+   *  as it was. */
+  async #warmUp(state: AgentState, offset: number, append: AgentArgs["append"]): Promise<void> {
+    try {
+      const usage = await this.#ping(state, offset);
+      await appendUnlessLost(append, {
+        type: "events.iterate.com/agent/cache-kept-warm",
+        idempotencyKey: this.idempotencyKey(`warm-up/${String(offset)}`),
+        payload: { afterRequestOffset: offset, usage },
+      });
+    } catch (error) {
+      console.warn({ event: "agent.warm-up-failed", offset, error: String(error).slice(0, 300) });
+    } finally {
+      this.#warming = false;
+    }
+  }
+
+  /** THE KEEP-WARM PING: the named request's own input, so the history it cached stays cached. Its
+   *  cost lands as `cache-kept-warm`, and the next check is set a ping interval later, carrying
+   *  the pings' total. A ping that is the window's last (`keepWarmStop`) sets instead a check due
+   *  now with no window, which compacts while the history is still cached, or none when idle
+   *  compaction is off. Best effort: a failed ping still sets the next check, which then compacts
+   *  or pings again. */
   async #keepWarm(input: {
     state: AgentState;
     check: IdleCheck;
@@ -1369,36 +1431,19 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     const key = `idle-compaction/${String(check.afterRequestOffset)}/${String(checkOffset)}`;
     let next = check;
     try {
-      const { path } = await this.#identity();
-      const answer = await this.#stream({
-        model,
-        llm: state.config.llm,
-        input: [
-          ...(await this.#requestInput(state, check.afterRequestOffset, model, append)),
-          { role: "user", content: KEEP_WARM_PROMPT },
-        ],
-        cacheKey: promptCacheKey(path),
-        signal: AbortSignal.timeout(state.config.llmRequestExpiryMs),
-        onDelta: () => undefined,
-        toolChoice: "none",
-        maxOutputTokens: 16,
-      });
-      const stopped = answer.usage && keepWarmStop(model, check, answer.usage);
+      const usage = await this.#ping(state, check.afterRequestOffset);
+      const stopped = usage && keepWarmStop(model, check, usage);
       await appendUnlessLost(append, {
         type: "events.iterate.com/agent/cache-kept-warm",
         idempotencyKey: this.idempotencyKey(`keep-warm/${String(checkOffset)}`),
-        payload: {
-          afterRequestOffset: check.afterRequestOffset,
-          usage: answer.usage,
-          stopped,
-        },
+        payload: { afterRequestOffset: check.afterRequestOffset, usage, stopped },
       });
       if (stopped) {
         if (state.config.idleCompactionAfterMs > 0)
           await this.#armIdleCheck({ ...check, keepWarmUntil: undefined }, Date.now(), key);
         return;
       }
-      const usd = answer.usage && (answer.usage.costUsd ?? requestCostUsd(model, answer.usage));
+      const usd = usage && (usage.costUsd ?? requestCostUsd(model, usage));
       next = {
         ...check,
         cacheReadAt: new Date().toISOString(),
@@ -1886,10 +1931,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
    *  ONE system item keyed to the request (the head snapshot on the first request). It lands after
    *  the request's stamp and before its answer, which is exactly where every later request renders
    *  it, so the input stays append-only. Answers the item for the request being built (the state
-   *  may not have it yet); null when nothing changed or the item is already in the state. */
+   *  may not have it yet); null when nothing changed or the item is already in the state. With no
+   *  `append` (a ping), the item is only answered: the next request writes it. */
   async #syncSections(
     state: AgentState,
-    append: AgentArgs["append"],
+    append: AgentArgs["append"] | null,
     requestOffset: number,
   ): Promise<RenderItem | null> {
     if (state.contextItems.some((item) => item.sections && item.llmRequestOffset === requestOffset))
@@ -1907,11 +1953,12 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       llmRequestOffset: requestOffset,
       ...(first && { snapshot: true }),
     };
-    await appendUnlessLost(append, {
-      type: "events.iterate.com/agent/context-added",
-      idempotencyKey: this.idempotencyKey(`sections/${String(requestOffset)}`),
-      payload,
-    });
+    if (append)
+      await appendUnlessLost(append, {
+        type: "events.iterate.com/agent/context-added",
+        idempotencyKey: this.idempotencyKey(`sections/${String(requestOffset)}`),
+        payload,
+      });
     return { offset: requestOffset + 0.5, ...payload };
   }
 
@@ -1924,7 +1971,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     state: AgentState,
     throughOffset: number,
     model: string,
-    append: AgentArgs["append"],
+    append: AgentArgs["append"] | null,
     replayReasoning = true,
   ): Promise<InputItem[]> {
     const { path } = await this.#identity();
@@ -1966,6 +2013,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
   /** This incarnation's compaction, so a second over-threshold request waits for the first. */
   #compacting = false;
+
+  /** This incarnation's warm-up, so a second press while it runs sends no second ping. */
+  #warming = false;
 
   /** THE COMPACTION: the request's own input, the
    *  summarize instruction appended as its last message (user role: the cache breakpoint before it
