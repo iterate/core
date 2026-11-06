@@ -400,6 +400,14 @@ export type SecretOAuthOptions = {
    *  first (`oauthCallbackUrl`, the redirect URI to register for a client of your own), which
    *  completes it only in the browser that opened the start link. */
   next?: string | { routingSlug?: string; path: string };
+  /** The one person who may complete the attempt, by their user id (`user_…`), when they need not
+   *  reach this secret's owner: a customer of the project's own app connecting their own account,
+   *  whom the project knows from a sign-in with this platform. The platform's callback then
+   *  completes the attempt only in a browser signed in as that person, in place of one that reaches
+   *  the owner; a member who is not that person is refused like anyone else. Only for a project's
+   *  secret, and only with a client of your own (`clientId`): the deployment's app is consented to
+   *  by someone who reaches the owner. */
+  completedByUserId?: string;
   /** How the token endpoint wants the client credential. */
   clientAuth?: ClientAuth;
   scope?: string;

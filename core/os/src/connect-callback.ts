@@ -9,7 +9,8 @@
 //   3. a platform session (a browser cookie, or a bearer that holds the start cookie too); a
 //      signed-out page navigation is sent to sign in with this very callback as its same-origin
 //      `next`, and comes back with its start cookie still set; anything else gets a 401;
-//   4. the session reaches the attempt's owner (else 403);
+//   4. the session is one the attempt admits: it reaches the attempt's owner (`reaching`), or it is
+//      the one person the attempt was begun for (secret-oauth-callback.ts); else 403;
 //   5. the provider did not answer `error` (else 400).
 // Nothing before the flow's completion touches the attempt, so a code is still the attempt's after
 // the sign-in detour.
@@ -44,6 +45,26 @@ export type CallbackAuthorization = NonNullable<Awaited<ReturnType<typeof callba
  *  attempt clears, secret-oauth-start.ts `withStartCleared`). */
 export type Admitted = { authorization: CallbackAuthorization; start: string };
 
+/** Who may complete an attempt: the check on a session, and what a caller who fails it reads. */
+export type Admission = {
+  admits: (controlPlane: ControlPlane, authorization: CallbackAuthorization) => Promise<boolean>;
+  /** The 401 of a client with no session, which is no browser to send to sign in. */
+  signedOut: string;
+  /** The 403 of a session the attempt does not admit. */
+  refused: string;
+};
+
+/** The admission of an attempt that belongs to `name` (a project, or the secrets of a project, a
+ *  person or an organization): any session that reaches it. */
+export const reaching = (
+  name: string,
+  reachedBy: (controlPlane: ControlPlane, reach: Reach) => Promise<boolean>,
+): Admission => ({
+  admits: (controlPlane, { reach }) => reachedBy(controlPlane, reach),
+  signedOut: `Sign in to iterate in this browser first, then open this link again — it connects to ${name}, which you must be a member of.`,
+  refused: `Your session cannot access ${name}.`,
+});
+
 /** The callback's `state`, verified and unexpired, when `isState` takes it; otherwise null. */
 export async function callbackStateOf<T extends { exp: number }>(
   url: URL,
@@ -61,21 +82,14 @@ export const notIssuedHere = () =>
   callbackPage(400, "This link is not one the platform issued, or it has expired.");
 
 /** Steps 2 to 5 of the header for a callback whose state verified (`callbackStateOf`): the admitted
- *  session, or the response that refuses it or sends it to sign in. `owner` is what the session must
- *  reach, and its name in the refusal. */
+ *  session, or the response that refuses it or sends it to sign in. */
 export async function admitCallback(
   request: Request,
   env: Env,
   addresses: PlatformAddresses,
-  input: {
-    start: unknown;
-    owner: {
-      name: string;
-      reachedBy: (controlPlane: ControlPlane, reach: Reach) => Promise<boolean>;
-    };
-  },
+  input: { start: unknown; admission: Admission },
 ): Promise<Response | Admitted> {
-  const { start } = input;
+  const { start, admission } = input;
   if (typeof start !== "string" || !start || !(await startedHere(request, start)))
     return notStartedHere();
   const url = new URL(request.url);
@@ -92,13 +106,9 @@ export async function admitCallback(
         "referrer-policy": "no-referrer",
       },
     });
-  if (!authorization)
-    return callbackPage(
-      401,
-      `Sign in to iterate in this browser first, then open this link again — it connects to ${input.owner.name}, which you must be a member of.`,
-    );
-  if (!(await input.owner.reachedBy(new ControlPlane(env), authorization.reach)))
-    return callbackPage(403, `Your session cannot access ${input.owner.name}.`);
+  if (!authorization) return callbackPage(401, admission.signedOut);
+  if (!(await admission.admits(new ControlPlane(env), authorization)))
+    return callbackPage(403, admission.refused);
   const denied = url.searchParams.get("error");
   if (denied) return callbackPage(400, `The provider declined: ${denied}`);
   return { authorization, start };

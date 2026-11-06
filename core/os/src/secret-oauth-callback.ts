@@ -17,7 +17,14 @@ import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { isSecretOAuthState, secretOwnerOf } from "./secret-oauth.ts";
 import { callbackPage } from "./callback-page.ts";
 import { withStartCleared } from "./secret-oauth-start.ts";
-import { admitCallback, callbackStateOf, notIssuedHere, refused } from "./connect-callback.ts";
+import {
+  admitCallback,
+  callbackStateOf,
+  notIssuedHere,
+  reaching,
+  refused,
+  type Admission,
+} from "./connect-callback.ts";
 
 /** WHO may complete a secret's OAuth: a session that reaches the secret's owner — for a project's
  *  secret, a session reaching that project; for a user's own, that user; for an organization's, a
@@ -36,11 +43,25 @@ async function reachesSecretOwner(
   return controlPlane.reachesOrg(reach, owner.id);
 }
 
+/** WHO completes an attempt begun for one person (iterate/api
+ *  `SecretOAuthOptions.completedByUserId`): a session of that person's own, whether or not it
+ *  reaches the secret's owner, and no one else's, a member of the owner included. The project's
+ *  code named them, and the platform says who a browser is. An impersonation is another person's
+ *  hands, so it is refused; the operator's bearer is no person. */
+const onlyPerson = (userId: string): Admission => ({
+  admits: async (_controlPlane, { principal }) =>
+    principal.actor === userId && !principal.impersonatedBy,
+  signedOut:
+    "Sign in to iterate in this browser first, then open this link again — it was started for one person, and only they can finish it.",
+  refused: "This connect was started for someone else. Sign in as them, or start it again.",
+});
+
 /** A secret's OAuth callback: the provider redirected the human here with `code` and the
  *  platform-signed `state` (secret-oauth.ts) naming the secret's context and the nonce. The shared
  *  admission (connect-callback.ts) admits the browser that started it, signed in, reaching the
- *  secret's owner (`reachesSecretOwner`); the secret's facet then exchanges the code. A failure is a
- *  4xx page that says why (callback-page.ts), never a credential. */
+ *  secret's owner (`reachesSecretOwner`), or signed in as the one person the attempt was begun for
+ *  (`onlyPerson`); the secret's facet then exchanges the code. A failure is a 4xx page that says
+ *  why (callback-page.ts), never a credential. */
 export async function secretOAuthCallback(
   request: Request,
   env: Env,
@@ -55,13 +76,15 @@ export async function secretOAuthCallback(
   } catch (error) {
     return callbackPage(400, error instanceof Error ? error.message : String(error));
   }
-  // connect-callback.ts: the start cookie, the session (or the sign-in detour), the owner's reach
+  // connect-callback.ts: the start cookie, the session (or the sign-in detour), then who it is
   const admitted = await admitCallback(request, env, addresses, {
     start: claims.start,
-    owner: {
-      name: `the secrets of ${owner.kind} ${owner.id}`,
-      reachedBy: (controlPlane, reach) => reachesSecretOwner(controlPlane, reach, owner),
-    },
+    admission:
+      claims.completedByUserId && owner.kind === "project"
+        ? onlyPerson(claims.completedByUserId)
+        : reaching(`the secrets of ${owner.kind} ${owner.id}`, (controlPlane, reach) =>
+            reachesSecretOwner(controlPlane, reach, owner),
+          ),
   });
   if (refused(admitted)) return admitted;
   const { authorization, start } = admitted;

@@ -205,12 +205,18 @@ function gatePage(input: {
 function onwardPage(location: string, headers: Record<string, string> = {}): Response {
   const href = text(location);
   return new Response(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${href}"><title>Signing in</title></head><body><p><a href="${href}">Continue</a></p></body></html>`,
+    // the gate pages' own look: the browser paints this page for the moment the next one takes to
+    // answer, and a bare document there is a white flash between two dark pages
+    standalonePage({
+      title: "Signing in",
+      head: `<meta http-equiv="refresh" content="0;url=${href}">`,
+      body: `<p><a href="${href}">Continue</a></p>`,
+    }),
     {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
-        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        "Content-Security-Policy": `default-src 'none'; style-src ${plainPageCssHash}; frame-ancestors 'none'`,
         "Referrer-Policy": "no-referrer",
         "X-Frame-Options": "DENY",
         ...headers,

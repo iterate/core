@@ -158,8 +158,14 @@ test("the connect form's POST moves on to the issuer's authorize endpoint by a r
   expect(answer).toMatchObject({ status: 200 });
   expect(answer?.headers.get("location")).toBeNull();
   expect(answer?.headers.get("set-cookie")).toContain("__Host-itx-session=");
-  expect(await answer?.text()).toContain(
+  const page = await answer?.text();
+  expect(page).toContain(
     `<meta http-equiv="refresh" content="0;url=${ISSUER}/oauth2/auth?state=x">`,
+  );
+  // the page is painted while the next one loads: it has the gate pages' look, which its policy allows
+  expect(page).toContain(`<style>${plainPageCss}</style>`);
+  expect(answer?.headers.get("content-security-policy")).toBe(
+    `default-src 'none'; style-src ${plainPageCssHash}; frame-ancestors 'none'`,
   );
   expect(calls).toEqual(["end", `begin ${ISSUER}`]);
 });

@@ -744,6 +744,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
       nonce,
       exp: Date.now() + SECRET_OAUTH_TTL_MS,
       next: options.next,
+      completedByUserId: options.completedByUserId,
     };
     const { clientId, clientSecret } = this.#oauthClientOf(options);
     // a placeholder that cannot resolve is refused now, before a human is sent to consent

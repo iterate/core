@@ -1350,6 +1350,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               (origin): origin is string => Boolean(origin),
             ),
           );
+          if (normalized.completedByUserId && owner.kind !== "project")
+            throw codedError(
+              "INVALID_INPUT",
+              "itx.secrets.beginOAuth: completedByUserId names a customer of a project's own app — this secret's owner is not a project",
+            );
           await enableSecretRow(secret);
           // a facet call answers `unknown` over the hop: this is SecretFacet.beginOAuth's declared answer
           return (await secretFacet(["beginOAuth", normalized, platformOrigin])) as {

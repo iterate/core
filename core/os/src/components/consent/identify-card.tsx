@@ -3,11 +3,20 @@ import { cn } from "cn";
 import { Button } from "../ui/button.tsx";
 import { disabledButtonClass, linkClass, StandalonePage } from "../standalone-page.tsx";
 import type { ConsentView } from "../../consent.ts";
+import { switchAccountHref } from "../../login-search.ts";
 
 /** A client asking only who the person is (the `/oauth2/userinfo` resource): it learns their email
  *  and reaches nothing. Continue is a plain POST to this very authorization URL (consent.ts
- *  `approve`). */
-export function IdentifyCard({ view }: { view: Extract<ConsentView, { kind: "identify" }> }) {
+ *  `approve`). Switch account signs out and comes back to this request through sign-in, as the
+ *  consent card's does (signed-in-account.tsx): the same form, posted elsewhere. */
+export function IdentifyCard({
+  view,
+  authorization,
+}: {
+  view: Extract<ConsentView, { kind: "identify" }>;
+  /** the request's raw query, `?…` (routes/oauth2.auth.tsx) */
+  authorization: string;
+}) {
   const hydrated = useHydrated();
   return (
     <StandalonePage>
@@ -32,6 +41,14 @@ export function IdentifyCard({ view }: { view: Extract<ConsentView, { kind: "ide
           disabled={!hydrated}
         >
           Continue as {view.email}
+        </Button>
+        <Button
+          type="submit"
+          variant="link"
+          className={linkClass}
+          formAction={switchAccountHref(`/oauth2/auth${authorization}`)}
+        >
+          Switch account
         </Button>
         <a href={view.denyLocation} className={linkClass}>
           Cancel

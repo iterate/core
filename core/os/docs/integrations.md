@@ -32,7 +32,11 @@ A package's own OAuth app comes back to the platform's callback, like every othe
 path } })` answers a start link and a `nonce`; the platform composes `next` under the deployment's
 ingress, so it is the project's own page by construction. The human opens the start link, consents,
 and the callback completes the attempt only in the browser that opened it (and only for someone who
-reaches the project), then sends them to that page. The page reads what the consent granted with
+reaches the project), then sends them to that page. A project whose own app has customers, people
+who signed in with this platform and are no members of the project, names the one who is connecting
+their own account: `beginOAuth(path, { …, completedByUserId })`. The callback then completes the
+attempt only in a browser signed in as that person, and refuses everyone else, the project's members
+included. It is for a client of the project's own, never the deployment's app. The page reads what the consent granted with
 `itx.secrets.oauthResult(path, { nonce })`: `complete` with the scopes and the account an `account`
 endpoint named, `pending`, or `unavailable`; never a token. Project code completes no attempt itself
 (`completeOAuth` is the platform's own), so no page of a project's ever receives a code.

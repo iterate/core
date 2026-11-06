@@ -65,6 +65,9 @@ export type NormalizedSecretOAuthOptions = {
   /** The endpoint that names the account the tokens are for, and the JSON paths of its id and
    *  name (iterate/api `SecretOAuthOptions.account`): null when the token response names it. */
   account: AccountLookup | null;
+  /** The one person who may complete the attempt (iterate/api
+   *  `SecretOAuthOptions.completedByUserId`): null when anyone who reaches the secret's owner may. */
+  completedByUserId: string | null;
 };
 
 /** An endpoint within the pin that names an account, called with the new access token, and where
@@ -101,6 +104,9 @@ export type SecretOAuthState = {
    *  the code only from the browser holding that start's cookie. Absent from the state `beginOAuth`
    *  signs, present in the one each start re-signs. */
   start?: string;
+  /** The one person the attempt was begun for (iterate/api `SecretOAuthOptions.completedByUserId`):
+   *  the callback admits a session of theirs, in place of one that reaches the secret's owner. */
+  completedByUserId?: string | null;
 };
 
 /** The platform's redirect URI for a secret's OAuth with a client of the project's own — registered
@@ -154,6 +160,7 @@ export function normalizeSecretOAuth(
       `secrets.beginOAuth: tokenEndpoint ${tokenEndpoint.origin} is outside the pin ${urls.join(", ")} — the tokens only ever go toward a pinned host`,
     );
   const account = accountLookupOf(options.account, urls, Boolean(client));
+  const completedByUserId = completedByUserIdOf(options.completedByUserId, Boolean(client));
   const extra: Record<string, string> = {};
   if (isRecord(options.extra))
     for (const [key, value] of Object.entries(options.extra)) extra[key] = String(value);
@@ -182,7 +189,26 @@ export function normalizeSecretOAuth(
         ? options.expectAccount
         : null,
     account,
+    completedByUserId,
   };
+}
+
+/** `completedByUserId` checked: absent, or a person's user id as the catalog mints it
+ *  (control-plane/catalog.ts `newId`). Not with the deployment's own client: its consent page names
+ *  the deployment's app, so only someone who reaches the secret's owner completes it. */
+function completedByUserIdOf(value: unknown, platformClient: boolean): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || !/^user_[0-9a-f]{32}$/.test(value))
+    throw codedError(
+      "INVALID_INPUT",
+      "secrets.beginOAuth: completedByUserId is a person's user id (user_…): the one person who may complete the attempt",
+    );
+  if (platformClient)
+    throw codedError(
+      "INVALID_INPUT",
+      "secrets.beginOAuth: completedByUserId is for a client of your own — the deployment's app is completed by someone who reaches the secret's owner",
+    );
+  return value;
 }
 
 /** `account` checked: absent, or `{ url, id, name? }` — an http(s) endpoint within the pin (the new
@@ -359,7 +385,8 @@ export function isSecretOAuthState(claims: unknown): claims is SecretOAuthState 
     typeof claims.nonce === "string" &&
     typeof claims.exp === "number" &&
     typeof (claims.next ?? "") === "string" &&
-    typeof (claims.start ?? "") === "string"
+    typeof (claims.start ?? "") === "string" &&
+    typeof (claims.completedByUserId ?? "") === "string"
   );
 }
 

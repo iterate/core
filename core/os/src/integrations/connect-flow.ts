@@ -16,7 +16,13 @@
 
 import { signClaims } from "../caller.ts";
 import { callbackPage } from "../callback-page.ts";
-import { admitCallback, callbackStateOf, notIssuedHere, refused } from "../connect-callback.ts";
+import {
+  admitCallback,
+  callbackStateOf,
+  notIssuedHere,
+  reaching,
+  refused,
+} from "../connect-callback.ts";
 import { contextStub } from "../context-stub.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { Env } from "../env.ts";
@@ -121,10 +127,9 @@ export async function connectFlowCallback(
   if (!claims || claims.flow !== flowName) return notIssuedHere();
   const admitted = await admitCallback(request, env, addresses, {
     start: claims.start,
-    owner: {
-      name: `project ${claims.projectId}`,
-      reachedBy: (controlPlane, reach) => controlPlane.reachesProject(reach, claims.projectId),
-    },
+    admission: reaching(`project ${claims.projectId}`, (controlPlane, reach) =>
+      controlPlane.reachesProject(reach, claims.projectId),
+    ),
   });
   if (refused(admitted)) return admitted;
   const { authorization, start } = admitted;

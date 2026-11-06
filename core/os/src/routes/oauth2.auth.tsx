@@ -48,6 +48,6 @@ function AuthorizePage() {
   const { authorization } = Route.useSearch();
   if (view.kind === "invalid") return <InvalidRequest description={view.description} />;
   if (view.kind === "setting-up") return <SettingUpAccount />;
-  if (view.kind === "identify") return <IdentifyCard view={view} />;
+  if (view.kind === "identify") return <IdentifyCard view={view} authorization={authorization} />;
   return <ConsentCard view={view} authorization={authorization} platformOrigin={platformOrigin} />;
 }

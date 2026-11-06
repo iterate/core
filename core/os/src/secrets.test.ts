@@ -739,6 +739,7 @@ test("normalizeSecretOAuth: the pin defaults to the token endpoint's origin, mus
     next: null,
     expectAccount: null,
     account: null,
+    completedByUserId: null,
   });
   expect(() =>
     normalizeSecretOAuth({ ...PROVIDER, clientId: "c", urls: ["https://api.example"] }),
@@ -750,6 +751,38 @@ test("normalizeSecretOAuth: the pin defaults to the token endpoint's origin, mus
   expect(() => normalizeSecretOAuth({ ...PROVIDER, clientId: "c", clientAuth: "basic" })).toThrow(
     /clientAuth is one of/,
   );
+});
+
+// `completedByUserId` names the one person an attempt is for: a user id, and only with a client of
+// the project's own (the deployment's app is completed by someone who reaches the secret's owner).
+test.for([
+  {
+    name: "a user id with a client of the project's own is kept",
+    options: { clientId: "c", completedByUserId: "user_aaaabbbbccccddddaaaabbbbccccdddd" },
+    keeps: { completedByUserId: "user_aaaabbbbccccddddaaaabbbbccccdddd" },
+  },
+  {
+    name: "an email is refused",
+    options: { clientId: "c", completedByUserId: "ada@example.test" },
+    refused: /completedByUserId is a person's user id/,
+  },
+  {
+    name: "an id that is no user's is refused",
+    options: { clientId: "c", completedByUserId: "prj_aaaabbbbccccddddaaaabbbbccccdddd" },
+    refused: /completedByUserId is a person's user id/,
+  },
+  {
+    name: "the deployment's own client is refused",
+    options: {
+      client: { platform: "google" },
+      completedByUserId: "user_aaaabbbbccccddddaaaabbbbccccdddd",
+    },
+    refused: /completedByUserId is for a client of your own/,
+  },
+])("normalizeSecretOAuth, whom an attempt is for: $name", ({ options, keeps, refused }) => {
+  const normalize = () => normalizeSecretOAuth({ ...PROVIDER, ...options });
+  if (refused) expect(normalize).toThrow(refused);
+  else expect(normalize()).toMatchObject(keeps!);
 });
 
 test("beginSecretOAuth: the authorize URL carries the code request with PKCE S256, the signed state, the scope and the extra parameters; the pending attempt keeps the options and the verifier, never on the URL", async () => {
@@ -1196,6 +1229,16 @@ test.for([
     state: true,
   },
   { name: "with a numeric next", claims: { ...oauthState, next: 1 }, state: false },
+  {
+    name: "with the person it was begun for",
+    claims: { ...oauthState, completedByUserId: "user_aaaabbbbccccddddaaaabbbbccccdddd" },
+    state: true,
+  },
+  {
+    name: "with a numeric completedByUserId",
+    claims: { ...oauthState, completedByUserId: 7 },
+    state: false,
+  },
   { name: "null", claims: null, state: false },
 ])("isSecretOAuthState: $name → $state", ({ claims, state }) => {
   expect(isSecretOAuthState(claims)).toBe(state);
