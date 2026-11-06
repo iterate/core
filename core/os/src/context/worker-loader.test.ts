@@ -20,6 +20,7 @@ import {
   loadedIdentityChanges,
   moduleIdentityOf,
   prepareConfinedWorker,
+  type KeptModules,
 } from "./worker-loader.ts";
 
 // sucrase's transform, counted: a load that reads the resolved memo runs none. The resolver takes
@@ -239,6 +240,83 @@ test("what a producer answered under a published module identity is kept under t
   // agents.ts changed: a new identity, produced once more
   expect(await coldIsolate("commit-3", b)).not.toBe(first);
   expect(producer.produced()).toBe(2);
+});
+
+test("a cold load reads its caller's own copy before ITX_KV and the producer: once ITX_KV's memos expired, a context that kept the code runs no producer, a context with no copy keeps what ITX_KV gave though it read the resolved memo, and a copy of other code is never read", async () => {
+  const shared = fakeKv();
+  const producer = fakeProducer();
+  const [first, next] = [
+    await workerIdentityOf(producedFiles(1)),
+    await workerIdentityOf(producedFiles(2)),
+  ];
+  /** One context's copy, as FacetHost keeps it: one row, the latest key's. */
+  const contextCopy = () => {
+    let row: { key: string; files: Record<string, string> } | undefined;
+    const kept: KeptModules = {
+      get: (key) => (row?.key === key ? row.files : undefined),
+      keep: (key, files) => void (row = { key, files }),
+    };
+    return { kept, row: () => row };
+  };
+  const coldIsolate = async (kept: KeptModules, commitOid: string, moduleIdentity: string) => {
+    const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+    const { loaderId } = await loadConfined(env, {
+      kind: "facet",
+      owner: ["prj_kept.iterate/", "Agents"],
+      source: ["itx", "config", ["modules", { commitOid }]],
+      cacheKey: commitOid,
+      mainModule: "worker.js",
+      moduleIdentity,
+      kept,
+      ...producer,
+    });
+    await warm.get(loaderId);
+  };
+  const root = contextCopy();
+  await coldIsolate(root.kept, "commit-1", first);
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+  // the producer's answer, once it resolved as the identity, is kept beside ITX_KV's memo
+  await vi.waitFor(() =>
+    expect(root.row()).toEqual({ key: shared.puts[0]!.key, files: producedFiles(1) }),
+  );
+  // a context with no copy loads from the resolved memo, and keeps the files ITX_KV answers
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(1));
+  const agent = contextCopy();
+  await coldIsolate(agent.kept, "commit-1", first);
+  await vi.waitFor(() => expect(agent.row()).toEqual(root.row()));
+  // a day later both of ITX_KV's memos have expired: the root's next birth starts from its own copy
+  shared.values.clear();
+  await coldIsolate(root.kept, "commit-1", first);
+  expect(producer.produced()).toBe(1);
+  // other code is another key: the copy is not read, and the new answer replaces it
+  await coldIsolate(root.kept, "commit-2", next);
+  expect(producer.produced()).toBe(2);
+  await vi.waitFor(() => expect(root.row()?.files).toEqual(producedFiles(2)));
+});
+
+test("a caller's own key gets no copy: ITX_KV's expiry stays the bound on a key that does not keep its promise", async () => {
+  const shared = fakeKv();
+  const producer = fakeProducer();
+  const kept: KeptModules = {
+    get: () => {
+      throw new Error("a caller's key reads no copy");
+    },
+    keep: () => {
+      throw new Error("a caller's key keeps no copy");
+    },
+  };
+  const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+  const { loaderId } = await loadConfined(env, {
+    kind: "facet",
+    owner: ["prj_kept.iterate/", "Agents"],
+    source: ["itx", "site", ["build"]],
+    cacheKey: "build-1",
+    kept,
+    ...producer,
+  });
+  await warm.get(loaderId);
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+  expect(producer.produced()).toBe(1);
 });
 
 test("what a producer answered under a published module identity is kept for every context of its project: a new context's cold load reads ITX_KV and runs no producer, in an isolate of its own; another project's context runs its own", async () => {

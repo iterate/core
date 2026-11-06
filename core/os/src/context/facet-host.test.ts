@@ -8,6 +8,7 @@ import { codedError } from "iterate/lib";
 import type { StreamEvent } from "iterate/stream/processor";
 import { unavailableError } from "../unavailable.ts";
 import { FacetHost } from "./facet-host.ts";
+import { moduleIdentityOf } from "./worker-loader.ts";
 
 test("a materialization that resolved an older publication and resumes after a newer one was installed leaves the facet on the newer one: nothing restarts it again", async () => {
   const facets = namedFacets();
@@ -124,6 +125,79 @@ test("a birth with no facet to start opens no critical section", async () => {
   const facets = namedFacets();
   expect(await facets.birth()).toEqual([]);
   expect(facets).toMatchObject({ locks: 0 });
+});
+
+test("a birth starts a loaded facet from the code its context kept: once ITX_KV's memo expired, the start asks no producer, which at the root would wait on the root's own birth", async () => {
+  const facets = await producedFacets();
+  expect(await facets.call()).toBe("ok"); // the first start runs the producer
+  await vi.waitFor(() => expect(facets.kept()).toBeDefined());
+  // no isolate warm and no memo in ITX_KV: a deploy once the memos expired
+  facets.deploy();
+  facets.expireMemo();
+  expect(await facets.birth()).toEqual(["tally"]);
+  expect(facets).toMatchObject({ produced: 1, starts: 2 });
+  expect(await facets.call()).toBe("ok");
+});
+
+test("the code a birth's start keeps is written only once every start of the birth settled: nothing lands between a facet's stop and its start, and a start from the resolved memo keeps it too", async () => {
+  const facets = await producedFacets();
+  await facets.call();
+  await vi.waitFor(() => expect(facets.kept()).toBeDefined());
+  // a context that kept no copy yet (one born before copies were kept), its memos still in ITX_KV
+  facets.forgetCopy();
+  facets.deploy();
+  await facets.birth();
+  await vi.waitFor(() => expect(facets.kept()).toBeDefined());
+  expect(facets.order.slice(facets.order.lastIndexOf("started"))).toEqual([
+    "started",
+    "put facet:tally:modules",
+  ]);
+  expect(facets).toMatchObject({ produced: 1 });
+  // that birth loaded from the resolved memo, yet its copy is the files: once both memos expired,
+  // the next birth asks no producer
+  facets.deploy();
+  facets.expireMemo();
+  expect(await facets.birth()).toEqual(["tally"]);
+  expect(facets).toMatchObject({ produced: 1 });
+});
+
+test("a facet's kept code is the latest load's: an older load's keep that lands after a newer publication's is dropped, so the copy stays the code the facet runs", async () => {
+  const facets = await producedFacets();
+  await facets.call();
+  await vi.waitFor(() => expect(facets.kept()).toBeDefined());
+  await vi.waitFor(() => expect(facets.resolvedMemoKept()).toBe(true));
+  // a birth that reads the resolved memo, with no copy: its keep reads the files' memo, held
+  facets.forgetCopy();
+  const reads = facets.holdFileReads();
+  facets.deploy();
+  await facets.birth();
+  await vi.waitFor(() => expect(reads.waiting()).toBe(1));
+  // agents.ts changes, and the next birth keeps the new code's copy
+  await facets.publish(2);
+  facets.deploy();
+  await facets.birth();
+  await vi.waitFor(() => expect(facets.kept()?.files).toEqual(facets.filesAt(2)));
+  reads.release();
+  await settle();
+  expect(facets.kept()?.files).toEqual(facets.filesAt(2));
+  expect(facets).toMatchObject({ produced: 2 });
+});
+
+test("calls to a running facet while its load's keep waits drop nothing: the copy is kept once the read answers", async () => {
+  const facets = await producedFacets();
+  await facets.call();
+  await vi.waitFor(() => expect(facets.kept()).toBeDefined());
+  await vi.waitFor(() => expect(facets.resolvedMemoKept()).toBe(true));
+  // a birth that reads the resolved memo, with no copy: its keep reads the files' memo, held
+  facets.forgetCopy();
+  const reads = facets.holdFileReads();
+  facets.deploy();
+  await facets.birth();
+  await vi.waitFor(() => expect(reads.waiting()).toBe(1));
+  // every call resolves the facet's identity again, and finds it unchanged
+  for (let i = 0; i < 3; i++) expect(await facets.call()).toBe("ok");
+  reads.release();
+  await vi.waitFor(() => expect(facets.kept()?.files).toEqual(facets.filesAt(1)));
 });
 
 /** A context's facet host with one facet, `tally`, named by the root's published worker: `publish`
@@ -268,6 +342,181 @@ function namedFacets() {
       restarts = new Promise((resolve) => (releaseRestarts = () => resolve(undefined)));
     },
     releaseRestarts: () => releaseRestarts(),
+  };
+}
+
+/** How many `producedFacets` hosts this file made: each gets a project of its own. */
+let producedFacetsMade = 0;
+
+/** A context's facet host with one loaded facet, `tally`, named by the root's published worker
+ *  and loaded from a PRODUCER (the config pointer's: `itx.config.modules({ commitOid })`), over a
+ *  Worker Loader that runs `getCode` once per id until `deploy` drops every isolate, and an ITX_KV
+ *  memo that `expireMemo` empties. A facet's start waits for its code, as workerd's does.
+ *  `produced` counts the producer's runs, `starts` the facet's instances, `kept` reads the
+ *  context's copy of the code, and `order` lists every start and every storage write. */
+async function producedFacets() {
+  // a project of its own: the loader's in-flight memo writes are per isolate, keyed by project
+  const project = `prj_produced${++producedFacetsMade}`;
+  const kv = new Map<string, unknown>();
+  const memo = new Map<string, string>();
+  const memoMetadata = new Map<string, unknown>();
+  const warm = new Map<string, Promise<unknown>>();
+  const instances = new Map<string, object>();
+  const order: string[] = [];
+  let produced = 0;
+  let starts = 0;
+  const filesAt = (version: number) => ({
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": "export default {}",
+    "agents.ts": `export class Tally { version = ${version} }`,
+  });
+  const identityOf = (files: Record<string, string>) =>
+    moduleIdentityOf(files, "agents.ts", { ITX_KV: {} as KVNamespace }, "agents.ts");
+  let files = filesAt(1);
+  let identity = await identityOf(files);
+  let commit = 1;
+  /** Reads of the files' memo that wait until `release` (`holdFileReads`). */
+  let heldFileReads: (() => void)[] | undefined;
+  const host = new FacetHost({
+    ctx: {
+      storage: {
+        kv: {
+          get: (key: string) => kv.get(key),
+          put: (key: string, value: unknown) => {
+            order.push(`put ${key}`);
+            kv.set(key, value);
+          },
+          delete: (key: string) => kv.delete(key),
+          list: ({ prefix }: { prefix: string }) =>
+            new Map([...kv].filter(([key]) => key.startsWith(prefix))),
+        },
+      },
+      facets: {
+        get: (name: string, startup: () => { class: { code: Promise<unknown> } }) => {
+          let instance = instances.get(name);
+          if (!instance) {
+            const { code } = startup().class;
+            starts++;
+            instance = {
+              listPublicMethods: async () => {
+                await code;
+                order.push("started");
+                return ["call"];
+              },
+              call: async () => {
+                await code;
+                return "ok";
+              },
+            };
+            instances.set(name, instance);
+          }
+          return instance;
+        },
+        abort: (name: string) => void instances.delete(name),
+        delete: (name: string) => void instances.delete(name),
+      },
+      blockConcurrencyWhile: <T>(work: () => Promise<T>) => work(),
+      exports: {},
+    },
+    env: () => ({
+      LOADER: {
+        get: (id: string, getCode: () => Promise<unknown>) => {
+          if (!warm.has(id)) warm.set(id, getCode());
+          return { getDurableObjectClass: () => ({ code: warm.get(id) }) };
+        },
+      },
+      ITX_KV: {
+        get: async (key: string, type?: "json") => {
+          if (heldFileReads && key.startsWith("produced-modules-"))
+            await new Promise<void>((resolve) => heldFileReads!.push(resolve));
+          const value = memo.get(key) ?? null;
+          return type === "json" && value ? JSON.parse(value) : value;
+        },
+        getWithMetadata: async (key: string, type?: "json") => {
+          const value = memo.get(key) ?? null;
+          return {
+            value: type === "json" && value ? JSON.parse(value) : value,
+            metadata: (value && memoMetadata.get(key)) ?? null,
+          };
+        },
+        put: async (key: string, value: string, options?: KVNamespacePutOptions) => {
+          memo.set(key, value);
+          memoMetadata.set(key, options?.metadata);
+        },
+      },
+    }),
+    deployId: "deploy-1",
+    iterateContextName: `${project}.iterate/`,
+    projectId: project,
+    path: "/",
+    platformOrigin: () => null,
+    itxEntrypoint: () => ({}),
+    invoke: () => Promise.reject(new Error("unused")),
+    namedWorker: async () => {
+      const [answer, at] = [files, commit];
+      return {
+        vouched: true,
+        // `/repos/config`'s files at the commit: at a root's birth, a call that waits on that birth
+        invoke: async () => {
+          produced++;
+          return answer;
+        },
+        spec: {
+          source: ["itx", "config", ["modules", { commitOid: `c${at}` }]],
+          cacheKey: `c${at}`,
+          manifest: {
+            generation: at,
+            modules: { "agents.ts": { identity, classes: ["Tally"] } },
+          },
+        },
+      };
+    },
+    resolveItxExpression: () => [],
+    stream: { coreReducedState: { subscriptions: {} } },
+    reconcileAlarm: () => {},
+    loadedFacetMaterialized: () => {},
+    deliveriesQueuedFor: async () => {},
+    cause: () => undefined,
+  } as unknown as ConstructorParameters<typeof FacetHost>[0]);
+  const tally = host.handle("tally", {
+    className: "Tally",
+    mainModule: "agents.ts",
+    source: ["itx", ["cd", "/"], "config"],
+  });
+  return {
+    order,
+    get produced() {
+      return produced;
+    },
+    get starts() {
+      return starts;
+    },
+    kept: () => kv.get("facet:tally:modules") as { key: string; files: object } | undefined,
+    resolvedMemoKept: () => [...memo.keys()].some((key) => key.startsWith("resolved-modules-")),
+    filesAt,
+    /** A commit that changes `agents.ts`: a new identity, under the same spec. */
+    publish: async (version: number) => {
+      files = filesAt(version);
+      identity = await identityOf(files);
+      commit++;
+    },
+    /** Hold every read of the files' memo until the answer's `release`. */
+    holdFileReads: () => {
+      const held: (() => void)[] = [];
+      heldFileReads = held;
+      return {
+        waiting: () => held.length,
+        release: () => {
+          heldFileReads = undefined;
+          for (const resolve of held.splice(0)) resolve();
+        },
+      };
+    },
+    forgetCopy: () => void kv.delete("facet:tally:modules"),
+    call: () => host.callFacetAsPlatform(tally, [["call"]]),
+    birth: () => host.startFacetsTheLastIncarnationRan(),
+    deploy: () => warm.clear(),
+    expireMemo: () => memo.clear(),
   };
 }
 

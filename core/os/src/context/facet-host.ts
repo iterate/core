@@ -71,7 +71,9 @@ import {
   loadedIdentityChanges,
   namedWorkerLoad,
   prepareConfinedWorker,
+  type KeptModules,
   type NamedWorker,
+  type WorkerModules,
 } from "./worker-loader.ts";
 import { namesAWorker } from "./itx-expression-rewriting.ts";
 import { criticalSectionDeadline } from "./critical-section-deadline.ts";
@@ -115,6 +117,9 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
  *  Remove when that file's pin, a `createFailing` tagged `slow`, goes red because the raw fault no
  *  longer reproduces. */
 const FACET_START_WATCHDOG_MS = 10_000;
+/** The most a facet's kept code may be (`#keptModulesOf`): a stored value is at most 2 MB, and its
+ *  size is counted as the repo facet counts its kept snapshot, two bytes a character. */
+const KEPT_MODULES_MAX_BYTES = 1_800_000;
 /** A hosted processor's claim on its context's alarm (`processors.claim`), one kv row
  *  (`facet-claim:<name>`): when a revive is owed by, and why — the cause of the attempt it covers
  *  (cause.ts). */
@@ -494,7 +499,9 @@ export class FacetHost {
    *  claim on this context's alarm (`processors.claim`) keeps the facet running — so a claimed one,
    *  and a FIRST-PARTY one (the platform's own classes release every scope, `using getItx()`; the
    *  `secret` facet pumps a proxied socket with no claim), is started without a reset: the start
-   *  lands on the instance if it still runs. Returns the names reset. */
+   *  lands on the instance if it still runs. A loaded one starts from the code this context kept
+   *  of it (`#keptModulesOf`), so a birth asks no other context for code it ran before. Returns the
+   *  names reset. */
   async startFacetsTheLastIncarnationRan(): Promise<string[]> {
     const ran = Array.from(this.#deps.ctx.storage.kv.list({ prefix: "facet-ran:" }), ([key]) =>
       key.slice("facet-ran:".length),
@@ -565,18 +572,88 @@ export class FacetHost {
     restarts: { name: string; abort: (() => void) | null }[],
   ): Promise<boolean[]> {
     if (restarts.length === 0) return Promise.resolve([]);
-    return this.#deps.ctx.blockConcurrencyWhile(async () => {
-      for (const { abort } of restarts) abort?.();
-      const owed: (() => void)[] = [];
-      const batch = new AbortController();
-      const deadline = criticalSectionDeadline(FACET_START_WATCHDOG_MS, batch.signal);
-      const started = await Promise.all(
-        restarts.map(({ name }) => this.#start(name, why, owed, deadline)),
-      );
-      batch.abort();
-      for (const write of owed) write();
-      return started;
-    });
+    return this.#deps.ctx.blockConcurrencyWhile(() =>
+      this.#betweenStopsAndStarts(async () => {
+        for (const { abort } of restarts) abort?.();
+        const owed: (() => void)[] = [];
+        const batch = new AbortController();
+        const deadline = criticalSectionDeadline(FACET_START_WATCHDOG_MS, batch.signal);
+        const started = await Promise.all(
+          restarts.map(({ name }) => this.#start(name, why, owed, deadline)),
+        );
+        batch.abort();
+        for (const write of owed) write();
+        return started;
+      }),
+    );
+  }
+
+  /** How many stretches from a facet's stop to its start are in flight (`#betweenStopsAndStarts`),
+   *  and the writes that came during them (`#writeOutsideStarts`). */
+  #stopsNotStarted = 0;
+  readonly #writesAfterStarts: (() => void)[] = [];
+  /** `work`, which stops facets and starts them again (`#restartAll`, a call's `#recover`): a write
+   *  that may come at any moment waits until no such stretch is in flight (FACET_START_WATCHDOG_MS). */
+  async #betweenStopsAndStarts<T>(work: () => Promise<T>): Promise<T> {
+    this.#stopsNotStarted++;
+    try {
+      return await work();
+    } finally {
+      if (--this.#stopsNotStarted === 0)
+        for (const write of this.#writesAfterStarts.splice(0)) write();
+    }
+  }
+  /** A write that may come at any moment (`#keptModulesOf`): now, or once no facet is between its
+   *  stop and its start. */
+  #writeOutsideStarts(write: () => void): void {
+    if (this.#stopsNotStarted > 0) this.#writesAfterStarts.push(write);
+    else write();
+  }
+
+  /** THE CODE A LOADED FACET STARTS FROM, AS THIS CONTEXT KEEPS IT (`facet:<name>:modules`): what
+   *  its producer last answered, under the key of the module memo in ITX_KV (worker-loader.ts
+   *  `KeptModules`). The memo there expires a day after it was written; this copy does not, so a
+   *  start of code this context has loaded before reads only its own storage. A birth then starts
+   *  such a facet with no call to another context. At the root that call would be a loop: the
+   *  config's producer reads `/repos/config`, which mints its git token through the root's rules,
+   *  and the root answers no read of its rules until its birth's starts settled. One copy a facet,
+   *  the latest key's: it is replaced when the code changes and deleted with the facet. A copy that
+   *  may not fit one kv cell (KEPT_MODULES_MAX_BYTES) is not kept. Read only by a cold load, never
+   *  kept in memory: a running facet never asks. A load keeps its copy only while the facet's
+   *  identity is still the one it loaded (`loaderIdOf`, against `#loaderIdByName`): a keep comes a
+   *  turn after its load, and a facet named by a published worker keeps its spec across a
+   *  publication that changes its code, so a load of the older code would replace the newer
+   *  code's copy. A call under the same identity changes nothing. */
+  #keptModulesOf(name: string, memo: FacetSpec, loaderIdOf: () => string | undefined): KeptModules {
+    const row = `facet:${name}:modules`;
+    type Kept = { key: string; files: WorkerModules };
+    return {
+      get: (key) => {
+        // kv answers what was put: `keep`, below, is the row's only writer
+        const kept = this.#deps.ctx.storage.kv.get<Kept>(row);
+        return kept?.key === key ? kept.files : undefined;
+      },
+      keep: (key, files) => {
+        if (2 * JSON.stringify(files).length > KEPT_MODULES_MAX_BYTES) return;
+        this.#writeOutsideStarts(() => {
+          // a facet deleted, reconfigured or moved to other code since this load keeps nothing of it
+          if (this.#facetStartupMemoByName.get(name) !== memo) return;
+          if (this.#loaderIdByName.get(name) !== loaderIdOf()) return;
+          // Never thrown: the write may run where a throw resets the object (`#restartAll`), and a
+          // copy not kept costs only the next cold load ITX_KV's read or the producer.
+          try {
+            this.#deps.ctx.storage.kv.put(row, { key, files } satisfies Kept);
+          } catch (error) {
+            console.warn({
+              event: "facet.platform-failure-keep-modules",
+              namespace: "iterate-context",
+              name,
+              message: String(error instanceof Error ? error.message : error).slice(0, 512),
+            });
+          }
+        });
+      },
+    };
   }
 
   /** THE PLATFORM'S START of a facet: materialized — a loaded one's new identity recorded only once
@@ -907,15 +984,17 @@ export class FacetHost {
         const owed: (() => void)[] = [];
         try {
           return await this.#afterEarlierRecoveries(name, () =>
-            this.#recover(
-              name,
-              firstPartyClassName,
-              facetStartupMemo,
-              itxExpressionSteps,
-              { failedOn: materialized, error },
-              FACET_CALL_WATCHDOG,
-              callOptions,
-              owed,
+            this.#betweenStopsAndStarts(() =>
+              this.#recover(
+                name,
+                firstPartyClassName,
+                facetStartupMemo,
+                itxExpressionSteps,
+                { failedOn: materialized, error },
+                FACET_CALL_WATCHDOG,
+                callOptions,
+                owed,
+              ),
             ),
           );
         } finally {
@@ -1133,6 +1212,8 @@ export class FacetHost {
         };
       } else {
         const { worker } = resolved;
+        // the identity a keep of this load's code checks: a keep comes only from `load`, after this
+        let preparedLoaderId: string | undefined;
         const { loaderId, load, retire } = await prepareConfinedWorker({
           env: this.#deps.env(),
           platformOrigin: this.#deps.platformOrigin(),
@@ -1144,8 +1225,10 @@ export class FacetHost {
           mainModule: memo.mainModule,
           moduleIdentity: worker.moduleIdentity,
           invoke: worker.invoke,
+          kept: this.#keptModulesOf(name, memo, () => preparedLoaderId),
           where: `facet "${name}"`,
         });
+        preparedLoaderId = loaderId;
         // A deploy is other code to work in flight (iterate/stream/processor `revive`), even one
         // that keeps the loaded identity.
         codeId = JSON.stringify([this.#deps.deployId, loaderId]);
@@ -1507,6 +1590,7 @@ export class FacetHost {
     this.#deps.ctx.storage.kv.delete(`facet:${name}`);
     this.#deleteRow(`facet:${name}:loader-id`);
     this.#deleteRow(`facet:${name}:named-worker`);
+    this.#deps.ctx.storage.kv.delete(`facet:${name}:modules`);
     this.#deps.ctx.storage.kv.delete(`facet:${name}:restarts`);
     this.#deps.ctx.storage.kv.delete(`facet-ran:${name}`);
     this.#facetStartupMemoByName.delete(name);

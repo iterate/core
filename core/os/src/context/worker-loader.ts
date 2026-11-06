@@ -345,6 +345,17 @@ export function loadedIdentityChanges(previous: string, next: string): string[] 
   return before.generation === after.generation ? changed : [...changed, "generation"];
 }
 
+/** A PRODUCER'S ANSWER AS THE CALLER KEEPS IT, under the memo's key in `ITX_KV`: FacetHost
+ *  `#keptModulesOf` keeps one in the facet's own context, and says why. Only under a published
+ *  module identity, which names the code: unlike `ITX_KV`'s memos it does not expire, and that
+ *  expiry is what bounds a caller's key that does not keep "same key ⇒ same code". A cold load reads
+ *  it before `ITX_KV` and before the producer. It is handed what `ITX_KV` answered, and what
+ *  `ITX_KV` keeps (once the load resolved it and it is that identity). */
+export type KeptModules = {
+  get(key: string): WorkerModules | undefined;
+  keep(key: string, files: WorkerModules): void;
+};
+
 /** What `prepareConfinedWorker` needs. */
 type PrepareConfinedWorkerOptions = {
   env: { LOADER: WorkerLoader; ITX_KV: KVNamespace } & IterateConfigEnv;
@@ -379,6 +390,9 @@ type PrepareConfinedWorkerOptions = {
   /** Evaluate a producer expression through the owning context's dispatch — inside `getCode`, so
    *  only on a cold isolate. */
   invoke: (call: ItxExpression) => Promise<unknown>;
+  /** The caller's own copy of a producer's answer under `moduleIdentity` (`KeptModules`); none for
+   *  a stateless worker. */
+  kept?: KeptModules;
   /** Names the load site in errors (`facet "tally"`, `workers.get`). */
   where: string;
 };
@@ -429,6 +443,8 @@ export async function prepareConfinedWorker(
   let getModules: () => Promise<ObtainedModules> | ObtainedModules;
   /** What names the source in the resolved memo's key: its content, or the producer memo's key. */
   let sourceKey: () => Promise<string>;
+  /** On a resolved memo's hit, hand the caller the files it has no copy of (`KeptModules`). */
+  let keepCopyOnMemoHit: (() => void) | undefined;
   if (isWorkerModules(source)) {
     const modules = requireFiles(source);
     // refused where it is handed in, not late in a cold load; once per modules object
@@ -463,7 +479,18 @@ export async function prepareConfinedWorker(
     // expression may read the owner's own state. Never the deploy: a platform change to what a
     // producer answers is a new key prefix, and produced-modules-prefix.test.ts fails on a change
     // to the code that decides it until the prefix is decided. A KV failure is a miss: the
-    // producer runs.
+    // producer runs. The caller's own copy (`kept`) is read before ITX_KV, under the same key, and
+    // is handed what ITX_KV answered and what it keeps.
+    const kept = opts.moduleIdentity ? opts.kept : undefined;
+    /** Hand the caller's copy `files` under `kvKey` when they are the code it names, after one turn
+     *  of the event loop, as a memo's write: the load's answer goes first. Never rejects. */
+    const keepCopy = (kvKey: string, files: WorkerModules, isNamed: () => Promise<boolean>) => {
+      if (!kept) return;
+      void (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (await isNamed()) kept.keep(kvKey, files);
+      })().catch(moduleCacheFailed(opts, "put"));
+    };
     /** Only an answer that can load is kept or believed: one the producer gave before its build
      *  landed must reach the dead-id recovery's next run, not be read back for a day. */
     const loadable = (files: unknown): files is WorkerModules => {
@@ -501,14 +528,22 @@ export async function prepareConfinedWorker(
       ).then((hash) => `produced-modules-2/${hash}`));
     getModules = async () => {
       const kvKey = await sourceKey();
+      // the caller's own copy first: it needs no call, and it names its code, so what is made of it
+      // may be kept a new day (`KeptModules`)
+      const own = kept?.get(kvKey);
+      if (loadable(own)) return { files: own, expiresAt: aDayFromNow() };
       const stored = await opts.env.ITX_KV.getWithMetadata(kvKey, "json").catch(
         moduleCacheFailed(opts, "get"),
       );
-      if (stored && loadable(stored.value))
+      if (stored && loadable(stored.value)) {
+        const files = stored.value;
         return {
-          files: stored.value,
+          files,
           expiresAt: KeptMetadata.safeParse(stored.metadata).data?.expiresAt,
+          // ITX_KV keeps only the code its key names (`keep`, below)
+          keep: () => keepCopy(kvKey, files, async () => true),
         };
+      }
       console.info({ event: "worker-loader.produced", name: opts.owner, where, source: named });
       // The producer is a read the cacheKey names, so running it twice is running it once: a read a
       // deploy's reset of the context it reads cut (the project ingress's
@@ -537,9 +572,24 @@ export async function prepareConfinedWorker(
       return {
         files,
         expiresAt,
-        keep: (resolved, isNamed) =>
-          keep(kvKey, opts.moduleIdentity ? resolved.files : files, isNamed, expiresAt),
+        keep: (resolved, isNamed) => {
+          const keptFiles = opts.moduleIdentity ? resolved.files : files;
+          keep(kvKey, keptFiles, isNamed, expiresAt);
+          keepCopy(kvKey, keptFiles, isNamed);
+        },
       };
+    };
+    // a load that read the resolved memo never reads the files: a caller with no copy of them gets
+    // ITX_KV's, so it starts from its own once both memos expired
+    keepCopyOnMemoHit = () => {
+      if (!kept) return;
+      void (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const kvKey = await sourceKey();
+        if (kept.get(kvKey)) return;
+        const stored = await opts.env.ITX_KV.get(kvKey, "json");
+        if (loadable(stored)) kept.keep(kvKey, stored);
+      })().catch(moduleCacheFailed(opts, "get"));
     };
   }
   // 2. the confined worker under the billed cacheKey. A JSON array, never `a:b:c`: a context name,
@@ -573,8 +623,10 @@ export async function prepareConfinedWorker(
     const memoKey = resolvedMemoKey(await sourceKey(), opts.env, mainModule);
     let started = Date.now();
     const remembered = await readResolvedMemo(opts, await memoKey);
-    if (remembered)
+    if (remembered) {
+      keepCopyOnMemoHit?.();
       return { worker: remembered, modules: "resolved-memo", resolveMs: Date.now() - started };
+    }
     const { files, keep, expiresAt } = await getModules();
     // what each module lock read answered, and whether this resolution wrote one (a lock it made:
     // then the next resolution reads what KV kept, and the memo waits for that one)
