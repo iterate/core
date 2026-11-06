@@ -268,11 +268,8 @@ test("a small change renders as a diff, a large one in full, a removal as a line
   expect(sectionChanges({ a: "1" }, { a: "1", c: "3" })?.sections).toEqual({ c: "3" });
 });
 
-test("the cache key: the agent's path, a voice call's client for a voice call", () => {
+test("the cache key: the agent's path, clamped to the provider's maximum", () => {
   expect(promptCacheKey("/agents/chief-of-staff")).toBe("/agents/chief-of-staff");
-  expect(promptCacheKey("/agents/voice/whatsapp-447700900001/20261003-ab")).toBe(
-    "voice/whatsapp-447700900001",
-  );
   expect(Array.from(promptCacheKey(`/agents/${"x".repeat(80)}`))).toHaveLength(64);
 });
 

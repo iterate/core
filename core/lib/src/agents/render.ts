@@ -18,8 +18,8 @@
 //   `pi.system` entries: "Only what changed is sent again, which keeps provider prompt caches warm").
 // - NOTHING IN THE PREFIX MOVES. The capability tree is sorted and stripped of what changes on every
 //   publication (the config commit and publication number); the agent's own path sits in the last
-//   section, after an explicit breakpoint, so agents that share instructions (calls with one person)
-//   can share their cached head.
+//   section, after an explicit breakpoint, so agents that share instructions and a cache key can
+//   share their cached head.
 // - THE MODEL'S OWN OUTPUT IS REPLAYED EXACTLY: the response's items (encrypted reasoning, message,
 //   function call, with their ids) are stored and sent back as they came (Pi's thinkingSignature
 //   replay), so a multi-step answer keeps its reasoning and its prefix. An answer written by another
@@ -104,7 +104,7 @@ export function messageText(item: OutputItem): string {
 
 /** The sections that are this agent's own (its tree, its pinned code, its path). They come last in
  *  the head, after the explicit cache breakpoint: everything before it is the same for agents with
- *  the same instructions (two calls with one person), so they can share its cache. */
+ *  the same instructions, so those with the same cache key can share its cache. */
 const OWN_SECTIONS = new Set(["capability-tree", "preamble", "identity"]);
 
 // ── the capability tree, stable ──

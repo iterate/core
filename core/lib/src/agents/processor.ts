@@ -232,13 +232,9 @@ const ASYNC_FUNCTION_BODY_RE = /^(?:async\s*(?:function|\()|\(?async\s*\()/;
 /** The provider's prompt-cache key is at most this long (Pi: clampOpenAIPromptCacheKey). */
 const PROMPT_CACHE_KEY_MAX = 64;
 
-/** The cache key a request is routed with: the agent's path, except a voice call's agent, which
- *  shares its client's key (`voice/<client>`) so calls with the same person share their cached head
- *  (render.ts OWN_SECTIONS). */
+/** The cache key a request is routed with: the agent's path, clamped to the provider's maximum. */
 export function promptCacheKey(path: string): string {
-  const voice = /^\/agents\/voice\/([^/]+)\/[^/]+$/.exec(path);
-  const key = voice ? `voice/${voice[1]}` : path;
-  return Array.from(key).slice(0, PROMPT_CACHE_KEY_MAX).join("");
+  return Array.from(path).slice(0, PROMPT_CACHE_KEY_MAX).join("");
 }
 
 /** The failure backoff, folded into the debounce window: doubling from the policy's base per
