@@ -76,14 +76,33 @@ const BUFFER_UP_TO_BYTES = 32 * 1024 * 1024;
  *  body of a known length is passed through a `FixedLengthStream`, still streaming; one of no known
  *  length is read, up to BUFFER_UP_TO_BYTES, to learn it, unless it is a stream by nature
  *  (`text/event-stream`), which must not wait for its end. A body past the limit streams on, as it
- *  came: an unknown length, as before. */
+ *  came: an unknown length, as before.
+ *
+ *  `fetch` decodes gzip and Brotli as the body is read, and keeps the origin's `Content-Encoding` and
+ *  `Content-Length`, which describe the compressed bytes. So a decoded body is of no known length,
+ *  and the container gets it plain: a `FixedLengthStream` of the compressed length fails the
+ *  response. */
 async function withKnownLength(response: Response, request: Request): Promise<Response> {
   const { status, headers, body } = response;
   const bodiless =
     !body || request.method === "HEAD" || status === 101 || status === 204 || status === 304;
   if (bodiless) return response;
+  const decoded = /^(gzip|br)$/i.test(headers.get("content-encoding") ?? "");
+  const answer = (bytes: BodyInit) => {
+    const plain = new Response(bytes, response);
+    if (decoded) {
+      plain.headers.delete("content-encoding");
+      plain.headers.delete("content-length");
+    }
+    return plain;
+  };
   const declared = Number(headers.get("content-length"));
-  if (headers.has("content-length") && Number.isSafeInteger(declared) && declared >= 0) {
+  if (
+    !decoded &&
+    headers.has("content-length") &&
+    Number.isSafeInteger(declared) &&
+    declared >= 0
+  ) {
     const { readable, writable } = new FixedLengthStream(declared);
     void body.pipeTo(writable).catch(() => undefined);
     return new Response(readable, response);
@@ -101,7 +120,7 @@ async function withKnownLength(response: Response, request: Request): Promise<Re
         whole.set(chunk, at);
         at += chunk.byteLength;
       }
-      const known = new Response(whole, response);
+      const known = answer(whole);
       known.headers.set("content-length", String(size));
       return known;
     }
@@ -119,7 +138,7 @@ async function withKnownLength(response: Response, request: Request): Promise<Re
         },
         cancel: () => reader.cancel(),
       });
-      return new Response(rest, response);
+      return answer(rest);
     }
   }
 }
