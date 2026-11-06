@@ -41,6 +41,7 @@ import { WorkerManifest } from "./worker-manifest.ts";
 import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
 import {
   enteredThroughPlatform,
+  LOADED_WORKER_MODULE,
   readPackage,
   resolveModules,
   type ResolveOptions,
@@ -57,6 +58,20 @@ const PRODUCED_MODULES_TTL_SECONDS = 24 * 60 * 60;
 /** The most one KV value may be (Cloudflare's limit). A repo's whole tree can pass it while the
  *  files its entry's graph reads do not, so a value over it is simply not kept. */
 const KV_VALUE_MAX_BYTES = 25 * 1024 * 1024;
+/** A RESOLVED MEMO in `ITX_KV`: what `resolveModules` and `enteredThroughPlatform` made of a source,
+ *  so a cold load reads it and runs no transform on its caller's thread (`prepareConfinedWorker`).
+ *  The platform's own modules are named, not kept: this build has them (`PLATFORM_MODULES`), and
+ *  the platform's code identity is in the key. `locks` is the SHA-256 of every module lock the
+ *  resolution read: a lock that is no longer the one it read makes the memo a miss. The value is
+ *  SEALED: the SHA-256 of the payload, a newline, then the payload, so a memo cut short or changed
+ *  after its write is a miss (`readResolvedMemo`). */
+const ResolvedMemo = z.object({
+  mainModule: z.string(),
+  modules: z.record(z.string(), z.string()),
+  platformModules: z.array(z.string()),
+  compatibilityFlags: z.array(z.string()).nullable(),
+  locks: z.record(z.string(), z.string()),
+});
 /** Refuse a spec whose LITERAL source is over the ceiling (itx-expression-rewriting.ts
  *  `SOURCE_MAX_CHARS`) — the startup memo is one kv cell in the DO (re-read on every post-eviction
  *  wake) and the hosting event one log row under the 8 MiB event ceiling, so an oversize source
@@ -177,14 +192,33 @@ type ResolvedWorker = Awaited<ReturnType<typeof resolveModules>>;
 /** A resolved source as the loader starts it (module-resolution.ts `enteredThroughPlatform`). */
 type StartedWorker = ReturnType<typeof enteredThroughPlatform>;
 /** A source's files as `prepareConfinedWorker` obtained them, and for a producer's fresh answer how
- *  to keep it once it resolved (`produce`). */
-type ObtainedModules = { files: WorkerModules; keep?: (resolved: ResolvedWorker) => void };
+ *  to keep it once it resolved (`produce`), when the resolution is the code its key names. */
+type ObtainedModules = {
+  files: WorkerModules;
+  keep?: (resolved: ResolvedWorker, named: () => Promise<boolean>) => void;
+  /** When what is kept of these files expires, in seconds since the epoch: a new day for files
+   *  fresh from their source, the producer memo's own expiry for files read back from it (its
+   *  `metadata`), nothing when that memo predates it. A resolved memo of the files expires with
+   *  them, so it never outlives what it was made from (`produce`). */
+  expiresAt: number | undefined;
+};
+/** A memo's expiry as its write carries it in KV `metadata` (`keepInKv`). */
+const KeptMetadata = z.object({ expiresAt: z.number() });
+/** When what is kept now expires: a day from now, in seconds since the epoch. */
+const aDayFromNow = () => Math.floor(Date.now() / 1000) + PRODUCED_MODULES_TTL_SECONDS;
+/** A started worker and how this load came by it: read whole from the resolved memo, or resolved
+ *  and transformed here; `resolveMs` is how long that took (the `worker-loader.built` line). */
+type ProducedWorker = {
+  worker: StartedWorker;
+  modules: "resolved-memo" | "transformed";
+  resolveMs: number;
+};
 const loaderIdGenerations = new Map<
   string,
   {
     generation: number;
     dead: boolean;
-    recovery?: { itxEntrypoint: Fetcher; modules: Promise<StartedWorker> };
+    recovery?: { itxEntrypoint: Fetcher; modules: Promise<ProducedWorker> };
   }
 >();
 
@@ -391,6 +425,8 @@ export async function prepareConfinedWorker(
       : undefined;
   let sourceVersion: string;
   let getModules: () => Promise<ObtainedModules> | ObtainedModules;
+  /** What names the source in the resolved memo's key: its content, or the producer memo's key. */
+  let sourceKey: () => Promise<string>;
   if (isWorkerModules(source)) {
     const modules = requireFiles(source);
     // refused where it is handed in, not late in a cold load; once per modules object
@@ -399,7 +435,9 @@ export async function prepareConfinedWorker(
       packageReadOf.add(modules);
     }
     sourceVersion = named || `content:${contentHashOfWorkerModules(modules)}`;
-    getModules = () => ({ files: modules });
+    getModules = () => ({ files: modules, expiresAt: aDayFromNow() });
+    // the resolved memo's source is the content itself, by a hash no crafted source collides with
+    sourceKey = async () => `content:${await sha256Hex(JSON.stringify(modules))}`;
   } else {
     if (!named)
       throw new Error(
@@ -424,15 +462,6 @@ export async function prepareConfinedWorker(
     // producer answers is a new key prefix, and produced-modules-prefix.test.ts fails on a change
     // to the code that decides it until the prefix is decided. A KV failure is a miss: the
     // producer runs.
-    const cacheFailed = (action: "get" | "put") => (error: unknown) => {
-      console.warn({
-        event: "worker-loader.platform-failure-module-cache",
-        action,
-        name: opts.owner,
-        where,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    };
     /** Only an answer that can load is kept or believed: one the producer gave before its build
      *  landed must reach the dead-id recovery's next run, not be read back for a day. */
     const loadable = (files: unknown): files is WorkerModules => {
@@ -445,64 +474,39 @@ export async function prepareConfinedWorker(
       }
     };
     /** Keep `files` under `kvKey` for the next cold load, once this load resolved them (`produce`),
-     *  and without this load waiting for it: a whole tree's write lasts as long as a cold build (a
-     *  config repo's 1.6 MB, 1.2–1.8 s; measured 2026-11-04). Under an identity only files whose
-     *  resolved graph IS it are kept, hashed as a publication hashes it (`identityOfResolved`); other
-     *  files load for this call, are never kept, and are logged. A write already in flight for the
-     *  key in this isolate is the one (`keepsInFlight`), and a 429 says another isolate kept it
-     *  within the second. Anything else failing is a warning, as a failed read is. */
-    const keep = (kvKey: string, files: WorkerModules, resolved: ResolvedWorker) => {
-      if (keepsInFlight.has(kvKey)) return;
-      const value = JSON.stringify(files);
-      if (new TextEncoder().encode(value).byteLength > KV_VALUE_MAX_BYTES) return;
-      keepsInFlight.add(kvKey);
-      const kept = (async () => {
-        if (opts.moduleIdentity) {
-          const identity = await identityOfResolved(resolved);
-          if (identity !== opts.moduleIdentity) {
-            console.warn({
-              event: "worker-loader.module-identity-mismatch",
-              name: opts.owner,
-              where,
-              mainModule,
-              expected: opts.moduleIdentity,
-              produced: identity,
-            });
-            return;
-          }
-        }
-        await opts.env.ITX_KV.put(kvKey, value, { expirationTtl: PRODUCED_MODULES_TTL_SECONDS });
-      })()
-        .catch((error: unknown) => {
-          // the binding quotes KV's status (platform-retry.ts `OVERLOADED_MESSAGE` reads it so)
-          if (/KV PUT failed: 429\b/.test(error instanceof Error ? error.message : String(error)))
-            console.info({
-              event: "worker-loader.module-cache-kept-elsewhere",
-              name: opts.owner,
-              where,
-            });
-          else cacheFailed("put")(error);
-        })
-        .finally(() => keepsInFlight.delete(kvKey));
-      // `waitUntil` holds a stateless invocation open for the write. It runs inside the load, so a
-      // throw from it (no invocation to hold) must not fail the load: the write then runs detached.
-      try {
-        waitUntil(kept);
-      } catch {
-        void kept;
-      }
-    };
-    getModules = async () => {
-      const producer = normalizedItxExpression(source);
-      const kvKey = `produced-modules-2/${await sha256Hex(
+     *  and only when the resolution is the code the key names (`named`, `produce`). */
+    const keep = (
+      kvKey: string,
+      files: WorkerModules,
+      named: () => Promise<boolean>,
+      expiresAt: number,
+    ) =>
+      keepInKv(
+        opts,
+        kvKey,
+        async () => ((await named()) ? JSON.stringify(files) : undefined),
+        expiresAt,
+      );
+    const producer = normalizedItxExpression(source);
+    let producedKey: Promise<string> | undefined;
+    sourceKey = () =>
+      (producedKey ||= sha256Hex(
         JSON.stringify(
           opts.moduleIdentity
             ? [LOADED_CODE_FORMAT, projectOf(opts.owner), named, mainModule]
             : [opts.owner, named, producer],
         ),
-      )}`;
-      const stored: unknown = await opts.env.ITX_KV.get(kvKey, "json").catch(cacheFailed("get"));
-      if (loadable(stored)) return { files: stored };
+      ).then((hash) => `produced-modules-2/${hash}`));
+    getModules = async () => {
+      const kvKey = await sourceKey();
+      const stored = await opts.env.ITX_KV.getWithMetadata(kvKey, "json").catch(
+        moduleCacheFailed(opts, "get"),
+      );
+      if (stored && loadable(stored.value))
+        return {
+          files: stored.value,
+          expiresAt: KeptMetadata.safeParse(stored.metadata).data?.expiresAt,
+        };
       console.info({ event: "worker-loader.produced", name: opts.owner, where, source: named });
       // The producer is a read the cacheKey names, so running it twice is running it once: a read a
       // deploy's reset of the context it reads cut (the project ingress's
@@ -517,15 +521,22 @@ export async function prepareConfinedWorker(
       });
       // A producer that answers one module's text (a `readFile`, a `kv.get`) answers the source of
       // that one module, named as its `main`.
-      const files = requireFiles(
-        typeof produced === "string"
-          ? { "package.json": '{"main":"worker.js"}', "worker.js": produced }
-          : produced,
-      );
-      if (!loadable(files)) return { files };
+      // This load's own copy: what resolves, and what is kept after it, is what the producer
+      // answered NOW, whatever it does with its map afterwards.
+      const files = {
+        ...requireFiles(
+          typeof produced === "string"
+            ? { "package.json": '{"main":"worker.js"}', "worker.js": produced }
+            : produced,
+        ),
+      };
+      const expiresAt = aDayFromNow();
+      if (!loadable(files)) return { files, expiresAt };
       return {
         files,
-        keep: (resolved) => keep(kvKey, opts.moduleIdentity ? resolved.files : files, resolved),
+        expiresAt,
+        keep: (resolved, isNamed) =>
+          keep(kvKey, opts.moduleIdentity ? resolved.files : files, isNamed, expiresAt),
       };
     };
   }
@@ -548,12 +559,101 @@ export async function prepareConfinedWorker(
   // Produce AND resolve: a source whose imports cannot resolve (a missing file, a parse error, esm.sh
   // down) fails here — in the recovery below that is before `load()` opens a new generation, so a
   // failure that persists mints no billed identity per retry.
-  const produce = async (): Promise<StartedWorker> => {
-    const { files, keep } = await getModules();
-    const resolved = await resolveModules(files, resolveOptions(opts.env, where, mainModule));
-    // A producer's fresh answer is kept only once it resolved: one that cannot load is never kept.
-    keep?.(resolved);
-    return enteredThroughPlatform(resolved, PLATFORM_MODULES);
+  //
+  // THE RESOLVED MEMO first: `getCode` runs on the caller's thread (a Durable Object's one thread),
+  // and resolving is synchronous CPU there (sucrase, the lexer: 170–700 ms for a config worker), so
+  // a cold load reads what an earlier load resolved and transforms nothing. Its key names everything
+  // the resolution's answer depends on: the platform's code (its transforms, its modules, the
+  // format), the source (its content, or what names a producer's answer), the main module and the
+  // esm origin. The module locks it read are checked by value (`readResolvedMemo`). Each deployment
+  // has its own ITX_KV. A miss resolves as before and keeps the answer off this load's path.
+  const produce = async (): Promise<ProducedWorker> => {
+    const memoKey = resolvedMemoKey(await sourceKey(), opts.env, mainModule);
+    let started = Date.now();
+    const remembered = await readResolvedMemo(opts, await memoKey);
+    if (remembered)
+      return { worker: remembered, modules: "resolved-memo", resolveMs: Date.now() - started };
+    const { files, keep, expiresAt } = await getModules();
+    // what each module lock read answered, and whether this resolution wrote one (a lock it made:
+    // then the next resolution reads what KV kept, and the memo waits for that one)
+    const locks = new Map<string, string>();
+    let wroteLock = false;
+    const store = {
+      get: async (key: string) => {
+        const value = await opts.env.ITX_KV.get(key);
+        if (value) locks.set(key, value);
+        return value;
+      },
+      put: (key: string, value: string) => {
+        wroteLock = true;
+        return opts.env.ITX_KV.put(key, value);
+      },
+    };
+    started = Date.now();
+    const resolved = await resolveModules(files, {
+      ...resolveOptions(opts.env, where, mainModule),
+      store,
+    });
+    const worker = enteredThroughPlatform(resolved, PLATFORM_MODULES);
+    const resolveMs = Date.now() - started;
+    // Kept only once it resolved, so an answer that cannot load is never kept; under a module
+    // identity, only a graph that IS it (`isNamed`). Other answers load for this call, are logged.
+    // Asked once, and only by a write, after its timer turn: hashing the graph is off the load's
+    // path. A failure to hash it is a resolution not kept, never an unhandled rejection.
+    let namedCheck: Promise<boolean> | undefined;
+    const isNamed = () => (namedCheck ||= isTheNamedCode(resolved).catch(() => false));
+    keep?.(resolved, isNamed);
+    // what the memo keeps, owned here before the write's turn: the loader has `worker`'s objects
+    const snapshot = {
+      mainModule: worker.mainModule,
+      modules: { ...worker.modules },
+      compatibilityFlags: worker.compatibilityFlags ? [...worker.compatibilityFlags] : null,
+    };
+    // expires with the files it was made from; files whose expiry is unknown keep no memo
+    if (!wroteLock && expiresAt !== undefined)
+      keepInKv(
+        opts,
+        await memoKey,
+        async () => {
+          if (!(await isNamed())) return undefined;
+          const lockHashes: Record<string, string> = {};
+          for (const [key, value] of locks) lockHashes[key] = await sha256Hex(value);
+          // only a module that IS this build's copy is named and left out: a source file under a
+          // platform module's name keeps its own text
+          const isPlatformCopy = ([name, code]: [string, string]) =>
+            Object.hasOwn(PLATFORM_MODULES.modules, name) &&
+            PLATFORM_MODULES.modules[name] === code;
+          const entries = Object.entries(snapshot.modules);
+          const payload = JSON.stringify({
+            mainModule: snapshot.mainModule,
+            modules: Object.fromEntries(entries.filter((entry) => !isPlatformCopy(entry))),
+            platformModules: entries.filter(isPlatformCopy).map(([name]) => name),
+            compatibilityFlags: snapshot.compatibilityFlags,
+            locks: lockHashes,
+          } satisfies z.infer<typeof ResolvedMemo>);
+          return `${await sha256Hex(payload)}\n${payload}`;
+        },
+        expiresAt,
+      );
+    return { worker, modules: "transformed", resolveMs };
+  };
+  /** Whether a resolution is the code its memos' keys name: always, but for a producer under a
+   *  published module identity, whose graph must hash as the publication hashed it
+   *  (`identityOfResolved`); literal files are their own key. Asked once per resolution, off the
+   *  load's path. */
+  const isTheNamedCode = async (resolved: ResolvedWorker): Promise<boolean> => {
+    if (!opts.moduleIdentity || isWorkerModules(source)) return true;
+    const identity = await identityOfResolved(resolved);
+    if (identity === opts.moduleIdentity) return true;
+    console.warn({
+      event: "worker-loader.module-identity-mismatch",
+      name: opts.owner,
+      where,
+      mainModule,
+      expected: opts.moduleIdentity,
+      produced: identity,
+    });
+    return false;
   };
   let workerForCode = produce;
   if (state.dead) {
@@ -586,7 +686,7 @@ export async function prepareConfinedWorker(
   const loaderId = generationId(loaderIdBase, generation);
   const load = () =>
     opts.env.LOADER.get(loaderId, async () => {
-      let resolved: StartedWorker;
+      let resolved: ProducedWorker;
       try {
         // Only on a cold isolate; resolution is locked per dependency set in ITX_KV, so a cold start
         // after the first one reads KV and never the network.
@@ -597,7 +697,17 @@ export async function prepareConfinedWorker(
       }
       // An isolate built: a new loaded identity, one this machine did not keep warm, or the first
       // load after a deploy.
-      console.info({ event: "worker-loader.built", name: opts.owner, where, loaderId });
+      // `modules`: read from the resolved memo, or transformed here; `resolveMs`: how long that took
+      // by the Workers clock, which moves with I/O (a transform's CPU shows in the DO's cpu time).
+      console.info({
+        event: "worker-loader.built",
+        name: opts.owner,
+        where,
+        loaderId,
+        modules: resolved.modules,
+        resolveMs: resolved.resolveMs,
+      });
+      const { worker } = resolved;
       return {
         // A worker's package.json gives its workerd compatibility flags (module-resolution.ts). The
         // default keeps Node compat OFF — this date turns it on, and it adds ~0.7 ms to every cold load
@@ -609,14 +719,14 @@ export async function prepareConfinedWorker(
         // that disables either. No CPU limit: trusted clients. The platform bounds a DO to 10
         // distinct dynamic workers with in-flight requests — the pins' release keeps a context under it.
         compatibilityDate: COMPATIBILITY_DATE,
-        compatibilityFlags: applySdkCompatibilityFlags(resolved.compatibilityFlags, opts.where),
+        compatibilityFlags: applySdkCompatibilityFlags(worker.compatibilityFlags, opts.where),
         // A loaded worker's invocation lasts as long as the work it starts: a voice agent's speaker
         // sender appends every frame of a call from one background task, each append a subrequest.
         // Under the plan's default of 10,000 per invocation, a call ends at its 10,000th speaker
         // frame (`Too many subrequests by single Worker invocation`): about 17 minutes of speech.
         limits: { subRequests: LOADED_WORKER_SUBREQUESTS },
-        mainModule: resolved.mainModule,
-        modules: resolved.modules,
+        mainModule: worker.mainModule,
+        modules: worker.modules,
         env: { ITX: opts.itxEntrypoint },
         globalOutbound: opts.itxEntrypoint,
       };
@@ -659,6 +769,147 @@ export function isLoadedWorkerPlatformFailure(error: unknown): error is Error {
     remote !== true &&
     failureKind(error) === "failed"
   );
+}
+
+/** A read or write of a memo in ITX_KV that failed: a warning, and the memo a miss. */
+const moduleCacheFailed =
+  (opts: Pick<PrepareConfinedWorkerOptions, "owner" | "where">, action: "get" | "put") =>
+  (error: unknown) => {
+    console.warn({
+      event: "worker-loader.platform-failure-module-cache",
+      action,
+      name: opts.owner,
+      where: opts.where,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  };
+
+/** Keep the value `make` answers under `kvKey` until `expiresAt` (seconds since the epoch, also
+ *  written as its `metadata`, so a memo made from it can expire with it), without the load
+ *  waiting for it: a whole
+ *  tree's write lasts as long as a cold build (a config repo's 1.6 MB, 1.2–1.8 s; measured
+ *  2026-11-04). `make` answers nothing for a value that must not be kept; a value over KV's limit
+ *  is not kept either. A write already in flight for the key in this isolate is the one
+ *  (`keepsInFlight`), and a 429 says another isolate kept it within the second. Anything else
+ *  failing is a warning, as a failed read is: the next cold load misses and writes it again. */
+function keepInKv(
+  opts: Pick<PrepareConfinedWorkerOptions, "env" | "owner" | "where">,
+  kvKey: string,
+  make: () => Promise<string | undefined>,
+  expiresAt: number,
+): void {
+  // KV refuses an expiry under a minute away: so little of the day left is not worth a write
+  if (expiresAt < Date.now() / 1000 + 60 || keepsInFlight.has(kvKey)) return;
+  keepsInFlight.add(kvKey);
+  const kept = (async () => {
+    // one turn of the event loop first: the load's answer goes before any of the memo's work
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const value = await make();
+    if (!value) return;
+    const bytes = new TextEncoder().encode(value).byteLength;
+    if (bytes > KV_VALUE_MAX_BYTES) {
+      // not kept: every cold load of it resolves again, so the line says why
+      console.info({
+        event: "worker-loader.module-cache-too-large",
+        name: opts.owner,
+        where: opts.where,
+        key: kvKey.slice(0, kvKey.indexOf("/")),
+        bytes,
+      });
+      return;
+    }
+    // checked again: the work above may have taken the expiry under KV's minute, which KV
+    // would refuse, a refusal that is no platform failure
+    if (expiresAt < Date.now() / 1000 + 60) return;
+    await opts.env.ITX_KV.put(kvKey, value, {
+      expiration: expiresAt,
+      metadata: { expiresAt } satisfies z.infer<typeof KeptMetadata>,
+    });
+  })()
+    .catch((error: unknown) => {
+      // the binding quotes KV's status (platform-retry.ts `OVERLOADED_MESSAGE` reads it so)
+      if (/KV PUT failed: 429\b/.test(error instanceof Error ? error.message : String(error)))
+        console.info({
+          event: "worker-loader.module-cache-kept-elsewhere",
+          name: opts.owner,
+          where: opts.where,
+        });
+      else moduleCacheFailed(opts, "put")(error);
+    })
+    .finally(() => keepsInFlight.delete(kvKey));
+  // `waitUntil` holds a stateless invocation open for the write. It runs inside the load, so a
+  // throw from it (no invocation to hold) must not fail the load: the write then runs detached.
+  try {
+    waitUntil(kept);
+  } catch {
+    void kept;
+  }
+}
+
+/** The resolved memo's key (`prepareConfinedWorker`, `produce`). The `resolved-modules-N` prefix
+ *  names the memo's shape: a change to `ResolvedMemo` is a new prefix. */
+async function resolvedMemoKey(
+  source: string,
+  env: IterateConfigEnv,
+  mainModule: string | undefined,
+): Promise<string> {
+  const esmOrigin = (env.ITERATE && iterateConfigOf(env).urls.esm) || null;
+  return `resolved-modules-2/${await sha256Hex(
+    JSON.stringify([await platformCodeIdentity(), esmOrigin, source, mainModule || null]),
+  )}`;
+}
+
+/** The resolved memo under `kvKey` as the loader starts it, or nothing: a miss, a value of another
+ *  shape, a module this build's platform does not ship, or a module lock that no longer holds what
+ *  the resolution read. What it rejected is logged. A failed read is a miss. */
+async function readResolvedMemo(
+  opts: Pick<PrepareConfinedWorkerOptions, "env" | "owner" | "where">,
+  kvKey: string,
+): Promise<StartedWorker | undefined> {
+  const text = await opts.env.ITX_KV.get(kvKey).catch(moduleCacheFailed(opts, "get"));
+  if (typeof text !== "string") return undefined;
+  const rejected = (reason: "integrity" | "shape" | "lock") => {
+    console.info({
+      event: "worker-loader.resolved-memo-rejected",
+      name: opts.owner,
+      where: opts.where,
+      reason,
+    });
+    return undefined;
+  };
+  // sealed: a value cut short, or changed since its write, is not the payload its digest names
+  const seal = text.indexOf("\n");
+  const payload = text.slice(seal + 1);
+  if (seal !== 64 || (await sha256Hex(payload)) !== text.slice(0, seal))
+    return rejected("integrity");
+  let stored: unknown;
+  try {
+    stored = JSON.parse(payload);
+  } catch {
+    return rejected("shape");
+  }
+  const memo = ResolvedMemo.safeParse(stored);
+  if (
+    !memo.success ||
+    !Object.hasOwn(memo.data.modules, memo.data.mainModule) ||
+    !memo.data.platformModules.every((name) => Object.hasOwn(PLATFORM_MODULES.modules, name)) ||
+    // every started worker enters through the platform's module (`enteredThroughPlatform`)
+    !(
+      memo.data.platformModules.includes(LOADED_WORKER_MODULE) ||
+      Object.hasOwn(memo.data.modules, LOADED_WORKER_MODULE)
+    )
+  )
+    return rejected("shape");
+  const { mainModule, modules, platformModules, compatibilityFlags, locks } = memo.data;
+  const current = await Promise.all(
+    Object.entries(locks).map(async ([key, hash]) => {
+      const value = await opts.env.ITX_KV.get(key).catch(moduleCacheFailed(opts, "get"));
+      return typeof value === "string" && (await sha256Hex(value)) === hash;
+    }),
+  );
+  if (!current.every(Boolean)) return rejected("lock");
+  for (const name of platformModules) modules[name] = PLATFORM_MODULES.modules[name]!;
+  return { mainModule, modules, compatibilityFlags: compatibilityFlags || undefined };
 }
 
 /** How the loader resolves a source (module-resolution.ts): this build's platform packages,

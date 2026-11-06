@@ -7,6 +7,7 @@ import { waitUntil } from "cloudflare:workers";
 import type { ItxExpression, ItxExpressionStep } from "iterate/expression";
 import { codedError, errorCode } from "iterate/lib";
 import { failureKind } from "iterate/platform-retry";
+import { transform } from "sucrase";
 import { expect, test, vi } from "vitest";
 import type { Caller } from "../caller.ts";
 import { workersRoot } from "./built-ins.ts";
@@ -20,6 +21,14 @@ import {
   moduleIdentityOf,
   prepareConfinedWorker,
 } from "./worker-loader.ts";
+
+// sucrase's transform, counted: a load that reads the resolved memo runs none. The resolver takes
+// no transform to inject, and that CPU is what the memo saves, so the count is of sucrase itself.
+// oxlint-disable-next-line iterate/no-vi-mock -- the one way to observe that no transform ran
+vi.mock("sucrase", async (original) => {
+  const sucrase = await original<typeof import("sucrase")>();
+  return { ...sucrase, transform: vi.fn(sucrase.transform) };
+});
 
 test("two literal sources whose djb2 hashes collide never share one Worker Loader cacheKey", async () => {
   // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources.
@@ -140,9 +149,10 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
 });
 
 test("a producer's modules are read once per commit, not once per cold isolate: a cold isolate under the same key reads ITX_KV and never asks the producer again", async () => {
-  const { kv } = fakeKv();
+  const { kv, values, puts } = fakeKv();
   const producer = fakeProducer();
   const coldIsolate = async () => {
+    forgetResolved(values); // as after a platform change: the files' memo alone
     const { env, warm } = fakeLoaderEnv({ kv }); // the last isolate idled out: nothing warm
     const { loaderId } = await loadConfined(env, {
       owner: "prj_kv_cold.iterate/",
@@ -156,6 +166,7 @@ test("a producer's modules are read once per commit, not once per cold isolate: 
     modules: { "worker.js": loaded("export default 1") },
   });
   expect(producer.produced()).toBe(1);
+  await vi.waitFor(() => expect(puts).toHaveLength(1)); // kept off the load's path
   await expect(coldIsolate()).resolves.toMatchObject({
     modules: { "worker.js": loaded("export default 1") },
   });
@@ -173,13 +184,17 @@ test("what a producer answered is kept for a day under its owner, key and expres
       ...producer,
       ...overrides,
     });
+  const before = Math.floor(Date.now() / 1000);
   await load();
   await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
   expect(shared).toMatchObject({
-    puts: [
-      { key: expect.stringMatching(/^produced-modules-2\//), options: { expirationTtl: 86_400 } },
-    ],
+    puts: [{ key: expect.stringMatching(/^produced-modules-2\//) }],
   });
+  // a day from now, written as its metadata too, so what is made from it can expire with it
+  const { expiration, metadata } = shared.puts[0]!.options!;
+  expect(expiration! - before).toBeGreaterThanOrEqual(86_400);
+  expect(expiration! - before).toBeLessThanOrEqual(86_401);
+  expect(metadata).toEqual({ expiresAt: expiration });
   const others: Partial<ConfinedWorkerOptions>[] = [
     { owner: "prj_other.iterate/" },
     { cacheKey: "decade" },
@@ -197,6 +212,7 @@ test("what a producer answered under a published module identity is kept under t
   const shared = fakeKv();
   const producer = fakeProducer();
   const coldIsolate = async (commitOid: string, moduleIdentity: string) => {
+    forgetResolved(shared.values); // as after a platform change: the files' memo alone
     const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
     const { loaderId } = await loadConfined(env, {
       kind: "facet",
@@ -291,6 +307,7 @@ test("under a published module identity ITX_KV keeps the files its main module's
   const shared = fakeKv();
   let produced = 0;
   const coldIsolate = async () => {
+    forgetResolved(shared.values); // as after a platform change: the files' memo alone
     const { env, warm } = fakeLoaderEnv({ kv: shared.kv }); // the last isolate idled out
     const { loaderId } = await loadConfined(env, {
       kind: "facet",
@@ -483,7 +500,13 @@ test.for([
   {
     name: "fails",
     put: () => Promise.reject(new Error("KV PUT failed")),
+    // the producer's answer, then the resolved memo
     warned: [
+      {
+        event: "worker-loader.platform-failure-module-cache",
+        action: "put",
+        message: "KV PUT failed",
+      },
       {
         event: "worker-loader.platform-failure-module-cache",
         action: "put",
@@ -501,7 +524,11 @@ test.for([
   "a cold load waits for no KV write: one that $name holds nothing, and the load answers",
   async ({ name, put, warned }) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const kv = { get: async () => null, put } as unknown as KVNamespace;
+    const kv = {
+      get: async () => null,
+      getWithMetadata: async () => ({ value: null, metadata: null }),
+      put,
+    } as unknown as KVNamespace;
     const { env, warm } = fakeLoaderEnv({ kv });
     const { loaderId } = await loadConfined(env, {
       // a key of its own: a write that never settles stays this isolate's write in flight
@@ -524,6 +551,7 @@ test("an isolate writes a key once at a time: cold loads that all missed it star
   const landed = new Promise<void>((resolve) => (release = resolve));
   const slowKv = {
     get: async () => null,
+    getWithMetadata: async () => ({ value: null, metadata: null }),
     put: async (...args: Parameters<KVNamespace["put"]>) => {
       await landed;
       return shared.kv.put(...args);
@@ -621,6 +649,8 @@ test("the config pointer's worker, reached through the pointer, loads under its 
   ]);
   // that isolate idled out (or a deploy): the cold load reads the answer ITX_KV kept
   await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(1));
+  forgetResolved(shared.values); // as after a platform change: the files' memo alone
   const cold = configWorkerOver({ kv, invoke, vouched: true });
   await cold.call(pointer("c2", a));
   expect({ id: cold.ids[0], built: cold.built(), produced }).toEqual({
@@ -666,6 +696,7 @@ test("a KV that cannot be read or written costs the producer's run and a logged 
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const broken = {
     get: () => Promise.reject(new Error("KV GET failed")),
+    getWithMetadata: () => Promise.reject(new Error("KV GET failed")),
     put: () => Promise.reject(new Error("KV PUT failed")),
   } as unknown as KVNamespace;
   const { env, warm } = fakeLoaderEnv({ kv: broken });
@@ -679,8 +710,12 @@ test("a KV that cannot be read or written costs the producer's run and a logged 
   await expect(warm.get(loaderId)).resolves.toMatchObject({
     modules: { "worker.js": loaded("export default 1") },
   });
+  // the resolved memo and the producer's answer, each read and each written
+  await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(4));
   expect(warn.mock.calls.map(([line]) => line)).toMatchObject([
     { event: "worker-loader.platform-failure-module-cache", action: "get" },
+    { event: "worker-loader.platform-failure-module-cache", action: "get" },
+    { event: "worker-loader.platform-failure-module-cache", action: "put" },
     { event: "worker-loader.platform-failure-module-cache", action: "put" },
   ]);
 });
@@ -714,6 +749,7 @@ test("a cold load resolves its source once: while its module lock's read is held
       await held;
       return lock;
     },
+    getWithMetadata: shared.kv.getWithMetadata,
     put: shared.kv.put,
   } as unknown as KVNamespace;
   const { env, warm } = fakeLoaderEnv({ kv });
@@ -736,6 +772,317 @@ test("a cold load resolves its source once: while its module lock's read is held
   expect(lockReads).toBe(1);
 });
 
+test("a cold load reads the resolved memo an earlier cold load kept and transforms nothing; the built line says which it was", async () => {
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  const shared = fakeKv();
+  const files = {
+    "package.json": '{"main":"worker.ts"}',
+    "worker.ts":
+      'import { greeting } from "./greeting.ts"; export default greeting satisfies string;',
+    "greeting.ts": 'export const greeting: string = "hi";',
+  };
+  const producer = { invoke: async () => files };
+  const coldIsolate = async (options: Partial<ConfinedWorkerOptions> = {}) => {
+    vi.mocked(transform).mockClear();
+    const { env, warm } = fakeLoaderEnv({ kv: shared.kv }); // the last isolate idled out
+    const { loaderId } = await loadConfined(env, {
+      owner: "prj_resolved_memo.iterate/",
+      source: site,
+      cacheKey: "c0ffee",
+      ...producer,
+      ...options,
+    });
+    const code = await warm.get(loaderId);
+    const built = info.mock.calls
+      .map(([line]) => line as { event?: string; loaderId?: string })
+      .findLast((line) => line.event === "worker-loader.built" && line.loaderId === loaderId);
+    return { code, transforms: vi.mocked(transform).mock.calls.length, built };
+  };
+  const first = await coldIsolate();
+  expect(first).toMatchObject({
+    transforms: 2,
+    built: { modules: "transformed", resolveMs: expect.any(Number) },
+  });
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(1));
+  // kept without the platform's own modules, which this build has
+  const kept = unsealed(shared.values.get(shared.resolvedPuts[0]!.key)!) as {
+    modules: Record<string, string>;
+    platformModules: string[];
+  };
+  expect(Object.keys(kept.modules).sort()).toEqual(["greeting.js", "worker.js"]);
+  expect(kept.platformModules).toContain("node_modules/.platform/loaded-worker.js");
+  // the next cold load: the same modules, read whole, no transform
+  const second = await coldIsolate();
+  expect(second).toEqual({
+    code: first.code,
+    transforms: 0,
+    built: { ...first.built, modules: "resolved-memo", resolveMs: expect.any(Number) },
+  });
+  // a literal source is its own key: the second load of the same files reads the memo too
+  await coldIsolate({ source: files, cacheKey: undefined });
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(2));
+  await expect(coldIsolate({ source: files, cacheKey: undefined })).resolves.toMatchObject({
+    transforms: 0,
+    built: { modules: "resolved-memo" },
+  });
+});
+
+test("the resolved memo's key names the platform's code: a memo kept under another platform identity is never read, one under this one is", async () => {
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  const owner = "prj_resolved_platform.iterate/";
+  const producedKey = `produced-modules-2/${createHash("sha256")
+    .update(JSON.stringify([owner, "key:c0ffee", site]))
+    .digest("hex")}`;
+  const keyOf = (platform: string) =>
+    `resolved-modules-2/${createHash("sha256")
+      .update(JSON.stringify([platform, null, producedKey, null]))
+      .digest("hex")}`;
+  const memoOf = (code: string) =>
+    sealed({
+      mainModule: "worker.js",
+      modules: { "worker.js": code },
+      platformModules: ["node_modules/.platform/loaded-worker.js"],
+      compatibilityFlags: null,
+      locks: {},
+    });
+  const coldIsolate = async (kept: [string, string]) => {
+    const memo = fakeKv();
+    memo.values.set(...kept);
+    const { env, warm } = fakeLoaderEnv({ kv: memo.kv });
+    const producer = fakeProducer();
+    const { loaderId } = await loadConfined(env, {
+      owner,
+      source: site,
+      cacheKey: "c0ffee",
+      ...producer,
+    });
+    return { code: await warm.get(loaderId), produced: producer.produced() };
+  };
+  await expect(
+    coldIsolate([keyOf(PLATFORM_ID), memoOf("export default 'kept'")]),
+  ).resolves.toMatchObject({
+    code: { modules: { "worker.js": "export default 'kept'" } },
+    produced: 0,
+  });
+  await expect(
+    coldIsolate([keyOf(`${PLATFORM_ID.slice(0, -1)}0`), memoOf("export default 'kept'")]),
+  ).resolves.toMatchObject({
+    code: { modules: { "worker.js": loaded("export default 1") } },
+    produced: 1,
+  });
+  expect(info).toHaveBeenCalled();
+});
+
+test("a resolved memo whose module lock moved, or that is corrupt or partial, is a miss: the load resolves again, and says what it rejected", async () => {
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  const files = {
+    "package.json": '{"main":"worker.ts","dependencies":{"left-pad":"1.3.0"}}',
+    "worker.ts": 'import leftPad from "left-pad"; export default leftPad;',
+  };
+  const lockOf = (body: string) =>
+    JSON.stringify({ modules: { "node_modules/left-pad.js": body }, platformModules: [] });
+  const shared = fakeKv();
+  let lock = lockOf("export default (text) => text;");
+  const kv = {
+    get: async (key: string, type?: "json") =>
+      key.startsWith("module-lock-") ? lock : shared.kv.get(key, type as "json"),
+    getWithMetadata: shared.kv.getWithMetadata,
+    put: shared.kv.put,
+  } as unknown as KVNamespace;
+  const coldIsolate = async () => {
+    vi.mocked(transform).mockClear();
+    const { env, warm } = fakeLoaderEnv({ kv });
+    const { loaderId } = await loadConfined(env, {
+      owner: "prj_resolved_lock.iterate/",
+      source: files,
+    });
+    const code = (await warm.get(loaderId)) as { modules: Record<string, string> };
+    return {
+      leftPad: code.modules["node_modules/left-pad.js"],
+      transforms: vi.mocked(transform).mock.calls.length,
+    };
+  };
+  const rejections = () =>
+    info.mock.calls
+      .map(([line]) => line as { event?: string; reason?: string })
+      .filter((line) => line.event === "worker-loader.resolved-memo-rejected")
+      .map((line) => line.reason);
+  await expect(coldIsolate()).resolves.toEqual({
+    leftPad: "export default (text) => text;",
+    transforms: 1,
+  });
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(1));
+  const memoKey = shared.resolvedPuts[0]!.key;
+  const kept = shared.values.get(memoKey)!;
+  // the lock the resolution read, by its value's hash
+  expect(Object.keys((unsealed(kept) as { locks: object }).locks)).toEqual([
+    expect.stringMatching(/^module-lock-3\//),
+  ]);
+  await expect(coldIsolate()).resolves.toMatchObject({ transforms: 0 });
+  // the lock the resolution read is no longer there: resolved again, with the lock that is
+  lock = lockOf("export default (text) => `${text}`;");
+  await expect(coldIsolate()).resolves.toEqual({
+    leftPad: "export default (text) => `${text}`;",
+    transforms: 1,
+  });
+  expect(rejections()).toEqual(["lock"]);
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(2)); // kept again, with that lock
+  // changed after its write — cut short, a module dropped, the platform's modules dropped — is
+  // not what its seal names; sealed again, partial (no main module, no platform entry), naming a
+  // platform module this build lacks, or of another shape
+  const memo = unsealed(kept) as { modules: Record<string, string> } & Record<string, unknown>;
+  const { "node_modules/left-pad.js": _leftPad, ...withoutLeftPad } = memo.modules;
+  for (const value of [
+    kept.slice(0, kept.length / 2),
+    `${kept.slice(0, 64)}\n${JSON.stringify({ ...memo, modules: withoutLeftPad })}`,
+    `${kept.slice(0, 64)}\n${JSON.stringify({ ...memo, platformModules: [] })}`,
+    kept.slice(kept.indexOf("\n") + 1), // no seal at all
+    sealed({ ...memo, modules: {} }),
+    sealed({ ...memo, platformModules: [] }),
+    sealed({ ...memo, platformModules: ["node_modules/.platform/gone.js"] }),
+    sealed({ ...memo, locks: undefined }),
+  ]) {
+    const writes = shared.resolvedPuts.length;
+    shared.values.set(memoKey, value);
+    await expect(coldIsolate()).resolves.toMatchObject({ transforms: 1 });
+    await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(writes + 1));
+  }
+  expect(rejections()).toEqual([
+    "lock",
+    ...Array<string>(4).fill("integrity"),
+    ...Array<string>(4).fill("shape"),
+  ]);
+});
+
+test("a resolved memo expires with the files it was made from: fresh files give both memos one new day; files read back give it their memo's expiry, not a new day; files of unknown expiry give it none", async () => {
+  const shared = fakeKv();
+  const producer = fakeProducer();
+  const coldIsolate = async () => {
+    const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+    const { loaderId } = await loadConfined(env, {
+      owner: "prj_resolved_expiry.iterate/",
+      source: site,
+      cacheKey: "c0ffee",
+      ...producer,
+    });
+    await warm.get(loaderId);
+  };
+  await coldIsolate();
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(1));
+  const filesKey = shared.puts[0]!.key;
+  const fresh = shared.puts[0]!.options!.expiration;
+  expect(shared.resolvedPuts[0]!).toMatchObject({
+    options: {
+      expiration: fresh,
+      metadata: { expiresAt: fresh },
+    },
+  });
+  // the files' memo, kept an hour short of a day ago: a platform change moved the resolved key
+  const keptLongAgo = Math.floor(Date.now() / 1000) + 3_600;
+  shared.metadata.set(filesKey, { expiresAt: keptLongAgo });
+  forgetResolved(shared.values);
+  await coldIsolate();
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(2));
+  expect(shared.resolvedPuts[1]!).toMatchObject({
+    options: {
+      expiration: keptLongAgo,
+      metadata: { expiresAt: keptLongAgo },
+    },
+  });
+  // a files' memo written before its expiry was: no resolved memo, which might outlive it
+  shared.metadata.delete(filesKey);
+  forgetResolved(shared.values);
+  await coldIsolate();
+  await settled();
+  expect({ produced: producer.produced(), resolvedPuts: shared.resolvedPuts.length }).toEqual({
+    produced: 1,
+    resolvedPuts: 2,
+  });
+});
+
+test("an expiry that falls under KV's minute while the write is deferred keeps nothing and logs no platform failure", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const shared = fakeKv();
+  const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+  const { loaderId } = await loadConfined(env, {
+    owner: "prj_resolved_expiring.iterate/",
+    source: site,
+    cacheKey: "c0ffee",
+    ...fakeProducer(),
+  });
+  await warm.get(loaderId);
+  // the load answered and both writes wait for their turn: the clock then reaches 30 s before
+  // the day they were given ends
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now + (86_400 - 30) * 1000);
+  try {
+    await settled();
+    await settled();
+    expect({ puts: shared.puts, resolvedPuts: shared.resolvedPuts }).toEqual({
+      puts: [],
+      resolvedPuts: [],
+    });
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test("what is kept is what this load resolved: a producer that changes the map it answered, after the load, changes neither memo", async () => {
+  const shared = fakeKv();
+  const answered: Record<string, string> = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": 'import "./two.js"; export default 1',
+    "two.js": "export const two = 2;",
+  };
+  const coldIsolate = async () => {
+    const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+    const { loaderId } = await loadConfined(env, {
+      owner: "prj_resolved_snapshot.iterate/",
+      source: site,
+      cacheKey: "c0ffee",
+      invoke: async () => answered,
+    });
+    return warm.get(loaderId) as Promise<{ modules: Record<string, string> }>;
+  };
+  const first = await coldIsolate();
+  // the producer keeps its map and changes it before the memos' writes start
+  answered["worker.js"] = "export default 2";
+  delete answered["two.js"];
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(1));
+  expect(await coldIsolate()).toEqual(first); // from the resolved memo
+  forgetResolved(shared.values);
+  expect(await coldIsolate()).toEqual(first); // from the files' memo, resolved again
+});
+
+test("a source file named like a platform module keeps its own text in the resolved memo: a hit loads what the miss loaded", async () => {
+  const shared = fakeKv();
+  const platformName = "node_modules/.platform/loaded-worker.js";
+  const files = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": 'import "./node_modules/.platform/loaded-worker.js"; export default 1;',
+    [platformName]: "export const authors = true;",
+  };
+  const coldIsolate = async () => {
+    const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+    const { loaderId } = await loadConfined(env, {
+      owner: "prj_resolved_platform_name.iterate/",
+      source: files,
+    });
+    return warm.get(loaderId);
+  };
+  const miss = await coldIsolate();
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(1));
+  const kept = unsealed(shared.values.get(shared.resolvedPuts[0]!.key)!) as {
+    modules: Record<string, string>;
+    platformModules: string[];
+  };
+  expect(kept.modules[platformName]).toBe("export const authors = true;");
+  expect(kept.platformModules).not.toContain(platformName);
+  expect(await coldIsolate()).toEqual(miss);
+});
+
 test("a waitUntil that throws (no invocation to hold) leaves the cold load answered and the write running detached", async () => {
   const hold = vi.spyOn(waitUntil as unknown as { hold: () => void }, "hold");
   hold.mockImplementation(() => {
@@ -752,8 +1099,9 @@ test("a waitUntil that throws (no invocation to hold) leaves the cold load answe
   await expect(warm.get(loaderId)).resolves.toMatchObject({
     modules: { "worker.js": loaded("export default 1") },
   });
-  expect(hold).toHaveBeenCalledTimes(1);
+  expect(hold).toHaveBeenCalledTimes(2); // the producer's answer and the resolved memo
   await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+  await vi.waitFor(() => expect(shared.resolvedPuts).toHaveLength(1));
 });
 
 test("an answer that cannot load is never kept or believed: the dead-id recovery asks the producer again", async () => {
@@ -774,7 +1122,7 @@ test("an answer that cannot load is never kept or believed: the dead-id recovery
     modules: { "worker.js": loaded("export default class Site {}") },
   });
   expect(produced).toBe(2);
-  expect(shared.puts).toHaveLength(1);
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
   // a value under the key that is not a loadable module map is a miss, and the producer's answer replaces it
   for (const key of shared.values.keys()) shared.values.set(key, "{}");
   const cold = fakeLoaderEnv({ kv: shared.kv });
@@ -815,8 +1163,9 @@ test("a key: producer's answer with a missing import is never kept: the next loa
   await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
 });
 
-test("an answer over KV's value limit is not kept, and costs no warning: the worker still loads", async () => {
+test("an answer over KV's value limit is not kept, and costs no warning, only a line that says so: the worker still loads", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
   const shared = fakeKv();
   const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
   const invoke = async () => ({
@@ -835,6 +1184,14 @@ test("an answer over KV's value limit is not kept, and costs no warning: the wor
   });
   expect(shared).toMatchObject({ puts: [] });
   expect(warn).not.toHaveBeenCalled();
+  await vi.waitFor(() =>
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "worker-loader.module-cache-too-large",
+        key: "produced-modules-2",
+      }),
+    ),
+  );
 });
 
 test("literal modules: the key is their content hash unless the caller names a cacheKey", async () => {
@@ -927,13 +1284,15 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
 });
 
 test("a source that keeps failing to resolve mints one loader id, not one per retry: the recovery resolves outside the loader", async () => {
-  const { env, keys } = fakeLoaderEnv();
+  const { env, keys, warm } = fakeLoaderEnv();
   const retry = () =>
     loadConfined(env, {
       source: { "package.json": '{"main":"worker.js"}', "worker.js": `import "./missing.js";` },
     });
-  await retry(); // the cold load resolves inside getCode, fails, and marks the id dead
-  await settled();
+  // the cold load resolves inside getCode, fails, and marks the id dead; its rejection is the
+  // mark's, however many turns the resolved memo's read takes first
+  const { loaderId } = await retry();
+  await warm.get(loaderId)!.catch(() => undefined);
   for (let attempt = 0; attempt < 3; attempt++)
     await expect(retry()).rejects.toThrow(/no such file/);
   expect(new Set(keys)).toMatchObject({ size: 1 });
@@ -1319,21 +1678,48 @@ const producedFiles = (n: number) => ({
 const workerIdentityOf = (files: Record<string, string>) =>
   moduleIdentityOf(files, "worker.js", { ITX_KV: fakeKv().kv }, "worker.js");
 
-/** A fake `env.ITX_KV` that keeps every value and records each `put`'s options. */
+/** A resolved memo's value as worker-loader.ts seals it: the payload's SHA-256, a newline, the
+ *  payload. */
+const sealed = (memo: unknown) => {
+  const payload = JSON.stringify(memo);
+  return `${createHash("sha256").update(payload).digest("hex")}\n${payload}`;
+};
+
+/** A sealed resolved memo's payload, parsed. */
+const unsealed = (value: string): unknown => JSON.parse(value.slice(value.indexOf("\n") + 1));
+
+/** Drop every resolved memo `values` keeps: a cold load then reads only the producer's memo, as
+ *  it does after a platform change moved the resolved memo's key. */
+const forgetResolved = (values: Map<string, string>) => {
+  for (const key of [...values.keys()]) if (key.startsWith("resolved-modules-")) values.delete(key);
+};
+
+/** A fake `env.ITX_KV` that keeps every value and its metadata, and records each `put`'s options:
+ *  a resolved memo's in `resolvedPuts`, every other in `puts`. */
 const fakeKv = () => {
   const values = new Map<string, string>();
+  const metadata = new Map<string, unknown>();
   const puts: { key: string; options?: KVNamespacePutOptions }[] = [];
+  const resolvedPuts: { key: string; options?: KVNamespacePutOptions }[] = [];
   const kv = {
     get: async (key: string, type?: "json") => {
       const value = values.get(key) ?? null;
       return type === "json" && value ? JSON.parse(value) : value;
     },
+    getWithMetadata: async (key: string, type?: "json") => {
+      const value = values.get(key) ?? null;
+      return {
+        value: type === "json" && value ? JSON.parse(value) : value,
+        metadata: (value && metadata.get(key)) ?? null,
+      };
+    },
     put: async (key: string, value: string, options?: KVNamespacePutOptions) => {
       values.set(key, value);
-      puts.push({ key, options });
+      metadata.set(key, options?.metadata);
+      (key.startsWith("resolved-modules-") ? resolvedPuts : puts).push({ key, options });
     },
   } as unknown as KVNamespace;
-  return { kv, values, puts };
+  return { kv, values, metadata, puts, resolvedPuts };
 };
 
 /** A fake `env.LOADER` that records every key and — like workerd — runs `getCode` once per NEW key
@@ -1389,7 +1775,11 @@ const loadConfined = async (...args: Parameters<typeof workerOptions>) => {
 
 /** Let every promise chain started so far settle (a producer's failure reaches the dead marker
  *  through the resolve step's awaits), whatever its depth in microtasks. */
-const settled = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+const settled = async () => {
+  // a memo's write waits one timer turn before it starts (worker-loader.ts `keepInKv`): three
+  // turns see it through
+  for (let turn = 0; turn < 3; turn++) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+};
 
 /** `itx.workers.get(spec)` of a fresh context at `/`, one `call(step)` per call by `caller`, over a
  *  Worker Loader whose first `failingEntries` entries (by id, in the order it was asked for them)

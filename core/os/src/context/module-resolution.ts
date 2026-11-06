@@ -376,7 +376,7 @@ function addPlatformModules(out: ModuleMap, names: string[], platform: PlatformM
 }
 
 /** What every loaded worker evaluates first (iterate src/sdk/loaded-worker.ts), as build.ts names it. */
-const LOADED_WORKER_MODULE = "node_modules/.platform/loaded-worker.js";
+export const LOADED_WORKER_MODULE = "node_modules/.platform/loaded-worker.js";
 
 /** A resolved worker as the loader starts it: its main module imports the platform's
  *  LOADED_WORKER_MODULE before anything of its own — on its first line, so its lines keep their
