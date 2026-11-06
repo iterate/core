@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,18 @@ const isEphemeralPackageRunner = () =>
 const forceBuiltPackage = process.env.ITERATE_FORCE_BUILT_PACKAGE === "1";
 
 /**
+ * Whether every runtime dependency of the package at `pkgDir` is installed. A
+ * checkout that has not run `pnpm install` has the CLI's source but not what it
+ * imports, so it cannot run it.
+ * @param {string} pkgDir
+ * @returns {boolean}
+ */
+const dependenciesInstalled = (pkgDir) => {
+  const { dependencies = {} } = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
+  return Object.keys(dependencies).every((name) => existsSync(join(pkgDir, "node_modules", name)));
+};
+
+/**
  * Find a local version of the iterate CLI that differs from the currently
  * running script. Returns an importable module path, or null.
  * @returns {string | null}
@@ -51,7 +63,11 @@ const findLocalModule = () => {
   if (repoRoot) {
     const repoPkg = join(repoRoot, "core/lib");
     const repoBin = join(repoPkg, "bin/iterate.js");
-    if (existsSync(repoBin) && realpathSync(repoBin) !== selfReal) {
+    if (
+      existsSync(repoBin) &&
+      realpathSync(repoBin) !== selfReal &&
+      dependenciesInstalled(repoPkg)
+    ) {
       const repoSrc = join(repoPkg, "src/cli/cli.ts");
       if (existsSync(repoSrc)) return repoSrc;
       const repoDist = join(repoPkg, "dist/cli.mjs");

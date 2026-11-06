@@ -283,6 +283,47 @@ test("a pnpm shim for this package does not redirect source development to stale
   }
 });
 
+test("an installed CLI hands off to a monorepo checkout only once its dependencies are installed", async () => {
+  using scratch = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
+  const installed = join(scratch.path, "installed");
+  const checkout = join(scratch.path, "checkout");
+  const checkoutPkg = join(checkout, "core/lib");
+  for (const path of [join(installed, "bin"), join(installed, "dist"), join(checkoutPkg, "bin")])
+    mkdirSync(path, { recursive: true });
+  for (const pkg of [installed, checkoutPkg]) copyFileSync(bin, join(pkg, "bin/iterate.js"));
+  writeFileSync(join(installed, "package.json"), '{"type":"module"}');
+  writeFileSync(
+    join(installed, "dist/cli.mjs"),
+    'export async function runCli() { console.log("installed"); }',
+  );
+  writeFileSync(join(checkout, "pnpm-workspace.yaml"), "packages: [core/lib]\n");
+  writeFileSync(
+    join(checkoutPkg, "package.json"),
+    '{"type":"module","dependencies":{"capnweb":"*"}}',
+  );
+  mkdirSync(join(checkoutPkg, "src/cli"), { recursive: true });
+  writeFileSync(
+    join(checkoutPkg, "src/cli/cli.ts"),
+    'export async function runCli() { console.log("checkout"); }',
+  );
+  const run = async () =>
+    (
+      await promisify(execFile)(process.execPath, [join(installed, "bin/iterate.js")], {
+        cwd: checkout,
+        env: {
+          ...process.env,
+          ITERATE_FORCE_BUILT_PACKAGE: "",
+          npm_command: "",
+          npm_lifecycle_event: "",
+        },
+        timeout: 5000,
+      })
+    ).stdout.trim();
+  expect(await run()).toBe("installed");
+  mkdirSync(join(checkoutPkg, "node_modules/capnweb"), { recursive: true });
+  expect(await run()).toBe("checkout");
+});
+
 test("an authentication timeout closes the transport without an unhandled RPC rejection", async () => {
   const entered = Promise.withResolvers<void>();
   class Root extends RpcTarget {
