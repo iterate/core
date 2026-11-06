@@ -6,7 +6,7 @@
 // BUILT FOR A LOG OF 100,000 EVENTS: `history: "tail"` reads only the newest page to be caught up
 // (the head from a one-row probe, then the page below it) and reads older pages when asked
 // (`loadOlder`); `"all"` reads every page from the first, for a consumer that folds the whole log
-// (the agents chat). A batch merges without copying what is held but once per frame (an append is
+// (a tree of every context). A batch merges without copying what is held but once per frame (an append is
 // a concat, a prepend too; only a batch landing inside the held range re-sorts), each wire batch
 // is cloned once, and who acted and the processors table's version are kept as events arrive
 // rather than recomputed from the whole log.

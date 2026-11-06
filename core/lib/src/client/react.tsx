@@ -244,7 +244,7 @@ const LIVE_STATE_CONNECTING: LiveStateResult = {
  *  once a frame; `caughtUp` once the read reached the head; `error` when the connect failed.
  *  `history: "tail"` (the default) reads the newest page only — a context of 100,000 events opens
  *  as fast as one of 10 — and `older.loadOlder()` reads the page below what is held; `"all"` reads
- *  every page from the first, for a consumer that folds the whole log (the agents chat). `head` is
+ *  every page from the first, for a consumer that folds the whole log (a tree of every context). `head` is
  *  the newest offset known, so a view can say how much of the log it holds. Off that same log, THE SUBSCRIPTIONS TABLE (`itx.subscriptions.list()`:
  *  every subscriber — a row that hosts a facet is a processor — with its delivery cursor), re-read
  *  whenever the log grows a row-changing event (a subscription configured, halted or resumed — the
