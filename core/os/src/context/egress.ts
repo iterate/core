@@ -3,7 +3,7 @@
 // (itx-expression-rewriting.ts `PORTABLE_ROOTS`).
 import { ITERATE_CAUSE_HEADER, resolveContextPath } from "iterate/lib";
 import { parseCause, causeHeader, refuseActPastLimit, type Cause } from "../cause.ts";
-import { traceModelCall } from "../agent-spans.ts";
+import { traceModelCall, traceResponsesSocket } from "../agent-spans.ts";
 import { secretPathsReferenced } from "../secrets.ts";
 import { FETCH_UPGRADE_RESUMABLE_HEADER } from "./fetch-upgrade.ts";
 import { stampCallerHeaders } from "./rpc-stubs.ts";
@@ -45,25 +45,7 @@ export function egress(
   // refuses a request without one: a caller that names none is sent as `iterate`.
   if (!headers.has("user-agent")) headers.set("user-agent", "iterate");
   const outbound = new Request(request, { headers });
-  // a model call with a project's own key gets the spans Cloudflare's Agents view reads
-  // (agent-spans.ts); one on an open Responses WebSocket is frames on its upgrade, and has none
-  if (isResponsesCall(outbound))
-    return traceModelCall({ projectId: from.projectId, path: from.path, provider: "openai" }, () =>
-      send(outbound, from),
-    );
-  return send(outbound, from);
-}
-
-/** An HTTP request to OpenAI's Responses API. */
-const isResponsesCall = (request: Request) =>
-  request.method === "POST" &&
-  request.url === "https://api.openai.com/v1/responses" &&
-  !request.headers.has("upgrade");
-
-/** The request to its origin, or through the one secret it names. */
-function send(outbound: Request, from: Parameters<typeof egress>[1]): Promise<Response> {
   const paths = secretPathsReferenced(outbound);
-  if (paths.length === 0) return fetch(outbound);
   if (paths.length > 1)
     return Promise.resolve(
       new Response(
@@ -72,8 +54,32 @@ function send(outbound: Request, from: Parameters<typeof egress>[1]): Promise<Re
       ),
     );
   const { projectId, path } = from;
-  return from.secretFetch(
-    resolveContextPath(resourceScope(projectId, path).rootPath, `.${paths[0]}`),
-    outbound,
-  );
+  const secretPath =
+    paths[0] && resolveContextPath(resourceScope(projectId, path).rootPath, `.${paths[0]}`);
+  const send = () => (secretPath ? from.secretFetch(secretPath, outbound) : fetch(outbound));
+  // a model call with a project's own key gets the spans Cloudflare's Agents view reads
+  // (agent-spans.ts): an HTTP call's answer is read through, and a Responses WebSocket is relayed
+  const model = modelCallAt(outbound, { projectId, path, secretPath });
+  if (model?.kind === "socket")
+    return send().then((upgrade) => traceResponsesSocket(upgrade, model.call));
+  if (model?.kind === "http") return traceModelCall(model.call, send);
+  return send();
+}
+
+/** Whether this hop traces `outbound` as a model call, and as whose. Only the first hop does: a
+ *  request naming a secret that another context holds goes on to that context, whose own egress
+ *  hands it to its `secret` facet. That second hop, where the secret is the context's own, neither
+ *  relays a socket (which would keep the secret's context resident for the socket's life) nor opens
+ *  a second set of spans under the secret's path. */
+export function modelCallAt(
+  outbound: Pick<Request, "url" | "method" | "headers">,
+  at: { projectId: string; path: string; secretPath: string | undefined },
+):
+  | { kind: "socket" | "http"; call: { projectId: string; path: string; provider: string } }
+  | undefined {
+  if (outbound.url !== "https://api.openai.com/v1/responses" || at.secretPath === at.path) return;
+  const call = { projectId: at.projectId, path: at.path, provider: "openai" };
+  if (outbound.headers.get("upgrade")?.toLowerCase() === "websocket")
+    return { kind: "socket", call };
+  return outbound.method === "POST" ? { kind: "http", call } : undefined;
 }
