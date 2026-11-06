@@ -67,6 +67,10 @@ export type Caller = {
    *  `as`) and the kernel. What connecting their own account to a project needs
    *  (context/built-ins.ts `integrations.connect(provider, { account })`). */
   account?: true;
+  /** A PERSON WHO IS NO MEMBER, reaching a project that lends them a facet (session.ts
+   *  `projects.get`): a context runs only a call on a facet lent to the principal, and refuses
+   *  every other before it writes anything (context/facet-lends.ts). Set by the session alone. */
+  lendee?: true;
 };
 /** The grant's header beside it (the caller's `grant`), set and stripped exactly where the
  *  principal's is. */
@@ -140,6 +144,9 @@ const PLATFORM_FACT_TYPE_LIST = [
   "events.iterate.com/github/webhook-received",
   "events.iterate.com/slack/webhook-received",
   "events.iterate.com/mcp/webhook-received",
+  // a project's root opens to people who are no members only through `itx.facets.lend`
+  // (context/facet-lends.ts rule 2)
+  "events.iterate.com/itx/facet-lending-enabled",
   // every provider's connection facts, typed from the provider by the one mechanism that lands them
   // (integrations/connections.ts `appendConnected`, verbs.ts `disconnectIntegration`)
   ...INTEGRATION_PROVIDERS.flatMap(

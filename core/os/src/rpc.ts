@@ -39,6 +39,8 @@ export async function rpcResponse(
     reach: authorization.reach,
     grants: new GrantsRpcTarget(env, authorization, addresses),
     scopes: authorization.grant?.scope,
+    // a personal access token names no client
+    ...(authorization.grant?.clientId && { client: authorization.grant.clientId }),
     ...(authorization.grant?.kind === "issuer" && {
       consent: new ConsentRpcTarget(env, ctx, authorization.grant, addresses, {
         admittedThisRequest: false,

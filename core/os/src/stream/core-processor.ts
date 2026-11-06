@@ -12,6 +12,7 @@
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke) · snapshotVersion
 //   who is sent each commit   itx/subscription-configured { name, target|null, ordered?, filter?, copy?, ifConfiguredAtOffset? }
 //                             | -delivery-halted | -delivery-resumed → subscriptions (the delivery loop)
+//   who a facet is lent to    itx/facet-lent · facet-lend-revoked { facet, to } → facetLends; itx/facet-lending-enabled → lendsFacets (a root's)
 //   which scripts are running itx/run-requested { code } · run-settled { requestOffset, settlement } → scriptRuns, by the request's offset (the DO's runner; the wake record settles what a restart interrupted)
 //
 // ONE reduce, no effects, no verbs — a pure fold (`reduceCoreEvent`) with a batch form
@@ -68,6 +69,7 @@ import {
   fixedPointOf,
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
+import { FacetLend, reduceFacetLend, type FacetLends } from "../context/facet-lends.ts";
 import { CoreEventCatalog } from "./core-events.ts";
 import { compileEventExpression } from "./event-expressions.ts";
 import {
@@ -327,6 +329,9 @@ export type Subscription = {
     mainModule?: string;
     source?: unknown;
   };
+  /** Set on a row a person the project lends to configured (iterate-context.ts `subscribe`): it is
+   *  delivered only the live state of the facets lent to them (context/facet-lends.ts rule 4). */
+  lentTo?: string;
   /** A CURSOR target that exhausted its retries (the loop appended the halted fact). */
   halted?: { afterOffset: number; attempts: number; error?: string };
   /** The newest delivery-resumed: the loop applies it once (a seek, an un-halt, or — on a fan-out
@@ -368,6 +373,11 @@ export type CoreState = {
   snapshotVersion: number;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
+  /** Who each facet here is lent to (context/facet-lends.ts). Absent in a checkpoint written before
+   *  lends existed, so every reader defaults it. */
+  facetLends?: FacetLends;
+  /** A project's root only: the project has lent a facet (context/facet-lends.ts rule 2). */
+  lendsFacets?: true;
   /** Explicit fetch target for the project apex; null until configured. */
   ingressTarget: ItxExpression | null;
   /** THE FETCH ROUTES, by name (src/fetch-routes.ts): which requests on the project's hosts go
@@ -519,6 +529,20 @@ export function reduceCoreEvent(
       return { ...state, paused: { reason: (payload.reason as string | undefined) ?? "paused" } };
     case "events.iterate.com/itx/resumed":
       return { ...state, paused: null };
+    case "events.iterate.com/itx/facet-lent":
+    case "events.iterate.com/itx/facet-lend-revoked": {
+      // checked at the append boundary (`normalizeControlEvent`)
+      const facetLends = reduceFacetLend(
+        state.facetLends || {},
+        event.type,
+        payload as FacetLend,
+        event.offset,
+      );
+      return facetLends && { ...state, facetLends };
+    }
+    case "events.iterate.com/itx/facet-lending-enabled":
+      if (state.lendsFacets) return undefined;
+      return { ...state, lendsFacets: true };
 
     case "events.iterate.com/itx/rewrite-rule-configured": {
       // A no-op is `undefined`, not a fresh object: the inline host detects change by identity, and
@@ -619,10 +643,12 @@ export function reduceCoreEvent(
       const afterOffset = payload.afterOffset as number | undefined;
       const ordered = payload.ordered as false | undefined;
       // `normalizeSubscriptionConfigured` checked the target and `filter`, and compiled each
-      // expression, before the event could be appended. It stores a copy target as written.
+      // expression, before the event could be appended. It stores a copy target as written, and
+      // `lentTo` as the lendee's user id when the platform subscribed for a lendee (facet-lends.ts).
       const copyTarget = CopyTarget.safeParse(payload.target);
       const copy = copyTarget.success ? copyTarget.data : undefined;
       const filter = payload.filter as string | undefined;
+      const lentTo = payload.lentTo as string | undefined;
       // M1: a hosting target keeps its spelling but sheds its SOURCE here (`hostedFacet` says why).
       const configuredTarget: ItxExpression = copy
         ? ["itx", ["cd", copy.path]]
@@ -643,6 +669,8 @@ export function reduceCoreEvent(
         ...(copy && { copy }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
         ...(filter && { filter }),
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
+        ...(lentTo && { lentTo }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
         ...(hostedFacet && { hostedFacet }),
       });
@@ -740,6 +768,7 @@ function normalizeSubscriptionConfigured(input: {
   afterOffset?: number;
   ordered?: boolean;
   filter?: string;
+  lentTo?: string;
   ifConfiguredAtOffset?: number;
 }): Record<string, unknown> {
   const name = parseSubscriptionName(input.name);
@@ -774,6 +803,7 @@ function normalizeSubscriptionConfigured(input: {
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,
     );
   const filter = FilterExpression.parse(input.filter);
+  const lentTo = FacetLend.shape.to.optional().parse(input.lentTo);
   if (!copy && filter) throw new Error("a subscription's `filter` is for a row with a copy target");
   if (copy && ordered === true) throw new Error("a copy row is `ordered: false`");
   // compiled now, so a bad expression is refused before the row is stored
@@ -787,6 +817,8 @@ function normalizeSubscriptionConfigured(input: {
     ...(target && (copy || ordered === false) && { ordered: false }),
     // oxlint-disable-next-line iterate/simple-truthiness-check -- the stored payload is compared with jsonEqual on an idempotent retry, which counts keys: an absent filter must stay absent
     ...(filter && { filter }),
+    // the stored payload is compared with jsonEqual on an idempotent retry, which counts keys
+    ...(target && lentTo && { lentTo }),
     ...(!target &&
       input.ifConfiguredAtOffset !== undefined && {
         ifConfiguredAtOffset: input.ifConfiguredAtOffset,
@@ -904,6 +936,19 @@ export function normalizeControlEvent(event: StreamEventInput, ownPath: string):
     if (event.ephemeral)
       throw new Error("a run's request is durable: the scriptRuns table is rebuilt from the log");
     return { ...event, payload: RunRequested.parse(event.payload) };
+  }
+  if (
+    event.type === "events.iterate.com/itx/facet-lent" ||
+    event.type === "events.iterate.com/itx/facet-lend-revoked"
+  ) {
+    if (event.ephemeral) throw new Error("a lend is durable: who a facet is lent to is core state");
+    return { ...event, payload: FacetLend.parse(event.payload) };
+  }
+  if (event.type === "events.iterate.com/itx/facet-lending-enabled") {
+    if (event.ephemeral || ownPath !== "/")
+      throw new Error("a project's root records, durably, that the project lends a facet");
+    z.strictObject({}).optional().parse(event.payload);
+    return event;
   }
   if (event.type === "events.iterate.com/itx/subscription-configured")
     return {

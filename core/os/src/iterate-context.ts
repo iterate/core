@@ -304,6 +304,10 @@ export class IterateContextRpcTarget extends RpcTarget {
       itxExpression,
     );
     const terminalFetch = terminalFetchOf(itxExpression, args);
+    // A fetch rides the context's fetch channel, whose headers carry no lendee: a lendee calls a
+    // lent facet's methods alone (context/facet-lends.ts rule 3).
+    if (terminalFetch && this.#caller.lendee)
+      throw codedError("FORBIDDEN", "a person this project lends to does not fetch through it");
     if (resolver && terminalFetch)
       return statelessExpressionFetch(
         resolver,
@@ -357,6 +361,8 @@ export class IterateContextRpcTarget extends RpcTarget {
       fetchRoute?: Omit<FetchRouteInput, "target"> & { fetchRouteName: string };
     } = {},
   ): Promise<RewriteRuleHandleRpcTarget> {
+    if (this.#caller.lendee)
+      throw codedError("FORBIDDEN", "a person this project lends to provides nothing here");
     // LOADED CODE may lend its OWN object (a live stub answers with the code's own authority and
     // dies with its invocation); a pure rewrite or a deny is a ROW, and a row from loaded code is
     // `itx.append`'s business — through its context's table, where a jail's wall stands.
@@ -472,8 +478,11 @@ export class IterateContextRpcTarget extends RpcTarget {
         "FORBIDDEN",
         "loaded code writes a subscription row with itx.append({ type: 'events.iterate.com/itx/subscription-configured', payload: { name, target, consumes } }); subscribe lends a live callback only",
       );
+    const lendee = this.#caller.lendee && (await this.#lendeeSubscribing(input, isLiveCallback));
     // oxlint-disable-next-line iterate/simple-truthiness-check -- only an ABSENT name gets a minted one; an empty-string name is a caller bug that must reach the reduce and be refused there (parseSubscriptionName), never silently become a fresh row per call
-    const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
+    const named = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
+    // a lendee's row is named by the session: a name of theirs could replace a member's row
+    const name = lendee ? `lent-${crypto.randomUUID().slice(0, 8)}` : named;
     const rpcStubKey = `subscription:${name}`;
     const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
     const delivery = {
@@ -491,6 +500,7 @@ export class IterateContextRpcTarget extends RpcTarget {
           name,
           target: ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]],
           ...delivery,
+          lentTo: lendee || undefined,
         },
       };
       if (this.#caller.app) await this.#append(row); // loaded code's row: its table first, as in `provide`
@@ -518,6 +528,33 @@ export class IterateContextRpcTarget extends RpcTarget {
       // no pager to recall: the handle un-sets the row itself — only the one this call wrote
       if (target) this.#removeSubscriptionInBackground(name, committed.offset);
     });
+  }
+
+  /** A LENDEE'S SUBSCRIPTION (context/facet-lends.ts rule 4): a live callback on the live state
+   *  alone, at a context that lends them a facet — asked of the context without waking it, so a
+   *  refusal writes and births nothing. Answers the person the row is lent to; the session names
+   *  the row, never the lendee. */
+  async #lendeeSubscribing(
+    input: { consumes?: string[]; afterOffset?: number; ordered?: false; filter?: string },
+    isLiveCallback: boolean,
+  ): Promise<string> {
+    const liveState =
+      input.consumes?.length === 1 &&
+      input.consumes[0] === "events.iterate.com/itx/live-state-changed" &&
+      input.afterOffset === undefined &&
+      input.ordered === undefined &&
+      !input.filter;
+    if (!isLiveCallback || !liveState)
+      throw codedError(
+        "FORBIDDEN",
+        'a person this project lends to subscribes a live callback to live state alone: consumes ["events.iterate.com/itx/live-state-changed"]',
+      );
+    // the session makes a lendee's handle for a person alone (session.ts `#lendingProjectId`)
+    const userId = this.#caller.principal!.actor;
+    const { facets } = await this.#durableObject.facetLendsFor(userId);
+    if (facets.length === 0)
+      throw codedError("FORBIDDEN", "this context lends no facet to this session's person");
+    return userId;
   }
 
   // ── processors: durable configuration, two lines each over the subscription event ──

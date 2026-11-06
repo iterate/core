@@ -143,6 +143,7 @@ import {
   type RulesSnapshotAnswer,
 } from "./context/rule-snapshots.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
+import { foldedArgs, lentFacetCall } from "./context/facet-lends.ts";
 
 /** WHO THIS CONTEXT IS: its name, when it was reached by name (every caller but one); reached by
  *  id alone — the context sweep (scripts/ci/context-sweep.ts), which knows only the ids Cloudflare
@@ -1261,6 +1262,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
     },
     fetchRoutes: () => this.#stream.coreReducedState.fetchRoutes,
+    facetLends: () => this.#stream.coreReducedState.facetLends || {},
     rewriteRules: {
       list: (depth = REWRITE_BUDGET) => this.#rewriteRuleListAt(depth),
       // Canonicalized the same way `provide` canonicalized the match; an unparseable one is no row.
@@ -1801,6 +1803,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   ): Promise<unknown> {
     this.#nameActiveSpan();
     if (this.#unborn) throw await this.#unbornStill(this.#unborn);
+    // A LENDEE'S CALL is admitted or refused here, before the wake record: a refused one writes
+    // nothing and births nothing (context/facet-lends.ts rule 3).
+    const lent =
+      caller.lendee &&
+      lentFacetCall(
+        foldedArgs(normalizedItxExpression(call), args),
+        this.#stream.coreReducedState.facetLends || {},
+        caller.principal?.actor,
+      );
     const kind = caller.app ? "loaded" : caller.path ? "context" : "other";
     // A call that names no cause — a person's, an outside request's — begins a chain (cause.ts).
     if (!caller.cause) caller = { ...caller, cause: newChain("a call") };
@@ -1811,9 +1822,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         caller.cause,
       );
     this.#residency.inboundCallStarted(kind);
-    const result = await this.#invokeInProcess(call, args, caller).finally(() =>
-      this.#residency.inboundCallEnded(caller.app === true),
-    );
+    const result = await (
+      lent
+        ? this.#callerStorage.run(this.#withPlatformOrigin(caller), async () =>
+            lent.steps.length === 0
+              ? this.#facetHost.handle(lent.facet)
+              : this.#facetHost.callFacetAsLendee(lent.facet, lent.steps),
+          )
+        : this.#invokeInProcess(call, args, caller)
+    ).finally(() => this.#residency.inboundCallEnded(caller.app === true));
     // THE CALLER'S SESSION ENDS WITH THE CALL, WHATEVER IT KEEPS (context/dispatch.ts
     // `itxAnswerDetachedFromSession`): every Workers-RPC caller of this actor — the edge (capnweb
     // /api, a loaded worker's or a facet's `env.ITX`), /mcp, a sibling's `cd` — arrives through this
@@ -1854,6 +1871,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       }
       throw error;
     }
+  }
+
+  /** WHAT THIS CONTEXT LENDS `userId` (context/facet-lends.ts): the facets lent to them here, and
+   *  on a project's root whether the project lends at all. A DO-only verb that records nothing, as
+   *  `rulesSnapshot` reads: no wake and no birth. A context never born answers that it lends
+   *  nothing; a deleted project's root throws its refusal (`#unborn`), as every entry point does. */
+  facetLendsFor(userId: string): { projectLends: boolean; facets: string[] } {
+    this.#nameActiveSpan();
+    if (this.#unborn) throw this.#unborn;
+    this.#residency.inboundCallInOneTurn();
+    const { facetLends = {}, lendsFacets } = this.#stream.coreReducedState;
+    return {
+      projectLends: lendsFacets === true,
+      facets: Object.keys(facetLends).filter((facet) => facetLends[facet]![userId] !== undefined),
+    };
   }
 
   /** A DELIVERY'S SEND, AT MOST ONCE (integrations/email.ts): the event this log already recorded

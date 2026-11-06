@@ -52,6 +52,7 @@ import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stre
 import { deepestCause, recordRefusal, type Cause } from "../cause.ts";
 import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
 import type { Metrics } from "../metrics.ts";
+import { reachesLendee } from "../context/facet-lends.ts";
 import {
   type CoreState,
   type EventCopy,
@@ -515,7 +516,7 @@ export class SubscriptionDelivery {
     for (const [name, row] of Object.entries(rows)) {
       if (row.halted) continue; // an operator's resume is the only way back (the case above)
       const record = this.#deliveryRecordFor(name);
-      const events = freshEvents.filter((event) => consumesEvent(row.consumes, event));
+      const events = freshEvents.filter((event) => rowTakes(state, row, event));
       if (targetOwnsProgress(state, row)) {
         // A cursor row RE-POINTED at a target that owns its progress (a rule commit): the stream's
         // cursor is nothing of the target's — it goes, and with it the row's claim and records.
@@ -1253,7 +1254,9 @@ export class SubscriptionDelivery {
             }
             return;
           }
-          const events = page.events.filter((event) => consumesEvent(row.consumes, event));
+          const events = page.events.filter((event) =>
+            rowTakes(this.#stream.coreReducedState, row, event),
+          );
           const range: ScannedRange = { after: cursor.confirmedOffset, through };
           // The table follows only when the log's proof moved past the cursor or a claim stands
           // in it: an ephemeral-only pass on a quiet row touches no storage.
@@ -2101,4 +2104,11 @@ function routeDigestOf(routedTo: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(36);
+}
+
+/** Whether `row` is delivered `event`: what it consumes, and for a row a person the project lends to
+ *  configured, only the live state of the facets lent to them now (context/facet-lends.ts rule 4). */
+function rowTakes(state: CoreState, row: Subscription, event: StreamEvent): boolean {
+  if (!consumesEvent(row.consumes, event)) return false;
+  return !row.lentTo || reachesLendee(event, state.facetLends || {}, row.lentTo);
 }

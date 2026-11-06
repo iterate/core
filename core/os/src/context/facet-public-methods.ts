@@ -21,8 +21,12 @@
 //   4. A first-party class's list is read off the class; a loaded class's is asked of the facet once
 //      per startup memo (`listPublicMethods()`, which the shells answer). A loaded class that extends
 //      neither shell answers no list, so nothing on it is reached by expression.
+//   5. A class lists what a person it is LENT to may reach in `static lentMethods`, beside the
+//      live state's seed read every lend carries (context/facet-lends.ts). A member reaches those
+//      too. Read as rule 4 reads `publicMethods`; a first-party class lends nothing.
 import { codedError } from "iterate/lib";
 import { itxExpressionStepName, type ItxExpression } from "iterate/expression";
+import { LENT_LIVE_STATE_METHODS } from "./facet-lends.ts";
 
 /** Refuses — FORBIDDEN — a walk on the facet `facetName` whose first step is not one of the
  *  `publicMethods` its class lists (rule 1). The refusal names the step and the list. */
@@ -36,5 +40,21 @@ export function assertFacetMethodIsPublic(
   throw codedError(
     "FORBIDDEN",
     `facet "${facetName}": ${JSON.stringify(method)} is not one of its public methods (${publicMethods.join(", ") || "it lists none"}) — a facet's class lists what a caller reaches by itx expression in static publicMethods`,
+  );
+}
+
+/** Refuses — FORBIDDEN — a lendee's walk on the facet `facetName` whose first step is neither the
+ *  live state's seed read nor one of the `lentMethods` its class lists (rule 5). */
+export function assertFacetMethodIsLent(
+  facetName: string,
+  lentMethods: readonly string[],
+  itxExpressionSteps: ItxExpression,
+): void {
+  const method = itxExpressionStepName(itxExpressionSteps[0]) ?? "";
+  const lent = [...LENT_LIVE_STATE_METHODS, ...lentMethods];
+  if (lent.includes(method)) return;
+  throw codedError(
+    "FORBIDDEN",
+    `facet "${facetName}": ${JSON.stringify(method)} is not one it lends (${lent.join(", ")}) — a facet's class lists what a person it is lent to reaches in static lentMethods`,
   );
 }

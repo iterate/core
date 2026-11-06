@@ -108,6 +108,10 @@ export abstract class FacetDurableObject<
    *  method or a property of this class. A subclass lists its own on top of its parent's:
    *  `static override publicMethods = [...super.publicMethods, "send"]`. */
   static publicMethods: readonly string[] = ["fetch"];
+  /** What a person the facet is LENT to may call (`itx.facets.lend`), beside its live state: the
+   *  first step, as for `publicMethods`. A list of its own, so a method written for members is
+   *  never handed to a stranger by accident; a member may call these too. None by default. */
+  static lentMethods: readonly string[] = [];
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -130,6 +134,13 @@ export abstract class FacetDurableObject<
     // `this.constructor` is the concrete facet class, a subclass of this one; TypeScript types it as
     // `Function`, which has no `publicMethods`.
     return (this.constructor as typeof FacetDurableObject).publicMethods;
+  }
+
+  /** This class's `lentMethods`, as `listPublicMethods` answers its `publicMethods`. On no list:
+   *  only the context asks it. */
+  listLentMethods(): readonly string[] {
+    // `this.constructor` is the concrete facet class, as in `listPublicMethods`.
+    return (this.constructor as typeof FacetDurableObject).lentMethods;
   }
 
   /** `using itx = this.getItx()`: this facet's context's scope, released with every call made

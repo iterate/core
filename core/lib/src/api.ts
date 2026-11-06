@@ -1400,6 +1400,17 @@ export interface IterateContextApi {
      *  `events.iterate.com/itx/facet-aborted { name, reason?, callerPath?, app? }` event;
      *  `NO_FACET` for a name never hosted here. */
     abort(name: string, reason?: string): Promise<StreamEvent>;
+    /** LEND the facet `name` of this context to the person `to` (a user id), who need be no member
+     *  of the project: their `/api` session reaches it through `projects.get(project).cd(path)`,
+     *  and nothing else of the project. A lend carries the facet's live state (`liveSnapshot` and
+     *  its deltas) and the methods its class lists in `static lentMethods`. Appends
+     *  `events.iterate.com/itx/facet-lent { facet, to }` here, and marks the project's root as one
+     *  that lends. A first-party facet is never lent. Lending again is a no-op. core/os
+     *  README.md, "A project lends a facet to a person". */
+    lend(name: string, input: { to: string }): Promise<void>;
+    /** End a lend `lend` made: `events.iterate.com/itx/facet-lend-revoked { facet, to }`. The
+     *  person's next call on the facet is refused, and its live state stops reaching them. */
+    revokeLend(name: string, input: { to: string }): Promise<void>;
   };
   subscriptions: {
     list(): SubscriptionListEntry[];

@@ -492,6 +492,9 @@ export type SessionAuthority = {
   /** The OAuth grant this session IS — the connection, stamped beside the principal on every event
    *  (`source.grant`); absent for the admin secret and the in-band cookie/admin authenticate. */
   grant?: string;
+  /** The OAuth client the grant was made for (oauth.ts `AccessGrant`): which project's lends it
+   *  reaches, when it is a project host's own (`projects.get`). */
+  client?: string;
   reach: Reach;
   grants?: GrantsRpcTarget;
   consent?: ConsentRpcTarget;
@@ -1193,12 +1196,42 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     const { controlPlane } = this.#session.input;
     const { reach } = this.#session.authority;
     const id = await controlPlane.reachableProjectId(reach, address.projectId);
-    if (!id)
-      throw codedError(
-        "FORBIDDEN",
-        `projects.get(${JSON.stringify(project)}): outside this session's reach — ${describeReach(reach)}`,
-      );
-    return this.#context(id);
+    if (id) return this.#context(id);
+    const lending = await this.#lendingProjectId(address.projectId);
+    if (lending) return this.#lentContext(lending);
+    throw codedError(
+      "FORBIDDEN",
+      `projects.get(${JSON.stringify(project)}): outside this session's reach — ${describeReach(reach)}`,
+    );
+  }
+
+  /** The project `ref` names, when this session's person is no member of it but may hold what it
+   *  lends them (context/facet-lends.ts): a person's grant that is the project host's own
+   *  client's, or bound to no list of projects — never one bound to other projects (a key for
+   *  chosen projects, another project's site) — and a project whose root records that it lends.
+   *  Only the root is asked, and nothing is written: a project that never lent stays as closed to
+   *  them as it was. */
+  async #lendingProjectId(ref: string): Promise<string | null> {
+    const { input, authority } = this.#session;
+    const { reach, principal, client } = authority;
+    if (reach === "every" || !("userId" in reach) || !principal.email) return null;
+    const project = await input.controlPlane.getProject(ref);
+    if (!project) return null;
+    if (reach.projectIds) {
+      const own =
+        client &&
+        (await input.controlPlane.projectOfClient(
+          input.iterateConfig,
+          client,
+          input.platformOrigin,
+        ));
+      if (own !== project.id) return null;
+    }
+    const root = input.contextNamespace.getByName(
+      DurableObjectNameCodec.address({ projectId: project.id, path: "/" }).name,
+    );
+    const { projectLends } = await root.facetLendsFor(principal.actor);
+    return projectLends ? project.id : null;
   }
 
   /** DELETE the project — the owner of its organization, or the operator. Every step is keyed, so
@@ -1327,6 +1360,19 @@ class ProjectCollectionRpcTarget extends RpcTarget {
         `projects.${verb}(${JSON.stringify(project)}): no such project`,
       );
     return id;
+  }
+
+  /** A project's root as a person it lends to holds it: every call is the context's to admit
+   *  (caller.ts `lendee`). Not one of the transport's held projects, whose membership its lease
+   *  re-checks (rpc.ts); and with no stateless reach, which answers without the context. */
+  #lentContext(projectId: string): IterateContextRpcTarget {
+    return new IterateContextRpcTarget(
+      this.#session.input.contextNamespace,
+      DurableObjectNameCodec.parse(projectId),
+      this.#sessionTeardown,
+      this.#session.input.waitUntil,
+      { ...this.#session.caller, lendee: true },
+    );
   }
 
   #context(projectId: string): IterateContextRpcTarget {

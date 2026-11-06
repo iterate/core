@@ -216,6 +216,23 @@ export class ControlPlane {
     return custom;
   }
 
+  /** The project whose own OAuth client `clientId` is: a host's client document,
+   *  `https://<host>/.auth/client.json`. A grant that client holds is bound to that project
+   *  (consent.ts `projectsForClient`) and reaches that project's lends alone (session.ts). The
+   *  project's id; the host's own label when the catalog no longer holds it, so such a client is
+   *  still bound, to no project anyone reaches. Null for any other client. */
+  async projectOfClient(
+    config: IterateConfig,
+    clientId: string,
+    platformOrigin: string,
+  ): Promise<string | null> {
+    const url = URL.canParse(clientId) ? new URL(clientId) : null;
+    if (url?.pathname !== "/.auth/client.json") return null;
+    const host = await this.projectHostOf(config, url, platformOrigin);
+    if (!host) return null;
+    return (await this.getProject(host.project))?.id ?? host.project;
+  }
+
   /** The connection a provider account's webhooks go to (catalog.ts `routeIntegration`). Never
    *  kept: a route released and taken by another project routes there on the next delivery. */
   integrationRouteOf(provider: string, externalId: string): Promise<IntegrationRouteRecord | null> {

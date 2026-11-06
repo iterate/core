@@ -38,9 +38,23 @@ An app for people who are not its project's members asks for the `identity` scop
 `/.auth/login?scope=identity`, or the challenge `auth.requirePerson` answers, which the edge turns
 into that sign-in for a page load. The consent page then shows only who the app learns you are,
 and the grant reaches no project: at `/api`, `whoami` and `info` answer (`scopes: ["identity"]`)
-and `projects.get` is refused. Beside `iterate`, `identity` adds nothing: every grant says who you
+and `projects.get` is refused, except for the project that lends them a facet (below). Beside `iterate`, `identity` adds nothing: every grant says who you
 are. Under paths routing (previews) every project's page shares the issuer's origin and cookie, so
 a person signed in to the issuer arrives as a person on every project's page, with no consent.
+
+A person who is no member can still reach the facets a project lends them, through `/api`
+([a project lends a facet](../README.md#a-project-lends-a-facet-to-a-person)). Which grant reaches
+which project's lends:
+
+| Grant                                                                           | Reaches the lends of             |
+| ------------------------------------------------------------------------------- | -------------------------------- |
+| one made by a project host's own client (`https://<host>/.auth/client.json`)    | that project only                |
+| one bound to no list of projects (the issuer's session, an app given every one) | every project that lends to them |
+| one bound to chosen projects (a personal access token, another site's identity) | none                             |
+
+A lend is to a person, so without this rule every site the person signed in to could use what any
+other project lent them. Under paths ingress every project's page holds the issuer's session, so a
+lend is no defence between projects there, as membership is not.
 
 ## Signing in through another deployment
 

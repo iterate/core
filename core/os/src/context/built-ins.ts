@@ -119,6 +119,7 @@ import {
 } from "./rpc-stubs.ts";
 import { admitLoadedCodeRow, namesAWorker } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
+import { FacetLend, type FacetLends } from "./facet-lends.ts";
 import {
   assertFacetSourceWithinCeiling,
   contentHashOfWorkerModules,
@@ -664,6 +665,8 @@ export interface BuildBuiltInsDeps {
   fetchRoutes: () => FetchRouteTable;
   /** The own context's — a wait never crosses a hop. */
   waitForEvent: BuiltInScope["waitForEvent"];
+  /** Who each facet here is lent to: the core state's `facetLends` (context/facet-lends.ts). */
+  facetLends: () => FacetLends;
   /** The facet host's entry, verbatim (accepted trade: a busy stateful facet pins its stream), and the
    *  host's reset of one facet, started again before it answers (facet-host.ts `abort`). */
   facets: {
@@ -686,6 +689,14 @@ export interface BuildBuiltInsDeps {
   /** THE LIBRARY's roots (library.ts `buildLibrary(itx).roots`), built by the DO over its own
    *  `itx` handle so a library call's `itx.fetch(...)` resolves through THIS context's rules. */
   library: LibraryRoots;
+}
+
+/** A lend's payload from a verb's arguments, or INVALID_INPUT: a project's facet, a person's id. */
+function facetLendOf(name: string, input: { to: string }, verb: string): FacetLend {
+  const lend = FacetLend.safeParse({ facet: name, to: input?.to });
+  if (!lend.success)
+    throw codedError("INVALID_INPUT", `${verb}(name, { to }): ${z.prettifyError(lend.error)}`);
+  return lend.data;
 }
 
 /** Assemble the built-in scope for one context. Every entry closes over the context's identity —
@@ -2220,6 +2231,36 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           payload: { name, reason, callerPath, app },
         });
         return aborted;
+      },
+      // context/facet-lends.ts says what a lend is. The root's mark comes first: a lend that lands
+      // after it is reachable at once, and a mark with no lend opens nothing.
+      lend: async (name, input) => {
+        const lend = facetLendOf(name, input, "itx.facets.lend");
+        if (projectId === GLOBAL_PROJECT_ID)
+          throw codedError("INVALID_CONTEXT", "itx.facets.lend: a project lends its facets");
+        await deps.context("/").invoke(
+          [
+            "itx",
+            "builtins",
+            [
+              "append",
+              {
+                type: "events.iterate.com/itx/facet-lending-enabled",
+                payload: {},
+                idempotencyKey: "itx/facet-lending-enabled",
+              },
+            ],
+          ],
+          [],
+          { ...hopCaller(), platform: true },
+        );
+        if (deps.facetLends()[lend.facet]?.[lend.to] !== undefined) return;
+        await append({ type: "events.iterate.com/itx/facet-lent", payload: lend });
+      },
+      revokeLend: async (name, input) => {
+        const lend = facetLendOf(name, input, "itx.facets.revokeLend");
+        if (deps.facetLends()[lend.facet]?.[lend.to] === undefined) return;
+        await append({ type: "events.iterate.com/itx/facet-lend-revoked", payload: lend });
       },
     },
     subscriptions: deps.subscriptions,

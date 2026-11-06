@@ -108,14 +108,13 @@ export async function projectsForClient(
 ) {
   const controlPlane = new ControlPlane(env);
   const projects = await controlPlane.reachableProjects({ userId }, expected);
-  const url = URL.canParse(clientId) ? new URL(clientId) : null;
-  const host =
-    url?.pathname === "/.auth/client.json"
-      ? await controlPlane.projectHostOf(iterateConfigOf(env), url, platformOrigin)
-      : null;
-  if (!host) return { projects, projectBound: false };
-  const project = await controlPlane.getProject(host.project);
-  return { projects: projects.filter((p) => p.id === project?.id), projectBound: true };
+  const project = await controlPlane.projectOfClient(
+    iterateConfigOf(env),
+    clientId,
+    platformOrigin,
+  );
+  if (!project) return { projects, projectBound: false };
+  return { projects: projects.filter((p) => p.id === project), projectBound: true };
 }
 
 /** How long a userinfo grant (`kind: "identify"`) lives: the client reads who signed in once, at

@@ -64,7 +64,7 @@ import {
   FacetHandle,
   isMissingRpcMethod,
 } from "./dispatch.ts";
-import { assertFacetMethodIsPublic } from "./facet-public-methods.ts";
+import { assertFacetMethodIsLent, assertFacetMethodIsPublic } from "./facet-public-methods.ts";
 import { assertFacetPlacement } from "./first-party-facet-placement.ts";
 import {
   assertFacetSourceWithinCeiling,
@@ -155,9 +155,10 @@ const FACET_CALL_WATCHDOG: FacetCallWatchdog = {
   watchdogMs: FACET_CALL_WATCHDOG_MS,
   onTimeout: "restart",
 };
-/** How a call enters a facet (`#callOn`): a caller's walk checked against the public methods, and
- *  the cause the facet's `callWithCause` runs it under (cause.ts). */
-type FacetCallOptions = { byItxExpression?: boolean; cause?: Cause };
+/** How a call enters a facet (`#callOn`): a caller's walk checked against the public methods (and
+ *  the lent ones), a lendee's against what the facet lends (context/facet-lends.ts), and the cause
+ *  the facet's `callWithCause` runs it under (cause.ts). */
+type FacetCallOptions = { byItxExpression?: boolean; asLendee?: boolean; cause?: Cause };
 /** How long a context that materialized a loaded facet must go without activity from OUTSIDE the
  *  project's loaded code — an edge session, HTTP, MCP, a sibling's hop, a claim, an alarm pass that
  *  did work — with no call, facet call, run or pin in flight, before its unclaimed loaded facets are
@@ -319,6 +320,8 @@ export class FacetHost {
    *  to the code that identity loads, and a publication that changes the code changes the identity
    *  (`#publicMethodsOf`). */
   readonly #publicMethodsByLoaderId = new Map<string, readonly string[]>();
+  /** A loaded facet's `lentMethods`, kept as `#publicMethodsByLoaderId` keeps its public ones. */
+  readonly #lentMethodsByLoaderId = new Map<string, readonly string[]>();
   /** Each loaded facet's identity as this incarnation last materialized it — ahead of its
    *  `facet:<name>:loader-id` row while a restart under a new identity is starting it. */
   readonly #loaderIdByName = new Map<string, string>();
@@ -870,6 +873,16 @@ export class FacetHost {
     return facetHandle;
   }
 
+  /** A PERSON THE FACET IS LENT TO, calling it (the DO's `invoke` admitted the call: the facet is
+   *  lent to them, context/facet-lends.ts): checked against what the facet lends, its live state's
+   *  seed read and its class's `lentMethods`. By name only: a lendee never hosts a facet. */
+  callFacetAsLendee(name: string, itxExpressionSteps: ItxExpression): Promise<unknown> {
+    return this.#callFacet(name, undefined, itxExpressionSteps, {
+      asLendee: true,
+      cause: this.#deps.cause(),
+    });
+  }
+
   /** Whether the facet a handle names runs loaded code (its calls are `Caller.app`, as its
    *  `env.ITX` stamps them) rather than a first-party class (the platform at this context). By name,
    *  as `#materialize` decides it: a row's handle carries no spec. */
@@ -909,7 +922,7 @@ export class FacetHost {
     name: string,
     spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
-    { byItxExpression = false, cause }: { byItxExpression?: boolean; cause?: Cause } = {},
+    { byItxExpression = false, asLendee = false, cause }: FacetCallOptions = {},
   ): Promise<unknown> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee, so a non-string is rejected with a usage error
     if (typeof name !== "string")
@@ -960,7 +973,7 @@ export class FacetHost {
         ["fetch", requestCausedBy(first[1], cause), ...first.slice(2)],
         ...rest,
       ];
-    const callOptions = { byItxExpression, cause };
+    const callOptions = { byItxExpression, asLendee, cause };
     this.#markRan(name);
     this.#facetWorkInFlight++;
     try {
@@ -1018,17 +1031,27 @@ export class FacetHost {
     name: string,
     itxExpressionSteps: ItxExpression,
     watchdog: FacetCallWatchdog,
-    { byItxExpression = false, cause }: FacetCallOptions,
+    { byItxExpression = false, asLendee = false, cause }: FacetCallOptions,
   ): Promise<unknown> {
-    if (byItxExpression)
+    // A first-party class lends nothing, and is never lent (context/facet-lends.ts).
+    const lentMethods = () =>
+      materialized.loaderId ? this.#lentMethodsOf(materialized, name) : Promise.resolve([]);
+    if (asLendee) assertFacetMethodIsLent(name, await lentMethods(), itxExpressionSteps);
+    else if (byItxExpression) {
+      const publicMethods = materialized.loaderId
+        ? await this.#publicMethodsOf(materialized, name)
+        : // `name` hosts a first-party class, so it is one of the table's keys; the type system cannot see it.
+          FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS];
+      // a member reaches what the facet lends too: the lent list is asked only when it decides
+      const method = itxExpressionStepName(itxExpressionSteps[0]) ?? "";
       assertFacetMethodIsPublic(
         name,
-        materialized.loaderId
-          ? await this.#publicMethodsOf(materialized, name)
-          : // `name` hosts a first-party class, so it is one of the table's keys; the type system cannot see it.
-            FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS],
+        publicMethods.includes(method)
+          ? publicMethods
+          : [...publicMethods, ...(await lentMethods())],
         itxExpressionSteps,
       );
+    }
     const withCause =
       cause &&
       itxExpressionStepName(itxExpressionSteps[0]) !== "fetch" &&
@@ -1059,6 +1082,25 @@ export class FacetHost {
     }
     this.#publicMethodsByLoaderId.set(loaderId, publicMethods);
     return publicMethods;
+  }
+
+  /** A LOADED facet's `lentMethods`, asked as `#publicMethodsOf` asks its public ones
+   *  (`listLentMethods()`); a class that answers none lends nothing. */
+  async #lentMethodsOf(materialized: MaterializedFacet, name: string) {
+    // a loaded facet's, so it has one (the caller checks)
+    const loaderId = materialized.loaderId!;
+    let lentMethods = this.#lentMethodsByLoaderId.get(loaderId);
+    if (lentMethods) return lentMethods;
+    try {
+      lentMethods = z
+        .array(z.string())
+        .parse(await this.#call(materialized, name, [["listLentMethods"]], FACET_CALL_WATCHDOG));
+    } catch (error) {
+      if (!isMissingRpcMethod(error, "listLentMethods")) throw error;
+      lentMethods = [];
+    }
+    this.#lentMethodsByLoaderId.set(loaderId, lentMethods);
+    return lentMethods;
   }
 
   /** A failed call's recovery, bounded: at most ONE retry on a start a peer already put in place,
@@ -1274,6 +1316,7 @@ export class FacetHost {
           });
           // The class the old identity loaded is gone from this facet: its list goes with it.
           this.#publicMethodsByLoaderId.delete(previousLoaderId);
+          this.#lentMethodsByLoaderId.delete(previousLoaderId);
           // A platform start (`#start`, `#recover`) is itself the start that follows; a call restarts
           // it first — abort and start with nothing between (`#restart`), the identity recorded there.
           const abort = () => this.#abortForRestart(name, "loaded identity changed");

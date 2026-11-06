@@ -87,6 +87,40 @@ lists in `static publicMethods`: extend `FacetDurableObject` or `StreamProcessor
 `iterate/sdk` and add your own (`[...super.publicMethods, "send"]`); the platform's own calls
 go around the list (`src/context/facet-public-methods.ts`).
 
+### A project lends a facet to a person
+
+A person who is no member of a project can still use one of its facets, when the project lends it
+to them. Project code lends and revokes on the facet's context:
+
+```ts
+await itx.cd("/people/user_123").facets.lend("profile", { to: "user_123" });
+await itx.cd("/people/user_123").facets.revokeLend("profile", { to: "user_123" });
+```
+
+The person's `/api` session then reaches it as a member's page does:
+`session.projects.get(project).cd(path).facets.get(name).<method>(…)`, and `useFacetLiveState` on
+that context. A lend gives the facet's live state (`liveSnapshot` and its deltas) and the methods its
+class lists in `static lentMethods`, a list apart from `publicMethods` (none by default; a member
+reaches both). Every other call is refused FORBIDDEN before the context writes or births anything:
+another facet or context, `cd` to a context that lends them nothing, the log, appends, kv, files,
+secrets, `fetch`, `provide`, and any subscription but a live callback on live state. The rules are
+`src/context/facet-lends.ts`.
+
+- **Which sessions.** A grant reaches a project's lends when its client is that project's own (a
+  project host's `/.auth/client.json`: the identity grant a site's sign-in makes), or when it is
+  bound to no list of projects (the issuer's session under paths ingress, a script's grant for
+  every project, an admin signed in as the person). A grant bound to chosen projects (a personal
+  access token, another project's site) reaches none
+  ([credentials](docs/credentials.md#who-a-projects-host-says-is-calling)).
+- **A project that never lent stays closed.** `facets.lend` records once, on the project's root,
+  that the project lends (`itx/facet-lending-enabled`, a fact only the platform appends). Until it
+  has, `projects.get` refuses a person who is no member, as before, and asks nothing of any context
+  but the root. A `itx/facet-lent` appended by hand is a lend, but it opens nothing until the verb
+  has run once in that project.
+- **The lend is a fact.** `itx/facet-lent { facet, to }` and `itx/facet-lend-revoked` on the facet's
+  context, folded into its core state. A revoke ends the person's next call and their live state at
+  once. A first-party facet is never lent.
+
 Anything a caller or a facet keeps can hold a context resident and billed after its last call.
 [Context residency](docs/residency.md) explains the seven mechanisms that prevent, end or record
 that.

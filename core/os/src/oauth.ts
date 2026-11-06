@@ -64,6 +64,9 @@ export type AccessGrant = Omit<z.infer<typeof TokenProps>, "kind"> & {
   kind: GrantProps["kind"] | "personal";
   scope: string[];
   expiresAt: number;
+  /** The OAuth client the grant was made for; none for a personal access token. A project host's
+   *  own client reaches that project's lends (session.ts `projects.get`). */
+  clientId?: string;
   /** When the person's account last recorded a use of the grant (epoch ms, `grantUses`), as the
    *  admission's own read of the account found it; absent when it never has. `recordGrantUse`
    *  reads it. */
@@ -438,6 +441,7 @@ async function authorizationOf(
     ...props.data,
     scope: token.scope,
     expiresAt: Math.min(token.expiresAt * 1000, props.data.deadline),
+    clientId: token.clientId,
   };
   const account = await liveGrantAccount(env, grant);
   if (!account) return null;
