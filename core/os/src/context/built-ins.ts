@@ -2505,6 +2505,9 @@ export function projectConfigDeps(
   } satisfies Partial<BuildBuiltInsDeps>;
 }
 
+/** A script's result file (results-preamble.ts): the one kind of file with no event of its own. */
+const SCRIPT_RESULT_FILE = /\/script-results\/[^/]+$/;
+
 /** What the portable built-ins read of their context: its identity, the bindings, how it is
  *  reached over HTTP and mail, its egress, a context by path for `cd`, who is calling, and the
  *  library. */
@@ -2540,6 +2543,24 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
   const hopCaller = (): Caller => {
     const { app: _loadedCode, ...caller } = deps.caller();
     return { ...caller, path: caller.path || path };
+  };
+  /** EVIDENCE OF A FILE: what a context writes to the bucket lands on its log, so no file is loose:
+   *  a reader follows the log to it. A script's own result is left out: the run's settlement already
+   *  names it. The write comes first, so a crash between the two leaves a file with no fact. */
+  type FileEvent = Pick<StreamEventInput, "source"> &
+    (
+      | {
+          type: "events.iterate.com/itx/file-set";
+          payload: { path: string; size: number; contentType: string; etag: string };
+        }
+      | { type: "events.iterate.com/itx/file-deleted"; payload: { path: string } }
+    );
+  const recordFileEvents = async (...events: FileEvent[]) => {
+    const kept = events.filter(({ payload }) => !SCRIPT_RESULT_FILE.test(payload.path));
+    if (kept.length)
+      await deps
+        .context(path)
+        .append(...kept.map((event) => stampCaller(event, hopCaller(), path)));
   };
   return {
     kv: {
@@ -2580,12 +2601,32 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
           data: new Uint8Array(await object.arrayBuffer()),
         };
       },
-      put: async (key, value, options = {}) =>
-        r2ObjectRecord(await env.FILES.put(r2Prefix + key, value, options), r2Prefix),
-      delete: (keys) =>
-        env.FILES.delete(
-          typeof keys === "string" ? r2Prefix + keys : keys.map((key) => r2Prefix + key),
-        ),
+      put: async (key, value, options = {}) => {
+        const record = r2ObjectRecord(
+          await env.FILES.put(r2Prefix + key, value, options),
+          r2Prefix,
+        );
+        await recordFileEvents({
+          type: "events.iterate.com/itx/file-set",
+          payload: {
+            path: `/${key}`,
+            size: record.size,
+            contentType: record.httpMetadata?.contentType || "application/octet-stream",
+            etag: record.etag,
+          },
+        });
+        return record;
+      },
+      delete: async (keys) => {
+        const list = typeof keys === "string" ? [keys] : keys;
+        await env.FILES.delete(list.map((key) => r2Prefix + key));
+        await recordFileEvents(
+          ...list.map((key) => ({
+            type: "events.iterate.com/itx/file-deleted" as const,
+            payload: { path: `/${key}` },
+          })),
+        );
+      },
       list: async (options = {}) => {
         const page = await env.FILES.list({
           ...options,

@@ -67,6 +67,13 @@ export async function serveProjectFileRequest(input: {
   project: string;
   /** The owner prefix every key of this project lives under (built-ins.ts `r2Prefix`). */
   keyPrefix: string;
+  /** A signed upload has no calling context: this records the file (worker.ts, on `/`). */
+  recordUpload: (file: {
+    path: string;
+    size: number;
+    contentType: string;
+    etag: string;
+  }) => Promise<unknown>;
   request: Request;
 }): Promise<Response> {
   const { request } = input;
@@ -90,7 +97,9 @@ export async function serveProjectFileRequest(input: {
   if (claims.method === "PUT") {
     const contentType = request.headers.get("content-type") || "application/octet-stream";
     const object = await input.bucket.put(key, request.body, { httpMetadata: { contentType } });
-    return Response.json({ path: `/${claims.key}`, contentType, size: object.size });
+    const path = `/${claims.key}`;
+    await input.recordUpload({ path, size: object.size, contentType, etag: object.etag });
+    return Response.json({ path, contentType, size: object.size });
   }
   // The range only when the request asks for one: handed the headers regardless, the bucket reports
   // a range on a whole-object read too, and the answer would read as partial.

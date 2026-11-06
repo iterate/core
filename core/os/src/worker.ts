@@ -59,6 +59,7 @@ import { nameActiveSpan, statelessExpressionFetch } from "./iterate-context.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
 import { FETCH_UPGRADE_RESUMABLE_HEADER, spliceEyeballAnswer } from "./context/fetch-upgrade.ts";
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
+import { reachableContext } from "./context-stub.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
 import { leasedProjectHostAnswer } from "./project-host-lease.ts";
 import { projectHostCallerOf, projectHostSignInAnswerOf } from "./project-host-sign-in.ts";
@@ -331,6 +332,16 @@ async function routeRequest(
         secret: await sessionSigningSecretOf(iterateConfig),
         project: projectId,
         keyPrefix: `${resourceScope(projectId, "/").id}/`,
+        recordUpload: (payload) =>
+          reachableContext(
+            env.ITERATE_CONTEXT,
+            DurableObjectNameCodec.address({ projectId, path: "/" }),
+            "files",
+          ).invoke(
+            ["itx", "builtins", ["append", { type: "events.iterate.com/itx/file-set", payload }]],
+            [],
+            { principal: null, cause: newChain("signed upload"), platform: true },
+          ),
         request: withoutBasePath(request, projectHost.basePath),
       });
       // Under paths a stored HTML or SVG file is a document on the platform's own origin that anyone

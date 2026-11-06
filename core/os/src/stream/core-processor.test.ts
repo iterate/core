@@ -40,6 +40,8 @@ test("the contract: slug `core`; the every-field-defaulted initial state", () =>
   // (core-events.ts, which the Project contract depends on) and the run pair
   expect(Object.keys(CoreContract.events)).toEqual([
     "events.iterate.com/itx/ingress-configured",
+    "events.iterate.com/itx/file-set",
+    "events.iterate.com/itx/file-deleted",
     "events.iterate.com/itx/child-created",
     "events.iterate.com/itx/run-requested",
     "events.iterate.com/itx/run-settled",

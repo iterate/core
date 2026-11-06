@@ -1189,7 +1189,9 @@ export interface IterateContextApi {
     delete(key: string): Promise<{ ok: true }>;
     list(prefix?: string): Promise<{ keys: string[] }>;
   };
-  /** The object store: the R2 binding's own verbs on the owner's slice of one bucket (every key
+  /** The object store: every write and delete lands `itx/file-set` or `itx/file-deleted` on the
+   *  context that made it, so a file always has evidence on a log (a signed upload's is on `/`).
+   *  The R2 binding's own verbs on the owner's slice of one bucket (every key
    *  prefixed, the prefix stripped from every key answered); what cannot cross the wire is answered
    *  as data — an `R2Object` as its fields, a body as its bytes. `list` is one page with its cursor.
    *  `presign` is a signed URL on the project host, a download or an upload. `files` is the
