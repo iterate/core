@@ -96,8 +96,7 @@ export const iterateStack = ({ deployment: { config, vars }, release, images }: 
       // default, deferred for at most 5 minutes (../src/iterate-config.ts says more).
       codeUpdateStrategy: codeUpdateStrategyOf(cloudflare.durableObjectCodeUpdates),
       // Every log line and trace, kept. With a warehouse, both go to it too, and the traces stay
-      // there alone: its `spans` table holds each one, and Cloudflare bills stored traces by the GB
-      // from 2026-12-01.
+      // there alone unless `persistTraces` says otherwise (../src/iterate-config.ts).
       observability: {
         enabled: true,
         headSamplingRate: 1,
@@ -111,7 +110,7 @@ export const iterateStack = ({ deployment: { config, vars }, release, images }: 
         traces: {
           enabled: true,
           headSamplingRate: 1,
-          persist: !warehouse,
+          persist: !warehouse || cloudflare.persistTraces === true,
           destinations: warehouse?.traces,
         },
       },

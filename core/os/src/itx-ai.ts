@@ -18,6 +18,7 @@ import type {
   ItxMarkdownDocument,
   ItxWebSearchAnswer,
 } from "iterate/api";
+import { traceModelCall } from "./agent-spans.ts";
 import type { Env } from "./iterate-context-durable-object.ts";
 import { unavailableError } from "./unavailable.ts";
 
@@ -31,7 +32,25 @@ export const ANSWER_MAX_BYTES = 10 * 1024 * 1024;
 /** The binding's methods, under their own names. */
 export class ItxAi extends WorkerEntrypoint<Env, { projectId: string }> {
   run(model: string, inputs: Record<string, unknown>, options?: AiOptions): Promise<unknown> {
-    return this.env.AI.run(model, inputs, options);
+    const send = () => this.env.AI.run(model, inputs, options);
+    // an agent's turn (the metadata its loop sends, iterate `agents/processor.ts`) gets the spans
+    // Cloudflare's Agents view reads, its stream read through (agent-spans.ts)
+    const metadata = options?.gateway?.metadata;
+    if (!options?.returnRawResponse || metadata?.context !== "agent-turn") return send();
+    const slash = model.indexOf("/");
+    return traceModelCall(
+      {
+        projectId: this.ctx.props.projectId,
+        path: String(metadata.streamPath),
+        provider: slash > 0 ? model.slice(0, slash) : "workers-ai",
+        model: model.slice(slash + 1),
+      },
+      async () => {
+        const raw: unknown = await send();
+        if (raw instanceof Response) return raw;
+        throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
+      },
+    );
   }
 
   models(params?: AiModelsSearchParams): Promise<AiModelsSearchObject[]> {

@@ -216,6 +216,11 @@ export const IterateConfig = z.object({
           }),
         ])
         .optional(),
+      /** KEEP TRACES IN CLOUDFLARE beside the warehouse, where Workers Observability and its Agents
+       *  view (src/agent-spans.ts) read them. Cloudflare bills stored traces by the GB from
+       *  2026-12-01, and the setting keeps every trace of the Worker, not only an agent's. Without a
+       *  warehouse the traces are kept there anyway. Unset ⇒ off. */
+      persistTraces: z.boolean().optional(),
       /** The account's telemetry warehouse (docs/telemetry.md), which iterate's
        *  internal-packages/telemetry sets up: `workerName` is its Worker, the OTLP endpoint of the
        *  account's export destinations, whose `TelemetryQuery` runs `itx.telemetry`; `eventsStream`

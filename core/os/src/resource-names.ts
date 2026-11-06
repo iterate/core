@@ -26,6 +26,8 @@ export type CloudflareSection = {
   workersDev?: boolean;
   /** How a deploy moves running Durable Objects onto the new code. Unset ⇒ Cloudflare's default. */
   durableObjectCodeUpdates?: { mode: "immediate" } | { mode: "deferred"; maxDelaySeconds?: number };
+  /** Keep the Worker's traces in Cloudflare too, beside the warehouse. */
+  persistTraces?: boolean;
   /** The telemetry warehouse the Worker sends to, which another deploy owns. */
   telemetry?: { workerName: string; eventsStream: string };
 };

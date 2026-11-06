@@ -130,7 +130,9 @@ Of the other `cloudflare` fields, `d1Location` is fixed when the D1 is made (a c
 with an empty one), and `protectData: true` keeps the data through a destroy ("Destroy").
 `durableObjectCodeUpdates` says how a deploy moves running contexts onto the new code. Unset, each
 keeps its old code until it is next idle, for at most 5 minutes (Cloudflare's default).
-`{ mode: "immediate" }` resets each at once.
+`{ mode: "immediate" }` resets each at once. With a telemetry warehouse, `persistTraces: true` keeps
+the Worker's traces in Cloudflare too, where its Agents view lists your agents' model calls; Cloudflare
+bills stored traces by the GB.
 
 The key, `secretsEncryption.key`, encrypts every project secret. Losing it loses them, and changing it
 signs everyone out. Keep `core/os/.secrets`, or your secrets manager's copy: it is the only one.
