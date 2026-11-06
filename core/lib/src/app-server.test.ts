@@ -10,6 +10,8 @@ import { plainPageCss, plainPageCssHash } from "./theme/plain-page-css.gen.ts";
 
 const ISSUER = "https://os.example";
 const CONNECTED = "https://iterate.someorg.example";
+/** Another platform than the one `connected` is bound to: what its connect page names. */
+const ANOTHER = "https://iterate.another.example";
 
 // ── /.auth/login with a session the platform honours ──
 test("covers what the page asked for → straight to next", async () => {
@@ -152,12 +154,26 @@ test("a sign-out from a connected issuer returns through that issuer's connect p
 test("the connect page lets its form redirect on to the issuer it names", async () => {
   // Chromium checks form-action along the submission's whole redirect chain: Continue POSTs here,
   // then 302s to that issuer's authorize endpoint
-  const { response } = connected(`/.auth/connect?${new URLSearchParams({ issuer: CONNECTED })}`);
+  // (`checked`: the silent sign-in before the page has run, `confirmedTo`)
+  const { response } = connected(
+    `/.auth/connect?${new URLSearchParams({ issuer: ANOTHER, checked: "1" })}`,
+  );
   const answer = await response;
   expect(answer?.status).toBe(200);
   expect(answer?.headers.get("content-security-policy")).toContain(
-    `form-action 'self' ${CONNECTED};`,
+    `form-action 'self' ${ANOTHER};`,
   );
+});
+
+test("a connect for the platform this browser is bound to already goes on to `next`, its sign-in as it is", async () => {
+  const { response, calls } = connected(
+    `/.auth/connect?${new URLSearchParams({ issuer: CONNECTED, next: "/projects/acme" })}`,
+  );
+  const answer = await response;
+  expect(answer?.status).toBe(303);
+  expect(answer?.headers.get("location")).toBe("/projects/acme");
+  expect(answer?.headers.get("set-cookie")).toBeNull();
+  expect(calls).toEqual([]);
 });
 
 test("the connect form's POST moves on to the issuer's authorize endpoint by a refresh, never a redirect", async () => {
@@ -286,12 +302,12 @@ test("a connect link's login hint rides through the connect page to the issuer's
   const hint = "ada@someorg.example";
   // a login link that names another issuer goes by the connect page, the hint kept
   const login = await connected(
-    `/.auth/login?${new URLSearchParams({ issuer: CONNECTED, next: "/projects/acme", login_hint: hint })}`,
+    `/.auth/login?${new URLSearchParams({ issuer: ANOTHER, next: "/projects/acme", login_hint: hint })}`,
   ).response;
-  const connect = `/.auth/connect?${new URLSearchParams({ issuer: CONNECTED, next: "/projects/acme", scope: "", login_hint: hint })}`;
+  const connect = `/.auth/connect?${new URLSearchParams({ issuer: ANOTHER, next: "/projects/acme", scope: "", login_hint: hint })}`;
   expect(login?.headers.get("location")).toBe(connect);
-  // the connect page's Continue carries it
-  const page = await connected(connect).response;
+  // the connect page's Continue carries it (once its silent sign-in has run: `checked`)
+  const page = await connected(`${connect}&checked=1`).response;
   expect(await page?.text()).toContain(`<input type="hidden" name="login_hint" value="${hint}">`);
   // and the POST sets it on the authorization it starts (posted for the deployment's own issuer
   // here: another must first answer over the network, `issuerAnswersAt`)

@@ -86,7 +86,8 @@ identity card the first time. Three rules make it so.
   deployment with no page (iterate/app-server `confirmedTo`). With no session at its issuer to ask
   through, the Dash first gets one by redirects alone: an authorization with `prompt=none` that
   asks only who the person is, back to the connect URL marked `checked=1` so it is asked once.
-  When the person never confirmed, the connect page shows as before, and that session goes.
+  When the person never confirmed, the connect page shows as before, and that session goes. A Dash
+  bound to that platform already (a second Open) has nothing to connect: it goes on to `next`.
 
 The issuer answers an authorization with `prompt=none` (OpenID Connect) with no page at all
 (`src/silent-authorize.ts`). A browser with no session there goes back to the client with

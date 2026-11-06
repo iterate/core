@@ -497,15 +497,18 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
             "Cache-Control": "no-store",
           },
         });
+      // a browser bound to the named platform already holds what a connect would make: on to
+      // `next`, its sign-in as it is
+      if (host?.issuer === named.origin)
+        return new Response(null, {
+          status: 303,
+          headers: { Location: next, "Cache-Control": "no-store" },
+        });
       // with no session at the deployment's own issuer to ask through, one is got first by
       // redirects alone (`prompt=none`, only who the person is), back to this page marked
-      // `checked` so it is asked once: an issuer that would need a page answers at once. A browser
-      // bound to the named platform already keeps its sign-in.
+      // `checked` so it is asked once: an issuer that would need a page answers at once
       const unasked =
-        named.origin !== issuer &&
-        host?.issuer !== issuer &&
-        host?.issuer !== named.origin &&
-        !url.searchParams.has("checked");
+        named.origin !== issuer && host?.issuer !== issuer && !url.searchParams.has("checked");
       if (unasked) {
         // the silent session's cookie replaces the one held: that sign-in ends first
         if (host) await endHeld();
