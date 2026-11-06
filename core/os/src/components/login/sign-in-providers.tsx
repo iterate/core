@@ -12,12 +12,12 @@ export function SignInProviders({ providers }: { providers: SignInProvider[] }) 
         <a
           key={provider.key}
           href={provider.href}
-          aria-label={`Continue with ${provider.name}`}
+          aria-label={provider.label || `Continue with ${provider.name}`}
           // cn() lets outline's border beat the base's transparent one, as <Button> does
           className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 gap-2 px-4")}
         >
           <img src={provider.logo} alt="" width={20} height={20} className="size-5" />
-          {provider.name}
+          {provider.label || provider.name}
         </a>
       ))}
     </div>
@@ -40,7 +40,7 @@ export function RecommendedSignIn({
         className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 gap-2 px-4")}
       >
         <img src={provider.logo} alt="" width={20} height={20} className="size-5" />
-        Sign in with {provider.name}
+        {provider.label || `Sign in with ${provider.name}`}
       </a>
       <p className="text-muted-foreground">
         or{" "}

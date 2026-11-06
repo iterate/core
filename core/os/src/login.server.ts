@@ -12,6 +12,7 @@ import {
   startLoginCode,
 } from "./password-and-code-sign-in.ts";
 import { iterateConfigOf, platformAddressesOf } from "./iterate-config.ts";
+import { issuerIsThisOrigin } from "./iterate-sign-in.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import type { Env } from "./env.ts";
@@ -52,9 +53,11 @@ export async function loginState(
     dash: config.urls.dash || null,
   };
   // One way in, a link (the self-host's Cloudflare Access): the page sends a signed-out person
-  // straight to it, but not back after a refusal (the page shows why) nor when a link asked for a
-  // provider
+  // straight to it, but not back after a refusal (the page shows why), nor when a link asked for a
+  // provider, nor to log in with iterate through this very origin (its deep link refuses that)
   const [only] = state.methods;
+  const iterate = config.login.methods.iterate;
+  const loops = Boolean(iterate && issuerIsThisOrigin(iterate.issuer, platformOrigin));
   return {
     ...state,
     straightTo:
@@ -62,7 +65,8 @@ export async function loginState(
       only?.kind === "link" &&
       !state.signedInAs &&
       !state.error &&
-      !state.providerHint
+      !state.providerHint &&
+      !loops
         ? only.href
         : null,
   };

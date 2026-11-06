@@ -370,16 +370,17 @@ export const IterateConfig = z.object({
               scopes: z.array(z.string().trim().min(1)).default(DEFAULT_CLOUDFLARE_SCOPES),
             })
             .optional(),
+          /** LOG IN WITH ITERATE (iterate-sign-in.ts says how it goes): `issuer` is another iterate
+           *  deployment's origin (`https://os.iterate.com`); `adminsOnly` admits only the addresses
+           *  `admins` lists. */
+          iterate: z
+            .object({
+              issuer: z.string({ error: REQUIRED }).trim().min(1, REQUIRED).pipe(httpOrigin),
+              adminsOnly: z.boolean().default(false),
+            })
+            .optional(),
         })
         .prefault({}),
-      /** AN ADMIN SIGNS IN THROUGH ANOTHER ISSUER (admin-sign-in.ts): the origin of an iterate
-       *  deployment — prd, for a preview — whose word this one takes on who a browser is, for the
-       *  addresses `admins` lists alone. The sign-in page offers "Continue with <its host>"; the
-       *  grant it asks that issuer for reads who the person is and nothing else. Refused
-       *  (`parseIterateConfig`) unless `urls.os` is a preview's https workers.dev origin or a test's:
-       *  a deployment on its own domain trusts no other issuer. A per-commit deployment's config
-       *  sets it, as `ITERATE__LOGIN__ADMIN_ISSUER`. Unset ⇒ off. */
-      adminIssuer: httpOrigin.optional(),
       /** THE RESERVED DOMAIN OF THIS DEPLOYMENT'S TEST PEOPLE (test-email-domain.ts): a sign-in
        *  provider pointed at a fake (a preview's pet shop, which mints any address) signs in
        *  addresses under it alone (identity.ts), and a sign-in link's `login_hint` pre-fills an
@@ -617,13 +618,13 @@ export function parseIterateConfigInput(input: unknown, deployId = "unversioned"
     throw new Error(
       `${field(["admins"])}: not with ${beside} except for a preview, local dev or a test (urls.os a workers.dev, localhost or .test origin), not ${JSON.stringify(urls.os)}`,
     );
-  // A deployment on its own domain takes no other issuer's word on who its admins are; a preview
-  // (or a test) does, on https alone, where that issuer reads this deployment's client metadata.
-  const httpsPreview = isPreviewOrLocalOrigin(urls.os) && new URL(urls.os).protocol === "https:";
-  if (login.adminIssuer && !httpsPreview)
+  // An issuer that is this deployment would send every sign-in back to itself. With a blank urls.os
+  // the platform origin is each request's own, so the deep link checks it again (iterate-sign-in.ts).
+  if (login.methods.iterate && login.methods.iterate.issuer === urls.os)
     throw new Error(
-      `${field(["login", "adminIssuer"])}: only for a preview or a test on https — urls.os must be an https workers.dev or .test origin, not ${JSON.stringify(urls.os)}`,
+      `${field(["login", "methods", "iterate", "issuer"])}: another deployment's origin, not this one's (urls.os)`,
     );
+  const httpsPreview = isPreviewOrLocalOrigin(urls.os) && new URL(urls.os).protocol === "https:";
   // Whoever holds a test link is its person (test-link.ts), so a link goes only where nobody's real
   // data lives. Its person is nobody real, and no admin: the link would make its holder one.
   if (login.testLink && !httpsPreview)
@@ -663,7 +664,7 @@ export function parseIterateConfigInput(input: unknown, deployId = "unversioned"
   }
   if (!Object.keys(methods).length)
     throw new Error(
-      `${field(["login", "methods"])}: no sign-in method — set cloudflareAccess, emailCode, password, or google, github or cloudflare with its integrations client`,
+      `${field(["login", "methods"])}: no sign-in method — set cloudflareAccess, emailCode, password, iterate, or google, github or cloudflare with its integrations client`,
     );
   const signIn = { ...login, methods };
   return { ...parsed, login: signIn, urls: { ...urls, ingressRouting }, deployId };
@@ -727,8 +728,8 @@ function isIdentityProvider(name: string): name is IdentityProvider {
   return IdentityProvider.safeParse(name).success;
 }
 
-/** An origin where nobody's real data lives, so `login.testEmailDomain`, `login.adminIssuer`,
- *  `login.testLink` and `admins` beside the global password may be honoured there: an https
+/** An origin where nobody's real data lives, so `login.testEmailDomain`, `login.testLink` and
+ *  `admins` beside the global password may be honoured there: an https
  *  workers.dev one (a per-PR preview's), localhost's, or one under `.test` (RFC 2606: never a public
  *  name — the workers suite's). A blank `urls.os` is none of them: it must be named. */
 function isPreviewOrLocalOrigin(origin: string) {

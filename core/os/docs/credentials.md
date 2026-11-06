@@ -42,6 +42,17 @@ and `projects.get` is refused. Beside `iterate`, `identity` adds nothing: every 
 are. Under paths routing (previews) every project's page shares the issuer's origin and cookie, so
 a person signed in to the issuer arrives as a person on every project's page, with no consent.
 
+## Signing in through another deployment
+
+`login.methods.iterate` (**Log in with iterate**) names another iterate deployment as the one that
+says who a person is (`src/iterate-sign-in.ts`). The deployment is that issuer's OAuth client, and
+its client id is the URL of a document it serves (`/.auth/sign-in/iterate/client.json`). It asks
+for the issuer's `/oauth2/userinfo` resource alone, reads the person's address there, and revokes
+the token at once. That token reaches no project (`/api` and `/mcp` refuse it by audience). The
+address then signs in here as any sign-in does: only when `login.allow` admits it, and with
+`adminsOnly` only when `admins` lists it too. The person's sessions here are this deployment's own:
+signing out at the issuer ends none of them.
+
 ## Personal access tokens
 
 A personal access token is iterate's own API key, the kind a SaaS product lets you make in its

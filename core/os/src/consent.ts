@@ -119,7 +119,7 @@ export async function projectsForClient(
 }
 
 /** How long a userinfo grant (`kind: "identify"`) lives: the client reads who signed in once, at
- *  once, and revokes it (admin-sign-in.ts); ten minutes bounds one it never revoked. */
+ *  once, and revokes it (iterate-sign-in.ts); ten minutes bounds one it never revoked. */
 const IDENTIFY_GRANT_MS = 10 * 60_000;
 
 /** The host of a CIMD client id (`https://<host>/…`, its metadata document's URL): the one fact of

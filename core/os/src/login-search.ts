@@ -10,8 +10,8 @@ const LoginSearch = z
     error: optionalString,
     email: optionalString,
     method: optionalString,
-    /** which way to sign in a link suggests (`google`, `github`, `cloudflare`, or the admin
-     *  issuer's host): the page leads with it (login.server.ts) */
+    /** which way to sign in a link suggests (`google`, `github`, `cloudflare`, `iterate`): the
+     *  page leads with it (login.server.ts) */
     provider_hint: optionalString,
   })
   .catch({});

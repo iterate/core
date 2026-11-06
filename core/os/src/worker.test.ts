@@ -306,21 +306,22 @@ const iterateConfigRows: {
     vars: { ...MINIMAL, ITERATE__ADMINS: '["*@iterate.com"]' },
     throws: /admins\.0 .*expected exact email addresses/,
   },
-  // admins sign in through another issuer only on a preview's (or a test's) https origin: a
-  // deployment on its own domain takes no other issuer's word, even from a mistaken Doppler value,
-  // and that issuer reads this deployment's client metadata document over https
+  // log in with iterate takes any deployment's origin as its issuer but this one's own
   {
-    vars: { ...MINIMAL, ITERATE__URLS__OS: PR123, ITERATE__LOGIN__ADMIN_ISSUER: PRD },
+    vars: { ...MINIMAL, ITERATE__URLS__OS: PR123, ITERATE__LOGIN__METHODS__ITERATE__ISSUER: PRD },
     becomes: {
       ...MINIMAL_CONFIG,
       urls: { ...MINIMAL_CONFIG.urls, os: PR123 },
-      login: { ...MINIMAL_CONFIG.login, adminIssuer: PRD },
+      login: {
+        ...MINIMAL_CONFIG.login,
+        methods: { ...MINIMAL_CONFIG.login.methods, iterate: { issuer: PRD, adminsOnly: false } },
+      },
     },
   },
-  ...[PRD, "http://localhost:8788", ""].map((os) => ({
-    vars: { ...MINIMAL, ITERATE__URLS__OS: os, ITERATE__LOGIN__ADMIN_ISSUER: PRD },
-    throws: /^ITERATE login\.adminIssuer .*only for a preview or a test on https/,
-  })),
+  {
+    vars: { ...MINIMAL, ITERATE__URLS__OS: PRD, ITERATE__LOGIN__METHODS__ITERATE__ISSUER: PRD },
+    throws: /^ITERATE login\.methods\.iterate\.issuer .*another deployment's origin/,
+  },
   // a fake provider signs test people in only where nobody's real data lives: never on prd's own
   // domain, and a blank urls.os (a self-host on each request's own origin) must name one first
   {
@@ -734,12 +735,14 @@ test("public protocol origins: under path routing the platform's own paths are n
   });
 });
 
-test("public protocol origins: a preview's admin sign-in (admin-sign-in.ts) asks prd who the browser is, for the userinfo resource alone, and signs nobody in yet; prd has no such route", async () => {
-  expect(await request(`${PRD}/.auth/admin-sign-in?next=%2Flogin`)).toMatchObject({ status: 404 });
-  const started = await request(`${PR123}/.auth/admin-sign-in?next=%2Flogin`, {
+test("public protocol origins: log in with iterate (iterate-sign-in.ts) asks the issuer who the browser is, for the userinfo resource alone, and signs nobody in yet; a deployment without the method has no such route", async () => {
+  expect(await request(`${PRD}/.auth/sign-in/iterate?next=%2Flogin`)).toMatchObject({
+    status: 404,
+  });
+  const started = await request(`${PR123}/.auth/sign-in/iterate?next=%2Flogin`, {
     ...MINIMAL,
     ITERATE__URLS__OS: PR123,
-    ITERATE__LOGIN__ADMIN_ISSUER: PRD,
+    ITERATE__LOGIN__METHODS__ITERATE__ISSUER: PRD,
   });
   expect(started).toMatchObject({ status: 302 });
   const authorize = new URL(started.headers.get("location")!);
@@ -750,10 +753,20 @@ test("public protocol origins: a preview's admin sign-in (admin-sign-in.ts) asks
     cookies: started.headers.getSetCookie().map((cookie) => cookie.split("=")[0]),
   }).toEqual({
     at: `${PRD}/oauth2/auth`,
-    clientId: `${PR123}/.auth/admin-sign-in/client.json`,
+    clientId: `${PR123}/.auth/sign-in/iterate/client.json`,
     resource: [`${PRD}/oauth2/userinfo`],
-    cookies: ["__Host-itx-admin-sign-in"],
+    cookies: ["__Host-itx-iterate-sign-in"],
   });
+});
+
+test("log in with iterate through a blank urls.os whose request origin is the issuer: the deep link answers a plain error, never a redirect back to itself", async () => {
+  const answer = await request(`${PR123}/.auth/sign-in/iterate?next=%2F`, {
+    ...MINIMAL,
+    ITERATE__LOGIN__METHODS__ITERATE__ISSUER: PR123,
+  });
+  expect(answer).toMatchObject({ status: 409 });
+  expect(answer.headers.get("location")).toBeNull();
+  expect(await answer.text()).toMatch(/names this deployment .* as its issuer/);
 });
 
 // Local dev's one click (local-sign-in.ts) exists on a laptop's platform alone: a loopback `urls.os`

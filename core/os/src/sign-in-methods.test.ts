@@ -27,6 +27,20 @@ test("Cloudflare Access alone is one link, which /login goes straight to", () =>
       name: "email (Cloudflare Access)",
       href: "/.auth/identity/cloudflare-access?next=%2Fprojects",
       logo: "/cloudflare-logo.svg",
+      label: undefined,
+    },
+  ]);
+});
+
+test("log in with iterate is one link, its deep link, in the house's words; alone, /login goes straight to it", () => {
+  expect(methodsOf({ iterate: { issuer: "https://os.iterate.com" } })).toEqual([
+    {
+      kind: "link",
+      key: "iterate",
+      name: "iterate",
+      href: "/.auth/sign-in/iterate?next=%2Fprojects",
+      logo: "/iterate-logo.svg",
+      label: "Log in with iterate",
     },
   ]);
 });

@@ -18,8 +18,8 @@ import { watchSignInStep } from "./sign-in-watch.ts";
 /** What the person reads when the platform failed their sign-in, on the sign-in page. */
 const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
 
-/** Every sign-in ends in this tail: the password and code forms, a provider (identity.ts), an admin
- * through another issuer (admin-sign-in.ts) and a link (`linkSignInResponse`). Its grant is the issuer's sole browser identity: ordinary storage, public token
+/** Every sign-in ends in this tail: the password and code forms, a provider (identity.ts), another
+ * iterate deployment (iterate-sign-in.ts) and a link (`linkSignInResponse`). Its grant is the issuer's sole browser identity: ordinary storage, public token
  * exchange, admission, expiry and revocation. No separate identity cookie. `picture` is the
  * identity provider's picture of the person, when it gave one (Google does).
  *

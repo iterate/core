@@ -1,18 +1,19 @@
-// admin-sign-in.ts — A DEPLOYMENT'S ADMINS SIGN IN THROUGH ANOTHER ISSUER: `login.adminIssuer` names
-// an iterate deployment (prd, for every per-commit deployment) whose word this one takes on who a
-// browser is, for its `admins` alone. The sign-in page's "Continue with <issuer host>" starts an
-// ordinary OAuth code flow at that issuer whose one resource is its `/oauth2/userinfo`: the grant can
-// read who the person is and nothing else (api.ts `userinfoResponse`; `/api` and `/mcp` refuse its
-// token by audience, RFC 8707). An address this deployment's `admins` lists is signed in here as
-// themselves; anyone else is refused. A PR deployment's admins are prd's (envs.ts
-// `previewDeployment`), so a PR's reviewer signs in as themselves with the prd session they already
-// have: what the admin app's link in the PR body leads with (scripts/os/preview.ts).
+// iterate-sign-in.ts — LOG IN WITH ITERATE: `login.methods.iterate` names another iterate deployment
+// (prd, os.iterate.com) whose word this one takes on who a browser is. Its deep link,
+// `/.auth/sign-in/iterate?next=<path>`, which the sign-in page's "Log in with iterate" goes to and
+// another app may link to straight, starts an ordinary OAuth code flow at that issuer whose one
+// resource is its `/oauth2/userinfo`: the grant can read who the person is and nothing else
+// (api.ts `userinfoResponse`; `/api` and `/mcp` refuse its token by audience, RFC 8707). The
+// address the issuer vouches for is signed in here as themselves when `login.allow` admits it, as
+// every method's is, and, with `adminsOnly`, when `admins` lists it too: a preview takes prd's word
+// for its admins alone (envs.ts `previewDeployment`), so a PR's reviewer signs in with the prd
+// session they already have.
 //
 // This deployment is the issuer's CIMD client, its metadata document served here
-// (`adminSignInClientMetadata`), so no preview is registered anywhere by hand. The token is read
+// (`iterateSignInClientMetadata`), so no deployment is registered anywhere by hand. The token is read
 // once and revoked at once; the issuer's grant ends in ten minutes besides (consent.ts). The flow's
 // state lives in one cookie signed like every platform claim set (iterate-config.ts
-// `sessionSigningSecretOf`, kind `admin-sign-in`): where the browser goes next, the OAuth `state`
+// `sessionSigningSecretOf`, kind `iterate-sign-in`): where the browser goes next, the OAuth `state`
 // and the PKCE verifier, for ten minutes. Nothing is stored server-side.
 
 import * as oauth from "oauth4webapi";
@@ -23,6 +24,7 @@ import { emailAllowed, EMAIL_NOT_ALLOWED_MESSAGE } from "./allowed-emails.ts";
 import {
   iterateConfigOf,
   platformAddressesOf,
+  type IterateConfig,
   sessionSigningSecretOf,
   USERINFO_PATH,
 } from "./iterate-config.ts";
@@ -35,22 +37,30 @@ import { watchSignInStep } from "./sign-in-watch.ts";
 
 /** Where the sign-in starts (`?next=`, a path on this origin), where the issuer sends the browser
  *  back, and where this deployment's CIMD document is — each answered by worker.ts only where
- *  `login.adminIssuer` is set. */
-export const ADMIN_SIGN_IN_PATH = "/.auth/admin-sign-in";
-export const ADMIN_SIGN_IN_CALLBACK_PATH = `${ADMIN_SIGN_IN_PATH}/callback`;
-export const ADMIN_SIGN_IN_CLIENT_PATH = `${ADMIN_SIGN_IN_PATH}/client.json`;
+ *  `login.methods.iterate` is set. */
+export const ITERATE_SIGN_IN_PATH = "/.auth/sign-in/iterate";
+export const ITERATE_SIGN_IN_CALLBACK_PATH = `${ITERATE_SIGN_IN_PATH}/callback`;
+export const ITERATE_SIGN_IN_CLIENT_PATH = `${ITERATE_SIGN_IN_PATH}/client.json`;
+
+/** Whether `issuer` is the origin this request reached the deployment on: a sign-in there would
+ *  start again at itself. */
+export const issuerIsThisOrigin = (issuer: string, platformOrigin: string) =>
+  new URL(issuer).origin === new URL(platformOrigin).origin;
+
+/** The method's settings (iterate-config.ts `login.methods.iterate`). */
+type IterateSignIn = NonNullable<IterateConfig["login"]["methods"]["iterate"]>;
 
 /** The cookie holding one browser's pending sign-in. `__Host-`: this origin's alone; `itx-`: a
  *  platform cookie, which no project app is handed or may set (browser-client.ts `appCookies`,
  *  worker.ts `withoutPlatformHeaders`) — under paths routing the app shares this origin. */
-const FLOW_COOKIE = "__Host-itx-admin-sign-in";
+const FLOW_COOKIE = "__Host-itx-iterate-sign-in";
 const FLOW_MS = 10 * 60_000;
 const clearFlowCookie = `${FLOW_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 
 /** The flow cookie's claims; `kind` tells them apart from every other claim set the session-signing
  *  secret signs. */
 const Flow = z.object({
-  kind: z.literal("admin-sign-in"),
+  kind: z.literal("iterate-sign-in"),
   /** where the browser goes once signed in: a path on this origin */
   next: z.string(),
   state: z.string(),
@@ -58,39 +68,46 @@ const Flow = z.object({
   exp: z.number(),
 });
 
-/** This deployment as the admin issuer's OAuth client: a public client (PKCE, no secret) whose one
+/** This deployment as the issuer's OAuth client: a public client (PKCE, no secret) whose one
  *  redirect is the callback. The issuer fetches it by its URL, the client id (CIMD). */
-export function adminSignInClientMetadata(platformOrigin: string) {
+export function iterateSignInClientMetadata(platformOrigin: string) {
   return {
-    client_id: `${platformOrigin}${ADMIN_SIGN_IN_CLIENT_PATH}`,
-    client_name: `${new URL(platformOrigin).host} admin sign-in`,
+    client_id: `${platformOrigin}${ITERATE_SIGN_IN_CLIENT_PATH}`,
+    client_name: new URL(platformOrigin).host,
     client_uri: platformOrigin,
     logo_uri: `${platformOrigin}/iterate-logo.svg`,
-    redirect_uris: [`${platformOrigin}${ADMIN_SIGN_IN_CALLBACK_PATH}`],
+    redirect_uris: [`${platformOrigin}${ITERATE_SIGN_IN_CALLBACK_PATH}`],
     token_endpoint_auth_method: "none",
     grant_types: ["authorization_code"],
     response_types: ["code"],
   };
 }
 
-/** `GET /.auth/admin-sign-in?next=`: send the browser to sign in at `issuer` (`login.adminIssuer`),
- *  asking only who they are, with the cookie that remembers `next` meanwhile. */
-export async function adminSignInResponse(request: Request, env: Env, issuer: string) {
+/** `GET /.auth/sign-in/iterate?next=`: send the browser to sign in at the method's issuer, asking
+ *  only who they are, with the cookie that remembers `next` meanwhile. */
+export async function iterateSignInResponse(request: Request, env: Env, { issuer }: IterateSignIn) {
   const config = iterateConfigOf(env);
   const { platformOrigin } = platformAddressesOf(env, request);
+  // a deployment with a blank `urls.os` learns its origin per request: one that is the issuer
+  // would send the browser back to itself, round and round
+  if (issuerIsThisOrigin(issuer, platformOrigin))
+    return new Response(
+      `log in with iterate names this deployment (${platformOrigin}) as its issuer; set login.methods.iterate.issuer to another deployment's origin\n`,
+      { status: 409, headers: { "cache-control": "no-store" } },
+    );
   const next = sameOriginPath(
     new URL(request.url).searchParams.get("next") || "/login",
     platformOrigin,
   );
   const { url, state, verifier } = await authorizationCodeRequest({
     issuer,
-    clientId: `${platformOrigin}${ADMIN_SIGN_IN_CLIENT_PATH}`,
-    redirectUri: `${platformOrigin}${ADMIN_SIGN_IN_CALLBACK_PATH}`,
+    clientId: `${platformOrigin}${ITERATE_SIGN_IN_CLIENT_PATH}`,
+    redirectUri: `${platformOrigin}${ITERATE_SIGN_IN_CALLBACK_PATH}`,
     resources: [`${issuer}${USERINFO_PATH}`],
   });
   const flow = await signClaims(
     {
-      kind: "admin-sign-in",
+      kind: "iterate-sign-in",
       next,
       state,
       verifier,
@@ -109,11 +126,16 @@ export async function adminSignInResponse(request: Request, env: Env, issuer: st
   });
 }
 
-/** `GET /.auth/admin-sign-in/callback`: `issuer`'s answer. An address `admins` lists is signed in
- *  here as themselves, the issuer session started exactly as a password sign-in starts it, and sent
- *  on to the flow's `next`; anyone else lands back on the sign-in page with why, and every outcome
- *  is logged with the address the issuer vouched for. */
-export async function adminSignInCallbackResponse(request: Request, env: Env, issuer: string) {
+/** `GET /.auth/sign-in/iterate/callback`: the issuer's answer. An address `login.allow` admits
+ *  (and, with `adminsOnly`, `admins` lists) is signed in here as themselves, the issuer session
+ *  started exactly as a password sign-in starts it, and sent on to the flow's `next`; anyone else
+ *  lands back on the sign-in page with why, and every outcome is logged with the address the issuer
+ *  vouched for. */
+export async function iterateSignInCallbackResponse(
+  request: Request,
+  env: Env,
+  { issuer, adminsOnly }: IterateSignIn,
+) {
   const config = iterateConfigOf(env);
   const refused = (error: string, next = "/login") => {
     const headers = new Headers({
@@ -129,23 +151,25 @@ export async function adminSignInCallbackResponse(request: Request, env: Env, is
     signingSecret: await sessionSigningSecretOf(config),
     request,
   }).catch((error: unknown) => {
-    console.warn({ event: "admin-sign-in.check-failed", message: String(error) });
+    console.warn({ event: "iterate-sign-in.check-failed", message: String(error) });
     return { error: `Could not confirm who you are at ${issuer}. Try again.` };
   });
   if ("error" in checked) return refused(checked.error);
-  if (!isAdmin(env, checked.email)) {
-    console.warn({ event: "admin-sign-in.refused-not-admin", email: checked.email });
+  if (adminsOnly && !isAdmin(env, checked.email)) {
+    console.warn({ event: "iterate-sign-in.refused-not-admin", email: checked.email });
     return refused(`${checked.email} is not an admin here. Sign in another way.`, checked.next);
   }
-  if (!emailAllowed(config.login, checked.email))
+  if (!emailAllowed(config.login, checked.email)) {
+    console.warn({ event: "iterate-sign-in.refused-not-allowed", email: checked.email });
     return refused(EMAIL_NOT_ALLOWED_MESSAGE, checked.next);
+  }
   const user = await watchSignInStep(
     "ensure-user",
     new ControlPlane(env).ensureUser(checked.email),
   );
   const session = await startIssuerSession(env, request, user, checked.next);
   if ("error" in session) return refused(session.error, checked.next);
-  console.info({ event: "admin-sign-in.signed-in", email: checked.email });
+  console.info({ event: "iterate-sign-in.signed-in", email: checked.email });
   const headers = new Headers({
     location: session.location,
     "cache-control": "no-store",
@@ -172,7 +196,7 @@ async function whoSignedIn(input: {
   // the library serves revocation at its token endpoint (RFC 7009)
   const as = { ...authorizationServer(input.issuer) };
   as.revocation_endpoint = as.token_endpoint;
-  const client = { client_id: `${input.platformOrigin}${ADMIN_SIGN_IN_CLIENT_PATH}` };
+  const client = { client_id: `${input.platformOrigin}${ITERATE_SIGN_IN_CLIENT_PATH}` };
   let callback: URLSearchParams;
   try {
     callback = oauth.validateAuthResponse(
@@ -199,7 +223,7 @@ async function whoSignedIn(input: {
       client,
       oauth.None(),
       callback,
-      `${input.platformOrigin}${ADMIN_SIGN_IN_CALLBACK_PATH}`,
+      `${input.platformOrigin}${ITERATE_SIGN_IN_CALLBACK_PATH}`,
       flow.data.verifier,
       options,
     ),
@@ -220,7 +244,10 @@ async function whoSignedIn(input: {
       })
       .then((response) => response.body?.cancel())
       .catch((error: unknown) =>
-        console.warn({ event: "admin-sign-in.userinfo-token-not-revoked", message: String(error) }),
+        console.warn({
+          event: "iterate-sign-in.userinfo-token-not-revoked",
+          message: String(error),
+        }),
       );
   }
 }

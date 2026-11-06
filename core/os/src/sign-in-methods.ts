@@ -1,10 +1,9 @@
 // sign-in-methods.ts — WHAT THE SIGN-IN PAGE SHOWS, a function of the config alone:
-// `login.methods` in its key order (iterate-config.ts keeps the order it was written in), and
-// `login.adminIssuer`'s link after them. The password and the mailed code share one email form,
+// `login.methods` in its key order (iterate-config.ts keeps the order it was written in). The password and the mailed code share one email form,
 // placed where the first of them is written; every other method is a link that starts its
 // sign-in. routes/login.tsx renders the list and wires no method of its own.
 import { INTEGRATION_PROVIDER_NAMES } from "iterate/api";
-import { ADMIN_SIGN_IN_PATH } from "./admin-sign-in.ts";
+import { ITERATE_SIGN_IN_PATH } from "./iterate-sign-in.ts";
 import { CLOUDFLARE_ACCESS_SIGN_IN_PATH } from "./cloudflare-access-sign-in.ts";
 import type { SignInProvider } from "./components/login/providers.ts";
 import type { IterateConfig } from "./iterate-config.ts";
@@ -24,8 +23,8 @@ export function signInMethodsOf(
   const query = new URLSearchParams({ next });
   const views: SignInMethodView[] = [];
   let form: Extract<SignInMethodView, { kind: "email" }> | undefined;
-  const link = (key: string, name: string, href: string, logo: string) =>
-    views.push({ kind: "link", key, name, href, logo });
+  const link = (key: string, name: string, href: string, logo: string, label?: string) =>
+    views.push({ kind: "link", key, name, href, logo, label });
   for (const [name, method] of Object.entries(config.login.methods)) {
     if (!method) continue;
     if (name === "password" || (name === "emailCode" && mail)) {
@@ -60,11 +59,14 @@ export function signInMethodsOf(
         `/.auth/identity/cloudflare?${query}`,
         "/cloudflare-logo.svg",
       );
-  }
-  // an admin through another issuer (admin-sign-in.ts): prd, on a preview
-  if (config.login.adminIssuer) {
-    const host = new URL(config.login.adminIssuer).host;
-    link(host, host, `${ADMIN_SIGN_IN_PATH}?${query}`, "/iterate-logo.svg");
+    else if (name === "iterate")
+      link(
+        "iterate",
+        "iterate",
+        `${ITERATE_SIGN_IN_PATH}?${query}`,
+        "/iterate-logo.svg",
+        "Log in with iterate",
+      );
   }
   return views;
 }

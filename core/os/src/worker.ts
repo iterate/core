@@ -1,7 +1,7 @@
 // worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
 // (the files host, else its fetch routes and the project's config worker, served here from the
 // root's snapshot: `serveProjectHost`), the MCP origin, then the platform origin's
-// own paths (`/version`, a preview's admin sign-in through prd, local dev's and a PR deployment's one click, the secret-OAuth callback, the
+// own paths (`/version`, log in with iterate through another deployment, local dev's and a PR deployment's one click, the secret-OAuth callback, the
 // integrations' callbacks and webhooks, Google identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
 // the issuer's pages as its catch-all.
 // Cap’n Web terminates at `/api`; a project host's request is served where it arrived.
@@ -42,13 +42,13 @@ import { unavailableAnswer } from "./unavailable.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
 import {
-  ADMIN_SIGN_IN_CALLBACK_PATH,
-  ADMIN_SIGN_IN_CLIENT_PATH,
-  ADMIN_SIGN_IN_PATH,
-  adminSignInCallbackResponse,
-  adminSignInClientMetadata,
-  adminSignInResponse,
-} from "./admin-sign-in.ts";
+  ITERATE_SIGN_IN_CALLBACK_PATH,
+  ITERATE_SIGN_IN_CLIENT_PATH,
+  ITERATE_SIGN_IN_PATH,
+  iterateSignInCallbackResponse,
+  iterateSignInClientMetadata,
+  iterateSignInResponse,
+} from "./iterate-sign-in.ts";
 import { localSignInResponse } from "./local-sign-in.ts";
 import { testLinkResponse } from "./test-link-sign-in.ts";
 import { cloudflareAccessSignInResponse } from "./cloudflare-access-sign-in.ts";
@@ -492,17 +492,17 @@ async function routeRequest(
   // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a deploy's
   // readiness check waits for — and the origin this deployment answers on.
   if (url.pathname === "/version") return new Response(`${deployId} ${platformOrigin}\n`);
-  // An admin's sign-in through another issuer (admin-sign-in.ts), prd's for a preview: its start,
-  // that issuer's answer, and this deployment's client metadata document, which the issuer
-  // fetches. None of them exists where `login.adminIssuer` is unset — prd, and every deployment
-  // on its own domain, which iterate-config.ts refuses it on.
-  const adminIssuer = iterateConfig.login.adminIssuer;
-  if (adminIssuer && request.method === "GET") {
-    if (url.pathname === ADMIN_SIGN_IN_PATH) return adminSignInResponse(request, env, adminIssuer);
-    if (url.pathname === ADMIN_SIGN_IN_CALLBACK_PATH)
-      return adminSignInCallbackResponse(request, env, adminIssuer);
-    if (url.pathname === ADMIN_SIGN_IN_CLIENT_PATH)
-      return Response.json(adminSignInClientMetadata(platformOrigin), {
+  // Log in with iterate (iterate-sign-in.ts), through another deployment that vouches for who a
+  // browser is: its start, that issuer's answer, and this deployment's client metadata document,
+  // which the issuer fetches. None of them exists where `login.methods.iterate` is unset.
+  const iterateSignIn = iterateConfig.login.methods.iterate;
+  if (iterateSignIn && request.method === "GET") {
+    if (url.pathname === ITERATE_SIGN_IN_PATH)
+      return iterateSignInResponse(request, env, iterateSignIn);
+    if (url.pathname === ITERATE_SIGN_IN_CALLBACK_PATH)
+      return iterateSignInCallbackResponse(request, env, iterateSignIn);
+    if (url.pathname === ITERATE_SIGN_IN_CLIENT_PATH)
+      return Response.json(iterateSignInClientMetadata(platformOrigin), {
         headers: { "cache-control": "public, max-age=300" },
       });
   }

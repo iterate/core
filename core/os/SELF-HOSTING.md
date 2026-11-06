@@ -241,6 +241,15 @@ a [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
   5. Under Advanced settings, Cookie settings, turn on **Cookie Path Attribute**.
   6. Set `teamDomain` to the team domain and `aud` to the application's **Application Audience
      (AUD) Tag**, then deploy.
+- `iterate: { issuer }`: **Log in with iterate**. Another iterate deployment (`issuer`, such as
+  `https://os.iterate.com`) says who the person is, and this one signs in whoever `login.allow`
+  admits. Nothing is registered at the issuer: this deployment is its client by the URL of a
+  document it serves. The grant it asks for reads the person's address and nothing else, and is
+  revoked at once. Its link is `<your-origin>/.auth/sign-in/iterate?next=<a path here>`, which
+  another app may link to straight. As the only method, a signed-out visit skips the sign-in page
+  and goes straight to the issuer. `adminsOnly: true` admits only the addresses `admins` lists (a
+  preview's, through prd). It can stand beside `cloudflareAccess`, so people can still sign in when
+  the issuer is down.
 
 ## Integrations
 
