@@ -32,6 +32,7 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
     "x-itx-rpc-stub-pager",
     "x-itx-fetch-upgrade",
     "x-itx-fetch-upgrade-eyeball",
+    "x-itx-secret-use",
   ];
   const forged = () =>
     new Headers([
@@ -55,6 +56,7 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
     "x-itx-rpc-stub-pager": null,
     "x-itx-fetch-upgrade": null,
     "x-itx-fetch-upgrade-eyeball": null,
+    "x-itx-secret-use": null,
   });
 });
 

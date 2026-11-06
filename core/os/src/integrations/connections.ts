@@ -18,11 +18,13 @@ import { callbackPage } from "../callback-page.ts";
 import { bytesFromBase64url, signClaims, type PlatformFactType } from "../caller.ts";
 import type { Cause } from "../cause.ts";
 import { contextStub, facetStateOf } from "../context-stub.ts";
+import { egress } from "../context/egress.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane, type Reach } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "../project/contract.ts";
+import { useSecretAt } from "../secrets.ts";
 import type { IntegrationConnectionRow, IntegrationProvider } from "./contract.ts";
 
 /** The bindings a provider acts through. */
@@ -227,16 +229,25 @@ export async function appendConnected(scope: IntegrationScope, row: IntegrationC
   return row;
 }
 
-/** A request through the owner root's egress, so a `getSecret(…)` placeholder is substituted in
+/** A request through egress as the owner's root, so a `getSecret(…)` placeholder is substituted in
  *  its secret's facet, the only code that holds the value. */
 export function ownerEgress(
   env: IntegrationEnv,
   owner: { projectId: string; rootPath: string },
   request: Request,
 ): Promise<Response> {
-  return env.ITERATE_CONTEXT.getByName(
-    DurableObjectNameCodec.stringify({ projectId: owner.projectId, path: owner.rootPath }),
-  ).fetch(request);
+  return egress(request, {
+    projectId: owner.projectId,
+    path: owner.rootPath,
+    cause: undefined,
+    useSecret: (secretPath, outbound) =>
+      useSecretAt(
+        env.ITERATE_CONTEXT.getByName(
+          DurableObjectNameCodec.stringify({ projectId: owner.projectId, path: secretPath }),
+        ),
+        outbound,
+      ),
+  });
 }
 
 /** The connection a project root records at `path` (`state.integrations`), or null. */

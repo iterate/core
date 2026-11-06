@@ -5,7 +5,7 @@
 // context/worker-loader.ts), the rpc stubs (context/rpc-stubs.ts), what ends its residency when
 // nothing should hold it (context/residency.ts), and `fetch()` (the pager upgrade, HTTP requests,
 // egress). Each module's header says what it does; this file is the wiring and the entry points.
-//   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to the context at that path, whose `secret` facet substitutes and dispatches (secret/durable-object.ts)
+//   egress — `#egress`: a `getSecret("/secrets/NAME")` request is forwarded to the context at that path (`#useSecret` there), whose `secret` facet substitutes and dispatches (secret/durable-object.ts)
 //
 // PURE WORKERS-RPC: capnweb never terminates here — the stateless `/api` worker relays. Dispatch is
 // ONE method, `invoke(call)`; every OTHER change to this context is an appended event (the edge's
@@ -97,7 +97,13 @@ import {
   PROJECT_DELETED,
   resourceScope,
 } from "./context/paths.ts";
-import { LEND_USE_HEADER, LENT_AS_HEADER, verifyLendUse } from "./secrets.ts";
+import {
+  LEND_USE_HEADER,
+  LENT_AS_HEADER,
+  SECRET_USE_HEADER,
+  useSecretAt,
+  verifyLendUse,
+} from "./secrets.ts";
 import { mcpWebhookOf } from "./integrations/mcp.ts";
 import { expressionFetchErrorAnswer, unavailableError } from "./unavailable.ts";
 import { metrics } from "./metrics.ts";
@@ -1995,16 +2001,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       headers.delete(LEND_USE_HEADER);
       return this.#lentFetch(new Request(request, { headers }), lend);
     }
+    // A SECRET'S USE (secrets.ts `useSecretAt`): egress ran at the caller's hop, so the request goes
+    // to this context's `secret` facet and never through egress again.
+    const app = request.headers.get(ITX_APP_HEADER) !== null;
+    if (request.headers.has(SECRET_USE_HEADER) && !app) return this.#useSecret(request);
     // The handlers, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; AN ITX-EXPRESSION FETCH (`x-itx-expression` names an itx expression — JSON from a session's
     // terminal `fetch(request)` or a located hop, "" for the project's ingress target, or dotted text
     // or JSON from a loaded worker's own `env.ITX.fetch` — resolved as a terminal-fetch call with the live Request
     // as its one runtime arg (`itxExpressionEndingInFetch`); the routing header is stripped so it never reaches the capability or
-    // egress); everything else is EGRESS.
+    // egress); everything else is refused.
     // LOADED CODE's fetch (`ItxEntrypoint.fetch` set the header): neither the rpc-stub pager
     // WebSocket nor the rpc-stub fetch upgrade — both append rows past every table — and the
     // expression runs as app code.
-    const app = request.headers.get(ITX_APP_HEADER) !== null;
     if (!app) {
       // A lend's row rides its pager: the attach is answered like a rule write (a re-dial's rule is
       // a repeat, and a lent callback's row waits a pending fence out with it — at most once).
@@ -2073,10 +2082,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         return expressionFetchErrorAnswer(error, itxExpressionHeader);
       }
     }
-    // Bare egress is the PLATFORM's (a first-party facet's raw `fetch(url)`); loaded code's fetch
-    // always names an expression (`ItxEntrypoint.fetch`), so an app Request without one is refused.
+    // Egress is a built-in (`itx.builtins.fetch`), reached by an expression: loaded code's fetch
+    // names one (`ItxEntrypoint.fetch`), and so does every platform sender.
     if (app) return new Response("loaded code's fetch names no expression\n", { status: 404 });
-    return this.#egress(request);
+    return new Response("a context's fetch names no expression\n", { status: 404 });
+  }
+
+  /** A SECRET'S USE (context/egress.ts): the request, to this context's `secret` facet. */
+  #useSecret(request: Request): Promise<Response> {
+    const headers = new Headers(request.headers);
+    headers.delete(SECRET_USE_HEADER);
+    // only this DO's own lend admission sets `LENT_AS_HEADER` (`#lentFetch`)
+    for (const name of [...headers.keys()]) if (name.startsWith("x-itx-lend")) headers.delete(name);
+    // A facet call answers `unknown`; the secret facet's `fetch` answers its Response.
+    return this.#facetHost.callFacetAsPlatform("secret", [
+      ["fetch", new Request(request, { headers })],
+    ]) as Promise<Response>;
   }
 
   /** AN ITX-EXPRESSION FETCH'S BODY: the visitor's body, streamed to the app through a pipe this DO owns. A
@@ -2118,25 +2139,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return { incarnation: this.#stream.storage.incarnation, calls: this.#residency.inboundCalls() };
   }
 
-  /** EGRESS (context/egress.ts), from this context: a secret that is this context's own is its
-   *  `secret` facet's to dial — hosted on demand, row or no row: a secret never set refuses inside
-   *  the facet ("no stored project secret"), a 502 — and another context's is that context's
-   *  `fetch`, which lands in ITS egress, here. */
+  /** EGRESS (context/egress.ts), from this context: a secret is its context's `secret` facet's to
+   *  dial (`#useSecret` there) — hosted on demand, row or no row: a secret never set refuses inside
+   *  the facet ("no stored project secret"), a 502. */
   #egress(request: Request): Promise<Response> {
     const { projectId, path } = this.#durableObjectAddress;
-    // why it is sent: the caller's, or the mark a context forwarding it here stamped (a secret's)
-    const cause = this.#caller.cause ?? parseCause(request.headers.get(ITERATE_CAUSE_HEADER));
     return egress(request, {
       projectId,
       path,
-      cause,
-      secretFetch: (secretPath, outbound) =>
+      cause: this.#caller.cause,
+      useSecret: (secretPath, outbound) =>
         secretPath === path
-          ? // A facet call answers `unknown`; the secret facet's `fetch` answers its Response.
-            (this.#facetHost.callFacetAsPlatform("secret", [
-              ["fetch", outbound],
-            ]) as Promise<Response>)
-          : this.#reach.contextOf(secretPath).fetch(outbound),
+          ? this.#useSecret(outbound)
+          : useSecretAt(this.#reach.contextOf(secretPath), outbound),
     });
   }
 

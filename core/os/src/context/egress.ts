@@ -14,7 +14,9 @@ import { resourceScope } from "./paths.ts";
  *  project's `/secrets/NAME`, a user's `/users/<id>/secrets/NAME` — so a user's placeholder reaches
  *  the user's own secret, never a shared one), and there to its `secret` facet
  *  (secret/durable-object.ts), which substitutes, pins, dispatches, and refreshes on a 401
- *  (`secretFetch`); one request, one secret (a second name is a 502 — no cross-secret chaining). A
+ *  (`useSecret`, secrets.ts `SECRET_USE_HEADER`: that context hands it to the facet, never to its own
+ *  egress, so all of this runs once, here); one request, one secret (a second name is a 502 — no
+ *  cross-secret chaining). A
  *  request naming none goes straight to the terminal fetch. Either way the platform's own headers
  *  never leave: the principal stamp (actor + email) and the expression would ride whatever an app
  *  forwards outbound. OUR MARK goes instead (cause.ts), and past the loop limit nothing is sent.
@@ -28,11 +30,11 @@ export function egress(
     path: string;
     /** Why it is sent (the caller's). */
     cause: Cause | undefined;
-    /** The secret's context's fetch — its `secret` facet's, where the value is. */
-    secretFetch: (secretPath: string, outbound: Request) => Promise<Response>;
+    /** The secret's `secret` facet's fetch, where the value is. */
+    useSecret: (secretPath: string, outbound: Request) => Promise<Response>;
   },
 ): Promise<Response> {
-  // A request a context forwards here (a secret's dispatch) carries the mark its sender stamped.
+  // why it is sent: the caller's, or the mark a platform sender stamped on the request
   const cause = from.cause || parseCause(request.headers.get(ITERATE_CAUSE_HEADER));
   refuseActPastLimit(cause, `egress to ${new URL(request.url).host}`);
   const headers = new Headers(request.headers);
@@ -56,28 +58,24 @@ export function egress(
   const { projectId, path } = from;
   const secretPath =
     paths[0] && resolveContextPath(resourceScope(projectId, path).rootPath, `.${paths[0]}`);
-  const send = () => (secretPath ? from.secretFetch(secretPath, outbound) : fetch(outbound));
+  const send = () => (secretPath ? from.useSecret(secretPath, outbound) : fetch(outbound));
   // a model call with a project's own key gets the spans Cloudflare's Agents view reads
   // (agent-spans.ts): an HTTP call's answer is read through, and a Responses WebSocket is relayed
-  const model = modelCallAt(outbound, { projectId, path, secretPath });
+  const model = modelCallAt(outbound, { projectId, path });
   if (model?.kind === "socket")
     return send().then((upgrade) => traceResponsesSocket(upgrade, model.call));
   if (model?.kind === "http") return traceModelCall(model.call, send);
   return send();
 }
 
-/** Whether this hop traces `outbound` as a model call, and as whose. Only the first hop does: a
- *  request naming a secret that another context holds goes on to that context, whose own egress
- *  hands it to its `secret` facet. That second hop, where the secret is the context's own, neither
- *  relays a socket (which would keep the secret's context resident for the socket's life) nor opens
- *  a second set of spans under the secret's path. */
+/** Whether `outbound` is a model call these spans trace, and as whose. */
 export function modelCallAt(
   outbound: Pick<Request, "url" | "method" | "headers">,
-  at: { projectId: string; path: string; secretPath: string | undefined },
+  at: { projectId: string; path: string },
 ):
   | { kind: "socket" | "http"; call: { projectId: string; path: string; provider: string } }
   | undefined {
-  if (outbound.url !== "https://api.openai.com/v1/responses" || at.secretPath === at.path) return;
+  if (outbound.url !== "https://api.openai.com/v1/responses") return;
   const call = { projectId: at.projectId, path: at.path, provider: "openai" };
   if (outbound.headers.get("upgrade")?.toLowerCase() === "websocket")
     return { kind: "socket", call };

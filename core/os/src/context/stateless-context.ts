@@ -16,6 +16,7 @@ import { mcpWebhookOf } from "../integrations/mcp.ts";
 import { reachableContext } from "../context-stub.ts";
 import { itxAiFor } from "../itx-ai.ts";
 import { buildLibrary, type LibraryItx } from "../library.ts";
+import { useSecretAt } from "../secrets.ts";
 import {
   buildIdentityRoots,
   buildPortableBuiltIns,
@@ -218,7 +219,7 @@ export function statelessResolverFor(args: {
             projectId,
             path,
             cause: callerNow.cause,
-            secretFetch: (secretPath, outbound) => context(secretPath).fetch(outbound),
+            useSecret: (secretPath, outbound) => useSecretAt(context(secretPath), outbound),
           }),
         caller: () => withOrigin(callerNow),
         invokeAs: (callerThere, call) => resolverUnder(callerThere).invoke(call),

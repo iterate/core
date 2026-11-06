@@ -69,6 +69,7 @@ import {
   ITX_GRANT_HEADER,
   type Caller,
 } from "../caller.ts";
+import { SECRET_USE_HEADER } from "../secrets.ts";
 import {
   FETCH_UPGRADE_EYEBALL_HEADER,
   FETCH_UPGRADE_SOCKET_HEADER,
@@ -507,7 +508,8 @@ export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
 
 /** THE HOP'S CALLER STAMP: every header the DO's fetch trusts as the platform's — the caller's
  *  (principal, grant, caller path, app, platform origin, cause), the protocol's (the pager attach,
- *  which appends past every table, and the fetch-upgrade leg) and the expression a fetch names —
+ *  which appends past every table, the fetch-upgrade leg, and a secret's use, which reaches its
+ *  `secret` facet) and the expression a fetch names —
  *  replaced on `headers` by `caller`'s (`null`: none, and no routing slug either, for a Request
  *  leaving the platform). Every hop that forwards a Request stamps through here, so a Request's own
  *  copy of any of them never survives. An explicit list, not an `x-itx-*` sweep like the edge's
@@ -522,6 +524,7 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
     RPC_STUB_PAGER_WEBSOCKET_HEADER,
     FETCH_UPGRADE_SOCKET_HEADER,
     FETCH_UPGRADE_EYEBALL_HEADER,
+    SECRET_USE_HEADER,
     ITERATE_CAUSE_HEADER,
     ITX_EXPRESSION_FETCH_HEADER,
   ])

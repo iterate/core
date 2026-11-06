@@ -391,6 +391,22 @@ export const LEND_USE_HEADER = "x-itx-lend-use";
 /** The lender's context → its own facet, after admission: `{ as, borrower }` JSON. */
 export const LENT_AS_HEADER = "x-itx-lend-as";
 
+// ── a secret's use on the fetch channel ── the platform's mark on a request egress hands a secret's
+// context (context/egress.ts); every hop's caller stamp strips it (context/rpc-stubs.ts
+// `stampCallerHeaders`).
+
+export const SECRET_USE_HEADER = "x-itx-secret-use";
+
+/** Egress → the secret's context: its `secret` facet substitutes, pins and dispatches. */
+export function useSecretAt(
+  context: { fetch(request: Request): Promise<Response> },
+  outbound: Request,
+): Promise<Response> {
+  const headers = new Headers(outbound.headers);
+  headers.set(SECRET_USE_HEADER, "1");
+  return context.fetch(new Request(outbound, { headers }));
+}
+
 type LendUse = { kind: "lend-use"; lender: string; lendId: string; borrower: string; exp: number };
 
 export const signLendUse = (
