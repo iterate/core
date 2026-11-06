@@ -684,6 +684,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           ...state,
           sections: shown,
           awaitingRun,
+          unnotedRun:
+            actor?.type === "script" && actor.requestOffset === state.unnotedRun
+              ? null
+              : state.unnotedRun,
           contextItems: [
             ...state.contextItems,
             {
@@ -866,6 +870,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         return {
           ...state,
           pendingRuns,
+          unnotedRun: requestOffset,
           scriptResults: [...state.scriptResults, row].slice(-RETAINED_SCRIPT_RESULTS),
         };
       }

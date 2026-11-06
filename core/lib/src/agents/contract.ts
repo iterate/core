@@ -218,6 +218,9 @@ export const AgentContract = defineProcessorContract({
     /** The script runs this loop asked for and that have not settled, by request offset, with
      *  when they were asked for: only their settlements become the model's input. */
     pendingRuns: z.record(z.string(), z.object({ requestedAt: z.number() })).default({}),
+    /** The run that settled and whose result note has not landed yet, by request offset: the loop
+     *  still owes that note, so a reader of this state does not take the agent for idle. */
+    unnotedRun: z.number().int().positive().nullable().default(null),
     /** This loop's newest script outcomes, oldest first: every script's `results` (results-preamble.ts). */
     scriptResults: z
       .array(

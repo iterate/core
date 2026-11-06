@@ -331,7 +331,27 @@ test.for<{
         triggerSource: "agent-loop",
       },
       autonomousTurnCount: 1,
+      unnotedRun: null,
     },
+  },
+  {
+    name: "a settled run stays owed until its result note lands, so the agent never reads as idle between them",
+    events: [
+      ...born,
+      run("requested", { code: "async () => 1" }, { processor: { slug: "agent" } }),
+      run("settled", { requestOffset: 3, settlement: { status: "succeeded", result: 1 } }),
+    ],
+    state: { pendingRuns: {}, unnotedRun: 3 },
+  },
+  {
+    name: "a run's result note clears what the loop owed for it",
+    events: [
+      ...born,
+      run("requested", { code: "async () => 1" }, { processor: { slug: "agent" } }),
+      run("settled", { requestOffset: 3, settlement: { status: "succeeded", result: 1 } }),
+      scriptResult(3),
+    ],
+    state: { unnotedRun: null },
   },
   {
     name: "a pause drops the parked trigger — the retry that tripped the breaker cannot resume it",
