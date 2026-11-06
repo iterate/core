@@ -12,6 +12,7 @@ import {
   environmentFaviconSvg,
   environmentTitle,
   forwardIssues,
+  oneStepDeeper,
   isSameOriginBrowserRequest,
   type Issue,
   releaseRpcSessions,
@@ -239,6 +240,48 @@ test.each([
   expect(environmentFaviconSvg({ kind: "preview", pr, deployment: `pr${pr}-a1b2c3d` })).toContain(
     `font-size="${fontSize}"`,
   );
+});
+
+test.for([
+  { name: "no wait is a step on", depth: 3, waited: 0, deeper: 4, clockAge: 0 },
+  {
+    name: "a clock a moment ahead, on another machine, is one step",
+    depth: 3,
+    waited: -0.001,
+    deeper: 4,
+    clockAge: -0.001,
+  },
+  { name: "a wait under two minutes keeps counting", depth: 3, waited: 1, deeper: 4, clockAge: 1 },
+  {
+    name: "five minutes takes two steps off, and keeps the minute over",
+    depth: 3,
+    waited: 5,
+    deeper: 2,
+    clockAge: 1,
+  },
+  {
+    name: "a day takes any chain back to its start, and its clock with it",
+    depth: 16,
+    waited: 1_440,
+    deeper: 1,
+    clockAge: 0,
+  },
+])("oneStepDeeper: $name", ({ depth, waited, deeper, clockAge }) => {
+  const now = Date.parse("2035-01-01T12:00:00Z");
+  vi.useFakeTimers({ now, toFake: ["Date"] });
+  const minutes = (count: number) => count * 60_000;
+  expect(oneStepDeeper({ depth, at: now - minutes(waited) })).toEqual({
+    depth: deeper,
+    at: now - minutes(clockAge),
+  });
+  vi.useRealTimers();
+});
+
+test("oneStepDeeper: a cause with no clock starts one, and keeps what else it carries", () => {
+  const now = Date.parse("2035-01-01T12:00:00Z");
+  vi.useFakeTimers({ now, toFake: ["Date"] });
+  expect(oneStepDeeper({ chain: "c", depth: 3 })).toEqual({ chain: "c", depth: 4, at: now });
+  vi.useRealTimers();
 });
 
 const roundtrip = (a: unknown, b: unknown) => {

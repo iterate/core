@@ -28,6 +28,7 @@ const PublishedModules = WorkerManifest.shape.modules;
 const EventCause = z.object({
   chain: z.string(),
   depth: z.number(),
+  at: z.number().optional(),
   parent: z.string().optional(),
 });
 

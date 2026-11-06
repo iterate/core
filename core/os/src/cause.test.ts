@@ -41,15 +41,23 @@ test("code run for events runs one deeper with the deepest of them as its parent
     offset,
     ...(depth !== undefined && { source: { cause: { chain: "c", depth, parent: "/@1" } } }),
   });
-  expect(causeOfDelivery([event(4, 1), event(5, 3), event(6, 3)])).toEqual({
+  expect(causeOfDelivery([event(4, 1), event(5, 3), event(6, 3)])).toMatchObject({
     chain: "c",
     depth: 4,
     parent: "/agents/a@5",
   });
   expect(causeOfDelivery([event(7)])).toMatchObject({ depth: 1, parent: "/agents/a@7" });
-  expect(causeOfDelivery([{ source: { cause: { chain: "c", depth: 2, parent: "/@1" } } }])).toEqual(
-    { chain: "c", depth: 3, parent: "/@1" },
-  );
+  expect(
+    causeOfDelivery([{ source: { cause: { chain: "c", depth: 2, parent: "/@1" } } }]),
+  ).toMatchObject({ chain: "c", depth: 3, parent: "/@1" });
+});
+
+test("an event and a mark carry the clock a chain counts from, and a wait takes depth off", () => {
+  const at = Date.now() - 10 * 60_000;
+  const cause = { chain: "c", depth: 7, at };
+  expect(storedCause(cause)).toEqual(cause);
+  expect(parseCause(causeHeader(cause))).toMatchObject(cause);
+  expect(causeOfDelivery([{ source: { cause } }])).toMatchObject({ chain: "c", depth: 3 });
 });
 
 test("an event stores its chain, depth and parent, and a mark carries the parent when a header can", () => {

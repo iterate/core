@@ -2,8 +2,9 @@
 // client id per app origin, PKCE, the `__Host-` cookie), the `/api` proxy, and the few pages the gate
 // serves itself. A browser session is an ordinary OAuth client of ONE issuer — by default the
 // deployment's own (`config.issuer`), or any Iterate issuer a person CONNECTS the app to on purpose (a
-// self-hosted platform). Connecting is deliberate: a same-origin POST from `/.auth/connect`, a page
-// that names the issuer and asks — never a link, because a link would be a forced login: it could
+// self-hosted platform). Connecting is deliberate: a same-origin POST, from `/.auth/connect`, a page
+// that names the issuer and asks, or from the app's own page where a person picked or typed it —
+// never a link, because a link would be a forced login: it could
 // bind a browser to an issuer of the linker's choosing, and the app would then show that issuer's
 // world as the person's. Once a session exists, its record is the ONLY source of where the credential
 // goes (`BrowserSession.host()`): the login probe, the `/api` proxy and logout all read it there.

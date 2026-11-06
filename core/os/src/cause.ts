@@ -4,10 +4,14 @@
 // and calls; the SDK carries it through loaded code unread, from a host's `callWithCause` or a
 // Request's mark (iterate src/cause.ts). Three guarantees rest on it:
 //
-// 1. BOUNDED CAUSAL DEPTH. A person's call, an outside request and inbound mail without our mark
+// 1. BOUNDED CAUSAL SPEED. A person's call, an outside request and inbound mail without our mark
 //    begin a chain at depth 0. Depth goes up by one only where code runs BECAUSE of an event or of
 //    other code — a delivery (`causeOfDelivery`), a script run — and everything else keeps it: a
-//    receipt, a retry, a revive, a schedule's firing, an agent's own turns. What we send carries our
+//    receipt, a retry, a revive, a schedule's firing, an agent's own turns. The clock takes it down
+//    (iterate/lib `oneStepDeeper`): depth is how far a chain has run ahead of the clock, not how
+//    long it has lived, so a runaway reaches the limit and a job that waits, one that re-arms itself
+//    for tomorrow or two agents working something through, never does. Waiting to retry a failure
+//    takes no step off (`SubscriptionDelivery.owedCause`). What we send carries our
 //    mark (ITERATE_CAUSE_HEADER), and what comes back with it resumes at its depth. Past
 //    LOOP_DEPTH_LIMIT code may still read, but every act — an append, a send, egress, a commit,
 //    waking a sleeping context, a birth — is refused LOOP_LIMIT naming where the chain began
@@ -24,7 +28,7 @@
 // Cloudflare ray, which joins Cloudflare's own request log), and `parent` the event whose handling
 // wrote it, so any event walks back to its origin one step at a time.
 
-import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
+import { codedError, errorCode, ITERATE_CAUSE_HEADER, oneStepDeeper } from "iterate/lib";
 import { z } from "zod";
 
 /** The chain a piece of work belongs to and how deep in it the work is — as an event stores it
@@ -32,8 +36,11 @@ import { z } from "zod";
 export type Cause = {
   /** Where and when the chain began, time-ordered: `<ISO time> with <origin> ~<nonce>`. */
   chain: string;
-  /** Hand-offs since the chain began: 0 for a person's call, one more per delivery or script. */
+  /** How far the chain has run ahead of the clock: 0 for a person's call, one more per delivery or
+   *  script, one less every STEP_FORGIVEN_EVERY_MS. */
   depth: number;
+  /** When the clock last took a step off, in ms since the epoch: what `oneStepDeeper` counts from. */
+  at?: number;
   /** The event whose handling this work runs for, `<path>@<offset>`: the step before, on every
    *  event the work writes. None where a person's call or an outside request began the work. */
   parent?: string;
@@ -48,8 +55,9 @@ export type Cause = {
   onBehalfOf?: string;
 };
 
-/** The deepest a chain acts at: past it, code may read but not act. */
-export const LOOP_DEPTH_LIMIT = 8;
+/** The deepest a chain acts at: past it, code may read but not act. This is a burst, not a budget:
+ *  a loop at machine speed reaches it at once, one at a model's speed in about half an hour. */
+export const LOOP_DEPTH_LIMIT = 16;
 /** The most contexts one call crosses. */
 const MAX_CONTEXT_HOPS = 16;
 /** A new chain, at depth 0, beginning now `with` its origin: the kind of thing that began it ("a
@@ -62,6 +70,7 @@ export function newChain(origin: string): Cause {
   return {
     chain: `${new Date().toISOString()} with ${origin.slice(0, 200).replace(/[^\x20-\x7e]/g, "?")} ~${nonce}`,
     depth: 0,
+    at: Date.now(),
   };
 }
 
@@ -87,13 +96,17 @@ export function causeOfDelivery(
   // a committed event's offset is 1 or more
   const parent =
     deepest?.path && deepest.offset ? `${deepest.path}@${deepest.offset}` : cause.parent;
-  return { chain: cause.chain, depth: cause.depth + 1, parent };
+  const { depth, at } = oneStepDeeper(cause);
+  return { chain: cause.chain, depth, at, parent };
 }
 
 /** A cause as an event stores it: the chain, the depth and the parent, never what only a call
  *  needs — and no `parent` key at all without one, so an event reads the same live as stored. */
-export function storedCause({ chain, depth, parent }: Cause): Cause {
-  return parent ? { chain, depth, parent } : { chain, depth };
+export function storedCause({ chain, depth, at, parent }: Cause): Cause {
+  const stored: Cause = { chain, depth };
+  if (at !== undefined) stored.at = at;
+  if (parent) stored.parent = parent;
+  return stored;
 }
 
 /** THE REFUSAL of an act past the limit — an append, a send, egress, a commit, waking a sleeping
@@ -146,10 +159,11 @@ export function crossingOneMore(cause: Cause, into: string, contexts = 1): Cause
 
 /** A cause as ITERATE_CAUSE_HEADER carries it: JSON, ASCII (a header is bytes; `newChain`), so a
  *  parent in any other characters stays behind. */
-export function causeHeader({ chain, depth, hops, parent }: Cause): string {
+export function causeHeader({ chain, depth, at, hops, parent }: Cause): string {
   return JSON.stringify({
     chain,
     depth,
+    at,
     hops: hops ?? 0,
     ...(parent && PRINTABLE_ASCII.test(parent) && { parent }),
   });
@@ -170,6 +184,7 @@ const CauseCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const WrittenCause = z.object({
   chain: z.string().max(512).regex(PRINTABLE_ASCII),
   depth: CauseCount,
+  at: CauseCount.optional().catch(undefined),
   parent: z.string().max(512).optional().catch(undefined),
   hops: CauseCount.nullish(),
   writeKey: z.string().max(512).optional().catch(undefined),
@@ -190,10 +205,11 @@ export function parseCause(value: unknown): Cause | undefined {
     }
   const written = WrittenCause.safeParse(fields);
   if (!written.success) return undefined;
-  const { chain, depth, parent, hops, writeKey, onBehalfOf } = written.data;
+  const { chain, depth, at, parent, hops, writeKey, onBehalfOf } = written.data;
   return {
     chain,
     depth,
+    at,
     parent,
     hops: hops || 0,
     ...(!mark && writeKey && { writeKey }),

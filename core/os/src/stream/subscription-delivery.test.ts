@@ -9,7 +9,7 @@ import { print, type ItxExpression } from "iterate/expression";
 import { codedError } from "iterate/lib";
 import type { StreamEvent, StreamEventInput, ScannedRange } from "iterate/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
-import { causeOfDelivery, type Cause } from "../cause.ts";
+import { causeOfDelivery, LOOP_DEPTH_LIMIT, type Cause } from "../cause.ts";
 import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import { registerPipelinedRpcBrand, FacetHandle } from "../context/dispatch.ts";
 import { SNAPSHOT_TTL_MS } from "../context/rule-snapshots.ts";
@@ -2105,7 +2105,7 @@ test("birth events: a fan-out row born from offset 0 delivers its own birth and 
 // ── the wake rule, as a property: random handlers over a simulated project ──
 
 test.for(Array.from({ length: 200 }, (_, i) => ({ name: `world ${i + 1}`, seed: i + 1 })))(
-  "fan-out, the wake rule and loop guard ($name): random handlers tell no wake twice, act at most 8 deep, go quiet",
+  "fan-out, the wake rule and loop guard ($name): random handlers tell no wake twice, act no deeper than the limit, go quiet",
   async ({ seed }) => {
     const world = randomHandlerWorld(seed);
     fakeClock(Date.parse("2035-01-01T00:00:00Z"));
@@ -2115,7 +2115,7 @@ test.for(Array.from({ length: 200 }, (_, i) => ({ name: `world ${i + 1}`, seed: 
     expect(new Set(world.toldOf)).toHaveProperty("size", world.toldOf.length);
     expect(world.toldOf.filter((wake) => !world.wakes().includes(wake))).toEqual([]);
     // what code appended is never past the limit: only the platform's own facts are
-    expect(world.deepestAct()).toBeLessThanOrEqual(8);
+    expect(world.deepestAct()).toBeLessThanOrEqual(LOOP_DEPTH_LIMIT);
     expect(world.quiet()).toEqual({ awake: [], alarms: [], retries: [] });
   },
 );
@@ -2175,7 +2175,7 @@ test("fan-out: a dead letter is written once per event, row and resume — a dea
   ]);
 });
 
-test("fan-out, the wake rule: a wake handler appending work that fails climbs one hop a lap, stops at 8, goes quiet", async () => {
+test("fan-out, the wake rule: a wake handler appending work that fails climbs one hop a lap, stops at the limit, goes quiet", async () => {
   const told: string[] = [];
   let current: ReturnType<typeof incarnation> | undefined;
   const handler = sink(told, (event) => {
@@ -2200,18 +2200,21 @@ test("fan-out, the wake rule: a wake handler appending work that fails climbs on
   // lifts its pause), and whenever its last record dead-letters (nothing owed). How often is up to
   // the ladder's jitter, so the depth is bounded and the number of works is not.
   const depths = factsOf(current, "test/work").map((event) => event.source!.cause!.depth);
-  expect(depths.slice(0, 8)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-  expect(Math.max(...depths)).toBe(8);
+  expect(depths.slice(0, LOOP_DEPTH_LIMIT)).toEqual(
+    Array.from({ length: LOOP_DEPTH_LIMIT }, (_, step) => step + 1),
+  );
+  expect(Math.max(...depths)).toBe(LOOP_DEPTH_LIMIT);
   expect(factsOf(current, "events.iterate.com/itx/loop-limit")).toMatchObject([
-    { payload: { depth: 9 } },
+    { payload: { depth: LOOP_DEPTH_LIMIT + 1 } },
   ]);
-  expect(told.filter((label) => label.startsWith("woken#")).length).toBeLessThan(60);
+  expect(told.filter((label) => label.startsWith("woken#")).length).toBeLessThan(
+    8 * LOOP_DEPTH_LIMIT,
+  );
 });
 
 // The row above with `Math.random` seeded, which the retry ladder's jitter draws from. This draw
-// restarts the climb at depth 2 after the loop-limit ack, and at depth 4 when the last record
-// dead-letters: [1..8, 2..8, 4..8], 20 works, which about 1 unseeded run in 140 reaches.
-test("fan-out, the wake rule, seeded: a jitter draw that restarts the climb twice still stops at 8, goes quiet", async () => {
+// restarts the climb after the loop-limit ack and again when the last record dead-letters.
+test("fan-out, the wake rule, seeded: a jitter draw that restarts the climb twice still stops at the limit, goes quiet", async () => {
   const told: string[] = [];
   vi.spyOn(Math, "random").mockImplementation(mulberry32(185));
   let current: ReturnType<typeof incarnation> | undefined;
@@ -2234,12 +2237,16 @@ test("fan-out, the wake rule, seeded: a jitter draw that restarts the climb twic
   }
   expect(current.delivery.deadlines()).toEqual([]);
   const depths = factsOf(current, "test/work").map((event) => event.source!.cause!.depth);
-  expect(depths.slice(0, 8)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-  expect(Math.max(...depths)).toBe(8);
+  expect(depths.slice(0, LOOP_DEPTH_LIMIT)).toEqual(
+    Array.from({ length: LOOP_DEPTH_LIMIT }, (_, step) => step + 1),
+  );
+  expect(Math.max(...depths)).toBe(LOOP_DEPTH_LIMIT);
   expect(factsOf(current, "events.iterate.com/itx/loop-limit")).toMatchObject([
-    { payload: { depth: 9 } },
+    { payload: { depth: LOOP_DEPTH_LIMIT + 1 } },
   ]);
-  expect(told.filter((label) => label.startsWith("woken#")).length).toBeLessThan(60);
+  expect(told.filter((label) => label.startsWith("woken#")).length).toBeLessThan(
+    8 * LOOP_DEPTH_LIMIT,
+  );
 });
 
 // ── custom metrics: a row's backlog, an event's lag from commit to ack and the events it timed, each retry, halt and dead letter ──

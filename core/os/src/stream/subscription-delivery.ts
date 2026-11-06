@@ -420,7 +420,9 @@ export class SubscriptionDelivery {
    *  `dueBy` — each fan-out record due, and the next page after each row's cursor whose claim is
    *  (a cursor row's batch, a fan-out row's backlog), each at the cause it was stored with
    *  (cause.ts). Only what is due: one deep obligation later never deepens a wake for another.
-   *  Each page is folded in as it is read, so one page is held at a time, never one per due row. */
+   *  Each page is folded in as it is read, so one page is held at a time, never one per due row.
+   *  The clock restarts here: time spent waiting to try again is time spent failing, and takes no
+   *  step off, or a handler that fails on every wake would run for ever at the retries' pace. */
   owedCause(dueBy: number): Cause | undefined {
     const state = this.#stream.coreReducedState;
     const now = Date.now();
@@ -447,7 +449,7 @@ export class SubscriptionDelivery {
         if (claim !== undefined && claim <= dueBy) owe(this.#readFanOutEvent(delivery.offset));
       }
     }
-    return owed;
+    return owed && { ...owed, at: now };
   }
 
   /** The post-commit hook: one pass over the rows. Fire-and-forget from append's view. Answers

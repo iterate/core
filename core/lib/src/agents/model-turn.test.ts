@@ -4,6 +4,7 @@
 // what a request reads once a summary landed after it was recorded. The whole loop on the worker is
 // test/vitest/agents/ (e2e) and agents-workers/ (an eviction mid-call).
 import { expect, test, vi } from "vitest";
+import { codedError } from "../lib.ts";
 import { ProcessorEngine, type StreamEvent, type StreamEventInput } from "../stream/processor.ts";
 import { memoryStorage, memoryStream } from "../stream/test-support.ts";
 import { type AgentConfigPatch, AgentProcessor } from "./processor.ts";
@@ -37,6 +38,30 @@ test.for([
     expect(usage.costUsd !== undefined).toBe(priced);
   },
 );
+
+test("the loop guard's refusal is no model failure: no other key, no retry, and the pause says why", async () => {
+  const keysTried = new Set<string | null>();
+  const { turn, commit, state } = agentWithModel({
+    config: { llm: { apiKeys: KEYS } },
+    fetch: async (request) => {
+      keysTried.add(request.headers.get("authorization"));
+      throw codedError("LOOP_LIMIT", "508: egress refused", { recorded: true });
+    },
+  });
+  const rows = await turn("Count.");
+  expect(keysTried).toMatchObject({ size: 1 });
+  const settled = rows.find((row) => row.type === "events.iterate.com/agent/llm-request-settled")!;
+  expect(settled.payload).toMatchObject({ result: { status: "failed", loopLimit: true } });
+  expect(settled.payload).not.toHaveProperty("failedKeys");
+  const after = await commit(settled);
+  expect(
+    after.find((row) => row.type === "events.iterate.com/agent/paused")?.payload,
+  ).toMatchObject({
+    reason: "the loop guard stopped a chain of reactions running too fast",
+  });
+  expect(JSON.stringify(after)).toContain("the model never heard it");
+  expect(state().pendingLlmRequestTrigger).toBeNull();
+});
 
 test("an agent's service tier is asked for, and an unset one is not sent", async () => {
   for (const serviceTier of ["priority", undefined]) {

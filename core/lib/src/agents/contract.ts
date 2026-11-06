@@ -491,6 +491,9 @@ export const AgentContract = defineProcessorContract({
             status: z.literal("failed"),
             errorMessage: z.string(),
             partialText: z.string().optional(),
+            /** The platform's loop guard refused the call: the model never heard it, and a retry
+             *  in this chain is refused too (core/os cause.ts). */
+            loopLimit: z.literal(true).optional(),
           }),
           z.object({
             status: z.literal("cancelled"),

@@ -12,6 +12,7 @@
 // (measured 2026-10-10). An API key's HTTP request waits far less: there the socket saves little.
 
 import { z } from "zod";
+import { errorCode } from "../lib.ts";
 
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 /** A server event on the agent's socket, as far as `viaSocket` reads it; anything else is
@@ -163,7 +164,8 @@ export async function postResponses<T>(
         return await read(response, attempt);
       });
     } catch (error) {
-      if (signal.aborted) throw error;
+      // the loop guard refuses the turn, not this key
+      if (signal.aborted || errorCode(error) === "LOOP_LIMIT") throw error;
       onKeyFailed({ key: position + 1, keys: apiKeys.length, error: String(error).slice(0, 300) });
       failure = error;
     }

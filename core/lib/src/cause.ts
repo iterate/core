@@ -40,12 +40,13 @@ function newCarrier(): Carrier {
     run(cause, code) {
       // what a call needs only for itself (its hops, the delivery its writes are keyed by) is not
       // kept; the cause is carried unread (`unknown`), so only the fields kept are named
-      const { chain, depth, parent } = (cause ?? {}) as {
+      const { chain, depth, at, parent } = (cause ?? {}) as {
         chain?: unknown;
         depth?: unknown;
+        at?: unknown;
         parent?: unknown;
       };
-      if (loaded) newest = chain === undefined ? undefined : { chain, depth, parent };
+      if (loaded) newest = chain === undefined ? undefined : { chain, depth, at, parent };
       return running.run({ cause }, code);
     },
     current,
@@ -56,17 +57,17 @@ function newCarrier(): Carrier {
       globalThis.fetch = async (input, init) => {
         // the cause is carried unread, so `current()` is `unknown`: the mark reads its fields alone
         const cause = current() as
-          | { chain?: unknown; depth?: unknown; hops?: unknown; parent?: unknown }
+          | { chain?: unknown; depth?: unknown; at?: unknown; hops?: unknown; parent?: unknown }
           | undefined;
         const request = new Request(input, init);
         // the mark alone, never what only a call needs (the delivery its writes are keyed by); a
         // header is bytes, so a parent in other characters than printable ASCII stays behind
         if (cause) {
-          const { chain, depth, hops, parent } = cause;
+          const { chain, depth, at, hops, parent } = cause;
           const ascii = typeof parent === "string" && /^[\x20-\x7e]*$/.test(parent);
           request.headers.set(
             ITERATE_CAUSE_HEADER,
-            JSON.stringify({ chain, depth, hops, ...(ascii && { parent }) }),
+            JSON.stringify({ chain, depth, at, hops, ...(ascii && { parent }) }),
           );
         }
         const answer = await outbound(request);

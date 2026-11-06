@@ -800,15 +800,18 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           };
         if (result.status === "failed")
           // The trigger comes back for the retry, still the same source; the pass caps the retries.
+          // The loop guard's refusal is no failure of the model: nothing is retried, and it pauses.
           return {
             ...state,
             openRequest: null,
             consecutiveLlmFailures: state.consecutiveLlmFailures + 1,
-            pendingLlmRequestTrigger: {
-              offset: open.requestedAtOffset,
-              atMs: Date.parse(event.createdAt),
-              source: open.triggerSource,
-            },
+            pendingLlmRequestTrigger: result.loopLimit
+              ? null
+              : {
+                  offset: open.requestedAtOffset,
+                  atMs: Date.parse(event.createdAt),
+                  source: open.triggerSource,
+                },
           };
         // Expired: the turn is dropped; the person's next words start fresh.
         return { ...state, openRequest: null };
@@ -1195,8 +1198,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       // A LOST TURN IS SAID: a failed attempt or an expired request becomes a note the next turn
       // reads, so the model can tell the person — raising no turn of its own (the retry is the
       // reduce's; `agent` actor, so it resets no breaker).
-      const lost =
-        result.status === "failed"
+      const refused = result.status === "failed" && result.loopLimit;
+      const lost = refused
+        ? `The loop guard refused the model request @${String(requestOffset)}: a chain of reactions ran too fast, and the model never heard it. Paused until the next message.`
+        : result.status === "failed"
           ? failedRequestNote({
               requestOffset,
               attempt: state.consecutiveLlmFailures,
@@ -1216,6 +1221,17 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               content: lost,
               actor: { type: "agent" },
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          }),
+        );
+      if (refused && open?.requestedAtOffset === requestOffset)
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/paused",
+            idempotencyKey: this.idempotencyKey(`pause/${String(requestOffset)}`),
+            payload: {
+              reason: "the loop guard stopped a chain of reactions running too fast",
+              triggerOffset: requestOffset,
             },
           }),
         );
@@ -1776,6 +1792,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           status: "failed",
           errorMessage: String(error instanceof Error ? error.message : error).slice(0, 4_000),
           partialText: inFlight.partialText || undefined,
+          ...(errorCode(error) === "LOOP_LIMIT" && { loopLimit: true as const }),
         });
         return;
       }

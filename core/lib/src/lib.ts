@@ -83,6 +83,24 @@ export const ITERATE_CAUSE_HEADER = "X-Iterate-Cause";
 /** What marks a 508 as an act refused past the loop limit (core/os unavailable.ts). */
 export const LOOP_LIMIT_HEADER = "iterate-loop-limit";
 
+/** The loop guard counts speed, not age (core/os cause.ts): a chain loses a step every this long. */
+export const STEP_FORGIVEN_EVERY_MS = 2 * 60_000;
+
+/** THE ONE +1: `cause` one hand-off deeper, less a step for every STEP_FORGIVEN_EVERY_MS since its
+ *  `at`, whose remainder it keeps. Work that waits keeps pace with the clock and never goes deep. */
+export function oneStepDeeper<Cause extends { depth: number; at?: number }>(cause: Cause) {
+  const now = Date.now();
+  const since = cause.at ?? now;
+  // never below 0: a cause minted on another machine can carry a clock a moment ahead of this one
+  const forgiven = Math.max(0, Math.floor((now - since) / STEP_FORGIVEN_EVERY_MS));
+  const depth = Math.max(0, cause.depth - forgiven);
+  return {
+    ...cause,
+    depth: depth + 1,
+    at: depth === 0 ? now : since + forgiven * STEP_FORGIVEN_EVERY_MS,
+  };
+}
+
 /** An answer refused past the loop limit — a 508 marked so — as the LOOP_LIMIT refusal it is,
  *  already recorded where it was met; none for any other answer. */
 export async function loopLimitOf(answer: Response): Promise<Error | undefined> {

@@ -50,7 +50,7 @@
 // over durable rows only, which is why durable product truth must never derive from an ephemeral.
 
 import type { SqlStorageValue } from "@cloudflare/workers-types";
-import { reportIssue, jsonEqual, codedError, diff, errorCode } from "../lib.ts";
+import { codedError, diff, errorCode, jsonEqual, oneStepDeeper, reportIssue } from "../lib.ts";
 import { runCausedBy } from "../cause.ts";
 import type { Principal } from "../principal.ts";
 import type { EmittedEventInput, ProcessorContract } from "./contract.ts";
@@ -718,7 +718,7 @@ export class ProcessorEngine<State> {
     if (event?.source?.cause)
       this.#headCause = { ...event.source.cause, parent: `${event.path}@${event.offset}` };
     const own = this.#headCause;
-    const beyond = own && { ...own, depth: own.depth + 1 };
+    const beyond = own && oneStepDeeper(own);
     const under = <T>(cause: EventCause | undefined, work: () => T): T => runCausedBy(cause, work);
     under(beyond, () =>
       this.processor.processEvent({
@@ -776,7 +776,7 @@ export class ProcessorEngine<State> {
 
 /** Why an event happened (`source.cause`): its chain, its depth, and the event whose handling wrote
  *  it (`<path>@<offset>`), if any. */
-type EventCause = { chain: string; depth: number; parent?: string };
+type EventCause = { chain: string; depth: number; at?: number; parent?: string };
 
 /** Points at one event. `path` and `offset` alone pick it out; `createdAt` and `type` come along
  *  because a reader almost always wants them too. */
@@ -804,7 +804,7 @@ export type StreamEventInput = {
     origin?: string;
     /** WHY IT HAPPENED, stamped by the platform (a writer's own is dropped): the chain of reactions
      *  it belongs to — when and where that began — how many hand-offs deep in it, and the event
-     *  whose handling wrote it. Past 8, code reacting to code may read but not act, and the
+     *  whose handling wrote it. Past the limit, code reacting to code may read but not act, and the
      *  `itx/loop-limit` fact says where it stopped. */
     cause?: EventCause;
     /** The durable schedule definition responsible for this occurrence. */

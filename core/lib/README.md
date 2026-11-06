@@ -125,10 +125,11 @@ Words from `/` (a member's session, the dash) read as a person's, with no sender
 context whose code ran, not who asked it to run (core/os `caller.ts` `stampCaller` says why that
 makes it advisory). Batch writes: `append(...events)` is one commit, however many events it carries.
 
-Runaway reactions stop on their own: code that reacts to other code's output round after round —
-two agents answering each other, a handler that appends what it handles — is stopped after a few
-rounds with one error naming where the chain of reactions began, and the context records one
-`itx/loop-limit` fact. Reading still works.
+Runaway reactions stop on their own: code that reacts to other code's output faster than the clock
+— two agents answering each other at once, a handler that appends what it handles — is stopped with
+one error naming where the chain of reactions began, and the context records one `itx/loop-limit`
+fact. Reading still works. What counts is speed: each hand-off adds a step and every two minutes
+takes one away, so a job that waits, like one that re-arms itself for tomorrow, never trips it.
 
 The exception is a jail, a context with a bare `itx ⇒ null` row plus the grants beside it. A bare
 jail is closed both ways: its code appends nowhere, and no code appends into it. Grant it
