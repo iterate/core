@@ -79,6 +79,13 @@ export const ConsentApproved = z.object({
   scopes: z.array(z.string()),
 });
 export type ConsentApproved = z.infer<typeof ConsentApproved>;
+/** `events.iterate.com/account/identity-confirmed`: the person confirmed who they are to a client
+ *  at the identity card (consent.ts), which the issuer then answers at once for that client
+ *  (`describe`). Keyed by the grant the approval minted. `identity-forgotten` ends it (grants.ts
+ *  `forgetIdentity`): the card shows again. */
+export const IdentityConfirmed = z.object({ clientId: z.string().min(1), clientName: z.string() });
+export type IdentityConfirmed = z.infer<typeof IdentityConfirmed>;
+const IdentityForgotten = z.object({ clientId: z.string().min(1) });
 /** A platform admin signed a client in as someone (consent.ts `#impersonate`): ONE record, landed on
  *  both accounts — `events.iterate.com/account/impersonation-started` on the person's,
  *  `events.iterate.com/account/impersonation-performed` on the admin's, each stamped with the admin
@@ -105,7 +112,7 @@ export const AccountContract = defineProcessorContract({
   slug: "account",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "9",
+  version: "10",
   description:
     "The user's account: authentications, personal access tokens, ended and used grants, consents, the catalog of the user's own secrets and the lends of them, and the person's own connections.",
   /** THE REDUCED STATE — the record of the account, folded from the facts above: what a client
@@ -130,6 +137,11 @@ export const AccountContract = defineProcessorContract({
     grantUses: z.record(z.string(), z.object({ at: z.number() })).default({}),
     /** Every consent approved, in order: the client and what it was given. */
     consents: z.array(ConsentApproved.extend({ at: z.string() })).default([]),
+    /** The clients the person confirmed who they are to, by client id: the Dash lists them as
+     *  "Sites that know who you are", and consent answers them without the card. */
+    identityConfirmations: z
+      .record(z.string(), z.object({ clientName: z.string(), at: z.string() }))
+      .default({}),
     /** Every secret set under this owner (src/secret/contract.ts): what `itx.secrets.list()` reads here. */
     secrets: SecretCatalog.default({}),
     /** The person's own connections (src/integrations/contract.ts), by log path: a sign-in that kept
@@ -160,6 +172,16 @@ export const AccountContract = defineProcessorContract({
       description: "The person approved a client at consent (platform fact).",
       payloadSchema: ConsentApproved,
     },
+    "events.iterate.com/account/identity-confirmed": {
+      description:
+        "The person confirmed who they are to a client at the identity card (platform fact).",
+      payloadSchema: IdentityConfirmed,
+    },
+    "events.iterate.com/account/identity-forgotten": {
+      description:
+        "The person ended a client's confirmation of who they are: its identity card shows again (platform fact).",
+      payloadSchema: IdentityForgotten,
+    },
     "events.iterate.com/account/impersonation-started": {
       description:
         "A platform admin signed a client in as the person, for an hour (platform fact, audit only).",
@@ -181,6 +203,8 @@ export const AccountContract = defineProcessorContract({
     "events.iterate.com/account/grant-ended",
     "events.iterate.com/account/grant-used",
     "events.iterate.com/account/consent-approved",
+    "events.iterate.com/account/identity-confirmed",
+    "events.iterate.com/account/identity-forgotten",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
     "events.iterate.com/secret/lent",

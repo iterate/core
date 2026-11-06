@@ -28,6 +28,10 @@ type StoredSession = Pending | Active;
 /** Each app binds this same class. Token exchange and logout use the issuer's
  * public protocol, so separately deployed apps need no platform bindings.
  * One queue serializes sign-in, refresh, logout and expiry across tabs (`#serial`). */
+/** What an issuer answers a `prompt=none` authorization it cannot complete without showing a page
+ *  (OpenID Connect Core 1.0, 3.1.2.6). */
+const SILENT_REFUSALS = new Set(["login_required", "interaction_required"]);
+
 export class BrowserSession extends DurableObject {
   /** The operation that runs last, settled either way: the next one starts after it. */
   #last: Promise<unknown> = Promise.resolve();
@@ -106,6 +110,9 @@ export class BrowserSession extends DurableObject {
         // pending flow to be retried from a genuine browser.
         if (error instanceof oauth.AuthorizationResponseError) {
           await this.#clear();
+          // a silent sign-in (`prompt=none`) the issuer could not answer without a page: no
+          // refusal, the flow's `next` carries on without it (app-server.ts `/.auth/connect`)
+          if (SILENT_REFUSALS.has(error.error)) return { next: data.next, signedIn: false };
           return { error: "Authorization was declined." };
         }
         return {

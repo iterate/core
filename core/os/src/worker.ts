@@ -49,6 +49,8 @@ import {
   iterateSignInClientMetadata,
   iterateSignInResponse,
 } from "./iterate-sign-in.ts";
+import { ITERATE_APPS_PATH, iterateAppsOf } from "./iterate-apps.ts";
+import { silentAuthorizeResponse } from "./silent-authorize.ts";
 import { localSignInResponse } from "./local-sign-in.ts";
 import { testLinkResponse } from "./test-link-sign-in.ts";
 import { cloudflareAccessSignInResponse } from "./cloudflare-access-sign-in.ts";
@@ -492,6 +494,15 @@ async function routeRequest(
   // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a deploy's
   // readiness check waits for — and the origin this deployment answers on.
   if (url.pathname === "/version") return new Response(`${deployId} ${platformOrigin}\n`);
+  // An authorization that asks for no page (silent-authorize.ts), before the consent page's route.
+  const silent = await silentAuthorizeResponse(request, env, ctx);
+  if (silent) return silent;
+  // This deployment's own apps, for a deployment that signs people in through this one
+  // (iterate-apps.ts).
+  if (url.pathname === ITERATE_APPS_PATH)
+    return Response.json(iterateAppsOf(iterateConfig), {
+      headers: { "cache-control": "public, max-age=300" },
+    });
   // Log in with iterate (iterate-sign-in.ts), through another deployment that vouches for who a
   // browser is: its start, that issuer's answer, and this deployment's client metadata document,
   // which the issuer fetches. None of them exists where `login.methods.iterate` is unset.

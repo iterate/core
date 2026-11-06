@@ -46,6 +46,10 @@ export const GrantProps = z.object({
    *  person's, and the admin is stamped beside them on every call — `Principal.impersonatedBy`, the
    *  same shape. */
   impersonatedBy: z.object({ actor: z.string().startsWith("user_"), email: z.string() }).optional(),
+  /** An issuer session started by log in with iterate (iterate-sign-in.ts): that issuer's origin.
+   *  Its own apps are approved for this session with no consent page (consent.ts
+   *  `#approveIssuersOwnApp`). */
+  signedInVia: z.string().optional(),
 });
 export type GrantProps = z.infer<typeof GrantProps>;
 

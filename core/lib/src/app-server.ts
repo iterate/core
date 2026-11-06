@@ -4,16 +4,23 @@
 // deployment's own (`config.issuer`), or any Iterate issuer a person CONNECTS the app to on purpose (a
 // self-hosted platform). Connecting is deliberate: a same-origin POST, from `/.auth/connect`, a page
 // that names the issuer and asks, or from the app's own page where a person picked or typed it —
-// never a link, because a link would be a forced login: it could
-// bind a browser to an issuer of the linker's choosing, and the app would then show that issuer's
-// world as the person's. Once a session exists, its record is the ONLY source of where the credential
-// goes (`BrowserSession.host()`): the login probe, the `/api` proxy and logout all read it there.
+// never a link alone, because a link would be a forced login: it could bind a browser to an issuer
+// of the linker's choosing, and the app would then show that issuer's world as the person's. The one
+// exception is the person's own choice made before: a platform they confirmed who they are to, as
+// the deployment's own issuer says (`confirmedTo`). Once a session exists, its record is the ONLY
+// source of where the credential goes (`BrowserSession.host()`): the login probe, the `/api` proxy
+// and logout all read it there.
 import { newHttpBatchRpcSession } from "capnweb";
 import type { BrowserHost, BrowserSession } from "./app-session.ts";
 import type { IterateApi } from "./api.ts";
 import { cookieValueOf, isSameOriginBrowserRequest, sameOriginPath } from "./lib.ts";
 import { OAuthScopes } from "./oauth-scopes.ts";
 import { plainPageCssHash, standalonePage } from "./standalone-page.ts";
+
+/** Where a platform's log in with iterate keeps its client document (core/os iterate-sign-in.ts):
+ *  the client id a person confirmed who they are to, which `/.auth/connect` asks about. */
+export const ITERATE_SIGN_IN_PATH = "/.auth/sign-in/iterate";
+export const ITERATE_SIGN_IN_CLIENT_PATH = `${ITERATE_SIGN_IN_PATH}/client.json`;
 
 /** The port separates local apps sharing localhost's cookie jar. */
 export function sessionCookieName(url: URL) {
@@ -382,6 +389,67 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     }
     return host;
   };
+  /** A switch away from the session this browser holds: end it at the issuer it was with (best
+   *  effort — that issuer may be gone), then forget it here either way, so no grant of it stays
+   *  live behind the cookie that replaces it. */
+  const endHeld = async () => {
+    try {
+      await session!.end();
+    } catch {
+      await session!.discard();
+    }
+  };
+  /** Bind this browser to `origin` and sign in there, as the connect page's Continue does: the
+   *  issuer is asked first whether it answers as one, and a sign-in held elsewhere is ended. */
+  const connectTo = async (origin: string, next: string, scopes: string[], loginHint: string) => {
+    if (origin !== issuer) {
+      const refused = await issuerAnswersAt(origin);
+      if (refused) return refusalPage(issuer, refused);
+    }
+    const host = await held();
+    if (host?.issuer === origin)
+      return onwardPage(
+        `/.auth/login?${signInQuery({ next, scope: scopes.join(" ") }, loginHint)}`,
+      );
+    if (host) await endHeld();
+    const { location, setCookie } = await startAppSession(
+      sessions,
+      {
+        origin: url.origin,
+        client,
+        issuer: origin,
+        resource: `${origin}/api`,
+        scopes,
+      },
+      next,
+    );
+    const authorize = new URL(location);
+    if (loginHint) authorize.searchParams.set("login_hint", loginHint);
+    return onwardPage(signInLocationOf(authorize, loginParamOf(next, url.origin, "prompt")), {
+      "Set-Cookie": setCookie,
+    });
+  };
+  /** Whether the person this browser is signed in as at the deployment's own issuer has confirmed who
+   *  they are to `origin`'s log in with iterate (`ITERATE_SIGN_IN_CLIENT_PATH`): that platform is one
+   *  they chose before, so the connect page need not ask. One bounded HTTP-batch read, best effort:
+   *  any failure asks. */
+  const confirmedTo = async (host: { issuer: string; resource: string }, origin: string) => {
+    try {
+      const bearer = await session!.bearer();
+      if (!bearer) return false;
+      // oxlint-disable-next-line iterate/no-capnweb-http-batch -- One bounded read, no live capabilities.
+      using api = newHttpBatchRpcSession<IterateApi>(
+        new Request(host.resource, {
+          headers: { Authorization: `Bearer ${bearer}` },
+          signal: AbortSignal.timeout(5_000),
+        }),
+      );
+      using signedIn = api.authenticate({ type: "bearer", token: bearer });
+      return await signedIn.identityConfirmedTo(`${origin}${ITERATE_SIGN_IN_CLIENT_PATH}`);
+    } catch {
+      return false;
+    }
+  };
   if (url.pathname === "/.auth/client.json")
     return Response.json(
       {
@@ -429,13 +497,55 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
             "Cache-Control": "no-store",
           },
         });
+      // with no session at the deployment's own issuer to ask through, one is got first by
+      // redirects alone (`prompt=none`, only who the person is), back to this page marked
+      // `checked` so it is asked once: an issuer that would need a page answers at once. A browser
+      // bound to the named platform already keeps its sign-in.
+      const unasked =
+        named.origin !== issuer &&
+        host?.issuer !== issuer &&
+        host?.issuer !== named.origin &&
+        !url.searchParams.has("checked");
+      if (unasked) {
+        // the silent session's cookie replaces the one held: that sign-in ends first
+        if (host) await endHeld();
+        const back = new URL(url);
+        back.searchParams.set("checked", "1");
+        const silent = await startAppSession(
+          sessions,
+          { origin: url.origin, client, issuer, resource, scopes: ["identity"] },
+          back.pathname + back.search,
+        );
+        const authorize = new URL(silent.location);
+        authorize.searchParams.set("prompt", "none");
+        return new Response(null, {
+          status: 303,
+          headers: {
+            Location: authorize.href,
+            "Set-Cookie": silent.setCookie,
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+      // a platform the person confirmed who they are to, as the deployment's own issuer says, is
+      // theirs: on at once
+      if (host?.issuer === issuer && (await confirmedTo(host, named.origin))) {
+        const asked = OAuthScopes.safeParse(
+          scope ? scope.split(" ").filter(Boolean) : config.scopes || [],
+        );
+        if (asked.success) return connectTo(named.origin, next, asked.data, loginHint || "");
+      }
+      // the silent sign-in's session knows only who the person is: it goes, so the page leaves
+      // this browser as it found it
+      const silent = host?.issuer === issuer && (await session!.scopes()).join(" ") === "identity";
+      if (silent) await session!.end().catch(() => session!.discard());
       return connectPage({
         url,
         origin: named.origin,
         next,
         scope,
         loginHint,
-        held: host,
+        held: silent ? null : host,
         defaultIssuer: issuer,
       });
     }
@@ -455,40 +565,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     const parsed = OAuthScopes.safeParse(posted.length ? posted : config.scopes || []);
     if (!parsed.success) return refusalPage(issuer, "Unsupported permission.");
     const loginHint = String(form.get("login_hint") || "");
-    if (named.origin !== issuer) {
-      const refused = await issuerAnswersAt(named.origin);
-      if (refused) return refusalPage(issuer, refused);
-    }
-    const host = await held();
-    if (host?.issuer === named.origin)
-      return onwardPage(
-        `/.auth/login?${signInQuery({ next, scope: parsed.data.join(" ") }, loginHint)}`,
-      );
-    if (host) {
-      // a deliberate switch: end the sign-in at the issuer it was with (best effort — that issuer
-      // may be gone), then forget it here either way
-      try {
-        await session!.end();
-      } catch {
-        await session!.discard();
-      }
-    }
-    const { location, setCookie } = await startAppSession(
-      sessions,
-      {
-        origin: url.origin,
-        client,
-        issuer: named.origin,
-        resource: `${named.origin}/api`,
-        scopes: parsed.data,
-      },
-      next,
-    );
-    const authorize = new URL(location);
-    if (loginHint) authorize.searchParams.set("login_hint", loginHint);
-    return onwardPage(signInLocationOf(authorize, loginParamOf(next, url.origin, "prompt")), {
-      "Set-Cookie": setCookie,
-    });
+    return connectTo(named.origin, next, parsed.data, loginHint);
   }
 
   if (url.pathname === "/.auth/login") {
@@ -599,7 +676,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
   if (url.pathname === "/.auth/callback") {
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
     const result = await session?.complete(url.search);
-    if (!result || result.error)
+    if (!result || "error" in result)
       return new Response(result?.error || "Sign-in does not match this browser.", {
         status: 400,
         headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },

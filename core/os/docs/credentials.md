@@ -67,6 +67,40 @@ address then signs in here as any sign-in does: only when `login.allow` admits i
 `adminsOnly` only when `admins` lists it too. The person's sessions here are this deployment's own:
 signing out at the issuer ends none of them.
 
+From the issuer's Dash into such a deployment is straight through: the one click, ever, is the
+identity card the first time. Three rules make it so.
+
+- **The issuer remembers an identity confirmation.** Approving the identity card records
+  `account/identity-confirmed` for that client on the person's account. Consent answers that
+  client's next identity request at once (`src/consent.ts`). The Dash lists these under Sessions as
+  "Sites that know who you are", where **Forget** shows the card again next time.
+- **The deployment approves the issuer's own apps.** The issuer serves its first-party apps' client
+  ids at `/.well-known/iterate-apps.json` (its `urls.dash` and `urls.apps`, `src/iterate-apps.ts`).
+  A deployment whose session for the person was started by log in with iterate approves those
+  clients with no consent page: the scopes asked for but `admin`, every project. Sessions says the
+  grant was approved because the person signed in with that issuer. The deployment keeps the list
+  for five minutes.
+- **The Dash goes straight on.** Its `/.auth/connect` asks its own issuer, through the Dash's
+  session there, whether the person confirmed who they are to the deployment's sign-in client
+  (`<deployment>/.auth/sign-in/iterate/client.json`). When they did, the Dash binds to the
+  deployment with no page (iterate/app-server `confirmedTo`). With no session at its issuer to ask
+  through, the Dash first gets one by redirects alone: an authorization with `prompt=none` that
+  asks only who the person is, back to the connect URL marked `checked=1` so it is asked once.
+  When the person never confirmed, the connect page shows as before, and that session goes.
+
+The issuer answers an authorization with `prompt=none` (OpenID Connect) with no page at all
+(`src/silent-authorize.ts`). A browser with no session there goes back to the client with
+`error=login_required`. A request it answers without a page goes on: an identity confirmed before,
+one of its own apps asking only who a signed-in person is, or a deployment's issuer's own app. Any
+other goes back with `error=interaction_required`. Each answer carries the request's `state`.
+
+The chain the Cloud's **Open** starts is the deployment's deep link,
+`<deployment>/.auth/sign-in/iterate?next=/`. The issuer shows the identity card the first time and
+answers at once after that. The deployment signs the person in. Its `/` sends the page on to the
+Dash's connect for it, which signs the Dash in at the issuer silently, asks, and binds to the
+deployment. The deployment then approves the Dash, which shows the deployment. A deployment's
+`next` never leaves its own origin, which is why the chain goes through the deployment's `/`.
+
 ## Personal access tokens
 
 A personal access token is iterate's own API key, the kind a SaaS product lets you make in its

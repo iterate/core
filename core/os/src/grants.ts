@@ -29,6 +29,9 @@ const DisplayMetadata = z.object({
   clientDomain: z.string().optional(),
   /** a platform admin's sign-in as the person (consent.ts `#impersonate`): the admin's email */
   impersonatedBy: z.string().optional(),
+  /** approved with no consent page, because the person signed in here through that issuer's log in
+   *  with iterate and the client is one of its own apps (consent.ts `#approveIssuersOwnApp`) */
+  approvedThrough: z.string().optional(),
 });
 const MintInput = z.object({
   name: z.string().trim().min(1).max(100),
@@ -99,6 +102,18 @@ export class GrantsRpcTarget extends RpcTarget {
       reportIssue("personal-access-token.unindex-failed", error, { id });
     }
   }
+  /** A site the person confirmed who they are to (consent.ts `#confirmIdentity`) is forgotten: its
+   *  identity card shows again next time. Keyed afresh, so a site confirmed again is forgotten
+   *  again. */
+  async forgetIdentity(clientId: string) {
+    const { sub } = this.#account();
+    await this.#land(sub, {
+      type: "events.iterate.com/account/identity-forgotten",
+      idempotencyKey: `account/identity-forgotten/${crypto.randomUUID()}`,
+      payload: { clientId: z.string().min(1).parse(clientId) },
+    });
+  }
+
   /** Any client can end its own grant, and a personal access token its own key. It cannot address
    *  another user's session. */
   async endCurrent() {
@@ -161,6 +176,7 @@ export class GrantsRpcTarget extends RpcTarget {
           logoUri: metadata.logoUri,
           clientDomain: metadata.clientDomain,
           impersonatedBy: metadata.impersonatedBy,
+          approvedThrough: metadata.approvedThrough,
           kind: grant.expiresAt ? "session" : "pending",
           resource: resourceNames.get(String(grant.resource)),
           createdAt: grant.createdAt * 1000,

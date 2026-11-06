@@ -47,7 +47,7 @@ export async function startIssuerSession(
   next: string,
   /** what the identity provider said about the person (Google's profile; an email sign-in has
    *  none), which the grant carries beside them */
-  extras: Pick<GrantProps, "picture" | "name"> = {},
+  extras: Pick<GrantProps, "picture" | "name" | "signedInVia"> = {},
 ): Promise<{ setCookie: string; location: string } | { error: string }> {
   startAccount(env, user.id);
   const addresses = platformAddressesOf(env, request);
@@ -92,6 +92,7 @@ export async function startIssuerSession(
         email: user.email,
         picture: extras.picture,
         name: extras.name,
+        signedInVia: extras.signedInVia,
         projects: null,
         deadline: Date.now() + 30 * 24 * 3600_000,
       } satisfies GrantProps,

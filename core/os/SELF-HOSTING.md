@@ -249,7 +249,10 @@ a [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
   another app may link to straight. As the only method, a signed-out visit skips the sign-in page
   and goes straight to the issuer. `adminsOnly: true` admits only the addresses `admins` lists (a
   preview's, through prd). It can stand beside `cloudflareAccess`, so people can still sign in when
-  the issuer is down.
+  the issuer is down. A person who signed in this way meets no consent page for the issuer's own
+  apps (its Dash), and the issuer asks who they are only the first time
+  ([credentials](docs/credentials.md#signing-in-through-another-deployment)). A deployment that is
+  an issuer itself names its own apps beside its Dash in `urls.apps`.
 
 ## Integrations
 

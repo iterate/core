@@ -64,6 +64,21 @@ export class AccountProcessor extends StreamProcessor<
           ...state,
           consents: [...state.consents, { ...event.payload, at: event.createdAt }],
         };
+      case "events.iterate.com/account/identity-confirmed": {
+        const { clientId, clientName } = event.payload;
+        if (state.identityConfirmations[clientId]) return undefined;
+        return {
+          ...state,
+          identityConfirmations: {
+            ...state.identityConfirmations,
+            [clientId]: { clientName, at: event.createdAt },
+          },
+        };
+      }
+      case "events.iterate.com/account/identity-forgotten": {
+        const { [event.payload.clientId]: forgotten, ...rest } = state.identityConfirmations;
+        return forgotten ? { ...state, identityConfirmations: rest } : undefined;
+      }
       case "events.iterate.com/secret/set":
       case "events.iterate.com/secret/deleted":
       case "events.iterate.com/secret/lent":

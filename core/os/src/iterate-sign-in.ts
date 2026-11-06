@@ -20,6 +20,7 @@ import * as oauth from "oauth4webapi";
 import { z } from "zod";
 import { cookieValueOf, sameOriginPath } from "iterate/lib";
 import { authorizationCodeRequest, authorizationServer } from "iterate/oauth";
+import { ITERATE_SIGN_IN_CLIENT_PATH, ITERATE_SIGN_IN_PATH } from "iterate/app-server";
 import { emailAllowed, EMAIL_NOT_ALLOWED_MESSAGE } from "./allowed-emails.ts";
 import {
   iterateConfigOf,
@@ -38,9 +39,8 @@ import { watchSignInStep } from "./sign-in-watch.ts";
 /** Where the sign-in starts (`?next=`, a path on this origin), where the issuer sends the browser
  *  back, and where this deployment's CIMD document is — each answered by worker.ts only where
  *  `login.methods.iterate` is set. */
-export const ITERATE_SIGN_IN_PATH = "/.auth/sign-in/iterate";
+export { ITERATE_SIGN_IN_CLIENT_PATH, ITERATE_SIGN_IN_PATH };
 export const ITERATE_SIGN_IN_CALLBACK_PATH = `${ITERATE_SIGN_IN_PATH}/callback`;
-export const ITERATE_SIGN_IN_CLIENT_PATH = `${ITERATE_SIGN_IN_PATH}/client.json`;
 
 /** Whether `issuer` is the origin this request reached the deployment on: a sign-in there would
  *  start again at itself. */
@@ -167,7 +167,9 @@ export async function iterateSignInCallbackResponse(
     "ensure-user",
     new ControlPlane(env).ensureUser(checked.email),
   );
-  const session = await startIssuerSession(env, request, user, checked.next);
+  const session = await startIssuerSession(env, request, user, checked.next, {
+    signedInVia: issuer,
+  });
   if ("error" in session) return refused(session.error, checked.next);
   console.info({ event: "iterate-sign-in.signed-in", email: checked.email });
   const headers = new Headers({

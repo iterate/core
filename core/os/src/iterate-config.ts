@@ -246,6 +246,10 @@ export const IterateConfig = z.object({
        *  origin being headless. Default: iterate's, which signs in to any deployment. `""` ⇒ the
        *  page names no dash. */
       dash: z.union([z.literal(""), httpOrigin]).default(DEFAULT_DASH),
+      /** THIS DEPLOYMENT'S OWN APPS beside the Dash, by origin (`https://agents.iterate.com`): a
+       *  deployment that signs people in through this one approves them without its consent page
+       *  (iterate-apps.ts). Default: none. */
+      apps: z.array(httpOrigin).default([]),
       /** The deployment's own esm.sh, which module resolution tries before public esm.sh
        *  (context/module-resolution.ts). Blank ⇒ public esm.sh alone. */
       esm: optionalOrigin,

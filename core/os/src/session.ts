@@ -537,6 +537,22 @@ export class SessionRpcTarget extends RpcTarget {
     return this.#authority.principal;
   }
 
+  /** Whether the session's person has confirmed who they are to `clientId` (consent.ts
+   *  `#confirmIdentity`): an app's gate goes straight on to a platform the person signed in to
+   *  this way before (iterate/app-server `/.auth/connect`). Nobody's for a credential that names
+   *  no person. */
+  async identityConfirmedTo(clientId: string): Promise<boolean> {
+    const { principal } = this.#authority;
+    if (!principal.email) return false;
+    const account = ownerContext(
+      this.#input.contextNamespace,
+      { account: principal.actor },
+      "session",
+    );
+    const state = await facetStateOf<AccountState>(account, "account", { principal: null });
+    return Boolean(state.identityConfirmations[z.string().parse(clientId)]);
+  }
+
   /** The operator's project-seed CLI. User sessions, including impersonated users, cannot
    * export secret cells. Address the native context directly, outside project rewrites. */
   async exportProjectSecretForSeed(projectRef: string, path: string): Promise<unknown> {

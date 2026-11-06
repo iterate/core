@@ -1585,6 +1585,9 @@ export interface GrantRecord {
   mintedBy?: string;
   /** A platform admin's sign-in as this person: the admin's email. */
   impersonatedBy?: string;
+  /** Approved with no consent page, because the person signed in through this issuer's log in with
+   *  iterate and the client is one of the issuer's own apps: that issuer's origin. */
+  approvedThrough?: string;
 }
 
 /** What the consent screen shows for an authorization request. */
@@ -1646,6 +1649,9 @@ export interface ProjectRecord {
 /** The session `authenticate` vends: who is calling, and the contexts they reach. */
 export interface IterateSessionApi {
   whoami(): Principal;
+  /** Whether this session's person confirmed who they are to the client `clientId` at the identity
+   *  card: an app's `/.auth/connect` goes straight on to a platform whose sign-in client it is. */
+  identityConfirmedTo(clientId: string): Promise<boolean>;
   /** Safe bootstrap data for every app, regardless of which host serves it. */
   info(): {
     principal: Principal;
@@ -1682,6 +1688,8 @@ export interface IterateSessionApi {
     }>;
     end(grantId: string): Promise<unknown>;
     endCurrent(): Promise<unknown>;
+    /** Forget a site the person confirmed who they are to: its identity card shows again. */
+    forgetIdentity(clientId: string): Promise<void>;
     mint(input: {
       name: string;
       /** project ids, each one the person reaches */

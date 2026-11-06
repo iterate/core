@@ -15,12 +15,17 @@ import {
 } from "iterate/oauth-scopes";
 import type { IngressRouting } from "iterate/project-ingress";
 import { suggestOrganizationName } from "./name-suggestions.ts";
-import { type ConsentApproved, type Impersonation } from "./account/contract.ts";
+import {
+  type ConsentApproved,
+  type IdentityConfirmed,
+  type Impersonation,
+} from "./account/contract.ts";
 import type { Env } from "./env.ts";
 import type { OrganizationRecord, ProjectRecord, UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { isSiblingOfPlatform, iterateConfigOf, type PlatformAddresses } from "./iterate-config.ts";
 import {
+  accountStateOf,
   grantIsLive,
   isAdmin,
   oauthHelpers,
@@ -29,6 +34,7 @@ import {
   type GrantProps,
 } from "./oauth.ts";
 import { clientDisplay } from "./client-display.ts";
+import { issuersOwnApps } from "./iterate-apps.ts";
 import { appendPlatformFacts, publishPlatformFacts } from "./session.ts";
 
 export type ConsentView =
@@ -225,6 +231,35 @@ export class ConsentRpcTarget extends RpcTarget {
       denied.searchParams.set("error_description", "The user declined access.");
       if (request.state) denied.searchParams.set("state", request.state);
       if (request.issuer) denied.searchParams.set("iss", request.issuer);
+      // one of this deployment's own apps asking, silently, only who a signed-in person is: at once,
+      // and nothing to remember (silent-authorize.ts)
+      if (
+        identify &&
+        new URLSearchParams(query).get("prompt") === "none" &&
+        isOwnApp(
+          request,
+          this.#addresses.platformOrigin,
+          (
+            await projectsForClient(
+              env,
+              this.#addresses.platformOrigin,
+              request.clientId,
+              this.#grant.userId,
+            )
+          ).projectBound,
+        )
+      ) {
+        const approved = await this.#confirmIdentity(request, client, { remember: false });
+        return { kind: "redirect", location: approved.redirectTo };
+      }
+      // a client the person already confirmed who they are to is answered at once (`#confirmIdentity`)
+      if (
+        identify &&
+        (await accountStateOf(env, this.#grant.userId)).identityConfirmations[request.clientId]
+      ) {
+        const approved = await this.#confirmIdentity(request, client);
+        return { kind: "redirect", location: approved.redirectTo };
+      }
       if (identify)
         return {
           kind: "identify",
@@ -246,7 +281,9 @@ export class ConsentRpcTarget extends RpcTarget {
         request.clientId,
         this.#grant.userId,
       );
-      const approved = await this.#testLinkApproval(request, client, bound.projectBound);
+      const approved =
+        (await this.#testLinkApproval(request, client, bound.projectBound)) ||
+        (await this.#approveIssuersOwnApp(request, client, bound.projectBound));
       if (approved) return { kind: "redirect", location: approved.redirectTo };
       return {
         kind: "consent",
@@ -294,6 +331,28 @@ export class ConsentRpcTarget extends RpcTarget {
     )
       return null;
     return this.#complete(request, client, null, this.#grantable(request, projectBound));
+  }
+
+  /** One of the trusted issuer's own apps, for a person whose session here that issuer's log in with
+   *  iterate started (iterate-sign-in.ts, `signedInVia`): approved at once, as the person would at
+   *  the page — the scopes asked for but `admin`, every project — and named so in Sessions
+   *  (`approvedThrough`). The issuer says which apps are its own (iterate-apps.ts). */
+  async #approveIssuersOwnApp(
+    request: AuthRequest,
+    client: ClientInfo | null,
+    projectBound: boolean,
+  ) {
+    const via = this.#grant.signedInVia;
+    if (
+      !via ||
+      via !== iterateConfigOf(this.#env).login.methods.iterate?.issuer ||
+      projectBound ||
+      request.resource !== this.#addresses.api ||
+      !(await issuersOwnApps(via)).includes(request.clientId)
+    )
+      return null;
+    const scopes = request.scope.filter((scope) => scope !== "admin");
+    return this.#complete(request, client, null, scopes, undefined, { approvedThrough: via });
   }
 
   /** What an admin's "Sign in as someone else…" offers for `request` (`ConsentView`'s
@@ -354,9 +413,7 @@ export class ConsentRpcTarget extends RpcTarget {
       if (request.resource === this.#addresses.userinfo || !request.scope.includes("iterate")) {
         if (data.impersonate)
           return { error: "Signing in as someone else is not for this client." };
-        return request.resource === this.#addresses.userinfo
-          ? await this.#complete(request, client, [], ["iterate"], IDENTIFY_GRANT_MS)
-          : await this.#complete(request, client, [], ["identity"]);
+        return await this.#confirmIdentity(request, client);
       }
       if (data.impersonate) return await this.#impersonate(request, client, data.impersonate);
       const { projects, projectBound } = await projectsForClient(
@@ -479,6 +536,41 @@ export class ConsentRpcTarget extends RpcTarget {
   /** Grant `client` the `projects` (null = every current and future one) and `scope`, and record
    *  the fact of the approval on the person's account context, stamped with them and the issuer
    *  grant they approved through. */
+  /** THE IDENTITY CARD'S APPROVAL: a grant of who the person is (ten minutes for the userinfo
+   *  resource, the usual lifetime for `identity`), and, unless `remember` is false, the fact that
+   *  they confirmed it to this client, which `describe` answers at once from then on. */
+  async #confirmIdentity(
+    request: AuthRequest,
+    client: ClientInfo | null,
+    { remember = true }: { remember?: boolean } = {},
+  ) {
+    const approved =
+      request.resource === this.#addresses.userinfo
+        ? await this.#complete(request, client, [], ["iterate"], IDENTIFY_GRANT_MS)
+        : await this.#complete(request, client, [], ["identity"]);
+    if (!remember) return approved;
+    publishPlatformFacts(
+      {
+        contextNamespace: this.#env.ITERATE_CONTEXT,
+        waitUntil: (promise) => this.#ctx.waitUntil(promise),
+      },
+      { account: this.#grant.userId },
+      {
+        type: "events.iterate.com/account/identity-confirmed",
+        idempotencyKey: `account/identity-confirmed/${grantIdOf(approved)}`,
+        payload: {
+          clientId: request.clientId,
+          clientName: clientDisplay(client, request.clientId).clientName,
+        } satisfies IdentityConfirmed,
+      },
+      {
+        principal: { actor: this.#grant.userId, email: this.#grant.email },
+        grant: this.#grant.grantId,
+      },
+    );
+    return approved;
+  }
+
   async #complete(
     request: AuthRequest,
     client: ClientInfo | null,
@@ -486,13 +578,15 @@ export class ConsentRpcTarget extends RpcTarget {
     scope: string[],
     // a platform admin's `admin` grant lives 12 hours: no refresh outlives its deadline
     lifetimeMs = (scope.includes("admin") ? 12 : 30 * 24) * 3600_000,
+    /** what Sessions says of how it was approved (grants.ts `DisplayMetadata`) */
+    approval: { approvedThrough?: string } = {},
   ) {
     const env = this.#env;
     const display = clientDisplay(client, request.clientId);
     const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
       request,
       userId: this.#grant.userId,
-      metadata: display,
+      metadata: { ...display, ...approval },
       scope,
       revokeExistingGrants: false,
       props: {

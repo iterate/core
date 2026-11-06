@@ -54,6 +54,7 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
+      identityConfirmations: {},
       secrets: {},
       integrations: {},
     },
@@ -67,6 +68,7 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
+      identityConfirmations: {},
       secrets: {},
       integrations: {},
     },
@@ -129,6 +131,7 @@ const rows: {
           at: expect.any(String),
         },
       ],
+      identityConfirmations: {},
     },
   },
   {
@@ -161,6 +164,7 @@ const rows: {
       endedGrants: {},
       grantUses: { grant_a: { at: 5 } },
       consents: [],
+      identityConfirmations: {},
       secrets: {},
       integrations: {},
     },
@@ -181,6 +185,7 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
+      identityConfirmations: {},
       secrets: {},
       integrations: {},
     },
@@ -201,6 +206,7 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
+      identityConfirmations: {},
       secrets: {},
       integrations: {},
     },
@@ -229,6 +235,7 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
+      identityConfirmations: {},
       secrets: {},
       integrations: {},
     },
@@ -283,6 +290,7 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
+      identityConfirmations: {},
       secrets: {
         "/secrets/google-42": {
           urls: ["https://google.test"],
@@ -300,6 +308,33 @@ const rows: {
           scopes: ["openid"],
         },
       },
+    },
+  },
+  {
+    name: "an identity confirmed to a client is kept once, by client; forgotten, it goes",
+    events: [
+      ...["deployment-a", "deployment-a", "deployment-b"].map((clientId) => ({
+        type: "events.iterate.com/account/identity-confirmed",
+        payload: { clientId, clientName: clientId },
+        source: platform,
+      })),
+      {
+        type: "events.iterate.com/account/identity-forgotten",
+        payload: { clientId: "deployment-b" },
+        source: platform,
+      },
+    ],
+    state: {
+      authentications: [],
+      personalAccessTokens: {},
+      endedGrants: {},
+      grantUses: {},
+      consents: [],
+      identityConfirmations: {
+        "deployment-a": { clientName: "deployment-a", at: expect.any(String) },
+      },
+      secrets: {},
+      integrations: {},
     },
   },
 ];
