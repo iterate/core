@@ -172,15 +172,17 @@ function parseNamedWorkerLoad(
   return { source, cacheKey, moduleIdentity: published.identity, generation: manifest.generation };
 }
 
-/** WORKAROUND — workerd keeps a named isolate whose startup FAILED (a `getCode` that threw) in its
- *  isolate map for the process's life, so every later `LOADER.get(id)` replays the failure: server.c++
- *  `WorkerStubImpl` never gets a `service`, and only an abort removes the map entry (still so on
- *  upstream main, 2026-09-03; the fix belongs there). Until a workerd release carries it: a producer
- *  that threw marks its loader id DEAD; the next attempt runs the producer OUTSIDE the loader (a
- *  failure there mints nothing) and loads the modules LITERALLY under the next GENERATION of the id
+/** WORKAROUND, LOCAL WORKERD ONLY — local workerd (`pnpm dev`, the Workers suite) keeps a named
+ *  isolate whose startup FAILED (a `getCode` that threw) in its isolate map for the process's life, so
+ *  every later `LOADER.get(id)` replays the failure: server.c++ `WorkerStubImpl` never gets a
+ *  `service`, and only an abort removes the map entry. The edge does not: its next `get` runs
+ *  `getCode` again, for a getter that threw and for code that threw at top level, so there this costs
+ *  one extra identity per recovery and nothing else. It goes when a workerd release in wrangler
+ *  matches the edge. Until then: a producer that threw marks its loader id DEAD; the next attempt
+ *  runs the producer OUTSIDE the loader (a failure there mints nothing) and loads the modules LITERALLY under the next GENERATION of the id
  *  (`generationId`). One extra identity per dead→recovered transition, never per attempt.
  *  Memory-only: a platform-isolate reset costs one replayed failure. Code that fails to START is outside this (same
- *  key ⇒ same code — the author's bug) and is replayed until upstream lands.
+ *  key ⇒ same code — the author's bug), and local workerd replays it.
  *
  *  ONE RECOVERY AT A TIME: every caller that finds the id dead while a recovery runs waits on that
  *  one (`recovery`), as the loader has every caller of a cold id wait on one `getCode`, so a burst of
