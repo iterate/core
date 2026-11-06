@@ -1,6 +1,6 @@
 // worker.test.ts — the edge's pure halves as tables: the iterate config (what the one object becomes,
 // what is refused by name, the per-env memo, the derived keys), the platform's own endpoints (the public
-// protocol origins, `/version`, a preview's admin sign-in through prd, local dev's one click, and under path routing the platform's
+// protocol origins, `/version`, a preview's admin sign-in through prd, local dev's and a PR deployment's one click, and under path routing the platform's
 // own paths never a project).
 // The ingress convention itself (subdomains, paths, custom hostnames) is the SDK's project-ingress
 // module and its own table.
@@ -24,6 +24,7 @@ import {
   type IterateConfig,
 } from "./iterate-config.ts";
 import type { Env } from "./env.ts";
+import { testLinkToken } from "./test-link.ts";
 
 // ── iterate config ── THE TABLE for the iterate config: what the vars become, what is refused (by name),
 // and the per-env memo. Each row is `{ vars, becomes | throws, warns? }`.
@@ -37,6 +38,12 @@ const MINIMAL = {
   ITERATE__SECRETS_ENCRYPTION__KEY: "secrets-key",
   ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD: "password",
   ITERATE__LOGIN__ALLOW: '[{"everyone":{}}]',
+};
+/** A one-click link's config, to which a row adds its `urls.os`. */
+const TEST_LINK = {
+  ...MINIMAL,
+  ITERATE__LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
+  ITERATE__LOGIN__TEST_LINK__EMAIL: "pr123@preview.iterate.test",
 };
 /** `login.allow` admitting anyone, as a var. */
 const EVERYONE = MINIMAL.ITERATE__LOGIN__ALLOW;
@@ -336,6 +343,44 @@ const iterateConfigRows: {
     },
     throws: /^ITERATE login\.testEmailDomain .*only for a preview, local dev or a test/,
   })),
+  // a one-click link signs in whoever holds it: on a preview's https origin alone, so never prd's
+  // or a self-host's (its own domain, or a blank urls.os), even from a mistaken Doppler value, and
+  // never a laptop's, which has its own (local-sign-in.ts)
+  {
+    vars: { ...TEST_LINK, ITERATE__URLS__OS: PR123 },
+    becomes: {
+      ...MINIMAL_CONFIG,
+      urls: { ...MINIMAL_CONFIG.urls, os: PR123 },
+      login: {
+        ...MINIMAL_CONFIG.login,
+        testEmailDomain: "preview.iterate.test",
+        testLink: { email: "pr123@preview.iterate.test" },
+      },
+    },
+  },
+  ...[PRD, "https://iterate.selfhost.example", "http://localhost:8788", ""].map((os) => ({
+    vars: {
+      ...MINIMAL,
+      ITERATE__URLS__OS: os,
+      ITERATE__LOGIN__TEST_LINK__EMAIL: "pr123@preview.iterate.test",
+    },
+    throws: /^ITERATE login\.testLink .*only for a preview or a test on https/,
+  })),
+  // its person is nobody real: under the test email domain, admitted by the rules, and no admin
+  ...[
+    { ITERATE__LOGIN__TEST_LINK__EMAIL: "jonas@iterate.com" },
+    { ITERATE__LOGIN__TEST_EMAIL_DOMAIN: "" },
+    { ITERATE__ADMINS: '["pr123@preview.iterate.test"]' },
+    { ITERATE__LOGIN__ALLOW: '[{"email":"someone@else.test"}]' },
+    { ITERATE__LOGIN__DENY: '[{"emailDomain":"preview.iterate.test"}]' },
+  ].map((vars) => ({
+    vars: { ...TEST_LINK, ITERATE__URLS__OS: PR123, ...vars },
+    throws: /^ITERATE login\.testLink\.email .*is no test person/,
+  })),
+  {
+    vars: { ...TEST_LINK, ITERATE__URLS__OS: PR123, ITERATE__LOGIN__TEST_LINK__EMAIL: "nobody" },
+    throws: /^ITERATE login\.testLink\.email /,
+  },
   // a client is both halves or neither
   {
     vars: { ...MINIMAL, ITERATE__INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id" },
@@ -741,6 +786,72 @@ test.for<{ name: string; origin: string; vars: Record<string, unknown> }>([
     expect(await request(`${origin}/.auth/local-sign-in?${search}`, vars)).toMatchObject({
       status: 404,
     });
+  },
+);
+
+// A PR deployment's one click (test-link.ts) exists where `login.testLink` names a person alone. Where
+// it signs in is test/vitest/os-workers/test-link.test.ts's. The token below is each deployment's
+// own, so a row's 404 is the route's absence, never a refused token.
+test.for<{ name: string; origin: string; vars: Record<string, unknown> }>([
+  { name: "prd", origin: PRD, vars: origins },
+  {
+    name: "a self-host on its own domain",
+    origin: "https://iterate.selfhost.example",
+    vars: { ...MINIMAL, ITERATE__URLS__OS: "https://iterate.selfhost.example" },
+  },
+  {
+    name: "a self-host on workers.dev (a blank urls.os)",
+    origin: "https://iterate.selfhost.workers.dev",
+    vars: MINIMAL,
+  },
+  { name: "a preview with no PR", origin: PR123, vars: { ...MINIMAL, ITERATE__URLS__OS: PR123 } },
+  {
+    name: "a laptop's platform",
+    origin: "http://localhost:8788",
+    vars: {
+      ...MINIMAL,
+      ITERATE__URLS__OS: "http://localhost:8788",
+      ITERATE__LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
+    },
+  },
+])(
+  "public protocol origins: a PR deployment's one click is no route on $name",
+  async ({ origin, vars }) => {
+    const search = new URLSearchParams({ t: await testLinkToken(origin, "secrets-key") });
+    expect(await request(`${origin}/.auth/test-link?${search}`, vars)).toMatchObject({
+      status: 404,
+    });
+  },
+);
+
+test.for<{ name: string; search: () => Promise<URLSearchParams>; says: RegExp }>([
+  {
+    name: "another deployment's token",
+    search: async () =>
+      new URLSearchParams({ t: await testLinkToken("https://pr124-os.test", "secrets-key") }),
+    says: /not for this deployment/,
+  },
+  {
+    name: "a next off the deployment",
+    search: async () =>
+      new URLSearchParams({
+        t: await testLinkToken(PR123, "secrets-key"),
+        next: "https://evil.attacker.workers.dev/",
+      }),
+    says: /does not send people/,
+  },
+])(
+  "public protocol origins: a PR deployment's one click refuses $name, in a plain sentence, and signs nobody in",
+  async ({ search, says }) => {
+    const refused = await request(`${PR123}/.auth/test-link?${await search()}`, {
+      ...TEST_LINK,
+      ITERATE__URLS__OS: PR123,
+    });
+    expect({
+      status: refused.status,
+      body: await refused.text(),
+      cookies: refused.headers.getSetCookie(),
+    }).toMatchObject({ status: 403, body: expect.stringMatching(says), cookies: [] });
   },
 );
 

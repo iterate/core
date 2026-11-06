@@ -28,7 +28,7 @@ import {
 import type { OAuthIntegrationProvider } from "iterate/api";
 import { D1_LOCATIONS } from "./resource-names.ts";
 import { refuseNonPlatformWrites, sha256Hex } from "./caller.ts";
-import { EmailRule } from "./allowed-emails.ts";
+import { emailAllowed, EmailRule } from "./allowed-emails.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { PROJECT_CONTEXT_BIRTH_EVENTS } from "./project/context-birth-events.ts";
@@ -391,6 +391,11 @@ export const IterateConfig = z.object({
        *  Unset ⇒ no fake provider signs anyone in, no link pre-fills an admin's choice, and no
        *  one-click local sign-in exists. */
       testEmailDomain: dnsName.optional(),
+      /** THE ONE-CLICK SIGN-IN OF A PR'S DEPLOYMENT (test-link.ts): `email` is the one person
+       *  `/.auth/test-link` signs in. Refused (`parseIterateConfig`) unless `urls.os` is a preview's
+       *  or a test's on https, the address is under `testEmailDomain`, `allow` admits it and `admins`
+       *  does not list it. A pull request's deployment's config sets it. Unset ⇒ no such route. */
+      testLink: z.object({ email: z.email().toLowerCase() }).optional(),
     },
     { error: REQUIRED },
   ),
@@ -614,12 +619,26 @@ export function parseIterateConfigInput(input: unknown, deployId = "unversioned"
     );
   // A deployment on its own domain takes no other issuer's word on who its admins are; a preview
   // (or a test) does, on https alone, where that issuer reads this deployment's client metadata.
-  if (
-    login.adminIssuer &&
-    (!isPreviewOrLocalOrigin(urls.os) || new URL(urls.os).protocol !== "https:")
-  )
+  const httpsPreview = isPreviewOrLocalOrigin(urls.os) && new URL(urls.os).protocol === "https:";
+  if (login.adminIssuer && !httpsPreview)
     throw new Error(
       `${field(["login", "adminIssuer"])}: only for a preview or a test on https — urls.os must be an https workers.dev or .test origin, not ${JSON.stringify(urls.os)}`,
+    );
+  // Whoever holds a test link is its person (test-link.ts), so a link goes only where nobody's real
+  // data lives. Its person is nobody real, and no admin: the link would make its holder one.
+  if (login.testLink && !httpsPreview)
+    throw new Error(
+      `${field(["login", "testLink"])}: only for a preview or a test on https — urls.os must be an https workers.dev or .test origin, not ${JSON.stringify(urls.os)}`,
+    );
+  const person = login.testLink?.email;
+  if (
+    person &&
+    (person.split("@")[1] !== login.testEmailDomain ||
+      parsed.admins.includes(person) ||
+      !emailAllowed(login, person))
+  )
+    throw new Error(
+      `${field(["login", "testLink", "email"])}: ${person} is no test person: it must be under login.testEmailDomain, admitted by login.allow, and no admin`,
     );
   // The methods in the order they were written (the schema's output follows its own), each a
   // provider's only with its client: without one it is off, loudly, and the rest still runs.
@@ -708,10 +727,10 @@ function isIdentityProvider(name: string): name is IdentityProvider {
   return IdentityProvider.safeParse(name).success;
 }
 
-/** An origin where nobody's real data lives, so `login.testEmailDomain`, `login.adminIssuer` and
- *  `admins` beside the global password may be honoured there: an https workers.dev one (a per-PR
- *  preview's), localhost's, or one under `.test` (RFC 2606: never a public name — the workers
- *  suite's). A blank `urls.os` is none of them: it must be named. */
+/** An origin where nobody's real data lives, so `login.testEmailDomain`, `login.adminIssuer`,
+ *  `login.testLink` and `admins` beside the global password may be honoured there: an https
+ *  workers.dev one (a per-PR preview's), localhost's, or one under `.test` (RFC 2606: never a public
+ *  name — the workers suite's). A blank `urls.os` is none of them: it must be named. */
 function isPreviewOrLocalOrigin(origin: string) {
   if (!origin) return false;
   const { protocol, hostname } = new URL(origin);
@@ -801,6 +820,17 @@ export function platformAddressesOf(env: IterateConfigEnv, request: Request): Pl
     mcp: config.urls.mcp ? `${config.urls.mcp}/` : `${platformOrigin}/mcp`,
     userinfo: `${platformOrigin}${USERINFO_PATH}`,
   };
+}
+
+/** Whether `url` is on https on the platform's host or a sibling of it — dash.iterate.com beside
+ *  os.iterate.com, a preview's `pr1-dash` beside its `pr1-os` — which only whoever holds the parent
+ *  name can serve: as far as an address can tell, one of this deployment's own. */
+export function isSiblingOfPlatform(url: URL, platformOrigin: string) {
+  const parentOf = (hostname: string) => hostname.slice(hostname.indexOf(".") + 1);
+  return (
+    url.protocol === "https:" &&
+    parentOf(url.hostname) === parentOf(new URL(platformOrigin).hostname)
+  );
 }
 
 /** The project `url` is a host of by the deployment's STATIC rules: under the ingress routing

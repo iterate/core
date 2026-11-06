@@ -19,7 +19,7 @@ import { type ConsentApproved, type Impersonation } from "./account/contract.ts"
 import type { Env } from "./env.ts";
 import type { OrganizationRecord, ProjectRecord, UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { iterateConfigOf, type PlatformAddresses } from "./iterate-config.ts";
+import { isSiblingOfPlatform, iterateConfigOf, type PlatformAddresses } from "./iterate-config.ts";
 import {
   grantIsLive,
   isAdmin,
@@ -73,11 +73,10 @@ export type ConsentView =
         /** one of this deployment's own apps, as far as the issuer can tell (`isOwnApp`) */
         ownApp: boolean;
         /** THE PERSON A LINK NAMED: the authorization's `login_hint` (iterate/app-server.ts
-         *  `/.auth/login`; a PR body's `Sign in ↗`, scripts/os/preview.ts), when it is one of `people`
-         *  under the test email domain (`login.testEmailDomain`, none on prd) and the client one of
-         *  our own apps. The page opens on "Sign in as someone else" with
-         *  them filled in, and the admin still confirms: `approve` never reads the hint, only the
-         *  page's own post. */
+         *  `/.auth/login`), when it is one of `people` under the test email domain
+         *  (`login.testEmailDomain`, none on prd) and the client one of our own apps. The page opens
+         *  on "Sign in as someone else" with them filled in, and the admin still confirms: `approve`
+         *  never reads the hint, only the page's own post. */
         suggested?: string;
       };
     }
@@ -134,16 +133,15 @@ function cimdHostOf(clientId: string) {
  *  host — dash.iterate.com beside os.iterate.com, a preview's `pr1-dash` beside its `pr1-os` —
  *  and not a project's host, which is userspace. On a laptop's platform every app returning to the
  *  laptop counts: a local app registers itself (iterate/app-session.ts), and nothing there is
- *  anyone's real data. It grants nothing: the impersonation confirm's warning reads it, and
- *  whether a link may pre-fill that confirm (`#impersonation`). */
+ *  anyone's real data. For an admin it grants nothing: the impersonation confirm's warning reads
+ *  it, and whether a link may pre-fill that confirm (`#impersonation`). The one approval it decides
+ *  is a PR's test person's (`#testLinkApproval`). */
 function isOwnApp(request: AuthRequest, platformOrigin: string, projectBound: boolean) {
   if (projectBound) return false;
   const loopback = (url: string) => ["localhost", "127.0.0.1"].includes(new URL(url).hostname);
   if (loopback(platformOrigin)) return loopback(request.redirectUri);
   const url = URL.canParse(request.clientId) ? new URL(request.clientId) : null;
-  if (url?.protocol !== "https:" || url.pathname !== "/.auth/client.json") return false;
-  const parentOf = (hostname: string) => hostname.slice(hostname.indexOf(".") + 1);
-  return parentOf(url.hostname) === parentOf(new URL(platformOrigin).hostname);
+  return url?.pathname === "/.auth/client.json" && isSiblingOfPlatform(url, platformOrigin);
 }
 
 /** The grant an approval minted: `completeAuthorization` stores it before it answers, and its code
@@ -247,6 +245,8 @@ export class ConsentRpcTarget extends RpcTarget {
         request.clientId,
         this.#grant.userId,
       );
+      const approved = await this.#testLinkApproval(request, client, bound.projectBound);
+      if (approved) return { kind: "redirect", location: approved.redirectTo };
       return {
         kind: "consent",
         query,
@@ -278,6 +278,23 @@ export class ConsentRpcTarget extends RpcTarget {
     }
   }
 
+  /** ONE CLICK, NOT TWO: nobody real stands behind a PR's test person (`login.testLink`,
+   *  test-link.ts), so the page has nobody to ask. One of our own apps is approved without it, with
+   *  what the app asked for and "All my projects": a grant narrowed to named projects could not make
+   *  another in the Dash. Anyone else, any other client, and an app that asks for `admin` get the
+   *  page: that person cannot grant `admin`, and the page's Switch account is how a reviewer gets
+   *  back to themselves for the admin app. */
+  async #testLinkApproval(request: AuthRequest, client: ClientInfo | null, projectBound: boolean) {
+    const person = iterateConfigOf(this.#env).login.testLink?.email;
+    if (
+      this.#grant.email !== person ||
+      request.scope.includes("admin") ||
+      !isOwnApp(request, this.#addresses.platformOrigin, projectBound)
+    )
+      return null;
+    return this.#complete(request, client, null, this.#grantable(request, projectBound));
+  }
+
   /** What an admin's "Sign in as someone else…" offers for `request` (`ConsentView`'s
    *  `impersonation`), `query` its raw authorization query. */
   async #impersonation(request: AuthRequest, query: string, projectBound: boolean) {
@@ -285,8 +302,8 @@ export class ConsentRpcTarget extends RpcTarget {
       (user) => user.id !== this.#grant.userId,
     );
     const ownApp = isOwnApp(request, this.#addresses.platformOrigin, projectBound);
-    // a link pre-fills only a test person (a PR body's `pr<N>@…`), and only for one of our apps:
-    // prd has no test email domain, so there, like for a third party, the choice stays the admin's
+    // a link pre-fills only a test person, and only for one of our apps: prd has no test email
+    // domain, so there, like for a third party, the choice stays the admin's
     const testEmailDomain = iterateConfigOf(this.#env).login.testEmailDomain;
     const hint = new URLSearchParams(query).get("login_hint")?.trim().toLowerCase();
     const named = ownApp && testEmailDomain && hint?.endsWith(`@${testEmailDomain}`);

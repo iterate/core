@@ -1,7 +1,7 @@
 // worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
 // (the files host, else its fetch routes and the project's config worker, served here from the
 // root's snapshot: `serveProjectHost`), the MCP origin, then the platform origin's
-// own paths (`/version`, a preview's admin sign-in through prd, local dev's one click, the secret-OAuth callback, the
+// own paths (`/version`, a preview's admin sign-in through prd, local dev's and a PR deployment's one click, the secret-OAuth callback, the
 // integrations' callbacks and webhooks, Google identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
 // the issuer's pages as its catch-all.
 // Cap’n Web terminates at `/api`; a project host's request is served where it arrived.
@@ -45,6 +45,7 @@ import {
   adminSignInResponse,
 } from "./admin-sign-in.ts";
 import { localSignInResponse } from "./local-sign-in.ts";
+import { testLinkResponse } from "./test-link-sign-in.ts";
 import { cloudflareAccessSignInResponse } from "./cloudflare-access-sign-in.ts";
 import { iterateConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./iterate-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
@@ -481,6 +482,9 @@ async function routeRequest(
   // Local dev's one click (local-sign-in.ts, `pnpm getin`): on a laptop's platform alone.
   const localSignIn = await localSignInResponse(request, env);
   if (localSignIn) return localSignIn;
+  // A PR deployment's one click (test-link.ts): where `login.testLink` names its test person alone.
+  const testLink = await testLinkResponse(request, env);
+  if (testLink) return testLink;
   // Sign-in through Cloudflare Access (cloudflare-access-sign-in.ts), whose application guards
   // this one path alone: where `login.methods.cloudflareAccess` is set up.
   const accessSignIn = await cloudflareAccessSignInResponse(request, env);

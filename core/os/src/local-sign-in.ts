@@ -5,18 +5,17 @@
 //
 // A laptop's platform alone: `urls.os` a loopback origin, with `login.testEmailDomain` set, which
 // iterate-config.ts refuses anywhere but a preview, a laptop or a test. A preview and prd (https) and a
-// self-host (a blank `urls.os`, so no test email domain) have no such route. The laptop's password
-// is `dev`, in this repository, so the route signs in no one a form post could not. What it adds is
-// a sign-in by GET, so it answers only a navigation the person started: the address bar, `open` or
-// `xdg-open`, a Playwright `goto` (`Sec-Fetch-Site: none`), or a client that is no browser. A web
-// page's navigation is refused: it would switch the laptop's session to another test person.
+// self-host (a blank `urls.os`, so no test email domain) have no such route; a PR's preview has its
+// own, test-link.ts. The laptop's password is `dev`, in this repository, so the route signs in no
+// one a form post could not. What it adds is a sign-in by GET, so it answers only a navigation the
+// person started: the address bar, `open` or `xdg-open`, a Playwright `goto` (`Sec-Fetch-Site:
+// none`), or a client that is no browser. A web page's navigation is refused: it would switch the
+// laptop's session to another test person.
 import { isLocalOrigin } from "iterate/lib";
 import { emailAllowed } from "./allowed-emails.ts";
 import { iterateConfigOf, platformAddressesOf } from "./iterate-config.ts";
-import { ControlPlane } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
-import { startIssuerSession } from "./issuer-session.ts";
-import { watchSignInStep } from "./sign-in-watch.ts";
+import { linkSignInResponse, plainRefusal } from "./issuer-session.ts";
 
 /** `GET /.auth/local-sign-in?email=&next=` (the URL scripts/getin.ts opens) on a laptop's
  *  platform, else null: worker.ts answers as for any path nobody serves. `next` is any URL on the
@@ -41,25 +40,14 @@ export async function localSignInResponse(request: Request, env: Env): Promise<R
       `Only a test person, an address under ${login.testEmailDomain}, signs in here.`,
     );
 
-  const user = await watchSignInStep("ensure-user", new ControlPlane(env).ensureUser(email));
-  const session = await startIssuerSession(env, request, user, "/login");
-  const headers = new Headers({ "cache-control": "no-store", "referrer-policy": "no-referrer" });
-  if ("error" in session) {
-    headers.set("location", `/login?${new URLSearchParams({ error: session.error })}`);
-    return new Response(null, { status: 303, headers });
-  }
   const asked = url.searchParams.get("next") || "/login";
   // the whole URL, not its origin: an opaque one's (`javascript:`) is "null", and a `blob:` URL's
   // is the page that made it
   const next = URL.canParse(asked, platformOrigin) ? new URL(asked, platformOrigin).href : null;
-  headers.set("location", next && isLocalOrigin(next) ? next : `${platformOrigin}/login`);
-  headers.set("set-cookie", session.setCookie);
-  return new Response(null, { status: 302, headers });
-}
-
-function plainRefusal(message: string) {
-  return new Response(`${message}\n`, {
-    status: 403,
-    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
-  });
+  return linkSignInResponse(
+    env,
+    request,
+    email,
+    next && isLocalOrigin(next) ? next : `${platformOrigin}/login`,
+  );
 }

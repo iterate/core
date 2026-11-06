@@ -11,14 +11,15 @@ import { clientDisplay } from "./client-display.ts";
 import { platformAddressesOf } from "./iterate-config.ts";
 import type { Env } from "./env.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
 import { accountStateOf, oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
 import { watchSignInStep } from "./sign-in-watch.ts";
 
 /** What the person reads when the platform failed their sign-in, on the sign-in page. */
 const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
 
-/** Every sign-in ends in this tail: the password and code forms, a provider (identity.ts) and an
- * admin through another issuer (admin-sign-in.ts). Its grant is the issuer's sole browser identity: ordinary storage, public token
+/** Every sign-in ends in this tail: the password and code forms, a provider (identity.ts), an admin
+ * through another issuer (admin-sign-in.ts) and a link (`linkSignInResponse`). Its grant is the issuer's sole browser identity: ordinary storage, public token
  * exchange, admission, expiry and revocation. No separate identity cookie. `picture` is the
  * identity provider's picture of the person, when it gave one (Google does).
  *
@@ -121,6 +122,35 @@ export async function startIssuerSession(
   if (!result) return { error: PLATFORM_FAILURE_MESSAGE };
   if (result.error) throw new Error(result.error);
   return { setCookie: flow.setCookie, location: result.next! };
+}
+
+/** A SIGN-IN BY LINK (local-sign-in.ts, test-link-sign-in.ts): `email`, found or created, signed in
+ *  as the password would, and the browser sent on to `location`. A shared link pressed many times
+ *  locks nobody out: it counts no password attempt. */
+export async function linkSignInResponse(
+  env: Env,
+  request: Request,
+  email: string,
+  location: string,
+) {
+  const user = await watchSignInStep("ensure-user", new ControlPlane(env).ensureUser(email));
+  const session = await startIssuerSession(env, request, user, "/login");
+  const headers = new Headers({ "cache-control": "no-store", "referrer-policy": "no-referrer" });
+  if ("error" in session) {
+    headers.set("location", `/login?${new URLSearchParams({ error: session.error })}`);
+    return new Response(null, { status: 303, headers });
+  }
+  headers.set("location", location);
+  headers.set("set-cookie", session.setCookie);
+  return new Response(null, { status: 302, headers });
+}
+
+/** A link refused, in a sentence for the person who opened it. */
+export function plainRefusal(message: string) {
+  return new Response(`${message}\n`, {
+    status: 403,
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+  });
 }
 
 /** THE PERSON'S ACCOUNT, STARTED WHILE THE SIGN-IN FINISHES: one read of it in the background, so
