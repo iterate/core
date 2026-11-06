@@ -155,9 +155,10 @@ async function grantSummary(resource: string, bearer: string) {
 }
 
 /** What each scope is, to the person, in one or two words — the Sign-in-again page's permissions
- *  line. The issuer's consent page spells the same three at sentence length (oauth-scopes.ts). */
+ *  line. The issuer's consent page spells the same at sentence length (oauth-scopes.ts). */
 const scopeLabels: Record<string, string> = {
   iterate: "your projects",
+  identity: "who you are",
   account: "your account",
   "organizations:write": "your organizations",
   admin: "the whole platform",
@@ -534,7 +535,9 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         if (!probe.ok) throw new Error(`iterate API check failed (${probe.status})`);
         const heldScopes = await session!.scopes();
         const project = url.searchParams.get("project");
-        if (!project && scopes.every((scope) => heldScopes.includes(scope)))
+        // every grant says who the person is: one that holds `iterate` holds `identity` too
+        const held = heldScopes.includes("iterate") ? [...heldScopes, "identity"] : heldScopes;
+        if (!project && scopes.every((scope) => held.includes(scope)))
           return new Response(null, {
             status: 303,
             headers: { Location: next, "Cache-Control": "no-store" },

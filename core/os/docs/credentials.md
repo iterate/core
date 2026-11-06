@@ -20,6 +20,28 @@ replayed against it. That is why an OAuth token for `/api` is refused at `/mcp`,
 The two resources are not project-specific: a grant's projects are what the person ticked at
 consent.
 
+## Who a project's host says is calling
+
+A project's host serves the project's config worker. The edge tells the app who is calling in two
+headers, and strips any copy a request brings (`src/project-host-sign-in.ts` holds the rules):
+
+- `x-itx-person` (`{ userId, email }`): anyone signed in, member of the project or not. When a
+  platform admin is signed in as the person, it says so in `impersonatedBy`, as `x-itx-principal`
+  does: an app that hands out something personal refuses, or records, such a person.
+- `x-itx-principal` (and the grant): a member of the project only.
+
+A session cookie on a write or a WebSocket upgrade from another site gets neither. The SDK reads
+them: `auth.require` asks for a member, `auth.requirePerson` for anyone signed in, and
+`auth.person` says who it is.
+
+An app for people who are not its project's members asks for the `identity` scope:
+`/.auth/login?scope=identity`, or the challenge `auth.requirePerson` answers, which the edge turns
+into that sign-in for a page load. The consent page then shows only who the app learns you are,
+and the grant reaches no project: at `/api`, `whoami` and `info` answer (`scopes: ["identity"]`)
+and `projects.get` is refused. Beside `iterate`, `identity` adds nothing: every grant says who you
+are. Under paths routing (previews) every project's page shares the issuer's origin and cookie, so
+a person signed in to the issuer arrives as a person on every project's page, with no consent.
+
 ## Personal access tokens
 
 A personal access token is iterate's own API key, the kind a SaaS product lets you make in its
@@ -30,8 +52,9 @@ device. It is not an OAuth token, so it has no single audience, and one key work
 - **What it can do.** It acts as you, with the `iterate` scope, on the projects you chose when you
   made it. It can't see or manage your sessions or keys, and it can't create organizations, so a
   leaked key can't mint another. `/api` and `/mcp` refuse a project it doesn't cover; that
-  project's host lets the request through anonymous, as it does any non-member's
-  (`src/project-host-sign-in.ts`), so the app sees no one.
+  project's host lets the request through as a person who is no member, as it does any
+  non-member's ([below](#who-a-projects-host-says-is-calling)), so the app learns who you are and
+  never treats you as a member.
 - **Format.** `itk_<your user id>_<key id>_<256 random bits><CRC32>`, 103 characters
   (`src/personal-access-token.ts`). The fixed prefix and checksum make a leaked key easy to find:
   `\bitk_[0-9a-f]{32}_[0-9a-f]{16}_[0-9A-Za-z]{49}\b` is a pattern for secret scanning.

@@ -7,7 +7,12 @@
 // Cap’n Web terminates at `/api`; a project host's request is served where it arrived.
 
 import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
-import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
+import {
+  ITX_PERSON_HEADER,
+  ITX_PRINCIPAL_HEADER,
+  type Person,
+  type Principal,
+} from "iterate/principal";
 import { forwardIssues, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import {
   ITERATE_BASE_PATH_HEADER,
@@ -111,10 +116,16 @@ function withoutPlatformHeaders(answer: Response): Response {
 
 /** WHO a project host's request is, as the context DO's `fetch` reads it: `principal` is the
  *  verified stamp the context runs the call under (null: nobody) and `grant` the OAuth grant or
- *  personal access token it acts through; `platformBearer` says the `Authorization: Bearer` was the
- *  platform's own credential, which an app never sees. The operator's bearer is refused here
- *  (oauth.ts `authorizationForToken`). */
-type ProjectHostIdentity = { principal: Principal | null; grant?: string; platformBearer: boolean };
+ *  personal access token it acts through; `person` is anyone signed in, member or not, which only
+ *  the app reads; `platformBearer` says the `Authorization: Bearer` was the platform's own
+ *  credential, which an app never sees. The operator's bearer is refused here (oauth.ts
+ *  `authorizationForToken`). */
+type ProjectHostIdentity = {
+  principal: Principal | null;
+  grant?: string;
+  person: Person | null;
+  platformBearer: boolean;
+};
 
 /** The Request a project host serves (`serveProjectHost`) — the same Request, its URL, method, body
  *  and a WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*`
@@ -123,8 +134,9 @@ type ProjectHostIdentity = { principal: Principal | null; grant?: string; platfo
  *  platform bearer (an OAuth access token, a personal access token) removed (a site's own bearer
  *  scheme passes through untouched), then the routing slug the host names in
  *  `x-iterate-routing-slug` (deleted for the apex, so a visitor's copy never survives) and the
- *  principal's stamp; our mark (cause.ts) is the app's to receive with its call. The edge picks the project only; the config worker's `fetch`
- *  routes on the routing slug in plain code. */
+ *  person's and principal's stamps; our mark (cause.ts) is the app's to receive with its call.
+ *  The edge picks the project only; the config worker's `fetch` routes on the routing slug in
+ *  plain code. */
 function projectHostRequestTo(
   request: Request,
   routing: {
@@ -147,6 +159,8 @@ function projectHostRequestTo(
   if (routing.identity.principal)
     headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(routing.identity.principal));
   if (routing.identity.grant) headers.set(ITX_GRANT_HEADER, routing.identity.grant);
+  if (routing.identity.person)
+    headers.set(ITX_PERSON_HEADER, JSON.stringify(routing.identity.person));
   // A WebSocket the edge will hold: a lent stub's upgrade answers resumable (spliceEyeballAnswer).
   if (request.headers.get("upgrade")?.toLowerCase() === "websocket")
     headers.set(FETCH_UPGRADE_RESUMABLE_HEADER, "1");
@@ -393,18 +407,31 @@ async function routeRequest(
     const reachesProject = authorization
       ? await controlPlane.reachesProject(authorization.reach, projectId)
       : false;
-    // WHO ARRIVES (project-host-sign-in.ts): a member is stamped; a non-member, or a session
-    // cookie on a cross-site write or upgrade, goes on anonymous — the app decides what that sees
+    // WHO ARRIVES (project-host-sign-in.ts): a member is stamped as a person and a principal, a
+    // non-member as a person; a session cookie on a cross-site write or upgrade goes on anonymous —
+    // the app decides what each sees
     const caller = projectHostCallerOf({
       authorization: authorization && { via: bearer ? "bearer" : "cookie", reachesProject },
       request,
     });
     const stamped = caller === "member" ? authorization : null;
-    if (stamped?.grant) ctx.waitUntil(recordGrantUse(env, stamped.grant));
+    // every authorization here has a grant: the operator's bearer is refused at a project host.
+    // Only consent's "Sign in as someone else" makes a grant with `impersonatedBy`: on this host's
+    // own client that is a member's (consent binds it to the project), and a bearer of another
+    // client's grant may be a non-member's. The issuer's own session (paths ingress) and an
+    // `identity` grant never carry it.
+    const personGrant = caller === "anonymous" ? null : authorization?.grant || null;
+    if (personGrant) ctx.waitUntil(recordGrantUse(env, personGrant));
     // the visitor's own cookies reach the app; the platform's cookie and bearer never do
     const identity = {
       principal: stamped?.principal || null,
       grant: stamped?.grant?.grantId,
+      person: personGrant && {
+        userId: personGrant.userId,
+        email: personGrant.email,
+        // JSON.stringify leaves an undefined key out of the header
+        impersonatedBy: personGrant.impersonatedBy,
+      },
       platformBearer: Boolean(bearer && authorization),
     };
     // A lent stub's WebSocket (a tunnel's) is held HERE, not by the context: it survives the

@@ -1,19 +1,29 @@
 import { z } from "zod";
 import { isSameOriginBrowserRequest } from "../lib.ts";
-import { ITX_PRINCIPAL_HEADER } from "../principal.ts";
+import { ITX_PERSON_HEADER, ITX_PRINCIPAL_HEADER, type Person } from "../principal.ts";
 
 const Principal = z.object({ actor: z.string().min(1), email: z.string().optional() });
+const PersonStamp = z.object({
+  userId: z.string().min(1),
+  email: z.string(),
+  impersonatedBy: z.object({ actor: z.string().min(1), email: z.string() }).optional(),
+});
 
-/** Project ingress strips public identity headers and stamps `x-itx-principal` for a project member
- *  only: a visitor signed out, signed in without this project, or riding a session cookie on a
- *  cross-site write arrives without one. This guard runs in the config worker, before it proxies an
- *  app.
+/** Guards for a project's config worker, before it proxies an app. Who arrives at a project's
+ *  host, and which stamp the edge puts on their request (`x-itx-person` for anyone signed in,
+ *  `x-itx-principal` for a member), is core/os/src/project-host-sign-in.ts, "WHO ARRIVES". The
+ *  guards:
+ *    - `auth.require` asks for a member, and `auth.requirePerson` for anyone signed in. Both answer
+ *      null when the request may go on, else the answer to send.
+ *    - `auth.person` reads the person, or null. Its `impersonatedBy` names the platform admin
+ *      signed in as them: an app that hands out something personal refuses, or records, that.
  *
- *  Signed out, every request gets `401` with `WWW-Authenticate: Bearer realm="iterate"`: the
+ *  Signed out, `auth.require` answers `401` with `WWW-Authenticate: Bearer realm="iterate"`: the
  *  platform's edge turns that answer into the sign-in for a page load (or into "sign in again with
  *  this project" for someone signed in without it), whatever path the app is served under, and hands
- *  a fetch, a write or a WebSocket upgrade the 401 itself. Any app can ask for a signed-in visitor
- *  the same way:
+ *  a fetch, a write or a WebSocket upgrade the 401 itself. `auth.requirePerson` answers the same
+ *  challenge with `scope="identity"`: the sign-in asks the person only who they are, and grants no
+ *  project. Any app can ask for a signed-in visitor the same way:
  *
  *  ```js
  *  if (!request.headers.get("x-itx-principal"))
@@ -28,18 +38,39 @@ const Principal = z.object({ actor: z.string().min(1), email: z.string().optiona
  *  the visitor's cookie. */
 export const auth = {
   require(request: Request): Response | null {
-    const isWebSocketUpgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
-    const isRead = ["GET", "HEAD", "OPTIONS"].includes(request.method) && !isWebSocketUpgrade;
-    if (!isRead && !isSameOriginBrowserRequest(request))
-      return new Response("Cross-site request refused", { status: 403 });
+    const refused = crossSiteRefusal(request);
+    if (refused) return refused;
     const principal = request.headers.get(ITX_PRINCIPAL_HEADER);
     if (principal) {
       Principal.parse(JSON.parse(principal)); // Platform-owned stamp; malformed means a defect.
       return null;
     }
-    return new Response("Sign in\n", {
-      status: 401,
-      headers: { "WWW-Authenticate": 'Bearer realm="iterate"', "Cache-Control": "no-store" },
-    });
+    return signIn('Bearer realm="iterate"');
+  },
+  requirePerson(request: Request): Response | null {
+    const refused = crossSiteRefusal(request);
+    if (refused) return refused;
+    if (auth.person(request)) return null;
+    return signIn('Bearer realm="iterate", scope="identity"');
+  },
+  person(request: Request): Person | null {
+    const person = request.headers.get(ITX_PERSON_HEADER);
+    // Platform-owned stamp; malformed means a defect.
+    return person ? PersonStamp.parse(JSON.parse(person)) : null;
   },
 };
+
+/** A write or a WebSocket upgrade from another origin: 403. */
+function crossSiteRefusal(request: Request): Response | null {
+  const isWebSocketUpgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+  const isRead = ["GET", "HEAD", "OPTIONS"].includes(request.method) && !isWebSocketUpgrade;
+  if (isRead || isSameOriginBrowserRequest(request)) return null;
+  return new Response("Cross-site request refused", { status: 403 });
+}
+
+function signIn(challenge: string): Response {
+  return new Response("Sign in\n", {
+    status: 401,
+    headers: { "WWW-Authenticate": challenge, "Cache-Control": "no-store" },
+  });
+}

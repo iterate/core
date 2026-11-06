@@ -25,7 +25,7 @@ export const oauthResourceForOsBaseUrl = (osBaseUrl: string) => new URL("/api", 
 export async function oauthLogin(input: {
   issuer: string;
   openBrowser: (url: URL) => void | Promise<void>;
-  /** `iterate` is always asked for (iterate/oauth-scopes) */
+  /** `iterate` is asked for unless the set is `identity` alone (iterate/oauth-scopes) */
   scopes?: OAuthScope[];
 }) {
   const as = authorizationServer(input.issuer);

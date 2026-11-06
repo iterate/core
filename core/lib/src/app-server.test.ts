@@ -18,6 +18,19 @@ test("covers what the page asked for → straight to next", async () => {
   expect(response?.headers.get("location")).toBe("/projects/acme");
 });
 
+// every grant says who the person is, so one for projects covers a page that asks only that
+test("a page asking for identity, with a sign-in that holds iterate → straight to next", async () => {
+  const response = await login("/.auth/login?next=%2Faccount&scope=identity", ["iterate"]);
+  expect(response?.status).toBe(303);
+  expect(response?.headers.get("location")).toBe("/account");
+});
+
+test("a page asking for projects, with a sign-in that holds identity → the Sign in again page", async () => {
+  const response = await login("/.auth/login?next=%2F&scope=iterate", ["identity"]);
+  expect(response?.status).toBe(200);
+  expect(await response!.text()).toContain("Permissions: who you are.");
+});
+
 test.for([
   {
     name: "a project the page named",

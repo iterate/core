@@ -5,8 +5,9 @@ import { disabledButtonClass, linkClass, StandalonePage } from "../standalone-pa
 import type { ConsentView } from "../../consent.ts";
 import { switchAccountHref } from "../../login-search.ts";
 
-/** A client asking only who the person is (the `/oauth2/userinfo` resource): it learns their email
- *  and reaches nothing. Continue is a plain POST to this very authorization URL (consent.ts
+/** A client asking only who the person is (the `/oauth2/userinfo` resource, or the `identity`
+ *  scope alone: a project's app for people who are not its members): it learns their email and
+ *  reaches nothing. Continue is a plain POST to this very authorization URL (consent.ts
  *  `approve`). Switch account signs out and comes back to this request through sign-in, as the
  *  consent card's does (signed-in-account.tsx): the same form, posted elsewhere. */
 export function IdentifyCard({

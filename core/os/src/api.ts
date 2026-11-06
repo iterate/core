@@ -68,9 +68,10 @@ export async function oauthResponse(
 }
 
 /** One of the platform's resources, hosted with oauth.ts's validator: `serve` gets the bearer's
- *  authorization (`ctx.props`) once its token holds `iterate` — one that lacks it is answered with
- *  the MCP step-up challenge (`insufficientScope`). The first scope a client asks for is
- *  `iterate` alone (`scopes_supported`, the initial 401's `scope`): `account` and
+ *  authorization (`ctx.props`) once its token holds `iterate`, or `identity`, whose grant reaches
+ *  no project (`whoami` and `info` answer, `projects.get` is FORBIDDEN). A token with neither is
+ *  answered with the MCP step-up challenge (`insufficientScope`). The first scope a client asks
+ *  for is `iterate` alone (`scopes_supported`, the initial 401's `scope`): `account` and
  *  `organizations:write` are the client's explicit choice. */
 function resourceServer(
   addresses: PlatformAddresses,
@@ -111,7 +112,7 @@ function resourceServer(
     },
     handler: {
       fetch(request, env, ctx) {
-        if (!ctx.auth.scope.includes("iterate")) {
+        if (!ctx.auth.scope.includes("iterate") && !ctx.auth.scope.includes("identity")) {
           logRefusal(resource, "insufficient_scope");
           return insufficientScope(ctx.auth, ["iterate"]);
         }

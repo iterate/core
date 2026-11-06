@@ -81,7 +81,8 @@ export type ConsentView =
       };
     }
   | {
-      /** a client asking only who the person is (the `/oauth2/userinfo` resource, `#identify`) */
+      /** a client asking only who the person is: the `/oauth2/userinfo` resource, or `identity`
+       *  alone (iterate/oauth-scopes) */
       kind: "identify";
       clientName: string;
       clientId: string;
@@ -217,7 +218,8 @@ export class ConsentRpcTarget extends RpcTarget {
     try {
       const request = await this.#request(query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
-      const identify = request.resource === this.#addresses.userinfo;
+      const identify =
+        request.resource === this.#addresses.userinfo || !request.scope.includes("iterate");
       const display = clientDisplay(client, request.clientId);
       const denied = new URL(request.redirectUri);
       denied.searchParams.set("error", "access_denied");
@@ -348,10 +350,14 @@ export class ConsentRpcTarget extends RpcTarget {
     try {
       const request = await this.#request(data.query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
-      if (request.resource === this.#addresses.userinfo) {
+      // who the person is, and no project: for the userinfo resource ten minutes, for `identity`
+      // the usual lifetime, since the app keeps the person signed in with it
+      if (request.resource === this.#addresses.userinfo || !request.scope.includes("iterate")) {
         if (data.impersonate)
           return { error: "Signing in as someone else is not for this client." };
-        return await this.#complete(request, client, [], ["iterate"], IDENTIFY_GRANT_MS);
+        return request.resource === this.#addresses.userinfo
+          ? await this.#complete(request, client, [], ["iterate"], IDENTIFY_GRANT_MS)
+          : await this.#complete(request, client, [], ["identity"]);
       }
       if (data.impersonate) return await this.#impersonate(request, client, data.impersonate);
       const { projects, projectBound } = await projectsForClient(

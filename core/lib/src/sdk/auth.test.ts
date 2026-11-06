@@ -61,6 +61,49 @@ test("a same-origin POST with a principal still passes", () => {
   ).toBeNull();
 });
 
+// A person who is no member is stamped `x-itx-person` alone; `auth.require` still asks for a member.
+const person = { "x-itx-person": JSON.stringify({ userId: "user_1", email: "a@example.com" }) };
+test.for<{ name: string; headers: Record<string, string>; method?: string; status: number | null }>(
+  [
+    { name: "a person", headers: person, status: null },
+    { name: "a member, stamped both", headers: { ...person, ...signedIn }, status: null },
+    { name: "signed out", headers: {}, status: 401 },
+    {
+      name: "a person's cross-site POST",
+      headers: { origin: "https://evil.example", ...person },
+      method: "POST",
+      status: 403,
+    },
+    {
+      name: "a person's same-origin POST",
+      headers: { origin: "https://worker.example", ...person },
+      method: "POST",
+      status: null,
+    },
+  ],
+)("requirePerson: $name → $status", ({ headers, method, status }) => {
+  const response = auth.requirePerson(workerRequest(method || "GET", headers));
+  expect(response?.status ?? null).toBe(status);
+  if (status === 401)
+    expect(response!.headers.get("WWW-Authenticate")).toBe(
+      'Bearer realm="iterate", scope="identity"',
+    );
+});
+
+test("person reads the platform admin signed in as the person, when the stamp names one", () => {
+  const impersonatedBy = { actor: "user_2", email: "admin@example.com" };
+  const stamp = { userId: "user_1", email: "a@example.com", impersonatedBy };
+  const request = workerRequest("GET", { "x-itx-person": JSON.stringify(stamp) });
+  expect(auth.person(request)).toEqual(stamp);
+});
+
+test("person reads the stamp; a person who is no member is not let through require", () => {
+  const request = workerRequest("GET", person);
+  expect(auth.person(request)).toEqual({ userId: "user_1", email: "a@example.com" });
+  expect(auth.person(workerRequest("GET", signedIn))).toBeNull();
+  expect(auth.require(request)?.status).toBe(401);
+});
+
 function workerRequest(method: string, headers: Record<string, string>) {
   return new Request("https://worker.example/x", { method, headers });
 }

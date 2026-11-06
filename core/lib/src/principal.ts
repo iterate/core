@@ -1,7 +1,8 @@
 // principal.ts — WHO user code is acting for, as the platform tells it: the verified `Principal`
 // (`itx.whoami()`, `source.principal` on an event) and the header the platform stamps it in on a
-// Request it forwards to a project's worker (sdk/auth.ts reads it). How the platform admits and
-// carries a caller, and signs its own tokens, stays in the platform.
+// Request it forwards to a project's worker, and the `Person` a project's host stamps for anyone
+// signed in (sdk/auth.ts reads both). How the platform admits and carries a caller, and signs its
+// own tokens, stays in the platform.
 
 /** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. A
  *  platform admin signed in as someone else is two people (RFC 8693's subject and actor): the
@@ -16,3 +17,18 @@ export type Principal = {
 /** The header the edge sets on a Request it forwards on a principal's behalf — the ingress after
  *  the cookie check, a session's terminal `fetch` — and strips from every inbound Request. */
 export const ITX_PRINCIPAL_HEADER = "x-itx-principal";
+
+/** A signed-in person as a project's host knows them, member or not: the control plane's user id
+ *  and their email, and `impersonatedBy` the platform admin signed in as them, as on `Principal`.
+ *  An app that hands out something personal refuses, or records, a person an admin is signed in
+ *  as. */
+export type Person = {
+  userId: string;
+  email: string;
+  impersonatedBy?: { actor: string; email: string };
+};
+
+/** The header the edge sets, as the JSON of a `Person`, on a project host's Request from anyone
+ *  signed in (core/os project-host-sign-in.ts), and strips from every inbound Request. A member
+ *  gets `x-itx-principal` beside it. */
+export const ITX_PERSON_HEADER = "x-itx-person";

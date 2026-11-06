@@ -290,7 +290,9 @@ export async function authorizationForToken(
     logRefusal(addresses.api, "admin_scope_not_accepted", entryPoint);
     return null;
   }
-  if (validation.scope.includes("iterate")) return validation.props;
+  // an `identity` grant reaches no project (consent.ts `approve`): it is who the person is
+  if (validation.scope.includes("iterate") || validation.scope.includes("identity"))
+    return validation.props;
   logRefusal(addresses.api, "insufficient_scope", entryPoint);
   return null;
 }

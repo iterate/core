@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import {
-  isIterateSignInChallenge,
+  iterateSignInChallengeOf,
   projectHostCallerOf,
   projectHostSignInAnswerOf,
   type ProjectHostCaller,
@@ -8,7 +8,7 @@ import {
 
 const HOST = "https://site--acme.projects.test";
 
-// ── rules 1–4: who arrives ──
+// ── rules 1–4: who arrives; a member and a non-member are each stamped a person (worker.ts) ──
 test.for<{
   name: string;
   authorization: { via: "bearer" | "cookie"; reachesProject: boolean } | null;
@@ -35,6 +35,27 @@ test.for<{
     authorization: { via: "cookie", reachesProject: false },
     method: "POST",
     headers: { origin: HOST },
+    arrivesAs: "non-member",
+  },
+  {
+    name: "a cookie that does not reach the project on a cross-site POST",
+    authorization: { via: "cookie", reachesProject: false },
+    method: "POST",
+    headers: { origin: "https://evil.example" },
+    arrivesAs: "anonymous",
+  },
+  {
+    name: "a cookie that does not reach the project on a cross-site WebSocket upgrade",
+    authorization: { via: "cookie", reachesProject: false },
+    method: "GET",
+    headers: { upgrade: "websocket", origin: "https://evil.example" },
+    arrivesAs: "anonymous",
+  },
+  {
+    name: "a cookie that does not reach the project on a cross-site GET",
+    authorization: { via: "cookie", reachesProject: false },
+    method: "GET",
+    headers: { origin: "https://evil.example" },
     arrivesAs: "non-member",
   },
   {
@@ -107,6 +128,7 @@ test.for<{
 
 // ── rules 5–7: the app's answer, as the browser or client gets it ──
 const NAVIGATE = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
+const IDENTITY = 'Bearer realm="iterate", scope="identity"';
 test.for<{
   name: string;
   url?: string;
@@ -198,6 +220,69 @@ test.for<{
     becomes: { status: 403 },
   },
   { name: "a member's 401", headers: NAVIGATE, caller: "member", becomes: "unchanged" },
+  // the identity challenge (`auth.requirePerson`): only a signed-out page load signs in
+  {
+    name: "anonymous navigation, identity challenge",
+    headers: NAVIGATE,
+    caller: "anonymous",
+    wwwAuthenticate: IDENTITY,
+    becomes: { status: 302, location: "/.auth/login?scope=identity&next=%2Fx" },
+  },
+  {
+    name: "anonymous navigation, identity challenge with its scope first",
+    headers: NAVIGATE,
+    caller: "anonymous",
+    wwwAuthenticate: 'bearer scope=identity, realm="iterate"',
+    becomes: { status: 302, location: "/.auth/login?scope=identity&next=%2Fx" },
+  },
+  {
+    name: "anonymous fetch, identity challenge",
+    headers: { "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" },
+    caller: "anonymous",
+    wwwAuthenticate: IDENTITY,
+    becomes: "unchanged",
+  },
+  {
+    name: "anonymous POST, identity challenge",
+    method: "POST",
+    caller: "anonymous",
+    wwwAuthenticate: IDENTITY,
+    becomes: "unchanged",
+  },
+  {
+    name: "anonymous WebSocket upgrade, identity challenge",
+    headers: { upgrade: "websocket" },
+    caller: "anonymous",
+    wwwAuthenticate: IDENTITY,
+    becomes: "unchanged",
+  },
+  {
+    name: "non-member navigation, identity challenge: signed in already, no loop",
+    headers: NAVIGATE,
+    caller: "non-member",
+    wwwAuthenticate: IDENTITY,
+    becomes: "unchanged",
+  },
+  {
+    name: "non-member fetch, identity challenge",
+    caller: "non-member",
+    wwwAuthenticate: IDENTITY,
+    becomes: "unchanged",
+  },
+  {
+    name: "member navigation, identity challenge",
+    headers: NAVIGATE,
+    caller: "member",
+    wwwAuthenticate: IDENTITY,
+    becomes: "unchanged",
+  },
+  {
+    name: "a scope that is not identity is the member challenge",
+    headers: NAVIGATE,
+    caller: "non-member",
+    wwwAuthenticate: 'Bearer realm="iterate", scope="account"',
+    becomes: { status: 302, location: "/.auth/login?project=acme&next=%2Fx" },
+  },
   {
     name: "an app's own Basic challenge",
     headers: NAVIGATE,
@@ -250,24 +335,28 @@ test.for<{
   expect(response!.headers.get("location") ?? undefined).toBe(becomes.location);
 });
 
-// ── the challenge parser ──
-test.for<{ header: string | null; ours: boolean }>([
-  { header: 'Bearer realm="iterate"', ours: true },
-  { header: "bearer realm=iterate", ours: true },
-  { header: 'Bearer error="invalid_token", realm="iterate"', ours: true },
-  { header: 'Negotiate abc==, Bearer realm="iterate"', ours: true },
-  { header: 'Basic realm="x,y", Bearer realm="iterate", scope="a"', ours: true },
-  { header: 'Bearer realm="it\\erate"', ours: true },
-  { header: 'Bearer realm="Iterate"', ours: false },
-  { header: 'Bearer realm="iterate-app"', ours: false },
-  { header: 'Basic realm="iterate"', ours: false },
-  { header: 'Bearer realm="app", Basic realm="iterate"', ours: false },
-  { header: 'Bearer error="realm=iterate"', ours: false },
-  { header: 'Bearerx realm="iterate"', ours: false },
-  { header: 'realm="iterate"', ours: false },
-  { header: '"Bearer" realm="iterate"', ours: false },
-  { header: "", ours: false },
-  { header: null, ours: false },
+// ── the challenge parser: ours, and its scope ──
+test.for<{ header: string | null; ours: { scope: string } | null }>([
+  { header: 'Bearer realm="iterate"', ours: { scope: "" } },
+  { header: "bearer realm=iterate", ours: { scope: "" } },
+  { header: 'Bearer error="invalid_token", realm="iterate"', ours: { scope: "" } },
+  { header: 'Negotiate abc==, Bearer realm="iterate"', ours: { scope: "" } },
+  { header: 'Basic realm="x,y", Bearer realm="iterate", scope="a"', ours: { scope: "a" } },
+  { header: 'Bearer realm="it\\erate"', ours: { scope: "" } },
+  { header: 'Bearer realm="iterate", scope="identity"', ours: { scope: "identity" } },
+  { header: 'Bearer SCOPE="identity", realm=iterate', ours: { scope: "identity" } },
+  { header: 'Bearer scope="identity", Bearer realm="iterate"', ours: { scope: "" } },
+  { header: 'Bearer realm="iterate", Basic scope="identity"', ours: { scope: "" } },
+  { header: 'Bearer realm="Iterate"', ours: null },
+  { header: 'Bearer realm="iterate-app"', ours: null },
+  { header: 'Basic realm="iterate"', ours: null },
+  { header: 'Bearer realm="app", Basic realm="iterate"', ours: null },
+  { header: 'Bearer error="realm=iterate"', ours: null },
+  { header: 'Bearerx realm="iterate"', ours: null },
+  { header: 'realm="iterate"', ours: null },
+  { header: '"Bearer" realm="iterate"', ours: null },
+  { header: "", ours: null },
+  { header: null, ours: null },
 ])("WWW-Authenticate: $header → $ours", ({ header, ours }) => {
-  expect(isIterateSignInChallenge(header)).toBe(ours);
+  expect(iterateSignInChallengeOf(header)).toEqual(ours);
 });

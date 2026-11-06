@@ -331,8 +331,10 @@ export abstract class IterateConfigEntrypoint<
 > extends WorkerEntrypoint<Env> {
   /** At fetch entry: `const denied = this.auth.require(request); if (denied) return denied;`
    *  `x-itx-principal` is on a request only when a project member (or the operator) sent it, safe
-   *  to act on. A private route written by hand answers the platform's sign-in challenge, which
-   *  the edge turns into the sign-in for a page load (`auth.require` does the same):
+   *  to act on. A page for people who are not members asks with `this.auth.requirePerson(request)`
+   *  and reads who they are with `this.auth.person(request)` (`x-itx-person`). A private route
+   *  written by hand answers the platform's sign-in challenge, which the edge turns into the
+   *  sign-in for a page load (`auth.require` does the same):
    *
    *  ```js
    *  if (!request.headers.get("x-itx-principal"))
