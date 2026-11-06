@@ -29,8 +29,9 @@ RUN install -d -m 755 /etc/apt/keyrings \
   && apt-get install -y -qq --no-install-recommends gh doppler \
   && rm -rf /var/lib/apt/lists/*
 
-# Pinned, so an image is the same every time it is built; a version moves in a commit.
-RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
+# Pinned, so an image is the same every time it is built; a version moves in a commit. pnpm 12
+# fetches its native binary on its first run, so the build runs it once to keep that in the image.
+RUN corepack enable && corepack prepare pnpm@12.18.0 --activate && pnpm --version
 RUN npm install -g --no-fund --no-audit \
     @anthropic-ai/claude-code@2.1.292 \
     @openai/codex@0.160.1 \
