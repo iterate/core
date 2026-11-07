@@ -1,7 +1,9 @@
 // ── who may sign in ── `login.allow` and `login.deny` (iterate-config.ts), rules that mirror
 // Cloudflare Access's policy rules: an address, a domain (exactly, not its subdomains), or
-// everyone. Checked at each sign-in, one through Cloudflare Access too
-// (cloudflare-access-sign-in.ts), and at every grant's admission and refresh (oauth.ts).
+// everyone. An address rule may also admit the address's subaddresses (`jo+anything@b.com` for
+// `jo@b.com`, RFC 5233), which Access has no rule for. Checked at each sign-in, one through
+// Cloudflare Access too (cloudflare-access-sign-in.ts), and at every grant's admission and
+// refresh (oauth.ts).
 import { dnsName } from "iterate/app-config";
 import { z } from "zod";
 
@@ -14,6 +16,8 @@ export const EmailRule = z.union(
         .trim()
         .toLowerCase()
         .regex(/^[^@\s]+@[^@\s]+$/, "expected an email address"),
+      /** Also the address's subaddresses: `jo+anything@b.com` for `jo@b.com`. */
+      subaddresses: z.literal(true).optional(),
     }),
     z.strictObject({ emailDomain: dnsName }),
     z.strictObject({ everyone: z.strictObject({}) }),
@@ -32,9 +36,13 @@ export function emailAllowed(
   email: string,
 ): boolean {
   const address = email.trim().toLowerCase();
+  // the address with its subaddress (`+tag` before the `@`) removed, for a rule that admits them
+  const bare = address.replace(/\+[^@]*@/, "@");
   const matches = (rule: EmailRule) =>
     "everyone" in rule ||
-    ("email" in rule ? rule.email === address : address.split("@")[1] === rule.emailDomain);
+    ("email" in rule
+      ? rule.email === address || (rule.subaddresses === true && rule.email === bare)
+      : address.split("@")[1] === rule.emailDomain);
   return rules.allow.some(matches) && !(rules.deny || []).some(matches);
 }
 

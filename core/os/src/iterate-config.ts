@@ -316,7 +316,8 @@ export const IterateConfig = z.object({
   login: z.object(
     {
       /** WHO MAY SIGN IN (allowed-emails.ts), rules that mirror Cloudflare Access's policy rules:
-       *  `[{ "email": "a@b.com" }, { "emailDomain": "b.com" }, { "everyone": {} }]`. A person may
+       *  `[{ "email": "a@b.com" }, { "emailDomain": "b.com" }, { "everyone": {} }]`; an address
+       *  rule with `"subaddresses": true` admits `a+anything@b.com` too. A person may
        *  sign in when one of them matches. Every method refuses an address the rules do not
        *  admit, and a live grant for one stops working. Required, with no default: a deployment
        *  open to anyone says so, `[{ "everyone": {} }]`. */

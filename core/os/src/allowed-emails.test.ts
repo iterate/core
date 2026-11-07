@@ -21,6 +21,24 @@ test.for<{ name: string; allow: EmailRule[]; deny?: EmailRule[]; email: string; 
       email: "other@example.org",
       allowed: false,
     },
+    {
+      name: "an address rule admits no subaddress unless it says so",
+      allow: [{ email: "friend@example.org" }],
+      email: "friend+cloud@example.org",
+      allowed: false,
+    },
+    {
+      name: "an address rule that admits subaddresses takes any tag",
+      allow: [{ email: "friend@example.org", subaddresses: true }],
+      email: "Friend+Cloud-2@example.org",
+      allowed: true,
+    },
+    {
+      name: "and still the address itself, but not another local part",
+      allow: [{ email: "friend@example.org", subaddresses: true }],
+      email: "friendly@example.org",
+      allowed: false,
+    },
     { name: "everyone admits anyone", allow: [{ everyone: {} }], email: "x@y.dev", allowed: true },
     {
       name: "a deny rule wins over an allow rule",

@@ -211,6 +211,7 @@ a [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
 `login.methods` lists the ways people sign in, in the sign-in page's order. `login.allow`
 (required) and `login.deny` say who may, in rules that mirror Cloudflare Access's:
 `{ "email": "a@b.com" }`, `{ "emailDomain": "b.com" }` (that domain exactly) or `{ "everyone": {} }`.
+An address rule with `"subaddresses": true` admits `a+anything@b.com` too.
 
 - `password: { password }` (secret: `ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD`), the self-host
   default: one password for everyone, the email only a name tag. It needs no domain and no
