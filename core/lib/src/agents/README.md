@@ -56,8 +56,15 @@ open (with `llm.apiKeys`) and its prompt cached. The ping writes nothing to the 
 changes no schedule, and `agent/cache-kept-warm` reports what it cost. A press that no request
 follows costs that one ping.
 
-It is best effort. The provider may miss its cache, and a context sleeps about 10 s after its last
-call, so a request long after the ping keeps only the cached prompt.
+It is best effort, and each part lasts a different time. The prompt is the provider's to keep: it
+outlasted every wait measured, the longest 71 minutes, but no model promises that. The context sleeps
+10 to 12 s after its last call, and takes its socket with it. The socket closes 60 s after its last
+answer, even with the context awake.
+
+So code that waits longer keeps the agent ready itself: one `waitForEvent` held open on the agent's
+context holds it awake with no model call, and asking again within 60 s keeps the socket. A phone
+bridge does this for a whole call. Measured on a 20,000-token agent, a hand-over reaches the model in
+about 0.4 s with everything warm, 1.1 s on a new socket, and 2 s after the context slept.
 
 ## Your own credentials
 

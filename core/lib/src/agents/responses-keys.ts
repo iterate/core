@@ -198,7 +198,10 @@ const refusedUntil = new Map<string, number>();
  *  use), answered as the HTTP request would be: a Response whose body is the same server-sent
  *  events. Undefined when the socket cannot carry it: the upgrade refused, a request already in
  *  flight on it, an error before the response began (HTTP then answers with its status, and
- *  egress refreshes an expired token on a 401), or a socket that closed first. */
+ *  egress refreshes an expired token on a 401), or a socket that closed first. A kept socket that
+ *  cannot send is replaced for this same request: `sockets` outlives the context that slept, its
+ *  WebSocket does not, and a request over HTTP would leave no socket open, which is what a ping is
+ *  for. */
 async function viaSocket(
   send: (request: Request) => Promise<Response>,
   apiKey: string,
@@ -210,6 +213,7 @@ async function viaSocket(
   const name = `${apiKey}\n${session}`;
   let held = sockets.get(name);
   if (held?.onMessage) return undefined;
+  const kept = Boolean(held);
   if (!held) {
     const upgrade = await raceAbort(
       signal,
@@ -257,6 +261,11 @@ async function viaSocket(
   };
   const drop = () => release(false);
   signal.addEventListener("abort", drop, { once: true });
+  // an abort that landed as the upgrade answered came before this listener
+  if (signal.aborted) {
+    drop();
+    signal.throwIfAborted();
+  }
   let began: (served: boolean) => void = () => undefined;
   const beginning = new Promise<boolean>((resolve) => (began = resolve));
   let streaming = false;
@@ -309,10 +318,20 @@ async function viaSocket(
     socket.socket.send(JSON.stringify({ type: "response.create", ...body, stream: undefined }));
   } catch {
     release(false);
-    return undefined;
+    return kept ? viaSocket(send, apiKey, session, body, signal) : undefined;
   }
   if (!(await raceAbort(signal, beginning))) return undefined;
   return new Response(events, { headers: { "content-type": "text/event-stream" } });
+}
+
+/** Close a socket nobody took up: Workers needs one accepted before it can be closed. */
+function discardSocket(socket: WebSocket) {
+  try {
+    socket.accept();
+    socket.close();
+  } catch {
+    // already closed
+  }
 }
 
 /** Close `socket`, which may be closed already. */
@@ -325,8 +344,8 @@ function closeQuietly(socket: WebSocket) {
 }
 
 /** Race an un-abortable dial against the caller's signal: the caller regains control the moment it
- *  aborts (an interruption, the expiry, the idle watchdog). A Response or stream the orphaned dial
- *  answers after that is cancelled, so the provider stops and no unread body holds the edge's
+ *  aborts (an interruption, the expiry, the idle watchdog). A Response, stream or socket the orphaned
+ *  dial answers after that is cancelled, so the provider stops and nothing unread holds the edge's
  *  invocation open; a stream already open is cancelled by `drainSse` itself. */
 export function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
   const cancelLateBody = () =>
@@ -334,6 +353,7 @@ export function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> 
       (late) => {
         const body = late instanceof Response ? late.body : late;
         if (body instanceof ReadableStream) void body.cancel(signal.reason).catch(() => undefined);
+        if (late instanceof Response && late.webSocket) discardSocket(late.webSocket);
       },
       () => undefined,
     );

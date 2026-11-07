@@ -272,6 +272,88 @@ test("a refused upgrade, or an error before the answer begins, sends the request
   expect(failing.sockets[0]?.closed).toBe(true);
 });
 
+test("a socket left dead by a sleep is replaced for the same request, so a ping still leaves one open", async () => {
+  const line = openAi(() => [{ type: "response.completed", response: { output: [] } }]);
+  const { send, upgrades, sockets } = line;
+  const body = { stream: true, prompt_cache_key: "/agents/slept" };
+  const key = 'getSecret("/secrets/slept")';
+  await postResponses(send, body, [key], live, IDLE_MS, readText);
+  // the context slept: this module's map kept the socket, and a new incarnation cannot send on it
+  sockets[0]!.dead = true;
+  await postResponses(send, body, [key], live, IDLE_MS, readText);
+  expect({ upgrades: upgrades.length, posts: line.posts }).toEqual({ upgrades: 2, posts: 0 });
+  expect(sockets[1]?.sent).toEqual([
+    { type: "response.create", prompt_cache_key: "/agents/slept" },
+  ]);
+  // the next request finds the replacement, kept as any socket is
+  await postResponses(send, body, [key], live, IDLE_MS, readText);
+  expect(upgrades).toHaveLength(2);
+  sockets[1]?.close();
+});
+
+test("a socket just opened that cannot send goes over HTTP: one replacement, never a loop", async () => {
+  const line = openAi(() => [{ type: "response.completed", response: { output: [] } }], {
+    deadFrom: 1,
+  });
+  const { send, upgrades, sockets } = line;
+  const body = { stream: true, prompt_cache_key: "/agents/twice" };
+  const key = 'getSecret("/secrets/twice")';
+  await postResponses(send, body, [key], live, IDLE_MS, readText);
+  sockets[0]!.dead = true;
+  const answer = await postResponses(send, body, [key], live, IDLE_MS, readText);
+  expect({ answer, upgrades: upgrades.length, posts: line.posts }).toEqual({
+    answer: "answered over HTTP",
+    upgrades: 2,
+    posts: 1,
+  });
+});
+
+test("an abort as the upgrade answers closes that socket, and the next request opens another", async () => {
+  const line = openAi(() => [{ type: "response.completed", response: { output: [] } }]);
+  const controller = new AbortController();
+  const send = async (request: Request) => {
+    const answer = await line.send(request);
+    // two turns on: the dial's race has let go of the abort, and its caller has not resumed
+    queueMicrotask(() => queueMicrotask(() => controller.abort()));
+    return answer;
+  };
+  const body = { stream: true, prompt_cache_key: "/agents/aborted" };
+  const key = 'getSecret("/secrets/aborted")';
+  await expect(
+    postResponses(send, body, [key], controller.signal, IDLE_MS, readText),
+  ).rejects.toThrow();
+  expect(line.sockets[0]).toMatchObject({ closed: true, sent: [] });
+  expect(line).toMatchObject({ posts: 0 });
+  await postResponses(line.send, body, [key], live, IDLE_MS, readText);
+  expect({ upgrades: line.upgrades.length, posts: line.posts }).toEqual({ upgrades: 2, posts: 0 });
+  line.sockets[1]?.close();
+});
+
+test("an upgrade that answers after an abort is closed, so no socket stays open with no reader", async () => {
+  const line = openAi(() => []);
+  const controller = new AbortController();
+  let answerLate = () => {};
+  const send = (request: Request) =>
+    new Promise<Response>((resolve) => {
+      answerLate = () => resolve(line.send(request));
+    });
+  const body = { stream: true, prompt_cache_key: "/agents/late" };
+  const asked = postResponses(
+    send,
+    body,
+    ['getSecret("/secrets/late")'],
+    controller.signal,
+    IDLE_MS,
+    readText,
+  );
+  await Promise.resolve();
+  controller.abort();
+  await expect(asked).rejects.toThrow();
+  answerLate();
+  await new Promise((resolve) => setTimeout(resolve));
+  expect(line.sockets[0]?.closed).toBe(true);
+});
+
 test("a socket that closes during the answer fails that key's attempt, and the next request opens another", async () => {
   const { send, upgrades, sockets } = openAi((socket) => {
     setTimeout(() => socket.close()); // after the answer has begun
@@ -297,8 +379,12 @@ test("a socket that closes during the answer fails that key's attempt, and the n
 const KEYS = ['getSecret("/secrets/plan", { field: "accessToken" })', 'getSecret("/secrets/key")'];
 
 /** OpenAI behind egress: an upgrade answers a socket whose every request `reply` answers with
- *  events ("refuse": no socket), and a POST answers 200. */
-function openAi(reply: ((socket: FakeSocket) => unknown[]) | "refuse") {
+ *  events ("refuse": no socket), and a POST answers 200. The socket at `deadFrom`, and each after
+ *  it, cannot send. */
+function openAi(
+  reply: ((socket: FakeSocket) => unknown[]) | "refuse",
+  { deadFrom = Number.POSITIVE_INFINITY } = {},
+) {
   const upgrades: Array<{ authorization: string | null; session: string | null }> = [];
   const sockets: FakeSocket[] = [];
   const counts = { posts: 0 };
@@ -313,6 +399,7 @@ function openAi(reply: ((socket: FakeSocket) => unknown[]) | "refuse") {
     });
     if (reply === "refuse") return new Response("no upgrade", { status: 426 });
     const socket = new FakeSocket(reply);
+    socket.dead = sockets.length >= deadFrom;
     sockets.push(socket);
     return Object.assign(new Response(null, { status: 200 }), { webSocket: socket });
   };
@@ -333,6 +420,8 @@ type SocketEvent = { data?: string; code?: number; reason?: string };
 class FakeSocket {
   sent: unknown[] = [];
   closed = false;
+  /** Opened by an incarnation that has gone: a Workers WebSocket then throws on `send`. */
+  dead = false;
   readonly #listeners = new Map<string, Array<(event: SocketEvent) => void>>();
   readonly #reply: (socket: FakeSocket) => unknown[];
   constructor(reply: (socket: FakeSocket) => unknown[]) {
@@ -343,6 +432,7 @@ class FakeSocket {
     this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), listener]);
   }
   send(text: string) {
+    if (this.dead) throw new Error("Cannot perform I/O on behalf of a different Durable Object");
     this.sent.push(JSON.parse(text));
     const events = this.#reply(this);
     queueMicrotask(() => {
