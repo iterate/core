@@ -21,6 +21,7 @@ export default defineConfig([
       "app-session": "src/app-session.ts",
       client: "src/client/live-state.ts",
       react: "src/client/react.tsx",
+      "event-log": "src/client/event-log.ts",
       api: "src/api.ts",
       lib: "src/lib.ts",
       expression: "src/expression.ts",
