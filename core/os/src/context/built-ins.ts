@@ -104,6 +104,7 @@ import {
   SECRET_OAUTH_CALLBACK_PATH,
   isSecretOAuthState,
   normalizeSecretOAuth,
+  type SecretOAuthAttempt,
 } from "../secret-oauth.ts";
 import { unavailableError } from "../unavailable.ts";
 import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
@@ -160,6 +161,9 @@ type PlatformSecretsVerbs = {
   /** The platform's start hop (secret-oauth-start.ts): the provider's URL of the attempt in flight
    *  whose nonce its link names. You never call it. */
   oauthStartTarget(path: string, input: { nonce: string }): Promise<string>;
+  /** The platform's callback (secret-oauth-callback.ts): of the attempt whose nonce the state
+   *  names, the one person who may complete it and where the human goes on to. You never call it. */
+  oauthAttempt(path: string, input: { nonce: string }): Promise<SecretOAuthAttempt>;
   /** The platform's move of a Slack workspace here (integrations/verbs.ts `confirmIntegrationMove`):
    *  the token its consent's exchange held aside (secret/durable-object.ts `admitHeldToken`) stored,
    *  then `secret/set`, like `completeOAuth`. You never call it. */
@@ -1389,6 +1393,19 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           // a facet call answers `unknown` over the hop: SecretFacet.oauthStartTarget's answer
           async () =>
             (await secretFacet(["oauthStartTarget", { nonce: String(input?.nonce) }])) as string,
+        );
+      },
+      oauthAttempt: (secretPath, input) => {
+        assertPlatformCaller("secrets.oauthAttempt");
+        return onSecretContext(
+          secretPath,
+          ["oauthAttempt", secretPath, input],
+          // a facet call answers `unknown` over the hop: SecretFacet.oauthAttempt's answer
+          async () =>
+            (await secretFacet([
+              "oauthAttempt",
+              { nonce: String(input?.nonce) },
+            ])) as SecretOAuthAttempt,
         );
       },
       // The redirect URI to register at a provider for a client of the project's own: the

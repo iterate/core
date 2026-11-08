@@ -1223,22 +1223,6 @@ test.for([
   { name: "exp as a string", claims: { ...oauthState, exp: "1" }, state: false },
   { name: "context as a number", claims: { ...oauthState, context: 7 }, state: false },
   { name: "an array", claims: [oauthState], state: false },
-  {
-    name: "with a string next",
-    claims: { ...oauthState, next: "https://os.example/" },
-    state: true,
-  },
-  { name: "with a numeric next", claims: { ...oauthState, next: 1 }, state: false },
-  {
-    name: "with the person it was begun for",
-    claims: { ...oauthState, completedByUserId: "user_aaaabbbbccccddddaaaabbbbccccdddd" },
-    state: true,
-  },
-  {
-    name: "with a numeric completedByUserId",
-    claims: { ...oauthState, completedByUserId: 7 },
-    state: false,
-  },
   { name: "null", claims: null, state: false },
 ])("isSecretOAuthState: $name → $state", ({ claims, state }) => {
   expect(isSecretOAuthState(claims)).toBe(state);

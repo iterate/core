@@ -82,6 +82,7 @@ import {
   secretOAuthCallbackPathOf,
   type NormalizedSecretOAuthOptions,
   type PendingSecretOAuth,
+  type SecretOAuthAttempt,
   type SecretOAuthState,
 } from "../secret-oauth.ts";
 import {
@@ -153,6 +154,12 @@ type PendingAttempt = PendingSecretOAuth & {
    *  hop sends the browser on to (`oauthStartTarget`, secret-oauth-start.ts). */
   authorizationUrl?: string;
 };
+
+/** WHAT THE CALLBACK READS OF AN ATTEMPT (storage `attempt`), before its exchange and after it,
+ *  when a refreshed tab replays the callback: who may complete it and where the human goes on to
+ *  (`oauthAttempt`). Apart from `pending`, which the exchange consumes, so the replay finds it as
+ *  the first callback did; a new attempt replaces it, and it lapses with the state. */
+type AttemptLanding = SecretOAuthAttempt & { nonce: string; until: number };
 
 /** A MINT WHOSE FACT HAS YET TO LAND (storage `minted`): the cell `#doRefresh` sealed, and the
  *  write it refreshed. A provider may have rotated the refresh token on that mint, so the cell is
@@ -241,7 +248,7 @@ export class SecretFacet extends StreamProcessorDurableObject<
 > {
   /** The secret's READS alone — the current cell, and whether the secret was deleted, by the facts
    *  that say so. Everything else here is the platform's: `seal`, `clear`,
-   *  `beginOAuth`, `completeOAuth`, `verifyHmac`, `signHmac` and `clientSecretFor` are `itx.secrets`'s
+   *  `beginOAuth`, `completeOAuth`, `oauthAttempt`, `verifyHmac`, `signHmac` and `clientSecretFor` are `itx.secrets`'s
    *  (context/built-ins.ts, whose verbs append the attributed facts), `fetch` is egress's and
    *  `exportForProjectSeed` the operator's native RPC — each reaches this facet through the facet
    *  host's platform entry. */
@@ -724,13 +731,12 @@ export class SecretFacet extends StreamProcessorDurableObject<
     return Buffer.from(node, "hex");
   }
 
-  /** OAUTH, step one: keep the pending attempt, hand back the start link the human opens
-   *  (secret-oauth-start.ts). The `state` is a platform-signed claim naming this context, a nonce
-   *  only this attempt knows and `next`; the redirect URI is the platform's callback for the
-   *  client. A new
-   *  attempt replaces an unfinished one; the record, if any, stays until the exchange writes over
-   *  it. Nothing lands on any log until the exchange succeeds — an abandoned attempt leaves no
-   *  trace. */
+  /** OAUTH, step one: keep the pending attempt and its landing (`oauthAttempt`), hand back the
+   *  start link the human opens (secret-oauth-start.ts). The `state` is a platform-signed claim
+   *  naming this context and a nonce only this attempt knows (secret-oauth.ts `SecretOAuthState`);
+   *  the redirect URI is the platform's callback for the client. A new attempt replaces an
+   *  unfinished one; the record, if any, stays until the exchange writes over it. Nothing lands on
+   *  any log until the exchange succeeds — an abandoned attempt leaves no trace. */
   async beginOAuth(
     options: NormalizedSecretOAuthOptions,
     /** the platform origin the callback hangs under — the caller's (a facet knows none itself) */
@@ -743,8 +749,6 @@ export class SecretFacet extends StreamProcessorDurableObject<
       context: this.#address().context,
       nonce,
       exp: Date.now() + SECRET_OAUTH_TTL_MS,
-      next: options.next,
-      completedByUserId: options.completedByUserId,
     };
     const { clientId, clientSecret } = this.#oauthClientOf(options);
     // a placeholder that cannot resolve is refused now, before a human is sent to consent
@@ -774,6 +778,12 @@ export class SecretFacet extends StreamProcessorDurableObject<
       basedOn: (await this.#material())?.setAt ?? null,
       authorizationUrl: providerUrl,
     });
+    await this.ctx.storage.put<AttemptLanding>("attempt", {
+      nonce,
+      until: state.exp,
+      completedByUserId: options.completedByUserId,
+      next: options.next,
+    });
     await this.ctx.storage.delete("held");
     // the nonce names this attempt to whoever finishes it (integrations/verbs.ts): the callback
     // carries it, signed, in `state`
@@ -788,6 +798,25 @@ export class SecretFacet extends StreamProcessorDurableObject<
     if (!pending?.authorizationUrl || pending.nonce !== input?.nonce || pending.until <= Date.now())
       throw codedError("GONE", "no pending attempt matches this link — begin again");
     return pending.authorizationUrl;
+  }
+
+  /** What the callback reads of the attempt `nonce` (`itx.secrets.oauthAttempt`,
+   *  secret-oauth-callback.ts): the one person who may complete it and where the human goes on
+   *  to, before the exchange and again when a refreshed tab replays the callback. Refused once a
+   *  newer attempt replaced it or its state lapsed. */
+  async oauthAttempt(input: { nonce: string }): Promise<SecretOAuthAttempt> {
+    const attempt = await this.ctx.storage.get<AttemptLanding>("attempt");
+    if (attempt?.nonce === input?.nonce && attempt.until > Date.now())
+      return { completedByUserId: attempt.completedByUserId, next: attempt.next };
+    // an attempt whose landing was never kept apart (begun by an older host) answers from its
+    // pending record while it is in flight
+    const pending = await this.ctx.storage.get<PendingAttempt>("pending");
+    if (pending?.nonce === input?.nonce && pending.until > Date.now())
+      return {
+        completedByUserId: pending.options.completedByUserId,
+        next: pending.options.next,
+      };
+    throw codedError("GONE", "no attempt matches this callback — begin again");
   }
 
   /** What became of the attempt `nonce` (`itx.secrets.oauthResult`): the scopes granted and the

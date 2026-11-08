@@ -88,25 +88,31 @@ export type PendingSecretOAuth = {
   until: number;
 };
 
-/** The claims the platform signs into the `state` parameter — how the callback finds the secret:
- *  `context` is the secret's context, its Durable Object name (`<projectId>.iterate/secrets/<name>`;
- *  under `/users/<id>` or `/organizations/<id>` for a user's or an organization's own secret) — the
- *  callback derives the RESOURCE OWNER from it (context/paths.ts `resourceScope`) and admits the
- *  human by that. `kind` keeps these claims apart from every other claim set the same key signs. */
+/** The claims the platform signs into the `state` parameter — how the callback finds the secret
+ *  and the attempt, and NO MORE: a provider caps `state` (X at 500 characters), and the host keeps
+ *  everything else about the attempt (`SecretOAuthAttempt`). `context` is the secret's context,
+ *  its Durable Object name (`<projectId>.iterate/secrets/<name>`; under `/users/<id>` or
+ *  `/organizations/<id>` for a user's or an organization's own secret) — the callback derives the
+ *  RESOURCE OWNER from it (context/paths.ts `resourceScope`) and admits the human by that. `kind`
+ *  keeps these claims apart from every other claim set the same key signs. */
 export type SecretOAuthState = {
   kind: "secret-oauth";
   context: string;
   nonce: string;
   exp: number;
-  /** Where the callback redirects once the tokens are stored. */
-  next?: string | null;
   /** The start that sent this browser to the provider (secret-oauth-start.ts): the callback admits
    *  the code only from the browser holding that start's cookie. Absent from the state `beginOAuth`
    *  signs, present in the one each start re-signs. */
   start?: string;
-  /** The one person the attempt was begun for (iterate/api `SecretOAuthOptions.completedByUserId`):
-   *  the callback admits a session of theirs, in place of one that reaches the secret's owner. */
-  completedByUserId?: string | null;
+};
+
+/** What the callback needs of the attempt the state names, kept by the host from `beginOAuth` for
+ *  as long as the state lives (secret/durable-object.ts `oauthAttempt`): the one person who may
+ *  complete it (iterate/api `SecretOAuthOptions.completedByUserId`), admitted in place of one who
+ *  reaches the secret's owner, and where the callback sends the human once the tokens are stored. */
+export type SecretOAuthAttempt = {
+  completedByUserId: string | null;
+  next: string | null;
 };
 
 /** The platform's redirect URI for a secret's OAuth with a client of the project's own — registered
@@ -384,9 +390,7 @@ export function isSecretOAuthState(claims: unknown): claims is SecretOAuthState 
     typeof claims.context === "string" &&
     typeof claims.nonce === "string" &&
     typeof claims.exp === "number" &&
-    typeof (claims.next ?? "") === "string" &&
-    typeof (claims.start ?? "") === "string" &&
-    typeof (claims.completedByUserId ?? "") === "string"
+    typeof (claims.start ?? "") === "string"
   );
 }
 

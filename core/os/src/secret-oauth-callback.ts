@@ -14,7 +14,8 @@ import type { PlatformAddresses } from "./iterate-config.ts";
 import { moveOfferLanding } from "./integrations/connections.ts";
 import type { FinishConnectAnswer, FinishConnectInput } from "./integrations/verbs.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
-import { isSecretOAuthState, secretOwnerOf } from "./secret-oauth.ts";
+import { isSecretOAuthState, secretOwnerOf, type SecretOAuthAttempt } from "./secret-oauth.ts";
+import { isRecord } from "./secrets.ts";
 import { callbackPage } from "./callback-page.ts";
 import { withStartCleared } from "./secret-oauth-start.ts";
 import {
@@ -76,12 +77,35 @@ export async function secretOAuthCallback(
   } catch (error) {
     return callbackPage(400, error instanceof Error ? error.message : String(error));
   }
+  // The state names the attempt and no more (secret-oauth.ts `SecretOAuthState`): who may complete
+  // it and where the human goes on to, the secret's facet kept (`itx.secrets.oauthAttempt`).
+  let attempt: SecretOAuthAttempt;
+  try {
+    // `invoke` is untyped across the DO hop: this is the built-in's own declared answer
+    // (context/built-ins.ts `secrets.oauthAttempt`)
+    attempt = (await contextStub(
+      env.ITERATE_CONTEXT,
+      DurableObjectNameCodec.parse(claims.context),
+      "secret-oauth",
+    ).invoke(
+      ["itx", "builtins", "secrets", ["oauthAttempt", owner.path, { nonce: claims.nonce }]],
+      [],
+      { principal: null, platform: true },
+    )) as SecretOAuthAttempt;
+  } catch (error) {
+    // the attempt's own "gone" is a dead link; a platform failure propagates, so the human retries
+    if (!isRecord(error) || error.code !== "GONE") throw error;
+    return callbackPage(
+      400,
+      "This attempt is no longer in flight: a newer one replaced it, or it expired. Begin again.",
+    );
+  }
   // connect-callback.ts: the start cookie, the session (or the sign-in detour), then who it is
   const admitted = await admitCallback(request, env, addresses, {
     start: claims.start,
     admission:
-      claims.completedByUserId && owner.kind === "project"
-        ? onlyPerson(claims.completedByUserId)
+      attempt.completedByUserId && owner.kind === "project"
+        ? onlyPerson(attempt.completedByUserId)
         : reaching(`the secrets of ${owner.kind} ${owner.id}`, (controlPlane, reach) =>
             reachesSecretOwner(controlPlane, reach, owner),
           ),
@@ -157,15 +181,15 @@ export async function secretOAuthCallback(
   // Held by another project: the human's landing offers the move (`next` or nowhere).
   if (move)
     return withStartCleared(
-      await moveOfferLanding(env, authorization.reach, move, claims.next || null),
+      await moveOfferLanding(env, authorization.reach, move, attempt.next || null),
       start,
     );
-  // `next` was checked against the platform's and the Dash's origins before it was signed.
-  if (claims.next)
+  // `next` was checked against the platform's and the Dash's origins when the attempt began.
+  if (attempt.next)
     return withStartCleared(
       new Response(null, {
         status: 303,
-        headers: { location: claims.next, "cache-control": "no-store" },
+        headers: { location: attempt.next, "cache-control": "no-store" },
       }),
       start,
     );
