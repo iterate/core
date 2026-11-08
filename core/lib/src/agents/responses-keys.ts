@@ -111,7 +111,8 @@ export async function withStreamAttempt<T>(
  *  key), and the next key gets the same request; `read` starts afresh, so nothing
  *  of the failed answer is kept. When none succeeds, the last failure is thrown. `signal` is the
  *  turn's: once it aborts, the attempt in flight is abandoned and no later key is sent. `send` is
- *  the isolate's `fetch` (egress). */
+ *  the isolate's `fetch` (egress), one function per incarnation of the agent's context: the agent's
+ *  sockets are kept per `send`, so the global `fetch` would share them across incarnations. */
 export async function postResponses<T>(
   send: (request: Request) => Promise<Response>,
   body: Record<string, unknown>,
@@ -189,19 +190,27 @@ type AgentSocket = {
   idle?: ReturnType<typeof setTimeout>;
 };
 
-/** Each agent's socket, by key and session (the agent's path), and the keys whose upgrade was
- *  refused, which go over HTTP alone until the time noted. */
-const sockets = new Map<string, AgentSocket>();
-const refusedUntil = new Map<string, number>();
+/** What one caller's requests share: its sockets, by key and session (the agent's path), and the
+ *  keys whose upgrade was refused, which go over HTTP alone until the time noted. The caller is the
+ *  `send` it passes, one per incarnation of an agent's context (processor.ts `#send`). A WebSocket is
+ *  its opener's alone in Workers, so a new incarnation starts with none rather than find the last
+ *  one's dead, and two agents that share a path and a key in two projects never share a socket. */
+type CallerSockets = { open: Map<string, AgentSocket>; refusedUntil: Map<string, number> };
+const byCaller = new WeakMap<object, CallerSockets>();
+
+function socketsOf(caller: object): CallerSockets {
+  let mine = byCaller.get(caller);
+  if (!mine) byCaller.set(caller, (mine = { open: new Map(), refusedUntil: new Map() }));
+  return mine;
+}
 
 /** `body` on the agent's socket for `apiKey` (wss://api.openai.com/v1/responses, opened on first
  *  use), answered as the HTTP request would be: a Response whose body is the same server-sent
  *  events. Undefined when the socket cannot carry it: the upgrade refused, a request already in
  *  flight on it, an error before the response began (HTTP then answers with its status, and
  *  egress refreshes an expired token on a 401), or a socket that closed first. A kept socket that
- *  cannot send is replaced for this same request: `sockets` outlives the context that slept, its
- *  WebSocket does not, and a request over HTTP would leave no socket open, which is what a ping is
- *  for. */
+ *  cannot send is replaced for this same request, and `agent.socket-replaced` says so: a request over
+ *  HTTP would leave no socket open, which is what a ping is for. */
 async function viaSocket(
   send: (request: Request) => Promise<Response>,
   apiKey: string,
@@ -209,6 +218,7 @@ async function viaSocket(
   body: Record<string, unknown>,
   signal: AbortSignal,
 ): Promise<Response | undefined> {
+  const { open: sockets, refusedUntil } = socketsOf(send);
   if ((refusedUntil.get(apiKey) ?? 0) > Date.now()) return undefined;
   const name = `${apiKey}\n${session}`;
   let held = sockets.get(name);
@@ -316,12 +326,25 @@ async function viaSocket(
     // input: only the new items, with `previous_response_id`, measured no faster, since the prompt
     // cache covers the rest.
     socket.socket.send(JSON.stringify({ type: "response.create", ...body, stream: undefined }));
-  } catch {
+  } catch (error) {
     release(false);
-    return kept ? viaSocket(send, apiKey, session, body, signal) : undefined;
+    if (!kept) return undefined;
+    reportReplaced(socket, String(error));
+    return viaSocket(send, apiKey, session, body, signal);
   }
   if (!(await raceAbort(signal, beginning))) return undefined;
   return new Response(events, { headers: { "content-type": "text/event-stream" } });
+}
+
+/** Say in the logs that a kept socket was replaced, and why: the platform's only sign of it.
+ *  `requests` is how many it carried before the one it failed. */
+function reportReplaced(socket: AgentSocket, why: string) {
+  console.warn({
+    event: "agent.socket-replaced",
+    why: why.slice(0, 200),
+    openForMs: Date.now() - socket.openedAt,
+    requests: socket.requests - 1,
+  });
 }
 
 /** Close a socket nobody took up: Workers needs one accepted before it can be closed. */

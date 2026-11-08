@@ -1,7 +1,7 @@
 // responses-keys.test.ts — the key stack's spec: the body every key takes, which key answers, and
 // when a request rides the agent's socket.
 
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   bodyForKeys,
   postResponses,
@@ -272,23 +272,73 @@ test("a refused upgrade, or an error before the answer begins, sends the request
   expect(failing.sockets[0]?.closed).toBe(true);
 });
 
-test("a socket left dead by a sleep is replaced for the same request, so a ping still leaves one open", async () => {
+test("a new incarnation never sees the last one's sockets: it opens its own at once, though the last died mid-answer", async () => {
+  const line = openAi((socket) =>
+    socket === line.sockets[0]
+      ? [{ type: "response.created" }]
+      : [{ type: "response.completed", response: { output: [] } }],
+  );
+  // each incarnation of an agent's context passes its own `send`
+  const after = (request: Request) => line.send(request);
+  const body = { stream: true, prompt_cache_key: "/agents/midway" };
+  const key = 'getSecret("/secrets/midway")';
+  const dying = new AbortController();
+  const stranded = postResponses(
+    (request: Request) => line.send(request),
+    body,
+    [key],
+    dying.signal,
+    IDLE_MS,
+    readText,
+  ).catch(() => undefined);
+  await vi.waitFor(() => expect(line.sockets[0]?.sent).toHaveLength(1));
+  await postResponses(after, body, [key], live, IDLE_MS, readText);
+  expect({ upgrades: line.upgrades.length, posts: line.posts }).toEqual({ upgrades: 2, posts: 0 });
+  // the dead one ending later takes nothing of the new one's
+  dying.abort();
+  await stranded;
+  await postResponses(after, body, [key], live, IDLE_MS, readText);
+  expect(line.upgrades).toHaveLength(2);
+  line.sockets[1]?.close();
+});
+
+test("two agents with one path in two projects, in one isolate, keep a socket each", async () => {
+  const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const line = openAi(() => [{ type: "response.completed", response: { output: [] } }]);
-  const { send, upgrades, sockets } = line;
-  const body = { stream: true, prompt_cache_key: "/agents/slept" };
-  const key = 'getSecret("/secrets/slept")';
-  await postResponses(send, body, [key], live, IDLE_MS, readText);
-  // the context slept: this module's map kept the socket, and a new incarnation cannot send on it
-  sockets[0]!.dead = true;
-  await postResponses(send, body, [key], live, IDLE_MS, readText);
-  expect({ upgrades: upgrades.length, posts: line.posts }).toEqual({ upgrades: 2, posts: 0 });
-  expect(sockets[1]?.sent).toEqual([
-    { type: "response.create", prompt_cache_key: "/agents/slept" },
+  const projectA = (request: Request) => line.send(request);
+  const projectB = (request: Request) => line.send(request);
+  const body = { stream: true, prompt_cache_key: "/agents/assistant" };
+  const key = 'getSecret("/secrets/openai")';
+  for (const send of [projectA, projectB, projectA, projectB])
+    await postResponses(send, body, [key], live, IDLE_MS, readText);
+  expect({ upgrades: line.upgrades.length, posts: line.posts }).toEqual({ upgrades: 2, posts: 0 });
+  expect(warned).not.toHaveBeenCalled();
+  for (const socket of line.sockets) socket.close();
+  warned.mockRestore();
+});
+
+test("a kept socket that cannot send is replaced for the same request, and the log says why", async () => {
+  const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const line = openAi(() => [{ type: "response.completed", response: { output: [] } }]);
+  const body = { stream: true, prompt_cache_key: "/agents/unsendable" };
+  const key = 'getSecret("/secrets/unsendable")';
+  await postResponses(line.send, body, [key], live, IDLE_MS, readText);
+  line.sockets[0]!.dead = true;
+  await postResponses(line.send, body, [key], live, IDLE_MS, readText);
+  expect({ upgrades: line.upgrades.length, posts: line.posts }).toEqual({ upgrades: 2, posts: 0 });
+  expect(line.sockets[1]?.sent).toEqual([
+    { type: "response.create", prompt_cache_key: "/agents/unsendable" },
   ]);
-  // the next request finds the replacement, kept as any socket is
-  await postResponses(send, body, [key], live, IDLE_MS, readText);
-  expect(upgrades).toHaveLength(2);
-  sockets[1]?.close();
+  // the requests it carried before this one, and the error that ended it
+  expect(warned).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "agent.socket-replaced",
+      why: expect.stringContaining("WebSocket is closed"),
+      requests: 1,
+    }),
+  );
+  line.sockets[1]?.close();
+  warned.mockRestore();
 });
 
 test("a socket just opened that cannot send goes over HTTP: one replacement, never a loop", async () => {
@@ -420,7 +470,7 @@ type SocketEvent = { data?: string; code?: number; reason?: string };
 class FakeSocket {
   sent: unknown[] = [];
   closed = false;
-  /** Opened by an incarnation that has gone: a Workers WebSocket then throws on `send`. */
+  /** A socket that can no longer be sent on, closed under the agent: `send` then throws. */
   dead = false;
   readonly #listeners = new Map<string, Array<(event: SocketEvent) => void>>();
   readonly #reply: (socket: FakeSocket) => unknown[];
@@ -432,7 +482,7 @@ class FakeSocket {
     this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), listener]);
   }
   send(text: string) {
-    if (this.dead) throw new Error("Cannot perform I/O on behalf of a different Durable Object");
+    if (this.dead) throw new Error("WebSocket is closed");
     this.sent.push(JSON.parse(text));
     const events = this.#reply(this);
     queueMicrotask(() => {

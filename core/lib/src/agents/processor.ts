@@ -2017,6 +2017,13 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   /** This incarnation's warm-up, so a second press while it runs sends no second ping. */
   #warming = false;
 
+  /** This incarnation's way out to a model with the project's own keys. One per incarnation, since
+   *  the agent's sockets are kept per `send` (responses-keys.ts): a new incarnation opens its own. */
+  readonly #send = (request: Request) => {
+    const send = this.deps.fetch;
+    return send ? send(request) : fetch(request);
+  };
+
   /** THE COMPACTION: the request's own input, the
    *  summarize instruction appended as its last message (user role: the cache breakpoint before it
    *  is the turn's own, so that whole input is read from cache), on the request's own model, the
@@ -2159,9 +2166,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     const read = (response: Response, attempt: StreamAttempt) =>
       readAnswer(model, response, attempt, { onAnswer, onDelta });
     if (llm.apiKeys.length > 0) {
-      const send = this.deps.fetch || ((request: Request) => fetch(request));
       return postResponses(
-        send,
+        this.#send,
         { model, ...body },
         llm.apiKeys,
         signal,
