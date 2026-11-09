@@ -36,6 +36,7 @@ import {
   wrapScript,
 } from "./results-preamble.ts";
 import { type AgentInputGate, isOtherContext } from "./message.ts";
+import { AGENTS_PATH } from "./install.ts";
 import { standingFileSection, standingInstructionFiles } from "./standing-instructions.ts";
 import { AgentContract, type AgentState, type LlmUsage } from "./contract.ts";
 import { AGENT_COMPACTION_PROMPT, DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
@@ -517,13 +518,13 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     return (this.#identityRead = await itx.whoami());
   }
 
-  /** A certificate on `/`, where the catalog folds it (catalog.ts): stamped with this agent's path,
-   *  which is all the catalog trusts. Unkeyed there: a key on `/` is anyone's to take first, and a
-   *  same-body event under it would swallow this one; the catalog's fold is idempotent, so a retry
-   *  that lands it twice changes nothing. */
+  /** The death certificate on `/agents`, where the catalog folds it (catalog.ts). A birth needs
+   *  none there: the agent's context announced itself when it first woke. Unkeyed there: a key on
+   *  `/agents` is anyone's to take first, and a same-body event under it would swallow this one; the
+   *  catalog's fold is idempotent, so a retry that lands it twice changes nothing. */
   async #postToTheCatalog({ type, payload }: AgentEmitted): Promise<unknown> {
     using itx = this.deps.getItx();
-    return await itx.cd("/").append({ type, payload });
+    return await itx.cd(AGENTS_PATH).append({ type, payload });
   }
 
   /** Every change the facts make is stamped with the event's time: `lastActivityAt` moves exactly
@@ -1461,9 +1462,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
     // THE SAGA — the birth, from state at head, in the background: at most once per incarnation,
     // and any later delivery over the same state runs it again, so an attempt lost to an eviction
-    // costs nothing. Nothing to provision: the certificate goes to `/` (the project catalog) first,
-    // then lands here in ONE append with the default system prompt beside it — keyed here, so a
-    // retry appends nothing twice. An operator's instructions are their own `context-added` after.
+    // costs nothing. Nothing to provision, and nothing to tell the catalog: it lists this context
+    // already (catalog.ts). The certificate lands here in ONE append with the default system prompt
+    // beside it — keyed here, so a retry appends nothing twice. An operator's instructions are their own `context-added` after.
     if (state.creation?.status === "requested") {
       if (this.#creating) return;
       this.#creating = true;
@@ -1480,7 +1481,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: { path },
             idempotencyKey: `agent/created:${path}`,
           };
-          await this.#postToTheCatalog(certificate); // the project catalog first
           // the project's starting configuration, before the certificate: a retry appends it once
           const defaults = this.deps.defaultConfig?.();
           if (defaults)
@@ -1507,7 +1507,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
     // THE DEATH — the birth's mirror, only of an agent that was born, and the LOOP's gate: a deleted
     // agent (or one asked to go) runs no more turns, whatever the fold below says. Nothing to tear
-    // down, so the saga is the death certificate alone: `/` first (the catalog drops the entry), then
+    // down, so the saga is the death certificate alone: `/agents` first (the catalog drops the entry), then
     // here — keyed, so a retry appends nothing twice. A throw appends nothing: the next at-head pass
     // is the retry, and there is no delete-failed fact.
     if (state.deletion) {

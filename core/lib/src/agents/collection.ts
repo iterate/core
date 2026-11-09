@@ -3,11 +3,17 @@
 // A DELETED AGENT'S FACET IS NEVER HOSTED AGAIN. `delete` ends with the `agent` row gone and
 // `ctx.facets.delete` taking the facet's storage with it (core/os context/facet-host.ts
 // `#deleteFacet`); a verb on a dead agent answers from the catalog's `deleted` row on `/`
-// (catalog.ts), never by `facets.get("agent", spec)` on its context. That call would host the facet
+// (catalog.ts, on `/agents`), never by `facets.get("agent", spec)` on its context. That call would host the facet
 // again (a new database folded from the whole log, an instance that can run on past the context's
 // incarnation), and aborting a running loaded facet resets a whole Durable Object (core/os
 // context/residency.ts, the birth reset; core/os e2e/facet-abort-storage-reset.e2e.test.ts
 // measures it).
+//
+// AN AGENT IS ANY CONTEXT UNDER `/agents`, iterate's own or not (catalog.ts). An iterate agent hosts
+// the `agent` facet, which `create` binds. Any other agent (a coding session a bridge appends to,
+// say) hosts nothing here: a message to it is the same `agent/context-added` appended to its
+// context, which its own subscription delivers to whatever runs it, and its death is the
+// certificate on `/agents` alone.
 import { RpcTarget } from "cloudflare:workers";
 import type { StreamEvent } from "../stream/processor.ts";
 import { codedError, errorCode, resolveContextPath } from "../lib.ts";
@@ -15,49 +21,75 @@ import type { FacetSpec, IterateContextApi } from "../api.ts";
 import type { AgentHandleApi, AgentsApi } from "./api.ts";
 import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
-import { agentsFacetSpec } from "./install.ts";
+import { appendMessage } from "./message.ts";
+import { AGENTS_PATH, agentsFacetSpec } from "./install.ts";
 
 /** The subscription rows every agent gets when it's created. They copy what a list shows about the
- *  agent from its own log onto `/` as `agent/listing-updated` events, and the catalog folds them
- *  (catalog.ts). That way a list reads only `/` and never wakes an agent, and the agent itself needs
- *  no list code. An agent created before these rows existed never gets them, so lists show only its
- *  path. They're appended as `subscription-configured` events because `subscribe` only lets loaded
- *  code lend live callbacks. */
+ *  agent from its own log onto `/agents` as `agent/listing-updated` events, and the catalog folds
+ *  them (catalog.ts). That way a list reads only `/agents` and never wakes an agent, and the agent
+ *  itself needs no list code. An agent whose log has no such rows shows only its path. They're
+ *  appended as `subscription-configured` events because `subscribe` only lets loaded code lend
+ *  live callbacks. */
 const CATALOG_ROWS = [
-  // the name the agent gives itself
+  // what runs it: the agent's own birth certificate
   {
-    name: "catalog-title",
-    consumes: ["events.iterate.com/agent/summary-updated"],
-    filter: `$type(payload.title) = "string"`,
+    name: "catalog-kind",
+    consumes: ["events.iterate.com/agent/created"],
     target: {
-      path: "/",
+      path: AGENTS_PATH,
       type: "events.iterate.com/agent/listing-updated",
-      payload: `{ "title": $substring(payload.title, 0, 120) }`,
+      payload: `{ "kind": "iterate" }`,
+    },
+  },
+  // what the agent says about itself: the name it gives itself, what it is doing now (or what it
+  // waits for; a wait cleared with null clears it) and its purpose or conclusions
+  {
+    name: "catalog-summary",
+    consumes: ["events.iterate.com/agent/summary-updated"],
+    filter: `$type(payload.title) = "string" or $type(payload.activity) = "string" or $type(payload.waitingFor) = "string" or payload.waitingFor = null or $type(payload.description) = "string"`,
+    target: {
+      path: AGENTS_PATH,
+      type: "events.iterate.com/agent/listing-updated",
+      payload: `{
+        "title": $type(payload.title) = "string" ? $substring(payload.title, 0, 120),
+        "activity": $type(payload.activity) = "string"
+          ? $substring(payload.activity, 0, 200)
+          : $type(payload.waitingFor) = "string"
+            ? "Waiting for " & $replace(payload.waitingFor, "_", " ")
+            : (payload.waitingFor = null ? ""),
+        "description": $type(payload.description) = "string" ? $substring(payload.description, 0, 500)
+      }`,
     },
   },
   // the first non-blank line of each message from a person (role "user", from a user or with no
-  // actor); the catalog keeps the earliest
+  // actor), of which the catalog keeps the earliest; the message also answers whatever the agent
+  // was waiting for and starts its next turn, so it clears the activity
   {
     name: "catalog-first-words",
     consumes: ["events.iterate.com/agent/context-added"],
     filter: `payload.role = "user" and $not(payload.actor.type != "user")`,
     target: {
-      path: "/",
+      path: AGENTS_PATH,
       type: "events.iterate.com/agent/listing-updated",
       payload: `{
         "title": $substring(($split(payload.content, "\\n").$trim($))[$ != ""][0], 0, 120),
-        "fromWords": true
+        "fromWords": true,
+        "activity": ""
       }`,
     },
   },
-  // each model request, when it starts and when it ends: the copy carries no title, only its time
+  // each model request, when it starts (working) and when it ends (idle)
   {
-    name: "catalog-activity",
+    name: "catalog-status",
     consumes: [
       "events.iterate.com/agent/llm-request-requested",
       "events.iterate.com/agent/llm-request-settled",
     ],
-    target: { path: "/", type: "events.iterate.com/agent/listing-updated" },
+    target: {
+      path: AGENTS_PATH,
+      type: "events.iterate.com/agent/listing-updated",
+      payload: `{ "status": type = "events.iterate.com/agent/llm-request-requested" ? "working" : "idle" }`,
+    },
   },
 ] satisfies Parameters<IterateContextApi["subscribe"]>[0][];
 
@@ -68,43 +100,84 @@ const CERTIFICATE_WAIT_MS = 30_000;
  *  `TERMINAL_WAIT_SLICE_MS` says why). */
 const CERTIFICATE_WAIT_SLICE_MS = 5_000;
 
+/** The catalog on `/agents` (catalog.ts) through the log's head, and the offset it is folded to. */
+export type CatalogRead = () => Promise<{ offset: number; state: AgentCatalogState }>;
+
+/** How long `create` waits for a new agent to be listed: its context announces itself to
+ *  `/agents` when it first wakes, which `create` has just made it do. */
+const LISTED_WAIT_MS = 10_000;
+
 /** `itx.agents` (api.ts `AgentsApi`) over one base: the root's at `/`, an agent's own at its
  *  path (`at(base)`, catalog.ts). */
 export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   private readonly getItx: () => IterateContextApi & Disposable;
-  private readonly catalog: () => Promise<AgentCatalogState>;
+  private readonly catalogRead: CatalogRead;
   private readonly base: string;
 
-  constructor(
-    getItx: () => IterateContextApi & Disposable,
-    catalog: () => Promise<AgentCatalogState>,
-    base = "/",
-  ) {
+  constructor(getItx: () => IterateContextApi & Disposable, catalog: CatalogRead, base = "/") {
     super();
     this.getItx = getItx;
-    this.catalog = catalog;
+    this.catalogRead = catalog;
     this.base = base;
+  }
+
+  private async catalog() {
+    return (await this.catalogRead()).state;
   }
 
   get(path: string) {
     path = resolveContextPath(this.base, path);
     if (path === "/") throw new Error("An agent needs its own context path");
-    return new AgentReference(this.getItx, path, this.catalog, this.base);
+    return new AgentReference(this.getItx, path, () => this.catalog(), this.base);
   }
 
-  /** Every agent created under the project, by path, with what a list shows about it. It reads only
-   *  the catalog on `/` (catalog.ts); reading the agents themselves would wake every one. */
+  /** Every agent, by path: every context under `/agents`, with what a list shows about it. It reads
+   *  only the catalog on `/agents` (catalog.ts); reading the agents themselves would wake every
+   *  one. */
   async list() {
     return Object.entries((await this.catalog()).agents).map(([path, row]) => ({
       path,
       createdAt: row.createdAt,
+      parent: row.parent || null,
+      kind: row.kind || null,
+      host: row.host || null,
+      status: row.status || null,
+      activity: row.activity || null,
+      description: row.description || null,
       title: row.title || null,
       lastActivityAt: row.lastActivityAt || null,
     }));
   }
 
+  /** Until the catalog lists `path`, a context under `/agents`: its own announcement lands there
+   *  when it first wakes, a moment after the call that woke it. Bounded: one that has not landed by
+   *  LISTED_WAIT_MS is logged and left to land on the context's next wake (core/os
+   *  `announceToAncestors` retries it then), so the agent `create` made is not refused for it. */
+  async #untilListed(path: string) {
+    if (!path.startsWith(`${AGENTS_PATH}/`)) return;
+    const { offset, state } = await this.catalogRead();
+    if (state.agents[path] || state.deleted[path]) return;
+    using itx = this.getItx();
+    try {
+      await itx.cd(AGENTS_PATH).waitForEvent({
+        type: "events.iterate.com/itx/child-created",
+        payload: { childPath: path },
+        afterOffset: offset,
+        timeoutMs: LISTED_WAIT_MS,
+      });
+    } catch (error) {
+      if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
+      console.warn({
+        event: "agent-collection.not-listed",
+        message: "the agent's context has not announced itself to /agents yet",
+        path,
+        waitedMs: LISTED_WAIT_MS,
+      });
+    }
+  }
+
   /** Bring the agent at `path` into being: the `agent` processor row on that path, then
-   *  `agent/create-requested`, then the terminal fact — `agent/created` (in the catalog by then), or
+   *  `agent/create-requested`, then the terminal fact — `agent/created`, listed by then, or
    *  `agent/create-failed`, thrown; a later call is a new attempt. Idempotent: a created agent answers
    *  at once, and a creation already open is WAITED ON, never requested again — the terminal is
    *  sought after the request that opened it, so a certificate landing between the read and the
@@ -149,7 +222,10 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     if (state.deletion) throw dead;
     // The agent's row: its birth enables it, and enabling it again appends nothing.
     await context.processors.enable("agent", spec);
-    if (state.creation?.status === "created") return { path };
+    if (state.creation?.status === "created") {
+      await this.#untilListed(path);
+      return { path };
+    }
     let requestedAtOffset: number;
     if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
     else {
@@ -189,6 +265,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     );
     if (settled.type === "events.iterate.com/agent/create-failed")
       throw new Error(`agent ${path}: creation failed — ${String(settled.payload?.error)}`);
+    await this.#untilListed(path);
     return { path };
   }
 
@@ -205,16 +282,19 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     if (path === "/") throw new Error("An agent needs its own context path");
     const context = itx.cd(path);
     // THE CATALOG, THEN THE FACET BY NAME, so no call here hosts a facet for an agent that has
-    // none (the header says why). Never born: nothing to delete. Dead with no `agent` row left:
+    // none (the header says why). Never listed: nothing to delete. Another kind of agent hosts no
+    // facet: its death is the certificate on `/agents` alone. Dead with no `agent` row left:
     // answered at once. Otherwise the facet is read by name: the row's own — alive, or dead with
     // the row not yet gone (a retry, or a second delete racing the saga), whose certificate is
-    // waited for on this path as ever. NO_FACET there is a row gone meanwhile (dead: answered) or
-    // a live agent without its row, which only `create` binds again: thrown. Over the loopback
-    // stub the list's answer types as an RPC result, not the rows the context declares; the wire
-    // copied it.
+    // waited for on this path as ever. NO_FACET there is a row gone meanwhile (dead: answered), a
+    // context that never hosted an iterate agent (the certificate alone), or a live iterate agent
+    // without its row, which only `create` binds again: thrown. Over the loopback stub the list's
+    // answer types as an RPC result, not the rows the context declares; the wire copied it.
     const catalog = await this.catalog();
-    if (!catalog.deleted[path] && !catalog.agents[path])
+    const row = catalog.agents[path];
+    if (!catalog.deleted[path] && !row && path.startsWith(`${AGENTS_PATH}/`))
       throw codedError("NOT_CREATED", `agent ${path}: not created — nothing to delete`, { path });
+    if (row?.kind && row.kind !== "iterate") return await this.#certifyDeath(path);
     const rows = async () => (await context.processors.list()) as unknown as { name: string }[];
     if (catalog.deleted[path] && !(await rows()).some((row) => row.name === "agent"))
       return { path };
@@ -228,6 +308,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     } catch (error) {
       if (errorCode(error) !== "NO_FACET") throw error;
       if (catalog.deleted[path] || (await this.catalog()).deleted[path]) return { path };
+      if (row && row.kind !== "iterate") return await this.#certifyDeath(path);
       throw new Error(
         `agent ${path}: its context has no \`agent\` processor — itx.agents.create(${JSON.stringify(path)}) binds it again`,
       );
@@ -257,6 +338,17 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     // deletion-order rationale.
     if ((await rows()).some((row) => row.name === "agent"))
       await context.processors.disable("agent");
+    return { path };
+  }
+
+  /** The death of an agent that hosts no facet here: its certificate on `/agents`, which the catalog
+   *  folds. Unkeyed, as an iterate agent's own (processor.ts): the fold is idempotent. */
+  async #certifyDeath(path: string) {
+    using itx = this.getItx();
+    await itx.cd(AGENTS_PATH).append({
+      type: "events.iterate.com/agent/deleted",
+      payload: { path },
+    });
     return { path };
   }
 }
@@ -330,19 +422,35 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
   }
 
   /** A person's words: a dead agent refuses from the catalog (the header: its facet is never hosted
-   *  again); a live one's words go to the facet its context's `agent` row hosts, by NAME — never by
-   *  spec, so no facet is hosted for an agent that has none. NO_FACET is then a context without an
-   *  `agent` row: never born, dead since, or a live agent without its row, which only `create` binds
-   *  again — each refused. The facet appends them, so they are stamped with the agent's own path;
-   *  the sender rides beside them as the base, which the sender's own `itx.agents` row pins
-   *  (`itx.cd('/').agents.at(<sender>)`, written by `create`) — `/` for every context that reaches
-   *  the root's collection, which the fold reads as a person (processor.ts). `options` (`{ trigger:
-   *  false }`) rides as the facet's third argument, after the base (message.ts). */
+   *  again), and so does a path under `/agents` it does not list (its context is not even called).
+   *  An iterate agent's words go to the facet its context's `agent` row hosts, by NAME — never by
+   *  spec, so no facet is hosted for an agent that has none. The facet appends them, so they are
+   *  stamped with the agent's own path; the sender rides beside them as the base, which the
+   *  sender's own `itx.agents` row pins (`itx.cd('/').agents.at(<sender>)`, written by `create`) —
+   *  `/` for every context that reaches the root's collection, which the fold reads as a person
+   *  (processor.ts). `options` (`{ trigger: false }`) rides as the facet's third argument, after the
+   *  base (message.ts). Any other kind of agent hosts no facet: the same event is appended to its
+   *  context from here (message.ts `appendMessage`), and its own subscription delivers it. NO_FACET
+   *  on a row of no kind (one created before kinds were copied, or a context that never said what
+   *  it is) is such a context too; on an iterate agent, one without its row, which only `create`
+   *  binds again: refused. */
   async message(...[input, options]: Parameters<AgentHandleApi["message"]>) {
     const path = this.path;
     const dead = new Error(`agent ${path}: deleted`);
-    // The catalog first: a dead agent's context is not even called.
-    if ((await this.catalog()).deleted[path]) throw dead;
+    const notCreated = () =>
+      codedError(
+        "NOT_CREATED",
+        `agent ${path}: not created — itx.agents.create(${JSON.stringify(path)}) first`,
+        { path },
+      );
+    // The catalog first: a dead agent's context is not even called, nor an unlisted one's.
+    let catalog = await this.catalog();
+    if (catalog.deleted[path]) throw dead;
+    const row = catalog.agents[path];
+    if (!row && path.startsWith(`${AGENTS_PATH}/`)) throw notCreated();
+    const from = this.base === "/" ? undefined : this.base;
+    if (row?.kind && row.kind !== "iterate")
+      return await appendMessage(this.getItx, path, (itx) => itx.cd(path), input, from, options);
     // The facet is this app's AgentDurableObject, whose `message` answers the event it appended
     // (durable-object.ts: `message(input, from, options)`) — ours, so asserted.
     try {
@@ -360,14 +468,12 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
     }
     // Read AGAIN to name the refusal: a delete that finished since the first read has taken the row
     // and the facet, and only a fresh read knows it.
-    const catalog = await this.catalog();
+    catalog = await this.catalog();
     if (catalog.deleted[path]) throw dead;
-    if (!catalog.agents[path])
-      throw codedError(
-        "NOT_CREATED",
-        `agent ${path}: not created — itx.agents.create(${JSON.stringify(path)}) first`,
-        { path },
-      );
+    const listed = catalog.agents[path];
+    if (!listed) throw notCreated();
+    if (listed.kind !== "iterate")
+      return await appendMessage(this.getItx, path, (itx) => itx.cd(path), input, from, options);
     throw new Error(
       `agent ${path}: its context has no \`agent\` processor — itx.agents.create(${JSON.stringify(path)}) binds it again`,
     );

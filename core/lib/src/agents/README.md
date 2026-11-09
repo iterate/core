@@ -24,8 +24,9 @@ case "events.iterate.com/project/worker-updated":
   await installAgents(itx);
 ```
 
-`installAgents` enables the catalog processor on `/` and writes the `itx.agents` rewrite rule to the
-collection facet; it does the same every time. Every facet of the app, the collection's and each
+`installAgents` enables the catalog processor on `/agents` and writes the `itx.agents` rewrite rule
+on the root to the collection facet there; it does the same every time, and disables the catalog
+the root held before it moved. Every facet of the app, the collection's and each
 agent's, names its class in `agents.ts` of the project's published config
 (`{ className, mainModule: "agents.ts", source: itx.cd('/').config }`, `agentsFacetSpec`), so
 nothing is copied into the project. A commit that changes what `agents.ts` bundles restarts the
@@ -35,12 +36,34 @@ deployment).
 Importing `iterate/agents` registers `itx.agents` on iterate/api's `InstalledAppRoots`:
 `itx as IterateContextApiWith<"agents">` types `create`, `get(path).message`, `list` and `delete`.
 
-`itx.agents.list()` reads a whole list from `/` in one go, with each agent's title and when it was
-last active, so showing a list of agents wakes none of them. Agents have no list code of their own.
-Each agent gets three subscription rows when it's created (`collection.ts` `CATALOG_ROWS`). They copy
-its title, the first line a person sends it, and each model request onto `/` as
-`agent/listing-updated` events (`itx.subscribe` with `target: { path: "/", … }`), and the catalog
-folds those. An agent created before those rows existed shows only its path.
+## What an agent is
+
+An agent is any context under `/agents`, at any depth. Iterate's own agents live there
+(`/agents/web/<moment>`, `/agents/email/t<thread>`), and so can anything else that is a
+conversation with a title, a status and a way to message it, such as a coding session a bridge
+appends to (`/agents/claude/<session>`, its subagents beneath it). Every context announces itself to
+each of its ancestors when it first wakes (`itx/child-created`), and the catalog on `/agents` folds
+those announcements, so it lists every context below it with no registration step. Anything
+appended under `/agents` is listed, whether or not it is an agent: that is the rule. A row's
+`parent` is the nearest row above it, so `/agents/web`, which only holds the web agents, is the
+parent of each of them.
+
+`itx.agents.list()` reads a whole list from `/agents` in one go, so showing a list of agents wakes
+none of them. Each row is small and the same for every kind of agent: `kind` (what runs it:
+`iterate`, `claude`, …), `host`, `status` (`working`, `idle`, `waiting`, `ended`), `activity` (one
+line), `description` (a few sentences), `title` and `lastActivityAt`. Everything but `createdAt`
+and `parent` comes from copies of the agent's own events onto `/agents` as `agent/listing-updated`
+(`itx.subscribe` with `target: { path: "/agents", … }`): copies only, since only the platform can
+set `source.copiedFrom`, and an older copy never undoes a newer one, field by field. An iterate
+agent gets four subscription rows when it's created (`collection.ts` `CATALOG_ROWS`): its birth
+(`kind: "iterate"`), its summary (title, activity, description), the first line a person sends it,
+and each model request (`working`, then `idle`). Another kind of agent configures its own rows. An
+agent created before the catalog moved to `/agents` shows only its path.
+
+Messaging any agent is appending `agent/context-added` to its context. `get(path).message(input)`
+sends an iterate agent's words through its facet, and appends the same event straight to any other
+agent's context, whose own subscription delivers it to whatever runs it. `delete(path)` of an agent
+iterate does not run records its death on `/agents` and nothing else.
 
 - `contract.ts` — an agent's events and state; `processor.ts` — the reduce and the loop;
   `render.ts` — each request as OpenAI reads it; `processor.test.ts` — the processor's spec.

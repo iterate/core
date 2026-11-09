@@ -2,10 +2,9 @@
 // (processor.ts) and `message()`, a person's words.
 import { codedError } from "../lib.ts";
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
-import type { StreamEvent } from "../stream/processor.ts";
 import type { AgentHandleApi } from "./api.ts";
-import { type AgentInputGate, messagePayload } from "./message.ts";
-import type { AgentState, FileAttachment } from "./contract.ts";
+import { type AgentInputGate, appendMessage } from "./message.ts";
+import type { AgentState } from "./contract.ts";
 import { type AgentConfigPatch, AgentProcessor } from "./processor.ts";
 
 // Not `implements Pick<AgentHandleApi, "message">`: the facet's `message` takes the sender (the
@@ -61,35 +60,14 @@ export class AgentDurableObject extends StreamProcessorDurableObject<AgentState>
     options?: Parameters<AgentHandleApi["message"]>[1],
   ) {
     const path = await this.#created();
-    const { message, files = [] } = typeof input === "string" ? { message: input } : input;
-    const attachments: FileAttachment[] = [];
-    for (const file of files) {
-      const filename = file.filename.replace(/[^A-Za-z0-9._-]+/g, "-");
-      const storedAt = `${path}/${crypto.randomUUID().slice(0, 8)}-${filename}`;
-      using itx = this.getItx();
-      const stored = await itx.files
-        .get(storedAt)
-        .put({ contentType: file.contentType, data: file.data });
-      attachments.push({
-        contentType: stored.contentType,
-        filename: file.filename,
-        path: stored.path,
-        size: stored.size,
-      });
-    }
-    using itx = this.getItx();
-    const appended = await itx.append({
-      type: "events.iterate.com/agent/context-added",
-      payload: messagePayload({
-        message,
-        files: attachments,
-        from,
-        trigger: options?.trigger !== false,
-      }),
-    });
-    // Over the loopback stub the append's answer types as an RPC result, not the array the context
-    // declares (`append(...events): Promise<StreamEvent[]>`, context/built-ins.ts); the wire copied it.
-    return (appended as unknown as StreamEvent[])[0]!;
+    return await appendMessage(
+      () => this.getItx(),
+      path,
+      (itx) => itx,
+      input,
+      from,
+      options,
+    );
   }
 
   /** Every verb starts here: an agent whose certificate has not landed refuses, and so does one

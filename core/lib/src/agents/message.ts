@@ -1,8 +1,54 @@
 // message.ts — words one context puts in an agent's log: what `itx.agents.get(path).message(text,
-// options)` appends (`messagePayload`), and the gate a project may put on words another agent sent
-// (`AgentInputGate`, the receiving side).
+// options)` appends (`appendMessage`, `messagePayload`), and the gate a project may put on words
+// another agent sent (`AgentInputGate`, the receiving side).
 import type { IterateContextApi } from "../api.ts";
+import type { StreamEvent } from "../stream/processor.ts";
+import type { AgentMessageInput, AgentMessageOptions } from "./api.ts";
 import type { FileAttachment } from "./contract.ts";
+
+/** A message to the agent at `path`: its attachments, each stored first under the agent's path
+ *  (`itx.files`, `<path>/<8 of a uuid>-<name>`), then ONE `context-added` naming them, appended to
+ *  the context `target` picks from a scope (the agent's own facet appends to its own; the collection
+ *  to another kind of agent's, collection.ts). Answers the event, so a caller can wait for what
+ *  follows it. */
+export async function appendMessage(
+  getItx: () => IterateContextApi & Disposable,
+  path: string,
+  target: (itx: IterateContextApi) => Pick<IterateContextApi, "append">,
+  input: AgentMessageInput,
+  from: string | undefined,
+  options: AgentMessageOptions | undefined,
+): Promise<StreamEvent> {
+  const { message, files = [] } = typeof input === "string" ? { message: input } : input;
+  const attachments: FileAttachment[] = [];
+  for (const file of files) {
+    const filename = file.filename.replace(/[^A-Za-z0-9._-]+/g, "-");
+    const storedAt = `${path}/${crypto.randomUUID().slice(0, 8)}-${filename}`;
+    using itx = getItx();
+    const stored = await itx.files
+      .get(storedAt)
+      .put({ contentType: file.contentType, data: file.data });
+    attachments.push({
+      contentType: stored.contentType,
+      filename: file.filename,
+      path: stored.path,
+      size: stored.size,
+    });
+  }
+  using itx = getItx();
+  const appended = await target(itx).append({
+    type: "events.iterate.com/agent/context-added",
+    payload: messagePayload({
+      message,
+      files: attachments,
+      from,
+      trigger: options?.trigger !== false,
+    }),
+  });
+  // Over the loopback stub the append's answer types as an RPC result, not the array the context
+  // declares (`append(...events): Promise<StreamEvent[]>`, context/built-ins.ts); the wire copied it.
+  return (appended as unknown as StreamEvent[])[0]!;
+}
 
 /** The `context-added` payload a message appends: the words, their files, the sender the
  *  collection relayed, and, with `trigger: false`, context only. */

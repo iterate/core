@@ -26,22 +26,41 @@ export interface AgentHandleApi {
    *  next turn (or, with `{ trigger: false }`, context it reads on that turn), answered so a caller
    *  can wait for what follows it. Sent from another agent, the model reads them
    *  as `[from <sender's context>]` — the collection's base, which the sender's own `itx.agents` row
-   *  pins (collection.ts); from anywhere else they read as a person's. A deleted agent refuses, and
-   *  so does one never created (NOT_CREATED). */
+   *  pins (collection.ts); from anywhere else they read as a person's. To an agent that is not
+   *  iterate's own, the same event is appended to its context, for its own subscription to
+   *  deliver. A deleted agent refuses, and so does one never created (NOT_CREATED). */
   message(input: AgentMessageInput, options?: AgentMessageOptions): Promise<StreamEvent>;
 }
 
+/** One row of `itx.agents.list()`. */
+export type AgentListing = {
+  path: string;
+  createdAt: string;
+  parent: string | null;
+  kind: string | null;
+  host: string | null;
+  status: "working" | "idle" | "waiting" | "ended" | null;
+  activity: string | null;
+  description: string | null;
+  title: string | null;
+  lastActivityAt: string | null;
+};
+
 /** `itx.agents` — installed by rewrite rule on the project's root and on each agent's context.
  *  `create` and `delete` are sagas on the agent's path (a deleted agent is not re-creatable; a
- *  `delete` of an agent never created refuses, NOT_CREATED). */
+ *  `delete` of an agent never created refuses, NOT_CREATED). `delete` of an agent that is not
+ *  iterate's own only records its death on `/agents`. */
 export interface AgentsApi {
-  /** Every agent, with what a list shows about it: its title (the name it gave itself, or else the
-   *  first line a person sent it; null until it has either) and when it was last active (null
-   *  until it has been). It reads only `/` and wakes no agent, so use it to show many agents
+  /** Every agent, with what a list shows about it. An agent is any context under `/agents`, at any
+   *  depth: an iterate agent `create` made, a coding session a bridge appends to, anything. `parent`
+   *  is the nearest agent above it (null at the top). `kind` is what runs it (`"iterate"`,
+   *  `"claude"`, …) and `host` the machine it runs on. `status` is `working`, `idle`, `waiting` (on
+   *  someone) or `ended`; `activity` one line on what it is doing now, and `description` a few
+   *  sentences on its purpose or conclusions. `title` is the name it gave itself, or else the first
+   *  line a person sent it. `lastActivityAt` is when it was last active. Each is null until the
+   *  agent has said it. It reads only `/agents` and wakes no agent, so use it to show many agents
    *  rather than reading each one. */
-  list(): Promise<
-    { path: string; createdAt: string; title: string | null; lastActivityAt: string | null }[]
-  >;
+  list(): Promise<AgentListing[]>;
   get(path: string): AgentHandleApi;
   create(path: string): Promise<{ path: string }>;
   delete(path: string): Promise<{ path: string }>;
