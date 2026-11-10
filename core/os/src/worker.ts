@@ -370,10 +370,12 @@ async function routeRequest(
         );
       return file;
     }
-    // The browser adapter's endpoints (`/api`, `/.auth/*`) are an app's OWN under subdomains — its
-    // origin. Under paths the app shares the platform's origin, whose `/api` and `/.auth/*` are the
-    // platform's; same-origin app scripts can make authenticated platform requests.
-    if (routing?.type !== "paths") {
+    // The browser adapter's endpoints (`/api`, `/.auth/*`) are an app's OWN on a host of its own —
+    // under subdomains, and a project's own hostname or wildcard under paths too. An app reached by
+    // a path shares the platform's origin, whose `/api` and `/.auth/*` are the platform's;
+    // same-origin app scripts can make authenticated platform requests.
+    const ownHost = url.origin !== platformOrigin;
+    if (ownHost) {
       const browserResponse = await browserClient(request, env, ctx);
       if (browserResponse) return browserResponse;
     }
@@ -456,13 +458,13 @@ async function routeRequest(
       ),
     );
     // The app's `401 Bearer realm="iterate"` becomes the sign-in (project-host-sign-in.ts), at the
-    // browser adapter serving this host: the host's own under subdomains, the platform's under paths.
+    // browser adapter serving this host: the host's own on a host of its own, the platform's on a path.
     const signIn = projectHostSignInAnswerOf({
       answer,
       request,
       caller,
       projectSlug: project.slug,
-      loginUrl: `${routing?.type === "paths" ? platformOrigin : url.origin}/.auth/login`,
+      loginUrl: `${ownHost ? url.origin : platformOrigin}/.auth/login`,
     });
     if (signIn && answer.body) ctx.waitUntil(answer.body.cancel());
     // A MEMBER'S BEARER GRANT holds what stays open (a WebSocket, a streamed body) to its lease:
