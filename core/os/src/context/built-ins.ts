@@ -2736,14 +2736,20 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
     cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
     email: {
       send: async (input) => {
-        const domain = emailDomainOf(deps.ingressRouting);
         const slug = owner.kind === "project" ? (await deps.projectInfo()).projectSlug : undefined;
+        const wildcard = deps.projectWildcard;
+        const ownDomain =
+          wildcard && slug && [slug, projectId].includes(wildcard.project)
+            ? wildcard.hostname
+            : null;
+        // the project's address is on the subdomains' hostname, or else, for the project wildcard's
+        // project on a deployment of paths (a self-host on its own domain), on the wildcard's
+        const domain = emailDomainOf(deps.ingressRouting) || ownDomain;
         if (!domain || !slug || !env.EMAIL)
           throw codedError(
             "INVALID_CONTEXT",
-            "itx.email: only a project has an address, on a deployment whose projects are subdomains and that can send mail",
+            "itx.email: only a project has an address, on a deployment whose projects are subdomains or that has a project wildcard, and that can send mail",
           );
-        const wildcard = deps.projectWildcard;
         return sendEmail(
           {
             EMAIL: env.EMAIL,
@@ -2751,8 +2757,7 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
             filesPrefix: r2Prefix,
             address: `${slug}@${domain}`,
             name: slug,
-            ownDomain:
-              wildcard && [slug, projectId].includes(wildcard.project) ? wildcard.hostname : null,
+            ownDomain,
             emailContext: deps.context(EMAIL_PATH),
             caller: hopCaller(),
           },
