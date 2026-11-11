@@ -39,6 +39,8 @@ const KeyAdded = z.union([
     at: z.number(),
     actor: z.string(),
     paths: z.array(z.string()),
+    /** The capability the key's token may lend, `itx.<provide>`, when it has one. */
+    provide: z.string().optional(),
     addedBy: z.string(),
   }),
 ]);

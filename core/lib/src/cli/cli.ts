@@ -18,6 +18,7 @@ import { isCodingAgent } from "./coding-agent.ts";
 import { runFs } from "./fs.ts";
 import { loginFlowFor, unexpectedUser } from "./device-login/flow.ts";
 import { revokeSession } from "./oauth.ts";
+import { bridgeAppend, bridgeKeyOf, bridgeToken } from "./bridge-key.ts";
 import { importProvidedFile, nameOfFile, runProvide } from "./provide.ts";
 import { runTunnel } from "./tunnel.ts";
 import { shareMyComputer } from "./share-my-computer.ts";
@@ -389,6 +390,18 @@ const launcherProcedures = {
           .describe(
             "The capability's name, itx.<name> (default: the file's, whatsapp.ts → whatsapp)",
           ),
+        key: z
+          .string()
+          .optional()
+          .describe(
+            "A file for this bridge's own key, made on the first run: a member allows it once at the link printed, and the bridge then connects with no sign-in, for as long as the key is allowed",
+          ),
+        paths: z
+          .string()
+          .optional()
+          .describe(
+            "With --key: where the key may also add events, comma-separated, under /integrations/ (e.g. /integrations/whatsapp/)",
+          ),
         mind: mindOption,
       }),
     )
@@ -401,12 +414,35 @@ const launcherProcedures = {
       const file = await importProvidedFile(input.file);
       const name = input.name || nameOfFile(input.file);
       const address = await resolveMind(input.mind);
-      // runProvide owns the connection from here, and every one `reconnect` opens
+      if (!input.key) {
+        // runProvide owns the connection from here, and every one `reconnect` opens
+        await runProvide({
+          connection: await connect(address),
+          reconnect: () => connect(address),
+          file,
+          name,
+        });
+        return;
+      }
+      // THE BRIDGE'S OWN KEY (bridge-key.ts): each connection asks for a new token, which lives
+      // an hour. The first waits for a member to allow the key. A later one does not: a key that
+      // a member removed is refused, and the bridge says so and ends.
+      const key = await bridgeKeyOf(input.key);
+      const paths = input.paths?.split(",").map((path) => path.trim());
+      // ITERATE_KEY_TOKEN_SECONDS: a test's, to see a token end without waiting an hour
+      const seconds = Number(process.env.ITERATE_KEY_TOKEN_SECONDS) || undefined;
+      const connectWithKey = async (wait?: (line: string) => void) =>
+        connectMind({
+          address,
+          token: await bridgeToken({ address, name, key, paths, seconds, wait }),
+          signIn: false,
+        });
       await runProvide({
-        connection: await connect(address),
-        reconnect: () => connect(address),
+        connection: await connectWithKey((line) => console.error(line)),
+        reconnect: () => connectWithKey(),
         file,
         name,
+        append: bridgeAppend(address, key),
       });
     }),
   config: {

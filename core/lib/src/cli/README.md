@@ -198,6 +198,31 @@ install`). A missing one is refused before any sign-in, naming the folder to ins
 For a machine that stays up, the stored sign-in refreshes itself while the issuer keeps the
 grant (30 days at most), and `ITERATE_MIND_TOKEN` takes a token as it stands.
 
+#### A bridge that runs for longer: `--key`
+
+A person's sign-in ends after 30 days. A bridge that must run for longer gets a key of its own:
+
+```sh
+iterate provide ./whatsapp.ts --key ~/.iterate/whatsapp.key --mind example.com
+```
+
+- **The first run** makes a P-256 key pair, writes the private half to the file (mode 600) and
+  prints a link to `iterate.<mind>/keys/enrol`. A member of the mind opens it, signs in and presses
+  Allow. The bridge waits for that, for 15 minutes, and then connects.
+- **Every later run** connects with no person. Each connection asks the mind for a token with a
+  statement the key signs. The token lives one hour and there is no refresh token: when it ends,
+  the connection closes and `provide` connects again with a new one.
+- **The key may do one thing:** lend `itx.<name>`, the name it was allowed for. Its `itx` has
+  `provide` and nothing else, so the file cannot read or write the mind through it. With
+  `--paths /integrations/whatsapp/` the link also asks for those paths, and the file's default
+  export gets `append(path, { type, payload })`: it adds an event there, signed by the key.
+- **The key has no end date.** The member who allowed it sees it on `iterate.<mind>/keys`, with
+  what it may do and the day it last asked for a token, and removes it there. After a removal the
+  mind gives it no new token, and its open connection ends when its token does, within the hour.
+- **The file is the bridge.** Whoever can read the key file can lend that name. Keep it on the
+  bridge's machine alone. The private key is read in one function (`signer` in `bridge-key.ts`):
+  a TPM, a Secure Enclave or the OS keychain would go there, so the key never leaves the hardware.
+
 ## A ChatGPT plan
 
 `chatgpt connect [address]` lets a person's ChatGPT plan pay for the mind's Responses API

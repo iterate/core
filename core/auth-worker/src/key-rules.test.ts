@@ -3,6 +3,7 @@ import {
   canonicalPath,
   cloudNameRefusal,
   honouredNext,
+  scopeInWords,
   serviceKeyRequestOf,
   underPaths,
 } from "./key-rules.ts";
@@ -64,6 +65,36 @@ test("a service's request names a plain actor, a label, a key and at least one p
   expect(ask({ ...good, paths: "/integrations/../secrets/" })).toHaveProperty("refused");
   expect(ask({ ...good, label: "" })).toHaveProperty("refused");
   expect(ask({ ...good, publicKey: "not base64url!" })).toHaveProperty("refused");
+});
+
+test("a service's key may lend one capability, with or without paths, and must ask for something", () => {
+  const ask = (query: Record<string, string>) => serviceKeyRequestOf(new URLSearchParams(query));
+  const bridge = { actor: "bridge-whatsapp", label: "whatsapp on beelink", publicKey: "abc_-1" };
+  expect(ask({ ...bridge, provide: "whatsapp.jonas" })).toEqual({
+    ...bridge,
+    paths: [],
+    provide: "whatsapp.jonas",
+  });
+  expect(ask({ ...bridge, provide: "whatsapp", paths: "/integrations/whatsapp/" })).toEqual({
+    ...bridge,
+    paths: ["/integrations/whatsapp/"],
+    provide: "whatsapp",
+  });
+  expect(ask(bridge)).toHaveProperty("refused");
+  for (const provide of ["secrets.get()", "whats app", "a..b", ".a", "9lives", "a/b"])
+    expect(ask({ ...bridge, provide })).toHaveProperty("refused");
+  // the paths rule holds beside a capability too
+  expect(ask({ ...bridge, provide: "whatsapp", paths: "/agents/" })).toHaveProperty("refused");
+});
+
+test("a key's scope reads as what its service can do", () => {
+  expect(scopeInWords({ paths: [], provide: "whatsapp" })).toBe(
+    "lend its functions to this mind as itx.whatsapp",
+  );
+  expect(scopeInWords({ paths: ["/integrations/x/"], provide: "x" })).toBe(
+    "lend its functions to this mind as itx.x, and add events under /integrations/x/",
+  );
+  expect(scopeInWords({ paths: ["/integrations/"] })).toBe("add events under /integrations/");
 });
 
 test("the Cloud's name goes to the key the stack's own Cloud publishes, and to no other", () => {

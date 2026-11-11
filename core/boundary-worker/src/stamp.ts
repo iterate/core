@@ -1,8 +1,10 @@
 import {
   ITX_EXPIRES_HEADER,
   ITX_GRANT_HEADER,
+  ITX_LENDER_HEADER,
   ITX_PERSON_HEADER,
   ITX_PRINCIPAL_HEADER,
+  type Lender,
   type Person,
 } from "iterate/principal";
 import {
@@ -47,7 +49,16 @@ export async function stampedRequest(
     // The platform's hostname is not the mind's: the mind gets no cookie and no credential.
     headers.delete("cookie");
     headers.delete("authorization");
-    if (identity) stamp(headers, identity);
+    // A key's token is no member's: it gets no principal, so nothing that asks for one takes it.
+    if (identity?.provide) {
+      const lender: Lender = {
+        actor: identity.principal.actor,
+        key: identity.grant,
+        provide: identity.provide,
+      };
+      headers.set(ITX_LENDER_HEADER, JSON.stringify(lender));
+      headers.set(ITX_EXPIRES_HEADER, String(identity.expiresAt));
+    } else if (identity) stamp(headers, identity);
     // The boundary answers the RFC 9728 documents and this 401 itself, so a hostile mind cannot
     // send a client to another issuer. Under `/api/` the rest is the mind's (signed URLs, webhooks).
     const needsCaller = route === "mcp" || url.pathname === "/api";
@@ -55,7 +66,7 @@ export async function stampedRequest(
     const probe = route === "mcp" && !identity && (await isDiscoverProbe(request));
     return {
       forwarded: new Request(request, { headers }),
-      caller: identity ? "member" : "anonymous",
+      caller: identity && !identity.provide ? "member" : "anonymous",
       email: identity?.principal.email || null,
       ...(needsCaller &&
         !identity && {

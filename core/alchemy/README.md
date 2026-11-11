@@ -118,6 +118,13 @@ addresses nobody named. Each one is a member with no passkey until it adds one, 
 its mail gets a passkey that approves requests and adds members. A stack that approves things
 names each member by the exact address.
 
+A bridge that lends a capability for longer than a person's sign-in lasts has a key of its own
+(`iterate provide --key`, `core/lib/src/cli/README.md`). A member allows the key once, on
+`/keys/enrol`, for one capability name. The key then asks `POST /keys/token` for a token with a
+statement it signs. The token lives one hour, is for the API alone, and reaches the one lend and
+nothing else of the mind. There is no refresh token and the key has no end date: the member who
+allowed it removes it on `/keys`, which also shows the day the key last asked for a token.
+
 A lost passkey has two ways back in, and neither is mail:
 
 - A member who is no owner asks an owner. An owner is a member an `email` rule of `allow` names.

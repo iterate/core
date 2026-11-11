@@ -22,8 +22,13 @@ export type TokenIdentity = {
   /** Unix seconds. */
   expiresAt: number;
   /** Always true for the API, the MCP server and `/provide`; a mind hostname's token answers for
-   *  anyone signed in. */
+   *  anyone signed in. False for a key's token. */
   member: boolean;
+  /** A KEY'S TOKEN, never a person's (core/auth-worker/src/key-tokens.ts): the one capability name
+   *  it may lend to the mind as `itx.<provide>`. It is live for the API alone, where it reaches
+   *  that lend and nothing else of the mind. `principal.actor` is the key's service and `grant`
+   *  is `key:<the key's id>`. */
+  provide?: string;
 };
 
 export interface Door {

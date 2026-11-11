@@ -44,6 +44,14 @@ export function signedBytes(statement: string): Uint8Array<ArrayBuffer> {
   return concat(head, body);
 }
 
+/** A KEY'S TOKEN (core/auth-worker/src/key-tokens.ts): a key that a member allowed to lend a
+ *  capability posts a statement of this type at `/`, ending within five minutes, to this path of
+ *  the mind's platform origin, and gets a token for the mind's API that lives an hour. */
+export const KEY_TOKEN_STATEMENT_TYPE = "events.iterate.com/account/key-token-requested";
+export const KEY_TOKEN_PATH = "/keys/token";
+/** Where a key adds an event under its paths: the body is the envelope, the answer the event's key. */
+export const STATEMENTS_PATH = "/statements";
+
 export function statementText(fields: Omit<Statement, "nonce">): string {
   return JSON.stringify({
     ...fields,

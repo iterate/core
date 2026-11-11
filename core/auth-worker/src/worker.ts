@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { KEY_TOKEN_PATH, STATEMENTS_PATH } from "iterate/signed";
 import { codedError } from "iterate/lib";
 import { mindMcpUrlOf } from "iterate/mind-api";
 import type { AuthService, TokenIdentity } from "iterate/workers";
@@ -50,8 +51,9 @@ import { passkeySignInResponse } from "./passkey-sign-in.ts";
 import { isMember, membersResponse, standingOf } from "./members.ts";
 import { verifiedStatement } from "./keys.ts";
 import { keysPagesResponse } from "./keys-pages.ts";
+import { keyTokenIdentity, keyTokenResponse } from "./key-tokens.ts";
 import { signedByStack } from "./stack-key.ts";
-import { STATEMENTS_PATH, statementsResponse } from "./statements.ts";
+import { statementsResponse } from "./statements.ts";
 
 export class Auth extends WorkerEntrypoint<Env> implements AuthService {
   async fetch(request: Parameters<AuthService["fetch"]>[0]) {
@@ -114,6 +116,8 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
       return signOutResponse(this.env, request);
     if (pathname === FIRST_OWNER_PATH && (get || request.method === "POST"))
       return firstOwnerResponse(this.env, request);
+    if (pathname === KEY_TOKEN_PATH && request.method === "POST")
+      return keyTokenResponse(this.env, request);
     const keys = await keysPagesResponse(this.env, request);
     if (keys) return keys;
     if (pathname === STATEMENTS_PATH && request.method === "POST")
@@ -124,6 +128,7 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
   async whoIs(...[token, resource]: Parameters<AuthService["whoIs"]>) {
     if (!token || !resource) return null;
     return (
+      (await keyTokenIdentity(this.env, token, resource)) ??
       (await tokenIdentity(this.env, token, resource)) ??
       (await prototypeIdentity(this.env, token, resource))
     );

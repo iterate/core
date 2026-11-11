@@ -4,8 +4,6 @@ import type { Env } from "./env.ts";
 import { canonicalPath, underPaths } from "./key-rules.ts";
 import { verifiedStatement } from "./keys.ts";
 
-export const STATEMENTS_PATH = "/statements";
-
 // Ingress appends these events as the platform, so the kernel's guard on platform facts
 // (core/itx caller.ts `refuseNonPlatformWrites`) cannot catch them: this list must.
 const PLATFORM_NAMESPACES = ["itx", "mind", "email", "webhook", "mcp", "account", "secret"];
@@ -30,7 +28,11 @@ export async function statementsResponse(env: Env, request: Request): Promise<Re
     );
   if (!underPaths(statement.path, paths))
     return Response.json(
-      { refused: `this key adds events under ${paths!.join(", ")} alone` },
+      {
+        refused: paths?.length
+          ? `this key adds events under ${paths.join(", ")} alone`
+          : "this key adds no events: it only lends a capability",
+      },
       { status: 403 },
     );
   if (

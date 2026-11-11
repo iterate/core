@@ -5,6 +5,14 @@ import {
   mindMcpUrlOf,
   protectedResourceMetadataUrlOf,
 } from "iterate/mind-api";
+import {
+  base64url,
+  KEY_TOKEN_PATH,
+  KEY_TOKEN_STATEMENT_TYPE,
+  keyIdOf,
+  signedP256,
+  statementText,
+} from "iterate/signed";
 import { z } from "zod";
 import { signerOf } from "./approvals.ts";
 import { attempt, type Check } from "./lib.ts";
@@ -229,6 +237,7 @@ export async function authChecks(domain: string): Promise<Check[]> {
     ...(await limitChecks(domain, metadata)),
     ...(await emailChecks(domain)),
     ...(await passkeyChecks(domain)),
+    ...(await keyTokenChecks(domain)),
     ...(await membersChecks(domain)),
   );
   return checks;
@@ -532,6 +541,55 @@ async function emailChecks(domain: string): Promise<Check[]> {
 
 // Without a passkey or a session: what the endpoints refuse. scripts/passkey-sign-in-proof.ts signs
 // in with a passkey; no smoke check holds a member's session, so none shows what one may do.
+// A service's key gets a token for the API only once a member allowed it (core/auth-worker
+// key-tokens.ts). scripts/bridge-key-proof.ts proves the whole of it with a member's session.
+async function keyTokenChecks(domain: string): Promise<Check[]> {
+  const issuer = platformOriginOf(domain);
+  return [
+    await attempt("key tokens: a key nobody allowed gets no token", async () => {
+      const curve = { name: "ECDSA", namedCurve: "P-256" } as const;
+      const pair = await crypto.subtle.generateKey(curve, true, ["sign", "verify"]);
+      const publicKey = base64url(
+        new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey)),
+      );
+      const at = Date.now();
+      const envelope = await signedP256(
+        statementText({
+          mind: domain,
+          path: "/",
+          type: KEY_TOKEN_STATEMENT_TYPE,
+          at,
+          expires: at + 60_000,
+        }),
+        pair.privateKey,
+        await keyIdOf(publicKey),
+      );
+      const response = await fetch(`${issuer}${KEY_TOKEN_PATH}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(envelope),
+      });
+      const { error } = z
+        .object({ error: z.string().optional() })
+        .parse(await response.json().catch(() => ({})));
+      return {
+        pass: response.status === 401 && error === "invalid_client",
+        detail: `${response.status} ${error}`,
+      };
+    }),
+    await attempt("key tokens: a token this stack did not sign is nobody on the API", async () => {
+      // the shape of a key's token, with no signature of the stack's
+      const forged = ["eyJhbGciOiJIUzI1NiJ9", btoa(JSON.stringify({ kind: "key-token" })), "x"];
+      const response = await fetch(mindApiUrlOf(domain), {
+        method: "POST",
+        headers: { authorization: `Bearer ${forged.join(".")}` },
+      });
+      await response.body?.cancel();
+      return { pass: response.status === 401, detail: `${response.status}` };
+    }),
+  ];
+}
+
 async function passkeyChecks(domain: string): Promise<Check[]> {
   const issuer = platformOriginOf(domain);
   const post = async (path: string, body: unknown, origin: string | null = issuer) => {

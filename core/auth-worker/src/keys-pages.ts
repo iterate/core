@@ -6,6 +6,7 @@ import {
   CLOUD_ACTOR,
   cloudNameRefusal,
   honouredNext,
+  scopeInWords,
   type ServiceKeyRequest,
   serviceKeyRequestOf,
 } from "./key-rules.ts";
@@ -89,12 +90,16 @@ type KeyRow = {
   user_id: string | null;
   actor: string | null;
   paths: string | null;
+  provide: string | null;
   label: string;
   format: string;
   credential_id: string | null;
   added_at: number;
+  last_used_at: number | null;
   revoked_at: number | null;
 };
+
+const day = (at: number) => new Date(at).toISOString().slice(0, 10);
 
 async function keysPage(
   env: Env,
@@ -115,12 +120,20 @@ async function keysPage(
     .all<KeyRow>();
   const nextField = next ? `<input type="hidden" name="next" value="${text(next)}">` : "";
   const item = (key: KeyRow) => {
+    const scope = scopeInWords({
+      paths: JSON.parse(key.paths || "[]") as string[],
+      provide: key.provide || undefined,
+    });
     const what = key.actor
-      ? `a key for ${text(key.actor)}, under ${text((JSON.parse(key.paths || "[]") as string[]).join(", "))}`
+      ? `a key for ${text(key.actor)}: it can ${text(scope)}`
       : key.format === "webauthn"
         ? "passkey"
         : text(key.format);
-    const when = `added ${new Date(key.added_at).toISOString().slice(0, 10)}`;
+    // a key that lends asks for a token each hour it runs, so this says whether its service is alive
+    const used = key.provide
+      ? `, ${key.last_used_at ? `last used ${day(key.last_used_at)}` : "never used"}`
+      : "";
+    const when = `added ${day(key.added_at)}${used}`;
     // a session that owes a passkey removes nothing, so the ticket's shows the lost keys bare
     const remove = key.revoked_at
       ? `<span class="muted">removed</span>`
@@ -387,10 +400,15 @@ async function enrolPage(env: Env, url: URL): Promise<Response> {
   return page({
     title: `Add a key for ${ask.label}?`,
     body: `<h1>Add a key for ${label}?</h1>
-      <p>${label} asks to add a key to ${text(domain)}. With it, ${label} can add events to this mind under ${text(ask.paths.join(", "))}. It cannot approve requests or read anything.</p>
+      <p>${label} asks to add a key to ${text(domain)}. With it, ${label} can ${text(scopeInWords(ask))}. It cannot approve requests or read anything.</p>
+      ${
+        ask.provide
+          ? `<p>The agents of ${text(domain)} call what it lends, so ${label} sees what they send it. The key has no end date: it works until you remove it on <a href="${KEYS_PATH}">Your keys</a>.</p>`
+          : ""
+      }
       <p class="muted">Key ${text(key.slice(0, 8))}, for ${text(ask.actor)}.</p>
       <form method="post" action="${ENROL_PATH}" class="actions">
-        ${hidden("actor", ask.actor)}${hidden("label", ask.label)}${hidden("publicKey", ask.publicKey)}${hidden("paths", ask.paths.join(","))}${next ? hidden("next", next) : ""}
+        ${hidden("actor", ask.actor)}${hidden("label", ask.label)}${hidden("publicKey", ask.publicKey)}${hidden("paths", ask.paths.join(","))}${ask.provide ? hidden("provide", ask.provide) : ""}${next ? hidden("next", next) : ""}
         <button type="submit" name="decision" value="allow">Allow</button>
         <button type="submit" name="decision" value="cancel" class="link">Cancel</button>
       </form>`,
@@ -415,14 +433,23 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
   if (!key) return errorPage("The service's key is not one this mind can use.", 400);
   const at = Date.now();
   const { meta } = await env.DB.prepare(
-    `insert into keys (id, actor, paths, public_key, format, label, added_via, added_by, added_at)
-     values (?1, ?2, ?3, ?4, 'p256', ?5, 'enrol-page', ?6, ?7)
+    `insert into keys (id, actor, paths, public_key, format, label, added_via, added_by, added_at, provide)
+     values (?1, ?2, ?3, ?4, 'p256', ?5, 'enrol-page', ?6, ?7, ?8)
      on conflict (id) do update set actor = excluded.actor, paths = excluded.paths,
        label = excluded.label, added_by = excluded.added_by, added_at = excluded.added_at,
-       revoked_at = null
+       provide = excluded.provide, last_used_at = null, revoked_at = null
      where keys.revoked_at is not null and keys.user_id is null`,
   )
-    .bind(key, ask.actor, JSON.stringify(ask.paths), ask.publicKey, ask.label, session.userId, at)
+    .bind(
+      key,
+      ask.actor,
+      JSON.stringify(ask.paths),
+      ask.publicKey,
+      ask.label,
+      session.userId,
+      at,
+      ask.provide || null,
+    )
     .run();
   const facts = new AccountFacts();
   if (meta.changes) {
@@ -435,6 +462,7 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
         at,
         actor: ask.actor,
         paths: ask.paths,
+        provide: ask.provide,
         addedBy: session.userId,
       },
       // with the time: the same key added again after a removal is a new fact
@@ -449,15 +477,16 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
     next,
     facts,
     "Added",
-    `<p>${text(ask.label)} can now add events to ${text(domain)} under ${text(ask.paths.join(", "))}.</p>`,
+    `<p>${text(ask.label)} can now ${text(scopeInWords(ask))}.</p>`,
   );
 }
 
 async function liveFor(env: Env, key: string, ask: ServiceKeyRequest): Promise<boolean> {
   const row = await env.DB.prepare(
-    `select 1 from keys where id = ?1 and actor = ?2 and paths = ?3 and revoked_at is null`,
+    `select 1 from keys where id = ?1 and actor = ?2 and paths = ?3
+       and provide is ?4 and revoked_at is null`,
   )
-    .bind(key, ask.actor, JSON.stringify(ask.paths))
+    .bind(key, ask.actor, JSON.stringify(ask.paths), ask.provide || null)
     .first();
   return Boolean(row);
 }

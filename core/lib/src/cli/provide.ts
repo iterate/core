@@ -9,11 +9,17 @@ import type { MindConnection } from "../node.ts";
 
 /** What `iterate provide` reads from a file: its default export, called on every connection with
  *  that connection's mind, answers the object whose functions are lent; `description`, when
- *  exported, is the one line a model reads for the name. */
+ *  exported, is the one line a model reads for the name. With `--key` the connection is the key's:
+ *  `itx` lends and does nothing else, and `append` adds an event as the key (bridge-key.ts). */
 export type ProvidedFile = {
-  provide: (input: { itx: unknown }) => unknown;
+  provide: (input: { itx: unknown; append?: BridgeAppend }) => unknown;
   description?: string;
 };
+
+type BridgeAppend = (
+  path: string,
+  event: { type: string; payload?: Record<string, unknown> },
+) => Promise<void>;
 
 /** A capability's name: `itx.<name>`, dotted segments allowed (`whatsapp.jonas`). */
 const NAME = /^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)*$/;
@@ -140,6 +146,8 @@ export async function runProvide(input: {
   reconnect: () => Promise<MindConnection>;
   file: ProvidedFile;
   name: string;
+  /** with `--key`: how the file adds an event, since its `itx` only lends */
+  append?: BridgeAppend;
   /** the reconnect schedule — a test's, `RECONNECT_DELAYS_MS` otherwise */
   reconnectDelaysMs?: readonly number[];
 }): Promise<void> {
@@ -156,7 +164,7 @@ export async function runProvide(input: {
    *  as a line. */
   const serve = async (connection: MindConnection, first: boolean): Promise<"stopped" | string> => {
     const mind = connection.itx;
-    const target = rpcTargetOf(await input.file.provide({ itx: mind }));
+    const target = rpcTargetOf(await input.file.provide({ itx: mind, append: input.append }));
     using lend = await mind.provide(
       match,
       target,

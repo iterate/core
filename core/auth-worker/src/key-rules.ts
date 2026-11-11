@@ -65,8 +65,14 @@ export type ServiceKeyRequest = {
   actor: string;
   label: string;
   publicKey: string;
+  /** Where the key may add events. Empty for a key that only lends. */
   paths: string[];
+  /** The one capability the key's token may lend, as `itx.<provide>` (./key-tokens.ts). */
+  provide?: string;
 };
+
+/** A capability's name, as `iterate provide` takes it: `whatsapp`, `whatsapp.jonas`. */
+const CAPABILITY_NAME = /^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)*$/;
 
 // `actor` allows no `_`, so it is never a user's id, `user_…`.
 export function serviceKeyRequestOf(
@@ -80,6 +86,7 @@ export function serviceKeyRequestOf(
     .split(",")
     .map((prefix) => prefix.trim())
     .filter(Boolean);
+  const provide = field("provide");
   if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(actor))
     return { refused: "The service's name must be lowercase letters, digits and hyphens." };
   if (!label || label.length > 100) return { refused: "The service must give a short name." };
@@ -87,14 +94,31 @@ export function serviceKeyRequestOf(
   // A key a member allows on a page reaches integrations alone: a link someone was tricked into
   // opening cannot ask for an agent's context or the mind's root. A wider key is the config's.
   if (
-    !paths.length ||
     !paths.every(
       (prefix) =>
         prefix.startsWith(SERVICE_PATHS_ROOT) && canonicalPath(prefix.replace(/\/+$/, "")),
     )
   )
+    return { refused: `The service may add events under ${SERVICE_PATHS_ROOT} alone.` };
+  if (provide && (provide.length > 100 || !CAPABILITY_NAME.test(provide)))
     return {
-      refused: `The service may add events under ${SERVICE_PATHS_ROOT} alone, and must name where.`,
+      refused:
+        "The service may lend one capability, named in letters and digits (whatsapp, whatsapp.jonas).",
     };
-  return { actor, label, publicKey, paths };
+  // a key that may do nothing is a mistake in the link, never a wish
+  if (!paths.length && !provide)
+    return {
+      refused: `The service must name what it asks for: a capability to lend (provide), or where under ${SERVICE_PATHS_ROOT} it adds events (paths).`,
+    };
+  return provide ? { actor, label, publicKey, paths, provide } : { actor, label, publicKey, paths };
+}
+
+/** What the key lets its service do, in a person's words: for the consent page and `/keys`. */
+export function scopeInWords({ paths, provide }: Pick<ServiceKeyRequest, "paths" | "provide">) {
+  return [
+    provide && `lend its functions to this mind as itx.${provide}`,
+    paths.length > 0 && `add events under ${paths.join(", ")}`,
+  ]
+    .filter(Boolean)
+    .join(", and ");
 }

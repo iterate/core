@@ -14,12 +14,16 @@ import { stackKeyOf } from "./stack-key.ts";
 
 const MAX_LIFETIME_MS = 24 * 3600 * 1000;
 
+/** The one refusal a key's service acts on: its key waits for a member's consent (./key-tokens.ts). */
+export const UNKNOWN_KEY = "the key is not one this mind knows";
+
 type KnownKey = {
   principal: { actor: string; email?: string };
   publicKey: string;
   label: string;
   format?: Envelope["signature"]["format"]; // none for a root key: it may sign in either
   paths?: string[]; // none: any path
+  provide?: string; // the capability a service's key may lend (./key-tokens.ts)
 };
 
 /** `once: false` takes a statement again. Only the intake asks for it (./statements.ts): the log
@@ -28,7 +32,10 @@ export async function verifiedStatement(
   env: Env,
   value: unknown,
   { once = true } = {},
-): Promise<(Exclude<Verified, { refused: string }> & { paths?: string[] }) | { refused: string }> {
+): Promise<
+  | (Exclude<Verified, { refused: string }> & { paths?: string[]; provide?: string })
+  | { refused: string }
+> {
   const envelope = envelopeOf(value);
   if (!envelope) return { refused: "not an envelope: { statement, signature }" };
   const config = iterateConfigOf(env);
@@ -36,7 +43,7 @@ export async function verifiedStatement(
   if (envelope.signature.key === (await stackKeyOf(env)).key)
     return { refused: "the stack's own key signs for others, not for this stack" };
   const key = await knownKey(env, config, envelope.signature.key);
-  if (!key) return { refused: "the key is not one this mind knows" };
+  if (!key) return { refused: UNKNOWN_KEY };
   if (key.format && key.format !== envelope.signature.format)
     return { refused: `this key signs as ${key.format}` };
   const issuer = issuerOf(env);
@@ -73,6 +80,7 @@ export async function verifiedStatement(
     },
     statement,
     paths: key.paths,
+    provide: key.provide,
   };
 }
 
@@ -107,7 +115,7 @@ async function knownKey(env: Env, config: AuthConfig, id: string): Promise<Known
   const root = (await rootKeysOf(config)).get(id);
   if (root) return root;
   const row = await env.DB.prepare(
-    `select k.public_key, k.format, k.label, k.actor, k.paths, u.id as user_id, u.email
+    `select k.public_key, k.format, k.label, k.actor, k.paths, k.provide, u.id as user_id, u.email
      from keys k left join users u on u.id = k.user_id
      where k.id = ?1 and k.revoked_at is null`,
   )
@@ -118,6 +126,7 @@ async function knownKey(env: Env, config: AuthConfig, id: string): Promise<Known
       label: string;
       actor: string | null;
       paths: string | null;
+      provide: string | null;
       user_id: string | null;
       email: string | null;
     }>();
@@ -130,7 +139,12 @@ async function knownKey(env: Env, config: AuthConfig, id: string): Promise<Known
   if (row.user_id && row.email)
     return { ...common, principal: { actor: row.user_id, email: row.email } };
   if (row.actor && row.paths)
-    return { ...common, principal: { actor: row.actor }, paths: JSON.parse(row.paths) as string[] };
+    return {
+      ...common,
+      principal: { actor: row.actor },
+      paths: JSON.parse(row.paths) as string[],
+      provide: row.provide || undefined,
+    };
   return null;
 }
 

@@ -29,6 +29,23 @@ export const ITX_GRANT_HEADER = "x-itx-grant";
  *  then. Stripped from every inbound Request. */
 export const ITX_EXPIRES_HEADER = "x-itx-expires";
 
+/** A KEY'S TOKEN (core/auth-worker/src/key-tokens.ts): the service the key speaks for, the key as
+ *  the grant it acts through (`key:<id>`), and the one capability it may lend, `itx.<provide>`. */
+export type Lender = { actor: string; key: string; provide: string };
+
+/** The header ingress sets for a key's token on the mind's API, as the JSON of a `Lender`, in place
+ *  of `ITX_PRINCIPAL_HEADER`: such a caller is no principal, and reaches its one lend and nothing
+ *  else of the mind (core/mind-worker/src/api.ts). Stripped from every inbound Request. */
+export const ITX_LENDER_HEADER = "x-itx-lender";
+
+const StampedLender = z.object({ actor: z.string(), key: z.string(), provide: z.string() });
+
+/** The lender ingress stamped on `request`, or null. Trusted as it stands, as `stampedCallerOf`. */
+export function stampedLenderOf(request: Request): Lender | null {
+  const lender = request.headers.get(ITX_LENDER_HEADER);
+  return lender ? StampedLender.parse(JSON.parse(lender)) : null;
+}
+
 /** A signed-in person as a mind's host knows them, member or not: the auth Worker's user id
  *  and their email, and `impersonatedBy` the platform admin signed in as them, as on `Principal`.
  *  An app that hands out something personal refuses, or records, a person an admin is signed in
