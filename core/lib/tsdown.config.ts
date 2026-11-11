@@ -49,8 +49,6 @@ export default defineConfig([
       "compatibility-date": "src/compatibility-date.ts",
       "package-builds": "src/package-builds.ts",
       "platform-retry": "src/platform-retry.ts",
-      "config-repo-template": "src/config-repo-template.ts",
-      "integration-scopes": "src/integration-scopes.ts",
       oauth: "src/client/oauth.ts",
       "standalone-page": "src/standalone-page.ts",
     },
