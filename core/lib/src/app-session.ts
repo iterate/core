@@ -64,6 +64,13 @@ export class BrowserSession extends DurableObject {
     return { minds, lastUsed: minds[0]?.address ?? null };
   }
 
+  /** Whether a sign-in began or completed under this record's cookie id: it names a connected
+   *  mind, or a sign-in still waiting at an issuer. */
+  async known(): Promise<boolean> {
+    const record = await this.#record();
+    return record.minds.length > 0 || record.pending.some((flow) => flow.until > Date.now());
+  }
+
   /** A sign-in to `address` left for its issuer with `state`: the callback finds it by that. */
   async expect(state: string, address: string) {
     const record = await this.#record();

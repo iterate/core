@@ -93,9 +93,12 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     next: string,
     discovered?: DiscoveredMind,
   ): Promise<{ location: string; setCookie: string } | { error: string }> => {
-    const cookieId = id || crypto.randomUUID();
+    // THE COOKIE'S ID IS KEPT ONLY WHEN THIS APP KNOWS IT: an id with no record was not written by
+    // a sign-in here, so somebody planted it, and tokens stored under it would be theirs to use.
+    const cookieId = id && (await record(id).known()) ? id : crypto.randomUUID();
     const setCookie = `${sessionCookieName(url)}=${cookieId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
-    if (id && (await sessionOf(id, address).bearer())) return { location: next, setCookie };
+    if (id === cookieId && (await sessionOf(id, address).bearer()))
+      return { location: next, setCookie };
     const mind = discovered || (await discover(address));
     if ("error" in mind) return mind;
     const { url: location, state } = await sessionOf(cookieId, address).begin(
@@ -249,7 +252,19 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         .catch(() => {}),
     ]);
     if (response.status === 401) await session.discard();
-    return response;
+    // THE MIND'S ANSWER SETS NOTHING IN THIS BROWSER. A mind is not this app: its `Set-Cookie`
+    // would be a cookie of the app's origin, so a hostile mind could plant the session cookie's id
+    // and hold the id under which the person next signs in to a mind of their own. Its
+    // `Clear-Site-Data` would sign the browser out of every mind.
+    const kept = new Headers(response.headers);
+    kept.delete("set-cookie");
+    kept.delete("clear-site-data");
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: kept,
+      webSocket: response.webSocket,
+    });
   }
 
   return new Response("Not found", { status: 404 });
