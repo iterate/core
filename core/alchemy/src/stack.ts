@@ -15,6 +15,8 @@ import { platformOriginOf } from "iterate/mind-api";
 import { type MindConfig, resourceNamesOf } from "./config.ts";
 
 /** A path in `core/`, from this file: a deploy from any working directory finds it. */
+import { publishedSandboxImageIn } from "./sandbox-image.ts";
+
 const core = (path: string) => resolve(import.meta.dirname, "../..", path);
 /** Without it a Worker's fetch to a hostname of its own zone skips every Worker's route there: a
  *  stack that shares its zone with another Worker (the iterate Cloud, an issuer) must reach it. */
@@ -181,7 +183,10 @@ export const mindStack = (config: MindConfig) =>
                   : [
                       Cloudflare.Container("iterate-dev-image", {
                         schedulingPolicy: "durable_object",
-                        context: core("mind-worker/images/iterate-dev-image"),
+                        // already in the account's registry (scripts/sandbox-image.ts): no Docker
+                        ...(config.mind?.sandboxImage === "published"
+                          ? { image: publishedSandboxImageIn(config.accountId) }
+                          : { context: core("mind-worker/images/iterate-dev-image") }),
                       }),
                     ]),
               ],

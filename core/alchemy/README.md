@@ -197,8 +197,13 @@ least a deploy needs.
 - With `mail: true` in the config: Email Routing on the zone, its catch-all rule delivering to the
   boundary, and Email Sending on the domain, which the boundary sends with.
 - The sandboxes' image, `images/iterate-dev-image` of `core/mind-worker`, built with the local Docker and
-  pushed. A deploy from a machine with no Docker sets `sandboxImage: "managed"` in the config's
-  `mind`: the stack declares no image, and a sandbox starts Cloudflare's managed image.
+  pushed. A deploy with no Docker sets `sandboxImage` in the config's `mind`:
+  - `"published"`: `scripts/sandbox-image.ts` copies the same image, built once and published at
+    `ghcr.io/iterate/iterate-dev-image` (the digest is pinned in `src/sandbox-image.ts`), into the
+    account's registry through the registry API, and the stack names it there. A deploy after the
+    first copies nothing.
+  - `"managed"`: the stack declares no image, and a sandbox starts Cloudflare's bare
+    `cloudflare/debian-trixie`, with no Node, git tools, Chromium or agent CLIs.
 
 ## Telemetry
 

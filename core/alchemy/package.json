@@ -4,7 +4,7 @@
   "description": "The Alchemy program that deploys one mind as a stack of Workers",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "deploy": "f() { node --env-file-if-exists=.secrets scripts/refuse-older-stack.ts \"$@\" && pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets scripts/repos-namespace.ts \"$@\" && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js deploy \"$@\"; }; f",
+    "deploy": "f() { node --env-file-if-exists=.secrets scripts/refuse-older-stack.ts \"$@\" && pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets scripts/repos-namespace.ts \"$@\" && node --env-file-if-exists=.secrets scripts/sandbox-image.ts \"$@\" && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js deploy \"$@\"; }; f",
     "plan": "pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js plan",
     "destroy": "node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js destroy",
     "config": "node --env-file-if-exists=.secrets scripts/config.ts",

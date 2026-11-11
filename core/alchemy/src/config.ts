@@ -24,8 +24,10 @@ export const MindConfig = z
         provided: z.literal(true).optional(),
         name: z.string().min(1).optional(),
         template: z.string().min(1).optional(),
-        // `managed`: no image built; sandboxes start Cloudflare's managed image (a deploy with no Docker).
-        sandboxImage: z.enum(["built", "managed"]).optional(),
+        // `built` (absent): the deploy builds the full image with the local Docker. `published`: the deploy
+        // copies the full image, built once (src/sandbox-image.ts), into the account, with no Docker.
+        // `managed`: no image; sandboxes start Cloudflare's bare managed image.
+        sandboxImage: z.enum(["built", "published", "managed"]).optional(),
       })
       .refine(
         ({ provided, ...worker }) => !provided || Object.keys(worker).length === 0,
