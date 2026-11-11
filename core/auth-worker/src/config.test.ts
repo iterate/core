@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { FIRST_OWNER_TICKET_MS, firstOwnerTicketOf, isOwner } from "./config.ts";
+import { AuthSettings, FIRST_OWNER_TICKET_MS, firstOwnerTicketOf, isOwner } from "./config.ts";
 
 const NOW = 1_000_000;
 const SETTINGS = {
@@ -21,6 +21,28 @@ test.each([
   expect(firstOwnerTicketOf(text, SETTINGS, NOW)).toEqual({
     refused: expect.stringContaining(why),
   });
+});
+
+test("a mind may have no way to sign in beside a passkey, and may mail codes", () => {
+  const allow = [{ email: "owner@example.com" }];
+  // no `methods` at all, and an empty one: the owner's ticket and an owner's hand are the ways in
+  expect(AuthSettings.parse({ login: { allow } }).login).toMatchObject({ methods: {} });
+  expect(AuthSettings.parse({ login: { methods: {}, allow } }).login).toMatchObject({
+    methods: {},
+  });
+  expect(AuthSettings.parse({ login: { methods: { email: {} }, allow } }).login).toMatchObject({
+    methods: { email: {} },
+  });
+});
+
+test("the sign-in through another iterate deployment is gone: a config that names it is refused", () => {
+  const settings = {
+    login: {
+      methods: { iterate: { issuer: "https://os.iterate.com" } },
+      allow: [{ email: "owner@example.com" }],
+    },
+  };
+  expect(AuthSettings.safeParse(settings)).toMatchObject({ success: false });
 });
 
 test("an owner is named by an email rule, by the exact address", () => {

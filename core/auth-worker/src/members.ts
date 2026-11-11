@@ -25,7 +25,7 @@ export async function isMember(env: Env, email: string): Promise<boolean> {
 }
 
 /** What a session is to this stack. Only a live passkey's session acts as a "member". A mailed code
- *  or the upstream proves an address and no more, and the owner's ticket is a deploy's word: a
+ *  proves an address and no more, and the owner's ticket is a deploy's word: a
  *  member's session from one of them is "passkey-owed", and opens /keys alone, to add a passkey. */
 export async function standingOf(
   env: Env,
@@ -86,11 +86,7 @@ export async function membersResponse(
     });
   const standing = await standingOf(env, session);
   if (standing === "not-member")
-    return notMemberPage({
-      domain: iterateConfigOf(env).domain,
-      email: session.email,
-      issuer: iterateConfigOf(env).login.methods.iterate?.issuer,
-    });
+    return notMemberPage({ domain: iterateConfigOf(env).domain, email: session.email });
   if (standing === "passkey-owed") return passkeyOwedResponse(MEMBERS_PATH);
   const owner = isOwner(iterateConfigOf(env).login, session.email);
   if (request.method === "GET") return membersPage(env, { owner });

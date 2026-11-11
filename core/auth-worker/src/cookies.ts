@@ -8,18 +8,13 @@ import { type Env, issuerOf } from "./env.ts";
 // it, or for everyone when AUTH_SIGNING_KEY changes. Membership is checked again on every use.
 const SESSION_COOKIE = "__Host-iterate-auth-session";
 const SESSION_SECONDS = 30 * 24 * 3600;
-const FLOW_COOKIE = "__Host-iterate-auth-sign-in";
-const FLOW_SECONDS = 10 * 60;
 
 /** How a session was opened, kept in its cookie as `method`: what the person proved to get it. */
-const SignInMethod = z.enum(["iterate", "email", "passkey", "first-owner-ticket"]);
+const SignInMethod = z.enum(["email", "passkey", "first-owner-ticket"]);
 export type SignInMethod = z.infer<typeof SignInMethod>;
 
 /** `method` is absent in a cookie made before the claim was. */
 export type Session = { userId: string; email: string; method?: SignInMethod };
-
-const Flow = z.object({ next: z.string(), state: z.string(), verifier: z.string() });
-type Flow = z.infer<typeof Flow>;
 
 /** `key`: the id of the passkey that opened the session, for the method "passkey". */
 export async function sessionCookie(
@@ -53,23 +48,8 @@ export async function sessionOf(env: Env, request: Request): Promise<Session | n
 
 export const clearSessionCookie = cookie(SESSION_COOKIE, "", 0);
 
-export async function flowCookie(env: Env, flow: Flow) {
-  return cookie(
-    FLOW_COOKIE,
-    await sign(env, "sign-in", flow, undefined, FLOW_SECONDS),
-    FLOW_SECONDS,
-  );
-}
-
-export async function flowOf(env: Env, request: Request): Promise<Flow | null> {
-  const parsed = Flow.safeParse(await verified(env, request, FLOW_COOKIE, "sign-in"));
-  return parsed.success ? parsed.data : null;
-}
-
-export const clearFlowCookie = cookie(FLOW_COOKIE, "", 0);
-
-// `__Host-` binds each cookie to this origin over https. `SameSite=Lax` because the upstream's
-// redirect back and a client's link to the authorization endpoint are cross-site navigations.
+// `__Host-` binds each cookie to this origin over https. `SameSite=Lax` because a client's link
+// to the authorization endpoint is a cross-site navigation.
 function cookie(name: string, value: string, maxAgeSeconds: number) {
   return `${name}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`;
 }

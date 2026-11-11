@@ -33,18 +33,7 @@ import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import { DASH_PATH, dashOriginOf, dashResponse } from "./dash.ts";
 import { homePage, signInPage } from "./pages.ts";
 import { selfTestResponse } from "./self-test.ts";
-import {
-  clientMetadata,
-  ITERATE_SIGN_IN_CALLBACK_PATH,
-  ITERATE_SIGN_IN_CLIENT_PATH,
-  ITERATE_SIGN_IN_PATH,
-  iterateSignInCallbackResponse,
-  iterateSignInResponse,
-  SIGN_IN_PATH,
-  SIGN_OUT_PATH,
-  signInHref,
-  signOutResponse,
-} from "./sign-in.ts";
+import { SIGN_IN_PATH, SIGN_OUT_PATH, signInHref, signOutResponse } from "./sign-in.ts";
 import { emailSignInResponse } from "./email-sign-in.ts";
 import { FIRST_OWNER_PATH, firstOwnerResponse } from "./first-owner.ts";
 import { passkeySignInResponse } from "./passkey-sign-in.ts";
@@ -96,9 +85,9 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
     if (pathname === SIGN_IN_PATH && get) {
       const next = url.searchParams.get("next") || "/";
       const { domain, login } = iterateConfigOf(this.env);
-      return login.methods.iterate
-        ? signInPage(domain, next, Boolean(login.methods.email))
-        : Response.redirect(`${issuerOf(this.env)}${signInHref(this.env, next)}`, 302);
+      return login.methods.email
+        ? Response.redirect(`${issuerOf(this.env)}${signInHref(this.env, next)}`, 302)
+        : signInPage(domain, next);
     }
     const members = await membersResponse(this.env, request, (token, resource) =>
       this.whoIs(token, resource),
@@ -108,10 +97,6 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
     if (emailSignIn) return emailSignIn;
     const passkeySignIn = await passkeySignInResponse(this.env, request);
     if (passkeySignIn) return passkeySignIn;
-    if (pathname === ITERATE_SIGN_IN_PATH && get) return iterateSignInResponse(this.env, request);
-    if (pathname === ITERATE_SIGN_IN_CALLBACK_PATH && get)
-      return iterateSignInCallbackResponse(this.env, request);
-    if (pathname === ITERATE_SIGN_IN_CLIENT_PATH && get) return clientMetadata(this.env);
     if (pathname === SIGN_OUT_PATH && request.method === "POST")
       return signOutResponse(this.env, request);
     if (pathname === FIRST_OWNER_PATH && (get || request.method === "POST"))

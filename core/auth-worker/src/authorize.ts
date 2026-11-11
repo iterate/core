@@ -131,8 +131,8 @@ async function notMemberRefusal(
   const standing = await standingOf(env, session);
   if (standing === "passkey-owed") return passkeyOwedResponse(here);
   if (standing === "member" || hostResource) return null;
-  const { domain, login } = iterateConfigOf(env);
-  return notMemberPage({ domain, email: session.email, issuer: login.methods.iterate?.issuer });
+  const { domain } = iterateConfigOf(env);
+  return notMemberPage({ domain, email: session.email });
 }
 
 async function complete(

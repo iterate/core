@@ -36,10 +36,9 @@ export async function devicePageResponse(env: Env, request: Request) {
     ? `${VERIFICATION_PATH}?${new URLSearchParams({ user_code: typed })}`
     : VERIFICATION_PATH;
   if (!session) return seeOther(signInHref(env, here));
-  const { domain, login } = iterateConfigOf(env);
+  const { domain } = iterateConfigOf(env);
   const standing = await standingOf(env, session);
-  if (standing === "not-member")
-    return notMemberPage({ domain, email: session.email, issuer: login.methods.iterate?.issuer });
+  if (standing === "not-member") return notMemberPage({ domain, email: session.email });
   if (standing === "passkey-owed") return passkeyOwedResponse(here);
   if (!typed) return enter(domain);
   const userCode = normalizeUserCode(typed);

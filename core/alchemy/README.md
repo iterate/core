@@ -10,8 +10,8 @@ every resource named `iterate-<name>-<part>` (`src/config.ts` `resourceNamesOf`)
 
 1. Copy `mind.config.example.ts` to `mind.config.local.ts` (git ignores it, and
    `mind.config*.local.json`). Fill in the mind's `name`, the Cloudflare `accountId` and a
-   zone of that account as `domain`, and under `auth` who is a member (`login.allow`) and how a
-   person signs in (`login.methods`: `email`, `iterate` or both). Or name another config file in
+   zone of that account as `domain`, and under `auth` who is a member (`login.allow`) and whether a
+   mailed code proves an address (`login.methods.email`; passkeys need no setting). Or name another config file in
    `ITERATE_MIND_CONFIG`, a module or a `.json` file. `src/config.ts` says what each field does.
 2. Set `CLOUDFLARE_API_TOKEN` (the table below says what it must allow). `CLOUDFLARE_ACCOUNT_ID`
    is optional with a config file; when set, it must be the config's account.
@@ -79,16 +79,20 @@ The auth Worker is the mind's OAuth authorization server, at `https://iterate.<z
 find it from the protected-resource documents the boundary serves for the API
 (`https://iterate.<zone>/.well-known/oauth-protected-resource/api`) and the MCP server, and read its
 endpoints from `https://iterate.<zone>/.well-known/oauth-authorization-server`. Anyone may sign in;
-a token for the API, the MCP server or `/provide` goes to a member alone (`login.allow`). Two ways
-to prove an address, one or both:
+a token for the API, the MCP server or `/provide` goes to a member alone (`login.allow`). One way
+to prove an address beside a passkey:
 
 - `email: {}`, a mailed code: six digits from `sign-in@<zone>` through the stack's own boundary,
   so the stack depends on nobody. The config must have its `email` part, or the deploy is refused.
   A code goes only to an address that an `email` or `emailDomain` rule of `allow` names. With
   `email: { anyone: true }` any other address that asks is mailed too, at most 20 such codes an
   hour for the whole stack: use it when people who are not members sign in to the mind's pages.
-- `iterate: { issuer }`, log in with iterate: the issuer must accept this Worker as a client by its
-  metadata document, `https://iterate.<zone>/sign-in/iterate/client.json`.
+
+With no method (`methods` left out, or `{}`), a passkey is the only way to sign in, and the only
+way to a first passkey is a deploy's ticket (`scripts/first-owner-ticket.ts`). A ticket is for an
+owner: a person `allow` names by address. A member who is no owner (one an owner added on
+`/members`, or one an `emailDomain` rule names) cannot get a first passkey on such a mind. Name
+each person by address, or give the mind a method.
 
 A member signs in with a passkey, and with nothing else. Every stack's sign-in page has "Sign in
 with a passkey": one the member added on `https://iterate.<zone>/keys`. It signs in the member
@@ -97,11 +101,11 @@ verify its user (a PIN, a fingerprint or a face). Its session on `iterate.<zone>
 passkey is removed. The grants that session gave do not: an app or a CLI it signed in stays so
 until its grant ends, or until an owner removes the member's keys.
 
-A code or the upstream proves an address and no more. For a member who holds no passkey, it opens
+A mailed code proves an address and no more. For a member who holds no passkey, it opens
 a session that does one thing: it adds the first passkey on `/keys`, and every other page sends
 the member there. That passkey makes the session a member's, and the page then asks for a second
-passkey. For a member who holds a passkey, a code or the upstream is refused: mail is no way round
-a passkey. Someone who is no member signs in by a code or the upstream as before, and gets
+passkey. For a member who holds a passkey, a code is refused: mail is no way round
+a passkey. Someone who is no member signs in by a code as before, and gets
 nothing but an identity on the mind's own pages.
 
 Who may act grows only by a signature (`core/auth-worker/src/signed-change.ts`). To add a member, and to
@@ -110,7 +114,7 @@ signed: on `/members` and `/keys` the person's passkey signs it, and a script se
 `{ statement, signature }` to `POST /members`. A session's cookie or a member's token does neither,
 so whoever steals one adds no one. To remove a member or a key takes no signature. A new passkey
 is made on another device than the one that signs it: no device holds two passkeys of one person.
-Two ways in sign nothing: a person's first passkey, after a mailed code or the upstream, and the
+Two ways in sign nothing: a person's first passkey, after a mailed code, and the
 passkey the owner's ticket adds.
 
 A rule of `allow` that names no exact address (`subaddresses`, `emailDomain`, `everyone`) admits

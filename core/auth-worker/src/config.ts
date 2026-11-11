@@ -43,15 +43,14 @@ export type EmailRule = z.infer<typeof EmailRule>;
  *  approved without a consent page. */
 export const AuthSettings = z.strictObject({
   login: z.strictObject({
-    /** The ways to prove an address, one or both. The sign-in page lists them, in this order, and
-     *  then the passkey (./passkey-sign-in.ts). A member signs in with a passkey: these two sign
-     *  in a member who holds none, to add the first one, and anyone who is no member. */
+    /** The ways to prove an address beside a passkey. A method here signs in a member who holds no
+     *  passkey, to add the first one, and anyone who is no member. None is valid: a member signs
+     *  in with a passkey (./passkey-sign-in.ts), and the one way to a first passkey is a deploy's
+     *  ticket (./first-owner.ts), which is an owner's alone. So with no method, a member who is no
+     *  owner (one an owner added, or one an `emailDomain` rule names) cannot get in: name each
+     *  person by address in `allow`, or give the mind a method. */
     methods: z
       .strictObject({
-        /** LOG IN WITH ITERATE: `issuer` is an iterate deployment's origin, such as
-         *  `https://os.iterate.com`, whose word this Worker takes on who a person is
-         *  (./sign-in.ts). */
-        iterate: z.strictObject({ issuer: Origin }).optional(),
         /** A MAILED CODE (./email-sign-in.ts): six digits sent from `sign-in@<domain>` through the
          *  stack's own boundary, so the stack depends on nobody. The stack must handle mail
          *  (its `email` part). A code goes to an address an `email` or `emailDomain` rule of
@@ -60,11 +59,9 @@ export const AuthSettings = z.strictObject({
          *  for the whole stack, so its domain is never a way to mail the world. */
         email: z.strictObject({ anyone: z.literal(true).optional() }).optional(),
       })
-      .refine((methods) => methods.iterate || methods.email, {
-        error: "names no way to sign in: give iterate, email or both",
-      }),
+      .default({}),
     /** WHO IS A MEMBER, for now: a person is when one rule matches. Anyone a method vouches for
-     *  (the upstream, or a mailed code) may sign in, and signing in grants nothing: a token for the
+     *  (a mailed code) may sign in, and signing in grants nothing: a token for the
      *  API, the MCP server or `/provide` is issued to a member alone, and answered only while they are one (checked at
      *  consent, at every token refresh and at every `whoIs`). Everyone, on purpose:
      *  `[{ "everyone": {} }]`. */

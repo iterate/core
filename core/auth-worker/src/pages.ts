@@ -80,35 +80,22 @@ export function homePage(input: {
   });
 }
 
-export function signInPage(domain: string, next: string, mailsCodes: boolean) {
-  const passkey = passkeySignIn(next);
+/** The sign-in page of a mind that mails no code: the passkey alone. */
+export function signInPage(domain: string, next: string) {
+  const passkey = passkeySignIn(next, "alone");
   return page({
     title: `Sign in to ${domain}`,
     body: `<h1>Sign in to ${text(domain)}</h1>
-      <form method="get" action="/sign-in/iterate">
-        <input type="hidden" name="next" value="${text(next)}">
-        <button type="submit">Log in with iterate</button>
-      </form>
-      ${
-        mailsCodes
-          ? `<p class="muted">Or sign in with a code we email you.</p>
-      <form method="post" action="/sign-in/email" class="stack">
-        <input type="hidden" name="next" value="${text(next)}">
-        <input type="email" name="email" autocomplete="email" required aria-label="Email">
-        <button type="submit">Send a code</button>
-      </form>`
-          : ""
-      }
       ${passkey.body}`,
     script: passkey.script,
   });
 }
 
 /** The page's half of ./passkey-sign-in.ts. It names no credential, so the browser offers the
- *  passkeys it holds for this site. */
-export function passkeySignIn(next: string) {
+ *  passkeys it holds for this site. `alone`: the page offers no other way to sign in. */
+export function passkeySignIn(next: string, alone?: "alone") {
   return {
-    body: `<p class="muted">Or use a passkey you added here.</p>
+    body: `<p class="muted">${alone ? "Use" : "Or use"} a passkey you added here.</p>
       <form id="passkey" class="stack" data-next="${text(next)}">
         <button type="submit">Sign in with a passkey</button>
         <p id="passkey-status" class="muted" role="status"></p>
@@ -170,17 +157,12 @@ export function errorPage(
   );
 }
 
-export function notMemberPage(input: { domain: string; email: string; issuer?: string }) {
-  const upstream = input.issuer && new URL(input.issuer).host;
+export function notMemberPage(input: { domain: string; email: string }) {
   return errorPage(
-    `You are signed in as ${input.email}, and that address is not a member of ${input.domain}. Ask the mind's owner to add it. To use another account, sign out${upstream ? ` at ${upstream}` : ""}, then try again.`,
+    `You are signed in as ${input.email}, and that address is not a member of ${input.domain}. Ask the mind's owner to add it. To use another account, sign out, then try again.`,
     403,
     undefined,
-    [
-      input.issuer
-        ? { href: input.issuer, label: `Open ${upstream}` }
-        : { href: "/", label: "Sign out" },
-    ],
+    [{ href: "/", label: "Sign out" }],
   );
 }
 

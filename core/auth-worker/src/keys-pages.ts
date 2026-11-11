@@ -39,7 +39,7 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
     (pathname === ENROL_PATH && (get || post));
   if (!known) return null;
   const issuer = issuerOf(env);
-  const { domain, login, trustedClients } = iterateConfigOf(env);
+  const { domain, trustedClients } = iterateConfigOf(env);
   const session = await sessionOf(env, request);
   const standing = session ? await standingOf(env, session) : "not-member";
   if (pathname === KEYS_JSON_PATH) {
@@ -58,7 +58,7 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
   if (standing === "not-member")
     return post
       ? json({ error: "not a member" }, 403)
-      : notMemberPage({ domain, email: session.email, issuer: login.methods.iterate?.issuer });
+      : notMemberPage({ domain, email: session.email });
   const owed = standing === "passkey-owed";
   // Such a session adds a passkey, on /keys, and no more. An address proven by a code adds the
   // first one alone: with a passkey held, the session is from before it, and its holder signs in

@@ -8,8 +8,9 @@ export default {
   domain: "example.com",
   auth: {
     login: {
-      // A mailed code needs `mail: true`. Log in with iterate is
-      // `iterate: { issuer: "https://os.iterate.com" }`, beside it or instead.
+      // A mailed code needs `mail: true`. With no method at all, a member signs in with a passkey
+      // alone, and the one way to a first passkey is a deploy's ticket for an owner, a person
+      // `allow` names by address (scripts/first-owner-ticket.ts).
       methods: { email: {} },
       allow: [{ email: "person@example.org" }],
     },

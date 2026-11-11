@@ -71,7 +71,8 @@ const PUBLIC_FIELDS = new Set([
   "mind.name",
   "mind.template",
   "mind.sandboxImage",
-  "auth.login.methods.iterate.issuer",
+  // empty: a mind whose one way to sign in is a passkey
+  "auth.login.methods",
   "auth.login.methods.email",
   "auth.login.methods.email.anyone",
   "auth.login.allow[].email",
