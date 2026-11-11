@@ -18,7 +18,6 @@ import {
   type ItxEntrypointScope,
   type WorkerManifest,
 } from "core-itx";
-import { templates } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
 import { PLATFORM_AUTHOR } from "../repo/contract.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
@@ -65,6 +64,10 @@ const LogAnswer = z.array(
 const FilesAnswer = z.record(z.string(), z.union([z.string(), z.object({ base64: z.string() })]));
 const CommitAnswer = z.object({ commitOid: z.string().nullable() });
 
+/** The config templates this build bundles (the generated config-templates.js, which the facet
+ *  hands over): each folder of core/configs by its name, with its files. */
+export type ConfigTemplates = Record<string, { path: string; content: string }[]>;
+
 /** The facet's own storage, for what no event carries (template-update.ts `TemplateKept`). Not the
  *  reduced state: a root's row names the types it delivers at its birth, so a root born before
  *  this code would never be handed a new one. */
@@ -86,16 +89,19 @@ export class ProjectProcessor extends StreamProcessor<
   private readonly getItx: () => ItxEntrypointScope & Disposable;
   private readonly publisher: () => ProjectPublisher;
   private readonly kept: KeptByTheFacet;
+  private readonly templates: ConfigTemplates;
 
   constructor(
     getItx: () => ItxEntrypointScope & Disposable,
     publisher: () => ProjectPublisher,
     kept: KeptByTheFacet,
+    templates: ConfigTemplates,
   ) {
     super();
     this.getItx = getItx;
     this.publisher = publisher;
     this.kept = kept;
+    this.templates = templates;
   }
 
   // per incarnation; the durable ground is the state
@@ -262,35 +268,15 @@ export class ProjectProcessor extends StreamProcessor<
         } finally {
           this.#publishing = false;
         }
+        // The template's update waited for this drain, and the drain's own outcome was delivered
+        // while it still ran: no later delivery is owed, so it starts here.
+        await this.#followTemplateOnce(append);
       });
     }
-    // A NEWER TEMPLATE, once per incarnation. A config repo is seeded once, and this code bundles
-    // the template it was built with: a project seeded from an older one gets what that adds
-    // (template-update.ts). A deploy restarts the root, whose next wake is delivered here.
-    if (
-      state.creation?.status === "created" &&
-      !this.#nextOwed() &&
-      !this.#publishing &&
-      !this.#templateFollowed
-    ) {
-      this.#templateFollowed = true;
-      runInBackground(async () => {
-        try {
-          const followed = await this.#followTemplate();
-          if (!followed) return;
-          if (followed.fact) await append(followed.fact);
-          await this.kept.keepTemplate(followed.kept);
-        } catch (error) {
-          // the next incarnation tries again: a commit made meanwhile only moved the tip
-          console.info({
-            event: "project.template-not-followed",
-            namespace: "project",
-            message: "the config repo was not compared with the bundled template",
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      });
-    }
+    // A NEWER TEMPLATE, once per incarnation (`#followTemplateOnce`): now when nothing is owed, else
+    // at the end of the publication above. A deploy restarts the root, whose next wake is
+    // delivered here.
+    if (this.#templateMayFollow()) runInBackground(() => this.#followTemplateOnce(append));
     // A failed creation is asked for again, once per incarnation: only the root's birth writes the
     // request, so a failure that stood would leave the project with no site for good.
     if (state.creation?.status === "failed" && !this.#retriedFailedCreation) {
@@ -343,7 +329,7 @@ export class ProjectProcessor extends StreamProcessor<
     // The loader refuses a ref that moves (`…@main`), so the seed pins them; one that cannot be
     // pinned fails the creation.
     const files = (async () => {
-      const changes = await pinDependencies(templateFilesOf(reference || "minimal"));
+      const changes = await pinDependencies(this.#templateFilesOf(reference || "minimal"));
       readPackage(filesOf(changes), "The config template");
       return changes;
     })();
@@ -388,11 +374,44 @@ export class ProjectProcessor extends StreamProcessor<
     if (!commitOid) throw new Error("the config repo's seed left main unborn");
   }
 
+  // Created, nothing owed, no publication running, and not compared yet in this incarnation.
+  #templateMayFollow(): boolean {
+    return (
+      this.#newestState?.creation?.status === "created" &&
+      !this.#nextOwed() &&
+      !this.#publishing &&
+      !this.#templateFollowed
+    );
+  }
+
+  // A config repo is seeded once, and this code bundles the template it was built with: a project
+  // seeded from an older one gets what that adds (template-update.ts). Never throws.
+  async #followTemplateOnce(
+    append: (...events: EmittedEventInput<typeof ProjectContract>[]) => Promise<unknown>,
+  ): Promise<void> {
+    if (!this.#templateMayFollow()) return;
+    this.#templateFollowed = true;
+    try {
+      const followed = await this.#followTemplate();
+      if (!followed) return;
+      if (followed.fact) await append(followed.fact);
+      await this.kept.keepTemplate(followed.kept);
+    } catch (error) {
+      // the next incarnation tries again: a commit made meanwhile only moved the tip
+      console.info({
+        event: "project.template-not-followed",
+        namespace: "project",
+        message: "the config repo was not compared with the bundled template",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   // What to keep, and the fact to append when there is something to say. Compared once for each
   // set of bundled templates. Nothing is kept when the commit is refused: the next incarnation
   // compares again.
   async #followTemplate() {
-    const hash = await sha256Hex(JSON.stringify(templates));
+    const hash = await sha256Hex(JSON.stringify(this.templates));
     const kept = await this.kept.template();
     if (kept?.hash === hash) return undefined;
     const call = async (expression: ItxExpression) => {
@@ -426,8 +445,8 @@ export class ProjectProcessor extends StreamProcessor<
       seed?.template ||
       /"name":\s*"@iterate-com\/config-([\w-]+)"/.exec(manifest)?.[1] ||
       "";
-    if (!Object.hasOwn(templates, name)) return { kept: { ...kept, hash }, fact: undefined };
-    const template = await pinDependencies(templateFilesOf(name));
+    if (!Object.hasOwn(this.templates, name)) return { kept: { ...kept, hash }, fact: undefined };
+    const template = await pinDependencies(this.#templateFilesOf(name));
     const now = await hashesOf(current);
     const untouched = new Set(
       Object.keys(written).filter(
@@ -475,6 +494,15 @@ export class ProjectProcessor extends StreamProcessor<
             }
           : undefined,
     };
+  }
+
+  #templateFilesOf(name: string) {
+    const files = Object.hasOwn(this.templates, name) ? this.templates[name] : undefined;
+    if (!files)
+      throw new Error(
+        `no config template ${JSON.stringify(name)}: this build bundles ${Object.keys(this.templates).join(", ")} (core/configs)`,
+      );
+    return files;
   }
 
   #nextOwed(): ProjectState["unpublishedCommits"][number] | undefined {
@@ -591,13 +619,4 @@ async function landOnce(publisher: ProjectPublisher, ...events: StreamEventInput
   } catch (error) {
     if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
   }
-}
-
-function templateFilesOf(name: string) {
-  const files = Object.hasOwn(templates, name) ? templates[name] : undefined;
-  if (!files)
-    throw new Error(
-      `no config template ${JSON.stringify(name)}: this build bundles ${Object.keys(templates).join(", ")} (core/configs)`,
-    );
-  return files;
 }

@@ -1,6 +1,7 @@
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import { contextAt, runningCause, type ItxEntrypointScope } from "core-itx";
 import { moduleIdentityOf } from "../context/worker-loader.ts";
+import { templates } from "../generated/config-templates.js";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
 import type { EntitySlug } from "./entity-lifecycle.ts";
@@ -22,6 +23,7 @@ export class ProjectFacet extends StreamProcessorDurableObject<
       template: () => this.ctx.storage.get<TemplateKept>("config-template"),
       keepTemplate: (kept) => this.ctx.storage.put("config-template", kept),
     },
+    templates,
   );
 
   #publisher(): ProjectPublisher {
