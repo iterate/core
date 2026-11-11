@@ -994,6 +994,10 @@ export type RepoHandle = InvokeHandle & {
   }): Promise<RepoCommitResult>;
   writeFile(path: string, content: string): Promise<RepoCommitResult>;
   log(options?: { limit?: number }): Promise<RepoLogEntry[]>;
+  /** Lands the tip's `repo/commit-completed` fact again, and answers the tip. A `git push` to the
+   *  repo's remote moves the tip and lands no fact, so `/repos/config` does not publish by itself:
+   *  call this after such a push. Null when the repo has no commit. */
+  announceTip(): Promise<string | null>;
   /** The one remote the repo remembers, as git's `origin`: a git URL over HTTP(S) whose userinfo may
    *  hold a secret placeholder (`https://x-access-token:getSecret("/secrets/github-acme", { field:
    *  "accessToken" })@github.com/acme/config.git`, the placeholder percent-encoded or not), never a
