@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
+import { connectMind } from "iterate/node";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { mindRoot } from "./smoke/lib.ts";
 
 // A core/os fact that carried a cell, sealed for `<mindId>.iterate/secrets/<name>`.
 const CellFact = z.object({
@@ -61,13 +61,16 @@ export default async function importSecrets(
     if (fact.success && at > 0)
       latest.set(context.slice(at + ".iterate".length), fact.data.payload);
   }
+  // One WebSocket session for every secret. An HTTP batch ends at its first await, and the proof
+  // below is awaited before the call: over a batch every import failed, with no word from the mind.
+  using connection = await connectMind({ address: domain, token, signIn: false });
+  // `importSealed` is the mind's own `itx.secrets` verb, which iterate/api's type does not name
+  const secrets = connection.itx.secrets as unknown as {
+    importSealed(path: string, cell: string, proof: string): Promise<unknown>;
+  };
   let failed = 0;
   for (const [path, { sealed }] of [...latest].sort(([a], [b]) => (a < b ? -1 : 1))) {
     try {
-      // `importSealed` is the mind's own `itx.secrets` verb, which iterate/api's type does not name
-      const secrets = mindRoot(domain, token).secrets as unknown as {
-        importSealed(path: string, cell: string, proof: string): Promise<unknown>;
-      };
       // the cell as text: the proof covers these bytes, whatever order a hop gives an object's keys
       const cell = JSON.stringify(sealed);
       await secrets.importSealed(path, cell, await proofOf(path, cell));
