@@ -320,6 +320,9 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (this.#version() === 0)
       throw codedError("SECRET_NOT_SET", `secret ${path}: never set — nothing to delete`);
     const held = this.#current();
+    // A write that reserved its version before this delete, and still seals, is earlier than the
+    // delete: `#write` reads this and keeps no value of it.
+    this.ctx.storage.kv.put("deleted-through", this.#version());
     for (const key of ["current", "pending", "completed", "collecting"])
       this.ctx.storage.kv.delete(key);
     const events: SecretFact[] = held
@@ -406,6 +409,14 @@ export class SecretDurableObject extends DurableObject<Env> {
     const version = this.#version() + 1;
     this.ctx.storage.kv.put("version", version);
     const cell = await this.#sealCell(path, record, version);
+    // A DELETE THAT CAME IN WHILE THE SEAL AWAITED IS THE LATER WORD. With no value held, this
+    // write would store its own and undo the delete. It stores nothing and says so, and no fact
+    // says the secret was set.
+    if (version <= (this.ctx.storage.kv.get<number>("deleted-through") ?? 0))
+      throw codedError(
+        "SECRET_NOT_SET",
+        `secret ${path}: it was deleted while this value was being stored, and the value is not kept. Set it again if it is still wanted`,
+      );
     const current = this.#current();
     if (!current || current.cell.version < version)
       this.ctx.storage.kv.put<Current>("current", { cell, public: publicFields });

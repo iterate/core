@@ -33,7 +33,7 @@ type ErrorCode =
   | "INVALID_INPUT"
   | "IDENTITY_CONFLICT" // verified login cannot replace another linked identity
   | "GRANT_NOT_FOUND" // a caller may revoke only a grant in their own inventory
-  | "SECRET_NOT_SET" // itx.secrets.delete of a path that holds no secret: already gone, or never set
+  | "SECRET_NOT_SET" // itx.secrets.delete of a path that holds no secret: already gone, or never set; or a set that a delete came in during, whose value is not kept
   | "NOT_CREATED" // a verb or delete on an agent, repo, workspace or sandbox whose path has no creation certificate (never created, or its create is still running or failed): create it first; `data` is { path }; never retried
   | "NO_ITX_EXPRESSION_MATCH" // no rewrite rule matches the call (default-deny)
   | "IDEMPOTENCY_CONFLICT"

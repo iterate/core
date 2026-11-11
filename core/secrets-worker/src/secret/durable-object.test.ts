@@ -255,6 +255,22 @@ test("a rule with strings of the body lets a read go with its body whole, and ho
   });
 });
 
+test("a delete that comes in while a new value is being sealed is the later word: the value is not stored", async () => {
+  const { secret } = await vault();
+  // not awaited: it has reserved its version and seals
+  const set = secret.secret(PATH, "set", {
+    material: "newer-token-bbbb",
+    urls: ["https://gmail.googleapis.com"],
+  });
+  const stored = expect(set).rejects.toThrow("deleted while this value was being stored");
+  await secret.secret(PATH, "delete", {});
+  await stored;
+  expect(await secret.secret(PATH, "describe", {})).toEqual({ path: PATH, set: false });
+  // a value set after the delete is kept
+  await secret.secret(PATH, "set", { material: "newest", urls: ["https://gmail.googleapis.com"] });
+  expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: true });
+});
+
 test("a rule cannot be loosened without a signature, and a member's signed statement removes it", async () => {
   const { secret, decide } = await vault();
   const by = { userId: "user_aaaa", email: "member@example.com" };
