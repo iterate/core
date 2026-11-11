@@ -3,10 +3,10 @@
 
    shadcn's neutral theme, as the UI kit has it (packages/ui/src/styles/globals.css), with the
    kit's status colours. Each colour is light-dark(light, dark), and color-scheme picks the side:
-   the system's setting by default, which also applies to an open page, or the class `light` or
-   `dark` on <html> where a page sets one (the kit's theme toggle does). */
+   light, whatever the system says. The class `dark` on <html> picks the other, for a page that
+   sets it. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --radius: 0.625rem;
   --background: light-dark(oklch(1 0 0), oklch(0.145 0 0));
   --foreground: light-dark(oklch(0.145 0 0), oklch(0.985 0 0));
@@ -30,9 +30,6 @@
   --input: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 15%));
   --ring: light-dark(oklch(0.708 0 0), oklch(0.556 0 0));
   --link: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
-}
-:root.light {
-  color-scheme: light;
 }
 :root.dark {
   color-scheme: dark;

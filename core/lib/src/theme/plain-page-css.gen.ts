@@ -3,7 +3,7 @@
 
 /** tokens.css and plain-page.css: the text of a plain page's one `<style>`. */
 export const plainPageCss = `:root {
-color-scheme: light dark;
+color-scheme: light;
 --radius: 0.625rem;
 --background: light-dark(oklch(1 0 0), oklch(0.145 0 0));
 --foreground: light-dark(oklch(0.145 0 0), oklch(0.985 0 0));
@@ -27,9 +27,6 @@ color-scheme: light dark;
 --input: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 15%));
 --ring: light-dark(oklch(0.708 0 0), oklch(0.556 0 0));
 --link: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
-}
-:root.light {
-color-scheme: light;
 }
 :root.dark {
 color-scheme: dark;
@@ -182,4 +179,4 @@ gap: 0.75rem 1.25rem;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-ZI/zi+6yiJDKQ6KEnj0WkjhVH99EgGoWnb0tRT4grUw='";
+export const plainPageCssHash = "'sha256-8pLitWJ9W0V4JYOptvP3QxU6yRdLlpxXZNrUelm/Kt4='";
