@@ -9,12 +9,9 @@ packages:
 cleanupUnusedCatalogs: true
 catalog:
   # One Cloudflare toolchain for every Worker in the repo, pinned here even where one package uses
-  # it: the Vite plugin, the wrangler it builds and deploys with, the runtime types, the Workers
-  # test pool, and cf, which core/os runs `cf dev` and its local D1 migrate with, from
-  # cloudflare.config.ts in the @cloudflare/config format, which test/ reads too. core/os alone
-  # builds with the Vite plugin 2.0 beta (`catalog:vite-plugin-2`, below): the apps pass their
-  # Worker config through 1.x's `config` option, which 2.0 changes. Alchemy deploys core/os, on
-  # Effect: all pinned exactly, so every deployer runs the same set.
+  # it: the Vite plugin, the wrangler it builds and deploys with, the runtime types and the
+  # containers library. Alchemy deploys a mind's stack (core/alchemy), on Effect: all pinned
+  # exactly, so every deployer runs the same set.
   "@cloudflare/workers-types": ^5.20261103.1
   alchemy: 2.0.0-beta.85
   "@alchemy.run/cloudflare": 2.0.0-beta.85
@@ -43,7 +40,6 @@ catalog:
   typescript: ^7.0.2
   uqr: 0.1.3
   vitest: ^4.1.11
-  # vitest's HTML reporter, the e2e rows' report in a cowboy run: vitest's own version
   ws: 8.21.3
   zod: 4.6.5
 minimumReleaseAge: 1440
