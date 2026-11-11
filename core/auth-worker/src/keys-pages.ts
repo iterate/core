@@ -180,7 +180,9 @@ async function keysPage(
       ? `your sign-in on ${text(new URL(host).host)}`
       : signIn.resource
         ? `the mind, through ${text(new URL(signIn.resource).pathname)}`
-        : "the mind or one of its pages";
+        : signIn.goesTo
+          ? `access went to ${text(signIn.goesTo)}`
+          : "the mind or one of its pages";
     const ends = signIn.endsAt ? `, ends ${day(signIn.endsAt * 1000)} if it is not used` : "";
     // a hostname's own sign-in has no client name: the page there is what holds it
     const name = signIn.clientName || (host ? `This browser, on ${new URL(host).host}` : "An app");

@@ -311,12 +311,22 @@ export type SignIn = {
   /** What it is for: a resource of the stack, or a mind hostname's origin. Absent on a grant made
    *  before grants kept it. */
   resource?: string;
+  /** The host the grant's code went to: the client's own address. */
+  goesTo?: string;
   /** Epoch seconds. `endsAt` moves at each refresh: it is when an unused sign-in ends. */
   createdAt: number;
   endsAt?: number;
 };
 
 const SignInMetadata = z.object({ clientName: z.string(), resource: z.string().optional() });
+
+/** The mind hostname whose own sign-in a grant is, read from where its code went: for a grant
+ *  made before grants kept their resource. */
+function hostOfOwnCallback(env: Env, redirectUri: string | undefined) {
+  if (!redirectUri || !URL.canParse(redirectUri)) return undefined;
+  const host = mindHostResourceOf(env, new URL(redirectUri).origin);
+  return host && redirectUri === hostCallbackOf(host) ? host : undefined;
+}
 
 export async function signInsOf(env: Env, userId: string): Promise<SignIn[]> {
   const helpers = oauthHelpers(env);
@@ -333,7 +343,10 @@ export async function signInsOf(env: Env, userId: string): Promise<SignIn[]> {
           metadata.data?.clientName && metadata.data.clientName !== grant.clientId
             ? metadata.data.clientName
             : "",
-        resource: metadata.data?.resource,
+        resource: metadata.data?.resource || hostOfOwnCallback(env, grant.redirectUri),
+        goesTo: URL.canParse(grant.redirectUri || "")
+          ? new URL(grant.redirectUri!).host
+          : undefined,
         createdAt: grant.createdAt,
         endsAt: grant.expiresAt,
       });
