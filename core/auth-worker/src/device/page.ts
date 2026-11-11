@@ -86,10 +86,10 @@ function enter(domain: string, typed = "", error?: string) {
     title: `Sign in a device to ${domain}`,
     status: error ? 400 : 200,
     body: `<h1>Sign in a device to ${text(domain)}</h1>
-      <p>Enter the code the device shows.</p>
-      ${error ? `<p><strong>${text(error)}</strong></p>` : ""}
+      <p class="muted">Enter the code the device shows.</p>
+      ${error ? `<p role="alert">${text(error)}</p>` : ""}
       <form method="get" class="stack">
-        <input name="user_code" value="${text(typed)}" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Code">
+        <label>Code <input name="user_code" value="${text(typed)}" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
         <button type="submit">Next</button>
       </form>`,
   });
@@ -104,8 +104,8 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
   const code = `<p>Continue only if you started this sign-in yourself and the device shows <strong>${text(userCode)}</strong>.</p>`;
   const form = `<form method="post" class="actions">
         <input type="hidden" name="user_code" value="${text(userCode)}">
+        <button type="submit" name="action" value="decline" class="secondary">Decline</button>
         <button type="submit" name="action" value="confirm">Continue</button>
-        <button type="submit" name="action" value="decline" class="link">Decline</button>
       </form>`;
   if (device.letIn) {
     const { signer } = device.letIn;

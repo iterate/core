@@ -158,6 +158,7 @@ async function keysPage(
       }<p class="muted">A passkey you already have here signs each new one, so you use both: first the new one, then the one you have.</p>`;
   return page({
     title: `Your keys for ${domain}`,
+    wide: true,
     body: `<h1>Your keys for ${text(domain)}</h1>
       <p>A key lets you sign in to ${text(domain)} and approve things in it: a passkey in your password manager, or a security key such as a YubiKey.</p>
       ${results.length ? `<ul>${results.map(item).join("")}</ul>` : `<p class="muted">You have no keys here yet.</p>`}

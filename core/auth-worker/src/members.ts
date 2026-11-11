@@ -272,6 +272,7 @@ async function membersPage(
     .join("");
   return page({
     title: `Members of ${domain}`,
+    wide: true,
     status: error ? 400 : 200,
     body: `<h1>Members of ${text(domain)}</h1>
       <p>A member may use the mind's API, its MCP server and its apps, and add or remove other members.</p>

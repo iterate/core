@@ -155,6 +155,7 @@ async function page(deps: ApprovalsDeps): Promise<Response> {
     `${body}<script type="application/json" id="approvals-data">${JSON.stringify(data).replaceAll("<", "\\u003c")}</script><script nonce="${nonce}">${SCRIPT}</script>`,
     "'self'",
     nonce,
+    true,
   );
 }
 

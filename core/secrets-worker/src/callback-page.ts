@@ -6,12 +6,14 @@ import { plainPageCssHash, standalonePage } from "iterate/standalone-page";
 export const escaped = (text: string) =>
   text.replace(/[&<>"]/g, (character) => `&#${character.charCodeAt(0)};`);
 
-// `body` is HTML the caller escaped.
+// `body` is HTML the caller escaped. `wide`: a page a person works in (the approvals), where the
+// others are the narrow card of one question.
 export function plainPage(
   status: number,
   body: string,
   formAction = "'none'",
   scriptNonce?: string,
+  wide = false,
 ): Response {
   const script = scriptNonce ? `script-src 'nonce-${scriptNonce}'; connect-src 'self'; ` : "";
   return new Response(
@@ -19,6 +21,7 @@ export function plainPage(
       title: "iterate",
       head: `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`,
       body,
+      wide,
     }),
     {
       status,

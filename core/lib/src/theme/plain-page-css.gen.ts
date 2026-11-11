@@ -32,13 +32,16 @@ color-scheme: light;
 color-scheme: dark;
 }
 body {
+display: flex;
+flex-direction: column;
+min-height: 100svh;
 margin: 0;
-background: var(--background);
+background: var(--muted);
 color: var(--foreground);
 font-family:
 ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
 "Noto Color Emoji";
-font-size: 1rem;
+font-size: 0.9375rem;
 line-height: 1.5;
 -webkit-font-smoothing: antialiased;
 }
@@ -46,15 +49,54 @@ main {
 box-sizing: border-box;
 display: flex;
 flex-direction: column;
-gap: 1.5rem;
-max-width: 52.5rem;
-margin: 0 auto;
-padding: 3.5rem 1.25rem 6.5rem;
+gap: 1.25rem;
+width: calc(100% - 2rem);
+max-width: 26rem;
+margin: auto;
+padding: 2rem;
+border: 1px solid var(--border);
+border-radius: calc(var(--radius) + 4px);
+background: var(--card);
+color: var(--card-foreground);
+box-shadow: 0 1px 2px 0 rgb(0 0 0 / 5%);
 overflow-wrap: anywhere;
+}
+main.wide {
+max-width: 46rem;
+margin: 3rem auto;
+}
+@media (max-width: 40rem) {
+body {
+background: var(--card);
+}
+main,
+main.wide {
+width: 100%;
+max-width: none;
+margin: 0;
+padding: 2rem 1.25rem 4rem;
+border: 0;
+border-radius: 0;
+box-shadow: none;
+}
+}
+.mark {
+display: flex;
+}
+.mark svg {
+width: 2.25rem;
+height: 2.25rem;
+border-radius: 22.37%;
+}
+.mark rect {
+fill: var(--foreground);
+}
+.mark g {
+fill: var(--card);
 }
 h1 {
 margin: 0;
-font-size: 1.5rem;
+font-size: 1.25rem;
 font-weight: 600;
 line-height: 1.3;
 letter-spacing: -0.025em;
@@ -79,7 +121,11 @@ border: 1px solid var(--border);
 border-radius: var(--radius);
 }
 label {
-display: block;
+display: flex;
+flex-direction: column;
+gap: 0.375rem;
+font-size: 0.875rem;
+font-weight: 500;
 }
 input,
 select,
@@ -151,6 +197,53 @@ padding: 0;
 background: none;
 font-size: inherit;
 }
+button.secondary {
+border: 1px solid var(--input);
+background: transparent;
+color: var(--foreground);
+}
+button.secondary:hover {
+background: var(--accent);
+}
+.or {
+display: flex;
+align-items: center;
+gap: 0.75rem;
+color: var(--muted-foreground);
+font-size: 0.8125rem;
+}
+.or::before,
+.or::after {
+flex: 1;
+border-top: 1px solid var(--border);
+content: "";
+}
+main:not(.wide) .stack {
+align-items: stretch;
+}
+main:not(.wide) .stack > button:not(.link) {
+width: 100%;
+}
+main:not(.wide) .actions > button:not(.link) {
+flex: 1;
+}
+main:not(.wide)
+:is(input:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"]), textarea) {
+box-sizing: border-box;
+width: 100%;
+max-width: none;
+min-height: 2.25rem;
+}
+blockquote {
+margin: 0;
+padding-left: 0.875rem;
+border-left: 2px solid var(--border);
+color: var(--muted-foreground);
+}
+small {
+color: var(--muted-foreground);
+font-size: 0.8125rem;
+}
 :focus-visible {
 outline: 3px solid color-mix(in oklab, var(--ring) 50%, transparent);
 outline-offset: 2px;
@@ -167,6 +260,9 @@ flex-direction: column;
 align-items: flex-start;
 gap: 0.75rem;
 }
+[role="status"]:empty {
+display: none;
+}
 [hidden] {
 display: none !important;
 }
@@ -179,4 +275,4 @@ gap: 0.75rem 1.25rem;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-8pLitWJ9W0V4JYOptvP3QxU6yRdLlpxXZNrUelm/Kt4='";
+export const plainPageCssHash = "'sha256-gRPuw7Heftu2m2G88r++7ifZlsB3wpU7VQpWCxRoHY8='";

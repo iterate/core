@@ -8,8 +8,10 @@ export const text = (value: string) =>
 // wherever that is.
 const CSP = `default-src 'none'; style-src ${plainPageCssHash}; frame-ancestors 'none'; base-uri 'none'`;
 
+/** One page. `wide` is a page a person reads or works in (the start page, the keys, the members);
+ *  without it the page is the narrow card of one question and one action. */
 export function page(
-  input: { title: string; body: string; status?: number; script?: string },
+  input: { title: string; body: string; status?: number; script?: string; wide?: boolean },
   headers = new Headers(),
 ): Response {
   const nonce = input.script && crypto.randomUUID();
@@ -26,7 +28,7 @@ export function page(
   const body = nonce
     ? `${input.body}<script nonce="${nonce}">${input.script}</script>`
     : input.body;
-  return new Response(standalonePage({ title: input.title, head: "", body }), {
+  return new Response(standalonePage({ title: input.title, head: "", body, wide: input.wide }), {
     status: input.status ?? 200,
     headers,
   });
@@ -48,6 +50,7 @@ export function homePage(input: {
       `<li><a href="${text(href)}">${text(label)}</a> <span class="muted">${text(about)}</span></li>`;
     return page({
       title: domain,
+      wide: true,
       body: `<h1>${text(domain)}</h1>
       <p>You are signed in as <strong>${text(email)}</strong>.</p>
       <ul class="stack">
@@ -95,9 +98,9 @@ export function signInPage(domain: string, next: string) {
  *  passkeys it holds for this site. `alone`: the page offers no other way to sign in. */
 export function passkeySignIn(next: string, alone?: "alone") {
   return {
-    body: `<p class="muted">${alone ? "Use" : "Or use"} a passkey you added here.</p>
+    body: `${alone ? `<p class="muted">Use a passkey you added here.</p>` : `<p class="or">or</p>`}
       <form id="passkey" class="stack" data-next="${text(next)}">
-        <button type="submit">Sign in with a passkey</button>
+        <button type="submit"${alone ? "" : ` class="secondary"`}>Sign in with a passkey</button>
         <p id="passkey-status" class="muted" role="status"></p>
       </form>`,
     script: `
@@ -198,8 +201,8 @@ export function consentPage(input: {
         ${loopback}
         <form method="post" class="actions">
           <input type="hidden" name="handle" value="${text(input.handle)}">
+          <button type="submit" name="decision" value="deny" class="secondary">Deny</button>
           <button type="submit" name="decision" value="allow">Allow</button>
-          <button type="submit" name="decision" value="deny" class="link">Deny</button>
         </form>`,
     },
     input.headers,

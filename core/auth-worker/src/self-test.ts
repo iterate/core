@@ -148,6 +148,7 @@ function selfTestPage(env: Env, email: string) {
   };
   return page({
     title: `Self-test of ${domain}`,
+    wide: true,
     body: `<h1>Self-test of ${text(domain)}</h1>
       <p>These checks use your mind for real, as you: they send mail, call the internet, use a throwaway secret and ask the agents' model one short question.</p>
       <p class="muted">The checks connect to your mind the way Claude Code does, so a consent page comes first: choose Allow there.</p>

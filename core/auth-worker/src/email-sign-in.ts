@@ -66,11 +66,11 @@ function addressPage(env: Env, request: Request, error?: string, typed = "") {
     title: `Sign in to ${domain}`,
     status: error ? 400 : 200,
     body: `<h1>Sign in to ${text(domain)}</h1>
-      <p>Enter your email. We send you a code to sign in with.</p>
-      ${error ? `<p><strong>${text(error)}</strong></p>` : ""}
+      <p class="muted">Enter your email. We send you a code to sign in with.</p>
+      ${error ? `<p role="alert">${text(error)}</p>` : ""}
       <form method="post" action="${EMAIL_SIGN_IN_PATH}" class="stack">
         <input type="hidden" name="next" value="${text(next)}">
-        <input type="email" name="email" value="${text(typed)}" autocomplete="email" required aria-label="Email">
+        <label>Email <input type="email" name="email" value="${text(typed)}" autocomplete="email" placeholder="you@example.com" required></label>
         <button type="submit">Send a code</button>
       </form>
       ${passkey.body}`,
@@ -154,10 +154,10 @@ async function codePage(env: Env, request: Request, error?: string, status = 200
     title: "Enter your code",
     status,
     body: `<h1>Enter your code</h1>
-      <p>If <strong>${text(challenge.email)}</strong> may sign in here, a code is on its way. It expires in 10 minutes.</p>
-      ${error ? `<p><strong>${text(error)}</strong></p>` : ""}
+      <p class="muted">If <strong>${text(challenge.email)}</strong> may sign in here, a code is on its way. It expires in 10 minutes.</p>
+      ${error ? `<p role="alert">${text(error)}</p>` : ""}
       <form method="post" action="${CODE_PATH}" class="stack">
-        <input name="code" inputmode="numeric" autocomplete="one-time-code" required aria-label="Code">
+        <label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
         <button type="submit">Sign in</button>
       </form>
       <p><a href="${text(`${EMAIL_SIGN_IN_PATH}?${new URLSearchParams({ next: challenge.next })}`)}">Use another email, or send a new code</a></p>`,
