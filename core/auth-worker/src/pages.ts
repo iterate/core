@@ -1,5 +1,6 @@
 import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
 import { plainPageCssHash, standalonePage } from "iterate/standalone-page";
+import { clientTile, shownLogoOf } from "./client-mark.ts";
 
 export const text = (value: string) =>
   value.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
@@ -11,7 +12,17 @@ const CSP = `default-src 'none'; style-src ${plainPageCssHash}; frame-ancestors 
 /** One page. `wide` is a page a person reads or works in (the start page, the keys, the members);
  *  without it the page is the narrow card of one question and one action. */
 export function page(
-  input: { title: string; body: string; status?: number; script?: string; wide?: boolean },
+  input: {
+    title: string;
+    body: string;
+    status?: number;
+    script?: string;
+    wide?: boolean;
+    /** Who asks for the mind, as their tile (client-mark.ts), for the card's head. */
+    asker?: string;
+    /** The one origin an image of this page may come from: a verified client's own logo. */
+    imageOrigin?: string;
+  },
   headers = new Headers(),
 ): Response {
   const nonce = input.script && crypto.randomUUID();
@@ -19,7 +30,11 @@ export function page(
   headers.set("cache-control", "no-store");
   headers.set(
     "content-security-policy",
-    nonce ? `${CSP}; script-src 'nonce-${nonce}'; connect-src 'self'` : CSP,
+    [
+      CSP,
+      ...(nonce ? [`script-src 'nonce-${nonce}'`, "connect-src 'self'"] : []),
+      ...(input.imageOrigin ? [`img-src ${input.imageOrigin}`] : []),
+    ].join("; "),
   );
   headers.set("x-frame-options", "DENY");
   // `same-origin`, not `no-referrer`: under `no-referrer` a browser sends `Origin: null` on a
@@ -28,10 +43,13 @@ export function page(
   const body = nonce
     ? `${input.body}<script nonce="${nonce}">${input.script}</script>`
     : input.body;
-  return new Response(standalonePage({ title: input.title, head: "", body, wide: input.wide }), {
-    status: input.status ?? 200,
-    headers,
-  });
+  return new Response(
+    standalonePage({ title: input.title, head: "", body, wide: input.wide, asker: input.asker }),
+    {
+      status: input.status ?? 200,
+      headers,
+    },
+  );
 }
 
 /** The platform's start page: a member's ways into the mind, or the sign-in for anyone else. */
@@ -239,11 +257,15 @@ export function consentPage(input: {
   return page(
     {
       title: `Allow ${details.clientName}?`,
+      // the client's mark beside the mind's: a known client's, a verified client's own logo, or
+      // its initials (client-mark.ts)
+      asker: clientTile({ ...details, name: details.clientName }),
+      imageOrigin: shownLogoOf(details)?.origin,
       body: `${
         input.host
-          ? `<h1>Allow ${name} to use ${text(input.host)} as you?</h1>
+          ? `<h1>${name} wants to use ${text(input.host)} as you</h1>
         <p>${name} will learn that you are <strong>${text(input.email)}</strong>, and can use ${text(input.host)} as you. It gets nothing else in ${domain}.</p>`
-          : `<h1>Allow ${name} to act as you in ${domain}?</h1>
+          : `<h1>${name} wants to access ${domain}</h1>
         <p>${name} will use ${domain} through ${text(input.resource)}, as <strong>${text(input.email)}</strong>. It can read and change everything in this mind.</p>`
       }
         ${origin}

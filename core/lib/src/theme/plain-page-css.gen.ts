@@ -88,6 +88,44 @@ width: 2.25rem;
 height: 2.25rem;
 border-radius: 22.37%;
 }
+.asks {
+display: flex;
+align-items: center;
+justify-content: center;
+gap: 1rem;
+color: var(--muted-foreground);
+font-size: 1.25rem;
+}
+.asks .mark svg,
+.tile {
+width: 3.5rem;
+height: 3.5rem;
+border-radius: 22.37%;
+}
+.tile {
+box-sizing: border-box;
+display: grid;
+place-items: center;
+overflow: hidden;
+border: 1px solid var(--border);
+background: var(--card);
+color: var(--foreground);
+font-size: 1.125rem;
+font-weight: 600;
+}
+.tile svg {
+width: 2rem;
+height: 2rem;
+}
+.tile img {
+width: 100%;
+height: 100%;
+object-fit: contain;
+}
+main.asked h1 {
+text-align: center;
+text-wrap: balance;
+}
 .mark rect {
 fill: var(--foreground);
 }
@@ -287,4 +325,4 @@ gap: 0.75rem 1.25rem;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-NdbXKha8xlaPYl01u6G5ARXzNZRRPHs8ptKw1F4W4ZA='";
+export const plainPageCssHash = "'sha256-bEbL9x3WQHgW/6dIT0Mdu4vkJ8ynT8V15BcFjbvmx04='";

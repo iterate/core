@@ -60,8 +60,10 @@ test("the consent page asks one question, with Deny and Allow as a pair", async 
   expect(html).toMatch(
     /<form method="post" action="\/sign-out" class="inline">\s*<input type="hidden" name="next" value="\/oauth2\/auth\?client_id=c&#38;state=s">\s*<button type="submit" class="link">Use another account<\/button>/,
   );
-  expect(html).toContain(`<main><div class="mark"`);
-  expect(html).toContain(`<h1>Allow Claude Code to act as you in ${DOMAIN}?</h1>`);
+  // who asks: the mind's mark and Claude's own, side by side, and the heading says it
+  expect(html).toContain(`<main class="asked"><div class="asks"><div class="mark"`);
+  expect(html).toContain(`data-client-mark="known"`);
+  expect(html).toContain(`<h1>Claude Code wants to access ${DOMAIN}</h1>`);
   expect(html).toMatch(
     /<button type="submit" name="decision" value="deny" class="secondary">Deny<\/button>\s*<button type="submit" name="decision" value="allow">Allow<\/button>/,
   );
@@ -81,6 +83,80 @@ test("a member's start page is the wide card, and a refusal the narrow one", asy
   expect(start).toContain(`<main class="wide"><div class="mark"`);
   const refusal = await kept("refusal", errorPage("That link has ended."));
   expect(refusal).toContain(`<main><div class="mark"`);
+});
+
+test("a client's own logo is shown only for a verified domain, from that domain, and the page's policy allows that one origin", async () => {
+  const consent = (details: object) =>
+    consentPage({
+      details: {
+        clientName: "Notes",
+        redirectUri: "https://notes.example.org/callback",
+        redirectHost: "notes.example.org",
+        redirectIsLoopback: false,
+        ...details,
+      } as never,
+      handle: "handle",
+      email: "owner@example.net",
+      domain: DOMAIN,
+      resource: `https://iterate.${DOMAIN}/mcp`,
+      here: "/oauth2/auth?client_id=c&state=s",
+      headers: new Headers(),
+    });
+  const verified = consent({
+    clientDomain: "example.org",
+    logoUri: "https://cdn.example.org/logo.png",
+  });
+  expect(verified.headers.get("content-security-policy")).toContain(
+    "img-src https://cdn.example.org",
+  );
+  expect(await kept("consent-own-logo", verified)).toContain(
+    `<img src="https://cdn.example.org/logo.png" alt="" referrerpolicy="no-referrer">`,
+  );
+  // a client that registered itself says its own logo: its initials are shown, and no image may load
+  for (const details of [
+    { logoUri: "https://cdn.example.org/logo.png" },
+    { clientDomain: "example.org", logoUri: "https://elsewhere.example/logo.png" },
+    { clientDomain: "example.org", logoUri: "http://example.org/logo.png" },
+    { clientDomain: "example.org", logoUri: "javascript:alert(1)" },
+  ]) {
+    const answer = consent(details);
+    expect(answer.headers.get("content-security-policy")).not.toContain("img-src");
+    const html = await answer.text();
+    expect(html).not.toContain("<img");
+    expect(html).toContain(`<div class="tile" data-client-mark="initials">NO</div>`);
+  }
+});
+
+test("a known client's mark goes by where its access goes, or by its name", async () => {
+  const html = async (details: object) =>
+    await consentPage({
+      details: { redirectIsLoopback: false, ...details } as never,
+      handle: "handle",
+      email: "owner@example.net",
+      domain: DOMAIN,
+      resource: `https://iterate.${DOMAIN}/mcp`,
+      here: "/oauth2/auth?client_id=c&state=s",
+      headers: new Headers(),
+    }).text();
+  const claude = {
+    redirectUri: "https://claude.ai/api/mcp/auth_callback",
+    redirectHost: "claude.ai",
+  };
+  expect(await html({ clientName: "An app", ...claude })).toContain(`data-client-mark="known"`);
+  expect(
+    await html({
+      clientName: "Cursor",
+      redirectUri: "cursor://x/callback",
+      redirectHost: "cursor://x/callback",
+    }),
+  ).toContain(`data-client-mark="known"`);
+  expect(
+    await html({
+      clientName: "ChatGPT",
+      redirectUri: "https://chatgpt.com/x",
+      redirectHost: "chatgpt.com",
+    }),
+  ).toContain(`<div class="tile" data-client-mark="initials">CH</div>`);
 });
 
 /** The page's HTML, written to ITERATE_PAGES_OUT when that names a folder. */

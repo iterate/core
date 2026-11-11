@@ -25,6 +25,9 @@ export function standalonePage(input: {
   head: string;
   body: string;
   wide?: boolean;
+  /** Somebody asks for the mind (a consent, a device's sign-in): their tile, as HTML. The card's
+   *  head is then the mind's mark and that tile side by side, and its heading is centred. */
+  asker?: string;
 }) {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${input.title.replace(/[&<>"]/g, (character) => `&#${character.charCodeAt(0)};`)}</title><style>${plainPageCss}</style>${input.head}</head><body><main${input.wide ? ' class="wide"' : ""}>${MARK}${input.body}</main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${input.title.replace(/[&<>"]/g, (character) => `&#${character.charCodeAt(0)};`)}</title><style>${plainPageCss}</style>${input.head}</head><body><main${input.wide ? ' class="wide"' : input.asker ? ' class="asked"' : ""}>${input.asker ? `<div class="asks">${MARK}<span aria-hidden="true">⇄</span>${input.asker}</div>` : MARK}${input.body}</main></body></html>`;
 }
