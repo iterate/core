@@ -84,20 +84,28 @@ export const AuthSettings = z.strictObject({
    *  document's URL) and redirect are both on one of them (./authorize.ts). */
   trustedClients: z.array(Origin).optional(),
   /** Root keys: their statements count with no row here. A key with an `email` is a person's, a
-   *  member while `login.allow` admits it. `paths` confines what it may add through
-   *  `POST /statements`; without it, any path. */
+   *  member while `login.allow` admits it: it approves, and adds members and keys, at no path at
+   *  all. `paths` confines what a service's key may add through `POST /statements`; without it,
+   *  any path. So a key has an `email` or `paths`, never both: `paths` would read as a limit on
+   *  what the person's key may do, and it is none. */
   keys: z
     .array(
-      z.strictObject({
-        actor: z.string().min(1),
-        email: z.string().optional(),
-        /** SubjectPublicKeyInfo DER, base64url. */
-        publicKey: z
-          .string()
-          .regex(/^[A-Za-z0-9_-]+$/, "expected SubjectPublicKeyInfo DER, base64url"),
-        label: z.string().min(1),
-        paths: z.array(z.string().startsWith("/")).min(1).optional(),
-      }),
+      z
+        .strictObject({
+          actor: z.string().min(1),
+          email: z.string().optional(),
+          /** SubjectPublicKeyInfo DER, base64url. */
+          publicKey: z
+            .string()
+            .regex(/^[A-Za-z0-9_-]+$/, "expected SubjectPublicKeyInfo DER, base64url"),
+          label: z.string().min(1),
+          paths: z.array(z.string().startsWith("/")).min(1).optional(),
+        })
+        .refine(({ email, paths }) => !(email && paths), {
+          path: ["paths"],
+          error:
+            "a key with an email is a person's: it approves and adds members whatever paths say, so it takes no paths. Give a service's key paths and no email",
+        }),
     )
     .optional(),
 });
@@ -146,6 +154,22 @@ export const AuthConfig = AuthSettings.extend({
     },
   );
 export type AuthConfig = z.infer<typeof AuthConfig>;
+
+/** Whether `email` is at the mind's own domain or under it. Every mailbox there is the mind's,
+ *  whose code may be hostile: the mind receives the sign-in code mailed to that address. */
+export function atMindsDomain(domain: string, email: string): boolean {
+  const host = email.trim().toLowerCase().split("@")[1] || "";
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+/** WHETHER THE CONFIG MAKES `email` A MEMBER: a rule of `login.allow` admits it, and it is no
+ *  address of the mind's own. A deploy refuses a rule that names such an address (`AuthConfig`).
+ *  `everyone` names none, so it is refused here: with it, the mind's code could mail itself a
+ *  code and be a member. */
+export const memberByConfig = (
+  config: { domain: string; login: { allow: readonly EmailRule[] } },
+  email: string,
+) => !atMindsDomain(config.domain, email) && emailAllowed(config.login.allow, email);
 
 /** Whether `rules` admit `email`: one of them matches (no `deny` rule). */
 export function emailAllowed(rules: readonly EmailRule[], email: string): boolean {

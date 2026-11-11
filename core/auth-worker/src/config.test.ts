@@ -1,5 +1,11 @@
 import { expect, test } from "vitest";
-import { AuthSettings, FIRST_OWNER_TICKET_MS, firstOwnerTicketOf, isOwner } from "./config.ts";
+import {
+  AuthSettings,
+  FIRST_OWNER_TICKET_MS,
+  firstOwnerTicketOf,
+  isOwner,
+  memberByConfig,
+} from "./config.ts";
 
 const NOW = 1_000_000;
 const SETTINGS = {
@@ -57,6 +63,39 @@ test("the sign-in through another iterate deployment is gone: a config that name
     },
   };
   expect(AuthSettings.safeParse(settings)).toMatchObject({ success: false });
+});
+
+test("a root key is a person's, with an email, or a service's, with paths: one with both is refused", () => {
+  const key = { actor: "a", publicKey: "MFkw", label: "A key" };
+  const settings = (extra: object) => ({
+    login: { allow: [{ email: "owner@example.com" }] },
+    keys: [{ ...key, ...extra }],
+  });
+  expect([
+    AuthSettings.safeParse(settings({ email: "owner@example.com" })).success,
+    AuthSettings.safeParse(settings({ paths: ["/integrations/"] })).success,
+    AuthSettings.safeParse(settings({})).success,
+  ]).toEqual([true, true, true]);
+  // paths would read as a limit on the person's key, which approves and adds members all the same
+  expect(
+    AuthSettings.safeParse(settings({ email: "owner@example.com", paths: ["/integrations/"] })),
+  ).toMatchObject({
+    success: false,
+    error: {
+      issues: [{ path: ["keys", 0, "paths"], message: expect.stringContaining("no paths") }],
+    },
+  });
+});
+
+test("`everyone` makes no member of an address at the mind's own domain, whose mail the mind receives", () => {
+  const config = { domain: "mind.example", login: { allow: [{ everyone: {} }] } };
+  expect([
+    memberByConfig(config, "anyone@example.com"),
+    memberByConfig(config, "agent@mind.example"),
+    memberByConfig(config, "Agent@Sub.Mind.Example "),
+    // another domain that only ends with the same letters
+    memberByConfig(config, "jo@notmind.example"),
+  ]).toEqual([true, false, false, true]);
 });
 
 test("an owner is named by an email rule, by the exact address", () => {

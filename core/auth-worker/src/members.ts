@@ -4,11 +4,13 @@ import { z } from "zod";
 import { base64url } from "iterate/signed";
 import { AccountFacts } from "./account-facts.ts";
 import {
+  atMindsDomain,
   emailAllowed,
   type EmailRule,
   FIRST_OWNER_PATH,
   FIRST_OWNER_TICKET_MS,
   isOwner,
+  memberByConfig,
 } from "./config.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import { type Session, sessionOf } from "./cookies.ts";
@@ -30,7 +32,11 @@ const MEMBERS_PATH = "/members";
 type Added = { email: string; addedBy: string; addedAt: number };
 
 export async function isMember(env: Env, email: string): Promise<boolean> {
-  return emailAllowed(iterateConfigOf(env).login.allow, email) || (await isAdded(env, email));
+  const config = iterateConfigOf(env);
+  // An address of the mind's own is no member, by a rule or by a row: `add` refuses one, and this
+  // holds for a row from before it did.
+  if (atMindsDomain(config.domain, email)) return false;
+  return memberByConfig(config, email) || (await isAdded(env, email));
 }
 
 /** What a session is to this stack. Only a live passkey's session acts as a "member". A mailed code
@@ -186,8 +192,7 @@ async function add(env: Env, change: SignedChange): Promise<Outcome> {
     .toLowerCase();
   if (!z.email().safeParse(email).success) return { error: "Enter an email address.", status: 400 };
   const { domain, login } = iterateConfigOf(env);
-  const host = email.split("@")[1]!;
-  if (host === domain || host.endsWith(`.${domain}`))
+  if (atMindsDomain(domain, email))
     return {
       error: `An address at ${domain} cannot be a member: the mind receives its mail, so the mind could sign in as that member.`,
       status: 400,
