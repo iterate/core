@@ -10,6 +10,7 @@ import { HOST_SESSION_PREFIX, type TokenIdentity } from "iterate/workers";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
 import { admitted, TOO_MANY } from "./device/limits.ts";
+import { isBlocked } from "./blocked.ts";
 import { isMember } from "./members.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 
@@ -184,6 +185,8 @@ export async function tokenIdentity(
     : validated.expiresAt;
   const member = await isMember(env, props.data.email);
   if (expiresAt * 1000 <= Date.now() || (!hostResource && !member)) return null;
+  // a member is never blocked, so only a mind hostname's token asks
+  if (!member && (await isBlocked(env, props.data.email))) return null;
   return {
     principal: { actor: props.data.userId, email: props.data.email },
     grant: props.data.grantId,
@@ -222,6 +225,8 @@ async function grantLifetime(
   const hostResource = mindHostResourceOf(env, input.resource);
   if (!hostResource && !(await isMember(env, grant.email)))
     throw refused("not_a_member", "The session is no longer active.");
+  if (hostResource && (await isBlocked(env, grant.email)))
+    throw refused("blocked", "The session is no longer active.");
   const lifetime = grantLifetimeOf(grant, {
     refresh: input.grantType !== GrantType.AUTHORIZATION_CODE,
     host: Boolean(hostResource),

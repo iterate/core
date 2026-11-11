@@ -2,6 +2,7 @@ import { waitUntil } from "cloudflare:workers";
 import { sameOriginPath, cookieValueOf, reportIssue } from "iterate/lib";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
+import { isBlocked } from "./blocked.ts";
 import { emailAllowed } from "./config.ts";
 import { sessionCookie } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
@@ -267,7 +268,12 @@ async function whoIsMailed(env: Env, email: string) {
     email,
   );
   const anyone = Boolean(methods.email?.anyone) || allow.some((rule) => "everyone" in rule);
-  return { named, mailable: !reservedDomain.test(email) && (named || domain || anyone) };
+  // someone an owner blocked gets the same page as anyone, and no mail
+  const blocked = !named && (await isBlocked(env, email));
+  return {
+    named,
+    mailable: !reservedDomain.test(email) && !blocked && (named || domain || anyone),
+  };
 }
 
 const cookie = (id: string, maxAgeSeconds: number) =>

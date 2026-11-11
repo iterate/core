@@ -38,6 +38,7 @@ import { SIGN_IN_PATH, SIGN_OUT_PATH, signInHref, signOutResponse } from "./sign
 import { emailSignInResponse } from "./email-sign-in.ts";
 import { FIRST_OWNER_PATH, firstOwnerResponse } from "./first-owner.ts";
 import { passkeySignInResponse } from "./passkey-sign-in.ts";
+import { isBlocked } from "./blocked.ts";
 import { isMember, membersResponse, standingOf } from "./members.ts";
 import { verifiedStatement } from "./keys.ts";
 import { keysPagesResponse } from "./keys-pages.ts";
@@ -155,10 +156,12 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
       new Request(issuerOf(this.env), { headers: { cookie } }),
     );
     if (!session) return null;
+    const member = (await standingOf(this.env, session)) === "member";
+    if (!member && (await isBlocked(this.env, session.email))) return null;
     return {
       userId: session.userId,
       email: session.email,
-      member: (await standingOf(this.env, session)) === "member",
+      member,
     };
   }
 

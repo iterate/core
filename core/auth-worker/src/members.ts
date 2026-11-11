@@ -5,6 +5,7 @@ import { AccountFacts } from "./account-facts.ts";
 import { emailAllowed, type EmailRule, isOwner } from "./config.ts";
 import { type Session, sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { blockedOf } from "./blocked.ts";
 import { endGrantsOf } from "./oauth.ts";
 import { errorPage, notMemberPage, page, text } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
@@ -101,6 +102,13 @@ export async function membersResponse(
     const outcome = owner
       ? await removeKeys(env, session, email)
       : { error: "Only an owner, a member the stack's config names, removes a member's keys." };
+    if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
+    return outcome.facts.on(await membersPage(env, { owner, notice: outcome.notice }));
+  }
+  if (action === "block" || action === "unblock") {
+    const outcome = owner
+      ? await (action === "block" ? block(env, session, email) : unblock(env, session, email))
+      : { error: "Only an owner, a member the stack's config names, blocks a person." };
     if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
     return outcome.facts.on(await membersPage(env, { owner, notice: outcome.notice }));
   }
@@ -236,6 +244,57 @@ async function removeKeys(
   };
 }
 
+// For a person who is no member: an app's end user, on a stack whose sign-in is open to anyone. A
+// member is removed, not blocked, since a member's standing comes from the members' list.
+async function block(
+  env: Env,
+  actor: Session,
+  typed: string,
+): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
+  const email = typed.trim().toLowerCase();
+  if (!email.includes("@")) return { error: "Type the address to block." };
+  if (await isMember(env, email))
+    return { error: `${email} is a member. Remove the member first; a member is never blocked.` };
+  await env.DB.prepare(
+    "insert into blocked (email, blocked_by, blocked_at) values (?1, ?2, ?3) on conflict do nothing",
+  )
+    .bind(email, actor.email, Date.now())
+    .run();
+  const facts = new AccountFacts();
+  const person = await env.DB.prepare("select id from users where email = ?1")
+    .bind(email)
+    .first<{ id: string }>();
+  // what they hold ends now: an app's session on a hostname, an agent's token
+  if (person) await endGrantsOf(env, person.id, facts);
+  facts.add(actor.userId, {
+    type: "events.iterate.com/account/person-blocked",
+    payload: { email },
+  });
+  console.info({ event: "auth.person-blocked", by: actor.userId, known: Boolean(person) });
+  return {
+    facts,
+    notice: `${email} is blocked: no sign-in code goes to it, and it is signed out of every app.`,
+  };
+}
+
+async function unblock(
+  env: Env,
+  actor: Session,
+  typed: string,
+): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
+  const email = typed.trim().toLowerCase();
+  const removed = await env.DB.prepare("delete from blocked where email = ?1 returning email")
+    .bind(email)
+    .first();
+  if (!removed) return { error: `${email} is not blocked.` };
+  const facts = new AccountFacts();
+  facts.add(actor.userId, {
+    type: "events.iterate.com/account/person-unblocked",
+    payload: { email },
+  });
+  return { facts, notice: `${email} is no longer blocked.` };
+}
+
 function ruleInWords(rule: EmailRule) {
   if ("everyone" in rule) return "Everyone who signs in";
   if ("emailDomain" in rule) return `Anyone at ${rule.emailDomain}`;
@@ -270,6 +329,20 @@ async function membersPage(
         </form></li>`,
     )
     .join("");
+  const blockedRows = owner
+    ? (await blockedOf(env))
+        .map(
+          (
+            row,
+          ) => `<li>${text(row.email)} <span class="muted">(blocked by ${text(row.blockedBy)})</span>
+        <form method="post" action="${MEMBERS_PATH}">
+          <input type="hidden" name="action" value="unblock">
+          <input type="hidden" name="email" value="${text(row.email)}">
+          <button type="submit" class="link">Unblock</button>
+        </form></li>`,
+        )
+        .join("")
+    : "";
   return page({
     title: `Members of ${domain}`,
     wide: true,
@@ -293,6 +366,14 @@ async function membersPage(
         <input type="hidden" name="action" value="remove-keys">
         <input type="email" name="email" autocomplete="off" required aria-label="The member's email">
         <button type="submit">Remove this member's keys</button>
+      </form>
+      <h2>Block a person who is not a member</h2>
+      <p>For a stack whose sign-in is open to anyone, so that its apps have users of their own. A blocked address gets no sign-in code, and is signed out of every app at once.</p>
+      <ul>${blockedRows}</ul>
+      <form method="post" action="${MEMBERS_PATH}" class="stack">
+        <input type="hidden" name="action" value="block">
+        <input type="email" name="email" autocomplete="off" required aria-label="The person's email">
+        <button type="submit">Block this person</button>
       </form>`
           : ""
       }`,
