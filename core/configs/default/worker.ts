@@ -9,6 +9,7 @@ import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 import { agentsApp } from "./apps/agents/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
+import { callSlack, slackContentOf, slackMessageOf } from "./slack.ts";
 
 // The integration packages this mind hosts (a Telegram bot, your own GitHub App, …), one element
 // each: AGENTS.md, and the recipes at https://github.com/jonastemplestein/iterategrations.
@@ -138,6 +139,28 @@ export default class extends IterateConfigEntrypoint {
           });
         break;
       }
+      case "events.iterate.com/slack/webhook-received": {
+        // What happened in a Slack workspace a member linked, on `/integrations/slack/<team>`,
+        // relayed and signed by iterate Cloud (anything else of this type reaches no agent). One
+        // agent for each thread (slack.ts): a mention or a direct message starts it, and a later
+        // message of the thread reaches it only when it exists.
+        if (event.source?.signer?.principal.actor !== "iterate-cloud") break;
+        const message = slackMessageOf(event.payload);
+        if (!message) break;
+        if (message.starts) await itx.agents.create(message.agent);
+        else if (!(await itx.agents.list()).some((agent) => agent.path === message.agent)) break;
+        await itx
+          .cd(message.agent)
+          .append({
+            type: "events.iterate.com/agent/context-added",
+            idempotencyKey: message.idempotencyKey,
+            payload: { role: "user", actor: { type: "user" }, content: slackContentOf(message) },
+          })
+          .catch((error: unknown) => {
+            if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
+          });
+        break;
+      }
       case "events.iterate.com/github/webhook-received":
       case "events.iterate.com/repo/commit-completed": {
         // THIS REPO AND ITS GITHUB REPOSITORY ARE ONE HISTORY, once a member linked them
@@ -247,5 +270,12 @@ export default class extends IterateConfigEntrypoint {
       }
     }
     return new Response("Not found\n", { status: 404 });
+  }
+
+  /** `itx.config.slack(method, args)`: any method of Slack's Web API, as the workspace's bot
+   *  (slack.ts). An agent of a Slack thread answers with it. */
+  async slack(method: string, args?: Record<string, unknown>) {
+    using itx = this.getItx();
+    return await callSlack(itx, method, args);
   }
 }

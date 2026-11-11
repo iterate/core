@@ -21,6 +21,12 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
     and the website. So only the platform's own record of a member's mail sent straight from their
     domain reaches one; a forward, a list's copy, a re-sent old message, an auto-reply or a bounce
     is ignored.
+  - The `events.iterate.com/slack/webhook-received` case is the Slack agent (`slack.ts`): one agent
+    for each Slack thread, at `/agents/slack/<team>/<channel>/<thread>`. A mention of the bot or a
+    direct message starts one; a later message of the thread reaches the same agent. The agent
+    answers by calling Slack's Web API itself: `await itx.config.slack("chat.postMessage", {
+channel, thread_ts, text })`, and any other method the same way. The token stays in the vault
+    (`/secrets/slack`, linked through iterate Cloud's Slack app).
   - The `events.iterate.com/x/message-received` case hands what a linked X account says to
     iterate's bot (a direct message, or a post that mentions it) to an agent of its own per
     account, `/agents/x/u<x user id>`. A member links an account with
