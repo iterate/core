@@ -55,15 +55,15 @@ export async function secretChecks(domain: string): Promise<Check[]> {
     }),
     await attempt("secrets: itx.fetch to another origin is refused", async () => {
       const { status } = await use("https://example.com/", placeholder);
-      return { pass: status === 502, detail: `${status}` };
+      return { pass: status === 403, detail: `${status}` };
     }),
     await attempt(
-      "secrets: the refused use is on the log, a secret/used with status 502",
+      "secrets: the refused use is on the log, a secret/used with status 403",
       async () => {
         const refused = (await logOf(root, path)).some(
           (event) =>
             event.type === "events.iterate.com/secret/used" &&
-            (event.payload as { status?: unknown } | undefined)?.status === 502,
+            (event.payload as { status?: unknown } | undefined)?.status === 403,
         );
         return { pass: refused, detail: `a refused use on the log: ${refused}` };
       },
@@ -115,7 +115,7 @@ export async function secretChecks(domain: string): Promise<Check[]> {
       "secrets: a placeholder in a URL is refused for a secret placed in headers",
       async () => {
         const { status } = await use(`${ECHO}/anything?k=getSecret("${path}")`, {});
-        return { pass: status === 502, detail: `${status}` };
+        return { pass: status === 403, detail: `${status}` };
       },
     ),
     await attempt("secrets: a secret made with no operations refuses signHmac", async () => {
@@ -172,7 +172,7 @@ export async function secretChecks(domain: string): Promise<Check[]> {
     await attempt("secrets: after delete, a use is refused", async () => {
       await root().secrets.delete(path);
       const { status } = await use(`${ECHO}/headers`, placeholder);
-      return { pass: status === 502, detail: `${status}` };
+      return { pass: status === 403, detail: `${status}` };
     }),
     ...(await petshopRefresh(root)),
   ];

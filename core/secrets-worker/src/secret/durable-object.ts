@@ -235,6 +235,9 @@ export type CollectionForm = Pick<
   "urls" | "description" | "fields" | "use" | "anyoneWithLink"
 > & { redirectOrigin?: string };
 
+/** A use refused because the refresh it needed failed at the provider: not the caller's mistake. */
+class RefreshFailedRefusal extends SecretRefused {}
+
 export class SecretDurableObject extends DurableObject<Env> {
   // Single-flight per cell: callers who 401 together share one mint. A caller holding a newer cell
   // queues behind the running one.
@@ -1179,8 +1182,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     this.#waiting.delete(digest);
   }
 
-  // Every refusal is a 502 to the caller, never to the destination. A substituted value is cut out
-  // of the answer's headers; the body goes back as the host sent it.
+  // Every refusal goes to the caller, never to the destination: a 403 when the vault's own rules
+  // refuse the request as it is written (the pin, the placement, a secret that is not set), and a
+  // 502 when a refresh the request needed failed at its provider. A 403 is the caller's to fix, so
+  // it is no error line in the Workers' logs; a failed refresh is one. A substituted value is cut
+  // out of the answer's headers; the body goes back as the host sent it.
   override async fetch(incoming: Request): Promise<Response> {
     const path = this.#pathOf(incoming.headers.get(SECRET_USE_HEADER) ?? "");
     const headers = new Headers(incoming.headers);
@@ -1315,7 +1321,9 @@ export class SecretDurableObject extends DurableObject<Env> {
           if (!(error instanceof SecretRefused) || !error.mintable || last) throw error;
           const failed = await refreshed();
           if (failed)
-            throw new SecretRefused(`${error.message}; the refresh failed: ${failed.message}`);
+            throw new RefreshFailedRefusal(
+              `${error.message}; the refresh failed: ${failed.message}`,
+            );
           stored = await read();
           continue;
         }
@@ -1326,7 +1334,12 @@ export class SecretDurableObject extends DurableObject<Env> {
       }
     } catch (error) {
       if (!(error instanceof SecretRefused) && !(error instanceof HeldAnswer)) throw error;
-      const status = error instanceof HeldAnswer ? error.status : 502;
+      const status =
+        error instanceof HeldAnswer
+          ? error.status
+          : error instanceof RefreshFailedRefusal
+            ? 502
+            : 403;
       // only a use that was dispatched names the digest of the request that waited
       held = undefined;
       console.info({

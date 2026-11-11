@@ -95,7 +95,7 @@ export class SecretUse extends WorkerEntrypoint<Env> {
   async fetch(request: Request) {
     const path = request.headers.get(SECRET_USE_HEADER) ?? "";
     if (!SECRET_PATH.test(path))
-      return new Response(`itx.fetch: ${JSON.stringify(path)} names no secret\n`, { status: 502 });
+      return new Response(`itx.fetch: ${JSON.stringify(path)} names no secret\n`, { status: 403 });
     return this.env.SECRET.getByName(path).fetch(request);
   }
 }

@@ -22,7 +22,7 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     if (paths.length > 1)
       return new Response(
         `itx.fetch: one request, one secret — this one names ${paths.map((path) => JSON.stringify(path)).join(", ")}\n`,
-        { status: 502 },
+        { status: 403 },
       );
     if (paths[0]) {
       headers.set(SECRET_USE_HEADER, paths[0]);
