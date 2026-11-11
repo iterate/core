@@ -510,6 +510,27 @@ await run("an agent proposes a rule, and the member's passkey signs it into one"
   };
 });
 
+await run(
+  "the member removes the bridge's key on /keys with the passkey, and the bridge lends no more",
+  async () => {
+    await page.goto(`${issuer}/keys`);
+    const row = page.locator("li", {
+      has: page.locator(`input[name="key"][value="${bridgeKey}"]`),
+    });
+    await row.getByRole("button", { name: "Remove" }).click();
+    // the page comes back with the key listed as removed, and no button for it
+    await page
+      .locator(`input[name="key"][value="${bridgeKey}"]`)
+      .waitFor({ state: "detached", timeout: 15_000 });
+    const overflow = z
+      .number()
+      .parse(await page.evaluate("document.documentElement.scrollWidth - window.innerWidth"));
+    must(overflow <= 0, `the keys page is ${overflow} px wider than the phone`);
+    bridgeKey = "";
+    return { detail: "Remove asked for the passkey; the key is listed as removed" };
+  },
+);
+
 await cleanUp();
 await browser.close();
 console.log(`proven: ${step} of ${step}`);
