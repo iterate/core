@@ -306,6 +306,7 @@ export async function endGrantsOf(env: Env, userId: string, facts: AccountFacts)
 /** One live sign-in of a person, as /keys lists it: a grant, whose client holds tokens. */
 export type SignIn = {
   id: string;
+  /** The client's own name, or "" for one that gave none: a mind hostname's own sign-in. */
   clientName: string;
   /** What it is for: a resource of the stack, or a mind hostname's origin. Absent on a grant made
    *  before grants kept it. */
@@ -327,7 +328,11 @@ export async function signInsOf(env: Env, userId: string): Promise<SignIn[]> {
       const metadata = SignInMetadata.safeParse(grant.metadata);
       signIns.push({
         id: grant.id,
-        clientName: metadata.data?.clientName || grant.clientId,
+        // a client that gave no name is kept by its id, which says nothing to a person
+        clientName:
+          metadata.data?.clientName && metadata.data.clientName !== grant.clientId
+            ? metadata.data.clientName
+            : "",
         resource: metadata.data?.resource,
         createdAt: grant.createdAt,
         endsAt: grant.expiresAt,

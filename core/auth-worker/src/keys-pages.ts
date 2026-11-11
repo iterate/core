@@ -172,7 +172,9 @@ async function keysPage(
         ? `the mind, through ${text(new URL(signIn.resource).pathname)}`
         : "the mind or one of its pages";
     const ends = signIn.endsAt ? `, ends ${day(signIn.endsAt * 1000)} if it is not used` : "";
-    return `<li>${text(signIn.clientName)} <span class="muted">(${what}, since ${day(signIn.createdAt * 1000)}${ends})</span>
+    // a hostname's own sign-in has no client name: the page there is what holds it
+    const name = signIn.clientName || (host ? `This browser, on ${new URL(host).host}` : "An app");
+    return `<li>${text(name)} <span class="muted">(${what}, since ${day(signIn.createdAt * 1000)}${ends})</span>
         <form method="post" action="${END_SIGN_IN_PATH}" class="inline">
           <input type="hidden" name="signIn" value="${text(signIn.id)}">
           <button type="submit" class="link">Sign out</button>
