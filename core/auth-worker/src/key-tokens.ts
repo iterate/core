@@ -1,6 +1,6 @@
 // key-tokens.ts — A TOKEN FOR A KEY, WITH NO PERSON. A service that lends a capability to the mind
-// (`iterate provide --key`, core/lib/src/cli/bridge-key.ts) must stay connected for longer than
-// any person's grant lasts. A member allows its key once, on /keys/enrol, with the one capability
+// (`iterate provide --key`, core/lib/src/cli/bridge-key.ts) should not hold a person's
+// grant, which may do all that person may. A member allows its key once, on /keys/enrol, with the one capability
 // it may lend (`provide`). From then on the key signs a statement and gets a token for the mind's
 // API that lives an hour. There is no refresh token: the key signs again. The key has no end date,
 // and a member ends it on /keys.

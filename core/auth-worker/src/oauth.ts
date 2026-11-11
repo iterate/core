@@ -46,11 +46,13 @@ export function mindHostResourceOf(env: Env, resource: string | null | undefined
 export const hostCallbackOf = (hostResource: string) =>
   `${hostResource}${HOST_SESSION_PREFIX}callback`;
 
-// `deadline` (epoch ms): the grant is refused from then on, however recently it was used.
+// A grant lives for as long as its client keeps refreshing it, and ends once it has been idle for
+// SESSION_IDLE_SECONDS. Only a let-in grant has a `deadline` (epoch ms), from which it is refused.
+// A grant made before 2026-11-12 carries one of thirty days, which nothing reads.
 export const GrantProps = z.object({
   userId: z.string().startsWith("user_"),
   email: z.string(),
-  deadline: z.number().int().positive(),
+  deadline: z.number().int().positive().optional(),
   letIn: z
     .object({
       reason: z.string(),
@@ -74,7 +76,6 @@ const HOST_ACCESS_TOKEN_SECONDS = 24 * 3600;
 const CLIENT_REGISTRATION_SECONDS = 2 * SESSION_IDLE_SECONDS;
 // The library would take up to 1 MiB; it caps a client metadata document at 5 KiB.
 const CLIENT_METADATA_MAX_CHARACTERS = 4096;
-export const GRANT_LIFETIME_MS = 30 * 24 * 3600_000;
 
 // Built per call: the library takes a fixed list of resources, and a call may be about one mind
 // hostname besides the config's.
@@ -142,7 +143,10 @@ export async function tokenIdentity(
   if (!validated) return null;
   const props = TokenProps.safeParse(validated.props);
   if (!props.success || props.data.userId !== validated.userId) return null;
-  const expiresAt = Math.min(validated.expiresAt, Math.floor(props.data.deadline / 1000));
+  const deadline = letInDeadlineOf(props.data);
+  const expiresAt = deadline
+    ? Math.min(validated.expiresAt, Math.floor(deadline / 1000))
+    : validated.expiresAt;
   const member = await isMember(env, props.data.email);
   if (expiresAt * 1000 <= Date.now() || (!hostResource && !member)) return null;
   return {
@@ -153,8 +157,12 @@ export async function tokenIdentity(
   };
 }
 
+/** The instant a let-in grant ends. A let-in grant with none ended at its making. */
+const letInDeadlineOf = (grant: GrantProps) => (grant.letIn ? grant.deadline || 1 : undefined);
+
 // The library revokes a grant this refuses, with its tokens. A let-in grant gets one access token
-// for its whole remaining time: nobody may refresh it.
+// for its whole remaining time: nobody may refresh it. Any other grant gets an access token and
+// the library's idle lifetime, which each refresh starts again.
 async function grantLifetime(
   env: Env,
   input: TokenExchangeCallbackOptions<Env>,
@@ -179,30 +187,30 @@ async function grantLifetime(
   const hostResource = mindHostResourceOf(env, input.resource);
   if (!hostResource && !(await isMember(env, grant.email)))
     throw refused("not_a_member", "The session is no longer active.");
-  const remaining = Math.floor((grant.deadline - Date.now()) / 1000);
+  const lifetime = grantLifetimeOf(grant, {
+    refresh: input.grantType !== GrantType.AUTHORIZATION_CODE,
+    host: Boolean(hostResource),
+    now: Date.now(),
+  });
+  if (lifetime === "deadline_passed") throw refused(lifetime, "The session has expired.");
+  if (lifetime === "let_in_no_refresh")
+    throw refused(lifetime, "Being let in cannot be renewed. Ask again.");
+  return { accessTokenProps: { ...grant, grantId: input.grantId }, ...lifetime };
+}
+
+/** What one token exchange gives a grant, or why the grant ends at it. */
+export function grantLifetimeOf(
+  grant: GrantProps,
+  exchange: { refresh: boolean; host: boolean; now: number },
+): { accessTokenTTL: number; refreshTokenTTL?: number } | "deadline_passed" | "let_in_no_refresh" {
+  const deadline = letInDeadlineOf(grant);
+  if (!deadline)
+    return { accessTokenTTL: exchange.host ? HOST_ACCESS_TOKEN_SECONDS : ACCESS_TOKEN_SECONDS };
+  const remaining = Math.floor((deadline - exchange.now) / 1000);
   // KV's shortest expiry, below which the library refuses a lifetime.
-  if (remaining < 60) throw refused("deadline_passed", "The session has expired.");
-  if (grant.letIn && input.grantType !== GrantType.AUTHORIZATION_CODE)
-    throw refused("let_in_no_refresh", "Being let in cannot be renewed. Ask again.");
-  if (grant.letIn)
-    return {
-      accessTokenProps: { ...grant, grantId: input.grantId },
-      accessTokenTTL: remaining,
-      refreshTokenTTL: remaining,
-    };
-  const token = {
-    accessTokenProps: { ...grant, grantId: input.grantId },
-    accessTokenTTL: Math.min(
-      hostResource ? HOST_ACCESS_TOKEN_SECONDS : ACCESS_TOKEN_SECONDS,
-      remaining,
-    ),
-  };
-  if (remaining >= SESSION_IDLE_SECONDS) return token;
-  // The library honours `refreshTokenTTL` only at the code exchange and `refreshTokenIdleTTL`
-  // only at a refresh.
-  return input.grantType === GrantType.AUTHORIZATION_CODE
-    ? { ...token, refreshTokenTTL: remaining }
-    : { ...token, refreshTokenIdleTTL: remaining };
+  if (remaining < 60) return "deadline_passed";
+  if (exchange.refresh) return "let_in_no_refresh";
+  return { accessTokenTTL: remaining, refreshTokenTTL: remaining };
 }
 
 // A revocation (RFC 7009) is a `token` and no `grant_type`. The library answers it 200 whatever it

@@ -195,12 +195,14 @@ install`). A missing one is refused before any sign-in, naming the folder to ins
   computer's authority. A killed or stopped `provide` takes the name with it: the mind's calls
   answer `NO_ITX_EXPRESSION_MATCH`, as before it was lent.
 
-For a machine that stays up, the stored sign-in refreshes itself while the issuer keeps the
-grant (30 days at most), and `ITERATE_MIND_TOKEN` takes a token as it stands.
+For a machine that stays up, the stored sign-in refreshes itself, and the issuer keeps the grant
+for as long as it does: a grant ends after 7 days with no refresh, when its person stops being a
+member, or when it is revoked. `ITERATE_MIND_TOKEN` takes a token as it stands.
 
-#### A bridge that runs for longer: `--key`
+#### A bridge that is not a person: `--key`
 
-A person's sign-in ends after 30 days. A bridge that must run for longer gets a key of its own:
+A stored sign-in acts as its person, with everything that person may do. A bridge that should
+lend one capability and nothing else gets a key of its own:
 
 ```sh
 iterate provide ./whatsapp.ts --key ~/.iterate/whatsapp.key --mind example.com

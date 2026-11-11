@@ -1,5 +1,5 @@
 // bridge-key.ts — `iterate provide <file> --key <key file>`: A BRIDGE WITH A KEY OF ITS OWN. A
-// person's sign-in ends after 30 days at most, and a bridge must run for longer with nobody there.
+// person's sign-in acts as that person, and a bridge should lend one capability and nothing else.
 // So the bridge makes a P-256 key pair once and keeps the private half in a file. A member of the
 // mind allows the key once, on the mind's own page, for one capability name. From then on the key
 // signs a statement and gets a token for the mind's API that lives an hour

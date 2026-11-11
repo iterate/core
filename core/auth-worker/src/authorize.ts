@@ -9,7 +9,6 @@ import { AccountFacts } from "./account-facts.ts";
 import { type Session, sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import {
-  GRANT_LIFETIME_MS,
   type GrantProps,
   grantedScopes,
   hostCallbackOf,
@@ -149,8 +148,8 @@ async function complete(
   const props: GrantProps = {
     userId: session.userId,
     email: session.email,
-    deadline: Date.now() + (letIn ? letIn.seconds * 1000 : GRANT_LIFETIME_MS),
     ...(letIn && {
+      deadline: Date.now() + letIn.seconds * 1000,
       letIn: {
         reason: letIn.reason,
         clientName: clientName || authRequest.clientId,
@@ -195,7 +194,7 @@ async function approve(
     },
     idempotencyKey: `account/consent-approved/${grantId}`,
   });
-  if (props.letIn)
+  if (props.letIn && props.deadline)
     facts.add(session.userId, {
       type: "events.iterate.com/account/let-in-approved",
       payload: {
