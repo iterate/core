@@ -32,7 +32,65 @@ address and secrets on their domain.
    (`itx.cd("/integrations/email")`) and tell the owner what their mail said. A member's own mail
    also gets an agent of its own per thread (`/agents/email/t<thread>`), which may answer it.
 
-## 3. The AI model
+## 3. Put the mind's code on GitHub
+
+Drive to this step: it is the one that makes the mind the owner's own. Give the reason in one
+sentence: the mind's code then lives in a repository they own, and they can read and change it with
+their own tools. Ask plainly whether to do it now. If the owner says no, go to "If the owner
+declines GitHub" below. If yes, you do the work and the owner approves once.
+
+1. **Connect.** Ask which GitHub account holds the repository: their own, or an organization. Then
+   `const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/github", { client: { cloud: "github", accounts: ["<account>"] } })`
+   and give the owner the link. They confirm on iterate Cloud's page and approve at GitHub. Where
+   iterate's App is not installed on that account yet, add `install: true` to `client`: the owner
+   installs it on GitHub's page first. If the call is refused because the stack names no Cloud,
+   say so, and go to "If the owner declines GitHub".
+2. **Check it.** `await itx.secrets.describe("/secrets/github")` must say it is set. Then
+   `itx.fetch(new Request("https://api.github.com/user", { headers: { authorization: 'Bearer getSecret("/secrets/github", { field: "accessToken" })', accept: "application/vnd.github+json", "user-agent": "iterate" } }))`
+   and tell the owner which account answered. Use a placeholder in every request, never a token.
+3. **The repository.** Ask: a new private repository named `<domain>-config`, or one they name
+   that is empty. It must be empty: no README, no licence, no `.gitignore`.
+   - For a new one, try to create it, with the same headers and the JSON body
+     `{ "name": "<domain>-config", "private": true }`:
+     `POST https://api.github.com/user/repos` for their own account, or
+     `POST https://api.github.com/orgs/<org>/repos` for an organization.
+   - If GitHub refuses (403 or 404), the App may not create repositories there. Ask the owner to
+     create an empty private repository at `https://github.com/new`, to give iterate's App access
+     to it, and to tell you its name.
+4. **Link it.** This is what `linkThroughCloud` of `@iterate-com/github-sync` does, as three calls:
+   - Find the App's installation on the account:
+     `GET https://api.github.com/user/installations?per_page=100` with the same headers. Take the
+     `id` of the installation whose `account.login` is the account.
+   - Make that installation's token a secret of its own:
+     `await itx.secrets.set("/secrets/github-installation-<id>", {}, { urls: ["https://api.github.com", "https://github.com"], refresh: { kind: "github-app-installation", apiOrigin: "https://api.github.com", installationId: "<id>", client: { cloud: "github" } } })`.
+   - Name the repository as the origin of the mind's code:
+     `await itx.repos.get("/repos/config").setOrigin('https://x-access-token:getSecret("/secrets/github-installation-<id>", { field: "accessToken" })@github.com/<account>/<name>.git')`.
+5. **Push.** `await itx.repos.get("/repos/config").push()`. It answers `updated`. A refusal that
+   says not fast-forward means the repository was not empty: say so, and ask for an empty one. A 403
+   or 404 means the App has no access to that repository: the owner gives it access at
+   `https://github.com/settings/installations`.
+6. **Check that a commit comes back.** From now on `worker.ts` keeps the two in step: a push to
+   the repository's `main` is pulled here, which publishes the mind, and a commit here is pushed
+   there. Prove it: make one commit on GitHub, a `README.md` that says in two sentences that this
+   repository is the code of the mind at `<domain>`, and names `AGENTS.md` as the guide:
+   `PUT https://api.github.com/repos/<account>/<name>/contents/README.md` with the installation's
+   placeholder (`getSecret("/secrets/github-installation-<id>", { field: "accessToken" })`) and the
+   body `{ "message": "Say what this repository is", "content": "<the text as base64>" }`. Then
+   read `await itx.repos.get("/repos/config").readFile("README.md")` every few seconds, for a
+   minute at most, until the text is there. Each move is also a `config/github-mirrored` fact on
+   the mind's root. If it does not arrive, say so and say what you saw; do not claim it works.
+7. **Send the link.** Give the owner `https://github.com/<account>/<name>` and ask them to open two
+   files first: `worker.ts`, which is the whole mind in one file, and
+   `apps/onboarding/onboarding.md`, which is what you were told. Say that a commit they push to
+   `main` is live on `https://<domain>/` a few seconds later.
+
+### If the owner declines GitHub
+
+Do not press twice. Send them to `https://docs.<domain>`: the same code, read in a browser, with
+each file's history. Ask them to open `AGENTS.md` first, then `worker.ts`. Say that they can
+connect GitHub later by asking you.
+
+## 4. The AI model
 
 You answer, so one model works. An agent uses the first of these that is set: a ChatGPT plan (the
 secret `/secrets/chatgpt`), an OpenAI API key (the secret `/secrets/openai`), or else the
@@ -41,14 +99,11 @@ itx.secrets.describe(path)` says whether a secret is set. Say which one is in us
 plan, the owner goes back to the wizard's step "Set up AI agents", or runs
 `iterate chatgpt connect iterate.<domain>` on their own computer.
 
-## 4. Connect services through iterate Cloud
+## 5. Connect other services through iterate Cloud
 
-The owner connects an account through iterate's own app at iterate Cloud. The mind needs no
-OAuth client of its own. Offer all four: GitHub, Google (Gmail), Slack and X. Recommend GitHub
-first: the mind's code can live in a GitHub repository, and agents can open pull requests there.
+The owner connects an account through iterate's own app at iterate Cloud, as for GitHub. Offer
+Google (Gmail), Slack and X:
 
-- GitHub: ask which accounts (a user or organizations) the mind works with, then
-  `const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/github", { client: { cloud: "github", accounts: ["<account>"] } })`.
 - Google (Gmail): `itx.secrets.beginOAuth("/secrets/google", { client: { cloud: "google" } })`.
 - Slack: `itx.secrets.beginOAuth("/secrets/slack", { client: { cloud: "slack" } })`.
 - X: `itx.secrets.beginOAuth("/secrets/x", { client: { cloud: "x" } })`.
@@ -56,17 +111,15 @@ first: the mind's code can live in a GitHub repository, and agents can open pull
 Give the owner the `authorizationUrl`. They confirm on the Cloud's page, then approve at the
 service, and the tokens land in the secret. Afterwards check it: `await
 itx.secrets.describe("/secrets/<name>")` must say it is set, then make one request with a
-placeholder, never a token. For GitHub:
-`itx.fetch(new Request("https://api.github.com/user", { headers: { authorization: 'Bearer getSecret("/secrets/github", { field: "accessToken" })' } }))`.
-Tell the owner which account answered. `AGENTS.md`, "Accounts through iterate Cloud", has the rest:
-GitHub's events, and how to keep `/repos/config` and a GitHub repository as one history. If a call
-is refused because the stack names no Cloud, say so.
+placeholder, never a token, and tell the owner which account answered. `AGENTS.md`, "Accounts
+through iterate Cloud", has the rest.
 
-## 5. Approve a sensitive action with your passkey
+## 6. Approve a sensitive action with your passkey
 
 A secret may have a rule. A request with that secret that matches the rule's method and host waits
-in the vault until a member approves it with a passkey. Show the owner how, with the secret they
-just connected. For GitHub:
+in the vault until a member approves it with a passkey. Show the owner how, with a secret they
+connected. For GitHub (the rule below is on `/secrets/github`, the owner's own connection; the
+repository's sync uses the installation's secret and is not held):
 
 1. The owner opens `https://iterate.<domain>/secrets/approvals`. Under "A new rule" they enter the
    secret `/secrets/github`, the method `POST` and the host `api.github.com`, and save.
@@ -79,7 +132,7 @@ just connected. For GitHub:
 5. Ask whether to keep the rule. With it, every `POST` to `api.github.com` with that secret waits
    for a passkey. The owner changes or removes the rule on the same page.
 
-## 6. Connect Claude to this mind
+## 7. Connect Claude to this mind
 
 The mind has an MCP server at `https://iterate.<domain>/mcp`.
 
@@ -89,21 +142,23 @@ The mind has an MCP server at `https://iterate.<domain>/mcp`.
 The owner signs in to the mind when Claude first uses it. Ask them to have Claude run
 `itx.whoami()` and tell you what it answered.
 
-## 7. People and passkeys
+## 8. People and passkeys
 
 - Another member: you cannot add one. The owner adds them at `https://iterate.<domain>/members` and
   signs it with their passkey. Ask who should join, then send the owner there.
 - A second passkey, on another device, so that a lost device does not lock the owner out: at
   `https://iterate.<domain>/keys`. A passkey they have signs the new one, so they do it themselves.
 
-## 8. The mind's own code
+## 9. The mind's own code
 
 The mind's code is the repository `/repos/config`: `worker.ts`, the apps under `apps/`, and this
-file. A commit to `main` publishes it. You can change it yourself with
+file. A commit to `main` publishes it. The owner reads it at `https://docs.<domain>`, and in their
+GitHub repository when step 3 linked one. You can change it yourself with
 `itx.repos.get("/repos/config")`: offer to change the website's homepage as a first try, and show
 the owner the result at `https://<domain>/`.
 
 ## Where to look
 
 - `https://iterate.<domain>/` is the start page: people, keys, secrets and approvals.
+- `https://docs.<domain>` shows the mind's code and notes, with each file's history.
 - `https://iterate.<domain>/self-test` checks the whole installation.
