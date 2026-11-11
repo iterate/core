@@ -47,6 +47,37 @@ export function mindHostResourceOf(env: Env, resource: string | null | undefined
   return resource;
 }
 
+/** The resource a client named, as the stack knows it. A token for a mind hostname is for the
+ *  whole host, so a path on one (`https://app.example.com/mcp`, or the bare `/` a URL parser adds)
+ *  means its origin: an MCP client names its server's URL. Anything else is returned unchanged. */
+export function knownResourceOf(env: Env, resource: string): string {
+  if (iterateConfigOf(env).resources.includes(resource) || !URL.canParse(resource)) return resource;
+  return mindHostResourceOf(env, new URL(resource).origin) || resource;
+}
+
+/** `request` with its `resource` as `knownResourceOf` reads it: the query's at the authorization
+ *  endpoint, the form's at the token endpoint. */
+export async function withKnownResource(env: Env, request: Request): Promise<Request> {
+  const url = new URL(request.url);
+  const asked = url.searchParams.get("resource");
+  if (asked && knownResourceOf(env, asked) !== asked) {
+    url.searchParams.set("resource", knownResourceOf(env, asked));
+    return new Request(url, request);
+  }
+  const type = request.headers.get("content-type") || "";
+  if (request.method !== "POST" || !type.startsWith("application/x-www-form-urlencoded"))
+    return request;
+  const form = new URLSearchParams(await request.clone().text());
+  const named = form.get("resource");
+  if (!named || knownResourceOf(env, named) === named) return request;
+  form.set("resource", knownResourceOf(env, named));
+  return new Request(request.url, {
+    method: "POST",
+    headers: request.headers,
+    body: form.toString(),
+  });
+}
+
 export const hostCallbackOf = (hostResource: string) =>
   `${hostResource}${HOST_SESSION_PREFIX}callback`;
 

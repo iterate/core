@@ -1,5 +1,12 @@
 import { expect, test } from "vitest";
-import { grantedScopes, grantLifetimeOf, type GrantProps } from "./oauth.ts";
+import type { Env } from "./env.ts";
+import {
+  grantedScopes,
+  grantLifetimeOf,
+  type GrantProps,
+  knownResourceOf,
+  withKnownResource,
+} from "./oauth.ts";
 
 const NOW = Date.UTC(2026, 10, 12);
 const DAY_MS = 24 * 3600_000;
@@ -53,3 +60,52 @@ test.for([
     expect(grantedScopes(requested, host)).toEqual(granted);
   },
 );
+
+// the one thing these read of the stack: its domain and the resources its config names
+const env = {
+  DOMAIN: "example.com",
+  AUTH_SETTINGS: JSON.stringify({
+    login: { allow: [{ email: "owner@elsewhere.test" }] },
+  }),
+} as unknown as Env;
+
+test("a path on a mind hostname names the host, as an MCP client names its server; nothing else changes", () => {
+  const known = (resource: string) => knownResourceOf(env, resource);
+  expect(known("https://guestbook.example.com/mcp")).toBe("https://guestbook.example.com");
+  expect(known("https://guestbook.example.com/")).toBe("https://guestbook.example.com");
+  expect(known("https://guestbook.example.com")).toBe("https://guestbook.example.com");
+  // the platform's own resources are whole URLs, and a path beside them is no resource
+  expect(known("https://iterate.example.com/mcp")).toBe("https://iterate.example.com/mcp");
+  expect(known("https://iterate.example.com/mcp/x")).toBe("https://iterate.example.com/mcp/x");
+  expect(known("https://elsewhere.test/mcp")).toBe("https://elsewhere.test/mcp");
+  expect(known("http://guestbook.example.com/mcp")).toBe("http://guestbook.example.com/mcp");
+});
+
+test("the authorization and token requests carry the host for a path on it", async () => {
+  const authorize = await withKnownResource(
+    env,
+    new Request(
+      "https://iterate.example.com/oauth2/auth?client_id=c&resource=https%3A%2F%2Fguestbook.example.com%2Fmcp",
+    ),
+  );
+  expect(new URL(authorize.url).searchParams.get("resource")).toBe("https://guestbook.example.com");
+  const token = await withKnownResource(
+    env,
+    new Request("https://iterate.example.com/oauth2/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "grant_type=refresh_token&refresh_token=r&resource=https%3A%2F%2Fguestbook.example.com%2Fmcp",
+    }),
+  );
+  expect(Object.fromEntries(new URLSearchParams(await token.text()))).toEqual({
+    grant_type: "refresh_token",
+    refresh_token: "r",
+    resource: "https://guestbook.example.com",
+  });
+  const untouched = new Request("https://iterate.example.com/oauth2/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "grant_type=refresh_token&resource=https%3A%2F%2Fiterate.example.com%2Fmcp",
+  });
+  expect(await withKnownResource(env, untouched)).toBe(untouched);
+});

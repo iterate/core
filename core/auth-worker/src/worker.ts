@@ -10,6 +10,7 @@ import {
   hostCallbackOf,
   oauthHelpers,
   mindHostResourceOf,
+  withKnownResource,
   tokenEndpointResponse,
   tokenIdentity,
   TOKEN_ENDPOINT,
@@ -45,11 +46,15 @@ import { signedByStack } from "./stack-key.ts";
 import { statementsResponse } from "./statements.ts";
 
 export class Auth extends WorkerEntrypoint<Env> implements AuthService {
-  async fetch(request: Parameters<AuthService["fetch"]>[0]) {
-    const url = new URL(request.url);
+  async fetch(asked: Parameters<AuthService["fetch"]>[0]) {
+    const url = new URL(asked.url);
     // the cookies and the metadata name the issuer's origin alone
     if (url.origin !== issuerOf(this.env)) return new Response("Not found", { status: 404 });
     const { pathname } = url;
+    const request =
+      pathname === AUTHORIZE_ENDPOINT || pathname === TOKEN_ENDPOINT
+        ? await withKnownResource(this.env, asked)
+        : asked;
     const get = request.method === "GET" || request.method === "HEAD";
     if (pathname === AUTHORIZE_ENDPOINT) return authorizeResponse(this.env, request);
     if (pathname === TOKEN_ENDPOINT && request.method === "POST")
