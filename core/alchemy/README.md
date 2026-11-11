@@ -123,13 +123,6 @@ node node_modules/alchemy/bin/cli.js destroy fork/alchemy.run.ts --stage <name> 
 Each stack has its own `destroy`. The mind's leaves the state store, `iterate-<name>-state`, in the
 account: delete that Worker by hand when both stacks are gone.
 
-Proven on 2026-11-11 on a prototype stack (`g4` on effect.ninja, a provided mind): a deploy from a
-second checkout with no config file changed nothing; a KV namespace and a Worker declared inside
-the mind's stack were made, and the next plain deploy deleted both; the same two in a stack named
-`fork` were made, answered, and a plan and a deploy of the mind's stack left them alone; each stack's `destroy`
-removed its own resources. Not proven
-there: the Cloud's Update over a stack the CLI made, and a CLI deploy over a stack the Cloud made.
-
 ## One hostname of a zone
 
 `hostnames: "platform"` is for a zone that serves other things. The stack then makes the DNS record
