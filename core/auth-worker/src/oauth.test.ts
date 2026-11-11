@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { grantLifetimeOf, type GrantProps } from "./oauth.ts";
+import { grantedScopes, grantLifetimeOf, type GrantProps } from "./oauth.ts";
 
 const NOW = Date.UTC(2026, 10, 12);
 const DAY_MS = 24 * 3600_000;
@@ -37,3 +37,19 @@ test("being let in keeps its end: one token for the time asked for, no refresh, 
     "deadline_passed",
   );
 });
+
+test.for([
+  ["the API's own scope", ["iterate"], false, ["iterate"]],
+  ["no scope at all", [], false, ["iterate"]],
+  // the Codex CLI asks for every scope in the server's metadata
+  ["every scope the metadata lists", ["iterate", "identity"], false, ["iterate"]],
+  ["another scope only", ["identity"], false, null],
+  ["a mind hostname's own scope", ["identity"], true, ["identity"]],
+  ["every scope, for a mind hostname", ["iterate", "identity"], true, ["identity"]],
+  ["the API's scope only, for a mind hostname", ["iterate"], true, null],
+] as const)(
+  "a request for %s is granted the resource's one scope, or refused",
+  ([, requested, host, granted]) => {
+    expect(grantedScopes(requested, host)).toEqual(granted);
+  },
+);

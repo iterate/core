@@ -19,12 +19,16 @@ export const CLIENT_REGISTRATION_ENDPOINT = "/oauth2/register";
 
 const OAuthScope = z.enum(["iterate", "identity"]);
 
+/** What a request for `requested` scopes is granted: the resource's one scope, when the request
+ *  names it or names none. A client that asks for every scope the metadata lists (the Codex CLI
+ *  does, `iterate identity`) gets that one alone, as RFC 6749 §3.3 allows; the token answer says
+ *  which. A request for other scopes only is refused (null). */
 export function grantedScopes(
   requested: readonly string[],
   hostResource: boolean,
 ): string[] | null {
   const scope = hostResource ? "identity" : "iterate";
-  return requested.every((name) => name === scope) ? [scope] : null;
+  return requested.length === 0 || requested.includes(scope) ? [scope] : null;
 }
 
 export function mindHostResourceOf(env: Env, resource: string | null | undefined) {
