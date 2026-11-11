@@ -175,7 +175,9 @@ form.addEventListener("submit", async (event) => {
       status.textContent = "Waiting for your new passkey…";
       const credential = await navigator.credentials.create({ publicKey: {
         rp: { id: rp, name: rp },
-        user: { id: enc.encode(user), name: email, displayName: email },
+        // The name is what a password manager lists the passkey under: its name here, this host and
+        // the day, so that a person's passkeys are told apart there. The address is the displayName.
+        user: { id: enc.encode(user), name: [form.label.value.trim(), rp, new Date().toISOString().slice(0, 10)].join(" · "), displayName: email },
         challenge: unb64u(challenge),
         pubKeyCredParams: [{ type: "public-key", alg: -7 }],
         excludeCredentials: (await passkeys).map((key) => ({ type: "public-key", id: unb64u(key.credentialId) })),
