@@ -230,6 +230,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   cross-posted to another log keeps its own namespace: `repo/created` on `/` is still a repo fact.
 - **An integration** uses its own name as its namespace, for example `chrome`, `slack`, `google`,
   `github`.
+- **An app** of a mind uses its own name too: `ai-subscriptions` (the Claude and Codex accounts'
+  app, internal-packages/ai-subscriptions, and `apps/ai-subscriptions/` of a mind's config repo).
 - **`test`** holds types that only tests append. Production code never matches a `test/*` type. A
   test contract may keep a slug of its own (`counter`), but its events go under `test/`. A test must
   not borrow a production namespace for a type that does not exist.
