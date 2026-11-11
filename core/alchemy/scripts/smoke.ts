@@ -17,7 +17,7 @@ import { approvalChecks } from "./smoke/approvals.ts";
 import { cloudChecks } from "./smoke/cloud.ts";
 import { secretChecks } from "./smoke/secrets.ts";
 import { appsChecks } from "./smoke/apps.ts";
-import { attempt, ownsPlatformAlone, mindRoot } from "./smoke/lib.ts";
+import { attempt, mindRoot, mindWorkerIs, ownsPlatformAlone } from "./smoke/lib.ts";
 
 /** Checks the stack deployed on `domain`, the zone of its mind config. */
 export default async function smoke(
@@ -30,6 +30,18 @@ export default async function smoke(
   hostnames?: "all" | "platform",
 ) {
   if (hostnames === "platform") ownsPlatformAlone();
+  // Which site the mind serves is in its config repo: a check of the default config's site is
+  // skipped on a mind whose worker.ts is its own (./smoke/lib.ts `DEFAULT_SITE`). A mind that does
+  // not answer yet is checked as the default.
+  const stackToken = process.env.ITERATE_PROTOTYPE_TOKEN;
+  if (stackToken)
+    await mindRoot(domain, stackToken)
+      .repos.get("/repos/config")
+      .readFile("worker.ts")
+      .then(
+        (source) => mindWorkerIs(String(source)),
+        () => {},
+      );
   const provided = mode
     ? mode === "provided"
     : (await fetch(mindProvideUrlOf(domain)).then(async (response) => {

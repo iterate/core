@@ -16,6 +16,36 @@ const NOT_ON_PLATFORM = [
 ];
 let platformOnly = false;
 
+// CHECKS OF THE DEFAULT CONFIG'S OWN SITE, by the start of their names, each with the text of the
+// default worker.ts (core/configs/default) that it tests. A mind whose worker.ts is its own, such
+// as a shop or a redirect, answers its hostnames in its own way: those answers are that mind's to
+// check, so a check whose text its worker.ts lacks is skipped.
+const DEFAULT_SITE: [start: string, text: string, what: string][] = [
+  ["hostnames: the apex answers the config worker's page", '"Homepage of mind "', "homepage"],
+  ["repos: a commit to /repos/config republishes the site", '"Homepage of mind "', "homepage"],
+  [
+    "hostnames: a subdomain reaches the config worker with its routing key",
+    '"Not found\\n"',
+    "plain 404 for a hostname that nothing is mounted on",
+  ],
+  ["boundary: a page load of https://", '"/me"', "page /me"],
+  ["boundary: a fetch of https://", '"/me"', "page /me"],
+];
+/** The mind's worker.ts, once the smoke has read it from the config repo; empty until then. */
+let mindWorker = "";
+
+/** From now on `attempt` skips a check of the default site that `source`, the mind's own
+ *  worker.ts, does not hold. */
+export function mindWorkerIs(source: string) {
+  mindWorker = source;
+}
+
+/** Whether the mind's worker.ts mounts the app in `apps/<name>`: it imports the app's `app.ts`,
+ *  in a line that is not commented out. Yes while worker.ts is not read. */
+export const mounts = (name: string) =>
+  !mindWorker ||
+  new RegExp(`^import [^\\n]*["']\\./apps/${name}/app(?:\\.ts)?["']`, "m").test(mindWorker);
+
 /** From now on `attempt` skips NOT_ON_PLATFORM: an ES module's importer cannot assign its `let`. */
 export function ownsPlatformAlone() {
   platformOnly = true;
@@ -30,6 +60,15 @@ export async function attempt(
       check,
       pass: true,
       detail: 'skipped: the stack owns iterate.<domain> alone (hostnames: "platform")',
+    };
+  const ownSite =
+    mindWorker &&
+    DEFAULT_SITE.find(([start, text]) => check.startsWith(start) && !mindWorker.includes(text));
+  if (ownSite)
+    return {
+      check,
+      pass: true,
+      detail: `skipped: this mind's worker.ts is its own, without the default config's ${ownSite[2]}`,
     };
   try {
     return { check, ...(await run()) };

@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import type { RepoFileChange } from "iterate/api";
 import { platformOriginOf } from "iterate/mind-api";
-import { attempt, type Check, mindRoot } from "./lib.ts";
+import { attempt, type Check, mindRoot, mounts } from "./lib.ts";
 
 /** One request by hand: Node's `fetch` sends no `Upgrade` and no `Sec-Fetch-*`. Answers what came
  *  back, and follows nothing. */
@@ -71,16 +71,17 @@ export async function appsChecks(domain: string): Promise<Check[]> {
     return commitOid;
   };
   const files = await repo().listFiles();
-  const hasAgentsApp = files.paths.includes("apps/agents/app.ts");
+  const hasAgentsApp = files.paths.includes("apps/agents/app.ts") && mounts("agents");
   const withoutApp = {
     pass: true,
-    detail: "skipped: this mind's config has no apps/agents (an older default config)",
+    detail: "skipped: this mind's config does not mount apps/agents (an older or its own config)",
   };
   const app = `https://agents.${domain}`;
-  const hasOnboardingApp = files.paths.includes("apps/onboarding/app.ts");
+  const hasOnboardingApp = files.paths.includes("apps/onboarding/app.ts") && mounts("onboarding");
   const withoutOnboardingApp = {
     pass: true,
-    detail: "skipped: this mind's config has no apps/onboarding (an older default config)",
+    detail:
+      "skipped: this mind's config does not mount apps/onboarding (an older or its own config)",
   };
 
   return [
@@ -162,10 +163,11 @@ export async function appsChecks(domain: string): Promise<Check[]> {
       };
     }),
     await attempt("hostnames: a signed-out page load of the docs app signs in", async () => {
-      if (!files.paths.includes("apps/docs/app.ts"))
+      if (!files.paths.includes("apps/docs/app.ts") || !mounts("docs"))
         return {
           pass: true,
-          detail: "skipped: this mind's config has no apps/docs (an older default config)",
+          detail:
+            "skipped: this mind's config does not mount apps/docs (an older or its own config)",
         };
       const page = await ask(`https://docs.${domain}/`, {
         "sec-fetch-mode": "navigate",
