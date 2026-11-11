@@ -230,9 +230,12 @@ type Refused = {
   payload?: object;
 };
 
-/** Until a call that has begun waits in the gate: its hashing ends on the real event loop. */
+/** Until a call that has begun waits in the gate. Its hashing ends on the thread pool, so how many
+ *  turns of the event loop that takes is anything: on a two-CPU machine about one hash in sixty took more
+ *  than 500. The bound is time, by a clock no test here fakes. */
 async function waiting(gate: ActsGate) {
-  for (let turns = 0; turns < 500; turns++) {
+  const until = performance.now() + 10_000;
+  while (performance.now() < until) {
     if ((await gate.state()).held.some((row) => row.waited)) return;
     await new Promise((resolve) => setImmediate(resolve));
   }

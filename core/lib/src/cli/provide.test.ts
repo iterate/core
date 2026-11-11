@@ -34,7 +34,8 @@ test("a file whose dependency is not installed names the folder to install in, b
   const empty = cli.provide([join(folder.path, "nothing.mjs"), "--mind", "demo"]);
   expect(await empty.exited).not.toBe(0);
   expect(empty.stderr()).toContain("nothing.mjs has no default export to provide");
-});
+  // two starts of the CLI: how long a process takes to start is the machine's, not this test's
+}, 60_000);
 
 test("rpcTargetOf: nothing to lend is refused, saying why", () => {
   expect(() => rpcTargetOf(undefined)).toThrow(

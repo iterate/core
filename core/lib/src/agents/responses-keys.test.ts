@@ -237,6 +237,9 @@ test("every chunk an answer sends keeps it alive past the idle budget, and the c
   const chunks = held([]);
   let sent = 0;
   const controller = new AbortController();
+  // The clock is the test's, from before the budget starts: on a real one a busy machine makes
+  // 30 ms into more than the budget, and the answer stalls.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const call = postResponses(
     async () => {
       sent += 1;
@@ -250,9 +253,15 @@ test("every chunk an answer sends keeps it alive past the idle budget, and the c
     () => undefined,
   );
   // 150 ms, three budgets, with a keepalive every 30 ms: never idle
-  for (let tick = 0; tick < 5; tick++) {
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    chunks.push(": keepalive\n\n");
+  try {
+    for (let tick = 0; tick < 5; tick++) {
+      await vi.advanceTimersByTimeAsync(30);
+      chunks.push(": keepalive\n\n");
+      // the chunk is read on the real event loop, and that read starts the budget again
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  } finally {
+    vi.useRealTimers();
   }
   expect(chunks.cancelled).toBeUndefined();
   controller.abort(new Error("interrupted"));
