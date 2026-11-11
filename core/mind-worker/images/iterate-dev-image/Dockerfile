@@ -40,6 +40,10 @@ RUN npm install -g --no-fund --no-audit \
     @xai-official/grok@1.0.46 \
     iterate@0.4.1-main.20261007T065323Z-9e9cca2 \
     cf@1.0.0-beta.12 \
+    # The ACP adapters a sandbox's runner starts (internal-packages/acp-bridge/src/agents.ts
+    # sandboxLaunches), at the versions pinned there: a session then downloads nothing.
+    @agentclientprotocol/codex-acp@2.6.0 \
+    @agentclientprotocol/claude-agent-acp@0.106.0 \
   && npm cache clean --force
 
 # The public repository, for a sandbox that wants the platform's source at hand.

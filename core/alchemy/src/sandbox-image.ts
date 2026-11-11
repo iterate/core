@@ -7,7 +7,7 @@
 export const PUBLISHED_SANDBOX_IMAGE = {
   source: "ghcr.io/iterate/iterate-dev-image",
   // allow-high-entropy-next-line: the public image's content digest, a pin and no secret
-  digest: "sha256:df1de82cbcaa70bda17b7a456134075175a77054798bde102848c35b161e6104",
+  digest: "sha256:03e19e40cae1cddd093802f5cab2e0b7273395a0abebea0a111c07e23dceb419",
 };
 
 /** Where the copy lands: the repository is the image's name in the mind's account. */
