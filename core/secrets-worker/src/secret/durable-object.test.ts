@@ -292,6 +292,36 @@ test("a delete that comes in while a new value is being sealed is the later word
   expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: true });
 });
 
+test("a rule with a path that never waits lets a file go there, and refuses the same bytes at the API's own address", async () => {
+  const { secret, upstream, decide } = await vault();
+  await decide(MEMBER, {
+    type: "events.iterate.com/secret/approval-rule-configured",
+    payload: {
+      rule: {
+        methods: ["POST"],
+        hosts: ["gmail.googleapis.com"],
+        jsonStrings: ["messages/send"],
+        freePaths: ["/upload/"],
+      },
+    },
+  });
+  // the first bytes of a JPEG: no text, so no JSON
+  const file = (path: string) =>
+    secret.fetch(
+      useRequest(`https://gmail.googleapis.com${path}`, {
+        method: "POST",
+        headers: { "content-type": "image/jpeg" },
+        body: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]),
+      }),
+    );
+  const answers = [await file("/upload/u1/"), await file("/batch"), await file("/upload/u%31/")];
+  expect({
+    statuses: answers.map((answer) => answer.status),
+    kinds: answers.map((answer) => answer.headers.get(VAULT_ANSWER_HEADER)),
+    sends: upstream.mock.calls.length,
+  }).toEqual({ statuses: [200, 415, 415], kinds: [null, "refused", "refused"], sends: 1 });
+});
+
 test("a rule cannot be loosened without a signature, and a member's signed statement removes it", async () => {
   const { secret, decide } = await vault();
   const by = { userId: "user_aaaa", email: "member@example.com" };

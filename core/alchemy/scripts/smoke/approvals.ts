@@ -37,10 +37,10 @@ export async function approvalChecks(domain: string): Promise<Check[]> {
       .object({ messages: z.array(z.object({ text: z.string() }).loose()) })
       .parse(await (await fetch(`${origin}/__test-controls/slack/messages?team=${team}`)).json())
       .messages.map((message) => message.text);
-  const post = (body: string) =>
+  const post = (body: string, to = url) =>
     root()
       .run(
-        `async (itx) => { const response = await itx.fetch(new Request(${JSON.stringify(url)}, { method: "POST", headers: { authorization: 'Bearer getSecret("${PATH}")', "content-type": "application/json" }, body: ${JSON.stringify(body)} })); const body = await response.json().catch(() => null); return { status: response.status, kind: response.headers.get("x-iterate-vault-answer"), ok: body?.ok ?? null }; }`,
+        `async (itx) => { const response = await itx.fetch(new Request(${JSON.stringify(to)}, { method: "POST", headers: { authorization: 'Bearer getSecret("${PATH}")', "content-type": "application/json" }, body: ${JSON.stringify(body)} })); const body = await response.json().catch(() => null); return { status: response.status, kind: response.headers.get("x-iterate-vault-answer"), ok: body?.ok ?? null }; }`,
       )
       .then((answer) =>
         z
@@ -180,6 +180,33 @@ export async function approvalChecks(domain: string): Promise<Check[]> {
       const ended = await rejected(call, await waiting(body));
       return { pass: ended.pass && (await recorded()).length === 2, detail: ended.detail };
     }),
+    // A PATH THAT NEVER WAITS: for an address that takes files, whose body is no JSON.
+    await attempt(
+      "approvals: under a path that never waits a POST with no JSON goes at once, and with an escape in its path it does not",
+      async () => {
+        const signed = await member.post({
+          path: PATH,
+          type: RULE_CONFIGURED,
+          payload: {
+            rule: {
+              methods: ["POST"],
+              hosts: [new URL(origin).hostname],
+              jsonStrings: [named],
+              freePaths: ["/oauth/"],
+            },
+          },
+        });
+        // the stand-in's own answer to a body it cannot read: the vault sent it on
+        const free = await post(`not JSON ${crypto.randomUUID()}`, `${origin}/oauth/register`);
+        const body = `not JSON ${crypto.randomUUID()}`;
+        const call = post(body, `${origin}/oauth/%72egister`);
+        const ended = await rejected(call, await waiting(body));
+        return {
+          pass: !signed.error && !free.kind && free.status !== 202 && ended.pass,
+          detail: `${signed.error || "the rule frees /oauth/"}; there: ${free.status}, the vault's answer ${free.kind}; with %72 in the path: ${ended.detail}`,
+        };
+      },
+    ),
   ];
 
   async function logOf() {

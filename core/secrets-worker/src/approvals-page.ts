@@ -81,6 +81,7 @@ export async function secretApprovals(request: Request, deps: ApprovalsDeps): Pr
           methods: words("methods"),
           hosts: words("hosts"),
           jsonStrings: words("jsonStrings"),
+          freePaths: words("freePaths"),
         },
         by,
       });
@@ -218,6 +219,8 @@ ${field("methods", "Methods", rule?.methods.join(", ") ?? "POST")}
 ${field("hosts", "Hosts", rule?.hosts.join(", ") ?? "")}
 ${field("jsonStrings", "Only when the JSON body holds one of these, or leave empty for every request", rule?.jsonStrings?.join(", ") ?? "", "")}
 <p class="muted">For an API that reads and acts through one address: EmailSubmission/set holds a mail sent through JMAP and lets a read go. With this, a body that is not JSON waits too.</p>
+${field("freePaths", "Paths that never wait, or leave empty", rule?.freePaths?.join(", ") ?? "", "")}
+<p class="muted">For an address that takes files, whose body is no JSON: /jmap/upload/ lets an attachment go to Fastmail. A path with a % or a query still waits.</p>
 <p class="actions"><button type="submit">Save</button>${path ? ` <button type="button" class="link" data-sign-rule>Sign and save</button> <button type="button" class="link" data-remove-rule>Remove, signed</button>` : ""}</p></form>`;
 }
 
@@ -309,7 +312,7 @@ for (const form of document.querySelectorAll("[data-rule]")) {
   const words = (name) => form.elements[name].value.split(/[\\s,]+/).filter(Boolean);
   const path = () => form.elements.path.value;
   form.querySelector("[data-sign-rule]")?.addEventListener("click", () =>
-    sign({ path: path(), type: data.types.rule, payload: { rule: { methods: words("methods"), hosts: words("hosts"), jsonStrings: words("jsonStrings") } } }).catch(fail));
+    sign({ path: path(), type: data.types.rule, payload: { rule: { methods: words("methods"), hosts: words("hosts"), jsonStrings: words("jsonStrings"), freePaths: words("freePaths") } } }).catch(fail));
   form.querySelector("[data-remove-rule]")?.addEventListener("click", () =>
     sign({ path: path(), type: data.types.rule, payload: { rule: null } }).catch(fail));
 }

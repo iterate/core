@@ -100,6 +100,56 @@ test.for([
   );
 });
 
+// JMAP takes a file at an address of its own, with a body that is no JSON.
+test.for([
+  { name: "an upload goes, whatever its body", path: "/jmap/upload/u1234abcd/", held: false },
+  { name: "a file under the upload's folder goes", path: "/jmap/upload/u1234abcd", held: false },
+  { name: "the API's own address waits", path: "/jmap/api/", held: true },
+  {
+    name: "a folder that only begins with the same letters waits",
+    path: "/jmap/uploads/u1/",
+    held: true,
+  },
+  {
+    name: "a path that climbs out of the folder is read as where it ends, and waits",
+    path: "/jmap/upload/../api/",
+    held: true,
+  },
+  {
+    name: "a path that climbs out with escapes waits: the host may read %2F as a slash",
+    path: "/jmap/upload/x%2F..%2F..%2Fapi/",
+    held: true,
+  },
+  { name: "a path with any escape waits", path: "/jmap/upload/u%31/", held: true },
+  { name: "a path with a query waits", path: "/jmap/upload/u1/?to=/jmap/api/", held: true },
+  { name: "a path with an empty part waits", path: "//jmap/upload/u1/", held: true },
+  {
+    name: "a path with a backslash is read as a slash",
+    path: "/jmap/upload\\..\\api/",
+    held: true,
+  },
+])("a rule with a path that never waits: $name", ({ path, held }) => {
+  const rule = ApprovalRule.parse({
+    methods: ["POST"],
+    hosts: ["api.fastmail.com"],
+    jsonStrings: ["EmailSubmission/set"],
+    freePaths: ["/jmap/upload/"],
+  });
+  // no body that this can read: bytes of a file
+  expect(ruleMatches(rule, "POST", `https://api.fastmail.com${path}`, null)).toEqual(held);
+});
+
+test.for([
+  ["the whole host", "/"],
+  ["a path with no slash at its end", "/jmap/upload"],
+  ["a path that climbs", "/jmap/../upload/"],
+  ["a path with an escape", "/jmap/up%6Coad/"],
+])("a path that never waits may not be %s", ([, path]) => {
+  expect(
+    ApprovalRule.safeParse({ methods: ["POST"], hosts: ["a.com"], freePaths: [path] }),
+  ).toMatchObject({ success: false });
+});
+
 test("a rule with strings of the body still asks for its method and host first", () => {
   const send = jmap("EmailSubmission/set");
   expect([
@@ -227,6 +277,30 @@ test.for([
     after: rule(["POST"], ["a.com"], ["Submission/set"]),
     tighter: false,
   },
+  {
+    name: "a path that never waits added",
+    before: rule(["POST"], ["a.com"]),
+    after: rule(["POST"], ["a.com"], undefined, ["/upload/"]),
+    tighter: false,
+  },
+  {
+    name: "the paths that never wait removed",
+    before: rule(["POST"], ["a.com"], undefined, ["/upload/"]),
+    after: rule(["POST"], ["a.com"]),
+    tighter: true,
+  },
+  {
+    name: "a path that never waits made longer, which frees less",
+    before: rule(["POST"], ["a.com"], undefined, ["/upload/"]),
+    after: rule(["POST"], ["a.com"], undefined, ["/upload/files/"]),
+    tighter: true,
+  },
+  {
+    name: "a path that never waits made shorter, which frees more",
+    before: rule(["POST"], ["a.com"], undefined, ["/upload/files/"]),
+    after: rule(["POST"], ["a.com"], undefined, ["/upload/"]),
+    tighter: false,
+  },
 ])("tightening: $name", ({ before, after, tighter }) => {
   expect(isTightening(before, after)).toEqual(tighter);
 });
@@ -279,8 +353,8 @@ function jmap(...calls: string[]) {
   return JSON.stringify({ methodCalls: calls.map((name, index) => [name, {}, `c${index}`]) });
 }
 
-function rule(methods: string[], hosts: string[], jsonStrings?: string[]) {
-  return ApprovalRule.parse({ methods, hosts, jsonStrings });
+function rule(methods: string[], hosts: string[], jsonStrings?: string[], freePaths?: string[]) {
+  return ApprovalRule.parse({ methods, hosts, jsonStrings, freePaths });
 }
 
 function text(headers: Record<string, string>) {

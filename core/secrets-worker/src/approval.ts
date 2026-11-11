@@ -25,20 +25,50 @@ export const ApprovalRule = z
       )
       .max(20, "name 20 strings of the body at most")
       .optional(),
+    /** A request to a path under one of these never waits, whatever its body (`pathIsFree`). For
+     *  a host that takes files at an address of its own: JMAP's upload, whose body is no JSON
+     *  and would else always wait. Each starts and ends with `/` and names a folder at least. */
+    freePaths: z
+      .array(
+        z
+          .string()
+          .regex(
+            /^\/(?:(?!\.{1,2}\/)[A-Za-z0-9._~-]+\/)+$/,
+            "a path that never waits starts and ends with /, in letters, digits and . _ ~ -, such as /jmap/upload/",
+          ),
+      )
+      .max(10, "name 10 paths that never wait at most")
+      .optional(),
   })
   .strict()
-  .transform(({ methods, hosts, jsonStrings }) => ({
+  .transform(({ methods, hosts, jsonStrings, freePaths }) => ({
     methods: [...new Set(methods.map((method) => method.toUpperCase()))].sort(),
     hosts: [...new Set(hosts.map((host) => host.toLowerCase()))].sort(),
     // an empty list is no list: the form sends one when its field is empty
     ...(!!jsonStrings?.length && { jsonStrings: [...new Set(jsonStrings)].sort() }),
+    ...(!!freePaths?.length && { freePaths: [...new Set(freePaths)].sort() }),
   }));
 export type ApprovalRule = z.infer<typeof ApprovalRule>;
 
-/** Whether the rule's methods and hosts name the request: all that a rule with no `jsonStrings`
- *  asks, and what is asked before a body is read. */
+/** Whether the rule's methods and hosts name the request, at a path the rule does not free: all
+ *  that a rule with no `jsonStrings` asks, and what is asked before a body is read. */
 export function ruleNames(rule: ApprovalRule, method: string, url: string): boolean {
-  return rule.methods.includes(method.toUpperCase()) && rule.hosts.includes(new URL(url).hostname);
+  return (
+    rule.methods.includes(method.toUpperCase()) &&
+    rule.hosts.includes(new URL(url).hostname) &&
+    !pathIsFree(rule.freePaths, url)
+  );
+}
+
+/** WHETHER A REQUEST GOES TO A PATH THAT NEVER WAITS. Only a path that is written plainly counts,
+ *  with no query: letters, digits and `. _ ~ -` between single slashes. The URL's own parser has
+ *  resolved `..` by then. A `%`, which a host may read as a `/` or a `.`, and so take the request
+ *  to another address than the one read here, makes the path one that waits. */
+function pathIsFree(freePaths: readonly string[] | undefined, url: string): boolean {
+  if (!freePaths) return false;
+  const { pathname, search } = new URL(url);
+  if (search || !/^(?:\/[A-Za-z0-9._~-]+)+\/?$/.test(pathname)) return false;
+  return freePaths.some((prefix) => pathname.startsWith(prefix));
 }
 
 /** WHETHER A REQUEST WAITS. `body` is its body as text (`bodyTextOf`), or null when that is not
@@ -110,10 +140,15 @@ export function isTightening(before: ApprovalRule | null, after: ApprovalRule | 
         after.jsonStrings?.some((now) => comparable(was).includes(comparable(now))),
       ),
     );
+  // A path frees no more than a path above it frees.
+  const paths = (after.freePaths || []).every((now) =>
+    before.freePaths?.some((was) => now.startsWith(was)),
+  );
   return (
     before.methods.every((method) => after.methods.includes(method)) &&
     before.hosts.every((host) => after.hosts.includes(host)) &&
-    strings
+    strings &&
+    paths
   );
 }
 
