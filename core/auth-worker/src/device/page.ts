@@ -2,6 +2,7 @@ import { mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
 import { sessionOf } from "../cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "../env.ts";
 import { passkeyOwedResponse, standingOf } from "../members.ts";
+import { clientTile } from "../client-mark.ts";
 import { errorPage, notMemberPage, page, text, otherAccountForm } from "../pages.ts";
 import { signInHref } from "../sign-in.ts";
 import { CALLBACK_PATH, normalizeUserCode, VERIFICATION_PATH } from "./protocol.ts";
@@ -95,6 +96,11 @@ function enter(domain: string, typed = "", error?: string) {
   });
 }
 
+/** Who asks, as the consent page shows it (../client-mark.ts): a device gives a name alone, so its
+ *  tile is a known client's mark by that name, or its initials. The page's words say that the
+ *  name is the device's own claim. */
+export const deviceTile = (name: string) => clientTile({ name, redirectUri: "", redirectHost: "" });
+
 function confirm(env: Env, userCode: string, device: DeviceRequest, email: string) {
   const { domain } = iterateConfigOf(env);
   const where = [device.requestedFrom.city, device.requestedFrom.country]
@@ -116,6 +122,7 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
       : "The name is its own claim: nothing proves who asks. Continue only if you know where this request comes from.";
     return page({
       title: `Let ${name} in?`,
+      asker: deviceTile(name),
       body: `<h1>Let ${text(name)} in?</h1>
       <p><strong>${text(name)}</strong> asks to be let in to ${text(domain)}. ${proof}</p>
       <blockquote>${text(device.letIn.reason)}</blockquote>
@@ -126,6 +133,7 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
   }
   return page({
     title: `Sign in ${device.clientName}?`,
+    asker: deviceTile(device.clientName),
     body: `<h1>Sign in a device to ${text(domain)}?</h1>
       <p>A device that calls itself <strong>${text(device.clientName)}</strong> asked ${ago} seconds ago${where ? `, from ${text(where)}` : ""}. The name is the device's own claim.</p>
       <p>It wants ${text(resourceInWords(env, device.resource))}, as <strong>${text(email)}</strong>. It can read and change everything in this mind.</p>

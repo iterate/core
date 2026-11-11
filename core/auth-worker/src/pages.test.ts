@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { emailSignInResponse } from "./email-sign-in.ts";
 import type { Env } from "./env.ts";
+import { deviceTile } from "./device/page.ts";
 import { chooserPage, consentPage, errorPage, homePage, signInPage } from "./pages.ts";
 
 const DOMAIN = "example.com";
@@ -157,6 +158,17 @@ test("a known client's mark goes by where its access goes, or by its name", asyn
       redirectHost: "chatgpt.com",
     }),
   ).toContain(`<div class="tile" data-client-mark="initials">CH</div>`);
+});
+
+test("a device's sign-in shows who asks by the name the device gives: a known mark, or its initials", () => {
+  expect(deviceTile("Claude Code")).toContain(`data-client-mark="known"`);
+  expect(deviceTile("iterate CLI on a laptop")).toBe(
+    `<div class="tile" data-client-mark="initials">IT</div>`,
+  );
+  // a name is text: markup in it does not reach the page
+  expect(deviceTile(`<img src=x onerror=alert(1)>`)).toBe(
+    `<div class="tile" data-client-mark="initials">IM</div>`,
+  );
 });
 
 /** The page's HTML, written to ITERATE_PAGES_OUT when that names a folder. */
