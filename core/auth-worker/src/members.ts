@@ -1,8 +1,16 @@
 import { mindApiUrlOf } from "iterate/mind-api";
 import type { TokenIdentity } from "iterate/workers";
 import { z } from "zod";
+import { base64url } from "iterate/signed";
 import { AccountFacts } from "./account-facts.ts";
-import { emailAllowed, type EmailRule, isOwner } from "./config.ts";
+import {
+  emailAllowed,
+  type EmailRule,
+  FIRST_OWNER_PATH,
+  FIRST_OWNER_TICKET_MS,
+  isOwner,
+} from "./config.ts";
+import { sha256Hex } from "./device/protocol.ts";
 import { type Session, sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import { blockedOf } from "./blocked.ts";
@@ -102,6 +110,13 @@ export async function membersResponse(
     const outcome = owner
       ? await removeKeys(env, session, email)
       : { error: "Only an owner, a member the stack's config names, removes a member's keys." };
+    if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
+    return outcome.facts.on(await membersPage(env, { owner, notice: outcome.notice }));
+  }
+  if (action === "link") {
+    const outcome = owner
+      ? await memberLink(env, session, email)
+      : { error: "Only an owner, a member the stack's config names, makes a sign-in link." };
     if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
     return outcome.facts.on(await membersPage(env, { owner, notice: outcome.notice }));
   }
@@ -244,6 +259,39 @@ async function removeKeys(
   };
 }
 
+// A member's way to a first passkey where no code can be mailed, and a way back in for a member
+// who lost every passkey: the page the first owner's ticket opens (./first-owner.ts), for one use
+// within a day. The link is shown once, to the owner, who passes it on; the stack keeps its hash.
+// Never for an owner: an owner's way in is a deploy's ticket.
+async function memberLink(
+  env: Env,
+  actor: Session,
+  typed: string,
+): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
+  const email = typed.trim().toLowerCase();
+  if (isOwner(iterateConfigOf(env).login, email))
+    return { error: `${email} is an owner. An owner gets in with a deploy's link.` };
+  if (!(await isMember(env, email)))
+    return { error: `${email} is not a member. Add the member first.` };
+  const ticket = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  const expires = Date.now() + FIRST_OWNER_TICKET_MS;
+  await env.DB.prepare(
+    "insert into member_tickets (hash, email, made_by, expires_at) values (?1, ?2, ?3, ?4)",
+  )
+    .bind(await sha256Hex(ticket), email, actor.email, expires)
+    .run();
+  const facts = new AccountFacts();
+  facts.add(actor.userId, {
+    type: "events.iterate.com/account/member-link-made",
+    payload: { email, expires },
+  });
+  console.info({ event: "auth.member-link-made", by: actor.userId });
+  return {
+    facts,
+    notice: `Give this link to ${email}, and to nobody else. It works once, within 24 hours, and is not shown again: ${issuerOf(env)}${FIRST_OWNER_PATH}#${ticket}`,
+  };
+}
+
 // For a person who is no member: an app's end user, on a stack whose sign-in is open to anyone. A
 // member is removed, not blocked, since a member's standing comes from the members' list.
 async function block(
@@ -366,6 +414,13 @@ async function membersPage(
         <input type="hidden" name="action" value="remove-keys">
         <input type="email" name="email" autocomplete="off" required aria-label="The member's email">
         <button type="submit">Remove this member's keys</button>
+      </form>
+      <h2>A sign-in link for a member</h2>
+      <p>For a member who has no passkey here and cannot get a code by email. The link signs the member in once, to add a passkey. Whoever holds the link is that member, so pass it on yourself.</p>
+      <form method="post" action="${MEMBERS_PATH}" class="stack">
+        <input type="hidden" name="action" value="link">
+        <input type="email" name="email" autocomplete="off" required aria-label="The member's email">
+        <button type="submit">Make a sign-in link</button>
       </form>
       <h2>Block a person who is not a member</h2>
       <p>For a stack whose sign-in is open to anyone, so that its apps have users of their own. A blocked address gets no sign-in code, and is signed out of every app at once.</p>

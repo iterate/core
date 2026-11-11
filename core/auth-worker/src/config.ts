@@ -166,6 +166,9 @@ export const FirstOwnerTicket = z.strictObject({
 export type FirstOwnerTicket = z.infer<typeof FirstOwnerTicket>;
 
 export const FIRST_OWNER_TICKET_MS = 24 * 3600_000;
+/** The page a ticket opens: the first owner's (./first-owner.ts), and a member's link from an owner
+ *  (./members.ts `memberLink`). */
+export const FIRST_OWNER_PATH = "/keys/first";
 
 /** The ticket in `text`, or why auth refuses it: its address must be one an `email` rule of
  *  `login.allow` names, and it ends at most 24 hours from `now`. */

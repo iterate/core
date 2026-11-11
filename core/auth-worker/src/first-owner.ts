@@ -1,14 +1,13 @@
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
-import { type FirstOwnerTicket, firstOwnerTicketOf } from "./config.ts";
+import { FIRST_OWNER_PATH, type FirstOwnerTicket, firstOwnerTicketOf } from "./config.ts";
 import { sessionCookie, sessionOf } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import { honouredNext } from "./key-rules.ts";
+import { isMember } from "./members.ts";
 import { page, text } from "./pages.ts";
 import { linkIdentity } from "./users.ts";
-
-export const FIRST_OWNER_PATH = "/keys/first";
 
 export async function firstOwnerResponse(env: Env, request: Request): Promise<Response> {
   if (request.method !== "POST") return firstOwnerPage(env, new URL(request.url));
@@ -48,12 +47,15 @@ async function spentTicket(
   env: Env,
   given: string | undefined,
   now: number,
-): Promise<FirstOwnerTicket | { refused: string }> {
+): Promise<Pick<FirstOwnerTicket, "email"> | { refused: string }> {
+  const hash = given ? await sha256Hex(given) : "";
+  const members = hash ? await spentMemberTicket(env, hash, now) : null;
+  if (members) return members;
   if (!env.FIRST_OWNER_TICKET) return { refused: "no ticket is bound" };
   const ticket = firstOwnerTicketOf(env.FIRST_OWNER_TICKET, iterateConfigOf(env), now);
   if ("refused" in ticket) return ticket;
   if (ticket.expires <= now) return { refused: "its 24 hours are over" };
-  if (!given || (await sha256Hex(given)) !== ticket.hash) return { refused: "not the ticket" };
+  if (hash !== ticket.hash) return { refused: "not the ticket" };
   // The ticket is a deploy's word, and whoever deploys this Worker owns the stack: so it counts on a
   // stack with users and keys too, as an owner's way back in. One statement: of two posts, one wins.
   const spent = await env.DB.prepare(
@@ -62,6 +64,27 @@ async function spentTicket(
     .bind(ticket.hash, now)
     .first();
   return spent ? ticket : { refused: "used before" };
+}
+
+/** A link an owner made for a member (./members.ts `memberLink`), spent by this call: null when
+ *  `hash` is no such link's. It signs in someone who is still a member, once, within its day. */
+async function spentMemberTicket(
+  env: Env,
+  hash: string,
+  now: number,
+): Promise<{ email: string } | { refused: string } | null> {
+  const row = await env.DB.prepare(
+    `update member_tickets set spent_at = ?2
+     where hash = ?1 and spent_at is null and expires_at > ?2
+     returning email`,
+  )
+    .bind(hash, now)
+    .first<{ email: string }>();
+  if (row) return (await isMember(env, row.email)) ? row : { refused: "no longer a member" };
+  const known = await env.DB.prepare("select 1 from member_tickets where hash = ?1")
+    .bind(hash)
+    .first();
+  return known ? { refused: "a member's link, used before or over" } : null;
 }
 
 function firstOwnerPage(env: Env, url: URL) {

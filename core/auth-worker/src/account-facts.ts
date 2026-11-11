@@ -53,6 +53,7 @@ const KeyRemoved = z.object({
 });
 const MemberRemoved = z.object({ email: z.string().min(1) });
 const PersonBlocked = z.object({ email: z.string().min(1) });
+const MemberLinkMade = z.object({ email: z.string().min(1), expires: z.number() });
 const MemberAdded = SignedBy.extend({ email: z.string().min(1) });
 const LetInApproved = z.object({
   grantId: z.string().min(1),
@@ -72,6 +73,10 @@ export type AccountFact = (
   | { type: "events.iterate.com/account/grant-ended"; payload: z.infer<typeof GrantEnded> }
   | { type: "events.iterate.com/account/member-added"; payload: z.infer<typeof MemberAdded> }
   | { type: "events.iterate.com/account/member-removed"; payload: z.infer<typeof MemberRemoved> }
+  | {
+      type: "events.iterate.com/account/member-link-made";
+      payload: z.infer<typeof MemberLinkMade>;
+    }
   | { type: "events.iterate.com/account/person-blocked"; payload: z.infer<typeof PersonBlocked> }
   | { type: "events.iterate.com/account/person-unblocked"; payload: z.infer<typeof PersonBlocked> }
   | { type: "events.iterate.com/account/let-in-approved"; payload: z.infer<typeof LetInApproved> }
