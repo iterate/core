@@ -517,17 +517,30 @@ await run(
     const row = page.locator("li", {
       has: page.locator(`input[name="key"][value="${bridgeKey}"]`),
     });
+    const removes = page.locator("form[data-remove]");
+    const before = await removes.count();
     await row.getByRole("button", { name: "Remove" }).click();
-    // the page comes back with the key listed as removed, and no button for it
     await page
       .locator(`input[name="key"][value="${bridgeKey}"]`)
       .waitFor({ state: "detached", timeout: 15_000 });
+    // A refusal's page has no such input either. So: the page that came back is the keys page,
+    // and it offers one Remove fewer, which is this key's.
+    await page
+      .getByRole("heading", { name: /^Your keys for/ })
+      .waitFor({ timeout: 15_000 })
+      .catch(async () => {
+        throw new Error(`the page says: ${(await page.locator("body").innerText()).slice(0, 200)}`);
+      });
+    const after = await removes.count();
+    must(after === before - 1, `the keys page offered ${before} removals and now ${after}`);
     const overflow = z
       .number()
       .parse(await page.evaluate("document.documentElement.scrollWidth - window.innerWidth"));
     must(overflow <= 0, `the keys page is ${overflow} px wider than the phone`);
     bridgeKey = "";
-    return { detail: "Remove asked for the passkey; the key is listed as removed" };
+    return {
+      detail: `Remove asked for the passkey; the keys page came back with ${after} keys to remove, one fewer`,
+    };
   },
 );
 
