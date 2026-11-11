@@ -220,6 +220,10 @@ button.link {
   background: none;
   font-size: inherit;
 }
+/* a form that is one link-like button in a line of text: "Not you? Use another account" */
+form.inline {
+  display: inline;
+}
 /* another way to do the same thing, beside or under the main action */
 button.secondary {
   border: 1px solid var(--input);

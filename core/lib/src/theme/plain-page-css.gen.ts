@@ -235,6 +235,9 @@ padding: 0;
 background: none;
 font-size: inherit;
 }
+form.inline {
+display: inline;
+}
 button.secondary {
 border: 1px solid var(--input);
 background: transparent;
@@ -325,4 +328,4 @@ gap: 0.75rem 1.25rem;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-bEbL9x3WQHgW/6dIT0Mdu4vkJ8ynT8V15BcFjbvmx04='";
+export const plainPageCssHash = "'sha256-b069qk4MqOs+KbNx4h/n5/jTY/uJVfcFumIvEUtcp18='";
