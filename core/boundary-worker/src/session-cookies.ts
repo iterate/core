@@ -2,8 +2,12 @@ import { cookieValueOf } from "iterate/lib";
 
 export const HOST_SESSION_COOKIE = "__Host-iterate-session";
 export const FLOW_COOKIE = "__Host-iterate-sign-in";
+/** Set by a sign-out on this host, until the next sign-in here: that sign-in asks the issuer for
+ *  its account chooser, so that a person who signed out can come back as someone else. */
+export const SIGNED_OUT_COOKIE = "__Host-iterate-signed-out";
 
-const isSessionCookie = (name: string) => name === HOST_SESSION_COOKIE || name === FLOW_COOKIE;
+const isSessionCookie = (name: string) =>
+  name === HOST_SESSION_COOKIE || name === FLOW_COOKIE || name === SIGNED_OUT_COOKIE;
 
 export const sessionTokenOf = (request: Request) =>
   cookieValueOf(request.headers.get("cookie"), HOST_SESSION_COOKIE);

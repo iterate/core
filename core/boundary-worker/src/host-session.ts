@@ -1,4 +1,4 @@
-import { isSameOriginBrowserRequest, sameOriginPath } from "iterate/lib";
+import { cookieValueOf, isSameOriginBrowserRequest, sameOriginPath } from "iterate/lib";
 import { authorizationCodeRequest, authorizationServer } from "iterate/oauth";
 import { platformOriginOf } from "iterate/mind-api";
 import { standalonePage } from "iterate/standalone-page";
@@ -13,6 +13,7 @@ import {
   HOST_SESSION_COOKIE,
   sessionTokenOf,
   setsSessionCookie,
+  SIGNED_OUT_COOKIE,
 } from "./session-cookies.ts";
 import { socketAnswer, stampedRequest } from "./stamp.ts";
 
@@ -73,6 +74,9 @@ async function signInResponse(request: Request, { auth, domain }: HostDeps) {
     resources: [url.origin],
     scopes: ["identity"],
   });
+  // OpenID Connect's `prompt`: the issuer says who is signed in there, and offers another account
+  if (cookieValueOf(request.headers.get("cookie"), SIGNED_OUT_COOKIE) === "1")
+    location.searchParams.set("prompt", "select_account");
   const flow = {
     state,
     verifier,
@@ -146,6 +150,7 @@ async function callbackResponse(request: Request, deps: HostDeps) {
     cookie(HOST_SESSION_COOKIE, tokens.access_token, tokens.expires_in || 3600),
   );
   headers.append("set-cookie", cookie(FLOW_COOKIE, "", 0));
+  headers.append("set-cookie", cookie(SIGNED_OUT_COOKIE, "", 0));
   return new Response(null, { status: 302, headers });
 }
 
@@ -165,14 +170,12 @@ async function signOutResponse(request: Request, deps: HostDeps) {
         console.warn({ event: "boundary.host-sign-out-not-revoked", message: String(error) }),
       );
   }
-  return new Response(null, {
-    status: 303,
-    headers: {
-      location: "/",
-      "set-cookie": cookie(HOST_SESSION_COOKIE, "", 0),
-      "cache-control": "no-store",
-    },
-  });
+  const headers = new Headers({ location: "/", "cache-control": "no-store" });
+  headers.append("set-cookie", cookie(HOST_SESSION_COOKIE, "", 0));
+  // The issuer's own session lives on: without this, the next sign-in here would bring the same
+  // person back with no question. A day is long enough for "sign out, then sign in as another".
+  headers.append("set-cookie", cookie(SIGNED_OUT_COOKIE, "1", 24 * 3600));
+  return new Response(null, { status: 303, headers });
 }
 
 // The token endpoint is reached through the auth Worker's binding: a Worker's fetch to a route of
