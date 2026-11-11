@@ -85,6 +85,11 @@ test("a service's key may lend one capability, with or without paths, and must a
     expect(ask({ ...bridge, provide })).toHaveProperty("refused");
   // the paths rule holds beside a capability too
   expect(ask({ ...bridge, provide: "whatsapp", paths: "/agents/" })).toHaveProperty("refused");
+  // a name of the platform's own: a lent stub there would get what the mind sends to it
+  for (const provide of ["secrets", "secrets.set", "fetch", "email", "repos", "run", "config.x"])
+    expect(ask({ ...bridge, provide })).toMatchObject({
+      refused: expect.stringContaining("that name is this mind's own"),
+    });
 });
 
 test("a key's scope reads as what its service can do", () => {

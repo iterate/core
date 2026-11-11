@@ -1,3 +1,4 @@
+import { codedError } from "iterate/lib";
 import { expect, test } from "vitest";
 import { LenderRoot } from "./lender-root.ts";
 
@@ -34,6 +35,33 @@ test.for([
   expect(lent).toEqual([]);
 });
 
+test.for([
+  "secrets",
+  "fetch",
+  "email.send",
+  "repos",
+  "run",
+  "config",
+  "config.whatsapp",
+  "builtins",
+])("a key enrolled to lend itx.%s lends nothing: the name is the platform's own", (provide) => {
+  const { root, lent } = session(provide);
+  expect(() => root.provide(`itx.${provide}`, stub)).toThrow(/is the platform's own name/);
+  expect(lent).toEqual([]);
+});
+
+test("a key's name that the mind's table gives to something else lends nothing, and its own lend from before is lent again", async () => {
+  const app = session("agents.create", "itx.cd('/agents').facets.get('agents').create");
+  await expect(app.root.provide("itx.agents.create", stub)).rejects.toThrow(
+    /a name this mind uses already/,
+  );
+  const under = session("whatsapp.jonas", "itx.builtins.rpcStubs.get('itx.whatsapp').jonas");
+  await expect(under.root.provide("itx.whatsapp.jonas", stub)).rejects.toThrow(/uses already/);
+  const again = session("whatsapp.jonas", "itx.builtins.rpcStubs.get('itx.whatsapp.jonas')");
+  await again.root.provide("itx.whatsapp.jonas", stub);
+  expect([app.lent, under.lent, again.lent]).toEqual([[], [], [["itx.whatsapp.jonas", stub, {}]]]);
+});
+
 test("a key's session has no other name of itx", () => {
   const names = Object.getOwnPropertyNames(LenderRoot.prototype).toSorted();
   expect(names).toEqual(["constructor", "provide", "whoami"]);
@@ -44,11 +72,19 @@ type Call = { match: string; target: unknown; options: Record<string, unknown> }
 
 function stub() {}
 
-function session() {
+/** `resolved`: what the mind's table makes of the key's name now. None: no rule matches it. */
+function session(provide = "whatsapp.jonas", resolved?: string) {
   const lent: unknown[][] = [];
   const root = new LenderRoot(
-    { provide: async (...call: unknown[]) => void lent.push(call) } as never,
-    { actor: "bridge-whatsapp-jonas", key: "key:k1", provide: "whatsapp.jonas" },
+    {
+      provide: async (...call: unknown[]) => void lent.push(call),
+      invoke: async () => {
+        if (!resolved) throw codedError("NO_ITX_EXPRESSION_MATCH", "no rewrite rule matches");
+        return [`itx.${provide}`, resolved];
+      },
+    } as never,
+    { actor: "bridge-whatsapp-jonas", key: "key:k1", provide },
+    new Set(["secrets", "fetch", "email", "repos", "run"]),
   );
   return { root, lent };
 }

@@ -42,9 +42,11 @@ import {
 } from "./context/rpc-stub-relay.ts";
 import {
   entersOwnRoot,
+  implicitRootsAt,
   normalizeRewriteRuleConfigured,
   type ItxExpressionResolver,
 } from "./context/itx-expression-rewriting.ts";
+import { lendRefusal } from "./context/lent-names.ts";
 import { FetchRouteConfiguredPayload } from "./fetch-routes.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { statelessResolverFor } from "./context/stateless-context.ts";
@@ -267,6 +269,9 @@ export class IterateContextRpcTarget extends RpcTarget {
         this.#removeRuleInBackground(matchString, expectedTarget),
       );
     }
+    // Whoever lends, at whichever context: a name that is the platform's at the mind's root.
+    const refused = lendRefusal(matchString, implicitRootsAt("/"));
+    if (refused) throw codedError("FORBIDDEN", `itx.provide: ${refused}`);
     // Built before the lend, so a match the codec refuses throws with nothing lent.
     const ruleEvent: StreamEventInput = {
       type: "events.iterate.com/itx/rewrite-rule-configured",

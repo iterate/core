@@ -1,4 +1,4 @@
-import { serveSession } from "core-itx";
+import { implicitRootsAt, serveSession } from "core-itx";
 import { stampedCallerOf, stampedExpiryOf, stampedLenderOf } from "iterate/principal";
 import { LenderRoot } from "./lender-root.ts";
 
@@ -11,7 +11,7 @@ export async function serveApi(request: Request, ctx: ExecutionContext) {
       caller: { principal: { actor: lender.actor }, grant: lender.key },
       endsAt: stampedExpiryOf(request),
       endReason: "the key's token for this session ended: ask for a new one",
-      root: (context) => new LenderRoot(context, lender),
+      root: (context) => new LenderRoot(context, lender, implicitRootsAt("/")),
     });
   const caller = stampedCallerOf(request);
   if (!caller.principal) return new Response("Sign in\n", { status: 401 });

@@ -23,6 +23,8 @@ export {
   type Cause,
 } from "./cause.ts";
 export { unavailableError } from "./unavailable.ts";
+export { implicitRootsAt } from "./context/itx-expression-rewriting.ts";
+export { isLendOf, lendRefusal } from "./context/lent-names.ts";
 export { DurableObjectNameCodec } from "./context/paths.ts";
 export {
   encodeFetchExpression,

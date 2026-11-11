@@ -74,6 +74,23 @@ export type ServiceKeyRequest = {
 /** A capability's name, as `iterate provide` takes it: `whatsapp`, `whatsapp.jonas`. */
 const CAPABILITY_NAME = /^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)*$/;
 
+/** NAMES THAT ARE THE PLATFORM'S AT A MIND'S ROOT, which no key lends: a lent stub is read before
+ *  a built-in root, so a key that lent `itx.secrets` would get every secret set after it. The
+ *  mind's kernel is the authority and refuses such a lend itself (core/itx
+ *  `context/lent-names.ts`), also for a root that this list does not know yet. This list is so
+ *  that no member is asked to allow such a key. The kernel's roots, then the mind Worker's
+ *  (core/itx `BUILT_IN_ROOT_DESCRIPTIONS`, core/mind-worker `roots`). */
+const PLATFORM_NAMES = new Set([
+  ...["builtins", "config", "whoami", "fetchRoutes", "append", "appendOffsets", "schedules"],
+  ...["readEvents", "waitForEvent", "cd", "fetch", "rpcStubs", "rewriteRules", "facets", "abort"],
+  ...["subscriptions", "processors", "workers", "run"],
+  ...["connectToOpenApi", "connectToCapnweb", "connectToMcp", "repos", "workspaces", "sandboxes"],
+  ...["files", "kv", "ai", "cfArtifacts", "r2", "secrets", "approvals", "browser", "images"],
+  ...["email", "integrations", "url", "webhooks", "telemetry", "platformHook"],
+  // a row of the default config's Agents app, not a root: the mind's table refuses it for a key
+  "agents",
+]);
+
 // `actor` allows no `_`, so it is never a user's id, `user_…`.
 export function serviceKeyRequestOf(
   fields: URLSearchParams | FormData,
@@ -104,6 +121,11 @@ export function serviceKeyRequestOf(
     return {
       refused:
         "The service may lend one capability, named in letters and digits (whatsapp, whatsapp.jonas).",
+    };
+  const lent = provide.split(".")[0] || "";
+  if (PLATFORM_NAMES.has(lent))
+    return {
+      refused: `The service may not lend itx.${lent}: that name is this mind's own. A service lends under a name of its own.`,
     };
   // a key that may do nothing is a mistake in the link, never a wish
   if (!paths.length && !provide)
