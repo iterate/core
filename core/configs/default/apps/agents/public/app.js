@@ -104,8 +104,7 @@ function App() {
   return html`
     <${AppShell}
       app="Agents"
-      minds=${[{ id: domain, slug: domain }]}
-      activeMindId=${domain}
+      mind=${domain}
       mindHref=${() => "./"}
       nav=${html`<${AgentsNav} mind=${domain} agents=${agents} agent=${agent} onOpen=${open} />`}
       header=${agent ? html`<span class="truncate font-mono text-sm">${agent}</span>` : null}

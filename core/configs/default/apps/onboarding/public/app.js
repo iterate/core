@@ -81,8 +81,7 @@ function App() {
   return html`
     <${AppShell}
       app="Onboarding"
-      minds=${[{ id: domain, slug: domain }]}
-      activeMindId=${domain}
+      mind=${domain}
       mindHref=${() => "./"}
       nav=${html`<${Nav} />`}
       account=${principal}

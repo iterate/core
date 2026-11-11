@@ -28,11 +28,17 @@ export function onboardingApp() {
       // The page's own socket (public/app.js opens it): the member's itx.
       if (url.pathname === "/itx") return host.auth.itx(request);
       // What @iterate-com/ui's shell asks of its host, as apps/agents/app.ts answers it: which
-      // platform this page talks to, and its "Sign out".
+      // platform this page talks to, the one mind this app serves, and its "Sign out".
+      const mind = url.hostname.split(".").slice(1).join(".");
       if (url.pathname === "/.auth/session.json") {
-        const platform = `https://iterate.${url.hostname.split(".").slice(1).join(".")}`;
+        const platform = `https://iterate.${mind}`;
         return Response.json({ issuer: platform, defaultIssuer: platform });
       }
+      if (url.pathname === "/.auth/minds.json")
+        return Response.json({
+          minds: [{ address: mind, lastUsedAt: Date.now() }],
+          lastUsed: mind,
+        });
       if (url.pathname === "/.auth/logout")
         return new Response(null, { status: 307, headers: { location: "/.iterate/sign-out" } });
       return serveFiles(request, { index, files });

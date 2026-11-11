@@ -21,15 +21,23 @@ export function agentsApp() {
       // The page's own socket (public/app.js opens it): the member's itx, which the platform
       // serves for whoever it signed in on this host.
       if (url.pathname === "/itx") return host.auth.itx(request);
-      // What @iterate-com/ui's shell asks of the host it runs on, for the foot of its sidebar. It
-      // was written for an app with a sign-in gate of its own under /.auth/. Here the platform
-      // signs people in, so these two answers stand in for that gate. Nobody signed out gets this
-      // far: worker.ts's guard answers them first.
+      // What @iterate-com/ui's shell asks of the host it runs on, for the head and the foot of its
+      // sidebar. It was written for an app with a sign-in gate of its own under /.auth/. Here the
+      // platform signs people in, so these three answers stand in for that gate. Nobody signed
+      // out gets this far: worker.ts's guard answers them first.
+      // the mind's address: this host, one label shorter
+      const mind = url.hostname.split(".").slice(1).join(".");
       if (url.pathname === "/.auth/session.json") {
-        // which platform this page talks to: the mind's own, one label beside this host
-        const platform = `https://iterate.${url.hostname.split(".").slice(1).join(".")}`;
+        // which platform this page talks to: the mind's own
+        const platform = `https://iterate.${mind}`;
         return Response.json({ issuer: platform, defaultIssuer: platform });
       }
+      // the minds this browser is connected to, for the shell's switcher: this app serves one
+      if (url.pathname === "/.auth/minds.json")
+        return Response.json({
+          minds: [{ address: mind, lastUsedAt: Date.now() }],
+          lastUsed: mind,
+        });
       // its "Sign out": the platform's own sign-out takes the POST
       if (url.pathname === "/.auth/logout")
         return new Response(null, { status: 307, headers: { location: "/.iterate/sign-out" } });
