@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { attempt, projectRoot, type Check } from "./lib.ts";
+import { attempt, mindRoot, type Check } from "./lib.ts";
 
 const ECHO = "https://httpbin.org";
 
 export async function secretChecks(domain: string): Promise<Check[]> {
   const token = process.env.ITERATE_PROTOTYPE_TOKEN;
   if (!token) return [];
-  const root = () => projectRoot(domain, token);
+  const root = () => mindRoot(domain, token);
   const path = "/secrets/smoke-key";
   const first = crypto.randomUUID();
   const second = crypto.randomUUID();
@@ -178,7 +178,7 @@ export async function secretChecks(domain: string): Promise<Check[]> {
   ];
 }
 
-async function petshopRefresh(root: () => ReturnType<typeof projectRoot>): Promise<Check[]> {
+async function petshopRefresh(root: () => ReturnType<typeof mindRoot>): Promise<Check[]> {
   const origin = process.env.ITERATE_SMOKE_PETSHOP_ORIGIN;
   if (!origin) return [];
   return [
@@ -257,7 +257,7 @@ async function petshopRefresh(root: () => ReturnType<typeof projectRoot>): Promi
   ];
 }
 
-async function logOf(root: () => ReturnType<typeof projectRoot>, path: string) {
+async function logOf(root: () => ReturnType<typeof mindRoot>, path: string) {
   const events: { type: string; offset: number; payload?: unknown }[] = [];
   for (let after = 0; ;) {
     const page = await root().cd(path).readEvents(after, 500);

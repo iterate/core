@@ -1,4 +1,4 @@
-// app.js — THE AGENTS APP'S PAGE: the project's agents in the sidebar, and beside them one agent's
+// app.js — THE AGENTS APP'S PAGE: the mind's agents in the sidebar, and beside them one agent's
 // chat or, with no agent in the URL, the home page that starts one. Everything it draws is a
 // component of @iterate-com/ui, loaded through the import map in index.html. This folder holds the
 // wiring, the sidebar's rows and the home page: change them here.
@@ -20,7 +20,7 @@ import { AgentsNav } from "./nav.js";
 
 // ── the member's itx ──
 // One WebSocket to this host's /itx, which app.ts answers: a capnweb session whose root is the
-// project's itx, as the member the platform signed in on this host. The platform ends it when the
+// mind's itx, as the member the platform signed in on this host. The platform ends it when the
 // sign-in ends; a reload signs in again. Three closes in a minute stop the reloads.
 const socket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
 const itx = newWebSocketRpcSession(socket);
@@ -42,7 +42,7 @@ socket.addEventListener("close", () => {
 // Who is signed in, as the session itself says: the foot of the sidebar shows them.
 const { principal } = await itx.whoami();
 
-// The project is its domain, and this host is one label under it.
+// The mind is its domain, and this host is one label under it.
 const domain = location.hostname.split(".").slice(1).join(".") || location.hostname;
 
 // ── the URL ──
@@ -104,10 +104,10 @@ function App() {
   return html`
     <${AppShell}
       app="Agents"
-      projects=${[{ id: domain, slug: domain }]}
-      activeProjectId=${domain}
-      projectHref=${() => "./"}
-      nav=${html`<${AgentsNav} project=${domain} agents=${agents} agent=${agent} onOpen=${open} />`}
+      minds=${[{ id: domain, slug: domain }]}
+      activeMindId=${domain}
+      mindHref=${() => "./"}
+      nav=${html`<${AgentsNav} mind=${domain} agents=${agents} agent=${agent} onOpen=${open} />`}
       header=${agent ? html`<span class="truncate font-mono text-sm">${agent}</span>` : null}
       account=${principal}
       locationKey=${href}

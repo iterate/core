@@ -15,7 +15,7 @@ import { Toaster } from "@iterate-com/ui/components/ui/sonner";
 import { newWebSocketRpcSession, useContextStub, useIterateContext } from "@iterate-com/ui/live";
 import { BotIcon, MessageCircleIcon } from "lucide-react";
 
-// app.ts says the same: the project's one onboarding agent.
+// app.ts says the same: the mind's one onboarding agent.
 const AGENT = "/agents/onboarding";
 
 // The sidebar starts collapsed: the shell reads this cookie once, and keeps what a person then
@@ -25,7 +25,7 @@ if (!document.cookie.includes("sidebar_state="))
 
 // ── the member's itx ──
 // As apps/agents/public/app.js: one WebSocket to this host's /itx, a capnweb session whose root is
-// the project's itx, as the member the platform signed in on this host. The platform ends it when
+// the mind's itx, as the member the platform signed in on this host. The platform ends it when
 // the sign-in ends; a reload signs in again. Three closes in a minute stop the reloads.
 const socket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
 const itx = newWebSocketRpcSession(socket);
@@ -46,7 +46,7 @@ socket.addEventListener("close", () => {
 
 const { principal } = await itx.whoami();
 
-// The project is its domain, and this host is one label under it.
+// The mind is its domain, and this host is one label under it.
 const domain = location.hostname.split(".").slice(1).join(".") || location.hostname;
 
 /** Anything said in the chat: by a person, by the agent, or by this page (below). */
@@ -59,7 +59,7 @@ function App() {
   const context = useIterateContext(agent.stub, AgentChat.contextOptions);
   // THE AGENT SPEAKS FIRST. When the chat is empty, this page says once that the owner has opened
   // it: a developer note, not the owner's words, which starts the agent's first turn. The key makes
-  // it one event for the project, whatever reloads or how many tabs are open.
+  // it one event for the mind, whatever reloads or how many tabs are open.
   const { stub } = agent;
   const empty = context.caughtUp && !context.events.some(said);
   useEffect(() => {
@@ -81,9 +81,9 @@ function App() {
   return html`
     <${AppShell}
       app="Onboarding"
-      projects=${[{ id: domain, slug: domain }]}
-      activeProjectId=${domain}
-      projectHref=${() => "./"}
+      minds=${[{ id: domain, slug: domain }]}
+      activeMindId=${domain}
+      mindHref=${() => "./"}
       nav=${html`<${Nav} />`}
       account=${principal}
       locationKey="/"

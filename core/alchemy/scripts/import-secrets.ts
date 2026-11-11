@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { projectRoot } from "./smoke/lib.ts";
+import { mindRoot } from "./smoke/lib.ts";
 
-// A core/os fact that carried a cell, sealed for `<projectId>.iterate/secrets/<name>`.
+// A core/os fact that carried a cell, sealed for `<mindId>.iterate/secrets/<name>`.
 const CellFact = z.object({
   type: z.enum([
     "events.iterate.com/secret/set",
@@ -20,7 +20,7 @@ const Deleted = z.object({
 
 /** Imports the secrets in `file` into the stack deployed on `domain`. */
 export default async function importSecrets(
-  /** The project's domain, e.g. example.com. */
+  /** The mind's domain, e.g. example.com. */
   domain: string,
   /** The exported secret facts: a JSON array, or one JSON event per line. */
   file: string,
@@ -64,8 +64,8 @@ export default async function importSecrets(
   let failed = 0;
   for (const [path, { sealed }] of [...latest].sort(([a], [b]) => (a < b ? -1 : 1))) {
     try {
-      // `importSealed` is the project's own `itx.secrets` verb, which iterate/api's type does not name
-      const secrets = projectRoot(domain, token).secrets as unknown as {
+      // `importSealed` is the mind's own `itx.secrets` verb, which iterate/api's type does not name
+      const secrets = mindRoot(domain, token).secrets as unknown as {
         importSealed(path: string, cell: string, proof: string): Promise<unknown>;
       };
       // the cell as text: the proof covers these bytes, whatever order a hop gives an object's keys

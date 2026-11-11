@@ -1,11 +1,11 @@
 {
   "name": "core-alchemy",
   "type": "module",
-  "description": "The Alchemy program that deploys one project as a stack of Workers",
+  "description": "The Alchemy program that deploys one mind as a stack of Workers",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "deploy": "f() { pnpm --filter core-project build && node --env-file-if-exists=.secrets scripts/repos-namespace.ts \"$@\" && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js deploy \"$@\"; }; f",
-    "plan": "pnpm --filter core-project build && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js plan",
+    "deploy": "f() { node --env-file-if-exists=.secrets scripts/refuse-older-stack.ts \"$@\" && pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets scripts/repos-namespace.ts \"$@\" && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js deploy \"$@\"; }; f",
+    "plan": "pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js plan",
     "destroy": "node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js destroy",
     "config": "node --env-file-if-exists=.secrets scripts/config.ts",
     "smoke": "node --env-file-if-exists=.secrets scripts/smoke.ts",
@@ -17,7 +17,7 @@
     "@effect/platform-node": "catalog:",
     "alchemy": "catalog:",
     "capnweb": "catalog:",
-    "core-auth": "workspace:*",
+    "core-auth-worker": "workspace:*",
     "effect": "catalog:",
     "iterate": "workspace:*",
     "trpc-cli": "catalog:",

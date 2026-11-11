@@ -35,7 +35,7 @@ import { SNAPSHOT_REREADS, type RuleSnapshot } from "./rule-snapshots.ts";
 const BUILT_IN_ROOT_DESCRIPTIONS = {
   whoami: "who this context is: `itx.whoami()` → { path }",
   fetchRoutes:
-    "which itx expression a request on this project's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the platform serves a match from `route.target`, before the config worker's fetch",
+    "which itx expression a request on this mind's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the platform serves a match from `route.target`, before the config worker's fetch",
   append: "write events to this log: `itx.append({ type, payload })`",
   appendOffsets:
     "write events to this log and answer their offsets only, not the events: `itx.appendOffsets({ type, payload })` → [offset]",
@@ -43,8 +43,8 @@ const BUILT_IN_ROOT_DESCRIPTIONS = {
     "durable future appends: `schedules.set({ key, when, events })` · `schedules.cancel(key)`",
   readEvents: "read this log: `(await itx.readEvents(afterOffset, limit)).events`",
   waitForEvent: "block until an event lands: `waitForEvent({ type, afterOffset, timeoutMs })`",
-  cd: "any context of the project, with every verb: `itx.cd('/').waitForEvent(…)`, `itx.cd('./child').append({ type, payload })`; a jail's bare null refuses what reaches in",
-  fetch: "the internet through the project's egress: `itx.fetch(new Request(url))`",
+  cd: "any context of the mind, with every verb: `itx.cd('/').waitForEvent(…)`, `itx.cd('./child').append({ type, payload })`; a jail's bare null refuses what reaches in",
+  fetch: "the internet through the mind's egress: `itx.fetch(new Request(url))`",
   rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
   rewriteRules: "this table, described: `await rewriteRules.list()`",
   facets:
@@ -60,7 +60,7 @@ const BUILT_IN_ROOT_DESCRIPTIONS = {
 export type BuiltInRoot = keyof typeof BUILT_IN_ROOT_DESCRIPTIONS;
 
 // A context's own roots, implicit in every context: nothing else could `append` or `abort` mean at
-// `/agents/x`. Every other root is implicit at the project root only.
+// `/agents/x`. Every other root is implicit at the mind root only.
 const CONTEXT_ROOTS = [
   "whoami",
   "append",
@@ -80,7 +80,7 @@ const CONTEXT_ROOTS = [
 ] as const satisfies readonly BuiltInRoot[];
 
 // A security surface: a root belongs here only if it answers identically at every context of a
-// project but for whom it names as the caller.
+// mind but for whom it names as the caller.
 const PORTABLE_ROOTS = ["fetch"] as const satisfies readonly BuiltInRoot[];
 
 function roots() {
@@ -491,7 +491,7 @@ export function rowsNamingRpcStub(args: {
 }
 
 // Loaded code's input, or a row's target, is walled as it will resolve: never the fixed point, and
-// a signing secret only at the project root. A producer is walled at the context the walk reached.
+// a signing secret only at the mind root. A producer is walled at the context the walk reached.
 function admitLoadedCodeExpression(expression: ItxExpression, from: string): void {
   let at = from;
   for (const step of expression) {
@@ -503,11 +503,11 @@ function admitLoadedCodeExpression(expression: ItxExpression, from: string): voi
       );
     if (Array.isArray(step))
       for (const arg of step.slice(1)) {
-        // a receiver that verifies a signature trusts the event as the whole project's
+        // a receiver that verifies a signature trusts the event as the whole mind's
         if (at !== "/" && typeof arg === "object" && !!arg && "signingSecret" in arg)
           throw codedError(
             "FORBIDDEN",
-            `a webhook's signing secret is named only at the project's root, and ${JSON.stringify(at)} is below it`,
+            `a webhook's signing secret is named only at the mind's root, and ${JSON.stringify(at)} is below it`,
           );
         if (isSourceSpec(arg)) {
           const sourceExpression = normalizedItxExpression(arg.source);
@@ -578,7 +578,7 @@ export function admitLoadedCodeRow(
     );
   const target = payload?.target;
   if (!target) return;
-  // a live object is checked when it is lent; a copy target's path may be anywhere in the project
+  // a live object is checked when it is lent; a copy target's path may be anywhere in the mind
   if (typeof target !== "string" && !Array.isArray(target)) return;
   const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
   if (builtInsGetStep(expression, "rpcStubs")) return;
@@ -586,7 +586,7 @@ export function admitLoadedCodeRow(
 }
 
 // While a context's table holds its bare `itx ⇒ null`, only a member's session (a principal) may
-// re-point or remove it: anything else would bring back `cd`, and with it the whole project.
+// re-point or remove it: anything else would bring back `cd`, and with it the whole mind.
 export function refuseLiftingAJail(
   events: readonly StreamEventInput[],
   rules: Readonly<Record<string, ItxExpressionRewriteRule>>,
@@ -904,7 +904,7 @@ export class ItxExpressionResolver {
           if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
           if (hops === 0 && !liveRules) return { route: own(), validUntil, rules };
           // A refusal the snapshots gave stands only as long as they do. Refusing the config
-          // pointer, which only a publication writes, means the project has published no config.
+          // pointer, which only a publication writes, means the mind has published no config.
           if (hops > 0 && error instanceof Error)
             Object.assign(error, {
               validUntil,

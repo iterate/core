@@ -199,7 +199,7 @@ function quietSince(state: AgentState, requestOffset: number): boolean {
 }
 
 /** Why an input is OWED AN ANSWER, or null when its turn may end in silence: a job an agent
- *  scheduled (an input a schedule delivers, set by a script rather than by the project's own code
+ *  scheduled (an input a schedule delivers, set by a script rather than by the mind's own code
  *  at `/`, whose WhatsApp reviews mostly end in silence), or words their writer marked
  *  `answerOwed`; `answerOwed: false` opts a scheduled input out. */
 export function answerOwedFor(event: {
@@ -464,10 +464,10 @@ type CachedAgentProcessorDeps = {
   /** The clock and the wait, injected only so a unit test can make the debounce instant. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  /** The project's gate on words another agent sent (message.ts), read when it is needed: the
+  /** The mind's gate on words another agent sent (message.ts), read when it is needed: the
    *  facet class's `messageGate`, which the config's agents.ts sets. */
   messageGate?: () => AgentInputGate | undefined;
-  /** The project's own list of standing files for an agent, read when it is needed: the facet
+  /** The mind's own list of standing files for an agent, read when it is needed: the facet
    *  class's `standingFiles`. */
   standingFiles?: () => ((path: string, files: string[]) => string[]) | undefined;
   /** The configuration a new agent starts with, read at its birth: the facet class's `defaultConfig`. */
@@ -511,9 +511,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     { controller: AbortController; partialText: string }
   >();
 
-  #identityRead?: { projectId: string; path: string };
-  /** Which context this is — its project and path — read once. */
-  async #identity(): Promise<{ projectId: string; path: string }> {
+  #identityRead?: { mindId: string; path: string };
+  /** Which context this is — its mind and path — read once. */
+  async #identity(): Promise<{ mindId: string; path: string }> {
     if (this.#identityRead) return this.#identityRead;
     using itx = this.deps.getItx();
     return (this.#identityRead = await itx.whoami());
@@ -731,7 +731,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           actor?.type === "script" || actor?.type === "agent" ? "agent-loop" : "external";
         // words that must be answered: the newest such input is the one owed
         const why = source === "external" ? answerOwedFor({ ...event, payload }) : null;
-        // THE GATE (message.ts `AgentInputGate`): words from another agent wait for the project's
+        // THE GATE (message.ts `AgentInputGate`): words from another agent wait for the mind's
         // gate when everything the trigger stands for came from other agents; once a person's or
         // the loop's own words are pending, a turn is owed anyway and nothing waits
         const prior = state.pendingLlmRequestTrigger;
@@ -1503,7 +1503,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: { path },
             idempotencyKey: `agent/created:${path}`,
           };
-          // the project's starting configuration, before the certificate: a retry appends it once
+          // the mind's starting configuration, before the certificate: a retry appends it once
           const defaults = this.deps.defaultConfig?.();
           if (defaults)
             await append({
@@ -1543,7 +1543,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: { path },
             idempotencyKey: `agent/deleted:${path}`,
           };
-          await this.#postToTheCatalog(certificate); // the project catalog first
+          await this.#postToTheCatalog(certificate); // the mind catalog first
           await append(certificate); // this path last: closes the obligation
         } finally {
           this.#deleting = false;
@@ -1553,7 +1553,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     }
     const now = this.#now();
 
-    // THE GATE: words another agent sent wait for the project's gate (message.ts), asked once per
+    // THE GATE: words another agent sent wait for the mind's gate (message.ts), asked once per
     // input while no request is open; its `agent/input-gated` lets the trigger on or drops it. An
     // input from a sender the gate does not apply to, or no gate at all, wakes the agent as before.
     const trigger = state.pendingLlmRequestTrigger;
@@ -1918,7 +1918,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         files.map(async (file) => {
           try {
             using itx = this.deps.getItx();
-            // the handle first: a pipelined `get` that refuses (a project with no config repo) would
+            // the handle first: a pipelined `get` that refuses (a mind with no config repo) would
             // reject a second promise nobody awaits
             const repo = await itx.repos.get("/repos/config");
             const text = await repo.readFile(file);
@@ -1947,7 +1947,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     const pinned = preambleSection(state.preamble, state.preambleQuarantined);
     if (pinned) sections.preamble = pinned;
     if (tree) sections["capability-tree"] = tree;
-    sections.identity = `CURRENT PROJECT: ${JSON.stringify(whoami)}`;
+    sections.identity = `CURRENT MIND: ${JSON.stringify(whoami)}`;
     return sections;
   }
 
@@ -2047,7 +2047,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   /** The refresh of `#secretsSet` in flight, so a request that comes meanwhile starts no second. */
   #secretsRefresh: Promise<void> | undefined;
 
-  /** This incarnation's way out to a model with the project's own keys. One per incarnation, since
+  /** This incarnation's way out to a model with the mind's own keys. One per incarnation, since
    *  the agent's sockets are kept per `send` (responses-keys.ts): a new incarnation opens its own. */
   readonly #send = (request: Request) => {
     const send = this.deps.fetch;
@@ -2138,7 +2138,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   /** One STREAMED Responses API call with the one tool, read by `readAnswer`. With no `apiKeys`, or
    *  at their `AI_GATEWAY` entry, an `openai/…` Workers AI partner model through `itx.ai` and the
    *  account's AI Gateway: Cloudflare's billing, no key, and the gateway's spend limits partition on
-   *  the metadata (project, stream path). Each other entry is the project's own key, straight at
+   *  the metadata (mind, stream path). Each other entry is the mind's own key, straight at
    *  api.openai.com through the isolate's `fetch`, on the agent's WebSocket when one is open, each
    *  in turn until one's answer completes (responses-keys.ts). Either way each answer has
    *  `llm.streamIdleTimeoutMs` of silence before it fails, measured from its request.
@@ -2196,7 +2196,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     const read = (response: Response, attempt: StreamAttempt) =>
       readAnswer(model, response, attempt, { onAnswer, onDelta });
     const gateway = async (attempt: StreamAttempt) => {
-      const { projectId, path } = await this.#identity();
+      const { mindId, path } = await this.#identity();
       using itx = this.deps.getItx();
       const raw: unknown = await raceAbort(
         attempt.signal,
@@ -2212,7 +2212,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             gateway: {
               id: AI_GATEWAY_ID,
               skipCache: true,
-              metadata: { projectId, streamPath: path, context: "agent-turn" },
+              metadata: { mindId, streamPath: path, context: "agent-turn" },
             },
           },
         ),

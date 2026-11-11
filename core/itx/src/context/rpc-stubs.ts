@@ -1,6 +1,6 @@
 import { failureKind } from "iterate/platform-retry";
 import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
-import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
+import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { parse, type ItxExpression } from "iterate/expression";
@@ -19,10 +19,8 @@ import {
 } from "./fetch-upgrade.ts";
 
 export const RPC_STUB_PAGER_WEBSOCKET_HEADER = "x-itx-rpc-stub-pager";
-type RpcStubPagerAttachRequest = { rpcStubKey: string; appendEvents: StreamEventInput[] };
-// URI-encoded: a header is a ByteString, and a key or an event is not.
-export const encodeRpcStubPagerAttachRequest = (request: RpcStubPagerAttachRequest): string =>
-  encodeURIComponent(JSON.stringify(request));
+export type RpcStubPagerAttachRequest = { rpcStubKey: string; appendEvents: StreamEventInput[] };
+// URI-encoded (rpc-stub-relay.ts): a header is a ByteString, and a key or an event is not.
 function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequest {
   const decoded = JSON.parse(decodeURIComponent(header)) as Partial<RpcStubPagerAttachRequest>;
   // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of JSON.parse output; the `Partial<...>` cast is a claim, not a guarantee

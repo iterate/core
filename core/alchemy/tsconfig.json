@@ -3,5 +3,5 @@
   // Worker.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "types": ["node"] },
-  "include": ["alchemy.run.ts", "project.config.example.ts", "src", "scripts"]
+  "include": ["alchemy.run.ts", "mind.config.example.ts", "src", "scripts"]
 }

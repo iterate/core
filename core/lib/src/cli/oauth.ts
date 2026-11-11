@@ -1,9 +1,9 @@
-// THE CLI'S SIGN-IN to a project's issuer, and the refresh before each connection: a native public
-// client (https://www.rfc-editor.org/rfc/rfc8252) on oauth4webapi, of the issuer the project's API
-// names (iterate/oauth `discoverProject`). It registers its loopback redirect
+// THE CLI'S SIGN-IN to a mind's issuer, and the refresh before each connection: a native public
+// client (https://www.rfc-editor.org/rfc/rfc8252) on oauth4webapi, of the issuer the mind's API
+// names (iterate/oauth `discoverMind`). It registers its loopback redirect
 // (https://www.rfc-editor.org/rfc/rfc7591), sends the person to the issuer with PKCE, and redeems the
 // redirect back for tokens bound to one resource (https://www.rfc-editor.org/rfc/rfc8707): the
-// project's API, or its `/provide`.
+// mind's API, or its `/provide`.
 
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -12,7 +12,7 @@ import { isLocalOrigin } from "../lib.ts";
 import {
   authorizationCodeRequest,
   authorizationServerOf,
-  type DiscoveredProject,
+  type DiscoveredMind,
 } from "../client/oauth.ts";
 import { standalonePage } from "../standalone-page.ts";
 import type { StoredSession } from "./config.ts";
@@ -23,37 +23,37 @@ const CLIENT_NAME = "iterate CLI";
 /** The client registration every sign-in starts with: the issuer must take one (RFC 7591), since a
  *  terminal has no client metadata document of its own to point at. */
 export async function registerClient(
-  project: DiscoveredProject,
+  mind: DiscoveredMind,
   metadata: Partial<oauth.OmitSymbolProperties<oauth.Client>>,
 ): Promise<oauth.Client> {
-  if (!project.endpoints.registration)
+  if (!mind.endpoints.registration)
     throw new Error(
-      `${new URL(project.issuer).host} takes no client registrations, so this terminal cannot sign in: set ITERATE_PROJECT_TOKEN instead.`,
+      `${new URL(mind.issuer).host} takes no client registrations, so this terminal cannot sign in: set ITERATE_MIND_TOKEN instead.`,
     );
   const registration = await oauth.processDynamicClientRegistrationResponse(
     await oauth.dynamicClientRegistrationRequest(
-      authorizationServerOf(project),
+      authorizationServerOf(mind),
       metadata,
-      requestOptions(project.issuer),
+      requestOptions(mind.issuer),
     ),
   );
   return { client_id: registration.client_id };
 }
 
-/** Sign in to `project`'s issuer in a browser, for `resource`: `openBrowser` gets the
+/** Sign in to `mind`'s issuer in a browser, for `resource`: `openBrowser` gets the
  *  authorization URL, and the redirect back to this process's loopback listener is validated
  *  (state, `iss`, no `error`) before its code is redeemed with the PKCE verifier. The scope is
- *  `iterate`, the one a project's issuer grants. */
+ *  `iterate`, the one a mind's issuer grants. */
 export async function oauthLogin(input: {
-  project: DiscoveredProject;
+  mind: DiscoveredMind;
   resource: string;
   clientName?: string;
   openBrowser: (url: URL) => void | Promise<void>;
 }): Promise<StoredSession> {
-  const { project, resource } = input;
-  const as = authorizationServerOf(project);
+  const { mind, resource } = input;
+  const as = authorizationServerOf(mind);
   await using loopback = await listenForRedirect();
-  const client = await registerClient(project, {
+  const client = await registerClient(mind, {
     client_name: input.clientName || CLIENT_NAME,
     redirect_uris: [loopback.redirectUri],
     token_endpoint_auth_method: "none",
@@ -61,8 +61,8 @@ export async function oauthLogin(input: {
     response_types: ["code"],
   });
   const request = await authorizationCodeRequest({
-    issuer: project.issuer,
-    authorizationEndpoint: project.endpoints.authorization,
+    issuer: mind.issuer,
+    authorizationEndpoint: mind.endpoints.authorization,
     clientId: client.client_id,
     redirectUri: loopback.redirectUri,
     resources: [resource],
@@ -91,11 +91,11 @@ export async function oauthLogin(input: {
         callback,
         loopback.redirectUri,
         request.verifier,
-        { ...requestOptions(project.issuer), additionalParameters: { resource } },
+        { ...requestOptions(mind.issuer), additionalParameters: { resource } },
       ),
     ),
   );
-  return sessionFromTokens(tokens, project, client.client_id, started);
+  return sessionFromTokens(tokens, mind, client.client_id, started);
 }
 
 /** A fresh access token for `session`, the sign-in for `resource`, from the issuer that issued it.
@@ -168,22 +168,22 @@ async function tokenResponse(step: string, request: () => Promise<oauth.TokenEnd
   }
 }
 
-/** The session to store from a token response: `project`'s issuer and endpoints, or, for a
+/** The session to store from a token response: `mind`'s issuer and endpoints, or, for a
  *  refresh, the ones `previous` holds. */
 export function sessionFromTokens(
   tokens: oauth.TokenEndpointResponse,
-  project: DiscoveredProject | null,
+  mind: DiscoveredMind | null,
   clientId: string,
   started: number,
   previous?: StoredSession,
 ): StoredSession {
-  const issuer = project?.issuer || previous?.issuer;
-  const tokenEndpoint = project?.endpoints.token || previous?.tokenEndpoint;
+  const issuer = mind?.issuer || previous?.issuer;
+  const tokenEndpoint = mind?.endpoints.token || previous?.tokenEndpoint;
   if (!issuer || !tokenEndpoint) throw new Error("A session needs the issuer it came from.");
   return {
     issuer,
     tokenEndpoint,
-    revocationEndpoint: project ? project.endpoints.revocation : previous?.revocationEndpoint,
+    revocationEndpoint: mind ? mind.endpoints.revocation : previous?.revocationEndpoint,
     token: tokens.access_token,
     refreshToken: tokens.refresh_token || previous?.refreshToken,
     clientId,

@@ -3,15 +3,15 @@ import type { IterateContextApi } from "./api.ts";
 import { startHeartbeat, type Heartbeat } from "./client/heartbeat.ts";
 import { openSocketWithRetry, socketOnceOpen } from "./client/socket.ts";
 
-/** What `authenticate` resolves to: the project's root context as a capnweb stub (pipelined;
+/** What `authenticate` resolves to: the mind's root context as a capnweb stub (pipelined;
  *  disposable), and the fast first read. Declared, so the package's declarations stay
  *  serializable. */
 export type AuthenticatedApp = {
-  /** The project's root context, `/`, as the person signed in: `itx.cd(path)` reaches the rest. A
+  /** The mind's root context, `/`, as the person signed in: `itx.cd(path)` reaches the rest. A
    *  proxy to the current connection, so a dropped socket costs a reconnect, not the page. */
   itx: RpcStub<IterateContextApi>;
   /** Plain data, read the fastest way there is: over the socket once it is open, before that as one
-   *  capnweb HTTP batch on `POST /api?project=<address>` (a few hundred milliseconds sooner on a
+   *  capnweb HTTP batch on `POST /api?mind=<address>` (a few hundred milliseconds sooner on a
    *  first load). `fn` makes its calls at once, pipelined, and returns data: a stub it returns ends
    *  with the batch, so anything held — a context to subscribe to — comes from `itx`. A context it
    *  addresses on the way is held with `using` (`using agents = itx.cd("/agents")`): over the open
@@ -28,8 +28,8 @@ function leaveForLogin(login: string): Promise<never> {
   return new Promise<never>(() => {});
 }
 
-/** One socket to `/api?project=<address>`, the bearer attached by the app's gate. The `itx` is
- *  the session's root, the project's root context as the person: usable before the socket has
+/** One socket to `/api?mind=<address>`, the bearer attached by the app's gate. The `itx` is
+ *  the session's root, the mind's root context as the person: usable before the socket has
  *  even opened, calls queue until it has. */
 type Connection = { itx: RpcStub<IterateContextApi>; socket: WebSocket; dispose(): void };
 function connectionOn(socket: WebSocket): Connection {
@@ -37,8 +37,8 @@ function connectionOn(socket: WebSocket): Connection {
   return { itx, socket, dispose: () => itx[Symbol.dispose]() };
 }
 
-/** Create once per project a page shows — a TanStack route's client-only `beforeLoad`, or a plain
- *  page's entry. `project` is the project's address (iterate/project-api). Every loader and action
+/** Create once per mind a page shows — a TanStack route's client-only `beforeLoad`, or a plain
+ *  page's entry. `mind` is the mind's address (iterate/mind-api). Every loader and action
  *  of the page shares the returned connection.
  *
  *  Signing in waits for HTTP only: the probe. The socket's upgrade runs beside it and nothing waits
@@ -46,16 +46,16 @@ function connectionOn(socket: WebSocket): Connection {
  *  (client/socket.ts `socketOnceOpen`), its calls queue until then, and a page reads its first data
  *  with `read` meanwhile. The upgrade tries for a while (≈16 s of attempts) before its calls fail.
  *  The `itx` the page holds is a proxy to the CURRENT connection: when the socket closes, the next
- *  call opens a fresh one and pipelines onto it. A reconnect the project refuses (the session ended
+ *  call opens a fresh one and pipelines onto it. A reconnect the mind refuses (the session ended
  *  elsewhere) rejects that call; the page's retry runs `authenticate` again — a fresh one, the
  *  socket's close forgot the last — whose probe sends the browser to sign in. */
-export function createIterateClient(options: { project: string }): IterateClient {
-  const { project } = options;
+export function createIterateClient(options: { mind: string }): IterateClient {
+  const { mind } = options;
   let live: Connection | null = null;
   let connecting: Promise<AuthenticatedApp> | undefined;
   const apiUrl = () => {
     const url = new URL("/api", window.location.href);
-    url.searchParams.set("project", project);
+    url.searchParams.set("mind", mind);
     return url;
   };
   const socketUrl = () => {
@@ -94,7 +94,7 @@ export function createIterateClient(options: { project: string }): IterateClient
         heartbeat = startHeartbeat({
           beat: () => connection.itx.whoami(),
           onDead: (reason) => {
-            console.warn(`The connection to ${project} is dead (${reason}). Reconnecting.`);
+            console.warn(`The connection to ${mind} is dead (${reason}). Reconnecting.`);
             dispose();
           },
         });
@@ -124,7 +124,7 @@ export function createIterateClient(options: { project: string }): IterateClient
     return await fn(batch);
   }
   async function connect(next: string): Promise<AuthenticatedApp> {
-    const login = `/.auth/login?${new URLSearchParams({ project, next })}`;
+    const login = `/.auth/login?${new URLSearchParams({ mind, next })}`;
     // Two requests at once: the probe and the socket's upgrade, which nothing here waits for
     // (client/socket.ts `socketOnceOpen`). A socket the probe does not lead to is closed unused.
     const opening = live ? undefined : openSocketWithRetry(socketUrl());
@@ -146,7 +146,7 @@ export function createIterateClient(options: { project: string }): IterateClient
     await probe.body?.cancel();
     if (!probe.ok) discard();
     if (probe.status === 401) return leaveForLogin(login);
-    if (!probe.ok) throw new Error(`${project} is unavailable (${probe.status}). Please retry.`);
+    if (!probe.ok) throw new Error(`${mind} is unavailable (${probe.status}). Please retry.`);
     // another read may have opened the live connection meanwhile (`itx`): then this one goes
     if (opening && !live) adopt(socketOnceOpen(opening));
     else discard();

@@ -1,6 +1,6 @@
 import * as oauth from "oauth4webapi";
 import { OAuthScopes } from "../oauth-scopes.ts";
-import { platformOriginOf, projectAddressCandidatesOf, projectApiUrlOf } from "../project-api.ts";
+import { platformOriginOf, mindAddressCandidatesOf, mindApiUrlOf } from "../mind-api.ts";
 
 /** The platform's issuer as oauth4webapi's authorization server: its endpoints under `/oauth2`, and
  *  the `iss` it adds to every authorization response (RFC 9207), which `validateAuthResponse` then
@@ -42,10 +42,10 @@ export async function authorizationCodeRequest(input: {
   return { url, state, verifier };
 }
 
-/** A PROJECT AS A CLIENT FINDS IT from its address (project-api.ts): its API origin, which is the
+/** A MIND AS A CLIENT FINDS IT from its address (mind-api.ts): its API origin, which is the
  *  resource every token for it names, and the issuer its API trusts, with the endpoints that
  *  issuer publishes. Plain data, so a browser session can store it. */
-export type DiscoveredProject = {
+export type DiscoveredMind = {
   address: string;
   resource: string;
   issuer: string;
@@ -63,19 +63,19 @@ export type DiscoveredProject = {
 };
 
 /** The discovered issuer as oauth4webapi's authorization server. */
-export function authorizationServerOf(project: DiscoveredProject): oauth.AuthorizationServer {
+export function authorizationServerOf(mind: DiscoveredMind): oauth.AuthorizationServer {
   return {
-    issuer: project.issuer,
-    authorization_endpoint: project.endpoints.authorization,
-    token_endpoint: project.endpoints.token,
-    revocation_endpoint: project.endpoints.revocation,
-    registration_endpoint: project.endpoints.registration,
-    device_authorization_endpoint: project.endpoints.deviceAuthorization,
-    authorization_response_iss_parameter_supported: project.issParameter,
+    issuer: mind.issuer,
+    authorization_endpoint: mind.endpoints.authorization,
+    token_endpoint: mind.endpoints.token,
+    revocation_endpoint: mind.endpoints.revocation,
+    registration_endpoint: mind.endpoints.registration,
+    device_authorization_endpoint: mind.endpoints.deviceAuthorization,
+    authorization_response_iss_parameter_supported: mind.issParameter,
   };
 }
 
-/** FIND A PROJECT'S ISSUER from its address, by standards alone:
+/** FIND A MIND'S ISSUER from its address, by standards alone:
  *   1. the API's protected-resource metadata (RFC 9728) for `https://iterate.<address>/api`, whose
  *      `resource` must be that URL exactly, and whose first `authorization_servers` entry is the
  *      issuer;
@@ -83,11 +83,11 @@ export function authorizationServerOf(project: DiscoveredProject): oauth.Authori
  *      exactly, and whose endpoints are the ones the sign-in uses.
  *  Every URL is https, except an issuer or endpoint on a local origin when `local` (an app in local
  *  development). An error is a sentence a person can act on. */
-export async function discoverProject(
+export async function discoverMind(
   address: string,
   options: { local?: boolean } = {},
-): Promise<DiscoveredProject | { error: string }> {
-  const resource = projectApiUrlOf(address);
+): Promise<DiscoveredMind | { error: string }> {
+  const resource = mindApiUrlOf(address);
   const allowed = (value: unknown): value is string => {
     if (typeof value !== "string" || !URL.canParse(value)) return false;
     const url = new URL(value);
@@ -107,11 +107,11 @@ export async function discoverProject(
     metadata = await oauth.processResourceDiscoveryResponse(new URL(resource), response);
   } catch (error) {
     if (error instanceof oauth.OperationProcessingError)
-      return { error: `${address} does not answer as an iterate project. Check the address.` };
+      return { error: `${address} does not answer as an iterate mind. Check the address.` };
     return { error: `${new URL(resource).host} could not be reached. Check the address.` };
   }
   if (metadata.resource !== resource)
-    return { error: `${address} does not answer as an iterate project. Check the address.` };
+    return { error: `${address} does not answer as an iterate mind. Check the address.` };
   const issuer = metadata.authorization_servers?.[0];
   if (!issuer) return { error: `${address} does not name a sign-in provider.` };
   if (!allowed(issuer))
@@ -163,15 +163,15 @@ export async function discoverProject(
   };
 }
 
-/** THE PROJECT A TYPED HOST NAMES: each of its candidates (iterate/project-api
- *  `projectAddressCandidatesOf`) asked in turn, so `example.com` and `iterate.example.com` find one
- *  project, kept under the address that answered. */
-export async function resolveProject(
+/** THE MIND A TYPED HOST NAMES: each of its candidates (iterate/mind-api
+ *  `mindAddressCandidatesOf`) asked in turn, so `example.com` and `iterate.example.com` find one
+ *  mind, kept under the address that answered. */
+export async function resolveMind(
   host: string,
-  discover: (address: string) => Promise<DiscoveredProject | { error: string }> = (address) =>
-    discoverProject(address),
-): Promise<DiscoveredProject | { error: string }> {
-  const candidates = projectAddressCandidatesOf(host);
+  discover: (address: string) => Promise<DiscoveredMind | { error: string }> = (address) =>
+    discoverMind(address),
+): Promise<DiscoveredMind | { error: string }> {
+  const candidates = mindAddressCandidatesOf(host);
   const refusals: { error: string }[] = [];
   for (const address of candidates) {
     const found = await discover(address);
@@ -179,6 +179,6 @@ export async function resolveProject(
     refusals.push(found);
   }
   const [a, b] = candidates.map((address) => new URL(platformOriginOf(address)).host);
-  if (!b) return refusals[0] || { error: `${a} does not answer as an iterate project.` };
-  return { error: `Neither ${a} nor ${b} answers as an iterate project. Check the address.` };
+  if (!b) return refusals[0] || { error: `${a} does not answer as an iterate mind.` };
+  return { error: `Neither ${a} nor ${b} answers as an iterate mind. Check the address.` };
 }

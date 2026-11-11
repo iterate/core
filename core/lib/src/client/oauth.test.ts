@@ -1,13 +1,13 @@
 import { expect, test } from "vitest";
-import { projectAddressOf } from "../project-api.ts";
-import { type DiscoveredProject, resolveProject } from "./oauth.ts";
+import { mindAddressOf } from "../mind-api.ts";
+import { type DiscoveredMind, resolveMind } from "./oauth.ts";
 
 test.for([
   "afoop.com",
   "iterate.afoop.com",
   "https://iterate.afoop.com/",
   "  ITERATE.Afoop.COM.  ",
-  "https://afoop.com/projects/x",
+  "https://afoop.com/minds/x",
   "afoop.com/",
 ])("%s finds afoop.com", async (typed) => {
   expect(await resolve(typed, ["afoop.com"])).toMatchObject({ address: "afoop.com" });
@@ -35,7 +35,7 @@ test("neither answering names both platform hostnames that were asked", async ()
   }).toMatchObject({
     both: {
       error:
-        "Neither iterate.nowhere.com nor iterate.iterate.nowhere.com answers as an iterate project. Check the address.",
+        "Neither iterate.nowhere.com nor iterate.iterate.nowhere.com answers as an iterate mind. Check the address.",
     },
     one: { error: "nowhere.com does not answer" },
   });
@@ -43,10 +43,10 @@ test("neither answering names both platform hostnames that were asked", async ()
 
 /** `typed` resolved with discovery faked: `live` are the addresses whose platform answers. */
 async function resolve(typed: string, live: string[]) {
-  const parsed = projectAddressOf(typed);
+  const parsed = mindAddressOf(typed);
   if ("error" in parsed) return { error: parsed.error, asked: [] };
   const asked: string[] = [];
-  const discover = async (address: string): Promise<DiscoveredProject | { error: string }> => {
+  const discover = async (address: string): Promise<DiscoveredMind | { error: string }> => {
     asked.push(address);
     if (!live.includes(address)) return { error: `${address} does not answer` };
     return {
@@ -57,6 +57,6 @@ async function resolve(typed: string, live: string[]) {
       issParameter: true,
     };
   };
-  const found = await resolveProject(parsed.address, discover);
+  const found = await resolveMind(parsed.address, discover);
   return { ...("error" in found ? { error: found.error } : { address: found.address }), asked };
 }

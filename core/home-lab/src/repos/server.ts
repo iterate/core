@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
-// as core/project's `repoArtifactName` spells one
+// as core/mind-worker's `repoArtifactName` spells one
 const REPO_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
 /** Git's basic-auth password, or a bearer, must be `token`; it listens on loopback only. */
@@ -38,7 +38,7 @@ export async function serveRepos(input: { dir: string; token: string; port: numb
     response.writeHead(404, { "content-type": "text/plain" }).end("Not found\n");
   }
 
-  // a missing repo is answered in Artifacts' words, which core/project reads
+  // a missing repo is answered in Artifacts' words, which core/mind-worker reads
   function manage(method: string, name: string, response: ServerResponse) {
     if (!REPO_NAME.test(name))
       return void response.writeHead(400).end(`Not a repo name: ${JSON.stringify(name)}\n`);

@@ -2,7 +2,7 @@
 // webhook check also needs the stack to trust the Cloud's key.
 import { get } from "node:https";
 import { z } from "zod";
-import { attempt, projectRoot, type Check } from "./lib.ts";
+import { attempt, mindRoot, type Check } from "./lib.ts";
 
 const TOKENS = "/secrets/smoke-cloud-github";
 const INSTALLATION = "/secrets/smoke-cloud-installation";
@@ -34,7 +34,7 @@ export async function cloudChecks(domain: string): Promise<Check[]> {
   const login = github && new URL(github.authorizationEndpoint).searchParams.get("login");
   if (!github?.installUrl || !login)
     return [skipped(`the Cloud at ${cloud} has no github client at the pet shop's fake`)];
-  const root = () => projectRoot(domain, token);
+  const root = () => mindRoot(domain, token);
   const [shop] = github.urls;
   const installationId = new URL(github.installUrl).searchParams.get("installation_id") || "";
   const withSecret = (url: string, path: string, method = "GET") =>
@@ -209,7 +209,7 @@ export async function cloudChecks(domain: string): Promise<Check[]> {
         }
         return {
           pass: false,
-          detail: `the Cloud answered ${fired.status} ${JSON.stringify(fired.body)}, and nothing landed on ${path} in 20 s: does the stack trust the Cloud's key? (${cloud}/enrol?project=${domain})`,
+          detail: `the Cloud answered ${fired.status} ${JSON.stringify(fired.body)}, and nothing landed on ${path} in 20 s: does the stack trust the Cloud's key? (${cloud}/enrol?mind=${domain})`,
         };
       },
     ),
@@ -219,7 +219,7 @@ export async function cloudChecks(domain: string): Promise<Check[]> {
 async function botChecks(
   cloud: string,
   x: z.infer<typeof CloudFacts>["clients"][string] | undefined,
-  root: () => ReturnType<typeof projectRoot>,
+  root: () => ReturnType<typeof mindRoot>,
 ): Promise<Check[]> {
   const person = x && new URL(x.authorizationEndpoint).searchParams.get("user");
   const bot = x?.bot;
@@ -238,7 +238,7 @@ async function botChecks(
       return { pass: done.includes("holds the tokens"), detail: done.slice(0, 70) };
     }),
     await attempt(
-      "cloud: what the linked account says to the bot lands signed by the Cloud, and the project answers as the bot",
+      "cloud: what the linked account says to the bot lands signed by the Cloud, and the mind answers as the bot",
       async () => {
         await fetch(`${fake}/__test-controls/dm`, {
           method: "POST",

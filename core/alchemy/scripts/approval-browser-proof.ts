@@ -1,5 +1,5 @@
 //   node --env-file-if-exists=.secrets scripts/approval-browser-proof.ts <domain>
-// ITERATE_PROTOTYPE_TOKEN       the stand-in member token for the project's API
+// ITERATE_PROTOTYPE_TOKEN       the stand-in member token for the mind's API
 // ITERATE_SMOKE_PETSHOP_ORIGIN  the pet shop's origin
 // ITERATE_PROOF_EMAIL           the member who signs in, by a mailed code: one with no passkey. When
 //                               not a member yet, ITERATE_SMOKE_APPROVER_KEY signs the add.
@@ -17,18 +17,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { chromium, type Page } from "playwright";
-import { platformOriginOf } from "iterate/project-api";
+import { platformOriginOf } from "iterate/mind-api";
 import { z } from "zod";
 import { addPasskey, authenticator, lendPasskey, touched } from "./proof-passkeys.ts";
 import { signerOf, slackToken } from "./smoke/approvals.ts";
-import { projectRoot } from "./smoke/lib.ts";
+import { mindRoot } from "./smoke/lib.ts";
 
 const PROTOTYPES = ["jispwoso.com", "templesteins.com"];
 /** A live stack is proven only when named twice, and nothing the proof made is left on it. */
 const live =
   Boolean(process.env.ITERATE_PROOF_LIVE) && process.env.ITERATE_PROOF_LIVE === process.argv[2];
 const TARGETS = live ? [...PROTOTYPES, process.argv[2]!] : PROTOTYPES;
-/** core/auth/src/cookies.ts `SESSION_COOKIE`, which the package does not export. */
+/** core/auth-worker/src/cookies.ts `SESSION_COOKIE`, which the package does not export. */
 const SESSION_COOKIE = "__Host-iterate-auth-session";
 const PATH = live ? "/secrets/proof-approvals" : "/secrets/approval-proof";
 const TYPES = {
@@ -190,7 +190,7 @@ async function ensureMember(email: string): Promise<string> {
   const lower = email.toLowerCase();
   if (added.some((row) => row.email === lower)) return "added before";
   if (config.some((rule) => rule.email?.toLowerCase() === lower)) return "in the stack's config";
-  // a token adds no one: a member's key signs the add (core/auth/src/signed-change.ts)
+  // a token adds no one: a member's key signs the add (core/auth-worker/src/signed-change.ts)
   must(env.ITERATE_SMOKE_APPROVER_KEY, `${email} is no member: set ITERATE_SMOKE_APPROVER_KEY`);
   const signer = await signerOf(domain!, env.ITERATE_SMOKE_APPROVER_KEY);
   const answer = await fetch(`${issuer}/members`, {
@@ -213,7 +213,7 @@ async function ensureMember(email: string): Promise<string> {
   return "added now";
 }
 
-const root = () => projectRoot(domain, token);
+const root = () => mindRoot(domain, token);
 const team = `TPROOF${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 const url = `${petshop}/api/chat.postMessage`;
 
@@ -399,7 +399,7 @@ await run("the Dash lists it while it waits", async () => {
   if (!dash) return { detail: "skipped: ITERATE_PROOF_DASH_ORIGIN is not set" };
   const tab = await context.newPage();
   tab.setDefaultTimeout(60_000);
-  const approvals = `${dash}/projects/${domain}/approvals`;
+  const approvals = `${dash}/minds/${domain}/approvals`;
   await tab.goto(approvals, { waitUntil: "networkidle" });
   const connect = tab.getByRole("button", { name: "Connect" });
   if (await connect.isVisible()) {

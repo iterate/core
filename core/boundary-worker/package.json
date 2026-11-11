@@ -1,0 +1,20 @@
+{
+  "name": "core-boundary-worker",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "capnweb": "catalog:",
+    "core-itx": "workspace:*",
+    "iterate": "workspace:*",
+    "oauth4webapi": "catalog:",
+    "postal-mime": "4.0.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

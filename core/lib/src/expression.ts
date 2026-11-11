@@ -50,7 +50,7 @@ const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 // marker is ONE reserved literal, `{ "@": true }`, and the merge entry the key `"...@"` with the value
 // `true` — so the stored form is plain JSON, and those two spellings are unspellable as literals in a
 // target (the codec's one reservation). What `@` MEANS is `fillItxExpressionHoles` in
-// core/os/src/context/itx-expression-rewriting.ts; here it is only lexed (parse, targets only) and
+// core/itx/src/context/itx-expression-rewriting.ts; here it is only lexed (parse, targets only) and
 // printed back (print, targets only).
 /** The marker's array-half spelling, the one reserved literal. */
 const ITX_EXPRESSION_HOLE = { "@": true } as const;
@@ -316,7 +316,7 @@ type InvokeTarget = {
 /** Names that must NEVER become dynamic capability segments — a dispatcher answering them would turn
  *  a plain property probe into a live capability call. Enforced at the prototype-chain hop and at
  *  every depth of the path proxies it hands out, and by the library's connectors, which never grow
- *  a method by one of these names (core/os library/connection.ts). Two kinds, one set: */
+ *  a method by one of these names (core/mind-worker/src/library/connection.ts). Two kinds, one set: */
 export const RESERVED_SEGMENT_NAMES: ReadonlySet<string> = new Set([
   // JS/RPC protocol machinery a framework or capnweb probes on any object (`then` above all: an
   // instance must never look thenable, or every `await` of it would resolve a capability).
@@ -427,7 +427,7 @@ export function installPrototypeInvokeFallback<T extends abstract new (...args: 
 export class InvokeHandle extends RpcTarget {
   readonly #dispatchItxExpressionSteps: (itxExpressionSteps: ItxExpression) => unknown;
   /** Whether a walk that reaches this handle gives it the REST of its steps in one dispatch, calls
-   *  and all (core/os context/dispatch.ts `walkSteps`), instead of one dispatch per call. For a
+   *  and all (core/itx/src/context/dispatch.ts `walkSteps`), instead of one dispatch per call. For a
    *  handle whose intermediate answers cannot cross a hop: a sandbox's `container.exec(argv).stdout`,
    *  whose `exec` answers a process that no RPC carries. An own property: no caller reaches it. */
   readonly takesTheRest: boolean;

@@ -3,7 +3,7 @@
 //   FacetDurableObject           — the `DurableObject` shell a context hosts as a facet: its class lists
 //                                  the methods a caller reaches by itx expression (`publicMethods`)
 //   StreamProcessorDurableObject — the facet shell that hosts ONE `StreamProcessor`
-//   IterateConfigEntrypoint      — the stateless `WorkerEntrypoint` a project's config repo exports
+//   IterateConfigEntrypoint      — the stateless `WorkerEntrypoint` a mind's config repo exports
 // and capnweb's constructors (below), which loaded code has no other platform path to.
 //
 // Everything else has one path of its own: a processor's surface (`StreamProcessor`,
@@ -98,7 +98,7 @@ export type FacetProps = {
  *  className })`, a rule naming it, or a processor's row. A caller reaches a facet by itx expression
  *  (`itx.facets.get(name).<method>(…)`) only through what its class lists in `publicMethods`: the
  *  context refuses any other first step FORBIDDEN before the call reaches the facet
- *  (core/os context/facet-public-methods.ts). The platform's own calls — the delivery loop's push
+ *  (core/itx/src/context/facet-public-methods.ts). The platform's own calls — the delivery loop's push
  *  and catch-up, the alarm's revive — never go through the list. A loaded class that does not
  *  extend this shell lists nothing, so no caller reaches it by expression. */
 export abstract class FacetDurableObject<
@@ -124,7 +124,7 @@ export abstract class FacetDurableObject<
   }
 
   /** THE CALL UNDER A CAUSE (`walkUnderCause`): a caller's `itx.facets.get(name).<steps>`, the
-   *  alarm's revive. On no list: only the platform calls it (core/os context/facet-host.ts). */
+   *  alarm's revive. On no list: only the platform calls it (core/itx/src/context/facet-host.ts). */
   callWithCause(cause: unknown, steps: RpcSteps): Promise<unknown> {
     return walkUnderCause(this, cause, steps);
   }
@@ -189,10 +189,10 @@ export type ProcessorScope = {
   readEvents(afterOffset?: number, limit?: number): Promise<unknown>;
   /** The engine's claim on the context's alarm (processor.ts rule 3): "come back by `at`", or null. */
   processors: { claim(name: string, at: number | null): Promise<unknown> };
-  /** Another context of the project by its dotted surface (`.append`), which the platform's handle
+  /** Another context of the mind by its dotted surface (`.append`), which the platform's handle
    *  and a loaded worker's alike answer — how an entity's processor cross-posts its certificate to
    *  `/` (`itx.cd("/").append(certificate)`). Through the table like every other
-   *  word here: anyone's `cd(path).append` reaches any context of the project, stamped with where
+   *  word here: anyone's `cd(path).append` reaches any context of the mind, stamped with where
    *  it came from; a jail's bare null refuses it. */
   cd(path: string): { append(...events: StreamEventInput[]): Promise<unknown> };
 };
@@ -299,28 +299,28 @@ export abstract class StreamProcessorDurableObject<
   }
 }
 
-/** What `processEvent` is handed: one event, and the project's root, typed with the installed apps
+/** What `processEvent` is handed: one event, and the mind's root, typed with the installed apps
  *  the config repo's init case gives it (`IterateConfigProcessEventArgs<"agents">`). */
 export type IterateConfigProcessEventArgs<App extends keyof InstalledAppRoots = never> = {
   event: StreamEvent;
   itx: IterateContextApiWith<App>;
 };
 
-/** WHAT A PROJECT HOSTS BESIDE ITS OWN CODE — an integration package (iterate-telegram,
+/** WHAT A MIND HOSTS BESIDE ITS OWN CODE — an integration package (iterate-telegram,
  *  iterate-github, …: github.com/jonastemplestein/iterategrations), two hooks the config repo's
  *  `worker.ts` lists in `const integrations: Integration[]` and dispatches to
- *  (core/configs/default/worker.ts). A package's install hook is its `project/worker-updated` case:
- *  there it registers its card on the project's `/integrations` context (iterate/integrations),
+ *  (core/configs/default/worker.ts). A package's install hook is its `mind/worker-updated` case:
+ *  there it registers its card on the mind's `/integrations` context (iterate/integrations),
  *  keyed by that event's path and offset, so the Dash lists it after every publish and a retry
  *  appends nothing new. A package keeps nothing across calls: not the host, not a scope, not a
  *  handle. */
 export type Integration = {
-  /** The host it answers (`telegram` for `telegram--<project>`): the worker hands it the requests
+  /** The host it answers (`telegram` for `telegram--<mind>`): the worker hands it the requests
    *  on that routing slug and no other, so a package never sees another's requests, and an error
    *  in one page breaks no other host. */
   routingSlug?: string;
   /** A request on `routingSlug`. `host` is the worker: `using itx = host.getItx()` for the
-   *  project's scope, and for a members-only page the gate every private page needs:
+   *  mind's scope, and for a members-only page the gate every private page needs:
    *  `const denied = host.auth.require(request); if (denied) return denied;`. A webhook needs no
    *  gate: it proves itself with a signature (`itx.secrets.verifyHmac`). A sender that can only
    *  present a secret as it is (`itx.secrets.verifyEquals`) can be shut out by anyone for a minute
@@ -329,21 +329,21 @@ export type Integration = {
     request: Request,
     host: Pick<IterateConfigEntrypoint, "getItx" | "auth">,
   ): Promise<Response>;
-  /** Every durable event of the project, as `processEvent` is handed it: unordered, at least once,
+  /** Every durable event of the mind, as `processEvent` is handed it: unordered, at least once,
    *  so each reaction is an append keyed by the event's path and offset. Return for an event the
    *  package does not handle: a hook that throws fails the whole worker's handling of that event,
-   *  which the platform retries, and one that throws on every event slows the project's own cases
+   *  which the platform retries, and one that throws on every event slows the mind's own cases
    *  to a trickle. */
   processEvent?(args: IterateConfigProcessEventArgs): Promise<void>;
 };
 
-/** Stateless config entrypoint, the default export of a project's config repo; its init handles
- *  `events.iterate.com/project/worker-updated` (core/configs/default/worker.ts). */
+/** Stateless config entrypoint, the default export of a mind's config repo; its init handles
+ *  `events.iterate.com/mind/worker-updated` (core/configs/default/worker.ts). */
 export abstract class IterateConfigEntrypoint<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
 > extends WorkerEntrypoint<Env> {
   /** At fetch entry: `const denied = this.auth.require(request); if (denied) return denied;`
-   *  `x-itx-principal` is on a request only when a project member (or the operator) sent it, safe
+   *  `x-itx-principal` is on a request only when a mind member (or the operator) sent it, safe
    *  to act on. A page for people who are not members asks with `this.auth.requirePerson(request)`
    *  and reads who they are with `this.auth.person(request)` (`x-itx-person`). A private route
    *  written by hand answers the platform's sign-in challenge, which the edge turns into the
@@ -378,7 +378,7 @@ export abstract class IterateConfigEntrypoint<
     return walkUnderCause(this, cause, steps, callerPath);
   }
 
-  /** `using itx = this.getItx()`: the project root's scope, released with every call made through
+  /** `using itx = this.getItx()`: the mind root's scope, released with every call made through
    *  it when the block ends (`FacetDurableObject.getItx` says why nothing is kept past it). A field,
    *  not a method: Workers RPC reaches an entrypoint's methods, and a caller must never get the
    *  scope (sdk/index.test.ts). Public, so a package the worker hosts (`Integration`) reaches it
@@ -386,7 +386,7 @@ export abstract class IterateConfigEntrypoint<
   readonly getItx = (): IterateContextApi & Disposable => itxScope(this.env.ITX);
 
   /** THE CONTEXT A METHOD WAS CALLED FROM, inside a method other than `fetch`: the context whose
-   *  code or session made the call, as the platform stamps it (core/os caller.ts `Caller.path`),
+   *  code or session made the call, as the platform stamps it (core/itx/src/caller.ts `Caller.path`),
    *  never an argument a caller chooses (packages/voice worker.ts says why it needs one). A field,
    *  as `getItx` is. */
   protected readonly callerPath = (): string => {
@@ -396,18 +396,18 @@ export abstract class IterateConfigEntrypoint<
     return path;
   };
 
-  /** THE AUTHOR HOOK: every durable event of every context of the project from its first
+  /** THE AUTHOR HOOK: every durable event of every context of the mind from its first
    *  publication on (what was committed while no config was published may be passed over), one per
    *  call, unordered and at least once; a throw fails that event alone, which the platform retries.
-   *  `itx` is the project's root, `itx.cd(event.path)` the event's own context. Make each reaction
+   *  `itx` is the mind's root, `itx.cd(event.path)` the event's own context. Make each reaction
    *  idempotent (an append keyed by `event.path` and `event.offset`) and keep no state here.
    *  Default: ignore it. */
   processEvent(_args: IterateConfigProcessEventArgs): void | Promise<void> {}
 
-  /** THE WEB ROOT — every Request on a host of the project that no fetch route takes (the platform
+  /** THE WEB ROOT — every Request on a host of the mind that no fetch route takes (the platform
    *  serves those first: `itx.fetchRoutes`). The host's routing slug is in `x-iterate-routing-slug`
-   *  (`notes` for `notes--<project>.<hostname>`; absent on the apex), written only by the platform:
-   *  route on it in plain code, answering here (reaching the project through `this.getItx()`) or
+   *  (`notes` for `notes--<mind>.<hostname>`; absent on the apex), written only by the platform:
+   *  route on it in plain code, answering here (reaching the mind through `this.getItx()`) or
    *  forwarding the Request. Default: not found. */
   override fetch(_request: Request): Response | Promise<Response> {
     return new Response("Not found\n", { status: 404 });

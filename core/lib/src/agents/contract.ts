@@ -21,7 +21,7 @@ const Actor = z.discriminatedUnion("type", [
 const Role = z.enum(["system", "developer", "user", "assistant"]);
 
 /** A file attached to a context item (an attachment record, minus its signed URL): the
- *  project file it was stored as (`itx.files`), its content type, original name and size. */
+ *  mind file it was stored as (`itx.files`), its content type, original name and size. */
 const FileAttachment = z.object({
   contentType: z.string().min(1),
   filename: z.string().min(1),
@@ -259,7 +259,7 @@ export const AgentContract = defineProcessorContract({
       .default([]),
     /** The ONE trigger the next request answers; null once a request has been recorded for it.
      *  `gate`: every input it stands for came from another agent, and these offsets wait for the
-     *  project's gate (`agent/input-gated`) before a request is recorded; absent, nothing waits. */
+     *  mind's gate (`agent/input-gated`) before a request is recorded; absent, nothing waits. */
     pendingLlmRequestTrigger: z
       .object({
         offset: z.number().int().positive(),
@@ -311,7 +311,7 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/created": {
       description:
-        "The birth certificate: on the agent's path, and cross-posted to / for the project catalog — hence it names the path.",
+        "The birth certificate: on the agent's path, and cross-posted to / for the mind catalog — hence it names the path.",
       payloadSchema: z.object({ path: z.string().min(1) }),
     },
     "events.iterate.com/agent/create-failed": {
@@ -325,7 +325,7 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/deleted": {
       description:
-        "The death certificate: on the agent's path, and cross-posted to / for the project catalog, which drops the entry and keeps the death — hence it names the path. Terminal: a deleted agent is not re-creatable, and its facet is never hosted again.",
+        "The death certificate: on the agent's path, and cross-posted to / for the mind catalog, which drops the entry and keeps the death — hence it names the path. Terminal: a deleted agent is not re-creatable, and its facet is never hosted again.",
       payloadSchema: z.object({ path: z.string().min(1) }),
     },
     "events.iterate.com/agent/configured": {
@@ -405,7 +405,7 @@ export const AgentContract = defineProcessorContract({
         /** Words that must be answered (a person's request): a turn that would end on a script
          *  returning nothing, before anything was said, is asked once more (`owedAnswer`). An input
          *  a schedule delivers is owed by default when the schedule was set by a script (a job an
-         *  agent scheduled), not by the project's code at `/`; `false` opts it out. */
+         *  agent scheduled), not by the mind's code at `/`; `false` opts it out. */
         answerOwed: z.boolean().optional(),
         llmRequestOffset: z.number().int().positive().optional(),
         /** A compaction summary (processor.ts `#compact`), on a developer item: it replaces every
@@ -510,7 +510,7 @@ export const AgentContract = defineProcessorContract({
             errorMessage: z.string(),
             partialText: z.string().optional(),
             /** The platform's loop guard refused the call: the model never heard it, and a retry
-             *  in this chain is refused too (core/os cause.ts). */
+             *  in this chain is refused too (core/itx/src/cause.ts). */
             loopLimit: z.literal(true).optional(),
           }),
           z.object({
@@ -585,7 +585,7 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/input-gated": {
       description:
-        "The project's gate (message.ts `AgentInputGate`, set by the config's agents.ts) on words another agent sent without `trigger: false`: `wake` lets the input at `inputOffset` start a turn; otherwise it stays context, read on the next turn. `decision` is the gate's record (the triage decision, its probability and reason). A decision for an input no longer waiting is a harmless fact.",
+        "The mind's gate (message.ts `AgentInputGate`, set by the config's agents.ts) on words another agent sent without `trigger: false`: `wake` lets the input at `inputOffset` start a turn; otherwise it stays context, read on the next turn. `decision` is the gate's record (the triage decision, its probability and reason). A decision for an input no longer waiting is a harmless fact.",
       payloadSchema: z.object({
         inputOffset: z.number().int().positive(),
         wake: z.boolean(),

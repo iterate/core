@@ -2,8 +2,8 @@ import { createHmac } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { StreamEvent } from "iterate/stream/processor";
 import { EmailContract } from "iterate/email";
-import { projectApiUrlOf } from "iterate/project-api";
-import { attempt, type Check, projectRoot } from "./lib.ts";
+import { mindApiUrlOf } from "iterate/mind-api";
+import { attempt, type Check, mindRoot } from "./lib.ts";
 
 const MCP_INSTRUCTION_ROOTS = [
   "whoami",
@@ -29,27 +29,24 @@ export async function integrationsChecks(domain: string): Promise<Check[]> {
         detail: "skipped: ITERATE_PROTOTYPE_TOKEN is not set",
       },
     ];
-  const root = () => projectRoot(domain, token);
+  const root = () => mindRoot(domain, token);
   const marker = crypto.randomUUID().slice(0, 8);
   const checks: Check[] = [];
 
   let sentAt = 0;
   checks.push(
-    await attempt(
-      "mail: itx.email.send to the project's own domain records email/sent",
-      async () => {
-        const sent = (await root().email.send({
-          to: `smoke-${marker}@${domain}`,
-          subject: `smoke ${marker}`,
-          text: `A smoke check's message, ${marker}.`,
-        })) as StreamEvent;
-        sentAt = sent.offset;
-        return {
-          pass: sent.type === "events.iterate.com/email/sent",
-          detail: `${sent.type} at ${sent.offset}`,
-        };
-      },
-    ),
+    await attempt("mail: itx.email.send to the mind's own domain records email/sent", async () => {
+      const sent = (await root().email.send({
+        to: `smoke-${marker}@${domain}`,
+        subject: `smoke ${marker}`,
+        text: `A smoke check's message, ${marker}.`,
+      })) as StreamEvent;
+      sentAt = sent.offset;
+      return {
+        pass: sent.type === "events.iterate.com/email/sent",
+        detail: `${sent.type} at ${sent.offset}`,
+      };
+    }),
   );
   let received: StreamEvent | undefined;
   let deadLetter: StreamEvent | undefined;
@@ -80,7 +77,7 @@ export async function integrationsChecks(domain: string): Promise<Check[]> {
           : parsed.error.message.slice(0, 300),
       };
     }),
-    await attempt("mail: the message as it arrived is a project file", async () => {
+    await attempt("mail: the message as it arrived is a mind file", async () => {
       const path = (received?.payload as { raw?: { path: string } } | undefined)?.raw?.path;
       if (!path) return { pass: false, detail: "no message came back" };
       const head = await root().files.get(path).head();
@@ -115,7 +112,7 @@ export async function integrationsChecks(domain: string): Promise<Check[]> {
 
   const name = `smoke-webhook-${marker}`;
   const material = crypto.randomUUID();
-  const webhookUrl = `${projectApiUrlOf(domain)}/webhooks/${name}`;
+  const webhookUrl = `${mindApiUrlOf(domain)}/webhooks/${name}`;
   const body = JSON.stringify({ smoke: marker });
   const post = (signature: string) =>
     fetch(webhookUrl, {

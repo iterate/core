@@ -1,23 +1,23 @@
-# Project configuration
+# Mind configuration
 
-This repository is the project's code. A commit to `main` publishes it: the platform loads
-`worker.ts`, the `main` in `package.json`, and every context of the project runs the new code.
+This repository is the mind's code. A commit to `main` publishes it: the platform loads
+`worker.ts`, the `main` in `package.json`, and every context of the mind runs the new code.
 
 `worker.ts` extends `IterateConfigEntrypoint` from `iterate/sdk`, which holds the hosts (a
 processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/stream/processor`):
 
-- `processEvent({ event, itx })` sees every durable event of every context of the project, one at
+- `processEvent({ event, itx })` sees every durable event of every context of the mind, one at
   a time, in no particular order and at least once, so each case must be idempotent. `itx` is the
-  project's root; `itx.cd(event.path)` is the event's own context. Keep no state in the worker:
-  read it from the project.
-  - The `events.iterate.com/project/worker-updated` case is the init hook. It runs after every
+  mind's root; `itx.cd(event.path)` is the event's own context. Keep no state in the worker:
+  read it from the mind.
+  - The `events.iterate.com/mind/worker-updated` case is the init hook. It runs after every
     published commit: it installs the agents app and creates the onboarding agent. It sets no
-    schedule, so an idle project sleeps; uncommenting the heartbeat there sets one that wakes it
+    schedule, so an idle mind sleeps; uncommenting the heartbeat there sets one that wakes it
     every five minutes.
-  - The `events.iterate.com/email/received` case hands each email a member sends to the project
+  - The `events.iterate.com/email/received` case hands each email a member sends to the mind
     to an agent of its own per thread, `/agents/email/t<thread>`, once the `email` facet has
     folded it into its thread; the agent replies with `itx.email.send({ inReplyToOffset })`. An
-    agent acts with the project root's full reach: every context, secret-backed call, repository
+    agent acts with the mind root's full reach: every context, secret-backed call, repository
     and the website. So only the platform's own record of a member's mail sent straight from their
     domain reaches one; a forward, a list's copy, a re-sent old message, an auto-reply or a bounce
     is ignored.
@@ -28,30 +28,30 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
     Cloud then relays that account's messages, each signed by the Cloud's key, and only an event
     with that signer reaches an agent. The agent answers through the Cloud with the `itx.fetch` its
     context shows; the vault signs that request, and the Cloud sends it as the bot only to an
-    account this project linked. Link a member's own account alone: whoever writes from a linked
-    account speaks to an agent with the project's reach.
-- `fetch` serves every host of the project. The `x-iterate-routing-slug` header names the host
+    account this mind linked. Link a member's own account alone: whoever writes from a linked
+    account speaks to an agent with the mind's reach.
+- `fetch` serves every host of the mind. The `x-iterate-routing-slug` header names the host
   (`blog` for `blog.<domain>`, absent on the apex), so `fetch` is a `switch` on it, one case for each
   host. The guard beside a case says who may come: none for a public site, `this.auth.require`
   for members, `this.auth.requirePerson` for anyone signed in. A request
   a fetch route takes never reaches it: the platform sends it to the route's target first
   (`iterate tunnel <port>` sets a route per tunnel; `itx.fetchRoutes.set` sets one by hand).
-- `integrations` lists the integration packages this project hosts (`Integration` from
+- `integrations` lists the integration packages this mind hosts (`Integration` from
   `iterate/sdk`: a Telegram bot, your own GitHub App, and more, one folder each in
   https://github.com/jonastemplestein/iterategrations, whose recipes add one). Each is one element,
   from its package (`telegram()`, `github()`). `fetch` hands a package the requests on its own
-  routing slug, and `processEvent` hands every package every event after the project's own cases:
-  a package's install hook is its `project/worker-updated` case, where it registers its card on
+  routing slug, and `processEvent` hands every package every event after the mind's own cases:
+  a package's install hook is its `mind/worker-updated` case, where it registers its card on
   `/integrations` for the Dash's Integrations page (`iterate/integrations`; writing a package of
   your own: https://github.com/jonastemplestein/iterategrations/blob/main/adding-an-integration.md). A hook returns for an
   event it does not handle: one that throws fails this event for the whole worker, which the
-  platform retries, and a hook that throws on every event slows the project's own cases to a
+  platform retries, and a hook that throws on every event slows the mind's own cases to a
   trickle. A package serves its
   own setup page and webhook on its host and keeps its credentials through `itx.secrets`; the
   Dash shows what it registered and links to its page.
 
 The agents' runtime is `iterate/agents`, which comes from the platform like the rest of
-`iterate/*`: the project runs the deployment's own build, and a platform deploy upgrades it.
+`iterate/*`: the mind runs the deployment's own build, and a platform deploy upgrades it.
 `apps/agents/backend.ts` re-exports its two classes and sets what a new agent pays with: a ChatGPT
 plan, else an OpenAI API key, else the deployment's AI Gateway credit. Every agent runs from that
 file's own bundle, so a commit that changes only `worker.ts` or the page leaves the agents running.
@@ -81,7 +81,7 @@ export default {
   kind: "grok",
   // the Agents app reads the agent's durable log, and these ephemeral types for its view
   ephemeralEvents: ["x.ai/grok/token"],
-  // its server half, an Integration's processEvent: every event of the project
+  // its server half, an Integration's processEvent: every event of the mind
   processEvent: async ({ event, itx }) => {
     if (event.type !== "events.iterate.com/agent/message-received") return;
     if (!event.path.startsWith("/agents/grok/")) return;
@@ -99,18 +99,18 @@ Every kind shares two things: the catalog row (kind, status, activity, title), a
 `itx.agents.get(path).message(…)`, which land on the agent's log as
 `events.iterate.com/agent/message-received`. Everything else is the kind's own: its events, its
 rows and its chat. `worker.ts` runs each kind's `processEvent` beside the integrations, and on every
-publish writes where each kind's file is to the project's KV (`agent-kinds`), where the Agents app
+publish writes where each kind's file is to the mind's KV (`agent-kinds`), where the Agents app
 finds it. The app runs `view` in a sandboxed frame with only that agent's log and verbs; there, a
 server-only import is a stand-in that throws if the view touches it. A kind whose agents run
 elsewhere (iterate's in the platform) needs no `processEvent`.
 
-`worker.ts` reaches the project through the `itx` that `processEvent` is handed, or through
+`worker.ts` reaches the mind through the `itx` that `processEvent` is handed, or through
 `using itx = this.getItx()`: when the block ends, the scope, every call made through it and every
 handle it awaited are released. Put it in the smallest block that holds its calls, await every
 call inside it, and hand data, not handles, out of it; an object that needs reach takes an
 accessor, `() => this.getItx()`. Never keep a value from `this.env.ITX.get()`, which nothing
-releases: a kept value keeps the project's context, and any facet holding it, resident after the
-project goes idle.
+releases: a kept value keeps the mind's context, and any facet holding it, resident after the
+mind goes idle.
 
 Files may be TypeScript or JavaScript and import each other by relative path. Import packages by
 name: `iterate/*` and `zod` come from the platform; list any other package in `package.json` and
@@ -193,7 +193,7 @@ apps/<name>/
   `index`. So a commit publishes the page with the worker, as one thing.
 - **The page loads packages from a URL**, pinned in its import map (the page below shows how).
 - **The member's `itx` in the page.** `host.auth.itx(request)`, answered from a path of the app's
-  choosing, makes that path a WebSocket to the project's `itx` for the member who is signed in on
+  choosing, makes that path a WebSocket to the mind's `itx` for the member who is signed in on
   that host: `newWebSocketRpcSession(new WebSocket("/itx"))`, a capnweb session
   (`apps/agents/public/app.js`). The platform decides who the caller is, never the page. What the
   page appends shows `source.via.appPage`, and the socket closes when the sign-in ends.
@@ -211,18 +211,18 @@ apps/<name>/
 ## Accounts through iterate Cloud
 
 When the stack's config names an iterate Cloud (`cloud: { origin }`), a member connects GitHub,
-Google (Gmail) or X through iterate's own app there. The project needs no OAuth client of its own.
+Google (Gmail) or X through iterate's own app there. The mind needs no OAuth client of its own.
 
 - `const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/github", { client: { cloud: "github" } })`,
   then give the member the link. They confirm on the Cloud's page, then approve at the provider, and
   the tokens land in the secret. `"google"` and `"x"` work the same way. For GitHub, name the
-  accounts whose repositories the project works with, `client: { cloud: "github", accounts:
-["acme"] }`: the project gets the events and the installation tokens of those alone, where the
+  accounts whose repositories the mind works with, `client: { cloud: "github", accounts:
+["acme"] }`: the mind gets the events and the installation tokens of those alone, where the
   member administers them, and none when it names none. `install: true` sends the member to the
   App's install page first, and connects the installation they choose there.
 - Use the account with a placeholder, never a token:
   `itx.fetch(new Request("https://api.github.com/user", { headers: { authorization: 'Bearer getSecret("/secrets/github", { field: "accessToken" })' } }))`.
-  The Cloud keeps the app's secret and adds it at each refresh. The tokens stay in this project's
+  The Cloud keeps the app's secret and adds it at each refresh. The tokens stay in this mind's
   vault.
 - GitHub's deliveries for an installation the member administers arrive as
   `events.iterate.com/github/webhook-received` on `/integrations/github/<installation id>`, signed
@@ -232,17 +232,17 @@ Google (Gmail) or X through iterate's own app there. The project needs no OAuth 
   `@iterate-com/github-sync/install`, after a connect that names the repository's account. From
   then on `worker.ts` keeps them in step (its `github/webhook-received` and
   `repo/commit-completed` case): a push to the repository's main is pulled, which publishes the
-  project, and a commit here is pushed. What moved, and what could not, is a
-  `config/github-mirrored` fact on the project's root. When the two histories have diverged nothing moves, until a member calls
-  `pull({ force: true })` (GitHub's wins) or `push({ force: true })` (the project's wins).
+  mind, and a commit here is pushed. What moved, and what could not, is a
+  `config/github-mirrored` fact on the mind's root. When the two histories have diverged nothing moves, until a member calls
+  `pull({ force: true })` (GitHub's wins) or `push({ force: true })` (the mind's wins).
 
 ## People who are not members
 
 Signing in says who someone is. Being a member is a separate list: a member reaches the whole
-project (its API, its MCP server, every context), and anyone else reaches only what `fetch` serves
+mind (its API, its MCP server, every context), and anyone else reaches only what `fetch` serves
 them. So a page can serve people who are not members, an app's end users.
 
-On every host of the project, the platform holds the browser session. `fetch` gets each request
+On every host of the mind, the platform holds the browser session. `fetch` gets each request
 stamped: `this.auth.person(request)` is `{ userId, email }` for anyone signed in, and a member is
 stamped as a principal too. Three guards, each `null` when the request may go on, else the answer
 to return:
@@ -295,7 +295,7 @@ path you build from their input stays under their own context.
 `@iterate-com/ui/live` reads a context live, as the person viewing: guard the route with
 `this.auth.require(request)`, and the page connects with the host's own session. A whole page and
 its route, to copy beside `worker.ts`:
-https://github.com/iterate/packages/blob/main/packages/ui/examples/project-host-page.ts.
+https://github.com/iterate/packages/blob/main/packages/ui/examples/mind-host-page.ts.
 
 ## How the platform works
 
@@ -304,7 +304,7 @@ guess how a capability behaves. List the files first:
 `https://data.jsdelivr.com/v1/packages/gh/iterate/core@main?structure=flat` (`files[].name`; the
 list can be hours behind). GitHub's own list,
 `https://api.github.com/repos/iterate/core/git/trees/main?recursive=1` (`tree[].path`), is exact, but
-GitHub allows 60 listings an hour to everyone behind one address, so from a project it often
+GitHub allows 60 listings an hour to everyone behind one address, so from a mind it often
 answers 403. Then read `core/AGENTS.md`, then the file you need:
 `https://raw.githubusercontent.com/iterate/core/main/<path>`. `main` can differ from the code this
-project runs: where they disagree, what a call answers is right.
+mind runs: where they disagree, what a call answers is right.

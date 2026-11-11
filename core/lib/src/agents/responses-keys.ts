@@ -1,5 +1,5 @@
 // responses-keys.ts — the agent's model call with a stack of credentials (`llm.apiKeys`,
-// contract.ts): API keys a project brings, and the deployment's AI Gateway (`AI_GATEWAY`).
+// contract.ts): API keys a mind brings, and the deployment's AI Gateway (`AI_GATEWAY`).
 //
 // A key is the text that follows `Bearer `: normally a `getSecret("/secrets/…")` placeholder, which
 // egress swaps for the secret's value on the way to api.openai.com, so no key is ever in this code.
@@ -220,7 +220,7 @@ type AgentSocket = {
  *  keys whose upgrade was refused, which go over HTTP alone until the time noted. The caller is the
  *  `send` it passes, one per incarnation of an agent's context (processor.ts `#send`). A WebSocket is
  *  its opener's alone in Workers, so a new incarnation starts with none rather than find the last
- *  one's dead, and two agents that share a path and a key in two projects never share a socket. */
+ *  one's dead, and two agents that share a path and a key in two minds never share a socket. */
 type CallerSockets = { open: Map<string, AgentSocket>; refusedUntil: Map<string, number> };
 const byCaller = new WeakMap<object, CallerSockets>();
 

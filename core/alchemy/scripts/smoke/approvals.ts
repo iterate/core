@@ -8,9 +8,9 @@ import {
   type Statement,
   statementText,
 } from "iterate/signed";
-import { platformOriginOf } from "iterate/project-api";
+import { platformOriginOf } from "iterate/mind-api";
 import { z } from "zod";
-import { attempt, projectRoot, type Check } from "./lib.ts";
+import { attempt, mindRoot, type Check } from "./lib.ts";
 
 const PATH = "/secrets/smoke-approval";
 const APPROVED = "events.iterate.com/secret/request-approved";
@@ -26,7 +26,7 @@ export async function approvalChecks(domain: string): Promise<Check[]> {
         "set ITERATE_PROTOTYPE_TOKEN, ITERATE_SMOKE_PETSHOP_ORIGIN, ITERATE_SMOKE_APPROVER_KEY and ITERATE_SMOKE_SERVICE_KEY",
       ),
     ];
-  const root = () => projectRoot(domain, token);
+  const root = () => mindRoot(domain, token);
   const member = await signerOf(domain, memberKey);
   const service = await signerOf(domain, serviceKey);
   const team = `TSMOKE${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
@@ -66,7 +66,7 @@ export async function approvalChecks(domain: string): Promise<Check[]> {
       payload: { rule: { methods: ["POST"], hosts: [new URL(origin).hostname] } },
     })
     .catch((error: unknown) => ({ error: String(error) }));
-  if (ruled.error === "the key is not one this project knows")
+  if (ruled.error === "the key is not one this mind knows")
     return [skipped(`the stack's auth.keys does not name the member's key ${member.key}`)];
   const first = `smoke ${crypto.randomUUID()}`;
   const second = `smoke ${crypto.randomUUID()}`;
@@ -182,7 +182,7 @@ export async function signerOf(domain: string, pkcs8: string) {
   const sign = (fields: Fields) => {
     const now = Date.now();
     const statement = statementText({
-      project: domain,
+      mind: domain,
       ...fields,
       at: now,
       expires: now + 300_000,

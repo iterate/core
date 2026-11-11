@@ -5,8 +5,8 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { build } from "esbuild";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
-import { addressOf, projectToken } from "iterate/node";
-import { projectProvideUrlOf } from "iterate/project-api";
+import { addressOf, mindToken } from "iterate/node";
+import { mindProvideUrlOf } from "iterate/mind-api";
 import { Log, LogLevel, Miniflare, Response } from "miniflare";
 import { serveRepos } from "./repos/server.ts";
 
@@ -22,12 +22,12 @@ const { values, positionals } = parseArgs({
     telemetry: { type: "boolean", default: false },
   },
 });
-if (!positionals[0]) throw new Error("Name the project's domain: node src/main.ts <domain>");
+if (!positionals[0]) throw new Error("Name the mind's domain: node src/main.ts <domain>");
 // the spelling `iterate login` stores its session under
 const domain = addressOf(positionals[0]);
 const dir = path.resolve(import.meta.dirname, "../.home-lab", domain);
 mkdirSync(dir, { recursive: true, mode: 0o700 });
-const projectDir = path.resolve(import.meta.dirname, "../../project");
+const mindDir = path.resolve(import.meta.dirname, "../../mind-worker");
 const repos = await serveRepos({
   dir: `${dir}/repos`,
   token: kept("repos-token"),
@@ -50,13 +50,13 @@ const mf = new Miniflare({
         manifest: moduleOf(await bundle(`${import.meta.dirname}/link/worker.ts`)),
         env: {
           DOMAIN: { type: "text", value: domain },
-          PROJECT: { type: "worker", worker: "project", exportName: "Project" },
+          MIND: { type: "worker", worker: "mind", exportName: "Mind" },
           LINK: { type: "durable-object", worker: "link", exportName: "Link" },
           TOKEN: {
             type: "fetcher",
             handler: async () =>
               new Response(
-                await projectToken({ address: domain, resource: projectProvideUrlOf(domain) }),
+                await mindToken({ address: domain, resource: mindProvideUrlOf(domain) }),
               ),
           },
         },
@@ -68,14 +68,14 @@ const mf = new Miniflare({
     },
     {
       config: {
-        name: "project",
+        name: "mind",
         compatibilityDate: COMPATIBILITY_DATE,
         // must match core/alchemy/src/stack.ts
         compatibilityFlags: ["nodejs_compat", "allow_irrevocable_stub_storage"],
         manifest: moduleOf(
-          values.bundle ? readFileSync(values.bundle, "utf8") : await projectBundle(),
+          values.bundle ? readFileSync(values.bundle, "utf8") : await mindBundle(),
         ),
-        env: projectBindings(),
+        env: mindBindings(),
         exports: {
           IterateContextDurableObject: { type: "durable-object", storage: "sqlite" },
           SandboxContainer: {
@@ -102,10 +102,10 @@ const link = (await (await mf.dispatchFetch("http://link.home-lab.invalid/")).js
   error: string | null;
 };
 console.log(`
-The project ${domain} runs on this machine, in local workerd.
+The mind ${domain} runs on this machine, in local workerd.
   ${local.href}                the apex, as https://${domain}/
   http://<label>.localhost:${values.port}/   https://<label>.${domain}/
-  http://iterate.localhost:${values.port}/api   the project's API, nobody stamped as the caller
+  http://iterate.localhost:${values.port}/api   the mind's API, nobody stamped as the caller
   state                          ${dir}
   ${link.connected ? `connected to https://iterate.${domain}/provide: the stack forwards to it` : `not connected to https://iterate.${domain}/provide (${link.error}); the link dials again`}
   repos                          ${dir}/repos, served at ${repos.origin}/<name>.git
@@ -125,25 +125,25 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
       }),
   );
 
-/** One per binding of core/project/src/env.ts. No Cloudflare credential is put on this machine. */
-function projectBindings() {
+/** One per binding of core/mind-worker/src/env.ts. No Cloudflare credential is put on this machine. */
+function mindBindings() {
   const standIn = (binding: string, why: string) =>
     ({ type: "worker", worker: "link", exportName: "StandIn", props: { binding, why } }) as const;
   return {
     DOMAIN: { type: "text", value: domain },
-    PROJECT_NAME: { type: "text", value: values.name || domain.split(".")[0] },
-    PROJECT_TEMPLATE: { type: "text", value: values.template },
+    MIND_NAME: { type: "text", value: values.name || domain.split(".")[0] },
+    MIND_TEMPLATE: { type: "text", value: values.template },
     DOOR: { type: "worker", worker: "link", exportName: "Door" },
     CONTEXTS: {
       type: "durable-object",
-      worker: "project",
+      worker: "mind",
       exportName: "IterateContextDurableObject",
     },
     CF_VERSION_METADATA: { type: "version-metadata" },
     LOADER: { type: "worker-loader" },
-    PROJECT_KV: { type: "kv" },
+    MIND_KV: { type: "kv" },
     FILES: { type: "r2" },
-    PROJECT_SIGNING_KEY: { type: "text", value: kept("project-signing-key") },
+    MIND_SIGNING_KEY: { type: "text", value: kept("mind-signing-key") },
     AI: standIn(
       "AI",
       "Workers AI has no local simulator. Give the agents a model key as a secret instead; it leaves through the door.",
@@ -156,12 +156,12 @@ function projectBindings() {
     },
     SANDBOX_CONTAINER: {
       type: "durable-object",
-      worker: "project",
+      worker: "mind",
       exportName: "SandboxContainer",
     },
     BROWSER: standIn("BROWSER", "Browser Run has no local simulator."),
     IMAGES: standIn("IMAGES", "Cloudflare Images is not simulated at home."),
-    // its presence also gives the project `itx.telemetry` (core/project src/context/telemetry.ts)
+    // its presence also gives the mind `itx.telemetry` (core/mind-worker src/context/telemetry.ts)
     ...(values.telemetry && {
       TELEMETRY_METRICS: { type: "worker", worker: "link", exportName: "HomeMetrics" } as const,
     }),
@@ -186,7 +186,7 @@ function sandboxEngine(): { socket: string; image: string } | { off: string } {
     };
   const host = docker(["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"]);
   const socket = host.status === 0 ? host.stdout.trim() : "unix:///var/run/docker.sock";
-  const folder = `${projectDir}/images/iterate-dev-image`;
+  const folder = `${mindDir}/images/iterate-dev-image`;
   const hash = createHash("sha256");
   for (const file of readdirSync(folder).sort())
     hash
@@ -204,10 +204,10 @@ function sandboxEngine(): { socket: string; image: string } | { off: string } {
   return { socket, image };
 }
 
-async function projectBundle() {
-  const built = spawnSync("node", ["scripts/build.ts"], { cwd: projectDir, stdio: "inherit" });
-  if (built.status !== 0) throw new Error("core/project's build failed");
-  return bundle(`${projectDir}/src/worker.ts`);
+async function mindBundle() {
+  const built = spawnSync("node", ["scripts/build.ts"], { cwd: mindDir, stdio: "inherit" });
+  if (built.status !== 0) throw new Error("core/mind-worker's build failed");
+  return bundle(`${mindDir}/src/worker.ts`);
 }
 
 async function bundle(entryPoint: string) {

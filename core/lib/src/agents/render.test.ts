@@ -34,7 +34,7 @@ const HEAD = {
   system: "You are an agent.",
   "AGENTS.md": "AGENTS.md (/repos/config), as it is now:\n\nBe kind.\nBe brief.",
   "capability-tree": "itx.kv — kv",
-  identity: 'CURRENT PROJECT: {"path":"/agents/a"}',
+  identity: 'CURRENT MIND: {"path":"/agents/a"}',
 };
 
 // A three-request script chain with an instruction change before the second request:
@@ -242,13 +242,13 @@ test("the capability tree renders sorted and without the config commit or public
     row("itx.kv", "kv"),
     row(
       "itx.config",
-      "the project's published config: /repos/config at 72de7b20aae9, publication 5326",
+      "the mind's published config: /repos/config at 72de7b20aae9, publication 5326",
     ),
   ] as never);
   const two = stableCapabilityTree([
     row(
       "itx.config",
-      "the project's published config: /repos/config at 1a2b3c4d5e6f, publication 5327",
+      "the mind's published config: /repos/config at 1a2b3c4d5e6f, publication 5327",
     ),
     row("itx.kv", "kv"),
   ] as never);

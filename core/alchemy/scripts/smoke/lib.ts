@@ -1,6 +1,6 @@
 import { newHttpBatchRpcSession } from "capnweb";
 import type { IterateContextApi } from "iterate/api";
-import { projectApiUrlOf } from "iterate/project-api";
+import { mindApiUrlOf } from "iterate/mind-api";
 
 export type Check = { check: string; pass: boolean; detail: string };
 
@@ -39,8 +39,8 @@ export async function attempt(
 }
 
 // A capnweb HTTP batch ends at its first await, so a read that must see a write is a second call.
-export function projectRoot(domain: string, token: string) {
-  const request = new Request(projectApiUrlOf(domain), {
+export function mindRoot(domain: string, token: string) {
+  const request = new Request(mindApiUrlOf(domain), {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
   });

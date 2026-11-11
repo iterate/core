@@ -1,7 +1,7 @@
 // config.ts — WHAT THE CLI KEEPS ON DISK, in its config directory (`$XDG_CONFIG_HOME/iterate`, else
-// `~/.config/iterate`): `config.json`, the profiles, each naming one project by its address
-// (iterate/project-api), the default profile and the folders mapped to one; and `sessions.json`,
-// the sign-ins, one per OAuth resource a token is for (a project's API, its `/provide`). Both are
+// `~/.config/iterate`): `config.json`, the profiles, each naming one mind by its address
+// (iterate/mind-api), the default profile and the folders mapped to one; and `sessions.json`,
+// the sign-ins, one per OAuth resource a token is for (a mind's API, its `/provide`). Both are
 // written mode 600 in a folder of mode 700. The Node client (../node.ts) reads and refreshes the
 // sessions.
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -16,13 +16,13 @@ const CONFIG_DIR = join(
 
 // A file of its own: `config.json` is the CLI's on `main`, whose profiles (a server URL and a
 // session each) this shape would drop on its first write.
-export const CONFIG_PATH = join(CONFIG_DIR, "projects.json");
+export const CONFIG_PATH = join(CONFIG_DIR, "minds.json");
 const SESSIONS_PATH = join(CONFIG_DIR, "sessions.json");
 /** The profile `iterate login` writes when none is named. */
 export const DEFAULT_CONFIG_NAME = "default";
 
-/** A named profile: the project it talks to, by address. */
-export const Config = z.object({ project: z.string().optional() });
+/** A named profile: the mind it talks to, by address. */
+export const Config = z.object({ mind: z.string().optional() });
 export type Config = z.infer<typeof Config>;
 
 /** The config file on disk. */
@@ -85,11 +85,11 @@ export function readConfig(name: string): Config | Error {
   return Config.parse(raw);
 }
 
-/** Point the profile `name` at `project`. */
-export function setConfigProject(name: string, project: string) {
+/** Point the profile `name` at `mind`. */
+export function setConfigMind(name: string, mind: string) {
   const configFile = readConfigFile();
   configFile.configs ||= {};
-  configFile.configs[name] = { ...configFile.configs[name], project };
+  configFile.configs[name] = { ...configFile.configs[name], mind };
   writeConfigFile(configFile);
 }
 

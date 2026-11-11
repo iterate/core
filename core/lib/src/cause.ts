@@ -1,14 +1,14 @@
 // cause.ts — the SDK's half of the loop guard, INTERNAL: no export names it and no signature takes
-// it (core/os src/cause.ts explains the guard). A host's `callWithCause` (every loaded entrypoint
+// it (core/itx/src/cause.ts explains the guard). A host's `callWithCause` (every loaded entrypoint
 // has one, sdk/loaded-worker.ts), and its `fetch` under a Request's mark, run their code under the
 // cause the platform handed them, and this carries that cause, unread, to every `getItx` scope
 // and, in a loaded isolate, every outbound `fetch`.
 // Any other code runs, in a loaded isolate, under the newest cause its isolate saw, and in the
-// platform's own, shared by every project, under none. Shared by name
+// platform's own, shared by every mind, under none. Shared by name
 // (`Symbol.for("iterate.cause")`), so every copy of the SDK in an isolate reaches the same one.
 
 // The SDK is typed against the Cloudflare types, never Node's: workerd hands this module to loaded
-// workers under `nodejs_als` alone (core/os context/worker-loader.ts), Node to the unit tests.
+// workers under `nodejs_als` alone (core/mind-worker/src/context/worker-loader.ts), Node to the unit tests.
 // @ts-ignore -- without Node's types the import has none; it is typed right below
 import { AsyncLocalStorage as NodeAsyncLocalStorage } from "node:async_hooks";
 import { ITERATE_CAUSE_HEADER, loopLimitOf } from "./lib.ts";

@@ -1,14 +1,13 @@
-import { loadProjectConfig, resourceNamesOf, stageOf } from "../src/config.ts";
+import { loadMindConfig, resourceNamesOf, stageOf } from "../src/config.ts";
 
 async function reposNamespace() {
-  const config = await loadProjectConfig(stageOf(process.argv));
+  const config = await loadMindConfig(stageOf(process.argv));
   const token = process.env.CLOUDFLARE_API_TOKEN;
   if (!token)
     throw new Error(
       "CLOUDFLARE_API_TOKEN is not set: the Artifacts namespace is made with it, as the deploy is",
     );
-  if (config.project?.provided)
-    return console.log("the project is provided: no Artifacts namespace");
+  if (config.mind?.provided) return console.log("the mind is provided: no Artifacts namespace");
   const { accountId } = config;
   const namespace = resourceNamesOf(config.name).repos;
   const api = `https://api.cloudflare.com/client/v4/accounts/${accountId}/artifacts/namespaces`;

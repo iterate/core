@@ -1,7 +1,7 @@
 // app-session.ts — WHAT AN APP'S GATE KEEPS for one browser (app-server.ts): one object per browser
-// and project, `<app origin>:<cookie id>:<address>`, holding that project's discovered issuer and the
+// and mind, `<app origin>:<cookie id>:<address>`, holding that mind's discovered issuer and the
 // browser's tokens there, and one small record per browser, `<app origin>:<cookie id>`, of the
-// projects it is connected to. Both are this one class, because each app's Worker binds one namespace
+// minds it is connected to. Both are this one class, because each app's Worker binds one namespace
 // (`BROWSER_SESSION`); an object only ever plays one of the two parts.
 import { DurableObject } from "cloudflare:workers";
 import * as oauth from "oauth4webapi";
@@ -9,21 +9,21 @@ import { z } from "zod";
 import {
   authorizationCodeRequest,
   authorizationServerOf,
-  type DiscoveredProject,
+  type DiscoveredMind,
 } from "./client/oauth.ts";
 import { isLocalOrigin } from "./lib.ts";
 import { fetchResendingNotRoutedYet } from "./platform-retry.ts";
 
-/** What a sign-in to one project starts from: the app's origin and branding, and the project as
- *  discovery found it. The scope is `iterate`, the one a project's issuer grants for its API. */
-export type ProjectSignIn = {
+/** What a sign-in to one mind starts from: the app's origin and branding, and the mind as
+ *  discovery found it. The scope is `iterate`, the one a mind's issuer grants for its API. */
+export type MindSignIn = {
   origin: string;
-  project: DiscoveredProject;
+  mind: DiscoveredMind;
   client?: { name: string; logoUri: string };
 };
 type Base = {
   origin: string;
-  project: DiscoveredProject;
+  mind: DiscoveredMind;
   clientId: string;
   next: string;
   until: number;
@@ -37,11 +37,11 @@ type Active = Base & {
 };
 type StoredSession = Pending | Active;
 
-/** A project the browser is connected to, as `/.auth/projects.json` answers it. */
-export type ConnectedProject = { address: string; lastUsedAt: number };
-/** The record: the connected projects, and the sign-ins still waiting at an issuer, by `state`. */
+/** A mind the browser is connected to, as `/.auth/minds.json` answers it. */
+export type ConnectedMind = { address: string; lastUsedAt: number };
+/** The record: the connected minds, and the sign-ins still waiting at an issuer, by `state`. */
 type StoredRecord = {
-  projects: ConnectedProject[];
+  minds: ConnectedMind[];
   pending: { state: string; address: string; until: number }[];
   until: number;
 };
@@ -56,14 +56,12 @@ export class BrowserSession extends DurableObject {
   /** The operation that runs last, settled either way: the next one starts after it. */
   #last: Promise<unknown> = Promise.resolve();
 
-  // ── the record: which projects this browser is connected to ──
+  // ── the record: which minds this browser is connected to ──
 
-  /** The connected projects, the last used first. */
-  async projects(): Promise<{ projects: ConnectedProject[]; lastUsed: string | null }> {
-    const projects = [...(await this.#record()).projects].sort(
-      (a, b) => b.lastUsedAt - a.lastUsedAt,
-    );
-    return { projects, lastUsed: projects[0]?.address ?? null };
+  /** The connected minds, the last used first. */
+  async minds(): Promise<{ minds: ConnectedMind[]; lastUsed: string | null }> {
+    const minds = [...(await this.#record()).minds].sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+    return { minds, lastUsed: minds[0]?.address ?? null };
   }
 
   /** A sign-in to `address` left for its issuer with `state`: the callback finds it by that. */
@@ -77,7 +75,7 @@ export class BrowserSession extends DurableObject {
     await this.#saveRecord(record);
   }
 
-  /** The project a pending sign-in is for, or null. */
+  /** The mind a pending sign-in is for, or null. */
   async addressOf(state: string): Promise<string | null> {
     const record = await this.#record();
     return (
@@ -91,27 +89,27 @@ export class BrowserSession extends DurableObject {
   async connected(address: string) {
     const record = await this.#record();
     record.pending = record.pending.filter((flow) => flow.address !== address);
-    record.projects = [
-      ...record.projects.filter((project) => project.address !== address),
+    record.minds = [
+      ...record.minds.filter((mind) => mind.address !== address),
       { address, lastUsedAt: Date.now() },
     ];
     await this.#saveRecord(record);
   }
 
-  /** `address` was used just now. A write at most once a minute per project, and none for a project
+  /** `address` was used just now. A write at most once a minute per mind, and none for a mind
    *  the browser is not connected to. */
   async touch(address: string) {
     const record = await this.#record();
-    const project = record.projects.find((item) => item.address === address);
-    if (!project || project.lastUsedAt > Date.now() - 60_000) return;
-    project.lastUsedAt = Date.now();
+    const mind = record.minds.find((item) => item.address === address);
+    if (!mind || mind.lastUsedAt > Date.now() - 60_000) return;
+    mind.lastUsedAt = Date.now();
     await this.#saveRecord(record);
   }
 
   /** The browser signed out of `address`: it is no longer connected. */
   async forget(address: string) {
     const record = await this.#record();
-    record.projects = record.projects.filter((project) => project.address !== address);
+    record.minds = record.minds.filter((mind) => mind.address !== address);
     record.pending = record.pending.filter((flow) => flow.address !== address);
     await this.#saveRecord(record);
   }
@@ -119,7 +117,7 @@ export class BrowserSession extends DurableObject {
   async #record(): Promise<StoredRecord> {
     return (
       (await this.ctx.storage.get<StoredRecord>("record")) || {
-        projects: [],
+        minds: [],
         pending: [],
         until: 0,
       }
@@ -133,22 +131,22 @@ export class BrowserSession extends DurableObject {
     await this.ctx.storage.setAlarm(record.until);
   }
 
-  // ── a session: one project's sign-in ──
+  // ── a session: one mind's sign-in ──
 
-  /** Start the OAuth code flow with PKCE at the project's issuer, for the project's API as the
-   *  resource (RFC 8707). Whatever this object held for the project before is replaced. Answers the
+  /** Start the OAuth code flow with PKCE at the mind's issuer, for the mind's API as the
+   *  resource (RFC 8707). Whatever this object held for the mind before is replaced. Answers the
    *  authorization URL and the flow's `state`. */
-  begin(signIn: ProjectSignIn, next: string) {
+  begin(signIn: MindSignIn, next: string) {
     return this.#serial(async () => {
-      const { origin, project, client } = signIn;
+      const { origin, mind, client } = signIn;
       const local = isLocalOrigin(origin);
       if (new URL(origin).protocol !== "https:" && !local)
         throw new Error("Browser login requires HTTPS");
       let clientId = `${origin}/.auth/client.json`;
       // An issuer cannot fetch a local app's client metadata document: the local app registers
       // (RFC 7591) where the issuer allows it.
-      if (local && project.endpoints.registration) {
-        const response = await fetch(project.endpoints.registration, {
+      if (local && mind.endpoints.registration) {
+        const response = await fetch(mind.endpoints.registration, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -168,15 +166,15 @@ export class BrowserSession extends DurableObject {
           .parse(await response.json()).client_id;
       }
       const { url, state, verifier } = await authorizationCodeRequest({
-        issuer: project.issuer,
-        authorizationEndpoint: project.endpoints.authorization,
+        issuer: mind.issuer,
+        authorizationEndpoint: mind.endpoints.authorization,
         clientId,
         redirectUri: `${origin}/.auth/callback`,
-        resources: [project.resource],
+        resources: [mind.resource],
       });
       const data: Pending = {
         origin,
-        project,
+        mind,
         next,
         clientId,
         phase: "pending",
@@ -199,9 +197,9 @@ export class BrowserSession extends DurableObject {
       const data = await this.ctx.storage.get<StoredSession>("session");
       if (!data || data.phase !== "pending" || data.until <= Date.now())
         return {
-          error: "This sign-in expired or does not match this browser. Connect the project again.",
+          error: "This sign-in expired or does not match this browser. Connect the mind again.",
         };
-      const as = authorizationServerOf(data.project);
+      const as = authorizationServerOf(data.mind);
       const client: oauth.Client = { client_id: data.clientId };
       let callback: URLSearchParams;
       try {
@@ -219,7 +217,7 @@ export class BrowserSession extends DurableObject {
           return { error: "Authorization was declined." };
         }
         return {
-          error: "This sign-in expired or does not match this browser. Connect the project again.",
+          error: "This sign-in expired or does not match this browser. Connect the mind again.",
         };
       }
       const started = Date.now();
@@ -237,14 +235,14 @@ export class BrowserSession extends DurableObject {
         tokens = await oauth.processAuthorizationCodeResponse(as, client, response);
       } catch (error) {
         await this.#endOnDeadGrant(error);
-        return { error: "Sign-in could not complete. Connect the project again." };
+        return { error: "Sign-in could not complete. Connect the mind again." };
       }
       await this.#activate(data, tokens, started);
       return { next: data.next };
     });
   }
 
-  /** A live access token for the project's API, refreshed when it is about to expire; null when
+  /** A live access token for the mind's API, refreshed when it is about to expire; null when
    *  there is no live session. */
   bearer() {
     return this.#serial(() => this.#bearer());
@@ -261,8 +259,8 @@ export class BrowserSession extends DurableObject {
   end() {
     return this.#serial(async () => {
       const data = await this.ctx.storage.get<StoredSession>("session");
-      if (data?.phase === "active" && data.project.endpoints.revocation) {
-        const as = authorizationServerOf(data.project);
+      if (data?.phase === "active" && data.mind.endpoints.revocation) {
+        const as = authorizationServerOf(data.mind);
         const client: oauth.Client = { client_id: data.clientId };
         const response = await oauth.revocationRequest(
           as,
@@ -303,7 +301,7 @@ export class BrowserSession extends DurableObject {
       return null;
     }
     if (data.expiresAt > Date.now() + 30_000) return data.accessToken;
-    const as = authorizationServerOf(data.project);
+    const as = authorizationServerOf(data.mind);
     const client: oauth.Client = { client_id: data.clientId };
     const started = Date.now();
     let tokens: oauth.TokenEndpointResponse;
@@ -327,11 +325,11 @@ export class BrowserSession extends DurableObject {
    *  request Cloudflare answered itself sent again (an issuer's brand-new workers.dev hostname that
    *  the server reached does not route yet), and — only for a LOCAL APP (`begin` already admits
    *  http there) — oauth4webapi's opt-out of its HTTPS-only default. Keyed on the app's origin,
-   *  never the issuer's: a project a person typed can not talk a deployed app into sending its
+   *  never the issuer's: a mind a person typed can not talk a deployed app into sending its
    *  codes in the clear. */
   #tokenOptions(data: StoredSession): oauth.TokenEndpointRequestOptions {
     const options: oauth.TokenEndpointRequestOptions = {
-      additionalParameters: { resource: data.project.resource },
+      additionalParameters: { resource: data.mind.resource },
       signal: AbortSignal.timeout(10_000),
       [oauth.customFetch]: fetchResendingNotRoutedYet({
         area: "app-session",
@@ -352,10 +350,10 @@ export class BrowserSession extends DurableObject {
     const refreshToken =
       tokens.refresh_token || (data.phase === "active" ? data.refreshToken : undefined);
     if (!refreshToken) throw new Error("The sign-in provider returned no refresh token.");
-    const { origin, project, clientId, next } = data;
+    const { origin, mind, clientId, next } = data;
     const stored: Active = {
       origin,
-      project,
+      mind,
       clientId,
       next,
       phase: "active",

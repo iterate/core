@@ -1,4 +1,4 @@
-// home.js — the project's home page in this app: a box whose first message starts a new agent, and
+// home.js — the mind's home page in this app: a box whose first message starts a new agent, and
 // the agents that were active most recently, each opening its chat.
 import { html, useMemo, useRef, useState } from "@iterate-com/ui/page";
 import { Button } from "@iterate-com/ui/components/ui/button";

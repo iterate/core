@@ -7,7 +7,7 @@ export function ancestorPathsOf(path: string): string[] {
 }
 
 // A context's Durable Object name IS its canonical path. Each hosting Worker binds its own
-// namespace of the class, so a name says nothing about a project: the namespace is the isolation.
+// namespace of the class, so a name says nothing about a mind: the namespace is the isolation.
 export type DurableObjectAddress = { path: string; name: string };
 
 export const DurableObjectNameCodec = {

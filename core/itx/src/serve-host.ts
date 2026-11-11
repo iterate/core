@@ -1,6 +1,6 @@
 import { errorCode } from "iterate/lib";
 import { stampedExpiryOf } from "iterate/principal";
-import { ITERATE_SERVE_HEADER } from "iterate/project-ingress";
+import { ITERATE_SERVE_HEADER } from "iterate/mind-ingress";
 import type { Caller } from "./caller.ts";
 import { FETCH_UPGRADE_RESUMABLE_HEADER, spliceEyeballAnswer } from "./context/fetch-upgrade.ts";
 import { implicitRootsAt, resolveItxExpression } from "./context/itx-expression-rewriting.ts";
@@ -67,18 +67,18 @@ export async function serveHostRequest(args: {
           JSON.stringify(route.target),
         ),
       );
-    // A snapshot read does not bear the root, so one log read does: its birth events start the project.
+    // A snapshot read does not bear the root, so one log read does: its birth events start the mind.
     if (!routing.ingressTarget) {
       ctx.waitUntil(reach.contextOf("/").read(0, 1));
       if (unserved) return unserved("no-ingress");
       return new Response(
-        "This project has no site yet: its config worker's fetch serves this page once the project defines one\n",
+        "This mind has no site yet: its config worker's fetch serves this page once the mind defines one\n",
         { status: 404 },
       );
     }
     label = JSON.stringify(routing.ingressTarget);
     const ingress = itxExpressionEndingInFetch(routing.ingressTarget);
-    // Refused here, so an unpublished project costs the root no call per request.
+    // Refused here, so an unpublished mind costs the root no call per request.
     resolveItxExpression(() => rules, ingress, implicitRootsAt("/"));
     const answer = await resolverUnder(caller).invoke(ingress, request);
     if (
@@ -131,9 +131,9 @@ const withoutServeHeader =
 // A MEMBER'S OWN ITX, FOR THE PAGE THEY ARE ON (iterate/sdk `auth.itx`). The config worker's answer
 // asked for it; it named no caller and handed over no Request. The caller is the one the boundary
 // stamped on the Request this invocation was given, so nothing user code built or altered is read.
-// A principal on a project host is a member (the boundary stamps no other). The session is the
+// A principal on a mind host is a member (the boundary stamps no other). The session is the
 // host's own: a WebSocket upgrade from that origin, ended when the stamp ends, and marked, so what
-// the page appends says it came through a page of the project's code.
+// the page appends says it came through a page of the mind's code.
 async function itxSession(args: {
   ctx: ExecutionContext;
   request: Request;

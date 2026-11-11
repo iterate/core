@@ -1,22 +1,22 @@
 // app-server.ts — THE BROWSER-AUTH GATE every app Worker runs first: the OAuth client (one CIMD
 // client id per app origin, PKCE, the `__Host-` cookie), the `/api` proxy, and the gate's own JSON.
-// An app is hosted apart from any project (tasks/project-stack.md, "Headless Workers"). A person
-// points it at a project by the project's address (project-api.ts), and may be connected to several
-// at once: one cookie per browser, and behind it one `BrowserSession` per project, each with its own
-// issuer, found by discovery (`discoverProject`), and its own tokens (app-session.ts).
+// An app is hosted apart from any mind (tasks/mind-stack.md, "Headless Workers"). A person
+// points it at a mind by the mind's address (mind-api.ts), and may be connected to several
+// at once: one cookie per browser, and behind it one `BrowserSession` per mind, each with its own
+// issuer, found by discovery (`discoverMind`), and its own tokens (app-session.ts).
 //
-// Connecting is deliberate: a browser is bound to a project only by a same-origin POST to
+// Connecting is deliberate: a browser is bound to a mind only by a same-origin POST to
 // `/.auth/connect`, from the app's connect page where the person typed the address — never by a
-// link alone, because a link would be a forced login: it could bind a browser to a project of the
-// linker's choosing, and the app would then show that project's world as the person's. A link may
-// only sign the browser in again to a project it is already connected to (`/.auth/login`).
+// link alone, because a link would be a forced login: it could bind a browser to a mind of the
+// linker's choosing, and the app would then show that mind's world as the person's. A link may
+// only sign the browser in again to a mind it is already connected to (`/.auth/login`).
 import type { BrowserSession } from "./app-session.ts";
-import { type DiscoveredProject, discoverProject, resolveProject } from "./client/oauth.ts";
+import { type DiscoveredMind, discoverMind, resolveMind } from "./client/oauth.ts";
 import { cookieValueOf, isLocalOrigin, isSameOriginBrowserRequest, sameOriginPath } from "./lib.ts";
-import { projectAddressCandidatesOf, projectAddressOf, projectApiUrlOf } from "./project-api.ts";
+import { mindAddressCandidatesOf, mindAddressOf, mindApiUrlOf } from "./mind-api.ts";
 
-/** The app's page where a person types a project's address (packages/ui `ConnectProject`). The
- *  gate sends a browser there for a project it is not connected to. */
+/** The app's page where a person types a mind's address (packages/ui `ConnectMind`). The
+ *  gate sends a browser there for a mind it is not connected to. */
 export const CONNECT_PAGE_PATH = "/connect";
 
 /** The port separates local apps sharing localhost's cookie jar. */
@@ -34,17 +34,17 @@ function cookieIdOf(request: Request): string | null {
 
 /** The address a query parameter names, as typed or linked: null when it names none, else the
  *  host and whether it is spelled exactly so. */
-function addressParamOf(url: URL, name = "project"): { address: string; exact: boolean } | null {
+function addressParamOf(url: URL, name = "mind"): { address: string; exact: boolean } | null {
   const value = url.searchParams.get(name);
   if (!value) return null;
-  const parsed = projectAddressOf(value);
+  const parsed = mindAddressOf(value);
   return "address" in parsed ? { address: parsed.address, exact: parsed.address === value } : null;
 }
 
-/** `next` with a `/projects/<segment>` that names `address` another way spelled as `address`, so
- *  a project has one URL in the app. */
+/** `next` with a `/minds/<segment>` that names `address` another way spelled as `address`, so
+ *  a mind has one URL in the app. */
 function nextFor(next: string, address: string) {
-  const match = /^\/projects\/([^/?#]+)(.*)$/s.exec(next);
+  const match = /^\/minds\/([^/?#]+)(.*)$/s.exec(next);
   if (!match) return next;
   let segment: string;
   try {
@@ -52,9 +52,9 @@ function nextFor(next: string, address: string) {
   } catch {
     return next;
   }
-  const parsed = projectAddressOf(segment);
-  return "address" in parsed && projectAddressCandidatesOf(parsed.address).includes(address)
-    ? `/projects/${address}${match[2]}`
+  const parsed = mindAddressOf(segment);
+  return "address" in parsed && mindAddressCandidatesOf(parsed.address).includes(address)
+    ? `/minds/${address}${match[2]}`
     : next;
 }
 
@@ -78,36 +78,35 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     logoUri: new URL(config.client.logoUri, url.origin).href,
   };
   const id = cookieIdOf(request);
-  /** The browser's record of its projects. */
+  /** The browser's record of its minds. */
   const record = (cookieId: string) => sessions.getByName(`${url.origin}:${cookieId}`);
-  /** The browser's session for one project. */
+  /** The browser's session for one mind. */
   const sessionOf = (cookieId: string, address: string) =>
     sessions.getByName(`${url.origin}:${cookieId}:${address}`);
 
   /** Start a sign-in to `address`: discovery, then the code flow at the issuer it found. A browser
    *  already signed in there goes on to `next`. The cookie is written again with each start, so
    *  its thirty days run from the last sign-in. */
-  const discover = (address: string) =>
-    discoverProject(address, { local: isLocalOrigin(url.origin) });
+  const discover = (address: string) => discoverMind(address, { local: isLocalOrigin(url.origin) });
   const signIn = async (
     address: string,
     next: string,
-    discovered?: DiscoveredProject,
+    discovered?: DiscoveredMind,
   ): Promise<{ location: string; setCookie: string } | { error: string }> => {
     const cookieId = id || crypto.randomUUID();
     const setCookie = `${sessionCookieName(url)}=${cookieId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
     if (id && (await sessionOf(id, address).bearer())) return { location: next, setCookie };
-    const project = discovered || (await discover(address));
-    if ("error" in project) return project;
+    const mind = discovered || (await discover(address));
+    if ("error" in mind) return mind;
     const { url: location, state } = await sessionOf(cookieId, address).begin(
-      { origin: url.origin, project, client },
+      { origin: url.origin, mind, client },
       next,
     );
     await record(cookieId).expect(state, address);
     return { location, setCookie };
   };
   const connectPage = (address: string, next: string) =>
-    `${CONNECT_PAGE_PATH}?${new URLSearchParams({ project: address, next })}`;
+    `${CONNECT_PAGE_PATH}?${new URLSearchParams({ mind: address, next })}`;
 
   if (url.pathname === "/.auth/client.json")
     return Response.json(
@@ -124,13 +123,13 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       { headers: { "Cache-Control": "public, max-age=300" } },
     );
 
-  if (url.pathname === "/.auth/projects.json") {
-    // the projects this browser is connected to, by address: for the app's own pages alone
+  if (url.pathname === "/.auth/minds.json") {
+    // the minds this browser is connected to, by address: for the app's own pages alone
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
     const site = request.headers.get("sec-fetch-site");
     if ((site && site !== "same-origin") || !isSameOriginBrowserRequest(request))
       return new Response("Cross-site request refused", { status: 403 });
-    const answer = id ? await record(id).projects() : { projects: [], lastUsed: null };
+    const answer = id ? await record(id).minds() : { minds: [], lastUsed: null };
     return Response.json(answer, { headers: noStore });
   }
 
@@ -141,16 +140,16 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     if (!isSameOriginBrowserRequest(request) || !request.headers.get("origin"))
       return new Response("Cross-site request refused", { status: 403 });
     const form = await request.formData();
-    const typed = projectAddressOf(String(form.get("project") ?? ""));
+    const typed = mindAddressOf(String(form.get("mind") ?? ""));
     if ("error" in typed) return Response.json(typed, { status: 400, headers: noStore });
-    const project = await resolveProject(typed.address, discover);
-    if ("error" in project) return Response.json(project, { status: 400, headers: noStore });
-    const { address } = project;
+    const mind = await resolveMind(typed.address, discover);
+    if ("error" in mind) return Response.json(mind, { status: 400, headers: noStore });
+    const { address } = mind;
     const next = nextFor(
-      sameOriginPath(String(form.get("next") || `/projects/${address}`), url.origin),
+      sameOriginPath(String(form.get("next") || `/minds/${address}`), url.origin),
       address,
     );
-    const started = await signIn(address, next, project);
+    const started = await signIn(address, next, mind);
     if ("error" in started) return Response.json(started, { status: 400, headers: noStore });
     return Response.json(
       { location: started.location },
@@ -159,15 +158,15 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
   }
 
   if (url.pathname === "/.auth/login") {
-    // Sign in again to a project this browser is connected to: a link may do that. A project it is
+    // Sign in again to a mind this browser is connected to: a link may do that. A mind it is
     // not connected to goes to the connect page, which asks.
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
     const linked = sameOriginPath(url.searchParams.get("next") || "/", url.origin);
     const typed = addressParamOf(url);
     if (!typed) return redirect(CONNECT_PAGE_PATH);
-    // a project this browser is connected to under any name the link may mean
-    const connected = id ? (await record(id).projects()).projects.map((p) => p.address) : [];
-    const address = projectAddressCandidatesOf(typed.address).find((candidate) =>
+    // a mind this browser is connected to under any name the link may mean
+    const connected = id ? (await record(id).minds()).minds.map((p) => p.address) : [];
+    const address = mindAddressCandidatesOf(typed.address).find((candidate) =>
       connected.includes(candidate),
     );
     if (!address) return redirect(connectPage(typed.address, linked));
@@ -190,7 +189,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       return new Response(
         result && "error" in result
           ? result.error
-          : "This sign-in expired or does not match this browser. Connect the project again.",
+          : "This sign-in expired or does not match this browser. Connect the mind again.",
         { status: 400, headers: { ...noStore, "Referrer-Policy": "no-referrer" } },
       );
     await record(id).connected(address);
@@ -198,18 +197,18 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
   }
 
   if (url.pathname === "/.auth/logout") {
-    // Sign out of one project: its session ends at the issuer when the issuer can revoke, and the
-    // browser is no longer connected to it. Other projects stay signed in.
+    // Sign out of one mind: its session ends at the issuer when the issuer can revoke, and the
+    // browser is no longer connected to it. Other minds stay signed in.
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
     if (!isSameOriginBrowserRequest(request))
       return new Response("Cross-site request refused", { status: 403 });
     const address = addressParamOf(url)?.address;
-    if (!address) return new Response("Name the project to sign out of", { status: 400 });
+    if (!address) return new Response("Name the mind to sign out of", { status: 400 });
     if (id) {
       try {
         await sessionOf(id, address).end();
       } catch {
-        console.error("oauth.app_logout_failed", { origin: url.origin, project: address });
+        console.error("oauth.app_logout_failed", { origin: url.origin, mind: address });
         return new Response(
           "Sign-out could not complete. Your session is still present; go back and try again.",
           { status: 503 },
@@ -221,14 +220,14 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
   }
 
   if (url.pathname === "/api") {
-    // The page's capnweb connection to one project, a WebSocket or an HTTP batch, with the bearer
+    // The page's capnweb connection to one mind, a WebSocket or an HTTP batch, with the bearer
     // of this browser's session there. THE COOKIE'S AUTHORITY IS SAME-ORIGIN ONLY (CSRF): a request
     // from another origin, or with no Origin at all, gets the 401 a browser with no session gets.
     const named = addressParamOf(url);
-    if (!named) return new Response("Name the project: /api?project=<address>", { status: 400 });
+    if (!named) return new Response("Name the mind: /api?mind=<address>", { status: 400 });
     const { address } = named;
     // another spelling gets no session: the page signs in again, and the gate sends it to the
-    // project's one URL (`nextFor`)
+    // mind's one URL (`nextFor`)
     const session =
       named.exact && id && request.headers.get("origin") === url.origin
         ? sessionOf(id, address)
@@ -241,10 +240,10 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     // The same-origin gate above already ran. Provider CORS reconstruction loses 101.
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket") headers.delete("origin");
     headers.set("authorization", `Bearer ${bearer}`);
-    // where the credential goes is the project's API, by the address its session is named for
+    // where the credential goes is the mind's API, by the address its session is named for
     const [response] = await Promise.all([
-      fetch(new Request(projectApiUrlOf(address), new Request(request, { headers }))),
-      // the last used project is where the app's home goes (`/.auth/projects.json`); best effort
+      fetch(new Request(mindApiUrlOf(address), new Request(request, { headers }))),
+      // the last used mind is where the app's home goes (`/.auth/minds.json`); best effort
       record(id)
         .touch(address)
         .catch(() => {}),

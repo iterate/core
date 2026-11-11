@@ -2,10 +2,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { AuthSettings } from "core-auth/config";
+import { AuthSettings } from "core-auth-worker/config";
 import { z } from "zod";
 
-export const ProjectConfig = z
+export const MindConfig = z
   .strictObject({
     name: z
       .string()
@@ -18,8 +18,8 @@ export const ProjectConfig = z
     // `platform`: `iterate.<domain>` alone, for a zone that serves other things. Absent: the apex, every
     // name under it, and the zone's mail.
     hostnames: z.enum(["all", "platform"]).optional(),
-    // `{ provided: true }`: a project that runs elsewhere (core/home-lab) and dials `/provide`.
-    project: z
+    // `{ provided: true }`: a mind that runs elsewhere (core/home-lab) and dials `/provide`.
+    mind: z
       .strictObject({
         provided: z.literal(true).optional(),
         name: z.string().min(1).optional(),
@@ -29,7 +29,7 @@ export const ProjectConfig = z
       })
       .refine(
         ({ provided, ...worker }) => !provided || Object.keys(worker).length === 0,
-        "a provided project has no Worker here: give { provided: true } alone",
+        "a provided mind has no Worker here: give { provided: true } alone",
       )
       .optional(),
     auth: AuthSettings,
@@ -58,7 +58,7 @@ export const ProjectConfig = z
     },
   );
 
-export type ProjectConfig = z.infer<typeof ProjectConfig>;
+export type MindConfig = z.infer<typeof MindConfig>;
 
 // The config is stored in the state store, which every holder of the state token reads: a field joins
 // this list only once it is shown to be no secret. An array's items are `[]`.
@@ -67,10 +67,10 @@ const PUBLIC_FIELDS = new Set([
   "accountId",
   "domain",
   "hostnames",
-  "project.provided",
-  "project.name",
-  "project.template",
-  "project.sandboxImage",
+  "mind.provided",
+  "mind.name",
+  "mind.template",
+  "mind.sandboxImage",
   "auth.login.methods.iterate.issuer",
   "auth.login.methods.email",
   "auth.login.methods.email.anyone",
@@ -100,41 +100,41 @@ function unlistedFields(value: unknown, path = ""): string[] {
   return PUBLIC_FIELDS.has(path) ? [] : [path];
 }
 
-function parseProjectConfig(value: unknown, source: string): ProjectConfig {
-  const parsed = ProjectConfig.safeParse(value);
+function parseMindConfig(value: unknown, source: string): MindConfig {
+  const parsed = MindConfig.safeParse(value);
   if (parsed.success) {
     const unlisted = unlistedFields(parsed.data);
     if (unlisted.length > 0)
       throw new Error(
-        `The project config ${source} has fields not shown to be public, which the stored config may not hold: ${unlisted.join(", ")} (src/config.ts PUBLIC_FIELDS)`,
+        `The mind config ${source} has fields not shown to be public, which the stored config may not hold: ${unlisted.join(", ")} (src/config.ts PUBLIC_FIELDS)`,
       );
     return parsed.data;
   }
   throw new Error(
-    `The project config ${source} is invalid: ${parsed.error.issues.map(({ path, message }) => (path.length > 0 ? `${path.join(".")}: ${message}` : message)).join("; ")}`,
+    `The mind config ${source} is invalid: ${parsed.error.issues.map(({ path, message }) => (path.length > 0 ? `${path.join(".")}: ${message}` : message)).join("; ")}`,
   );
 }
 
 // A file named but missing is an error, never a fall back to the stored config.
-export async function loadProjectConfig(stage: string | undefined): Promise<ProjectConfig> {
-  const named = process.env.ITERATE_PROJECT_CONFIG;
-  const path = resolve(named || `${import.meta.dirname}/../project.config.local.ts`);
+export async function loadMindConfig(stage: string | undefined): Promise<MindConfig> {
+  const named = process.env.ITERATE_MIND_CONFIG;
+  const path = resolve(named || `${import.meta.dirname}/../mind.config.local.ts`);
   if (existsSync(path))
-    return parseProjectConfig(
+    return parseMindConfig(
       path.endsWith(".json")
         ? JSON.parse(readFileSync(path, "utf8"))
         : (await import(pathToFileURL(path).href)).default,
       `at ${path}`,
     );
-  if (named) throw new Error(`ITERATE_PROJECT_CONFIG names ${path}, and there is no such file`);
+  if (named) throw new Error(`ITERATE_MIND_CONFIG names ${path}, and there is no such file`);
   if (!stage)
     throw new Error(
-      `No project config at ${path}, and no --stage <name> to read a stored one by. Copy project.config.example.ts to project.config.local.ts, or name a config file in ITERATE_PROJECT_CONFIG.`,
+      `No mind config at ${path}, and no --stage <name> to read a stored one by. Copy mind.config.example.ts to mind.config.local.ts, or name a config file in ITERATE_MIND_CONFIG.`,
     );
-  return storedProjectConfig(stage);
+  return storedMindConfig(stage);
 }
 
-export function storedProjectConfig(name: string): ProjectConfig {
+export function storedMindConfig(name: string): MindConfig {
   const local = process.env.ITERATE_STATE_STORE === "local";
   const store = local ? "the local state (.alchemy/)" : resourceNamesOf(name).state;
   const read = spawnSync(
@@ -143,7 +143,7 @@ export function storedProjectConfig(name: string): ProjectConfig {
       `${import.meta.dirname}/../node_modules/alchemy/bin/cli.js`,
       "state",
       "read",
-      `project/${name}/output`,
+      `mind/${name}/output`,
       ...(local ? ["--backend", "local"] : ["--backend", "cloudflare", "--name", store]),
     ],
     // `CI` makes a missing store an error: outside CI, Alchemy would deploy one to read from.
@@ -165,9 +165,9 @@ export function storedProjectConfig(name: string): ProjectConfig {
   } | null;
   if (!output?.config)
     throw new Error(
-      `No config is stored for the stack ${name} in ${store}: deploy it once with a config file (ITERATE_PROJECT_CONFIG=<file>)`,
+      `No config is stored for the stack ${name} in ${store}: deploy it once with a config file (ITERATE_MIND_CONFIG=<file>)`,
     );
-  return parseProjectConfig(output.config, `stored for the stack ${name}`);
+  return parseMindConfig(output.config, `stored for the stack ${name}`);
 }
 
 export function stageOf(argv: readonly string[]): string | undefined {
@@ -179,14 +179,12 @@ export function stageOf(argv: readonly string[]): string | undefined {
 export const resourceNamesOf = (name: string) => {
   const prefix = `iterate-${name}`;
   return {
-    // Held under the name from before the boundary: a Worker of a new name cannot take routes another
-    // Worker holds (Alchemy refuses the deploy), so a rename moves the routes first.
-    boundary: `${prefix}-ingress`,
+    boundary: `${prefix}-boundary`,
     secrets: `${prefix}-secrets`,
     auth: `${prefix}-auth`,
     authDb: `${prefix}-auth-db`,
     authKv: `${prefix}-auth-kv`,
-    project: `${prefix}-project`,
+    mind: `${prefix}-mind`,
     // Alchemy binds the namespace but does not make it: ../scripts/repos-namespace.ts does.
     repos: `${prefix}-repos`,
     files: `${prefix}-files`,

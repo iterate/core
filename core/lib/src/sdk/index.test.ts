@@ -35,7 +35,7 @@ test("the defaults: an event is ignored, without opening its context, and every 
   const entrypoint = configEntrypoint(log);
   await entrypoint.deliverEvent(event);
   expect(log).toEqual([]);
-  expect(await entrypoint.fetch(new Request("https://project.example/"))).toMatchObject({
+  expect(await entrypoint.fetch(new Request("https://mind.example/"))).toMatchObject({
     status: 404,
   });
 });

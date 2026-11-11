@@ -746,7 +746,7 @@ test.for([
       now: () => 0,
       sleep: () => Promise.resolve(),
     });
-    // the project's starting configuration, which every agent born in it is given
+    // the mind's starting configuration, which every agent born in it is given
     const configured = {
       type: "events.iterate.com/agent/configured",
       payload: {

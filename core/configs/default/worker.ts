@@ -9,16 +9,16 @@ import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 import { agentsApp } from "./apps/agents/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 
-// The integration packages this project hosts (a Telegram bot, your own GitHub App, …), one element
+// The integration packages this mind hosts (a Telegram bot, your own GitHub App, …), one element
 // each: AGENTS.md, and the recipes at https://github.com/jonastemplestein/iterategrations.
 const integrations: Integration[] = [];
 
-// The apps this project hosts: a folder each under apps/, mounted on its host in `fetch` below
+// The apps this mind hosts: a folder each under apps/, mounted on its host in `fetch` below
 // (AGENTS.md, "Apps"). Each `app.ts` exports the function that makes one.
 const agents = agentsApp();
 const onboarding = onboardingApp();
 
-// The kinds of agent this project runs (AGENTS.md, "Kinds of agent"): one file each, named by its
+// The kinds of agent this mind runs (AGENTS.md, "Kinds of agent"): one file each, named by its
 // import, written exactly `() => import("./path/to/kind.ts")` (`makeAgentKind` reads the path from
 // it). Their `processEvent` runs below beside the integrations', and every publish tells the Agents
 // app where each kind's file is.
@@ -28,17 +28,17 @@ export default class extends IterateConfigEntrypoint {
   // How events arrive and what each case does: AGENTS.md.
   async processEvent({ event, itx }: IterateConfigProcessEventArgs<"agents">) {
     switch (event.type) {
-      case "events.iterate.com/project/worker-updated": {
-        // This code here is your init hook. The platform appends `project/worker-updated` on `/`
+      case "events.iterate.com/mind/worker-updated": {
+        // This code here is your init hook. The platform appends `mind/worker-updated` on `/`
         // whenever it publishes a commit of this repo, so this case runs again after every commit:
         // keep it idempotent. Only the platform appends this type.
         await agents.install(itx);
         // where each kind's file is, for the Agents app's chat (`agentKinds`, above)
         await publishAgentKinds(itx, agentKinds);
         await onboarding.install(itx);
-        // A heartbeat, for a project that should wake on its own (to check on itself and repair what
+        // A heartbeat, for a mind that should wake on its own (to check on itself and repair what
         // it finds, say): uncommented, it appends `heartbeat` on `/` every five minutes and wakes the
-        // project each time. Set again unchanged, it keeps its clock. Commenting it out again does
+        // mind each time. Set again unchanged, it keeps its clock. Commenting it out again does
         // not stop it; `itx.schedules.cancel("heartbeat")` does.
         // await itx.schedules.set({
         //   key: "heartbeat",
@@ -138,7 +138,7 @@ export default class extends IterateConfigEntrypoint {
       case "events.iterate.com/repo/commit-completed": {
         // THIS REPO AND ITS GITHUB REPOSITORY ARE ONE HISTORY, once a member linked them
         // (AGENTS.md, `linkThroughCloud`). A push to the repository's main is pulled here, which
-        // publishes the project. A commit here is pushed there. Both move the same commits,
+        // publishes the mind. A commit here is pushed there. Both move the same commits,
         // fast-forward only, and what one side just received is already on the other, so nothing
         // loops: a pull lands `repo/commit-completed` too, and the push it causes finds GitHub up
         // to date.
@@ -173,7 +173,7 @@ export default class extends IterateConfigEntrypoint {
         if (!origin || (pushed && pushed.toLowerCase() !== origin.toLowerCase())) break;
         // Never forced. When GitHub refuses, or the two histories have diverged, nothing moves
         // and no side is chosen: a member does that, with `pull` or `push` and `{ force: true }`.
-        // What moved, and what could not, is a fact on the project's root.
+        // What moved, and what could not, is a fact on the mind's root.
         // One more try for anything but that: two commits close together push at the same
         // moment, and GitHub lets one of them wait.
         const sync = () => (pushed ? repo.pull() : repo.push());
@@ -202,7 +202,7 @@ export default class extends IterateConfigEntrypoint {
         break;
       }
     }
-    // Every package and every kind of agent (`agentKinds`), after the project's own cases; the hook
+    // Every package and every kind of agent (`agentKinds`), after the mind's own cases; the hook
     // contract is iterate/sdk `Integration`. The map is async, so a hook that throws before its
     // first await fails like one that rejects.
     const kinds = await Promise.all(agentKinds.map(async (kind) => (await kind.load()).default));
@@ -215,7 +215,7 @@ export default class extends IterateConfigEntrypoint {
     if (failed) throw failed.reason;
   }
 
-  // Every host of the project: one case each, on `x-iterate-routing-slug` (`agents` for
+  // Every host of the mind: one case each, on `x-iterate-routing-slug` (`agents` for
   // agents.<domain>, null on the apex). The guard beside a case says who may come: none for a
   // public site, `this.auth.require` for members, `this.auth.requirePerson` for anyone signed in
   // (AGENTS.md, "People who are not members"). A package answers the requests on its own slug.
@@ -234,8 +234,8 @@ export default class extends IterateConfigEntrypoint {
         if (new URL(request.url).pathname === "/me")
           return this.auth.requirePerson(request) || Response.json(this.auth.person(request));
         using itx = this.getItx();
-        const { projectSlug } = await itx.whoami();
-        return new Response("Homepage of project " + projectSlug + "\n", {
+        const { mindSlug } = await itx.whoami();
+        return new Response("Homepage of mind " + mindSlug + "\n", {
           headers: { "content-type": "text/plain; charset=utf-8" },
         });
       }

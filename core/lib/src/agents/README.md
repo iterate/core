@@ -1,13 +1,13 @@
 # iterate/agents
 
-The agents app for Iterate projects: a collection of agents on a project, each a conversation on
+The agents app for Iterate minds: a collection of agents on a mind, each a conversation on
 its own context, driven by a model that acts by writing scripts against that context's `itx`.
-A project installs it; the platform ships its code as `iterate/agents`, so a project runs the
+A mind installs it; the platform ships its code as `iterate/agents`, so a mind runs the
 deployment's own build and upgrades with it, like `iterate/sdk`.
 
 ## Install
 
-A project's config repo re-exports the app's two classes from `agents.ts` and installs the app
+A mind's config repo re-exports the app's two classes from `agents.ts` and installs the app
 from its init case (core/configs/default does both). It lists no dependency: `iterate/*` comes
 from the platform.
 
@@ -20,16 +20,16 @@ export { AgentCollectionDurableObject, AgentDurableObject } from "iterate/agents
 import { installAgents } from "iterate/agents/install";
 
 // in processEvent, the init case
-case "events.iterate.com/project/worker-updated":
+case "events.iterate.com/mind/worker-updated":
   await installAgents(itx);
 ```
 
 `installAgents` enables the catalog processor on `/agents` and writes the `itx.agents` rewrite rule
 on the root to the collection facet there; it does the same every time, and disables the catalog
 the root held before it moved. Every facet of the app, the collection's and each
-agent's, names its class in `agents.ts` of the project's published config
+agent's, names its class in `agents.ts` of the mind's published config
 (`{ className, mainModule: "agents.ts", source: itx.cd('/').config }`, `agentsFacetSpec`), so
-nothing is copied into the project. A commit that changes what `agents.ts` bundles restarts the
+nothing is copied into the mind. A commit that changes what `agents.ts` bundles restarts the
 agents on their next call, and so does a platform deploy (every loader cache key folds in the
 deployment).
 

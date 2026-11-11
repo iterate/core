@@ -13,7 +13,7 @@ import onboardingFiles from "../../configs/default/apps/onboarding/public/";
 import Config from "../../configs/default/worker.ts";
 
 test("the default config's pages and folders load here as the platform's loader makes them", () => {
-  // The rule is the loader's (core/project/src/context/module-resolution.ts). When it changes,
+  // The rule is the loader's (core/mind-worker/src/context/module-resolution.ts). When it changes,
   // this fails here and not at a deploy: a page is its text, a folder is its files by path.
   expect(index).toMatch(/^<!doctype html>/i);
   expect(files["app.js"]).toEqual(expect.any(String));
@@ -67,7 +67,7 @@ test.for([
     body: { repository: { full_name: "acme/site" } },
   },
   { name: "another delivery about main moves nothing", delivery: { name: "create" } },
-  { name: "a project with no origin does nothing", origin: null },
+  { name: "a mind with no origin does nothing", origin: null },
   { name: "nor one whose origin is not on GitHub", origin: "https://git.example/acme/config.git" },
 ] as {
   name: string;
@@ -164,7 +164,7 @@ test("a push that GitHub lets wait is tried once more, and one it refuses twice 
   ]);
 });
 
-/** A project's root as the case uses it: the config repo's origin, its pull and push (which take
+/** A mind's root as the case uses it: the config repo's origin, its pull and push (which take
  *  no argument: a `force` would show in `calls`), and what is appended to the root. */
 function rootWith({
   origin,

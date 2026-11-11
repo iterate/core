@@ -2,7 +2,7 @@ import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 
 type StoreProps = { origin: string; token: string };
 
-/** The part of Artifacts core/project calls (src/context/cf-artifacts.ts), over the launcher's git
+/** The part of Artifacts core/mind-worker calls (src/context/cf-artifacts.ts), over the launcher's git
  *  store. One token serves every repo and scope. */
 export class HomeArtifacts extends WorkerEntrypoint<unknown, StoreProps> {
   async create(name: string) {

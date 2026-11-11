@@ -1,7 +1,7 @@
 // principal.ts — WHO user code is acting for, as the platform tells it: the verified `Principal`
 // (`itx.whoami()`, `source.principal` on an event), the header ingress stamps it in on a Request it
-// forwards to a project, with the grant beside it, and the `Person` ingress stamps for anyone
-// signed in on a project's hostname (core/boundary/src/stamp.ts; sdk/auth.ts reads both), and the
+// forwards to a mind, with the grant beside it, and the `Person` ingress stamps for anyone
+// signed in on a mind's hostname (core/boundary-worker/src/stamp.ts; sdk/auth.ts reads both), and the
 // one reader of the principal's stamp, `stampedCallerOf`. How the platform admits and carries a
 // caller, and signs its own tokens, stays in the platform.
 import { z } from "zod";
@@ -29,7 +29,7 @@ export const ITX_GRANT_HEADER = "x-itx-grant";
  *  then. Stripped from every inbound Request. */
 export const ITX_EXPIRES_HEADER = "x-itx-expires";
 
-/** A signed-in person as a project's host knows them, member or not: the auth Worker's user id
+/** A signed-in person as a mind's host knows them, member or not: the auth Worker's user id
  *  and their email, and `impersonatedBy` the platform admin signed in as them, as on `Principal`.
  *  An app that hands out something personal refuses, or records, a person an admin is signed in
  *  as. */
@@ -39,8 +39,8 @@ export type Person = {
   impersonatedBy?: { actor: string; email: string };
 };
 
-/** The header ingress sets, as the JSON of a `Person`, on a project host's Request from anyone
- *  signed in (core/boundary/src/project-host-sign-in.ts), and strips from every inbound Request. A
+/** The header ingress sets, as the JSON of a `Person`, on a mind host's Request from anyone
+ *  signed in (core/boundary-worker/src/mind-host-sign-in.ts), and strips from every inbound Request. A
  *  member gets `x-itx-principal` beside it. */
 export const ITX_PERSON_HEADER = "x-itx-person";
 
@@ -59,7 +59,7 @@ export function stampedExpiryOf(request: Request): number | null {
 
 /** THE CALLER INGRESS STAMPED on `request`: the principal, and the grant they came through, which
  *  every event they append then carries. Null when nobody is stamped. Ingress strips every `x-itx-*`
- *  a caller sends and stamps its own, and only ingress reaches a project, so the stamp is trusted
+ *  a caller sends and stamps its own, and only ingress reaches a mind, so the stamp is trusted
  *  as it stands: a malformed one is a defect, and throws. */
 export function stampedCallerOf(request: Request): {
   principal: Principal | null;

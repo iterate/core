@@ -105,7 +105,7 @@ const originRows: { headers: Record<string, string>; becomes: boolean }[] = [
   { headers: { origin: "" }, becomes: false }, // a PRESENT but empty Origin is foreign — never "no Origin" (lib.ts's one null-vs-empty exception)
   { headers: { origin: "https://worker.example" }, becomes: true }, // the page is this origin
   { headers: { origin: "https://evil.example" }, becomes: false }, // another site drove the browser
-  { headers: { origin: "https://site--prj.worker.example" }, becomes: false }, // same site is not same origin: a project host
+  { headers: { origin: "https://site--prj.worker.example" }, becomes: false }, // same site is not same origin: a mind host
   { headers: { origin: "http://worker.example" }, becomes: false }, // the scheme is part of the origin
   { headers: { origin: "https://worker.example:8443" }, becomes: false }, // so is the port
   { headers: { origin: "null" }, becomes: false }, // an opaque origin (a sandboxed document) is foreign
@@ -138,12 +138,12 @@ test("reportIssue hands each issue to the forwarder — bounded attributes, the 
   vi.spyOn(console, "error").mockImplementation(() => {});
   const boom = new Error("boom");
   forwardIssues((issue) => seen.push(issue));
-  reportIssue("site.a", boom, { projectId: "prj_1", skipped: undefined, long: "x".repeat(300) });
+  reportIssue("site.a", boom, { mindId: "mind_1", skipped: undefined, long: "x".repeat(300) });
   expect(seen).toEqual([
     {
       failureSite: "site.a",
       caught: boom,
-      attributes: { projectId: "prj_1", long: "x".repeat(256) },
+      attributes: { mindId: "mind_1", long: "x".repeat(256) },
     },
   ]);
   forwardIssues(() => {

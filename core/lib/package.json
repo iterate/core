@@ -35,7 +35,7 @@
     "./expression": "./src/expression.ts",
     "./principal": "./src/principal.ts",
     "./workers": "./src/workers.ts",
-    "./project-api": "./src/project-api.ts",
+    "./mind-api": "./src/mind-api.ts",
     "./facts": "./src/facts.ts",
     "./signed": "./src/signed.ts",
     "./secret-placeholder": "./src/secret-placeholder.ts",
@@ -43,7 +43,7 @@
     "./stream/contract": "./src/stream/contract.ts",
     "./stream/test-support": "./src/stream/test-support.ts",
     "./oauth-scopes": "./src/oauth-scopes.ts",
-    "./project-ingress": "./src/project-ingress.ts",
+    "./mind-ingress": "./src/mind-ingress.ts",
     "./app-config": "./src/app-config.ts",
     "./compatibility-date": "./src/compatibility-date.ts",
     "./package-builds": "./src/package-builds.ts",
@@ -116,9 +116,9 @@
         "types": "./dist/workers.d.mts",
         "import": "./dist/workers.mjs"
       },
-      "./project-api": {
-        "types": "./dist/project-api.d.mts",
-        "import": "./dist/project-api.mjs"
+      "./mind-api": {
+        "types": "./dist/mind-api.d.mts",
+        "import": "./dist/mind-api.mjs"
       },
       "./facts": {
         "types": "./dist/facts.d.mts",
@@ -148,9 +148,9 @@
         "types": "./dist/oauth-scopes.d.mts",
         "import": "./dist/oauth-scopes.mjs"
       },
-      "./project-ingress": {
-        "types": "./dist/project-ingress.d.mts",
-        "import": "./dist/project-ingress.mjs"
+      "./mind-ingress": {
+        "types": "./dist/mind-ingress.d.mts",
+        "import": "./dist/mind-ingress.mjs"
       },
       "./app-config": {
         "types": "./dist/app-config.d.mts",

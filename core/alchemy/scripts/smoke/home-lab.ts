@@ -1,30 +1,26 @@
-import {
-  projectApiUrlOf,
-  projectProvideUrlOf,
-  protectedResourceMetadataUrlOf,
-} from "iterate/project-api";
-import { attempt, type Check, projectRoot } from "./lib.ts";
+import { mindApiUrlOf, mindProvideUrlOf, protectedResourceMetadataUrlOf } from "iterate/mind-api";
+import { attempt, type Check, mindRoot } from "./lib.ts";
 
 const ECHO = "https://httpbin.org";
 
 const BIRTH_FACTS = [
   "events.iterate.com/repo/created",
   "events.iterate.com/repo/commit-completed",
-  "events.iterate.com/project/worker-updated",
-  "events.iterate.com/project/created",
+  "events.iterate.com/mind/worker-updated",
+  "events.iterate.com/mind/created",
 ];
 
 export async function homeLabChecks(domain: string): Promise<Check[]> {
   const apex = `https://${domain}/`;
   const checks = [
     await attempt("home lab: /provide takes WebSockets alone (426 to a plain GET)", async () => {
-      const response = await fetch(projectProvideUrlOf(domain));
+      const response = await fetch(mindProvideUrlOf(domain));
       await response.body?.cancel();
       return { pass: response.status === 426, detail: `${response.status}` };
     }),
   ];
-  // The boundary answers 503 for every project hostname while nothing is provided.
-  const document = await fetch(protectedResourceMetadataUrlOf(projectApiUrlOf(domain)));
+  // The boundary answers 503 for every mind hostname while nothing is provided.
+  const document = await fetch(protectedResourceMetadataUrlOf(mindApiUrlOf(domain)));
   await document.body?.cancel();
   if (document.status === 503)
     return [
@@ -37,7 +33,7 @@ export async function homeLabChecks(domain: string): Promise<Check[]> {
           detail: `${response.status} ${JSON.stringify(body.trim())}`,
         };
       }),
-      { check: "home lab: the project", pass: true, detail: "skipped: no home lab is connected" },
+      { check: "home lab: the mind", pass: true, detail: "skipped: no home lab is connected" },
     ];
   checks.push(
     await attempt("home lab: the apex answers the config's page", async () => {
@@ -59,7 +55,7 @@ export async function homeLabChecks(domain: string): Promise<Check[]> {
         detail: "skipped: ITERATE_PROTOTYPE_TOKEN is not set",
       },
     ];
-  const root = () => projectRoot(domain, token);
+  const root = () => mindRoot(domain, token);
   const run = (script: string) => root().run(script) as Promise<unknown>;
   const marker = crypto.randomUUID().slice(0, 8);
   checks.push(
@@ -92,7 +88,7 @@ export async function homeLabChecks(domain: string): Promise<Check[]> {
           changes: [{ path: "smoke/home-lab.txt", content: "${marker}\\n" }],
         });
         const outcome = await itx.waitForEvent({
-          type: ["events.iterate.com/project/worker-updated", "events.iterate.com/project/worker-update-failed"],
+          type: ["events.iterate.com/mind/worker-updated", "events.iterate.com/mind/worker-update-failed"],
           payload: { commitOid },
           afterOffset: 0,
           timeoutMs: 120000,
@@ -100,7 +96,7 @@ export async function homeLabChecks(domain: string): Promise<Check[]> {
         return { type: outcome.type, error: outcome.payload?.error };
       }`)) as { type: string; error?: string };
       return {
-        pass: outcome.type === "events.iterate.com/project/worker-updated",
+        pass: outcome.type === "events.iterate.com/mind/worker-updated",
         detail: outcome.error || outcome.type,
       };
     }),

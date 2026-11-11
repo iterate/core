@@ -25,13 +25,13 @@ test("a file whose dependency is not installed names the folder to install in, b
   // nothing listens here: the file's refusal must come first
   using cli = cliConfig("http://127.0.0.1:1");
 
-  const missing = cli.provide([join(folder.path, "whatsapp.ts"), "--project", "demo"]);
+  const missing = cli.provide([join(folder.path, "whatsapp.ts"), "--mind", "demo"]);
   expect(await missing.exited).not.toBe(0);
   expect(missing.stderr()).toContain(
     `Cannot find package 'baileys-not-installed' imported from ${join(folder.path, "whatsapp.ts")}. Install whatsapp.ts's dependencies first: npm install (or pnpm install) in ${folder.path}.`,
   );
 
-  const empty = cli.provide([join(folder.path, "nothing.mjs"), "--project", "demo"]);
+  const empty = cli.provide([join(folder.path, "nothing.mjs"), "--mind", "demo"]);
   expect(await empty.exited).not.toBe(0);
   expect(empty.stderr()).toContain("nothing.mjs has no default export to provide");
 });

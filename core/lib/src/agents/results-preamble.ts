@@ -357,7 +357,7 @@ function renderRow(entry: ScriptResultRow, index: number): string {
   }
 }
 
-/** Whether an envelope LOADS as the context's runner will load it (core/os library.ts
+/** Whether an envelope LOADS as the context's runner will load it (core/mind-worker/src/library.ts
  *  `runScriptModule` splices the script into `const script =\n…\n;` of worker.js; the loader lexes the
  *  module with es-module-lexer, then V8 parses it, both at the worker's first call): null when it
  *  does, else the loader's words. A module the loader has seen is warm, keyed by its text: measured

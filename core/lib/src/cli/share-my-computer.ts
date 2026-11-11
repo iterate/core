@@ -2,14 +2,14 @@
 // `runProvide` (so it reconnects as `iterate provide` does), under a friendly default name.
 import { hostname } from "node:os";
 import { builtInPrompts } from "trpc-cli";
-import type { ProjectConnection } from "../node.ts";
+import type { MindConnection } from "../node.ts";
 import { runProvide } from "./provide.ts";
 import computer, { description } from "./use-my-computer.ts";
 
-/** Lend this computer to the connection's project until Ctrl-C. */
+/** Lend this computer to the connection's mind until Ctrl-C. */
 export async function shareMyComputer(input: {
-  connection: ProjectConnection;
-  reconnect: () => Promise<ProjectConnection>;
+  connection: MindConnection;
+  reconnect: () => Promise<MindConnection>;
   name?: string;
 }) {
   await runProvide({

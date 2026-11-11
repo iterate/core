@@ -1,7 +1,7 @@
 {
   "name": "core-home-lab",
   "type": "module",
-  "description": "A project that runs on a home machine: the real project Worker in local workerd, dialled into its stack",
+  "description": "A mind that runs on a home machine: the real mind Worker in local workerd, dialled into its stack",
   "engines": {
     "node": ">=24"
   },

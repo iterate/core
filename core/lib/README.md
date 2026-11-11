@@ -29,7 +29,7 @@ Supabase, tRPC, Hono and Wrangler draw the same line: the decision record
 
 ## One path per symbol
 
-Code the platform loads for a project (the config entrypoint, a facet, a worker behind a rewrite rule)
+Code the platform loads for a mind (the config entrypoint, a facet, a worker behind a rewrite rule)
 imports each symbol from one path, and the loader links this deployment's own build of it:
 
 | Path                       | What it holds                                                                                                                                                                              |
@@ -78,15 +78,15 @@ import { IterateConfigEntrypoint } from "iterate/sdk";
 export default class extends IterateConfigEntrypoint {
   async fetch() {
     using itx = this.getItx();
-    const { projectSlug } = await itx.whoami();
-    return new Response(`Homepage of ${projectSlug}`);
+    const { mindSlug } = await itx.whoami();
+    return new Response(`Homepage of ${mindSlug}`);
   }
 }
 ```
 
 Bind each scope with `using` in the smallest block that holds its calls, await every call inside
 it, and hand data, not handles, out of it: a kept scope, step or handle keeps the context, and any
-facet holding it, resident after the project goes idle. An object that needs reach takes an
+facet holding it, resident after the mind goes idle. An object that needs reach takes an
 accessor (`() => this.getItx()`), never a scope; work that outlives the call runs under a
 processor's `runInBackground` claim. Lint refuses a raw `ITX.get()` and a `getItx()` no `using`
 binds in this repository (`iterate/no-raw-itx-get`).
@@ -106,7 +106,7 @@ async setupVoiceAgent({ streamPath }) {
 
 ## Who wrote an event
 
-Anyone in a project can append any event to any context, and every event says where it came from.
+Anyone in a mind can append any event to any context, and every event says where it came from.
 The platform stamps `source.origin`, the context whose code or session wrote it, beside
 `source.principal` (the member) and `source.platform`. A writer's own values are dropped. The one
 field a writer keeps is `source.processor`, the engine's label for which processor wrote it.
@@ -199,8 +199,8 @@ using connection = await connectIterate({
   baseUrl: "https://os.iterate.com",
   auth: { type: "bearer", token: process.env.ITERATE_BEARER_TOKEN },
 });
-using project = await connection.session.projects.get("my-project");
-console.log(await project.run("async (itx) => await itx.whoami()"));
+using mind = await connection.session.minds.get("my-mind");
+console.log(await mind.run("async (itx) => await itx.whoami()"));
 ```
 
 ## Event types
@@ -210,22 +210,22 @@ event segment, both lowercase kebab-case, and never a third segment.
 
 Every type under `events.iterate.com/` follows these rules, test types included. A type without
 that prefix belongs to whoever appends it and is opaque to the platform: tests use types like
-`demo/ping` on purpose, and a project may use its own domain (`events.garple.com/sales/…`).
+`demo/ping` on purpose, and a mind may use its own domain (`events.garple.com/sales/…`).
 
 ### Namespaces
 
 - **`itx`** holds the context engine's own events: everything the core contract
-  (`core/os/src/stream/core-processor.ts`) reduces, validates or refuses, plus the records the
+  (`core/itx/src/stream/core-processor.ts`) reduces, validates or refuses, plus the records the
   Stream, the context Durable Object and the SDK processor host write themselves. Where the schema
   and the reduce live decides it, not which contexts hold the event: fetch routes and the apex
-  ingress target are core state, so they are `itx` even though only a project root's copy is read.
-  A domain processor may consume an `itx` event (the agent consumes `itx/run-*`, the Project
+  ingress target are core state, so they are `itx` even though only a mind root's copy is read.
+  A domain processor may consume an `itx` event (the agent consumes `itx/run-*`, the Mind
   processor `itx/ingress-configured`); it names the core's catalog in its `processorDeps` rather than
   defining the event itself. The core's checkpoint slug is `core`: it is a storage key, not a type
   prefix.
 - **A domain namespace** is the singular name of the kind of context whose log the event belongs
   to, which is the defining contract's slug when there is one: `account`, `organization`,
-  `project`, `repo`, `workspace`, `sandbox`, `deployment`, `secret`, `agent`, `voice-agent`. A fact
+  `mind`, `repo`, `workspace`, `sandbox`, `deployment`, `secret`, `agent`, `voice-agent`. A fact
   cross-posted to another log keeps its own namespace: `repo/created` on `/` is still a repo fact.
 - **An integration** uses its own name as its namespace, for example `chrome`, `slack`, `google`,
   `github`.
@@ -244,7 +244,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   takes one of three shapes:
   - `<x>-settled` is the one terminal fact when the asker reads a result. It names
     `requestOffset` and carries the outcome: succeeded, failed or cancelled, a status, or an error.
-    Examples: `itx/run-*`, `agent/llm-request-*`, `project/hostname-add-*`, `deployment/run-*`.
+    Examples: `itx/run-*`, `agent/llm-request-*`, `mind/hostname-add-*`, `deployment/run-*`.
   - `<verb-ed>` or `<verb>-failed` is used when success is a fact that other logs wait on, like a
     certificate: `create-requested` → `created` or `create-failed`, `delete-requested` → `deleted`,
     `hostname-remove-requested` → `hostname-removed`. A failure that is retried rather than
@@ -253,8 +253,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
     `agent/context-added` carries the `llmRequestOffset` of the `llm-request-requested` it answers.
 - **One verb pair per kind of change:**
   - `added` / `removed` for membership in a set: `organization/member-added`,
-    `organization/project-added`, hostnames.
-  - `created` / `deleted` for an entity with a lifecycle: projects, repos, workspaces, sandboxes,
+    `organization/mind-added`, hostnames.
+  - `created` / `deleted` for an entity with a lifecycle: minds, repos, workspaces, sandboxes,
     agents.
   - `set` / `deleted` for a keyed value: `secret/*`.
   - `set` / `cancelled` for a schedule: `itx/schedule-*`. Each occurrence is `fired` or `failed`.
@@ -270,7 +270,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   (`voice-agent/mic-frame`, `agent/llm-response-frame`), a heartbeat (`voice-agent/keepalive`), and
   a diagnostic record (`itx/alarm-trace`). A durable event is never a noun.
 - **Families and prefixes.** Code matches some families by prefix: `…/itx/run-`,
-  `…/itx/subscription-`, `…/itx/schedule-`, `…/project/hostname-`. Before naming a new type, check
+  `…/itx/subscription-`, `…/itx/schedule-`, `…/mind/hostname-`. Before naming a new type, check
   it doesn't join one of these families by accident. Never match `…/itx/` as a whole: it is not a
   permission boundary, and it catches live-state deltas, stub presence and child
   announcements.
@@ -278,20 +278,21 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   follows its name (`itx/child-created:<path>`). Broader concepts, modules and Workers log
   event names keep theirs: the Stream, scheduled appends, `core`, `scheduled-append.completed`.
 - **Renaming.** A rename has to serve one of these rules, not taste. If a type is stored outside the
-  platform's Durable Objects (device firmware, a published SDK, a project's config repo),
+  platform's Durable Objects (device firmware, a published SDK, a mind's config repo),
   rename it only in a change that migrates that store too.
 
-| Namespace                                                                                    | Defined in                                                                                                                                                                                                                                                                                         |
-| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `itx`                                                                                        | `core/os/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `core/os/src/context/built-ins.ts`, `core/os/src/fetch-routes.ts`, `core/os/src/iterate-context-durable-object.ts`, `core/lib/src/stream/{run,processor}.ts` |
-| `account`, `organization`, `project`, `repo`, `workspace`, `sandbox`, `deployment`, `secret` | `core/os/src/<name>/contract.ts` (repo, workspace, sandbox and deployment also use `project/entity-lifecycle.ts`)                                                                                                                                                                                  |
-| `agent`                                                                                      | `core/lib/src/agents/contract.ts`                                                                                                                                                                                                                                                                  |
-| `voice-agent`                                                                                | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                |
-| `chrome`                                                                                     | `packages/browser-extension/public/panel.js`                                                                                                                                                                                                                                                       |
-| `email`                                                                                      | `core/lib/src/email.ts`                                                                                                                                                                                                                                                                            |
-| `webhook`                                                                                    | `core/project/src/integrations/webhooks.ts` (a delivery to a webhook context of a project stack)                                                                                                                                                                                                   |
-| `cloud`                                                                                      | `core/auth/src/device/protocol.ts` (the statement the iterate Cloud signs to ask to be let in: shown with the request, never appended)                                                                                                                                                             |
-| `integration`                                                                                | `core/lib/src/integrations.ts` (the registry a project's packages write into; its fold is `core/os/src/integrations/registry.ts`)                                                                                                                                                                  |
-| `test`                                                                                       | tests only                                                                                                                                                                                                                                                                                         |
+| Namespace                                                                                 | Defined in                                                                                                                                                                                                                                                                                             |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `itx`                                                                                     | `core/itx/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `core/itx/src/context/built-ins.ts`, `core/itx/src/fetch-routes.ts`, `core/itx/src/iterate-context-durable-object.ts`, `core/lib/src/stream/{run,processor}.ts` |
+| `account`, `organization`, `mind`, `repo`, `workspace`, `sandbox`, `deployment`, `secret` | `core/os/src/<name>/contract.ts` (repo, workspace, sandbox and deployment also use `mind/entity-lifecycle.ts`)                                                                                                                                                                                         |
+| `mind`                                                                                    | `core/mind-worker/src/mind/contract.ts`: the mind stack's name for what core/os calls `mind`                                                                                                                                                                                                           |
+| `agent`                                                                                   | `core/lib/src/agents/contract.ts`                                                                                                                                                                                                                                                                      |
+| `voice-agent`                                                                             | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                    |
+| `chrome`                                                                                  | `packages/browser-extension/public/panel.js`                                                                                                                                                                                                                                                           |
+| `email`                                                                                   | `core/lib/src/email.ts`                                                                                                                                                                                                                                                                                |
+| `webhook`                                                                                 | `core/mind-worker/src/integrations/webhooks.ts` (a delivery to a webhook context of a mind stack)                                                                                                                                                                                                      |
+| `cloud`                                                                                   | `core/auth-worker/src/device/protocol.ts` (the statement the iterate Cloud signs to ask to be let in: shown with the request, never appended)                                                                                                                                                          |
+| `integration`                                                                             | `core/lib/src/integrations.ts` (the registry a mind's packages write into; its fold is `core/mind-worker/src/integrations/registry.ts`)                                                                                                                                                                |
+| `test`                                                                                    | tests only                                                                                                                                                                                                                                                                                             |
 
 `note/added` is only an example in the Agents composer; no contract defines `note`.

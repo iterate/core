@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { projectApiUrlOf } from "iterate/project-api";
-import { attempt, type Check, projectRoot } from "./lib.ts";
+import { mindApiUrlOf } from "iterate/mind-api";
+import { attempt, type Check, mindRoot } from "./lib.ts";
 
 /** Export batches, a stream's 60 s roll and a catalog commit come before a row can be read. */
 const LANDING_MS = 240_000;
@@ -10,7 +10,7 @@ type Answer = { rows: Record<string, unknown>[]; sql: string };
 export async function telemetryChecks(domain: string): Promise<Check[]> {
   const token = process.env.ITERATE_PROTOTYPE_TOKEN;
   if (!token) return [];
-  const root = () => projectRoot(domain, token);
+  const root = () => mindRoot(domain, token);
   const served = JSON.stringify(await root().rewriteRules.list()).includes('"itx.telemetry"');
   if (!served)
     return [
@@ -35,7 +35,7 @@ export async function telemetryChecks(domain: string): Promise<Check[]> {
   const marker = crypto.randomUUID().slice(0, 8);
   const path = `/smoke/telemetry-${marker}`;
   await root().cd(path).append({ type: "smoke/telemetry", payload: { marker } });
-  const webhook = await fetch(`${projectApiUrlOf(domain)}/webhooks/smoke-trace-${marker}`, {
+  const webhook = await fetch(`${mindApiUrlOf(domain)}/webhooks/smoke-trace-${marker}`, {
     method: "POST",
     headers: { "x-hub-signature-256": `sha256=${"0".repeat(64)}` },
     body: "{}",
@@ -61,7 +61,7 @@ export async function telemetryChecks(domain: string): Promise<Check[]> {
       );
       return { pass: Number(rows[0]?.n) > 0, detail: JSON.stringify(rows[0] ?? null) };
     }),
-    await attempt("telemetry: one request across the boundary, project, door, vault", async () => {
+    await attempt("telemetry: one request across the boundary, mind, door, vault", async () => {
       const rows = await until(
         `SELECT trace_id, worker, count(*) AS spans FROM spans WHERE trace_id IN (SELECT trace_id FROM spans WHERE url_path LIKE '%smoke-trace-${marker}%') GROUP BY trace_id, worker`,
         (found) => found.length > 0,

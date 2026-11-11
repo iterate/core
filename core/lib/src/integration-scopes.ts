@@ -1,4 +1,4 @@
-// integration-scopes.ts — WHAT A PERSON'S ACCOUNT LACKS for a project, the one rule the platform
+// integration-scopes.ts — WHAT A PERSON'S ACCOUNT LACKS for a mind, the one rule the platform
 // (`itx.integrations.connect(provider, { account })`) and the Dash's Connect sheet both apply.
 
 /** Google's short names for its identity scopes, which a sign-in asks for and a token response may

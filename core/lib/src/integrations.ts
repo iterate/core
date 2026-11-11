@@ -1,23 +1,23 @@
-// integrations.ts — THE INTEGRATION REGISTRY: what a project's packages (iterate/sdk `Integration`)
-// tell the Dash about themselves. A package appends two kinds of fact on the project's
+// integrations.ts — THE INTEGRATION REGISTRY: what a mind's packages (iterate/sdk `Integration`)
+// tell the Dash about themselves. A package appends two kinds of fact on the mind's
 // `/integrations` context, and the first-party `integration` facet there folds them into the state
-// the Dash's Integrations page renders (core/os integrations/registry.ts). Both are SET semantics:
+// the Dash's Integrations page renders (core/mind-worker/src/integrations/registry.ts). Both are SET semantics:
 // the whole card or row again whenever anything changes, or null to take it away.
 //   integration/configured             the card: a title, a description, a status, buttons
 //   integration/connection-configured  one connection's row under a card: its account, status, buttons
 // A button's target is where the Dash sends the person: an absolute http(s) URL, or a place in the
-// project (`routingSlug` and `path`) whose URL the Dash composes (iterate/project-ingress
-// `projectPublicUrlOf`), so a package needs no origin when it registers, and the link follows a
-// rename or a primary hostname. The Dash renders what the project's own code wrote, so every string
+// mind (`routingSlug` and `path`) whose URL the Dash composes (iterate/mind-ingress
+// `mindPublicUrlOf`), so a package needs no origin when it registers, and the link follows a
+// rename or a primary hostname. The Dash renders what the mind's own code wrote, so every string
 // is capped and the fold keeps the state within INTEGRATION_STATE_MAX_BYTES, half the checkpoint
 // limit on a facet's state.
 import { z } from "zod";
-import { ROUTING_SLUG } from "./project-ingress.ts";
+import { ROUTING_SLUG } from "./mind-ingress.ts";
 // the contract's module alone: stream/processor.ts reaches node:async_hooks through the cause, which
 // no browser has, and the Dash imports this module
 import { defineProcessorContract, type ProcessorState } from "./stream/contract.ts";
 
-/** The project context every registration lands on, and the first-party `integration` facet
+/** The mind context every registration lands on, and the first-party `integration` facet
  *  folds: `itx.cd(INTEGRATIONS_PATH).append(…)`. */
 export const INTEGRATIONS_PATH = "/integrations";
 
@@ -26,15 +26,15 @@ export const INTEGRATIONS_PATH = "/integrations";
 const Slug = z.string().regex(ROUTING_SLUG).max(63);
 
 /** The most UTF-8 bytes the state serializes to: a card or row that would take it past the budget
- *  is left out, so project code cannot grow the facet's state past the checkpoint limit
+ *  is left out, so mind code cannot grow the facet's state past the checkpoint limit
  *  (iterate/stream/processor REDUCE_CHECKPOINT_TOO_LARGE, which would lock the facet) — half of it. */
 export const INTEGRATION_STATE_MAX_BYTES = 1024 * 1024;
 
-/** WHERE A BUTTON LEADS: an absolute http(s) URL, or a place in this project, which the Dash turns
- *  into the URL of `routingSlug` (the apex when absent) at `path` on the project's primary hostname,
+/** WHERE A BUTTON LEADS: an absolute http(s) URL, or a place in this mind, which the Dash turns
+ *  into the URL of `routingSlug` (the apex when absent) at `path` on the mind's primary hostname,
  *  else under the deployment's ingress. */
 const IntegrationUrl = z.strictObject({ url: z.url({ protocol: /^https?$/ }).max(2048) });
-/** A place in the project: `routingSlug`'s host (the apex when absent) at `path`. */
+/** A place in the mind: `routingSlug`'s host (the apex when absent) at `path`. */
 const IntegrationPlace = z.strictObject({
   routingSlug: Slug.optional(),
   // one leading slash: `//host` would read as an authority when the URL is composed
@@ -95,7 +95,7 @@ export const IntegrationRegistryContract = defineProcessorContract({
   slug: "integration",
   version: "1",
   description:
-    "The integrations a project's packages registered, and their connections: what the Dash's Integrations page shows.",
+    "The integrations a mind's packages registered, and their connections: what the Dash's Integrations page shows.",
   stateSchema: z.object({
     /** Every registered card, by the integration's name. */
     integrations: z.record(z.string(), IntegrationCard).default({}),

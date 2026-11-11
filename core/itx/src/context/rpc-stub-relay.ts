@@ -10,7 +10,7 @@ import { dialRpcStubFetch } from "./fetch-upgrade.ts";
 import { redial } from "./redial.ts";
 import {
   disposeRpcStub,
-  encodeRpcStubPagerAttachRequest,
+  type RpcStubPagerAttachRequest,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
 } from "./rpc-stubs.ts";
@@ -147,10 +147,10 @@ export async function lendRpcStubOverPager(
     durableObjectStub().fetch("https://rpc-stub-pager.internal/", {
       headers: {
         Upgrade: "websocket",
-        [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
-          rpcStubKey,
-          appendEvents,
-        }),
+        // URI-encoded: a header is a ByteString, and a key or an event is not
+        [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeURIComponent(
+          JSON.stringify({ rpcStubKey, appendEvents } satisfies RpcStubPagerAttachRequest),
+        ),
       },
     });
   let response: Response;

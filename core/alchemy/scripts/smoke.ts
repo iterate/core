@@ -1,10 +1,10 @@
 import {
   platformOriginOf,
-  projectApiUrlOf,
-  projectMcpUrlOf,
-  projectProvideUrlOf,
+  mindApiUrlOf,
+  mindMcpUrlOf,
+  mindProvideUrlOf,
   protectedResourceMetadataUrlOf,
-} from "iterate/project-api";
+} from "iterate/mind-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { sandboxChecks } from "./smoke/sandboxes.ts";
@@ -17,13 +17,13 @@ import { approvalChecks } from "./smoke/approvals.ts";
 import { cloudChecks } from "./smoke/cloud.ts";
 import { secretChecks } from "./smoke/secrets.ts";
 import { appsChecks } from "./smoke/apps.ts";
-import { attempt, ownsPlatformAlone, projectRoot } from "./smoke/lib.ts";
+import { attempt, ownsPlatformAlone, mindRoot } from "./smoke/lib.ts";
 
-/** Checks the stack deployed on `domain`, the zone of its project config. */
+/** Checks the stack deployed on `domain`, the zone of its mind config. */
 export default async function smoke(
-  /** The project's domain, e.g. example.com. */
+  /** The mind's domain, e.g. example.com. */
   domain: string,
-  /** `provided` for a stack whose project runs elsewhere (core/home-lab); when not given, a stack
+  /** `provided` for a stack whose mind runs elsewhere (core/home-lab); when not given, a stack
    *  whose `/provide` takes WebSockets (426 to a plain GET) is one. */
   mode?: "worker" | "provided",
   /** The config's `hostnames`: `platform` for a stack that owns `iterate.<domain>` alone. */
@@ -32,7 +32,7 @@ export default async function smoke(
   if (hostnames === "platform") ownsPlatformAlone();
   const provided = mode
     ? mode === "provided"
-    : (await fetch(projectProvideUrlOf(domain)).then(async (response) => {
+    : (await fetch(mindProvideUrlOf(domain)).then(async (response) => {
         await response.body?.cancel();
         return response.status;
       })) === 426;
@@ -47,9 +47,9 @@ export default async function smoke(
       ...(await cliChecks(domain)),
       ...(await telemetryChecks(domain)),
       {
-        check: "the project Worker's checks (skeleton, loader, MCP, birth, files)",
+        check: "the mind Worker's checks (skeleton, loader, MCP, birth, files)",
         pass: true,
-        detail: "skipped: the project is provided, and has no project Worker",
+        detail: "skipped: the mind is provided, and has no mind Worker",
       },
     ];
     return report(results);
@@ -57,18 +57,18 @@ export default async function smoke(
   const results = [
     await pageContains(`${platformOriginOf(domain)}/`, "Sign-in for"),
     await pageContains(`${platformOriginOf(domain)}/secrets/`, "secrets:"),
-    ...(await skeletonHops(`${projectApiUrlOf(domain)}/_skeleton`)),
+    ...(await skeletonHops(`${mindApiUrlOf(domain)}/_skeleton`)),
     ...(process.env.ITERATE_PROTOTYPE_TOKEN
       ? await apiChecks(domain, process.env.ITERATE_PROTOTYPE_TOKEN)
       : [
           {
-            check: "the project's API (iterate.<domain>/api)",
+            check: "the mind's API (iterate.<domain>/api)",
             pass: true,
             detail: "skipped: ITERATE_PROTOTYPE_TOKEN is not set",
           },
         ]),
     ...(await loadedCodeAndMcpChecks(domain)),
-    ...(await projectBirthChecks(domain)),
+    ...(await mindBirthChecks(domain)),
     ...(await authChecks(domain)),
     ...(await filesAndCallerChecks(domain)),
     ...(await secretChecks(domain)),
@@ -138,22 +138,22 @@ const skeletonHops = async (url: string) => {
       detail: JSON.stringify(hops.principal),
     },
     {
-      check: "project → door → https://example.com/",
+      check: "mind → door → https://example.com/",
       pass: hops.egressFetchStatus === 200,
       detail: `${hops.egressFetchStatus}`,
     },
     {
-      check: "project → door → the issuer (iterate.<domain>), in the boundary",
+      check: "mind → door → the issuer (iterate.<domain>), in the boundary",
       pass: hops.authThroughEgressStatus === 200,
       detail: `${hops.authThroughEgressStatus}`,
     },
     {
-      check: "project → door → secrets Worker: a verb answers for /secrets/skeleton",
+      check: "mind → door → secrets Worker: a verb answers for /secrets/skeleton",
       pass: hops.secretsEventCount >= 1,
       detail: `${hops.secretsEventCount}`,
     },
     {
-      check: "project reads its own /integrations/email",
+      check: "mind reads its own /integrations/email",
       pass: true,
       detail: `${hops.emailEventCount} events`,
     },
@@ -169,9 +169,9 @@ const apiChecks = async (domain: string, token: string) => {
     );
   return [
     await attempt("api: stamped caller — whoami, append on /, read it back", async () => {
-      const itx = projectRoot(domain, token);
+      const itx = mindRoot(domain, token);
       const [who, [root]] = await Promise.all([itx.whoami(), itx.append(event)]);
-      const page = await projectRoot(domain, token).readEvents(root!.offset - 1, 10);
+      const page = await mindRoot(domain, token).readEvents(root!.offset - 1, 10);
       return {
         pass: who.path === "/" && found(page),
         detail: `whoami ${JSON.stringify(who)}; / at ${root!.offset} read back ${found(page)}`,
@@ -183,7 +183,7 @@ const apiChecks = async (domain: string, token: string) => {
 const loadedCodeAndMcpChecks = async (domain: string) => {
   const token = process.env.ITERATE_PROTOTYPE_TOKEN;
   if (!token) return [];
-  const root = () => projectRoot(domain, token);
+  const root = () => mindRoot(domain, token);
   const marker = crypto.randomUUID();
   const RunAnswer = z.object({ marker: z.string(), offset: z.number() });
   const workerSource = {
@@ -198,7 +198,7 @@ const loadedCodeAndMcpChecks = async (domain: string) => {
       "",
     ].join("\n"),
   };
-  const mcpUrl = projectMcpUrlOf(domain);
+  const mcpUrl = mindMcpUrlOf(domain);
   const metadataUrl = protectedResourceMetadataUrlOf(mcpUrl);
   const mcp = async (id: number, method: string, params: object, withToken: boolean) => {
     const response = await fetch(mcpUrl, {
@@ -298,17 +298,17 @@ type SaidSource = {
   onBehalfOf?: { principal?: { actor?: string }; via?: unknown; call?: string };
 };
 
-const projectBirthChecks = async (domain: string) => {
+const mindBirthChecks = async (domain: string) => {
   const token = process.env.ITERATE_PROTOTYPE_TOKEN;
   if (!token) return [];
-  const root = () => projectRoot(domain, token);
+  const root = () => mindRoot(domain, token);
   const marker = crypto.randomUUID().slice(0, 8);
   let said: SaidSource | undefined;
   const outcomeOf = async (commitOid: string) =>
     (await root().waitForEvent({
       type: [
-        "events.iterate.com/project/worker-updated",
-        "events.iterate.com/project/worker-update-failed",
+        "events.iterate.com/mind/worker-updated",
+        "events.iterate.com/mind/worker-update-failed",
       ],
       payload: { commitOid },
       afterOffset: 0,
@@ -326,29 +326,29 @@ const projectBirthChecks = async (domain: string) => {
   return [
     await attempt("birth: the root has its certificate and a published config", async () => {
       const published = await root().waitForEvent({
-        type: "events.iterate.com/project/worker-updated",
+        type: "events.iterate.com/mind/worker-updated",
         afterOffset: 0,
         timeoutMs: 120_000,
       });
       const created = await root().waitForEvent({
-        type: "events.iterate.com/project/created",
+        type: "events.iterate.com/mind/created",
         afterOffset: 0,
         timeoutMs: 60_000,
       });
       const page = await root().readEvents(0, 1);
       return {
         pass: page.events[0]?.type === "events.iterate.com/itx/created" && created.offset > 0,
-        detail: `worker-updated at ${published.offset}; project/created at ${created.offset}`,
+        detail: `worker-updated at ${published.offset}; mind/created at ${created.offset}`,
       };
     }),
     await attempt("hostnames: the apex answers the config worker's page", async () => {
       const { status, body } = await pageOnceItHas(
         `https://${domain}/`,
-        "Homepage of project ",
+        "Homepage of mind ",
         10_000,
       );
       return {
-        pass: status === 200 && body.startsWith("Homepage of project "),
+        pass: status === 200 && body.startsWith("Homepage of mind "),
         detail: `${status} ${body.trim().slice(0, 80)}`,
       };
     }),
@@ -370,8 +370,8 @@ const projectBirthChecks = async (domain: string) => {
         const files = await repo().listFiles();
         const original = (await repo().readFile("worker.ts")) as string;
         const changed = original.replace(
-          "Homepage of project ",
-          `Homepage (smoke ${marker}) of project `,
+          "Homepage of mind ",
+          `Homepage (smoke ${marker}) of mind `,
         );
         if (changed === original) throw new Error("worker.ts holds no homepage text to change");
         const commit = async (content: string, message: string) => {
@@ -382,7 +382,7 @@ const projectBirthChecks = async (domain: string) => {
             parent,
           })) as { commitOid: string };
           const outcome = await outcomeOf(commitOid);
-          if (outcome.type !== "events.iterate.com/project/worker-updated")
+          if (outcome.type !== "events.iterate.com/mind/worker-updated")
             throw new Error(`commit ${commitOid} was not published: ${outcome.payload.error}`);
           return commitOid;
         };
@@ -455,7 +455,7 @@ const projectBirthChecks = async (domain: string) => {
 const filesAndCallerChecks = async (domain: string) => {
   const token = process.env.ITERATE_PROTOTYPE_TOKEN;
   if (!token) return [];
-  const root = () => projectRoot(domain, token);
+  const root = () => mindRoot(domain, token);
   const marker = crypto.randomUUID();
   const path = `/smoke/${marker}.txt`;
   const text = `smoke file ${marker}`;
@@ -490,8 +490,8 @@ const filesAndCallerChecks = async (domain: string) => {
       const who = (await root().whoami()) as { principal?: { actor?: string; email?: string } };
       return { pass: Boolean(who.principal?.actor), detail: JSON.stringify(who.principal) };
     }),
-    await attempt("mail in: a platform fact appended through Project.context lands", async () => {
-      const response = await fetch(`${projectApiUrlOf(domain)}/_skeleton`, {
+    await attempt("mail in: a platform fact appended through Mind.context lands", async () => {
+      const response = await fetch(`${mindApiUrlOf(domain)}/_skeleton`, {
         headers: { authorization: `Bearer ${token}` },
       });
       const hops = z

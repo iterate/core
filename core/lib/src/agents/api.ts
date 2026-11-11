@@ -1,4 +1,4 @@
-// api.ts — `itx.agents`, the agents app's published type. A project installs the app (install.ts
+// api.ts — `itx.agents`, the agents app's published type. A mind installs the app (install.ts
 // mounts the collection facet as the `itx.agents` rewrite rule), so iterate/api does not name it.
 // Importing `iterate/agents` registers the root on iterate/api's `InstalledAppRoots`, and a caller
 // that knows agents are installed writes `itx as IterateContextApiWith<"agents">`. catalog.ts and
@@ -16,7 +16,7 @@ export type AgentMessageInput =
 
 /** How `message` delivers the words. `trigger: false` makes them context only: the agent reads
  *  them on its next turn but does not wake for them (an FYI that needs nothing now). The default,
- *  `trigger: true`, starts a turn, unless the project gates words between agents (message.ts). */
+ *  `trigger: true`, starts a turn, unless the mind gates words between agents (message.ts). */
 export type AgentMessageOptions = { trigger?: boolean };
 
 /** `itx.agents.get(path)`: one agent. Anything else on its context is a plain
@@ -47,7 +47,7 @@ export type AgentListing = {
   lastActivityAt: string | null;
 };
 
-/** `itx.agents` — installed by rewrite rule on the project's root and on each agent's context.
+/** `itx.agents` — installed by rewrite rule on the mind's root and on each agent's context.
  *  `create` and `delete` are sagas on the agent's path (a deleted agent is not re-creatable; a
  *  `delete` of an agent never created refuses, NOT_CREATED). `delete` of an agent that is not
  *  iterate's own only records its death on `/agents`. */

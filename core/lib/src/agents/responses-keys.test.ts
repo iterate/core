@@ -351,14 +351,14 @@ test("a new incarnation never sees the last one's sockets: it opens its own at o
   line.sockets[1]?.close();
 });
 
-test("two agents with one path in two projects, in one isolate, keep a socket each", async () => {
+test("two agents with one path in two minds, in one isolate, keep a socket each", async () => {
   const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const line = openAi(() => [{ type: "response.completed", response: { output: [] } }]);
-  const projectA = (request: Request) => line.send(request);
-  const projectB = (request: Request) => line.send(request);
+  const mindA = (request: Request) => line.send(request);
+  const mindB = (request: Request) => line.send(request);
   const body = { stream: true, prompt_cache_key: "/agents/assistant" };
   const key = 'getSecret("/secrets/openai")';
-  for (const send of [projectA, projectB, projectA, projectB])
+  for (const send of [mindA, mindB, mindA, mindB])
     await postResponses(send, body, [key], live, IDLE_MS, readText);
   expect({ upgrades: line.upgrades.length, posts: line.posts }).toEqual({ upgrades: 2, posts: 0 });
   expect(warned).not.toHaveBeenCalled();

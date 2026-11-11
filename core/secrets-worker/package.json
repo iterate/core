@@ -1,0 +1,21 @@
+{
+  "name": "core-secrets-worker",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@octokit/auth-app": "8.3.1",
+    "curve25519-js": "0.0.4",
+    "iterate": "workspace:*",
+    "oauth4webapi": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

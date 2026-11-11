@@ -1,7 +1,6 @@
 import { expect, test } from "vitest";
 import {
   formatConfigRepoTemplateReference,
-  normalizeConfigRepoTemplateReference,
   parseConfigRepoTemplateReference,
 } from "./config-repo-template.ts";
 
@@ -29,8 +28,10 @@ test.for([
 
 test("serializes every accepted prefix to canonical GitHub shorthand", () => {
   expect(
-    normalizeConfigRepoTemplateReference(
-      " git+https://github.com/iterate/iterate.git#main&path:configs/with-voice ",
+    formatConfigRepoTemplateReference(
+      parseConfigRepoTemplateReference(
+        " git+https://github.com/iterate/iterate.git#main&path:configs/with-voice ",
+      ),
     ),
   ).toBe("github:iterate/iterate#main&path:configs/with-voice");
 });

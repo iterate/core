@@ -25,7 +25,7 @@ const walkCallerPath = new (NodeAsyncLocalStorage as new <T>() => {
 /** `callWithCause` (../cause.ts): the platform's way to walk `steps` on `host` under the cause of
  *  the call that made it — only as far as Workers RPC would reach, and never into `callWithCause`
  *  itself or `getItx`, which Workers RPC reaches on every loaded entrypoint (loaded-worker.ts).
- *  `callerPath` is the context the call came from, as the platform stamps it (core/os caller.ts
+ *  `callerPath` is the context the call came from, as the platform stamps it (core/itx/src/caller.ts
  *  `Caller.path`); `currentCallerPath` reads it while the walk runs. */
 export function walkUnderCause(
   host: object,

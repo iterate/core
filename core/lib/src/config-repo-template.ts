@@ -29,7 +29,7 @@ export function isSafeConfigRepoTemplatePath(path: string): boolean {
 
 /**
  * Parse the public-GitHub subset of pnpm's Git dependency syntax. The result
- * is plain structured data safe to place in durable project/repo requests;
+ * is plain structured data safe to place in durable mind/repo requests;
  * callers serialize it canonically before persisting the original string.
  */
 export function parseConfigRepoTemplateReference(input: string): ConfigRepoTemplateReference {
@@ -147,8 +147,4 @@ export function formatConfigRepoTemplateReference(reference: ConfigRepoTemplateR
   if (reference.ref) return `${repository}#${reference.ref}`;
   if (reference.path) return `${repository}#path:${reference.path}`;
   return repository;
-}
-
-export function normalizeConfigRepoTemplateReference(input: string): string {
-  return formatConfigRepoTemplateReference(parseConfigRepoTemplateReference(input));
 }

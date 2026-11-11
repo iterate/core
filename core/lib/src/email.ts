@@ -1,9 +1,9 @@
-// email.ts — EMAIL's events and threads: a project's mail, every message in or out on one context,
+// email.ts — EMAIL's events and threads: a mind's mail, every message in or out on one context,
 // `/integrations/email` (core/os src/email/contract.ts), inbound as `email/received` and each
-// `itx.email.send` as `email/sent`, both appended by the platform (core/os integrations/email.ts).
-// The first-party `email` facet there folds them into threads (core/os email/processor.ts); a config
+// `itx.email.send` as `email/sent`, both appended by the platform (core/mind-worker/src/integrations/email.ts).
+// The first-party `email` facet there folds them into threads (core/mind-worker/src/email/processor.ts); a config
 // repo reads its state and parses a message with this contract (core/configs/default/worker.ts). An
-// inbound message's bytes, as it arrived, and each attachment's are project files under `/email/`.
+// inbound message's bytes, as it arrived, and each attachment's are mind files under `/email/`.
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "./stream/processor.ts";
 
@@ -23,7 +23,7 @@ const EmailMessage = z.object({
   /** The message it answers, and its thread's ids oldest first: what threads it (processor.ts). */
   inReplyTo: z.string().nullable(),
   references: z.array(z.string()),
-  /** Each attachment's bytes are the project file at `path`. */
+  /** Each attachment's bytes are the mind file at `path`. */
   attachments: z.array(
     z.object({
       filename: z.string(),
@@ -37,7 +37,7 @@ const EmailMessage = z.object({
 export const EmailContract = defineProcessorContract({
   slug: "email",
   version: "1",
-  description: "A project's email, both directions, folded into threads.",
+  description: "A mind's email, both directions, folded into threads.",
   stateSchema: z.object({
     /** Every thread, keyed by the offset of its first message: that message's subject and the
      *  offset of every message in it, oldest first. */
@@ -51,7 +51,7 @@ export const EmailContract = defineProcessorContract({
   events: {
     "events.iterate.com/email/received": {
       description:
-        "A message arrived at one of the project's addresses (platform fact, keyed by its Message-ID).",
+        "A message arrived at one of the mind's addresses (platform fact, keyed by its Message-ID).",
       payloadSchema: EmailMessage.extend({
         /** Where the author asks for replies (Reply-To), when it is not `from`. */
         replyTo: z.string().optional(),
@@ -59,7 +59,7 @@ export const EmailContract = defineProcessorContract({
          *  (`<slug>@…`, or `<slug>+<tag>@…`). */
         envelope: z.object({ from: z.string(), to: z.string() }),
         /** The whole message as Cloudflare delivered it to `envelope.to`, its RFC 5322 bytes: the
-         *  project file at `path` (`/email/<message key>/<address>.eml`, `message/rfc822`), `size`
+         *  mind file at `path` (`/email/<message key>/<address>.eml`, `message/rfc822`), `size`
          *  bytes long (what Cloudflare's `rawSize` counts). A redelivery keeps the first delivery's
          *  file, and the event describes that one. Absent on a message recorded before the
          *  platform kept it. */
@@ -78,7 +78,7 @@ export const EmailContract = defineProcessorContract({
           /** The From address is proven by Cloudflare's checks as it received the message: an
            *  aligned DMARC pass, DKIM signature or SPF pass. A forged From is false. */
           verified: z.boolean(),
-          /** The From address is verified and belongs to a member of this project. */
+          /** The From address is verified and belongs to a member of this mind. */
           member: z.boolean(),
           /** The From domain's own server handed the message over: every Cloudflare record has an
            *  SPF pass for an aligned envelope domain (email/sender.ts). Anyone can re-send a
@@ -99,7 +99,7 @@ export const EmailContract = defineProcessorContract({
       }),
     },
     "events.iterate.com/email/sent": {
-      description: "The project sent a message through `itx.email.send` (platform fact).",
+      description: "The mind sent a message through `itx.email.send` (platform fact).",
       payloadSchema: EmailMessage,
     },
   },

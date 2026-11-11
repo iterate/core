@@ -7,7 +7,7 @@ const EXPRESSION_MAX_CHARS = 1024;
 // Steps, not time: `Date.now()` doesn't move during a synchronous turn on Workers.
 const EVALUATION_MAX_STEPS = 10_000;
 
-// Expressions are a project's code in an isolate other projects share. Path steps read inherited
+// Expressions are a mind's code in an isolate other minds share. Path steps read inherited
 // properties, so a name on Object.prototype (or $eval/$lookup building one) could pollute it.
 const NAMES_ON_OBJECT_PROTOTYPE: ReadonlySet<unknown> = new Set(
   Object.getOwnPropertyNames(Object.prototype),

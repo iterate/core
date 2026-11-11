@@ -2,7 +2,7 @@
 // tasks/full-stack-apps.md that need a person, which scripts/smoke/apps.ts cannot run.
 //
 //   node --env-file-if-exists=.secrets scripts/apps-browser-proof.ts <domain>
-// ITERATE_PROTOTYPE_TOKEN     the stand-in member token for the project's API
+// ITERATE_PROTOTYPE_TOKEN     the stand-in member token for the mind's API
 // ITERATE_PROOF_SESSION_FILE  a member's session at iterate.<domain>: { name, value, domain, path }
 // ITERATE_PROOF_SHOTS         the folder for screenshots (default: a new temp folder)
 //
@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { z } from "zod";
-import { projectRoot } from "./smoke/lib.ts";
+import { mindRoot } from "./smoke/lib.ts";
 
 const PROTOTYPES = ["jispwoso.com", "templesteins.com"];
 const domain = process.argv[2];
@@ -128,7 +128,7 @@ try {
       },
       [path, type, `wss://agents.${domain}/itx`] as const,
     );
-    const { events } = (await projectRoot(domain, token).cd(path).readEvents(0, 500)) as {
+    const { events } = (await mindRoot(domain, token).cd(path).readEvents(0, 500)) as {
       events: {
         type: string;
         payload: { message?: unknown };
@@ -177,7 +177,7 @@ try {
     );
   }
 
-  // 4. the same member's cookie, from another origin of the project: refused
+  // 4. the same member's cookie, from another origin of the mind: refused
   const other = await context.newPage();
   await other.goto(`https://${domain}/`, { waitUntil: "domcontentloaded" });
   const crossOrigin = await other.evaluate(

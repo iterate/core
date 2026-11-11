@@ -10,7 +10,7 @@ import files from "./public/";
 
 export function agentsApp() {
   return {
-    /** The init hook's part (worker.ts, `project/worker-updated`): the catalog on /agents and the
+    /** The init hook's part (worker.ts, `mind/worker-updated`): the catalog on /agents and the
      *  `itx.agents` rule, from the classes backend.ts exports. Idempotent. */
     install: (itx: Parameters<typeof installAgents>[0]) =>
       installAgents(itx, { module: "apps/agents/backend.ts" }),
@@ -26,7 +26,7 @@ export function agentsApp() {
       // signs people in, so these two answers stand in for that gate. Nobody signed out gets this
       // far: worker.ts's guard answers them first.
       if (url.pathname === "/.auth/session.json") {
-        // which platform this page talks to: the project's own, one label beside this host
+        // which platform this page talks to: the mind's own, one label beside this host
         const platform = `https://iterate.${url.hostname.split(".").slice(1).join(".")}`;
         return Response.json({ issuer: platform, defaultIssuer: platform });
       }

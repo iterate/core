@@ -10,7 +10,7 @@ import type { OnBehalfOf } from "./on-behalf-of.ts";
 export type Caller = {
   principal: Principal | null;
   grant?: string;
-  // A member's session held by a page of the project's own host (serve-host.ts `itxSession`).
+  // A member's session held by a page of the mind's own host (serve-host.ts `itxSession`).
   via?: { appPage: string };
   // Set by the first `cd` hop. Its presence means the input expression was already admitted;
   // fresh env.ITX calls never inherit it.
@@ -60,7 +60,7 @@ export function refusePlatformIdempotencyKeys(
   events: readonly { idempotencyKey?: string }[],
   caller: Caller,
 ): void {
-  const platformKey = caller.app && /^(?:itx|project|repo|workspace|sandbox|secret)[/@]/;
+  const platformKey = caller.app && /^(?:itx|mind|repo|workspace|sandbox|secret)[/@]/;
   if (!platformKey) return;
   for (const { idempotencyKey } of events)
     if (idempotencyKey && platformKey.test(idempotencyKey))
@@ -72,8 +72,8 @@ export function refusePlatformIdempotencyKeys(
 
 // Readers trust these by type alone, so the append boundary refuses anyone else's.
 const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set([
-  "events.iterate.com/project/worker-updated",
-  "events.iterate.com/project/worker-update-failed",
+  "events.iterate.com/mind/worker-updated",
+  "events.iterate.com/mind/worker-update-failed",
   "events.iterate.com/email/received",
   "events.iterate.com/email/sent",
   "events.iterate.com/webhook/received",
@@ -104,7 +104,7 @@ function refuseThePlatformsOwn(events: readonly StreamEventInput[]): void {
     )
       throw codedError(
         "FORBIDDEN",
-        "`itx.config` is the project's published config: only the platform's publication writes it (commit to /repos/config)",
+        "`itx.config` is the mind's published config: only the platform's publication writes it (commit to /repos/config)",
       );
   }
 }

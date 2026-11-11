@@ -2,11 +2,11 @@
 import { expect, test } from "vitest";
 import { missingScopes } from "./integration-scopes.ts";
 
-// A PERSON'S ACCOUNT FOR A PROJECT: connected at once when it holds every scope asked, else the
+// A PERSON'S ACCOUNT FOR A MIND: connected at once when it holds every scope asked, else the
 // scopes it lacks are what Google or Cloudflare is asked to add.
 test.for([
   {
-    row: "a Google sign-in with Gmail, asked the project's default",
+    row: "a Google sign-in with Gmail, asked the mind's default",
     provider: "google",
     granted: ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.modify"],
     asked: [
@@ -45,6 +45,6 @@ test.for([
     asked: [],
     missing: [],
   },
-] as const)("a person's account for a project — $row", ({ provider, granted, asked, missing }) =>
+] as const)("a person's account for a mind — $row", ({ provider, granted, asked, missing }) =>
   expect(missingScopes(provider, granted, asked)).toEqual(missing),
 );

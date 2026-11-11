@@ -1,6 +1,6 @@
 // sdk/direct-append.ts — A FACET'S DIRECT APPEND, HELD WHILE USED. Every push a context hands its
 // facet carries the context's own `append`, as a function, under the caller the facet's `env.ITX`
-// would stamp (core/os iterate-context-durable-object.ts `#directAppendFor`): the facet's engine
+// would stamp (core/itx/src/iterate-context-durable-object.ts `#directAppendFor`): the facet's engine
 // appends through it straight into the context, with no entrypoint invocation and no second hop
 // between. A voice agent's speaker frame takes about 0 ms this way, against 4–5 ms at p50 through
 // `env.ITX` (measured 2026-10-10), and one sender awaits every frame of a reply.

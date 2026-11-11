@@ -4,15 +4,15 @@ import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Alchemy from "alchemy";
 import * as Output from "alchemy/Output";
 import { Stage } from "alchemy/Stage";
-import { authConfigOf, firstOwnerTicketOf } from "core-auth/config";
+import { authConfigOf, firstOwnerTicketOf } from "core-auth-worker/config";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
-import { platformOriginOf } from "iterate/project-api";
-import { type ProjectConfig, resourceNamesOf } from "./config.ts";
+import { platformOriginOf } from "iterate/mind-api";
+import { type MindConfig, resourceNamesOf } from "./config.ts";
 
 /** A path in `core/`, from this file: a deploy from any working directory finds it. */
 const core = (path: string) => resolve(import.meta.dirname, "../..", path);
@@ -20,15 +20,15 @@ const core = (path: string) => resolve(import.meta.dirname, "../..", path);
  *  stack that shares its zone with another Worker (the iterate Cloud, an issuer) must reach it. */
 const STRICTLY_PUBLIC = "global_fetch_strictly_public";
 
-export const projectStack = (config: ProjectConfig) =>
+export const mindStack = (config: MindConfig) =>
   Effect.gen(function* () {
     const names = resourceNamesOf(config.name);
     const domain = config.domain;
-    const provided = config.project?.provided === true;
+    const provided = config.mind?.provided === true;
     const stage = yield* Stage;
     if (stage !== config.name)
       return yield* refuse(
-        `the stage is ${stage}, but it must be the project's name: --stage ${config.name}`,
+        `the stage is ${stage}, but it must be the mind's name: --stage ${config.name}`,
       );
 
     // The config decides, never the variable's presence: a deploy from a shell without it would put a
@@ -71,13 +71,13 @@ export const projectStack = (config: ProjectConfig) =>
     authConfigOf(domain, authSettings);
     const db = yield* Cloudflare.D1.Database("AuthDb", {
       name: names.authDb,
-      migrations: core("auth/migrations"),
+      migrations: core("auth-worker/migrations"),
     });
     const kv = yield* Cloudflare.KV.Namespace("AuthKv", { title: names.authKv });
     const authSendEmail = yield* Cloudflare.Email.SendEmail("AUTH_SEND_EMAIL");
     const auth = yield* Cloudflare.Worker("Auth", {
       name: names.auth,
-      main: core("auth/src/worker.ts"),
+      main: core("auth-worker/src/worker.ts"),
       // A client metadata document is fetched from the public internet alone, which the OAuth library
       // requires before it offers such clients at all.
       compatibility: { date: COMPATIBILITY_DATE, flags: [STRICTLY_PUBLIC] },
@@ -99,7 +99,7 @@ export const projectStack = (config: ProjectConfig) =>
 
     const secrets = yield* Cloudflare.Worker("Secrets", {
       name: names.secrets,
-      main: core("secrets/src/worker.ts"),
+      main: core("secrets-worker/src/worker.ts"),
       // nodejs_compat: `node:crypto` and `Buffer`; Alchemy adds it by default only before 2026-08-04.
       compatibility: { date: COMPATIBILITY_DATE, flags: ["nodejs_compat", STRICTLY_PUBLIC] },
       observability,
@@ -116,15 +116,15 @@ export const projectStack = (config: ProjectConfig) =>
       },
     });
 
-    const projectSigningKey =
-      !provided && (yield* Alchemy.Random("ProjectSigningKey", { bytes: 32 })).text;
-    // The boundary and the project bind each other: each binding is the Effect that declares the other
+    const mindSigningKey =
+      !provided && (yield* Alchemy.Random("MindSigningKey", { bytes: 32 })).text;
+    // The boundary and the mind bind each other: each binding is the Effect that declares the other
     // Worker, which Alchemy resolves once both are registered, so both are declared before either is yielded.
-    const declaredProject =
-      projectSigningKey &&
+    const declaredMind =
+      mindSigningKey &&
       Effect.gen(function* () {
-        const projectKv = yield* Cloudflare.KV.Namespace("ProjectKv", {
-          title: `${names.project}-kv`,
+        const mindKv = yield* Cloudflare.KV.Namespace("MindKv", {
+          title: `${names.mind}-kv`,
         });
         const artifacts = yield* Cloudflare.Artifacts.Namespace("ARTIFACTS", {
           namespace: names.repos,
@@ -134,9 +134,9 @@ export const projectStack = (config: ProjectConfig) =>
           name: names.files,
           forceDestroy: true,
         });
-        return yield* Cloudflare.Worker("Project", {
-          name: names.project,
-          main: core("project/src/worker.ts"),
+        return yield* Cloudflare.Worker("Mind", {
+          name: names.mind,
+          main: core("mind-worker/src/worker.ts"),
           // allow_irrevocable_stub_storage (experimental): loaded code stores its env.ITX stub and
           // replays it; every worker in the chain needs it.
           compatibility: {
@@ -152,35 +152,35 @@ export const projectStack = (config: ProjectConfig) =>
           workersDev: { enabled: false, previewsEnabled: false },
           env: {
             DOMAIN: domain,
-            PROJECT_NAME: config.project?.name || config.name,
-            PROJECT_TEMPLATE: config.project?.template || "default",
+            MIND_NAME: config.mind?.name || config.name,
+            MIND_TEMPLATE: config.mind?.template || "default",
             DOOR: Effect.map(
               Effect.suspend(
                 (): Effect.Effect<Cloudflare.Worker, unknown, unknown> => declaredBoundary,
               ),
               (boundary) => Cloudflare.WorkerEntrypoint(boundary, { entrypoint: "Door" }),
             ),
-            CONTEXTS: Cloudflare.DurableObject("PROJECT_CONTEXT", {
+            CONTEXTS: Cloudflare.DurableObject("MIND_CONTEXT", {
               className: "IterateContextDurableObject",
             }),
             CF_VERSION_METADATA: Cloudflare.Workers.VersionMetadata(),
             LOADER: Cloudflare.Workers.WorkerLoader("LOADER"),
-            PROJECT_KV: projectKv,
+            MIND_KV: mindKv,
             ARTIFACTS: artifacts,
             FILES: bucket,
-            PROJECT_SIGNING_KEY: projectSigningKey,
+            MIND_SIGNING_KEY: mindSigningKey,
             AI: Cloudflare.Workers.AI(),
             // An imageless Container gives the class its `ctx.container`; the image is a Container of
             // its own, which `ctx.container.images` holds under its name.
             SANDBOX_CONTAINER: Cloudflare.DurableObject("SandboxContainer", {
               containers: [
                 Cloudflare.Container("SandboxContainer", { schedulingPolicy: "durable_object" }),
-                ...(config.project?.sandboxImage === "managed"
+                ...(config.mind?.sandboxImage === "managed"
                   ? []
                   : [
                       Cloudflare.Container("iterate-dev-image", {
                         schedulingPolicy: "durable_object",
-                        context: core("project/images/iterate-dev-image"),
+                        context: core("mind-worker/images/iterate-dev-image"),
                       }),
                     ]),
               ],
@@ -219,36 +219,35 @@ export const projectStack = (config: ProjectConfig) =>
           TELEMETRY: Cloudflare.WorkerEntrypoint(telemetry.worker, { entrypoint: "Telemetry" }),
         }),
       };
-      // One logical id and Worker name for both modes, held from before the boundary existed: the live
-      // stacks' routes are attached to it (./config.ts `resourceNamesOf`).
-      if (declaredProject)
-        return yield* Cloudflare.Worker("Ingress", {
+      // One logical id and Worker name for both modes: the stack's routes are attached to it.
+      if (declaredMind)
+        return yield* Cloudflare.Worker("Boundary", {
           ...shared,
-          main: core("boundary/src/worker.ts"),
+          main: core("boundary-worker/src/worker.ts"),
           compatibility: { date: COMPATIBILITY_DATE, flags: [STRICTLY_PUBLIC] },
           env: {
             ...bindings,
-            PROJECT: Effect.map(declaredProject, (project) =>
-              Cloudflare.WorkerEntrypoint(project, { entrypoint: "Project" }),
+            MIND: Effect.map(declaredMind, (mind) =>
+              Cloudflare.WorkerEntrypoint(mind, { entrypoint: "Mind" }),
             ),
           },
         });
-      return yield* Cloudflare.Worker("Ingress", {
+      return yield* Cloudflare.Worker("Boundary", {
         ...shared,
-        main: core("boundary/src/provided.ts"),
+        main: core("boundary-worker/src/provided.ts"),
         compatibility: { date: COMPATIBILITY_DATE, flags: ["nodejs_compat", STRICTLY_PUBLIC] },
         // One `/provide` session is one long invocation: every call through it counts against its limits.
         limits: { subrequests: 1_000_000, cpuMs: 300_000 },
         env: {
           ...bindings,
-          CONTEXTS: Cloudflare.DurableObject("INGRESS_CONTEXT", {
+          CONTEXTS: Cloudflare.DurableObject("BOUNDARY_CONTEXT", {
             className: "IterateContextDurableObject",
           }),
           CF_VERSION_METADATA: Cloudflare.Workers.VersionMetadata(),
         },
       });
     });
-    if (declaredProject) yield* declaredProject;
+    if (declaredMind) yield* declaredMind;
     const boundary = yield* declaredBoundary;
 
     const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
@@ -282,7 +281,7 @@ export const projectStack = (config: ProjectConfig) =>
       yield* Cloudflare.Email.SendingSubdomain("EmailSending", { zoneId: zone.id, name: domain });
     }
     // Alchemy keeps the output in the state store once a deploy succeeded: a deploy with no config file
-    // reads the config back from it (./config.ts `storedProjectConfig`).
+    // reads the config back from it (./config.ts `storedMindConfig`).
     return { domain, boundary: boundary.workerName, config };
   });
 
@@ -337,7 +336,7 @@ const telemetryPart = (names: ReturnType<typeof resourceNamesOf>) =>
         http: false,
         workerBinding: { enabled: true },
         schema: JSON.parse(
-          readFileSync(core(`telemetry/schemas/${table}.json`), "utf8"),
+          readFileSync(core(`telemetry-worker/schemas/${table}.json`), "utf8"),
         ) as Cloudflare.Basin.StreamFieldsSchema,
       });
       const sink = yield* Cloudflare.Basin.Sink(`Telemetry_${table}_sink`, {
@@ -361,7 +360,7 @@ const telemetryPart = (names: ReturnType<typeof resourceNamesOf>) =>
     const otlpSecret = yield* Alchemy.Random("TelemetryOtlpSecret", { bytes: 32 });
     const worker = yield* Cloudflare.Worker("Telemetry", {
       name: names.telemetry,
-      main: core("telemetry/src/worker.ts"),
+      main: core("telemetry-worker/src/worker.ts"),
       compatibility: { date: COMPATIBILITY_DATE },
       // never exported to itself: a failure to land would make more of what failed to land
       observability: {
@@ -377,8 +376,8 @@ const telemetryPart = (names: ReturnType<typeof resourceNamesOf>) =>
         ACCOUNT_ID: accountId,
         TELEMETRY_BUCKET: names.telemetryBucket,
         METRICS_DATASET: names.telemetryDataset,
-        OWN_WORKERS: [names.project, names.boundary].join(","),
-        PROJECT_WORKER: names.project,
+        OWN_WORKERS: [names.mind, names.boundary].join(","),
+        MIND_WORKER: names.mind,
         TELEMETRY_OTLP_SECRET: otlpSecret.text,
         TELEMETRY_CATALOG_TOKEN: catalogToken.value,
         TELEMETRY_ANALYTICS_TOKEN: analyticsToken.value,

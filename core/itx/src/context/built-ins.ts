@@ -9,7 +9,7 @@ import {
   InvokeHandle,
 } from "iterate/expression";
 import type { FacetSpec, IterateContextApi } from "iterate/api";
-import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
+import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import type { Cause } from "../cause.ts";
 import { refusePlatformIdempotencyKeys, sha256Hex, stampCaller, type Caller } from "../caller.ts";
@@ -63,7 +63,7 @@ export interface BuiltInScope {
   builtins: Omit<BuiltInScope, "builtins">;
   whoami(): Promise<{
     path: string;
-    projectSlug?: string;
+    mindSlug?: string;
     principal?: { actor: string; email?: string };
   }>;
   fetchRoutes: IterateContextApi["fetchRoutes"];
@@ -184,11 +184,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       ...keyed.map((event) => stampCaller(event, { ...caller, onBehalfOf }, path)),
     );
   };
-  const assertOnProjectRoot = (verb: string) => {
+  const assertOnMindRoot = (verb: string) => {
     if (path !== "/")
       throw codedError(
         "INVALID_CONTEXT",
-        `itx.fetchRoutes.${verb}: a project's fetch routes live on its root "/" — reach them there, itx.cd("/").fetchRoutes`,
+        `itx.fetchRoutes.${verb}: a mind's fetch routes live on its root "/" — reach them there, itx.cd("/").fetchRoutes`,
       );
   };
 
@@ -197,7 +197,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     ...buildIdentityRoots(deps),
     fetchRoutes: {
       set: async (fetchRouteName, route) => {
-        assertOnProjectRoot("set");
+        assertOnMindRoot("set");
         const refusal = (reason: string) =>
           codedError(
             "INVALID_INPUT",
@@ -240,7 +240,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return { fetchRouteName };
       },
       list: async () => {
-        assertOnProjectRoot("list");
+        assertOnMindRoot("list");
         return Object.entries(deps.fetchRoutes())
           .map(([fetchRouteName, route]) => ({ fetchRouteName, ...route }))
           .sort(
@@ -248,7 +248,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           );
       },
       match: async (request) => {
-        assertOnProjectRoot("match");
+        assertOnMindRoot("match");
         return matchFetchRoute(deps.fetchRoutes(), {
           url: request.url,
           headers: new Headers(request.headers),
@@ -415,12 +415,12 @@ export function buildIdentityRoots(
   const { path } = deps;
   return {
     whoami: async () => {
-      const { projectSlug } = itxHost();
+      const { mindSlug } = itxHost();
       const principal = deps.caller().principal;
       return {
         path,
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
-        ...(projectSlug && { projectSlug }),
+        ...(mindSlug && { mindSlug }),
         ...(principal && {
           principal: {
             actor: principal.actor,

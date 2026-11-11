@@ -15,7 +15,7 @@ test.skipIf(!DRY)("render the chief's next request", () => {
     "AGENTS.md": `AGENTS.md (/repos/config), as it is now:\n\n${src.agents}`,
     "chief-of-staff.md": `chief-of-staff.md (/repos/config), as it is now:\n\n${src.role}`,
     "capability-tree": stableCapabilityTree(src.tree)!,
-    identity: `CURRENT PROJECT: ${JSON.stringify(src.whoami)}`,
+    identity: `CURRENT MIND: ${JSON.stringify(src.whoami)}`,
   };
   const last = Math.max(...state.contextItems.map((item: RenderItem) => item.offset));
   const items: RenderItem[] = [

@@ -14,7 +14,7 @@ test.for<{ headers: Record<string, string>; status: number }>([
 });
 
 // Signed out, every method answers the platform's sign-in challenge; the edge turns it into the
-// sign-in redirect for a page load (core/os project-host-sign-in.ts), under any base path.
+// sign-in redirect for a page load (core/boundary-worker/src/mind-host-sign-in.ts), under any base path.
 test.for<{ method: string; headers: Record<string, string> }>([
   { method: "GET", headers: { origin: "" } },
   { method: "HEAD", headers: {} },
@@ -26,8 +26,8 @@ test.for<{ method: string; headers: Record<string, string> }>([
   expect(response!.headers.get("WWW-Authenticate")).toBe('Bearer realm="iterate"');
 });
 
-// A WebSocket handshake is a GET, but it is checked like a write: every `<routingSlug>--<project>.iterate.app`
-// host is same-site with every other, so a SameSite=Lax cookie rides a socket another project opens.
+// A WebSocket handshake is a GET, but it is checked like a write: every `<routingSlug>--<mind>.iterate.app`
+// host is same-site with every other, so a SameSite=Lax cookie rides a socket another mind opens.
 const signedIn = { "x-itx-principal": JSON.stringify({ actor: "user:1" }) };
 test.for<{ name: string; headers: Record<string, string>; status: number | null }>([
   { name: "cross-origin", headers: { origin: "https://evil.example", ...signedIn }, status: 403 },

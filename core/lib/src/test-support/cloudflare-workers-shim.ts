@@ -5,7 +5,7 @@
 // (iterate/no-vi-mock). It proves nothing about the runtime: class bodies never run as Workers
 // here, and `env` starts empty; a test may fill it with the bindings the module reads
 // (packages/ui's src/apps/server.test.ts). Behaviour that needs workerd belongs in test/'s
-// workers project (test/vitest/os-workers/). Types still come from @cloudflare/workers-types; the alias
+// workers mind (test/vitest/os-workers/). Types still come from @cloudflare/workers-types; the alias
 // replaces the module at run time only.
 
 export class RpcTarget {}

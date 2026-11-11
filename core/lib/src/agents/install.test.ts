@@ -51,12 +51,12 @@ test("installAgents disables nothing once the root has no catalog of its own", a
 });
 
 /** The facet spec every row and rule of the app names: a class of the config repo's `agents.ts`,
- *  in the project's published config (the facet restarts by that module's bundle, not a key). */
+ *  in the mind's published config (the facet restarts by that module's bundle, not a key). */
 function published(className: string) {
   return { className, mainModule: "agents.ts", source: ["itx", ["cd", "/"], "config"] };
 }
 
-/** A project root, with processor rows named `rows`, that records the calls installing makes. */
+/** A mind root, with processor rows named `rows`, that records the calls installing makes. */
 function fakeRoot({ rows }: { rows: string[] }) {
   const calls: unknown[][] = [];
   return {

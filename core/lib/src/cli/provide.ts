@@ -1,14 +1,14 @@
-// provide.ts — `iterate provide <file>`: a local file's functions lent to the project as
+// provide.ts — `iterate provide <file>`: a local file's functions lent to the mind as
 // `itx.<name>` (core-itx iterate-context.ts `provide`) until Ctrl-C, lent again over each new
 // connection. A bridge on another machine (a WhatsApp session, a terminal manager) is one such file.
 import { existsSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { RpcTarget } from "capnweb";
-import type { ProjectConnection } from "../node.ts";
+import type { MindConnection } from "../node.ts";
 
 /** What `iterate provide` reads from a file: its default export, called on every connection with
- *  that connection's project, answers the object whose functions are lent; `description`, when
+ *  that connection's mind, answers the object whose functions are lent; `description`, when
  *  exported, is the one line a model reads for the name. */
 export type ProvidedFile = {
   provide: (input: { itx: unknown }) => unknown;
@@ -128,16 +128,16 @@ function lend(object: Record<string, unknown>): RpcTarget | null {
  *  wake, short enough that a lend whose network is gone for good says so and exits. */
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fill(30_000)];
 
-/** `iterate provide <file>`: lend the file's functions to the project as `itx.<name>` until Ctrl-C.
+/** `iterate provide <file>`: lend the file's functions to the mind as `itx.<name>` until Ctrl-C.
  *  On every connection — the first, and each one `reconnect` opens after one closes or the lend
  *  ends under it — the file's default export is called with that connection's root as `itx`,
  *  and what it answers is lent again at the same name: the file keeps its long-lived state (a
- *  socket, a session) in its own module scope and reaches the project through the newest `itx`.
+ *  socket, a session) in its own module scope and reaches the mind through the newest `itx`.
  *  `itx.<name>` is printed on stdout once live. Only when every attempt to reconnect fails does it
  *  end, with an error. */
 export async function runProvide(input: {
-  connection: ProjectConnection;
-  reconnect: () => Promise<ProjectConnection>;
+  connection: MindConnection;
+  reconnect: () => Promise<MindConnection>;
   file: ProvidedFile;
   name: string;
   /** the reconnect schedule — a test's, `RECONNECT_DELAYS_MS` otherwise */
@@ -154,13 +154,10 @@ export async function runProvide(input: {
   process.once("SIGTERM", stop);
   /** Lend over one connection until Ctrl-C, or until the connection closes or the lend ends — why,
    *  as a line. */
-  const serve = async (
-    connection: ProjectConnection,
-    first: boolean,
-  ): Promise<"stopped" | string> => {
-    const project = connection.itx;
-    const target = rpcTargetOf(await input.file.provide({ itx: project }));
-    using lend = await project.provide(
+  const serve = async (connection: MindConnection, first: boolean): Promise<"stopped" | string> => {
+    const mind = connection.itx;
+    const target = rpcTargetOf(await input.file.provide({ itx: mind }));
+    using lend = await mind.provide(
       match,
       target,
       input.file.description ? { description: input.file.description } : undefined,
@@ -179,7 +176,7 @@ export async function runProvide(input: {
     return await Promise.race([stopped, connectionClosed, lendEnded]);
   };
   const delaysMs = input.reconnectDelaysMs || RECONNECT_DELAYS_MS;
-  let connection: ProjectConnection | null = input.connection;
+  let connection: MindConnection | null = input.connection;
   let lastFailure = "";
   try {
     for (let first = true, failures = 0; ; first = false) {

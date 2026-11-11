@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
-import { ITERATE_ROUTING_SLUG_HEADER, ROUTING_SLUG } from "iterate/project-ingress";
+import { ITERATE_ROUTING_SLUG_HEADER, ROUTING_SLUG } from "iterate/mind-ingress";
 
 const FetchRouteName = z
   .string()
@@ -49,7 +49,7 @@ const FetchRouteRequestMatcher = z.strictObject({
 type FetchRouteRequestMatcher = z.infer<typeof FetchRouteRequestMatcher>;
 
 const FetchRouteAuthRequirement = z.strictObject({
-  visitors: z.literal("project-members"),
+  visitors: z.literal("mind-members"),
 });
 
 const FetchRouteTarget = z

@@ -1,5 +1,5 @@
 // tunnel.test.ts — the tunnel's local proxy, `LocalPortRpcTarget`, against real local servers: what
-// the project host's request becomes on `localhost:<port>`, a WebSocket that keeps the subprotocol
+// the mind host's request becomes on `localhost:<port>`, a WebSocket that keeps the subprotocol
 // the local server chose, and the 502 when nothing listens.
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";

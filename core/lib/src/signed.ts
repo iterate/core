@@ -3,8 +3,8 @@
 // before the signature checks. A page's script cannot import this module, so it copies `signedBytes`.
 
 export type Statement = {
-  /** The project's domain. */
-  project: string;
+  /** The mind's domain. */
+  mind: string;
   path: string;
   type: string;
   payload?: Record<string, unknown>;
@@ -161,7 +161,7 @@ export function statementOf(text: string): Statement | { refused: string } {
   const s = parsed as Record<string, unknown>;
   const string = (value: unknown) => typeof value === "string" && value.length > 0;
   const valid =
-    string(s.project) &&
+    string(s.mind) &&
     string(s.path) &&
     (s.path as string).startsWith("/") &&
     string(s.type) &&

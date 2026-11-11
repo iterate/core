@@ -1,11 +1,11 @@
-// What a project's apps stand on (tasks/full-stack-apps.md): a repo holds bytes, a published config
+// What a mind's apps stand on (tasks/full-stack-apps.md): a repo holds bytes, a published config
 // imports its files, and the Agents app of the default config answers on agents.<domain>. A check
 // that needs a signed-in person is not here: scripts/apps-browser-proof.ts runs those in a browser.
 import { randomBytes } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import type { RepoFileChange } from "iterate/api";
-import { platformOriginOf } from "iterate/project-api";
-import { attempt, type Check, projectRoot } from "./lib.ts";
+import { platformOriginOf } from "iterate/mind-api";
+import { attempt, type Check, mindRoot } from "./lib.ts";
 
 /** One request by hand: Node's `fetch` sends no `Upgrade` and no `Sec-Fetch-*`. Answers what came
  *  back, and follows nothing. */
@@ -47,20 +47,20 @@ export async function appsChecks(domain: string): Promise<Check[]> {
         detail: "skipped: ITERATE_PROTOTYPE_TOKEN is not set",
       },
     ];
-  const root = () => projectRoot(domain, token);
+  const root = () => mindRoot(domain, token);
   const repo = () => root().repos.get("/repos/config");
   const marker = crypto.randomUUID().slice(0, 8);
   const published = async (commitOid: string) => {
     const outcome = (await root().waitForEvent({
       type: [
-        "events.iterate.com/project/worker-updated",
-        "events.iterate.com/project/worker-update-failed",
+        "events.iterate.com/mind/worker-updated",
+        "events.iterate.com/mind/worker-update-failed",
       ],
       payload: { commitOid },
       afterOffset: 0,
       timeoutMs: 120_000,
     })) as { type: string; payload: { error?: string } };
-    if (outcome.type !== "events.iterate.com/project/worker-updated")
+    if (outcome.type !== "events.iterate.com/mind/worker-updated")
       throw new Error(`commit ${commitOid} was not published: ${outcome.payload.error}`);
   };
   const commit = async (message: string, changes: RepoFileChange[]) => {
@@ -74,13 +74,13 @@ export async function appsChecks(domain: string): Promise<Check[]> {
   const hasAgentsApp = files.paths.includes("apps/agents/app.ts");
   const withoutApp = {
     pass: true,
-    detail: "skipped: this project's config has no apps/agents (an older default config)",
+    detail: "skipped: this mind's config has no apps/agents (an older default config)",
   };
   const app = `https://agents.${domain}`;
   const hasOnboardingApp = files.paths.includes("apps/onboarding/app.ts");
   const withoutOnboardingApp = {
     pass: true,
-    detail: "skipped: this project's config has no apps/onboarding (an older default config)",
+    detail: "skipped: this mind's config has no apps/onboarding (an older default config)",
   };
 
   return [
@@ -116,7 +116,7 @@ export async function appsChecks(domain: string): Promise<Check[]> {
     ),
     await attempt("hostnames: a signed-out page load of the Agents app signs in", async () => {
       if (!hasAgentsApp) return withoutApp;
-      // the stand-in token is no bearer for a project host: a member's page is the browser proof's
+      // the stand-in token is no bearer for a mind host: a member's page is the browser proof's
       const page = await ask(`${app}/`, {
         "sec-fetch-mode": "navigate",
         "sec-fetch-dest": "document",
@@ -169,7 +169,7 @@ export async function appsChecks(domain: string): Promise<Check[]> {
       return { pass: listed, detail: `/agents/onboarding listed: ${listed}` };
     }),
     await attempt(
-      "hostnames: no answer of the project carries the platform's serve header",
+      "hostnames: no answer of the mind carries the platform's serve header",
       async () => {
         const answers = await Promise.all(
           [`https://${domain}/`, `${app}/itx`, `${app}/`].map(async (url) => {

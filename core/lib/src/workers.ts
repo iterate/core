@@ -5,8 +5,8 @@ import type { Principal } from "./principal.ts";
 import type { Envelope, Statement } from "./signed.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
-export interface ProjectTarget {
-  /** The project trusts the boundary's stamp because only the boundary can reach it. */
+export interface MindTarget {
+  /** The mind trusts the boundary's stamp because only the boundary can reach it. */
   fetch(request: Request): Promise<Response>;
   /** Idempotent by each event's `idempotencyKey`. */
   append(path: string, events: StreamEventInput[]): Promise<void>;
@@ -19,13 +19,13 @@ export type TokenIdentity = {
   grant: string;
   /** Unix seconds. */
   expiresAt: number;
-  /** Always true for the API, the MCP server and `/provide`; a project hostname's token answers for
+  /** Always true for the API, the MCP server and `/provide`; a mind hostname's token answers for
    *  anyone signed in. */
   member: boolean;
 };
 
 export interface Door {
-  /** A request for a hostname of the project's own domain is answered in the boundary: the global
+  /** A request for a hostname of the mind's own domain is answered in the boundary: the global
    *  `fetch` fails inside the zone. */
   fetch(request: Request): Promise<Response>;
   secret: SecretCall;
@@ -41,21 +41,19 @@ export type MetricPoint = { indexes?: string[]; blobs?: string[]; doubles?: numb
 
 export type TelemetryAnswer = { rows: Record<string, unknown>[]; sql: string };
 
-/** It holds the warehouse's tokens, so the project, which may be hostile, never holds one. */
+/** It holds the warehouse's tokens, so the mind, which may be hostile, never holds one. */
 export interface TelemetryService {
   /** `hours` is 24 by default and at most 720; at most 1,000 rows. */
   query(sql: string, hours?: number): Promise<TelemetryAnswer>;
   sendEvents(events: StreamEvent[]): Promise<void>;
-  /** For a project with no metrics binding of its own, a home lab's. */
+  /** For a mind with no metrics binding of its own, a home lab's. */
   writeMetrics(points: MetricPoint[]): Promise<void>;
 }
 
 /** One connection carries both directions, and it ends when the token does. */
 export interface ProvideSession {
   /** Disposing of the handle ends the lend; `lendEnded` settles, with why, when the other side ends it. */
-  provide(
-    project: ProjectTarget,
-  ): Promise<{ [Symbol.dispose](): void; lendEnded(): Promise<string> }>;
+  provide(mind: MindTarget): Promise<{ [Symbol.dispose](): void; lendEnded(): Promise<string> }>;
   door: Door;
 }
 
@@ -65,7 +63,7 @@ export interface AuthService {
    *  resource but a hostname, when its person is no member now. */
   whoIs(token: string, resource: string): Promise<TokenIdentity | null>;
   /** A public client whose one redirect is `https://<host>${HOST_SESSION_PREFIX}callback`. Refused
-   *  for a host outside the project's domain, or the platform's. */
+   *  for a host outside the mind's domain, or the platform's. */
   hostClient(host: string): Promise<string>;
   isMember(email: string): Promise<boolean>;
   /** `cookie` is the request's `Cookie` header on the issuer's origin; null when signed out. */
@@ -102,7 +100,7 @@ export type Verified =
     }
   | { refused: string };
 
-/** The boundary answers everything under it on a project hostname; the project never sees it. */
+/** The boundary answers everything under it on a mind hostname; the mind never sees it. */
 export const HOST_SESSION_PREFIX = "/.iterate/";
 
 export type SecretAnswer<T> = { result: T; facts: Facts };
@@ -164,7 +162,7 @@ export interface SecretsService {
   secret: SecretCall;
 }
 
-/** `from` must be an address on the project's domain. */
+/** `from` must be an address on the mind's domain. */
 export type OutboundEmail = {
   from: { email: string; name: string };
   to: string[];

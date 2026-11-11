@@ -2,28 +2,28 @@
 // (`device_authorization_endpoint` in its metadata): no listener, no browser on this computer.
 import * as oauth from "oauth4webapi";
 import { encode, renderUnicodeCompact } from "uqr";
-import { authorizationServerOf, type DiscoveredProject } from "../../client/oauth.ts";
+import { authorizationServerOf, type DiscoveredMind } from "../../client/oauth.ts";
 import type { StoredSession } from "../config.ts";
 import { registerClient, requestOptions, sessionFromTokens } from "../oauth.ts";
 import { pollUntilAnswered, type PollAnswer } from "./poll.ts";
 
-/** Sign in to `project`'s issuer from a browser on any device, for `resource`: the person opens the
+/** Sign in to `mind`'s issuer from a browser on any device, for `resource`: the person opens the
  *  printed page, checks the code, and approves. `deviceName` is the registration's `client_name`,
  *  which that page shows. `print` writes a line for the person, or the agent that relays it;
  *  `colors` says whether the person sees its colors (`showsColors`). */
 export async function deviceLogin(input: {
-  project: DiscoveredProject;
+  mind: DiscoveredMind;
   resource: string;
   deviceName: string;
   print: (line: string) => void;
   colors: boolean;
 }): Promise<StoredSession> {
-  const { project, resource } = input;
-  const issuer = project.issuer;
-  if (!project.endpoints.deviceAuthorization)
+  const { mind, resource } = input;
+  const issuer = mind.issuer;
+  if (!mind.endpoints.deviceAuthorization)
     throw new Error(`${new URL(issuer).host} does not offer the device sign-in.`);
-  const as = authorizationServerOf(project);
-  const client = await registerClient(project, {
+  const as = authorizationServerOf(mind);
+  const client = await registerClient(mind, {
     client_name: input.deviceName,
     token_endpoint_auth_method: "none",
     grant_types: ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
@@ -59,7 +59,7 @@ export async function deviceLogin(input: {
     onRetry: (reason, waitMs) =>
       input.print(`Could not reach ${issuer} (${reason}); trying again in ${waitMs / 1000} s.`),
   });
-  return sessionFromTokens(answer.tokens, project, client.client_id, answer.started);
+  return sessionFromTokens(answer.tokens, mind, client.client_id, answer.started);
 }
 
 /** `text` as a QR code for a phone's camera (uqr, https://github.com/unjs/uqr, error correction L),

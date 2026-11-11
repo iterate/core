@@ -1,4 +1,4 @@
-// agents/kinds.ts — KINDS OF AGENT. An agent kind is one file in a project's config repo
+// agents/kinds.ts — KINDS OF AGENT. An agent kind is one file in a mind's config repo
 // (`agent-kinds/<kind>.ts` by convention) whose default export is an `AgentKind`: what its agents
 // are called in the catalog, its server half (the shape of an `Integration`'s `processEvent`), what
 // the Agents app reads of an agent's log, and its chat view. A config repo's worker names its kinds,
@@ -17,7 +17,7 @@ import type { StreamEvent } from "../stream/processor.ts";
 export type AgentKind<View = unknown> = {
   /** The catalog's `kind` for these agents: the Agents app finds this file by it. */
   kind: string;
-  /** The server half: every durable event of the project, after the project's own cases. A kind
+  /** The server half: every durable event of the mind, after the mind's own cases. A kind
    *  answers its own: sets up an agent's rows when it starts, hands a `message-received` on one of
    *  its paths to whatever runs it, or does the work itself. Keyed appends: an event can come more
    *  than once. A kind whose agents run elsewhere (iterate's, in the platform) has none. */
@@ -49,7 +49,7 @@ export function makeAgentKind(meta: { url?: string }, load: () => Promise<{ defa
   return { path: decodeURIComponent(url.pathname).slice(1), load };
 }
 
-/** Writes `{ <kind>: <path> }` to the project's KV under `agent-kinds`, where the Agents app reads
+/** Writes `{ <kind>: <path> }` to the mind's KV under `agent-kinds`, where the Agents app reads
  *  which file has a kind's chat view. A path the repo doesn't have (`x.js`, as the platform loads
  *  it) is the `.ts` it was written as. */
 export async function publishAgentKinds(

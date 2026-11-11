@@ -348,12 +348,12 @@ test("live state with a sometimes-throwing projection: state advances through th
   expect(await p.snapshot()).toMatchObject({ state: { n: 1 } }); // the batch committed anyway
   expect(changes()).toHaveLength(0); // only the notification was lost
 
-  mem.stream.append({ type: "tick" }); // n: 1→2 — projects again; the holder HEALS
+  mem.stream.append({ type: "tick" }); // n: 1→2 — minds again; the holder HEALS
   await settle();
   expect(await p.snapshot()).toMatchObject({ state: { n: 2 } });
   // The holder diffs the LAST GOOD projection it stored ({n:0}) against the new one ({n:2}),
-  // COALESCING the lost n=1 window into one delta — it heals the moment it can project again,
-  // not only once both sides of a step project.
+  // COALESCING the lost n=1 window into one delta — it heals the moment it can mind again,
+  // not only once both sides of a step mind.
   expect(changes()).toHaveLength(1);
   const healed = changes()[0].payload as { from: number; to: number; patch: unknown };
   expect(healed).toMatchObject({ patch: [{ op: "replace", path: "/n", value: 2 }] });

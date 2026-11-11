@@ -1,20 +1,20 @@
-// chatgpt.ts — `iterate chatgpt connect`: A PERSON'S CHATGPT PLAN PAYS FOR THE PROJECT'S RESPONSES
+// chatgpt.ts — `iterate chatgpt connect`: A PERSON'S CHATGPT PLAN PAYS FOR THE MIND'S RESPONSES
 // API REQUESTS, with nothing to paste. OpenAI's Sign in with ChatGPT for open-source tools
 // (https://developers.openai.com/siwc/token-sharing-open-source) ends at a loopback address,
-// http://127.0.0.1:1455/auth/callback, on the computer the browser runs on. A project runs
-// elsewhere, so this process listens there and hands the code to the project:
+// http://127.0.0.1:1455/auth/callback, on the computer the browser runs on. A mind runs
+// elsewhere, so this process listens there and hands the code to the mind:
 //
-//   1. the project says its host id (made once, kept in its kv)
+//   1. the mind says its host id (made once, kept in its kv)
 //   2. this process listens on 127.0.0.1:1455 and opens OpenAI's consent in the browser
 //   3. OpenAI sends the browser back here with a code and the client it registered
-//   4. the project trades the code for tokens and keeps them, in one `itx.run` script
+//   4. the mind trades the code for tokens and keeps them, in one `itx.run` script
 //
-// The tokens are made inside the project and never reach this computer. This process holds the
-// PKCE verifier and the code for one sign-in, and sends both to the project once. The names below
+// The tokens are made inside the mind and never reach this computer. This process holds the
+// PKCE verifier and the code for one sign-in, and sends both to the mind once. The names below
 // are the ChatGPT integration's (the `iterate-chatgpt` package), which reads and writes the same.
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import type { ProjectItx } from "../node.ts";
+import type { MindItx } from "../node.ts";
 import { standalonePage } from "../standalone-page.ts";
 
 const ISSUER = "https://auth.openai.com";
@@ -44,7 +44,7 @@ export type Account = { id: string; email?: string; plan?: string; at: string };
 
 /** The account an id token names: its OpenID `sub`, its address, and the plan when the token says.
  *  The claims are not verified: the token comes straight from OpenAI's token endpoint over TLS, and
- *  they only label the account. The function runs in the project (`finishScript` puts its text
+ *  they only label the account. The function runs in the mind (`finishScript` puts its text
  *  there), so it refers to nothing outside itself. */
 function accountOf(idToken: string | undefined): Account {
   let claims: Record<string, any> = {};
@@ -108,7 +108,7 @@ export async function exchange(material, fetch) {
 
 const random = () => randomBytes(32).toString("base64url");
 
-/** OpenAI's consent page for one sign-in. `hostId` is the project's `urn:uuid:` id: OpenAI
+/** OpenAI's consent page for one sign-in. `hostId` is the mind's `urn:uuid:` id: OpenAI
  *  attributes the plan's usage to it. */
 export function authorizeUrl(input: {
   hostId: string;
@@ -210,7 +210,7 @@ export function waitForCallback(
   return promise;
 }
 
-/** The project's host id, made once, and who is connected now. */
+/** The mind's host id, made once, and who is connected now. */
 function hostScript(): string {
   return `async (itx) => {
   let id = await itx.kv.get(${JSON.stringify(HOST_KEY)});
@@ -227,7 +227,7 @@ function hostScript(): string {
 }`;
 }
 
-/** The project trades the code for tokens and keeps them: the secret, its refresh code, and the
+/** The mind trades the code for tokens and keeps them: the secret, its refresh code, and the
  *  account. It answers only `{ email, plan }`. Every value goes in as JSON. */
 export function finishScript(input: { code: string; clientId: string; verifier: string }): string {
   return `async (itx) => {
@@ -263,7 +263,7 @@ export function finishScript(input: { code: string; clientId: string; verifier: 
 }`;
 }
 
-/** One Responses request the plan pays for, sent from the project; it answers the text. */
+/** One Responses request the plan pays for, sent from the mind; it answers the text. */
 function testScript(): string {
   return `async (itx) => {
   const response = await fetch(${JSON.stringify(`${RESOURCE}/responses`)}, {
@@ -295,27 +295,27 @@ function testScript(): string {
 }`;
 }
 
-/** The whole sign-in against a connected project. `openBrowser` prints and opens the consent page. */
+/** The whole sign-in against a connected mind. `openBrowser` prints and opens the consent page. */
 export async function connectChatgpt(input: {
-  itx: ProjectItx;
+  itx: MindItx;
   address: string;
   test: boolean;
   print: (line: string) => void;
   openBrowser: (url: URL) => void | Promise<void>;
 }): Promise<{ message: string; test?: string }> {
   const { itx, address, print } = input;
-  const project = (await itx.run(hostScript())) as {
+  const mind = (await itx.run(hostScript())) as {
     hostId: string;
     connected: boolean;
     email?: string;
   };
-  if (project.connected)
+  if (mind.connected)
     print(
-      `${address} has a ChatGPT plan already (${project.email || "an account it does not name"}). This sign-in replaces it.`,
+      `${address} has a ChatGPT plan already (${mind.email || "an account it does not name"}). This sign-in replaces it.`,
     );
   const state = random();
   const verifier = random();
-  const url = authorizeUrl({ hostId: project.hostId, state, verifier, nonce: random() });
+  const url = authorizeUrl({ hostId: mind.hostId, state, verifier, nonce: random() });
   const callback = await waitForCallback(state, () => {
     print("Sign in with a personal ChatGPT Plus or Pro account, and allow iterate.");
     void input.openBrowser(url);
@@ -326,7 +326,7 @@ export async function connectChatgpt(input: {
     email?: string;
     plan?: string;
   };
-  const message = `Connected ${account.email || "an account"}${account.plan ? ` (${account.plan})` : ""} to ${address}. The project keeps the tokens in ${SECRET} and refreshes them itself.`;
+  const message = `Connected ${account.email || "an account"}${account.plan ? ` (${account.plan})` : ""} to ${address}. The mind keeps the tokens in ${SECRET} and refreshes them itself.`;
   if (!input.test) return { message };
   print("Connected. A test request on the plan...");
   return { message, test: (await itx.run(testScript())) as string };

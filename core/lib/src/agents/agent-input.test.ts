@@ -1,5 +1,5 @@
 // agent-input.test.ts — words other contexts put in an agent's log (message.ts): what `message()`
-// appends, and THE GATE (the loop holds words another agent sent until the project's gate says
+// appends, and THE GATE (the loop holds words another agent sent until the mind's gate says
 // whether they wake it).
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "../stream/processor.ts";

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { authorizeUrl, finishScript, waitForCallback } from "./chatgpt.ts";
 
-test("the consent URL asks OpenAI for the plan's usage, for this project's host id, with PKCE", () => {
+test("the consent URL asks OpenAI for the plan's usage, for this mind's host id, with PKCE", () => {
   const url = authorizeUrl({
     hostId: "urn:uuid:1",
     state: "the-state",
@@ -63,7 +63,7 @@ test("the listener ends with OpenAI's description when the sign-in was refused",
 test("the finish script keeps every value inside its JSON string", async () => {
   const clientId = `oaiapp_"); globalThis.leaked = ("`;
   const script = finishScript({ code: "c\nd", clientId, verifier: "v" });
-  // the script runs as the project would run it, with fetch and itx recorded
+  // the script runs as the mind would run it, with fetch and itx recorded
   const seen: { body?: string; material?: unknown; account?: string } = {};
   const fakeFetch = async (_url: string, init: { body: string }) => {
     seen.body = init.body;

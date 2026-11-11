@@ -1,7 +1,7 @@
 // message.ts — words one context puts in an agent's log: what `itx.agents.get(path).message(text,
 // options)` appends (`appendMessage`: ONE `agent/message-received`, the input every kind of agent
 // reads), the `context-added` iterate's loop turns it into (`messagePayload`), and the gate a
-// project may put on words another agent sent (`AgentInputGate`, the receiving side).
+// mind may put on words another agent sent (`AgentInputGate`, the receiving side).
 import type { IterateContextApi } from "../api.ts";
 import type { StreamEvent } from "../stream/processor.ts";
 import type { AgentMessageInput, AgentMessageOptions } from "./api.ts";
@@ -71,12 +71,12 @@ export function messagePayload(input: {
 }
 
 /** Whether `origin` is ANOTHER context than this agent's own: not the agent (its own scripts run
- *  there), not `/` (the project's code and its people). */
+ *  there), not `/` (the mind's code and its people). */
 export function isOtherContext(path: string, origin: string | undefined): boolean {
   return Boolean(origin) && origin !== path && origin !== "/";
 }
 
-/** A project's gate on words another agent sent without `trigger: false`, on the RECEIVING side
+/** A mind's gate on words another agent sent without `trigger: false`, on the RECEIVING side
  *  (processor.ts): it holds whether they arrived by `message()` or by a raw
  *  `context-added` append. A config repo's `agents.ts` sets it on the facet class. `applies` says,
  *  at once, whether this sender's words to this agent are gated at all; `decide` whether they wake

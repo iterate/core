@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { platformOriginOf } from "iterate/project-api";
+import { platformOriginOf } from "iterate/mind-api";
 import { base64url, fromBase64url, keyIdOf, signedP256, statementText } from "iterate/signed";
 
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
@@ -11,7 +11,7 @@ const { positionals, values } = parseArgs({
     paths: { type: "string", default: "/smoke/" },
     path: { type: "string", default: "/smoke/statement" },
     type: { type: "string", default: "events.iterate.com/test/statement-signed" },
-    project: { type: "string" },
+    mind: { type: "string" },
     twice: { type: "boolean", default: false },
   },
 });
@@ -50,7 +50,7 @@ if (command === "keygen" && file) {
   );
   const at = Date.now();
   const statement = statementText({
-    project: values.project || domain,
+    mind: values.mind || domain,
     path: values.path,
     type: values.type,
     payload: { smoke: true },
@@ -69,7 +69,7 @@ if (command === "keygen" && file) {
 } else {
   console.error(
     "usage: signed-statement.ts keygen <key-file> [--paths /a/,/b/]\n" +
-      "       signed-statement.ts send <key-file> <domain> [--path p] [--type t] [--project d] [--twice]",
+      "       signed-statement.ts send <key-file> <domain> [--path p] [--type t] [--mind d] [--twice]",
   );
   process.exitCode = 2;
 }

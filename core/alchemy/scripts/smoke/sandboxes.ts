@@ -1,4 +1,4 @@
-import { attempt, projectRoot, type Check } from "./lib.ts";
+import { attempt, mindRoot, type Check } from "./lib.ts";
 
 // A first start pulls the image, which takes longer than one call may: ask again, for at most this.
 const START_WAIT_MS = 8 * 60_000;
@@ -25,7 +25,7 @@ export async function sandboxChecks(domain: string): Promise<Check[]> {
   const marker = crypto.randomUUID().slice(0, 8);
   const sandbox = JSON.stringify(`/sandboxes/smoke-${marker}`);
   const workspace = JSON.stringify(`/workspaces/smoke-${marker}`);
-  const run = (code: string) => projectRoot(domain, token).run(code) as Promise<unknown>;
+  const run = (code: string) => mindRoot(domain, token).run(code) as Promise<unknown>;
   const onSandbox = (body: string) => `async (itx) => {
     const sandbox = itx.sandboxes.get(${sandbox});
     const started = async (call) => {
@@ -64,7 +64,7 @@ export async function sandboxChecks(domain: string): Promise<Check[]> {
       return { pass: read === written, detail: JSON.stringify(read) };
     }),
     await attempt("sandboxes: a request from inside leaves through the door", async () => {
-      // with no internet of its own, an answer can only have come through the project's door
+      // with no internet of its own, an answer can only have come through the mind's door
       const answer = (await run(
         onSandbox(`
           const result = await started(() =>

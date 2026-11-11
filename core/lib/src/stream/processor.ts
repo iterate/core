@@ -133,7 +133,7 @@ export function consumesEvent(
   return !consumes || consumes.includes("*") || consumes.includes(event.type);
 }
 
-/** A failure that is a LOOP_LIMIT refusal the platform recorded (core/os src/cause.ts
+/** A failure that is a LOOP_LIMIT refusal the platform recorded (core/itx/src/cause.ts
  *  `recordRefusal`) settles as done: the loop ends there, with its one fact, and nothing is retried
  *  or reported. Any other — an unrecorded one too — is rethrown. */
 const unlessLoopLimit = (error: unknown): void => {
@@ -694,7 +694,7 @@ export class ProcessorEngine<State> {
     // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
     let blockers: Promise<unknown> = Promise.resolve();
     // Validated against the declared `emits` and stamped with provenance. A certificate an entity
-    // cross-posts to ANOTHER context (`/`, the project catalog) is its own `itx.cd(path).append(...)`
+    // cross-posts to ANOTHER context (`/`, the mind catalog) is its own `itx.cd(path).append(...)`
     // through the host's `getItx` — the context's own append, no second verb here.
     const stamped = (emittedEvents: StreamEventInput[]): StreamEventInput[] => {
       for (const emitted of emittedEvents) {
@@ -712,7 +712,7 @@ export class ProcessorEngine<State> {
       }
       return emittedEvents;
     };
-    // A PROCESSOR'S EFFECTS (core/os src/cause.ts), each bound to its event's cause — an eventless
+    // A PROCESSOR'S EFFECTS (core/itx/src/cause.ts), each bound to its event's cause — an eventless
     // pass, the newest one's — with that event as their parent: what it appends to its own log keeps
     // that depth, so an agent's own turns stay flat, and anything else it does is code reacting to
     // code, one hand-off deeper.
@@ -795,7 +795,7 @@ export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  /** PROVENANCE, stamped by the platform as the event commits (core/os caller.ts `stampCaller`): a
+  /** PROVENANCE, stamped by the platform as the event commits (core/itx/src/caller.ts `stampCaller`): a
    *  writer's own `source` is dropped but for `processor`, the engine's label. */
   source?: {
     /** WHERE IT CAME FROM: the context whose code or session wrote it — the context a call started
@@ -829,7 +829,7 @@ export type StreamEventInput = {
      *  `principal` by the platform when it appends; absent for the admin secret and the kernel. */
     grant?: string;
     /** HOW THE PRINCIPAL CAME, when not through the platform's API with a bearer: `appPage` is the
-     *  project host whose page held the session (iterate/sdk `auth.itx`). The page is the project's
+     *  mind host whose page held the session (iterate/sdk `auth.itx`). The page is the mind's
      *  code, so the member was there, but what the page sent in their name is the page's doing.
      *  Stamped by the platform; a writer's own is dropped. */
     via?: { appPage: string };
@@ -1004,7 +1004,7 @@ export class ReduceCheckpointTable {
 }
 
 // ── live state ── THE live-state primitive: one value, its revision chain, and the diff→emit
-// dance Phoenix LiveView does, over the project's stream. Used two ways: a mini-app DO owns one
+// dance Phoenix LiveView does, over the mind's stream. Used two ways: a mini-app DO owns one
 // directly as its store; the ProcessorEngine owns one per processor and `set`s the projection after
 // every batch (sdk/index.ts shows both).
 //

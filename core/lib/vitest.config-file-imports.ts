@@ -3,7 +3,7 @@
 // (core/configs/default/files.d.ts says what loaded code gets). Vite reads neither by itself, so
 // core/lib's vitest config names this plugin. Loaded code is not changed for it.
 //
-// THE RULE IS THE LOADER'S: core/project/src/context/module-resolution.ts (`fileModule`,
+// THE RULE IS THE LOADER'S: core/mind-worker/src/context/module-resolution.ts (`fileModule`,
 // `loadFolder`). This copies it, for a file under a `configs/` folder alone:
 //
 //   a relative import of a file that is not code (.ts .mts .js .mjs are code) has one default

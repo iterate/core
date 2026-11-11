@@ -23,7 +23,7 @@ import {
 } from "iterate/expression";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import type { RewriteRuleListEntry, StreamPage, SubscriptionListEntry } from "iterate/api";
-import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
+import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
 import { causeOfDelivery, deepestCause, newChain, parseCause, type Cause } from "./cause.ts";

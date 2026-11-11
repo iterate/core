@@ -6,12 +6,12 @@ import type { FacetSpec, IterateContextApi } from "../api.ts";
 /** Where the catalog lives. Every context under it, at any depth, is an agent (catalog.ts). */
 export const AGENTS_PATH = "/agents";
 
-/** The module of a project's published config that exports the app's two classes, unless the
+/** The module of a mind's published config that exports the app's two classes, unless the
  *  config says another (`apps/agents/backend.ts`): to `installAgents`, and on the collection's
  *  class, which starts each agent from it (catalog.ts `module`). */
 export const AGENTS_MODULE = "agents.ts";
 
-/** One of the app's facets: `className` from `module` of the project's published config. */
+/** One of the app's facets: `className` from `module` of the mind's published config. */
 export function agentsFacetSpec(
   className: "AgentCollectionDurableObject" | "AgentDurableObject",
   module = AGENTS_MODULE,
@@ -49,7 +49,7 @@ export async function installAgents(
       match: "itx.agents",
       target: ["itx", ["cd", AGENTS_PATH], "facets", ["get", "agents", spec]],
       description:
-        "The project's installed agents app, every context under /agents: list(), create(path), get(path).message(text), delete(path)",
+        "The mind's installed agents app, every context under /agents: list(), create(path), get(path).message(text), delete(path)",
     },
   });
   // A catalog on the root is read by nothing, and would fold every copy an agent still sends to `/`.

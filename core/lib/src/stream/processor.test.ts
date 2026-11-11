@@ -795,7 +795,7 @@ test("a batch that moves neither the reduce nor the projection emits NO delta (t
   const contract5 = defineProcessorContract({
     slug: "still",
     version: "1.0.0",
-    description: "consumes ticks, reduces nothing, projects the (unchanged) state verbatim",
+    description: "consumes ticks, reduces nothing, minds the (unchanged) state verbatim",
     stateSchema: z.object({ n: z.number().default(0) }),
     consumes: ["tick"],
     emits: [],
@@ -1669,7 +1669,7 @@ class StarProcessor extends StreamProcessor<{ seen: string[] }> {
 const TallyContract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",
-  description: "counts events; projects a trimmed live shape",
+  description: "counts events; minds a trimmed live shape",
   stateSchema: z.object({ count: z.number().default(0), secret: z.string().default("hidden") }),
   consumes: ["tick"],
   emits: [],

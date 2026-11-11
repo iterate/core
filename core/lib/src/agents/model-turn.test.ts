@@ -703,7 +703,7 @@ function agentOnLog(
   const scheduled: unknown[][] = [];
   const standingFile = { text: "Be brief." };
   const itx = {
-    whoami: async () => ({ projectId: "prj_t", path, projectSlug: "t" }),
+    whoami: async () => ({ mindId: "mind_t", path, mindSlug: "t" }),
     repos: {
       get: async () => ({
         readFile: async (file: string) => (file === "AGENTS.md" ? standingFile.text : null),
@@ -758,7 +758,7 @@ function agentWithModel(options: {
   const sent: Record<string, unknown>[] = [];
   const sleeps: number[] = [];
   const itx = {
-    whoami: async () => ({ projectId: "prj_t", path: PATH, projectSlug: "t" }),
+    whoami: async () => ({ mindId: "mind_t", path: PATH, mindSlug: "t" }),
     repos: {
       get: async () => ({
         readFile: async (file: string) => (file === "AGENTS.md" ? "Be brief." : null),

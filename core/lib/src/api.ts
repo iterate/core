@@ -35,7 +35,7 @@ import type {
 import type { InvokeHandle, ItxExpression, ItxExpressionInput } from "./expression.ts";
 import type { ConsentScope } from "./oauth-scopes.ts";
 import type { Principal } from "./principal.ts";
-import type { IngressRouting } from "./project-ingress.ts";
+import type { IngressRouting } from "./mind-ingress.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
 /** What `authenticate` accepts: the browser (its login cookie rode the upgrade), a device or script
@@ -142,10 +142,10 @@ export type WorkerSource = Record<string, string> | ItxExpressionInput;
  *  `source` is the code (its modules, or an expression that produces them under `cacheKey`), or —
  *  an expression with NO `cacheKey` — the NAME of a loaded worker: one that resolves, as a call
  *  would, to `itx.builtins.workers.get(spec)` in the table of the context whose rule it is
- *  (`itx.cd('/').config`, the project's published config). The facet loads that worker's source,
+ *  (`itx.cd('/').config`, the mind's published config). The facet loads that worker's source,
  *  its producer run with that context's authority. `mainModule` names the module of the source that
  *  exports `className` when it is not the source's entry (`agents.ts` of a config repo whose entry
- *  is `worker.ts`): the facet runs that module's own graph, and — named by the project's published
+ *  is `worker.ts`): the facet runs that module's own graph, and — named by the mind's published
  *  config — restarts in place, storage kept, only when that module's identity changes, never onto
  *  an older publication. */
 export type FacetSpec = {
@@ -222,8 +222,8 @@ export type SecretRefresh =
   /** A GitHub App installation's token (`POST <apiOrigin>/app/installations/<id>/access_tokens`
    *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is the deployment's
    *  (`{ platform: "github" }`, minted only for an installation the control plane routes to this
-   *  project) or the project's own, whose `appId` and `privateKey` the material holds
-   *  (`{ project: "github" }`); either may be a `getSecret("/secrets/<name>", { field })`
+   *  mind) or the mind's own, whose `appId` and `privateKey` the material holds
+   *  (`{ mind: "github" }`); either may be a `getSecret("/secrets/<name>", { field })`
    *  placeholder naming another of the owner's secrets pinned to `apiOrigin`, so one secret holding
    *  the App's key serves every installation's secret. */
   | {
@@ -232,7 +232,7 @@ export type SecretRefresh =
       installationId: string;
       /** `cloud`: iterate Cloud's GitHub App of that name, whose key stays at the Cloud. The Cloud
        *  mints the token, for an installation this deployment connected. */
-      client: { platform: "github" } | { project: "github" } | { cloud: string };
+      client: { platform: "github" } | { mind: "github" } | { cloud: string };
     }
   /** EXCHANGE CODE: `source` is one ES module exporting `async function exchange(material, fetch)`,
    *  which logs in (any vendor's shape: a CSRF form and its cookie, a GraphQL mutation) and returns
@@ -275,14 +275,14 @@ export type SecretCatalogEntry = {
    *  an OAuth client's `clientId` beside the secret that holds its `clientSecret`. */
   public?: Record<string, string>;
   /** A path that forwards every use to a secret elsewhere: a person's account connected to this
-   *  project (`integrations.connect(provider, { account })`), or the deployment's own secret its
+   *  mind (`integrations.connect(provider, { account })`), or the deployment's own secret its
    *  operator lent (`itx.secrets.lend`) — whose, under which lend, and the connection it is. */
   borrowed?: {
     lendId: string;
     lender: { userId: string; email?: string } | { instance: true };
     integration?: { provider: string; account: string; externalId: string };
   };
-  /** A lender's secret's live lends, by lend id: the project (or `every-project`) and the path it
+  /** A lender's secret's live lends, by lend id: the mind (or `every-mind`) and the path it
    *  is lent as. */
   lends?: Record<string, { to: string; as: string; since: string }>;
 };
@@ -300,7 +300,7 @@ export const SECRET_OPERATIONS = [
 export type SecretOperation = (typeof SECRET_OPERATIONS)[number];
 
 /** WHAT A SECRET MAY BE USED FOR, fixed when it is made, kept by the secrets Worker and shown to the
- *  person who gives it on the collection form or the OAuth start page: the project's code cannot
+ *  person who gives it on the collection form or the OAuth start page: the mind's code cannot
  *  widen it later. */
 export type SecretUses = {
   /** Where its placeholder may sit in a request: in a header (`"header"`, the default; a `Basic`
@@ -327,11 +327,11 @@ export type CollectSecretInput = {
    *  a placeholder), a webhook's `signingSecret`. Without it, one Value. */
   fields?: CollectSecretField[];
   /** Where the page sends the person once the secret is saved, as an OAuth redirect does: an
-   *  absolute http(s) URL without credentials, such as the project's page that asked. The page
+   *  absolute http(s) URL without credentials, such as the mind's page that asked. The page
    *  shows its host before the person saves. Without it, the page says the tab can close. */
   redirectUrl?: string;
   /** Whoever holds the link may fill the form, signed in or not; the page says so. Without it, only
-   *  a member of the project, signed in. */
+   *  a member of the mind, signed in. */
   anyoneWithLink?: boolean;
 } & SecretUses;
 
@@ -415,8 +415,8 @@ export type SecretOAuthClient =
   | {
       cloud: string;
       /** For a GitHub App of the Cloud's: the accounts (a person's or an organization's login)
-       *  whose installations this project asks to be connected to. The member's consent reaches
-       *  every account they administer; the project gets the events and the installation tokens
+       *  whose installations this mind asks to be connected to. The member's consent reaches
+       *  every account they administer; the mind gets the events and the installation tokens
        *  of these alone, and the Cloud's page names them before the member approves. With none
        *  named it gets no installation, unless `install: true` sends the member to the App's
        *  install page, where the one they choose is connected. */
@@ -424,7 +424,7 @@ export type SecretOAuthClient =
     };
 
 /** What `secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the OAuth client
- *  (the project's own in the clear, or an integration's `client`), the scope, the pin, and any extra
+ *  (the mind's own in the clear, or an integration's `client`), the scope, the pin, and any extra
  *  authorize parameters the provider needs (Google: `access_type=offline`, `prompt=consent`). */
 export type SecretOAuthOptions = {
   /** The provider's two endpoints. Absent with a Cloud client, which names them, the client's id
@@ -443,19 +443,19 @@ export type SecretOAuthOptions = {
   clientSecret?: string;
   client?: SecretOAuthClient;
   /** Where the platform's callback sends the human once the tokens are stored: an absolute URL on
-   *  the platform's origin or the Dash's, or a page of this project's, `{ routingSlug?, path }`:
+   *  the platform's origin or the Dash's, or a page of this mind's, `{ routingSlug?, path }`:
    *  `routingSlug`'s host (the apex when absent) at `path` (a query is fine), composed by the
-   *  deployment's static rules alone — on the hostname its config pins to the project when it has
-   *  one, else under its ingress — so it is the project's own by construction. That page reads what
+   *  deployment's static rules alone — on the hostname its config pins to the mind when it has
+   *  one, else under its ingress — so it is the mind's own by construction. That page reads what
    *  the consent granted with `oauthResult`. Every attempt comes back to the platform's callback
    *  first (`oauthCallbackUrl`, the redirect URI to register for a client of your own), which
    *  completes it only in the browser that opened the start link. */
   next?: string | { routingSlug?: string; path: string };
   /** The one person who may complete the attempt, by their user id (`user_…`), when they need not
-   *  reach this secret's owner: a customer of the project's own app connecting their own account,
-   *  whom the project knows from a sign-in with this platform. The platform's callback then
+   *  reach this secret's owner: a customer of the mind's own app connecting their own account,
+   *  whom the mind knows from a sign-in with this platform. The platform's callback then
    *  completes the attempt only in a browser signed in as that person, in place of one that reaches
-   *  the owner; a member who is not that person is refused like anyone else. Only for a project's
+   *  the owner; a member who is not that person is refused like anyone else. Only for a mind's
    *  secret, and only with a client of your own (`clientId`): the deployment's app is consented to
    *  by someone who reaches the owner. */
   completedByUserId?: string;
@@ -477,16 +477,16 @@ export type SecretOAuthOptions = {
    *  deployment's app names its own accounts. */
   account?: { url: string; id: string; name?: string };
   /** Whoever holds the start link may consent, signed in or not; the page says so. Without it, only
-   *  a member of the project, signed in. */
+   *  a member of the mind, signed in. */
   anyoneWithLink?: boolean;
 } & SecretUses;
 
-/** How a lend to every project went, project by project: how many borrow it, the projects that
+/** How a lend to every mind went, mind by mind: how many borrow it, the minds that
  *  keep a secret of their own at its path, and the ones whose borrow failed. */
-export type EveryProjectBorrows = {
+export type EveryMindBorrows = {
   borrowed: number;
   kept: string[];
-  failed: { projectId: string; error: string }[];
+  failed: { mindId: string; error: string }[];
 };
 
 /** An `R2Object` as `itx.r2` answers it: every field the class carries, as data — the key with the
@@ -610,7 +610,7 @@ export type ItxToMarkdownService = {
 
 /** `itx.ai.gateway(id)`: the binding's `AiGateway`. `run` is the gateway's universal endpoint and
  *  answers the provider's body: parsed JSON, text, or bytes. `getLog` and `patchLog` take a log's
- *  id as the gateway's log list shows it; a gateway may log other projects' calls too, so nothing
+ *  id as the gateway's log list shows it; a gateway may log other minds' calls too, so nothing
  *  here lists them. */
 export type ItxAiGateway = {
   getLog(logId: string): Promise<AiGatewayLog>;
@@ -696,7 +696,7 @@ export type CfBrowserApi = {
 };
 
 /** Where an `itx.images` image comes from: its bytes, a `ReadableStream` of them, an http(s) URL
- *  (fetched by the platform through the project's egress, so the bytes never visit you), a project
+ *  (fetched by the platform through the mind's egress, so the bytes never visit you), a mind
  *  file's path (`"/images/photo.jpg"`), or a file handle (`itx.files.get(path)`). A script uses the
  *  path: its `itx.files.get(path)` is a promise it must `await` before it can pass the handle on.
  *  At most 20 MB, the Images binding's own limit. */
@@ -753,13 +753,13 @@ export interface CfArtifactRepoApi {
   remote(): Promise<string>;
 }
 
-/** `itx.cfArtifacts`: Cloudflare Artifacts, project-scoped and addressed BY THE REPO'S PATH — the
+/** `itx.cfArtifacts`: Cloudflare Artifacts, mind-scoped and addressed BY THE REPO'S PATH — the
  *  binding's own verbs. `repos` is the friendlier surface. */
 export interface CfArtifactsApi {
   /** The Artifacts repo, `main` unborn until the first commit; false when it already existed. */
   create(path: string): Promise<{ created: boolean }>;
   get(path: string): Promise<CfArtifactRepoApi>;
-  /** This project's repos, as paths (one page). */
+  /** This mind's repos, as paths (one page). */
   list(options?: { limit?: number; cursor?: string }): Promise<{
     repos: { path: string }[];
     cursor?: string;
@@ -861,7 +861,7 @@ export type CapnwebConnectionApi = InvokeHandle & { close(): void };
 export type FileRecord = { path: string; contentType: string; size: number };
 
 /** `itx.files.get(path)`: a file's verbs. `put`'s string data is base64 or a `data:` URL; `url` is
- *  a signed URL on the project host that downloads (`GET`, the default) or uploads (`PUT`) it. */
+ *  a signed URL on the mind host that downloads (`GET`, the default) or uploads (`PUT`) it. */
 export type FileHandle = {
   put(input: {
     contentType?: string;
@@ -876,13 +876,13 @@ export type FileHandle = {
   }): Promise<{ url: string; expiresAt: string }>;
 };
 
-/** `itx.email.send`: one message from the project's own address. `inReplyToOffset` names a
- *  message on the project's `/integrations/email` and answers it in its thread: its recipients,
- *  `Re:` subject and threading headers are the defaults. Each attachment is a project file
+/** `itx.email.send`: one message from the mind's own address. `inReplyToOffset` names a
+ *  message on the mind's `/integrations/email` and answers it in its thread: its recipients,
+ *  `Re:` subject and threading headers are the defaults. Each attachment is a mind file
  *  (`itx.files`). */
 export type EmailSendInput = {
-  /** The project's own address by default (a reply's: the address the answered message reached);
-   *  the project that owns the deployment's project wildcard domain may name any address there
+  /** The mind's own address by default (a reply's: the address the answered message reached);
+   *  the mind that owns the deployment's mind wildcard domain may name any address there
    *  (`hello@iterate.com`). Any other address is refused. */
   from?: string;
   to?: string | string[];
@@ -898,7 +898,7 @@ export type EmailSendInput = {
  *  request: `url` is a standard `URLPattern` over the real URL (hostname and path; its init's
  *  fields, each a pattern string), `headers` exact values. `routingSlug` is a convenience, the one
  *  address component both ingress modes can express: paths routing shares one host, so it is the
- *  `/projects/<project>/<routingSlug>` segment; subdomains make it `<routingSlug>--<project>` or
+ *  `/minds/<mind>/<routingSlug>` segment; subdomains make it `<routingSlug>--<mind>` or
  *  `<routingSlug>.<custom hostname>`. Without paths routing it could go, and a route would match
  *  its hostname directly (`url: { hostname: "here.tunnels.templestein.com" }`). `{}` takes every
  *  request. */
@@ -919,12 +919,12 @@ export type FetchRouteRequestMatcher = {
 };
 
 /** A route as `itx.fetchRoutes.set(name, route)` takes it: the requests it takes, the itx
- *  expression they go to, who may use it (`project-members`: the config worker answers anyone else
+ *  expression they go to, who may use it (`mind-members`: the config worker answers anyone else
  *  the sign-in challenge; absent or null: public) and its priority (higher first, then by name). */
 export type FetchRouteInput = {
   requestMatcher: FetchRouteRequestMatcher;
   target: ItxExpressionInput;
-  authRequirement?: { visitors: "project-members" } | null;
+  authRequirement?: { visitors: "mind-members" } | null;
   priority?: number;
 };
 
@@ -934,7 +934,7 @@ export type FetchRouteEntry = {
   fetchRouteName: string;
   requestMatcher: FetchRouteRequestMatcher;
   target: ItxExpression;
-  authRequirement: { visitors: "project-members" } | null;
+  authRequirement: { visitors: "mind-members" } | null;
   priority: number;
   configuredOffset: number;
 };
@@ -1016,7 +1016,7 @@ export type RepoHandle = InvokeHandle & {
 export type WorkspaceChange = { path: string; change: "added" | "deleted" | "modified" };
 /** One mount as `gitStatus` reports it: its path, its repo, and the overlay's changes under it. */
 export type WorkspaceMountStatus = { path: string; repo: string; changes: WorkspaceChange[] };
-/** `itx.workspaces.get(path)`: a private overlay over the project's repos, each repo mounted at its
+/** `itx.workspaces.get(path)`: a private overlay over the mind's repos, each repo mounted at its
  *  path (the workspace facet in core/os). Reads see the overlay, then the mounted repo's tip. */
 export type WorkspaceHandle = InvokeHandle & {
   mounts(): Promise<Record<string, { repo: string }>>;
@@ -1047,7 +1047,7 @@ export type WorkspaceHandle = InvokeHandle & {
 export type SandboxSnapshot = { id: string; size: number; name?: string };
 
 /** What the container API's `start` takes: `ctx.container.start`'s options, but for
- *  `enableInternet` (refused: a sandbox's only way out is the project's egress) and a
+ *  `enableInternet` (refused: a sandbox's only way out is the mind's egress) and a
  *  `containerSnapshot`, which can only be the snapshot the sandbox's own log records. A start that
  *  names a size (`instance`) is remembered: the sandbox starts on it again until one names another. */
 export type SandboxContainerStartOptions = {
@@ -1066,7 +1066,7 @@ export type SandboxContainerStartOptions = {
 };
 
 /** What the sandbox's own `start` takes: the container API's, and `from`, the path of another
- *  sandbox of this project whose snapshot this one starts from (a golden toolset made once, then
+ *  sandbox of this mind whose snapshot this one starts from (a golden toolset made once, then
  *  started many times). That snapshot is this sandbox's disk from then on. One of `image`,
  *  `containerSnapshot` and `from` at most. */
 export type SandboxStartOptions = SandboxContainerStartOptions & { from?: string };
@@ -1119,7 +1119,7 @@ export type SandboxFilesApi = {
  *  `.kill(signo?)`. A `start`, `snapshotContainer` or `destroy` lands on the sandbox's log, and a
  *  sandbox with a call running is not parked. Cloudflare's meaning holds: a raw `start` restores
  *  nothing by itself and a `destroy` saves nothing. Not reachable: `interceptOutbound*` (the
- *  project's egress is the platform's alone). */
+ *  mind's egress is the platform's alone). */
 export type SandboxContainerApi = InvokeHandle & {
   readonly running: Promise<boolean>;
   readonly images: Promise<Record<string, string>>;
@@ -1144,11 +1144,11 @@ export type SandboxContainerApi = InvokeHandle & {
  *  command, a file call or a stream being read is use; a call left open counts for an hour at most)
  *  is saved and stopped, a sandbox in use has its disk saved every 15 minutes, and Cloudflare stops
  *  the container two hours after it last answered, whatever else fails. THE ONLY WAY OUT IS THE
- *  PROJECT'S EGRESS: the container starts with the internet off, and every HTTP and HTTPS request it
- *  makes, to any name or address, WebSocket handshakes included, is answered by the project's own
+ *  MIND'S EGRESS: the container starts with the internet off, and every HTTP and HTTPS request it
+ *  makes, to any name or address, WebSocket handshakes included, is answered by the mind's own
  *  `itx.fetch` (its rewrite rules;
  *  `getSecret("/secrets/…")` placeholders are substituted there). `apt-get` works through it. A
- *  project's GitHub connection is in every command's environment as placeholders (`GH_TOKEN`, and a
+ *  mind's GitHub connection is in every command's environment as placeholders (`GH_TOKEN`, and a
  *  git credential helper that answers with it): with `git` and `gh` installed, cloning, pushing and
  *  opening pull requests need no setup, and no token ever enters the container. A call
  *  that does not answer within a minute fails: run longer work in the background and poll. Where the
@@ -1185,11 +1185,11 @@ export type SandboxHandle = InvokeHandle & {
 };
 
 /** An entity collection root (`itx.repos`, `itx.workspaces`, `itx.sandboxes`): `get(path)` the entity's handle,
- *  `list()` the project catalog, `create(path)` the creation saga on that path (the parent link the
+ *  `list()` the mind catalog, `create(path)` the creation saga on that path (the parent link the
  *  caller's context writes first, then the processor row, the request, the terminal fact — created,
  *  or create-failed thrown), `delete(path)` the deletion saga (the request, `deleted` cross-posted to
  *  `/`, the row disabled). A relative `path` means the caller's. `get` and `list` reach the whole
- *  project; `create` and `delete` only paths strictly beneath the caller's context (FORBIDDEN). An
+ *  mind; `create` and `delete` only paths strictly beneath the caller's context (FORBIDDEN). An
  *  entity whose creation has not landed refuses its handle's verbs and `delete` (NOT_CREATED). */
 export type EntityCollectionApi<Handle> = {
   get(path: string): Handle;
@@ -1199,26 +1199,26 @@ export type EntityCollectionApi<Handle> = {
 };
 
 /** The roots an installable app adds by rewrite rule — present only on a context whose table has
- *  the rule (a project that installed the app), so never part of `IterateContextApi` itself. An
+ *  the rule (a mind that installed the app), so never part of `IterateContextApi` itself. An
  *  installed app publishes its root by augmenting this interface from its own package
  *  (`declare module "iterate/api" { interface InstalledAppRoots { myApp: MyAppApi } }`), so a root
  *  the platform does not ship is never named here; a caller imports that module to spell
  *  `IterateContextApiWith<"myApp">`. */
 export interface InstalledAppRoots {}
 
-/** A context whose project installed the named apps: with the app's package imported,
+/** A context whose mind installed the named apps: with the app's package imported,
  *  `IterateContextApiWith<"myApp">` spells `itx.myApp`. Code that holds a plain scope asserts it
  *  (`itx as IterateContextApiWith<"myApp">`) where it knows the app is installed. */
-/** What `itx.telemetry.query` answers: the rows, and the SQL that ran for the project. */
+/** What `itx.telemetry.query` answers: the rows, and the SQL that ran for the mind. */
 export type TelemetryRows = { rows: Record<string, unknown>[]; sql: string };
 
 export type IterateContextApiWith<App extends keyof InstalledAppRoots> = IterateContextApi &
   Pick<InstalledAppRoots, App>;
 
-/** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
+/** A context (a mind, a user, an organization): every `itx` root, reached through `invoke`. */
 export interface IterateContextApi {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
-  /** Another context of this project, by path (`..` and `/` allowed; the global namespace is not). */
+  /** Another context of this mind, by path (`..` and `/` allowed; the global namespace is not). */
   cd(path: string): IterateContextApi;
   /** Durable batches appended after a deadline (`afterMs`), at an instant (`at`) or on an interval
    *  (`everyMs`); a key set again is replaced, but an interval set again as it stands keeps its
@@ -1232,28 +1232,28 @@ export interface IterateContextApi {
     list(): ScheduledAppend[];
     get(key: ScheduleKey): ScheduledAppend | null;
   };
-  /** `principal` is who is calling, when the call has one: a person through the project's API. Code
-   *  the project loaded calls as itself and gets none. */
+  /** `principal` is who is calling, when the call has one: a person through the mind's API. Code
+   *  the mind loaded calls as itself and gets none. */
   whoami():
     | {
-        projectId: string;
+        mindId: string;
         path: string;
-        projectSlug?: string;
-        projectUrl?: string;
+        mindSlug?: string;
+        mindUrl?: string;
         principal?: Principal;
       }
     | Promise<{
-        projectId: string;
+        mindId: string;
         path: string;
-        projectSlug?: string;
-        projectUrl?: string;
+        mindSlug?: string;
+        mindUrl?: string;
         principal?: Principal;
       }>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   /** `append`, answered with each event's offset alone: the events do not travel back. */
   appendOffsets(...events: StreamEventInput[]): Promise<number[]>;
-  /** This project's public URL over HTTP: the apex, or a routing slug's host (`blog--<project>`, or
-   *  `blog.<primary hostname>` once the project has a primary hostname),
+  /** This mind's public URL over HTTP: the apex, or a routing slug's host (`blog--<mind>`, or
+   *  `blog.<primary hostname>` once the mind has a primary hostname),
    *  at `path`. Only from a session, which carries the origin to compose it with. */
   url(target?: { routingSlug?: string; path?: string }): Promise<string>;
   /** RESET this context (Cloudflare's `ctx.abort`): its Durable Object drops everything it holds in
@@ -1265,7 +1265,7 @@ export interface IterateContextApi {
    *  every socket on the context (a provider's re-dials), and every other call in flight there — it
    *  rejects with the reset's message (`itx.abort() reset the context <path>: <reason>`). A handle
    *  you kept names its target by expression, so its next call reaches the new incarnation.
-   *  Another context of the project: `itx.cd(path).abort()`. A rewrite rule masks it like any name
+   *  Another context of the mind: `itx.cd(path).abort()`. A rewrite rule masks it like any name
    *  (`provide("itx.abort", null)`). */
   abort(reason?: string): Promise<StreamEvent>;
   readEvents(
@@ -1286,7 +1286,7 @@ export interface IterateContextApi {
    *  The R2 binding's own verbs on the owner's slice of one bucket (every key
    *  prefixed, the prefix stripped from every key answered); what cannot cross the wire is answered
    *  as data — an `R2Object` as its fields, a body as its bytes. `list` is one page with its cursor.
-   *  `presign` is a signed URL on the project host, a download or an upload. `files` is the
+   *  `presign` is a signed URL on the mind host, a download or an upload. `files` is the
    *  friendlier surface. */
   r2: {
     head(key: string): Promise<R2ObjectRecord | null>;
@@ -1322,7 +1322,7 @@ export interface IterateContextApi {
       expiresInSeconds?: number;
     }): Promise<{ url: string; expiresAt: string }>;
   };
-  /** The project's secrets, WRITE-ONLY: a secret IS its path (`/secrets/<name>`, the name
+  /** The mind's secrets, WRITE-ONLY: a secret IS its path (`/secrets/<name>`, the name
    *  `[a-zA-Z0-9._-]+`), and the path is what an outbound request's placeholder spells —
    *  `getSecret("/secrets/<name>")` in a URL or a header substitutes to the value at egress, and only
    *  towards the ORIGINS in `urls` (required: a secret is always pinned). `set` stores a string or a
@@ -1403,33 +1403,33 @@ export interface IterateContextApi {
      *  false. A replayable token stays replayable: prefer `verifyHmac` wherever the sender signs. */
     verifyEquals(path: string, input: SecretEqualsVerification): Promise<boolean>;
     /** The operator's, on the global root (`session.global`): lend the deployment's own secret to
-     *  a project, as the project's path `as`, or `to: "every-project"`: every project, one created
-     *  later included, borrows it unless its path holds a secret of its own. The project's uses are
+     *  a mind, as the mind's path `as`, or `to: "every-mind"`: every mind, one created
+     *  later included, borrows it unless its path holds a secret of its own. The mind's uses are
      *  forwarded to this secret, and the material never leaves it. `revokeLend` ends it; so does a
-     *  project deleting its path, for that project alone. (A person's account reaches a project
+     *  mind deleting its path, for that mind alone. (A person's account reaches a mind
      *  through `integrations.connect(provider, { account })` instead.) */
     lend(
       path: string,
       input: { to: string; as: string },
-    ): Promise<{ lendId: string; everyProject?: EveryProjectBorrows }>;
+    ): Promise<{ lendId: string; everyMind?: EveryMindBorrows }>;
     revokeLend(path: string, lendId: string): Promise<{ lendId: string }>;
   };
-  /** Connect and disconnect this context's owner — a project (its root), or a person
+  /** Connect and disconnect this context's owner — a mind (its root), or a person
    *  (`session.user`) — and a provider THROUGH THE DEPLOYMENT'S OWN APP there (`session.info()`'s
-   *  `iterateAppProviders`; a project's own app at a provider is a package the project hosts,
+   *  `iterateAppProviders`; a mind's own app at a provider is a package the mind hosts,
    *  iterate/sdk `Integration`, which registers itself in `iterate/integrations`). `connect` answers
    *  where to send the human (the platform's start link, as `secrets.beginOAuth`'s), and the
    *  connection's name; again for one that exists asks for more
    *  `scopes` on the same account. GitHub's `installationId` connects an installation the App
-   *  already has, without GitHub's configure page. On a project, `account` connects one of YOUR
+   *  already has, without GitHub's configure page. On a mind, `account` connects one of YOUR
    *  accounts instead — the address the provider gives it, as `session.user`'s
    *  `state.integrations` lists it: with no `authorizationUrl` when it already holds what the
-   *  project asks for, else one that asks the provider to add it. The project then uses it as
+   *  mind asks for, else one that asks the provider to add it. The mind then uses it as
    *  `/secrets/<provider>-<connection>` while it stays connected and you stay a member.
    *  `disconnect` revokes the token where the provider allows and removes the connection, its secret
-   *  and its webhook route; an account of yours disconnected from a project stays yours.
+   *  and its webhook route; an account of yours disconnected from a mind stays yours.
    *  `requestFromUser` answers a Dash link asking the signed-in person to connect the provider to
-   *  this project. */
+   *  this mind. */
   integrations: {
     connect(
       provider: IntegrationProvider,
@@ -1455,7 +1455,7 @@ export interface IterateContextApi {
       options?: { scopes?: string[] },
     ): Promise<{ url: string }>;
   };
-  /** The project's fetch routes, on its root `/`: which itx expression, the route's `target`, a
+  /** The mind's fetch routes, on its root `/`: which itx expression, the route's `target`, a
    *  request on its hosts goes to. `set` appends one `itx/fetch-route-configured` fact (`null`
    *  deletes the route); `match` answers the route a request takes. The platform serves a request a
    *  route takes from `route.target` (a WebSocket upgrade included), before the config worker's
@@ -1494,12 +1494,12 @@ export interface IterateContextApi {
      *  `NO_FACET` for a name never hosted here. */
     abort(name: string, reason?: string): Promise<StreamEvent>;
     /** LEND the facet `name` of this context to the person `to` (a user id), who need be no member
-     *  of the project: their `/api` session reaches it through `projects.get(project).cd(path)`,
-     *  and nothing else of the project. A lend carries the facet's live state (`liveSnapshot` and
+     *  of the mind: their `/api` session reaches it through `minds.get(mind).cd(path)`,
+     *  and nothing else of the mind. A lend carries the facet's live state (`liveSnapshot` and
      *  its deltas) and the methods its class lists in `static lentMethods`. Appends
-     *  `events.iterate.com/itx/facet-lent { facet, to }` here, and marks the project's root as one
+     *  `events.iterate.com/itx/facet-lent { facet, to }` here, and marks the mind's root as one
      *  that lends. A first-party facet is never lent. Lending again is a no-op. core/os
-     *  README.md, "A project lends a facet to a person". */
+     *  README.md, "A mind lends a facet to a person". */
     lend(name: string, input: { to: string }): Promise<void>;
     /** End a lend `lend` made: `events.iterate.com/itx/facet-lend-revoked { facet, to }`. The
      *  person's next call on the facet is refused, and its live state stops reaching them. */
@@ -1527,7 +1527,7 @@ export interface IterateContextApi {
     /** A stateless worker loaded from `spec`: `mainModule` loads that module of the source as its
      *  entry in place of package.json's `main`. `source` is as `FacetSpec`'s: an expression with no
      *  `cacheKey` is the NAME of a loaded worker (`itx.cd('/').config`), whose code each call loads,
-     *  `mainModule` as the project's publication of it recorded it. */
+     *  `mainModule` as the mind's publication of it recorded it. */
     get(spec: {
       source: WorkerSource;
       cacheKey?: string;
@@ -1539,12 +1539,12 @@ export interface IterateContextApi {
   /** HTTP WEBHOOKS, the target of a fan-out row that sends each event to another server, Stripe's
    *  way: `webhooks.get({ url, signingSecret? }).deliverEvent` POSTs the event as JSON from this
    *  context through its own `itx.fetch` (a context that may not fetch sends nothing), with
-   *  `iterate-event-id: <projectId><path>@<offset>` (repeats share it) and, given a signing secret (a secret
+   *  `iterate-event-id: <mindId><path>@<offset>` (repeats share it) and, given a signing secret (a secret
    *  path pinned to `url`'s origin), `iterate-timestamp` and `iterate-signature: v1=<hex
    *  HMAC-SHA256 of "<timestamp>.<body>">`. A 2xx acks; any other status retries on the event's own
    *  ladder (~44 h); a 410 halts the row until a resume. `deliverEvent` is the delivery loop's call
-   *  alone. A signature vouches for the PROJECT, not a context: a receiver checks the body's `path`,
-   *  and loaded code names a signing secret only at the project's root. */
+   *  alone. A signature vouches for the MIND, not a context: a receiver checks the body's `path`,
+   *  and loaded code names a signing secret only at the mind's root. */
   webhooks: {
     get(spec: {
       url: string;
@@ -1583,7 +1583,7 @@ export interface IterateContextApi {
   }): Promise<{ [Symbol.dispose](): void }>;
   /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`
    *  mean `target`, an expression, a live stub, or null to deny. `description` is the one line a
-   *  model reads for the name. `fetchRoute` (a live stub, on the project's root) is a fetch route to
+   *  model reads for the name. `fetchRoute` (a live stub, on the mind's root) is a fetch route to
    *  `match` that lives exactly as long as the lend: set with it, set again when the platform
    *  re-attaches it, removed when it ends however it ends. A live stub's handle answers
    *  `lendEnded()` with why the lend ended — it can end while the session lives (the platform lost
@@ -1603,9 +1603,9 @@ export interface IterateContextApi {
    *  out); resolves with the result or rejects with the settlement's error. Never re-run. A script
    *  still running ten minutes after it started is settled failed (`failureKind: "deadline"`). */
   run(script: string): Promise<unknown>;
-  /** The project's repos and workspaces as domain objects — one shape each: `get(path)` is
+  /** The mind's repos and workspaces as domain objects — one shape each: `get(path)` is
    *  the entity's facet on the context at `path` (its verbs, plus the typed `append` on that
-   *  context), `list()` the project catalog, `create(path)` the creation saga on that path (the
+   *  context), `list()` the mind catalog, `create(path)` the creation saga on that path (the
    *  parent link the caller's context writes first, then the processor row, the request, the
    *  terminal fact — created, or create-failed thrown), `delete(path)` the deletion saga (the
    *  request, `deleted` cross-posted to `/`, the row disabled). A relative `path` means the caller's. */
@@ -1619,19 +1619,19 @@ export interface IterateContextApi {
   browser: CfBrowserApi;
   /** Cloudflare Images: `info` and `transform` over image bytes. */
   images: CfImagesApi;
-  /** Cloudflare Artifacts, project-scoped (`repos` is the friendlier surface). */
+  /** Cloudflare Artifacts, mind-scoped (`repos` is the friendlier surface). */
   cfArtifacts: CfArtifactsApi;
-  /** Files stored in the project's object store, by path (`r2` underneath). */
+  /** Files stored in the mind's object store, by path (`r2` underneath). */
   files: {
     get(path: string): InvokeHandle & FileHandle;
     list(prefix?: string): Promise<FileRecord[]>;
   };
-  /** THE PROJECT'S TELEMETRY (docs/telemetry.md): `query(sql, { hours })` runs one SELECT over
+  /** THE MIND'S TELEMETRY (docs/telemetry.md): `query(sql, { hours })` runs one SELECT over
    *  `events`, `logs` and `spans` (Basin SQL), or over `metrics` alone (Workers Analytics Engine),
-   *  each cut to this project's rows of the last `hours` (default 24, at most 720), and answers the
+   *  each cut to this mind's rows of the last `hours` (default 24, at most 720), and answers the
    *  rows with the SQL that ran. Throws on a deployment with no warehouse. */
   telemetry: { query(sql: string, options?: { hours?: number }): Promise<TelemetryRows> };
-  /** The project's email, `<slug>@iterate.app` (core/os/src/email/contract.ts has its events and
+  /** The mind's email, `<slug>@iterate.app` (core/os/src/email/contract.ts has its events and
    *  threads). `send` answers the `email/sent` event. */
   email: {
     send(input: EmailSendInput): Promise<StreamEvent>;
@@ -1662,11 +1662,11 @@ export interface GrantRecord {
   clientDomain?: string;
   name: string;
   kind: GrantKind;
-  /** An OAuth grant's one resource: Cap'n Web at `/api` (and the projects' hosts), or `/mcp`. A
-   *  personal access token has none: it works at `/api`, at `/mcp` and on its projects' hosts. */
+  /** An OAuth grant's one resource: Cap'n Web at `/api` (and the minds' hosts), or `/mcp`. A
+   *  personal access token has none: it works at `/api`, at `/mcp` and on its minds' hosts. */
   resource?: "api" | "mcp";
-  /** A personal access token's projects, by id: all it reaches. */
-  projects?: string[];
+  /** A personal access token's minds, by id: all it reaches. */
+  minds?: string[];
   createdAt: number;
   expiresAt: number | null;
   lastUsedAt: number | null;
@@ -1690,13 +1690,13 @@ export type ConsentAnswer =
       query: string;
       clientName: string;
       email: string;
-      projects: ProjectRecord[];
+      minds: MindRecord[];
       orgs: OrgRecord[];
-      projectBound: boolean;
+      mindBound: boolean;
       /** the scopes the request asked for, each with the page's copy (oauth-scopes.ts) */
       scopes: ConsentScope[];
       denyLocation: string;
-      /** how projects are reached over HTTP (project-ingress.ts) — the page composes a project's URL */
+      /** how minds are reached over HTTP (mind-ingress.ts) — the page composes a mind's URL */
       ingressRouting: IngressRouting;
       /** the onboarding step's first draft of an organization name, from the person's name or email */
       suggestedOrganizationName: string;
@@ -1722,18 +1722,18 @@ export interface InvitationRecord {
 }
 
 /** An organization as the session lists it: its minted id, its free-text name, the person's role
- *  in it, and how many projects it holds (every one of them, not only those this grant lists). */
+ *  in it, and how many minds it holds (every one of them, not only those this grant lists). */
 export interface OrgRecord {
   id: string;
   name: string;
   role?: "owner" | "member";
-  projects: number;
+  minds: number;
 }
 
-/** A project as the catalog lists it: addressed by `id` everywhere (`projects.get`, a grant's list,
- *  an MCP call's `project`, an app's URL); `slug` is the label of its hostnames and its name to a
- *  person, which `projects.rename` changes. The id is the one stable identifier. */
-export interface ProjectRecord {
+/** A mind as the catalog lists it: addressed by `id` everywhere (`minds.get`, a grant's list,
+ *  an MCP call's `mind`, an app's URL); `slug` is the label of its hostnames and its name to a
+ *  person, which `minds.rename` changes. The id is the one stable identifier. */
+export interface MindRecord {
   id: string;
   slug: string;
   orgId: string;
@@ -1750,19 +1750,19 @@ export interface IterateSessionApi {
     principal: Principal;
     scopes: string[];
     platformOrigin: string;
-    /** how projects are reached over HTTP (project-ingress.ts `projectUrlOf`); null ⇒ no ingress */
+    /** how minds are reached over HTTP (mind-ingress.ts `mindUrlOf`); null ⇒ no ingress */
     ingressRouting: IngressRouting;
-    /** the hostnames this deployment's config pins to projects, each naming its project by id or
-     *  slug (project-ingress.ts `pinnedHostnameOf`): a project's primary hostname before any it
+    /** the hostnames this deployment's config pins to minds, each naming its mind by id or
+     *  slug (mind-ingress.ts `pinnedHostnameOf`): a mind's primary hostname before any it
      *  claimed, which `itx.url` and the dash's buttons compose on */
-    projectHostnames: { hostname: string; project: string }[];
+    mindHostnames: { hostname: string; mind: string }[];
     /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
     mcpOrigin: string;
     /** the providers whose iterate app this deployment holds (ITERATE `integrations`): a
-     *  project connects through iterate's app only there; its own app at a provider is a package
+     *  mind connects through iterate's app only there; its own app at a provider is a package
      *  it hosts (iterate/sdk `Integration`), which registers itself in `iterate/integrations` */
     iterateAppProviders: IntegrationProvider[];
-    /** what iterate's app asks for there, by provider — what a project needs of your account before
+    /** what iterate's app asks for there, by provider — what a mind needs of your account before
      *  it uses it (`integrations.connect(provider, { account })`) */
     iterateAppScopes: Partial<Record<OAuthIntegrationProvider, string[]>>;
     /** the providers a person signs in with here: the ones a signed-in person can add to their
@@ -1776,7 +1776,7 @@ export interface IterateSessionApi {
     list(cursor?: string): Promise<{
       items: GrantRecord[];
       cursor?: string;
-      projects: ProjectRecord[];
+      minds: MindRecord[];
       canMintToken: boolean;
     }>;
     end(grantId: string): Promise<unknown>;
@@ -1785,8 +1785,8 @@ export interface IterateSessionApi {
     forgetIdentity(clientId: string): Promise<void>;
     mint(input: {
       name: string;
-      /** project ids, each one the person reaches */
-      projects: string[];
+      /** mind ids, each one the person reaches */
+      minds: string[];
       /** epoch ms; omitted, the key never expires */
       expiresAt?: number;
       /** a device's public client metadata document (Kit): the key is listed as that device */
@@ -1798,52 +1798,52 @@ export interface IterateSessionApi {
     describe(query: string): Promise<ConsentAnswer>;
     approve(input: {
       query: string;
-      projects: string[];
+      minds: string[];
       /** a platform admin's "Sign in as someone else…": the person's user id */
       impersonate?: string;
     }): Promise<{ redirectTo: string } | { error: string }>;
   };
-  projects: {
-    /** oldest first (a grant bound to projects with no user: in the grant's order) */
-    list(): Promise<ProjectRecord[]>;
-    /** the project's root context, by its slug or its id */
-    get(project: string): Promise<IterateContextApi>;
+  minds: {
+    /** oldest first (a grant bound to minds with no user: in the grant's order) */
+    list(): Promise<MindRecord[]>;
+    /** the mind's root context, by its slug or its id */
+    get(mind: string): Promise<IterateContextApi>;
     /** Config repository presets available on this platform, besides the minimal config a
      *  creation that names no template gets: core/configs/default first, which the dash and the
-     *  consent page start a person's project from. */
+     *  consent page start a person's mind from. */
     templates(): Promise<
       [{ label: string; reference: string }, ...{ label: string; reference: string }[]]
     >;
-    /** a new project: `project` is slugged into its hostname label, its id is minted — the returned
+    /** a new mind: `mind` is slugged into its hostname label, its id is minted — the returned
      *  context's `whoami()` says it, so does `list()` */
     create(input: {
-      project: string;
+      mind: string;
       orgId?: string;
       configRepoTemplate?: string;
-      /** Operator-only recovery: retain the source project identity from a project seed. */
-      restoreProjectId?: string;
+      /** Operator-only recovery: retain the source mind identity from a mind seed. */
+      restoreMindId?: string;
     }): Promise<IterateContextApi>;
-    /** Rename a project, by its slug or its id — its organization's owner, or the operator; anyone
+    /** Rename a mind, by its slug or its id — its organization's owner, or the operator; anyone
      *  else is refused (FORBIDDEN). `slug` is the new label of its hosts (`<slug>.<hostname>`,
-     *  `<routingSlug>--<slug>.<hostname>`, `/projects/<slug>/…`) and the local part of its email
+     *  `<routingSlug>--<slug>.<hostname>`, `/minds/<slug>/…`) and the local part of its email
      *  address, given as a slug (lowercase letters and digits, words joined by single dashes:
-     *  INVALID_INPUT otherwise) that no other project holds (PROJECT_NAME_TAKEN). Answers the row
-     *  renamed: from then on the project answers on the new hosts and address, and the old ones
+     *  INVALID_INPUT otherwise) that no other mind holds (MIND_NAME_TAKEN). Answers the row
+     *  renamed: from then on the mind answers on the new hosts and address, and the old ones
      *  name nothing (another edge isolate may serve the old ones for up to five seconds). The id
      *  stays, and so does everything keyed by it: contexts, data, custom hostnames, connections,
-     *  grants. Refused while the deployment's config names the project by its slug
-     *  (`urls.projectHostnames`, `urls.projectWildcard`): name it by its id there first. The same
-     *  slug again changes nothing. Lands `events.iterate.com/project/renamed` on the project's root
-     *  and `events.iterate.com/organization/project-renamed` on its organization. */
-    rename(project: string, input: { slug: string }): Promise<ProjectRecord>;
-    /** Delete a project, by its slug or its id — its organization's owner, or the operator; anyone
-     *  else is refused (FORBIDDEN). Answers once nothing reaches the project any more (its row is
+     *  grants. Refused while the deployment's config names the mind by its slug
+     *  (`urls.mindHostnames`, `urls.mindWildcard`): name it by its id there first. The same
+     *  slug again changes nothing. Lands `events.iterate.com/mind/renamed` on the mind's root
+     *  and `events.iterate.com/organization/mind-renamed` on its organization. */
+    rename(mind: string, input: { slug: string }): Promise<MindRecord>;
+    /** Delete a mind, by its slug or its id — its organization's owner, or the operator; anyone
+     *  else is refused (FORBIDDEN). Answers once nothing reaches the mind any more (its row is
      *  gone, and its slug free); its contexts, hostnames and storage are destroyed after, by the
      *  deletion saga on its root. There is no undo. */
-    delete(project: string): Promise<void>;
+    delete(mind: string): Promise<void>;
   };
   /** The organizations this session reaches — the person's memberships (a grant narrowed to
-   *  projects sees only their organizations, unless it holds `organizations:write`): the rows, its
+   *  minds sees only their organizations, unless it holds `organizations:write`): the rows, its
    *  members and open invitation links, the organization's context by membership, and the verbs
    *  (`organizations:write`; the person is the owner of what they create, and only an owner
    *  renames, deletes or changes members). The reads are the control plane's catalog, as it stands;
@@ -1858,7 +1858,7 @@ export interface IterateSessionApi {
     /** the person is its owner; the operator names the owner (`ownerId`) */
     create(input: { name: string; ownerId?: string }): Promise<OrgRecord>;
     rename(orgId: string, input: { name: string }): Promise<OrgRecord>;
-    /** only while it holds no project */
+    /** only while it holds no mind */
     delete(orgId: string): Promise<void>;
     addMember(orgId: string, input: { userId: string; role?: "owner" | "member" }): Promise<void>;
     removeMember(orgId: string, input: { userId: string }): Promise<void>;
@@ -1899,8 +1899,8 @@ export interface IterateSessionApi {
   user: IterateContextApi;
   /** The global namespace's root `/` — a platform admin's session (the `admin` scope) or the
    *  operator bearer's alone. Its `cd` reaches `/users/<id>…`, `/organizations/<id>…` and
-   *  `/secrets/<name>…`, as a project root's reaches the project; its `secrets` are the deployment's
-   *  own, which the operator lends to projects. */
+   *  `/secrets/<name>…`, as a mind root's reaches the mind; its `secrets` are the deployment's
+   *  own, which the operator lends to minds. */
   global: IterateContextApi;
   /** Every person on the platform — a platform admin's session (the `admin` scope) or the
    *  operator's alone. */
@@ -1914,21 +1914,21 @@ export interface IterateSessionApi {
   /** Every context Cloudflare lists, by id — the operator's alone (scripts/ci/context-sweep.ts):
    *  who each is, from its own birth record; its durable log a page at a time, as `readEvents`
    *  pages it, which the sweep backs an orphan up with; and an orphan's destruction (refused for a
-   *  global context and for any project that still exists). Neither `identify` nor `readEvents`
+   *  global context and for any mind that still exists). Neither `identify` nor `readEvents`
    *  records a wake. */
   contexts: {
     identify(
       ids: string[],
-    ): Promise<({ id: string; projectId: string; path: string } | { id: string; error: string })[]>;
+    ): Promise<({ id: string; mindId: string; path: string } | { id: string; error: string })[]>;
     readEvents(id: string, afterOffset: number): Promise<StreamPage>;
-    destroy(id: string): Promise<{ projectId: string; path: string }>;
+    destroy(id: string): Promise<{ mindId: string; path: string }>;
   };
-  /** One project secret's encrypted cell, as a project seed archives it — the operator's alone
-   *  (scripts/os/project-seed.ts). */
-  exportProjectSecretForSeed(project: string, path: string): Promise<unknown>;
-  /** The version this edge runs and the one each named project's root context runs, at most eight
+  /** One mind secret's encrypted cell, as a mind seed archives it — the operator's alone
+   *  (scripts/os/mind-seed.ts). */
+  exportMindSecretForSeed(mind: string, path: string): Promise<unknown>;
+  /** The version this edge runs and the one each named mind's root context runs, at most eight
    *  — the operator's alone (scripts/os/preview-readiness.ts). */
-  versions(projectIds: string[]): Promise<{ edge: string; contexts: string[] }>;
+  versions(mindIds: string[]): Promise<{ edge: string; contexts: string[] }>;
   logout(): unknown;
 }
 

@@ -193,7 +193,7 @@ test.for([
   ["a pkg.pr.new branch, which the loader refuses", agentsAt("main")],
   ["a fork's build", `https://pkg.pr.new/someone/fork/@iterate-com/agents@${older}`],
   ["another package's build", pkgPrNewVersion("@iterate-com/voice", older)],
-])("%s is the project's own, and nothing is asked", async ([, installed]) => {
+])("%s is the mind's own, and nothing is asked", async ([, installed]) => {
   const get = vi.fn(async () => Response.json({ main: npmAt(newer, later) }));
   expect(await buildStanding("@iterate-com/agents", installed, get)).toEqual({
     kind: "own",

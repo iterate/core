@@ -1,5 +1,5 @@
 // standalone-page.ts — a page served as plain HTML, outside any app's build: the browser-auth
-// gate's own pages (app-server.ts), the platform's callback pages (core/os callback-page.ts) and
+// gate's own pages (app-server.ts), the platform's callback pages (core/secrets-worker/src/callback-page.ts) and
 // the CLI's sign-in page (cli/oauth.ts). Its one stylesheet is inline (theme/plain-page.css over
 // theme/tokens.css), so the page loads nothing to look like the issuer's pages, and a CSP allows
 // that stylesheet by its hash, `plainPageCssHash`.

@@ -11,12 +11,12 @@ import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import files from "./public/";
 
-/** The one onboarding agent of the project: every member who opens the app talks in its chat. */
+/** The one onboarding agent of the mind: every member who opens the app talks in its chat. */
 const ONBOARDING_AGENT = "/agents/onboarding";
 
 export function onboardingApp() {
   return {
-    /** The init hook's part (worker.ts, `project/worker-updated`), after the Agents app's install:
+    /** The init hook's part (worker.ts, `mind/worker-updated`), after the Agents app's install:
      *  the agent, if it does not exist yet. Creating it starts no model turn. Idempotent. */
     async install(itx: IterateConfigProcessEventArgs<"agents">["itx"]) {
       await itx.agents.create(ONBOARDING_AGENT);

@@ -1,4 +1,4 @@
-// durable-object.ts — one agent's facet, loaded into a project through the public SDK: the processor
+// durable-object.ts — one agent's facet, loaded into a mind through the public SDK: the processor
 // (processor.ts) and `message()`, a person's words.
 import { codedError } from "../lib.ts";
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
@@ -14,7 +14,7 @@ export class AgentDurableObject extends StreamProcessorDurableObject<AgentState>
    *  reaches it through the collection (collection.ts). */
   static override publicMethods = [...super.publicMethods, "message"];
 
-  /** The project's gate on words another agent sends without `trigger: false`, which the
+  /** The mind's gate on words another agent sends without `trigger: false`, which the
    *  processor applies on the receiving side (message.ts `AgentInputGate`): a config repo's
    *  `agents.ts` sets it. None: every such message is a trigger, as before. */
   static messageGate: AgentInputGate | undefined;
@@ -24,8 +24,8 @@ export class AgentDurableObject extends StreamProcessorDurableObject<AgentState>
    *  (standing-instructions.ts) and answers the list to use. None: the default. */
   static standingFiles: ((path: string, files: string[]) => string[]) | undefined;
 
-  /** The configuration every agent born in this project starts with, as an `agent/configured`
-   *  patch (`llm.apiKeys` of a project that brings its own credentials, say). Appended at birth,
+  /** The configuration every agent born in this mind starts with, as an `agent/configured`
+   *  patch (`llm.apiKeys` of a mind that brings its own credentials, say). Appended at birth,
    *  before the certificate; an agent born earlier keeps what its log holds. None: the contract's
    *  defaults. */
   static defaultConfig: AgentConfigPatch | undefined;
@@ -53,7 +53,7 @@ export class AgentDurableObject extends StreamProcessorDurableObject<AgentState>
    *  and named on the event; an image among them is what the model will see. `from` is the
    *  collection's base, which it relays as the sender (collection.ts `AgentReference.message`).
    *  `{ trigger: false }` makes the words context only. Otherwise words from another agent pass the
-   *  project's gate, if any, once they are in the log (processor.ts, `agent/input-gated`). The event
+   *  mind's gate, if any, once they are in the log (processor.ts, `agent/input-gated`). The event
    *  is answered so a caller can wait for what follows it. */
   async message(
     input: Parameters<AgentHandleApi["message"]>[0],

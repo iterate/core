@@ -1,15 +1,15 @@
 import { get, request as httpsRequest } from "node:https";
 import {
   platformOriginOf,
-  projectApiUrlOf,
-  projectMcpUrlOf,
+  mindApiUrlOf,
+  mindMcpUrlOf,
   protectedResourceMetadataUrlOf,
-} from "iterate/project-api";
+} from "iterate/mind-api";
 import { z } from "zod";
 import { signerOf } from "./approvals.ts";
 import { attempt, type Check } from "./lib.ts";
 
-/** core/auth/src/cookies.ts `SESSION_COOKIE`, which the package does not export. */
+/** core/auth-worker/src/cookies.ts `SESSION_COOKIE`, which the package does not export. */
 const ISSUER_SESSION_COOKIE = "__Host-iterate-auth-session";
 const CHALLENGE_PATH = "/me";
 
@@ -95,7 +95,7 @@ export async function authChecks(domain: string): Promise<Check[]> {
           // allow-high-entropy-next-line: the example challenge of RFC 7636 appendix B
           code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
           code_challenge_method: "S256",
-          resource: projectApiUrlOf(domain),
+          resource: mindApiUrlOf(domain),
         }).toString();
         const first = await fetch(authorization, { redirect: "manual" });
         const signIn = first.headers.get("location") || "";
@@ -133,7 +133,7 @@ export async function authChecks(domain: string): Promise<Check[]> {
       };
     }),
     ...(await Promise.all(
-      [projectApiUrlOf(domain), projectMcpUrlOf(domain)].map((resource) =>
+      [mindApiUrlOf(domain), mindMcpUrlOf(domain)].map((resource) =>
         attempt(`boundary: ${resource}'s protected-resource document names ${issuer}`, async () => {
           const response = await fetch(protectedResourceMetadataUrlOf(resource));
           const document = (await response.json().catch(() => null)) as {
@@ -155,12 +155,12 @@ export async function authChecks(domain: string): Promise<Check[]> {
     await attempt(
       "boundary: a WebSocket to /api with no bearer is 401, before any socket",
       async () => {
-        const status = await upgradeStatus(projectApiUrlOf(domain));
+        const status = await upgradeStatus(mindApiUrlOf(domain));
         return { pass: status === 401, detail: `${status}` };
       },
     ),
     await attempt("boundary: a made-up bearer on /api is 401, invalid_token", async () => {
-      const response = await fetch(projectApiUrlOf(domain), {
+      const response = await fetch(mindApiUrlOf(domain), {
         method: "POST",
         headers: { authorization: `Bearer made-up-${crypto.randomUUID()}` },
         body: "",
@@ -171,14 +171,14 @@ export async function authChecks(domain: string): Promise<Check[]> {
         pass:
           response.status === 401 &&
           challenge.includes('error="invalid_token"') &&
-          challenge.includes(protectedResourceMetadataUrlOf(projectApiUrlOf(domain))),
+          challenge.includes(protectedResourceMetadataUrlOf(mindApiUrlOf(domain))),
         detail: `${response.status} ${challenge}`,
       };
     }),
-    await attempt("boundary: /api reaches the project without the issuer's cookie", async () => {
+    await attempt("boundary: /api reaches the mind without the issuer's cookie", async () => {
       const token = process.env.ITERATE_PROTOTYPE_TOKEN;
       if (!token) return { pass: true, detail: "skipped: ITERATE_PROTOTYPE_TOKEN is not set" };
-      const response = await fetch(`${projectApiUrlOf(domain)}/_skeleton`, {
+      const response = await fetch(`${mindApiUrlOf(domain)}/_skeleton`, {
         headers: { cookie: `${ISSUER_SESSION_COOKIE}=smoke`, authorization: `Bearer ${token}` },
       });
       const body = z
@@ -270,7 +270,7 @@ async function deviceChecks(domain: string, metadata: Record<string, unknown> | 
       body: new URLSearchParams({
         client_id: client,
         scope: "iterate",
-        resource: projectApiUrlOf(domain),
+        resource: mindApiUrlOf(domain),
       }),
     });
     if (!response.ok) throw new Error(`the device authorization answered ${response.status}`);
@@ -395,7 +395,7 @@ async function limitChecks(
             body: new URLSearchParams({
               client_id: client.client_id,
               scope: "iterate",
-              resource: projectApiUrlOf(domain),
+              resource: mindApiUrlOf(domain),
             }),
           });
           const body = z
@@ -580,7 +580,7 @@ async function passkeyChecks(domain: string): Promise<Check[]> {
       };
     }),
     await attempt(
-      "passkey: an answer from no passkey of the project is refused, and its challenge is spent",
+      "passkey: an answer from no passkey of the mind is refused, and its challenge is spent",
       async () => {
         const answer = {
           statement: offered.statement,
@@ -594,7 +594,7 @@ async function passkeyChecks(domain: string): Promise<Check[]> {
         return {
           pass:
             first.status === 403 &&
-            Boolean(first.error?.includes("not one this project knows")) &&
+            Boolean(first.error?.includes("not one this mind knows")) &&
             second.status === 403 &&
             Boolean(second.error?.includes("expired")),
           detail: `${first.status} ${first.error}; again ${second.status} ${second.error}`,
@@ -604,7 +604,7 @@ async function passkeyChecks(domain: string): Promise<Check[]> {
   ];
 }
 
-/** core/auth/src/signed-change.ts `MEMBER_ADDED`, which the package does not export. */
+/** core/auth-worker/src/signed-change.ts `MEMBER_ADDED`, which the package does not export. */
 const MEMBER_ADDED = "events.iterate.com/account/member-added";
 
 // To add a member takes a member's key: a token removes one and adds no one.
@@ -653,7 +653,7 @@ async function membersChecks(domain: string): Promise<Check[]> {
   const added = (address: string) =>
     ({ path: "/", type: MEMBER_ADDED, payload: { email: address } }) as const;
   // a stack whose `auth.keys` does not name the smoke keys: the signed checks say so and pass
-  const unknown = (error: string) => error.includes("not one this project knows");
+  const unknown = (error: string) => error.includes("not one this mind knows");
   const skip = { pass: true, detail: "skipped: the stack's auth.keys does not name the smoke key" };
   const once = member ? await member.sign(added(email)) : null;
   return [
@@ -694,7 +694,7 @@ async function membersChecks(domain: string): Promise<Check[]> {
         detail: `${status} ${error}`,
       };
     }),
-    await attempt("members: an address at the project's own domain is refused", async () => {
+    await attempt("members: an address at the mind's own domain is refused", async () => {
       if (!member) return { pass: true, detail: "skipped: no ITERATE_SMOKE_APPROVER_KEY" };
       const { status, error } = await call("POST", await member.sign(added(`smoke@${domain}`)), {});
       if (unknown(error)) return skip;

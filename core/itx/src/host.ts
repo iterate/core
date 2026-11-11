@@ -11,7 +11,7 @@ import type { IterateContextDurableObject } from "./iterate-context-durable-obje
 import type { ReachableContext } from "./stream/stream.ts";
 
 export interface ItxHost {
-  projectSlug?: string;
+  mindSlug?: string;
   /** Appended in the same batch as the birth and first wake records. */
   birthEvents?(path: string): readonly StreamEventInput[];
   /** Without it, a run's writes are attributed to nobody. */
@@ -91,7 +91,7 @@ export function itxLoader(needs: string): ItxLoader {
 const itxEntrypointsByCtx = new WeakMap<object, Map<string, Fetcher>>();
 
 // Minted once per `ctx` and context: the loader keeps a dead id's recovery per stub
-// (core/project worker-loader.ts `loaderIdGenerations`), so every load of `ctx` shares one.
+// (core/mind-worker worker-loader.ts `loaderIdGenerations`), so every load of `ctx` shares one.
 export function itxEntrypointFor(
   ctx: DurableObjectState | ExecutionContext,
   iterateContextName: string,

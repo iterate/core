@@ -65,7 +65,7 @@ test("a malformed DER signature is refused, not guessed at", async () => {
 
 test("a statement parses only with every field", () => {
   const text = statement();
-  expect(statementOf(text)).toMatchObject({ project: "example.com", path: "/integrations/github" });
+  expect(statementOf(text)).toMatchObject({ mind: "example.com", path: "/integrations/github" });
   const { nonce: _, ...withoutNonce } = JSON.parse(text);
   expect(statementOf(JSON.stringify(withoutNonce))).toHaveProperty("refused");
   expect(statementOf(JSON.stringify({ ...withoutNonce, nonce: "n", path: "x" }))).toHaveProperty(
@@ -84,7 +84,7 @@ async function newKey() {
 
 const statement = () =>
   statementText({
-    project: "example.com",
+    mind: "example.com",
     path: "/integrations/github",
     type: "events.iterate.com/github/webhook-received",
     payload: { action: "opened" },

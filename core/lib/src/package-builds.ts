@@ -5,8 +5,8 @@
 // `main` (npm's dist-tag) or a pkg.pr.new branch, which move, so a writer resolves one once, as it
 // writes, the way npm's lockfile holds a git dependency at its commit
 // (https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#packages); the loader refuses a
-// pkg.pr.new ref that moves (core/os/src/context/module-resolution.ts says why). The writers: the
-// platform's seed of a config repo from a template (core/os/src/project/processor.ts), Docs' Install
+// pkg.pr.new ref that moves (core/mind-worker/src/context/module-resolution.ts says why). The writers: the
+// platform's seed of a config repo from a template (core/mind-worker/src/mind/processor.ts), Docs' Install
 // Docs, the apps that upgrade voice to main's newest build (`buildStanding`), and the e2e rows.
 import { z } from "zod";
 import { fetchRetryingPlatformFailures, UPSTREAM_ONCE } from "./platform-retry.ts";
@@ -115,13 +115,13 @@ export async function pinPkgPrNewVersion(
   return `https://pkg.pr.new/${parts.owner}/${parts.repo}/${name}@${served.commit}`;
 }
 
-/** Where a project's installed build of one of this repository's packages stands against the newest
+/** Where a mind's installed build of one of this repository's packages stands against the newest
  *  build main has published on npm, by commit (`buildStanding`). Each commit is as its version
  *  names it: seven digits from an npm version, the whole sha from a pkg.pr.new URL. */
 export type BuildStanding =
   /** `installed`, the version as its package.json pins it, is not this repository's build at a
    *  commit (another npm version, a fork's build, a build of the iterate/iterate archive): the
-   *  project's own, which it upgrades itself */
+   *  mind's own, which it upgrades itself */
   | { kind: "own"; installed: string }
   /** the installed build is main's newest */
   | { kind: "newest"; installed: string }
@@ -132,7 +132,7 @@ export type BuildStanding =
   | { kind: "ahead"; installed: string; newest: string };
 
 /**
- * WHETHER MAIN HAS A NEWER BUILD of package `name` than `installed`, the version a project's source
+ * WHETHER MAIN HAS A NEWER BUILD of package `name` than `installed`, the version a mind's source
  * pins: main's newest is the npm version its `main` dist-tag names now (`npmMainVersion`). An npm
  * build of main is behind when its commit is older, by the committer date its version holds. A
  * pkg.pr.new build at a commit (a pull request's, or main's from before npm) is ahead when

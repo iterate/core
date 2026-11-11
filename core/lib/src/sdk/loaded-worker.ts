@@ -1,5 +1,5 @@
 // sdk/loaded-worker.ts — what every LOADED worker evaluates before its own main module, and the
-// platform's own isolate never does (core/os context/module-resolution.ts `enteredThroughPlatform`).
+// platform's own isolate never does (core/mind-worker/src/context/module-resolution.ts `enteredThroughPlatform`).
 // Its outbound `fetch` carries the cause it runs under (../cause.ts), and every `WorkerEntrypoint`
 // it exports, an SDK host or not, gets:
 //   callWithCause(cause, steps, callerPath)

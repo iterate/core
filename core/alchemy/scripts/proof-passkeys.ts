@@ -5,7 +5,7 @@ import type { CDPSession, Page } from "playwright";
 import { z } from "zod";
 
 /** Adds a passkey on /keys. A member who holds one confirms the new one with it, in a second press
- *  (core/auth/src/signed-change.ts), and no device makes a second passkey for a person: so the new
+ *  (core/auth-worker/src/signed-change.ts), and no device makes a second passkey for a person: so the new
  *  one and the old one are on two authenticators, and `touch` says which one answers a press.
  *  Answers how it was added. */
 export async function addPasskey(

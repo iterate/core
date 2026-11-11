@@ -149,7 +149,7 @@ test("a scheduled turn that answered in words is not reminded at its next silent
   expect(log.state.pendingLlmRequestTrigger).toBeNull();
 });
 
-test("turns that may end in silence get no extra request: mail, the project code's reviews, an opted-out job", async () => {
+test("turns that may end in silence get no extra request: mail, the mind code's reviews, an opted-out job", async () => {
   const cases: Array<[string, Record<string, unknown>, Record<string, unknown>?]> = [
     ["[gmail received · personal · id 1] Parcel Co: Out for delivery", { origin: "/" }],
     [
@@ -236,7 +236,7 @@ test("a turn that goes on anyway is not reminded: a person's new words wait for 
   expect(types(log.events)).toContain("agent/answer-reminded");
 });
 
-test("answerOwedFor: a job a script scheduled, or words marked so; never the project code's schedules unless marked", () => {
+test("answerOwedFor: a job a script scheduled, or words marked so; never the mind code's schedules unless marked", () => {
   const schedule = { key: "digest-morning", scheduledAtOffset: 1, at: "2026-10-03T08:00:00.000Z" };
   expect(answerOwedFor({ payload: {}, source: { origin: SCRIPTS, schedule } })).toBe(
     'the scheduled job "digest-morning"',
@@ -332,7 +332,7 @@ const born = async (log: Log) => {
   await log.commit({ type: "events.iterate.com/agent/created", payload: { path: PATH } });
 };
 
-/** Words into the agent, from `source` (a person's, the project code's, a schedule's). */
+/** Words into the agent, from `source` (a person's, the mind code's, a schedule's). */
 const input = (
   log: Log,
   content: string,

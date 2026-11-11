@@ -247,7 +247,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     )
       throw codedError(
         "INVALID_INPUT",
-        "provide's fetchRoute rides a lent stub on the project's root \"/\"; set any other route with itx.fetchRoutes.set",
+        "provide's fetchRoute rides a lent stub on the mind's root \"/\"; set any other route with itx.fetchRoutes.set",
       );
     if (isRow) {
       // Appended before this session's lend is recalled, so the DO's un-set on the pager close

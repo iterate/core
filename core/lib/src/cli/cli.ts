@@ -1,8 +1,8 @@
-// cli.ts — THE `iterate` CLI: sign in to a project by its address, run scripts in it, and lend it
+// cli.ts — THE `iterate` CLI: sign in to a mind by its address, run scripts in it, and lend it
 // what runs on this machine (a file's functions, a local port, this computer). A profile
-// (./config.ts) names one project; `--config <name>`, a folder mapped to a profile, the default
-// profile, or the only one picks it, and `--project <address>` overrides it for one command. Every
-// connection is the Node client's (../node.ts `connectProject`).
+// (./config.ts) names one mind; `--config <name>`, a folder mapped to a profile, the default
+// profile, or the only one picks it, and `--mind <address>` overrides it for one command. Every
+// connection is the Node client's (../node.ts `connectMind`).
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -11,14 +11,8 @@ import repl from "node:repl";
 import { RpcTarget } from "capnweb";
 import { createCli, os, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
-import {
-  addressOf,
-  connectProject,
-  discoverAddress,
-  openForSignIn,
-  signInToProject,
-} from "../node.ts";
-import { projectApiUrlOf, projectMcpUrlOf, projectProvideUrlOf } from "../project-api.ts";
+import { addressOf, connectMind, discoverAddress, openForSignIn, signInToMind } from "../node.ts";
+import { mindApiUrlOf, mindMcpUrlOf, mindProvideUrlOf } from "../mind-api.ts";
 import { connectChatgpt } from "./chatgpt.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import { runFs } from "./fs.ts";
@@ -34,7 +28,7 @@ import {
   readConfigFile,
   readSession,
   removeSession,
-  setConfigProject,
+  setConfigMind,
   writeConfigFile,
 } from "./config.ts";
 
@@ -82,32 +76,31 @@ const resolveConfigName = (workspacePath: string): string => {
   return names.length === 1 ? names[0]! : DEFAULT_CONFIG_NAME;
 };
 
-/** The project a command talks to: `--project` in either spelling, as discovery keeps it (as
+/** The mind a command talks to: `--mind` in either spelling, as discovery keeps it (as
  *  `login` stores the profile's), else the profile's. */
-const resolveProject = async (given?: string): Promise<string> => {
+const resolveMind = async (given?: string): Promise<string> => {
   if (given) return (await discoverAddress(given)).address;
   const name = resolveConfigName(process.cwd());
   const config = readConfig(name);
   if (config instanceof Error) throw config;
-  if (!config.project)
+  if (!config.mind)
     throw new Error(
-      `Profile "${name}" names no project. Run \`iterate login <address>\`, e.g. iterate login example.com.`,
+      `Profile "${name}" names no mind. Run \`iterate login <address>\`, e.g. iterate login example.com.`,
     );
-  return config.project;
+  return config.mind;
 };
 
-const connect = async (project?: string) =>
-  connectProject({ address: await resolveProject(project) });
+const connect = async (mind?: string) => connectMind({ address: await resolveMind(mind) });
 
-/** `iterate login`: sign in to the project at the typed address, check who that is, and make it the
- *  profile's project. `chatgpt connect` signs in by this too. */
+/** `iterate login`: sign in to the mind at the typed address, check who that is, and make it the
+ *  profile's mind. `chatgpt connect` signs in by this too. */
 const login = async (input: { address: string; device?: boolean; expectUser?: string }) => {
-  const project = await discoverAddress(input.address);
-  const resource = projectApiUrlOf(project.address);
-  const session = await signInToProject(project, resource, {
+  const mind = await discoverAddress(input.address);
+  const resource = mindApiUrlOf(mind.address);
+  const session = await signInToMind(mind, resource, {
     flow: loginFlowFor({ device: input.device, env: process.env, platform: process.platform }),
   });
-  using connection = await connectProject({ address: project.address, token: session.token });
+  using connection = await connectMind({ address: mind.address, token: session.token });
   const who = await connection.itx.whoami();
   const unexpected = unexpectedUser(who.principal?.email, input.expectUser);
   if (unexpected) {
@@ -116,18 +109,18 @@ const login = async (input: { address: string; device?: boolean; expectUser?: st
     throw new Error(unexpected);
   }
   const name = resolveConfigName(process.cwd());
-  setConfigProject(name, project.address);
+  setConfigMind(name, mind.address);
   return {
-    message: `Signed in to ${project.address} as ${who.principal?.email || who.principal?.actor || "someone the project does not name"}`,
+    message: `Signed in to ${mind.address} as ${who.principal?.email || who.principal?.actor || "someone the mind does not name"}`,
     profile: name,
     expiresAt: session.expiresAt,
   };
 };
 
-const projectOption = z
+const mindOption = z
   .string()
   .optional()
-  .describe("The project's address, e.g. example.com (default: the profile's)");
+  .describe("The mind's address, e.g. example.com (default: the profile's)");
 
 const launcherProcedures = {
   login: os
@@ -136,12 +129,12 @@ const launcherProcedures = {
         address: z
           .string()
           .meta({ positional: true })
-          .describe("The project's address, e.g. example.com"),
+          .describe("The mind's address, e.g. example.com"),
         device: z
           .boolean()
           .optional()
           .describe(
-            "Approve from a browser on any device, when the project's issuer offers it: the default over SSH, on Linux with no display, and under a coding agent",
+            "Approve from a browser on any device, when the mind's issuer offers it: the default over SSH, on Linux with no display, and under a coding agent",
           ),
         expectUser: z
           .string()
@@ -149,18 +142,18 @@ const launcherProcedures = {
           .describe("Refuse and end a session for anyone but this email"),
       }),
     )
-    .meta({ description: "Sign in to a project and make it the profile's project" })
+    .meta({ description: "Sign in to a mind and make it the profile's mind" })
     .handler(async ({ input }) => login(input)),
   logout: os
-    .input(z.object({ project: projectOption }))
+    .input(z.object({ mind: mindOption }))
     .meta({
       description:
-        "End this machine's sign-ins to the project (its API and /provide) at its issuer, and forget them",
+        "End this machine's sign-ins to the mind (its API and /provide) at its issuer, and forget them",
     })
     .handler(async ({ input }) => {
-      const address = await resolveProject(input.project);
+      const address = await resolveMind(input.mind);
       const ended: string[] = [];
-      for (const resource of [projectApiUrlOf(address), projectProvideUrlOf(address)]) {
+      for (const resource of [mindApiUrlOf(address), mindProvideUrlOf(address)]) {
         const session = readSession(resource);
         if (!session) continue;
         await revokeSession(session).catch((error: unknown) => {
@@ -174,22 +167,22 @@ const launcherProcedures = {
       return { message: ended.length ? `Signed out of ${address}` : `Not signed in to ${address}` };
     }),
   whoami: os
-    .input(z.object({ project: projectOption }))
-    .meta({ description: "Who the project says you are, and where" })
+    .input(z.object({ mind: mindOption }))
+    .meta({ description: "Who the mind says you are, and where" })
     .handler(async ({ input }) => {
-      using connection = await connect(input.project);
-      return { project: connection.address, ...(await connection.itx.whoami()) };
+      using connection = await connect(input.mind);
+      return { mind: connection.address, ...(await connection.itx.whoami()) };
     }),
   repl: os
     .input(
       z.object({
-        project: projectOption,
-        context: z.string().default("/").describe("Context path within the project"),
+        mind: mindOption,
+        context: z.string().default("/").describe("Context path within the mind"),
       }),
     )
     .meta({ description: "Open a local Node REPL with itx and RpcTarget in scope" })
     .handler(async ({ input }) => {
-      using connection = await connect(input.project);
+      using connection = await connect(input.mind);
       using context = await connection.itx.cd(input.context);
       console.error(
         `Connected to ${connection.address}, context ${input.context}. Use .exit to quit.`,
@@ -222,8 +215,8 @@ const launcherProcedures = {
       .input(
         z
           .object({
-            project: projectOption,
-            context: z.string().default("/").describe("Context path within the project"),
+            mind: mindOption,
+            context: z.string().default("/").describe("Context path within the mind"),
             eval: z
               .string()
               .optional()
@@ -238,7 +231,7 @@ const launcherProcedures = {
             "Specify exactly one of --eval or --file",
           ),
       )
-      .meta({ description: "Run an itx script once in the project" })
+      .meta({ description: "Run an itx script once in the mind" })
       .handler(async ({ input }) => {
         let script = input.eval;
         if (input.file === "-") {
@@ -246,7 +239,7 @@ const launcherProcedures = {
           for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
           script = Buffer.concat(chunks).toString("utf8");
         } else if (input.file) script = await readFile(input.file, "utf8");
-        using connection = await connect(input.project);
+        using connection = await connect(input.mind);
         using context = await connection.itx.cd(input.context);
         return await context.run(`async (itx) => {\n${script}\n}`);
       }),
@@ -255,16 +248,16 @@ const launcherProcedures = {
     claude: os
       .input(
         z.object({
-          project: projectOption,
+          mind: mindOption,
           exec: z.boolean().optional().describe("Run the command instead of printing it"),
         }),
       )
       .meta({
         description:
-          "The command that adds the project's MCP server to Claude Code: printed, or run with --exec. Claude Code then signs in with the project's issuer (/mcp in Claude Code)",
+          "The command that adds the mind's MCP server to Claude Code: printed, or run with --exec. Claude Code then signs in with the mind's issuer (/mcp in Claude Code)",
       })
       .handler(async ({ input }) => {
-        const argv = claudeMcpAddArgs(projectMcpUrlOf(await resolveProject(input.project)));
+        const argv = claudeMcpAddArgs(mindMcpUrlOf(await resolveMind(input.mind)));
         if (!input.exec) {
           // stdout carries the command alone, so `eval "$(iterate mcp claude)"` runs it
           console.log(shellCommand(["claude", ...argv]));
@@ -286,7 +279,7 @@ const launcherProcedures = {
             .string()
             .optional()
             .meta({ positional: true })
-            .describe("The project's address, e.g. example.com (default: the profile's)"),
+            .describe("The mind's address, e.g. example.com (default: the profile's)"),
           test: z
             .boolean()
             .default(true)
@@ -296,12 +289,12 @@ const launcherProcedures = {
       )
       .meta({
         description:
-          "Connect a personal ChatGPT Plus or Pro plan to the project: sign in with ChatGPT in this computer's browser, on 127.0.0.1:1455; the project gets the tokens and keeps them",
+          "Connect a personal ChatGPT Plus or Pro plan to the mind: sign in with ChatGPT in this computer's browser, on 127.0.0.1:1455; the mind gets the tokens and keeps them",
       })
       .handler(async ({ input }) => {
-        const address = await resolveProject(input.address);
+        const address = await resolveMind(input.address);
         // a first-time user runs this one command: no sign-in here is `iterate login` first
-        if (!process.env.ITERATE_PROJECT_TOKEN?.trim() && !readSession(projectApiUrlOf(address)))
+        if (!process.env.ITERATE_MIND_TOKEN?.trim() && !readSession(mindApiUrlOf(address)))
           console.error((await login({ address })).message);
         using connection = await connect(address);
         return await connectChatgpt({
@@ -316,7 +309,7 @@ const launcherProcedures = {
   useMyComputer: os
     .input(
       z.object({
-        project: projectOption,
+        mind: mindOption,
         name: z
           .string()
           .regex(/^[a-zA-Z][a-zA-Z0-9]*$/)
@@ -326,10 +319,10 @@ const launcherProcedures = {
     )
     .meta({
       description:
-        "Share this computer with a project until Ctrl-C: run commands and read and write files (on a Mac, native dialogs and Swift too). The same as `iterate provide` of use-my-computer.ts",
+        "Share this computer with a mind until Ctrl-C: run commands and read and write files (on a Mac, native dialogs and Swift too). The same as `iterate provide` of use-my-computer.ts",
     })
     .handler(async ({ input }) => {
-      const address = await resolveProject(input.project);
+      const address = await resolveMind(input.mind);
       // shareMyComputer owns the connection from here, and every one `reconnect` opens
       await shareMyComputer({
         connection: await connect(address),
@@ -357,20 +350,20 @@ const launcherProcedures = {
           .string()
           .optional()
           .describe(
-            "Serve on this hostname of the project instead of the name's, e.g. hello.tunnels.example.com",
+            "Serve on this hostname of the mind instead of the name's, e.g. hello.tunnels.example.com",
           ),
         public: z
           .boolean()
           .optional()
           .describe("Anyone may use it (default: signed-in visitors only)"),
-        project: projectOption,
+        mind: mindOption,
       }),
     )
     .meta({
-      description: "Serve a local port on a project host until Ctrl-C, WebSockets included",
+      description: "Serve a local port on a mind host until Ctrl-C, WebSockets included",
     })
     .handler(async ({ input }) => {
-      const address = await resolveProject(input.project);
+      const address = await resolveMind(input.mind);
       // runTunnel owns the connection from here, and every one `reconnect` opens
       await runTunnel({
         connection: await connect(address),
@@ -396,18 +389,18 @@ const launcherProcedures = {
           .describe(
             "The capability's name, itx.<name> (default: the file's, whatsapp.ts → whatsapp)",
           ),
-        project: projectOption,
+        mind: mindOption,
       }),
     )
     .meta({
       description:
-        "Lend a local file's functions to a project as itx.<name> until Ctrl-C; the file's folder installs its own dependencies",
+        "Lend a local file's functions to a mind as itx.<name> until Ctrl-C; the file's folder installs its own dependencies",
     })
     .handler(async ({ input }) => {
       // the file first: a missing dependency is the answer before any sign-in
       const file = await importProvidedFile(input.file);
       const name = input.name || nameOfFile(input.file);
-      const address = await resolveProject(input.project);
+      const address = await resolveMind(input.mind);
       // runProvide owns the connection from here, and every one `reconnect` opens
       await runProvide({
         connection: await connect(address),
@@ -419,16 +412,16 @@ const launcherProcedures = {
   config: {
     get: os
       .input(z.object({}))
-      .meta({ default: true, description: "Show the profile in use, its project and its sign-in" })
+      .meta({ default: true, description: "Show the profile in use, its mind and its sign-in" })
       .handler(async () => {
         const name = resolveConfigName(process.cwd());
         const config = readConfig(name);
         if (config instanceof Error) return { configPath: CONFIG_PATH, error: config.message };
-        const session = config.project ? readSession(projectApiUrlOf(config.project)) : null;
+        const session = config.mind ? readSession(mindApiUrlOf(config.mind)) : null;
         return {
           configPath: CONFIG_PATH,
           profile: name,
-          project: config.project,
+          mind: config.mind,
           signedIn: session ? { issuer: session.issuer, expiresAt: session.expiresAt } : false,
         };
       }),
@@ -442,7 +435,7 @@ const launcherProcedures = {
           profiles: Object.fromEntries(
             Object.entries(configFile.configs || {}).map(([name, config]) => [
               name,
-              { project: config.project, active: name === current ? true : undefined },
+              { mind: config.mind, active: name === current ? true : undefined },
             ]),
           ),
           default: configFile.default,
@@ -452,7 +445,7 @@ const launcherProcedures = {
       .input(
         z.object({
           name: z.string().describe("Profile name"),
-          project: z.string().optional().describe("The project's address, e.g. example.com"),
+          mind: z.string().optional().describe("The mind's address, e.g. example.com"),
           setDefault: z.boolean().optional().describe("Make it the default profile"),
           setWorkspace: z.boolean().optional().describe("Map the current folder to this profile"),
         }),
@@ -462,7 +455,7 @@ const launcherProcedures = {
         const configFile = readConfigFile();
         configFile.configs ||= {};
         configFile.configs[input.name] ||= {};
-        if (input.project) configFile.configs[input.name]!.project = addressOf(input.project);
+        if (input.mind) configFile.configs[input.name]!.mind = addressOf(input.mind);
         if (input.setDefault) configFile.default = input.name;
         if (input.setWorkspace) {
           configFile.workspaces ||= {};
@@ -501,7 +494,7 @@ export const runCli = async () => {
     router: launcherProcedures,
     name: "iterate",
     description:
-      "The iterate CLI: sign in to a project by its address, run itx scripts in it, and lend it what runs on this machine.",
+      "The iterate CLI: sign in to a mind by its address, run itx scripts in it, and lend it what runs on this machine.",
   });
   // trpc-cli's built-in prompts ask for a missing input, but only a person at a terminal
   await cli.run({
@@ -512,7 +505,7 @@ export const runCli = async () => {
 
 /** Claude Code's arguments that add one HTTP MCP server named `iterate` at `mcpUrl`
  *  (https://code.claude.com/docs/en/mcp). It signs in itself: the server's protected-resource
- *  metadata names the project's issuer. */
+ *  metadata names the mind's issuer. */
 export const claudeMcpAddArgs = (mcpUrl: string) => [
   "mcp",
   "add",

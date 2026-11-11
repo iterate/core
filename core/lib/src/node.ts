@@ -1,17 +1,17 @@
-// node.ts — ONE NODE CLIENT FOR A PROJECT, addressed by its domain (iterate/project-api): what the
-// `iterate` CLI and scripts use, and the token a home lab dials with (`projectToken`).
-// `connectProject` answers the project's root `itx` over capnweb at `iterate.<address>/api`. A
-// sign-in finds the project's issuer by discovery (iterate/oauth `discoverProject`), runs once (the
+// node.ts — ONE NODE CLIENT FOR A MIND, addressed by its domain (iterate/mind-api): what the
+// `iterate` CLI and scripts use, and the token a home lab dials with (`mindToken`).
+// `connectMind` answers the mind's root `itx` over capnweb at `iterate.<address>/api`. A
+// sign-in finds the mind's issuer by discovery (iterate/oauth `discoverMind`), runs once (the
 // loopback code flow with PKCE, or the device flow when the issuer offers it and there is no browser
 // here), keeps the session per resource in the CLI's config directory (cli/config.ts, mode 600) and
-// refreshes it. A token handed in, or ITERATE_PROJECT_TOKEN, replaces all of that and is used as it
+// refreshes it. A token handed in, or ITERATE_MIND_TOKEN, replaces all of that and is used as it
 // stands.
 import { hostname } from "node:os";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { ResponseBodyError } from "oauth4webapi";
 import WebSocket from "ws";
 import type { IterateContextApi } from "./api.ts";
-import { type DiscoveredProject, resolveProject } from "./client/oauth.ts";
+import { type DiscoveredMind, resolveMind } from "./client/oauth.ts";
 import { startHeartbeat } from "./client/heartbeat.ts";
 import { isCodingAgent } from "./cli/coding-agent.ts";
 import { readSession, removeSession, writeSession, type StoredSession } from "./cli/config.ts";
@@ -19,24 +19,24 @@ import { loginFlowFor, type LoginFlow } from "./cli/device-login/flow.ts";
 import { deviceLogin, showsColors } from "./cli/device-login/index.ts";
 import { oauthLogin, refreshOAuthSession } from "./cli/oauth.ts";
 import { withTimeout } from "./lib.ts";
-import { projectAddressOf, projectApiUrlOf } from "./project-api.ts";
+import { mindAddressOf, mindApiUrlOf } from "./mind-api.ts";
 
 /** Where a line for the person goes: stderr, so stdout stays a command's answer. */
 const printToStderr = (line: string) => console.error(line);
 
-/** A TYPED ADDRESS AS A PROJECT'S (iterate/project-api `projectAddressOf`: lowercased, a scheme, a
+/** A TYPED ADDRESS AS A MIND'S (iterate/mind-api `mindAddressOf`: lowercased, a scheme, a
  *  path and a trailing dot dropped), or an error that says why it is none. Every command and the
  *  home lab resolve an address here, so a session is stored and found under one spelling. */
 export function addressOf(typed: string): string {
-  const parsed = projectAddressOf(typed);
+  const parsed = mindAddressOf(typed);
   if ("error" in parsed) throw new Error(parsed.error);
   return parsed.address;
 }
 
-/** THE PROJECT AT A TYPED ADDRESS, `example.com` or `iterate.example.com` alike, as discovery
- *  finds it (iterate/oauth `resolveProject`). */
-export async function discoverAddress(typed: string): Promise<DiscoveredProject> {
-  const found = await resolveProject(addressOf(typed));
+/** THE MIND AT A TYPED ADDRESS, `example.com` or `iterate.example.com` alike, as discovery
+ *  finds it (iterate/oauth `resolveMind`). */
+export async function discoverAddress(typed: string): Promise<DiscoveredMind> {
+  const found = await resolveMind(addressOf(typed));
   if ("error" in found) throw new Error(found.error);
   return found;
 }
@@ -49,28 +49,28 @@ export type SignInOptions = {
   openBrowser?: (url: URL) => void | Promise<void>;
 };
 
-/** SIGN IN to `project`'s issuer for `resource` and store the session. The device flow when it is
+/** SIGN IN to `mind`'s issuer for `resource` and store the session. The device flow when it is
  *  the flow for this process and the issuer offers it; else the loopback flow, whose URL is printed
  *  (an agent, or `ITERATE_SKIP_BROWSER_OPEN=1`, opens it itself). */
-export async function signInToProject(
-  project: DiscoveredProject,
+export async function signInToMind(
+  mind: DiscoveredMind,
   resource: string,
   options: SignInOptions = {},
 ): Promise<StoredSession> {
   const print = options.print || printToStderr;
   const flow = options.flow || loginFlowFor({ env: process.env, platform: process.platform });
-  const device = flow === "device" && Boolean(project.endpoints.deviceAuthorization);
-  print(`Signing in to ${project.address} at ${new URL(project.issuer).host}...`);
+  const device = flow === "device" && Boolean(mind.endpoints.deviceAuthorization);
+  print(`Signing in to ${mind.address} at ${new URL(mind.issuer).host}...`);
   const session = device
     ? await deviceLogin({
-        project,
+        mind,
         resource,
         deviceName: `iterate CLI on ${hostname()}`,
         print,
         colors: showsColors(process.stderr.isTTY, process.env),
       })
     : await oauthLogin({
-        project,
+        mind,
         resource,
         openBrowser: options.openBrowser || ((url) => openForSignIn(url, print)),
       });
@@ -95,17 +95,17 @@ export async function openForSignIn(url: URL, print: (line: string) => void) {
   });
 }
 
-/** A LIVE BEARER FOR `resource` of the project at `address`: `token`, else ITERATE_PROJECT_TOKEN,
+/** A LIVE BEARER FOR `resource` of the mind at `address`: `token`, else ITERATE_MIND_TOKEN,
  *  else the stored session, refreshed when it ends within the minute. With none, or one the issuer
  *  refuses to refresh, a sign-in when `signIn` allows it; else an error that says how to sign in. */
-export async function projectToken(input: {
+export async function mindToken(input: {
   address: string;
   resource: string;
   token?: string;
   /** false: never sign in, fail instead (a script, the smoke check) */
   signIn?: SignInOptions | false;
 }): Promise<string> {
-  const fixed = input.token || process.env.ITERATE_PROJECT_TOKEN?.trim();
+  const fixed = input.token || process.env.ITERATE_MIND_TOKEN?.trim();
   if (fixed) return fixed;
   const { resource } = input;
   const stored = readSession(resource);
@@ -128,8 +128,8 @@ export async function projectToken(input: {
   }
   if (input.signIn === false)
     throw new Error(`Not signed in to ${input.address}. Run \`iterate login ${input.address}\`.`);
-  const project = await discoverAddress(input.address);
-  return (await signInToProject(project, resource, input.signIn)).token;
+  const mind = await discoverAddress(input.address);
+  return (await signInToMind(mind, resource, input.signIn)).token;
 }
 
 const endsWithinTheMinute = (session: StoredSession) => {
@@ -138,34 +138,34 @@ const endsWithinTheMinute = (session: StoredSession) => {
   return Number.isFinite(expiresAt) && expiresAt <= Date.now() + 60_000;
 };
 
-/** The project's root context, as capnweb hands it: pipelined, and disposable. */
-export type ProjectItx = RpcStub<IterateContextApi>;
+/** The mind's root context, as capnweb hands it: pipelined, and disposable. */
+export type MindItx = RpcStub<IterateContextApi>;
 
-/** One connection to a project's API. Dispose it to close every capability and its socket.
+/** One connection to a mind's API. Dispose it to close every capability and its socket.
  *  Operations are never retried: replaying a script could duplicate its effects. */
-export type ProjectConnection = Disposable & {
-  /** the project's address */
+export type MindConnection = Disposable & {
+  /** the mind's address */
   address: string;
-  itx: ProjectItx;
+  itx: MindItx;
   closed: Promise<{ code: number; reason: string }>;
 };
 
-/** CONNECT TO THE PROJECT AT `address`: a bearer for its API (`projectToken`), a WebSocket to
+/** CONNECT TO THE MIND AT `address`: a bearer for its API (`mindToken`), a WebSocket to
  *  `iterate.<address>/api` with the bearer on the upgrade request, where ingress checks it and
- *  stamps the caller, and the session's root, the project's `itx` as that caller. A refused bearer
+ *  stamps the caller, and the session's root, the mind's `itx` as that caller. A refused bearer
  *  is a 401 on the upgrade, before any socket. A heartbeat ends a connection whose peer stopped
  *  answering. */
 // Explicit return type keeps declaration emit from expanding capnweb's recursive mapped types.
-export async function connectProject(input: {
+export async function connectMind(input: {
   address: string;
   token?: string;
   signIn?: SignInOptions | false;
   /** the heartbeat's timing — a test's, client/heartbeat.ts `HEARTBEAT` otherwise */
   heartbeat?: { intervalMs: number; deadAfterMs: number };
-}): Promise<ProjectConnection> {
+}): Promise<MindConnection> {
   const address = addressOf(input.address);
-  const resource = projectApiUrlOf(address);
-  const token = await projectToken({ address, resource, token: input.token, signIn: input.signIn });
+  const resource = mindApiUrlOf(address);
+  const token = await mindToken({ address, resource, token: input.token, signIn: input.signIn });
   const socket = new WebSocket(resource.replace(/^http/, "ws"), {
     handshakeTimeout: 15_000,
     headers: { authorization: `Bearer ${token}` },

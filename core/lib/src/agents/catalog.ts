@@ -36,7 +36,7 @@ const AgentCatalogContract = defineProcessorContract({
   slug: "agents",
   version: "4",
   description:
-    "The agents of this project: every context under /agents, with what a list shows about each.",
+    "The agents of this mind: every context under /agents, with what a list shows about each.",
   stateSchema: z.object({
     /** Every live agent by path: every context under `/agents`, at any depth, from its own
      *  `itx/child-created` (an agent never posts its birth here). Everything but `createdAt` and
@@ -222,7 +222,7 @@ function ancestorsOf(path: string): string[] {
 }
 
 /** The agents app's collection facet — what the `itx.agents` rule names (install.ts): the
- *  published `AgentsRootApi` (api.ts) at the project's root, `AgentsApi` plus `at(base)`, the
+ *  published `AgentsRootApi` (api.ts) at the mind's root, `AgentsApi` plus `at(base)`, the
  *  collection an agent's own `itx.agents` rule reaches. */
 export class AgentCollectionDurableObject
   extends StreamProcessorDurableObject<AgentCatalogState>
@@ -230,7 +230,7 @@ export class AgentCollectionDurableObject
 {
   /** The processor's reads, and `itx.agents`: the collection's verbs and `at(base)` (collection.ts). */
   static override publicMethods = [...super.publicMethods, "list", "get", "create", "delete", "at"];
-  /** The module of the project's published config that exports this class and
+  /** The module of the mind's published config that exports this class and
    *  `AgentDurableObject`: each agent's facet is started from it. A config that keeps them in
    *  another module sets it there, beside the export. */
   static module = AGENTS_MODULE;

@@ -1,10 +1,10 @@
-// sdk/auth.ts — WHO IS ASKING, for a project's config worker: `this.auth` on `IterateConfigEntrypoint`
-// (./index.ts). It reads the stamps ingress puts on a request for one of the project's hostnames,
+// sdk/auth.ts — WHO IS ASKING, for a mind's config worker: `this.auth` on `IterateConfigEntrypoint`
+// (./index.ts). It reads the stamps ingress puts on a request for one of the mind's hostnames,
 // and answers the challenge that makes ingress sign a person in. The guards are below.
 import { z } from "zod";
 import { isSameOriginBrowserRequest } from "../lib.ts";
 import { ITX_PERSON_HEADER, ITX_PRINCIPAL_HEADER, type Person } from "../principal.ts";
-import { ITERATE_SERVE_HEADER } from "../project-ingress.ts";
+import { ITERATE_SERVE_HEADER } from "../mind-ingress.ts";
 
 const Principal = z.object({ actor: z.string().min(1), email: z.string().optional() });
 const PersonStamp = z.object({
@@ -13,12 +13,12 @@ const PersonStamp = z.object({
   impersonatedBy: z.object({ actor: z.string().min(1), email: z.string() }).optional(),
 });
 
-/** GUARDS FOR A PROJECT'S CONFIG WORKER, before it serves a page. Every hostname of the project's
- *  domain but `iterate.<domain>` is the project's own, and on each one ingress holds the browser
- *  session (core/boundary/src/host-session.ts): it stamps anyone signed in as a person,
+/** GUARDS FOR A MIND'S CONFIG WORKER, before it serves a page. Every hostname of the mind's
+ *  domain but `iterate.<domain>` is the mind's own, and on each one ingress holds the browser
+ *  session (core/boundary-worker/src/host-session.ts): it stamps anyone signed in as a person,
  *  `x-itx-person`, and a member as a principal too, `x-itx-principal`. Signing in says who someone
- *  is; whether they are a member is the project's members list. So an app may serve people who
- *  are not members: its end users. Who arrives is core/boundary/src/project-host-sign-in.ts, "WHO
+ *  is; whether they are a member is the mind's members list. So an app may serve people who
+ *  are not members: its end users. Who arrives is core/boundary-worker/src/mind-host-sign-in.ts, "WHO
  *  ARRIVES". The guards:
  *    - `auth.require` asks for a member, and `auth.requirePerson` for anyone signed in. Both answer
  *      null when the request may go on, else the answer to send.
@@ -30,7 +30,7 @@ const PersonStamp = z.object({
  *  into the sign-in on this host and back to the page; a person signed in who is no member gets one
  *  refusal page in place of a member's page. A fetch, a write or a WebSocket upgrade gets the 401
  *  (or, for a non-member at a member's page, a 403) itself. Ingress answers `/.iterate/` on every
- *  project hostname itself: `/.iterate/sign-out` takes a POST from the host's own page. Any app can
+ *  mind hostname itself: `/.iterate/sign-out` takes a POST from the host's own page. Any app can
  *  ask for a member the same way:
  *
  *  ```js
@@ -42,7 +42,7 @@ const PersonStamp = z.object({
  *  client), else 403. Ingress already sends such a cookie request on anonymous; this repeats the
  *  check where the app runs. The handshake is a GET, but it opens a two-way channel, and the
  *  session cookie is `SameSite=Lax`: every hostname of the domain is same-site with every other, so
- *  a page on another of the project's hosts could otherwise open a socket to this app with the
+ *  a page on another of the mind's hosts could otherwise open a socket to this app with the
  *  visitor's cookie. */
 export const auth = {
   require(request: Request): Response | null {

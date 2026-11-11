@@ -1,8 +1,8 @@
-// secret-placeholder.ts — THE PLACEHOLDER GRAMMAR (tasks/project-stack.md): how a request spells a
+// secret-placeholder.ts — THE PLACEHOLDER GRAMMAR (tasks/mind-stack.md): how a request spells a
 // secret, `getSecret("/secrets/<name>")`, defined once for the Workers that read it. Egress finds
 // which secret a request names and sends it to the secrets Worker with the secret named in
 // `SECRET_USE_HEADER`; the secrets Worker substitutes the material. Pure, moved out of core/os
-// src/secrets.ts unchanged. And the path of the secrets Worker's OAuth callback, which the project
+// src/secrets.ts unchanged. And the path of the secrets Worker's OAuth callback, which the mind
 // answers as `itx.secrets.oauthCallbackUrl()`. The facts a secret's answer carries ride the one
 // carrier of iterate/facts.
 
@@ -84,7 +84,7 @@ export function secretPathsIn(value: string): string[] {
 
 /** THE SECRET A REQUEST USES, as egress names it on the request it hands the secrets Worker: the
  *  path its placeholder spells. Egress deletes any copy a caller sent and sets its own, and only
- *  egress binds the entrypoint that reads it (core/secrets worker.ts `SecretUse`). */
+ *  egress binds the entrypoint that reads it (core/secrets-worker worker.ts `SecretUse`). */
 export const SECRET_USE_HEADER = "x-itx-secret-use";
 
 /** On an answer the vault gave itself, its `VaultAnswerKind`. The secrets Worker strips it from

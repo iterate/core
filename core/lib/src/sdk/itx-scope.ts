@@ -20,7 +20,7 @@ import { releaseRpcSessions } from "../lib.ts";
  *  the block ends: `return await itx.whoami()`, never `return itx.whoami()`.
  *
  *    using itx = this.getItx();
- *    const { projectSlug } = await itx.whoami();
+ *    const { mindSlug } = await itx.whoami();
  */
 export function itxScope<Scope>(entrypoint: { get(): Scope }): Scope & Disposable {
   const steps: unknown[] = [];

@@ -13,11 +13,11 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { platformOriginOf } from "iterate/project-api";
+import { platformOriginOf } from "iterate/mind-api";
 import { z } from "zod";
 import { addPasskey, authenticator, lendPasskey, touched } from "./proof-passkeys.ts";
 
-/** core/auth/src/cookies.ts `SESSION_COOKIE`, which the package does not export. */
+/** core/auth-worker/src/cookies.ts `SESSION_COOKIE`, which the package does not export. */
 const SESSION_COOKIE = "__Host-iterate-auth-session";
 
 const domain = process.argv[2];
@@ -252,7 +252,7 @@ await run("the passkey removed, its session ends and it signs nobody in", async 
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   const refusal =
     (await page.locator("#passkey-status").filter({ hasText: /\./ }).textContent()) || "";
-  must(refusal.includes("not one this project knows"), `the page says ${refusal}`);
+  must(refusal.includes("not one this mind knows"), `the page says ${refusal}`);
   // `/sign-in` on a stack with two ways to sign in, `/sign-in/email` with the mailed code alone
   must(new URL(page.url()).pathname.startsWith("/sign-in"), `at ${page.url()}`);
   return `its session ends, and ${refusal}`;

@@ -1,11 +1,10 @@
 {
-  "name": "iterate-os",
+  "name": "iterate-core",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.18.0",
   "scripts": {
-    "build": "pnpm --dir core/os build",
-    "deploy": "pnpm --dir core/os run deploy",
-    "dev": "pnpm --dir core/os dev"
+    "build": "pnpm --filter core-mind-worker build",
+    "deploy": "pnpm --dir core/alchemy run deploy"
   }
 }

@@ -1,17 +1,17 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { codedError } from "iterate/lib";
-import { projectProvideUrlOf } from "iterate/project-api";
+import { mindProvideUrlOf } from "iterate/mind-api";
 import { FACTS_HEADER } from "iterate/facts";
 import { secretPathsReferenced } from "iterate/secret-placeholder";
-import type { Door as BoundaryDoor, ProjectTarget, ProvideSession } from "iterate/workers";
+import type { Door as BoundaryDoor, MindTarget, ProvideSession } from "iterate/workers";
 import { forwardEveryMethod, relayTo } from "./relay.ts";
 
 export { HomeArtifacts } from "../repos/artifacts.ts";
 
 type LinkEnv = {
   DOMAIN: string;
-  PROJECT: ProjectTarget;
+  MIND: MindTarget;
   LINK: DurableObjectNamespace<Link>;
   /** The launcher: `GET` answers a live token for `iterate.<domain>/provide`. */
   TOKEN: Fetcher;
@@ -33,7 +33,7 @@ export default {
     const headers = new Headers(
       [...request.headers].filter(([name]) => !name.startsWith("x-itx-")),
     );
-    return env.PROJECT.fetch(new Request(url, new Request(request, { headers })));
+    return env.MIND.fetch(new Request(url, new Request(request, { headers })));
   },
 } satisfies ExportedHandler<LinkEnv>;
 
@@ -93,7 +93,7 @@ export class StandIn extends WorkerEntrypoint<LinkEnv, { binding: string; why: s
   static {
     forwardEveryMethod(StandIn, (standIn) => {
       const { binding, why } = standIn.ctx.props;
-      throw new Error(`${binding} is not available to a project at home: ${why}`);
+      throw new Error(`${binding} is not available to a mind at home: ${why}`);
     });
   }
 }
@@ -174,21 +174,21 @@ export class Link extends DurableObject<LinkEnv> {
     try {
       const token = await (await this.env.TOKEN.fetch("http://launcher/token")).text();
       // workerd names a network failure only "internal error"
-      const response = await fetch(projectProvideUrlOf(domain), {
+      const response = await fetch(mindProvideUrlOf(domain), {
         headers: { upgrade: "websocket", authorization: `Bearer ${token}` },
       }).catch((error: unknown) => {
-        throw new Error(`${projectProvideUrlOf(domain)} could not be reached (${String(error)})`);
+        throw new Error(`${mindProvideUrlOf(domain)} could not be reached (${String(error)})`);
       });
       const socket = response.webSocket;
       if (!socket)
         throw new Error(
-          `${projectProvideUrlOf(domain)} answered ${String(response.status)}, not a WebSocket`,
+          `${mindProvideUrlOf(domain)} answered ${String(response.status)}, not a WebSocket`,
         );
       socket.accept();
       opened = socket;
       const session = newWebSocketRpcSession<ProvideSession>(socket);
-      const project = relayTo(() => this.env.PROJECT) as unknown as ProjectTarget;
-      const handle = await session.provide(project);
+      const mind = relayTo(() => this.env.MIND) as unknown as MindTarget;
+      const handle = await session.provide(mind);
       const door = (await session.door) as unknown as RpcStub<BoundaryDoor>;
       const broken = new Promise<string>((ended) =>
         session.onRpcBroken((error) => ended(`the session broke: ${String(error)}`)),

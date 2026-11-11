@@ -1,9 +1,9 @@
-// tunnel.ts — `iterate tunnel <port>`: a local port served on one of the project's hostnames,
-// `<name>.<address>`, through a stub lent to the project with the fetch route that reaches it.
+// tunnel.ts — `iterate tunnel <port>`: a local port served on one of the mind's hostnames,
+// `<name>.<address>`, through a stub lent to the mind with the fetch route that reaches it.
 import { randomBytes } from "node:crypto";
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import WebSocket from "ws";
-import type { ProjectConnection } from "../node.ts";
+import type { MindConnection } from "../node.ts";
 
 /** Headers the local dial makes itself: undici throws on the hop-by-hop ones, and `host` must be
  *  localhost's (Vite's `allowedHosts` refuses any other). */
@@ -18,7 +18,7 @@ const HOP_BY_HOP_HEADERS = [
   "host",
 ];
 
-/** THE TUNNEL'S LENT STUB: every request the project's host routes here, proxied to
+/** THE TUNNEL'S LENT STUB: every request the mind's host routes here, proxied to
  *  `http://localhost:<port>` — method, headers, streamed body, redirects handed back as they are.
  *  A WebSocket upgrade dials the local server with the visitor's subprotocols and pumps frames both
  *  ways. Nothing listening is a 502 naming the port. */
@@ -150,7 +150,7 @@ export class LocalPortRpcTarget extends RpcTarget {
   }
 }
 
-/** The platform's close-code policy (core/os src/context/websocket-close.ts `relayedCloseCode`),
+/** The platform's close-code policy (core/itx/src/context/websocket-close.ts `relayedCloseCode`),
  *  copied, since this package is published on its own. */
 function relayedCloseCode(code: number | undefined): number {
   if (code === undefined || code === 1005) return 1000;
@@ -169,7 +169,7 @@ function causeOf(error: unknown): string {
  *  tunnel whose network is gone for good says so and exits. */
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fill(30_000)];
 
-/** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<name>` with
+/** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the mind as `itx.tunnels.<name>` with
  *  the fetch route `tunnel-<name>` taking the `<name>` routing slug's host to it (or, given a
  *  `hostname`, that hostname's requests alone), print the URL on stdout, and on Ctrl-C delete the
  *  route, then end the lend. The route rides the lend (`provide`'s `fetchRoute`):
@@ -179,8 +179,8 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fil
  *  lends and routes again over it, the same name taking its own route over. Only when every attempt
  *  fails does the tunnel end, with an error. */
 export async function runTunnel(input: {
-  connection: ProjectConnection;
-  reconnect: () => Promise<ProjectConnection>;
+  connection: MindConnection;
+  reconnect: () => Promise<MindConnection>;
   port: number;
   tunnelName?: string;
   /** the one hostname the route matches (`url: { hostname }`) instead of the name's routing slug */
@@ -207,14 +207,11 @@ export async function runTunnel(input: {
   process.once("SIGTERM", stop);
   /** Serve over one connection until Ctrl-C (the route deleted), or until the connection closes or
    *  the lend ends — why, as a line. */
-  const serve = async (
-    connection: ProjectConnection,
-    first: boolean,
-  ): Promise<"stopped" | string> => {
-    const project = connection.itx;
+  const serve = async (connection: MindConnection, first: boolean): Promise<"stopped" | string> => {
+    const mind = connection.itx;
     // A route of this name or on this host is someone else's unless it is this tunnel's own (a
     // restart, another terminal, this tunnel before it reconnected), which is taken over.
-    const conflict = (await project.fetchRoutes.list()).find(
+    const conflict = (await mind.fetchRoutes.list()).find(
       (route) =>
         (route.fetchRouteName === fetchRouteName ||
           (hostname
@@ -226,24 +223,24 @@ export async function runTunnel(input: {
       throw new Error(
         `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another ${hostname ? "--name or --hostname" : "--name"}.`,
       );
-    // a routing slug is its label under the project's domain (core/project worker.ts
-    // `serveProjectHost`)
+    // a routing slug is its label under the mind's domain (core/mind-worker worker.ts
+    // `serveMindHost`)
     const url = `https://${hostname || `${tunnelName}.${connection.address}`}/`;
-    using lend = await project.provide(
+    using lend = await mind.provide(
       target,
       new LocalPortRpcTarget(input.port, (line) => console.error(line)),
       {
         fetchRoute: {
           fetchRouteName,
           requestMatcher,
-          authRequirement: input.public ? null : { visitors: "project-members" },
+          authRequirement: input.public ? null : { visitors: "mind-members" },
         },
       },
     );
     if (first) {
       console.log(url);
       console.error(
-        `${url} → http://localhost:${input.port} (${input.public ? "public" : "project members only"}). Press Ctrl-C to stop.`,
+        `${url} → http://localhost:${input.port} (${input.public ? "public" : "mind members only"}). Press Ctrl-C to stop.`,
       );
     } else console.error(`Reconnected: ${url} → http://localhost:${input.port}`);
     // The lend can end while the connection lives (the platform lost its pager, and the route
@@ -258,13 +255,13 @@ export async function runTunnel(input: {
     const outcome = await Promise.race([stopped, connectionClosed, lendEnded]);
     // the route first: the host stops answering the moment it is gone
     if (outcome === "stopped")
-      await project.fetchRoutes.set(fetchRouteName, null).catch((error: unknown) => {
+      await mind.fetchRoutes.set(fetchRouteName, null).catch((error: unknown) => {
         console.error(`Could not delete the fetch route ${fetchRouteName}: ${messageOf(error)}`);
       });
     return outcome;
   };
   const delaysMs = input.reconnectDelaysMs || RECONNECT_DELAYS_MS;
-  let connection: ProjectConnection | null = input.connection;
+  let connection: MindConnection | null = input.connection;
   let lastFailure = "";
   try {
     for (let first = true, failures = 0; ; first = false) {

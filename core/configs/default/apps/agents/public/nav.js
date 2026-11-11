@@ -1,7 +1,7 @@
 // nav.js — the sidebar's body (the frame around it is @iterate-com/ui's AppShell): "New agent",
-// then the project's agents at the top, most recently active first. Each shows its title with its
+// then the mind's agents at the top, most recently active first. Each shows its title with its
 // path beneath, an icon for what runs it and a dot for what it is doing. Pinned agents sit in a
-// list of their own, the pins kept per project in this browser.
+// list of their own, the pins kept per mind in this browser.
 import { html, useCallback, useMemo, useState } from "@iterate-com/ui/page";
 import {
   SidebarGroup,
@@ -28,8 +28,8 @@ export function pageLink(href, go) {
 
 export const agentHref = (path) => `?agent=${encodeURIComponent(path)}`;
 
-export function AgentsNav({ project, agents, agent, onOpen }) {
-  const { pinned, togglePinned } = usePinnedAgents(project);
+export function AgentsNav({ mind, agents, agent, onOpen }) {
+  const { pinned, togglePinned } = usePinnedAgents(mind);
   const ordered = useMemo(() => byRecentActivity(topLevelAgents(agents)), [agents]);
   const row = (item) => html`
     <${AgentsNavRow}
@@ -125,10 +125,10 @@ function kindIcon(kind) {
   return BoxIcon;
 }
 
-/** The agents this person pinned, per project, in this browser's localStorage: a viewer's
- *  convenience, never the project's data. Storage that throws leaves pins in memory only. */
-function usePinnedAgents(project) {
-  const key = `iterate-agents:pinned:${project}`;
+/** The agents this person pinned, per mind, in this browser's localStorage: a viewer's
+ *  convenience, never the mind's data. Storage that throws leaves pins in memory only. */
+function usePinnedAgents(mind) {
+  const key = `iterate-agents:pinned:${mind}`;
   const [pinned, setPinned] = useState(() => {
     try {
       const stored = JSON.parse(localStorage.getItem(key) || "[]");

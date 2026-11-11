@@ -18,7 +18,7 @@
 // builtin whitelist and drops subclass identity, but preserves ALL own enumerable properties
 // across the wire (verified at runtime against @iterate-com/capnweb 0.10.0) — and with
 // enhanced_error_serialization (our compat date) own props usually survive native Workers-RPC hops
-// too (contexts call each other with `invokeSafe`: core/os iterate-context-durable-object.ts says why).
+// too (contexts call each other with `invokeSafe`: core/itx/src/iterate-context-durable-object.ts says why).
 // So: never classify by `name`, `instanceof`, or message regex across a hop; check the code.
 // Human messages stay verbatim and greppable — the code rides beside them, never instead.
 // workerd's own stamped flags (`.retryable`, `.overloaded`, `.durableObjectReset`) ride the same
@@ -42,26 +42,26 @@ type ErrorCode =
   | "REDUCE_CHECKPOINT_TOO_LARGE" // a reduce's state would not fit one storage cell (stream/processor.ts)
   | "EVENT_UNREADABLE" // a stored row's body is not JSON — `data.offset` names it (stream.ts read)
   | "STREAM_PAUSED"
-  | "INVALID_CONTEXT" // a context name / project id the codec refuses (core/os context/paths.ts `DurableObjectNameCodec`) — coded, so it survives the hop
+  | "INVALID_CONTEXT" // a context name / mind id the codec refuses (core/itx/src/context/paths.ts `DurableObjectNameCodec`) — coded, so it survives the hop
   | "EXPRESSION_TOO_LONG" // a STRING itx expression over ITX_EXPRESSION_STRING_MAX_CHARS — pass the parsed form
   | "FACET_SOURCE_TOO_LARGE" // a facet's literal source, or a rule's target, over 1 MiB (worker-loader.ts FACET_SOURCE_MAX_CHARS) — refused on entry
   | "INVALID_CREDENTIALS" // authenticate(): the admin secret did not match, or the credentials named no known kind
   | "UNAUTHENTICATED" // authenticate({ type: "from-server-cookie" }): no session cookie on the request, or a cross-origin browser's request
-  | "FORBIDDEN" // projects.get(project): outside the session's reach (a grant narrowed to other projects, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (core/os first-party-facet-placement.ts)
-  | "PROJECT_NAME_TAKEN" // projects.create({ project }): a project of that slug exists in another org; projects.rename(project, { slug }): another project holds the slug
+  | "FORBIDDEN" // minds.get(mind): outside the session's reach (a grant narrowed to other minds, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (core/os first-party-facet-placement.ts)
+  | "MIND_NAME_TAKEN" // minds.create({ mind }): a mind of that slug exists in another org; minds.rename(mind, { slug }): another mind holds the slug
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context
-  | "FACET_ABORTED" // the facet instance this call ran on was reset by `itx.facets.abort` (core/os context/facet-host.ts) — its next call starts it fresh
-  | "FACET_RESTARTED" // the facet instance this call ran on was restarted by the platform under it — its source or loader identity changed, or another call on it timed out (core/os context/facet-host.ts) — its next call runs on the new instance
-  | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (core/os context/facet-host.ts)
+  | "FACET_ABORTED" // the facet instance this call ran on was reset by `itx.facets.abort` (core/itx/src/context/facet-host.ts) — its next call starts it fresh
+  | "FACET_RESTARTED" // the facet instance this call ran on was restarted by the platform under it — its source or loader identity changed, or another call on it timed out (core/itx/src/context/facet-host.ts) — its next call runs on the new instance
+  | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (core/itx/src/context/facet-host.ts)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
-  | "NOT_FAST_FORWARD" // a repo's pull or push without `force` where neither main contains the other (core/os repo/durable-object.ts) — `data` is { ours, theirs }
+  | "NOT_FAST_FORWARD" // a repo's pull or push without `force` where neither main contains the other (core/mind-worker/src/repo/durable-object.ts) — `data` is { ours, theirs }
   | "TIMEOUT" // lib.ts withTimeout: the call did not answer within its deadline
   | "GONE" // a target that says it is gone for good (an HTTP webhook's 410): the delivery halts its row, which an operator's resume reopens
-  | "LOOP_LIMIT" // code reacting to code too many hand-offs deep (core/os cause.ts): the act is refused for good, never retried
+  | "LOOP_LIMIT" // code reacting to code too many hand-offs deep (core/itx/src/cause.ts): the act is refused for good, never retried
   | "UNAVAILABLE" // the platform failed the call, not the caller: `data` is { kind, retryAfterMs } — a deploy's reset ("deploy-reset"), a lost connection ("disconnected") or an overload ("overloaded"); an idempotent call may be asked again after retryAfterMs, and an HTTP edge answers it 503 with that Retry-After
-  | "PERMANENT_FAILURE"; // a failure no repeat can change (a subscriber's poison event): a delivery halts on it at once instead of climbing its retry ladder (core/os stream/subscription-delivery.ts); a processor's work in flight that died with its host five times, whose revive is refused and recorded as `itx/work-failed` (stream/processor.ts)
+  | "PERMANENT_FAILURE"; // a failure no repeat can change (a subscriber's poison event): a delivery halts on it at once instead of climbing its retry ladder (core/itx/src/stream/subscription-delivery.ts); a processor's work in flight that died with its host five times, whose revive is refused and recorded as `itx/work-failed` (stream/processor.ts)
 // (There is no separate boundary-validation library: the append method's own runtime guards
 // throw plain Errors; a client is JUST capnweb, so malformed args surface as ordinary errors.)
 
@@ -77,13 +77,13 @@ export function errorCode(error: unknown): ErrorCode | undefined {
     : undefined;
 }
 
-/** OUR MARK (core/os cause.ts): what the platform sends — a request, a mail — carries the cause of
+/** OUR MARK (core/itx/src/cause.ts): what the platform sends — a request, a mail — carries the cause of
  *  the code that sent it here, as JSON; a request that comes back with it resumes its chain. */
 export const ITERATE_CAUSE_HEADER = "X-Iterate-Cause";
-/** What marks a 508 as an act refused past the loop limit (core/os unavailable.ts). */
+/** What marks a 508 as an act refused past the loop limit (core/itx/src/unavailable.ts). */
 export const LOOP_LIMIT_HEADER = "iterate-loop-limit";
 
-/** The loop guard counts speed, not age (core/os cause.ts): a chain loses a step every this long. */
+/** The loop guard counts speed, not age (core/itx/src/cause.ts): a chain loses a step every this long. */
 export const STEP_FORGIVEN_EVERY_MS = 2 * 60_000;
 
 /** THE ONE +1: `cause` one hand-off deeper, less a step for every STEP_FORGIVEN_EVERY_MS since its
