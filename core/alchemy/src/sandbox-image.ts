@@ -6,6 +6,7 @@
 //     -t ghcr.io/iterate/iterate-dev-image:<commit> core/mind-worker/images/iterate-dev-image
 export const PUBLISHED_SANDBOX_IMAGE = {
   source: "ghcr.io/iterate/iterate-dev-image",
+  // allow-high-entropy-next-line: the public image's content digest, a pin and no secret
   digest: "sha256:df1de82cbcaa70bda17b7a456134075175a77054798bde102848c35b161e6104",
 };
 
