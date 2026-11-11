@@ -1,0 +1,88 @@
+/* app.css — the page's own layout. @iterate-com/ui's stylesheet holds the utility classes its own
+   components use and no others, so what this page adds is written here as plain CSS, on the
+   theme's variables (apps/theme.css). */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+.docs-file {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.docs-bar {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.docs-bar button[aria-pressed] {
+  padding: 0.125rem 0.5rem;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}
+
+.docs-bar button[aria-pressed="true"] {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.docs-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.docs-markdown {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 48rem;
+  padding: 1.5rem 2rem;
+  font-size: 0.875rem;
+}
+
+.docs-plain {
+  margin: 0;
+  padding: 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+}
+
+.docs-note {
+  padding: 1rem;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+
+.docs-commits {
+  margin: 0;
+  padding: 0.5rem 1rem;
+  list-style: none;
+}
+
+.docs-commits li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+}
+
+.docs-commits a {
+  color: inherit;
+}
+
+.docs-commits small {
+  color: var(--muted-foreground);
+}

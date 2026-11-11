@@ -7,6 +7,9 @@ import { expect, test } from "vitest";
 import index from "../../configs/default/apps/agents/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import files from "../../configs/default/apps/agents/public/";
+import docsIndex from "../../configs/default/apps/docs/index.html";
+// oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
+import docsFiles from "../../configs/default/apps/docs/public/";
 import onboardingIndex from "../../configs/default/apps/onboarding/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import onboardingFiles from "../../configs/default/apps/onboarding/public/";
@@ -20,6 +23,8 @@ test("the default config's pages and folders load here as the platform's loader 
   expect(Object.keys(files)).toEqual(Object.keys(files).toSorted());
   expect(onboardingIndex).toMatch(/<title>Welcome to iterate<\/title>/);
   expect(Object.keys(onboardingFiles)).toEqual(["app.css", "app.js"]);
+  expect(docsIndex).toMatch(/<title>Docs<\/title>/);
+  expect(Object.keys(docsFiles)).toEqual(["app.css", "app.js"]);
 });
 
 const ORIGIN =

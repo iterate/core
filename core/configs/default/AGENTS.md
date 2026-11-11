@@ -181,6 +181,9 @@ app, on `agents.<domain>` for members: copy the folder to start one of your own.
 the chat with the agent at `/agents/onboarding`, where a new owner starts. `apps/onboarding/onboarding.md` is what
 that agent is told: `apps/agents/backend.ts` names it as the agent's standing instructions, read
 fresh before each request.
+`apps/docs/` is the docs app, on `docs.<domain>` for members: this repo read in a browser, its files
+in the sidebar, a file beside them (markdown rendered, code as code) and the commits that changed
+it. It reads through the member's `itx` and writes nothing.
 
 ```
 apps/<name>/

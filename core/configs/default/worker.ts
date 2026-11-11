@@ -7,6 +7,7 @@ import {
 } from "iterate/sdk";
 import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 import { agentsApp } from "./apps/agents/app.ts";
+import { docsApp } from "./apps/docs/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
 import { callSlack, slackContentOf, slackMessageOf } from "./slack.ts";
@@ -19,6 +20,7 @@ const integrations: Integration[] = [];
 // (AGENTS.md, "Apps"). Each `app.ts` exports the function that makes one.
 const agents = agentsApp();
 const onboarding = onboardingApp();
+const docs = docsApp();
 // The guestbook, an example of an app for end users, people who are not members (AGENTS.md, "The
 // guestbook"). To turn it on, uncomment this line, its import above and its case in `fetch`.
 // const guestbook = guestbookApp();
@@ -255,6 +257,8 @@ export default class extends IterateConfigEntrypoint {
         return this.auth.require(request) || agents.fetch(request, this);
       case "onboarding": // the onboarding app, for members: one chat with /agents/onboarding
         return this.auth.require(request) || onboarding.fetch(request, this);
+      case "docs": // the docs app, for members: the config repo, read in a browser
+        return this.auth.require(request) || docs.fetch(request, this);
       // case "guestbook": // the guestbook, for everyone: no guard here, its routes ask for who they need
       //   return guestbook.fetch(request, this);
       case null: {

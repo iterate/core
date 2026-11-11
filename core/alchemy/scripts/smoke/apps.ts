@@ -161,6 +161,23 @@ export async function appsChecks(domain: string): Promise<Check[]> {
         detail: `the page: ${page.status} to the issuer: ${toSignIn}`,
       };
     }),
+    await attempt("hostnames: a signed-out page load of the docs app signs in", async () => {
+      if (!files.paths.includes("apps/docs/app.ts"))
+        return {
+          pass: true,
+          detail: "skipped: this mind's config has no apps/docs (an older default config)",
+        };
+      const page = await ask(`https://docs.${domain}/`, {
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document",
+        accept: "text/html",
+      });
+      const toSignIn = page.location.startsWith(`${platformOriginOf(domain)}/oauth2/auth`);
+      return {
+        pass: page.status === 302 && toSignIn,
+        detail: `the page: ${page.status} to the issuer: ${toSignIn}`,
+      };
+    }),
     await attempt("agents: the onboarding app's agent exists", async () => {
       if (!hasOnboardingApp) return withoutOnboardingApp;
       // the root's `itx.agents` is the rule the Agents app's install writes, untyped here
