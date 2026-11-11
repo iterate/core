@@ -76,9 +76,14 @@ export async function secretApprovals(request: Request, deps: ApprovalsDeps): Pr
         .split(/[\s,]+/)
         .filter(Boolean);
     try {
-      const answer = await deps
-        .secretOf(path)
-        .tightenRule(path, { rule: { methods: words("methods"), hosts: words("hosts") }, by });
+      const answer = await deps.secretOf(path).tightenRule(path, {
+        rule: {
+          methods: words("methods"),
+          hosts: words("hosts"),
+          jsonStrings: words("jsonStrings"),
+        },
+        by,
+      });
       return withFacts(
         new Response(null, {
           status: 303,
@@ -205,12 +210,14 @@ function summaryOf(text: string): string {
 }
 
 function ruleForm(path: string, rule: ApprovalRule | null): string {
-  const field = (name: string, label: string, value: string) =>
-    `<label>${label}<br><input name="${name}" value="${escaped(value)}" size="44" required></label>`;
+  const field = (name: string, label: string, value: string, required = "required") =>
+    `<label>${label}<br><input name="${name}" value="${escaped(value)}" size="44" ${required}></label>`;
   return `<form method="post" action="${RULES_PATH}" class="stack" data-rule>
 ${path ? `<input type="hidden" name="path" value="${escaped(path)}"><h3>${escaped(path)}</h3>` : `<h3>A new rule</h3>${field("path", "Secret", "/secrets/")}`}
 ${field("methods", "Methods", rule?.methods.join(", ") ?? "POST")}
 ${field("hosts", "Hosts", rule?.hosts.join(", ") ?? "")}
+${field("jsonStrings", "Only when the JSON body holds one of these, or leave empty for every request", rule?.jsonStrings?.join(", ") ?? "", "")}
+<p class="muted">For an API that reads and acts through one address: EmailSubmission/set holds a mail sent through JMAP and lets a read go. With this, a body that is not JSON waits too.</p>
 <p class="actions"><button type="submit">Save</button>${path ? ` <button type="button" class="link" data-sign-rule>Sign and save</button> <button type="button" class="link" data-remove-rule>Remove, signed</button>` : ""}</p></form>`;
 }
 
@@ -293,7 +300,7 @@ for (const form of document.querySelectorAll("[data-rule]")) {
   const words = (name) => form.elements[name].value.split(/[\\s,]+/).filter(Boolean);
   const path = () => form.elements.path.value;
   form.querySelector("[data-sign-rule]")?.addEventListener("click", () =>
-    sign({ path: path(), type: data.types.rule, payload: { rule: { methods: words("methods"), hosts: words("hosts") } } }).catch(fail));
+    sign({ path: path(), type: data.types.rule, payload: { rule: { methods: words("methods"), hosts: words("hosts"), jsonStrings: words("jsonStrings") } } }).catch(fail));
   form.querySelector("[data-remove-rule]")?.addEventListener("click", () =>
     sign({ path: path(), type: data.types.rule, payload: { rule: null } }).catch(fail));
 }

@@ -14,6 +14,7 @@ import { attempt, mindRoot, type Check } from "./lib.ts";
 
 const PATH = "/secrets/smoke-approval";
 const APPROVED = "events.iterate.com/secret/request-approved";
+const RULE_CONFIGURED = "events.iterate.com/secret/approval-rule-configured";
 
 export async function approvalChecks(domain: string): Promise<Check[]> {
   const token = process.env.ITERATE_PROTOTYPE_TOKEN;
@@ -36,16 +37,31 @@ export async function approvalChecks(domain: string): Promise<Check[]> {
       .object({ messages: z.array(z.object({ text: z.string() }).loose()) })
       .parse(await (await fetch(`${origin}/__test-controls/slack/messages?team=${team}`)).json())
       .messages.map((message) => message.text);
-  const send = (text: string) =>
+  const post = (body: string) =>
     root()
       .run(
-        `async (itx) => { const response = await itx.fetch(new Request(${JSON.stringify(url)}, { method: "POST", headers: { authorization: 'Bearer getSecret("${PATH}")', "content-type": "application/json" }, body: ${JSON.stringify(JSON.stringify({ channel: "smoke", text }))} })); const body = await response.json().catch(() => null); return { status: response.status, kind: response.headers.get("x-iterate-vault-answer"), ok: body?.ok ?? null }; }`,
+        `async (itx) => { const response = await itx.fetch(new Request(${JSON.stringify(url)}, { method: "POST", headers: { authorization: 'Bearer getSecret("${PATH}")', "content-type": "application/json" }, body: ${JSON.stringify(body)} })); const body = await response.json().catch(() => null); return { status: response.status, kind: response.headers.get("x-iterate-vault-answer"), ok: body?.ok ?? null }; }`,
       )
       .then((answer) =>
         z
           .object({ status: z.number(), kind: z.string().nullable(), ok: z.boolean().nullable() })
           .parse(answer),
       );
+  const send = (text: string) => post(JSON.stringify({ channel: "smoke", text }));
+  /** A held call is rejected, and its answer is the rejection. */
+  const rejected = async (call: ReturnType<typeof post>, held: string | null) => {
+    const signed = await member.post({
+      path: PATH,
+      type: "events.iterate.com/secret/request-rejected",
+      about: [held || ""],
+      payload: { reason: "the smoke check rejects it" },
+    });
+    const answer = await call;
+    return {
+      pass: !signed.error && answer.status === 403 && answer.kind === "rejected",
+      detail: `${signed.error || "rejected"}; ${answer.status} ${answer.kind}`,
+    };
+  };
   const waiting = async (text: string) => {
     for (let tries = 0; tries < 20; tries += 1) {
       const fact = (await logOf()).findLast(
@@ -62,7 +78,7 @@ export async function approvalChecks(domain: string): Promise<Check[]> {
   const ruled = await member
     .post({
       path: PATH,
-      type: "events.iterate.com/secret/approval-rule-configured",
+      type: RULE_CONFIGURED,
       payload: { rule: { methods: ["POST"], hosts: [new URL(origin).hostname] } },
     })
     .catch((error: unknown) => ({ error: String(error) }));
@@ -70,6 +86,8 @@ export async function approvalChecks(domain: string): Promise<Check[]> {
     return [skipped(`the stack's auth.keys does not name the member's key ${member.key}`)];
   const first = `smoke ${crypto.randomUUID()}`;
   const second = `smoke ${crypto.randomUUID()}`;
+  const third = `smoke ${crypto.randomUUID()}`;
+  const named = `SMOKEHOLD${crypto.randomUUID().slice(0, 8)}`;
   let held: ReturnType<typeof send> | undefined;
   let settled = false;
   let digest: string | null = null;
@@ -127,21 +145,40 @@ export async function approvalChecks(domain: string): Promise<Check[]> {
       },
     ),
     await attempt("approvals: a rejection answers 403, and nothing more is sent", async () => {
-      const rejected = await member.post({
-        path: PATH,
-        type: "events.iterate.com/secret/request-rejected",
-        about: [digest || ""],
-        payload: { reason: "the smoke check rejects it" },
-      });
-      const answer = await held!;
-      return {
-        pass:
-          !rejected.error &&
-          answer.status === 403 &&
-          answer.kind === "rejected" &&
-          (await recorded()).length === 1,
-        detail: `${rejected.error || "rejected"}; ${answer.status} ${answer.kind}`,
-      };
+      const ended = await rejected(held!, digest);
+      return { pass: ended.pass && (await recorded()).length === 1, detail: ended.detail };
+    }),
+    // A RULE THAT NAMES A STRING OF THE BODY: for an API that reads and acts through one address.
+    await attempt(
+      "approvals: a rule that names a string of the body lets a POST without it go at once",
+      async () => {
+        const signed = await member.post({
+          path: PATH,
+          type: RULE_CONFIGURED,
+          payload: {
+            rule: { methods: ["POST"], hosts: [new URL(origin).hostname], jsonStrings: [named] },
+          },
+        });
+        const answer = await send(third);
+        const sent = await recorded();
+        return {
+          pass:
+            !signed.error && answer.status === 200 && answer.ok === true && sent.includes(third),
+          detail: `${signed.error || `the rule names ${named}`}; ${answer.status}, ok ${answer.ok}; the upstream saw ${sent.length}`,
+        };
+      },
+    ),
+    await attempt("approvals: a POST whose body holds the string waits", async () => {
+      const text = `smoke ${crypto.randomUUID()} with ${named.toLowerCase()} inside`;
+      const call = send(text);
+      const ended = await rejected(call, await waiting(text));
+      return { pass: ended.pass && (await recorded()).length === 2, detail: ended.detail };
+    }),
+    await attempt("approvals: a POST whose body is not JSON waits too", async () => {
+      const body = `not JSON ${crypto.randomUUID()}`;
+      const call = post(body);
+      const ended = await rejected(call, await waiting(body));
+      return { pass: ended.pass && (await recorded()).length === 2, detail: ended.detail };
     }),
   ];
 

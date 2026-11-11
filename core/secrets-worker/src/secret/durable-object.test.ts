@@ -221,6 +221,40 @@ test("a request the rule does not match is sent at once, and an upstream's copy 
   });
 });
 
+test("a rule with strings of the body lets a read go with its body whole, and holds a send", async () => {
+  const { secret, sent, decide } = await vault();
+  // holds less than the rule before it, so a member signs it
+  await decide(MEMBER, {
+    type: "events.iterate.com/secret/approval-rule-configured",
+    payload: {
+      rule: { methods: ["POST"], hosts: ["gmail.googleapis.com"], jsonStrings: ["messages/send"] },
+    },
+  });
+  const post = (body: string) =>
+    secret.fetch(
+      useRequest("https://gmail.googleapis.com/batch", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      }),
+    );
+  const read = JSON.stringify({ calls: ["messages/list"] });
+  const answers = [
+    await post(read),
+    await post(JSON.stringify({ calls: ["messages/send"] })),
+    await post("not JSON"),
+  ];
+  expect({
+    statuses: answers.map((answer) => answer.status),
+    kinds: answers.map((answer) => answer.headers.get(VAULT_ANSWER_HEADER)),
+    sent,
+  }).toEqual({
+    statuses: [200, 202, 202],
+    kinds: [null, "held", "held"],
+    sent: [{ authorization: "Bearer real-token-aaaa", body: read, extra: null }],
+  });
+});
+
 test("a rule cannot be loosened without a signature, and a member's signed statement removes it", async () => {
   const { secret, decide } = await vault();
   const by = { userId: "user_aaaa", email: "member@example.com" };

@@ -69,12 +69,14 @@ import {
 } from "../secrets.ts";
 import {
   ApprovalRule,
+  bodyTextOf,
   HELD_BODY_LIMIT,
   HeldAnswer,
   isTightening,
   requestOfText,
   requestText,
   ruleMatches,
+  ruleNames,
 } from "../approval.ts";
 import { INDEX } from "../approvals-index.ts";
 import { LegacySealedCell, type SealedCell, type SecretFact, type Signer } from "./contract.ts";
@@ -1213,6 +1215,8 @@ export class SecretDurableObject extends DurableObject<Env> {
       return answered(response);
     }
     let held: { digest: string; release?: () => void } | undefined;
+    // read below, and only for a rule that names strings of the body
+    let body: string | null = null;
     const upgrades = request.headers.get("upgrade")?.toLowerCase() === "websocket";
     // The pin is checked at every read: after a refresh it may have moved.
     const read = async () => {
@@ -1242,7 +1246,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       // No await from here to the dispatch: a rule set while this request was being prepared (a
       // refresh can take seconds) holds it too.
       const ruleNow = this.#rule();
-      if (!held && ruleNow && (upgrades || ruleMatches(ruleNow, request.method, request.url)))
+      if (!held && ruleNow && (upgrades || ruleMatches(ruleNow, request.method, request.url, body)))
         throw new HeldAnswer(
           409,
           "refused",
@@ -1271,7 +1275,9 @@ export class SecretDurableObject extends DurableObject<Env> {
         throw new SecretRefused(
           `itx.fetch: ${path} has an approval rule, so it opens no WebSocket`,
         );
-      if (stored && (waitFor || (rule && ruleMatches(rule, request.method, request.url)))) {
+      if (stored && !waitFor && rule?.jsonStrings && ruleNames(rule, request.method, request.url))
+        body = await bodyTextOf(request);
+      if (stored && (waitFor || (rule && ruleMatches(rule, request.method, request.url, body)))) {
         const approved = await this.#hold(path, request, waitFor, facts);
         held = { digest: approved.digest, release: approved.release };
         request = approved.request;
