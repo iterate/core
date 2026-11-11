@@ -57,8 +57,8 @@ const SandboxExecFinished = z.object({
   truncated: z.boolean(),
 });
 
-/** Built from `core/os/images/<name>`; an image name is always `<what>-image`. Where no image is built
- *  (a local run), a start uses SANDBOX_BASE_IMAGE. */
+/** Built from `core/mind-worker/images/<name>`; an image name is always `<what>-image`. Where no
+ *  image is built (a local run), a start uses SANDBOX_BASE_IMAGE. */
 export const SANDBOX_IMAGE = "iterate-dev-image";
 export const SANDBOX_BASE_IMAGE = "cloudflare/debian-trixie";
 

@@ -82,7 +82,7 @@ function messagesOf(error: unknown): string {
  *  (jsg/util.c++ `renderInternalError`): a failure hidden from JavaScript, whether the runtime's own
  *  or a defect of the code it ran (a facet whose class is not exported fails the same way), so
  *  `failureKind` reads it as `failed`. Only a caller whose callee runs no code of ours or a
- *  mind's can read it as the runtime's own (control-plane/edge.ts, over D1). */
+ *  mind's (D1, say) can read it as the runtime's own. */
 export const isOpaqueInternalError = (error: unknown): boolean =>
   /(^|: )internal error; reference = /m.test(messagesOf(error));
 

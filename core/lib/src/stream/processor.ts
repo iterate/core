@@ -41,8 +41,8 @@
 // log. So an idle processor a row pushes reads its log once per incarnation, not on every read; one
 // nothing pushes learns of a new event only by reading, and reads every time. A head shown is only
 // as fresh as the pushes that have ARRIVED, so the host holds a read back until the pushes it
-// already owes the processor have landed (core/os SubscriptionDelivery `deliveriesQueuedFor`): a
-// read that follows a commit holds it.
+// already owes the processor have landed (core/itx/src/stream/subscription-delivery.ts
+// `deliveriesQueuedFor`): a read that follows a commit holds it.
 //
 // `reduce` is a PURE reduce (new object out, its arguments immutable), CHECKPOINTED
 // (`ReduceCheckpointTable` below) with the offset and contract version it was reduced under; bumping
@@ -875,7 +875,7 @@ export type StreamEventInput = {
 };
 
 /** A committed event: the input plus the identity the stream assigned at its commit point, and the
- *  platform's `source`, whose `origin` every commit carries (core/os stream.ts). */
+ *  platform's `source`, whose `origin` every commit carries (core/itx/src/stream/stream.ts). */
 export type StreamEvent = Omit<StreamEventInput, "offset" | "source"> & {
   offset: number;
   createdAt: string;
@@ -883,8 +883,9 @@ export type StreamEvent = Omit<StreamEventInput, "offset" | "source"> & {
   source: NonNullable<StreamEventInput["source"]> & { origin: string };
 };
 
-// ── idempotency ── the one conflict message, which core/os stream.ts and test-support's
-// `memoryStream` both throw under code IDEMPOTENCY_CONFLICT; a caller checks the code, never the text.
+// ── idempotency ── the one conflict message, which core/itx/src/stream/stream.ts and
+// test-support's `memoryStream` both throw under code IDEMPOTENCY_CONFLICT; a caller checks the
+// code, never the text.
 
 export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number): string {
   return `idempotency key "${idempotencyKey}" already names a different event at offset ${existingOffset}`;

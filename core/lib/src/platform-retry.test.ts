@@ -153,8 +153,8 @@ test.for([
   },
 );
 
-// The control plane reads workerd's opaque internal error as an overload (control-plane/edge.ts):
-// D1 runs no code of ours, so there it is the runtime's own failure.
+// A caller of D1 may read workerd's opaque internal error as an overload: D1 runs no code of ours,
+// so there it is the runtime's own failure.
 test("isOpaqueInternalError: workerd's opaque internal error, through the cause sqlfu wraps, never a message that only mentions one", () => {
   expect(isOpaqueInternalError(new Error("internal error; reference = 0123"))).toBe(true);
   expect(

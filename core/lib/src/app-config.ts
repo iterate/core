@@ -1,8 +1,7 @@
-// app-config.ts — THE PREFIXED CONFIG MECHANISM: how every Worker of ours reads what differs between
-// deployments of the same code. ONE JSON object under a prefix of the Worker's own — the
-// platform's `ITERATE` (the iterate config, core/os/src/iterate-config.ts), the apps' `ITERATE_APP`
-// — checked against the Worker's own zod schema; loud on anything malformed, naming the field. A
-// value left out takes its schema's default.
+// app-config.ts — THE PREFIXED CONFIG MECHANISM: how a Worker of ours reads what differs between
+// deployments of the same code. ONE JSON object under a prefix of the Worker's own — the apps'
+// `ITERATE_APP`, for one — checked against the Worker's own zod schema; loud on anything
+// malformed, naming the field. A value left out takes its schema's default.
 //
 // Any key can also be set ALONE as a var: the name, then the path, `__` before every segment and
 // each segment in SNAKE_CASE: `ITERATE__URLS__OS`, `ITERATE__SECRETS_ENCRYPTION__KEY`,
@@ -12,8 +11,7 @@
 // warned about loudly and dropped, never silently kept. A var under the prefix with ONE underscore
 // (`ITERATE_CONTEXT`, a binding, or the apps' `ITERATE_APP`) is not the config's.
 //
-// The schemas: the platform's in core/os/src/iterate-config.ts, the apps on top's in
-// packages/shared/src/start-app-config.ts.
+// The apps' schema is in packages/shared/src/start-app-config.ts.
 
 import { z } from "zod";
 
@@ -35,8 +33,7 @@ export function parseAppConfigVars<Schema extends z.ZodTypeAny>(
 }
 
 /** The config's object as `env` gives it, before the schema: `<prefix>` with every `<prefix>__*`
- *  override merged on top, the deeper path last. Pure. What a deployment's config file starts from
- *  (core/os/iterate.config.ts), and what `parseAppConfigVars` parses. */
+ *  override merged on top, the deeper path last. Pure. What `parseAppConfigVars` parses. */
 export function appConfigInputOf(env: object, { prefix }: ConfigPrefix): Record<string, unknown> {
   const configEnv: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {

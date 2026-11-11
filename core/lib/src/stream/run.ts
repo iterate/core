@@ -33,8 +33,8 @@ export type RunSettlement = RunSettled["settlement"];
  *  turn already allows: its model request expires after ten. */
 export const RUN_DEADLINE_MS = 10 * 60_000;
 
-/** The run events' catalog. The core owns them (core/os core-processor.ts); a processor that
- *  consumes them names this catalog in its `processorDeps`. */
+/** The run events' catalog. The core owns them (core/itx/src/stream/core-processor.ts); a processor
+ *  that consumes them names this catalog in its `processorDeps`. */
 export const RunEventCatalog = {
   events: {
     "events.iterate.com/itx/run-requested": {

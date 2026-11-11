@@ -10,7 +10,7 @@
 // `node fs.ts <op>` with nothing installed: no npm, no build, and no CLI start-up (the CLI loads its
 // whole client first, and a file operation should not pay for that).
 //
-// THE PROTOCOL of `runFs`, shared with core/os `sandbox/files.ts`, which runs it:
+// THE PROTOCOL of `runFs`, shared with core/mind-worker/src/sandbox/files.ts, which runs it:
 //   read <path>               the file's bytes on stdout; nothing is written before the file opened
 //   write <path>              stdin into the file, created or truncated, once it opened
 //   stat <path>, lstat <path> one JSON line: `FsStat`

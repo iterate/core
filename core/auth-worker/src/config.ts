@@ -15,9 +15,10 @@ const Origin = z
   });
 
 /** One rule of `login.allow`, as Cloudflare Access names its rules, values lowercased (copied
- *  from core/os allowed-emails.ts). Only `{ email }` with no `subaddresses` names one person. Each
- *  other rule admits addresses nobody named: such an address is a member with no passkey until it
- *  adds one, so whoever reads its mail gets a passkey that approves requests and adds members. */
+ *  from the earlier platform, core/os, removed). Only `{ email }` with no `subaddresses` names one
+ *  person. Each other rule admits addresses nobody named: such an address is a member with no
+ *  passkey until it adds one, so whoever reads its mail gets a passkey that approves requests and
+ *  adds members. */
 export const EmailRule = z.union(
   [
     z.strictObject({
@@ -146,7 +147,7 @@ export const AuthConfig = AuthSettings.extend({
   );
 export type AuthConfig = z.infer<typeof AuthConfig>;
 
-/** Whether `rules` admit `email`: one of them matches (core/os allowed-emails.ts, without `deny`). */
+/** Whether `rules` admit `email`: one of them matches (no `deny` rule). */
 export function emailAllowed(rules: readonly EmailRule[], email: string): boolean {
   const address = email.trim().toLowerCase();
   // the address with its subaddress (`+tag` before the `@`) removed, for a rule that admits them

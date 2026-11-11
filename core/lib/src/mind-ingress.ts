@@ -95,8 +95,8 @@ export function mindAddressOf(
   return { routingSlug, mind, basePath: `/minds/${mind}/${routingSlug}` };
 }
 
-/** A MIND WILDCARD — an owned zone served as one mind's apex (core/os
- *  `urls.mindWildcard`, `{ hostname: "iterate.com", mind: "iterate" }`): the zone's apex and
+/** A MIND WILDCARD — an owned zone served as one mind's apex
+ *  (`{ hostname: "iterate.com", mind: "iterate" }`): the zone's apex and
  *  every first-level name under it but the excluded ones, in the apex shape, `routingSlug: null`, so the
  *  mind's config worker `fetch` answers exactly as it does on `<mind>.<hostname>`. Null for
  *  anything else. Case and a trailing dot are forgiven. Pure. */
@@ -112,13 +112,12 @@ export function mindWildcardHostOf(
     : null;
 }
 
-/** A MIND'S OWN HOSTNAME — `iterate.example.com`, added by the mind (core/os
- *  mind/custom-hostnames.ts) — is that mind's apex, and one label under it names a routing
- *  slug: `notes.iterate.example.com` carries `notes`, as `notes--<mind>.<hostname>` does. The
- *  hostnames a request's host could be a mind's own hostname for, most specific first: the host
- *  itself (the apex), then its parent with the first label as the routing slug. The caller
- *  looks them up in that order; the first a mind holds wins. Case and a trailing dot are
- *  forgiven. Pure. */
+/** A MIND'S OWN HOSTNAME — `iterate.example.com`, added by the mind — is that mind's apex, and one
+ *  label under it names a routing slug: `notes.iterate.example.com` carries `notes`, as
+ *  `notes--<mind>.<hostname>` does. The hostnames a request's host could be a mind's own hostname
+ *  for, most specific first: the host itself (the apex), then its parent with the first label as
+ *  the routing slug. The caller looks them up in that order; the first a mind holds wins. Case and
+ *  a trailing dot are forgiven. Pure. */
 export function customHostnameCandidatesOf(
   host: string,
 ): { hostname: string; routingSlug: string | null }[] {
@@ -183,8 +182,8 @@ export function primaryHostnameUrlOf(
   return url.hostname === hostname ? url : null;
 }
 
-/** THE HOSTNAME A DEPLOYMENT'S CONFIG PINS TO A MIND (core/os iterate-config.ts
- *  `urls.mindHostnames`, each entry naming its mind by id or by slug): the first entry's that
+/** THE HOSTNAME A DEPLOYMENT'S CONFIG PINS TO A MIND (`mindHostnames`, each entry naming its
+ *  mind by id or by slug): the first entry's that
  *  names `mind`, or null. It is the mind's primary hostname before any it claimed itself: the
  *  operator's own zone, served by the deployment's own routes, which no mind can claim or
  *  release. Pure. */

@@ -5,9 +5,10 @@
 //   invoke handle — `InvokeHandle` + the prototype hop: the DOTTED SURFACE, every unknown chain one
 //                   `invoke(expression)` — what `itx.facets.get(name)` and every other mid-chain
 //                   capability of api.ts is, and what a connector builds over a remote API
-// What the PLATFORM does with an expression is core/os: the rewrite rules (match, rank, rewrite) are
-// src/context/itx-expression-rewriting.ts, and executing a rewritten call against a live object graph
-// (`walkSteps`, the answer a context hands back) is src/context/dispatch.ts.
+// What the PLATFORM does with an expression is core/itx: the rewrite rules (match, rank, rewrite)
+// are core/itx/src/context/itx-expression-rewriting.ts, and executing a rewritten call against a
+// live object graph (`walkSteps`, the answer a context hands back) is
+// core/itx/src/context/dispatch.ts.
 import JSON5 from "json5";
 import { RpcTarget } from "capnweb";
 import { codedError, jsonEqual } from "./lib.ts";
@@ -54,7 +55,7 @@ const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 // printed back (print, targets only).
 /** The marker's array-half spelling, the one reserved literal. */
 const ITX_EXPRESSION_HOLE = { "@": true } as const;
-/** The merge entry's key — `...@` — read by core/os `fillItxExpressionHoles`. */
+/** The merge entry's key — `...@` — read by core/itx `fillItxExpressionHoles`. */
 export const ITX_EXPRESSION_MERGE_KEY = "...@";
 
 /** A single- or double-quoted string literal (escapes honored) or a JSON5 comment (block or line):
@@ -304,8 +305,7 @@ export function canonicalItxExpressionPrefix(source: ItxExpressionInput): string
 // access, not `in`; a typo'd built-in (`itx.strems`) is a syntactically valid dynamic dispatch that
 // fails at the capability table, not a crisp missing-method error.
 //
-// core/os's library tier (src/library.ts) builds its connectors on this section and the codec, as a
-// userspace worker would (library.ts's library rule, which lint enforces).
+// core/mind-worker/src/library.ts builds its connectors on this section and the codec.
 
 /** The dispatch method every dotted miss collapses onto. `IterateContextRpcTarget` implements it directly (root
  *  `itx`); a mid-chain `InvokeHandle` implements it relative to itself (empty root). */

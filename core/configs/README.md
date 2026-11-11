@@ -1,21 +1,17 @@
 # Core's mind templates
 
-Mind creation copies a template's files into a new `/repos/config` repository. The mind owns
-that copy: later template changes never overwrite it. Every build of core offers these templates,
-and each depends on nothing outside core, so they are also the plainest examples of how a mind
-is configured.
+A mind's root, at its birth, copies a template's files into a new `/repos/config` repository.
+The mind owns that copy. A newer template adds only the files the repo lacks and replaces only
+those still exactly as the platform wrote them (core/mind-worker/src/mind/template-update.ts).
+Every build of core bundles these templates, and each depends on nothing outside core, so they
+are also the plainest examples of how a mind is configured.
 
-- `default/` — the homepage, the agents app, inbound email handed to agents, and the place for the
-  integration packages the mind hosts. `agents.ts` re-exports the agents app's two classes from
-  `iterate/agents`; the init case of `worker.ts` (`mind/worker-updated`) calls
-  `installAgents(itx)`, which names that module of the published config, so a commit that doesn't
-  change it leaves the agents running; its `email/received` case gives each email thread from a
-  member an agent of its own. Its `integrations` array lists the packages (`Integration` from
-  `iterate/sdk`): `fetch` hands each the requests on its routing slug, `processEvent` hands each
-  every event after the mind's own cases. It sets no schedule: an idle mind sleeps. Its init
-  case holds a heartbeat, commented out: uncommented, a schedule that appends `heartbeat` on `/`
-  every five minutes and wakes the mind each time. The dash and the consent page start a
-  person's mind from this one.
+- `default/` — the template a stack's mind starts from unless its config names another
+  (`mind.template`, core/alchemy). It has the homepage, the Agents and onboarding apps and a
+  guestbook that is off (`apps/`), the agent kinds (`agent-kinds/`), cases in `worker.ts` that
+  hand email, Slack and X messages to agents, and the place for the integration packages the
+  mind hosts. Its init case (`mind/worker-updated`) installs the apps and sets no schedule: an
+  idle mind sleeps. Its `AGENTS.md` says the rest.
 - `minimal/` — the homepage and an empty `processEvent`: no agents, no schedules. A creation that
   names no template gets this one.
 
@@ -32,12 +28,5 @@ the running platform's SDK (an `iterate` absent from `dependencies` is the platf
 `devDependencies` are copied as written. In iterate's repo, `pnpm typecheck:configs` checks every
 template against the workspace packages.
 
-The build (`os/scripts/build.ts`) lists each one under its GitHub reference at the checkout's
-commit, in the repository the checkout's `origin` names
-(`github:iterate/core#<sha>&path:core/configs/default` in a clone of iterate/core), and a creation
-naming that reference is seeded from the build's copy, with no GitHub request.
-`session.minds.templates()` lists them, `default/` first, then any template the build was given
-with `--template`. The build fails without `default/`.
-`minds.create({ mind, configRepoTemplate })` also accepts custom references such as
-`github:owner/repo#main&path:templates/example`; the API resolves the ref to a commit before
-persisting the creation request.
+The build (core/mind-worker/scripts/build.ts) bundles each folder here under its name, with its
+git-tracked files, and a mind is seeded from the build's copy with no GitHub request.

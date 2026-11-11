@@ -34,7 +34,8 @@ export type SecretUse = {
   lendTo: string[] | null;
 };
 
-// A secret made before records said what it may do, or imported: everything, as core/os let it.
+// A secret made before records said what it may do, or imported: everything, as the earlier
+// platform (core/os, removed) let it.
 export const UNLIMITED_USE: SecretUse = {
   placement: "url",
   operations: [...SECRET_OPERATIONS],

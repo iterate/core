@@ -9,10 +9,9 @@ import { z } from "zod";
  *                             the person is
  *   - `account`             — manage the person's sessions and personal access tokens
  *   - `organizations:write` — the person's organizations: list every one they belong to, create new ones
- *   - `admin`               — operate the platform: every mind and person. Granted only to an
- *                             email the deployment's `admins` lists (core/os consent.ts), and only
- *                             while it lists it (oauth.ts). Signing a client in as someone else is
- *                             no scope: the issuer offers it to a listed admin at consent
+ *   - `admin`               — operate the platform: every mind and person
+ *  A mind's auth Worker grants `iterate` or `identity` alone (core/auth-worker/src/oauth.ts
+ *  `grantedScopes`).
  *  Consent is task-based (the shape Cloudflare's own OAuth consent took in August 2026: a client
  *  requests a set, the person may deselect the optional ones, the token carries what was granted):
  *  `iterate` is required, every other requested scope is optional on the consent page (`identity`
@@ -59,7 +58,6 @@ export const OAuthScopeDescriptions: Record<OAuthScope, Omit<ConsentScope, "name
     note: "Required — what the app is for.",
     required: true,
   },
-  // the identity card says this at length (core/os identify-card.tsx)
   identity: {
     title: "Learn who you are: your email, and nothing else",
     note: "Required — what the app is for.",

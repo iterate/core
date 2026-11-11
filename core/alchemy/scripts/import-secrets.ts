@@ -3,7 +3,8 @@ import { connectMind } from "iterate/node";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 
-// A core/os fact that carried a cell, sealed for `<mindId>.iterate/secrets/<name>`.
+// A fact of the earlier platform (core/os, removed) that carried a cell, sealed for
+// `<mindId>.iterate/secrets/<name>`.
 const CellFact = z.object({
   type: z.enum([
     "events.iterate.com/secret/set",

@@ -52,7 +52,7 @@ test("the sign-in with Google proves an address, and one switch makes it a full 
 test("the sign-in through another iterate deployment is gone: a config that names it is refused", () => {
   const settings = {
     login: {
-      methods: { iterate: { issuer: "https://os.iterate.com" } },
+      methods: { iterate: { issuer: "https://iterate.example.com" } },
       allow: [{ email: "owner@example.com" }],
     },
   };

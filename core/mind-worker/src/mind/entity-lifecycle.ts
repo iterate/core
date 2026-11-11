@@ -101,8 +101,7 @@ export class EntityLifecycleProcessor<
 > extends StreamProcessor<State> {
   readonly contract: ProcessorContract<State>;
   private readonly getItx: () => ItxEntrypointScope & Disposable;
-  // Read off the host's props, never `itx.whoami()`: that also reads the control plane, whose bound
-  // fails a creation on a cold wake of it.
+  // Read off the host's props.
   private readonly path: () => string;
   private readonly effects: {
     provision?: (path: string) => Promise<unknown>;

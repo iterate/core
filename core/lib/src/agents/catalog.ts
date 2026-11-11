@@ -12,9 +12,9 @@ import { AgentContract } from "./contract.ts";
 import { AgentCollectionRpcTarget } from "./collection.ts";
 import { AGENTS_MODULE, AGENTS_PATH } from "./install.ts";
 
-/** The core's announcement that a context exists below this one (core/os
- *  iterate-context-durable-object.ts `announceToAncestors`): what makes a row. The core owns it, so
- *  the catalog names it here, as `RunEventCatalog` names the run events. */
+/** The core's announcement that a context exists below this one
+ *  (core/itx/src/iterate-context-durable-object.ts `announceToAncestors`): what makes a row. The
+ *  core owns it, so the catalog names it here, as `RunEventCatalog` names the run events. */
 const ChildCreatedEventCatalog = {
   events: {
     "events.iterate.com/itx/child-created": {

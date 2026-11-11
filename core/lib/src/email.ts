@@ -1,5 +1,5 @@
 // email.ts — EMAIL's events and threads: a mind's mail, every message in or out on one context,
-// `/integrations/email` (core/os src/email/contract.ts), inbound as `email/received` and each
+// `/integrations/email`, inbound as `email/received` and each
 // `itx.email.send` as `email/sent`, both appended by the platform (core/mind-worker/src/integrations/email.ts).
 // The first-party `email` facet there folds them into threads (core/mind-worker/src/email/processor.ts); a config
 // repo reads its state and parses a message with this contract (core/configs/default/worker.ts). An
@@ -68,8 +68,8 @@ export const EmailContract = defineProcessorContract({
          *  Authentication-Results, DKIM-Signature and ARC set): `name` as written, `value` in
          *  JMAP's Raw form (RFC 8621 4.1.2.1), everything after the colon to the field's end, folds
          *  included, nothing decoded. `value.replace(/\r?\n(?=[ \t])/g, "")` unfolds it. Whole
-         *  fields from the top, the newest, up to 256 KiB of JSON (core/os email/raw-headers.ts).
-         *  Absent when `raw` is. */
+         *  fields from the top, the newest, up to 256 KiB of JSON (core/boundary-worker/src/mail.ts
+         *  `rawHeadersOf`). Absent when `raw` is. */
         headers: z.array(z.object({ name: z.string(), value: z.string() })).optional(),
         /** `headers` stops before the message's last field: the rest are only in `raw`. */
         headersTruncated: z.boolean().optional(),

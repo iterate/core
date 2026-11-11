@@ -1,12 +1,12 @@
-// api.ts — THE API AN APP DIALS: the shapes of core/os's `/api` root, the session it vends and a
-// context's surface, as a capnweb client sees them. DECLARED here, never generated, and never the
-// platform's classes: in core/os `IterateRpcTarget implements IterateApi` and
-// `IterateContextRpcTarget implements IterateContextApi` (src/session.ts, src/iterate-context.ts),
-// so an app built against this package types against exactly what the deployment answers. A context
+// api.ts — THE API AN APP DIALS: the shapes of a mind's `/api` session and a context's surface, as
+// a capnweb client sees them. DECLARED here, never generated, and never the platform's classes:
+// core/itx serves a context as `IterateContextRpcTarget` (core/itx/src/iterate-context.ts, served
+// by core/itx/src/session.ts), so an app built against this package types against what the
+// deployment answers. A context
 // has ONE method — `invoke(call, ...args)`, a dotted itx expression — and a capnweb stub proxies the
 // dotted spelling (`itx.repos.get(path).readFile(file)`) onto it. THIS FILE IS THE SOURCE OF TRUTH
-// for every root app code reaches: core/os derives its built-in record's type from these members
-// (context/built-ins.ts `BuiltInScope`, library.ts `LibraryRoots`), so a root or a verb the platform
+// for every root app code reaches: core/itx derives its built-in record's type from these members
+// (core/itx/src/context/built-ins.ts `BuiltInScope`), so a root or a verb the platform
 // implements and this file does not declare — or declares differently — fails to typecheck there.
 // The roots installed apps add are NOT here: each app registers its own on `InstalledAppRoots` from
 // its package, and `IterateContextApiWith` spells a context that has them.
@@ -221,12 +221,12 @@ export type SecretRefresh =
       client?: { platform: IntegrationProvider } | { cloud: string };
     }
   /** A GitHub App installation's token (`POST <apiOrigin>/app/installations/<id>/access_tokens`
-   *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is the deployment's
-   *  (`{ platform: "github" }`, minted only for an installation the control plane routes to this
-   *  mind) or the mind's own, whose `appId` and `privateKey` the material holds
-   *  (`{ mind: "github" }`); either may be a `getSecret("/secrets/<name>", { field })`
-   *  placeholder naming another of the owner's secrets pinned to `apiOrigin`, so one secret holding
-   *  the App's key serves every installation's secret. */
+   *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is iterate Cloud's
+   *  (`{ cloud }`) or one whose `appId` and `privateKey` the material holds (`{ mind: "github" }`,
+   *  and `{ platform: "github" }` the same way); either of those two fields may be a
+   *  `getSecret("/secrets/<name>", { field })` placeholder naming another of the owner's secrets
+   *  pinned to `apiOrigin`, so one secret holding the App's key serves every installation's
+   *  secret. */
   | {
       kind: "github-app-installation";
       apiOrigin: string;
@@ -246,10 +246,10 @@ export type SecretRefresh =
 
 /** A SECRET'S SEALED CELL — what every fact that writes material carries (`secret/set`, a
  *  `secret/refreshed` that minted, `secret/resealed`): the record with its material sealed under
- *  the deployment's secrets key and bound to this one secret and write (core/os
- *  src/secret-at-rest.ts says how, and what opens it). The log is the secret: a backup of it and
- *  the key is everything. `itx.cd(path).facets.get("secret").snapshot()` answers the current one
- *  as `state.material.sealed`. */
+ *  the deployment's secrets key and bound to this one secret and write
+ *  (core/secrets-worker/src/secret-at-rest.ts says how, and what opens it). The log is the secret:
+ *  a backup of it and the key is everything. `itx.cd(path).facets.get("secret").snapshot()` answers
+ *  the current one as `state.material.sealed`. */
 export type SealedSecretCell = {
   /** The secret's context name (its Durable Object's), the first part of the cell's binding. */
   context: string;
@@ -966,7 +966,7 @@ export type RepoSyncResult = {
   commitOid: string | null;
   previousOid: string | null;
 };
-/** `itx.repos.get(path)`: the repo's verbs, branch `main` only (the repo facet in core/os). A
+/** `itx.repos.get(path)`: the repo's verbs, branch `main` only (core/mind-worker/src/repo). A
  *  `commitOid` pins a read to that commit; without one, a read is of the tip. */
 export type RepoHandle = InvokeHandle & {
   tip(): Promise<string | null>;
@@ -1022,7 +1022,7 @@ export type WorkspaceChange = { path: string; change: "added" | "deleted" | "mod
 /** One mount as `gitStatus` reports it: its path, its repo, and the overlay's changes under it. */
 export type WorkspaceMountStatus = { path: string; repo: string; changes: WorkspaceChange[] };
 /** `itx.workspaces.get(path)`: a private overlay over the mind's repos, each repo mounted at its
- *  path (the workspace facet in core/os). Reads see the overlay, then the mounted repo's tip. */
+ *  path (core/mind-worker/src/workspace). Reads see the overlay, then the mounted repo's tip. */
 export type WorkspaceHandle = InvokeHandle & {
   mounts(): Promise<Record<string, { repo: string }>>;
   /** The overlay's copy (a deletion reads null), else the mounted repo's file at its tip. */
@@ -1139,7 +1139,7 @@ export type SandboxContainerApi = InvokeHandle & {
   invoke(steps: ItxExpression): Promise<any>;
 };
 
-/** `itx.sandboxes.get(path)`: a Linux container with a disk (the sandbox facet in core/os). `exec`
+/** `itx.sandboxes.get(path)`: a Linux container with a disk (core/mind-worker/src/sandbox). `exec`
  *  and every call of `files` start the container when none runs, from the disk last saved, on
  *  `standard-1` unless `start({ instance })` says otherwise. Memory and running processes do not
  *  survive a stop; the disk does, for 30 days after its last restore and only on the image it was
@@ -1503,8 +1503,7 @@ export interface IterateContextApi {
      *  and nothing else of the mind. A lend carries the facet's live state (`liveSnapshot` and
      *  its deltas) and the methods its class lists in `static lentMethods`. Appends
      *  `events.iterate.com/itx/facet-lent { facet, to }` here, and marks the mind's root as one
-     *  that lends. A first-party facet is never lent. Lending again is a no-op. core/os
-     *  README.md, "A mind lends a facet to a person". */
+     *  that lends. A first-party facet is never lent. Lending again is a no-op. */
     lend(name: string, input: { to: string }): Promise<void>;
     /** End a lend `lend` made: `events.iterate.com/itx/facet-lend-revoked { facet, to }`. The
      *  person's next call on the facet is refused, and its live state stops reaching them. */
@@ -1579,11 +1578,11 @@ export interface IterateContextApi {
      *  event it copies. `filter` is only for such a row: a JSONata expression over the event, and
      *  only events it answers exactly `true` for are copied.
      *
-     *  An expression that doesn't compile, or uses something forbidden (core/os
-     *  event-expressions.ts), makes `subscribe` throw. One that throws on a particular event fails
-     *  that event's delivery, which is retried like any other. `itx/*` events are never copied.
-     *  Copies can land in any order, so read `copiedFrom` to see when and where each original
-     *  happened. */
+     *  An expression that doesn't compile, or uses something forbidden
+     *  (core/itx/src/stream/event-expressions.ts), makes `subscribe` throw. One that throws on a
+     *  particular event fails that event's delivery, which is retried like any other. `itx/*`
+     *  events are never copied. Copies can land in any order, so read `copiedFrom` to see when and
+     *  where each original happened. */
     filter?: string;
   }): Promise<{ [Symbol.dispose](): void }>;
   /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`
@@ -1636,7 +1635,7 @@ export interface IterateContextApi {
    *  each cut to this mind's rows of the last `hours` (default 24, at most 720), and answers the
    *  rows with the SQL that ran. Throws on a deployment with no warehouse. */
   telemetry: { query(sql: string, options?: { hours?: number }): Promise<TelemetryRows> };
-  /** The mind's email, `<slug>@iterate.app` (core/os/src/email/contract.ts has its events and
+  /** The mind's email, `<slug>@iterate.app` (core/lib/src/email.ts has its events and
    *  threads). `send` answers the `email/sent` event. */
   email: {
     send(input: EmailSendInput): Promise<StreamEvent>;
@@ -1859,9 +1858,8 @@ export interface IterateSessionApi {
    *  minds sees only their organizations, unless it holds `organizations:write`): the rows, its
    *  members and open invitation links, the organization's context by membership, and the verbs
    *  (`organizations:write`; the person is the owner of what they create, and only an owner
-   *  renames, deletes or changes members). The reads are the control plane's catalog, as it stands;
-   *  each verb is a request it answers, a refusal a coded error (FORBIDDEN, INVALID_INPUT), and
-   *  lands its facts on the organization's context (and a member's account) after. */
+   *  renames, deletes or changes members). A refusal is a coded error (FORBIDDEN, INVALID_INPUT);
+   *  a verb lands its facts on the organization's context (and a member's account) after. */
   organizations: {
     /** oldest first */
     list(): Promise<OrgRecord[]>;

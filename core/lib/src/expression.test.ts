@@ -1,7 +1,7 @@
 // expression.test.ts — executable spec for the expression codec (parse ⇄ print over one table,
 // the canonical spelling, comments in args, the char limit) and the prototype hop's dotted invoke.
-// What the platform does with an expression — the step walk, the resolver over it — is tested in
-// core/os src/context/dispatch.test.ts.
+// What the platform does with an expression — the step walk, the resolver over it — is
+// core/itx/src/context/dispatch.ts, not tested here.
 
 import { expect, test } from "vitest";
 import { RpcStub, RpcTarget } from "capnweb";
@@ -83,8 +83,7 @@ test("a string expression over the char limit is refused, coded, before any pars
 });
 
 // ── invoke handle ── the dotted invoke's pure mechanism (the prototype hop and the path proxies it
-// hands out), in-process, driven over a real capnweb RpcStub. The end-to-end dotted surface over the
-// real worker is pinned by core/os's e2e tests.
+// hands out), in-process, driven over a real capnweb RpcStub.
 
 test("keeps real RpcTarget members and falls back only for unknown paths", async () => {
   const target = new HostTarget();
@@ -104,8 +103,7 @@ test("keeps real RpcTarget members and falls back only for unknown paths", async
 test("instances are genuine, unproxied RpcTargets (the whole point: workerd pipelining)", () => {
   // The fallback lives on the PROTOTYPE CHAIN, so the instance stays a plain, natively-branded
   // RpcTarget (no own dynamic props, no instance Proxy) — what workerd's pipeline classifier
-  // requires. The live guard for pipelining itself is core/os's e2e tests; this pins the
-  // structural half a unit test can see.
+  // requires. This pins the structural half a unit test can see, not pipelining itself.
   const target = new HostTarget();
   expect(target).toBeInstanceOf(RpcTarget);
   expect(Object.getOwnPropertyNames(target)).toEqual(["calls", "ownField"]);

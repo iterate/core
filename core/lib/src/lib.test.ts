@@ -143,8 +143,9 @@ test("applyPatch cannot touch prototypes (patches arrive over the wire)", () => 
   expect(({} as Record<string, unknown>).polluted).toBeUndefined();
 });
 
-// ── origin ── the check `from-server-cookie` (session.ts) and the console's POST forms
-// (core/os issuer-pages.ts) ride on: `{ origin, becomes }` rows for a request to https://worker.example/api.
+// ── origin ── the check a cookie-carrying request rides on (app-server.ts,
+// core/boundary-worker/src/host-session.ts): `{ origin, becomes }` rows for a request to
+// https://worker.example/api.
 
 const originRows: { headers: Record<string, string>; becomes: boolean }[] = [
   { headers: {}, becomes: true }, // no Origin at all: a non-browser client

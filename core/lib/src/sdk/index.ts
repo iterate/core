@@ -8,8 +8,8 @@
 //
 // Everything else has one path of its own: a processor's surface (`StreamProcessor`,
 // `defineProcessorContract`, `LiveState`, the event and contract types) is `iterate/stream/processor`,
-// which runs in Node too; zod is `zod`. A loaded worker imports each
-// by name and the loader links this deployment's own build of it (core/os/scripts/build.ts):
+// which runs in Node too; zod is `zod`. A loaded worker imports each by name and the loader links
+// this deployment's own build of it (core/mind-worker/scripts/build.ts):
 //
 //   import { StreamProcessorDurableObject } from "iterate/sdk";
 //   import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
@@ -62,9 +62,9 @@ export { serveFiles, type FileContent } from "./files.ts";
 // `static override publicMethods = [...super.publicMethods, "message"]`.
 //
 // IDENTITY is `ctx.props` — `{ iterateContextName, name }`, minted by the parent, the only party
-// that knows it (pinned in test/vitest/os-workers/facets.test.ts), plus `fedByPushes` when a row
-// pushes it (FacetProps). THE STREAM is the itx scope `this.getItx()` hands out (core/os
-// iterate-context.ts `ItxEntrypoint`); the engine's `append`/`read` ride it like any other dotted call.
+// that knows it, plus `fedByPushes` when a row pushes it (FacetProps). THE STREAM is the itx scope
+// `this.getItx()` hands out (core/itx/src/iterate-context.ts `ItxEntrypoint`); the engine's
+// `append`/`read` ride it like any other dotted call.
 //
 // NEVER define alarm(): facets have none (workerd#6810 — the runtime answers "Facets currently
 // cannot set alarms."); a timer, when one is needed, is a scheduled append on the context. The
@@ -174,7 +174,7 @@ export abstract class FacetDurableObject<
 
 /** What hands the itx scope over — a loaded worker's `env.ITX`, or the loopback a class of the
  *  platform's own worker mints from `ctx.exports`: `get()` its scope (a context's declared API,
- *  api.ts, which a capnweb stub of core/os's `IterateContextRpcTarget` satisfies), or `fetch` a
+ *  api.ts, which a capnweb stub of core/itx's `IterateContextRpcTarget` satisfies), or `fetch` a
  *  request through the context's dispatch (a fetch route's target, the `x-itx-expression` header). */
 export type ItxEntrypointService = {
   get(): IterateContextApi;
@@ -372,8 +372,8 @@ export abstract class IterateConfigEntrypoint<
   }
 
   /** THE CALL UNDER A CAUSE (`walkUnderCause`) every method but `fetch` is called through, with the
-   *  context it came from (`callerPath`). On no list: only the platform calls it (core/os
-   *  context/built-ins.ts `workers`). */
+   *  context it came from (`callerPath`). On no list: only the platform calls it
+   *  (core/itx/src/context/built-ins.ts `workers`). */
   callWithCause(cause: unknown, steps: RpcSteps, callerPath?: string): Promise<unknown> {
     return walkUnderCause(this, cause, steps, callerPath);
   }

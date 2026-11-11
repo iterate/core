@@ -47,7 +47,7 @@ type ErrorCode =
   | "FACET_SOURCE_TOO_LARGE" // a facet's literal source, or a rule's target, over 1 MiB (worker-loader.ts FACET_SOURCE_MAX_CHARS) — refused on entry
   | "INVALID_CREDENTIALS" // authenticate(): the admin secret did not match, or the credentials named no known kind
   | "UNAUTHENTICATED" // authenticate({ type: "from-server-cookie" }): no session cookie on the request, or a cross-origin browser's request
-  | "FORBIDDEN" // minds.get(mind): outside the session's reach (a grant narrowed to other minds, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (core/os first-party-facet-placement.ts)
+  | "FORBIDDEN" // minds.get(mind): outside the session's reach (a grant narrowed to other minds, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (core/itx/src/first-party-facets.ts `assertFacetPlacement`)
   | "MIND_NAME_TAKEN" // minds.create({ mind }): a mind of that slug exists in another org; minds.rename(mind, { slug }): another mind holds the slug
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
@@ -149,8 +149,8 @@ export async function loopLimitOf(answer: Response): Promise<Error | undefined> 
 
 // reportIssue — the ONE exit for unexpected failures (cloudflare-os error-reporting.ts, minus
 // its private Reporter Worker): one bounded console.error line; query event="issue" in Workers
-// Logs. A host forwards issues elsewhere too by `forwardIssues(forward)` (core/os posthog.ts:
-// PostHog Error Tracking) — capture sites never change. Deliberately NO cloudflare:workers
+// Logs. A host forwards issues elsewhere too by `forwardIssues(forward)` (to an error tracker,
+// say) — capture sites never change. Deliberately NO cloudflare:workers
 // import: this file rides the platform-neutral SDK bundle. Reporting must never disturb the
 // caller — armored end to end; worst case it prints nothing.
 
@@ -393,8 +393,8 @@ export function bytesToBase64(bytes: Uint8Array) {
   return btoa(binary);
 }
 
-// ── origin ── the one check that makes an ambient cookie safe to honour (session.ts
-// `from-server-cookie`, the issuer's form posts in core/os issuer-pages.ts).
+// ── origin ── the one check that makes an ambient cookie safe to honour (app-server.ts, and the
+// boundary Worker's cookie sessions, core/boundary-worker/src/host-session.ts).
 
 /** Whether `request` may spend the cookies it carries: its `Origin` header is this origin, or absent
  *  (a non-browser client — curl, a script). A browser stamps the page's origin on every WebSocket
@@ -425,8 +425,8 @@ export function cookieValueOf(cookieHeader: string | null, name: string): string
 /** `next` as a path on `origin`, else "/" — a redirect never leaves the host: `//evil.example`,
  *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". So
  *  does a same-origin path that parses to one starting `//` (`/.//evil.example`, `/..//…`,
- *  `/%2e//…`, `/a/..//…`), which a browser reads in a `Location` as another host. The issuer's
- *  login redirect uses it too (core/os issuer-pages.ts). */
+ *  `/%2e//…`, `/a/..//…`), which a browser reads in a `Location` as another host. The auth Worker's
+ *  sign-in redirects use it too (core/auth-worker/src/email-sign-in.ts, passkey-sign-in.ts). */
 export function sameOriginPath(next: string, origin: string): string {
   try {
     const url = new URL(next, origin);
@@ -471,13 +471,11 @@ export function resolveContextPath(basePath: string, contextPath: string): strin
  *
  * Read from the page's own hostname, the one fact the Worker, the server render and the browser
  * all agree on, so no env var or config carries it (envs.ts names the hosts):
- * - `pr<N>-<sha7>-<app>.<subdomain>.workers.dev`: a PR's per-commit deployment (scripts/os/preview.ts)
+ * - `pr<N>-<sha7>-<app>.<subdomain>.workers.dev`: a PR's per-commit deployment
  * - `localhost`, `*.localhost`, `127.0.0.1`: `pnpm dev`
- * - anything else: production (os.iterate.com, dash.iterate.com, agents.iterate.com, …)
+ * - anything else: production (dash.iterate.com, agents.iterate.com, …)
  *
- * Rendered by environment-head-content.tsx in every client's root (packages/ui's, and core/os's own
- * copy), and by the OS's `/favicon.svg` (core/os/src/issuer-pages.ts), which the SDK's gate pages
- * link.
+ * Rendered by environment-head-content.tsx in every client's root (packages/ui).
  */
 export function deploymentEnvironment(hostname: string) {
   const preview = /^(pr(\d+)(?:-[^.]+)?)-[^.-]+\.[^.]+\.workers\.dev$/.exec(hostname);
@@ -507,7 +505,7 @@ export function environmentFaviconHref(environment: DeploymentEnvironment, produ
 /**
  * Preview: purple, the PR number in white as large as the square allows (PR numbers run to four
  * digits and more, too many for the corner badge iterate/iterate#2197 drew for single-digit preview slots).
- * Dev: teal, the white iterate mark (core/os/public/iterate-logo.svg's paths).
+ * Dev: teal, the white iterate mark (packages/ui's iterate-logo.svg's paths).
  */
 export function environmentFaviconSvg(
   environment: Exclude<DeploymentEnvironment, { kind: "production" }>,

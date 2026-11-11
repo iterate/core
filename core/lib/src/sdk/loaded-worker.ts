@@ -9,8 +9,8 @@
 //   getItx()                    — `using itx = this.getItx()`: `env.ITX`'s scope, released when the
 //                                 block ends (itx-scope.ts).
 // Workers RPC reaches anything on the prototype, `getItx` included, so the platform refuses a
-// caller's step by that name (`walkUnderCause`, core/os built-ins.ts `workers`). Small, and imports
-// no host: every loaded isolate's cold start evaluates it.
+// caller's step by that name (`walkUnderCause`, core/itx/src/context/built-ins.ts `workers`).
+// Small, and imports no host: every loaded isolate's cold start evaluates it.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { carryCauseOnFetch } from "../cause.ts";

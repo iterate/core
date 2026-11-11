@@ -1,10 +1,10 @@
 // secret-placeholder.ts — THE PLACEHOLDER GRAMMAR (tasks/mind-stack.md): how a request spells a
 // secret, `getSecret("/secrets/<name>")`, defined once for the Workers that read it. Egress finds
 // which secret a request names and sends it to the secrets Worker with the secret named in
-// `SECRET_USE_HEADER`; the secrets Worker substitutes the material. Pure, moved out of core/os
-// src/secrets.ts unchanged. And the path of the secrets Worker's OAuth callback, which the mind
-// answers as `itx.secrets.oauthCallbackUrl()`. The facts a secret's answer carries ride the one
-// carrier of iterate/facts.
+// `SECRET_USE_HEADER`; the secrets Worker substitutes the material. Pure, moved unchanged out of
+// the earlier platform (core/os, removed). And the path of the secrets Worker's OAuth callback,
+// which the mind answers as `itx.secrets.oauthCallbackUrl()`. The facts a secret's answer carries
+// ride the one carrier of iterate/facts.
 
 /** A secret's name: `[a-zA-Z0-9._-]+`, but never `.` or `..` — the two segments
  *  `resolveContextPath` resolves away, so `/secrets/..` would name its owner's ROOT (and

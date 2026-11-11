@@ -5,9 +5,8 @@
 // `#deleteFacet`); a verb on a dead agent answers from the catalog's `deleted` row on `/`
 // (catalog.ts, on `/agents`), never by `facets.get("agent", spec)` on its context. That call would host the facet
 // again (a new database folded from the whole log, an instance that can run on past the context's
-// incarnation), and aborting a running loaded facet resets a whole Durable Object (core/os
-// context/residency.ts, the birth reset; core/os e2e/facet-abort-storage-reset.e2e.test.ts
-// measures it).
+// incarnation), and aborting a running loaded facet resets a whole Durable Object
+// (core/itx/src/context/residency.ts, the birth reset).
 //
 // AN AGENT IS ANY CONTEXT UNDER `/agents`, iterate's own or not (catalog.ts). An iterate agent hosts
 // the `agent` facet, which `create` binds. Any other agent (a coding session a bridge appends to,
@@ -158,7 +157,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
 
   /** Until the catalog lists `path`, a context under `/agents`: its own announcement lands there
    *  when it first wakes, a moment after the call that woke it. Bounded: one that has not landed by
-   *  LISTED_WAIT_MS is logged and left to land on the context's next wake (core/os
+   *  LISTED_WAIT_MS is logged and left to land on the context's next wake (core/itx's
    *  `announceToAncestors` retries it then), so the agent `create` made is not refused for it. */
   async #untilListed(path: string) {
     if (!path.startsWith(`${AGENTS_PATH}/`)) return;

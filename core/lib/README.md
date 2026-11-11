@@ -1,31 +1,20 @@
 # iterate
 
-The SDK for Iterate (`core/os`): context APIs, stream processors, reactive clients, React
+The SDK for Iterate: context APIs, stream processors, reactive clients, React
 bindings, and OAuth app sessions, under `iterate/*`. The package exports source in this
 workspace and compiled JavaScript with declarations when packed. Its `iterate` bin is the CLI
 ([src/cli/README.md](src/cli/README.md)).
 
 ## The SDK/platform line
 
-The SDK holds what user code runs or speaks, and the platform is its first user: core/os builds
-its own entities on `iterate/sdk`, and the first-party apps' code uses only `iterate/*`. Each
-subpath in `package.json`'s `exports` is one public module; nothing else is importable.
+The SDK holds what a mind's own code and apps run or speak: a loaded worker, a facet, a
+processor, a browser or Node client, and the wire contract between them and the platform. The
+Workers of a mind's stack (`core/*-worker`, with their shared kernel in `core/itx`) are its first
+user. Each subpath in `package.json`'s `exports` is one public module; nothing else is importable.
 
-- A module belongs here when user code runs it or speaks it: a loaded worker, a facet, a
-  processor, a browser or Node client, or the wire contract between them and the platform. It
-  belongs in core/os when only the platform's Worker runs it, and in packages/shared when more
-  than one app needs it and user code never does.
-- Outside core/os, no package and no app imports core/os. `import-js/no-restricted-paths` in
-  `.oxlintrc.json` resolves each import under `packages/**` and `internal-packages/**` to a file, so type
-  imports, re-exports, dynamic `import()` and an app added later are covered, and
-  `lint/oxlintrc-platform-line.test.ts` pins it. The platform's tests live in `test/`, which
-  the rule does not cover: they may import core/os, and core/os keeps only simple unit tests.
-- No private core package behind a thin `iterate`: core/os would then import modules user code
-  cannot, and the SDK's types would have to be bundled or published anyway.
-
-The decision's reasons, and how workerd, the Agents SDK, Convex,
-Supabase, tRPC, Hono and Wrangler draw the same line: the decision record
-`docs/2026-09-24-sdk-platform-line.md` in iterate/iterate#3018.
+Code that only a Worker of the stack runs belongs in that Worker or in `core/itx`, not here.
+Nothing in `core/` imports outside `core/` ([core/AGENTS.md](../AGENTS.md);
+`lint/oxlintrc-core-boundary.test.ts` pins it).
 
 ## One path per symbol
 
@@ -122,8 +111,9 @@ await itx.cd("/agents/b").append({
 ```
 
 Words from `/` (a member's session, the dash) read as a person's, with no sender. `origin` is the
-context whose code ran, not who asked it to run (core/os `caller.ts` `stampCaller` says why that
-makes it advisory). Batch writes: `append(...events)` is one commit, however many events it carries.
+context whose code ran, not who asked it to run (`core/itx/src/caller.ts` `stampCaller` says why
+that makes it advisory). Batch writes: `append(...events)` is one commit, however many events it
+carries.
 
 Runaway reactions stop on their own: code that reacts to other code's output faster than the clock
 — two agents answering each other at once, a handler that appends what it handles — is stopped with
@@ -189,18 +179,14 @@ A processor whose work takes steps is still one contract, one state, one `reduce
 
 ## Node connections
 
-`iterate/node` exposes a connection owner for Iterate scripts and live
-providers. It uses the same protocol and cleanup as the CLI:
+`iterate/node` connects a Node script to a mind at its address, with the same protocol, sign-in
+and cleanup as the CLI. `ITERATE_MIND_TOKEN`, when set, is used in place of a sign-in:
 
 ```js
-import { connectIterate } from "iterate/node";
+import { connectMind } from "iterate/node";
 
-using connection = await connectIterate({
-  baseUrl: "https://os.iterate.com",
-  auth: { type: "bearer", token: process.env.ITERATE_BEARER_TOKEN },
-});
-using mind = await connection.session.minds.get("my-mind");
-console.log(await mind.run("async (itx) => await itx.whoami()"));
+using connection = await connectMind({ address: "example.com" });
+console.log(await connection.itx.whoami());
 ```
 
 ## Event types
@@ -284,18 +270,20 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   platform's Durable Objects (device firmware, a published SDK, a mind's config repo),
   rename it only in a change that migrates that store too.
 
-| Namespace                                                                                 | Defined in                                                                                                                                                                                                                                                                                             |
-| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `itx`                                                                                     | `core/itx/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `core/itx/src/context/built-ins.ts`, `core/itx/src/fetch-routes.ts`, `core/itx/src/iterate-context-durable-object.ts`, `core/lib/src/stream/{run,processor}.ts` |
-| `account`, `organization`, `mind`, `repo`, `workspace`, `sandbox`, `deployment`, `secret` | `core/os/src/<name>/contract.ts` (repo, workspace, sandbox and deployment also use `mind/entity-lifecycle.ts`)                                                                                                                                                                                         |
-| `mind`                                                                                    | `core/mind-worker/src/mind/contract.ts`: the mind stack's name for what core/os calls `mind`                                                                                                                                                                                                           |
-| `agent`                                                                                   | `core/lib/src/agents/contract.ts`                                                                                                                                                                                                                                                                      |
-| `voice-agent`                                                                             | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                    |
-| `chrome`                                                                                  | `packages/browser-extension/public/panel.js`                                                                                                                                                                                                                                                           |
-| `email`                                                                                   | `core/lib/src/email.ts`                                                                                                                                                                                                                                                                                |
-| `webhook`                                                                                 | `core/mind-worker/src/integrations/webhooks.ts` (a delivery to a webhook context of a mind stack)                                                                                                                                                                                                      |
-| `cloud`                                                                                   | `core/auth-worker/src/device/protocol.ts` (the statement the iterate Cloud signs to ask to be let in: shown with the request, never appended)                                                                                                                                                          |
-| `integration`                                                                             | `core/lib/src/integrations.ts` (the registry a mind's packages write into; its fold is `core/mind-worker/src/integrations/registry.ts`)                                                                                                                                                                |
-| `test`                                                                                    | tests only                                                                                                                                                                                                                                                                                             |
+| Namespace                              | Defined in                                                                                                                                                                                                                                                                                             |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `itx`                                  | `core/itx/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `core/itx/src/context/built-ins.ts`, `core/itx/src/fetch-routes.ts`, `core/itx/src/iterate-context-durable-object.ts`, `core/lib/src/stream/{run,processor}.ts` |
+| `account`                              | `core/auth-worker/src/account-facts.ts`                                                                                                                                                                                                                                                                |
+| `organization`                         | `core/lib/src/api.ts` (named there only; no Worker of the stack appends one)                                                                                                                                                                                                                           |
+| `mind`, `repo`, `workspace`, `sandbox` | `core/mind-worker/src/mind/contract.ts` and `core/mind-worker/src/<name>/contract.ts` (repo, workspace and sandbox also use `mind/entity-lifecycle.ts`)                                                                                                                                                |
+| `secret`                               | `core/secrets-worker/src/secret/contract.ts`                                                                                                                                                                                                                                                           |
+| `agent`                                | `core/lib/src/agents/contract.ts`                                                                                                                                                                                                                                                                      |
+| `voice-agent`                          | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                    |
+| `chrome`                               | `packages/browser-extension/public/panel.js`                                                                                                                                                                                                                                                           |
+| `email`                                | `core/lib/src/email.ts`                                                                                                                                                                                                                                                                                |
+| `webhook`                              | `core/mind-worker/src/integrations/webhooks.ts` (a delivery to a webhook context of a mind stack)                                                                                                                                                                                                      |
+| `cloud`                                | `core/auth-worker/src/device/protocol.ts` (the statement the iterate Cloud signs to ask to be let in: shown with the request, never appended)                                                                                                                                                          |
+| `integration`                          | `core/lib/src/integrations.ts` (the registry a mind's packages write into; its fold is `core/mind-worker/src/integrations/registry.ts`)                                                                                                                                                                |
+| `test`                                 | tests only                                                                                                                                                                                                                                                                                             |
 
 `note/added` is only an example in the Agents composer; no contract defines `note`.

@@ -16,7 +16,7 @@ import {
 
 const subdomains: IngressRouting = { type: "subdomains", hostname: "iterate.app" };
 const paths: IngressRouting = { type: "paths" };
-const PRD = "https://os.iterate.com";
+const PRD = "https://platform.example";
 const DEV = "http://localhost:8788";
 
 // ── mindAddressOf — subdomains ──
@@ -37,7 +37,7 @@ const subdomainRows: { url: string; names: MindAddress | null; why: string }[] =
     names: { routingSlug: "my-app", mind: "my-proj", basePath: "" },
     why: "lowercased, the trailing dot dropped",
   },
-  { url: "https://os.iterate.com/site--p", names: null, why: "not under the hostname" },
+  { url: "https://platform.example/site--p", names: null, why: "not under the hostname" },
   { url: "https://iterate.app/", names: null, why: "the hostname itself has no labels" },
   { url: "https://a.b.c.iterate.app/", names: null, why: "three labels under the hostname" },
   {
@@ -101,7 +101,7 @@ test.for(pathRows)("$url → $why", ({ url, names }) => {
 
 test("the platform origin compares normalized", () => {
   expect(
-    mindAddressOf(paths, new URL(`${PRD}/minds/p/site`), "https://OS.iterate.com:443"),
+    mindAddressOf(paths, new URL(`${PRD}/minds/p/site`), "https://Platform.Example:443"),
   ).toEqual({
     routingSlug: "site",
     mind: "p",
@@ -250,7 +250,7 @@ const wildcard = {
   hostname: "iterate.com",
   mind: "iterate",
   excludedHostnames: [
-    "os.iterate.com",
+    "cloud.iterate.com",
     "mcp.iterate.com",
     "dash.iterate.com",
     "k.iterate.com",
@@ -362,7 +362,7 @@ test.for([
     primaryHostname: null,
     routing: paths,
     target: { routingSlug: "blog" },
-    url: "https://os.iterate.com/minds/templestein/blog/",
+    url: "https://platform.example/minds/templestein/blog/",
   },
   { primaryHostname: null, routing: null, target: {}, url: null },
   {

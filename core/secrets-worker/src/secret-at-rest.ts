@@ -37,11 +37,12 @@ export async function encryptSecretMaterial(
 
 export function decryptLegacySecretMaterial(
   encrypted: EncryptedMaterial,
-  // `context` is core/os's Durable Object name, `<mindId>.iterate/secrets/<name>`
+  // `context` is the Durable Object name in the earlier platform (core/os, removed),
+  // `<mindId>.iterate/secrets/<name>`
   binding: { context: string; urls: string[]; nonce: string },
   key: string,
 ): Promise<SecretMaterial> {
-  // the bytes core/os sealed with: its `additionalDataOf`, version 2
+  // the bytes that platform sealed with: its `additionalDataOf`, version 2
   const urls = [...new Set(binding.urls)].sort();
   const additionalData = Uint8Array.from(
     new TextEncoder().encode(

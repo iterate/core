@@ -1,5 +1,6 @@
-# iterate-dev-image: copied unchanged from core/os/images/iterate-dev-image, built and pushed by
-# Alchemy at deploy (core/alchemy/src/stack.ts). The image a sandbox starts from (core/mind-worker/src/sandbox): Cloudflare's own `cloudflare/debian-trixie`
+# iterate-dev-image: built and pushed by Alchemy at deploy (core/alchemy/src/stack.ts), or copied
+# from its published build (core/alchemy/src/sandbox-image.ts). The image a sandbox starts from
+# (core/mind-worker/src/sandbox): Cloudflare's own `cloudflare/debian-trixie`
 # (this base, pinned by version) plus the tools a dev machine needs, so a sandbox runs `git`, `gh`,
 # Chromium, the agent CLIs and the mind's own CLI on the first command.
 #
