@@ -221,9 +221,18 @@ ${field("jsonStrings", "Only when the JSON body holds one of these, or leave emp
 <p class="actions"><button type="submit">Save</button>${path ? ` <button type="button" class="link" data-sign-rule>Sign and save</button> <button type="button" class="link" data-remove-rule>Remove, signed</button>` : ""}</p></form>`;
 }
 
+/** WHICH HELD ROW IS TICKED WHEN THE PAGE OPENS: the one the page's link names (`?digest=`), when
+ *  the page's own hash of the row's text is its id. No other row: one press of Approve signs for
+ *  every ticked row, and a member has read the row a link brought them to, not the rows under it.
+ *  It runs in the page: the script below carries its source, for held requests and held acts. */
+export const tickedAtOpen = (digest: string, good: boolean, wanted: string | null) =>
+  good && digest === wanted;
+
 // `signedBytes` must match iterate/signed's: DSSE's pre-authentication encoding, lengths in bytes.
-const SCRIPT = `
+export const SCRIPT = `
 const data = JSON.parse(document.getElementById("approvals-data").textContent);
+const tickedAtOpen = ${tickedAtOpen.toString()};
+const wanted = new URLSearchParams(location.search).get("digest");
 const enc = new TextEncoder();
 const T = "application/vnd.iterate.statement+json";
 const signedBytes = (text) => {
@@ -278,7 +287,7 @@ for (const held of data.held) {
     row.querySelector("[data-check]").textContent = good ? "Checked: this is exactly what will be sent. Request " + held.digest.slice(0, 12) + "." : "This is not the request that waits, so it cannot be approved here.";
     if (good) row.dataset.checked = held.digest;
     row.querySelector("[data-pick]").disabled = !good;
-    row.querySelector("[data-pick]").checked = good;
+    row.querySelector("[data-pick]").checked = tickedAtOpen(held.digest, good, wanted);
   });
 }
 
@@ -305,6 +314,5 @@ for (const form of document.querySelectorAll("[data-rule]")) {
     sign({ path: path(), type: data.types.rule, payload: { rule: null } }).catch(fail));
 }
 
-const wanted = new URLSearchParams(location.search).get("digest");
 if (wanted) document.getElementById("request-" + wanted)?.scrollIntoView({ block: "center" });
 `;

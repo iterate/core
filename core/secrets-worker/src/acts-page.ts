@@ -100,8 +100,8 @@ export const actsData = (gate: Gate) => ({
   actsPath: APPROVALS_CONTEXT,
 });
 
-// Runs after the page's own script (./approvals-page.ts): `data`, `enc`, `sha256`, `hex`, `sign`
-// and `fail` are its.
+// Runs after the page's own script (./approvals-page.ts): `data`, `enc`, `sha256`, `hex`, `sign`,
+// `fail`, `wanted` and `tickedAtOpen` are its.
 export const ACTS_SCRIPT = `
 const line = (label, value, strong) => {
   const p = document.createElement("p");
@@ -136,7 +136,7 @@ for (const held of data.acts) {
     row.querySelector("[data-check]").textContent = good ? "Checked: this is exactly what will be done. Act " + held.digest.slice(0, 12) + "." : "This is not the act that waits, so it cannot be approved here.";
     if (good) row.dataset.checked = held.digest;
     row.querySelector("[data-pick]").disabled = !good;
-    row.querySelector("[data-pick]").checked = good;
+    row.querySelector("[data-pick]").checked = tickedAtOpen(held.digest, good, wanted);
   });
 }
 
@@ -183,6 +183,5 @@ for (const button of document.querySelectorAll("[data-take-proposal]"))
 document.querySelector("[data-lock]").addEventListener("click", (event) =>
   sign({ path: data.actsPath, type: event.target.dataset.lock }).catch(fail));
 
-const wantedAct = new URLSearchParams(location.search).get("digest");
-if (wantedAct) document.getElementById("act-" + wantedAct)?.scrollIntoView({ block: "center" });
+if (wanted) document.getElementById("act-" + wanted)?.scrollIntoView({ block: "center" });
 `;
