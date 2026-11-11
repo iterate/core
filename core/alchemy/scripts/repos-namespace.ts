@@ -12,14 +12,15 @@ async function reposNamespace() {
   const namespace = resourceNamesOf(config.name).repos;
   const api = `https://api.cloudflare.com/client/v4/accounts/${accountId}/artifacts/namespaces`;
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-  // Listed first: creating a namespace that already holds repos is refused as 10004 ("Access denied"),
-  // not the 10201 an empty one gets.
+  // Looked up first: creating a namespace that already holds repos is refused as 10004 ("Access
+  // denied"), not the 10201 an empty one gets. Looked up by its own path, which answers 404 (code
+  // 10200) when it is missing: its repos list answers 200 with no repos for any name.
   // Six tries, five seconds apart: Cloudflare answers 10004 in passing for a namespace that exists.
   let answer = "";
   for (let attempt = 1; attempt <= 6; attempt += 1) {
-    const listed = await fetch(`${api}/${namespace}/repos`, { headers });
-    await listed.body?.cancel();
-    if (listed.ok) return console.log(`${namespace} exists`);
+    const found = await fetch(`${api}/${namespace}`, { headers });
+    await found.body?.cancel();
+    if (found.ok) return console.log(`${namespace} exists`);
     const response = await fetch(api, {
       method: "POST",
       headers,
