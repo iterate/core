@@ -1,6 +1,6 @@
 {
-  // The apps on Workers (core/os, dash, agents, notes, docs, voice, dummy-petshop and ci-reports):
-  // Worker and browser code in one program, built by Vite.
+  // For a package with Worker and browser code in one program (the kernel in core/itx, the apps
+  // in packages/ and internal-packages/): each one's tsconfig.json extends this.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
