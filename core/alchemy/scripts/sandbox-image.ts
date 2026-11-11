@@ -3,6 +3,15 @@
 // registry API alone: no Docker. Every blob and the manifest already there is skipped, so a deploy
 // after the first copies nothing. The push credentials come from the deploy's own token and last an
 // hour.
+import { createHash } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { request } from "node:https";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream } from "node:stream/web";
 import { loadMindConfig, stageOf } from "../src/config.ts";
 import { PUBLISHED_SANDBOX_IMAGE } from "../src/sandbox-image.ts";
 
@@ -10,8 +19,6 @@ const MANIFEST_TYPES = [
   "application/vnd.oci.image.manifest.v1+json",
   "application/vnd.docker.distribution.manifest.v2+json",
 ].join(", ");
-// A Cloudflare request body has a size limit; a layer goes up in parts of this size.
-const PART = 64 * 1024 * 1024;
 
 type Registry = { host: string; repo: string; basic?: string };
 
@@ -45,6 +52,34 @@ async function tokenFor(registry: Registry, actions: string): Promise<string | u
   return `Bearer ${body.token || body.access_token}`;
 }
 
+/** A PATCH of the `size` bytes of `file`, with no time limit. */
+function streamTo(url: string, size: number, file: string, token: string) {
+  return new Promise<{ status: number; location: string }>((resolve, reject) => {
+    const sending = request(
+      url,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-length": String(size),
+          authorization: token,
+        },
+      },
+      (answer) => {
+        answer.resume();
+        answer.on("end", () =>
+          resolve({
+            status: answer.statusCode || 0,
+            location: String(answer.headers.location || ""),
+          }),
+        );
+      },
+    );
+    sending.on("error", reject);
+    createReadStream(file).on("error", reject).pipe(sending);
+  });
+}
+
 async function pushCredentials(accountId: string, token: string) {
   const answer = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/containers/registries/registry.cloudflare.com/credentials`,
@@ -67,7 +102,7 @@ async function copyBlob(
   source: Registry,
   sourceToken: string | undefined,
   target: Registry,
-  targetToken: string | undefined,
+  targetToken: string,
   digest: string,
   size: number,
 ) {
@@ -81,66 +116,58 @@ async function copyBlob(
   const read = await call(source, `/v2/${source.repo}/blobs/${digest}`, {}, sourceToken);
   if (!read.ok || !read.body)
     throw new Error(`${source.host} did not give the blob ${digest}: ${read.status}`);
-  const begun = await call(
-    target,
-    `/v2/${target.repo}/blobs/uploads/`,
-    { method: "POST" },
-    targetToken,
-  );
-  await begun.body?.cancel();
-  let location = begun.headers.get("location");
-  if (!begun.ok || !location)
-    throw new Error(`${target.host} did not start an upload: ${begun.status}`);
-  const absolute = (place: string) => new URL(place, `https://${target.host}`).toString();
-  location = absolute(location);
-  let sent = 0;
-  const parts: Uint8Array[] = [];
-  let buffered = 0;
-  const flush = async () => {
-    if (buffered === 0) return;
-    const part = Buffer.concat(parts, buffered);
-    const answer = await call(
-      target,
-      location!,
-      {
-        method: "PATCH",
-        headers: {
-          "content-type": "application/octet-stream",
-          "content-range": `${sent}-${sent + part.length - 1}`,
-          "content-length": String(part.length),
-        },
-        body: part,
+  // Read whole first: a download held back by a slow upload is closed by the source's storage.
+  const folder = await mkdtemp(join(tmpdir(), "sandbox-image-"));
+  const file = join(folder, "blob");
+  try {
+    const hash = createHash("sha256");
+    await pipeline(
+      Readable.fromWeb(read.body as ReadableStream),
+      async function* (chunks: AsyncIterable<Buffer>) {
+        for await (const chunk of chunks) {
+          hash.update(chunk);
+          yield chunk;
+        }
       },
+      createWriteStream(file),
+    );
+    if (`sha256:${hash.digest("hex")}` !== digest)
+      throw new Error(`the blob read from ${source.host} is not ${digest}`);
+    const begun = await call(
+      target,
+      `/v2/${target.repo}/blobs/uploads/`,
+      { method: "POST" },
       targetToken,
     );
-    await answer.body?.cancel();
-    if (!answer.ok)
-      throw new Error(`${target.host} refused part of ${digest} at ${sent}: ${answer.status}`);
-    location = absolute(answer.headers.get("location") ?? location!);
-    sent += part.length;
-    parts.length = 0;
-    buffered = 0;
-  };
-  for await (const chunk of read.body as unknown as AsyncIterable<Uint8Array>) {
-    parts.push(chunk);
-    buffered += chunk.length;
-    if (buffered >= PART) await flush();
+    await begun.body?.cancel();
+    const started = begun.headers.get("location");
+    if (!begun.ok || !started)
+      throw new Error(`${target.host} did not start an upload: ${begun.status}`);
+    // One streamed PATCH, as Docker pushes: Cloudflare's registry refuses a second part (416). Sent
+    // with node:https, which has no time limit: fetch gives up on a request whose answer takes more
+    // than five minutes, and a large layer takes longer than that to send.
+    const sent = await streamTo(absolute(target, started), size, file, targetToken);
+    if (sent.status < 200 || sent.status > 299)
+      throw new Error(`${target.host} refused the blob ${digest}: ${sent.status}`);
+    const close = new URL(absolute(target, sent.location || started));
+    close.searchParams.set("digest", digest);
+    const closed = await call(
+      target,
+      close.toString(),
+      { method: "PUT", headers: { "content-length": "0" } },
+      targetToken,
+    );
+    await closed.body?.cancel();
+    if (!closed.ok)
+      throw new Error(`${target.host} did not take the blob ${digest}: ${closed.status}`);
+    return true;
+  } finally {
+    await rm(folder, { recursive: true, force: true });
   }
-  await flush();
-  if (sent !== size) throw new Error(`the blob ${digest} has ${sent} bytes, not ${size}`);
-  const close = new URL(location);
-  close.searchParams.set("digest", digest);
-  const closed = await call(
-    target,
-    close.toString(),
-    { method: "PUT", headers: { "content-length": "0" } },
-    targetToken,
-  );
-  await closed.body?.cancel();
-  if (!closed.ok)
-    throw new Error(`${target.host} did not take the blob ${digest}: ${closed.status}`);
-  return true;
 }
+
+const absolute = (registry: Registry, place: string) =>
+  new URL(place, `https://${registry.host}`).toString();
 
 async function copySandboxImage() {
   const config = await loadMindConfig(stageOf(process.argv));
@@ -156,7 +183,7 @@ async function copySandboxImage() {
     repo: `${config.accountId}/iterate-dev-image`,
     basic: await pushCredentials(config.accountId, token),
   };
-  const targetToken = await tokenFor(target, "pull,push");
+  const targetToken = (await tokenFor(target, "pull,push")) || "";
   const present = await call(
     target,
     `/v2/${target.repo}/manifests/${digest}`,
