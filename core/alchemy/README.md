@@ -51,6 +51,85 @@ The stored config holds no secret: the keys are in Alchemy's state. A config wit
 `src/config.ts` `PUBLIC_FIELDS` does not list is refused before the deploy, so a new field is
 stored only once it is shown to be public.
 
+## An upgrade on the side, and a fork
+
+A stack is what its state store says it is: `iterate-<name>-state` in the mind's own account holds
+the Alchemy state, the two generated keys and the stored config. So any checkout that has the
+account's credentials can deploy over a stack that another checkout, or the iterate Cloud, made.
+Nothing is kept in the checkout.
+
+**An upgrade by hand.** From a checkout of the commit you want, with no config file:
+
+```sh
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… pnpm run plan --stage <name>     # read it first
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… pnpm run deploy --stage <name>
+```
+
+The plan of a stack that is up to date shows `noop` for every resource but `AuthDb`, which is
+checked against the migrations at each deploy. The iterate Cloud's "Update" is the same deploy, run
+in the Cloud's own container from the commit the Cloud is on: the two take turns over one state.
+A stack with `atRestKey: "environment"` or a first owner's ticket needs the same environment
+variables from whoever deploys.
+
+**A fork with changed code.** A fork's checkout deploys the same way, and the stack then runs the
+fork's Workers. The next deploy from another checkout, or the Cloud's Update, puts that checkout's
+code back: a stack runs the code of whoever deployed last. A fork that wants to stay a fork deploys
+from the fork alone, and merges upstream to upgrade.
+
+**A fork with resources of its own.** Do not add them to the mind's stack (`alchemy.run.ts`): a
+deploy from a checkout that does not declare them deletes them, with their data. Give them a stack
+of their own name, kept in the same state store. A deploy of the mind's stack does not know that
+stack and leaves it alone:
+
+```ts
+// fork/alchemy.run.ts
+import * as Cloudflare from "@alchemy.run/cloudflare";
+import * as Alchemy from "alchemy";
+import * as Effect from "effect/Effect";
+import { resolve } from "node:path";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
+import { loadMindConfig, resourceNamesOf, stageOf } from "../src/config.ts";
+
+const config = await loadMindConfig(stageOf(process.argv)); // the mind's stored config
+process.env.CLOUDFLARE_ACCOUNT_ID ||= config.accountId;
+
+export default Alchemy.Stack(
+  "fork", // not "mind": a stack of its own
+  {
+    providers: Cloudflare.providers(),
+    state: Cloudflare.state({ workerName: resourceNamesOf(config.name).state }),
+  },
+  Effect.gen(function* () {
+    const notes = yield* Cloudflare.KV.Namespace("ForkNotes", {
+      title: `iterate-${config.name}-fork-notes`,
+    });
+    yield* Cloudflare.Worker("ForkHello", {
+      name: `iterate-${config.name}-fork-hello`,
+      main: resolve(import.meta.dirname, "hello.ts"),
+      compatibility: { date: COMPATIBILITY_DATE },
+      workersDev: { enabled: true, previewsEnabled: false },
+      env: { NOTES: notes, DOMAIN: config.domain },
+    });
+  }),
+);
+```
+
+```sh
+node node_modules/alchemy/bin/cli.js deploy fork/alchemy.run.ts --stage <name> --yes
+node node_modules/alchemy/bin/cli.js destroy fork/alchemy.run.ts --stage <name> --yes
+```
+
+`resourceNamesOf(config.name)` gives the names of the mind's own Workers, for a binding by name.
+Each stack has its own `destroy`. The mind's leaves the state store, `iterate-<name>-state`, in the
+account: delete that Worker by hand when both stacks are gone.
+
+Proven on 2026-11-11 on a prototype stack (`g4` on effect.ninja, a provided mind): a deploy from a
+second checkout with no config file changed nothing; a KV namespace and a Worker declared inside
+the mind's stack were made, and the next plain deploy deleted both; the same two in a stack named
+`fork` were made, answered, and a plan and a deploy of the mind's stack left them alone; each stack's `destroy`
+removed its own resources. Not proven
+there: the Cloud's Update over a stack the CLI made, and a CLI deploy over a stack the Cloud made.
+
 ## One hostname of a zone
 
 `hostnames: "platform"` is for a zone that serves other things. The stack then makes the DNS record
