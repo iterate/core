@@ -301,6 +301,25 @@ path you build from their input stays under their own context.
 its route, to copy beside `worker.ts`:
 https://github.com/iterate/packages/blob/main/packages/ui/examples/mind-host-page.ts.
 
+### The guestbook
+
+`apps/guestbook` is a whole app for end users, to copy or to turn on. Anyone reads it at
+`guestbook.<domain>`. Anyone signed in writes an entry or answers one. An entry waits until a
+member approves it, and a member can remove any entry. Other agents write through the app's own
+MCP server at `guestbook.<domain>/mcp`: an MCP client finds the mind's sign-in from there, its
+person signs in, and its token is good for that host alone.
+
+Each entry, approval and removal is an event on `/apps/guestbook` (`apps/guestbook/entries.ts`),
+and the page is a reduction of that log.
+
+It is off in a new mind. To turn it on:
+
+1. In `worker.ts`, uncomment the three guestbook lines: the import, `guestbookApp()` and the
+   `case "guestbook"` in `fetch`.
+2. People who are not members sign in only when the stack's config opens that:
+   `login.methods.email.anyone: true` mails a sign-in code to any address that asks (the stack
+   must handle mail; at most 20 such codes an hour). Without it, only members can write.
+
 ## How the platform works
 
 The source code of the platform is public at https://github.com/iterate/core. Read it before you

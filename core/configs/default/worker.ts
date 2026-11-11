@@ -8,6 +8,7 @@ import {
 import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 import { agentsApp } from "./apps/agents/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
+// import { guestbookApp } from "./apps/guestbook/app.ts";
 
 // The integration packages this mind hosts (a Telegram bot, your own GitHub App, …), one element
 // each: AGENTS.md, and the recipes at https://github.com/jonastemplestein/iterategrations.
@@ -17,6 +18,9 @@ const integrations: Integration[] = [];
 // (AGENTS.md, "Apps"). Each `app.ts` exports the function that makes one.
 const agents = agentsApp();
 const onboarding = onboardingApp();
+// The guestbook, an example of an app for end users, people who are not members (AGENTS.md, "The
+// guestbook"). To turn it on, uncomment this line, its import above and its case in `fetch`.
+// const guestbook = guestbookApp();
 
 // The kinds of agent this mind runs (AGENTS.md, "Kinds of agent"): one file each, named by its
 // import, written exactly `() => import("./path/to/kind.ts")` (`makeAgentKind` reads the path from
@@ -228,6 +232,8 @@ export default class extends IterateConfigEntrypoint {
         return this.auth.require(request) || agents.fetch(request, this);
       case "onboarding": // the onboarding app, for members: one chat with /agents/onboarding
         return this.auth.require(request) || onboarding.fetch(request, this);
+      // case "guestbook": // the guestbook, for everyone: no guard here, its routes ask for who they need
+      //   return guestbook.fetch(request, this);
       case null: {
         // Who the visitor is, for anyone signed in, member or not: the smallest page with end
         // users. Signed out, the platform turns the answer into a sign-in and comes back here.
