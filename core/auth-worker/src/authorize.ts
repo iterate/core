@@ -6,7 +6,7 @@ import {
 } from "@cloudflare/workers-oauth-provider";
 import { mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
 import { AccountFacts } from "./account-facts.ts";
-import { type Session, sessionOf } from "./cookies.ts";
+import { clearSessionCookie, type Session, sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import {
   type GrantProps,
@@ -16,7 +16,7 @@ import {
   mindHostResourceOf,
 } from "./oauth.ts";
 import { passkeyOwedResponse, standingOf } from "./members.ts";
-import { consentPage, errorPage, notMemberPage } from "./pages.ts";
+import { chooserPage, consentPage, errorPage, notMemberPage } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
 import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { deviceStore } from "./device/store.ts";
@@ -63,10 +63,19 @@ async function describe(env: Env, request: Request) {
     );
   const authRequest = { ...parsed, scope };
   const session = await sessionOf(env, request);
-  const url = new URL(request.url);
-  if (!session)
-    return Response.redirect(`${issuerOf(env)}${signInHref(env, url.pathname + url.search)}`, 302);
-  const refused = await notMemberRefusal(env, session, hostResource, url.pathname + url.search);
+  const { prompt, here } = promptOf(new URL(request.url));
+  const signIn = `${issuerOf(env)}${signInHref(env, here)}`;
+  if (!session) return Response.redirect(signIn, 302);
+  // OpenID Connect's `prompt`. `login`: sign in again, whoever is signed in. `select_account`: say
+  // who is signed in and offer another account. Either comes back here without it.
+  if (prompt === "login")
+    return new Response(null, {
+      status: 302,
+      headers: { location: signIn, "set-cookie": clearSessionCookie, "cache-control": "no-store" },
+    });
+  if (prompt === "select_account")
+    return chooserPage({ domain: iterateConfigOf(env).domain, email: session.email, here });
+  const refused = await notMemberRefusal(env, session, hostResource, here);
   if (refused) return refused;
   // a hostname's own sign-in: the code goes to ingress on that host alone, and is not a consent
   if (hostResource && authRequest.redirectUri === hostCallbackOf(hostResource)) {
@@ -93,8 +102,25 @@ async function describe(env: Env, request: Request) {
     domain: iterateConfigOf(env).domain,
     resource: resourceInWords(env, authRequest.resource),
     host: hostResource ? new URL(hostResource).host : undefined,
+    here,
     headers: consent.headers,
   });
+}
+
+/** An authorization request's `prompt` (a space-separated list; `login` wins), and the request
+ *  without it, as a path of the issuer: where a sign-in or the chooser goes on. */
+export function promptOf(url: URL): { prompt: "login" | "select_account" | null; here: string } {
+  const asked = (url.searchParams.get("prompt") || "").split(" ");
+  const rest = new URL(url);
+  rest.searchParams.delete("prompt");
+  return {
+    prompt: asked.includes("login")
+      ? "login"
+      : asked.includes("select_account")
+        ? "select_account"
+        : null,
+    here: rest.pathname + rest.search,
+  };
 }
 
 async function decide(env: Env, request: Request) {
@@ -132,7 +158,7 @@ async function notMemberRefusal(
   if (standing === "passkey-owed") return passkeyOwedResponse(here);
   if (standing === "member" || hostResource) return null;
   const { domain } = iterateConfigOf(env);
-  return notMemberPage({ domain, email: session.email });
+  return notMemberPage({ domain, email: session.email, here });
 }
 
 async function complete(

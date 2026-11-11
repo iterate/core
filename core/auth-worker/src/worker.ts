@@ -32,9 +32,9 @@ import {
 import { sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
 import { DASH_PATH, dashOriginOf, dashResponse } from "./dash.ts";
-import { homePage, signInPage } from "./pages.ts";
+import { homePage, signInPage, SIGN_OUT_PATH } from "./pages.ts";
 import { selfTestResponse } from "./self-test.ts";
-import { SIGN_IN_PATH, SIGN_OUT_PATH, signInHref, signOutResponse } from "./sign-in.ts";
+import { SIGN_IN_PATH, signInHref, signOutResponse } from "./sign-in.ts";
 import { emailSignInResponse } from "./email-sign-in.ts";
 import { googleSignInResponse } from "./google-sign-in.ts";
 import { FIRST_OWNER_PATH } from "./config.ts";

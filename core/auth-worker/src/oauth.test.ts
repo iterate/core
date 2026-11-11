@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { promptOf } from "./authorize.ts";
 import type { Env } from "./env.ts";
 import {
   grantedScopes,
@@ -108,4 +109,20 @@ test("the authorization and token requests carry the host for a path on it", asy
     body: "grant_type=refresh_token&resource=https%3A%2F%2Fiterate.example.com%2Fmcp",
   });
   expect(await withKnownResource(env, untouched)).toBe(untouched);
+});
+
+test("an authorization request's prompt is read, and the request goes on without it", () => {
+  const of = (query: string) =>
+    promptOf(new URL(`https://iterate.example.com/oauth2/auth?${query}`));
+  expect(of("client_id=c&prompt=select_account&state=s")).toEqual({
+    prompt: "select_account",
+    here: "/oauth2/auth?client_id=c&state=s",
+  });
+  // a list: to sign in again is the stronger ask
+  expect(of("client_id=c&prompt=select_account%20login")).toMatchObject({ prompt: "login" });
+  expect(of("client_id=c&prompt=consent")).toEqual({
+    prompt: null,
+    here: "/oauth2/auth?client_id=c",
+  });
+  expect(of("client_id=c")).toEqual({ prompt: null, here: "/oauth2/auth?client_id=c" });
 });

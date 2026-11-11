@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { emailSignInResponse } from "./email-sign-in.ts";
 import type { Env } from "./env.ts";
-import { consentPage, errorPage, homePage, signInPage } from "./pages.ts";
+import { chooserPage, consentPage, errorPage, homePage, signInPage } from "./pages.ts";
 
 const DOMAIN = "example.com";
 const env = {
@@ -51,8 +51,14 @@ test("the consent page asks one question, with Deny and Allow as a pair", async 
       email: "owner@example.net",
       domain: DOMAIN,
       resource: `https://iterate.${DOMAIN}/mcp`,
+      here: "/oauth2/auth?client_id=c&state=s",
       headers: new Headers(),
     }),
+  );
+  // who is signed in, and the way to another account: sign out here, then come back to the request
+  expect(html).toContain("Signed in as owner@example.net. Not you?");
+  expect(html).toMatch(
+    /<form method="post" action="\/sign-out" class="inline">\s*<input type="hidden" name="next" value="\/oauth2\/auth\?client_id=c&#38;state=s">\s*<button type="submit" class="link">Use another account<\/button>/,
   );
   expect(html).toContain(`<main><div class="mark"`);
   expect(html).toContain(`<h1>Allow Claude Code to act as you in ${DOMAIN}?</h1>`);
@@ -78,6 +84,24 @@ test("a member's start page is the wide card, and a refusal the narrow one", asy
 });
 
 /** The page's HTML, written to ITERATE_PAGES_OUT when that names a folder. */
+test("the account chooser says who is signed in, goes on as them, or signs out and comes back", async () => {
+  const html = await kept(
+    "chooser",
+    chooserPage({
+      domain: DOMAIN,
+      email: "owner@example.net",
+      here: "/oauth2/auth?client_id=c&state=s",
+    }),
+  );
+  expect(html).toContain("You are signed in as <strong>owner@example.net</strong>.");
+  // the request's parameters ride the GET form, so "Continue" is the request without its prompt
+  expect(html).toMatch(
+    /<form method="get" action="\/oauth2\/auth" class="stack">\s*<input type="hidden" name="client_id" value="c"><input type="hidden" name="state" value="s">\s*<button type="submit">Continue as owner@example.net<\/button>/,
+  );
+  expect(html).toContain(`name="next" value="/oauth2/auth?client_id=c&#38;state=s"`);
+  expect(html).toContain("Use another account");
+});
+
 async function kept(name: string, answer: Response) {
   const html = await answer.text();
   const out = process.env.ITERATE_PAGES_OUT;

@@ -2,7 +2,7 @@ import { mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
 import { sessionOf } from "../cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "../env.ts";
 import { passkeyOwedResponse, standingOf } from "../members.ts";
-import { errorPage, notMemberPage, page, text } from "../pages.ts";
+import { errorPage, notMemberPage, page, text, otherAccountForm } from "../pages.ts";
 import { signInHref } from "../sign-in.ts";
 import { CALLBACK_PATH, normalizeUserCode, VERIFICATION_PATH } from "./protocol.ts";
 import { type DeviceRequest, deviceStore } from "./store.ts";
@@ -106,7 +106,8 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
         <input type="hidden" name="user_code" value="${text(userCode)}">
         <button type="submit" name="action" value="decline" class="secondary">Decline</button>
         <button type="submit" name="action" value="confirm">Continue</button>
-      </form>`;
+      </form>
+      <div class="muted">Signed in as ${text(email)}. Not you? ${otherAccountForm(`${VERIFICATION_PATH}?${new URLSearchParams({ user_code: userCode })}`)}</div>`;
   if (device.letIn) {
     const { signer } = device.letIn;
     const name = signer ? signer.label : device.clientName;

@@ -173,13 +173,47 @@ export function errorPage(
   );
 }
 
-export function notMemberPage(input: { domain: string; email: string }) {
-  return errorPage(
-    `You are signed in as ${input.email}, and that address is not a member of ${input.domain}. Ask the mind's owner to add it. To use another account, sign out, then try again.`,
-    403,
-    undefined,
-    [{ href: "/", label: "Sign out" }],
-  );
+/** Where a browser's session at the issuer ends (./sign-in.ts `signOutResponse`). */
+export const SIGN_OUT_PATH = "/sign-out";
+
+/** "Not you?": a button that ends this browser's session here and shows the sign-in, which then
+ *  comes back to `next`, a path of this origin. One session a browser: to use another account is
+ *  to sign out of this one. */
+export function otherAccountForm(next: string, label = "Use another account") {
+  return `<form method="post" action="${SIGN_OUT_PATH}" class="inline">
+        <input type="hidden" name="next" value="${text(next)}">
+        <button type="submit" class="link">${text(label)}</button>
+      </form>`;
+}
+
+/** THE ACCOUNT CHOOSER: who this browser is signed in as, before an authorization goes on. `here`
+ *  is the authorization request without its `prompt`, a path of this origin. */
+export function chooserPage(input: { domain: string; email: string; here: string }) {
+  const url = new URL(input.here, "https://issuer.invalid");
+  // a GET form sends its fields as the query, so each parameter of the request is one
+  const fields = [...url.searchParams]
+    .map(([name, value]) => `<input type="hidden" name="${text(name)}" value="${text(value)}">`)
+    .join("");
+  return page({
+    title: `Sign in to ${input.domain}`,
+    body: `<h1>Sign in to ${text(input.domain)}</h1>
+      <p>You are signed in as <strong>${text(input.email)}</strong>.</p>
+      <form method="get" action="${text(url.pathname)}" class="stack">
+        ${fields}
+        <button type="submit">Continue as ${text(input.email)}</button>
+      </form>
+      <div>${otherAccountForm(input.here)}</div>`,
+  });
+}
+
+export function notMemberPage(input: { domain: string; email: string; here?: string }) {
+  return page({
+    title: "You can't continue",
+    status: 403,
+    body: `<h1>You can't continue</h1>
+      <p>You are signed in as <strong>${text(input.email)}</strong>, and that address is not a member of ${text(input.domain)}. Ask the mind's owner to add it.</p>
+      <div>${otherAccountForm(input.here || "/")}</div>`,
+  });
 }
 
 export function consentPage(input: {
@@ -189,6 +223,8 @@ export function consentPage(input: {
   domain: string;
   resource: string;
   host?: string;
+  /** The authorization request, a path of this origin: where "use another account" comes back. */
+  here: string;
   headers: Headers;
 }) {
   const { details } = input;
@@ -216,7 +252,8 @@ export function consentPage(input: {
           <input type="hidden" name="handle" value="${text(input.handle)}">
           <button type="submit" name="decision" value="deny" class="secondary">Deny</button>
           <button type="submit" name="decision" value="allow">Allow</button>
-        </form>`,
+        </form>
+        <div class="muted">Signed in as ${text(input.email)}. Not you? ${otherAccountForm(input.here)}</div>`,
     },
     input.headers,
   );
