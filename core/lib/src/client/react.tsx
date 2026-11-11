@@ -44,7 +44,7 @@ export type LiveStateResult<S = unknown> = {
 };
 
 /** Subscribe to a producer's live state and render its latest value. Pass a ready `itx` (a capnweb
- *  `api.authenticate(credentials).user` or `.minds.get(id)`), the producer's `key`, and a `readSeed`
+ *  stub of a context: a mind's root, or `root.cd(path)`), the producer's `key`, and a `readSeed`
  *  thunk that reads `{rev, state}` (`() => itx.invoke("itx.facets.get('slug').liveSnapshot()")`).
  *  Re-subscribes when the session, `key`, or `name` changes; unmount (and every re-subscribe)
  *  disposes the previous server-side subscription. */
@@ -150,7 +150,7 @@ export function useFacetLiveState(
 }
 
 /** A facet's `liveSnapshot()` from a context a loader reads through `read`, for
- *  `useFacetLiveState`'s `initial`: `read(async (api) => { using mind = api.minds.get(id);
+ *  `useFacetLiveState`'s `initial`: `read(async (root) => { using mind = root.cd("/");
  *  return await facetSnapshotOf(mind, "mind"); })` — the `using` releases the pipelined
  *  context once read, which over the open socket would otherwise stay held. */
 export async function facetSnapshotOf(
@@ -169,7 +169,7 @@ export type FacetLiveSnapshot = z.infer<typeof FacetLiveSnapshot>;
 type ContextStubState<S> = { stub?: S; error?: string; pending: boolean };
 
 /** Hold a capnweb context stub for as long as the component wants it: `open()` —
- *  `() => api.minds.get(id)`, `() => root.cd(path)` — runs when `deps` change, and the stub is
+ *  `() => root.cd(path)` — runs when `deps` change, and the stub is
  *  disposed on unmount, on every re-open, and when it arrives after the component moved on (every
  *  open stub is a subscription row and a pinned Durable Object on the platform). `open` null opens
  *  nothing; `pending` while an open is in flight; `error` the refusal. */
