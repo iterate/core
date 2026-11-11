@@ -43,6 +43,11 @@ export const MindConfig = z
     // The Cloud's key, which signs the events it delivers, is one of `auth.keys`.
     cloud: z.strictObject({ origin: z.url({ protocol: /^https$/ }) }).optional(),
   })
+  .refine(({ auth, cloud }) => !auth.login.methods.google || cloud, {
+    path: ["auth", "login", "methods", "google"],
+    error:
+      "the sign-in with Google goes through an iterate Cloud's Google client: add cloud: { origin }, or sign in another way",
+  })
   .refine(({ hostnames, mail }) => !(hostnames === "platform" && mail), {
     path: ["mail"],
     error: 'a stack with hostnames: "platform" does not own the zone\'s mail',
@@ -77,6 +82,8 @@ const PUBLIC_FIELDS = new Set([
   "auth.login.methods",
   "auth.login.methods.email",
   "auth.login.methods.email.anyone",
+  "auth.login.methods.google",
+  "auth.login.methods.google.signsInAlone",
   "auth.login.allow[].email",
   "auth.login.allow[].subaddresses",
   "auth.login.allow[].emailDomain",

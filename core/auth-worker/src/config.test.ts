@@ -35,6 +35,20 @@ test("a mind may have no way to sign in beside a passkey, and may mail codes", (
   });
 });
 
+test("the sign-in with Google proves an address, and one switch makes it a full sign-in", () => {
+  const allow = [{ email: "owner@example.com" }];
+  expect(AuthSettings.parse({ login: { methods: { google: {} }, allow } }).login).toMatchObject({
+    methods: { google: {} },
+  });
+  expect(
+    AuthSettings.parse({ login: { methods: { google: { signsInAlone: true } }, allow } }).login,
+  ).toMatchObject({ methods: { google: { signsInAlone: true } } });
+  // the switch is on or absent: `false` would read as a choice that the default already makes
+  expect(
+    AuthSettings.safeParse({ login: { methods: { google: { signsInAlone: false } }, allow } }),
+  ).toMatchObject({ success: false });
+});
+
 test("the sign-in through another iterate deployment is gone: a config that names it is refused", () => {
   const settings = {
     login: {

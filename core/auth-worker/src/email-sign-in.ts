@@ -6,8 +6,8 @@ import { isBlocked } from "./blocked.ts";
 import { emailAllowed } from "./config.ts";
 import { sessionCookie } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
-import { errorPage, page, passkeySignIn, text } from "./pages.ts";
+import { type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
+import { errorPage, googleSignIn, page, passkeySignIn, text } from "./pages.ts";
 import { addressProven } from "./keys.ts";
 import { isAdded } from "./members.ts";
 import { linkIdentity } from "./users.ts";
@@ -85,7 +85,7 @@ function addressPage(env: Env, request: Request, error?: string, typed = "") {
         <label>Email <input type="email" name="email" value="${text(typed)}" autocomplete="email" placeholder="you@example.com" required></label>
         <button type="submit">Send a code</button>
       </form>
-      ${passkey.body}`,
+      ${passkey.body}${offersGoogle(env) ? googleSignIn(next) : ""}`,
     script: passkey.script,
   });
 }

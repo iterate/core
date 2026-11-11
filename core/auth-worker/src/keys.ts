@@ -84,7 +84,7 @@ export async function verifiedStatement(
   };
 }
 
-/** After a mailed code proved `user`'s address, which is all it proves. A member
+/** After a mailed code or a sign-in at Google proved `user`'s address, which is all it proves. A member
  *  who holds a passkey is refused: mail is no way round a passkey. A member who holds none goes to
  *  /keys to add the first. Anyone else goes on, since a session gives a non-member nothing. */
 export async function addressProven(

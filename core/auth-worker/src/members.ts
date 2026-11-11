@@ -34,14 +34,17 @@ export async function isMember(env: Env, email: string): Promise<boolean> {
 }
 
 /** What a session is to this stack. Only a live passkey's session acts as a "member". A mailed code
- *  proves an address and no more, and the owner's ticket is a deploy's word: a
- *  member's session from one of them is "passkey-owed", and opens /keys alone, to add a passkey. */
+ *  and a sign-in at Google prove an address and no more, and the owner's ticket is a deploy's
+ *  word: a member's session from one of them is "passkey-owed", and opens /keys alone, to add a
+ *  passkey. The config's `google.signsInAlone` makes Google's session a member's too. */
 export async function standingOf(
   env: Env,
   session: Session,
 ): Promise<"member" | "passkey-owed" | "not-member"> {
   if (!(await isMember(env, session.email))) return "not-member";
-  return session.method === "passkey" ? "member" : "passkey-owed";
+  if (session.method === "passkey") return "member";
+  const { google } = iterateConfigOf(env).login.methods;
+  return session.method === "google" && google?.signsInAlone ? "member" : "passkey-owed";
 }
 
 /** Where a "passkey-owed" session is sent from `here`, a path of this origin. */

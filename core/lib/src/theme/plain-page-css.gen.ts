@@ -244,6 +244,18 @@ small {
 color: var(--muted-foreground);
 font-size: 0.8125rem;
 }
+button.outline {
+border: 1px solid var(--border);
+background: var(--background);
+color: var(--foreground);
+}
+button.outline:hover {
+background: var(--accent);
+}
+button svg {
+margin-right: 0.5rem;
+vertical-align: -0.2em;
+}
 :focus-visible {
 outline: 3px solid color-mix(in oklab, var(--ring) 50%, transparent);
 outline-offset: 2px;
@@ -275,4 +287,4 @@ gap: 0.75rem 1.25rem;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-gRPuw7Heftu2m2G88r++7ifZlsB3wpU7VQpWCxRoHY8='";
+export const plainPageCssHash = "'sha256-NdbXKha8xlaPYl01u6G5ARXzNZRRPHs8ptKw1F4W4ZA='";

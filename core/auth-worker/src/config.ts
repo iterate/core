@@ -58,6 +58,18 @@ export const AuthSettings = z.strictObject({
          *  are not members can sign in to the mind's own pages: at most 20 such codes an hour
          *  for the whole stack, so its domain is never a way to mail the world. */
         email: z.strictObject({ anyone: z.literal(true).optional() }).optional(),
+        /** SIGN IN WITH GOOGLE (./google-sign-in.ts), through the Google client of the iterate
+         *  Cloud the stack's config names (`cloud.origin`). Google is the identity provider: this
+         *  Worker checks Google's signed id_token itself, and the Cloud lends its client secret
+         *  and no more. It proves an address as a mailed code does: a member who holds no passkey
+         *  adds the first one, and a member who holds one signs in with the passkey.
+         *
+         *  `signsInAlone: true` is the other policy: Google alone signs a member in, passkey or
+         *  not. It makes the Cloud as trusted as Google for who a member is: the Cloud holds the
+         *  client secret and the one redirect URI, so a dishonest Cloud could send a person to
+         *  Google with this Worker's nonce and hand over a genuine id_token for them. Without the
+         *  switch, that gets a first passkey for a member who has none, and nothing else. */
+        google: z.strictObject({ signsInAlone: z.literal(true).optional() }).optional(),
       })
       .default({}),
     /** WHO IS A MEMBER, for now: a person is when one rule matches. Anyone a method vouches for

@@ -79,14 +79,29 @@ The auth Worker is the mind's OAuth authorization server, at `https://iterate.<z
 find it from the protected-resource documents the boundary serves for the API
 (`https://iterate.<zone>/.well-known/oauth-protected-resource/api`) and the MCP server, and read its
 endpoints from `https://iterate.<zone>/.well-known/oauth-authorization-server`. Anyone may sign in;
-a token for the API, the MCP server or `/provide` goes to a member alone (`login.allow`). One way
-to prove an address beside a passkey:
+a token for the API, the MCP server or `/provide` goes to a member alone (`login.allow`). Two ways
+to prove an address beside a passkey, one or both:
 
 - `email: {}`, a mailed code: six digits from `sign-in@<zone>` through the stack's own boundary,
   so the stack depends on nobody. The config must have its `email` part, or the deploy is refused.
   A code goes only to an address that an `email` or `emailDomain` rule of `allow` names. With
   `email: { anyone: true }` any other address that asks is mailed too, at most 20 such codes an
   hour for the whole stack: use it when people who are not members sign in to the mind's pages.
+
+- `google: {}`, "Sign in with Google", through the Google client of the iterate Cloud the config
+  names (`cloud: { origin }`; without it the deploy is refused). Google is the identity provider:
+  the auth Worker checks Google's signed id_token itself (Google's keys, the Cloud's client id as
+  the audience, its own nonce), and takes an address only when Google is the authority for it: a
+  gmail.com address, or an address of the account's own Google Workspace domain. The Cloud lends
+  its client secret and its redirect URI, and learns nothing but that a sign-in happened. It proves
+  an address exactly as a mailed code does: a member with no passkey adds the first one, and a
+  member who has one signs in with the passkey.
+  `google: { signsInAlone: true }` is the other policy: Google alone signs a member in. It makes
+  the Cloud as trusted as Google for who a member is, because the Cloud holds the client secret
+  and the one redirect URI: a dishonest Cloud could send a person to Google with the stack's nonce
+  and hand the stack a genuine id_token for them. Without the switch, that gets a first passkey
+  for a member who has none, and nothing else. Such a session still signs nothing: adding a member
+  or a further passkey takes a passkey.
 
 With no method (`methods` left out, or `{}`), a passkey is the only way to sign in, and the only
 way to a first passkey is a deploy's ticket (`scripts/first-owner-ticket.ts`). A ticket is for an

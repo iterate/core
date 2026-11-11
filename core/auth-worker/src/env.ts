@@ -50,6 +50,11 @@ export function iterateConfigOf(env: Env): AuthConfig {
   return config;
 }
 
+/** Whether this stack offers "Sign in with Google" (./google-sign-in.ts): the config's method, and
+ *  an iterate Cloud to lend its Google client. */
+export const offersGoogle = (env: Env) =>
+  Boolean(iterateConfigOf(env).login.methods.google && env.CLOUD_ORIGIN);
+
 /** The issuer's origin: the platform's hostname under the mind's domain, `https://iterate.<domain>`
  *  (iterate/mind-api), where every page and endpoint of this Worker is. Ingress sends it every
  *  request there that is not for the API, the MCP server or the secret pages. */

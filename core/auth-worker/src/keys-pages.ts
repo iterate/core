@@ -66,7 +66,11 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
   // Such a session adds a passkey, on /keys, and no more. An address proven by a code adds the
   // first one alone: with a passkey held, the session is from before it, and its holder signs in
   // again. The owner's ticket adds one beside those the owner lost.
-  const first = owed && session.method !== "first-owner-ticket";
+  // A full sign-in by Google (`google.signsInAlone`) holds no key to sign with: its person's first
+  // passkey is added as a proven address adds one.
+  const proven =
+    owed || (session.method === "google" && !(await holdsPasskey(env, session.userId)));
+  const first = proven && session.method !== "first-owner-ticket";
   if (owed && (pathname !== KEYS_PATH || (first && (await holdsPasskey(env, session.userId))))) {
     if (post) return json({ error: "Sign in with your passkey first." }, 403);
     return new Response(null, {
@@ -83,11 +87,12 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
   }
   if (pathname === KEYS_PATH)
     return post
-      ? passkeyAdded(env, request, session, { owed, first })
+      ? passkeyAdded(env, request, session, { owed: proven, first })
       : keysPage(
           env,
           session,
           honouredNext(url.searchParams.get("next"), issuer, trustedClients),
+          proven,
           owed,
         );
   if (get) return enrolPage(env, url);
@@ -114,7 +119,10 @@ async function keysPage(
   env: Env,
   session: Session,
   next: string | null,
+  /** The session adds a passkey with no signature: it holds no key to sign with. */
   owed: boolean,
+  /** The session opens /keys alone, so the page offers no way on. */
+  held = owed,
 ): Promise<Response> {
   const issuer = issuerOf(env);
   const { domain } = iterateConfigOf(env);
@@ -179,13 +187,15 @@ async function keysPage(
     (key) => key.user_id && key.format === "webauthn" && !key.revoked_at,
   ).length;
   // No way on for a session that owes a passkey: every other page sends it back here.
-  const ask = owed
+  const ask = held
     ? `<p><strong>Add a passkey to go on.</strong> Only a passkey signs you in to ${text(domain)} after this.</p>`
-    : `${
-        passkeys === 1
-          ? `<p><strong>Add a second passkey</strong>, on another device or a security key. If you lose your only passkey you are locked out, until the mind's owner removes it, or, for an owner, until a new deploy.</p>`
-          : ""
-      }<p class="muted">A passkey you already have here signs each new one, so you use both: first the new one, then the one you have.</p>`;
+    : owed
+      ? `<p><strong>Add a passkey.</strong> It signs what you change here, such as a new member.</p>`
+      : `${
+          passkeys === 1
+            ? `<p><strong>Add a second passkey</strong>, on another device or a security key. If you lose your only passkey you are locked out, until the mind's owner removes it, or, for an owner, until a new deploy.</p>`
+            : ""
+        }<p class="muted">A passkey you already have here signs each new one, so you use both: first the new one, then the one you have.</p>`;
   return page({
     title: `Your keys for ${domain}`,
     wide: true,
@@ -199,7 +209,7 @@ async function keysPage(
       </form>
       ${ask}
       ${signedIn}
-      ${next && !owed ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
+      ${next && !held ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
     script: `${signScript(domain)}${PASSKEY_SCRIPT}`,
   });
 }

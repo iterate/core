@@ -30,12 +30,13 @@ import {
   metadataResponse,
 } from "./device/start.ts";
 import { sessionOf } from "./cookies.ts";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
 import { DASH_PATH, dashOriginOf, dashResponse } from "./dash.ts";
 import { homePage, signInPage } from "./pages.ts";
 import { selfTestResponse } from "./self-test.ts";
 import { SIGN_IN_PATH, SIGN_OUT_PATH, signInHref, signOutResponse } from "./sign-in.ts";
 import { emailSignInResponse } from "./email-sign-in.ts";
+import { googleSignInResponse } from "./google-sign-in.ts";
 import { FIRST_OWNER_PATH } from "./config.ts";
 import { firstOwnerResponse } from "./first-owner.ts";
 import { passkeySignInResponse } from "./passkey-sign-in.ts";
@@ -94,7 +95,7 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
       const { domain, login } = iterateConfigOf(this.env);
       return login.methods.email
         ? Response.redirect(`${issuerOf(this.env)}${signInHref(this.env, next)}`, 302)
-        : signInPage(domain, next);
+        : signInPage(domain, next, offersGoogle(this.env));
     }
     const members = await membersResponse(this.env, request, (token, resource) =>
       this.whoIs(token, resource),
@@ -102,6 +103,8 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
     if (members) return members;
     const emailSignIn = await emailSignInResponse(this.env, request);
     if (emailSignIn) return emailSignIn;
+    const googleSignIn = await googleSignInResponse(this.env, request);
+    if (googleSignIn) return googleSignIn;
     const passkeySignIn = await passkeySignInResponse(this.env, request);
     if (passkeySignIn) return passkeySignIn;
     if (pathname === SIGN_OUT_PATH && request.method === "POST")

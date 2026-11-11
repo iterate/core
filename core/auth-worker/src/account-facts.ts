@@ -4,6 +4,7 @@ import { z } from "zod";
 
 const SignedIn = z.union([
   z.object({ method: z.literal("email"), at: z.number() }),
+  z.object({ method: z.literal("google"), at: z.number() }),
   z.object({ method: z.literal("passkey"), key: z.string().min(1), at: z.number() }),
   z.object({ method: z.literal("first-owner-ticket"), at: z.number() }),
 ]);

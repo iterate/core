@@ -11,6 +11,7 @@ export default {
       // A mailed code needs `mail: true`. With no method at all, a member signs in with a passkey
       // alone, and the one way to a first passkey is a deploy's ticket for an owner, a person
       // `allow` names by address (scripts/first-owner-ticket.ts).
+      // `google: {}` adds "Sign in with Google" through the Cloud named below (`cloud.origin`).
       methods: { email: {} },
       allow: [{ email: "person@example.org" }],
     },
