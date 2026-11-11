@@ -8,8 +8,10 @@ import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 export interface MindTarget {
   /** The mind trusts the boundary's stamp because only the boundary can reach it. */
   fetch(request: Request): Promise<Response>;
-  /** Idempotent by each event's `idempotencyKey`. */
-  append(path: string, events: StreamEventInput[]): Promise<void>;
+  /** Idempotent by each event's `idempotencyKey`. `fromAuth`: the events are the auth Worker's own
+   *  answer, so the `source.signer` one names is the key the auth Worker verified. In any other
+   *  call an event's signer is dropped. */
+  append(path: string, events: StreamEventInput[], fromAuth?: boolean): Promise<void>;
   /** A redelivery records nothing new. */
   receiveEmail(mail: ReceivedEmail): Promise<void>;
 }

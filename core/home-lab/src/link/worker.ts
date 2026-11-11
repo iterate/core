@@ -1,6 +1,6 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import { codedError } from "iterate/lib";
+import { codedError, leavingTheStack } from "iterate/lib";
 import { mindProvideUrlOf } from "iterate/mind-api";
 import { FACTS_HEADER } from "iterate/facts";
 import { secretPathsReferenced } from "iterate/secret-placeholder";
@@ -44,7 +44,10 @@ export class Door extends WorkerEntrypoint<LinkEnv> {
     // The Link's `fetch`, not a stub's: workerd carries a WebSocket answer on the fetch channel only.
     if (secretPathsReferenced(request).length > 0)
       return this.env.LINK.getByName(this.env.DOMAIN).fetch(request);
-    const answer = await fetch(request);
+    // a host of the mind's own domain is the stack's boundary: any other is outside it
+    const { hostname } = new URL(request.url);
+    const own = hostname === this.env.DOMAIN || hostname.endsWith(`.${this.env.DOMAIN}`);
+    const answer = await fetch(own ? request : leavingTheStack(request));
     if (answer.webSocket) return answer;
     const headers = new Headers(answer.headers);
     // only the vault writes a secret's facts: an upstream's would be forged

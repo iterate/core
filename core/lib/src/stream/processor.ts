@@ -856,8 +856,8 @@ export type StreamEventInput = {
      *  append any type to a context it holds, never this. */
     platform?: true;
     /** THE KEY THAT SIGNED IT: the event is a signed statement (`signed`) whose signature the auth
-     *  Worker verified, naming who holds the key and the key's id. Kept only on the platform's
-     *  append (caller.ts `stampCaller`); a writer's own is dropped. */
+     *  Worker verified, naming who holds the key and the key's id. Stamped only where the auth
+     *  Worker's own answer is appended (caller.ts `Caller.signer`); a writer's own is dropped. */
     signer?: { principal: Principal; key: string };
   };
   /** A SIGNED STATEMENT this event carries out (iterate/signed): the exact text and its

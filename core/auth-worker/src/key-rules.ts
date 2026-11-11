@@ -40,6 +40,27 @@ export const underPaths = (path: string, paths: readonly string[] | undefined) =
 
 const SERVICE_PATHS_ROOT = "/integrations/";
 
+/** The stack's name for its iterate Cloud. A reader trusts a signer by this name
+ *  (core/configs/default/worker.ts), so no key gets it for the asking. */
+export const CLOUD_ACTOR = "iterate-cloud";
+
+/** A service names itself on `/keys/enrol`. The Cloud's name goes only to the key that the stack's
+ *  own Cloud publishes (`<cloud.origin>/.well-known/iterate-cloud`), or to a key the stack's
+ *  config names (`auth.keys`). `cloud` is null when the config names no Cloud, and its `publicKey`
+ *  when that Cloud gave none. Answers why `publicKey` may not have the name, or null. */
+export function cloudNameRefusal(
+  publicKey: string,
+  cloud: { origin: string; publicKey: string | null } | null,
+): string | null {
+  if (!cloud)
+    return `The name ${CLOUD_ACTOR} is for this mind's iterate Cloud alone, and its config names none (cloud.origin).`;
+  if (!cloud.publicKey)
+    return `The name ${CLOUD_ACTOR} is for this mind's iterate Cloud alone, and ${cloud.origin} gave no key to compare. Try again.`;
+  return publicKey === cloud.publicKey
+    ? null
+    : `The name ${CLOUD_ACTOR} is for this mind's iterate Cloud alone, and this is not the key of ${cloud.origin}.`;
+}
+
 export type ServiceKeyRequest = {
   actor: string;
   label: string;

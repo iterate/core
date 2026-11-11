@@ -32,7 +32,7 @@ const Flow = z.object({
 type HostDeps = {
   auth: AuthService;
   domain: string;
-  recordFacts: (response: Response) => Response;
+  recordFacts: (response: Response) => Response | Promise<Response>;
 };
 
 // Every hostname but the platform's is the mind's, whose code may be hostile: the session cookie

@@ -18,6 +18,10 @@ export type Caller = {
   app?: true;
   // Set only by the host's own code, on a fact it vouches for (`refuseNonPlatformWrites`).
   platform?: true;
+  // The key that signed what this call appends, as the auth Worker verified it. Set only where the
+  // auth Worker's own answer is appended (the mind Worker's `Mind.append`): an event never names its
+  // own signer.
+  signer?: { principal: Principal; key: string };
   // The SHA-256 of what a delivery delivers: a target answers only what it names, so nothing it
   // reaches can hand a subscriber an event its log never held.
   delivery?: string;
@@ -30,8 +34,8 @@ export const ITX_GRANT_HEADER = "x-itx-grant";
 export const ITX_APP_HEADER = "x-itx-app";
 export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 
-// A writer's own `source` is dropped but `processor` (and `signer` on a platform append). `origin`
-// is advisory: a `run-requested` anyone appends runs, and is stamped, where it lands.
+// A writer's own `source` is dropped but `processor`. `origin` is advisory: a `run-requested`
+// anyone appends runs, and is stamped, where it lands.
 export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   event: E,
   caller: Caller,
@@ -45,7 +49,7 @@ export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   if (caller.principal && caller.via) source.via = caller.via;
   if (caller.onBehalfOf) source.onBehalfOf = caller.onBehalfOf;
   // A signed statement the platform carries in is its signer's word, never the platform's.
-  if (caller.platform && event.source?.signer) source.signer = event.source.signer;
+  if (caller.platform && caller.signer) source.signer = caller.signer;
   else if (caller.platform) source.platform = true;
   if (caller.copiedFrom) source.copiedFrom = caller.copiedFrom;
   const stamped = { ...event, source };
@@ -86,7 +90,7 @@ export const isConfigPointerMatch = (match: ItxExpressionPrefix) =>
 // An occurrence fires under its schedule's stamp, so what one may not append it may not schedule.
 // A signed statement the platform carries in is held to this like anyone's.
 export function refuseNonPlatformWrites(events: readonly StreamEventInput[], caller: Caller): void {
-  refuseThePlatformsOwn(caller.platform ? events.filter((event) => event.source?.signer) : events);
+  if (!caller.platform || caller.signer) refuseThePlatformsOwn(events);
 }
 
 function refuseThePlatformsOwn(events: readonly StreamEventInput[]): void {

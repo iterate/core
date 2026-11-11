@@ -5,14 +5,13 @@
 import { platformOriginOf, mindMcpUrlOf } from "iterate/mind-api";
 import { sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { CLOUD_ACTOR } from "./key-rules.ts";
 import { passkeyOwedResponse, standingOf } from "./members.ts";
 import { notMemberPage, page, text } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
 
 const SELF_TEST_PATH = "/self-test";
 const FACTS_PATH = `${SELF_TEST_PATH}/facts`;
-/** The actor of the Cloud's key on a deployment (internal-packages/installer `access.js`). */
-const CLOUD_ACTOR = "iterate-cloud";
 
 type Result = { id: string; pass: boolean | null; detail: string };
 

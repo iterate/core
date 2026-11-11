@@ -17,7 +17,10 @@ export async function statementsResponse(env: Env, request: Request): Promise<Re
       { refused: "send an envelope, { statement, signature }, as JSON" },
       { status: 400 },
     );
-  const verified = await verifiedStatement(env, envelope);
+  // Taken again when it comes again: this Worker cannot know that the first try's event was
+  // stored, and a sender that got no 200 sends the same statement. The event's key is the
+  // statement's hash, so the log stores it once, however often it comes.
+  const verified = await verifiedStatement(env, envelope, { once: false });
   if ("refused" in verified) return Response.json(verified, { status: 403 });
   const { signer, statement, paths } = verified;
   if (!canonicalPath(statement.path))
@@ -37,9 +40,12 @@ export async function statementsResponse(env: Env, request: Request): Promise<Re
   )
     return Response.json({ refused: `${statement.type} is the platform's own` }, { status: 403 });
   const idempotencyKey = `statement:${await statementHashOf(envelope.statement)}`;
+  // The event is the act, so the boundary answers this 200 only once the log has it
+  // (iterate/facts `storeFirst`), and 503 when it has not.
   return withFacts(Response.json({ path: statement.path, type: statement.type, idempotencyKey }), [
     {
       path: statement.path,
+      storeFirst: true,
       events: [
         {
           type: statement.type,

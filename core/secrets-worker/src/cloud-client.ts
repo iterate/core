@@ -12,7 +12,7 @@
 // spend it, there. It knows which deployment asks by the statement on the request, signed by the
 // key the auth Worker keeps (`AuthService.sign`), whose public half the Cloud reads at
 // `iterate.<domain>/keys/stack.json`. No token of the Cloud's is held here, and none of ours there.
-import { codedError } from "iterate/lib";
+import { codedError, leavingTheStack } from "iterate/lib";
 import { z } from "zod";
 import { sha256Hex } from "./secrets.ts";
 
@@ -108,7 +108,7 @@ export function brokered(
     const headers = new Headers(request.headers);
     headers.set(STATEMENT_HEADER, Buffer.from(JSON.stringify(signed)).toString("base64url"));
     // never followed: the statement and a sealed token go to the Cloud's own host alone
-    return fetch(new Request(request, { headers, redirect: "manual" }));
+    return fetch(leavingTheStack(new Request(request, { headers, redirect: "manual" })));
   };
 }
 

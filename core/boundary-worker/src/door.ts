@@ -1,6 +1,11 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { withFacts } from "iterate/facts";
-import { codedError } from "iterate/lib";
+import {
+  causeLeavingTheStack,
+  codedError,
+  ITERATE_CAUSE_HEADER,
+  leavingTheStack,
+} from "iterate/lib";
 import { SECRET_USE_HEADER, secretPathsReferenced } from "iterate/secret-placeholder";
 import type { Door as DoorService, SecretVerb, SecretVerbs } from "iterate/workers";
 import type { DoorEnv } from "./env.ts";
@@ -30,7 +35,7 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     // The global `fetch` fails inside the zone: the boundary's own handler answers, and strips the
     // mind's stamps. No answer keeps a facts header: the mind would append what it says.
     const inbound = (this.ctx.exports as unknown as { default: Fetcher }).default;
-    if (!ownDomain) return withFacts(await fetch(outbound), []);
+    if (!ownDomain) return withFacts(await fetch(leavingTheStack(outbound)), []);
     // The mind's own request to one of its hosts is nobody's: it carries no session in.
     const ownHeaders = new Headers(outbound.headers);
     ownHeaders.delete("cookie");
@@ -47,6 +52,9 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     const domain = this.env.DOMAIN;
     if (!message.from.email.toLowerCase().endsWith(`@${domain}`))
       return { sent: false as const, error: `mail leaves from an address @${domain} alone` };
+    // a mail leaves the stack as a request to another host does
+    const { [ITERATE_CAUSE_HEADER]: cause, ...headers } = message.headers;
+    const mark = causeLeavingTheStack(cause);
     try {
       const { messageId } = await this.env.SEND_EMAIL.send({
         from: message.from,
@@ -55,7 +63,7 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
         subject: message.subject,
         text: message.text,
         html: message.html,
-        headers: message.headers,
+        headers: mark ? { ...headers, [ITERATE_CAUSE_HEADER]: mark } : headers,
         ...(message.attachments.length > 0 && {
           attachments: message.attachments.map(({ filename, contentType, content }) => ({
             disposition: "attachment" as const,

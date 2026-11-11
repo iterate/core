@@ -46,9 +46,10 @@ export default {
     const domain = workerEnv.DOMAIN;
     const route = platformRouteOf(new URL(request.url), domain);
     if (route === "provide") return serveProvide(request, workerEnv, ctx, domain);
-    const recordFacts = (response: Response) => {
+    // `fromAuth`: only the auth Worker's answer names the signer of an event (the key it verified)
+    const recordFacts = (response: Response, fromAuth = false) => {
       const { answer, recorded: appended } = recorded(response, (path, events) =>
-        throughTheMind(["append"], [path, events]),
+        throughTheMind(["append"], [path, events, fromAuth]),
       );
       ctx.waitUntil(appended);
       return answer;
@@ -78,7 +79,7 @@ export default {
       domain,
     });
     if (answer) return answer;
-    if (route === "auth") return recordFacts(await workerEnv.AUTH.fetch(forwarded));
+    if (route === "auth") return recordFacts(await workerEnv.AUTH.fetch(forwarded), true);
     if (route === "secrets") return recordFacts(await workerEnv.SECRETS.fetch(forwarded));
     return confinedAnswer(await toMind(forwarded));
   },

@@ -5,7 +5,9 @@ import type { StreamEventInput } from "./stream/processor.ts";
  *  (`withFacts(response, [])`) before anyone could believe it. */
 export const FACTS_HEADER = "x-iterate-facts";
 
-export type Facts = { path: string; events: StreamEventInput[] }[];
+/** `storeFirst`: the events are the act itself and not the record of one, as a signed statement's
+ *  event is. Whoever appends them answers only once they are stored (`recordFacts`). */
+export type Facts = { path: string; events: StreamEventInput[]; storeFirst?: true }[];
 
 export function encodeFacts(facts: Facts): string {
   let binary = "";
@@ -50,19 +52,39 @@ export function withFacts(response: Response, facts: Facts): Response {
   });
 }
 
-/** Never rejects: an append that fails is reported, and the act it records stands. */
+/** Never rejects: an append that fails is reported. A fact records an act that stands, so `answer`
+ *  goes on at once. A `storeFirst` fact is the act: `answer` waits for it, and is a 503 when it was
+ *  not stored, so the sender sends the same request again. */
 export function recordFacts(
   response: Response,
   append: (path: string, events: StreamEventInput[]) => Promise<unknown>,
-): { answer: Response; recorded: Promise<void> } {
+): { answer: Response | Promise<Response>; recorded: Promise<void> } {
   const header = response.headers.get(FACTS_HEADER);
   if (!header) return { answer: response, recorded: Promise.resolve() };
-  const recorded = Promise.all(
-    decodeFacts(header).map(({ path, events }) =>
-      append(path, events).catch((error: unknown) =>
-        reportIssue("facts.not-recorded", error, { path }),
-      ),
+  const facts = decodeFacts(header);
+  const stored = facts.map(({ path, events, storeFirst }) =>
+    append(path, events).then(
+      () => true,
+      (error: unknown) => {
+        reportIssue(storeFirst ? "facts.not-stored" : "facts.not-recorded", error, { path });
+        return !storeFirst;
+      },
     ),
-  ).then(() => {});
-  return { answer: withFacts(response, []), recorded };
+  );
+  const answer = withFacts(response, []);
+  const all = Promise.all(stored);
+  return {
+    answer: facts.some((fact) => fact.storeFirst)
+      ? all.then((kept) => (kept.every(Boolean) ? answer : notStored(answer)))
+      : answer,
+    recorded: all.then(() => {}),
+  };
+}
+
+function notStored(answer: Response): Response {
+  void answer.body?.cancel();
+  return Response.json(
+    { refused: "this was not stored: send the same request again" },
+    { status: 503, headers: { "cache-control": "no-store" } },
+  );
 }

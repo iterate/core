@@ -22,9 +22,12 @@ type KnownKey = {
   paths?: string[]; // none: any path
 };
 
+/** `once: false` takes a statement again. Only the intake asks for it (./statements.ts): the log
+ *  keeps its event once, by a key that is the statement's hash. */
 export async function verifiedStatement(
   env: Env,
   value: unknown,
+  { once = true } = {},
 ): Promise<(Exclude<Verified, { refused: string }> & { paths?: string[] }) | { refused: string }> {
   const envelope = envelopeOf(value);
   if (!envelope) return { refused: "not an envelope: { statement, signature }" };
@@ -49,14 +52,16 @@ export async function verifiedStatement(
   if (statement.expires <= now) return { refused: "the statement has expired" };
   if (statement.expires > now + MAX_LIFETIME_MS)
     return { refused: "the statement expires more than a day from now" };
-  // a repeat cannot insert, so a statement counts once
-  const [, inserted] = await env.DB.batch([
-    env.DB.prepare(`delete from statements where expires <= ?1`).bind(now),
-    env.DB.prepare(
-      `insert into statements (hash, expires) values (?1, ?2) on conflict do nothing`,
-    ).bind(await statementHashOf(envelope.statement), statement.expires),
-  ]);
-  if (!inserted?.meta.changes) return { refused: "the statement was seen before" };
+  if (once) {
+    // a repeat cannot insert, so a statement counts once
+    const [, inserted] = await env.DB.batch([
+      env.DB.prepare(`delete from statements where expires <= ?1`).bind(now),
+      env.DB.prepare(
+        `insert into statements (hash, expires) values (?1, ?2) on conflict do nothing`,
+      ).bind(await statementHashOf(envelope.statement), statement.expires),
+    ]);
+    if (!inserted?.meta.changes) return { refused: "the statement was seen before" };
+  }
   return {
     signer: {
       principal: key.principal,

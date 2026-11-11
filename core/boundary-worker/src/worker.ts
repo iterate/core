@@ -13,9 +13,10 @@ export default {
     if (secure) return secure;
     const domain = env.DOMAIN;
     const route = platformRouteOf(new URL(request.url), domain);
-    const recordFacts = (response: Response) => {
+    // `fromAuth`: only the auth Worker's answer names the signer of an event (the key it verified)
+    const recordFacts = (response: Response, fromAuth = false) => {
       const { answer, recorded: appended } = recorded(response, (path, events) =>
-        env.MIND.append(path, events),
+        env.MIND.append(path, events, fromAuth),
       );
       ctx.waitUntil(appended);
       return answer;
@@ -27,7 +28,7 @@ export default {
     if (route === "provide") return new Response("Not found", { status: 404 });
     const { forwarded, answer } = await stampedRequest(request, { auth: env.AUTH, route, domain });
     if (answer) return answer;
-    if (route === "auth") return recordFacts(await env.AUTH.fetch(forwarded));
+    if (route === "auth") return recordFacts(await env.AUTH.fetch(forwarded), true);
     if (route === "secrets") return recordFacts(await env.SECRETS.fetch(forwarded));
     return confinedAnswer(await env.MIND.fetch(forwarded));
   },

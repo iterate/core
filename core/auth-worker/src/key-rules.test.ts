@@ -1,5 +1,11 @@
 import { expect, test } from "vitest";
-import { canonicalPath, honouredNext, serviceKeyRequestOf, underPaths } from "./key-rules.ts";
+import {
+  canonicalPath,
+  cloudNameRefusal,
+  honouredNext,
+  serviceKeyRequestOf,
+  underPaths,
+} from "./key-rules.ts";
 
 const ISSUER = "https://iterate.example.com";
 const TRUSTED = ["https://cloud.example.net"];
@@ -58,6 +64,14 @@ test("a service's request names a plain actor, a label, a key and at least one p
   expect(ask({ ...good, paths: "/integrations/../secrets/" })).toHaveProperty("refused");
   expect(ask({ ...good, label: "" })).toHaveProperty("refused");
   expect(ask({ ...good, publicKey: "not base64url!" })).toHaveProperty("refused");
+});
+
+test("the Cloud's name goes to the key the stack's own Cloud publishes, and to no other", () => {
+  const cloud = { origin: "https://cloud.example.net", publicKey: "cloud-key" };
+  expect(cloudNameRefusal("cloud-key", cloud)).toBeNull();
+  expect(cloudNameRefusal("a-stranger's-key", cloud)).toMatch(/not the key of https:\/\/cloud/);
+  expect(cloudNameRefusal("cloud-key", { ...cloud, publicKey: null })).toMatch(/gave no key/);
+  expect(cloudNameRefusal("cloud-key", null)).toMatch(/names none/);
 });
 
 test("a statement names a context by its own path, with no segment the mind would resolve", () => {

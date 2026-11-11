@@ -5,6 +5,7 @@ import {
   IterateContextDurableObject,
   ItxEntrypoint,
   serveHostRequest,
+  type Caller,
   type ItxHostRoot,
 } from "core-itx";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
@@ -217,9 +218,13 @@ export class Mind extends WorkerEntrypoint<Env> implements MindTarget {
   }
 
   /** Only the boundary reaches this entrypoint, so what it appends is the platform's, which the
-   *  kernel refuses from any other caller. */
-  async append(...[path, events]: Parameters<MindTarget["append"]>) {
-    await appendAsPlatform(path, events);
+   *  kernel refuses from any other caller. A signed statement is its signer's: only the auth
+   *  Worker's answer names one, and each is appended under its own signer. */
+  async append(...[path, events, fromAuth]: Parameters<MindTarget["append"]>) {
+    const signed = fromAuth ? events.filter((event) => event.source?.signer) : [];
+    const own = events.filter((event) => !signed.includes(event));
+    if (own.length) await appendAsPlatform(path, own);
+    for (const event of signed) await appendAsPlatform(path, [event], event.source?.signer);
   }
 
   async receiveEmail(mail: Parameters<MindTarget["receiveEmail"]>[0]) {
@@ -255,10 +260,15 @@ export default {
   fetch: () => new Response("Not found", { status: 404 }),
 } satisfies ExportedHandler<Env>;
 
-const appendAsPlatform = async (path: string, events: StreamEventInput[]) =>
+const appendAsPlatform = async (
+  path: string,
+  events: StreamEventInput[],
+  signer?: Caller["signer"],
+) =>
   (await contextAt(path).invoke(["itx", "builtins", ["append", ...events]], [], {
     principal: null,
     platform: true,
+    signer,
   })) as StreamEvent[];
 
 /** The routing slug header is unset on the apex, so a visitor's copy never survives. */

@@ -5,6 +5,7 @@
 import { expect, test, vi } from "vitest";
 import {
   applyPatch,
+  causeLeavingTheStack,
   cookieValueOf,
   deploymentEnvironment,
   diff,
@@ -12,12 +13,57 @@ import {
   environmentFaviconSvg,
   environmentTitle,
   forwardIssues,
+  ITERATE_CAUSE_HEADER,
+  leavingTheStack,
   oneStepDeeper,
   isSameOriginBrowserRequest,
   type Issue,
   releaseRpcSessions,
   reportIssue,
 } from "./lib.ts";
+
+// ── our mark, as it leaves the stack ──
+test("a mark that leaves the stack keeps its counts, and names no context of the stack", () => {
+  const mark = JSON.stringify({
+    chain: "2026-11-11T20:00:00.000Z with an event on /agents/billing/acme ~k3x9q",
+    depth: 3,
+    at: 1_794_430_000_000,
+    hops: 2,
+    parent: "/agents/billing/acme@41",
+  });
+  expect(JSON.parse(causeLeavingTheStack(mark)!)).toEqual({
+    chain: "2026-11-11T20:00:00.000Z with another stack ~k3x9q",
+    depth: 3,
+    at: 1_794_430_000_000,
+    hops: 2,
+  });
+  const sent = leavingTheStack(
+    new Request("https://api.example.net/v1", { headers: { [ITERATE_CAUSE_HEADER]: mark } }),
+  );
+  expect(sent.headers.get(ITERATE_CAUSE_HEADER)).not.toMatch(/agents|billing|acme|@41/);
+});
+
+test.for([
+  [
+    "a chain the kernel did not make keeps its counts alone",
+    '{"chain":"/secrets/x","depth":1}',
+    '{"chain":"another stack","depth":1}',
+  ],
+  [
+    "a field that is no count is left out",
+    '{"chain":"x","depth":0,"at":"/agents/x","hops":-1}',
+    '{"chain":"another stack","depth":0}',
+  ],
+  ["a mark with no depth is no mark", '{"chain":"x","depth":"/agents/x"}', null],
+  ["text that is not the kernel's JSON is no mark", "/agents/billing@41", null],
+  ["no mark stays none", null, null],
+] as const)("%s", ([, mark, outside]) => {
+  expect(causeLeavingTheStack(mark)).toBe(outside);
+  const request = new Request("https://api.example.net/", {
+    headers: mark ? { [ITERATE_CAUSE_HEADER]: mark } : {},
+  });
+  expect(leavingTheStack(request).headers.get(ITERATE_CAUSE_HEADER)).toBe(outside);
+});
 
 // ── diff + applyPatch ──
 test("deep-equal values diff to undefined (the don't-emit signal)", () => {

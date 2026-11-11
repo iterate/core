@@ -4,7 +4,7 @@ import { createPrivateKey } from "node:crypto";
 import { createAppAuth } from "@octokit/auth-app";
 import { DurableObject } from "cloudflare:workers";
 import type { SecretMaterial, SecretOperation, SecretRefresh } from "iterate/api";
-import { codedError, ITERATE_CAUSE_HEADER } from "iterate/lib";
+import { codedError, ITERATE_CAUSE_HEADER, leavingTheStack } from "iterate/lib";
 import { type Facts, withFacts } from "iterate/facts";
 import { platformOriginOf } from "iterate/mind-api";
 import {
@@ -1567,7 +1567,7 @@ const dispatch = async (request: Request): Promise<Response> => {
   let overdue: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      fetch(request, { redirect: "manual" }),
+      fetch(leavingTheStack(request), { redirect: "manual" }),
       new Promise<Response>((answer) => {
         overdue = setTimeout(
           () =>

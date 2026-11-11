@@ -80,6 +80,45 @@ export function errorCode(error: unknown): ErrorCode | undefined {
 /** OUR MARK (core/itx/src/cause.ts): what the platform sends — a request, a mail — carries the cause of
  *  the code that sent it here, as JSON; a request that comes back with it resumes its chain. */
 export const ITERATE_CAUSE_HEADER = "X-Iterate-Cause";
+/** OUR MARK AS IT LEAVES THE STACK, in a request to a host that is not the stack's own, or in a
+ *  mail: the counts and when the chain began, so another stack that gets it counts on. What began
+ *  the chain and the event it runs for name the stack's own contexts (`<path>@<offset>`), and stay
+ *  behind. Null for no mark, and for one that the kernel did not write. */
+export function causeLeavingTheStack(mark: string | null | undefined): string | null {
+  if (!mark) return null;
+  let cause: unknown;
+  try {
+    cause = JSON.parse(mark);
+  } catch {
+    return null;
+  }
+  if (typeof cause !== "object" || !cause) return null;
+  const { chain, depth, at, hops } = cause as Record<string, unknown>;
+  const count = (value: unknown) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  if (count(depth) === undefined) return null;
+  // the kernel's chains are `<time> with <what began it> ~<nonce>` (core/itx/src/cause.ts `newChain`)
+  const [, began, nonce] =
+    (typeof chain === "string" && /^(\S+) with .* (~\S+)$/s.exec(chain)) || [];
+  return JSON.stringify({
+    chain: began ? `${began} with another stack ${nonce}` : "another stack",
+    depth,
+    at: count(at),
+    hops: count(hops),
+  });
+}
+
+/** `request` as it leaves the stack: with our mark as `causeLeavingTheStack` gives it. */
+export function leavingTheStack(request: Request): Request {
+  const mark = request.headers.get(ITERATE_CAUSE_HEADER);
+  if (!mark) return request;
+  const headers = new Headers(request.headers);
+  const outside = causeLeavingTheStack(mark);
+  if (outside) headers.set(ITERATE_CAUSE_HEADER, outside);
+  else headers.delete(ITERATE_CAUSE_HEADER);
+  return new Request(request, { headers });
+}
+
 /** What marks a 508 as an act refused past the loop limit (core/itx/src/unavailable.ts). */
 export const LOOP_LIMIT_HEADER = "iterate-loop-limit";
 

@@ -2,7 +2,13 @@ import { base64url, fromBase64url, keyIdOf } from "iterate/signed";
 import { type AccountFact, AccountFacts } from "./account-facts.ts";
 import { clearSessionCookie, type Session, sessionCookie, sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
-import { honouredNext, type ServiceKeyRequest, serviceKeyRequestOf } from "./key-rules.ts";
+import {
+  CLOUD_ACTOR,
+  cloudNameRefusal,
+  honouredNext,
+  type ServiceKeyRequest,
+  serviceKeyRequestOf,
+} from "./key-rules.ts";
 import { holdsPasskey } from "./keys.ts";
 import { standingOf } from "./members.ts";
 import { errorPage, notMemberPage, page, text } from "./pages.ts";
@@ -340,9 +346,35 @@ async function keysJson(env: Env, session: Session): Promise<Response> {
   });
 }
 
+// The name a service asks for is its own choice, and a reader trusts the Cloud's by the name alone.
+async function serviceKeyAsked(
+  env: Env,
+  fields: URLSearchParams | FormData,
+): Promise<ServiceKeyRequest | { refused: string }> {
+  const ask = serviceKeyRequestOf(fields);
+  if ("refused" in ask || ask.actor !== CLOUD_ACTOR) return ask;
+  const origin = env.CLOUD_ORIGIN;
+  // a redirect is no answer: the key must be the one this origin itself gives
+  const answer = origin
+    ? await fetch(`${origin}/.well-known/iterate-cloud`, { redirect: "manual" }).catch(() => null)
+    : null;
+  const facts: unknown = answer?.ok ? await answer.json().catch(() => null) : null;
+  const published =
+    typeof facts === "object" &&
+    facts &&
+    "publicKey" in facts &&
+    typeof facts.publicKey === "string"
+      ? facts.publicKey
+      : null;
+  const refused = cloudNameRefusal(ask.publicKey, origin ? { origin, publicKey: published } : null);
+  if (!refused) return ask;
+  console.info({ event: "auth.cloud-name-refused", cloud: origin || null });
+  return { refused };
+}
+
 async function enrolPage(env: Env, url: URL): Promise<Response> {
   const { domain, trustedClients } = iterateConfigOf(env);
-  const ask = serviceKeyRequestOf(url.searchParams);
+  const ask = await serviceKeyAsked(env, url.searchParams);
   if ("refused" in ask) return errorPage(ask.refused, 400);
   const key = await p256KeyIdOf(env, ask.publicKey);
   if (!key) return errorPage("The service's key is not one this mind can use.", 400);
@@ -375,7 +407,7 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
       "Nothing was added",
       `<p>No key was added to ${text(domain)}.</p>`,
     );
-  const ask = serviceKeyRequestOf(form);
+  const ask = await serviceKeyAsked(env, form);
   if ("refused" in ask) return errorPage(ask.refused, 400);
   const key = await p256KeyIdOf(env, ask.publicKey);
   if (!key) return errorPage("The service's key is not one this mind can use.", 400);
