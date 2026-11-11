@@ -27,6 +27,7 @@ import { createRemoteJWKSet, type JWTVerifyGetKey } from "jose";
 import { calculatePKCECodeChallenge, generateRandomCodeVerifier } from "oauth4webapi";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
+import { isBlocked } from "./blocked.ts";
 import { clearFlowCookie, flowCookie, flowOf, sessionCookie } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import { type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
@@ -162,6 +163,15 @@ async function finish(env: Env, request: Request, url: URL): Promise<Response> {
   if ("refused" in google) {
     console.info({ event: "google-sign-in.refused", reason: google.reason });
     return errorPage(google.refused, 403, cleared, again);
+  }
+  // someone an owner blocked gets no session here, as they get no mailed code (./blocked.ts)
+  if (!(await isMember(env, google.email)) && (await isBlocked(env, google.email))) {
+    console.info({ event: "auth.sign-in-refused", method: "google", reason: "blocked" });
+    return errorPage(
+      `${google.email} cannot sign in to ${iterateConfigOf(env).domain}.`,
+      403,
+      cleared,
+    );
   }
   // Google proved an address; `login.allow` still decides who is a member
   const user = await linkIdentity(env.DB, {

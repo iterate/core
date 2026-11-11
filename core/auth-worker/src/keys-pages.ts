@@ -173,7 +173,7 @@ async function keysPage(
     return `<li>${text(key.label)} <span class="muted">(${what}, ${when})</span> ${remove}</li>`;
   };
   // A session that owes a passkey ends nothing, as it removes nothing.
-  const signIns = owed ? [] : await signInsOf(env, session.userId);
+  const signIns = held ? [] : await signInsOf(env, session.userId);
   const signInItem = (signIn: SignIn) => {
     const host = signIn.resource && mindHostResourceOf(env, signIn.resource);
     const what = host
@@ -190,7 +190,7 @@ async function keysPage(
           <button type="submit" class="link">Sign out</button>
         </form></li>`;
   };
-  const signedIn = owed
+  const signedIn = held
     ? ""
     : `<h2>Where you are signed in</h2>
       <p>Each app, CLI, bridge or agent that you let in holds a sign-in. One lasts for as long as it is used, and ends after 7 days with no use. Sign one out here, and it stops working at once.</p>
