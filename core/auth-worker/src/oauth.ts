@@ -303,6 +303,54 @@ export async function endGrantsOf(env: Env, userId: string, facts: AccountFacts)
   }
 }
 
+/** One live sign-in of a person, as /keys lists it: a grant, whose client holds tokens. */
+export type SignIn = {
+  id: string;
+  clientName: string;
+  /** What it is for: a resource of the stack, or a mind hostname's origin. Absent on a grant made
+   *  before grants kept it. */
+  resource?: string;
+  /** Epoch seconds. `endsAt` moves at each refresh: it is when an unused sign-in ends. */
+  createdAt: number;
+  endsAt?: number;
+};
+
+const SignInMetadata = z.object({ clientName: z.string(), resource: z.string().optional() });
+
+export async function signInsOf(env: Env, userId: string): Promise<SignIn[]> {
+  const helpers = oauthHelpers(env);
+  const signIns: SignIn[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await helpers.listUserGrants(userId, { cursor });
+    for (const grant of page.items) {
+      const metadata = SignInMetadata.safeParse(grant.metadata);
+      signIns.push({
+        id: grant.id,
+        clientName: metadata.data?.clientName || grant.clientId,
+        resource: metadata.data?.resource,
+        createdAt: grant.createdAt,
+        endsAt: grant.expiresAt,
+      });
+    }
+    cursor = page.cursor;
+  } while (cursor);
+  return signIns.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/** Ends one grant of a person, with its tokens. A grant id that is not theirs ends nothing. */
+export async function endGrant(env: Env, userId: string, grantId: string, facts: AccountFacts) {
+  const helpers = oauthHelpers(env);
+  if (!(await grantHeld(helpers, userId, grantId))) return false;
+  await helpers.revokeGrant(grantId, userId);
+  facts.add(userId, {
+    type: "events.iterate.com/account/grant-ended",
+    payload: { grantId },
+    idempotencyKey: `account/grant-ended/${grantId}`,
+  });
+  return true;
+}
+
 async function grantHeld(
   helpers: ReturnType<typeof oauthHelpers>,
   userId: string,

@@ -160,7 +160,8 @@ async function complete(
   const { redirectTo } = await oauthHelpers(env, hostResource).completeAuthorization({
     request: authRequest,
     userId: session.userId,
-    metadata: { clientName: clientName || authRequest.clientId },
+    // what /keys shows of this sign-in (./oauth.ts `signInsOf`)
+    metadata: { clientName: clientName || authRequest.clientId, resource: authRequest.resource },
     scope: authRequest.scope,
     revokeExistingGrants: false,
     props,

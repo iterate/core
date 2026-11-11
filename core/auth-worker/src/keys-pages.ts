@@ -11,6 +11,7 @@ import {
   serviceKeyRequestOf,
 } from "./key-rules.ts";
 import { holdsPasskey } from "./keys.ts";
+import { endGrant, mindHostResourceOf, type SignIn, signInsOf } from "./oauth.ts";
 import { standingOf } from "./members.ts";
 import { errorPage, notMemberPage, page, text } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
@@ -21,6 +22,7 @@ const KEYS_PATH = "/keys";
 const KEYS_JSON_PATH = "/keys.json";
 const REMOVE_PATH = "/keys/remove";
 const ENROL_PATH = "/keys/enrol";
+const END_SIGN_IN_PATH = "/keys/sign-ins/end";
 
 const CHALLENGE_SECONDS = 5 * 60;
 const CHALLENGE_KEY_PREFIX = "iterate-key-challenge:";
@@ -36,6 +38,7 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
     (pathname === KEYS_PATH && (get || post)) ||
     (pathname === KEYS_JSON_PATH && get) ||
     (pathname === REMOVE_PATH && post) ||
+    (pathname === END_SIGN_IN_PATH && post) ||
     (pathname === ENROL_PATH && (get || post));
   if (!known) return null;
   const issuer = issuerOf(env);
@@ -72,6 +75,12 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
     });
   }
   if (pathname === REMOVE_PATH) return removed(env, request, session);
+  if (pathname === END_SIGN_IN_PATH) {
+    const facts = new AccountFacts();
+    const form = await request.formData();
+    await endGrant(env, session.userId, String(form.get("signIn") || ""), facts);
+    return facts.on(seeOther(KEYS_PATH));
+  }
   if (pathname === KEYS_PATH)
     return post
       ? passkeyAdded(env, request, session, { owed, first })
@@ -145,6 +154,27 @@ async function keysPage(
         </form>`;
     return `<li>${text(key.label)} <span class="muted">(${what}, ${when})</span> ${remove}</li>`;
   };
+  // A session that owes a passkey ends nothing, as it removes nothing.
+  const signIns = owed ? [] : await signInsOf(env, session.userId);
+  const signInItem = (signIn: SignIn) => {
+    const host = signIn.resource && mindHostResourceOf(env, signIn.resource);
+    const what = host
+      ? `your sign-in on ${text(new URL(host).host)}`
+      : signIn.resource
+        ? `the mind, through ${text(new URL(signIn.resource).pathname)}`
+        : "the mind or one of its pages";
+    const ends = signIn.endsAt ? `, ends ${day(signIn.endsAt * 1000)} if it is not used` : "";
+    return `<li>${text(signIn.clientName)} <span class="muted">(${what}, since ${day(signIn.createdAt * 1000)}${ends})</span>
+        <form method="post" action="${END_SIGN_IN_PATH}" class="inline">
+          <input type="hidden" name="signIn" value="${text(signIn.id)}">
+          <button type="submit" class="link">Sign out</button>
+        </form></li>`;
+  };
+  const signedIn = owed
+    ? ""
+    : `<h2>Where you are signed in</h2>
+      <p>Each app, CLI, bridge or agent that you let in holds a sign-in. One lasts for as long as it is used, and ends after 7 days with no use. Sign one out here, and it stops working at once.</p>
+      ${signIns.length ? `<ul>${signIns.map(signInItem).join("")}</ul>` : `<p class="muted">Nothing is signed in as you.</p>`}`;
   const passkeys = results.filter(
     (key) => key.user_id && key.format === "webauthn" && !key.revoked_at,
   ).length;
@@ -168,6 +198,7 @@ async function keysPage(
         <p id="status" class="muted" role="status"></p>
       </form>
       ${ask}
+      ${signedIn}
       ${next && !owed ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
     script: `${signScript(domain)}${PASSKEY_SCRIPT}`,
   });
