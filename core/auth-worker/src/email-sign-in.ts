@@ -59,6 +59,16 @@ export async function emailSignInResponse(env: Env, request: Request) {
   return request.method === "POST" ? finish(env, request) : codePage(env, request);
 }
 
+/** Who gets a code here, said on both pages. It is the stack's rule, which its config makes
+ *  public, and never one address's standing: every address is still answered alike. */
+function whoGetsACode(env: Env) {
+  const { methods, allow } = iterateConfigOf(env).login;
+  const { domain } = iterateConfigOf(env);
+  return methods.email?.anyone || allow.some((rule) => "everyone" in rule)
+    ? `Anyone can sign in to ${domain}. A new address gets an account of its own, with no access to the mind itself.`
+    : `${domain} takes no new sign-ups: a code goes only to an address that is already a member. Any other address gets no code and no error.`;
+}
+
 function addressPage(env: Env, request: Request, error?: string, typed = "") {
   const { domain } = iterateConfigOf(env);
   const next = new URL(request.url).searchParams.get("next") || "/";
@@ -68,6 +78,7 @@ function addressPage(env: Env, request: Request, error?: string, typed = "") {
     status: error ? 400 : 200,
     body: `<h1>Sign in to ${text(domain)}</h1>
       <p class="muted">Enter your email. We send you a code to sign in with.</p>
+      <p class="muted">${text(whoGetsACode(env))}</p>
       ${error ? `<p role="alert">${text(error)}</p>` : ""}
       <form method="post" action="${EMAIL_SIGN_IN_PATH}" class="stack">
         <input type="hidden" name="next" value="${text(next)}">
@@ -156,6 +167,7 @@ async function codePage(env: Env, request: Request, error?: string, status = 200
     status,
     body: `<h1>Enter your code</h1>
       <p class="muted">If <strong>${text(challenge.email)}</strong> may sign in here, a code is on its way. It expires in 10 minutes.</p>
+      <p class="muted">${text(whoGetsACode(env))} No code after a minute? Check the spam folder, then send a new one.</p>
       ${error ? `<p role="alert">${text(error)}</p>` : ""}
       <form method="post" action="${CODE_PATH}" class="stack">
         <label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
