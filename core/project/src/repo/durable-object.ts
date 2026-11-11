@@ -43,10 +43,15 @@ import {
   type RawGitObject,
   type RepoManifest,
 } from "./git-wire.ts";
-import { OriginSet, RepoContract, type CommitCompleted, type RepoState } from "./contract.ts";
+import {
+  OriginSet,
+  RepoContract,
+  type CommitCompleted,
+  type RepoState,
+  PLATFORM_AUTHOR,
+} from "./contract.ts";
 
 const REF = "refs/heads/main";
-const PLATFORM = { email: "config@iterate.com", name: "iterate" };
 const TOKEN_TTL_SECONDS = 300;
 /** An operation must not outlive its token. */
 const TOKEN_REUSE_MARGIN_MS = 60_000;
@@ -500,8 +505,8 @@ export class RepoFacet extends StreamProcessorDurableObject<
     for (const tree of trees)
       if (!objects.has(tree.oid)) toPush.push({ payload: tree.payload, type: "tree" });
     const commitBytes = encodeCommit({
-      author: { ...(input.author || PLATFORM), date: new Date() },
-      committer: PLATFORM,
+      author: { ...(input.author || PLATFORM_AUTHOR), date: new Date() },
+      committer: PLATFORM_AUTHOR,
       message: input.message,
       parents: tip ? [tip] : [],
       tree: rootOid,

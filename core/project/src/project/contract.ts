@@ -85,6 +85,17 @@ export const ProjectContract = defineProcessorContract({
         unavailable: z.literal(true).optional(),
       }),
     },
+    "events.iterate.com/project/template-applied": {
+      description:
+        "New code compared `/repos/config` with the template it bundles (`template`), once: the files it `added` and `replaced` are one commit of the platform's, `commitOid` (null when it wrote nothing). A file in `leftAlone` was changed or deleted by somebody, so the platform did not write it: `lacks` are the template's lines that file has not, to add by hand (none for a deleted file). For people and for the installer: no processor reads it.",
+      payloadSchema: z.object({
+        template: z.string(),
+        commitOid: z.string().nullable(),
+        added: z.array(z.string()),
+        replaced: z.array(z.string()),
+        leftAlone: z.array(z.object({ path: z.string(), lacks: z.array(z.string()) })),
+      }),
+    },
   },
   processorDeps: [RepoContract, WorkspaceContract, SandboxContract, CoreEventCatalog],
   consumes: [
@@ -107,6 +118,7 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
     "events.iterate.com/itx/ingress-configured",
+    "events.iterate.com/project/template-applied",
   ],
 });
 

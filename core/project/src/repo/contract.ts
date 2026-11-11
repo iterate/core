@@ -40,3 +40,7 @@ export const RepoContract = defineProcessorContract({
     },
   },
 });
+
+/** The author of a commit nobody asked for by name: the seed, a template's update, a member's own
+ *  commit that names no author. */
+export const PLATFORM_AUTHOR = { email: "config@iterate.com", name: "iterate" };

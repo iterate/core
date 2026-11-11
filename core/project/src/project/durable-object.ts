@@ -6,6 +6,7 @@ import type { ProjectState } from "./contract.ts";
 import type { EntitySlug } from "./entity-lifecycle.ts";
 import { ProjectProcessor } from "./processor.ts";
 import { configRepoCall, type ProjectPublisher } from "./publication.ts";
+import type { TemplateKept } from "./template-update.ts";
 
 export class ProjectFacet extends StreamProcessorDurableObject<
   ProjectState,
@@ -17,6 +18,10 @@ export class ProjectFacet extends StreamProcessorDurableObject<
   processor = new ProjectProcessor(
     () => this.getItx(),
     () => this.#publisher(),
+    {
+      template: () => this.ctx.storage.get<TemplateKept>("config-template"),
+      keepTemplate: (kept) => this.ctx.storage.put("config-template", kept),
+    },
   );
 
   #publisher(): ProjectPublisher {

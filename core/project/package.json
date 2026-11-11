@@ -3,7 +3,8 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "catalog:",
@@ -22,6 +23,7 @@
     "@types/node": "catalog:",
     "esbuild": "catalog:",
     "trpc-cli": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

@@ -10,14 +10,17 @@ import {
   StreamProcessor,
 } from "iterate/stream/processor";
 import { pinDependencies } from "iterate/package-builds";
+import { z } from "zod";
 import {
   runningUnder,
+  sha256Hex,
   unavailableError,
   type ItxEntrypointScope,
   type WorkerManifest,
 } from "core-itx";
 import { templates } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
+import { PLATFORM_AUTHOR } from "../repo/contract.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
 import {
   configPointer,
@@ -25,6 +28,13 @@ import {
   probedConfig,
   type ProjectPublisher,
 } from "./publication.ts";
+import {
+  seedOf,
+  templateChanges,
+  templateCommitMessage,
+  type RepoFiles,
+  type TemplateKept,
+} from "./template-update.ts";
 
 // a publication resolves its npm dependencies from esm.sh
 const PUBLICATION_BUDGET_MS = 60_000;
@@ -43,6 +53,26 @@ const ingressToConfig = () => ({
 const filesOf = (changes: { path: string; content: string }[]) =>
   Object.fromEntries(changes.map((file) => [file.path, file.content]));
 
+// What the config repo's facet answers to the template's update (iterate/api `RepoHandle`).
+const LogAnswer = z.array(
+  z.object({
+    oid: z.string(),
+    message: z.string(),
+    author: z.object({ email: z.string() }),
+    parents: z.array(z.string()),
+  }),
+);
+const FilesAnswer = z.record(z.string(), z.union([z.string(), z.object({ base64: z.string() })]));
+const CommitAnswer = z.object({ commitOid: z.string().nullable() });
+
+/** The facet's own storage, for what no event carries (template-update.ts `TemplateKept`). Not the
+ *  reduced state: a root's row names the types it delivers at its birth, so a root born before
+ *  this code would never be handed a new one. */
+export type KeptByTheFacet = {
+  template(): Promise<TemplateKept | undefined>;
+  keepTemplate(kept: TemplateKept): Promise<void>;
+};
+
 type PublicationAttempt =
   | { kind: "admitted"; mainModule: string; manifest: WorkerManifest }
   | { kind: "refused"; error: string };
@@ -55,16 +85,23 @@ export class ProjectProcessor extends StreamProcessor<
 
   private readonly getItx: () => ItxEntrypointScope & Disposable;
   private readonly publisher: () => ProjectPublisher;
+  private readonly kept: KeptByTheFacet;
 
-  constructor(getItx: () => ItxEntrypointScope & Disposable, publisher: () => ProjectPublisher) {
+  constructor(
+    getItx: () => ItxEntrypointScope & Disposable,
+    publisher: () => ProjectPublisher,
+    kept: KeptByTheFacet,
+  ) {
     super();
     this.getItx = getItx;
     this.publisher = publisher;
+    this.kept = kept;
   }
 
   // per incarnation; the durable ground is the state
   #creating = false;
   #retriedFailedCreation = false;
+  #templateFollowed = false;
   // One publication runs at a time and drains, oldest first: a commit that lands while one is in
   // flight is next, without waiting for another delivery.
   #unpublished: ProjectState["unpublishedCommits"] = [];
@@ -227,6 +264,33 @@ export class ProjectProcessor extends StreamProcessor<
         }
       });
     }
+    // A NEWER TEMPLATE, once per incarnation. A config repo is seeded once, and this code bundles
+    // the template it was built with: a project seeded from an older one gets what that adds
+    // (template-update.ts). A deploy restarts the root, whose next wake is delivered here.
+    if (
+      state.creation?.status === "created" &&
+      !this.#nextOwed() &&
+      !this.#publishing &&
+      !this.#templateFollowed
+    ) {
+      this.#templateFollowed = true;
+      runInBackground(async () => {
+        try {
+          const followed = await this.#followTemplate();
+          if (!followed) return;
+          if (followed.fact) await append(followed.fact);
+          await this.kept.keepTemplate(followed.kept);
+        } catch (error) {
+          // the next incarnation tries again: a commit made meanwhile only moved the tip
+          console.info({
+            event: "project.template-not-followed",
+            namespace: "project",
+            message: "the config repo was not compared with the bundled template",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    }
     // A failed creation is asked for again, once per incarnation: only the root's birth writes the
     // request, so a failure that stood would leave the project with no site for good.
     if (state.creation?.status === "failed" && !this.#retriedFailedCreation) {
@@ -322,6 +386,95 @@ export class ProjectProcessor extends StreamProcessor<
       });
     }
     if (!commitOid) throw new Error("the config repo's seed left main unborn");
+  }
+
+  // What to keep, and the fact to append when there is something to say. Compared once for each
+  // set of bundled templates. Nothing is kept when the commit is refused: the next incarnation
+  // compares again.
+  async #followTemplate() {
+    const hash = await sha256Hex(JSON.stringify(templates));
+    const kept = await this.kept.template();
+    if (kept?.hash === hash) return undefined;
+    const call = async (expression: ItxExpression) => {
+      using itx = this.getItx();
+      return await itx.invoke(expression);
+    };
+    // the repo's facet answers an itx expression, which is typed `unknown`: each answer is parsed
+    const filesAt = async (commitOid: string) =>
+      FilesAnswer.parse(await call(configRepoCall("files", { commitOid })));
+    // 50 commits back: a seed older than that is out of reach, and the template then only adds
+    // the files the repo lacks
+    const log = LogAnswer.parse(await call(configRepoCall("log", { limit: 50 })));
+    const tip = log[0]?.oid;
+    if (!tip) return undefined;
+    const current = await filesAt(tip);
+    const hashesOf = async (files: RepoFiles) =>
+      Object.fromEntries(
+        await Promise.all(
+          Object.entries(files)
+            .filter((file): file is [string, string] => typeof file[1] === "string")
+            .map(async ([path, content]) => [path, await sha256Hex(content)] as const),
+        ),
+      );
+    // the platform's record of what it wrote; a project older than the record starts from its seed
+    const seed = kept?.written ? undefined : seedOf(log, PLATFORM_AUTHOR.email);
+    const seeded = seed && (seed.oid === tip ? current : await filesAt(seed.oid));
+    const written = kept?.written || (seeded ? await hashesOf(seeded) : {});
+    const manifest = typeof current["package.json"] === "string" ? current["package.json"] : "";
+    const name =
+      kept?.template ||
+      seed?.template ||
+      /"name":\s*"@iterate-com\/config-([\w-]+)"/.exec(manifest)?.[1] ||
+      "";
+    if (!Object.hasOwn(templates, name)) return { kept: { ...kept, hash }, fact: undefined };
+    const template = await pinDependencies(templateFilesOf(name));
+    const now = await hashesOf(current);
+    const untouched = new Set(
+      Object.keys(written).filter(
+        (path) => Object.hasOwn(now, path) && now[path] === written[path],
+      ),
+    );
+    const { changes, added, replaced, platforms, leftAlone } = templateChanges({
+      template,
+      current,
+      written: new Set(Object.keys(written)),
+      untouched,
+    });
+    // only on the tip that was read: a commit made meanwhile refuses this one
+    const commit = changes.length
+      ? CommitAnswer.parse(
+          await call(
+            configRepoCall("commitFiles", {
+              message: templateCommitMessage(name),
+              changes,
+              parent: tip,
+            }),
+          ),
+        )
+      : null;
+    const contents = new Map(template.map((file) => [file.path, file.content]));
+    const nowWritten = Object.fromEntries(
+      await Promise.all(
+        platforms.map(async (path) => [path, await sha256Hex(contents.get(path)!)] as const),
+      ),
+    );
+    return {
+      kept: { hash, template: name, written: { ...written, ...nowWritten } },
+      fact:
+        changes.length || leftAlone.length
+          ? {
+              type: "events.iterate.com/project/template-applied" as const,
+              idempotencyKey: `project/template-applied:${hash.slice(0, 16)}:${tip}`,
+              payload: {
+                template: name,
+                commitOid: commit?.commitOid || null,
+                added,
+                replaced,
+                leftAlone,
+              },
+            }
+          : undefined,
+    };
   }
 
   #nextOwed(): ProjectState["unpublishedCommits"][number] | undefined {
