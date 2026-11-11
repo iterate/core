@@ -71,14 +71,19 @@ declines GitHub" below. If yes, you do the work and the owner approves once.
    `https://github.com/settings/installations`.
 6. **Check that a commit comes back.** From now on `worker.ts` keeps the two in step: a push to
    the repository's `main` is pulled here, which publishes the mind, and a commit here is pushed
-   there. Prove it: make one commit on GitHub, a `README.md` that says in two sentences that this
-   repository is the code of the mind at `<domain>`, and names `AGENTS.md` as the guide:
-   `PUT https://api.github.com/repos/<account>/<name>/contents/README.md` with the installation's
-   placeholder (`getSecret("/secrets/github-installation-<id>", { field: "accessToken" })`) and the
-   body `{ "message": "Say what this repository is", "content": "<the text as base64>" }`. Then
-   read `await itx.repos.get("/repos/config").readFile("README.md")` every few seconds, for a
-   minute at most, until the text is there. Each move is also a `config/github-mirrored` fact on
-   the mind's root. If it does not arrive, say so and say what you saw; do not claim it works.
+   there. Prove it with one commit made on GitHub: a `README.md` that says in two sentences that
+   this repository is the code of the mind at `<domain>`, and names `AGENTS.md` as the guide.
+   - Make it: `PUT https://api.github.com/repos/<account>/<name>/contents/README.md` with the
+     installation's placeholder
+     (`getSecret("/secrets/github-installation-<id>", { field: "accessToken" })`) and the body
+     `{ "message": "Say what this repository is", "content": "<the text as base64>" }`. GitHub
+     answers 201 with the new commit's id, `commit.sha`.
+   - Wait for that commit to arrive: each move is a `config/github-mirrored` fact on the mind's
+     root, so
+     `await itx.waitForEvent({ type: "config/github-mirrored", payload: { commitOid: "<commit.sha>" }, afterOffset: 0, timeoutMs: 60000 })`.
+     Name the commit: an older fact proves nothing.
+   - Then check `await itx.repos.get("/repos/config").readFile("README.md")` has the text. If it
+     did not arrive, say so and say what you saw; do not claim that it works.
 7. **Send the link.** Give the owner `https://github.com/<account>/<name>` and ask them to open two
    files first: `worker.ts`, which is the whole mind in one file, and
    `apps/onboarding/onboarding.md`, which is what you were told. Say that a commit they push to
