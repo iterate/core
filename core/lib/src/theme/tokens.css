@@ -1,32 +1,39 @@
 /* The look's values, as plain custom properties: nothing here needs Tailwind, so a page with no
    build can use the file as it is. theme.css gives them their Tailwind names.
 
-   The look of www.iterate.com, which took it from captun.sh: monospace, black on white, square
-   corners, one light border, one grey fill. Each colour is light-dark(light, dark): the OS's
-   setting picks one, and a change applies to an open page (color-scheme below). */
+   shadcn's neutral theme, as the UI kit has it (packages/ui/src/styles/globals.css), with the
+   kit's status colours. Each colour is light-dark(light, dark), and color-scheme picks the side:
+   the system's setting by default, which also applies to an open page, or the class `light` or
+   `dark` on <html> where a page sets one (the kit's theme toggle does). */
 :root {
   color-scheme: light dark;
-  --radius: 0;
-  --background: light-dark(#ffffff, #111111);
-  --foreground: light-dark(#111111, #eeeeee);
-  --card: light-dark(#ffffff, #111111);
-  --card-foreground: light-dark(#111111, #eeeeee);
-  --popover: light-dark(#ffffff, #111111);
-  --popover-foreground: light-dark(#111111, #eeeeee);
-  --primary: light-dark(#111111, #eeeeee);
-  --primary-foreground: light-dark(#ffffff, #111111);
-  --secondary: light-dark(#f4f4f4, #222222);
-  --secondary-foreground: light-dark(#111111, #eeeeee);
-  --muted: light-dark(#f4f4f4, #222222);
-  --muted-foreground: light-dark(#555555, #aaaaaa);
-  --accent: light-dark(#f4f4f4, #222222);
-  --accent-foreground: light-dark(#111111, #eeeeee);
-  --destructive: light-dark(#a40000, #ff8080);
-  --success: light-dark(#1a7f37, #75d994);
-  --warning: light-dark(#9a6700, #e8bb63);
-  --info: light-dark(#0e7490, #72cadd);
-  --border: light-dark(#dddddd, #444444);
-  --input: light-dark(#dddddd, #444444);
-  --ring: light-dark(#111111, #eeeeee);
-  --link: light-dark(#0645ad, #8ab4f8);
+  --radius: 0.625rem;
+  --background: light-dark(oklch(1 0 0), oklch(0.145 0 0));
+  --foreground: light-dark(oklch(0.145 0 0), oklch(0.985 0 0));
+  --card: light-dark(oklch(1 0 0), oklch(0.205 0 0));
+  --card-foreground: light-dark(oklch(0.145 0 0), oklch(0.985 0 0));
+  --popover: light-dark(oklch(1 0 0), oklch(0.205 0 0));
+  --popover-foreground: light-dark(oklch(0.145 0 0), oklch(0.985 0 0));
+  --primary: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
+  --primary-foreground: light-dark(oklch(0.985 0 0), oklch(0.205 0 0));
+  --secondary: light-dark(oklch(0.97 0 0), oklch(0.269 0 0));
+  --secondary-foreground: light-dark(oklch(0.205 0 0), oklch(0.985 0 0));
+  --muted: light-dark(oklch(0.97 0 0), oklch(0.269 0 0));
+  --muted-foreground: light-dark(oklch(0.556 0 0), oklch(0.708 0 0));
+  --accent: light-dark(oklch(0.97 0 0), oklch(0.269 0 0));
+  --accent-foreground: light-dark(oklch(0.205 0 0), oklch(0.985 0 0));
+  --destructive: light-dark(oklch(0.577 0.245 27.325), oklch(0.704 0.191 22.216));
+  --success: light-dark(oklch(0.508 0.118 165.612), oklch(0.765 0.177 163.223));
+  --warning: light-dark(oklch(0.555 0.163 48.998), oklch(0.828 0.189 84.429));
+  --info: light-dark(oklch(0.5 0.134 242.749), oklch(0.746 0.16 232.661));
+  --border: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 10%));
+  --input: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 15%));
+  --ring: light-dark(oklch(0.708 0 0), oklch(0.556 0 0));
+  --link: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
+}
+:root.light {
+  color-scheme: light;
+}
+:root.dark {
+  color-scheme: dark;
 }
