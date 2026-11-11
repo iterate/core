@@ -84,7 +84,7 @@ export function AgentsHome({ agents, onOpen, onCreate, onMessage }) {
                           />
                           <span class="truncate">${agentTitle(row)}</span>
                         <//>
-                        <${CardDescription} className="truncate font-mono text-2xs">${row.path}<//>
+                        <${CardDescription} className="truncate text-2xs">${row.path}<//>
                       <//>
                     <//>
                   </li>

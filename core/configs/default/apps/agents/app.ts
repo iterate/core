@@ -4,6 +4,7 @@
 // to start an app of your own.
 import { installAgents } from "iterate/agents/install";
 import { serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
+import theme from "../theme.css";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import files from "./public/";
@@ -42,7 +43,8 @@ export function agentsApp() {
       if (url.pathname === "/.auth/logout")
         return new Response(null, { status: 307, headers: { location: "/.iterate/sign-out" } });
       // A file of public/ by its path; any other page load is index.html.
-      return serveFiles(request, { index, files });
+      // the app's own files, and the one theme file that every app of this mind shares
+      return serveFiles(request, { index, files: { ...files, "theme.css": theme } });
     },
   };
 }

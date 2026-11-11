@@ -192,6 +192,10 @@ apps/<name>/
   from `iterate/sdk` answers a path that names a file with that file, and any other page load with
   `index`. So a commit publishes the page with the worker, as one thing.
 - **The page loads packages from a URL**, pinned in its import map (the page below shows how).
+- **One look for every app: `apps/theme.css`.** Each app serves that one file at `/theme.css`
+  (`app.ts`) and its page links it after the UI kit's style sheet. It holds the colours and the
+  corners (shadcn's theme variables). The apps are light, whatever the visitor's system says; to
+  make them all dark, change `light` to `dark` in the file's `color-scheme` line.
 - **The member's `itx` in the page.** `host.auth.itx(request)`, answered from a path of the app's
   choosing, makes that path a WebSocket to the mind's `itx` for the member who is signed in on
   that host: `newWebSocketRpcSession(new WebSocket("/itx"))`, a capnweb session

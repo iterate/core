@@ -102,7 +102,7 @@ function App() {
         listing=${undefined}
       />
     <//>
-    <${Toaster} theme="dark" />
+    <${Toaster} theme=${document.documentElement.classList.contains("dark") ? "dark" : "light"} />
   `;
 }
 

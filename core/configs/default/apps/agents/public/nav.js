@@ -102,7 +102,7 @@ function AgentsNavRow({ row, active, pinned, onOpen, onTogglePinned }) {
         </span>
         <span class="flex min-w-0 flex-col">
           <span class="truncate text-sm">${agentTitle(row)}</span>
-          <span class="truncate font-mono text-2xs text-muted-foreground">${row.path}</span>
+          <span class="truncate text-2xs text-muted-foreground">${row.path}</span>
         </span>
       <//>
       <button

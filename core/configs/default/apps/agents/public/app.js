@@ -107,13 +107,13 @@ function App() {
       mind=${domain}
       mindHref=${() => "./"}
       nav=${html`<${AgentsNav} mind=${domain} agents=${agents} agent=${agent} onOpen=${open} />`}
-      header=${agent ? html`<span class="truncate font-mono text-sm">${agent}</span>` : null}
+      header=${agent ? html`<span class="truncate text-sm">${agent}</span>` : null}
       account=${principal}
       locationKey=${href}
     >
       ${chat || home}
     <//>
-    <${Toaster} theme="dark" />
+    <${Toaster} theme=${document.documentElement.classList.contains("dark") ? "dark" : "light"} />
   `;
 }
 
