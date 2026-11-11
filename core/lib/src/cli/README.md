@@ -1,6 +1,7 @@
 # The iterate CLI
 
-The `iterate` command for one mind at a time, addressed by its domain (`iterate/mind-api`).
+The `iterate` command: each call talks to one mind, addressed by its domain (`iterate/mind-api`),
+and a machine keeps a [profile](#profiles) for each mind it uses.
 Requires Node >=22.18; no Bun runtime. It is part of the SDK's package, [`iterate`](../../README.md),
 and every connection it makes is the Node client's ([`iterate/node`](../node.ts)).
 
@@ -240,17 +241,27 @@ mind, the command runs `iterate login` first. Then it sends one test request on 
 
 ## Profiles
 
-Profiles live in `${XDG_CONFIG_HOME:-~/.config}/iterate/config.json`, each naming one mind.
-Selection order is `--config`, a parent-directory workspace mapping, the default profile, the only
+One machine can hold several minds side by side. A profile names one mind. Profiles live in
+`${XDG_CONFIG_HOME:-~/.config}/iterate/minds.json`, and the sign-ins in `sessions.json` beside it,
+one per mind, so a sign-in to one mind never replaces another's. Selection order is `--config`,
+the profile the current folder or a parent of it is mapped to, the default profile, the only
 profile, then `default`. `iterate login <address>` points the selected profile at the mind.
+`--mind <address>` names another mind for one command, with that mind's own sign-in.
 
 ```sh
-iterate config set --name work --mind example.com --set-default
-iterate --config work whoami
-iterate config set --name lab --mind example.org --set-workspace
+iterate login example.com                  # the profile `default`
+iterate config set --name lab              # a second profile
+iterate --config lab login example.org     # sign it in; the first sign-in stays
+iterate whoami                             # example.com
+iterate --config lab whoami                # example.org
+iterate --config lab provide ./whatsapp.ts # both can run at once, each in its own terminal
+iterate config set --name lab --set-workspace   # in a folder: commands there use `lab`
+iterate config use lab                     # make it the default
 iterate config list
 iterate config get
 ```
+
+A command that needs a sign-in starts one when the profile's mind has none, `whoami` included.
 
 ## Node REPL
 
