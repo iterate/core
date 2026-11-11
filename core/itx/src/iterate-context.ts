@@ -95,7 +95,7 @@ class SubscriptionHandleRpcTarget extends RpcTarget {
 
 // Declaration merging types the built-in roots; the prototype fallback below is the runtime.
 export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd" | "facets"> {
-  facets: Omit<IterateContextApi["facets"], "lend" | "revokeLend">;
+  facets: IterateContextApi["facets"];
 }
 
 type StatelessReach = (

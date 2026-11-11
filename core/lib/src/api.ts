@@ -265,17 +265,13 @@ export type SecretCatalogEntry = {
   /** The material's public fields (`set`'s `public`, a collection form's public parts), by name:
    *  an OAuth client's `clientId` beside the secret that holds its `clientSecret`. */
   public?: Record<string, string>;
-  /** A path that forwards every use to a secret elsewhere: a person's account connected to this
-   *  mind (`integrations.connect(provider, { account })`), or the deployment's own secret its
-   *  operator lent (`itx.secrets.lend`) — whose, under which lend, and the connection it is. */
+  /** A path that forwards every use to a secret elsewhere, as a lend of the old platform left it:
+   *  whose, under which lend, and the connection it is. packages/mind-backup reads it. */
   borrowed?: {
     lendId: string;
     lender: { userId: string; email?: string } | { instance: true };
     integration?: { provider: string; account: string; externalId: string };
   };
-  /** A lender's secret's live lends, by lend id: the mind (or `every-mind`) and the path it
-   *  is lent as. */
-  lends?: Record<string, { to: string; as: string; since: string }>;
 };
 
 /** THE OPERATIONS a secret may answer, the vault used as a signer: none unless the secret is made
@@ -471,14 +467,6 @@ export type SecretOAuthOptions = {
    *  a member of the mind, signed in. */
   anyoneWithLink?: boolean;
 } & SecretUses;
-
-/** How a lend to every mind went, mind by mind: how many borrow it, the minds that
- *  keep a secret of their own at its path, and the ones whose borrow failed. */
-export type EveryMindBorrows = {
-  borrowed: number;
-  kept: string[];
-  failed: { mindId: string; error: string }[];
-};
 
 /** An `R2Object` as `itx.r2` answers it: every field the class carries, as data — the key with the
  *  owner prefix stripped, dates as ISO strings, checksums as hex. */
@@ -1397,58 +1385,6 @@ export interface IterateContextApi {
      *  secrets Worker, for a secret made with it in `operations`. No string at the field answers
      *  false. A replayable token stays replayable: prefer `verifyHmac` wherever the sender signs. */
     verifyEquals(path: string, input: SecretEqualsVerification): Promise<boolean>;
-    /** The operator's, on the global root (`session.global`): lend the deployment's own secret to
-     *  a mind, as the mind's path `as`, or `to: "every-mind"`: every mind, one created
-     *  later included, borrows it unless its path holds a secret of its own. The mind's uses are
-     *  forwarded to this secret, and the material never leaves it. `revokeLend` ends it; so does a
-     *  mind deleting its path, for that mind alone. (A person's account reaches a mind
-     *  through `integrations.connect(provider, { account })` instead.) */
-    lend(
-      path: string,
-      input: { to: string; as: string },
-    ): Promise<{ lendId: string; everyMind?: EveryMindBorrows }>;
-    revokeLend(path: string, lendId: string): Promise<{ lendId: string }>;
-  };
-  /** Connect and disconnect this context's owner — a mind (its root), or a person
-   *  (`session.user`) — and a provider THROUGH THE DEPLOYMENT'S OWN APP there (`session.info()`'s
-   *  `iterateAppProviders`; a mind's own app at a provider is a package the mind hosts,
-   *  iterate/sdk `Integration`, which registers itself in `iterate/integrations`). `connect` answers
-   *  where to send the human (the platform's start link, as `secrets.beginOAuth`'s), and the
-   *  connection's name; again for one that exists asks for more
-   *  `scopes` on the same account. GitHub's `installationId` connects an installation the App
-   *  already has, without GitHub's configure page. On a mind, `account` connects one of YOUR
-   *  accounts instead — the address the provider gives it, as `session.user`'s
-   *  `state.integrations` lists it: with no `authorizationUrl` when it already holds what the
-   *  mind asks for, else one that asks the provider to add it. The mind then uses it as
-   *  `/secrets/<provider>-<connection>` while it stays connected and you stay a member.
-   *  `disconnect` revokes the token where the provider allows and removes the connection, its secret
-   *  and its webhook route; an account of yours disconnected from a mind stays yours.
-   *  `requestFromUser` answers a Dash link asking the signed-in person to connect the provider to
-   *  this mind. */
-  integrations: {
-    connect(
-      provider: IntegrationProvider,
-      options?:
-        | {
-            scopes?: string[];
-            next?: string;
-            connection?: string;
-            installationId?: string;
-            account?: never;
-          }
-        | {
-            scopes?: string[];
-            next?: string;
-            account: string;
-            connection?: never;
-            installationId?: never;
-          },
-    ): Promise<{ authorizationUrl?: string; connection: string }>;
-    disconnect(provider: IntegrationProvider, connection: string): Promise<void>;
-    requestFromUser(
-      provider: IntegrationProvider,
-      options?: { scopes?: string[] },
-    ): Promise<{ url: string }>;
   };
   /** The mind's fetch routes, on its root `/`: which itx expression, the route's `target`, a
    *  request on its hosts goes to. `set` appends one `itx/fetch-route-configured` fact (`null`
@@ -1488,16 +1424,6 @@ export interface IterateContextApi {
      *  `events.iterate.com/itx/facet-aborted { name, reason?, callerPath?, app? }` event;
      *  `NO_FACET` for a name never hosted here. */
     abort(name: string, reason?: string): Promise<StreamEvent>;
-    /** LEND the facet `name` of this context to the person `to` (a user id), who need be no member
-     *  of the mind: their session reaches that facet, and nothing else
-     *  of the mind. A lend carries the facet's live state (`liveSnapshot` and
-     *  its deltas) and the methods its class lists in `static lentMethods`. Appends
-     *  `events.iterate.com/itx/facet-lent { facet, to }` here, and marks the mind's root as one
-     *  that lends. A first-party facet is never lent. Lending again is a no-op. */
-    lend(name: string, input: { to: string }): Promise<void>;
-    /** End a lend `lend` made: `events.iterate.com/itx/facet-lend-revoked { facet, to }`. The
-     *  person's next call on the facet is refused, and its live state stops reaching them. */
-    revokeLend(name: string, input: { to: string }): Promise<void>;
   };
   subscriptions: {
     list(): SubscriptionListEntry[];

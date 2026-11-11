@@ -80,7 +80,7 @@ export interface BuiltInScope {
     get(rpcStubKey: string): RpcStubHandle;
   };
   rewriteRules: IterateContextApi["rewriteRules"];
-  facets: Omit<IterateContextApi["facets"], "get" | "lend" | "revokeLend"> & {
+  facets: Omit<IterateContextApi["facets"], "get"> & {
     get(name: string, spec?: FacetSpec): FacetHandle;
   };
   subscriptions: IterateContextApi["subscriptions"];
