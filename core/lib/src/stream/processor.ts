@@ -53,6 +53,7 @@ import type { SqlStorageValue } from "@cloudflare/workers-types";
 import { codedError, diff, errorCode, jsonEqual, oneStepDeeper, reportIssue } from "../lib.ts";
 import { runCausedBy } from "../cause.ts";
 import type { Principal } from "../principal.ts";
+import type { Envelope } from "../signed.ts";
 import type { EmittedEventInput, ProcessorContract } from "./contract.ts";
 
 export * from "./contract.ts";
@@ -827,11 +828,24 @@ export type StreamEventInput = {
      *  connected client (a Claude Code install, a dash sign-in, a personal token). Stamped beside
      *  `principal` by the platform when it appends; absent for the admin secret and the kernel. */
     grant?: string;
-    /** WHO A SCRIPT WROTE THIS FOR: the person who asked for the run (`itx.run`, MCP's `run`), the
-     *  grant they asked through, and the request (`<path>@<offset>`). Attribution, never authority:
-     *  gate on `principal`, not this. Stamped by the platform; a writer's own is dropped. Why and
-     *  how: core/os/src/on-behalf-of.ts. */
-    onBehalfOf?: { principal: Principal; grant?: string; run: string };
+    /** HOW THE PRINCIPAL CAME, when not through the platform's API with a bearer: `appPage` is the
+     *  project host whose page held the session (iterate/sdk `auth.itx`). The page is the project's
+     *  code, so the member was there, but what the page sent in their name is the page's doing.
+     *  Stamped by the platform; a writer's own is dropped. */
+    via?: { appPage: string };
+    /** WHO CODE WROTE THIS FOR: the person who asked, the grant they asked through, how they came
+     *  (`via`, as above), and what they asked for. `run` is a script's request (`itx.run`, MCP's
+     *  `run`: `<path>@<offset>`); `call` is their own call into a facet, whose code then wrote this
+     *  (`<path>#<facet>.<method>`: `itx.agents.get(path).message()` is one). Attribution, never
+     *  authority: gate on `principal`, not this. Stamped by the platform; a writer's own is
+     *  dropped. Why and how: core/itx/src/on-behalf-of.ts. */
+    onBehalfOf?: {
+      principal: Principal;
+      grant?: string;
+      via?: { appPage: string };
+      run?: string;
+      call?: string;
+    };
     /** Set when a subscription row copied this event here (`itx.subscribe` with a path target): the
      *  event it's a copy of. The copy's own `createdAt` is when the copy landed, and copies can land
      *  in any order, so read this for when and where the original happened. Stamped by the
@@ -841,7 +855,14 @@ export type StreamEventInput = {
      *  what a processor folding an account's or an organization's facts requires — a client can
      *  append any type to a context it holds, never this. */
     platform?: true;
+    /** THE KEY THAT SIGNED IT: the event is a signed statement (`signed`) whose signature the auth
+     *  Worker verified, naming who holds the key and the key's id. Kept only on the platform's
+     *  append (caller.ts `stampCaller`); a writer's own is dropped. */
+    signer?: { principal: Principal; key: string };
   };
+  /** A SIGNED STATEMENT this event carries out (iterate/signed): the exact text and its
+   *  signature, kept as they came so anyone can check them again. */
+  signed?: Envelope;
   /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
   idempotencyKey?: string;
   /** OPTIONAL PRECONDITION: land at exactly this offset or refuse the whole batch with

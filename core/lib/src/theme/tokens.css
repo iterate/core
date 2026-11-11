@@ -1,32 +1,32 @@
 /* The look's values, as plain custom properties: nothing here needs Tailwind, so a page with no
    build can use the file as it is. theme.css gives them their Tailwind names.
 
-   The look of www.iterate.com, which took it from captun.sh, in the dark: monospace, light grey on
-   near-black, square corners, one border, one grey fill. color-scheme makes the native controls
-   and scrollbars dark too. */
+   The look of www.iterate.com, which took it from captun.sh: monospace, black on white, square
+   corners, one light border, one grey fill. Each colour is light-dark(light, dark): the OS's
+   setting picks one, and a change applies to an open page (color-scheme below). */
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
   --radius: 0;
-  --background: #111111;
-  --foreground: #eeeeee;
-  --card: #111111;
-  --card-foreground: #eeeeee;
-  --popover: #111111;
-  --popover-foreground: #eeeeee;
-  --primary: #eeeeee;
-  --primary-foreground: #111111;
-  --secondary: #222222;
-  --secondary-foreground: #eeeeee;
-  --muted: #222222;
-  --muted-foreground: #aaaaaa;
-  --accent: #222222;
-  --accent-foreground: #eeeeee;
-  --destructive: #ff8080;
-  --success: #75d994;
-  --warning: #e8bb63;
-  --info: #72cadd;
-  --border: #444444;
-  --input: #444444;
-  --ring: #eeeeee;
-  --link: #8ab4f8;
+  --background: light-dark(#ffffff, #111111);
+  --foreground: light-dark(#111111, #eeeeee);
+  --card: light-dark(#ffffff, #111111);
+  --card-foreground: light-dark(#111111, #eeeeee);
+  --popover: light-dark(#ffffff, #111111);
+  --popover-foreground: light-dark(#111111, #eeeeee);
+  --primary: light-dark(#111111, #eeeeee);
+  --primary-foreground: light-dark(#ffffff, #111111);
+  --secondary: light-dark(#f4f4f4, #222222);
+  --secondary-foreground: light-dark(#111111, #eeeeee);
+  --muted: light-dark(#f4f4f4, #222222);
+  --muted-foreground: light-dark(#555555, #aaaaaa);
+  --accent: light-dark(#f4f4f4, #222222);
+  --accent-foreground: light-dark(#111111, #eeeeee);
+  --destructive: light-dark(#a40000, #ff8080);
+  --success: light-dark(#1a7f37, #75d994);
+  --warning: light-dark(#9a6700, #e8bb63);
+  --info: light-dark(#0e7490, #72cadd);
+  --border: light-dark(#dddddd, #444444);
+  --input: light-dark(#dddddd, #444444);
+  --ring: light-dark(#111111, #eeeeee);
+  --link: light-dark(#0645ad, #8ab4f8);
 }

@@ -1,0 +1,426 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import * as Cloudflare from "@alchemy.run/cloudflare";
+import * as Alchemy from "alchemy";
+import * as Output from "alchemy/Output";
+import { Stage } from "alchemy/Stage";
+import { authConfigOf, firstOwnerTicketOf } from "core-auth/config";
+import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
+import { platformOriginOf } from "iterate/project-api";
+import { type ProjectConfig, resourceNamesOf } from "./config.ts";
+
+/** A path in `core/`, from this file: a deploy from any working directory finds it. */
+const core = (path: string) => resolve(import.meta.dirname, "../..", path);
+/** Without it a Worker's fetch to a hostname of its own zone skips every Worker's route there: a
+ *  stack that shares its zone with another Worker (the iterate Cloud, an issuer) must reach it. */
+const STRICTLY_PUBLIC = "global_fetch_strictly_public";
+
+export const projectStack = (config: ProjectConfig) =>
+  Effect.gen(function* () {
+    const names = resourceNamesOf(config.name);
+    const domain = config.domain;
+    const provided = config.project?.provided === true;
+    const stage = yield* Stage;
+    if (stage !== config.name)
+      return yield* refuse(
+        `the stage is ${stage}, but it must be the project's name: --stage ${config.name}`,
+      );
+
+    // The config decides, never the variable's presence: a deploy from a shell without it would put a
+    // generated key in the vault, and no stored value would open.
+    const givenAtRestKey = Option.getOrUndefined(
+      yield* Config.option(Config.Redacted("ITERATE_SECRETS_AT_REST_KEY")),
+    );
+    // An empty value counts as none: a shell that expands a missing variable sets one.
+    if (config.atRestKey === "environment" && !(givenAtRestKey && Redacted.value(givenAtRestKey)))
+      return yield* refuse(
+        'atRestKey is "environment", but ITERATE_SECRETS_AT_REST_KEY is not set: the vault keeps its key',
+      );
+    if (config.atRestKey !== "environment" && givenAtRestKey)
+      return yield* refuse(
+        'ITERATE_SECRETS_AT_REST_KEY is set, but the config does not say atRestKey: "environment"',
+      );
+    const atRestKey =
+      givenAtRestKey || (yield* Alchemy.Random("SecretsAtRestKey", { bytes: 32 })).text;
+    const signingKey = yield* Alchemy.Random("AuthSigningKey", { bytes: 32 });
+
+    const prototypeToken = Option.getOrUndefined(
+      yield* Config.option(Config.Redacted("ITERATE_PROTOTYPE_TOKEN")),
+    );
+
+    // An empty value counts as none, as above. Never in the config: the stored config would keep it.
+    const givenFirstOwnerTicket = Option.getOrUndefined(
+      yield* Config.option(Config.String("ITERATE_FIRST_OWNER_TICKET")),
+    );
+    const firstOwnerTicket =
+      givenFirstOwnerTicket && firstOwnerTicketOf(givenFirstOwnerTicket, config.auth);
+    if (firstOwnerTicket && "refused" in firstOwnerTicket)
+      return yield* refuse(`ITERATE_FIRST_OWNER_TICKET: ${firstOwnerTicket.refused}`);
+
+    // The telemetry part first: every other Worker exports its logs and traces to its destinations.
+    const telemetry = config.telemetry && (yield* telemetryPart(names));
+    const observability = observabilityOf(telemetry?.destinations);
+
+    const authSettings = { ...config.auth, ...(provided && { provide: true as const }) };
+    // Parsed here, so a config auth would refuse fails the deploy, not the first request.
+    authConfigOf(domain, authSettings);
+    const db = yield* Cloudflare.D1.Database("AuthDb", {
+      name: names.authDb,
+      migrations: core("auth/migrations"),
+    });
+    const kv = yield* Cloudflare.KV.Namespace("AuthKv", { title: names.authKv });
+    const authSendEmail = yield* Cloudflare.Email.SendEmail("AUTH_SEND_EMAIL");
+    const auth = yield* Cloudflare.Worker("Auth", {
+      name: names.auth,
+      main: core("auth/src/worker.ts"),
+      // A client metadata document is fetched from the public internet alone, which the OAuth library
+      // requires before it offers such clients at all.
+      compatibility: { date: COMPATIBILITY_DATE, flags: [STRICTLY_PUBLIC] },
+      observability,
+      workersDev: { enabled: false, previewsEnabled: false },
+      env: {
+        DOMAIN: domain,
+        ...(config.cloud && { CLOUD_ORIGIN: config.cloud.origin }),
+        AUTH_SETTINGS: JSON.stringify(authSettings),
+        AUTH_SIGNING_KEY: signingKey.text,
+        DB: db,
+        OAUTH_KV: kv,
+        SEND_EMAIL: authSendEmail,
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- an absent token is no binding: Alchemy's env takes a value for every key it is given, and `undefined` is none it can bind
+        ...(prototypeToken && { ITERATE_PROTOTYPE_TOKEN: prototypeToken }),
+        ...(firstOwnerTicket && { FIRST_OWNER_TICKET: JSON.stringify(firstOwnerTicket) }),
+      },
+    });
+
+    const secrets = yield* Cloudflare.Worker("Secrets", {
+      name: names.secrets,
+      main: core("secrets/src/worker.ts"),
+      // nodejs_compat: `node:crypto` and `Buffer`; Alchemy adds it by default only before 2026-08-04.
+      compatibility: { date: COMPATIBILITY_DATE, flags: ["nodejs_compat", STRICTLY_PUBLIC] },
+      observability,
+      codeUpdateStrategy: { mode: "immediate" },
+      workersDev: { enabled: false, previewsEnabled: false },
+      env: {
+        DOMAIN: domain,
+        ...(config.cloud && { CLOUD_ORIGIN: config.cloud.origin }),
+        SECRETS_AT_REST_KEY: atRestKey,
+        AUTH: Cloudflare.WorkerEntrypoint(auth, { entrypoint: "Auth" }),
+        SECRET: Cloudflare.DurableObject("SECRET", { className: "SecretDurableObject" }),
+        LOADER: Cloudflare.Workers.WorkerLoader("LOADER"),
+        APPROVALS: Cloudflare.DurableObject("APPROVALS", { className: "ApprovalsIndex" }),
+      },
+    });
+
+    const projectSigningKey =
+      !provided && (yield* Alchemy.Random("ProjectSigningKey", { bytes: 32 })).text;
+    // The boundary and the project bind each other: each binding is the Effect that declares the other
+    // Worker, which Alchemy resolves once both are registered, so both are declared before either is yielded.
+    const declaredProject =
+      projectSigningKey &&
+      Effect.gen(function* () {
+        const projectKv = yield* Cloudflare.KV.Namespace("ProjectKv", {
+          title: `${names.project}-kv`,
+        });
+        const artifacts = yield* Cloudflare.Artifacts.Namespace("ARTIFACTS", {
+          namespace: names.repos,
+        });
+        // A destroy empties the bucket first: R2 refuses to delete one that holds objects.
+        const bucket = yield* Cloudflare.R2.Bucket("FILES", {
+          name: names.files,
+          forceDestroy: true,
+        });
+        return yield* Cloudflare.Worker("Project", {
+          name: names.project,
+          main: core("project/src/worker.ts"),
+          // allow_irrevocable_stub_storage (experimental): loaded code stores its env.ITX stub and
+          // replays it; every worker in the chain needs it.
+          compatibility: {
+            date: COMPATIBILITY_DATE,
+            flags: ["nodejs_compat", "allow_irrevocable_stub_storage"],
+          },
+          // One capnweb session or MCP run is one long invocation, and a cold load is CPU-bound.
+          limits: { subrequests: 1_000_000, cpuMs: 300_000 },
+          observability,
+          // Cloudflare defers moving Durable Objects onto new code for up to five minutes, while the
+          // Worker in front of them already runs the new.
+          codeUpdateStrategy: { mode: "immediate" },
+          workersDev: { enabled: false, previewsEnabled: false },
+          env: {
+            DOMAIN: domain,
+            PROJECT_NAME: config.project?.name || config.name,
+            PROJECT_TEMPLATE: config.project?.template || "default",
+            DOOR: Effect.map(
+              Effect.suspend(
+                (): Effect.Effect<Cloudflare.Worker, unknown, unknown> => declaredBoundary,
+              ),
+              (boundary) => Cloudflare.WorkerEntrypoint(boundary, { entrypoint: "Door" }),
+            ),
+            CONTEXTS: Cloudflare.DurableObject("PROJECT_CONTEXT", {
+              className: "IterateContextDurableObject",
+            }),
+            CF_VERSION_METADATA: Cloudflare.Workers.VersionMetadata(),
+            LOADER: Cloudflare.Workers.WorkerLoader("LOADER"),
+            PROJECT_KV: projectKv,
+            ARTIFACTS: artifacts,
+            FILES: bucket,
+            PROJECT_SIGNING_KEY: projectSigningKey,
+            AI: Cloudflare.Workers.AI(),
+            // An imageless Container gives the class its `ctx.container`; the image is a Container of
+            // its own, which `ctx.container.images` holds under its name.
+            SANDBOX_CONTAINER: Cloudflare.DurableObject("SandboxContainer", {
+              containers: [
+                Cloudflare.Container("SandboxContainer", { schedulingPolicy: "durable_object" }),
+                ...(config.project?.sandboxImage === "managed"
+                  ? []
+                  : [
+                      Cloudflare.Container("iterate-dev-image", {
+                        schedulingPolicy: "durable_object",
+                        context: core("project/images/iterate-dev-image"),
+                      }),
+                    ]),
+              ],
+            }),
+            BROWSER: Cloudflare.Workers.Browser(),
+            IMAGES: Cloudflare.Images.Images(),
+            ...(telemetry && { TELEMETRY_METRICS: telemetry.metrics }),
+          },
+        });
+      });
+
+    const declaredBoundary = Effect.gen(function* () {
+      const boundarySendEmail = yield* Cloudflare.Email.SendEmail("SEND_EMAIL");
+      const hostnames = config.hostnames || "all";
+      const shared = {
+        name: names.boundary,
+        observability,
+        codeUpdateStrategy: { mode: "immediate" } satisfies Cloudflare.WorkerCodeUpdateStrategy,
+        workersDev: { enabled: false, previewsEnabled: false },
+        routes:
+          hostnames === "platform"
+            ? [{ pattern: `iterate.${domain}/*`, zoneName: domain }]
+            : [
+                { pattern: `${domain}/*`, zoneName: domain },
+                { pattern: `*.${domain}/*`, zoneName: domain },
+              ],
+      };
+      const bindings = {
+        DOMAIN: domain,
+        HOSTNAMES: hostnames,
+        AUTH: Cloudflare.WorkerEntrypoint(auth, { entrypoint: "Auth" }),
+        SECRETS: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "Secrets" }),
+        SECRET_USE: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "SecretUse" }),
+        SEND_EMAIL: boundarySendEmail,
+        ...(telemetry && {
+          TELEMETRY: Cloudflare.WorkerEntrypoint(telemetry.worker, { entrypoint: "Telemetry" }),
+        }),
+      };
+      // One logical id and Worker name for both modes, held from before the boundary existed: the live
+      // stacks' routes are attached to it (./config.ts `resourceNamesOf`).
+      if (declaredProject)
+        return yield* Cloudflare.Worker("Ingress", {
+          ...shared,
+          main: core("boundary/src/worker.ts"),
+          compatibility: { date: COMPATIBILITY_DATE, flags: [STRICTLY_PUBLIC] },
+          env: {
+            ...bindings,
+            PROJECT: Effect.map(declaredProject, (project) =>
+              Cloudflare.WorkerEntrypoint(project, { entrypoint: "Project" }),
+            ),
+          },
+        });
+      return yield* Cloudflare.Worker("Ingress", {
+        ...shared,
+        main: core("boundary/src/provided.ts"),
+        compatibility: { date: COMPATIBILITY_DATE, flags: ["nodejs_compat", STRICTLY_PUBLIC] },
+        // One `/provide` session is one long invocation: every call through it counts against its limits.
+        limits: { subrequests: 1_000_000, cpuMs: 300_000 },
+        env: {
+          ...bindings,
+          CONTEXTS: Cloudflare.DurableObject("INGRESS_CONTEXT", {
+            className: "IterateContextDurableObject",
+          }),
+          CF_VERSION_METADATA: Cloudflare.Workers.VersionMetadata(),
+        },
+      });
+    });
+    if (declaredProject) yield* declaredProject;
+    const boundary = yield* declaredBoundary;
+
+    const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
+    // A failed lookup is a defect: the body's error channel is ConfigError, and a rerun retries it.
+    const zone = yield* Cloudflare.Zone.findZoneByName({ accountId, name: domain }).pipe(
+      Effect.orDie,
+    );
+    if (!zone) return yield* refuse(`the account ${accountId} has no zone ${domain}`);
+    const records =
+      config.hostnames === "platform"
+        ? { PlatformRecord: new URL(platformOriginOf(domain)).hostname }
+        : { ApexRecord: domain, WildcardRecord: `*.${domain}` };
+    // A route fires only on a proxied hostname; with the Worker as the only origin, `AAAA 100::` is the
+    // placeholder Alchemy's docs give.
+    for (const [id, name] of Object.entries(records))
+      yield* Cloudflare.DNS.Record(id, {
+        zoneId: zone.id,
+        name,
+        type: "AAAA",
+        content: "100::",
+        proxied: true,
+      });
+
+    if (config.mail) {
+      const routing = yield* Cloudflare.Email.Routing("EmailRouting", { zone: zone.id });
+      yield* Cloudflare.Email.CatchAll("EmailCatchAll", {
+        zone: routing.zoneId,
+        actions: [{ type: "worker", value: [boundary.workerName] }],
+      });
+      // Email Sending on the apex adds the bounce and DKIM records the boundary's `send_email` needs.
+      yield* Cloudflare.Email.SendingSubdomain("EmailSending", { zoneId: zone.id, name: domain });
+    }
+    // Alchemy keeps the output in the state store once a deploy succeeded: a deploy with no config file
+    // reads the config back from it (./config.ts `storedProjectConfig`).
+    return { domain, boundary: boundary.workerName, config };
+  });
+
+const telemetryPart = (names: ReturnType<typeof resourceNamesOf>) =>
+  Effect.gen(function* () {
+    const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
+    const bucket = yield* Cloudflare.R2.Bucket("TelemetryBucket", {
+      name: names.telemetryBucket,
+      forceDestroy: true,
+    });
+    // a Basin Catalog sink refuses a token whose Data Catalog Write is the bucket's alone
+    const catalogToken = yield* Cloudflare.ApiToken.AccountApiToken("TelemetryCatalogToken", {
+      name: `${names.telemetryBucket}-catalog`,
+      policies: [
+        {
+          effect: "allow",
+          permissionGroups: ["Workers R2 Data Catalog Write"],
+          resources: { [`com.cloudflare.api.account.${accountId}`]: "*" },
+        },
+        {
+          effect: "allow",
+          permissionGroups: ["Workers R2 Storage Bucket Item Write", "Workers R2 SQL Read"],
+          resources: {
+            [`com.cloudflare.edge.r2.bucket.${accountId}_default_${names.telemetryBucket}`]: "*",
+          },
+        },
+      ],
+    });
+    const analyticsToken = yield* Cloudflare.ApiToken.AccountApiToken("TelemetryAnalyticsToken", {
+      name: `${names.telemetryBucket}-analytics`,
+      policies: [
+        {
+          effect: "allow",
+          permissionGroups: ["Account Analytics Read"],
+          resources: { [`com.cloudflare.api.account.${accountId}`]: "*" },
+        },
+      ],
+    });
+    const catalog = yield* Cloudflare.Basin.Catalog("TelemetryCatalog", {
+      bucket,
+      token: catalogToken.value,
+      compaction: { state: "enabled" },
+      snapshotExpiration: { state: "enabled", maxSnapshotAge: "1d", minSnapshotsToKeep: 5 },
+    });
+    const streams = {} as Record<"events" | "logs" | "spans", Cloudflare.Basin.Stream>;
+    for (const table of ["events", "logs", "spans"] as const) {
+      const prefix = `${names.telemetryTables}_${table}`;
+      // a stream's schema never changes: a column change is a new table
+      const stream = yield* Cloudflare.Basin.Stream(`Telemetry_${table}_stream`, {
+        name: `${prefix}_stream`,
+        format: { type: "json" },
+        http: false,
+        workerBinding: { enabled: true },
+        schema: JSON.parse(
+          readFileSync(core(`telemetry/schemas/${table}.json`), "utf8"),
+        ) as Cloudflare.Basin.StreamFieldsSchema,
+      });
+      const sink = yield* Cloudflare.Basin.Sink(`Telemetry_${table}_sink`, {
+        name: `${prefix}_sink`,
+        type: "basin_catalog",
+        catalog,
+        table: { namespace: "telemetry", name: table },
+        token: catalogToken.value,
+        format: { type: "parquet", compression: "zstd", rowGroupBytes: 32 * 1024 * 1024 },
+        rollingPolicy: { intervalSeconds: 60 },
+      });
+      yield* Cloudflare.Basin.Pipeline(`Telemetry_${table}_pipeline`, {
+        name: prefix,
+        sql: Output.interpolate`INSERT INTO ${sink.name} SELECT * FROM ${stream.name}`,
+      });
+      streams[table] = stream;
+    }
+    const metrics = yield* Cloudflare.AnalyticsEngine.Dataset("TELEMETRY_METRICS", {
+      dataset: names.telemetryDataset,
+    });
+    const otlpSecret = yield* Alchemy.Random("TelemetryOtlpSecret", { bytes: 32 });
+    const worker = yield* Cloudflare.Worker("Telemetry", {
+      name: names.telemetry,
+      main: core("telemetry/src/worker.ts"),
+      compatibility: { date: COMPATIBILITY_DATE },
+      // never exported to itself: a failure to land would make more of what failed to land
+      observability: {
+        enabled: true,
+        headSamplingRate: 1,
+        logs: { enabled: true, headSamplingRate: 1, persist: true, invocationLogs: true },
+        traces: { enabled: true, headSamplingRate: 1, persist: true },
+      },
+      // Cloudflare refuses to change a destination's URL once it is made, and tests it on every
+      // other update: the export's intake stays on this workers.dev address and never moves.
+      workersDev: { enabled: true, previewsEnabled: false },
+      env: {
+        ACCOUNT_ID: accountId,
+        TELEMETRY_BUCKET: names.telemetryBucket,
+        METRICS_DATASET: names.telemetryDataset,
+        OWN_WORKERS: [names.project, names.boundary].join(","),
+        PROJECT_WORKER: names.project,
+        TELEMETRY_OTLP_SECRET: otlpSecret.text,
+        TELEMETRY_CATALOG_TOKEN: catalogToken.value,
+        TELEMETRY_ANALYTICS_TOKEN: analyticsToken.value,
+        LOGS: streams.logs,
+        SPANS: streams.spans,
+        EVENTS: streams.events,
+        METRICS: metrics,
+      },
+    });
+    const authorization = Output.map(otlpSecret.text, (secret) =>
+      Redacted.make(`Bearer ${Redacted.value(secret)}`),
+    );
+    const destination = (dataset: "traces" | "logs") =>
+      Cloudflare.Workers.ObservabilityDestination(`Telemetry_${dataset}`, {
+        name: `${names.telemetry}-${dataset}`,
+        url: Output.interpolate`${worker.url}/v1/${dataset}`,
+        headers: { authorization },
+        logpushDataset: `opentelemetry-${dataset}`,
+        enabled: true,
+        // a fresh workers.dev hostname is not routed everywhere yet (1042)
+        skipPreflightCheck: true,
+      });
+    const traces = yield* destination("traces");
+    const logs = yield* destination("logs");
+    return { worker, metrics, destinations: { traces: [traces.slug], logs: [logs.slug] } };
+  });
+
+const observabilityOf = (destinations?: {
+  traces: Output.Output<string>[];
+  logs: Output.Output<string>[];
+}) => ({
+  enabled: true,
+  headSamplingRate: 1,
+  logs: {
+    enabled: true,
+    headSamplingRate: 1,
+    persist: true,
+    invocationLogs: true,
+    destinations: destinations?.logs,
+  },
+  traces: { enabled: true, headSamplingRate: 1, persist: true, destinations: destinations?.traces },
+});
+
+const refuse = (message: string) =>
+  Effect.fail(new Config.ConfigError(new ConfigProvider.SourceError({ message })));

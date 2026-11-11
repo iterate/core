@@ -21,6 +21,7 @@ import {
   StreamProcessor,
 } from "../stream/processor.ts";
 import type { IterateContextApi } from "../api.ts";
+import { secretPathsIn } from "../secret-placeholder.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 import { formatScriptDuration, renderScriptSettlement } from "./result-render.ts";
 import {
@@ -1729,6 +1730,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       Math.max(1_000, open.expiresAt - startedAt),
     );
     try {
+      // begun here, beside the reads below, so the incarnation's first request seldom waits for it
+      void this.#refreshSecretsSet(secretPathsOf(state.config.llm.apiKeys));
       const { path } = await raceAbort(controller.signal, this.#identity());
       // raced, so the expiry frees a request stuck before its stream (a hung read) too
       const input = await raceAbort(
@@ -2038,6 +2041,12 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   /** This incarnation's warm-up, so a second press while it runs sends no second ping. */
   #warming = false;
 
+  /** What this incarnation last learned of each secret its keys name: whether it is set. Kept for
+   *  the incarnation, refreshed behind each model request (`#keysNotSet`). */
+  readonly #secretsSet = new Map<string, boolean>();
+  /** The refresh of `#secretsSet` in flight, so a request that comes meanwhile starts no second. */
+  #secretsRefresh: Promise<void> | undefined;
+
   /** This incarnation's way out to a model with the project's own keys. One per incarnation, since
    *  the agent's sockets are kept per `send` (responses-keys.ts): a new incarnation opens its own. */
   readonly #send = (request: Request) => {
@@ -2126,15 +2135,15 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     }
   }
 
-  /** One STREAMED Responses API call with the one tool, read by `readAnswer`. With no `apiKeys`, an
-   *  `openai/…` Workers AI partner model through `itx.ai` and the account's AI Gateway: Cloudflare's
-   *  billing, no key, and the gateway's spend limits partition on the metadata (project, stream
-   *  path). With `apiKeys`, the project's own credentials, straight at api.openai.com through the
-   *  isolate's `fetch`, on the agent's WebSocket when one is open, each key in turn until one's
-   *  answer completes (responses-keys.ts). Either way each answer has `llm.streamIdleTimeoutMs` of
-   *  silence before it fails, measured from its request. `store: false` with the encrypted
-   *  reasoning included: nothing lives on the provider's side, and the reasoning comes back on the
-   *  next request (render.ts). */
+  /** One STREAMED Responses API call with the one tool, read by `readAnswer`. With no `apiKeys`, or
+   *  at their `AI_GATEWAY` entry, an `openai/…` Workers AI partner model through `itx.ai` and the
+   *  account's AI Gateway: Cloudflare's billing, no key, and the gateway's spend limits partition on
+   *  the metadata (project, stream path). Each other entry is the project's own key, straight at
+   *  api.openai.com through the isolate's `fetch`, on the agent's WebSocket when one is open, each
+   *  in turn until one's answer completes (responses-keys.ts). Either way each answer has
+   *  `llm.streamIdleTimeoutMs` of silence before it fails, measured from its request.
+   *  `store: false` with the encrypted reasoning included: nothing lives on the provider's side,
+   *  and the reasoning comes back on the next request (render.ts). */
   async #stream({
     model,
     input,
@@ -2148,8 +2157,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     llm,
   }: {
     model: string;
-    /** The agent's `llm` config: its reasoning effort, its keys (empty goes through the AI
-     *  Gateway), its service tier and its idle budget. */
+    /** The agent's `llm` config: its reasoning effort, its keys (empty, or the `AI_GATEWAY` entry,
+     *  goes through the AI Gateway), its service tier and its idle budget. */
     llm: AgentState["config"]["llm"];
     input: InputItem[];
     /** The provider's prompt-cache routing key (promptCacheKey). */
@@ -2186,22 +2195,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     if (notes) notes.repairedStrings = repaired;
     const read = (response: Response, attempt: StreamAttempt) =>
       readAnswer(model, response, attempt, { onAnswer, onDelta });
-    if (llm.apiKeys.length > 0) {
-      return postResponses(
-        this.#send,
-        { model, ...body },
-        llm.apiKeys,
-        signal,
-        llm.streamIdleTimeoutMs,
-        read,
-        ({ keys, ...failure }) => {
-          console.warn({ event: "agent.api-key-failed", keys, ...failure });
-          notes?.failedKeys.push(failure);
-        },
-      );
-    }
-    const { projectId, path } = await this.#identity();
-    return withStreamAttempt(signal, llm.streamIdleTimeoutMs, async (attempt) => {
+    const gateway = async (attempt: StreamAttempt) => {
+      const { projectId, path } = await this.#identity();
       using itx = this.deps.getItx();
       const raw: unknown = await raceAbort(
         attempt.signal,
@@ -2225,9 +2220,70 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       if (!(raw instanceof Response))
         throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
       return read(raw, attempt);
+    };
+    if (llm.apiKeys.length === 0)
+      return withStreamAttempt(signal, llm.streamIdleTimeoutMs, gateway);
+    return postResponses(
+      this.#send,
+      { model, ...body },
+      llm.apiKeys,
+      signal,
+      llm.streamIdleTimeoutMs,
+      read,
+      ({ keys, ...failure }) => {
+        console.warn({ event: "agent.api-key-failed", keys, ...failure });
+        notes?.failedKeys.push(failure);
+      },
+      { gateway, notSet: await this.#keysNotSet(llm.apiKeys, signal) },
+    );
+  }
+
+  /** The entries of `apiKeys` whose secret this incarnation last saw not set: no request is sent
+   *  with them. Each call refreshes what it remembers behind the request, so a change is used one
+   *  request later. Only a path with no answer yet (the incarnation's first request, a key the
+   *  config gained) makes the request wait, raced against `signal`, and `#runLlmRequest` begins
+   *  the refresh early so that wait is short; a path the refresh could not answer is tried. */
+  async #keysNotSet(apiKeys: readonly string[], signal: AbortSignal): Promise<Set<string>> {
+    const paths = secretPathsOf(apiKeys);
+    if (paths.length === 0) return new Set();
+    const refresh = this.#refreshSecretsSet(paths);
+    if (paths.some((path) => !this.#secretsSet.has(path))) await raceAbort(signal, refresh);
+    return new Set(
+      apiKeys.filter((key) =>
+        secretPathsIn(key).some((path) => this.#secretsSet.get(path) === false),
+      ),
+    );
+  }
+
+  /** The refresh of `#secretsSet` in flight, or a new one: one `secrets.describe` per path, in
+   *  parallel. It never rejects: a failure is logged and keeps what is remembered, and a path with
+   *  no answer yet is then remembered as set, so its key is tried and no later request waits. */
+  #refreshSecretsSet(paths: string[]): Promise<void> {
+    if (this.#secretsRefresh) return this.#secretsRefresh;
+    if (paths.length === 0) return Promise.resolve();
+    const refresh = (async () => {
+      try {
+        using itx = this.deps.getItx();
+        const described = await Promise.all(paths.map((path) => itx.secrets.describe(path)));
+        for (const [index, path] of paths.entries())
+          this.#secretsSet.set(path, described[index]?.set === true);
+      } catch (error) {
+        console.warn({
+          event: "agent.secrets-describe-failed",
+          error: String(error).slice(0, 300),
+        });
+        for (const path of paths) if (!this.#secretsSet.has(path)) this.#secretsSet.set(path, true);
+      }
+    })().finally(() => {
+      if (this.#secretsRefresh === refresh) this.#secretsRefresh = undefined;
     });
+    this.#secretsRefresh = refresh;
+    return refresh;
   }
 }
+
+/** The secrets the entries of `apiKeys` name by their placeholders, each once. */
+const secretPathsOf = (apiKeys: readonly string[]) => [...new Set(apiKeys.flatMap(secretPathsIn))];
 
 /** ONE ANSWER read to its end: the text and thinking it adds reach `onDelta` as they stream; the
  *  answer is the response's own items (stored for exact replay), its prose, its first `run` call,

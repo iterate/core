@@ -48,6 +48,10 @@ import {
 export const SECRET_OAUTH_TTL_MS = 60 * 60_000;
 
 /** The options validated and normalized — the shape the pending attempt and the exchange read. */
+/** The one client this platform names: the deployment's own app. iterate Cloud's (`{ cloud }`) is
+ *  the project stack's, refused by `secretOAuthClientOf`. */
+export type PlatformOAuthClient = Extract<SecretOAuthClient, { platform: unknown }>;
+
 export type NormalizedSecretOAuthOptions = {
   authorizationEndpoint: string;
   tokenEndpoint: string;
@@ -55,7 +59,7 @@ export type NormalizedSecretOAuthOptions = {
   clientId: string;
   /** "" for a public client, and with `client`. A placeholder stays one here and in the record. */
   clientSecret: string;
-  client: SecretOAuthClient | null;
+  client: PlatformOAuthClient | null;
   clientAuth: ClientAuth;
   scope?: string;
   urls: string[];
@@ -122,7 +126,7 @@ export const SECRET_OAUTH_CALLBACK_PATH = "/.secrets/oauth/callback";
 /** The redirect URI path of an attempt on the platform: a deployment app's is its provider's
  *  callback, the URL iterate's Slack app and Google client are registered with, and every other
  *  attempt's `SECRET_OAUTH_CALLBACK_PATH`. worker.ts serves all of them with the same callback. */
-export function secretOAuthCallbackPathOf(client: SecretOAuthClient | null): string {
+export function secretOAuthCallbackPathOf(client: PlatformOAuthClient | null): string {
   if (!client) return SECRET_OAUTH_CALLBACK_PATH;
   return `/api/integrations/${client.platform}/callback`;
 }
@@ -274,7 +278,7 @@ function jsonPathOf(json: unknown, path: string): unknown {
 }
 
 /** `client` checked: absent, or `{ platform }` naming an OAuth integration's provider. */
-function secretOAuthClientOf(value: unknown): SecretOAuthClient | null {
+function secretOAuthClientOf(value: unknown): PlatformOAuthClient | null {
   if (value === undefined) return null;
   const platform =
     isRecord(value) && OAUTH_INTEGRATION_PROVIDERS.find((name) => name === value.platform);

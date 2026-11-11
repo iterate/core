@@ -24,9 +24,9 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { newHttpBatchRpcSession } from "capnweb";
-import { connectIterate } from "iterate/node";
 import { createCli } from "trpc-cli";
 import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
+import { connectIterate } from "./connect-iterate.ts";
 
 /** Open a browser signed in to local OS, on a project — starting the dev server and creating the project when missing */
 export default async function getin(

@@ -126,8 +126,9 @@ import {
 import { SecretProcessor } from "./processor.ts";
 
 /** The deployment's apps a strategy names as its client (`{ platform }`, secrets.ts). */
-type OAuthPlatform = NonNullable<
-  Extract<SecretRefresh, { kind: "oauth-refresh-token" }>["client"]
+type OAuthPlatform = Extract<
+  Extract<SecretRefresh, { kind: "oauth-refresh-token" }>["client"],
+  { platform: unknown }
 >["platform"];
 
 /** THE CURRENT MATERIAL, as the reduce keeps it: the offset of the write that put it there and the
@@ -1498,7 +1499,12 @@ export class SecretFacet extends StreamProcessorDurableObject<
           ...(isRecord(record.material) && record.material),
           accessToken: await this.#githubInstallationToken(refresh, record, pinnedDispatch),
         };
-      else if (refresh.kind === "oauth-refresh-token" && refresh.client?.platform)
+      else if (
+        refresh.kind === "oauth-refresh-token" &&
+        refresh.client &&
+        "platform" in refresh.client &&
+        refresh.client.platform
+      )
         next = await this.#platformRefresh(refresh, refresh.client, record, pinnedDispatch);
       else if (refresh.kind === "oauth-refresh-token" && refresh.client)
         // A record from before own-app mode left the platform names `client: { project }` and holds

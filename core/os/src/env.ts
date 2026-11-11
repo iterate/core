@@ -2,7 +2,7 @@
 // the control plane's D1 among them) plus the issuer's own — the OAuth provider's KV, the browser
 // sessions and the issuer's page files.
 
-import type { BrowserSession } from "iterate/app-session";
+import type { BrowserSession } from "./app-session.ts";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
 
 /** Platform bindings for the issuer, public APIs and project ingress. */

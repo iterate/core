@@ -1,99 +1,48 @@
 # The iterate CLI
 
-The `iterate` command for Iterate (`core/os`). Requires Node >=22.18; no Bun runtime. It is
-part of the SDK's package, [`iterate`](../../README.md). `npm install -g iterate` installs
-the `iterate` command the examples below use.
+The `iterate` command for one project at a time, addressed by its domain (`iterate/project-api`).
+Requires Node >=22.18; no Bun runtime. It is part of the SDK's package, [`iterate`](../../README.md),
+and every connection it makes is the Node client's ([`iterate/node`](../node.ts)).
 
 ```sh
 npx iterate                               # offline help
-npx iterate login                         # browser OAuth with project consent
-npx iterate login --device                # approve from a phone or another computer
-npx iterate projects list
-npx iterate orgs list
-npx iterate ping
-npx iterate repl --project my-project     # local Node REPL
-npx iterate itx run --project my-project --eval 'return await itx.whoami();'
-npx iterate tokens create --name my-script --project my-project   # a personal access token
-npx iterate tokens list
-npx iterate tokens revoke pat_…
-npx iterate mcp claude                    # Claude Code on /mcp with ITERATE_BEARER_TOKEN
-npx iterate use-my-computer --project my-project --name myComputer
-npx iterate tunnel 5173 --project my-project --name blog  # a local port on a project host
-npx iterate provide ./whatsapp.ts --project my-project  # a local file's functions as itx.whatsapp
+npx iterate login example.com             # sign in, and make it the profile's project
+npx iterate login example.com --device    # approve from a phone, when the issuer offers it
+npx iterate whoami
+npx iterate repl --context /notes         # local Node REPL
+npx iterate itx run --eval 'return await itx.whoami();'
+npx iterate mcp claude                    # the command that adds the project's MCP server to Claude Code
+npx iterate use-my-computer --name myComputer
+npx iterate tunnel 5173 --name blog       # a local port on blog.<address>
+npx iterate provide ./whatsapp.ts         # a local file's functions as itx.whatsapp
+npx iterate chatgpt connect example.com   # a ChatGPT plan pays for the project's Responses requests
 npx iterate logout
 npx iterate fs read ./notes.md            # a file's bytes on stdout; also write, stat, lstat, ls, mkdir, mv, rm
 ```
 
-The default server is `https://os.iterate.com`. Login uses that server's OAuth
-issuer, PKCE and a loopback callback, and asks for the `iterate` scope alone.
-Tokens refresh automatically before a command when close to expiry.
-`ITERATE_BEARER_TOKEN` supplies a personal access token for scripts and
-`mcp claude` (`tokens create` prints one once; it works at `/api`, `/mcp` and the
-projects' hosts). `ITERATE_ADMIN_BEARER` supplies the operator's
-credentials, which only `/api` accepts, and takes precedence. The `tokens`
-commands use neither, nor the stored login: each signs in in the browser with the
-`account` scope for its one call and ends that sign-in, so a stored login mints
-no key. `mcp claude` prints a command that reads the key from
-`$ITERATE_BEARER_TOKEN`, never the key itself. See
-[credentials](../../../os/docs/credentials.md).
-`ITERATE_SKIP_BROWSER_OPEN=1` prints the login URL without opening a browser.
+`--project <address>` names another project for one command. A project's API is
+`https://iterate.<address>/api`, and its issuer is whatever the API's protected-resource metadata
+names (RFC 9728): the CLI finds it, registers itself there (RFC 7591), and signs in with PKCE and a
+loopback callback for the API as the resource (RFC 8707). The sign-in is kept per resource in
+`${XDG_CONFIG_HOME:-~/.config}/iterate/sessions.json`, mode 600, and refreshed before a connection
+when it ends within the minute. `ITERATE_PROJECT_TOKEN` supplies a token for scripts and replaces
+the sign-in. `ITERATE_SKIP_BROWSER_OPEN=1` prints the sign-in URL without opening a browser.
+`logout` ends the sign-ins at the issuer, when it can revoke, and forgets them.
 
 ### Login without a browser
 
-`iterate login --device` signs in a computer whose browser nobody sees, such as
-a remote machine or an agent's. The person opens the printed page on any device,
-or scans the QR code, checks the code, approves, and picks the projects. The CLI
-polls for five minutes at most. It is the default over SSH (`SSH_CONNECTION`),
-on Linux with no display, and under a coding agent; `ITERATE_LOGIN_FLOW=browser`
-or `=device` overrides that. It grants `iterate` on `/api` alone, so the `tokens`
-commands still sign in in a browser on this computer. Every login prints whom it
-signed in. `--expect-user` ends and discards a session for anyone else.
+`iterate login --device` signs in a computer whose browser nobody sees, such as a remote machine or
+an agent's, when the project's issuer offers the device flow (RFC 8628,
+`device_authorization_endpoint` in its metadata). The person opens the printed page on any device,
+or scans the QR code, checks the code and approves. It is the default over SSH (`SSH_CONNECTION`),
+on Linux with no display, and under a coding agent; `ITERATE_LOGIN_FLOW=browser` or `=device`
+overrides that. With an issuer that does not offer it, the CLI prints the loopback flow's URL
+instead, which needs this machine's localhost. Every login prints whom it signed in.
+`--expect-user` ends and discards a session for anyone else.
 
-```text
-$ iterate login --device --expect-user me@example.com
-To sign in, open this page in a browser on any device:
-
-  https://os.iterate.com/oauth2/device
-
-and enter the code:  WDJB-MJHT
-
-Or scan this QR code, or open the link under it. Both fill in the code:
-
-  █████████████████████████████████████████
-  █████████████████████████████████████████
-  ████ ▄▄▄▄▄ █ ██▀▀  ▀▄ ▄▀█▄█▄▀█ ▄▄▄▄▄ ████
-  ████ █   █ █  ▀█ █▄██▄ ▄█▄   █ █   █ ████
-  ████ █▄▄▄█ █▀  █▄███▀█▄▀█▀▄▄██ █▄▄▄█ ████
-  ████▄▄▄▄▄▄▄█▄█ ▀▄▀▄▀ ▀▄▀ ▀ ▀ █▄▄▄▄▄▄▄████
-  ████  ▀▀▄▄▄▀▀█▄█▄ ▀█▀▄▀▀█ █▀█▀█ █▄ ▄▄████
-  █████ ▄▀ ▄▄▀▀ ▄█▀█▀█▄  ▀█▀█ ▄▀█ ▀▀▄▄█████
-  ████ ▀▀█ ▄▄ ▀█▀▄▀▄▄▄█ ▄▄█▄▄▀▄█▄ ▄▄█▄▄████
-  ████▄▀  ▄ ▄█▄▄▄ ▄ ▄ ▄  █  ▀▄ ▄██  ▄▄█████
-  ████ █▀█▄▀▄▄ ▀██▄ ▀█ ██▄▄▄▄ ▄▀▄▀▄▀██▄████
-  █████▀ █  ▄▀▄ ▀█▀█▀  ▀ ▀▄ █▄  █▄ ▀▄▄█████
-  ████▀█▀▀▄▄▄ ▄▀█▄▀▄▄▄▀█▀▄█▄    ▄ ▄▀██▄████
-  ██████▄█  ▄▄▄▄▄ ▄ ▄▄  ▄█ ▀▀  ▄ ▀▄█▄▄█████
-  ████▄▄▄▄▄▄▄█ ███▄ ▀▄▀▀▀▄█ ▄▄ ▄▄▄ ▀█ █████
-  ████ ▄▄▄▄▄ █▀▄▀█▀█▀ █▀█▀  ▄█ █▄█ █▄▄█████
-  ████ █   █ █▄ █▄▀▄▄▄▀█▀█▀▄▄▀▄▄ ▄ ▄▀▄█████
-  ████ █▄▄▄█ █▀▀▀ ▄ ▄ █▀██ ▀▄▀ █▄▀▄▀▄██████
-  ████▄▄▄▄▄▄▄█▄▄▄█▄▄█▄█▄▄▄▄▄▄▄▄██▄▄███▄████
-  █████████████████████████████████████████
-  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-  https://os.iterate.com/oauth2/device?user_code=WDJB-MJHT
-
-The code expires in 5 minutes. Waiting for approval...
-message: "Logged in as me@example.com"
-```
-
-In a terminal with colors, the QR code is drawn as `qrencode -t ANSI` draws it:
-each module is two spaces on a black or bright white background, so it reads
-the same in any theme and at any line height (76 columns by 37 rows). The
-transcript shows the form without colors, for a pipe, `NO_COLOR` or
-`TERM=dumb`: half blocks in the text color, which scan in a dark terminal whose
-lines touch. `FORCE_COLOR=1` forces the colors, for example under an agent whose
-output shows them. The link under the code works everywhere.
+In a terminal with colors, the QR code is drawn as `qrencode -t ANSI` draws it; without colors (a
+pipe, `NO_COLOR`, `TERM=dumb`) as half blocks in the text color. `FORCE_COLOR=1` forces the colors.
+The link under the code works everywhere.
 
 ## Files of this machine
 
@@ -107,27 +56,24 @@ two entry points, so a file is streamed by one code path.
 
 ## Running scripts
 
-`itx run` executes a JavaScript function body on the platform with `itx` in scope.
-Use `return` for the result. The server records the run and its settlement;
-the CLI never retries a script automatically. Scripts execute on the server,
-so local Node APIs and local filesystem access are unavailable.
+`itx run` executes a JavaScript function body in the project with `itx` in scope. Use `return` for
+the result. The project records the run and its settlement; the CLI never retries a script. Scripts
+execute in the project, so local Node APIs and local files are unavailable.
 
 ```sh
-iterate itx run --project my-project --context /notes --eval '
+iterate itx run --context /notes --eval '
   await itx.append({ type: "note", payload: { text: "hello" } });
   return await itx.readEvents(0, 10);
 '
-iterate itx run --project my-project --file ./script.js
-cat script.js | iterate itx run --project my-project --file -
+iterate itx run --file ./script.js
+cat script.js | iterate itx run --file -
 ```
 
-Specify exactly one of `--eval` or `--file`. `--context` is a project-local path
-(default `/`). `--project` accepts an id or slug; otherwise the CLI uses the
-config's `defaultProject`, or the only project accessible to the session.
+Specify exactly one of `--eval` or `--file`. `--context` is a path in the project (default `/`).
 
 ## Use my computer
 
-`use-my-computer` shares this computer as a live Iterate capability until Ctrl-C. It is
+`use-my-computer` shares this computer as a live capability of the project until Ctrl-C. It is
 [`provide`](#provide) of `use-my-computer.ts` (`iterate provide use-my-computer.ts --name
 jonasComputer` lends the same object), with a friendly default name:
 
@@ -146,30 +92,23 @@ disconnect reconnects as `provide` does; when every attempt fails the command en
 
 ## Tunnel
 
-`tunnel <port>` serves `http://localhost:<port>` on a host of the project until Ctrl-C,
-WebSocket upgrades included (a Vite dev server's hot module reloading works through it):
+`tunnel <port>` serves `http://localhost:<port>` on a host of the project until Ctrl-C, WebSocket
+upgrades included (a Vite dev server's hot module reloading works through it):
 
 ```sh
-iterate tunnel 5173 --project my-project --name blog
-# https://blog--my-project.iterate.app → http://localhost:5173 (project members only). Press Ctrl-C to stop.
-iterate tunnel 3000 --project my-project --public   # anyone may use it; the name is random
-iterate tunnel 3000 --project my-project --name hello --hostname hello.tunnels.example.com
-# https://hello.tunnels.example.com/ → http://localhost:3000 (project members only). Press Ctrl-C to stop.
+iterate tunnel 5173 --name blog
+# https://blog.example.com/ → http://localhost:5173 (project members only). Press Ctrl-C to stop.
+iterate tunnel 3000 --public   # anyone may use it; the name is random
+iterate tunnel 3000 --name hello --hostname hello.tunnels.example.com
 ```
 
 The URL alone goes to stdout; everything else goes to stderr. The tunnel lends the local port to
-the project as `itx.tunnels.<name>` with the fetch route `tunnel-<name>` (`itx.fetchRoutes`)
-whose target is it. The route matches the name's host (`requestMatcher: { routingSlug }`), or
-with `--hostname` that one hostname of the project alone (`url: { hostname }`). The project's
-config worker forwards a matched request to the route's target (`core/configs/default/worker.ts`). By default only signed-in project members get through; others are
-sent to sign in. The route lives as long as the lend: Ctrl-C deletes it, and a tunnel that dies
-without it (killed, asleep, offline) leaves the host answering 502 until the platform notices,
-then the route is gone too, until the tunnel runs again.
-
-On a deployment that serves projects under paths (`/projects/<project>/<name>/` on the
-platform's own origin, such as a per-PR preview), the local server must serve under the printed
-base path (Vite: `--base`). A deployment with a domain gives each tunnel its own origin:
-[custom domain](../../../os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels).
+the project as `itx.tunnels.<name>` with the fetch route `tunnel-<name>` (`itx.fetchRoutes`) whose
+target is it. The route matches the name's host, `<name>.<address>` (`requestMatcher: {
+routingSlug }`), or with `--hostname` that one hostname alone (`url: { hostname }`). By default
+only signed-in visitors get through. The route lives as long as the lend: Ctrl-C deletes it, and a
+tunnel that dies without it leaves the host answering 502 until the project notices, then the
+route is gone too.
 
 ### Without the CLI
 
@@ -203,7 +142,7 @@ await project.provide(`itx.tunnels.${routingSlug}`, new LocalSite(), {
     authRequirement: null,
   },
 });
-console.log(await project.url({ routingSlug }));
+console.log(`https://${routingSlug}.${address}/`);
 ```
 
 ## Provide
@@ -233,8 +172,8 @@ export default function provide({ itx }) {
 ```
 
 ```sh
-iterate provide ./whatsapp.ts --project my-project           # itx.whatsapp (the file's name)
-iterate provide ./dummy.ts --name whatsappDummy --project my-project
+iterate provide ./whatsapp.ts                    # itx.whatsapp (the file's name)
+iterate provide ./dummy.ts --name whatsappDummy
 ```
 
 `itx.<name>` alone goes to stdout once it is live; everything else goes to stderr. The project's
@@ -257,35 +196,42 @@ install`). A missing one is refused before any sign-in, naming the folder to ins
   computer's authority. A killed or stopped `provide` takes the name with it: the project's calls
   answer `NO_ITX_EXPRESSION_MATCH`, as before it was lent.
 
-For a machine that stays up, give it a key of its own rather than the stored login (whose grant
-lasts 30 days at most): `ITERATE_BEARER_TOKEN` from `iterate tokens create --name whatsapp
---project my-project --never-expires`.
+For a machine that stays up, the stored sign-in refreshes itself while the issuer keeps the
+grant (30 days at most), and `ITERATE_PROJECT_TOKEN` takes a token as it stands.
 
-## Configs
+## A ChatGPT plan
 
-Configs live in `${XDG_CONFIG_HOME:-~/.config}/iterate/config.json`. Selection
-order is `--config`, a parent-directory workspace mapping, the default config,
-a single saved config, then built-in `prd`.
+`chatgpt connect [address]` lets a person's ChatGPT plan pay for the project's Responses API
+requests, with OpenAI's
+[Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source). It needs a
+personal Plus or Pro account. The sign-in must end at `http://127.0.0.1:1455/auth/callback` on the
+computer the browser runs on, so the CLI listens there, opens OpenAI's consent page, and gives the
+code to the project. One `itx.run` script in the project trades the code for tokens and keeps them
+in `/secrets/chatgpt`, pinned to OpenAI's origins, and the secret refreshes itself. The tokens never
+reach this computer. A Codex sign-in uses the same port: close it first. Without a sign-in to the
+project, the command runs `iterate login` first. Then it sends one test request on the plan, unless
+`--no-test`. A new sign-in replaces the plan that the project had.
+
+## Profiles
+
+Profiles live in `${XDG_CONFIG_HOME:-~/.config}/iterate/config.json`, each naming one project.
+Selection order is `--config`, a parent-directory workspace mapping, the default profile, the only
+profile, then `default`. `iterate login <address>` points the selected profile at the project.
 
 ```sh
-iterate config set --name next --os-base-url https://os.iterate.com \
-  --default-project my-project --set-default
-iterate --config next login
-iterate config set --name local --os-base-url http://localhost:8788 --set-workspace
+iterate config set --name work --project example.com --set-default
+iterate --config work whoami
+iterate config set --name lab --project example.org --set-workspace
 iterate config list
 iterate config get
 ```
 
-Changing a config's server clears its session. Use `iterate itx run` for scripts; its
-`--project` selects the project and `--context` selects a path within it.
-
 ## Node REPL
 
-`iterate repl` opens a local Node REPL with the authenticated session as `itx`
-(try `await itx.projects.list()`) and the transport's `RpcTarget` constructor.
-Pass `--project my-project --context /` to bind `itx` to a project context;
-a configured `defaultProject` also selects a project. Top-level `await`, Node APIs and `.load` are available. The bindings remain available after `.clear`; `.exit` releases the context and connection. A lost connection
-ends the REPL visibly; it never silently repeats your commands.
+`iterate repl` opens a local Node REPL with the project's context as `itx` (`--context`, default
+`/`) and the transport's `RpcTarget` constructor. Top-level `await`, Node APIs and `.load` are
+available. The bindings remain available after `.clear`; `.exit` releases the context and the
+connection. A lost connection ends the REPL visibly; it never silently repeats your commands.
 
 ## Development
 

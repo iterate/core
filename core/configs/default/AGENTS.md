@@ -11,8 +11,9 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
   project's root; `itx.cd(event.path)` is the event's own context. Keep no state in the worker:
   read it from the project.
   - The `events.iterate.com/project/worker-updated` case is the init hook. It runs after every
-    published commit: it installs the agents app. It sets no schedule, so an idle project
-    sleeps; uncommenting the heartbeat there sets one that wakes it every five minutes.
+    published commit: it installs the agents app and creates the onboarding agent. It sets no
+    schedule, so an idle project sleeps; uncommenting the heartbeat there sets one that wakes it
+    every five minutes.
   - The `events.iterate.com/email/received` case hands each email a member sends to the project
     to an agent of its own per thread, `/agents/email/t<thread>`, once the `email` facet has
     folded it into its thread; the agent replies with `itx.email.send({ inReplyToOffset })`. An
@@ -20,8 +21,19 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
     and the website. So only the platform's own record of a member's mail sent straight from their
     domain reaches one; a forward, a list's copy, a re-sent old message, an auto-reply or a bounce
     is ignored.
+  - The `events.iterate.com/x/message-received` case hands what a linked X account says to
+    iterate's bot (a direct message, or a post that mentions it) to an agent of its own per
+    account, `/agents/x/u<x user id>`. A member links an account with
+    `itx.secrets.beginOAuth("/secrets/x", { client: { cloud: "x" } })` and opens the link. iterate
+    Cloud then relays that account's messages, each signed by the Cloud's key, and only an event
+    with that signer reaches an agent. The agent answers through the Cloud with the `itx.fetch` its
+    context shows; the vault signs that request, and the Cloud sends it as the bot only to an
+    account this project linked. Link a member's own account alone: whoever writes from a linked
+    account speaks to an agent with the project's reach.
 - `fetch` serves every host of the project. The `x-iterate-routing-slug` header names the host
-  (`blog` for `blog--<project>`, absent on the apex), so route on it with a plain `if`. A request
+  (`blog` for `blog.<domain>`, absent on the apex), so `fetch` is a `switch` on it, one case for each
+  host. The guard beside a case says who may come: none for a public site, `this.auth.require`
+  for members, `this.auth.requirePerson` for anyone signed in. A request
   a fetch route takes never reaches it: the platform sends it to the route's target first
   (`iterate tunnel <port>` sets a route per tunnel; `itx.fetchRoutes.set` sets one by hand).
 - `integrations` lists the integration packages this project hosts (`Integration` from
@@ -38,10 +50,11 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
   own setup page and webhook on its host and keeps its credentials through `itx.secrets`; the
   Dash shows what it registered and links to its page.
 
-The agents app is `iterate/agents`, which comes from the platform like the rest of `iterate/*`:
-the project runs the deployment's own build, and a platform deploy upgrades it. `agents.ts`
-re-exports its two classes, and every agent runs from that file's own bundle, so a commit that only
-changes `worker.ts` leaves the agents running.
+The agents' runtime is `iterate/agents`, which comes from the platform like the rest of
+`iterate/*`: the project runs the deployment's own build, and a platform deploy upgrades it.
+`apps/agents/backend.ts` re-exports its two classes and sets what a new agent pays with: a ChatGPT
+plan, else an OpenAI API key, else the deployment's AI Gateway credit. Every agent runs from that
+file's own bundle, so a commit that changes only `worker.ts` or the page leaves the agents running.
 
 ## Kinds of agent
 
@@ -154,7 +167,144 @@ Each component is `@iterate-com/ui/components/<name>` (`context-view/context-vie
 `repo-ide/repo-ide`, `ui/card`, …). The package's README has a fuller page (polling, a React library
 beside it), and its AGENTS.md the rest: https://github.com/iterate/packages/tree/main/packages/ui.
 
+## Apps
+
+An app is a folder under `apps/`, and a convention, not a framework. `apps/agents/` is the Agents
+app, on `agents.<domain>` for members: copy the folder to start one of your own.
+`apps/onboarding/` is the onboarding app, on `onboarding.<domain>` for members: one agent thread,
+the chat with the agent at `/agents/onboarding`, where a new owner starts. `apps/onboarding/onboarding.md` is what
+that agent is told: `apps/agents/backend.ts` names it as the agent's standing instructions, read
+fresh before each request.
+
+```
+apps/<name>/
+  index.html   the page; one file goes a long way
+  public/      files served as they are, at the host's root: scripts, styles, images
+  backend.ts   the app's Durable Object classes (stream processors too), if it has any
+  app.ts       exports a function that makes an object with `fetch`
+```
+
+- **Mount it** in `worker.ts`: import the function, call it once, and give it a case in `fetch`:
+  `case "agents": return this.auth.require(request) || agents.fetch(request, this);`.
+- **No build.** A module imports a file that is not code and gets its text, or its bytes when it is
+  not text (`import index from "./index.html"`). An import that ends in `/` is every file under
+  that folder, by path (`import files from "./public/"`). `serveFiles(request, { index, files })`
+  from `iterate/sdk` answers a path that names a file with that file, and any other page load with
+  `index`. So a commit publishes the page with the worker, as one thing.
+- **The page loads packages from a URL**, pinned in its import map (the page below shows how).
+- **The member's `itx` in the page.** `host.auth.itx(request)`, answered from a path of the app's
+  choosing, makes that path a WebSocket to the project's `itx` for the member who is signed in on
+  that host: `newWebSocketRpcSession(new WebSocket("/itx"))`, a capnweb session
+  (`apps/agents/public/app.js`). The platform decides who the caller is, never the page. What the
+  page appends shows `source.via.appPage`, and the socket closes when the sign-in ends.
+- **Who asked.** A facet's code appends as its context, not as the person who called it. So when a
+  signed-in person calls a facet (`itx.agents.get(path).message(...)` is such a call), what the
+  facet then appends shows them as `source.onBehalfOf`: `principal`, `grant`, `via` when they
+  came through a page, and `call` (`/agents#agents.get.message`). It says who asked, never what
+  they may do: check `source.principal` for that. An agent takes a member's words as the owner's,
+  from a page too, and the chat shows who said each message.
+- **A backend class** in `apps/<name>/backend.ts` is a facet like any other:
+  `itx.cd(path).facets.get(name, { className, mainModule: "apps/<name>/backend.ts", source: itx.cd("/").config })`.
+- **People who are not members** never get `itx`. Their page talks to your code: answer its
+  requests in the app's `fetch`, and check `host.auth.person(request)` there.
+
+## Accounts through iterate Cloud
+
+When the stack's config names an iterate Cloud (`cloud: { origin }`), a member connects GitHub,
+Google (Gmail) or X through iterate's own app there. The project needs no OAuth client of its own.
+
+- `const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/github", { client: { cloud: "github" } })`,
+  then give the member the link. They confirm on the Cloud's page, then approve at the provider, and
+  the tokens land in the secret. `"google"` and `"x"` work the same way. For GitHub, name the
+  accounts whose repositories the project works with, `client: { cloud: "github", accounts:
+["acme"] }`: the project gets the events and the installation tokens of those alone, where the
+  member administers them, and none when it names none. `install: true` sends the member to the
+  App's install page first, and connects the installation they choose there.
+- Use the account with a placeholder, never a token:
+  `itx.fetch(new Request("https://api.github.com/user", { headers: { authorization: 'Bearer getSecret("/secrets/github", { field: "accessToken" })' } }))`.
+  The Cloud keeps the app's secret and adds it at each refresh. The tokens stay in this project's
+  vault.
+- GitHub's deliveries for an installation the member administers arrive as
+  `events.iterate.com/github/webhook-received` on `/integrations/github/<installation id>`, signed
+  by the Cloud's key: `event.source.signer.principal.actor` is `"iterate-cloud"`.
+- To keep `/repos/config` and a GitHub repository one history through that App, a member links
+  them once: `linkThroughCloud(itx, { repository: "acme/config" })` from
+  `@iterate-com/github-sync/install`, after a connect that names the repository's account. From
+  then on `worker.ts` keeps them in step (its `github/webhook-received` and
+  `repo/commit-completed` case): a push to the repository's main is pulled, which publishes the
+  project, and a commit here is pushed. What moved, and what could not, is a
+  `config/github-mirrored` fact on the project's root. When the two histories have diverged nothing moves, until a member calls
+  `pull({ force: true })` (GitHub's wins) or `push({ force: true })` (the project's wins).
+
+## People who are not members
+
+Signing in says who someone is. Being a member is a separate list: a member reaches the whole
+project (its API, its MCP server, every context), and anyone else reaches only what `fetch` serves
+them. So a page can serve people who are not members, an app's end users.
+
+On every host of the project, the platform holds the browser session. `fetch` gets each request
+stamped: `this.auth.person(request)` is `{ userId, email }` for anyone signed in, and a member is
+stamped as a principal too. Three guards, each `null` when the request may go on, else the answer
+to return:
+
+- `this.auth.requirePerson(request)`: anyone signed in. Signed out, a page load signs them in and
+  comes back; a fetch gets a `401`.
+- `this.auth.require(request)`: a member. Someone signed in who is no member gets a refusal page
+  (a fetch gets a `403`).
+- `this.auth.person(request)`: who they are, or `null`. Key what you keep for a person by
+  `userId`, which never changes; an email can.
+
+The paths under `/.iterate/` on every host are the platform's: a form that POSTs to
+`/.iterate/sign-out` signs the person out.
+
+A guestbook where anyone signed in keeps their own notes, each person's in a context of its own,
+and only members see who wrote:
+
+```ts
+export default class extends IterateConfigEntrypoint {
+  async fetch(request: Request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/notes") {
+      const refused = this.auth.requirePerson(request);
+      if (refused) return refused;
+      const person = this.auth.person(request)!;
+      using itx = this.getItx();
+      const notes = itx.cd(`/guestbook/${person.userId}`);
+      if (request.method === "POST") {
+        await notes.append({ type: "note-added", payload: { text: await request.text() } });
+        await itx.cd("/guestbook").append({ type: "person-wrote", payload: person });
+      }
+      const { events } = await notes.readEvents(0, 100);
+      return Response.json({ email: person.email, notes: events.map((event) => event.payload) });
+    }
+    if (url.pathname === "/notes/all") {
+      const refused = this.auth.require(request);
+      if (refused) return refused;
+      using itx = this.getItx();
+      const { events } = await itx.cd("/guestbook").readEvents(0, 100);
+      return Response.json(events.map((event) => event.payload));
+    }
+    return new Response("Not found", { status: 404 });
+  }
+}
+```
+
+A person who is not a member never holds `itx`: only your code acts for them, so check every
+path you build from their input stays under their own context.
+
 `@iterate-com/ui/live` reads a context live, as the person viewing: guard the route with
 `this.auth.require(request)`, and the page connects with the host's own session. A whole page and
 its route, to copy beside `worker.ts`:
 https://github.com/iterate/packages/blob/main/packages/ui/examples/project-host-page.ts.
+
+## How the platform works
+
+The source code of the platform is public at https://github.com/iterate/core. Read it before you
+guess how a capability behaves. List the files first:
+`https://data.jsdelivr.com/v1/packages/gh/iterate/core@main?structure=flat` (`files[].name`; the
+list can be hours behind). GitHub's own list,
+`https://api.github.com/repos/iterate/core/git/trees/main?recursive=1` (`tree[].path`), is exact, but
+GitHub allows 60 listings an hour to everyone behind one address, so from a project it often
+answers 403. Then read `core/AGENTS.md`, then the file you need:
+`https://raw.githubusercontent.com/iterate/core/main/<path>`. `main` can differ from the code this
+project runs: where they disagree, what a call answers is right.

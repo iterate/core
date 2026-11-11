@@ -20,7 +20,7 @@ import * as oauth from "oauth4webapi";
 import { z } from "zod";
 import { cookieValueOf, sameOriginPath } from "iterate/lib";
 import { authorizationCodeRequest, authorizationServer } from "iterate/oauth";
-import { ITERATE_SIGN_IN_CLIENT_PATH, ITERATE_SIGN_IN_PATH } from "iterate/app-server";
+import { ITERATE_SIGN_IN_CLIENT_PATH, ITERATE_SIGN_IN_PATH } from "./app-server.ts";
 import { emailAllowed, EMAIL_NOT_ALLOWED_MESSAGE } from "./allowed-emails.ts";
 import {
   iterateConfigOf,

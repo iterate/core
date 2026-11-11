@@ -104,6 +104,7 @@ export const repoVerbs = [
   "tip",
   "readFile",
   "modules",
+  "files",
   "listFiles",
   "commitFiles",
   "writeFile",
@@ -368,6 +369,11 @@ export class RepoFacet extends StreamProcessorDurableObject<
         .map(([path, content]) => [path.slice(prefix.length), content]),
     );
   }
+  /** iterate/api's `files`, which the agents' prompt previews a candidate with: this platform's
+   *  repos hold text only, so it is `modules`. */
+  async files(options?: { commitOid?: string; dir?: string }): Promise<Record<string, string>> {
+    return this.modules(options);
+  }
   async listFiles(): Promise<{ commitOid: string | null; paths: string[] }> {
     await this.#created();
     const { tip, files } = await this.#fresh();
@@ -474,6 +480,8 @@ export class RepoFacet extends StreamProcessorDurableObject<
     }
     for (const change of input.changes) {
       if ("delete" in change) continue;
+      if (!("content" in change))
+        throw new Error(`repo.commitFiles: "${change.path}" is bytes; this platform commits text`);
       const file = filePath(change.path);
       // A file is never written where a directory is, nor under a file.
       for (const existing of manifest.keys())

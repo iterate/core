@@ -22,7 +22,7 @@ import type { AgentHandleApi, AgentsApi } from "./api.ts";
 import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
 import { appendMessage } from "./message.ts";
-import { AGENTS_PATH, agentsFacetSpec } from "./install.ts";
+import { AGENTS_MODULE, AGENTS_PATH, agentsFacetSpec } from "./install.ts";
 
 /** The subscription rows every agent gets when it's created. They copy what a list shows about the
  *  agent from its own log onto `/agents` as `agent/listing-updated` events, and the catalog folds
@@ -113,12 +113,19 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   private readonly getItx: () => IterateContextApi & Disposable;
   private readonly catalogRead: CatalogRead;
   private readonly base: string;
+  private readonly module: string;
 
-  constructor(getItx: () => IterateContextApi & Disposable, catalog: CatalogRead, base = "/") {
+  constructor(
+    getItx: () => IterateContextApi & Disposable,
+    catalog: CatalogRead,
+    base = "/",
+    module = AGENTS_MODULE,
+  ) {
     super();
     this.getItx = getItx;
     this.catalogRead = catalog;
     this.base = base;
+    this.module = module;
   }
 
   private async catalog() {
@@ -201,7 +208,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     const dead = new Error(`agent ${path}: deleted — not re-creatable`);
     if ((await this.catalog()).deleted[path]) throw dead;
     const context = itx.cd(path);
-    const spec = agentsFacetSpec("AgentDurableObject");
+    const spec = agentsFacetSpec("AgentDurableObject", this.module);
     // The facet is this app's AgentDurableObject and `snapshot()` the engine's
     // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
     const snapshot = async (facet: [method: "get", name: "agent", spec?: FacetSpec]) =>

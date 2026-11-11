@@ -1,0 +1,2 @@
+# Configs with real accounts and domains, as JSON (the .ts ones are in the root .gitignore).
+project.config*.local.json

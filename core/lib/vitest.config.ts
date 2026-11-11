@@ -1,7 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { configFileImports } from "./vitest.config-file-imports.ts";
 
 export default defineConfig({
+  // a config repo's imports of its page and its folders of files, as the platform's loader makes them
+  plugins: [configFileImports()],
   resolve: {
     alias: {
       // app-session.ts's only platform import is the DurableObject base class.

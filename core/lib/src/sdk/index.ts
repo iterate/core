@@ -45,6 +45,7 @@ import { DirectAppendHolder, type DirectAppend } from "./direct-append.ts";
 // to hold across calls, and a one-shot POST is the honest shape (the lint rule targets long-lived workers).
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
 export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
+export { serveFiles, type FileContent } from "./files.ts";
 // ── StreamProcessorDurableObject ── THE SDK HOST: the `DurableObject` shell that hosts ONE
 // `StreamProcessor` as a facet of its context. An author writes the pure processor and its host,
 // one line long:
@@ -321,8 +322,9 @@ export type Integration = {
   /** A request on `routingSlug`. `host` is the worker: `using itx = host.getItx()` for the
    *  project's scope, and for a members-only page the gate every private page needs:
    *  `const denied = host.auth.require(request); if (denied) return denied;`. A webhook needs no
-   *  gate: it proves itself with a signature (`itx.secrets.verifyHmac`) or a secret in its URL
-   *  (`itx.secrets.verifyEquals`). */
+   *  gate: it proves itself with a signature (`itx.secrets.verifyHmac`). A sender that can only
+   *  present a secret as it is (`itx.secrets.verifyEquals`) can be shut out by anyone for a minute
+   *  with twenty wrong guesses: use it only where the sender cannot sign. */
   fetch?(
     request: Request,
     host: Pick<IterateConfigEntrypoint, "getItx" | "auth">,

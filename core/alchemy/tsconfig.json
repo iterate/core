@@ -1,0 +1,7 @@
+{
+  // The Alchemy program and its scripts: Node programs. Each Worker package typechecks its own
+  // Worker.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["alchemy.run.ts", "project.config.example.ts", "src", "scripts"]
+}

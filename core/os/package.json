@@ -62,6 +62,7 @@
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "@types/ws": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "cf": "catalog:",
     "esbuild": "catalog:",
@@ -69,6 +70,7 @@
     "trpc-cli": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "ws": "catalog:"
   }
 }

@@ -12,13 +12,14 @@ import {
   parseConfigRepoTemplateReference,
   formatConfigRepoTemplateReference,
 } from "iterate/config-repo-template";
-import type { IterateApi, StreamPage } from "iterate/api";
+import type { StreamPage } from "iterate/api";
 import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
 import type { Principal } from "iterate/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { INTEGRATIONS_PATH } from "iterate/integrations";
 import { pinPublicGithubTemplate } from "./repo/github-template.ts";
+import type { ServedApi } from "./served-api.ts";
 import { base64url, sha256Hex, verifyAdminSecret, type Caller } from "./caller.ts";
 import type { Cause } from "./cause.ts";
 import { templates } from "./generated/config-templates.js";
@@ -102,7 +103,7 @@ export interface SessionInput {
  *  `authenticate({ type: "bearer", token })`, and the operator
  *  `authenticate({ type: "admin-secret", secret })`, the deployment admin secret verified here.
  *  Its teardown owns every context the session it vends hands out. */
-export class IterateRpcTarget extends RpcTarget implements IterateApi {
+export class IterateRpcTarget extends RpcTarget implements ServedApi {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
   /** The authority the transport already resolved (a credential on the upgrade), or null (a bare

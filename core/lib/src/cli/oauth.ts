@@ -1,56 +1,71 @@
-// `iterate login` and the refresh before each command: a native public client of the platform's
-// issuer (https://www.rfc-editor.org/rfc/rfc8252) on oauth4webapi, with the issuer description
-// (`iterate/oauth`) an app's browser session (`iterate/app-session`) uses. The CLI registers its
-// loopback redirect (https://www.rfc-editor.org/rfc/rfc7591), sends the person to the issuer with
-// PKCE, and redeems the redirect back for tokens bound to the platform API
-// (https://www.rfc-editor.org/rfc/rfc8707).
+// THE CLI'S SIGN-IN to a project's issuer, and the refresh before each connection: a native public
+// client (https://www.rfc-editor.org/rfc/rfc8252) on oauth4webapi, of the issuer the project's API
+// names (iterate/oauth `discoverProject`). It registers its loopback redirect
+// (https://www.rfc-editor.org/rfc/rfc7591), sends the person to the issuer with PKCE, and redeems the
+// redirect back for tokens bound to one resource (https://www.rfc-editor.org/rfc/rfc8707): the
+// project's API, or its `/provide`.
 
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as oauth from "oauth4webapi";
 import { isLocalOrigin } from "../lib.ts";
-import { authorizationCodeRequest, authorizationServer } from "../client/oauth.ts";
-import type { OAuthScope } from "../oauth-scopes.ts";
+import {
+  authorizationCodeRequest,
+  authorizationServerOf,
+  type DiscoveredProject,
+} from "../client/oauth.ts";
 import { standalonePage } from "../standalone-page.ts";
 import type { StoredSession } from "./config.ts";
 
-/** The platform API's audience (the RFC 8707 resource) at `osBaseUrl`, local port included. */
-export const oauthResourceForOsBaseUrl = (osBaseUrl: string) => new URL("/api", osBaseUrl).href;
+/** The client this process registers as: the CLI's name, or the home lab's. */
+const CLIENT_NAME = "iterate CLI";
 
-/** Sign in at `issuer` in a browser: `openBrowser` gets the authorization URL, and the redirect
- *  back to this process's loopback listener is validated (state, `iss`, no `error`) before its code
- *  is redeemed with the PKCE verifier. `iterate login` asks for `iterate` alone, so the session it
- *  stores on disk mints no key; `iterate tokens` signs in again for its one call with `account`
- *  (cli.ts `withAccountSession`). */
-export async function oauthLogin(input: {
-  issuer: string;
-  openBrowser: (url: URL) => void | Promise<void>;
-  /** `iterate` is asked for unless the set is `identity` alone (iterate/oauth-scopes) */
-  scopes?: OAuthScope[];
-}) {
-  const as = authorizationServer(input.issuer);
-  const resource = oauthResourceForOsBaseUrl(input.issuer);
-  await using loopback = await listenForRedirect();
+/** The client registration every sign-in starts with: the issuer must take one (RFC 7591), since a
+ *  terminal has no client metadata document of its own to point at. */
+export async function registerClient(
+  project: DiscoveredProject,
+  metadata: Partial<oauth.OmitSymbolProperties<oauth.Client>>,
+): Promise<oauth.Client> {
+  if (!project.endpoints.registration)
+    throw new Error(
+      `${new URL(project.issuer).host} takes no client registrations, so this terminal cannot sign in: set ITERATE_PROJECT_TOKEN instead.`,
+    );
   const registration = await oauth.processDynamicClientRegistrationResponse(
     await oauth.dynamicClientRegistrationRequest(
-      as,
-      {
-        client_name: "iterate CLI",
-        redirect_uris: [loopback.redirectUri],
-        token_endpoint_auth_method: "none",
-        grant_types: ["authorization_code", "refresh_token"],
-        response_types: ["code"],
-      },
-      requestOptions(input.issuer),
+      authorizationServerOf(project),
+      metadata,
+      requestOptions(project.issuer),
     ),
   );
-  const client = { client_id: registration.client_id };
+  return { client_id: registration.client_id };
+}
+
+/** Sign in to `project`'s issuer in a browser, for `resource`: `openBrowser` gets the
+ *  authorization URL, and the redirect back to this process's loopback listener is validated
+ *  (state, `iss`, no `error`) before its code is redeemed with the PKCE verifier. The scope is
+ *  `iterate`, the one a project's issuer grants. */
+export async function oauthLogin(input: {
+  project: DiscoveredProject;
+  resource: string;
+  clientName?: string;
+  openBrowser: (url: URL) => void | Promise<void>;
+}): Promise<StoredSession> {
+  const { project, resource } = input;
+  const as = authorizationServerOf(project);
+  await using loopback = await listenForRedirect();
+  const client = await registerClient(project, {
+    client_name: input.clientName || CLIENT_NAME,
+    redirect_uris: [loopback.redirectUri],
+    token_endpoint_auth_method: "none",
+    grant_types: ["authorization_code", "refresh_token"],
+    response_types: ["code"],
+  });
   const request = await authorizationCodeRequest({
-    issuer: input.issuer,
+    issuer: project.issuer,
+    authorizationEndpoint: project.endpoints.authorization,
     clientId: client.client_id,
     redirectUri: loopback.redirectUri,
     resources: [resource],
-    scopes: input.scopes,
   });
   await input.openBrowser(request.url);
   let callback: URLSearchParams;
@@ -76,20 +91,23 @@ export async function oauthLogin(input: {
         callback,
         loopback.redirectUri,
         request.verifier,
-        { ...requestOptions(input.issuer), additionalParameters: { resource } },
+        { ...requestOptions(project.issuer), additionalParameters: { resource } },
       ),
     ),
   );
-  return sessionFromTokens(tokens, client.client_id, started);
+  return sessionFromTokens(tokens, project, client.client_id, started);
 }
 
-/** A fresh access token for `session` from `issuer`. The issuer may keep the refresh token; an
- *  omitted scope means the grant's scope is unchanged (RFC 6749 §5.1). */
-export async function refreshOAuthSession(input: { issuer: string; session: StoredSession }) {
-  const { refreshToken, clientId } = input.session;
-  if (!refreshToken || !clientId)
-    throw new Error(`Session expired for ${input.issuer}. Run \`iterate login\` again.`);
-  const as = authorizationServer(input.issuer);
+/** A fresh access token for `session`, the sign-in for `resource`, from the issuer that issued it.
+ *  The issuer may keep the refresh token; an omitted scope means the grant's scope is unchanged
+ *  (RFC 6749 §5.1). */
+export async function refreshOAuthSession(input: {
+  resource: string;
+  session: StoredSession;
+}): Promise<StoredSession> {
+  const { refreshToken, clientId, issuer, tokenEndpoint } = input.session;
+  if (!refreshToken) throw new Error(`The sign-in for ${input.resource} has no refresh token.`);
+  const as: oauth.AuthorizationServer = { issuer, token_endpoint: tokenEndpoint };
   const client = { client_id: clientId };
   const started = Date.now();
   const tokens = await tokenResponse("OAuth refresh", async () =>
@@ -97,12 +115,32 @@ export async function refreshOAuthSession(input: { issuer: string; session: Stor
       as,
       client,
       await oauth.refreshTokenGrantRequest(as, client, oauth.None(), refreshToken, {
-        ...requestOptions(input.issuer),
-        additionalParameters: { resource: oauthResourceForOsBaseUrl(input.issuer) },
+        ...requestOptions(issuer),
+        additionalParameters: { resource: input.resource },
       }),
     ),
   );
-  return sessionFromTokens(tokens, clientId, started, input.session);
+  return { ...input.session, ...sessionFromTokens(tokens, null, clientId, started, input.session) };
+}
+
+/** End `session` at its issuer (RFC 7009) when the issuer can revoke: its refresh token, which ends
+ *  the grant, else its access token. Without a revocation endpoint the issuer keeps the grant until
+ *  it lapses, and only the local copy goes. */
+export async function revokeSession(session: StoredSession): Promise<void> {
+  if (!session.revocationEndpoint) return;
+  const as: oauth.AuthorizationServer = {
+    issuer: session.issuer,
+    revocation_endpoint: session.revocationEndpoint,
+  };
+  const [token, hint] = session.refreshToken
+    ? [session.refreshToken, "refresh_token"]
+    : [session.token, "access_token"];
+  await oauth.processRevocationResponse(
+    await oauth.revocationRequest(as, { client_id: session.clientId }, oauth.None(), token, {
+      ...requestOptions(session.issuer),
+      additionalParameters: { token_type_hint: hint },
+    }),
+  );
 }
 
 /** A bounded request. oauth4webapi sends only HTTPS unless told otherwise
@@ -123,20 +161,29 @@ async function tokenResponse(step: string, request: () => Promise<oauth.TokenEnd
   } catch (error) {
     if (error instanceof oauth.ResponseBodyError)
       throw new Error(
-        `${step} failed (${error.status} ${error.error}${error.error_description ? `: ${error.error_description}` : ""}). Run \`iterate login\` again.`,
+        `${step} failed (${error.status} ${error.error}${error.error_description ? `: ${error.error_description}` : ""}).`,
         { cause: error },
       );
     throw error;
   }
 }
 
+/** The session to store from a token response: `project`'s issuer and endpoints, or, for a
+ *  refresh, the ones `previous` holds. */
 export function sessionFromTokens(
   tokens: oauth.TokenEndpointResponse,
+  project: DiscoveredProject | null,
   clientId: string,
   started: number,
   previous?: StoredSession,
-) {
+): StoredSession {
+  const issuer = project?.issuer || previous?.issuer;
+  const tokenEndpoint = project?.endpoints.token || previous?.tokenEndpoint;
+  if (!issuer || !tokenEndpoint) throw new Error("A session needs the issuer it came from.");
   return {
+    issuer,
+    tokenEndpoint,
+    revocationEndpoint: project ? project.endpoints.revocation : previous?.revocationEndpoint,
     token: tokens.access_token,
     refreshToken: tokens.refresh_token || previous?.refreshToken,
     clientId,
@@ -180,9 +227,9 @@ async function listenForRedirect() {
       .writeHead(declined ? 400 : 200, { "content-type": "text/html; charset=utf-8" })
       .end(
         declined
-          ? redirectPage("Iterate sign-in was not authorized", "You can return to the terminal.")
+          ? redirectPage("iterate sign-in was not authorized", "You can return to the terminal.")
           : redirectPage(
-              "Iterate sign-in received",
+              "iterate sign-in received",
               "You can close this tab and return to the terminal.",
             ),
       );

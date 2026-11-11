@@ -173,17 +173,20 @@ function coreConfigTemplates(): ConfigTemplate[] {
   const head = githubHeadOf(root);
   const names = readdirSync(coreConfigs, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
-  // `default` first: the generated `templates` promises it there, and the dash and the consent page
-  // start a person's project from it
-  if (!names.includes("default"))
-    throw new Error(
-      "core/configs/default is missing: the dash and the consent page start a person's project from it",
-    );
-  return ["default", ...names.filter((name) => name !== "default")].map((name) => ({
-    reference: formatConfigRepoTemplateReference({ ...head, path: `core/configs/${name}` }),
-    files: trackedFiles(path.join(coreConfigs, name)),
-  }));
+    .map((entry) => entry.name)
+    .filter((name) => name !== "default");
+  // `default` first (the dash and the consent page start from it), and this platform's own copy:
+  // core/configs/default is the project stack's, whose file imports this loader cannot load.
+  return [
+    {
+      reference: formatConfigRepoTemplateReference({ ...head, path: "core/os/configs/default" }),
+      files: trackedFiles(path.join(root, "configs/default")),
+    },
+    ...names.map((name) => ({
+      reference: formatConfigRepoTemplateReference({ ...head, path: `core/configs/${name}` }),
+      files: trackedFiles(path.join(coreConfigs, name)),
+    })),
+  ];
 }
 
 /** The checkout at `checkout` as a template reference names it, without a folder: the GitHub

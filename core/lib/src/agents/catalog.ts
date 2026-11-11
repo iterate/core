@@ -10,7 +10,7 @@ import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { AgentHandleApi, AgentsRootApi } from "./api.ts";
 import { AgentContract } from "./contract.ts";
 import { AgentCollectionRpcTarget } from "./collection.ts";
-import { AGENTS_PATH } from "./install.ts";
+import { AGENTS_MODULE, AGENTS_PATH } from "./install.ts";
 
 /** The core's announcement that a context exists below this one (core/os
  *  iterate-context-durable-object.ts `announceToAncestors`): what makes a row. The core owns it, so
@@ -230,6 +230,10 @@ export class AgentCollectionDurableObject
 {
   /** The processor's reads, and `itx.agents`: the collection's verbs and `at(base)` (collection.ts). */
   static override publicMethods = [...super.publicMethods, "list", "get", "create", "delete", "at"];
+  /** The module of the project's published config that exports this class and
+   *  `AgentDurableObject`: each agent's facet is started from it. A config that keeps them in
+   *  another module sets it there, beside the export. */
+  static module = AGENTS_MODULE;
 
   processor = new AgentCatalogProcessor();
   at(base: string) {
@@ -244,6 +248,7 @@ export class AgentCollectionDurableObject
         return await this.snapshot();
       },
       base,
+      (this.constructor as typeof AgentCollectionDurableObject).module,
     );
   }
   #collection = this.at("/");

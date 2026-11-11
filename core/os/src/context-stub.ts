@@ -219,6 +219,7 @@ const IDEMPOTENT_CALLS: ReadonlySet<string> = new Set([
       "tip",
       "readFile",
       "modules",
+      "files",
       "listFiles",
       "log",
       "origin",

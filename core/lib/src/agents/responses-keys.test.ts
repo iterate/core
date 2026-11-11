@@ -3,6 +3,7 @@
 
 import { expect, test, vi } from "vitest";
 import {
+  AI_GATEWAY,
   bodyForKeys,
   postResponses,
   type StreamAttempt,
@@ -103,7 +104,7 @@ test("a key that answers an error, or throws, hands the same body to the next ke
   }
 });
 
-test("when no key succeeds, the last failure is thrown, and an empty stack says so", async () => {
+test("when no key succeeds, the last failure is thrown, and an empty stack says how to set a credential", async () => {
   const quiet = () => undefined;
   await expect(
     postResponses(egress(401, 503).send, {}, KEYS, live, IDLE_MS, readText, quiet),
@@ -121,7 +122,55 @@ test("when no key succeeds, the last failure is thrown, and an empty stack says 
   ).rejects.toThrow("b");
   await expect(
     postResponses(egress().send, {}, [], live, IDLE_MS, readText, quiet),
-  ).rejects.toThrow("llm.apiKeys is empty");
+  ).rejects.toThrow("no model credential is set");
+});
+
+test("the AI Gateway entry runs the caller's gateway request, after a key before it fails and is reported", async () => {
+  const { send, seen } = egress(429);
+  const log: unknown[] = [];
+  const answer = await postResponses(
+    send,
+    {},
+    [KEYS[0], AI_GATEWAY],
+    live,
+    IDLE_MS,
+    readText,
+    (line) => log.push(line),
+    { gateway: async () => "the gateway's answer" },
+  );
+  expect({ answer, sent: seen.length }).toEqual({ answer: "the gateway's answer", sent: 1 });
+  expect(log).toEqual([{ key: 1, keys: 2, error: expect.stringContaining("429") }]);
+});
+
+test("an entry whose secret is not set is never sent nor reported, and a later key's failure keeps its place in the whole stack", async () => {
+  const stack = ['getSecret("/secrets/unset")', ...KEYS];
+  const { send, seen } = egress(429, 200);
+  const log: unknown[] = [];
+  const answer = await postResponses(
+    send,
+    {},
+    stack,
+    live,
+    IDLE_MS,
+    readText,
+    (line) => log.push(line),
+    { notSet: new Set([stack[0]!]) },
+  );
+  expect(answer).toBe("answer 200");
+  expect(seen.map((one) => one.authorization)).toEqual(KEYS.map((key) => `Bearer ${key}`));
+  expect(log).toEqual([{ key: 2, keys: 3, error: expect.any(String) }]);
+});
+
+test("when every entry's secret is not set, nothing is sent and the error says how to set a credential", async () => {
+  const { send, seen } = egress();
+  await expect(
+    postResponses(send, {}, KEYS, live, IDLE_MS, readText, () => undefined, {
+      notSet: new Set(KEYS),
+    }),
+  ).rejects.toThrow(
+    /iterate chatgpt connect.*\/secrets\/openai.*AI Gateway credit in your Cloudflare account/,
+  );
+  expect(seen).toEqual([]);
 });
 
 test("an abort before the call sends nothing, and an abort during a key's request ends the call without trying the next key", async () => {

@@ -1,32 +1,41 @@
+// cli.ts — THE `iterate` CLI: sign in to a project by its address, run scripts in it, and lend it
+// what runs on this machine (a file's functions, a local port, this computer). A profile
+// (./config.ts) names one project; `--config <name>`, a folder mapped to a profile, the default
+// profile, or the only one picks it, and `--project <address>` overrides it for one command. Every
+// connection is the Node client's (../node.ts `connectProject`).
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { hostname } from "node:os";
 import { dirname } from "node:path";
 import process from "node:process";
 import repl from "node:repl";
 import { RpcTarget } from "capnweb";
 import { createCli, os, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
-import { connectIterate } from "../node.ts";
-import type { SessionCredentials } from "../api.ts";
+import {
+  addressOf,
+  connectProject,
+  discoverAddress,
+  openForSignIn,
+  signInToProject,
+} from "../node.ts";
+import { projectApiUrlOf, projectMcpUrlOf, projectProvideUrlOf } from "../project-api.ts";
+import { connectChatgpt } from "./chatgpt.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import { runFs } from "./fs.ts";
-import { deviceLogin, showsColors } from "./device-login/index.ts";
-import { loginFlowFor, unexpectedUser, type LoginFlow } from "./device-login/flow.ts";
-import { oauthLogin, refreshOAuthSession } from "./oauth.ts";
+import { loginFlowFor, unexpectedUser } from "./device-login/flow.ts";
+import { revokeSession } from "./oauth.ts";
 import { importProvidedFile, nameOfFile, runProvide } from "./provide.ts";
 import { runTunnel } from "./tunnel.ts";
 import { shareMyComputer } from "./share-my-computer.ts";
 import {
   CONFIG_PATH,
-  Config,
   DEFAULT_CONFIG_NAME,
   readConfig,
   readConfigFile,
-  removeConfigSession,
-  updateConfigSession,
+  readSession,
+  removeSession,
+  setConfigProject,
   writeConfigFile,
-  type StoredSession,
 } from "./config.ts";
 
 const isAgent = isCodingAgent(process.env);
@@ -40,237 +49,99 @@ const consumeCliStringFlag = (flagName: string): string | undefined => {
   process.argv.splice(flagIndex + 2, 2);
   return value;
 };
-const hasConfig = (configFile: ReturnType<typeof readConfigFile>, name: string) =>
-  name === DEFAULT_CONFIG_NAME || Boolean(configFile.configs?.[name]);
 
 /**
- * Resolve which config name to use.
- * Priority: --config flag > workspace match (walk up from cwd) > default > single-config auto > built-in prd
+ * Which profile to use. Priority: --config flag > workspace match (walk up from cwd) > default >
+ * the only profile > `default`.
  */
-const resolveConfigName = (workspacePath: string): string | Error => {
+const resolveConfigName = (workspacePath: string): string => {
   const configFile = readConfigFile();
-
+  const known = (name: string) =>
+    name === DEFAULT_CONFIG_NAME || Boolean(configFile.configs?.[name]);
+  const available = () => Object.keys(configFile.configs || {}).join(", ") || "(none)";
   if (configFlagOverride) {
-    if (!hasConfig(configFile, configFlagOverride)) {
-      return new Error(
-        `Config "${configFlagOverride}" not found. Available: ${Object.keys(configFile.configs || {}).join(", ") || "(none)"}`,
-      );
-    }
+    if (!known(configFlagOverride))
+      throw new Error(`Profile "${configFlagOverride}" not found. Available: ${available()}`);
     return configFlagOverride;
   }
-
-  let dir = workspacePath;
-  while (dir && dir !== "/") {
+  for (let dir = workspacePath; dir && dir !== "/"; dir = dirname(dir)) {
     const match = configFile.workspaces?.[dir];
-    if (match) {
-      if (!hasConfig(configFile, match)) {
-        return new Error(`Workspace "${dir}" maps to config "${match}" which doesn't exist.`);
-      }
-      return match;
-    }
-    dir = dirname(dir);
+    if (!match) continue;
+    if (!known(match))
+      throw new Error(`Workspace "${dir}" maps to profile "${match}", which doesn't exist.`);
+    return match;
   }
-
   if (configFile.default) {
-    if (!hasConfig(configFile, configFile.default)) {
-      return new Error(
-        `Default config "${configFile.default}" doesn't exist. Available: ${Object.keys(configFile.configs || {}).join(", ") || "(none)"}`,
+    if (!known(configFile.default))
+      throw new Error(
+        `Default profile "${configFile.default}" doesn't exist. Available: ${available()}`,
       );
-    }
     return configFile.default;
   }
-
-  const configNames = Object.keys(configFile.configs || {});
-  if (configNames.length === 1) return configNames[0];
-
-  return DEFAULT_CONFIG_NAME;
+  const names = Object.keys(configFile.configs || {});
+  return names.length === 1 ? names[0]! : DEFAULT_CONFIG_NAME;
 };
 
-function resolveConfig(workspacePath: string): { name: string; config: Config } | Error;
-function resolveConfig(
-  workspacePath: string,
-  options: { throw: true },
-): { name: string; config: Config };
-function resolveConfig(
-  workspacePath: string,
-  options?: { throw: true },
-): { name: string; config: Config } | Error {
-  const result = ((): { name: string; config: Config } | Error => {
-    const name = resolveConfigName(workspacePath);
-    if (name instanceof Error) return name;
-    const config = readConfig(name);
-    if (config instanceof Error) return config;
-    return { name, config };
-  })();
-  if (result instanceof Error && options?.throw) throw result;
-  return result;
-}
-
-/**
- * Resolve the config's OAuth credentials before connecting.
- * OAuth sessions are refreshed when possible.
- */
-const storedCredentials = async (
-  config: Config,
-  configName: string,
-): Promise<SessionCredentials> => {
-  let session = config.session;
-  if (!session) {
-    throw new Error(`Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`);
-  }
-  if (sessionNeedsRefresh(session)) {
-    session = await refreshOAuthSession({ issuer: config.osBaseUrl, session });
-    config.session = session;
-    updateConfigSession(configName, session);
-  }
-  if (session.token) {
-    return { type: "bearer", token: session.token };
-  }
-  throw new Error(`No bearer token for ${config.osBaseUrl}. Run \`iterate login\` again.`);
+/** The project a command talks to: `--project` in either spelling, as discovery keeps it (as
+ *  `login` stores the profile's), else the profile's. */
+const resolveProject = async (given?: string): Promise<string> => {
+  if (given) return (await discoverAddress(given)).address;
+  const name = resolveConfigName(process.cwd());
+  const config = readConfig(name);
+  if (config instanceof Error) throw config;
+  if (!config.project)
+    throw new Error(
+      `Profile "${name}" names no project. Run \`iterate login <address>\`, e.g. iterate login example.com.`,
+    );
+  return config.project;
 };
 
-const sessionNeedsRefresh = (session: StoredSession) => {
-  if (!session.expiresAt) return false;
-  const expiresAt = Date.parse(session.expiresAt);
-  return Number.isFinite(expiresAt) && expiresAt <= Date.now() + 60_000;
-};
+const connect = async (project?: string) =>
+  connectProject({ address: await resolveProject(project) });
 
-const credentialsForConfig = async (config: Config, name: string): Promise<SessionCredentials> => {
-  const secret = process.env.ITERATE_ADMIN_BEARER?.trim();
-  if (secret) return { type: "admin-secret", secret };
-  const token = process.env.ITERATE_BEARER_TOKEN?.trim();
-  if (token) return { type: "bearer", token };
-  return await storedCredentials(config, name);
-};
-/** THE `tokens` COMMANDS' OWN SIGN-IN, a step up from the stored login: a person's keys are managed
- *  only with the `account` scope, which `iterate login` does not ask for, so the refresh token a
- *  config file keeps on disk mints nothing. Each `tokens` command signs in in the browser asking for
- *  `account`, holds that session in memory for its one call, and ends it before it returns (the key
- *  it minted outlives it, and lists it as `mintedBy`). Whatever the environment holds is not used: a
- *  key in `ITERATE_BEARER_TOKEN` has `iterate` alone, and the operator's bearer names no person. */
-const withAccountSession = async <T>(
-  run: (session: Awaited<ReturnType<typeof connectIterate>>["session"]) => Promise<T>,
-): Promise<T> => {
-  const { config } = resolveConfig(process.cwd(), { throw: true });
-  console.error(`Signing in to ${config.osBaseUrl} to manage your personal access tokens...`);
-  const stepUp = await oauthLogin({
-    issuer: config.osBaseUrl,
-    openBrowser: openBrowserForLogin,
-    scopes: ["iterate", "account"],
+/** `iterate login`: sign in to the project at the typed address, check who that is, and make it the
+ *  profile's project. `chatgpt connect` signs in by this too. */
+const login = async (input: { address: string; device?: boolean; expectUser?: string }) => {
+  const project = await discoverAddress(input.address);
+  const resource = projectApiUrlOf(project.address);
+  const session = await signInToProject(project, resource, {
+    flow: loginFlowFor({ device: input.device, env: process.env, platform: process.platform }),
   });
-  using connection = await connectIterate({
-    baseUrl: config.osBaseUrl,
-    auth: { type: "bearer", token: stepUp.token },
-  });
-  try {
-    return await run(connection.session);
-  } finally {
-    // A failed sign-out must not hide what the call answered (a minted key is printed once): the
-    // session held no refresh token on disk, and its access token lapses within the hour.
-    await connection.session.logout().catch((error: unknown) => {
-      console.error(
-        `Could not end this sign-in (${error instanceof Error ? error.message : String(error)}); end it from the Dash's Sessions page.`,
-      );
-    });
-  }
-};
-const connectConfigured = async () => {
-  const resolved = resolveConfig(process.cwd(), { throw: true });
-  const connection = await connectIterate({
-    baseUrl: resolved.config.osBaseUrl,
-    auth: await credentialsForConfig(resolved.config, resolved.name),
-  });
-  return { resolved, connection };
-};
-const selectProject = async (
-  connection: Awaited<ReturnType<typeof connectIterate>>,
-  configured?: string,
-) => {
-  if (configured) return configured;
-  const projects = await connection.session.projects.list();
-  if (projects.length === 1) return projects[0].id;
-  throw new Error(
-    `Pass --project or set defaultProject in ${CONFIG_PATH}. Accessible projects: ${projects.map((p) => `${p.slug} (${p.id})`).join(", ") || "none"}.`,
-  );
-};
-const openUrlInBrowser = async (url: string) => {
-  const { execFile } = await import("node:child_process");
-  const { command, args } =
-    process.platform === "darwin"
-      ? { command: "open", args: [url] }
-      : process.platform === "win32"
-        ? { command: "cmd", args: ["/c", "start", "", url] }
-        : { command: "xdg-open", args: [url] };
-  execFile(command, args, (error) => {
-    if (error)
-      console.error(`Could not open a browser: ${error.message}. Open the URL above manually.`);
-  });
-};
-
-const readErrorBody = async (response: Response) => {
-  const text = await response.text();
-  return text.length > 300 ? `${text.slice(0, 300)}...` : text;
-};
-
-/** The authorization URL, printed (an agent, or `ITERATE_SKIP_BROWSER_OPEN=1`, opens it itself)
- *  and opened in the person's browser. */
-const openBrowserForLogin = async (url: URL) => {
-  console.error(`\nOpening browser to authenticate with Iterate:\n`);
-  console.error(`  ${url.href}\n`);
-  if (!isAgent && process.env.ITERATE_SKIP_BROWSER_OPEN !== "1") await openUrlInBrowser(url.href);
-};
-
-/** Sign in the way `flow` says (device-login/flow.ts), check who it signed in against `expectUser`,
- *  and only then store the session: a session for someone else is ended, never saved. */
-const loginToResolvedConfig = async (
-  resolved: { name: string; config: Config },
-  { flow, expectUser }: { flow: LoginFlow; expectUser?: string },
-) => {
-  const { config } = resolved;
-
-  console.error(`Logging in to ${config.osBaseUrl}...`);
-  const oauthResult =
-    flow === "device"
-      ? await deviceLogin({
-          issuer: config.osBaseUrl,
-          deviceName: `iterate CLI on ${hostname()}`,
-          print: (line) => console.error(line),
-          colors: showsColors(process.stderr.isTTY, process.env),
-        })
-      : await oauthLogin({ issuer: config.osBaseUrl, openBrowser: openBrowserForLogin });
-
-  // Update in-memory config so subsequent verification and calls see the token.
-  config.session = oauthResult;
-
-  using connection = await connectIterate({
-    baseUrl: config.osBaseUrl,
-    auth: { type: "bearer", token: oauthResult.token },
-  });
-  const principal = await connection.session.whoami();
-  const unexpected = unexpectedUser(principal.email, expectUser);
+  using connection = await connectProject({ address: project.address, token: session.token });
+  const who = await connection.itx.whoami();
+  const unexpected = unexpectedUser(who.principal?.email, input.expectUser);
   if (unexpected) {
-    await connection.session.logout();
+    removeSession(resource);
+    await revokeSession(session).catch(() => {});
     throw new Error(unexpected);
   }
-
-  updateConfigSession(resolved.name, oauthResult);
-  return { ...oauthResult, email: principal.email };
+  const name = resolveConfigName(process.cwd());
+  setConfigProject(name, project.address);
+  return {
+    message: `Signed in to ${project.address} as ${who.principal?.email || who.principal?.actor || "someone the project does not name"}`,
+    profile: name,
+    expiresAt: session.expiresAt,
+  };
 };
 
+const projectOption = z
+  .string()
+  .optional()
+  .describe("The project's address, e.g. example.com (default: the profile's)");
+
 const launcherProcedures = {
-  ping: os.input(z.object({})).handler(async () => {
-    const { connection } = await connectConfigured();
-    using owned = connection;
-    return { message: "Iterate session valid", principal: await owned.session.whoami() };
-  }),
   login: os
     .input(
       z.object({
+        address: z
+          .string()
+          .meta({ positional: true })
+          .describe("The project's address, e.g. example.com"),
         device: z
           .boolean()
           .optional()
           .describe(
-            "Approve from a browser on any device: print a URL and a code, and wait. The default over SSH, on Linux with no display, and under a coding agent",
+            "Approve from a browser on any device, when the project's issuer offers it: the default over SSH, on Linux with no display, and under a coding agent",
           ),
         expectUser: z
           .string()
@@ -278,64 +149,56 @@ const launcherProcedures = {
           .describe("Refuse and end a session for anyone but this email"),
       }),
     )
-    .meta({ description: "Authenticate with Iterate via browser OAuth" })
-    .handler(async ({ input }) => {
-      const session = await loginToResolvedConfig(resolveConfig(process.cwd(), { throw: true }), {
-        flow: loginFlowFor({ device: input.device, env: process.env, platform: process.platform }),
-        expectUser: input.expectUser,
-      });
-      return {
-        message: `Logged in as ${session.email}`,
-        expiresAt: session.expiresAt,
-        scope: session.scope,
-      };
-    }),
+    .meta({ description: "Sign in to a project and make it the profile's project" })
+    .handler(async ({ input }) => login(input)),
   logout: os
-    .input(z.object({}))
-    .meta({ description: "Remove the current config's stored session" })
-    .handler(async () => {
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-      removeConfigSession(resolved.name);
-      return { message: `Logged out from ${resolved.name}` };
+    .input(z.object({ project: projectOption }))
+    .meta({
+      description:
+        "End this machine's sign-ins to the project (its API and /provide) at its issuer, and forget them",
+    })
+    .handler(async ({ input }) => {
+      const address = await resolveProject(input.project);
+      const ended: string[] = [];
+      for (const resource of [projectApiUrlOf(address), projectProvideUrlOf(address)]) {
+        const session = readSession(resource);
+        if (!session) continue;
+        await revokeSession(session).catch((error: unknown) => {
+          console.error(
+            `Could not end the sign-in at the issuer (${error instanceof Error ? error.message : String(error)}); it is forgotten here.`,
+          );
+        });
+        removeSession(resource);
+        ended.push(resource);
+      }
+      return { message: ended.length ? `Signed out of ${address}` : `Not signed in to ${address}` };
     }),
-  orgs: {
-    list: os.input(z.object({})).handler(async () => {
-      const { connection } = await connectConfigured();
-      using owned = connection;
-      return await owned.session.organizations.list();
+  whoami: os
+    .input(z.object({ project: projectOption }))
+    .meta({ description: "Who the project says you are, and where" })
+    .handler(async ({ input }) => {
+      using connection = await connect(input.project);
+      return { project: connection.address, ...(await connection.itx.whoami()) };
     }),
-  },
-  projects: {
-    list: os.input(z.object({})).handler(async () => {
-      const { connection } = await connectConfigured();
-      using owned = connection;
-      return await owned.session.projects.list();
-    }),
-  },
   repl: os
     .input(
       z.object({
-        project: z.string().optional().describe("Project id or slug"),
+        project: projectOption,
         context: z.string().default("/").describe("Context path within the project"),
       }),
     )
     .meta({ description: "Open a local Node REPL with itx and RpcTarget in scope" })
     .handler(async ({ input }) => {
-      const { resolved, connection } = await connectConfigured();
-      using owned = connection;
-      const project = input.project || resolved.config.defaultProject;
-      if (!project && input.context !== "/")
-        throw new Error("--context requires --project or a configured defaultProject.");
-      using root = project ? await owned.session.projects.get(project) : null;
-      using context = root ? await root.cd(input.context) : null;
+      using connection = await connect(input.project);
+      using context = await connection.itx.cd(input.context);
       console.error(
-        `Connected to ${resolved.config.osBaseUrl}, ${project ? `project ${project}, context ${input.context}` : "session"}. Use .exit to quit.`,
+        `Connected to ${connection.address}, context ${input.context}. Use .exit to quit.`,
       );
       // capnweb identifies built-ins by prototype. Evaluate in this process's
       // realm so objects and argument arrays use the transport's constructors.
       const server = repl.start({ prompt: "itx> ", useGlobal: true });
       const initialize = () => {
-        server.context.itx = context || owned.session;
+        server.context.itx = context;
         server.context.RpcTarget = RpcTarget;
       };
       initialize();
@@ -343,7 +206,7 @@ const launcherProcedures = {
       try {
         const outcome = await Promise.race([
           new Promise<"exit">((resolve) => server.once("exit", () => resolve("exit"))),
-          owned.closed,
+          connection.closed,
         ]);
         if (outcome !== "exit") {
           throw new Error(
@@ -359,10 +222,7 @@ const launcherProcedures = {
       .input(
         z
           .object({
-            project: z
-              .string()
-              .optional()
-              .describe("Project id or slug; defaults to config.defaultProject"),
+            project: projectOption,
             context: z.string().default("/").describe("Context path within the project"),
             eval: z
               .string()
@@ -378,7 +238,7 @@ const launcherProcedures = {
             "Specify exactly one of --eval or --file",
           ),
       )
-      .meta({ description: "Run an itx script once on Iterate" })
+      .meta({ description: "Run an itx script once in the project" })
       .handler(async ({ input }) => {
         let script = input.eval;
         if (input.file === "-") {
@@ -386,131 +246,31 @@ const launcherProcedures = {
           for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
           script = Buffer.concat(chunks).toString("utf8");
         } else if (input.file) script = await readFile(input.file, "utf8");
-        const { resolved, connection } = await connectConfigured();
-        using owned = connection;
-        const project = await selectProject(owned, input.project || resolved.config.defaultProject);
-        using root = await owned.session.projects.get(project);
-        using context = await root.cd(input.context);
+        using connection = await connect(input.project);
+        using context = await connection.itx.cd(input.context);
         return await context.run(`async (itx) => {\n${script}\n}`);
       }),
-  },
-  tokens: {
-    create: os
-      .input(
-        z.object({
-          name: z
-            .string()
-            .trim()
-            .min(1)
-            .describe("What the token is for, as the sessions list shows it"),
-          project: z
-            .array(z.string())
-            .min(1)
-            .describe("The projects the token may reach, by id or slug"),
-          expiresInDays: z
-            .number()
-            .int()
-            .positive()
-            .default(30)
-            .describe("Days until the token expires"),
-          neverExpires: z
-            .boolean()
-            .optional()
-            .describe("A token that ends only when it is revoked"),
-        }),
-      )
-      .meta({
-        description:
-          "Mint a personal access token: your bearer at /api, at /mcp and on the projects' hosts, printed once (signs in with the account scope for this one call)",
-      })
-      .handler(async ({ input }) =>
-        withAccountSession(async (session) => {
-          const reachable = await session.projects.list();
-          const projects = input.project.map((ref) => {
-            const project = reachable.find((row) => row.id === ref || row.slug === ref);
-            if (!project)
-              throw new Error(
-                `No project ${JSON.stringify(ref)} in this session. Accessible projects: ${reachable.map((row) => row.slug).join(", ") || "none"}.`,
-              );
-            return project.id;
-          });
-          return await session.grants.mint({
-            name: input.name,
-            projects,
-            expiresAt: input.neverExpires
-              ? undefined
-              : Date.now() + input.expiresInDays * 24 * 3600_000,
-          });
-        }),
-      ),
-    list: os
-      .input(z.object({}))
-      .meta({
-        description:
-          "List your personal access tokens, never their bearers (signs in with the account scope for this one call)",
-      })
-      .handler(async () =>
-        withAccountSession(async (session) => {
-          const { items } = await session.grants.list();
-          return items
-            .filter((item) => item.kind === "personal" || item.kind === "device")
-            .map(({ id, name, projects, expiresAt, lastUsedAt, mintedBy }) => ({
-              id,
-              name,
-              projects: projects?.join(", "),
-              expiresAt: expiresAt ? new Date(expiresAt).toISOString() : "never",
-              lastUsedAt: lastUsedAt ? new Date(lastUsedAt).toISOString() : null,
-              mintedBy:
-                items.find((item) => item.id === mintedBy)?.name ??
-                `${mintedBy} (no longer listed)`,
-            }));
-        }),
-      ),
-    revoke: os
-      .input(
-        z.object({ id: z.string().meta({ positional: true }).describe("The token's id, pat_…") }),
-      )
-      .meta({
-        description:
-          "Revoke a personal access token: refused everywhere at once (signs in with the account scope for this one call)",
-      })
-      .handler(async ({ input }) =>
-        withAccountSession(async (session) => {
-          await session.grants.end(input.id);
-          return { revoked: input.id };
-        }),
-      ),
   },
   mcp: {
     claude: os
       .input(
         z.object({
-          exec: z
-            .boolean()
-            .optional()
-            .describe("Run Claude Code in this terminal instead of printing its command"),
+          project: projectOption,
+          exec: z.boolean().optional().describe("Run the command instead of printing it"),
         }),
       )
       .meta({
         description:
-          "Claude Code against the config's /mcp with a personal access token (ITERATE_BEARER_TOKEN): checks tools/list, then prints or runs the command",
+          "The command that adds the project's MCP server to Claude Code: printed, or run with --exec. Claude Code then signs in with the project's issuer (/mcp in Claude Code)",
       })
       .handler(async ({ input }) => {
-        const token = process.env.ITERATE_BEARER_TOKEN?.trim();
-        if (!token)
-          throw new Error(
-            "iterate mcp claude needs ITERATE_BEARER_TOKEN, a personal access token of the deployment the config names: `iterate tokens create --name claude --project <slug>` mints one.",
-          );
-        const resolved = resolveConfig(process.cwd(), { throw: true });
-        const { mcpUrl, tools } = await preflightMcp(resolved.config.osBaseUrl, token);
-        console.error(`${mcpUrl} accepted the bearer; tools: ${tools.join(", ")}`);
+        const argv = claudeMcpAddArgs(projectMcpUrlOf(await resolveProject(input.project)));
         if (!input.exec) {
-          // stdout carries the command alone, so `eval "$(iterate mcp claude)"` runs it; the key
-          // stays in the environment, never in a transcript
-          console.log(claudeMcpCommand(mcpUrl));
+          // stdout carries the command alone, so `eval "$(iterate mcp claude)"` runs it
+          console.log(shellCommand(["claude", ...argv]));
           return;
         }
-        const claude = spawnSync("claude", claudeMcpArgs({ mcpUrl, token }), { stdio: "inherit" });
+        const claude = spawnSync("claude", argv, { stdio: "inherit" });
         if (claude.error)
           throw new Error(`Could not start claude: ${claude.error.message}`, {
             cause: claude.error,
@@ -518,10 +278,45 @@ const launcherProcedures = {
         process.exit(claude.status ?? 1);
       }),
   },
+  chatgpt: {
+    connect: os
+      .input(
+        z.object({
+          address: z
+            .string()
+            .optional()
+            .meta({ positional: true })
+            .describe("The project's address, e.g. example.com (default: the profile's)"),
+          test: z
+            .boolean()
+            .default(true)
+            .meta({ negatable: true })
+            .describe("Send one Responses request on the plan after the sign-in"),
+        }),
+      )
+      .meta({
+        description:
+          "Connect a personal ChatGPT Plus or Pro plan to the project: sign in with ChatGPT in this computer's browser, on 127.0.0.1:1455; the project gets the tokens and keeps them",
+      })
+      .handler(async ({ input }) => {
+        const address = await resolveProject(input.address);
+        // a first-time user runs this one command: no sign-in here is `iterate login` first
+        if (!process.env.ITERATE_PROJECT_TOKEN?.trim() && !readSession(projectApiUrlOf(address)))
+          console.error((await login({ address })).message);
+        using connection = await connect(address);
+        return await connectChatgpt({
+          itx: connection.itx,
+          address: connection.address,
+          test: input.test,
+          print: (line) => console.error(line),
+          openBrowser: (url) => openForSignIn(url, (line) => console.error(line)),
+        });
+      }),
+  },
   useMyComputer: os
     .input(
       z.object({
-        project: z.string().optional().describe("Project id or slug"),
+        project: projectOption,
         name: z
           .string()
           .regex(/^[a-zA-Z][a-zA-Z0-9]*$/)
@@ -534,19 +329,11 @@ const launcherProcedures = {
         "Share this computer with a project until Ctrl-C: run commands and read and write files (on a Mac, native dialogs and Swift too). The same as `iterate provide` of use-my-computer.ts",
     })
     .handler(async ({ input }) => {
-      const { resolved, connection } = await connectConfigured();
-      let project: string;
-      try {
-        project = await selectProject(connection, input.project || resolved.config.defaultProject);
-      } catch (error) {
-        connection[Symbol.dispose]();
-        throw error;
-      }
+      const address = await resolveProject(input.project);
       // shareMyComputer owns the connection from here, and every one `reconnect` opens
       await shareMyComputer({
-        connection,
-        reconnect: async () => (await connectConfigured()).connection,
-        project,
+        connection: await connect(address),
+        reconnect: () => connect(address),
         name: input.name,
       });
     }),
@@ -564,7 +351,7 @@ const launcherProcedures = {
           .string()
           .optional()
           .describe(
-            "The tunnel's name and routing slug: the tunnel is <name>--<project> (default: a random one)",
+            "The tunnel's name and routing slug: the tunnel is <name>.<address> (default: a random one)",
           ),
         hostname: z
           .string()
@@ -575,27 +362,19 @@ const launcherProcedures = {
         public: z
           .boolean()
           .optional()
-          .describe("Anyone may use it (default: signed-in project members only)"),
-        project: z.string().optional().describe("Project id or slug"),
+          .describe("Anyone may use it (default: signed-in visitors only)"),
+        project: projectOption,
       }),
     )
     .meta({
       description: "Serve a local port on a project host until Ctrl-C, WebSockets included",
     })
     .handler(async ({ input }) => {
-      const { resolved, connection } = await connectConfigured();
-      let project: string;
-      try {
-        project = await selectProject(connection, input.project || resolved.config.defaultProject);
-      } catch (error) {
-        connection[Symbol.dispose]();
-        throw error;
-      }
+      const address = await resolveProject(input.project);
       // runTunnel owns the connection from here, and every one `reconnect` opens
       await runTunnel({
-        connection,
-        reconnect: async () => (await connectConfigured()).connection,
-        project,
+        connection: await connect(address),
+        reconnect: () => connect(address),
         port: input.port,
         tunnelName: input.name,
         hostname: input.hostname,
@@ -617,7 +396,7 @@ const launcherProcedures = {
           .describe(
             "The capability's name, itx.<name> (default: the file's, whatsapp.ts → whatsapp)",
           ),
-        project: z.string().optional().describe("Project id or slug"),
+        project: projectOption,
       }),
     )
     .meta({
@@ -628,19 +407,11 @@ const launcherProcedures = {
       // the file first: a missing dependency is the answer before any sign-in
       const file = await importProvidedFile(input.file);
       const name = input.name || nameOfFile(input.file);
-      const { resolved, connection } = await connectConfigured();
-      let project: string;
-      try {
-        project = await selectProject(connection, input.project || resolved.config.defaultProject);
-      } catch (error) {
-        connection[Symbol.dispose]();
-        throw error;
-      }
+      const address = await resolveProject(input.project);
       // runProvide owns the connection from here, and every one `reconnect` opens
       await runProvide({
-        connection,
-        reconnect: async () => (await connectConfigured()).connection,
-        project,
+        connection: await connect(address),
+        reconnect: () => connect(address),
         file,
         name,
       });
@@ -648,136 +419,76 @@ const launcherProcedures = {
   config: {
     get: os
       .input(z.object({}))
-      .meta({ default: true, description: "Show config, resolved target, and session status" })
+      .meta({ default: true, description: "Show the profile in use, its project and its sign-in" })
       .handler(async () => {
-        const configFile = readConfigFile();
-        const resolved = resolveConfig(process.cwd());
-
-        const configs = configFile.configs || {};
-        const sessions = Object.fromEntries(
-          Object.entries(configs).map(([name, cfg]) => {
-            if (!cfg.session) return [name, null];
-            return [
-              name,
-              {
-                hasToken: Boolean(cfg.session?.token),
-                expiresAt: cfg.session?.expiresAt,
-                expired: cfg.session?.expiresAt
-                  ? new Date(cfg.session.expiresAt) < new Date()
-                  : false,
-              },
-            ];
-          }),
-        );
-
-        if (resolved instanceof Error) {
-          return { configPath: CONFIG_PATH, error: resolved.message };
-        }
-
+        const name = resolveConfigName(process.cwd());
+        const config = readConfig(name);
+        if (config instanceof Error) return { configPath: CONFIG_PATH, error: config.message };
+        const session = config.project ? readSession(projectApiUrlOf(config.project)) : null;
         return {
           configPath: CONFIG_PATH,
-          config: resolved.name,
-          ...resolved.config,
-          session: sessions[resolved.name],
+          profile: name,
+          project: config.project,
+          signedIn: session ? { issuer: session.issuer, expiresAt: session.expiresAt } : false,
         };
       }),
     list: os
       .input(z.object({}))
-      .meta({ description: "List all named configs" })
+      .meta({ description: "List the profiles" })
       .handler(async () => {
         const configFile = readConfigFile();
-        const currentName = resolveConfigName(process.cwd());
-        const configs = { [DEFAULT_CONFIG_NAME]: {}, ...(configFile.configs || {}) };
+        const current = resolveConfigName(process.cwd());
         return {
-          configs: Object.fromEntries(
-            Object.entries(configs).map(([name, cfg]) => [
+          profiles: Object.fromEntries(
+            Object.entries(configFile.configs || {}).map(([name, config]) => [
               name,
-              {
-                osBaseUrl: Config.parse(cfg).osBaseUrl,
-                active: name === currentName ? true : undefined,
-              },
+              { project: config.project, active: name === current ? true : undefined },
             ]),
           ),
           default: configFile.default,
         };
       }),
-
     set: os
       .input(
         z.object({
-          name: z.string().describe("Config name (e.g. dev, prd, preview)"),
-          osBaseUrl: z
-            .string()
-            .optional()
-            .describe("Base URL for OS API (e.g. https://os.iterate.com)"),
-          defaultProject: z.string().optional().describe("Default project id or slug"),
-          setDefault: z.boolean().optional().describe("Set as the default config"),
-          setWorkspace: z.boolean().optional().describe("Map current directory to this config"),
+          name: z.string().describe("Profile name"),
+          project: z.string().optional().describe("The project's address, e.g. example.com"),
+          setDefault: z.boolean().optional().describe("Make it the default profile"),
+          setWorkspace: z.boolean().optional().describe("Map the current folder to this profile"),
         }),
       )
-      .meta({ description: "Create or update a named config" })
+      .meta({ description: "Create or change a profile" })
       .handler(async ({ input }) => {
         const configFile = readConfigFile();
         configFile.configs ||= {};
-
-        configFile.configs[input.name] ||= Config.parse({});
-        if (input.osBaseUrl && input.osBaseUrl !== configFile.configs[input.name].osBaseUrl) {
-          configFile.configs[input.name].osBaseUrl = input.osBaseUrl;
-          delete configFile.configs[input.name].session;
-        }
-        if (input.defaultProject)
-          configFile.configs[input.name].defaultProject = input.defaultProject;
-
-        if (input.setDefault) {
-          configFile.default = input.name;
-        }
+        configFile.configs[input.name] ||= {};
+        if (input.project) configFile.configs[input.name]!.project = addressOf(input.project);
+        if (input.setDefault) configFile.default = input.name;
         if (input.setWorkspace) {
           configFile.workspaces ||= {};
           configFile.workspaces[process.cwd()] = input.name;
         }
-
         writeConfigFile(configFile);
-        return {
-          configPath: CONFIG_PATH,
-          config: { ...configFile.configs[input.name], session: undefined },
-        };
+        return { configPath: CONFIG_PATH, profile: configFile.configs[input.name] };
       }),
-
     use: os
       .input(
         z.object({
-          name: z.string().meta({ positional: true }).describe("Config name to set as default"),
+          name: z.string().meta({ positional: true }).describe("Profile to make the default"),
         }),
       )
-      .meta({ description: "Set the default config" })
+      .meta({ description: "Set the default profile" })
       .handler(async ({ input }) => {
         const configFile = readConfigFile();
-        if (input.name !== DEFAULT_CONFIG_NAME && !configFile.configs?.[input.name]) {
-          throw new Error(
-            `Config "${input.name}" not found. Available: ${Object.keys(configFile.configs || {}).join(", ") || "(none)"}`,
-          );
-        }
+        if (input.name !== DEFAULT_CONFIG_NAME && !configFile.configs?.[input.name])
+          throw new Error(`Profile "${input.name}" not found.`);
         configFile.default = input.name;
         writeConfigFile(configFile);
         return { default: input.name };
       }),
-
-    current: os
-      .input(z.object({}))
-      .meta({ description: "Show which config is active and why" })
-      .handler(async () => {
-        const resolved = resolveConfig(process.cwd(), { throw: true });
-        return {
-          name: resolved.name,
-          config: {
-            ...resolved.config,
-            session: resolved.config.session ? { loggedIn: true } : undefined,
-          },
-          resolvedVia: configFlagOverride ? "--config flag" : "workspace mapping or default",
-        };
-      }),
   },
 };
+
 export const runCli = async () => {
   // the machine's own files, no sign-in and no flags of ours (fs.ts); a sandbox runs the same file alone
   if (process.argv[2] === "fs") {
@@ -790,7 +501,7 @@ export const runCli = async () => {
     router: launcherProcedures,
     name: "iterate",
     description:
-      "Iterate CLI. Run itx scripts, authenticate, share your computer, and provide local code.",
+      "The iterate CLI: sign in to a project by its address, run itx scripts in it, and lend it what runs on this machine.",
   });
   // trpc-cli's built-in prompts ask for a missing input, but only a person at a terminal
   await cli.run({
@@ -799,92 +510,17 @@ export const runCli = async () => {
   });
 };
 
-/**
- * The deployment's MCP endpoint, proven to accept `token` by a `tools/list`, which the platform's
- * stateless handler (core/os/src/mcp.ts) answers without an `initialize` first.
- *
- * Starts at `<osBaseUrl>/mcp`. A deployment with its own MCP origin answers there with a 308 to it
- * (core/os/src/worker.ts: os.iterate.com/mcp → https://mcp.iterate.com/). The redirect is followed
- * here, bearer kept, because fetch drops `Authorization` on a cross-origin redirect
- * (https://fetch.spec.whatwg.org/#http-redirect-fetch), which would read as a rejected bearer; the
- * returned URL is the final one, so Claude Code never meets the redirect.
- */
-export const preflightMcp = async (osBaseUrl: string, token: string) => {
-  let mcpUrl = new URL("/mcp", osBaseUrl).href;
-  let response = await postToolsList(mcpUrl, token);
-  const location = response.headers.get("location");
-  if ((response.status === 307 || response.status === 308) && location) {
-    mcpUrl = new URL(location, mcpUrl).href;
-    response = await postToolsList(mcpUrl, token);
-  }
-  if (response.status === 401)
-    throw new Error(
-      `${mcpUrl} rejected the bearer (401). ITERATE_BEARER_TOKEN must be a live personal access token of the deployment at ${osBaseUrl}.`,
-    );
-  if (!response.ok)
-    throw new Error(
-      `tools/list on ${mcpUrl} failed (${response.status}): ${await readErrorBody(response)}`,
-    );
-  // Streamable HTTP answers a request with JSON or with an SSE stream whose `data:` lines carry the
-  // JSON-RPC response: https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#sending-messages-to-the-server
-  const body = await response.text();
-  const json = response.headers.get("content-type")?.startsWith("text/event-stream")
-    ? body
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice("data:".length).trim())
-        .join("\n")
-    : body;
-  const parsed = z
-    .object({ result: z.object({ tools: z.array(z.object({ name: z.string() })) }) })
-    .safeParse(JSON.parse(json));
-  if (!parsed.success)
-    throw new Error(`tools/list on ${mcpUrl} answered no tool list: ${json.slice(0, 300)}`);
-  return { mcpUrl, tools: parsed.data.result.tools.map((tool) => tool.name) };
-};
-
-const postToolsList = (mcpUrl: string, token: string) =>
-  fetch(mcpUrl, {
-    method: "POST",
-    redirect: "manual",
-    signal: AbortSignal.timeout(30_000),
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
-  });
-
-/**
- * Claude Code's arguments for one HTTP MCP server named `iterate` and no other: `--mcp-config`
- * takes the JSON inline, `--strict-mcp-config` ignores the user's own MCP servers
- * (https://code.claude.com/docs/en/cli-reference, https://code.claude.com/docs/en/mcp).
- */
-export const claudeMcpArgs = (input: { mcpUrl: string; token: string }) => [
-  "--mcp-config",
-  JSON.stringify({
-    mcpServers: {
-      iterate: {
-        type: "http",
-        url: input.mcpUrl,
-        headers: { Authorization: `Bearer ${input.token}` },
-      },
-    },
-  }),
-  "--strict-mcp-config",
+/** Claude Code's arguments that add one HTTP MCP server named `iterate` at `mcpUrl`
+ *  (https://code.claude.com/docs/en/mcp). It signs in itself: the server's protected-resource
+ *  metadata names the project's issuer. */
+export const claudeMcpAddArgs = (mcpUrl: string) => [
+  "mcp",
+  "add",
+  "--transport",
+  "http",
+  "iterate",
+  mcpUrl,
 ];
-
-/** `claude` with `claudeMcpArgs` as a shell command that reads the key from `$ITERATE_BEARER_TOKEN`
- *  when it runs: printed, it carries no key. */
-export const claudeMcpCommand = (mcpUrl: string) => {
-  const placeholder = "ITERATE_BEARER_TOKEN_PLACEHOLDER";
-  // the argument holding it is single-quoted JSON; the variable is spliced in double quotes
-  return shellCommand(["claude", ...claudeMcpArgs({ mcpUrl, token: placeholder })]).replace(
-    placeholder,
-    `'"$ITERATE_BEARER_TOKEN"'`,
-  );
-};
 
 /** POSIX-shell-quoted: plain words bare, anything else single-quoted with `'` spelled `'\''`. */
 export const shellCommand = (argv: string[]) =>

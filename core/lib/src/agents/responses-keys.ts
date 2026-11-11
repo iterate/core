@@ -1,5 +1,5 @@
-// responses-keys.ts — the agent's model call with a stack of API keys, for a project that brings its
-// own credentials instead of the deployment's AI Gateway (`llm.apiKeys`, contract.ts).
+// responses-keys.ts — the agent's model call with a stack of credentials (`llm.apiKeys`,
+// contract.ts): API keys a project brings, and the deployment's AI Gateway (`AI_GATEWAY`).
 //
 // A key is the text that follows `Bearer `: normally a `getSecret("/secrets/…")` placeholder, which
 // egress swaps for the secret's value on the way to api.openai.com, so no key is ever in this code.
@@ -15,6 +15,9 @@ import { z } from "zod";
 import { errorCode } from "../lib.ts";
 
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
+/** The entry of `llm.apiKeys` that sends the request through the deployment's AI Gateway, as an
+ *  empty stack does: billed to the deployment, no key. */
+export const AI_GATEWAY = "ai-gateway";
 /** A server event on the agent's socket, as far as `viaSocket` reads it; anything else is
  *  skipped. */
 const SocketEvent = z.looseObject({ type: z.string() });
@@ -75,6 +78,14 @@ export function wellFormedBody(body: Record<string, unknown>): {
 /** A key whose answer failed: its position in the stack (from 1), the stack's size, and the error. */
 export type KeyFailure = { key: number; keys: number; error: string };
 
+/** What the caller knows of its stack: `gateway`, its request through the AI Gateway, which the
+ *  `AI_GATEWAY` entry runs; and `notSet`, the entries whose secret is not set, which are passed over
+ *  with no request. */
+export type StackOptions<T> = {
+  gateway?: (attempt: StreamAttempt) => Promise<T>;
+  notSet?: ReadonlySet<string>;
+};
+
 /** ONE ATTEMPT at a streamed answer: a signal that aborts with the caller's (an interruption, the
  *  expiry), or on its own once the provider has sent nothing for the idle budget, and `alive`, which
  *  the reader calls on every chunk the provider sends. */
@@ -105,14 +116,17 @@ export async function withStreamAttempt<T>(
 }
 
 /** One Responses API request, sent with each key in turn until one's answer is read to its end by
- *  `read`. An attempt that fails for any reason but `signal` — an answer that is not 2xx (`read`
- *  says so), a throw (its secret is missing, a dropped connection), an error event, or a stream that
- *  sends nothing for `idleMs` — is reported to `onKeyFailed` (its position and the error, never the
- *  key), and the next key gets the same request; `read` starts afresh, so nothing
- *  of the failed answer is kept. When none succeeds, the last failure is thrown. `signal` is the
- *  turn's: once it aborts, the attempt in flight is abandoned and no later key is sent. `send` is
- *  the isolate's `fetch` (egress), one function per incarnation of the agent's context: the agent's
- *  sockets are kept per `send`, so the global `fetch` would share them across incarnations. */
+ *  `read`. The `AI_GATEWAY` entry runs `gateway` instead, the caller's request through the AI
+ *  Gateway. An attempt that fails for any reason but `signal` — an answer that is not 2xx (`read`
+ *  says so), a throw (a dropped connection), an error event, or a stream that sends nothing for
+ *  `idleMs` — is reported to `onKeyFailed` (its position and the error, never the key), and the
+ *  next key gets the same request; `read` starts afresh, so nothing of the failed answer is kept.
+ *  An entry in `notSet` is passed over without a request or a report; the others keep their
+ *  positions in the whole stack. When none succeeds, the last failure is thrown, or, when no entry
+ *  was tried, an error that says how to set a credential. `signal` is the turn's: once it aborts,
+ *  the attempt in flight is abandoned and no later key is sent. `send` is the isolate's `fetch`
+ *  (egress), one function per incarnation of the agent's context: the agent's sockets are kept per
+ *  `send`, so the global `fetch` would share them across incarnations. */
 export async function postResponses<T>(
   send: (request: Request) => Promise<Response>,
   body: Record<string, unknown>,
@@ -122,17 +136,25 @@ export async function postResponses<T>(
   read: (response: Response, attempt: StreamAttempt) => Promise<T>,
   onKeyFailed: (failure: KeyFailure) => void = (failure) =>
     console.warn({ event: "agent.api-key-failed", ...failure }),
+  { gateway, notSet }: StackOptions<T> = {},
 ): Promise<T> {
   const forKeys = bodyForKeys(body);
   const json = JSON.stringify(forKeys);
   // A plan's token reads a cached prefix only within a session: without one, an agent's turns read
   // none of the turn before. An API key ignores it. The session also names the agent's socket.
   const session = typeof body.prompt_cache_key === "string" ? body.prompt_cache_key : undefined;
-  let failure: unknown = new Error("llm.apiKeys is empty");
+  let failure: unknown;
+  let tried = false;
   for (const [position, apiKey] of apiKeys.entries()) {
     // An abort ends the call: no later key is tried for a turn that was cancelled or expired.
     if (signal.aborted) throw signal.reason || new Error("aborted");
+    if (notSet?.has(apiKey)) continue;
+    tried = true;
     try {
+      if (apiKey === AI_GATEWAY) {
+        if (!gateway) throw new Error(`llm.apiKeys: "${AI_GATEWAY}" needs the caller's gateway`);
+        return await withStreamAttempt(signal, idleMs, gateway);
+      }
       return await withStreamAttempt(signal, idleMs, async (attempt) => {
         // anything the socket cannot do, this key's request does over HTTP
         const streamed =
@@ -171,6 +193,10 @@ export async function postResponses<T>(
       failure = error;
     }
   }
+  if (!tried)
+    throw new Error(
+      "no model credential is set: connect a ChatGPT plan (iterate chatgpt connect), set the secret /secrets/openai to an OpenAI API key, or add AI Gateway credit in your Cloudflare account",
+    );
   throw failure;
 }
 

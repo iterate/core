@@ -91,33 +91,40 @@ about 0.4 s with everything warm, 1.1 s on a new socket, and 2 s after the conte
 
 ## Your own credentials
 
-By default an agent's model calls go through the deployment's AI Gateway: no key, billed to the
-deployment. A project that brings its own credentials sets `llm.apiKeys`, an ordered list. Each
-entry is the text after `Bearer `, normally a `getSecret(...)` placeholder that egress swaps for the
-secret's value on the way to api.openai.com:
+`llm.apiKeys` is an ordered list of credentials. Each entry is the text after `Bearer `, normally a
+`getSecret(...)` placeholder that egress swaps for the secret's value on the way to api.openai.com,
+or `AI_GATEWAY` (`"ai-gateway"`): the deployment's AI Gateway, billed to the deployment, no key. An
+empty list is the AI Gateway alone. The default config's `apps/agents/backend.ts` ships this order, so a person
+who sets any one of the three needs no code change:
 
 ```ts
-// agents.ts
-import { AgentDurableObject } from "iterate/agents";
+// apps/agents/backend.ts
+import { AgentDurableObject, AI_GATEWAY } from "iterate/agents";
 
 AgentDurableObject.defaultConfig = {
   llm: {
     apiKeys: [
-      'getSecret("/secrets/chatgpt", { field: "accessToken" })', // a ChatGPT plan, tried first
-      'getSecret("/secrets/openai")', // the project's API key, when the first does not answer
+      'getSecret("/secrets/chatgpt", { field: "accessToken" })', // a ChatGPT plan
+      'getSecret("/secrets/openai")', // an OpenAI API key
+      AI_GATEWAY, // the deployment's AI Gateway credit
     ],
     streamIdleTimeoutMs: 120_000, // how long an answer may send nothing; 60 s by default
   },
 };
 ```
 
-A request goes to the first key. A key whose answer fails before it completes is named, with its
-error, in the request's `llm-request-settled` event (`failedKeys`), and the next key gets the same
-request: an answer that is not 2xx, a throw (its secret is missing), an error event, a stream that
-ends early, or one that sends nothing for `llm.streamIdleTimeoutMs`. Nothing of the failed answer is
-kept, and a feed starts the next one afresh. The person's next words or the request's expiry stop
-the stack. When no key succeeds, the last failure is the one the agent reports. Without keys, the AI
-Gateway's answer has the same idle budget.
+A request goes to the first credential. One whose answer fails before it completes is named, with
+its error, in the request's `llm-request-settled` event (`failedKeys`), and the next one gets the
+same request: an answer that is not 2xx, a throw, an error event, a stream that ends early, or one
+that sends nothing for `llm.streamIdleTimeoutMs`. Nothing of the failed answer is kept, and a feed
+starts the next one afresh. The person's next words or the request's expiry stop the stack. A key
+whose secret is not set is passed over without a request, and it is no failure, so it is not
+reported. The agent remembers which secrets are set and refreshes that behind each request: only
+the first request of an incarnation can wait for it (the check begins when the turn does), and a
+change is used one request later.
+When none succeeds, the last failure is the one the agent reports; when no credential was tried,
+the error names the ways to set one (`iterate chatgpt connect`, the secret `/secrets/openai`, or AI
+Gateway credit in your Cloudflare account).
 
 Every string of a request is sent well formed: a lone UTF-16 surrogate (half an emoji that a
 `slice` cut) goes as U+FFFD, which the settlement counts (`repairedStrings`). The conversation keeps

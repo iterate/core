@@ -4,6 +4,7 @@
 // importing this module registers `itx.agents` on iterate/api's `InstalledAppRoots` (api.ts).
 export { AgentCollectionDurableObject } from "./catalog.ts";
 export { AgentDurableObject } from "./durable-object.ts";
+export { AI_GATEWAY } from "./responses-keys.ts";
 export type {
   AgentHandleApi,
   AgentListing,

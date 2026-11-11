@@ -12,7 +12,7 @@ This project has no agents and no schedules.
   `events.iterate.com/project/worker-updated` runs after every published commit: that is the init
   hook.
 - `fetch` serves every host of the project. The `x-iterate-routing-slug` header names the host
-  (`blog` for `blog--<project>`, absent on the apex), so route on it with a plain `if`. A request
+  (`blog` for `blog.<domain>`, absent on the apex), so route on it with a plain `if`. A request
   a fetch route takes never reaches it: the platform sends it to the route's target first
   (`iterate tunnel <port>` sets a route per tunnel; `itx.fetchRoutes.set` sets one by hand).
 
@@ -28,3 +28,15 @@ Files may be TypeScript or JavaScript and import each other by relative path. Im
 name: `iterate/*` and `zod` come from the platform; list any other package in `package.json` and
 it loads from npm through esm.sh (packages that need Node.js builtins are refused). Type-check
 locally with `npm install && npx tsc`; the loader strips types but never checks them.
+
+## How the platform works
+
+The source code of the platform is public at https://github.com/iterate/core. Read it before you
+guess how a capability behaves. List the files first:
+`https://data.jsdelivr.com/v1/packages/gh/iterate/core@main?structure=flat` (`files[].name`; the
+list can be hours behind). GitHub's own list,
+`https://api.github.com/repos/iterate/core/git/trees/main?recursive=1` (`tree[].path`), is exact, but
+GitHub allows 60 listings an hour to everyone behind one address, so from a project it often
+answers 403. Then read `core/AGENTS.md`, then the file you need:
+`https://raw.githubusercontent.com/iterate/core/main/<path>`. `main` can differ from the code this
+project runs: where they disagree, what a call answers is right.

@@ -1,0 +1,7 @@
+/* app.css — the page's own layout: the shell fills the window. @iterate-com/ui's stylesheet holds
+   everything else. */
+html,
+body,
+#root {
+  height: 100%;
+}

@@ -1,6 +1,6 @@
 /* The plain pages' rules: HTML served with no build and no Tailwind (an app's gate pages, the
    platform's callback pages, the CLI's sign-in page). standalonePage() inlines tokens.css and then
-   this file, so they look like the issuer's pages: monospace, light on dark, square corners, one
+   this file, so they look like the issuer's pages: monospace, black on white, square corners, one
    centred column with its content left-aligned (core/os StandalonePage), no logo.
 
    Colours come from tokens.css by name, never as values here. The type is theme.css's: one

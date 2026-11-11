@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.app.json",
+  "compilerOptions": {
+    // The DOM lib's globals conflict with @cloudflare/workers-types.
+    "lib": ["ES2024", "ESNext.Disposable"],
+    "types": ["@cloudflare/workers-types", "node"]
+  },
+  "include": ["src"]
+}

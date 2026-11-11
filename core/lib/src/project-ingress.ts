@@ -21,9 +21,16 @@
  *  expression fetch, so neither a visitor nor loaded code can pick a routing slug. */
 export const ITERATE_ROUTING_SLUG_HEADER = "x-iterate-routing-slug";
 
+/** WHAT A CONFIG WORKER'S ANSWER ASKS THE PLATFORM TO SERVE IN ITS PLACE, on a project host:
+ *  `itx` is the visitor's own itx over a WebSocket (iterate/sdk `auth.itx`). An answer, never a
+ *  call: the platform serves it for the caller the boundary stamped on the request it still holds,
+ *  so the config worker names no caller. The platform drops the header from every answer it does
+ *  not honour, so it never reaches a browser. */
+export const ITERATE_SERVE_HEADER = "x-iterate-serve";
+
 /** THE BASE PATH a project host is served under (`ProjectAddress.basePath`, under paths
  *  `/projects/<project>[/<routingSlug>]`): the edge strips it from the URL the config worker sees
- *  and says it here, so a site composes the paths the browser addresses (packages/notes base-path.ts).
+ *  and says it here, so a site composes the paths the browser addresses.
  *  Set or deleted by the edge on every project request, so a visitor's spelling never reaches the
  *  project. Absent under subdomains, where each routing slug owns its origin. */
 export const ITERATE_BASE_PATH_HEADER = "x-iterate-base-path";

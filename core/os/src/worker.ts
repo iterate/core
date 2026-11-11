@@ -247,7 +247,7 @@ async function serveProjectHost(args: {
 forwardIssues(captureIssueInPosthog);
 
 export { IterateContextDurableObject };
-export { BrowserSession } from "iterate/app-session";
+export { BrowserSession } from "./app-session.ts";
 // THE FIRST-PARTY FACETS: exported Durable Object classes hosted as facets of a context through
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.

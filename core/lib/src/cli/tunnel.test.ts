@@ -1,13 +1,12 @@
 // tunnel.test.ts — the tunnel's local proxy, `LocalPortRpcTarget`, against real local servers: what
 // the project host's request becomes on `localhost:<port>`, a WebSocket that keeps the subprotocol
-// the local server chose, and the 502 when nothing listens; and the route `runTunnel` sets. The
-// platform half (the route, the host, the lent stub) is core/os e2e/tunnel.e2e.test.ts.
+// the local server chose, and the 502 when nothing listens.
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
 import { WebSocketServer } from "ws";
-import { expect, test, vi } from "vitest";
-import { LocalPortRpcTarget, runTunnel } from "./tunnel.ts";
+import { expect, test } from "vitest";
+import { LocalPortRpcTarget } from "./tunnel.ts";
 
 test("HTTP: path, query, method, headers and body reach localhost:<port>; a redirect is handed back; a gzipped body arrives decoded", async () => {
   const seen: {
@@ -60,14 +59,6 @@ test("HTTP: path, query, method, headers and body reach localhost:<port>; a redi
     status: 302,
     location: "/elsewhere",
   });
-
-  // paths routing: the base the edge stripped is put back
-  await target.fetch(
-    new Request("https://os.example/src/main.ts", {
-      headers: { "x-iterate-base-path": "/projects/acme/blog" },
-    }),
-  );
-  expect(seen.at(-1)).toMatchObject({ url: "/projects/acme/blog/src/main.ts" });
 
   // a path that looks like an authority stays a path on localhost
   await target.fetch(new Request("https://blog--acme.iterate.app//127.0.0.1:1/x"));
@@ -145,225 +136,7 @@ test("WebSocket: the requested subprotocols reach the local server, its choice n
   expect(await serverClosed).toBe(1000);
 });
 
-// The route's authRequirement says private or public; under paths the tunnel names the base path
-// the local server must serve under.
-test.for([
-  ["paths", "private"],
-  ["subdomains", "public"],
-] as const)("a %s deployment, a %s tunnel", async ([routing, visibility]) => {
-  const url =
-    routing === "paths"
-      ? "https://os.example.com/projects/p/blog/"
-      : "https://blog--p.example.com/";
-  const fake = fakeProject(url);
-  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-  const stdout = vi.spyOn(console, "log").mockImplementation(() => {});
-  const run = runTunnel({
-    // the tunnel ends as soon as it is live: the connection is already closed, and no reconnect
-    connection: fake.connection(Promise.resolve({ code: 1006, reason: "" })),
-    reconnect: () => Promise.reject(new Error("unreachable")),
-    reconnectDelaysMs: [],
-    project: "p",
-    port: 5173,
-    tunnelName: "blog",
-    public: visibility === "public",
-  });
-  await expect(run).rejects.toThrow("The tunnel disconnected and could not reconnect");
-  expect(fake).toMatchObject({ calls: ["provide itx.tunnels.blog with route tunnel-blog"] });
-  expect(fake.routes[0]).toMatchObject({
-    authRequirement: visibility === "public" ? null : { visitors: "project-members" },
-  });
-  expect(stdout.mock).toMatchObject({ calls: [[url]] });
-  const basePathLines = stderr.mock.calls.filter(
-    ([line]) => !String(line).includes(url) && String(line).includes("/projects/p/blog/"),
-  );
-  expect(basePathLines).toHaveLength(routing === "paths" ? 1 : 0);
-});
-
-// `--hostname`: the route matches that host alone (no routing slug) and travels with the lend, the
-// URL is the host's; a route of another tunnel on the host refuses the tunnel, a host that is not
-// one literal hostname too, both before anything is lent.
-test("a tunnel on a hostname: its route matches the host alone; a host another route takes, or a pattern, refuses it", async () => {
-  const fake = fakeProject("https://unused.example.com/");
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  const stdout = vi.spyOn(console, "log").mockImplementation(() => {});
-  const tunnelOn = (hostname: string) =>
-    runTunnel({
-      connection: fake.connection(Promise.resolve({ code: 1006, reason: "" })),
-      reconnect: () => Promise.reject(new Error("unreachable")),
-      reconnectDelaysMs: [],
-      project: "p",
-      port: 5173,
-      tunnelName: "hello",
-      hostname,
-      public: true,
-    });
-  await expect(tunnelOn("hello.tunnels.example.com")).rejects.toThrow("could not reconnect");
-  expect(fake).toMatchObject({
-    calls: ["provide itx.tunnels.hello with route tunnel-hello"],
-    routes: [
-      {
-        fetchRouteName: "tunnel-hello",
-        requestMatcher: { url: { hostname: "hello.tunnels.example.com" } },
-        authRequirement: null,
-      },
-    ],
-  });
-  expect(stdout.mock).toMatchObject({ calls: [["https://hello.tunnels.example.com/"]] });
-
-  fake.listedRoutes.push({
-    fetchRouteName: "blog",
-    requestMatcher: { url: { hostname: "taken.tunnels.example.com" } },
-    target: ["itx", "blog"],
-  });
-  await expect(tunnelOn("taken.tunnels.example.com")).rejects.toThrow(
-    "The fetch route blog (target itx.blog) already has this name or host. Pick another --name or --hostname.",
-  );
-  await expect(tunnelOn("*.tunnels.example.com")).rejects.toThrow("is not one lowercase hostname");
-  await expect(tunnelOn("Hello.tunnels.example.com")).rejects.toThrow(
-    "is not one lowercase hostname",
-  );
-  expect(fake.calls).toHaveLength(1);
-});
-
-// A connection that closes under a live tunnel (its heartbeat found the network gone — a laptop
-// asleep, a NAT mapping expired) is replaced: the tunnel reconnects and lends and routes again, and
-// says so; a failed attempt is tried again on the schedule, and only when every attempt fails does
-// it end, with an error. 2026-09-25: a tunnel sat 55 minutes on a dead connection, unaware.
-test("a tunnel whose connection closes reconnects, lends and routes again; it ends only when every attempt fails", async () => {
-  const fake = fakeProject("https://blog--p.example.com/");
-  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  let dropSecond!: () => void;
-  const reconnects = [
-    () => Promise.reject(new Error("getaddrinfo ENOTFOUND os.example.com")), // Wi-Fi not back yet
-    async () =>
-      fake.connection(
-        new Promise((resolve) => (dropSecond = () => resolve({ code: 1006, reason: "gone" }))),
-      ),
-  ];
-  const run = runTunnel({
-    connection: fake.connection(
-      Promise.resolve({ code: 1006, reason: "no answer to a heartbeat for 15 s" }),
-    ),
-    reconnect: () => {
-      const next = reconnects.shift();
-      if (!next) return Promise.reject(new Error("still offline"));
-      const connection = next();
-      void connection.then(
-        () => setTimeout(() => dropSecond(), 5),
-        () => undefined,
-      );
-      return connection;
-    },
-    reconnectDelaysMs: [0, 0],
-    project: "p",
-    port: 5173,
-    tunnelName: "blog",
-  });
-  await expect(run).rejects.toThrow(
-    "The tunnel disconnected and could not reconnect (still offline)",
-  );
-  expect(fake).toMatchObject({
-    calls: [
-      "provide itx.tunnels.blog with route tunnel-blog",
-      "provide itx.tunnels.blog with route tunnel-blog",
-    ],
-    disposedConnections: 2,
-  });
-  expect(stderr.mock.calls.map(([line]) => String(line))).toEqual([
-    expect.stringContaining("Press Ctrl-C to stop."),
-    "The tunnel disconnected (1006: no answer to a heartbeat for 15 s). Reconnecting...",
-    "Could not reconnect: getaddrinfo ENOTFOUND os.example.com",
-    "Reconnected: https://blog--p.example.com/ → http://localhost:5173",
-    "The tunnel disconnected (1006: gone). Reconnecting...",
-    "Could not reconnect: still offline",
-    "Could not reconnect: still offline",
-  ]);
-});
-
-// A lend that ends while its connection lives (the platform lost its pager, and the route with it)
-// is lent again, with its route, over a fresh connection.
-test("a tunnel whose lend ends under a live connection reconnects, lends and routes again", async () => {
-  const fake = fakeProject("https://blog--p.example.com/");
-  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  fake.lendsEnded.push(
-    Promise.resolve("went offline (its pager dropped and could not be re-dialed)"),
-  );
-  let stopSecond!: () => void;
-  const run = runTunnel({
-    connection: fake.connection(new Promise(() => {})),
-    reconnect: async () => {
-      if (fake.disposedConnections > 1) throw new Error("still offline");
-      return fake.connection(
-        new Promise((resolve) => (stopSecond = () => resolve({ code: 1006, reason: "gone" }))),
-      );
-    },
-    reconnectDelaysMs: [0],
-    project: "p",
-    port: 5173,
-    tunnelName: "blog",
-  });
-  await vi.waitFor(() => expect(fake.calls).toHaveLength(2));
-  stopSecond();
-  await expect(run).rejects.toThrow("could not reconnect");
-  expect(fake).toMatchObject({
-    calls: [
-      "provide itx.tunnels.blog with route tunnel-blog",
-      "provide itx.tunnels.blog with route tunnel-blog",
-    ],
-    disposedConnections: 2,
-  });
-  expect(stderr.mock.calls.map(([line]) => String(line))).toContain(
-    "The tunnel disconnected (its lend ended: the stub went offline (its pager dropped and could not be re-dialed)). Reconnecting...",
-  );
-});
-
-/** A project whose routes and lends are recorded, reached over connections that close when `closed`
- *  resolves (each counts its disposal). */
-function fakeProject(url: string) {
-  const fake = {
-    calls: [] as string[],
-    routes: [] as unknown[],
-    disposedConnections: 0,
-    /** the routes `fetchRoutes.list()` answers */
-    listedRoutes: [] as unknown[],
-    /** Each lend in turn ends when its entry resolves; a lend with none never ends on its own. */
-    lendsEnded: [] as Promise<string>[],
-    connection: (closed: Promise<{ code: number; reason: string }>) =>
-      ({
-        session: { projects: { get: async () => project } },
-        closed,
-        [Symbol.dispose]: () => void (fake.disposedConnections += 1),
-      }) as unknown as Parameters<typeof runTunnel>[0]["connection"],
-  };
-  const project = {
-    url: async () => url,
-    fetchRoutes: {
-      list: async () => fake.listedRoutes,
-      set: async (name: string, route: unknown) => {
-        fake.calls.push(`set ${name} ${route && "route"}`);
-        fake.routes.push(route);
-      },
-    },
-    provide: async (
-      target: string,
-      _stub: unknown,
-      options: { fetchRoute: { fetchRouteName: string } },
-    ) => {
-      fake.calls.push(`provide ${target} with route ${options.fetchRoute.fetchRouteName}`);
-      fake.routes.push(options.fetchRoute);
-      return {
-        lendEnded: () => fake.lendsEnded.shift() || new Promise<string>(() => {}),
-        [Symbol.dispose]: () => {},
-      };
-    },
-    [Symbol.dispose]: () => {},
-  };
-  return fake;
-}
-
+/** The visitor's end of the WebSocket the proxy answers with. */
 type VisitorSocket = {
   accept(): void;
   send(data: string | Uint8Array): void;

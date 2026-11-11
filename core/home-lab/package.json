@@ -1,0 +1,23 @@
+{
+  "name": "core-home-lab",
+  "type": "module",
+  "description": "A project that runs on a home machine: the real project Worker in local workerd, dialled into its stack",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "capnweb": "catalog:",
+    "esbuild": "catalog:",
+    "iterate": "workspace:*",
+    "miniflare": "5.20261104.0-beta"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

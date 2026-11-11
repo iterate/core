@@ -6,11 +6,17 @@ import type { FacetSpec, IterateContextApi } from "../api.ts";
 /** Where the catalog lives. Every context under it, at any depth, is an agent (catalog.ts). */
 export const AGENTS_PATH = "/agents";
 
-/** One of the app's facets: `className` from `agents.ts` of the project's published config. */
+/** The module of a project's published config that exports the app's two classes, unless the
+ *  config says another (`apps/agents/backend.ts`): to `installAgents`, and on the collection's
+ *  class, which starts each agent from it (catalog.ts `module`). */
+export const AGENTS_MODULE = "agents.ts";
+
+/** One of the app's facets: `className` from `module` of the project's published config. */
 export function agentsFacetSpec(
   className: "AgentCollectionDurableObject" | "AgentDurableObject",
+  module = AGENTS_MODULE,
 ): FacetSpec {
-  return { className, mainModule: "agents.ts", source: ["itx", ["cd", "/"], "config"] };
+  return { className, mainModule: module, source: ["itx", ["cd", "/"], "config"] };
 }
 
 /** The processor verbs installing calls. `list` is read only for each row's name, and answers
@@ -26,8 +32,9 @@ export async function installAgents(
     processors: Processors;
     cd(path: string): { processors: Pick<Processors, "enable"> };
   },
+  options: { module?: string } = {},
 ) {
-  const spec = agentsFacetSpec("AgentCollectionDurableObject");
+  const spec = agentsFacetSpec("AgentCollectionDurableObject", options.module);
   await itx.cd(AGENTS_PATH).processors.enable("agents", {
     ...spec,
     consumes: [

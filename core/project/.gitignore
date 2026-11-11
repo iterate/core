@@ -1,0 +1,4 @@
+# scripts/build.ts: the platform modules. Only the declaration belongs in git — a stale generated
+# module here would ship an old SDK to loaded code.
+/src/generated/*
+!/src/generated/*.d.ts

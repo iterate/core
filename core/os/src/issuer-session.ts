@@ -1,5 +1,4 @@
 import { waitUntil } from "cloudflare:workers";
-import { startAppSession } from "iterate/app-server";
 import { errorCode, reportIssue, sameOriginPath } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
 import {
@@ -7,6 +6,7 @@ import {
   isPlatformFailureKind,
   type PlatformFailureKind,
 } from "iterate/platform-retry";
+import { startAppSession } from "./app-server.ts";
 import { clientDisplay } from "./client-display.ts";
 import { platformAddressesOf } from "./iterate-config.ts";
 import type { Env } from "./env.ts";

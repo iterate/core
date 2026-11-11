@@ -8,6 +8,7 @@ import { codedError } from "../lib.ts";
 import { ProcessorEngine, type StreamEvent, type StreamEventInput } from "../stream/processor.ts";
 import { memoryStorage, memoryStream } from "../stream/test-support.ts";
 import { type AgentConfigPatch, AgentProcessor } from "./processor.ts";
+import { AI_GATEWAY } from "./responses-keys.ts";
 
 const PATH = "/agents/a";
 const AT = Date.parse("2026-10-10T12:00:00Z");
@@ -178,6 +179,72 @@ test("a stalled answer whose cancellation rejects its pending read, as workerd's
     failedKeys: [{ key: 1, error: "Error: the model stream stalled: nothing for 60 s" }],
     result: { status: "succeeded", text: "forty-two" },
   });
+});
+
+test("with the default order and no secret set, the request goes through the AI Gateway and nothing is sent to fetch", async () => {
+  const sentToFetch: Request[] = [];
+  const { turn, sent } = agentWithModel({
+    config: {
+      llm: {
+        apiKeys: [
+          'getSecret("/secrets/chatgpt", { field: "accessToken" })',
+          'getSecret("/secrets/openai")',
+          AI_GATEWAY,
+        ],
+      },
+    },
+    fetch: async (request) => {
+      sentToFetch.push(request);
+      return new Response("unexpected", { status: 500 });
+    },
+  });
+  const settled = settledOf(await turn("What is the answer?"));
+  expect(settled).toMatchObject({ result: { status: "succeeded", text: "forty-two" } });
+  expect(settled).not.toHaveProperty("failedKeys");
+  expect({ fetched: sentToFetch.length, gateway: sent.length }).toEqual({ fetched: 0, gateway: 1 });
+});
+
+test("the agent remembers which secrets are set and refreshes that behind each request: the second request waits for no describe, and a key set since is used by the request after", async () => {
+  const set = new Set<string>();
+  const answers: Array<() => void> = [];
+  const model = openAi(() => sse(answered("paid by the key")));
+  const { turn, commit, sent } = agentWithModel({
+    // no idle check: three turns in a row
+    config: {
+      llm: { apiKeys: ['getSecret("/secrets/openai")', AI_GATEWAY] },
+      keepWarmForMs: 0,
+      idleCompactionAfterMs: 0,
+    },
+    fetch: model.fetch,
+    describe: (path) =>
+      new Promise((resolve) => answers.push(() => resolve({ path, set: set.has(path) }))),
+  });
+  const settle = async (rows: Row[]) =>
+    void (await commit(rows.find((row) => row.type.endsWith("/llm-request-settled"))!));
+  // the incarnation's first request waits for the first answer
+  const first = turn("One?");
+  await until(() => answers.length === 1);
+  expect(sent).toHaveLength(0);
+  answers[0]!();
+  await settle(await first);
+  // the second is sent while its round's describe has not answered
+  await settle(await turn("Two?"));
+  expect({ describes: answers.length, gateway: sent.length, posts: model.posts.length }).toEqual({
+    describes: 2,
+    gateway: 2,
+    posts: 0,
+  });
+  set.add("/secrets/openai");
+  answers[1]!();
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(settledOf(await turn("Three?"))).toMatchObject({
+    result: { status: "succeeded", text: "paid by the key" },
+  });
+  expect({ gateway: sent.length, posts: model.posts }).toEqual({
+    gateway: 2,
+    posts: ['Bearer getSecret("/secrets/openai")'],
+  });
+  answers[2]!();
 });
 
 test("a key whose stream ends before its response does hands the request to the next key", async () => {
@@ -685,6 +752,8 @@ function agentWithModel(options: {
   config?: AgentConfigPatch;
   model?: () => Response;
   fetch?: (request: Request) => Promise<Response>;
+  /** `itx.secrets.describe`; by default no secret is set. */
+  describe?: (path: string) => Promise<{ path: string; set: boolean }>;
 }) {
   const sent: Record<string, unknown>[] = [];
   const sleeps: number[] = [];
@@ -696,6 +765,7 @@ function agentWithModel(options: {
       }),
     },
     cd: () => ({ rewriteRules: { list: async () => [] } }),
+    secrets: { describe: options.describe || (async (path: string) => ({ path, set: false })) },
     ai: {
       run: async (_model: string, body: Record<string, unknown>) => {
         sent.push(body);

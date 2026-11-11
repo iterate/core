@@ -1,45 +1,33 @@
-// `iterate login --device`: the platform's device login (core/os src/device-login/, RFC 8628) on
-// oauth4webapi. No listener, no browser on this computer.
+// THE DEVICE SIGN-IN (RFC 8628) on oauth4webapi, for an issuer that offers it
+// (`device_authorization_endpoint` in its metadata): no listener, no browser on this computer.
 import * as oauth from "oauth4webapi";
 import { encode, renderUnicodeCompact } from "uqr";
-import { authorizationServer } from "../../client/oauth.ts";
-import { oauthResourceForOsBaseUrl, requestOptions, sessionFromTokens } from "../oauth.ts";
+import { authorizationServerOf, type DiscoveredProject } from "../../client/oauth.ts";
+import type { StoredSession } from "../config.ts";
+import { registerClient, requestOptions, sessionFromTokens } from "../oauth.ts";
 import { pollUntilAnswered, type PollAnswer } from "./poll.ts";
 
-/** Sign in at `issuer` from a browser on any device: the person opens the printed page, checks the
- *  code, and approves. `deviceName` is the registration's `client_name`, which that page shows (it
- *  says the name is the device's own claim). `print` writes a line for the person, or the agent
- *  that relays it; `colors` says whether the person sees its colors (`showsColors`). The session
- *  holds `iterate` alone, for `/api`: the platform's device login grants nothing else. */
+/** Sign in to `project`'s issuer from a browser on any device, for `resource`: the person opens the
+ *  printed page, checks the code, and approves. `deviceName` is the registration's `client_name`,
+ *  which that page shows. `print` writes a line for the person, or the agent that relays it;
+ *  `colors` says whether the person sees its colors (`showsColors`). */
 export async function deviceLogin(input: {
-  issuer: string;
+  project: DiscoveredProject;
+  resource: string;
   deviceName: string;
   print: (line: string) => void;
   colors: boolean;
-}) {
-  const { issuer } = input;
-  const as = {
-    ...authorizationServer(issuer),
-    device_authorization_endpoint: new URL("/oauth2/device_authorization", issuer).href,
-  };
-  const resource = oauthResourceForOsBaseUrl(issuer);
-  const registration = await oauth.processDynamicClientRegistrationResponse(
-    await oauth.dynamicClientRegistrationRequest(
-      as,
-      {
-        client_name: input.deviceName,
-        // the platform's own device callback, never this process: registering it is how a client
-        // opts in to the device login
-        redirect_uris: [new URL("/oauth2/device/callback", issuer).href],
-        token_endpoint_auth_method: "none",
-        grant_types: ["authorization_code", "refresh_token"],
-        response_types: ["code"],
-      },
-      requestOptions(issuer),
-    ),
-  );
-  const client = { client_id: registration.client_id };
-  const verifier = oauth.generateRandomCodeVerifier();
+}): Promise<StoredSession> {
+  const { project, resource } = input;
+  const issuer = project.issuer;
+  if (!project.endpoints.deviceAuthorization)
+    throw new Error(`${new URL(issuer).host} does not offer the device sign-in.`);
+  const as = authorizationServerOf(project);
+  const client = await registerClient(project, {
+    client_name: input.deviceName,
+    token_endpoint_auth_method: "none",
+    grant_types: ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
+  });
   const device = await oauth.processDeviceAuthorizationResponse(
     as,
     client,
@@ -47,12 +35,7 @@ export async function deviceLogin(input: {
       as,
       client,
       oauth.None(),
-      {
-        scope: "iterate",
-        resource,
-        code_challenge: await oauth.calculatePKCECodeChallenge(verifier),
-        code_challenge_method: "S256",
-      },
+      { scope: "iterate", resource },
       requestOptions(issuer),
     ),
   );
@@ -72,11 +55,11 @@ export async function deviceLogin(input: {
   const answer = await pollUntilAnswered({
     intervalSeconds: device.interval || 5,
     deadline: Date.now() + expiresInSeconds * 1000,
-    poll: () => pollOnce(as, client, issuer, device.device_code, verifier, resource),
+    poll: () => pollOnce(as, client, issuer, device.device_code, resource),
     onRetry: (reason, waitMs) =>
       input.print(`Could not reach ${issuer} (${reason}); trying again in ${waitMs / 1000} s.`),
   });
-  return sessionFromTokens(answer.tokens, client.client_id, answer.started);
+  return sessionFromTokens(answer.tokens, project, client.client_id, answer.started);
 }
 
 /** `text` as a QR code for a phone's camera (uqr, https://github.com/unjs/uqr, error correction L),
@@ -90,7 +73,7 @@ export async function deviceLogin(input: {
  *  Without colors (a pipe, an agent's transcript): Unicode half blocks in the text color, two
  *  modules a character, with a four-module quiet zone. They scan in a dark terminal whose lines
  *  touch; space between lines cuts through them, so the link under the code is the fallback. */
-export function terminalQrCode(text: string, colors: boolean) {
+function terminalQrCode(text: string, colors: boolean) {
   if (!colors)
     return renderUnicodeCompact(text, { ecc: "L", border: 4 })
       .split("\n")
@@ -123,7 +106,6 @@ async function pollOnce(
   client: oauth.Client,
   issuer: string,
   deviceCode: string,
-  verifier: string,
   resource: string,
 ): Promise<PollAnswer<{ tokens: oauth.TokenEndpointResponse; started: number }>> {
   const started = Date.now();
@@ -133,7 +115,7 @@ async function pollOnce(
       client,
       await oauth.deviceCodeGrantRequest(as, client, oauth.None(), deviceCode, {
         ...requestOptions(issuer),
-        additionalParameters: { code_verifier: verifier, resource },
+        additionalParameters: { resource },
       }),
     );
     return { kind: "tokens", value: { tokens, started } };

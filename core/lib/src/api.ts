@@ -214,7 +214,10 @@ export type SecretRefresh =
       kind: "oauth-refresh-token";
       tokenEndpoint: string;
       clientAuth?: ClientAuth;
-      client?: { platform: IntegrationProvider };
+      /** `cloud`: the client is iterate Cloud's of that name, and `tokenEndpoint` is the Cloud's
+       *  broker, which adds the client secret. The refresh token in the material is sealed for
+       *  this deployment and means nothing anywhere else. */
+      client?: { platform: IntegrationProvider } | { cloud: string };
     }
   /** A GitHub App installation's token (`POST <apiOrigin>/app/installations/<id>/access_tokens`
    *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is the deployment's
@@ -227,7 +230,9 @@ export type SecretRefresh =
       kind: "github-app-installation";
       apiOrigin: string;
       installationId: string;
-      client: { platform: "github" } | { project: "github" };
+      /** `cloud`: iterate Cloud's GitHub App of that name, whose key stays at the Cloud. The Cloud
+       *  mints the token, for an installation this deployment connected. */
+      client: { platform: "github" } | { project: "github" } | { cloud: string };
     }
   /** EXCHANGE CODE: `source` is one ES module exporting `async function exchange(material, fetch)`,
    *  which logs in (any vendor's shape: a CSRF form and its cookie, a GraphQL mutation) and returns
@@ -282,6 +287,33 @@ export type SecretCatalogEntry = {
   lends?: Record<string, { to: string; as: string; since: string }>;
 };
 
+/** THE OPERATIONS a secret may answer, the vault used as a signer: none unless the secret is made
+ *  with them (`SecretUses.operations`). */
+export const SECRET_OPERATIONS = [
+  "signHmac",
+  "verifyHmac",
+  "verifyEquals",
+  "deriveSharedSecret",
+  "publicKeyOf",
+  "signWithKey",
+] as const;
+export type SecretOperation = (typeof SECRET_OPERATIONS)[number];
+
+/** WHAT A SECRET MAY BE USED FOR, fixed when it is made, kept by the secrets Worker and shown to the
+ *  person who gives it on the collection form or the OAuth start page: the project's code cannot
+ *  widen it later. */
+export type SecretUses = {
+  /** Where its placeholder may sit in a request: in a header (`"header"`, the default; a `Basic`
+   *  credential is a header), or also in the URL (`"url"`, a Telegram bot token in the path). */
+  placement?: "header" | "url";
+  /** The operations it answers (`SECRET_OPERATIONS`). Default: none. */
+  operations?: SecretOperation[];
+  /** The secrets whose refresh may borrow its material, by path: as a client secret or a GitHub
+   *  App's key that their refresh names with `getSecret("/secrets/<name>", { field })`. Default:
+   *  none. */
+  lendTo?: string[];
+};
+
 /** The input an agent gives `itx.secrets.collectFromUser`: the write-only secret path, the
  * origins its material may reach, what the collection page shows the person, and, for a secret of
  * several parts, one field each. `description` is markdown: say where the value comes from, with
@@ -298,7 +330,10 @@ export type CollectSecretInput = {
    *  absolute http(s) URL without credentials, such as the project's page that asked. The page
    *  shows its host before the person saves. Without it, the page says the tab can close. */
   redirectUrl?: string;
-};
+  /** Whoever holds the link may fill the form, signed in or not; the page says so. Without it, only
+   *  a member of the project, signed in. */
+  anyoneWithLink?: boolean;
+} & SecretUses;
 
 /** One part of a secret a collection page asks for: its name in the JSON secret
  *  (`[A-Za-z_][A-Za-z0-9_]*`), the label the person reads, whether its value is several lines
@@ -371,15 +406,31 @@ export type OAuthIntegrationProvider = Exclude<IntegrationProvider, "github">;
 export type SignInProvider = Exclude<IntegrationProvider, "slack" | "x">;
 
 /** Whose OAuth app a secret's `beginOAuth` goes through when it is not a client passed in the
- *  clear: the deployment's own at that provider (an integration connected through it). */
-export type SecretOAuthClient = { platform: OAuthIntegrationProvider };
+ *  clear: the deployment's own at that provider (an integration connected through it), or one of
+ *  iterate Cloud's by its name there (`github`, `google`, `x`), the app every deployment shares.
+ *  The Cloud keeps that app's secret and adds it to the exchange and to each refresh; the tokens
+ *  stay in this secret. */
+export type SecretOAuthClient =
+  | { platform: OAuthIntegrationProvider }
+  | {
+      cloud: string;
+      /** For a GitHub App of the Cloud's: the accounts (a person's or an organization's login)
+       *  whose installations this project asks to be connected to. The member's consent reaches
+       *  every account they administer; the project gets the events and the installation tokens
+       *  of these alone, and the Cloud's page names them before the member approves. With none
+       *  named it gets no installation, unless `install: true` sends the member to the App's
+       *  install page, where the one they choose is connected. */
+      accounts?: string[];
+    };
 
 /** What `secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the OAuth client
  *  (the project's own in the clear, or an integration's `client`), the scope, the pin, and any extra
  *  authorize parameters the provider needs (Google: `access_type=offline`, `prompt=consent`). */
 export type SecretOAuthOptions = {
-  authorizationEndpoint: string;
-  tokenEndpoint: string;
+  /** The provider's two endpoints. Absent with a Cloud client, which names them, the client's id
+   *  and the pin itself. */
+  authorizationEndpoint?: string;
+  tokenEndpoint?: string;
   /** Exactly one of `clientId` and `client`. */
   clientId?: string;
   /** Absent for a public client (PKCE alone), and with `client`. The secret itself, or one
@@ -425,7 +476,10 @@ export type SecretOAuthOptions = {
    *  answers the account, and `expectAccount` is checked against its id. Not with `client`: the
    *  deployment's app names its own accounts. */
   account?: { url: string; id: string; name?: string };
-};
+  /** Whoever holds the start link may consent, signed in or not; the page says so. Without it, only
+   *  a member of the project, signed in. */
+  anyoneWithLink?: boolean;
+} & SecretUses;
 
 /** How a lend to every project went, project by project: how many borrow it, the projects that
  *  keep a secret of their own at its path, and the ones whose borrow failed. */
@@ -885,8 +939,11 @@ export type FetchRouteEntry = {
   configuredOffset: number;
 };
 
-/** One change a repo commit applies: a file's new content, or its deletion. */
-export type RepoFileChange = { path: string; content: string } | { path: string; delete: true };
+/** One change a repo commit applies: a file's new content, as text or as bytes, or its deletion. */
+export type RepoFileChange =
+  | { path: string; content: string }
+  | { path: string; bytes: Uint8Array | ArrayBuffer }
+  | { path: string; delete: true };
 /** One commit as `log` lists it, newest first (`timestamp` is epoch milliseconds). */
 export type RepoLogEntry = {
   oid: string;
@@ -912,9 +969,22 @@ export type RepoSyncResult = {
  *  `commitOid` pins a read to that commit; without one, a read is of the tip. */
 export type RepoHandle = InvokeHandle & {
   tip(): Promise<string | null>;
+  /** A text file's text; null when the repo has no such file. A file that is not text is refused:
+   *  `readBytes` reads any file. */
   readFile(path: string, options?: { commitOid: string }): Promise<string | null>;
-  /** The repo as a loaded worker's source: every file, or with `dir` those under that folder. */
+  /** Any file's bytes, as a stream with its size: `await new Response(file.data).bytes()`. */
+  readBytes(
+    path: string,
+    options?: { commitOid: string },
+  ): Promise<{ data: ReadableStream<Uint8Array>; size: number } | null>;
+  /** The repo's text files by path, or with `dir` those under that folder. */
   modules(options?: { commitOid?: string; dir?: string }): Promise<Record<string, string>>;
+  /** Every file, as the loader reads a worker's source: text, or `{ base64 }` for a file that is
+   *  not text. */
+  files(options?: {
+    commitOid?: string;
+    dir?: string;
+  }): Promise<Record<string, string | { base64: string }>>;
   listFiles(): Promise<{ commitOid: string | null; paths: string[] }>;
   commitFiles(input: {
     message: string;
@@ -1162,9 +1232,23 @@ export interface IterateContextApi {
     list(): ScheduledAppend[];
     get(key: ScheduleKey): ScheduledAppend | null;
   };
+  /** `principal` is who is calling, when the call has one: a person through the project's API. Code
+   *  the project loaded calls as itself and gets none. */
   whoami():
-    | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
-    | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
+    | {
+        projectId: string;
+        path: string;
+        projectSlug?: string;
+        projectUrl?: string;
+        principal?: Principal;
+      }
+    | Promise<{
+        projectId: string;
+        path: string;
+        projectSlug?: string;
+        projectUrl?: string;
+        principal?: Principal;
+      }>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   /** `append`, answered with each event's offset alone: the events do not travel back. */
   appendOffsets(...events: StreamEventInput[]): Promise<number[]>;
@@ -1246,28 +1330,32 @@ export interface IterateContextApi {
    *  forgets it (re-settable); `list` is the catalog — paths, pins, strategy kinds, when first set,
    *  public fields — never a secret value. Every change is one fact on the secret's path
    *  (`secret/set`, `secret/deleted`), attributed to the caller and cross-posted to the root, so the
-   *  log says who set what and when; a fact that writes material carries it sealed
-   *  (`SealedSecretCell`), so the log is the secret and the deployment's key reads it. */
+   *  log says who set what and when. No fact carries the value, sealed or not. */
   secrets: {
     set(
       path: string,
       material: SecretMaterial,
-      /** `merge`: the material's fields go over the ones already stored, whose pin must be `urls`
-       *  (a strategy added to a secret a person filled through `collectFromUser`). `public`: the
+      /** The material and its options replace the whole of what the secret held. `public`: the
        *  names of the material's top-level string fields that are no secret (an OAuth client's
-       *  `clientId`): the `secret/set` fact carries their values and the catalog answers them
-       *  (`SecretCatalogEntry.public`). A merge keeps the ones the catalog has, under the new. */
-      options: { urls: string[]; refresh?: SecretRefresh; merge?: boolean; public?: string[] },
+       *  `clientId`): the `secret/set` fact carries their values and `describe` answers them.
+       *  `placement`, `operations` and `lendTo` (`SecretUses`) fix what the secret may be used for:
+       *  where its placeholder may sit, the operations it answers, and the secrets whose refresh may
+       *  borrow it. */
+      options: {
+        urls: string[];
+        refresh?: SecretRefresh;
+        merge?: boolean;
+        public?: string[];
+      } & SecretUses,
     ): Promise<{ path: string }>;
-    /** OAuth's first tokens: the link to send a human to — the platform's start link, which sends
-     *  their browser on to the provider's consent page. The human opens it in the browser that will
-     *  consent: the provider redirects them to the platform's callback, which completes only in the
-     *  browser that opened the link (and they must be signed in as someone who reaches the secret's
-     *  owner); the secret's facet exchanges the code, `secret/set` lands, and the callback redirects to `next`. The link stays good for an
-     *  hour, and opens again on another device. It is short, a random id the platform looks up: the
-     *  provider's URL, its `state` and the PKCE challenge stay on the platform. Only from a session,
-     *  which carries the platform's origin. `nonce` names this attempt (the callback's signed `state`
-     *  carries it); a later `beginOAuth` on the same path replaces it, and its link then sends nowhere. */
+    /** OAuth's first tokens: the link to send a human to — the secrets Worker's start page on the
+     *  platform's hostname, which shows the secret, the origins its tokens go to and what else they
+     *  may be used for, and whose Continue sends the browser on to the provider's consent page. A
+     *  signed-in member opens it, or anyone with `anyoneWithLink`. The provider redirects to the
+     *  secrets Worker's callback, which completes only in the browser shown that page; the secret's
+     *  object exchanges the code, `secret/set` lands, and the callback redirects to `next`. The
+     *  provider's URL and the PKCE verifier stay in the secrets Worker. The attempt lasts an hour.
+     *  `nonce` names it; a later `beginOAuth` on the same path replaces it. */
     beginOAuth(
       path: string,
       options: SecretOAuthOptions,
@@ -1285,29 +1373,34 @@ export interface IterateContextApi {
       | { status: "unavailable" }
     >;
     /** The redirect URI to register at a provider for a client of your own: the platform's one
-     *  callback, `<platform origin>/.secrets/oauth/callback`. Only from a session. */
+     *  callback, `<platform origin>/secrets/oauth/callback`. */
     oauthCallbackUrl(): Promise<string>;
     delete(path: string): Promise<{ path: string }>;
+    /** Whether the secret at `path` holds a value, never the value: `set` is false for a path
+     *  that holds none, one never set included. A read alone: no fact. The answer has more fields
+     *  (`SecretDescription`, iterate/workers). */
+    describe(path: string): Promise<{ path: string; set: boolean }>;
     list(): Promise<SecretCatalogEntry[]>;
-    /** Build the authenticated Dash link (`/collect-secret/<slug>`, a page of its own) where a
-     * person enters a value an agent must never see in chat. The link fixes the project, platform
-     * instance, secret path and egress pin, and shows `description` as the requester's words. If
-     * called from an agent context, a successful submission messages that same agent with the path
-     * only. */
+    /** The link to a form on the platform's own hostname where a person enters a value an agent
+     *  must never see in chat. The form shows the secret's path, its pin, what it may be used for
+     *  (`SecretUses`) and `description` as the requester's words, and answers a signed-in member
+     *  alone unless `anyoneWithLink`. */
     collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
     /** A webhook's signature checked against a secret WITHOUT revealing it: one bit back,
-     *  constant-time, run in the secret's facet. A secret never set (or a material with no key at
-     *  the field) answers false, never a description. */
+     *  constant-time, run in the secrets Worker. A material with no key at the field answers false.
+     *  Like every operation, only a secret made with it in `operations` answers, within a limit
+     *  per minute (`SecretUses`). */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
     /** The HMAC-SHA256 of `payload` under a secret, WITHOUT revealing it: the signature comes back,
-     *  the key never does, run in the secret's facet. For a provider that proves an endpoint by a
+     *  the key never does, run in the secrets Worker. For a provider that proves an endpoint by a
      *  challenge only the key's holder can answer (X's CRC). A secret never set, or a material with
-     *  no key at the field, is refused (`SECRET_NOT_SET`). */
+     *  no key at the field, is refused (`SECRET_NOT_SET`); so is a secret not made with it in
+     *  `operations` (`FORBIDDEN`). */
     signHmac(path: string, input: SecretHmacSigning): Promise<string>;
     /** A presented string compared with a secret WITHOUT revealing it, for a credential a caller can
      *  only send as it is (a webhook's static header token): one bit back, constant-time, run in the
-     *  secret's facet. A secret never set (or no string at the field) answers false. A replayable
-     *  token stays replayable: prefer `verifyHmac` wherever the sender signs. */
+     *  secrets Worker, for a secret made with it in `operations`. No string at the field answers
+     *  false. A replayable token stays replayable: prefer `verifyHmac` wherever the sender signs. */
     verifyEquals(path: string, input: SecretEqualsVerification): Promise<boolean>;
     /** The operator's, on the global root (`session.global`): lend the deployment's own secret to
      *  a project, as the project's path `as`, or `to: "every-project"`: every project, one created

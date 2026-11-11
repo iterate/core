@@ -1,7 +1,9 @@
+// tunnel.ts — `iterate tunnel <port>`: a local port served on one of the project's hostnames,
+// `<name>.<address>`, through a stub lent to the project with the fetch route that reaches it.
 import { randomBytes } from "node:crypto";
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import WebSocket from "ws";
-import type { IterateConnection } from "../node.ts";
+import type { ProjectConnection } from "../node.ts";
 
 /** Headers the local dial makes itself: undici throws on the hop-by-hop ones, and `host` must be
  *  localhost's (Vite's `allowedHosts` refuses any other). */
@@ -32,13 +34,10 @@ export class LocalPortRpcTarget extends RpcTarget {
 
   async fetch(request: Request): Promise<Response> {
     const visitorUrl = new URL(request.url);
-    // Under paths routing the edge strips `/projects/<project>/<slug>` and names it here: this
-    // sends the visitor's own path, which a server under that base (Vite: `--base`) expects.
-    const basePath = request.headers.get("x-iterate-base-path") || "";
     // Set piecewise, never joined as a string: a path of `//other-host/` must stay a path on
     // localhost, never become a destination.
     const localUrl = new URL(`http://localhost:${this.#port}`);
-    localUrl.pathname = `${basePath}${visitorUrl.pathname}`;
+    localUrl.pathname = visitorUrl.pathname;
     localUrl.search = visitorUrl.search;
     const headers = new Headers(request.headers);
     for (const name of HOP_BY_HOP_HEADERS) headers.delete(name);
@@ -180,9 +179,8 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fil
  *  lends and routes again over it, the same name taking its own route over. Only when every attempt
  *  fails does the tunnel end, with an error. */
 export async function runTunnel(input: {
-  connection: IterateConnection;
-  reconnect: () => Promise<IterateConnection>;
-  project: string;
+  connection: ProjectConnection;
+  reconnect: () => Promise<ProjectConnection>;
   port: number;
   tunnelName?: string;
   /** the one hostname the route matches (`url: { hostname }`) instead of the name's routing slug */
@@ -210,10 +208,10 @@ export async function runTunnel(input: {
   /** Serve over one connection until Ctrl-C (the route deleted), or until the connection closes or
    *  the lend ends — why, as a line. */
   const serve = async (
-    connection: IterateConnection,
+    connection: ProjectConnection,
     first: boolean,
   ): Promise<"stopped" | string> => {
-    using project = await connection.session.projects.get(input.project);
+    const project = connection.itx;
     // A route of this name or on this host is someone else's unless it is this tunnel's own (a
     // restart, another terminal, this tunnel before it reconnected), which is taken over.
     const conflict = (await project.fetchRoutes.list()).find(
@@ -228,7 +226,9 @@ export async function runTunnel(input: {
       throw new Error(
         `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another ${hostname ? "--name or --hostname" : "--name"}.`,
       );
-    const url = hostname ? `https://${hostname}/` : await project.url({ routingSlug: tunnelName });
+    // a routing slug is its label under the project's domain (core/project worker.ts
+    // `serveProjectHost`)
+    const url = `https://${hostname || `${tunnelName}.${connection.address}`}/`;
     using lend = await project.provide(
       target,
       new LocalPortRpcTarget(input.port, (line) => console.error(line)),
@@ -245,11 +245,6 @@ export async function runTunnel(input: {
       console.error(
         `${url} → http://localhost:${input.port} (${input.public ? "public" : "project members only"}). Press Ctrl-C to stop.`,
       );
-      const basePath = new URL(url).pathname;
-      if (basePath !== "/")
-        console.error(
-          `Projects are served under paths here: your local server must serve under ${basePath} (Vite: --base ${basePath}). To serve at / on an origin of its own, give the deployment a domain with a wildcard certificate: https://github.com/iterate/core/blob/main/core/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels`,
-        );
     } else console.error(`Reconnected: ${url} → http://localhost:${input.port}`);
     // The lend can end while the connection lives (the platform lost its pager, and the route
     // with it): serving again over a fresh connection lends and routes again.
@@ -269,7 +264,7 @@ export async function runTunnel(input: {
     return outcome;
   };
   const delaysMs = input.reconnectDelaysMs || RECONNECT_DELAYS_MS;
-  let connection: IterateConnection | null = input.connection;
+  let connection: ProjectConnection | null = input.connection;
   let lastFailure = "";
   try {
     for (let first = true, failures = 0; ; first = false) {

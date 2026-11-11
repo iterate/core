@@ -34,6 +34,11 @@
     "./lib": "./src/lib.ts",
     "./expression": "./src/expression.ts",
     "./principal": "./src/principal.ts",
+    "./workers": "./src/workers.ts",
+    "./project-api": "./src/project-api.ts",
+    "./facts": "./src/facts.ts",
+    "./signed": "./src/signed.ts",
+    "./secret-placeholder": "./src/secret-placeholder.ts",
     "./stream/processor": "./src/stream/processor.ts",
     "./stream/contract": "./src/stream/contract.ts",
     "./stream/test-support": "./src/stream/test-support.ts",
@@ -106,6 +111,26 @@
       "./principal": {
         "types": "./dist/principal.d.mts",
         "import": "./dist/principal.mjs"
+      },
+      "./workers": {
+        "types": "./dist/workers.d.mts",
+        "import": "./dist/workers.mjs"
+      },
+      "./project-api": {
+        "types": "./dist/project-api.d.mts",
+        "import": "./dist/project-api.mjs"
+      },
+      "./facts": {
+        "types": "./dist/facts.d.mts",
+        "import": "./dist/facts.mjs"
+      },
+      "./signed": {
+        "types": "./dist/signed.d.mts",
+        "import": "./dist/signed.mjs"
+      },
+      "./secret-placeholder": {
+        "types": "./dist/secret-placeholder.d.mts",
+        "import": "./dist/secret-placeholder.mjs"
       },
       "./stream/processor": {
         "types": "./dist/stream/processor.d.mts",
@@ -239,7 +264,6 @@
     "@cloudflare/workers-types": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
-    "jsqr": "catalog:",
     "react": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:",

@@ -1,0 +1,22 @@
+{
+  "name": "core-itx",
+  "type": "module",
+  "description": "itx: the context kernel as a library. A context Durable Object class any Worker can host",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mmkal/jsonata": "2.2.1",
+    "capnweb": "catalog:",
+    "iterate": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

@@ -309,7 +309,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  material's fields over the stored ones; `beginOAuth` hands back the provider's authorize URL
    *  (secret-oauth.ts); `verifyHmac` checks a webhook's signature in the secret's facet, one bit
    *  back; `signHmac` signs a provider's challenge there, the signature back and never the key; `lend` / `revokeLend` lend the deployment's own secret (the operator's) to projects. */
-  secrets: Omit<IterateContextApi["secrets"], "revokeLend"> & PlatformSecretsVerbs;
+  secrets: Omit<IterateContextApi["secrets"], "revokeLend" | "describe"> & PlatformSecretsVerbs;
   /** THE INTEGRATIONS (src/integrations/), the one way a caller connects and disconnects this
    *  context's owner — a project's root, or a person's own context (`session.user`). `connect` and
    *  `disconnect` run on the owner's root, whose facet (`project` or `account`) holds the

@@ -1,21 +1,33 @@
+// app-session.ts — WHAT AN APP'S GATE KEEPS for one browser (app-server.ts): one object per browser
+// and project, `<app origin>:<cookie id>:<address>`, holding that project's discovered issuer and the
+// browser's tokens there, and one small record per browser, `<app origin>:<cookie id>`, of the
+// projects it is connected to. Both are this one class, because each app's Worker binds one namespace
+// (`BROWSER_SESSION`); an object only ever plays one of the two parts.
 import { DurableObject } from "cloudflare:workers";
-import { newHttpBatchRpcSession } from "capnweb";
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
-import { authorizationCodeRequest, authorizationServer } from "./client/oauth.ts";
-import { OAuthScopes } from "./oauth-scopes.ts";
+import {
+  authorizationCodeRequest,
+  authorizationServerOf,
+  type DiscoveredProject,
+} from "./client/oauth.ts";
 import { isLocalOrigin } from "./lib.ts";
 import { fetchResendingNotRoutedYet } from "./platform-retry.ts";
-import type { IterateApi } from "./api.ts";
 
-export type BrowserHost = {
+/** What a sign-in to one project starts from: the app's origin and branding, and the project as
+ *  discovery found it. The scope is `iterate`, the one a project's issuer grants for its API. */
+export type ProjectSignIn = {
   origin: string;
-  issuer: string;
-  resource: string;
-  scopes: string[];
-  client?: { id?: string; name: string; logoUri: string };
+  project: DiscoveredProject;
+  client?: { name: string; logoUri: string };
 };
-type Base = BrowserHost & { clientId: string; next: string; until: number };
+type Base = {
+  origin: string;
+  project: DiscoveredProject;
+  clientId: string;
+  next: string;
+  until: number;
+};
 type Pending = Base & { phase: "pending"; state: string; verifier: string };
 type Active = Base & {
   phase: "active";
@@ -25,33 +37,125 @@ type Active = Base & {
 };
 type StoredSession = Pending | Active;
 
-/** Each app binds this same class. Token exchange and logout use the issuer's
- * public protocol, so separately deployed apps need no platform bindings.
- * One queue serializes sign-in, refresh, logout and expiry across tabs (`#serial`). */
-/** What an issuer answers a `prompt=none` authorization it cannot complete without showing a page
- *  (OpenID Connect Core 1.0, 3.1.2.6). */
-const SILENT_REFUSALS = new Set(["login_required", "interaction_required"]);
+/** A project the browser is connected to, as `/.auth/projects.json` answers it. */
+export type ConnectedProject = { address: string; lastUsedAt: number };
+/** The record: the connected projects, and the sign-ins still waiting at an issuer, by `state`. */
+type StoredRecord = {
+  projects: ConnectedProject[];
+  pending: { state: string; address: string; until: number }[];
+  until: number;
+};
 
+const PENDING_MS = 10 * 60_000;
+const SESSION_MS = 30 * 24 * 3600_000;
+
+/** Each app binds this same class. Token exchange, refresh and revocation use the discovered
+ *  issuer's public endpoints, so separately deployed apps need no platform bindings. One queue
+ *  serializes sign-in, refresh, sign-out and expiry across tabs (`#serial`). */
 export class BrowserSession extends DurableObject {
   /** The operation that runs last, settled either way: the next one starts after it. */
   #last: Promise<unknown> = Promise.resolve();
 
-  begin(host: BrowserHost, next: string) {
+  // ── the record: which projects this browser is connected to ──
+
+  /** The connected projects, the last used first. */
+  async projects(): Promise<{ projects: ConnectedProject[]; lastUsed: string | null }> {
+    const projects = [...(await this.#record()).projects].sort(
+      (a, b) => b.lastUsedAt - a.lastUsedAt,
+    );
+    return { projects, lastUsed: projects[0]?.address ?? null };
+  }
+
+  /** A sign-in to `address` left for its issuer with `state`: the callback finds it by that. */
+  async expect(state: string, address: string) {
+    const record = await this.#record();
+    const now = Date.now();
+    record.pending = [
+      ...record.pending.filter((flow) => flow.until > now),
+      { state, address, until: now + PENDING_MS },
+    ];
+    await this.#saveRecord(record);
+  }
+
+  /** The project a pending sign-in is for, or null. */
+  async addressOf(state: string): Promise<string | null> {
+    const record = await this.#record();
+    return (
+      record.pending.find((flow) => flow.state === state && flow.until > Date.now())?.address ??
+      null
+    );
+  }
+
+  /** A sign-in to `address` completed: it is connected and the last used, and its pending flows
+   *  are done. */
+  async connected(address: string) {
+    const record = await this.#record();
+    record.pending = record.pending.filter((flow) => flow.address !== address);
+    record.projects = [
+      ...record.projects.filter((project) => project.address !== address),
+      { address, lastUsedAt: Date.now() },
+    ];
+    await this.#saveRecord(record);
+  }
+
+  /** `address` was used just now. A write at most once a minute per project, and none for a project
+   *  the browser is not connected to. */
+  async touch(address: string) {
+    const record = await this.#record();
+    const project = record.projects.find((item) => item.address === address);
+    if (!project || project.lastUsedAt > Date.now() - 60_000) return;
+    project.lastUsedAt = Date.now();
+    await this.#saveRecord(record);
+  }
+
+  /** The browser signed out of `address`: it is no longer connected. */
+  async forget(address: string) {
+    const record = await this.#record();
+    record.projects = record.projects.filter((project) => project.address !== address);
+    record.pending = record.pending.filter((flow) => flow.address !== address);
+    await this.#saveRecord(record);
+  }
+
+  async #record(): Promise<StoredRecord> {
+    return (
+      (await this.ctx.storage.get<StoredRecord>("record")) || {
+        projects: [],
+        pending: [],
+        until: 0,
+      }
+    );
+  }
+
+  /** The record lives as long as a session may: thirty days from its last change. */
+  async #saveRecord(record: StoredRecord) {
+    record.until = Date.now() + SESSION_MS;
+    await this.ctx.storage.put("record", record);
+    await this.ctx.storage.setAlarm(record.until);
+  }
+
+  // ── a session: one project's sign-in ──
+
+  /** Start the OAuth code flow with PKCE at the project's issuer, for the project's API as the
+   *  resource (RFC 8707). Whatever this object held for the project before is replaced. Answers the
+   *  authorization URL and the flow's `state`. */
+  begin(signIn: ProjectSignIn, next: string) {
     return this.#serial(async () => {
-      if (await this.ctx.storage.get("session")) throw new Error("Browser session already exists");
-      const origin = new URL(host.origin);
-      const local = isLocalOrigin(host.origin);
-      if (origin.protocol !== "https:" && !local) throw new Error("Browser login requires HTTPS");
-      let clientId = host.client?.id || `${host.origin}/.auth/client.json`;
-      if (local) {
-        const response = await fetch(`${host.issuer}/oauth2/register`, {
+      const { origin, project, client } = signIn;
+      const local = isLocalOrigin(origin);
+      if (new URL(origin).protocol !== "https:" && !local)
+        throw new Error("Browser login requires HTTPS");
+      let clientId = `${origin}/.auth/client.json`;
+      // An issuer cannot fetch a local app's client metadata document: the local app registers
+      // (RFC 7591) where the issuer allows it.
+      if (local && project.endpoints.registration) {
+        const response = await fetch(project.endpoints.registration, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            client_name: host.client?.name || origin.host,
-            client_uri: host.origin,
-            logo_uri: host.client?.logoUri,
-            redirect_uris: [`${host.origin}/.auth/callback`],
+            client_name: client?.name || new URL(origin).host,
+            client_uri: origin,
+            logo_uri: client?.logoUri,
+            redirect_uris: [`${origin}/.auth/callback`],
             token_endpoint_auth_method: "none",
             grant_types: ["authorization_code", "refresh_token"],
             response_types: ["code"],
@@ -64,24 +168,26 @@ export class BrowserSession extends DurableObject {
           .parse(await response.json()).client_id;
       }
       const { url, state, verifier } = await authorizationCodeRequest({
-        issuer: host.issuer,
+        issuer: project.issuer,
+        authorizationEndpoint: project.endpoints.authorization,
         clientId,
-        redirectUri: `${host.origin}/.auth/callback`,
-        resources: [host.resource],
-        scopes: host.scopes,
+        redirectUri: `${origin}/.auth/callback`,
+        resources: [project.resource],
       });
       const data: Pending = {
-        ...host,
+        origin,
+        project,
         next,
         clientId,
         phase: "pending",
         state,
         verifier,
-        until: Date.now() + 10 * 60_000,
+        until: Date.now() + PENDING_MS,
       };
+      await this.ctx.storage.deleteAll();
       await this.ctx.storage.put("session", data);
       await this.ctx.storage.setAlarm(data.until);
-      return url.href;
+      return { url: url.href, state };
     });
   }
 
@@ -89,13 +195,13 @@ export class BrowserSession extends DurableObject {
    *  (the state matches this browser's pending flow, the `iss` matches the issuer, no `error`), then
    *  exchanges the code for tokens. */
   complete(callbackQuery: string) {
-    return this.#serial(async () => {
+    return this.#serial(async (): Promise<{ next: string } | { error: string }> => {
       const data = await this.ctx.storage.get<StoredSession>("session");
       if (!data || data.phase !== "pending" || data.until <= Date.now())
         return {
-          error: "This sign-in expired or does not match this browser. Start sign-in again.",
+          error: "This sign-in expired or does not match this browser. Connect the project again.",
         };
-      const as = authorizationServer(data.issuer);
+      const as = authorizationServerOf(data.project);
       const client: oauth.Client = { client_id: data.clientId };
       let callback: URLSearchParams;
       try {
@@ -110,13 +216,10 @@ export class BrowserSession extends DurableObject {
         // pending flow to be retried from a genuine browser.
         if (error instanceof oauth.AuthorizationResponseError) {
           await this.#clear();
-          // a silent sign-in (`prompt=none`) the issuer could not answer without a page: no
-          // refusal, the flow's `next` carries on without it (app-server.ts `/.auth/connect`)
-          if (SILENT_REFUSALS.has(error.error)) return { next: data.next, signedIn: false };
           return { error: "Authorization was declined." };
         }
         return {
-          error: "This sign-in expired or does not match this browser. Start sign-in again.",
+          error: "This sign-in expired or does not match this browser. Connect the project again.",
         };
       }
       const started = Date.now();
@@ -134,88 +237,64 @@ export class BrowserSession extends DurableObject {
         tokens = await oauth.processAuthorizationCodeResponse(as, client, response);
       } catch (error) {
         await this.#endOnDeadGrant(error);
-        return { error: "Sign-in could not complete. Start sign-in again." };
+        return { error: "Sign-in could not complete. Connect the project again." };
       }
       await this.#activate(data, tokens, started);
       return { next: data.next };
     });
   }
 
+  /** A live access token for the project's API, refreshed when it is about to expire; null when
+   *  there is no live session. */
   bearer() {
     return this.#serial(() => this.#bearer());
   }
-  /** THE ISSUER THIS SESSION IS BOUND TO and the resource its tokens are for — written once at
-   *  `begin`, never steered by a request: the app's `/api` proxy, its login probe and its logout read
-   *  them from here, so a browser connected to one issuer can only ever spend its credential there.
-   *  Null when no session was begun. */
-  async host(): Promise<{ issuer: string; resource: string } | null> {
-    const data = await this.ctx.storage.get<StoredSession>("session");
-    return data ? { issuer: data.issuer, resource: data.resource } : null;
-  }
-  async scopes() {
-    const data = await this.ctx.storage.get<StoredSession>("session");
-    return data?.phase === "active" ? data.scopes : [];
-  }
-  /** Public client metadata chosen by the app before consent; never a browser-supplied claim. */
-  async client() {
-    const data = await this.ctx.storage.get<StoredSession>("session");
-    return data?.phase === "active" ? data.client : undefined;
-  }
+
   /** A verified 401 means this local credential no longer grants access. */
   discard() {
     return this.#serial(() => this.#clear());
   }
 
+  /** Sign out: revoke the refresh token at the issuer's revocation endpoint (RFC 7009) when it has
+   *  one, then forget the session. A failure to reach the issuer keeps the session and throws, so
+   *  the person can try again. */
   end() {
     return this.#serial(async () => {
-      const token = await this.#bearer();
       const data = await this.ctx.storage.get<StoredSession>("session");
-      if (token && data) {
-        // Probe classifies a revoked/expired credential without interpreting RPC error text.
-        const probe = await fetch(
-          new Request(data.resource, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}` },
-            body: "",
+      if (data?.phase === "active" && data.project.endpoints.revocation) {
+        const as = authorizationServerOf(data.project);
+        const client: oauth.Client = { client_id: data.clientId };
+        const response = await oauth.revocationRequest(
+          as,
+          client,
+          oauth.None(),
+          data.refreshToken,
+          {
+            additionalParameters: { token_type_hint: "refresh_token" },
             signal: AbortSignal.timeout(10_000),
-          }),
+            [oauth.allowInsecureRequests]: isLocalOrigin(data.origin),
+          },
         );
-        await probe.body?.cancel();
-        if (probe.status !== 401) {
-          if (!probe.ok)
-            throw new Error(`Sign-out could not reach Iterate (${probe.status}). Try again.`);
-          // oxlint-disable-next-line iterate/no-capnweb-http-batch -- A bounded logout command returns no live capabilities.
-          using api = newHttpBatchRpcSession<IterateApi>(
-            new Request(data.resource, {
-              headers: { Authorization: `Bearer ${token}` },
-              signal: AbortSignal.timeout(10_000),
-            }),
-          );
-          // `authenticate(...)` returns a SessionRpcTarget STUB — its own RPC result to dispose (the
-          // capnweb README's `using authedApi = api.authenticate(...)`); disposing only `api` leaves
-          // it dangling and workerd warns the result was never disposed.
-          using session = api.authenticate({ type: "bearer", token });
-          await session.logout();
-        }
+        await oauth.processRevocationResponse(response);
       }
-      // Network failures preserve the session and are shown to the caller.
-      // Successful logout has written the issuer's durable revocation marker.
       await this.#clear();
     });
   }
 
   async alarm() {
-    // Pending flows expire in ten minutes; active grants have the same absolute
-    // thirty-day lifetime at the issuer (which also ends one unused for a week: its
-    // refresh then answers `invalid_grant`). No refresh token survives this bound.
-    // An expiry that waited in the queue behind a sign-in or a refresh reads the bound that one
-    // set: a session it renewed is kept, and the alarm moves to its new bound.
+    // A record ends thirty days after its last change. A pending flow expires in ten minutes; an
+    // active grant has an absolute thirty-day lifetime here, whatever the issuer allows. An expiry
+    // that waited in the queue behind a sign-in or a refresh reads the bound that one set: a
+    // session it renewed is kept, and the alarm moves to its new bound.
     await this.#serial(async () => {
-      const data = await this.ctx.storage.get<StoredSession>("session");
-      if (data && data.until > Date.now()) await this.ctx.storage.setAlarm(data.until);
+      const held =
+        (await this.ctx.storage.get<StoredSession>("session")) ||
+        (await this.ctx.storage.get<StoredRecord>("record"));
+      if (held && held.until > Date.now()) await this.ctx.storage.setAlarm(held.until);
       else await this.#clear();
     });
   }
+
   async #bearer() {
     const data = await this.ctx.storage.get<StoredSession>("session");
     if (!data || data.phase !== "active") return null;
@@ -224,7 +303,7 @@ export class BrowserSession extends DurableObject {
       return null;
     }
     if (data.expiresAt > Date.now() + 30_000) return data.accessToken;
-    const as = authorizationServer(data.issuer);
+    const as = authorizationServerOf(data.project);
     const client: oauth.Client = { client_id: data.clientId };
     const started = Date.now();
     let tokens: oauth.TokenEndpointResponse;
@@ -248,11 +327,11 @@ export class BrowserSession extends DurableObject {
    *  request Cloudflare answered itself sent again (an issuer's brand-new workers.dev hostname that
    *  the server reached does not route yet), and — only for a LOCAL APP (`begin` already admits
    *  http there) — oauth4webapi's opt-out of its HTTPS-only default. Keyed on the app's origin,
-   *  never the issuer's: an issuer a person typed can not talk a deployed app into sending its
+   *  never the issuer's: a project a person typed can not talk a deployed app into sending its
    *  codes in the clear. */
   #tokenOptions(data: StoredSession): oauth.TokenEndpointRequestOptions {
     const options: oauth.TokenEndpointRequestOptions = {
-      additionalParameters: { resource: data.resource },
+      additionalParameters: { resource: data.project.resource },
       signal: AbortSignal.timeout(10_000),
       [oauth.customFetch]: fetchResendingNotRoutedYet({
         area: "app-session",
@@ -272,25 +351,18 @@ export class BrowserSession extends DurableObject {
   ): Promise<Active> {
     const refreshToken =
       tokens.refresh_token || (data.phase === "active" ? data.refreshToken : undefined);
-    if (!refreshToken) throw new Error("Iterate returned no refresh token.");
-    const { origin, issuer, resource, clientId, next } = data;
+    if (!refreshToken) throw new Error("The sign-in provider returned no refresh token.");
+    const { origin, project, clientId, next } = data;
     const stored: Active = {
       origin,
-      issuer,
-      resource,
+      project,
       clientId,
-      client: data.client,
       next,
       phase: "active",
-      // An omitted (or empty) `scope` means unchanged (RFC 6749 §5.1) — keep what the grant already
-      // holds rather than silently narrow to `iterate`.
-      scopes: tokens.scope
-        ? OAuthScopes.parse(tokens.scope.split(" ").filter(Boolean))
-        : data.scopes,
       accessToken: tokens.access_token,
       refreshToken,
       expiresAt: started + (tokens.expires_in ?? 0) * 1000,
-      until: data.phase === "pending" ? started + 30 * 24 * 3600_000 : data.until,
+      until: data.phase === "pending" ? started + SESSION_MS : data.until,
     };
     await this.ctx.storage.put("session", stored);
     await this.ctx.storage.setAlarm(stored.until);
@@ -312,10 +384,9 @@ export class BrowserSession extends DurableObject {
         : error instanceof oauth.OperationProcessingError && error.cause instanceof Response
           ? error.cause.status
           : null;
-    throw status === null
-      ? error
-      : new Error(`Iterate token exchange failed (${status}). Try again.`);
+    throw status === null ? error : new Error(`Token exchange failed (${status}). Try again.`);
   }
+
   /** `work`, once every operation before it settled, so two tabs never spend one refresh token.
    *  Its failure is its caller's alone. A queue in memory, because the object is one instance and a
    *  reset ends the queue with it. Not `blockConcurrencyWhile`, so the object serves other requests

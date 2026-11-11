@@ -111,7 +111,10 @@ export const AgentContract = defineProcessorContract({
           .object({
             model: z.string().min(1).default("gpt-6.1-sol"),
             reasoningEffort: z.string().min(1).default("medium"),
-            // Empty uses the deployment's AI Gateway; otherwise see responses-keys.ts for key handling.
+            // Tried in order (responses-keys.ts): each a key, or AI_GATEWAY for the deployment's AI
+            // Gateway. A key whose secret is not set is passed over without a request; the agent
+            // remembers which are set and refreshes that behind each request, so a change is used
+            // one request later. Empty is the AI Gateway alone.
             apiKeys: z.array(z.string().min(1)).default([]),
             // The Responses API's `service_tier`, unset by default. "priority" streams answers
             // about 1.5× as fast for a higher price, on an API key and a plan's token alike (a

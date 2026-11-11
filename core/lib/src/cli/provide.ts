@@ -1,8 +1,11 @@
+// provide.ts — `iterate provide <file>`: a local file's functions lent to the project as
+// `itx.<name>` (core-itx iterate-context.ts `provide`) until Ctrl-C, lent again over each new
+// connection. A bridge on another machine (a WhatsApp session, a terminal manager) is one such file.
 import { existsSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { RpcTarget } from "capnweb";
-import type { IterateConnection } from "../node.ts";
+import type { ProjectConnection } from "../node.ts";
 
 /** What `iterate provide` reads from a file: its default export, called on every connection with
  *  that connection's project, answers the object whose functions are lent; `description`, when
@@ -127,15 +130,14 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fil
 
 /** `iterate provide <file>`: lend the file's functions to the project as `itx.<name>` until Ctrl-C.
  *  On every connection — the first, and each one `reconnect` opens after one closes or the lend
- *  ends under it — the file's default export is called with that connection's project as `itx`,
+ *  ends under it — the file's default export is called with that connection's root as `itx`,
  *  and what it answers is lent again at the same name: the file keeps its long-lived state (a
  *  socket, a session) in its own module scope and reaches the project through the newest `itx`.
  *  `itx.<name>` is printed on stdout once live. Only when every attempt to reconnect fails does it
  *  end, with an error. */
 export async function runProvide(input: {
-  connection: IterateConnection;
-  reconnect: () => Promise<IterateConnection>;
-  project: string;
+  connection: ProjectConnection;
+  reconnect: () => Promise<ProjectConnection>;
   file: ProvidedFile;
   name: string;
   /** the reconnect schedule — a test's, `RECONNECT_DELAYS_MS` otherwise */
@@ -153,10 +155,10 @@ export async function runProvide(input: {
   /** Lend over one connection until Ctrl-C, or until the connection closes or the lend ends — why,
    *  as a line. */
   const serve = async (
-    connection: IterateConnection,
+    connection: ProjectConnection,
     first: boolean,
   ): Promise<"stopped" | string> => {
-    using project = await connection.session.projects.get(input.project);
+    const project = connection.itx;
     const target = rpcTargetOf(await input.file.provide({ itx: project }));
     using lend = await project.provide(
       match,
@@ -165,7 +167,7 @@ export async function runProvide(input: {
     );
     if (first) {
       console.log(match);
-      console.error(`${match} is live for project ${input.project}. Press Ctrl-C to stop.`);
+      console.error(`${match} is live for ${connection.address}. Press Ctrl-C to stop.`);
     } else console.error(`Reconnected: ${match} is live again.`);
     const lendEnded = lend.lendEnded().then(
       (reason) => `its lend ended: the stub ${reason}`,
@@ -177,7 +179,7 @@ export async function runProvide(input: {
     return await Promise.race([stopped, connectionClosed, lendEnded]);
   };
   const delaysMs = input.reconnectDelaysMs || RECONNECT_DELAYS_MS;
-  let connection: IterateConnection | null = input.connection;
+  let connection: ProjectConnection | null = input.connection;
   let lastFailure = "";
   try {
     for (let first = true, failures = 0; ; first = false) {

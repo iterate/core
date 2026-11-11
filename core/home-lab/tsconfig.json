@@ -1,0 +1,7 @@
+{
+  // The launcher and the Node example (run as TypeScript source: Node strips the types) and the
+  // link Worker (bundled by the launcher), typed against the Cloudflare types, in one program.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "types": ["@cloudflare/workers-types", "node"] },
+  "include": ["src"]
+}

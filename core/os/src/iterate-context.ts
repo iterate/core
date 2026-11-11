@@ -72,6 +72,7 @@ import {
 import { SessionTeardown } from "./session.ts";
 import { contextStub } from "./context-stub.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
+import type { ServedContextApi } from "./served-api.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
@@ -789,7 +790,7 @@ export async function statelessExpressionFetch(
  *  is missing or mistyped. Not `implements`: the class's own verbs take richer arguments than the
  *  published ones (`provide`'s and `subscribe`'s lent stubs, which the published API types
  *  `unknown`), and an `implements` class spells the contract's (lint: iterate/mechanical-class-impl). */
-function publishedContextApiOf(context: IterateContextRpcTarget): IterateContextApi {
+function publishedContextApiOf(context: IterateContextRpcTarget): ServedContextApi {
   return context;
 }
 void publishedContextApiOf;

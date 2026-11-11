@@ -384,12 +384,16 @@ export function cookieValueOf(cookieHeader: string | null, name: string): string
 }
 
 /** `next` as a path on `origin`, else "/" — a redirect never leaves the host: `//evil.example`,
- *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". The
- *  issuer's login redirect uses it too (core/os issuer-pages.ts). */
+ *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". So
+ *  does a same-origin path that parses to one starting `//` (`/.//evil.example`, `/..//…`,
+ *  `/%2e//…`, `/a/..//…`), which a browser reads in a `Location` as another host. The issuer's
+ *  login redirect uses it too (core/os issuer-pages.ts). */
 export function sameOriginPath(next: string, origin: string): string {
   try {
     const url = new URL(next, origin);
-    return url.origin === origin ? url.pathname + url.search : "/";
+    return url.origin === origin && !url.pathname.startsWith("//")
+      ? url.pathname + url.search
+      : "/";
   } catch {
     return "/";
   }
