@@ -421,6 +421,12 @@ const launcherProcedures = {
           reconnect: () => connect(address),
           file,
           name,
+          // the stored sign-in's end; a token given in the environment has none known here
+          endsAt: () => {
+            if (process.env.ITERATE_MIND_TOKEN?.trim()) return undefined;
+            const ends = Date.parse(readSession(mindApiUrlOf(address))?.expiresAt || "");
+            return Number.isFinite(ends) ? ends : undefined;
+          },
         });
         return;
       }
@@ -431,18 +437,20 @@ const launcherProcedures = {
       const paths = input.paths?.split(",").map((path) => path.trim());
       // ITERATE_KEY_TOKEN_SECONDS: a test's, to see a token end without waiting an hour
       const seconds = Number(process.env.ITERATE_KEY_TOKEN_SECONDS) || undefined;
-      const connectWithKey = async (wait?: (line: string) => void) =>
-        connectMind({
-          address,
-          token: await bridgeToken({ address, name, key, paths, seconds, wait }),
-          signIn: false,
-        });
+      let tokenEndsAt = 0;
+      const connectWithKey = async (wait?: (line: string) => void) => {
+        const token = await bridgeToken({ address, name, key, paths, seconds, wait });
+        // a key's token lives the hour, or the seconds asked for
+        tokenEndsAt = Date.now() + (seconds || 3600) * 1000;
+        return connectMind({ address, token, signIn: false });
+      };
       await runProvide({
         connection: await connectWithKey((line) => console.error(line)),
         reconnect: () => connectWithKey(),
         file,
         name,
         append: bridgeAppend(address, key),
+        endsAt: () => tokenEndsAt,
       });
     }),
   config: {

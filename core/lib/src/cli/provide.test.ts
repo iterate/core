@@ -1,14 +1,15 @@
 // provide.test.ts — `iterate provide <file>` as a person runs it (the package's bin): a missing
 // dependency named before any sign-in, a file with no default export, and what `rpcTargetOf`
-// refuses to lend.
+// refuses to lend. And the loop itself (`runProvide`) over stand-in connections: the handover before a
+// sign-in ends.
 import { tmpdir } from "node:os";
 import { execFile, type ChildProcess } from "node:child_process";
 import { mkdirSync, realpathSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "vitest";
-import { rpcTargetOf } from "./provide.ts";
+import { expect, test, vi } from "vitest";
+import { rpcTargetOf, runProvide } from "./provide.ts";
 
 const bin = fileURLToPath(new URL("../../bin/iterate.js", import.meta.url));
 
@@ -44,6 +45,57 @@ test("rpcTargetOf: nothing to lend is refused, saying why", () => {
   expect(() => rpcTargetOf({ answer: 42 })).toThrow(
     "The default export answered an object with no functions: nothing to lend.",
   );
+});
+
+test("before a sign-in ends the name is lent over the next connection, and only then is the old one let go", async () => {
+  using quiet = quietConsole();
+  const happened: string[] = [];
+  const first = connectionOf("first", happened);
+  const second = connectionOf("second", happened);
+  const ends = [Date.now() + 60, undefined];
+  const run = runProvide({
+    connection: first.connection,
+    reconnect: async () => second.connection,
+    file: { provide: () => ({ hello: () => "hello" }) },
+    name: "standIn",
+    endsAt: () => ends.shift(),
+    renewBeforeMs: 30,
+    reconnectDelaysMs: [],
+  });
+  await second.lent;
+  // the old connection is let go after the new one lends, and its end is no disconnection
+  await first.disposed;
+  expect(happened).toEqual(["first lends", "second lends", "first let go"]);
+  expect(quiet.lines.join("\n")).not.toMatch(/disconnected|Reconnect/);
+  // the end of the run: the second connection closes, and no reconnect is allowed here
+  second.close();
+  await expect(run).rejects.toThrow("itx.standIn disconnected and could not reconnect");
+});
+
+test("when the next connection cannot be made, the present one is kept until it closes", async () => {
+  using quiet = quietConsole();
+  const happened: string[] = [];
+  const first = connectionOf("first", happened);
+  let asked = 0;
+  const run = runProvide({
+    connection: first.connection,
+    reconnect: async () => {
+      asked += 1;
+      throw new Error("the mind is not there");
+    },
+    file: { provide: () => ({ hello: () => "hello" }) },
+    name: "standIn",
+    endsAt: () => Date.now() + 40,
+    renewBeforeMs: 30,
+    reconnectDelaysMs: [],
+  });
+  await vi.waitFor(() => expect(asked).toBe(1));
+  expect(happened).toEqual(["first lends"]);
+  first.close();
+  await expect(run).rejects.toThrow("itx.standIn disconnected and could not reconnect");
+  // one try to renew, and none after it: the reconnect schedule here is empty
+  expect({ asked, happened }).toEqual({ asked: 1, happened: ["first lends", "first let go"] });
+  expect(quiet.lines.join("\n")).toContain("Could not renew itx.standIn before its sign-in ends");
 });
 
 /** A config naming `baseUrl` with a stored token, and `provide` run as a child process: `live`
@@ -94,6 +146,54 @@ function cliConfig(baseUrl: string) {
     [Symbol.dispose]: () => {
       for (const child of children) child.kill("SIGKILL");
       config[Symbol.dispose]();
+    },
+  };
+}
+
+/** A mind's connection as `runProvide` uses it, which says in `happened` when the name is lent over
+ *  it and when it is let go. `close()` is the mind closing it. */
+function connectionOf(name: string, happened: string[]) {
+  const lent = Promise.withResolvers<void>();
+  const disposed = Promise.withResolvers<void>();
+  const closed = Promise.withResolvers<{ code: number; reason: string }>();
+  let over = false;
+  const connection = {
+    address: "example.com",
+    itx: {
+      provide: async () => {
+        happened.push(`${name} lends`);
+        lent.resolve();
+        return { lendEnded: () => new Promise<string>(() => {}), [Symbol.dispose]: () => {} };
+      },
+    },
+    closed: closed.promise,
+    [Symbol.dispose]() {
+      if (over) return;
+      over = true;
+      happened.push(`${name} let go`);
+      disposed.resolve();
+    },
+  } as unknown as Parameters<typeof runProvide>[0]["connection"];
+  return {
+    connection,
+    lent: lent.promise,
+    disposed: disposed.promise,
+    close: () => closed.resolve({ code: 1008, reason: "the sign-in for this session ended" }),
+  };
+}
+
+/** What the run prints, kept from the test's output. */
+function quietConsole() {
+  const lines: string[] = [];
+  const log = vi.spyOn(console, "log").mockImplementation((line) => void lines.push(String(line)));
+  const error = vi
+    .spyOn(console, "error")
+    .mockImplementation((line) => void lines.push(String(line)));
+  return {
+    lines,
+    [Symbol.dispose]() {
+      log.mockRestore();
+      error.mockRestore();
     },
   };
 }

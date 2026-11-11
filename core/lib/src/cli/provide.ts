@@ -140,7 +140,8 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fil
  *  and what it answers is lent again at the same name: the file keeps its long-lived state (a
  *  socket, a session) in its own module scope and reaches the mind through the newest `itx`.
  *  `itx.<name>` is printed on stdout once live. Only when every attempt to reconnect fails does it
- *  end, with an error. */
+ *  end, with an error. A connection whose sign-in is about to end is replaced before it does (THE
+ *  HANDOVER, below), so the hourly end of a token costs no call. */
 export async function runProvide(input: {
   connection: MindConnection;
   reconnect: () => Promise<MindConnection>;
@@ -150,6 +151,11 @@ export async function runProvide(input: {
   append?: BridgeAppend;
   /** the reconnect schedule — a test's, `RECONNECT_DELAYS_MS` otherwise */
   reconnectDelaysMs?: readonly number[];
+  /** When the sign-in of the connection made last ends, as epoch ms, asked right after each one
+   *  is made. None: not known, and the name is lent until the connection closes. */
+  endsAt?: () => number | undefined;
+  /** how long before that end the next connection is made — a test's, `renewBeforeMs` otherwise */
+  renewBeforeMs?: number;
 }): Promise<void> {
   if (!NAME.test(input.name))
     throw new Error(
@@ -160,20 +166,21 @@ export async function runProvide(input: {
   const stopped = new Promise<"stopped">((resolve) => (stop = () => resolve("stopped")));
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
-  /** Lend over one connection until Ctrl-C, or until the connection closes or the lend ends — why,
-   *  as a line. */
-  const serve = async (connection: MindConnection, first: boolean): Promise<"stopped" | string> => {
+  /** Lend over one connection. `ended` says why it is no longer lent there: the connection closed,
+   *  or the lend ended. Lending the name again over a newer connection ends this lend too, at the
+   *  mind: the newest lend of a name wins, and a call on its way is sent to it. */
+  const lendOver = async (connection: MindConnection, how: "first" | "again" | "renewed") => {
     const mind = connection.itx;
     const target = rpcTargetOf(await input.file.provide({ itx: mind, append: input.append }));
-    using lend = await mind.provide(
+    const lend = await mind.provide(
       match,
       target,
       input.file.description ? { description: input.file.description } : undefined,
     );
-    if (first) {
+    if (how === "first") {
       console.log(match);
       console.error(`${match} is live for ${connection.address}. Press Ctrl-C to stop.`);
-    } else console.error(`Reconnected: ${match} is live again.`);
+    } else if (how === "again") console.error(`Reconnected: ${match} is live again.`);
     const lendEnded = lend.lendEnded().then(
       (reason) => `its lend ended: the stub ${reason}`,
       (error: unknown) => `its lend ended: ${messageOf(error)}`,
@@ -181,51 +188,117 @@ export async function runProvide(input: {
     const connectionClosed = connection.closed.then(
       ({ code, reason }) => `${code}: ${reason || "connection closed"}`,
     );
-    return await Promise.race([stopped, connectionClosed, lendEnded]);
-  };
-  const delaysMs = input.reconnectDelaysMs || RECONNECT_DELAYS_MS;
-  let connection: MindConnection | null = input.connection;
-  let lastFailure = "";
-  try {
-    for (let first = true, failures = 0; ; first = false) {
-      if (connection) {
+    return {
+      connection,
+      ended: Promise.race([lendEnded, connectionClosed]),
+      /** when this connection's sign-in ends, read as it was made */
+      endsAt: input.endsAt?.(),
+      [Symbol.dispose]() {
         try {
-          const outcome = await serve(connection, first);
-          if (outcome === "stopped") return;
-          lastFailure = outcome;
-          console.error(`${match} disconnected (${lastFailure}). Reconnecting...`);
-          failures = 0; // it was lent: a fresh round of attempts
-        } catch (error) {
-          if (first) throw error; // the first connection's refusal is the answer
-          lastFailure = messageOf(error);
-          console.error(`Could not lend ${match} again: ${lastFailure}`);
+          lend[Symbol.dispose]();
         } finally {
           connection[Symbol.dispose]();
         }
+      },
+    };
+  };
+  /** Resolves `what` after `ms`, or "stopped" at Ctrl-C; the timer never outlives the wait. */
+  const after = async <What extends string>(ms: number, what: What) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waited = await Promise.race([
+      stopped,
+      new Promise<What>((resolve) => (timer = setTimeout(() => resolve(what), ms))),
+    ]);
+    clearTimeout(timer);
+    return waited;
+  };
+  const delaysMs = input.reconnectDelaysMs || RECONNECT_DELAYS_MS;
+  // the first connection's refusal is the answer
+  let live: Awaited<ReturnType<typeof lendOver>> | null;
+  try {
+    live = await lendOver(input.connection, "first");
+  } catch (error) {
+    input.connection[Symbol.dispose]();
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
+    throw error;
+  }
+  let lastFailure = "";
+  try {
+    for (let failures = 0; ;) {
+      if (live) {
+        // THE HANDOVER: a sign-in's token ends on the hour, and the mind closes its connection
+        // then. A while before that the next connection is made and the name lent over it, so the
+        // name is never without a lender. When the next one cannot be made, this one is kept until
+        // it closes, and the reconnect below takes over as it always did.
+        const renewInMs =
+          live.endsAt === undefined
+            ? undefined
+            : live.endsAt - Date.now() - (input.renewBeforeMs ?? renewBeforeMs());
+        const outcome: string = await Promise.race([
+          live.ended,
+          stopped,
+          ...(renewInMs === undefined ? [] : [after(Math.max(renewInMs, 0), "renew")]),
+        ]);
+        if (outcome === "stopped") return;
+        if (outcome === "renew") {
+          const next = await (async () => {
+            const connection = await input.reconnect();
+            try {
+              return await lendOver(connection, "renewed");
+            } catch (error) {
+              connection[Symbol.dispose]();
+              throw error;
+            }
+          })().catch((error: unknown) => {
+            console.error(`Could not renew ${match} before its sign-in ends: ${messageOf(error)}`);
+            return null;
+          });
+          if (next) {
+            // the name is lent over the next connection now: this one's end is no disconnection
+            live[Symbol.dispose]();
+            live = next;
+          } else live.endsAt = undefined; // kept until it closes, with no second try to renew
+          continue;
+        }
+        lastFailure = outcome;
+        console.error(`${match} disconnected (${lastFailure}). Reconnecting...`);
+        live[Symbol.dispose]();
+        live = null;
+        failures = 0; // it was lent: a fresh round of attempts
       }
       const delayMs = delaysMs[failures++];
       if (delayMs === undefined)
         throw new Error(
           `${match} disconnected and could not reconnect (${lastFailure}). Run iterate provide again.`,
         );
-      let wait: ReturnType<typeof setTimeout> | undefined;
-      const waited = await Promise.race([
-        stopped,
-        new Promise<"waited">((resolve) => (wait = setTimeout(() => resolve("waited"), delayMs))),
-      ]);
-      clearTimeout(wait);
-      if (waited === "stopped") return;
-      connection = await input.reconnect().catch((error: unknown) => {
+      if ((await after(delayMs, "waited")) === "stopped") return;
+      const connection = await input.reconnect().catch((error: unknown) => {
         lastFailure = messageOf(error);
         console.error(`Could not reconnect: ${lastFailure}`);
         return null;
       });
+      if (!connection) continue;
+      try {
+        live = await lendOver(connection, "again");
+      } catch (error) {
+        connection[Symbol.dispose]();
+        lastFailure = messageOf(error);
+        console.error(`Could not lend ${match} again: ${lastFailure}`);
+      }
     }
   } finally {
+    live?.[Symbol.dispose]();
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
   }
 }
+
+/** How long before a sign-in's end the next connection is made: 20 to 55 seconds, by chance. Under
+ *  a minute, so that a stored sign-in counts as ending and is refreshed (node.ts `mindToken`). By
+ *  chance, because bridges that share one stored sign-in end at the same moment: the first to renew
+ *  refreshes it, and the others find it fresh. */
+const renewBeforeMs = () => 20_000 + Math.floor(Math.random() * 35_000);
 
 /** The folder of the nearest package.json at or above the file's own folder. */
 function nearestPackageDirectory(path: string): string | null {
