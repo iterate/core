@@ -230,6 +230,10 @@ Google (Gmail) or X through iterate's own app there. The mind needs no OAuth cli
 ["acme"] }`: the mind gets the events and the installation tokens of those alone, where the
   member administers them, and none when it names none. `install: true` sends the member to the
   App's install page first, and connects the installation they choose there.
+- Several accounts of one provider: connect each to a secret of its own, through the same client.
+  `itx.secrets.beginOAuth("/secrets/google-personal", { client: { cloud: "google" }, extra: { login_hint: "ada@gmail.com" } })`
+  beside `/secrets/google`: `login_hint` asks Google for that account. Each secret holds and
+  refreshes its own tokens, and a request names the account by the secret it names.
 - Use the account with a placeholder, never a token:
   `itx.fetch(new Request("https://api.github.com/user", { headers: { authorization: 'Bearer getSecret("/secrets/github", { field: "accessToken" })' } }))`.
   The Cloud keeps the app's secret and adds it at each refresh. The tokens stay in this mind's

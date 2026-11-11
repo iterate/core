@@ -8,6 +8,8 @@ const TOKENS = "/secrets/smoke-cloud-github";
 const INSTALLATION = "/secrets/smoke-cloud-installation";
 const X_TOKENS = "/secrets/smoke-cloud-x";
 const GOOGLE_TOKENS = "/secrets/smoke-cloud-google";
+/** A second Google account of the same mind: a secret of its own, beside the first. */
+const SECOND_GOOGLE_TOKENS = "/secrets/smoke-cloud-google-second";
 const SLACK_TOKENS = "/secrets/smoke-cloud-slack";
 
 const CloudFacts = z.object({
@@ -88,6 +90,54 @@ export async function cloudChecks(domain: string): Promise<Check[]> {
                   second.status === 200 &&
                   after > before,
                 detail: `Gmail names ${String(named)}; after the token expired: ${second.status}, refreshes on the log ${before} then ${after}`,
+              };
+            },
+          ),
+          // SEVERAL ACCOUNTS OF ONE PROVIDER on one mind: each is a secret of its own, connected
+          // through the same client of the Cloud's. `extra` names the account at the provider, as
+          // `login_hint` does at Google itself. Each secret answers as its own account, and a
+          // refresh of one leaves the other's tokens as they were.
+          await attempt(
+            "cloud: a second Google account connects to the same mind, in a secret of its own",
+            async () => {
+              const other = `second-${address}`;
+              const begun = z.object({ authorizationUrl: z.string() }).parse(
+                await root().secrets.beginOAuth(SECOND_GOOGLE_TOKENS, {
+                  client: { cloud: "google" },
+                  extra: { email: other },
+                  anyoneWithLink: true,
+                }),
+              );
+              const done = await walked(begun.authorizationUrl, cloud);
+              const profile = `${google.urls[0]}/gmail/v1/users/me/profile`;
+              const nameOf = async (path: string) =>
+                String(
+                  ((await withSecret(profile, path)).body as { emailAddress?: unknown } | null)
+                    ?.emailAddress,
+                );
+              const names = [await nameOf(GOOGLE_TOKENS), await nameOf(SECOND_GOOGLE_TOKENS)];
+              // the second account's token ends: its secret refreshes, and the first's does not
+              const before = [
+                await refreshed(GOOGLE_TOKENS),
+                await refreshed(SECOND_GOOGLE_TOKENS),
+              ];
+              await fetch(`${google.urls[0]}/__test-controls/expire-tokens`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ clientId: "petshop-default", account: other }),
+              });
+              const again = [await nameOf(GOOGLE_TOKENS), await nameOf(SECOND_GOOGLE_TOKENS)];
+              const after = [await refreshed(GOOGLE_TOKENS), await refreshed(SECOND_GOOGLE_TOKENS)];
+              return {
+                pass:
+                  done.includes("holds the tokens") &&
+                  names[0] === address &&
+                  names[1] === other &&
+                  again[0] === address &&
+                  again[1] === other &&
+                  after[0] === before[0] &&
+                  after[1]! > before[1]!,
+                detail: `the secrets answer as ${names.join(" and ")}; after the second's token expired: ${again.join(" and ")}, refreshes ${before.join("/")} then ${after.join("/")}`,
               };
             },
           ),
