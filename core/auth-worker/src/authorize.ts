@@ -250,6 +250,9 @@ function isTrustedClient(env: Env, authRequest: AuthRequest) {
   const client = new URL(authRequest.clientId);
   return (
     client.protocol === "https:" &&
+    // Never iterate Cloud's MCP relay, whatever the config lists: its one client stands for every
+    // app behind it (internal-packages/installer worker/mcp-relay.js), so a member is always asked.
+    client.pathname !== "/oauth2/client.json" &&
     trusted.includes(client.origin) &&
     new URL(authRequest.redirectUri).origin === client.origin
   );
