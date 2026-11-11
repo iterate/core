@@ -82,6 +82,16 @@ const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/email/sent",
   "events.iterate.com/webhook/received",
   "events.iterate.com/mcp/webhook-received",
+  // the vault's gate for acts (iterate/acts): its rules and its lock decide what waits
+  "events.iterate.com/approval/act-held",
+  "events.iterate.com/approval/act-approved",
+  "events.iterate.com/approval/act-rejected",
+  "events.iterate.com/approval/hold-expired",
+  "events.iterate.com/approval/act-done",
+  "events.iterate.com/approval/rule-set",
+  "events.iterate.com/approval/rule-proposed",
+  "events.iterate.com/approval/locked",
+  "events.iterate.com/approval/unlocked",
 ]);
 
 export const isConfigPointerMatch = (match: ItxExpressionPrefix) =>

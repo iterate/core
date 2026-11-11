@@ -5,6 +5,7 @@ import {
   errorCode,
   jsonEqual,
   releaseRpcSessions,
+  reportIssue,
   resolveContextPath,
 } from "iterate/lib";
 import type { RewriteRuleConfigured, RewriteRuleListEntry } from "iterate/api";
@@ -21,6 +22,7 @@ import {
   type ItxExpressionInput,
   type ItxExpressionPrefix,
 } from "iterate/expression";
+import { ACT_DONE, actText } from "iterate/acts";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { crossingOneMore, newChain, recordRefusal, type Cause } from "../cause.ts";
 import { isConfigPointerMatch, type Caller } from "../caller.ts";
@@ -28,6 +30,7 @@ import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { itxHost } from "../host.ts";
 import { unavailableError } from "../unavailable.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
+import { heldVerbOf } from "./held-verbs.ts";
 import { SNAPSHOT_REREADS, type RuleSnapshot } from "./rule-snapshots.ts";
 
 // Apart from the scope on purpose: the core reduce and the DO's `list()` read it, and neither may
@@ -849,9 +852,17 @@ export class ItxExpressionResolver {
 
   // A snapshot may expire while the next is read: the route is resolved again, a bounded number of times.
   async #dispatch(call: ItxExpressionInput, extraArgs: unknown[]) {
+    let approved: string | undefined;
     for (let routes = 0; routes < SNAPSHOT_REREADS; routes++) {
-      const { route, validUntil } = await this.#route(call, extraArgs);
+      const { route, validUntil, rules } = await this.#route(call, extraArgs);
       if (Date.now() >= validUntil) continue;
+      if (route.kind === "walked" && route.at === this.#path && this.#rewriteRules) {
+        const waited = !approved;
+        approved = await this.#heldUntilApproved(route, rules, approved);
+        // The wait is minutes long, and the table may have moved under it: the call is routed
+        // again, and must still be the act the member approved.
+        if (approved && waited) continue;
+      }
       const value =
         route.kind === "located"
           ? await this.#reach.located(route.at, route.expression, route.extraArgs, route.caller)
@@ -861,6 +872,70 @@ export class ItxExpressionResolver {
     throw unavailableError(
       "overloaded",
       `${JSON.stringify(print(normalizedItxExpression(call)))}: the rule snapshots it resolves through expired ${SNAPSHOT_REREADS} times before it could run`,
+    );
+  }
+
+  // A VERB AN APPROVAL RULE NAMES WAITS FOR A MEMBER'S YES (./held-verbs.ts, the host's `acts`).
+  // Asked where this context resolved the call by its own table, so every name for one function
+  // meets the same rule. The platform's own calls are not held: an act that a member approved
+  // after its caller stopped waiting is done as the platform. Answers the act's text once a
+  // member approved it, and nothing for a call that no rule names.
+  async #heldUntilApproved(
+    route: { fixedPoint: ItxExpression; extraArgs: unknown[] },
+    rules: readonly ItxExpressionRewriteRule[],
+    approved: string | undefined,
+  ): Promise<string | undefined> {
+    const gate = itxHost().acts;
+    const caller = this.#caller();
+    if (!gate || caller.platform) return undefined;
+    const verbRules = await gate.verbRules();
+    if (verbRules.length === 0) return undefined;
+    const held = heldVerbOf(verbRules, route.fixedPoint, route.extraArgs, (verb) => {
+      try {
+        return resolveItxExpression(() => rules, verb, implicitRootsAt(this.#path)).at(-1)!;
+      } catch {
+        return null;
+      }
+    });
+    if (!held) return undefined;
+    if ("refused" in held) throw codedError("FORBIDDEN", held.refused);
+    const text = actText(held);
+    if (approved === text) return approved;
+    if (approved)
+      throw codedError(
+        "FORBIDDEN",
+        `${held.act} changed while it waited for a member's approval: call it again`,
+      );
+    const from = caller.path || this.#path;
+    // The gate's facts are the platform's own, on the context it names.
+    const record = (facts: { path: string; events: StreamEventInput[] }[]) =>
+      Promise.all(
+        facts.map(({ path, events }) =>
+          this.#reach
+            .located(path, ["itx", "builtins", ["append", ...events]], [], {
+              principal: null,
+              platform: true,
+            })
+            .catch((error: unknown) => reportIssue("approval.facts-not-recorded", error, { path })),
+        ),
+      );
+    let answer = await gate.ask({ text, from });
+    if (answer.state === "held") {
+      await record(answer.facts);
+      answer = await gate.ask({ text, from, wait: true });
+    }
+    if (answer.state === "free") return undefined;
+    if (answer.state === "go") return text;
+    await record(answer.facts);
+    const where = `/secrets/approvals?digest=${answer.digest} on the platform's origin`;
+    throw codedError(
+      "FORBIDDEN",
+      answer.state === "rejected"
+        ? `${held.act}: ${answer.by} rejected this call: ${answer.reason} (${where})`
+        : answer.state === "done"
+          ? `${held.act}: this exact call was done before, for a member's one approval: a new call differs (${where})`
+          : `${held.act} waits for a member's approval, at ${where}. It can be approved for a day. When it is, it is done then, and this context gets an event that says so (${ACT_DONE}): do not call it again.`,
+      { digest: answer.digest, state: answer.state },
     );
   }
 

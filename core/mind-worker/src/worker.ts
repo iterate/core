@@ -37,9 +37,12 @@ import { WorkspaceFacet } from "./workspace/durable-object.ts";
 import { SandboxFacet } from "./sandbox/durable-object.ts";
 import { SandboxContainer } from "./sandbox/container.ts";
 import { SandboxEgress } from "./sandbox/egress.ts";
+import { APPROVALS_ROOT_DESCRIPTION, approvalsRoot } from "./context/approvals.ts";
 import { BROWSER_ROOT_DESCRIPTION, cfBrowser } from "./context/browser.ts";
 import { IMAGES_ROOT_DESCRIPTION, mindImages } from "./context/images.ts";
 import { EmailFacet } from "./email/durable-object.ts";
+import { runApprovedAct } from "./approved-acts.ts";
+import { heldVerbRules } from "./context/held-verb-rules.ts";
 import { EMAIL_PATH, emailRoot, receiveEmail } from "./integrations/email.ts";
 import {
   INTEGRATIONS_ROOT_DESCRIPTION,
@@ -101,6 +104,12 @@ defineItxHost({
     tracedModelCall(request, path, () =>
       sendRecordingSecretFacts(request, env.DOOR, (secretPath) => contextAt(secretPath)),
     ),
+  // The vault's gate for acts. The kernel asks for the verb rules on each call a context resolves
+  // by its own table: kept a few seconds, so a new rule holds within that time.
+  acts: {
+    verbRules: heldVerbRules(() => env.DOOR.actRules()),
+    ask: (input) => env.DOOR.act(input),
+  },
   loader: { prepareConfinedWorker },
   // A getter: the bindings are read when the kernel first reads the roots, never during module
   // evaluation.
@@ -129,6 +138,10 @@ defineItxHost({
       secrets: {
         description: SECRETS_ROOT_DESCRIPTION,
         build: (scope) => secretsRoot(scope, env.DOOR),
+      },
+      approvals: {
+        description: APPROVALS_ROOT_DESCRIPTION,
+        build: (scope) => approvalsRoot(scope, env.DOOR, env.DOMAIN),
       },
       browser: { description: BROWSER_ROOT_DESCRIPTION, build: () => cfBrowser(env.BROWSER) },
       // over a second `itx.r2` of the context's: what a write lands is the same
@@ -229,6 +242,13 @@ export class Mind extends WorkerEntrypoint<Env> implements MindTarget {
 
   async receiveEmail(mail: Parameters<MindTarget["receiveEmail"]>[0]) {
     await receiveEmail(this.env.FILES, contextAt(EMAIL_PATH), mail);
+  }
+
+  async runAct(held: Parameters<MindTarget["runAct"]>[0]) {
+    await runApprovedAct(
+      { files: this.env.FILES, egress: this.env.DOOR, contextAt, appendAsPlatform },
+      held,
+    );
   }
 
   /** No secret material: core/alchemy/scripts/smoke.ts reads these. */

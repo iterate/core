@@ -6,9 +6,11 @@ import {
   refuseActPastLimit,
   sha256Hex,
 } from "core-itx";
+import { ACT_DONE, type GateAnswer, type MailAct } from "iterate/acts";
 import type { EmailSendInput, StreamPage } from "iterate/api";
 import { EmailContract } from "iterate/email";
-import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
+import { codedError, errorCode, ITERATE_CAUSE_HEADER, reportIssue } from "iterate/lib";
+import { platformOriginOf } from "iterate/mind-api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import type { Door, ReceivedEmail } from "iterate/workers";
 import { z } from "zod";
@@ -73,6 +75,7 @@ export function emailRoot(
           ...scope,
           address: `${scope.name}@${scope.domain}`.toLowerCase(),
           emailContext: context.context(EMAIL_PATH),
+          contextOf: (path) => context.context(path),
           caller: hopCaller(context),
         },
         input,
@@ -88,6 +91,7 @@ async function sendEmail(
     name: string;
     domain: string;
     emailContext: ReachableContext;
+    contextOf: (path: string) => ReachableContext;
     caller: Caller;
   },
   input: EmailSendInput,
@@ -138,46 +142,78 @@ async function sendEmail(
   const key =
     writeKey &&
     `${writeKey}:email.send:${(await sha256Hex(JSON.stringify([to, cc, subject, request.text, request.html]))).slice(0, 16)}`;
+  let reserved = false;
   if (key) {
-    const { recorded, reserved } = await scope.emailContext.reserveSend(key);
-    if (recorded) return recorded;
-    if (!reserved)
+    const reservation = await scope.emailContext.reserveSend(key);
+    if (reservation.recorded) return reservation.recorded;
+    if (!reservation.reserved)
       throw codedError(
         "PERMANENT_FAILURE",
         "itx.email.send: an earlier attempt of this delivery sent this message or may have, and recorded nothing — it is not sent again",
       );
+    reserved = true;
   }
+  // Only the attempt that holds the reservation gives it up.
+  const release = async () => {
+    if (key && reserved) await scope.emailContext.releaseSend(key);
+    reserved = false;
+  };
   const references = answered?.references || [];
-  const outcome = await scope
-    .egress()
-    .sendEmail({
-      from: { email: from, name: scope.name },
-      to,
-      cc,
-      subject,
-      text: request.text,
-      html: request.html,
-      headers: {
-        "Auto-Submitted": "auto-generated",
-        ...(scope.caller.cause && { [ITERATE_CAUSE_HEADER]: causeHeader(scope.caller.cause) }),
-        ...(answered?.inReplyTo && {
-          "In-Reply-To": `<${answered.inReplyTo}>`,
-          References: referencesHeaderOf(references),
-        }),
-      },
-      attachments: attachments.map(({ filename, contentType, content }) => ({
-        filename,
-        contentType,
-        content,
-      })),
-    })
-    .catch(async (error: unknown) => {
-      if (key) await scope.emailContext.releaseSend(key);
-      throw error;
-    });
+  const message = {
+    from: { email: from, name: scope.name },
+    to,
+    cc,
+    subject,
+    text: request.text,
+    html: request.html,
+    headers: {
+      "Auto-Submitted": "auto-generated",
+      ...(scope.caller.cause && { [ITERATE_CAUSE_HEADER]: causeHeader(scope.caller.cause) }),
+      ...(answered?.inReplyTo && {
+        "In-Reply-To": `<${answered.inReplyTo}>`,
+        References: referencesHeaderOf(references),
+      }),
+    },
+    attachments: attachments.map(({ filename, contentType, content, path }) => ({
+      filename,
+      contentType,
+      content,
+      path,
+    })),
+  };
+  // A MAIL AN APPROVAL RULE NAMES WAITS (iterate/acts). The boundary answers `held` at once, so the
+  // log says it waits before anyone decides; the second call waits for the member's answer.
+  const sent = (wait: boolean) =>
+    scope
+      .egress()
+      .sendEmail(message, { from: scope.caller.path, wait })
+      .catch(async (error: unknown) => {
+        await release();
+        throw error;
+      });
+  let outcome = await sent(false);
+  if (!outcome.sent && outcome.gate?.state === "held") {
+    // A HELD MAIL KEEPS NO RESERVATION WHILE IT WAITS. Nothing went, so the reservation is given
+    // up before the wait: a retry of the delivery in that time waits beside this one, and an
+    // attempt that dies in the wait leaves nothing behind. The gate lets an approved mail go
+    // once, so it is the at-most-once of a held mail.
+    await release();
+    await recordGateFacts(scope.contextOf, scope.caller, outcome.gate.facts);
+    outcome = await sent(true);
+  }
   if (!outcome.sent) {
-    if (key) await scope.emailContext.releaseSend(key);
-    throw codedError("UNAVAILABLE", `itx.email.send: the door refused it: ${outcome.error}`);
+    await release();
+    if (!outcome.gate)
+      throw codedError("UNAVAILABLE", `itx.email.send: the boundary refused it: ${outcome.error}`);
+    await recordGateFacts(scope.contextOf, scope.caller, outcome.gate.facts);
+    const at = `${platformOriginOf(scope.domain)}/secrets/approvals?digest=${outcome.gate.digest}`;
+    throw codedError(
+      "FORBIDDEN",
+      outcome.gate.state === "waiting" || outcome.gate.state === "held"
+        ? `itx.email.send: this mail waits for a member's approval, at ${at}. It can be approved for a day. When it is, it is sent then, and this context gets an event that says so (${ACT_DONE}): do not send it again.`
+        : `itx.email.send: ${outcome.error} (${at})`,
+      { digest: outcome.gate.digest, state: outcome.gate.state },
+    );
   }
   return recordEmail(scope.emailContext, scope.caller, {
     type: "events.iterate.com/email/sent",
@@ -195,6 +231,87 @@ async function sendEmail(
       attachments: attachments.map(({ content: _bytes, ...attachment }) => attachment),
     },
   });
+}
+
+/** The gate's facts, on the context it names. One that does not land is reported: the gate's own
+ *  log holds the act. */
+async function recordGateFacts(
+  contextOf: (path: string) => ReachableContext,
+  caller: Caller,
+  facts: GateAnswer["facts"],
+) {
+  for (const { path, events } of facts)
+    await contextOf(path)
+      .invoke(["itx", "builtins", ["append", ...events]], [], { ...caller, platform: true })
+      .catch((error: unknown) => reportIssue("approval.facts-not-recorded", error, { path }));
+}
+
+/** A MAIL A MEMBER APPROVED AFTER ITS CALLER STOPPED WAITING: made again from the act's own text
+ *  and the files it names, and sent through the boundary, where the gate lets it go once. The boundary
+ *  makes the act's text again from what it is given: a file that changed since is another mail,
+ *  which nobody approved, and it is not sent. */
+export async function sendApprovedMail(
+  scope: {
+    files: R2Bucket;
+    egress: () => Pick<Door, "sendEmail">;
+    emailContext: ReachableContext;
+  },
+  act: MailAct,
+  from: string | undefined,
+) {
+  const attachments = await Promise.all(
+    act.attachments.map(async ({ filename, contentType, path }) => {
+      const object = path ? await scope.files.get(path.replace(/^\/+/, "")) : null;
+      if (!object) throw new Error(`the attached file ${path || filename} is gone`);
+      return {
+        filename,
+        contentType,
+        path: path!,
+        content: new Uint8Array(await object.arrayBuffer()),
+      };
+    }),
+  );
+  const outcome = await scope.egress().sendEmail(
+    {
+      from: { email: act.from, name: act.fromName },
+      to: act.to,
+      cc: act.cc,
+      subject: act.subject,
+      text: act.text || undefined,
+      html: act.html || undefined,
+      // the headers the act itself names, and none that it does not
+      headers: Object.fromEntries(
+        Object.entries({
+          "Auto-Submitted": "auto-generated",
+          "Reply-To": act.replyTo,
+          "In-Reply-To": act.inReplyTo,
+          References: act.references,
+        }).filter((header): header is [string, string] => Boolean(header[1])),
+      ),
+      attachments,
+    },
+    { from },
+  );
+  if (!outcome.sent) throw new Error(outcome.error);
+  return recordEmail(
+    scope.emailContext,
+    { principal: null },
+    {
+      type: "events.iterate.com/email/sent",
+      payload: {
+        messageId: bareMessageIdsOf(outcome.messageId)[0] ?? null,
+        from: act.from,
+        to: act.to,
+        cc: act.cc,
+        subject: act.subject,
+        text: act.text,
+        html: act.html,
+        inReplyTo: bareMessageIdsOf(act.inReplyTo || undefined)[0] ?? null,
+        references: bareMessageIdsOf(act.references || undefined),
+        attachments: act.attachments.map(({ sha256: _hash, ...attachment }) => attachment),
+      },
+    },
+  );
 }
 
 /** The `email` facet folds only the platform's facts, so its row is enabled first (a no-op once it is). */

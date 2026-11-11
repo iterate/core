@@ -113,6 +113,7 @@ export const mindStack = (config: MindConfig) =>
         SECRET: Cloudflare.DurableObject("SECRET", { className: "SecretDurableObject" }),
         LOADER: Cloudflare.Workers.WorkerLoader("LOADER"),
         APPROVALS: Cloudflare.DurableObject("APPROVALS", { className: "ApprovalsIndex" }),
+        ACTS: Cloudflare.DurableObject("ACTS", { className: "ActsGate" }),
       },
     });
 

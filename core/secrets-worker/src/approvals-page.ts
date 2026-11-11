@@ -1,10 +1,14 @@
 // The page's script hashes each stored text itself and offers approval only when that hash is the
 // digest. The signature is the credential, so the statements route asks for no session.
+import { APPROVALS_CONTEXT, RUN_ACTS_HEADER } from "iterate/acts";
 import { withFacts } from "iterate/facts";
+import { errorCode } from "iterate/lib";
 import { SECRET_PATH } from "iterate/secret-placeholder";
 import type { SecretAnswer } from "iterate/workers";
 import { z } from "zod";
 import type { Envelope } from "iterate/signed";
+import type { GateDecision, GateFacts, GateState, RuleWriter } from "./acts-gate.ts";
+import { ACT_RULES_PATH, ACTS_SCRIPT, actRules, actsData, heldActs } from "./acts-page.ts";
 import type { ApprovalRule, HeldRequest } from "./approval.ts";
 import { admitted, callbackPage, escaped, plainPage } from "./callback-page.ts";
 import type { HeldRow } from "./secret/durable-object.ts";
@@ -42,11 +46,20 @@ type ApprovalsDeps = {
     ): Promise<SecretAnswer<{ rule: ApprovalRule }>>;
     decide(path: string, envelope: Envelope): Promise<SecretAnswer<{ error?: string }>>;
   };
+  /** The gate for a mail and for a verb's call (./acts-gate.ts). */
+  gate: {
+    state(): Promise<GateState>;
+    setRules(input: { rules: unknown; by: RuleWriter }): Promise<{ facts: GateFacts }>;
+    decide(envelope: Envelope): Promise<{ result: GateDecision; facts: GateFacts }>;
+  };
 };
 
 /** The page and its two POST routes. */
 export const isApprovalsPath = (pathname: string) =>
-  pathname === SECRET_APPROVALS_PATH || pathname === STATEMENTS_PATH || pathname === RULES_PATH;
+  pathname === SECRET_APPROVALS_PATH ||
+  pathname === STATEMENTS_PATH ||
+  pathname === RULES_PATH ||
+  pathname === ACT_RULES_PATH;
 
 export async function secretApprovals(request: Request, deps: ApprovalsDeps): Promise<Response> {
   const { pathname } = new URL(request.url);
@@ -77,6 +90,21 @@ export async function secretApprovals(request: Request, deps: ApprovalsDeps): Pr
       return callbackPage(400, error instanceof Error ? error.message : String(error));
     }
   }
+  // The rules for acts, by a member's session alone. The gate says when that is not enough, and
+  // the page then signs the same rules.
+  if (pathname === ACT_RULES_PATH && request.method === "POST") {
+    const body = z.object({ rules: z.unknown() }).safeParse(await request.json().catch(() => null));
+    try {
+      const { facts } = await deps.gate.setRules({ rules: body.data?.rules, by: { member: by } });
+      return withFacts(Response.json({ ok: true }), facts);
+    } catch (error) {
+      const forbidden = errorCode(error) === "FORBIDDEN";
+      return Response.json(
+        { error: error instanceof Error ? error.message : String(error), signed: forbidden },
+        { status: forbidden ? 403 : 400 },
+      );
+    }
+  }
   if (pathname === SECRET_APPROVALS_PATH && request.method === "GET") return page(deps);
   return new Response("Method not allowed", { status: 405 });
 }
@@ -93,6 +121,14 @@ async function statement(request: Request, deps: ApprovalsDeps): Promise<Respons
     path = (JSON.parse(envelope.statement) as { path?: unknown }).path;
   } catch {
     return refuse("send { statement, signature } as JSON");
+  }
+  if (path === APPROVALS_CONTEXT) {
+    const { result, facts } = await deps.gate.decide(envelope);
+    if (result.error) return withFacts(refuse(result.error, 403), facts);
+    // Acts whose caller stopped waiting: the boundary hands them to the mind, which does them now.
+    // By their ids: an act's text does not fit a header.
+    const headers = result.run?.length ? { [RUN_ACTS_HEADER]: result.run.join(",") } : undefined;
+    return withFacts(Response.json({ ok: true }, { headers }), facts);
   }
   if (typeof path !== "string" || !SECRET_PATH.test(path))
     return refuse("the statement names no secret");
@@ -111,6 +147,7 @@ async function page(deps: ApprovalsDeps): Promise<Response> {
     if (!rule && !held.length) await deps.index.remove(path);
     else secrets.push({ path, rule, held: held.sort((a, b) => b.at - a.at) });
   }
+  const gate = await deps.gate.state();
   const waiting = secrets.filter((secret) => secret.held.length);
   waiting.sort((a, b) => b.held[0]!.at - a.held[0]!.at);
   const requests = waiting
@@ -136,8 +173,10 @@ async function page(deps: ApprovalsDeps): Promise<Response> {
     "<h1>Approvals</h1>",
     `<p role="alert" data-type="error" data-keys hidden>You have no passkey or security key here. <a href="/keys?next=${encodeURIComponent(SECRET_APPROVALS_PATH)}">Add one</a>, then come back.</p>`,
     `<p role="alert" data-type="error" data-failure hidden></p>`,
-    requests || "<p>Nothing waits for approval.</p>",
-    "<h2>Rules</h2>",
+    heldActs(gate),
+    requests || (gate.held.length ? "" : "<p>Nothing waits for approval.</p>"),
+    actRules(gate),
+    "<h2>Rules for requests with a secret</h2>",
     "<p>A request with a secret whose method and host its rule names waits here for a signed yes. Adding a method or a host saves at once; anything else is signed with your key.</p>",
     rules,
     ruleForm("", null),
@@ -148,11 +187,12 @@ async function page(deps: ApprovalsDeps): Promise<Response> {
       held.map(({ digest, text }) => ({ path, digest, text })),
     ),
     types: { approved: APPROVED, rejected: REJECTED, rule: RULE_CONFIGURED },
+    ...actsData(gate),
   };
   const nonce = crypto.randomUUID();
   return plainPage(
     200,
-    `${body}<script type="application/json" id="approvals-data">${JSON.stringify(data).replaceAll("<", "\\u003c")}</script><script nonce="${nonce}">${SCRIPT}</script>`,
+    `${body}<script type="application/json" id="approvals-data">${JSON.stringify(data).replaceAll("<", "\\u003c")}</script><script nonce="${nonce}">${SCRIPT}${ACTS_SCRIPT}</script>`,
     "'self'",
     nonce,
     true,

@@ -9,6 +9,7 @@ import {
   serveSession,
 } from "core-itx";
 import type { ItxExpressionStep } from "iterate/expression";
+import { runApprovedActs } from "iterate/acts";
 import { recordFacts as recorded } from "iterate/facts";
 import { stampedCallerOf } from "iterate/principal";
 import { platformRouteOf, mindProvideUrlOf } from "iterate/mind-api";
@@ -80,7 +81,18 @@ export default {
     });
     if (answer) return answer;
     if (route === "auth") return recordFacts(await workerEnv.AUTH.fetch(forwarded), true);
-    if (route === "secrets") return recordFacts(await workerEnv.SECRETS.fetch(forwarded));
+    if (route === "secrets") {
+      // an approval of an act whose caller stopped waiting: the mind does the act now
+      const { answer: answered, ran } = runApprovedActs(
+        await workerEnv.SECRETS.fetch(forwarded),
+        async (digest) => {
+          const held = await workerEnv.SECRETS.approvedAct(digest);
+          if (held) await throughTheMind(["runAct"], [held]);
+        },
+      );
+      ctx.waitUntil(ran);
+      return recordFacts(answered);
+    }
     return confinedAnswer(await toMind(forwarded));
   },
 

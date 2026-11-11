@@ -6,6 +6,7 @@ import {
   SECRET_USE_HEADER,
 } from "iterate/secret-placeholder";
 import type { SecretsService, SecretVerb, SecretVerbs } from "iterate/workers";
+import { ActsGate, GATE } from "./acts-gate.ts";
 import { ApprovalsIndex, INDEX } from "./approvals-index.ts";
 import { isApprovalsPath, secretApprovals } from "./approvals-page.ts";
 import type { Env } from "./env.ts";
@@ -17,7 +18,7 @@ import { PinnedOutbound } from "./secret/exchange-jail.ts";
 
 // A Durable Object binding names a class the main module exports, and `ctx.exports` mints the
 // jail's egress only for an export.
-export { ApprovalsIndex, PinnedOutbound, SecretDurableObject };
+export { ActsGate, ApprovalsIndex, PinnedOutbound, SecretDurableObject };
 
 export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
   async fetch(request: Parameters<SecretsService["fetch"]>[0]) {
@@ -40,6 +41,7 @@ export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
         mind: this.env.DOMAIN,
         index: this.env.APPROVALS.getByName(INDEX),
         secretOf: (path) => this.#secret(path),
+        gate: this.#gate(),
       });
     if (pathname === "/secrets" || pathname === "/secrets/")
       return new Response(`secrets: the vault of ${this.env.DOMAIN}`);
@@ -53,8 +55,38 @@ export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
   }
   /* oxlint-enable iterate/mechanical-class-impl */
 
+  async act(input: Parameters<SecretsService["act"]>[0]) {
+    return this.#gate().act(input);
+  }
+
+  async approvedAct(digest: string) {
+    return this.#gate().approved(digest);
+  }
+
+  async actNotDone(digest: string) {
+    return this.#gate().notDone(digest);
+  }
+
+  // Only the mind's own code comes this way (the boundary's Door): never a member's session.
+  async setActRules(input: Parameters<SecretsService["setActRules"]>[0]) {
+    return this.#gate().setRules({ rules: input.rules, by: { mind: input.from } });
+  }
+
+  async proposeActRule(input: Parameters<SecretsService["proposeActRule"]>[0]) {
+    return this.#gate().propose(input);
+  }
+
+  async actRules() {
+    const { locked, rules } = await this.#gate().state();
+    return { locked, rules };
+  }
+
   #secret(path: string) {
     return this.env.SECRET.getByName(assertSecretPath(path));
+  }
+
+  #gate() {
+    return this.env.ACTS.getByName(GATE);
   }
 }
 

@@ -1,4 +1,5 @@
 // Types, and the few names two Workers must share: no Worker imports another Worker's code.
+import type { ActRule, GateAnswer } from "./acts.ts";
 import type { SecretOperation, SecretRefresh } from "./api.ts";
 import type { Facts } from "./facts.ts";
 import type { Principal } from "./principal.ts";
@@ -14,6 +15,10 @@ export interface MindTarget {
   append(path: string, events: StreamEventInput[], fromAuth?: boolean): Promise<void>;
   /** A redelivery records nothing new. */
   receiveEmail(mail: ReceivedEmail): Promise<void>;
+  /** An act a member approved after its caller stopped waiting (./acts.ts): the mind does it now,
+   *  once, and writes what came of it on the caller's context. The gate decides whether it is
+   *  still to do, so a second call does nothing. */
+  runAct(held: { digest: string; text: string; from?: string }): Promise<void>;
 }
 
 export type TokenIdentity = {
@@ -36,7 +41,20 @@ export interface Door {
    *  `fetch` fails inside the zone. */
   fetch(request: Request): Promise<Response>;
   secret: SecretCall;
-  sendEmail(message: OutboundEmail): Promise<EmailOutcome>;
+  /** A mail that an approval rule names waits in the vault's gate (./acts.ts). The first call
+   *  answers `gate.state: "held"` at once; a call with `wait` waits for the member's answer.
+   *  `from` is the caller's claim of where the mail began. */
+  sendEmail(
+    message: OutboundEmail,
+    options?: { wait?: boolean; from?: string },
+  ): Promise<EmailOutcome>;
+  /** THE GATE FOR ACTS, for the mind's own code (./acts.ts): what it says of a verb's call, the
+   *  rules as they are, the rules set while the gate is open, and a rule proposed. A mail is
+   *  asked about by `sendEmail` alone. */
+  act: SecretsService["act"];
+  actRules: SecretsService["actRules"];
+  setActRules: SecretsService["setActRules"];
+  proposeActRule: SecretsService["proposeActRule"];
   /** Refused in a stack without the telemetry part. */
   queryTelemetry(sql: string, hours?: number): Promise<TelemetryAnswer>;
   sendEvents(events: StreamEvent[]): Promise<void>;
@@ -167,6 +185,20 @@ export type SecretCall = <V extends SecretVerb>(
 export interface SecretsService {
   fetch(request: Request): Promise<Response>;
   secret: SecretCall;
+  /** THE GATE FOR ACTS (./acts.ts): what it says of a mail or of a verb's call, by its exact
+   *  text. `from` is the caller's claim of where the act began. With `wait`, a held act's answer
+   *  comes when a member decided, or after five minutes. */
+  act(input: { text: string; from?: string; wait?: boolean }): Promise<GateAnswer>;
+  /** An act a member approved that is not done yet, by its id: what `runAct` of the mind takes. */
+  approvedAct(digest: string): Promise<{ digest: string; text: string; from?: string } | null>;
+  /** The boundary's alone, never the mind's: a mail the gate let go (`go`) that the mail service
+   *  refused keeps its approval. With this, a mind could send one approved mail many times. */
+  actNotDone(digest: string): Promise<void>;
+  /** The rules, set by the mind's own code. Refused once a member locked the gate. */
+  setActRules(input: { rules: unknown; from: string }): Promise<{ rules: ActRule[]; facts: Facts }>;
+  /** A rule the mind's code asks for: a member signs it on `/secrets/approvals`, or does not. */
+  proposeActRule(input: { rule: unknown; from?: string }): Promise<{ id: string; facts: Facts }>;
+  actRules(): Promise<{ locked: boolean; rules: ActRule[] }>;
 }
 
 /** `from` must be an address on the mind's domain. */
@@ -178,10 +210,14 @@ export type OutboundEmail = {
   text?: string;
   html?: string;
   headers: Record<string, string>;
-  attachments: { filename: string; contentType: string; content: Uint8Array }[];
+  /** `path`: where the file is in the mind's files, so a mail approved later is made again. */
+  attachments: { filename: string; contentType: string; content: Uint8Array; path?: string }[];
 };
 
-export type EmailOutcome = { sent: true; messageId: string } | { sent: false; error: string };
+/** `gate`: why the mail was not sent, when an approval rule holds it (./acts.ts). */
+export type EmailOutcome =
+  | { sent: true; messageId: string }
+  | { sent: false; error: string; gate?: Exclude<GateAnswer, { state: "free" | "go" }> };
 
 /** Each file is a stream: Workers RPC sends a stream beside its 32 MiB call limit, and capnweb sends
  *  one chunk a message. */

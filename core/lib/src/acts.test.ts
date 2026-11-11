@@ -1,0 +1,194 @@
+import { expect, test } from "vitest";
+import {
+  ActRule,
+  actText,
+  mailActOf,
+  RUN_ACTS_HEADER,
+  ruleHolds,
+  runApprovedActs,
+  rulesTighten,
+  sha256Hex,
+  verbActOf,
+} from "./acts.ts";
+
+test("a mail is one exact text: the same mail sent again is the same act, with no bytes in it", async () => {
+  const first = await mailActOf(mail({ headers: { "X-Iterate-Cause": "one" } }));
+  const again = await mailActOf(mail({ headers: { "X-Iterate-Cause": "two" } }));
+  expect(actText(first)).toBe(actText(again));
+  expect(first).toEqual({
+    act: "email.send",
+    from: "agent@example.com",
+    fromName: "The agent",
+    replyTo: null,
+    to: ["jo@example.net"],
+    cc: [],
+    subject: "The invoice",
+    text: "Attached.",
+    html: null,
+    inReplyTo: null,
+    references: null,
+    attachments: [
+      {
+        filename: "invoice.pdf",
+        contentType: "application/pdf",
+        size: 3,
+        sha256: await sha256Hex(new Uint8Array([1, 2, 3])),
+        path: "/files/invoice.pdf",
+      },
+    ],
+  });
+  expect(JSON.parse(actText(first))).toEqual(first);
+  // any change a person would see is another act
+  const other = await mailActOf(mail({ subject: "The invoice, again" }));
+  expect(actText(other)).not.toBe(actText(first));
+  const replyTo = await mailActOf(mail({ headers: { "Reply-To": "elsewhere@example.org" } }));
+  expect(replyTo).toMatchObject({ replyTo: "elsewhere@example.org" });
+});
+
+test.for([
+  ["every mail", { verb: "email.send" }, ["jo@example.net"], true],
+  ["a mail to a domain", { verb: "email.send", to: ["*@example.net"] }, ["jo@example.net"], true],
+  ["a mail to another domain", { verb: "email.send", to: ["*@example.net"] }, ["jo@x.org"], false],
+  [
+    "a named recipient, by display name",
+    { verb: "email.send", to: ["jo@x.org"] },
+    ["Jo <JO@x.org>"],
+    true,
+  ],
+  [
+    "a domain that only ends alike",
+    { verb: "email.send", to: ["*@x.org"] },
+    ["jo@notx.org"],
+    false,
+  ],
+  ["a verb's rule", { verb: "itx.whatsapp.sendMessage" }, ["jo@example.net"], false],
+] as const)("a mail rule holds %s", async ([, rule, to, held]) => {
+  const act = await mailActOf(mail({ to: [...to] }));
+  expect(ruleHolds(ActRule.parse(rule), act)).toBe(held);
+});
+
+test("a late approval names its acts by their ids, so the vault's answer stays small whatever the acts hold", async () => {
+  const digests = await Promise.all(
+    Array.from({ length: 50 }, (_unused, index) => sha256Hex(`act ${index}`)),
+  );
+  const named = digests.join(",");
+  // fifty acts, the most the gate holds: far under what a header may carry
+  expect(named.length).toBeLessThan(4096);
+  const ran: string[] = [];
+  const { answer, ran: all } = runApprovedActs(
+    Response.json({ ok: true }, { headers: { [RUN_ACTS_HEADER]: `${named},not-an-id` } }),
+    async (digest) => void ran.push(digest),
+  );
+  await all;
+  expect(ran).toEqual(digests);
+  // the header is the boundary's alone: it does not go on to the browser
+  expect(answer.headers.has(RUN_ACTS_HEADER)).toBe(false);
+  expect(await answer.json()).toEqual({ ok: true });
+});
+
+test("a copy counts as a recipient", async () => {
+  const act = await mailActOf(mail({ to: ["a@x.org"], cc: ["jo@example.net"] }));
+  expect(ruleHolds(ActRule.parse({ verb: "email.send", to: ["*@example.net"] }), act)).toBe(true);
+});
+
+test("a verb's rule holds that verb, or every verb under a prefix, and no other", () => {
+  const send = { act: "itx.whatsapp.sendMessage", args: ["jo", { text: "hello" }] };
+  expect(ruleHolds(ActRule.parse({ verb: "itx.whatsapp.sendMessage" }), send)).toBe(true);
+  expect(ruleHolds(ActRule.parse({ verb: "itx.whatsapp.*" }), send)).toBe(true);
+  expect(ruleHolds(ActRule.parse({ verb: "itx.whatsapp.send" }), send)).toBe(false);
+  expect(ruleHolds(ActRule.parse({ verb: "itx.whats.*" }), send)).toBe(false);
+  expect(ruleHolds(ActRule.parse({ verb: "email.send" }), send)).toBe(false);
+});
+
+test("a rule is a verb, with recipients for a mail alone", () => {
+  for (const rule of [
+    { verb: "secrets.set" },
+    { verb: "itx" },
+    { verb: "itx.*" },
+    { verb: "itx.whatsapp.*.send" },
+    { verb: "itx.whatsapp.sendMessage", to: ["*"] },
+    { verb: "email.send", to: [] },
+    { verb: "email.send", to: ["example.net"] },
+    { verb: "email.send", extra: true },
+  ])
+    expect(ActRule.safeParse(rule)).toHaveProperty("success", false);
+  expect(ActRule.parse({ verb: "email.send", to: ["*@B.com", "a@b.com", "*@b.com"] })).toEqual({
+    verb: "email.send",
+    to: ["*@b.com", "a@b.com"],
+  });
+});
+
+test("a held verb's arguments are plain JSON", () => {
+  expect(verbActOf("itx.whatsapp.sendMessage", ["jo", { text: "hi", n: [1, null] }])).toEqual({
+    act: "itx.whatsapp.sendMessage",
+    args: ["jo", { text: "hi", n: [1, null] }],
+  });
+  for (const args of [[new Uint8Array(2)], [() => {}], [{ at: new Date(0) }], [undefined]])
+    expect(verbActOf("itx.whatsapp.sendMessage", args)).toHaveProperty("refused");
+});
+
+test.for([
+  [
+    "one more rule",
+    [{ verb: "email.send", to: ["*@a.com"] }],
+    [{ verb: "email.send", to: ["*@a.com"] }, { verb: "itx.x.y" }],
+    true,
+  ],
+  [
+    "one more recipient",
+    [{ verb: "email.send", to: ["*@a.com"] }],
+    [{ verb: "email.send", to: ["*@a.com", "*@b.com"] }],
+    true,
+  ],
+  [
+    "every mail in place of some",
+    [{ verb: "email.send", to: ["*@a.com"] }],
+    [{ verb: "email.send" }],
+    true,
+  ],
+  ["a prefix in place of a verb", [{ verb: "itx.x.y" }], [{ verb: "itx.x.*" }], true],
+  [
+    "a rule removed",
+    [{ verb: "email.send" }, { verb: "itx.x.y" }],
+    [{ verb: "email.send" }],
+    false,
+  ],
+  [
+    "a recipient removed",
+    [{ verb: "email.send", to: ["*@a.com", "*@b.com"] }],
+    [{ verb: "email.send", to: ["*@a.com"] }],
+    false,
+  ],
+  [
+    "some mail in place of every mail",
+    [{ verb: "email.send" }],
+    [{ verb: "email.send", to: ["*@a.com"] }],
+    false,
+  ],
+  ["a verb in place of a prefix", [{ verb: "itx.x.*" }], [{ verb: "itx.x.y" }], false],
+] as const)("%s: tighter is %s", ([, before, after, tighter]) => {
+  const parsed = (rules: readonly unknown[]) => rules.map((rule) => ActRule.parse(rule));
+  expect(rulesTighten(parsed(before), parsed(after))).toBe(tighter);
+});
+
+function mail(
+  change: Partial<Parameters<typeof mailActOf>[0]> = {},
+): Parameters<typeof mailActOf>[0] {
+  return {
+    from: { email: "Agent@example.com", name: "The agent" },
+    to: ["jo@example.net"],
+    cc: [],
+    subject: "The invoice",
+    text: "Attached.",
+    headers: {},
+    attachments: [
+      {
+        filename: "invoice.pdf",
+        contentType: "application/pdf",
+        content: new Uint8Array([1, 2, 3]),
+        path: "/files/invoice.pdf",
+      },
+    ],
+    ...change,
+  };
+}

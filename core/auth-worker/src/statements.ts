@@ -6,7 +6,16 @@ import { verifiedStatement } from "./keys.ts";
 
 // Ingress appends these events as the platform, so the kernel's guard on platform facts
 // (core/itx caller.ts `refuseNonPlatformWrites`) cannot catch them: this list must.
-const PLATFORM_NAMESPACES = ["itx", "mind", "email", "webhook", "mcp", "account", "secret"];
+const PLATFORM_NAMESPACES = [
+  "itx",
+  "mind",
+  "email",
+  "webhook",
+  "mcp",
+  "account",
+  "secret",
+  "approval",
+];
 
 export async function statementsResponse(env: Env, request: Request): Promise<Response> {
   const envelope = envelopeOf(await request.json().catch(() => null));

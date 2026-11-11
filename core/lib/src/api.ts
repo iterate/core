@@ -34,6 +34,7 @@ import type {
 } from "@cloudflare/workers-types";
 import type { InvokeHandle, ItxExpression, ItxExpressionInput } from "./expression.ts";
 import type { ConsentScope } from "./oauth-scopes.ts";
+import type { ActRule } from "./acts.ts";
 import type { Principal } from "./principal.ts";
 import type { IngressRouting } from "./mind-ingress.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
@@ -1639,6 +1640,14 @@ export interface IterateContextApi {
    *  threads). `send` answers the `email/sent` event. */
   email: {
     send(input: EmailSendInput): Promise<StreamEvent>;
+  };
+  /** WHAT WAITS FOR A MEMBER'S SIGNED YES before it is done (./acts.ts): a mail, or a call of a
+   *  verb, that a rule names. `setRules` replaces the rules while they are open; once a member
+   *  locked them it is refused, and `propose` asks a member to sign one rule at `signAt`. */
+  approvals: {
+    rules(): Promise<{ locked: boolean; rules: ActRule[] }>;
+    setRules(rules: ActRule[]): Promise<ActRule[]>;
+    propose(rule: ActRule): Promise<{ id: string; signAt: string }>;
   };
   /** An MCP server over Streamable HTTP, through this context's egress; its events subscribed to
    *  land on this context. */

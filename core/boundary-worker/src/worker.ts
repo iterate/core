@@ -1,3 +1,4 @@
+import { runApprovedActs } from "iterate/acts";
 import { recordFacts as recorded } from "iterate/facts";
 import { platformRouteOf } from "iterate/mind-api";
 import type { Env } from "./env.ts";
@@ -29,7 +30,18 @@ export default {
     const { forwarded, answer } = await stampedRequest(request, { auth: env.AUTH, route, domain });
     if (answer) return answer;
     if (route === "auth") return recordFacts(await env.AUTH.fetch(forwarded), true);
-    if (route === "secrets") return recordFacts(await env.SECRETS.fetch(forwarded));
+    if (route === "secrets") {
+      // an approval of an act whose caller stopped waiting: the mind does the act now
+      const { answer: answered, ran } = runApprovedActs(
+        await env.SECRETS.fetch(forwarded),
+        async (digest) => {
+          const held = await env.SECRETS.approvedAct(digest);
+          if (held) await env.MIND.runAct(held);
+        },
+      );
+      ctx.waitUntil(ran);
+      return recordFacts(answered);
+    }
     return confinedAnswer(await env.MIND.fetch(forwarded));
   },
 

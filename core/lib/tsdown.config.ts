@@ -29,6 +29,7 @@ export default defineConfig([
       workers: "src/workers.ts",
       "mind-api": "src/mind-api.ts",
       facts: "src/facts.ts",
+      acts: "src/acts.ts",
       signed: "src/signed.ts",
       "secret-placeholder": "src/secret-placeholder.ts",
       "stream/processor": "src/stream/processor.ts",

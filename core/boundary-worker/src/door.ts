@@ -1,10 +1,12 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { actText, EMAIL_SEND, mailActOf } from "iterate/acts";
 import { withFacts } from "iterate/facts";
 import {
   causeLeavingTheStack,
   codedError,
   ITERATE_CAUSE_HEADER,
   leavingTheStack,
+  reportIssue,
 } from "iterate/lib";
 import { SECRET_USE_HEADER, secretPathsReferenced } from "iterate/secret-placeholder";
 import type { Door as DoorService, SecretVerb, SecretVerbs } from "iterate/workers";
@@ -48,10 +50,49 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
   }
   /* oxlint-enable iterate/mechanical-class-impl */
 
-  async sendEmail(message: Parameters<DoorService["sendEmail"]>[0]) {
+  // THE GATE FOR ACTS, for the mind's own code. A mail is asked about by `sendEmail` below alone:
+  // through `act` the mind could spend a mail's approval and send nothing.
+  async act(input: Parameters<DoorService["act"]>[0]) {
+    if (input.text.includes(`"act":"${EMAIL_SEND}"`))
+      throw codedError("FORBIDDEN", "the gate is asked about a mail by sending it, never apart");
+    return this.env.SECRETS.act(input);
+  }
+
+  async actRules() {
+    return this.env.SECRETS.actRules();
+  }
+
+  async setActRules(input: Parameters<DoorService["setActRules"]>[0]) {
+    return this.env.SECRETS.setActRules(input);
+  }
+
+  async proposeActRule(input: Parameters<DoorService["proposeActRule"]>[0]) {
+    return this.env.SECRETS.proposeActRule(input);
+  }
+
+  async sendEmail(...[message, options]: Parameters<DoorService["sendEmail"]>) {
     const domain = this.env.DOMAIN;
     if (!message.from.email.toLowerCase().endsWith(`@${domain}`))
       return { sent: false as const, error: `mail leaves from an address @${domain} alone` };
+    // THE GATE FIRST (iterate/acts): the mail as its approver reads it is made here, from what is
+    // about to be sent, so a mind cannot have one mail approved and another sent. `free` and `go`
+    // go on: `go` is the gate's mark that a member approved this mail, set once.
+    const gate = await this.env.SECRETS.act({
+      text: actText(await mailActOf(message)),
+      from: options?.from,
+      wait: options?.wait,
+    });
+    if (gate.state !== "free" && gate.state !== "go")
+      return {
+        sent: false as const,
+        error:
+          gate.state === "rejected"
+            ? `${gate.by} rejected this mail: ${gate.reason}`
+            : gate.state === "done"
+              ? "this exact mail was sent before, for a member's one approval: a new mail differs"
+              : "this mail waits for a member's approval",
+        gate,
+      };
     // a mail leaves the stack as a request to another host does
     const { [ITERATE_CAUSE_HEADER]: cause, ...headers } = message.headers;
     const mark = causeLeavingTheStack(cause);
@@ -75,6 +116,12 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
       });
       return { sent: true as const, messageId };
     } catch (error) {
+      // The gate's `notDone` says what this gives back. It is not reached when the boundary dies
+      // in the send: that mail may have gone, so the gate's mark stays.
+      if (gate.state === "go")
+        await this.env.SECRETS.actNotDone(gate.digest).catch((failed: unknown) =>
+          reportIssue("approval.not-given-back", failed, { digest: gate.digest }),
+        );
       return {
         sent: false as const,
         error: error instanceof Error ? error.message : String(error),

@@ -225,7 +225,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   prefix.
 - **A domain namespace** is the singular name of the kind of context whose log the event belongs
   to, which is the defining contract's slug when there is one: `account`, `organization`,
-  `mind`, `repo`, `workspace`, `sandbox`, `deployment`, `secret`, `agent`, `voice-agent`. A fact
+  `mind`, `repo`, `workspace`, `sandbox`, `deployment`, `secret`, `approval`, `agent`,
+  `voice-agent`. A fact
   cross-posted to another log keeps its own namespace: `repo/created` on `/` is still a repo fact.
 - **An integration** uses its own name as its namespace, for example `chrome`, `slack`, `google`,
   `github`.

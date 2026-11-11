@@ -1,6 +1,7 @@
 // The kernel reads `CONTEXTS` and `CF_VERSION_METADATA` from the host Worker's env by name. One
 // Worker has one host: `defineItxHost` runs once, at module scope, before it serves anything.
 import { env } from "cloudflare:workers";
+import type { ActRule, GateAnswer } from "iterate/acts";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { codedError } from "iterate/lib";
 import { reachableContext } from "./context-stub.ts";
@@ -24,6 +25,13 @@ export interface ItxHost {
   metrics?: Pick<AnalyticsEngineDataset, "writeDataPoint">;
   /** Every outbound `itx.fetch`, after the kernel stripped its headers and stamped the cause. */
   egress?(request: Request, from: { path: string }): Promise<Response>;
+  /** THE GATE FOR ACTS (iterate/acts): with it, a call of a verb that an approval rule names
+   *  waits until a member approves it (./context/held-verbs.ts). `verbRules` is asked on every
+   *  call a context resolves by its own table, so the host keeps it cheap. */
+  acts?: {
+    verbRules(): Promise<readonly ActRule[]>;
+    ask(input: { text: string; from?: string; wait?: boolean }): Promise<GateAnswer>;
+  };
 }
 
 export type FirstPartyFacet = {

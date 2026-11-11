@@ -37,6 +37,7 @@
     "./workers": "./src/workers.ts",
     "./mind-api": "./src/mind-api.ts",
     "./facts": "./src/facts.ts",
+    "./acts": "./src/acts.ts",
     "./signed": "./src/signed.ts",
     "./secret-placeholder": "./src/secret-placeholder.ts",
     "./stream/processor": "./src/stream/processor.ts",
@@ -123,6 +124,10 @@
       "./facts": {
         "types": "./dist/facts.d.mts",
         "import": "./dist/facts.mjs"
+      },
+      "./acts": {
+        "types": "./dist/acts.d.mts",
+        "import": "./dist/acts.mjs"
       },
       "./signed": {
         "types": "./dist/signed.d.mts",

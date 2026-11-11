@@ -2,6 +2,7 @@
 // and ingress call it. It calls the pinned hosts, and one other Worker: auth, which says who signed
 // an approval (./approvals-page.ts) and signs a request to iterate Cloud (./cloud-client.ts).
 import type { AuthService } from "iterate/workers";
+import type { ActsGate } from "./acts-gate.ts";
 import type { ApprovalsIndex } from "./approvals-index.ts";
 import type { SecretDurableObject } from "./secret/durable-object.ts";
 
@@ -24,6 +25,8 @@ declare global {
       LOADER: WorkerLoader;
       /** The list of secrets with an approval rule or a request waiting (./approvals-index.ts). */
       APPROVALS: DurableObjectNamespace<ApprovalsIndex>;
+      /** The gate for acts that are not a secret's request: one object (./acts-gate.ts). */
+      ACTS: DurableObjectNamespace<ActsGate>;
       /** The `Auth` entrypoint of the auth Worker: who signed a statement (`verify`), and a
        *  statement signed by the stack's own key (`sign`), which is how a request to iterate
        *  Cloud's broker says which deployment sent it (./cloud-client.ts). */
