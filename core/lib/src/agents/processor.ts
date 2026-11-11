@@ -35,7 +35,7 @@ import {
   RETAINED_SCRIPT_RESULTS,
   wrapScript,
 } from "./results-preamble.ts";
-import { type AgentInputGate, isOtherContext } from "./message.ts";
+import { type AgentInputGate, isOtherContext, messagePayload } from "./message.ts";
 import { AGENTS_PATH } from "./install.ts";
 import { standingFileSection, standingInstructionFiles } from "./standing-instructions.ts";
 import { AgentContract, type AgentState, type LlmUsage } from "./contract.ts";
@@ -986,6 +986,27 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // after the request raises no turn), no interrupt to settle — only the death itself, at head.
     if (state.deletion) {
       this.#atHead(args);
+      return;
+    }
+    // WORDS SENT TO ANY KIND OF AGENT (`message()`, message.ts) become this loop's own input: one
+    // `context-added`, keyed by the message, its sender carried as `from` (this facet appends it,
+    // so its origin is the agent itself). Everything after reads that, as it always has.
+    if (event?.type === "events.iterate.com/agent/message-received") {
+      const { origin } = event.source;
+      const sender = origin !== event.path ? origin : event.payload.from;
+      const { message, files = [], trigger } = event.payload;
+      blockProcessorWhile(() =>
+        append({
+          type: "events.iterate.com/agent/context-added",
+          idempotencyKey: this.idempotencyKey("message-received", event),
+          payload: messagePayload({
+            message,
+            files,
+            from: sender === "/" ? undefined : sender,
+            trigger: trigger !== false,
+          }),
+        }),
+      );
       return;
     }
     // THE INTERRUPT: cancellation is a property of new input, never a command. The

@@ -136,6 +136,11 @@ function rewriteSpecifiers(code: string, edits: SpecifierEdit[]): string {
   return out;
 }
 
+/** Whether a module reads `import.meta` (es-module-lexer's `d === -2`). */
+function readsImportMeta(code: string, name: string): boolean {
+  return parse(code, name)[0].some((imp) => imp.d === -2);
+}
+
 /** Imports of one module. An `import()` of a computed specifier is not one: it is left as written,
  *  and when it runs it resolves against the loaded modules (by their loaded names) and the
  *  runtime's, or rejects, as in any Worker. Packages do it on purpose: pi-ai's
@@ -345,7 +350,13 @@ export async function resolveModules(
       }
       edits.push({ ...edit, specifier: relativeSpecifier(name, target) });
     }
-    out[name] = rewriteSpecifiers(code, edits);
+    // workerd's `import.meta` is empty: an author's module that reads it gets the `url` it has in
+    // Node or a bundler, `file:///<its path in the source>`, so it can find what sits beside it
+    // (iterate/agents/kinds `makeAgentKind`). On its first line, after nothing.
+    const url = readsImportMeta(code, name)
+      ? `import.meta.url = ${JSON.stringify(new URL(path, "file:///").href)}; `
+      : "";
+    out[name] = url + rewriteSpecifiers(code, edits);
   }
 
   // 2. npm packages: their locked graph, which may itself import platform packages.

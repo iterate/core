@@ -359,6 +359,21 @@ export const AgentContract = defineProcessorContract({
         }),
       }),
     },
+    "events.iterate.com/agent/message-received": {
+      description:
+        "Words someone sent the agent through `itx.agents.get(path).message(…)`: the one input every kind of agent reads. iterate's loop answers it with its own context-added; another kind's delivery row hands it to whatever runs it.",
+      payloadSchema: z.object({
+        message: z.string(),
+        /** Files stored under the agent's path (`message()` stores them). */
+        files: z.array(FileAttachment).optional(),
+        /** The context that sent the words, as the collection relays it (collection.ts): the
+         *  agent's own facet appends them, so their `source.origin` is the agent itself. */
+        from: z.string().optional(),
+        /** `false`: context only, the words wake nothing (`message(…, { trigger: false })`). Each
+         *  kind decides what that means; absent means the words want an answer. */
+        trigger: z.literal(false).optional(),
+      }),
+    },
     "events.iterate.com/agent/context-added": {
       description:
         "Words into the model's context — the everyday event. A user or developer item raises the pending trigger unless its policy says not to; the assistant's own output carries llmRequestOffset.",
@@ -594,6 +609,7 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/delete-requested",
     "events.iterate.com/agent/deleted",
     "events.iterate.com/agent/configured",
+    "events.iterate.com/agent/message-received",
     "events.iterate.com/agent/context-added",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-settled",

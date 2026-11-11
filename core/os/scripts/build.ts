@@ -37,6 +37,7 @@ const PLATFORM_ENTRIES = [
   "iterate/principal",
   "iterate/agents",
   "iterate/agents/install",
+  "iterate/agents/kinds",
   "iterate/agents/contract",
   "iterate/agents/processor",
   "iterate/agents/codemode-format",

@@ -22,6 +22,34 @@ test("message(text, { trigger: false }) is context only; the default is a trigge
   });
 });
 
+test("message-received becomes the loop's own context-added, sender and trigger carried over", async () => {
+  const log = agentLog();
+  await log.born();
+  // the facet appended it, so its origin is the agent and the sender rides as `from`
+  const relayed = await log.commit({
+    type: "events.iterate.com/agent/message-received",
+    payload: { message: "FYI parcel", from: CHIEF, trigger: false },
+  });
+  expect(relayed).toMatchObject([
+    {
+      type: "events.iterate.com/agent/context-added",
+      idempotencyKey: expect.stringContaining("message-received"),
+      payload: messagePayload({ message: "FYI parcel", files: [], from: CHIEF, trigger: false }),
+    },
+  ]);
+  // a person's words, appended at `/`: no sender
+  const person = await log.commit({
+    type: "events.iterate.com/agent/message-received",
+    payload: { message: "hi" },
+    source: { origin: "/" },
+  });
+  expect(person).toMatchObject([
+    { payload: { role: "user", content: "hi", actor: { type: "user" }, from: undefined } },
+  ]);
+  // the message itself raises no turn: the context-added it becomes does
+  expect(log.state.pendingLlmRequestTrigger).toBeNull();
+});
+
 test("words another agent sent wait for the gate, by message() or by a raw append; a person's never do", async () => {
   const log = agentLog();
   await log.born();

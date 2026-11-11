@@ -51,6 +51,7 @@
     "./integrations": "./src/integrations.ts",
     "./agents": "./src/agents/index.ts",
     "./agents/install": "./src/agents/install.ts",
+    "./agents/kinds": "./src/agents/kinds.ts",
     "./agents/contract": "./src/agents/contract.ts",
     "./agents/processor": "./src/agents/processor.ts",
     "./agents/codemode-format": "./src/agents/codemode-format.ts",
@@ -176,6 +177,10 @@
       "./agents/install": {
         "types": "./dist/agents/install.d.mts",
         "import": "./dist/agents/install.mjs"
+      },
+      "./agents/kinds": {
+        "types": "./dist/agents/kinds.d.mts",
+        "import": "./dist/agents/kinds.mjs"
       },
       "./agents/contract": {
         "types": "./dist/agents/contract.d.mts",

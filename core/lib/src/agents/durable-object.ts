@@ -47,7 +47,8 @@ export class AgentDurableObject extends StreamProcessorDurableObject<AgentState>
     return (this.#pathRead = path);
   }
 
-  /** A person's words: ONE `context-added`, the trigger of the next turn — with their attachments,
+  /** A person's words: ONE `message-received`, which the loop turns into the `context-added` that
+   *  triggers the next turn (processor.ts) — with their attachments,
    *  each stored first under this agent's path (`itx.files`, `<path>/<8 of a uuid>-<name>`)
    *  and named on the event; an image among them is what the model will see. `from` is the
    *  collection's base, which it relays as the sender (collection.ts `AgentReference.message`).

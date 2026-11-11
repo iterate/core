@@ -301,7 +301,7 @@ function applySdkCompatibilityFlags(declared: string[] | undefined, where: strin
  *  module identity's memo keeps only the files its resolution read, under this format
  *  (`prepareConfinedWorker`). loaded-code-format.test.ts fails on a change to that code until it is
  *  decided here. */
-export const LOADED_CODE_FORMAT = 1;
+export const LOADED_CODE_FORMAT = 2;
 let platformIdentity: Promise<string> | undefined;
 /** WHAT THE PLATFORM PUTS INTO EVERY LOADED ISOLATE, as one hash in every loader id: this build's
  *  platform packages at their content (PLATFORM_MODULES), the compatibility date, the flags the

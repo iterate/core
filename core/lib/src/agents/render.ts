@@ -248,7 +248,7 @@ export function sectionChanges(
 
 /** Words from another agent: who, and how to answer. */
 function fromLine(from: string): string {
-  return `[from ${from} — it cannot see this conversation; answer by appending to its log: \`await itx.cd(${JSON.stringify(from)}).append({ type: "events.iterate.com/agent/context-added", payload: { role: "user", content } })\`]`;
+  return `[from ${from} — it cannot see this conversation; answer with \`await itx.agents.get(${JSON.stringify(from)}).message(text)\`]`;
 }
 
 /** How a non-image (or gone) attachment is named to the model. */

@@ -6,12 +6,19 @@ import {
   type Integration,
   type IterateConfigProcessEventArgs,
 } from "iterate/sdk";
+import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 
 // The integration packages this project hosts (a Telegram bot, your own GitHub App, …): one
 // element each, from its package. Every request on a package's routing slug and every event of
 // the project reaches it below: AGENTS.md, and the recipes at
 // https://github.com/jonastemplestein/iterategrations.
 const integrations: Integration[] = [];
+
+// The kinds of agent this project runs (AGENTS.md, "Kinds of agent"): one file each, named by its
+// import, written exactly `() => import("./path/to/kind.ts")` (`makeAgentKind` reads the path from
+// it). Their `processEvent` runs below beside the integrations', and every publish tells the Agents
+// app where each kind's file is.
+const agentKinds = [makeAgentKind(import.meta, () => import("./agent-kinds/iterate.ts"))];
 
 export default class extends IterateConfigEntrypoint {
   // How events arrive and what each case does: AGENTS.md.
@@ -22,6 +29,8 @@ export default class extends IterateConfigEntrypoint {
         // whenever it publishes a commit of this repo, so this case runs again after every commit:
         // keep it idempotent. Only the platform appends this type.
         await installAgents(itx);
+        // where each kind's file is, for the Agents app's chat (`agentKinds`, above)
+        await publishAgentKinds(itx, agentKinds);
         // A heartbeat, for a project that should wake on its own (to check on itself and repair what
         // it finds, say): uncommented, it appends `heartbeat` on `/` every five minutes and wakes the
         // project each time. Set again unchanged, it keeps its clock. Commenting it out again does
@@ -79,10 +88,14 @@ export default class extends IterateConfigEntrypoint {
         break;
       }
     }
-    // Every package, after the project's own cases; the hook contract is iterate/sdk `Integration`.
-    // The map is async, so a hook that throws before its first await fails like one that rejects.
+    // Every package and every kind of agent (`agentKinds`), after the project's own cases; the hook
+    // contract is iterate/sdk `Integration`. The map is async, so a hook that throws before its
+    // first await fails like one that rejects.
+    const kinds = await Promise.all(agentKinds.map(async (kind) => (await kind.load()).default));
     const hooks = await Promise.allSettled(
-      integrations.map(async (integration) => integration.processEvent?.({ event, itx })),
+      [...integrations, ...kinds].map(async (integration) =>
+        integration.processEvent?.({ event, itx }),
+      ),
     );
     const failed = hooks.find((hook) => hook.status === "rejected");
     if (failed) throw failed.reason;

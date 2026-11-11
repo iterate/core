@@ -11,7 +11,7 @@
 //
 // AN AGENT IS ANY CONTEXT UNDER `/agents`, iterate's own or not (catalog.ts). An iterate agent hosts
 // the `agent` facet, which `create` binds. Any other agent (a coding session a bridge appends to,
-// say) hosts nothing here: a message to it is the same `agent/context-added` appended to its
+// say) hosts nothing here: a message to it is the same `agent/message-received` appended to its
 // context, which its own subscription delivers to whatever runs it, and its death is the
 // certificate on `/agents` alone.
 import { RpcTarget } from "cloudflare:workers";

@@ -43,6 +43,54 @@ the project runs the deployment's own build, and a platform deploy upgrades it. 
 re-exports its two classes, and every agent runs from that file's own bundle, so a commit that only
 changes `worker.ts` leaves the agents running.
 
+## Kinds of agent
+
+Any context under `/agents` is an agent, and its kind is what the catalog lists it as: `iterate` for
+the agents app's own, `claude` for a Claude Code session, or one of your own. A kind is one file
+(`agent-kinds/<kind>.ts` by convention) whose default export `satisfies AgentKind`, named in
+`worker.ts`. `iterate/agents/kinds` has `makeAgentKind` and `AgentKind`;
+`@iterate-com/ui/agent-kind-view`'s `AgentKind` is the same with the view typed:
+
+```ts
+// worker.ts
+import { makeAgentKind } from "iterate/agents/kinds";
+
+const agentKinds = [
+  makeAgentKind(import.meta, () => import("./agent-kinds/iterate.ts")),
+  makeAgentKind(import.meta, () => import("./agent-kinds/grok.ts")),
+];
+
+// agent-kinds/grok.ts
+import type { AgentKind } from "@iterate-com/ui/agent-kind-view";
+import { createXai } from "@ai-sdk/xai"; // server only: fine to import, used in processEvent
+
+export default {
+  kind: "grok",
+  // the Agents app reads the agent's durable log, and these ephemeral types for its view
+  ephemeralEvents: ["x.ai/grok/token"],
+  // its server half, an Integration's processEvent: every event of the project
+  processEvent: async ({ event, itx }) => {
+    if (event.type !== "events.iterate.com/agent/message-received") return;
+    if (!event.path.startsWith("/agents/grok/")) return;
+    // answer it, appending to itx.cd(event.path)
+  },
+  // its chat: htm, not JSX, with iterate's chat parts (`ui.AgentShell`, `ui.Feed`, …)
+  view:
+    ({ html, useMemo, ui }) =>
+    (props) =>
+      html`<${ui.AgentShell} ...${props} />`,
+} satisfies AgentKind;
+```
+
+Every kind shares two things: the catalog row (kind, status, activity, title), and words sent with
+`itx.agents.get(path).message(…)`, which land on the agent's log as
+`events.iterate.com/agent/message-received`. Everything else is the kind's own: its events, its
+rows and its chat. `worker.ts` runs each kind's `processEvent` beside the integrations, and on every
+publish writes where each kind's file is to the project's KV (`agent-kinds`), where the Agents app
+finds it. The app runs `view` in a sandboxed frame with only that agent's log and verbs; there, a
+server-only import is a stand-in that throws if the view touches it. A kind whose agents run
+elsewhere (iterate's in the platform) needs no `processEvent`.
+
 `worker.ts` reaches the project through the `itx` that `processEvent` is handed, or through
 `using itx = this.getItx()`: when the block ends, the scope, every call made through it and every
 handle it awaited are released. Put it in the smallest block that holds its calls, await every

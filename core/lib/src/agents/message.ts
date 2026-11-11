@@ -1,13 +1,14 @@
 // message.ts — words one context puts in an agent's log: what `itx.agents.get(path).message(text,
-// options)` appends (`appendMessage`, `messagePayload`), and the gate a project may put on words
-// another agent sent (`AgentInputGate`, the receiving side).
+// options)` appends (`appendMessage`: ONE `agent/message-received`, the input every kind of agent
+// reads), the `context-added` iterate's loop turns it into (`messagePayload`), and the gate a
+// project may put on words another agent sent (`AgentInputGate`, the receiving side).
 import type { IterateContextApi } from "../api.ts";
 import type { StreamEvent } from "../stream/processor.ts";
 import type { AgentMessageInput, AgentMessageOptions } from "./api.ts";
 import type { FileAttachment } from "./contract.ts";
 
 /** A message to the agent at `path`: its attachments, each stored first under the agent's path
- *  (`itx.files`, `<path>/<8 of a uuid>-<name>`), then ONE `context-added` naming them, appended to
+ *  (`itx.files`, `<path>/<8 of a uuid>-<name>`), then ONE `message-received` naming them, appended to
  *  the context `target` picks from a scope (the agent's own facet appends to its own; the collection
  *  to another kind of agent's, collection.ts). Answers the event, so a caller can wait for what
  *  follows it. */
@@ -37,21 +38,21 @@ export async function appendMessage(
   }
   using itx = getItx();
   const appended = await target(itx).append({
-    type: "events.iterate.com/agent/context-added",
-    payload: messagePayload({
+    type: "events.iterate.com/agent/message-received",
+    payload: {
       message,
-      files: attachments,
+      ...(attachments.length > 0 && { files: attachments }),
       from,
-      trigger: options?.trigger !== false,
-    }),
+      ...(options?.trigger === false && { trigger: false as const }),
+    },
   });
   // Over the loopback stub the append's answer types as an RPC result, not the array the context
   // declares (`append(...events): Promise<StreamEvent[]>`, context/built-ins.ts); the wire copied it.
   return (appended as unknown as StreamEvent[])[0]!;
 }
 
-/** The `context-added` payload a message appends: the words, their files, the sender the
- *  collection relayed, and, with `trigger: false`, context only. */
+/** The `context-added` iterate's loop appends for a `message-received` (processor.ts): the words,
+ *  their files, the sender, and, with `trigger: false`, context only. */
 export function messagePayload(input: {
   message: string;
   files: FileAttachment[];

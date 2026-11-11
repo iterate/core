@@ -33,6 +33,7 @@ export default defineConfig([
       integrations: "src/integrations.ts",
       agents: "src/agents/index.ts",
       "agents/install": "src/agents/install.ts",
+      "agents/kinds": "src/agents/kinds.ts",
       "agents/contract": "src/agents/contract.ts",
       "agents/processor": "src/agents/processor.ts",
       "agents/codemode-format": "src/agents/codemode-format.ts",

@@ -11,6 +11,7 @@
 // another package) loads the package it names under the listed name; what cannot work in a loaded
 // worker is refused by name, except an import() of a computed specifier, which is left for the
 // runtime to resolve or reject; and
+// a module that reads `import.meta` gets its `url`, `file:///<its path>`; and
 // the loader starts every worker from a generated main that evaluates the platform's module first.
 // Like tsc, stripping elides an import whose bindings are never used as values.
 import { parse } from "es-module-lexer/js";
@@ -56,6 +57,18 @@ test("TypeScript is stripped, siblings resolve by any spelling, only what the en
   expect(modules["worker.js"]).not.toContain(": number");
   expect(modules["lib/c.js"]).not.toContain("./z.ts"); // type-only import elided
   expectLinked(modules);
+});
+
+test("a module that reads import.meta gets the url of its place in the source, on its first line; one that doesn't is as written", async () => {
+  const modules = await resolve({
+    "package.json": '{"main":"worker.ts"}',
+    "worker.ts": `import { kinds } from "./lib/kinds.ts"; export default { fetch: () => Response.json(kinds) };`,
+    "lib/kinds.ts": `export const kinds = new URL("../agent-kinds/echo.js", import.meta.url).pathname;`,
+  });
+  expect(modules["lib/kinds.js"]).toMatch(
+    /^import\.meta\.url = "file:\/\/\/lib\/kinds\.ts"; export const kinds/,
+  );
+  expect(modules["worker.js"]).toMatch(/^import \{ kinds \}/);
 });
 
 test.for([
