@@ -290,6 +290,16 @@ least a deploy needs.
     `ghcr.io/iterate/iterate-dev-image` (the digest is pinned in `src/sandbox-image.ts`), into the
     account's registry through the registry API, and the stack names it there. A deploy after the
     first copies nothing.
+
+    A first deploy takes longer by the copy and the preparation. Measured on bimplin.com
+    (11 November 2026):
+    - the copy of about 1.29 GB took 20 minutes from a home connection, at about 1 MB/s up;
+    - Cloudflare prepared the image in 1 minute 35 seconds;
+    - the rest of the deploy took about 1 minute.
+
+    From a machine in a data centre, such as the Cloud's deploy run, the copy is limited by that
+    machine's link.
+
   - `"managed"`: the stack declares no image, and a sandbox starts Cloudflare's bare
     `cloudflare/debian-trixie`, with no Node, git tools, Chromium or agent CLIs.
 
