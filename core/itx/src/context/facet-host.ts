@@ -63,8 +63,8 @@ const isFacetStartPlatformFailure = (error: unknown): error is Error =>
     error.message.startsWith("internal error; reference = "));
 /** A call that never answers would hold the pins' release, and with it this actor, forever. */
 const FACET_CALL_WATCHDOG_MS = 60_000;
-// Workaround for a platform defect (test/vitest/os/facet-abort-storage-reset.e2e.test.ts): on the
-// edge, a facet stopped after writes can reset its context on the next commit unless started first.
+// Workaround for a platform defect: on the edge, a facet stopped after writes can reset its
+// context on the next commit unless started first.
 const FACET_START_WATCHDOG_MS = 10_000;
 /** A stored value is at most 2 MB, counted two bytes a character. */
 const KEPT_MODULES_MAX_BYTES = 1_800_000;

@@ -10,13 +10,11 @@ import { z } from "zod";
  *   - `account`             — manage the person's sessions and personal access tokens
  *   - `organizations:write` — the person's organizations: list every one they belong to, create new ones
  *   - `admin`               — operate the platform: every mind and person
- *  A mind's auth Worker grants `iterate` or `identity` alone (core/auth-worker/src/oauth.ts
- *  `grantedScopes`).
- *  Consent is task-based (the shape Cloudflare's own OAuth consent took in August 2026: a client
- *  requests a set, the person may deselect the optional ones, the token carries what was granted):
- *  `iterate` is required, every other requested scope is optional on the consent page (`identity`
- *  alone has the identity card instead), and an app reads the granted set from
- *  `session.info().scopes` rather than assuming its request. */
+ *  A mind's auth Worker grants one scope for each resource, whatever set a client asks for:
+ *  `iterate` for the mind's API, MCP server and `/provide`, `identity` for a mind hostname
+ *  (core/auth-worker/src/oauth.ts `grantedScopes`). Its consent page asks one question and has no
+ *  optional scopes. `account`, `organizations:write` and `admin` are listed because the metadata
+ *  names them; no Worker of a mind's stack grants them. */
 export const OAuthScope = z.enum([
   "iterate",
   "identity",
