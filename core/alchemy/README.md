@@ -59,6 +59,20 @@ Sending. The mind Worker still runs, and its own site has no hostname. `mail: tr
 mailed sign-in code are refused with it. Smoke it with `pnpm smoke <zone> worker platform`, which
 skips, by name, the checks of the apex, the subdomains and mail.
 
+## A zone that other Workers share
+
+A stack with `hostnames: "all"` takes the routes `<zone>/*` and `*.<zone>/*`. Another Worker on the
+same zone keeps a hostname only through a route of its own for that hostname: a more specific
+route wins over the wildcard. Add those routes before the stack takes the wildcard.
+
+Two things to know when the zone had an apex and a wildcard record before the stack came:
+
+- The deploy needs `--adopt`, and it then holds the two `AAAA` records (`<zone>` and `*.<zone>`,
+  `100::`, proxied) as its own.
+- **A `destroy` of that stack deletes both records.** Every hostname on the zone that another
+  Worker serves by a route, and that has no DNS record of its own, stops resolving. Never destroy
+  such a stack without making both records again at once.
+
 ## Signing in
 
 The auth Worker is the mind's OAuth authorization server, at `https://iterate.<zone>`. Clients
