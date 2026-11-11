@@ -81,6 +81,17 @@ test.for([
     held: true,
   },
   { name: "a body with a byte order mark waits", body: `\ufeff${jmap("Email/get")}`, held: true },
+  {
+    // V8 compares such a string as any other: nothing here throws on it
+    name: "a read with half a surrogate pair in its text goes",
+    body: '{"methodCalls":[["Email/query",{"text":"\\ud83d"},"c0"]]}',
+    held: false,
+  },
+  {
+    name: "a send with half a surrogate pair in its text waits",
+    body: '{"methodCalls":[["EmailSubmission/set",{"text":"\\ud83d"},"c0"]]}',
+    held: true,
+  },
   { name: "an empty body waits", body: "", held: true },
   { name: "a body that is not text, or is too large to read, waits", body: null, held: true },
 ])("a rule with strings of the body: $name", ({ body, held }) => {

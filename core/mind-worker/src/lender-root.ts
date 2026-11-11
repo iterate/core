@@ -51,6 +51,8 @@ export class LenderRoot extends RpcTarget {
           "FORBIDDEN",
           `this key lends nothing: ${own} is a name this mind uses already, and a lent stub never takes it`,
         );
+      // The cast: `target` came off the wire. The checks above left an object or a function,
+      // which is what capnweb hands over for a stub, and the kernel's lend refuses anything else.
       return this.#root.provide(own, target as ClientRpcStub, description);
     });
   }

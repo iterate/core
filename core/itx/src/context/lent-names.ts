@@ -11,11 +11,13 @@ import {
   parseItxExpressionPrefix,
 } from "iterate/expression";
 
-/** Whether a resolved call ends at the stub lent as `match`: `itx.builtins.rpcStubs.get(match)`,
- *  which is how the table names a lent stub. */
+/** Whether a resolved call is the stub lent as `match` and nothing past it:
+ *  `itx.builtins.rpcStubs.get(match)`, which is how the table names a lent stub. A call that goes
+ *  on from that stub (`….get(match).inner`) came through another rule, and is not this lend. */
 export function isLendOf(resolved: ItxExpressionInput, match: ItxExpressionInput): boolean {
-  const [scope, builtins, stubs, get] = normalizedItxExpression(resolved);
+  const [scope, builtins, stubs, get, ...further] = normalizedItxExpression(resolved);
   return (
+    further.length === 0 &&
     scope === "itx" &&
     builtins === "builtins" &&
     stubs === "rpcStubs" &&

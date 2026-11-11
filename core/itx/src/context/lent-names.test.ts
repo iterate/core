@@ -42,7 +42,9 @@ test("a resolved call is a name's own lend only when it ends at the stub lent un
     isLendOf("itx.builtins.rpcStubs.get('itx.whatsapp').jonas", "itx.whatsapp.jonas"),
     isLendOf("itx.cd('/agents').facets.get('agents').create", "itx.agents.create"),
     isLendOf("itx.builtins.secrets", "itx.secrets"),
-  ]).toEqual([true, true, false, false, false]);
+    // a rule above the name that points into the stub lent under that name
+    isLendOf("itx.builtins.rpcStubs.get('itx.whatsapp.jonas').jonas", "itx.whatsapp.jonas"),
+  ]).toEqual([true, true, false, false, false, false]);
 });
 
 // some of the kernel's roots and of a host's
