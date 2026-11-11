@@ -159,19 +159,6 @@ const arrivals = async (subject: string) =>
     (event) => event.type === TYPES.received && event.payload.subject === subject,
   ).length;
 
-/** The person's side with no page: a form's post, as the page itself sends one. */
-const pressed = (path: string, fields: Record<string, string>) =>
-  fetch(`${issuer}${path}`, {
-    method: "POST",
-    redirect: "manual",
-    headers: {
-      cookie: `${SESSION_COOKIE}=${env.ITERATE_PROOF_SESSION_COOKIE}`,
-      origin: issuer,
-      "content-type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams(fields),
-  });
-
 /** The page's own post of the rules, with the session alone: as its script sends it. */
 const setRulesBySession = async (rules: unknown[]) =>
   z
@@ -186,7 +173,15 @@ let bridge: ChildProcess | undefined;
 let bridgeKey = "";
 async function cleanUp() {
   bridge?.kill("SIGINT");
-  if (bridgeKey) await pressed("/keys/remove", { key: bridgeKey }).catch(() => undefined);
+  // on /keys, with the passkey: a session alone removes no key
+  if (bridgeKey) {
+    await page.goto(`${issuer}/keys`);
+    const remove = page.locator(`form[data-remove]:has(input[name="key"][value="${bridgeKey}"])`);
+    if (await remove.count()) {
+      await remove.getByRole("button", { name: "Remove" }).click();
+      await remove.waitFor({ state: "detached", timeout: 15_000 }).catch(() => undefined);
+    }
+  }
   await page.goto(page_);
   const unlock = page.getByRole("button", { name: "Unlock, signed" });
   if (await unlock.count()) {
@@ -425,11 +420,10 @@ export default () => ({
       ),
     );
     bridgeKey = await keyIdOf(link.searchParams.get("publicKey") || "");
-    const allowed = await pressed("/keys/enrol", {
-      ...Object.fromEntries(link.searchParams),
-      decision: "allow",
-    });
-    must(allowed.status === 200, `Allow answered ${allowed.status}`);
+    // the consent page itself, at the phone's width: Allow is a press of the member's passkey
+    await page.goto(String(link));
+    await page.getByRole("button", { name: "Allow with your passkey" }).click();
+    await page.getByRole("heading", { name: "Added" }).waitFor({ timeout: 15_000 });
     await until("the lend", 60, async () => said.includes("itx.proofWhatsapp.jonas is live"));
     const free = await send(`free ${marker}`);
     must("answer" in free, `with no rule the send ended with ${JSON.stringify(free)}`);

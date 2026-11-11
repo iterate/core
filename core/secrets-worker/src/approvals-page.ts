@@ -263,7 +263,7 @@ async function sign(fields) {
   const assertion = await navigator.credentials.get({ publicKey: {
     challenge: await sha256(signedBytes(statement)),
     rpId: location.hostname,
-    userVerification: "preferred",
+    userVerification: "required",
     allowCredentials: keys.map((key) => ({ type: "public-key", id: unb64u(key.credentialId) })),
   } });
   const key = keys.find((key) => key.credentialId === assertion.id);

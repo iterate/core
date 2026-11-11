@@ -14,6 +14,7 @@ import { expect, test, vi } from "vitest";
 import { ActsGate } from "./acts-gate.ts";
 
 const MEMBER = "key-member";
+const UNCHECKED = "key-member-unchecked";
 const MAIL = JSON.stringify({
   act: "email.send",
   from: "agent@example.com",
@@ -126,6 +127,19 @@ test("a mail the mail service refused keeps its approval; a verb, and a mail nob
   expect(await gate.act({ text: CALL })).toMatchObject({ state: "go" });
   await gate.notDone(call.digest);
   expect(await gate.act({ text: CALL })).toMatchObject({ state: "done" });
+});
+
+test("a member's passkey that did not check its user approves nothing, rejects nothing and locks nothing", async () => {
+  const { gate, decide } = vault();
+  await gate.setRules({ rules: [{ verb: "email.send" }], by: member });
+  const { digest } = (await gate.act({ text: MAIL })) as { digest: string };
+  const refused = { result: { error: expect.stringContaining("did not check that it is you") } };
+  expect([
+    await decide(UNCHECKED, { type: ACT_APPROVED, about: [digest] }),
+    await decide(UNCHECKED, { type: ACT_REJECTED, about: [digest], payload: { reason: "no" } }),
+    await decide(UNCHECKED, { type: GATE_LOCKED }),
+  ]).toMatchObject([refused, refused, refused]);
+  expect(await gate.state()).toMatchObject({ locked: false, held: [{ state: "waiting" }] });
 });
 
 test("a rejection names its reason, and its caller hears who said no", async () => {
@@ -267,7 +281,9 @@ function vault() {
           principal: { actor: envelope.signature.key },
           key: envelope.signature.key,
           label: "test key",
-          member: envelope.signature.key === MEMBER,
+          member: envelope.signature.key.startsWith(MEMBER),
+          // a passkey says whether it checked its user; this one did not
+          ...(envelope.signature.key === UNCHECKED && { userVerified: false }),
         },
         statement: JSON.parse(envelope.statement),
       }),

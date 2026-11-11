@@ -267,6 +267,9 @@ export class ActsGate extends DurableObject<Env> {
       return refuse(`the statement is about ${statement.path}, not ${APPROVALS_CONTEXT}`);
     if (!verified.signer.member)
       return refuse("only a member's key approves, rejects, changes a rule or locks");
+    // as a sign-in asks: a passkey that checked nobody is anyone's who holds the device
+    if (verified.signer.userVerified === false)
+      return refuse("the passkey did not check that it is you, by a PIN, a fingerprint or a face");
     if (statement.type === GATE_LOCKED || statement.type === GATE_UNLOCKED) {
       this.ctx.storage.kv.put("locked", statement.type === GATE_LOCKED);
       return done(statement.type, {});

@@ -135,6 +135,28 @@ export function serviceKeyRequestOf(
   return provide ? { actor, label, publicKey, paths, provide } : { actor, label, publicKey, paths };
 }
 
+/** WHAT A MEMBER SIGNS TO ALLOW A SERVICE'S KEY: the key and all that it may do, as the consent
+ *  page said it. The page signs this, and the answer is taken only for the same. */
+export function enrolPayloadOf(key: string, ask: ServiceKeyRequest) {
+  return { key, actor: ask.actor, paths: ask.paths, provide: ask.provide || null };
+}
+
+/** Whether a signed payload allows exactly this key with exactly this reach: a statement for one
+ *  key, or for a smaller reach, allows no other. */
+export function allowsExactly(
+  payload: Record<string, unknown>,
+  key: string,
+  ask: ServiceKeyRequest,
+) {
+  const asked = enrolPayloadOf(key, ask);
+  return (
+    payload.key === asked.key &&
+    payload.actor === asked.actor &&
+    JSON.stringify(payload.paths) === JSON.stringify(asked.paths) &&
+    (payload.provide || null) === asked.provide
+  );
+}
+
 /** What the key lets its service do, in a person's words: for the consent page and `/keys`. */
 export function scopeInWords({ paths, provide }: Pick<ServiceKeyRequest, "paths" | "provide">) {
   return [

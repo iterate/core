@@ -4,6 +4,8 @@ import {
   cloudNameRefusal,
   honouredNext,
   scopeInWords,
+  allowsExactly,
+  enrolPayloadOf,
   serviceKeyRequestOf,
   underPaths,
 } from "./key-rules.ts";
@@ -123,4 +125,32 @@ test("a statement names a context by its own path, with no segment the mind woul
     "",
   ])
     expect(canonicalPath(path)).toBe(false);
+});
+
+test("a member's signature allows a service's key only for that key and that reach", () => {
+  const ask = {
+    actor: "bridge-whatsapp",
+    label: "WhatsApp",
+    publicKey: "MFkw",
+    paths: ["/integrations/whatsapp/"],
+    provide: "whatsapp",
+  };
+  const signed = enrolPayloadOf("key-1", ask);
+  expect(signed).toEqual({
+    key: "key-1",
+    actor: "bridge-whatsapp",
+    paths: ["/integrations/whatsapp/"],
+    provide: "whatsapp",
+  });
+  expect([
+    allowsExactly(signed, "key-1", ask),
+    // signed for a key that only adds events: it lends nothing
+    allowsExactly(enrolPayloadOf("key-1", { ...ask, provide: undefined }), "key-1", ask),
+    allowsExactly(signed, "key-2", ask),
+    allowsExactly(signed, "key-1", { ...ask, actor: "bridge-other" }),
+    allowsExactly(signed, "key-1", { ...ask, paths: ["/integrations/"] }),
+    allowsExactly(signed, "key-1", { ...ask, provide: "whatsapp.jonas" }),
+    // the statement that adds a person's passkey names a key and nothing more
+    allowsExactly({ key: "key-1" }, "key-1", ask),
+  ]).toEqual([true, false, false, false, false, false, false]);
 });

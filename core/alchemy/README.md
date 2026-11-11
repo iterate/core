@@ -218,10 +218,11 @@ names each member by the exact address.
 
 A bridge that lends a capability for longer than a person's sign-in lasts has a key of its own
 (`iterate provide --key`, `core/lib/src/cli/README.md`). A member allows the key once, on
-`/keys/enrol`, for one capability name. The key then asks `POST /keys/token` for a token with a
+`/keys/enrol`, for one capability name, with a press of their passkey. The key then asks `POST /keys/token` for a token with a
 statement it signs. The token lives one hour, is for the API alone, and reaches the one lend and
 nothing else of the mind. There is no refresh token and the key has no end date: the member who
-allowed it removes it on `/keys`, which also shows the day the key last asked for a token.
+allowed it removes it on `/keys`, with a press of their passkey too. That page also shows the day
+the key last asked for a token.
 
 A lost passkey has two ways back in, and neither is mail:
 

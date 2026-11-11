@@ -1,6 +1,7 @@
-// signed-change.ts — WHO MAY ACT GROWS ONLY BY A SIGNATURE (tasks/signed-events.md). A new member
-// and a further passkey let more act, so each counts only as a statement a member's key signed. A
-// session's cookie and a token add no one: whoever steals one can remove, and cannot add.
+// signed-change.ts — WHO MAY ACT GROWS ONLY BY A SIGNATURE (tasks/signed-events.md). A new member,
+// a further passkey and a service's key let more act, so each counts only as a statement a member's
+// key signed. A session's cookie and a token add no one. They remove no key either: whoever steals
+// a session could else take a member's passkeys away, and with them the member's way in.
 import { type Envelope, envelopeOf } from "iterate/signed";
 import type { Verified } from "iterate/workers";
 import type { Env } from "./env.ts";
@@ -8,6 +9,7 @@ import { verifiedStatement } from "./keys.ts";
 
 export const MEMBER_ADDED = "events.iterate.com/account/member-added";
 export const KEY_ADDED = "events.iterate.com/account/key-added";
+export const KEY_REMOVED = "events.iterate.com/account/key-removed";
 
 export type SignedChange = {
   signer: Exclude<Verified, { refused: string }>["signer"] & { principal: { email: string } };
@@ -40,6 +42,27 @@ export async function signedChange(
     payload: statement.payload || {},
     envelope,
   };
+}
+
+/** `signedChange` of a form's field, which carries the statement's envelope as JSON text, by the
+ *  person whose session posts the form. Another member's statement is no press of this person's. */
+export async function signedChangeBy(
+  env: Env,
+  field: unknown,
+  type: string,
+  email: string,
+): Promise<SignedChange | { refused: string }> {
+  let value: unknown = null;
+  try {
+    value = JSON.parse(String(field || ""));
+  } catch {
+    // no JSON is no statement: `signedChange` says so
+  }
+  const change = await signedChange(env, value, type);
+  if ("refused" in change) return change;
+  if (change.signer.principal.email.toLowerCase() !== email.toLowerCase())
+    return { refused: "the statement is signed by another person's key" };
+  return change;
 }
 
 /** What a fact says of the key that signed its change. */

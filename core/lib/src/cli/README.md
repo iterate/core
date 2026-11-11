@@ -211,7 +211,8 @@ iterate provide ./whatsapp.ts --key ~/.iterate/whatsapp.key --mind example.com
 
 - **The first run** makes a P-256 key pair, writes the private half to the file (mode 600) and
   prints a link to `iterate.<mind>/keys/enrol`. A member of the mind opens it, signs in and presses
-  Allow. The bridge waits for that, for 15 minutes, and then connects.
+  Allow, which asks for their passkey: the passkey signs the key and what it may do. The bridge
+  waits for that, for 15 minutes, and then connects.
 - **Every later run** connects with no person. Each connection asks the mind for a token with a
   statement the key signs. The token lives one hour and there is no refresh token: when it ends,
   the connection closes and `provide` connects again with a new one.

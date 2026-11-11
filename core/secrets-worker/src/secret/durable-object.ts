@@ -1032,6 +1032,9 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (statement.path !== path) return refuse(`the statement is about ${statement.path}`);
     if (!verified.signer.member)
       return refuse("only a member's key approves, rejects or changes a rule");
+    // as a sign-in asks: a passkey that checked nobody is anyone's who holds the device
+    if (verified.signer.userVerified === false)
+      return refuse("the passkey did not check that it is you, by a PIN, a fingerprint or a face");
     if (statement.type === RULE_CONFIGURED) {
       const given = statement.payload?.rule;
       const parsed = given === null ? null : ApprovalRule.safeParse(given);

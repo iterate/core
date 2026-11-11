@@ -10,6 +10,7 @@ import { APPROVED, HOLD_MS, MAX_WAITING, REJECTED, SecretDurableObject } from ".
 
 const PATH = "/secrets/gmail";
 const MEMBER = "key-member";
+const UNCHECKED = "key-member-unchecked";
 
 test("a matching request is held at once with its fact, and the wait call sends it once with the real value", async () => {
   const { secret, sent, approve } = await vault();
@@ -255,6 +256,26 @@ test("a rule with strings of the body lets a read go with its body whole, and ho
   });
 });
 
+test("a member's passkey that did not check its user approves no request and changes no rule", async () => {
+  const { secret, sent, decide } = await vault();
+  const digest = await held(secret, "hello");
+  const answers = [
+    await decide(UNCHECKED, { type: APPROVED, about: [digest] }),
+    await decide(UNCHECKED, {
+      type: "events.iterate.com/secret/approval-rule-configured",
+      payload: { rule: null },
+    }),
+  ];
+  expect(answers.map((answer) => answer.result.error)).toEqual([
+    expect.stringContaining("did not check that it is you"),
+    expect.stringContaining("did not check that it is you"),
+  ]);
+  expect({ sent, approvals: await secret.approvals(PATH) }).toMatchObject({
+    sent: [],
+    approvals: { rule: { methods: ["POST"] }, held: [{ digest, state: "waiting" }] },
+  });
+});
+
 test("a delete that comes in while a new value is being sealed is the later word: the value is not stored", async () => {
   const { secret } = await vault();
   // not awaited: it has reserved its version and seals
@@ -306,7 +327,9 @@ async function vault() {
           principal: { actor: envelope.signature.key },
           key: envelope.signature.key,
           label: "test key",
-          member: envelope.signature.key === MEMBER,
+          member: envelope.signature.key.startsWith(MEMBER),
+          // a passkey says whether it checked its user; this one did not
+          ...(envelope.signature.key === UNCHECKED && { userVerified: false }),
         },
         statement: JSON.parse(envelope.statement),
       }),

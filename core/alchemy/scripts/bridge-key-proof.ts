@@ -7,6 +7,8 @@
 //                               which calls what the bridge lends
 // ITERATE_PROOF_SESSION_COOKIE  a member's session cookie's value on iterate.<domain>: the person,
 //                               who presses Allow and Remove
+// ITERATE_SMOKE_APPROVER_KEY    the same member's software key of the stack's `auth.keys` (P-256
+//                               PKCS#8, base64url): it signs each press, as the page's passkey does
 // ITERATE_PROOF_HOLD_SECONDS    watch the bridge for this long before the removal (default 0):
 //                               redeploy the mind in that time, and read how it came back
 import { type ChildProcess, spawn } from "node:child_process";
@@ -22,22 +24,29 @@ import {
   statementText,
 } from "iterate/signed";
 import { z } from "zod";
+import { signerOf } from "./smoke/approvals.ts";
 import { mindRoot } from "./smoke/lib.ts";
 
 /** core/auth-worker/src/cookies.ts `SESSION_COOKIE`, which the package does not export. */
 const SESSION_COOKIE = "__Host-iterate-auth-session";
 const TOKEN_SECONDS = 60;
+const KEY_ADDED = "events.iterate.com/account/key-added";
 const NAME = "proofBridge";
 
 const domain = process.argv[2];
 const token = process.env.ITERATE_PROTOTYPE_TOKEN;
 const session = process.env.ITERATE_PROOF_SESSION_COOKIE;
-if (!domain || process.argv.length > 3 || !token || !session) {
+const memberKey = process.env.ITERATE_SMOKE_APPROVER_KEY;
+if (!domain || process.argv.length > 3 || !token || !session || !memberKey) {
   console.error(
-    "usage: bridge-key-proof.ts <domain>, with ITERATE_PROTOTYPE_TOKEN and ITERATE_PROOF_SESSION_COOKIE",
+    "usage: bridge-key-proof.ts <domain>, with ITERATE_PROTOTYPE_TOKEN, ITERATE_PROOF_SESSION_COOKIE and ITERATE_SMOKE_APPROVER_KEY",
   );
   process.exit(2);
 }
+const member = await signerOf(domain, memberKey);
+/** A press of the member's key: the signed statement a page puts in its form's `signed` field. */
+const signedPress = async (type: string, payload: Record<string, unknown>) =>
+  JSON.stringify(await member.sign({ path: "/", type, payload }));
 const issuer = platformOriginOf(domain);
 const cookie = `${SESSION_COOKIE}=${session}`;
 const folder = mkdtempSync(join(tmpdir(), "bridge-key-proof-"));
@@ -141,12 +150,31 @@ await run("a member reads what the key may do, and allows it", async () => {
   const words = await page.text();
   must(page.status === 200, `the consent page answered ${page.status}`);
   must(words.includes(`itx.${NAME}`), "the page does not name the capability");
+  // what the page's script signs: the key and all it may do, as the page says it
+  const asked = /data-enrol="([^"]*)"/.exec(words)?.[1];
+  must(asked, "the page does not carry what the member signs");
+  const payload = z.record(z.string(), z.unknown()).parse(
+    // the page writes a quote as a numbered entity
+    JSON.parse(asked.replaceAll(/&#(\d+);/g, (_all, code) => String.fromCharCode(Number(code)))),
+  );
+  must(
+    payload.key === key && payload.provide === NAME,
+    `the page signs ${JSON.stringify(payload)}`,
+  );
+  const form = { ...Object.fromEntries(link.searchParams), decision: "allow" };
+  const bySession = await pressed("/keys/enrol", form);
+  must(bySession.status === 403, `Allow with the session alone answered ${bySession.status}`);
+  const forLess = await pressed("/keys/enrol", {
+    ...form,
+    signed: await signedPress(KEY_ADDED, { ...payload, provide: null }),
+  });
+  must(forLess.status === 403, `a statement for another reach answered ${forLess.status}`);
   const allowed = await pressed("/keys/enrol", {
-    ...Object.fromEntries(link.searchParams),
-    decision: "allow",
+    ...form,
+    signed: await signedPress(KEY_ADDED, payload),
   });
   must(allowed.status === 200, `Allow answered ${allowed.status}`);
-  return `the page names itx.${NAME}; Allow answered 200`;
+  return `the page names itx.${NAME}; the session alone and a statement for another reach got 403; signed, Allow answered 200`;
 });
 
 await run(
@@ -220,7 +248,13 @@ if (hold)
 await run(
   "removed on /keys, the key gets no new token, and the lend ends within a token's life",
   async () => {
-    const removed = await pressed("/keys/remove", { key });
+    const bySession = await pressed("/keys/remove", { key });
+    must(bySession.status === 403, `Remove with the session alone answered ${bySession.status}`);
+    must(await ping(), "the session alone ended the lend");
+    const removed = await pressed("/keys/remove", {
+      key,
+      signed: await signedPress("events.iterate.com/account/key-removed", { key }),
+    });
     must(removed.status === 303, `Remove answered ${removed.status}`);
     const at = Date.now();
     const curve = { name: "ECDSA", namedCurve: "P-256" } as const;

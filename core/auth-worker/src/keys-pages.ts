@@ -3,8 +3,10 @@ import { type AccountFact, AccountFacts } from "./account-facts.ts";
 import { clearSessionCookie, type Session, sessionCookie, sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import {
+  allowsExactly,
   CLOUD_ACTOR,
   cloudNameRefusal,
+  enrolPayloadOf,
   honouredNext,
   scopeInWords,
   type ServiceKeyRequest,
@@ -15,7 +17,14 @@ import { endGrant, mindHostResourceOf, type SignIn, signInsOf } from "./oauth.ts
 import { standingOf } from "./members.ts";
 import { errorPage, notMemberPage, page, text } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
-import { KEY_ADDED, signedChange, signerOf, signScript } from "./signed-change.ts";
+import {
+  KEY_ADDED,
+  KEY_REMOVED,
+  signedChange,
+  signedChangeBy,
+  signerOf,
+  signScript,
+} from "./signed-change.ts";
 import { STACK_KEY_PATH, stackKeyOf, stackKeyResponse } from "./stack-key.ts";
 
 const KEYS_PATH = "/keys";
@@ -156,8 +165,9 @@ async function keysPage(
       ? `<span class="muted">removed</span>`
       : owed
         ? ""
-        : `<form method="post" action="${REMOVE_PATH}" class="inline">
+        : `<form method="post" action="${REMOVE_PATH}" class="inline" data-remove>
           <input type="hidden" name="key" value="${text(key.id)}">${nextField}
+          <input type="hidden" name="signed">
           <button type="submit" class="link">Remove</button>
         </form>`;
     return `<li>${text(key.label)} <span class="muted">(${what}, ${when})</span> ${remove}</li>`;
@@ -210,6 +220,7 @@ async function keysPage(
         <p id="status" class="muted" role="status"></p>
       </form>
       ${ask}
+      <p id="removal" class="muted" role="status">${owed ? "" : "Removing a key takes a press of a passkey you have here."}</p>
       ${signedIn}
       ${next && !held ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
     script: `${signScript(domain)}${PASSKEY_SCRIPT}`,
@@ -262,7 +273,21 @@ form.addEventListener("submit", async (event) => {
   } catch (error) {
     status.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.name === "InvalidStateError" ? "This device holds a passkey of yours for this site already. Make the new one on another device or a security key." : error.message || "The passkey was not added.";
   }
-});`;
+});
+// A key is removed by a statement one of the person's passkeys signs: the press is the consent.
+for (const remove of document.querySelectorAll("form[data-remove]"))
+  remove.addEventListener("submit", async (event) => {
+    if (remove.signed.value) return;
+    event.preventDefault();
+    const said = document.getElementById("removal");
+    try {
+      said.textContent = "Waiting for your passkey…";
+      remove.signed.value = JSON.stringify(await signedStatement({ type: "${KEY_REMOVED}", payload: { key: remove.key.value } }));
+      remove.submit();
+    } catch (error) {
+      said.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.message || "The key was not removed.";
+    }
+  });`;
 
 async function passkeyAdded(
   env: Env,
@@ -357,6 +382,15 @@ async function passkeyAdded(
 async function removed(env: Env, request: Request, session: Session): Promise<Response> {
   const form = await request.formData();
   const id = String(form.get("key") || "");
+  // A session alone removes no key: whoever stole one could take a member's passkeys away.
+  const change = await signedChangeBy(env, form.get("signed"), KEY_REMOVED, session.email);
+  if ("refused" in change)
+    return errorPage(
+      `The key was not removed: ${change.refused}. Removing a key takes a press of a passkey you have here.`,
+      403,
+    );
+  if (change.payload.key !== id)
+    return errorPage("The key was not removed: the signed statement is for another key.", 403);
   const next = honouredNext(
     String(form.get("next") || ""),
     issuerOf(env),
@@ -375,7 +409,13 @@ async function removed(env: Env, request: Request, session: Session): Promise<Re
   if (row) {
     const fact: AccountFact = {
       type: "events.iterate.com/account/key-removed",
-      payload: { key: row.id, label: row.label, actor: row.actor || undefined, at },
+      payload: {
+        key: row.id,
+        label: row.label,
+        actor: row.actor || undefined,
+        at,
+        ...signerOf(change),
+      },
       // with the time: a service's key can be added again and removed again
       idempotencyKey: `account/key-removed:${row.id}:${at}`,
     };
@@ -451,13 +491,34 @@ async function enrolPage(env: Env, url: URL): Promise<Response> {
           : ""
       }
       <p class="muted">Key ${text(key.slice(0, 8))}, for ${text(ask.actor)}.</p>
-      <form method="post" action="${ENROL_PATH}" class="actions">
+      <form method="post" action="${ENROL_PATH}" class="actions" data-enrol="${text(JSON.stringify(enrolPayloadOf(key, ask)))}">
         ${hidden("actor", ask.actor)}${hidden("label", ask.label)}${hidden("publicKey", ask.publicKey)}${hidden("paths", ask.paths.join(","))}${ask.provide ? hidden("provide", ask.provide) : ""}${next ? hidden("next", next) : ""}
-        <button type="submit" name="decision" value="allow">Allow</button>
-        <button type="submit" name="decision" value="cancel" class="link">Cancel</button>
-      </form>`,
+        ${hidden("decision", "cancel")}${hidden("signed", "")}
+        <button type="submit" data-allow>Allow with your passkey</button>
+        <button type="submit" class="link">Cancel</button>
+      </form>
+      <p id="status" class="muted" role="status"></p>`,
+    script: `${signScript(domain)}${ENROL_SCRIPT}`,
   });
 }
+
+// Allow is a statement one of the person's passkeys signs, of the key and all it may do as the
+// page says it. Cancel posts the form as it is.
+const ENROL_SCRIPT = `
+const form = document.querySelector("form[data-enrol]");
+const status = document.getElementById("status");
+form.addEventListener("submit", async (event) => {
+  if (!event.submitter?.hasAttribute("data-allow") || form.signed.value) return;
+  event.preventDefault();
+  try {
+    status.textContent = "Waiting for your passkey…";
+    form.signed.value = JSON.stringify(await signedStatement({ type: "${KEY_ADDED}", payload: JSON.parse(form.dataset.enrol) }));
+    form.decision.value = "allow";
+    form.submit();
+  } catch (error) {
+    status.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.message || "The key was not added.";
+  }
+});`;
 
 // A service's key a member removed is added again by a member's new consent; a person's key never is.
 async function serviceKeyAnswered(env: Env, request: Request, session: Session): Promise<Response> {
@@ -475,6 +536,19 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
   if ("refused" in ask) return errorPage(ask.refused, 400);
   const key = await p256KeyIdOf(env, ask.publicKey);
   if (!key) return errorPage("The service's key is not one this mind can use.", 400);
+  // A service's key lets one more thing act, so the member's passkey signs it: a session alone, or
+  // a page that posts this form for the member, allows nothing.
+  const change = await signedChangeBy(env, form.get("signed"), KEY_ADDED, session.email);
+  if ("refused" in change)
+    return errorPage(
+      `No key was added: ${change.refused}. Allowing a key takes a press of your passkey.`,
+      403,
+    );
+  if (!allowsExactly(change.payload, key, ask))
+    return errorPage(
+      "No key was added: the signed statement is for another key, or for another reach.",
+      403,
+    );
   const at = Date.now();
   const { meta } = await env.DB.prepare(
     `insert into keys (id, actor, paths, public_key, format, label, added_via, added_by, added_at, provide)
@@ -508,6 +582,7 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
         paths: ask.paths,
         provide: ask.provide,
         addedBy: session.userId,
+        ...signerOf(change),
       },
       // with the time: the same key added again after a removal is a new fact
       idempotencyKey: `account/key-added:${key}:${at}`,
