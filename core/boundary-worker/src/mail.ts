@@ -4,11 +4,21 @@ import PostalMime, { type Address } from "postal-mime";
 
 const BODY_MAX_CHARS = 100_000;
 
+/** What Cloudflare says when it will not forward a mail whose sender nobody proved. */
+const NOT_FORWARDABLE = "non-authenticated emails cannot be forwarded";
+
 /** THE BOUNDARY'S MAIL HANDLER: a mail that Cloudflare delivers goes to the mind, with what the
- *  boundary knows of its sender. A failure throws, so Cloudflare delivers the mail again. */
+ *  boundary knows of its sender. A failure throws, so Cloudflare delivers the mail again.
+ *
+ *  With `MAIL_FORWARD_TO` (the stack's `mail.forwardTo`) the mail is then forwarded there AS IT
+ *  ARRIVED, by Email Routing's own `forward`: its From is the sender's, so a reply goes to the
+ *  sender. After the mind has it, so a mail that is never forwarded is still kept; the mind takes
+ *  the same mail once, however often it is delivered. Cloudflare forwards only a mail whose
+ *  sender is proven: one that is not is kept and not forwarded. Any other failure of the forward
+ *  fails the delivery. */
 export async function receivedMail(
   message: ForwardableEmailMessage,
-  env: { AUTH: Pick<AuthService, "isMember"> },
+  env: { AUTH: Pick<AuthService, "isMember">; MAIL_FORWARD_TO?: string },
   mind: Pick<MindTarget, "receiveEmail">,
 ) {
   await mind.receiveEmail(
@@ -19,6 +29,18 @@ export async function receivedMail(
       isMember: (address) => env.AUTH.isMember(address),
     }),
   );
+  if (!env.MAIL_FORWARD_TO) return;
+  try {
+    await message.forward(env.MAIL_FORWARD_TO);
+  } catch (error) {
+    if (!String(error).includes(NOT_FORWARDABLE)) throw error;
+    console.info({
+      event: "mail.not-forwarded",
+      namespace: "boundary",
+      message: "a mail whose sender nobody proved is kept by the mind and not forwarded",
+      to: message.to,
+    });
+  }
 }
 
 async function parseEmail(input: {

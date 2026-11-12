@@ -340,6 +340,13 @@ least a deploy needs.
   traffic. A record that already exists is not taken over: remove it, or deploy with `--adopt`.
 - With `mail: true` in the config: Email Routing on the zone, its catch-all rule delivering to the
   boundary, and Email Sending on the domain, which the boundary sends with.
+- With `mail: { forwardTo: "team@example.org" }`: the same, and the boundary then forwards each
+  mail to that address as it arrived, with Email Routing's own forward: its From is the sender's,
+  so a reply goes to the sender. The mind has the mail first. Cloudflare forwards only a mail
+  whose sender is proven (SPF or DKIM): one that is not stays in the mind alone. The address must
+  be a verified destination address of the account's Email Routing: add it in the dashboard
+  (Email Routing, Destination addresses) and confirm the link Cloudflare mails to it. Until
+  then each forward fails, and with it the delivery.
 - The sandboxes' image, `images/iterate-dev-image` of `core/mind-worker`, built with the local Docker and
   pushed. A deploy with no Docker sets `sandboxImage` in the config's `mind`:
   - `"published"`: `scripts/sandbox-image.ts` copies the same image, built once and published at

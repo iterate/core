@@ -49,7 +49,11 @@ export const MindConfig = z
     // `environment`: ITERATE_SECRETS_AT_REST_KEY at every deploy, refused without it: a generated key in
     // its place would make every stored value unreadable.
     atRestKey: z.enum(["generated", "environment"]).optional(),
-    mail: z.literal(true).optional(),
+    // The stack owns the zone's mail: every address reaches the mind. `forwardTo`: each mail is
+    // then forwarded there as it arrived (a team's mailbox or group). The address must be a
+    // verified destination address of the account's Email Routing, which a person confirms once
+    // by the link Cloudflare mails to it.
+    mail: z.union([z.literal(true), z.strictObject({ forwardTo: z.email() })]).optional(),
     telemetry: z.literal(true).optional(),
     // The Cloud's key, which signs the events it delivers, is one of `auth.keys`.
     cloud: z.strictObject({ origin: z.url({ protocol: /^https$/ }) }).optional(),
@@ -112,6 +116,8 @@ const PUBLIC_FIELDS = new Set([
   "cloud.origin",
   "atRestKey",
   "mail",
+  // an address mail is forwarded to: it is in every forwarded mail's headers
+  "mail.forwardTo",
   "telemetry",
 ]);
 

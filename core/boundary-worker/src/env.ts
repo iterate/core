@@ -10,6 +10,8 @@ export type DoorEnv = {
   SECRETS: SecretsService;
   SECRET_USE: Fetcher;
   SEND_EMAIL: SendEmail;
+  /** Where each received mail is forwarded as it arrived (the stack's `mail.forwardTo`). */
+  MAIL_FORWARD_TO?: string;
   TELEMETRY?: TelemetryService;
 };
 

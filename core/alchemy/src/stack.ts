@@ -248,6 +248,7 @@ export const mindStack = (config: MindConfig) =>
         SECRETS: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "Secrets" }),
         SECRET_USE: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "SecretUse" }),
         SEND_EMAIL: boundarySendEmail,
+        ...(config.mail instanceof Object && { MAIL_FORWARD_TO: config.mail.forwardTo }),
         ...(telemetry && {
           TELEMETRY: Cloudflare.WorkerEntrypoint(telemetry.worker, { entrypoint: "Telemetry" }),
         }),
