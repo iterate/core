@@ -158,6 +158,48 @@ test("the page's script parses: a slip in the template that holds it shows here,
   expect(() => new Script(`${SCRIPT}${ACTS_SCRIPT}`)).not.toThrow();
 });
 
+test("a proposed rule for an act says which rule of that verb it takes the place of, and that less waits after it when that is so", () => {
+  const everyMail = { verb: "email.send" };
+  const toOne = { verb: "email.send", to: ["ceo@partner.example"] };
+  const rowOf = (rules: object[], rule: object) =>
+    proposedRules({
+      locked: true,
+      rules: rules as never,
+      held: [],
+      proposed: [{ id: "p1", rule: rule as never, at: 0 }],
+    });
+  // The gate holds every mail. The proposal names one recipient: approved, it is the one rule
+  // for mail, and a mail to anyone else waits no more.
+  const looser = rowOf([everyMail], toOne);
+  expect(looser).toContain("A mail to ceo@partner.example");
+  expect(looser).toContain("It takes the place of the rule that email.send has now: Every mail.");
+  expect(looser).toContain("After this, less waits than now.");
+  // the other way it holds more, and the row says what it replaces alone
+  const tighter = rowOf([toOne], everyMail);
+  expect(tighter).toContain(
+    "It takes the place of the rule that email.send has now: A mail to ceo@partner.example.",
+  );
+  expect(tighter).not.toContain("less waits");
+  // a rule for a verb that has none replaces nothing
+  const added = rowOf([everyMail], { verb: "itx.whatsapp.jonas.sendMessage" });
+  expect(added).not.toContain("takes the place");
+  expect(added).not.toContain("less waits");
+});
+
+test("a proposed rule for a secret says that less waits after it when it holds less than the rule that is there", () => {
+  const rule = { secret: "/secrets/fastmail", methods: ["POST"], hosts: ["api.fastmail.com"] };
+  const gate = { locked: true, rules: [], held: [], proposed: [{ id: "p1", rule, at: 0 }] };
+  // the rule that is there holds PUT too
+  expect(
+    proposedRules(gate, () => ({ methods: ["POST", "PUT"], hosts: ["api.fastmail.com"] })),
+  ).toContain("After this, less waits than now.");
+  // the same rule, and no rule at all, hold no less
+  expect(
+    proposedRules(gate, () => ({ methods: ["POST"], hosts: ["api.fastmail.com"] })),
+  ).not.toContain("less waits");
+  expect(proposedRules(gate)).not.toContain("less waits");
+});
+
 test("the page ticks the one row its link names, and only when its own hash of the row is the row's id", () => {
   expect([
     tickedAtOpen("aaaa", true, "aaaa"),

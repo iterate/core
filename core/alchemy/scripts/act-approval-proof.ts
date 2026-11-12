@@ -1106,6 +1106,13 @@ await run(
 );
 
 await run("an agent proposes a rule, and the member's passkey signs it into one", async () => {
+  // The gate holds every mail when the proposal comes: the proposal names some recipients alone.
+  const { rules: standing } = await root().approvals.rules();
+  await page.goto(page_);
+  await setRulesBySession([
+    ...standing.filter((each) => each.verb !== "email.send"),
+    { verb: "email.send" },
+  ]);
   const proposed = await root().approvals.propose({ verb: "email.send", to: ["*@example.org"] });
   must(proposed.signAt === `${page_}#proposed`, `it says to sign at ${proposed.signAt}`);
   proposals.push(proposed.id);
@@ -1114,7 +1121,16 @@ await run("an agent proposes a rule, and the member's passkey signs it into one"
   // load it again for an address that differs by its fragment alone.
   await page.goto(page_);
   const waits = page.locator("section[data-proposals]#proposed");
-  await waits.locator(`[data-proposal="${proposed.id}"]`).getByRole("checkbox").check();
+  const row = waits.locator(`[data-proposal="${proposed.id}"]`);
+  // The proposal comes in the place of the rule for every mail, so less waits after it: the row
+  // says both before the member signs.
+  const words = (await row.innerText()).replace(/\s+/g, " ");
+  must(
+    words.includes("It takes the place of the rule that email.send has now: Every mail.") &&
+      words.includes("After this, less waits than now."),
+    `the row says of what it replaces: ${words.slice(0, 300)}`,
+  );
+  await row.getByRole("checkbox").check();
   await waits.getByRole("button", { name: "Approve the chosen" }).click();
   await page
     .locator("li", { hasText: "A mail to *@example.org" })

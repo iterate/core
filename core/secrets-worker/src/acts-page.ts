@@ -10,6 +10,7 @@ import {
   APPROVALS_CONTEXT,
   GATE_LOCKED,
   GATE_UNLOCKED,
+  rulesTighten,
   RULE_SET,
 } from "iterate/acts";
 import {
@@ -19,7 +20,7 @@ import {
   type ProposedSecretRule,
 } from "./acts-gate.ts";
 import { summaryOf } from "./acts-gate.ts";
-import type { ApprovalRule } from "./approval.ts";
+import { type ApprovalRule, isTightening } from "./approval.ts";
 import { escaped } from "./callback-page.ts";
 
 export const ACT_RULES_PATH = "/secrets/approvals/act-rules";
@@ -100,20 +101,41 @@ export function proposedRules(
   const rows = gate.proposed
     .map(({ id, rule, from, at }) => {
       const when = `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC`;
-      const now = isSecretRule(rule) && ruleNowOf(rule.secret);
-      const replaces =
-        isSecretRule(rule) &&
-        (now
-          ? `It takes the place of the rule that ${rule.secret} has now: ${secretRuleInWords({ ...now, secret: rule.secret })}`
-          : `${rule.secret} has no rule now.`);
+      const { replaces, holdsLess } = isSecretRule(rule)
+        ? whatASecretRuleReplaces(rule, ruleNowOf(rule.secret))
+        : whatAnActRuleReplaces(rule, gate.rules);
       return `<fieldset id="proposal-${escaped(id)}" data-proposal="${escaped(id)}">
 <legend><label><input type="checkbox" data-pick="${escaped(id)}"> ${escaped(isSecretRule(rule) ? secretRuleInWords(rule) : ruleInWords(rule))}</label></legend>
 ${replaces ? `<p data-replaces>${escaped(replaces)}</p>` : ""}
+${holdsLess ? `<p data-holds-less><strong>After this, less waits than now.</strong> Read both rules before you approve.</p>` : ""}
 <p class="muted">A proposed rule, asked for ${from ? `from ${escaped(from)} ` : ""}at ${when}. It holds nothing until you approve it.</p>
 <details open><summary>The exact rule you sign for</summary><pre>${escaped(JSON.stringify(rule, null, 1))}</pre></details></fieldset>`;
     })
     .join("");
   return `<section data-proposals id="proposed"><h2>Proposed rules</h2>${rows}<p class="actions"><button type="button" data-approve>Approve the chosen</button> <button type="button" class="link" data-reject>Reject them</button></p></section>`;
+}
+
+/** WHAT AN APPROVED PROPOSAL TAKES AWAY. A proposed rule comes in the place of the rule that is
+ *  there for the same thing: a secret has one rule, and the rules for acts have one for each
+ *  verb (the page's script signs the present rules with this one in that verb's place). So a
+ *  proposal can make less wait than now, and its row says so before a member signs it. */
+function whatASecretRuleReplaces(rule: ProposedSecretRule, now: ApprovalRule | null | undefined) {
+  return now
+    ? {
+        replaces: `It takes the place of the rule that ${rule.secret} has now: ${secretRuleInWords({ ...now, secret: rule.secret })}`,
+        holdsLess: !isTightening(now, rule),
+      }
+    : { replaces: `${rule.secret} has no rule now.`, holdsLess: false };
+}
+function whatAnActRuleReplaces(rule: ActRule, rules: ActRule[]) {
+  const now = rules.find((old) => old.verb === rule.verb);
+  const after = [...rules.filter((old) => old.verb !== rule.verb), rule];
+  return {
+    replaces: now
+      ? `It takes the place of the rule that ${rule.verb} has now: ${ruleInWords(now)}.`
+      : "",
+    holdsLess: !rulesTighten(rules, after),
+  };
 }
 
 /** The rules for acts, and the lock. */
