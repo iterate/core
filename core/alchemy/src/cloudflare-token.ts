@@ -42,7 +42,6 @@ export const CLOUDFLARE_TOKEN_WRITES = [
   "Pipelines Send",
   "Workers R2 Data Catalog Write",
   "Zone Observability Write",
-  "Health Checks Write",
 ] as const;
 
 /** Groups that iterate Cloud's consent cannot grant. A token that a person's OAuth sign-in makes may
@@ -51,7 +50,8 @@ export const CLOUDFLARE_TOKEN_WRITES = [
  *  nothing for Access, Zero Trust or the network products (internal-packages/installer/worker/
  *  scopes.js says why). The list is fixed, not found at each deploy: a token whose list changes is
  *  updated in place, and an update needs the right to make tokens, which an everyday Update of the
- *  Cloud does not hold. */
+ *  Cloud does not hold. Cloudflare checks the token's two policies one at a time: the account's
+ *  groups come first, then the zones'. */
 export const CLOUDFLARE_TOKEN_NOT_GRANTED_BY_THE_CLOUD = [
   "Access: Audit Logs Read",
   "Access: Custom Pages Read",
@@ -118,6 +118,20 @@ export const CLOUDFLARE_TOKEN_NOT_GRANTED_BY_THE_CLOUD = [
   "Zero Trust Read",
   "Zero Trust Resilience Read",
   "Zero Trust: PII Read",
+  // zone-scoped, on the policy for every zone of the account
+  "DNS Read",
+  "Domain API Gateway Read",
+  "Firewall Services Read",
+  "Fraud Detection Read",
+  "HTTP DDoS Managed Ruleset Read",
+  "Health Checks Read",
+  "Health Checks Write",
+  "Payments Gateway Read",
+  "Precursor Read",
+  "Web3 Hostnames Read",
+  "Zone Security Center Insights Read",
+  "Zone Security Insights Partner Assets Read",
+  "Zone Versioning Read",
 ] as const;
 
 const ACCOUNT_SCOPE = "com.cloudflare.api.account";

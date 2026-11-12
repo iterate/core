@@ -527,7 +527,7 @@ observability, telemetry, pipelines and alerts. It deploys nothing.
 itself.** So it has no read of a D1 database's rows, a KV namespace's values, an R2 bucket's
 objects, a Logpush job, or the account's API tokens, and no write of a Worker, a route, a
 container, a DNS record, a zone, the registrar or a setting. `src/cloudflare-token.ts` has the
-rule, each read that is left out with what it could yield, and the seven writes, one of which can still make an observability destination (the token needs it to read logs).
+rule, each read that is left out with what it could yield, and the six writes, one of which can still make an observability destination (the token needs it to read logs).
 `src/cloudflare-token.test.ts` holds them against the catalog of permission groups that Alchemy
 ships: a catalog with a new read group fails there until somebody has asked the rule's question of
 it. The token still reads names: a bucket's, a namespace's, a database's, a secret's.

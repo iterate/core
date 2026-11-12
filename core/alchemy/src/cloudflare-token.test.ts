@@ -66,7 +66,7 @@ void test("the token holds no group that iterate Cloud's consent cannot grant: C
 // than this token? A changed list also changes the token of every stack at its next deploy.
 void test("the token's groups are as many as were looked at, and none is there twice", () => {
   assert.equal(groups.account.length, 77);
-  assert.equal(groups.zone.length, 45);
+  assert.equal(groups.zone.length, 32);
   assert.equal(new Set(held.map(({ id }) => id)).size, held.length);
 });
 
