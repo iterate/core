@@ -1557,8 +1557,8 @@ await run(
     const name = `proof-row-in-a-call-${marker}`;
     const escape = `itx.proofEscape${marker}`;
     const opensTheRoot = "itx.builtins.cd('/')";
-    // The row's target is a call of `append` with a rule in its arguments. A row runs as the
-    // platform's delivery, which checks no row: so the rule would land when the event comes.
+    // The row's target is a call of `append` with a rule in its arguments
+    // (core/itx/src/context/itx-expression-rewriting.ts `admitLoadedCodeExpression`).
     const subscription = {
       type: "events.iterate.com/itx/subscription-configured",
       payload: {

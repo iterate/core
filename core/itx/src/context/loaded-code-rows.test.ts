@@ -32,8 +32,8 @@ test.for(ROWS)("loaded code writes a %s row whose target is a name of its own co
   expect(() => admitLoadedCodeRow({ type, payload: { target: null } }, "/apps/x")).not.toThrow();
 });
 
-// A row whose target is a call that carries a row: the row inside would be written when the outer
-// row runs, as the platform's delivery, which checks no row.
+// A row whose target is a call that carries a row (./itx-expression-rewriting.ts
+// `admitLoadedCodeExpression`).
 const escape = {
   type: "events.iterate.com/itx/rewrite-rule-configured",
   payload: { match: "itx.escape", target: "itx.builtins.cd('/')" },
@@ -94,9 +94,8 @@ test("a row's target may carry an event that is no row, and a row whose own targ
     ).not.toThrow();
 });
 
-// A ROW THAT LOADED CODE SPLITS OVER TWO ROWS: a rule whose target has a hole, and a subscription
-// whose target is a call that fills the hole. Each passes the check on a row that loaded code
-// writes. The row that the two make exists only when the subscription's target is run.
+// Rows in two parts, a rule with a hole and the call that fills it: `admitRowsOfCall` in
+// ./itx-expression-rewriting.ts says what the two make.
 const RULE = "events.iterate.com/itx/rewrite-rule-configured";
 const opensTheRoot = { match: "itx.escape", target: "itx.builtins.cd('/')" };
 const SPLIT_ROWS: [how: string, ruleTarget: ItxExpression, call: ItxExpression][] = [

@@ -30,11 +30,9 @@ export type Caller = {
   // reaches can hand a subscriber an event its log never held.
   delivery?: string;
   // This call runs the target of a stored row: a subscription's delivery, or the ingress row for
-  // a request. Loaded code may have written the row, in parts that each passed its wall
-  // (./context/itx-expression-rewriting.ts `admitLoadedCodeRow`): a rule with a hole and a call
-  // that fills it. So a row that this call writes is checked as loaded code's own is
-  // (./context/built-ins.ts `append`). Set only where a row's target is run, and it stays on the
-  // caller across contexts.
+  // a request. A row that it writes is checked as loaded code's own is
+  // (./context/itx-expression-rewriting.ts `admitRowsOfCall` says why). Set only where a row's
+  // target is run, and it stays on the caller across contexts.
   runsRow?: true;
   copiedFrom?: EventCopiedFrom;
   cause?: Cause;

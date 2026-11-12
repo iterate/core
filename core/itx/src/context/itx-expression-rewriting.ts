@@ -519,9 +519,9 @@ function admitLoadedCodeExpression(expression: ItxExpression, from: string): voi
         }
         // A ROW IN A CALL'S ARGUMENTS IS A ROW. A row's target such as
         // `itx.append({ type: rewrite-rule-configured, payload: … })` writes that row when the
-        // row runs, and the row runs as the platform's delivery, which checks no row. So the row
-        // is checked here, where loaded code names it: in an event, in a list of events, or in a
-        // schedule's.
+        // row runs. So the row is checked here, where loaded code names it: in an event, in a
+        // list of events, or in a schedule's. A row that is made only when the row runs is
+        // checked then (`admitRowsOfCall`).
         for (const event of rowEventsIn(arg)) admitLoadedCodeRow(event, at);
       }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string")
@@ -533,12 +533,14 @@ function admitLoadedCodeExpression(expression: ItxExpression, from: string): voi
  *  (`admitLoadedCodeRow` says which types are). */
 function rowEventsIn(arg: unknown, depth = 0): { type: string; payload?: unknown }[] {
   if (!(typeof arg === "object" && !!arg) || depth > 8) return [];
-  const { type } = arg as { type?: unknown };
+  // the argument's fields by name: whatever it is, an event has a `type` that is a string
+  const fields = new Map<string, unknown>(Object.entries(arg));
+  const type = fields.get("type");
   const own =
     typeof type === "string" && type.startsWith("events.iterate.com/itx/")
-      ? [arg as { type: string; payload?: unknown }]
+      ? [{ type, payload: fields.get("payload") }]
       : [];
-  return [...own, ...Object.values(arg).flatMap((value) => rowEventsIn(value, depth + 1))];
+  return [...own, ...[...fields.values()].flatMap((value) => rowEventsIn(value, depth + 1))];
 }
 
 type WorkerSpecShape = { source?: unknown; cacheKey?: unknown };
