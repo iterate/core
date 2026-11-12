@@ -3,7 +3,7 @@
 import { RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
 import { unavailableError } from "core-itx";
-import { codedError } from "iterate/lib";
+import { codedError, mindNamesOf } from "iterate/lib";
 import { httpFailureKind } from "iterate/platform-retry";
 import type { ItxAiGateway, ItxMarkdownDocument, ItxWebSearchAnswer } from "iterate/api";
 import { traceModelCall } from "./agent-spans.ts";
@@ -13,14 +13,41 @@ import { traceModelCall } from "./agent-spans.ts";
 const TO_MARKDOWN_MAX_BYTES = 10 * 1024 * 1024;
 const ANSWER_MAX_BYTES = 10 * 1024 * 1024;
 
+/** Who makes a model call: the mind, and the context whose code calls. */
+type ModelCaller = { mindSlug?: string; path: string };
+
+type GatewayMetadata = NonNullable<GatewayOptions["metadata"]>;
+
+/** A call's metadata for the AI Gateway, with the mind's name on it, whatever the caller passed:
+ *  the gateway's spend rules cap a mind by `mindSlug`, so a caller that could leave it out or name
+ *  another mind would spend outside its mind's cap. The caller's other keys are kept, and its
+ *  `streamPath` when it names one (an agent's turn names the agent); else the calling context's
+ *  path. The mind's name comes first: the gateway keeps five entries of a request. */
+function stampedMetadata(given: GatewayMetadata | undefined, who: ModelCaller): GatewayMetadata {
+  const mind = mindNamesOf({ mindSlug: who.mindSlug });
+  return { ...mind, streamPath: who.path, ...given, ...mind };
+}
+
 export class ItxAi extends RpcTarget {
   readonly #ai: Ai;
-  constructor(ai: Ai) {
+  readonly #who: ModelCaller;
+  constructor(ai: Ai, who: ModelCaller) {
     super();
     this.#ai = ai;
+    this.#who = who;
   }
 
-  run(model: string, inputs: Record<string, unknown>, options?: AiOptions): Promise<unknown> {
+  run(model: string, inputs: Record<string, unknown>, given?: AiOptions): Promise<unknown> {
+    // A call that names no gateway goes to Workers AI itself, which takes no metadata.
+    const options = given?.gateway
+      ? {
+          ...given,
+          gateway: {
+            ...given.gateway,
+            metadata: stampedMetadata(given.gateway.metadata, this.#who),
+          },
+        }
+      : given;
     const send = () => this.#ai.run(model, inputs, options);
     // an agent's turn (the metadata iterate `agents/processor.ts` sends) gets traced
     const metadata = options?.gateway?.metadata;
@@ -62,7 +89,7 @@ export class ItxAi extends RpcTarget {
   }
 
   gateway(gatewayId: string): ItxAiGatewayTarget {
-    return new ItxAiGatewayTarget(this.#ai.gateway(gatewayId));
+    return new ItxAiGatewayTarget(this.#ai.gateway(gatewayId), gatewayId, this.#who);
   }
 
   async websearch(request: AiWebSearchRequest): Promise<ItxWebSearchAnswer> {
@@ -121,9 +148,13 @@ export class ItxToMarkdown extends RpcTarget {
 
 export class ItxAiGatewayTarget extends RpcTarget implements ItxAiGateway {
   readonly #gateway: AiGateway;
-  constructor(gateway: AiGateway) {
+  readonly #id: string;
+  readonly #who: ModelCaller;
+  constructor(gateway: AiGateway, id: string, who: ModelCaller) {
     super();
     this.#gateway = gateway;
+    this.#id = id;
+    this.#who = who;
   }
 
   async getLog(logId: Parameters<ItxAiGateway["getLog"]>[0]) {
@@ -146,7 +177,13 @@ export class ItxAiGatewayTarget extends RpcTarget implements ItxAiGateway {
   }
 
   async run(...[data, options]: Parameters<ItxAiGateway["run"]>) {
-    return bodyOf("AI Gateway run", await this.#gateway.run(data, options));
+    // the binding's type wants the gateway's id beside its options: the one this handle is of
+    const gateway = {
+      id: this.#id,
+      ...options?.gateway,
+      metadata: stampedMetadata(options?.gateway?.metadata, this.#who),
+    };
+    return bodyOf("AI Gateway run", await this.#gateway.run(data, { ...options, gateway }));
   }
 }
 

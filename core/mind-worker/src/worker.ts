@@ -128,7 +128,8 @@ defineItxHost({
       ai: {
         description:
           'Workers AI, verbatim: `ai.run(model, inputs, options?)` · `ai.models({ search?, task? })`; files as Markdown: `ai.toMarkdown({ name, blob } | [ … ], { conversionOptions? })` → { name, mimeType, format, tokens, data } (or `format: "error"`) for PDF, Office (docx, xlsx), ODF, CSV, HTML, XML and pictures (described), `blob` the bytes or a text, or `{ name, data }` with base64, at most 10 MiB a call; `ai.toMarkdown().supported()` lists the formats; web search through AI Gateway, billed to its credits: `ai.websearch({ gatewayId: "default", query, provider?: "ceramic" | "exa" | "linkup", limit? })` → { items: [{ url, title, description? }] }; AI Gateway: `ai.gateway(id).run(request)` · `getLog(logId)` · `patchLog(logId, { score?, feedback? })` · `getUrl(provider?)`',
-        build: () => new ItxAi(env.AI),
+        // each call through an AI Gateway names the mind and the calling context to it
+        build: (scope) => new ItxAi(env.AI, { mindSlug: env.MIND_NAME, path: scope.path }),
       },
       cfArtifacts: {
         description: "the Artifacts binding, mind-scoped (`repos` is the friendlier surface)",
