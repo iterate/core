@@ -15,6 +15,7 @@ import { stampedCallerOf } from "iterate/principal";
 import { platformRouteOf, mindProvideUrlOf } from "iterate/mind-api";
 import { mindHostResponse } from "./host-session.ts";
 import { parseEmail } from "./mail.ts";
+import { ProvidedDoor } from "./provided-door.ts";
 import { confinedAnswer, httpsRedirect, stampedRequest } from "./stamp.ts";
 
 // A birth event is written as given, so the target is stored as steps.
@@ -150,19 +151,20 @@ async function serveProvide(
 // `MindTarget` is on the wire but not in its type.
 class ProvideSessionTarget extends RpcTarget {
   readonly #root: IterateContextRpcTarget;
-  readonly #door: Fetcher;
+  readonly #door: ProvidedDoor;
 
   constructor(root: IterateContextRpcTarget, door: Fetcher) {
     super();
     this.#root = root;
-    this.#door = door;
+    this.#door = new ProvidedDoor(door);
   }
 
   provide(mind: ClientRpcStub) {
     return this.#root.provide("itx.mind", mind, { description: "the provided mind" });
   }
 
-  // capnweb serves a Workers stub as an RpcTarget, so each call of the home lab's is a call on the door.
+  // Each call of the home lab's is a call on the door, made by this invocation, which releases the
+  // answer (provided-door.ts).
   get door() {
     return this.#door;
   }

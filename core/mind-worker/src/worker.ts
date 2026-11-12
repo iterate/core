@@ -12,6 +12,7 @@ import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
 import { stampedCallerOf } from "iterate/principal";
 import { platformOriginOf, platformRouteOf } from "iterate/mind-api";
 import { EmailContract } from "iterate/email";
+import { releasedAnswer } from "iterate/lib";
 import { INTEGRATIONS_PATH, IntegrationRegistryContract } from "iterate/integrations";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import type { MindTarget } from "iterate/workers";
@@ -25,7 +26,6 @@ import { mindScopedArtifacts } from "./context/cf-artifacts.ts";
 import { FILES_PATH, serveMindFileRequest } from "./context/file-urls.ts";
 import { r2Root } from "./context/r2.ts";
 import {
-  releasedAnswer,
   SECRETS_ROOT_DESCRIPTION,
   secretsRoot,
   sendRecordingSecretFacts,

@@ -1,7 +1,7 @@
 import { stampCaller, type ItxHostRootContext } from "core-itx";
 import { env } from "cloudflare:workers";
 import type { SecretOperation, SecretRefresh, SecretUses } from "iterate/api";
-import { codedError } from "iterate/lib";
+import { codedError, releasedAnswer } from "iterate/lib";
 import { recordFacts } from "iterate/facts";
 import {
   assertSecretPath,
@@ -28,26 +28,6 @@ export const SECRETS_ROOT_DESCRIPTION =
 
 /** How many of the vault's sessions `list()` has open at once. */
 const DESCRIBED_AT_ONCE = 16;
-
-/** THE VAULT'S ANSWER, COPIED AND RELEASED. An answer that crosses Workers RPC holds its call's
- *  session open until its disposer runs: the boundary's, and behind it the vault's. Left alone,
- *  each stays open until the Worker is replaced, and enough of them fill the vault's memory: the
- *  vault ends with "Worker exceeded memory limit", and every approval that waits in it ends too.
- *  The vault answers plain data, so the mind keeps a copy and lets the session go. */
-export async function releasedAnswer<T>(answer: Promise<T>): Promise<T> {
-  const held = await answer;
-  if (typeof held !== "object" || held === null) return held;
-  let copy: T;
-  try {
-    copy = structuredClone(held);
-  } catch {
-    return held; // not plain data: whoever reads it releases it
-  }
-  // workerd puts the disposer on what a call across Workers answers; the answer's own type, the
-  // vault's plain data, does not name it
-  (held as Partial<Disposable>)[Symbol.dispose]?.();
-  return copy;
-}
 
 export function secretsRoot(context: ItxHostRootContext, egress: Door) {
   const record = async <T>(answer: Promise<SecretAnswer<T> | SecretRefusal>): Promise<T> => {

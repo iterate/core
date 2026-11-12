@@ -227,6 +227,27 @@ export function releaseRpcSessions(rpcSessions: readonly unknown[]): void {
     }
 }
 
+/** AN ANSWER FROM ANOTHER WORKER, COPIED AND RELEASED. An answer that crosses Workers RPC holds its
+ *  call's session open until its disposer runs, and behind that session every session the callee
+ *  opened to answer. Left alone, each stays open for as long as the code that holds the answer
+ *  lives: until the Worker is replaced, or for a socket's whole life. Enough of them fill the
+ *  callee's memory: the vault ended with "Worker exceeded memory limit", and every approval that
+ *  waited in it ended too. For plain data the caller keeps a copy and lets the session go. */
+export async function releasedAnswer<T>(answer: Promise<T>): Promise<T> {
+  const held = await answer;
+  if (typeof held !== "object" || held === null) return held;
+  let copy: T;
+  try {
+    copy = structuredClone(held);
+  } catch {
+    return held; // not plain data: whoever reads it releases it
+  }
+  // workerd puts the disposer on what a call across Workers answers; the answer's own type, plain
+  // data, does not name it
+  (held as Partial<Disposable>)[Symbol.dispose]?.();
+  return copy;
+}
+
 // ── patch ── the LiveView-style delta that rides every live-state change event. `diff` runs at
 // the PRODUCER (the processor's reduce, the mini-app helper's set) where old and new value are
 // both in hand; the stream forwards the ops verbatim; only CLIENTS apply them. The format is an

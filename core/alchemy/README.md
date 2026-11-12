@@ -364,6 +364,11 @@ The boundary forwards to it every request that is not the issuer's, the secrets 
 telemetry intake's, and inbound mail.
 With nothing connected, the mind's hostnames answer 503.
 
+**After a deploy that changes the boundary, restart the mind at home.** A deploy does not move
+an open socket: the home lab's connection stays with the boundary instance that accepted it, and
+that instance runs the code from before the deploy, until the socket ends (the mind's restart, or
+the end of its token's hour). The other Workers of the stack change at once.
+
 To deploy one beside a Worker stack, on a second zone, with a second config file:
 
 1. Copy `mind.config.local.ts` to `mind.config.home.local.ts` (git ignores it). Give it
