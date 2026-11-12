@@ -70,15 +70,16 @@ function asWalked(resolved: ItxExpression): {
 }
 
 /** Whether a step of the call is this step of a rule's verb. A name is the same name. A step that
- *  finds a thing, `rpcStubs.get(key)`, is the same step with more arguments after its own: the
- *  function that finds reads its own ones, so `get(key, 0)` is the same stub by another
- *  spelling. */
+ *  finds a thing is the same step by its name and its first argument, which say which thing:
+ *  `rpcStubs.get(key)`, `workers.get(spec)`, `facets.get(name, spec)`. What comes after the first
+ *  argument does not: `get(key, 0)` is the same stub, and a facet found with no spec, or with
+ *  another, is the same facet. */
 function sameStep(ofRule: ItxExpression[number], ofCall: ItxExpression[number] | undefined) {
   if (typeof ofRule === "string") return ofRule === ofCall;
   return (
     Array.isArray(ofCall) &&
-    ofCall.length >= ofRule.length &&
-    ofRule.every((part, index) => jsonEqual(part, ofCall[index]))
+    ofRule[0] === ofCall[0] &&
+    (ofRule.length < 2 || jsonEqual(ofRule[1], ofCall[1]))
   );
 }
 

@@ -4,6 +4,7 @@ import {
   actText,
   isMailAct,
   mailActOf,
+  mailHeaderRefusal,
   mailHeadersOf,
   recipientsRefusal,
 } from "iterate/acts";
@@ -91,6 +92,8 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     // about to be sent, so a mind cannot have one mail approved and another sent. `free` and `go`
     // go on: `go` is the gate's mark that a member approved this mail, set once.
     const act = await mailActOf(message);
+    const broken = mailHeaderRefusal(act);
+    if (broken) return { sent: false as const, error: broken };
     const gate = await this.env.SECRETS.act({
       text: actText(act),
       from: options?.from,

@@ -4,6 +4,7 @@ import {
   actOfText,
   actText,
   mailActOf,
+  mailHeaderRefusal,
   mailHeadersOf,
   recipientsRefusal,
   RUN_ACTS_HEADER,
@@ -126,6 +127,50 @@ test("a recipient that is no single address is held by every rule for mail, what
   const act = { ...(await mailActOf(mail())), to: ['"<safe@example.org>" <leak@example.net>'] };
   expect(ruleHolds(ActRule.parse({ verb: "email.send", to: ["*@example.net"] }), act)).toBe(true);
   expect(ruleHolds(ActRule.parse({ verb: "email.send", to: ["nobody@x.org"] }), act)).toBe(true);
+});
+
+test("a domain with a dot at an end is no address: the same host by another text would pass a rule for the domain", async () => {
+  for (const recipient of ["jo@example.net.", "jo@.example.net", "jo@example..net"])
+    expect(recipientsRefusal([recipient])).toContain("its address alone");
+  // such a mail never leaves the boundary; were one asked about, the rule for its domain holds it
+  const act = { ...(await mailActOf(mail())), to: ["jo@example.net."] };
+  expect(ruleHolds(ActRule.parse({ verb: "email.send", to: ["*@example.net"] }), act)).toBe(true);
+});
+
+test("a rule that names an address holds the same mailbox with a tag, and no other mailbox", async () => {
+  const tagged = await mailActOf(mail({ to: ["Jo+bills@example.net"] }));
+  const to = (address: string) => ActRule.parse({ verb: "email.send", to: [address] });
+  expect([
+    ruleHolds(to("jo@example.net"), tagged),
+    ruleHolds(to("joe@example.net"), tagged),
+    ruleHolds(to("jo@example.org"), tagged),
+    // a rule that names the tag holds that tag
+    ruleHolds(to("jo+bills@example.net"), tagged),
+    ruleHolds(to("jo+other@example.net"), tagged),
+  ]).toEqual([true, false, false, true, false]);
+});
+
+test.for([
+  ["the subject", { subject: "The invoice\r\nBcc: leak@example.net" }],
+  [
+    "the sender's name",
+    { from: { email: "agent@example.com", name: "The agent\nBcc: leak@example.net" } },
+  ],
+  ["Reply-To", { headers: { "Reply-To": "jo@example.com\r\nBcc: leak@example.net" } }],
+  ["In-Reply-To", { headers: { "In-Reply-To": "<m1@example.org>\nBcc: leak@example.net" } }],
+  ["References", { headers: { References: "<m0@example.org>\r<m1@example.org>" } }],
+] as const)(
+  "a mail with a line break in %s is refused: what follows it would be a header that nobody read",
+  async ([field, change]) => {
+    expect(mailHeaderRefusal(await mailActOf(mail(change)))).toContain(field);
+  },
+);
+
+test("a mail whose headers are each one line is taken", async () => {
+  const given = { "Reply-To": "jo@example.com", References: "<m0@example.org> <m1@example.org>" };
+  expect(mailHeaderRefusal(await mailActOf(mail({ headers: given })))).toBeNull();
+  // a body has as many lines as it likes
+  expect(mailHeaderRefusal(await mailActOf(mail({ text: "one\ntwo" })))).toBeNull();
 });
 
 test("the mail that goes has the act's own three headers and no other that its sender gave", async () => {

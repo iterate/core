@@ -191,8 +191,10 @@ export async function mailActOf(message: MailToSend): Promise<MailAct> {
   };
 }
 
-/** One address and nothing else: no name before it, no angle brackets, no second address. */
-const BARE_ADDRESS = /^[^\s<>",;:()[\]\\@]+@[A-Za-z0-9.-]+$/;
+/** One address and nothing else: no name before it, no angle brackets, no second address. Its
+ *  domain is names with one dot between them: `example.net.` is the same host to the mail service
+ *  and another text to a rule for `*@example.net`. */
+const BARE_ADDRESS = /^[^\s<>",;:()[\]\\@]+@(?:[A-Za-z0-9-]+\.)*[A-Za-z0-9-]+$/;
 
 /** WHY THE BOUNDARY DOES NOT SEND TO THESE RECIPIENTS, or null. A recipient is one address alone.
  *  A name before the address can hold another address in angle brackets
@@ -203,6 +205,22 @@ export function recipientsRefusal(recipients: readonly string[]): string | null 
   const at = recipients.findIndex((recipient) => !BARE_ADDRESS.test(recipient));
   if (at < 0) return null;
   return `name each recipient by its address alone, as jo@example.com: ${JSON.stringify(recipients[at]!.slice(0, 80))} is not one`;
+}
+
+/** WHY THE BOUNDARY DOES NOT SEND THIS MAIL, or null: a line break in a field that becomes a
+ *  header. A header is one line. What comes after a line break in its value is a header of its own
+ *  to whatever writes the mail, a Bcc for one, which no rule read and no approver saw as such. */
+export function mailHeaderRefusal(
+  act: Pick<MailAct, "subject" | "fromName" | "replyTo" | "inReplyTo" | "references">,
+): string | null {
+  const odd = Object.entries({
+    "the subject": act.subject,
+    "the sender's name": act.fromName,
+    "Reply-To": act.replyTo,
+    "In-Reply-To": act.inReplyTo,
+    References: act.references,
+  }).find(([, value]) => value && /[\r\n]/.test(value));
+  return odd ? `a mail's header is one line, and ${odd[0]} has a line break` : null;
 }
 
 /** THE HEADERS OF THE MAIL THAT GOES: the three that the act holds, made again from the act, and
@@ -271,7 +289,8 @@ function addressMatches(pattern: string, recipient: string): boolean {
   if (pattern === "*" || !BARE_ADDRESS.test(recipient)) return true;
   const address = recipient.toLowerCase();
   if (pattern.startsWith("*@")) return address.endsWith(pattern.slice(1));
-  return address === pattern;
+  // a tag is the same mailbox: mail to `jo+bills@example.com` is mail to jo
+  return address === pattern || address.replace(/\+[^@]*@/, "@") === pattern;
 }
 
 /** Whether `after` holds everything `before` held: a change that needs no signature once locked. */

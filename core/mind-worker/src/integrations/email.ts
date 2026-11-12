@@ -6,7 +6,13 @@ import {
   refuseActPastLimit,
   sha256Hex,
 } from "core-itx";
-import { ACT_DONE, type GateAnswer, type MailAct, recipientsRefusal } from "iterate/acts";
+import {
+  ACT_DONE,
+  type GateAnswer,
+  type MailAct,
+  mailHeaderRefusal,
+  recipientsRefusal,
+} from "iterate/acts";
 import type { EmailSendInput, StreamPage } from "iterate/api";
 import { EmailContract } from "iterate/email";
 import { codedError, errorCode, ITERATE_CAUSE_HEADER, reportIssue } from "iterate/lib";
@@ -124,7 +130,15 @@ async function sendEmail(
       "itx.email.send: name a recipient (`to`, `cc`, or `inReplyToOffset`) and a `text` or `html` body",
     );
   // as the boundary asks, said here in the caller's own words
-  const odd = recipientsRefusal([...to, ...cc]);
+  const odd =
+    recipientsRefusal([...to, ...cc]) ||
+    mailHeaderRefusal({
+      subject,
+      fromName: scope.name,
+      replyTo: null,
+      inReplyTo: null,
+      references: null,
+    });
   if (odd) throw codedError("INVALID_INPUT", `itx.email.send: ${odd}`);
   const attachments = await Promise.all(
     (request.attachments || []).map(async ({ path, filename }) => {
@@ -363,7 +377,12 @@ async function answeredMessageOf(emailContext: ReachableContext, offset: number,
     to: received ? [received.replyTo || received.from] : message.to,
     cc: received ? [] : message.cc,
     receivedAt: received ? received.envelope.to : message.from,
-    subject: /^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}`,
+    // A mail may arrive with a subject of two lines, and a header that goes is one line
+    // (iterate/acts `mailHeaderRefusal`): the answer's subject is that subject on one line.
+    subject: (/^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}`).replace(
+      /\s*[\r\n]+\s*/g,
+      " ",
+    ),
     inReplyTo: message.messageId,
     references: [...message.references, ...(message.messageId ? [message.messageId] : [])],
   };

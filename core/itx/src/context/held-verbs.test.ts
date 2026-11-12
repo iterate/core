@@ -177,6 +177,26 @@ test("a verb of a worker is held by the same spellings: an argument more on the 
   ]).toEqual([post, post, post, post]);
 });
 
+test("a step that finds a thing is the same step by its name and its first argument: a facet with no spec, or with another, is the same facet", () => {
+  // where `itx.agents` points here: a facet by its name, with the spec it was made by
+  const send = { act: "itx.agents.send", args: ["hi"] };
+  const facet = (...found: unknown[]): ItxExpression => [
+    "itx",
+    "builtins",
+    "facets",
+    ["get", ...found],
+    ["send", "hi"],
+  ];
+  expect([
+    held(["itx.agents.send"], facet("agents", { className: "Agents" })),
+    held(["itx.agents.send"], facet("agents")),
+    held(["itx.agents.send"], facet("agents", { className: "Another" })),
+    held(["itx.agents.send"], facet("agents", { className: "Agents" }, 0)),
+    // another name is another facet
+    held(["itx.agents.send"], facet("other", { className: "Agents" })),
+  ]).toEqual([send, send, send, send, null]);
+});
+
 test("the stub called through its own applyRoot is the stub called", () => {
   expect(held(["itx.whatsapp.*"], [...STUB, ["applyRoot", ["x"]]])).toEqual({
     act: "itx.whatsapp",
@@ -265,6 +285,14 @@ function held(verbs: readonly string[], resolved: ItxExpression, extraArgs: unkn
         ? [...STUB, ...verb.slice(2)]
         : verb[1] === "config"
           ? [...WORKER, ...verb.slice(2)]
-          : null,
+          : verb[1] === "agents"
+            ? [
+                "itx",
+                "builtins",
+                "facets",
+                ["get", "agents", { className: "Agents" }],
+                ...verb.slice(2),
+              ]
+            : null,
   );
 }

@@ -418,6 +418,76 @@ await run(
   },
 );
 
+await run(
+  "a mail that a rule would read as another mail: a recipient whose domain ends in a dot and a subject of two lines are refused, and a rule for one mailbox holds that mailbox with a tag",
+  async () => {
+    const sending = (to: string, subject: string) =>
+      root()
+        .email.send({ to, subject, text: `A mail of act-approval-proof.ts, ${marker}.` })
+        .then(
+          () => ({ sent: true as const }),
+          (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+        );
+    // a mail that waits answers nothing for five minutes
+    const soon = <T>(call: Promise<T>) =>
+      Promise.race([call, settled(20_000).then(() => ({ waits: true as const }))]);
+    const rejected = async (digest: string, reason: string) => {
+      await page.goto(`${page_}?digest=${digest}`);
+      await checked(digest);
+      page.once("dialog", (dialog) => void dialog.accept(reason));
+      await page.locator("[data-acts]").getByRole("button", { name: "Reject them" }).click();
+      await page.locator(`#act-${digest}`).waitFor({ state: "detached" });
+    };
+    // every part runs, so a run on a build without one of the three says all that it lacks
+    const wrong: string[] = [];
+    await setRulesBySession([rule]);
+
+    // The mail service reads `host.` as `host`, and a rule for `*@host` read it as another text.
+    const dotted = await soon(
+      sending(`approval-${marker}@${domain}.`, `a dot at the end ${marker}`),
+    );
+    if (!("refused" in dotted && dotted.refused.includes("its address alone")))
+      wrong.push(`a recipient at "${domain}." ended with ${JSON.stringify(dotted)}`);
+
+    // What comes after a line break in a subject is a header of its own, a Bcc for one.
+    const twoLines = `two lines ${marker}\r\nBcc: approval-${marker}@example.org`;
+    const broken = sending(`approval-${marker}@${domain}`, twoLines);
+    const brokenEnded = await soon(broken);
+    if (!("refused" in brokenEnded && brokenEnded.refused.includes("has a line break"))) {
+      wrong.push(`a subject of two lines ended with ${JSON.stringify(brokenEnded)}`);
+      if ("waits" in brokenEnded) {
+        await rejected(await heldDigest(twoLines), "two lines");
+        await broken;
+      }
+    }
+
+    // A tag is the same mailbox: a rule that names the mailbox holds its mail.
+    await setRulesBySession([{ verb: "email.send", to: [`approval-${marker}@${domain}`] }]);
+    const tag = `a tag ${marker}`;
+    const tagged = sending(`approval-${marker}+bills@${domain}`, tag);
+    const first = await Promise.race([
+      tagged,
+      heldDigest(tag).then(
+        (digest) => ({ digest }),
+        () => ({ waits: true as const }),
+      ),
+    ]);
+    if ("digest" in first) {
+      await rejected(first.digest, "not with a tag");
+      const ended = await tagged;
+      if (!("refused" in ended && ended.refused.includes("not with a tag")))
+        wrong.push(`the mail with a tag ended with ${JSON.stringify(ended)}`);
+    } else
+      wrong.push(`a mail to the rule's mailbox with a tag ended with ${JSON.stringify(first)}`);
+
+    await setRulesBySession([]);
+    must(!wrong.length, wrong.join("; "));
+    return {
+      detail: `refused before anything waits: ${"refused" in dotted ? dotted.refused.slice(0, 110) : ""} / ${"refused" in brokenEnded ? brokenEnded.refused.slice(0, 90) : ""}; the rule for approval-${marker}@${domain} held the mail to approval-${marker}+bills@${domain}, and the rejection ended it`,
+    };
+  },
+);
+
 // ── a verb: a stand-in for a WhatsApp bridge, itx.proofWhatsapp.jonas.sendMessage(jid, { text }) ──
 
 const SEND = "itx.proofWhatsapp.jonas.sendMessage";
