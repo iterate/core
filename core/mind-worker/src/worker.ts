@@ -25,6 +25,7 @@ import { mindScopedArtifacts } from "./context/cf-artifacts.ts";
 import { FILES_PATH, serveMindFileRequest } from "./context/file-urls.ts";
 import { r2Root } from "./context/r2.ts";
 import {
+  releasedAnswer,
   SECRETS_ROOT_DESCRIPTION,
   secretsRoot,
   sendRecordingSecretFacts,
@@ -267,7 +268,8 @@ export class Mind extends WorkerEntrypoint<Env> implements MindTarget {
       authThroughEgressStatus: (await door.fetch(new Request(`${platformOriginOf(domain)}/`)))
         .status,
       secretsEventCount:
-        (await door.secret("/secrets/skeleton", "describe", undefined)).path === "/secrets/skeleton"
+        (await releasedAnswer(door.secret("/secrets/skeleton", "describe", undefined))).path ===
+        "/secrets/skeleton"
           ? 1
           : 0,
       emailEventCount: (await contextAt("/integrations/email").read()).events.length,

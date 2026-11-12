@@ -26,6 +26,28 @@ import { hopCaller } from "./hop-caller.ts";
 export const SECRETS_ROOT_DESCRIPTION =
   'the mind\'s secrets, kept in the secrets Worker: `secrets.set("/secrets/<name>", material, { urls, refresh?, public? })` · `delete(path)` · `describe(path)` → { set, urls, refresh, public } · `list()` · `collectFromUser({ path, egress: { urls }, description?, fields?, redirectUrl? })` → { url } a person opens to type the value · `beginOAuth(path, { authorizationEndpoint, tokenEndpoint, clientId, clientSecret?, scope?, urls?, next? })` → { authorizationUrl, nonce } · `oauthResult(path, { nonce })` · `oauthCallbackUrl()` · `signHmac(path, { payload, field?, encoding? })` · `verifyHmac(path, { payload, signature, field? })` · `verifyEquals(path, { value, field? })`; use one in `itx.fetch` as `getSecret("/secrets/<name>")` in a header (or the URL), sent only to its `urls`. Each fact lands on `/secrets/<name>`. What a secret may be used for is fixed when it is made (`set`, `collectFromUser`, `beginOAuth`) and shown to whoever gives it: `placement: "url"` lets its placeholder sit in a URL, else headers alone; `operations: ["signHmac", …]` names the operations it answers, else none, each limited per minute; `lendTo: ["/secrets/<name>", …]` names the secrets whose refresh may borrow it as a client secret or an App key, else none; `anyoneWithLink: true` lets anyone holding the link fill the form or consent, else a signed-in member alone';
 
+/** How many of the vault's sessions `list()` has open at once. */
+const DESCRIBED_AT_ONCE = 16;
+
+/** THE VAULT'S ANSWER, COPIED AND RELEASED. An answer that crosses Workers RPC holds its call's
+ *  session open until its disposer runs: the boundary's, and behind it the vault's. Nothing
+ *  released these, so each stayed open until the Worker was replaced, and a mind that was asked
+ *  often (a page's `secrets.list()` every 30 s, one call a path) filled the vault's memory: the
+ *  vault ended with "Worker exceeded memory limit", and every approval that waited in it ended
+ *  too. The vault answers plain data, so the mind keeps a copy and lets the session go. */
+export async function releasedAnswer<T>(answer: Promise<T>): Promise<T> {
+  const held = await answer;
+  if (typeof held !== "object" || held === null) return held;
+  let copy: T;
+  try {
+    copy = structuredClone(held);
+  } catch {
+    return held; // not plain data: whoever reads it releases it
+  }
+  (held as Partial<Disposable>)[Symbol.dispose]?.();
+  return copy;
+}
+
 export function secretsRoot(context: ItxHostRootContext, egress: Door) {
   const record = async <T>(answer: Promise<SecretAnswer<T> | SecretRefusal>): Promise<T> => {
     const answered = await answer;
@@ -38,7 +60,7 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
     return answered.result;
   };
   const call = <V extends SecretVerb>(verb: V, path: string, input: SecretVerbs[V]["input"]) =>
-    egress.secret(assertSecretPath(path), verb, input);
+    releasedAnswer(egress.secret(assertSecretPath(path), verb, input));
   const describe = (path: string) => call("describe", path, undefined);
   const operated =
     (verb: SecretOperation) =>
@@ -69,7 +91,14 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
         if (page.atHead || page.scannedThroughOffset <= after) break;
         after = page.scannedThroughOffset;
       }
-      const described = await Promise.all([...paths].sort().map(describe));
+      // A few at a time: the log names every path the mind ever had, a deleted secret's too, and
+      // each is one call of the vault.
+      const sorted = [...paths].sort();
+      const described: SecretDescription[] = [];
+      for (let from = 0; from < sorted.length; from += DESCRIBED_AT_ONCE)
+        described.push(
+          ...(await Promise.all(sorted.slice(from, from + DESCRIBED_AT_ONCE).map(describe))),
+        );
       return described.filter((secret) => secret.set);
     },
     importSealed: (path: string, cell: string, proof: string) =>
