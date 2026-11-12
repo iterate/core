@@ -1,20 +1,22 @@
-// app.js — THE DASH'S PAGE: the mind seen from above. Four pages in one:
+// app.js — THE DASH'S PAGE: the mind seen from above. Five pages in one:
 //
 //   Overview   who is signed in, and the way to every app and every page about access
 //   Contexts   any context of the mind, live: its log, its processors, who is here
 //   Repo       the config repo as a small IDE: files, an editor, a diff, commits
+//   Secrets    what the mind may send where: set a secret, update it, delete it
 //   MCP        how to connect Claude Code or the Codex CLI to the mind
 //
 // The larger parts are components of @iterate-com/ui, loaded through the import map in
-// index.html: `ContextExplorer`, `RepoIde` and `McpConnect` are the ones iterate's hosted Dash
-// draws. This file is the wiring: the member's itx, the URL, the sidebar and the overview. Change
-// them here.
+// index.html: `ContextExplorer`, `RepoIde`, `SecretsPage` and `McpConnect` are the ones
+// iterate's hosted Dash draws. This file is the wiring: the member's itx, the URL, the sidebar and
+// the overview. Change them here.
 import {
   html,
   render,
   useCallback,
   useEffect,
   useMemo,
+  useState,
   useSyncExternalStore,
 } from "@iterate-com/ui/page";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
@@ -26,6 +28,7 @@ import {
 } from "@iterate-com/ui/components/context-explorer/context-explorer";
 import { McpConnect } from "@iterate-com/ui/components/mcp-connect";
 import { RepoIde, repoIdeSearchOf } from "@iterate-com/ui/components/repo-ide/repo-ide";
+import { SecretsPage, secretsPageStateOf } from "@iterate-com/ui/components/secrets-page";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/ui/card";
 import {
   SidebarGroup,
@@ -45,6 +48,7 @@ import {
   FolderGit2Icon,
   KeyRoundIcon,
   LayoutDashboardIcon,
+  LockKeyholeIcon,
   PhoneIcon,
   PlugIcon,
   ShieldCheckIcon,
@@ -114,9 +118,10 @@ const access = [
 ];
 
 // ── the URL ──
-// THE PAGE IS A LINK: `?page=contexts|repo|mcp` is the page (none: the overview), `?context=<path>`
-// the context shown, `?repo=<name>` the repo (none: config), and `?view=<json>` what the page's
-// own view holds (the explorer's filter and inspected event, the IDE's open file and panes).
+// THE PAGE IS A LINK: `?page=contexts|repo|secrets|mcp` is the page (none: the overview),
+// `?context=<path>` the context shown, `?repo=<name>` the repo (none: config), and `?view=<json>`
+// what the page's own view holds (the explorer's filter and inspected event, the IDE's open file
+// and panes, the secrets page's open sheet).
 const subscribeToUrl = (listener) => {
   addEventListener("popstate", listener);
   return () => removeEventListener("popstate", listener);
@@ -200,6 +205,7 @@ function App() {
   if (page === "contexts") view = html`<${Contexts} path=${context} search=${search} />`;
   if (page === "repo")
     view = html`<${Repo} name=${params.get("repo") || "config"} search=${search} />`;
+  if (page === "secrets") view = html`<${Secrets} search=${search} />`;
   if (page === "mcp")
     view = html`<div className="dash-scroll"><${McpConnect} server=${`${stack}/mcp`} /></div>`;
   return html`
@@ -239,6 +245,44 @@ function Contexts({ path, search }) {
       state=${contextViewStateOf(view)}
       onStateChange=${patchView}
     />
+  `;
+}
+
+/** The mind's secrets. This page reads the list, and reads it again after a set or a delete. The
+ *  sheet's state is `?view`, so New secret and a row's Update are links: opening one is a new entry
+ *  in the history, and Back closes it. */
+function Secrets({ search }) {
+  const [view] = useView(search);
+  // undefined while the page reads; then `{ secrets }`, `{ off }` for a mind with no vault, or `{ error }`
+  const [list, setList] = useState();
+  const reload = useCallback(async () => {
+    try {
+      const vault = await itx.rewriteRules.get("itx.secrets");
+      setList(vault?.target ? { secrets: await itx.secrets.list() } : { off: true });
+    } catch (failure) {
+      setList({ error: failure instanceof Error ? failure.message : String(failure) });
+    }
+  }, []);
+  useEffect(() => {
+    reload();
+  }, [reload]);
+  if (!list) return html`<p className="dash-note" data-spinner="true">Reading the secrets…</p>`;
+  if (list.error) return html`<p role="alert" className="dash-note dash-error">${list.error}</p>`;
+  if (list.off) return html`<p className="dash-note">This mind has no vault for secrets yet.</p>`;
+  return html`
+    <div className="dash-scroll">
+      <${SecretsPage}
+        itx=${itx}
+        secrets=${list.secrets}
+        state=${secretsPageStateOf(view)}
+        onStateChange=${(next, replace) =>
+          go(
+            hrefOf({ view: Object.keys(next).length ? JSON.stringify(next) : undefined }),
+            replace,
+          )}
+        onChanged=${reload}
+      />
+    </div>
   `;
 }
 
@@ -293,6 +337,12 @@ function Overview() {
               link: linkTo(pageOf("repo")),
             },
             {
+              name: "Secrets",
+              icon: LockKeyholeIcon,
+              about: "What the mind may send where: set, update, delete.",
+              link: linkTo(pageOf("secrets")),
+            },
+            {
               name: "MCP",
               icon: PlugIcon,
               about: "Connect Claude Code or the Codex CLI to this mind.",
@@ -344,6 +394,12 @@ function Nav({ page, waiting }) {
     },
     { name: "Contexts", icon: WaypointsIcon, page: "contexts", link: linkTo(pageOf("contexts")) },
     { name: "Config repo", icon: FolderGit2Icon, page: "repo", link: linkTo(pageOf("repo")) },
+    {
+      name: "Secrets",
+      icon: LockKeyholeIcon,
+      page: "secrets",
+      link: linkTo(pageOf("secrets")),
+    },
     { name: "MCP", icon: PlugIcon, page: "mcp", link: linkTo(pageOf("mcp")) },
   ];
   return html`

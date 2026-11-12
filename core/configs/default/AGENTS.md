@@ -190,9 +190,10 @@ it. It reads through the member's `itx` and writes nothing.
 `apps/voice/` is the Voice app, on `voice.<domain>` for members: a call to the mind from a browser
 ("Voice", below).
 `apps/dash/` is the Dash, on `dash.<domain>` for members: an overview with the way to every app,
-any context of the mind, live, the config repo as a small IDE, and how to connect a coding agent
-over MCP. Its larger parts are components of `@iterate-com/ui`, the ones iterate's hosted Dash
-draws; `public/app.js` is the wiring, the sidebar and the overview, and it is yours to change.
+any context of the mind, live, the config repo as a small IDE, the mind's secrets, and how to
+connect a coding agent over MCP. Its larger parts are components of `@iterate-com/ui`, the ones
+iterate's hosted Dash draws; `public/app.js` is the wiring, the sidebar and the overview, and it
+is yours to change.
 
 ```
 apps/<name>/
