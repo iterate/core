@@ -23,9 +23,14 @@ import {
   MEMBER_ADDED,
   type SignedChange,
   signedChange,
+  signedChangeBy,
   signerOf,
   signScript,
 } from "./signed-change.ts";
+
+/** What an owner signs to take a member's keys away, and to make a member's sign-in link. */
+const MEMBER_KEYS_REMOVED = "events.iterate.com/account/member-keys-removed";
+const MEMBER_LINK_MADE = "events.iterate.com/account/member-link-made";
 
 const MEMBERS_PATH = "/members";
 
@@ -62,6 +67,17 @@ export const passkeyOwedResponse = (here: string) =>
       "cache-control": "no-store",
     },
   });
+
+/** Whether the member with this address holds a passkey that is not removed. */
+export async function memberHoldsPasskey(env: Env, email: string): Promise<boolean> {
+  const held = await env.DB.prepare(
+    `select 1 from keys where format = 'webauthn' and revoked_at is null
+       and user_id = (select id from users where email = ?1) limit 1`,
+  )
+    .bind(email.trim().toLowerCase())
+    .first();
+  return Boolean(held);
+}
 
 export async function isAdded(env: Env, email: string): Promise<boolean> {
   const row = await env.DB.prepare("select 1 from members where email = ?1")
@@ -115,17 +131,15 @@ export async function membersResponse(
   const form = await request.formData().catch(() => null);
   const email = String(form?.get("email") || "");
   const action = form?.get("action");
-  if (action === "remove-keys") {
-    const outcome = owner
-      ? await removeKeys(env, session, email)
-      : { error: "Only an owner, a member the stack's config names, removes a member's keys." };
-    if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
-    return outcome.facts.on(await membersPage(env, { owner, notice: outcome.notice }));
-  }
-  if (action === "link") {
-    const outcome = owner
-      ? await memberLink(env, session, email)
-      : { error: "Only an owner, a member the stack's config names, makes a sign-in link." };
+  if (action === "remove-keys" || action === "link") {
+    const [type, act] =
+      action === "link"
+        ? ([MEMBER_LINK_MADE, memberLink] as const)
+        : ([MEMBER_KEYS_REMOVED, removeKeys] as const);
+    const press = owner
+      ? await ownerPress(env, session, form?.get("signed"), type, email)
+      : { error: "Only an owner, a member the stack's config names, does this." };
+    const outcome = "error" in press ? press : await act(env, session, email, press);
     if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
     return outcome.facts.on(await membersPage(env, { owner, notice: outcome.notice }));
   }
@@ -232,10 +246,32 @@ async function remove(env: Env, actor: Session, typed: string): Promise<Outcome>
 
 // A lost passkey's way back in. A mailed code signs in a member who holds no passkey, so this is
 // an owner's alone, and never for an owner's keys: an owner's way back in is a deploy's ticket.
+/** AN OWNER'S ACT ON ANOTHER MEMBER'S WAY IN TAKES THE OWNER'S PASSKEY. A link for a member lets a
+ *  new key act as that member, and with the member's keys removed a mailed code does the same. So
+ *  each is a statement of `type` that names the member, signed by a passkey of the owner whose
+ *  session posts it. A session alone, which can be stolen, does neither. */
+async function ownerPress(
+  env: Env,
+  actor: Session,
+  signed: unknown,
+  type: string,
+  typed: string,
+): Promise<SignedChange | { error: string }> {
+  const change = await signedChangeBy(env, signed, type, actor.email);
+  if ("refused" in change)
+    return {
+      error: `Nothing was changed: ${change.refused}. This takes a press of your passkey.`,
+    };
+  if (change.payload.email !== typed.trim().toLowerCase())
+    return { error: "Nothing was changed: the signed statement names another member." };
+  return change;
+}
+
 async function removeKeys(
   env: Env,
   actor: Session,
   typed: string,
+  press: SignedChange,
 ): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
   const email = typed.trim().toLowerCase();
   if (isOwner(iterateConfigOf(env).login, email))
@@ -257,7 +293,7 @@ async function removeKeys(
   for (const key of results)
     facts.add(key.userId, {
       type: "events.iterate.com/account/key-removed",
-      payload: { key: key.id, label: key.label, at, removedBy: actor.userId },
+      payload: { key: key.id, label: key.label, at, removedBy: actor.userId, ...signerOf(press) },
       idempotencyKey: `account/key-removed:${key.id}:${at}`,
     });
   console.info({ event: "auth.member-keys-removed", by: actor.userId, keys: results.length });
@@ -275,12 +311,19 @@ async function memberLink(
   env: Env,
   actor: Session,
   typed: string,
+  press: SignedChange,
 ): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
   const email = typed.trim().toLowerCase();
   if (isOwner(iterateConfigOf(env).login, email))
     return { error: `${email} is an owner. An owner gets in with a deploy's link.` };
   if (!(await isMember(env, email)))
     return { error: `${email} is not a member. Add the member first.` };
+  // The link is for a member with no passkey. Beside a passkey that the member holds, it would
+  // add a second key that the member does not know of.
+  if (await memberHoldsPasskey(env, email))
+    return {
+      error: `${email} has a passkey here. If it is lost, remove this member's keys first: then the link lets them add a new one.`,
+    };
   const ticket = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const expires = Date.now() + FIRST_OWNER_TICKET_MS;
   await env.DB.prepare(
@@ -290,8 +333,8 @@ async function memberLink(
     .run();
   const facts = new AccountFacts();
   facts.add(actor.userId, {
-    type: "events.iterate.com/account/member-link-made",
-    payload: { email, expires },
+    type: MEMBER_LINK_MADE,
+    payload: { email, expires, ...signerOf(press) },
   });
   console.info({ event: "auth.member-link-made", by: actor.userId });
   return {
@@ -418,17 +461,21 @@ async function membersPage(
         owner
           ? `<h2>A member lost a passkey</h2>
       <p>Remove the member's keys. This signs the member out of every app and device. A code by email then signs the member in once, to add a new passkey.</p>
-      <form method="post" action="${MEMBERS_PATH}" class="stack">
+      <form method="post" action="${MEMBERS_PATH}" class="stack" data-signed="${MEMBER_KEYS_REMOVED}">
         <input type="hidden" name="action" value="remove-keys">
+        <input type="hidden" name="signed">
         <label>The member's email <input type="email" name="email" autocomplete="off" required></label>
         <button type="submit">Remove this member's keys</button>
+        <p class="muted" role="status" data-status>Your passkey signs this.</p>
       </form>
       <h2>A sign-in link for a member</h2>
       <p>For a member who has no passkey here and cannot get a code by email. The link signs the member in once, to add a passkey. Whoever holds the link is that member, so pass it on yourself.</p>
-      <form method="post" action="${MEMBERS_PATH}" class="stack">
+      <form method="post" action="${MEMBERS_PATH}" class="stack" data-signed="${MEMBER_LINK_MADE}">
         <input type="hidden" name="action" value="link">
+        <input type="hidden" name="signed">
         <label>The member's email <input type="email" name="email" autocomplete="off" required></label>
         <button type="submit">Make a sign-in link</button>
+        <p class="muted" role="status" data-status>Your passkey signs this.</p>
       </form>
       <h2>Block a person who is not a member</h2>
       <p>For a stack whose sign-in is open to anyone, so that its apps have users of their own. A blocked address gets no sign-in code, and is signed out of every app at once.</p>
@@ -458,7 +505,21 @@ form.addEventListener("submit", async (event) => {
   } catch (error) {
     status.textContent = error.name === "NotAllowedError" ? "No passkey was used, so no member was added." : error.message || "The member was not added.";
   }
-});`;
+});
+// An owner's act on a member's way in: the owner's passkey signs the act and the member it names.
+for (const act of document.querySelectorAll("form[data-signed]"))
+  act.addEventListener("submit", async (event) => {
+    if (act.signed.value) return;
+    event.preventDefault();
+    const said = act.querySelector("[data-status]");
+    try {
+      said.textContent = "Waiting for your passkey…";
+      act.signed.value = JSON.stringify(await signedStatement({ type: act.dataset.signed, payload: { email: act.email.value.trim().toLowerCase() } }));
+      act.submit();
+    } catch (error) {
+      said.textContent = error.name === "NotAllowedError" ? "No passkey was used, so nothing was changed." : error.message || "Nothing was changed.";
+    }
+  });`;
 
 // The bearer is the credential here, never a cookie.
 function corsHeaders(env: Env, request: Request) {

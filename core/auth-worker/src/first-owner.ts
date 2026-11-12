@@ -5,7 +5,7 @@ import { sessionCookie, sessionOf } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import { honouredNext } from "./key-rules.ts";
-import { isMember } from "./members.ts";
+import { isMember, memberHoldsPasskey } from "./members.ts";
 import { page, text } from "./pages.ts";
 import { linkIdentity } from "./users.ts";
 
@@ -80,7 +80,13 @@ async function spentMemberTicket(
   )
     .bind(hash, now)
     .first<{ email: string }>();
-  if (row) return (await isMember(env, row.email)) ? row : { refused: "no longer a member" };
+  if (row) {
+    if (!(await isMember(env, row.email))) return { refused: "no longer a member" };
+    // made for a member with no passkey: one who has one since then signs in with it
+    if (await memberHoldsPasskey(env, row.email))
+      return { refused: "this member has a passkey now, and signs in with it" };
+    return row;
+  }
   const known = await env.DB.prepare("select 1 from member_tickets where hash = ?1")
     .bind(hash)
     .first();
