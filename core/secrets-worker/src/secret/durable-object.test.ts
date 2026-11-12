@@ -517,7 +517,9 @@ test("a rule cannot be loosened without a signature, and a member's signed state
   const by = { userId: "user_aaaa", email: "member@example.com" };
   await expect(
     secret.tightenRule(PATH, { rule: { methods: ["PUT"], hosts: ["gmail.googleapis.com"] }, by }),
-  ).rejects.toThrow("needs a member's signed statement");
+  ).rejects.toThrow(
+    `That takes your key, whether the rules for mail and calls are locked or not: go back, and press "Sign and save" in the block of ${PATH}`,
+  );
   await decide(MEMBER, {
     type: "events.iterate.com/secret/approval-rule-configured",
     payload: { rule: null },

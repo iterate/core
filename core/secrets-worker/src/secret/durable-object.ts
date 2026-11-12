@@ -1038,7 +1038,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (!isTightening(this.#rule(), rule))
       throw codedError(
         "FORBIDDEN",
-        `the rule of ${path} would hold fewer requests: removing a method or a host needs a member's signed statement`,
+        `the rule of ${path} would hold fewer requests than the rule it has now. That takes your key, whether the rules for mail and calls are locked or not: go back, and press "Sign and save" in the block of ${path}`,
       );
     this.#setRule(path, rule);
     await this.env.APPROVALS.getByName(INDEX).add(path);

@@ -29,6 +29,7 @@ import {
   heldActs,
   PROPOSALS_PATH,
   proposedRules,
+  secretRuleInWords,
 } from "./acts-page.ts";
 import type { ApprovalRule, HeldRequest } from "./approval.ts";
 import { admitted, callbackPage, escaped, plainPage } from "./callback-page.ts";
@@ -102,6 +103,14 @@ export async function secretApprovals(request: Request, deps: ApprovalsDeps): Pr
       String(form.get(name) ?? "")
         .split(/[\s,]+/)
         .filter(Boolean);
+    // ONE FORM FOR ONE SECRET. "A new rule" is for a secret that has none. For a secret with a
+    // rule its Save would change that rule, which this form does not show: the rule's own block
+    // shows it, in words.
+    if (form.get("new") && (await deps.secretOf(path).approvals(path)).rule)
+      return plainPage(
+        400,
+        `<p role="alert" data-type="error">${escaped(path)} has a rule already. <a href="${SECRET_APPROVALS_PATH}#${escaped(ruleBlockId(path))}">Change it in its own block.</a></p>`,
+      );
     try {
       const answer = await deps.secretOf(path).tightenRule(path, {
         rule: {
@@ -264,8 +273,12 @@ export function ruleForm(
 ): string {
   const field = (name: string, label: string, value: string, required = "required") =>
     `<label>${label} <input name="${name}" value="${escaped(value)}" size="44" ${required}></label>`;
-  return `<form method="post" action="${RULES_PATH}" class="stack" data-rule>
-${path ? `<input type="hidden" name="path" value="${escaped(path)}"><h3>${escaped(path)}</h3>` : `<h3>A new rule</h3>${field("path", "Secret", "/secrets/")}`}
+  // THE RULE IN WORDS, ABOVE ITS FIELDS: what waits and what stays free, as a proposed rule's row
+  // says it. The page's script says them again from the fields as a member types.
+  const words = path && rule ? secretRuleInWords({ ...rule, secret: path }) : "";
+  return `<form method="post" action="${RULES_PATH}" class="stack" data-rule${path ? ` id="${escaped(ruleBlockId(path))}"` : ""}>
+${path ? `<input type="hidden" name="path" value="${escaped(path)}"><h3>${escaped(path)}</h3>` : `<input type="hidden" name="new" value="1"><h3>A new rule</h3>${field("path", "Secret", "/secrets/")}<p role="alert" data-type="error" data-has-rule hidden></p>`}
+<p data-words${words ? "" : " hidden"}>${escaped(words)}</p>
 ${field("methods", "Methods", rule?.methods.join(", ") ?? "POST")}
 ${field("hosts", "Hosts", rule?.hosts.join(", ") ?? "")}
 ${field("jsonStrings", "Only when the JSON body holds one of these, or leave empty for every request", rule?.jsonStrings?.join(", ") ?? "", "")}
@@ -274,6 +287,16 @@ ${field("freePaths", "Paths that never wait, or leave empty", rule?.freePaths?.j
 <p class="muted">For an address that takes files, whose body is no JSON: /jmap/upload/ lets an attachment go to Fastmail. A path with a % or a query still waits.</p>
 <p class="actions"><button type="submit">Save</button>${path ? ` <button type="button" class="link" data-sign-rule>Sign and save</button> <button type="button" class="link" data-remove-rule>Remove, signed</button>` : ""}</p></form>`;
 }
+
+/** The id of the block of a secret's own rule, which "A new rule" leads to. */
+const ruleBlockId = (path: string) => `rule-${path}`;
+
+/** WHAT A RULE'S FORM SAYS ABOVE ITS FIELDS AS A MEMBER TYPES. `typed` is the fields' rule in
+ *  words, or nothing while they name no secret, method or host. The saved rule's words stay while
+ *  the fields are that rule; a rule that differs is marked, so a member reads what a press saves
+ *  or signs. It runs in the page: the script below carries its source. */
+export const wordsAsTyped = (saved: string, typed: string) =>
+  typed && typed !== saved ? `Not saved yet: ${typed}` : saved;
 
 /** WHICH HELD ROW IS TICKED WHEN THE PAGE OPENS: the one the page's link names (`?digest=`), when
  *  the page's own hash of the row's text is its id. No other row: one press of Approve signs for
@@ -286,6 +309,8 @@ export const tickedAtOpen = (digest: string, good: boolean, wanted: string | nul
 export const SCRIPT = `
 const data = JSON.parse(document.getElementById("approvals-data").textContent);
 const tickedAtOpen = ${tickedAtOpen.toString()};
+const secretRuleInWords = ${secretRuleInWords.toString()};
+const wordsAsTyped = ${wordsAsTyped.toString()};
 const wanted = new URLSearchParams(location.search).get("digest");
 const enc = new TextEncoder();
 const T = "application/vnd.iterate.statement+json";
@@ -363,8 +388,33 @@ for (const section of document.querySelectorAll("[data-secret]")) {
 for (const form of document.querySelectorAll("[data-rule]")) {
   const words = (name) => form.elements[name].value.split(/[\\s,]+/).filter(Boolean);
   const path = () => form.elements.path.value;
+  // The fields' rule, read as Save's post is read. The words above the fields and the statement
+  // that the key signs are both made from it.
+  const typed = () => ({ methods: words("methods"), hosts: words("hosts"), jsonStrings: words("jsonStrings"), freePaths: words("freePaths") });
+  const said = form.querySelector("[data-words]");
+  const saved = said.textContent;
+  // "A new rule" is for a secret that has none: a secret with a rule is changed in its own block.
+  const hasRule = form.querySelector("[data-has-rule]");
+  const leadsToBlock = () => {
+    const block = hasRule && document.getElementById("rule-" + path());
+    if (hasRule) hasRule.hidden = !block;
+    if (block) {
+      const link = document.createElement("a");
+      link.href = "#" + block.id;
+      link.textContent = "Change it in its own block";
+      hasRule.replaceChildren(path() + " has a rule already. ", link, ".");
+    }
+    return Boolean(block);
+  };
+  form.addEventListener("input", () => {
+    const rule = typed();
+    const named = !leadsToBlock() && /^\\/secrets\\/./.test(path()) && rule.methods.length && rule.hosts.length;
+    said.textContent = wordsAsTyped(saved, named ? secretRuleInWords({ secret: path(), ...rule }) : "");
+    said.hidden = !said.textContent;
+  });
+  form.addEventListener("submit", (event) => { if (leadsToBlock()) event.preventDefault(); });
   form.querySelector("[data-sign-rule]")?.addEventListener("click", () =>
-    sign({ path: path(), type: data.types.rule, payload: { rule: { methods: words("methods"), hosts: words("hosts"), jsonStrings: words("jsonStrings"), freePaths: words("freePaths") } } }).catch(fail));
+    sign({ path: path(), type: data.types.rule, payload: { rule: typed() } }).catch(fail));
   form.querySelector("[data-remove-rule]")?.addEventListener("click", () =>
     sign({ path: path(), type: data.types.rule, payload: { rule: null } }).catch(fail));
 }
