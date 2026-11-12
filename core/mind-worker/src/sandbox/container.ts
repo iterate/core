@@ -69,6 +69,9 @@ const REACHABLE: ReadonlySet<string> = new Set([
   "resize",
 ]);
 
+/** Where a sandbox keeps its secret list, for every later start (an idle sandbox restarts). */
+const EGRESS_SECRETS = "egressSecrets";
+
 /** NEVER `enableInternet`: a sandbox's only way out is the mind's egress. */
 export type SandboxStartOptions = {
   image?: string;
@@ -77,6 +80,8 @@ export type SandboxStartOptions = {
   env?: Record<string, string>;
   instance?: ContainerStartupOptions["instance"];
   labels?: Record<string, string>;
+  /** The secrets the sandbox's requests may name (secret-list.ts), kept until a start names others. */
+  secrets?: string[];
 };
 
 /** `timeoutMs` stands for the `signal` that cannot cross an RPC. */
@@ -256,7 +261,8 @@ export class SandboxContainer extends DurableObject {
     }
     this.#toolReady = false;
     const began = Date.now();
-    const { image, containerSnapshot, ...rest } = options;
+    const { image, containerSnapshot, secrets, ...rest } = options;
+    if (secrets) await this.ctx.storage.put(EGRESS_SECRETS, secrets);
     // the egress is registered first: a name looked up before it is would time out
     await this.#intercept();
     container.start({
@@ -301,9 +307,14 @@ export class SandboxContainer extends DurableObject {
   async #intercept(): Promise<void> {
     if (!this.ctx.id.name) throw new Error("SandboxContainer: its name is the sandbox's context");
     const { SandboxEgress } = this.ctx.exports as unknown as {
-      SandboxEgress: (options: { props: { iterateContextName: string } }) => Fetcher;
+      SandboxEgress: (options: {
+        props: { iterateContextName: string; secrets?: string[] };
+      }) => Fetcher;
     };
-    const egress = SandboxEgress({ props: { iterateContextName: this.ctx.id.name } });
+    const secrets = await this.ctx.storage.get<string[]>(EGRESS_SECRETS);
+    const egress = SandboxEgress({
+      props: { iterateContextName: this.ctx.id.name, secrets },
+    });
     await this.#container.interceptAllOutboundHttp(egress);
     await this.#container.interceptOutboundHttps("*", egress);
   }

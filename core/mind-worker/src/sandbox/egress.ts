@@ -9,10 +9,18 @@ import {
   stampCallerHeaders,
 } from "core-itx";
 import type { Env } from "../env.ts";
+import { secretListRefusal } from "./secret-list.ts";
 
-/** Its props name the sandbox's context, which the container cannot reach. */
-export class SandboxEgress extends WorkerEntrypoint<Env, { iterateContextName: string }> {
+/** Its props name the sandbox's context, which the container cannot reach, and the sandbox's
+ *  secret list when it has one (secret-list.ts): a request naming another secret goes nowhere. */
+export class SandboxEgress extends WorkerEntrypoint<
+  Env,
+  { iterateContextName: string; secrets?: string[] }
+> {
   override async fetch(request: Request): Promise<Response> {
+    // before the handshake's own route too: a WebSocket must not be the way round the list
+    const refused = secretListRefusal(request, this.ctx.props.secrets);
+    if (refused) return refused;
     const { path } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket")
       return this.#upgrade(request, path);

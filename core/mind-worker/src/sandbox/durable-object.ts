@@ -29,10 +29,13 @@ const StartOptions = z
     instance: SandboxInstance.optional(),
     labels: z.record(z.string(), z.string()).optional(),
     from: z.string().min(1).optional(),
+    // the secrets the sandbox's requests may name, from this start on (secret-list.ts); none given
+    // keeps the list it had, and a sandbox that never had one may name any
+    secrets: z.array(z.string().startsWith("/secrets/")).optional(),
     // strict: `enableInternet` is refused, not ignored: a sandbox's only way out is the mind's egress
   })
   .strict();
-const ContainerStartOptions = StartOptions.omit({ from: true });
+const ContainerStartOptions = StartOptions.omit({ from: true, secrets: true });
 const ExecOptions = z.object({
   cwd: z.string().min(1).optional(),
   env: z.record(z.string(), z.string()).optional(),
