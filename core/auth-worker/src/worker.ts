@@ -12,6 +12,7 @@ import {
   TOKEN_ENDPOINT,
   hostClientOf,
 } from "./oauth.ts";
+import { askingAppOf } from "./asking-app.ts";
 import { authorizeResponse } from "./authorize.ts";
 import { deviceCallbackResponse } from "./device/callback.ts";
 import { devicePageResponse } from "./device/page.ts";
@@ -93,7 +94,7 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
       const { domain, login } = iterateConfigOf(this.env);
       return login.methods.email
         ? Response.redirect(`${issuerOf(this.env)}${signInHref(this.env, next)}`, 302)
-        : signInPage(domain, next, offersGoogle(this.env));
+        : signInPage(domain, next, offersGoogle(this.env), await askingAppOf(this.env, next));
     }
     const members = await membersResponse(this.env, request, (token, resource) =>
       this.whoIs(token, resource),

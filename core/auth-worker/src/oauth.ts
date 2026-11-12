@@ -84,6 +84,11 @@ export async function withKnownResource(env: Env, request: Request): Promise<Req
 export const hostCallbackOf = (hostResource: string) =>
   `${hostResource}${HOST_SESSION_PREFIX}callback`;
 
+const hostClientKeyOf = (host: string) => `iterate-host-client:${host}`;
+
+/** The id of the client this stack made for `host` (`hostClientOf`), if it made one. */
+export const keptHostClientOf = (env: Env, host: string) => env.OAUTH_KV.get(hostClientKeyOf(host));
+
 /** The OAuth client a mind hostname signs its visitors in with, made at the host's first sign-in.
  *  Two first sign-ins at once may each make one; the last id kept is used from then on, and the
  *  other still works for the sign-in that holds it. The library never expires a client, and a mind
@@ -92,7 +97,7 @@ export const hostCallbackOf = (hostResource: string) =>
 export async function hostClientOf(env: Env, host: string): Promise<string> {
   const hostResource = mindHostResourceOf(env, `https://${host}`);
   if (!hostResource) throw codedError("INVALID_INPUT", `${host} is not a hostname of this mind`);
-  const key = `iterate-host-client:${new URL(hostResource).host}`;
+  const key = hostClientKeyOf(new URL(hostResource).host);
   const kept = await env.OAUTH_KV.get(key);
   if (kept) return kept;
   if (!(await admitted(env, "host-client", new Request(hostResource))))
@@ -389,8 +394,8 @@ function hostOfOwnCallback(env: Env, redirectUri: string | undefined) {
 /** One OAuth client that holds access as a person, with its live sessions and grants. */
 export type ClientWithAccess = {
   clientId: string;
-  /** The client's own name. A mind hostname's own client is named by its host, and a client that
-   *  gave no name is "". */
+  /** The client's own name. A mind hostname's own client is named as its app names itself, else by
+   *  its host, and a client that gave no name is "". */
   name: string;
   /** The mind hostname whose own client this is: one of the mind's pages or apps. */
   host?: string;
@@ -414,19 +419,28 @@ export async function sessionsByClientOf(env: Env, userId: string): Promise<Clie
   const clients = new Map<string, ClientWithAccess>();
   for (const signIn of await signInsOf(env, userId)) {
     const client = clients.get(signIn.clientId);
-    if (client) client.signIns.push(signIn);
-    else
-      clients.set(signIn.clientId, {
-        clientId: signIn.clientId,
-        name: signIn.host ? new URL(signIn.host).host : signIn.clientName,
-        host: signIn.host,
-        redirectUri: signIn.redirectUri,
-        goesTo: signIn.goesTo,
-        device: signIn.device,
-        logoUri: signIn.logoUri,
-        clientDomain: signIn.clientDomain,
-        signIns: [signIn],
-      });
+    if (client) {
+      client.signIns.push(signIn);
+      continue;
+    }
+    // A mind hostname's own client holds what its app says of itself, its name and its icon
+    // (./asking-app.ts writes them). A host that says nothing is named by its host.
+    const own = signIn.host
+      ? await oauthHelpers(env, signIn.host)
+          .lookupClient(signIn.clientId)
+          .catch(() => null)
+      : null;
+    clients.set(signIn.clientId, {
+      clientId: signIn.clientId,
+      name: signIn.host ? own?.clientName || new URL(signIn.host).host : signIn.clientName,
+      host: signIn.host,
+      redirectUri: signIn.redirectUri,
+      goesTo: signIn.goesTo,
+      device: signIn.device,
+      logoUri: signIn.host ? own?.logoUri : signIn.logoUri,
+      clientDomain: signIn.clientDomain,
+      signIns: [signIn],
+    });
   }
   return [...clients.values()];
 }

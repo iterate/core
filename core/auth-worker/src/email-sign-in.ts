@@ -2,13 +2,14 @@ import { waitUntil } from "cloudflare:workers";
 import { sameOriginPath, cookieValueOf, reportIssue } from "iterate/lib";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
+import { askingAppOf } from "./asking-app.ts";
 import { isBlocked } from "./blocked.ts";
 import { emailAllowed } from "./config.ts";
 import { sessionCookie } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import { clientOf } from "./device/limits.ts";
 import { type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
-import { errorPage, googleSignIn, page, passkeySignIn, text } from "./pages.ts";
+import { appSignIn, errorPage, googleSignIn, page, passkeySignIn, text } from "./pages.ts";
 import { addressProven } from "./keys.ts";
 import { isAdded } from "./members.ts";
 import { linkIdentity } from "./users.ts";
@@ -59,33 +60,61 @@ export async function emailSignInResponse(env: Env, request: Request) {
   return request.method === "POST" ? finish(env, request) : codePage(env, request);
 }
 
-/** Who gets a code here, said on both pages. It is the stack's rule, which its config makes
+/** Whether a new address gets a code here. It is the stack's rule, which its config makes
  *  public, and never one address's standing: every address is still answered alike. */
-function whoGetsACode(env: Env) {
+function anyoneGetsACode(env: Env) {
   const { methods, allow } = iterateConfigOf(env).login;
+  return Boolean(methods.email?.anyone || allow.some((rule) => "everyone" in rule));
+}
+
+/** Who gets a code here, as the mind's own two pages say it. */
+function whoGetsACode(env: Env) {
   const { domain } = iterateConfigOf(env);
-  return methods.email?.anyone || allow.some((rule) => "everyone" in rule)
+  return anyoneGetsACode(env)
     ? `Anyone can sign in to ${domain}. A new address gets an account of its own, with no access to the mind itself.`
     : `${domain} takes no new sign-ups: a code goes only to an address that is already a member. Any other address gets no code and no error.`;
 }
 
-function addressPage(env: Env, request: Request, error?: string, typed = "") {
+/** The app that a sign-in is for, as both pages say it: its head, and its block with who gets a
+ *  code. Null for the mind's own sign-in. */
+async function askingOf(env: Env, next: string, heading?: string) {
+  const app = await askingAppOf(env, next);
+  if (!app) return null;
+  const said = appSignIn(app, iterateConfigOf(env).domain, {
+    heading,
+    signUps: anyoneGetsACode(env) ? "anyone" : "members",
+  });
+  return { ...said, app };
+}
+
+/** The mind's own line above a form: who gets a code, and `more` after it. A page with an app's
+ *  block says who gets a code there, so it keeps `more` alone. */
+function ruleAbove(env: Env, asking: object | null, more = "") {
+  if (asking) return more && `<p class="muted">${text(more)}</p>`;
+  return `<p class="muted">${text(`${whoGetsACode(env)} ${more}`.trim())}</p>`;
+}
+
+async function addressPage(env: Env, request: Request, error?: string, typed = "") {
   const { domain } = iterateConfigOf(env);
   const next = new URL(request.url).searchParams.get("next") || "/";
   const passkey = passkeySignIn(next);
+  // a sign-in that an app of this mind started says which app, on each of its pages
+  const asking = await askingOf(env, next);
   return page({
-    title: `Sign in to ${domain}`,
+    title: asking?.title || `Sign in to ${domain}`,
+    asker: asking?.asker,
+    imageOrigin: asking?.imageOrigin,
     status: error ? 400 : 200,
-    body: `<h1>Sign in to ${text(domain)}</h1>
+    body: `${asking?.heading || `<h1>Sign in to ${text(domain)}</h1>`}
       <p class="muted">Enter your email. We send you a code to sign in with.</p>
-      <p class="muted">${text(whoGetsACode(env))}</p>
+      ${ruleAbove(env, asking)}
       ${error ? `<p role="alert">${text(error)}</p>` : ""}
       <form method="post" action="${EMAIL_SIGN_IN_PATH}" class="stack">
         <input type="hidden" name="next" value="${text(next)}">
         <label>Email <input type="email" name="email" value="${text(typed)}" autocomplete="email" placeholder="you@example.com" required></label>
         <button type="submit">Send a code</button>
       </form>
-      ${passkey.body}${offersGoogle(env) ? googleSignIn(next) : ""}`,
+      ${passkey.body}${offersGoogle(env) ? googleSignIn(next) : ""}${asking?.about || ""}`,
     script: passkey.script,
   });
 }
@@ -162,18 +191,26 @@ async function codePage(env: Env, request: Request, error?: string, status = 200
         .first<Pick<Challenge, "email" | "next">>()
     : null;
   if (!challenge) return restart(env, "/");
+  // the code is for the app that the sign-in started from, and the page still says which
+  const asking = await askingOf(env, challenge.next, "Enter your code");
+  const head = asking
+    ? `${asking.heading}
+      <p class="muted">You sign in to <strong>${text(asking.app.name)}</strong>.</p>`
+    : "<h1>Enter your code</h1>";
   return page({
     title: "Enter your code",
+    asker: asking?.asker,
+    imageOrigin: asking?.imageOrigin,
     status,
-    body: `<h1>Enter your code</h1>
+    body: `${head}
       <p class="muted">If <strong>${text(challenge.email)}</strong> may sign in here, a code is on its way. It expires in 10 minutes.</p>
-      <p class="muted">${text(whoGetsACode(env))} No code after a minute? Check the spam folder, then send a new one.</p>
+      ${ruleAbove(env, asking, "No code after a minute? Check the spam folder, then send a new one.")}
       ${error ? `<p role="alert">${text(error)}</p>` : ""}
       <form method="post" action="${CODE_PATH}" class="stack">
         <label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
         <button type="submit">Sign in</button>
       </form>
-      <p><a href="${text(`${EMAIL_SIGN_IN_PATH}?${new URLSearchParams({ next: challenge.next })}`)}">Use another email, or send a new code</a></p>`,
+      <p><a href="${text(`${EMAIL_SIGN_IN_PATH}?${new URLSearchParams({ next: challenge.next })}`)}">Use another email, or send a new code</a></p>${asking?.about || ""}`,
   });
 }
 

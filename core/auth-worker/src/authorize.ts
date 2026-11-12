@@ -6,6 +6,7 @@ import {
 } from "@cloudflare/workers-oauth-provider";
 import { mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
 import { AccountFacts } from "./account-facts.ts";
+import { appOf, askingAppOf } from "./asking-app.ts";
 import { clearSessionCookie, type Session, sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import {
@@ -75,7 +76,14 @@ async function describe(env: Env, request: Request) {
       headers: { location: signIn, "set-cookie": clearSessionCookie, "cache-control": "no-store" },
     });
   if (prompt === "select_account")
-    return chooserPage({ domain: iterateConfigOf(env).domain, email: session.email, here });
+    return chooserPage({
+      domain: iterateConfigOf(env).domain,
+      email: session.email,
+      here,
+      // an app's own sign-in says which app, to a person who is no member: a member's page is
+      // the mind's own
+      app: (await standingOf(env, session)) === "member" ? null : await askingAppOf(env, here),
+    });
   const refused = await notMemberRefusal(env, session, hostResource, here);
   if (refused) return refused;
   // a hostname's own sign-in: the code goes to ingress on that host alone, and is not a consent
@@ -103,6 +111,8 @@ async function describe(env: Env, request: Request) {
     domain: iterateConfigOf(env).domain,
     resource: resourceInWords(env, authRequest.resource),
     host: hostResource ? new URL(hostResource).host : undefined,
+    // the app that the host is, by the name it gives itself
+    app: hostResource ? await appOf(env, hostResource) : undefined,
     here,
     headers: consent.headers,
   });

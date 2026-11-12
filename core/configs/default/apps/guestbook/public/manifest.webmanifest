@@ -1,0 +1,14 @@
+{
+  "name": "Guestbook",
+  "short_name": "Guestbook",
+  "description": "A guestbook. Anyone reads it, and anyone who signs in writes in it.",
+  "start_url": "/",
+  "display": "browser",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

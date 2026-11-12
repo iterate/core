@@ -118,6 +118,25 @@ main.asked h1 {
   text-align: center;
   text-wrap: balance;
 }
+/* an app of the mind asks who is there: its host under the heading, and what it is in one block */
+main.asked .where {
+  margin-top: -0.875rem;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.about {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+.about p {
+  margin-bottom: 0.375rem;
+}
+.about strong {
+  color: var(--foreground);
+}
 .mark rect {
   fill: var(--foreground);
 }

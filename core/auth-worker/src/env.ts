@@ -1,5 +1,7 @@
 // env.ts — THE AUTH WORKER'S BINDINGS, as core/alchemy/src/stack.ts declares them, and its config. The boundary
-// and the secrets Worker call it; it calls no other Worker.
+// and the secrets Worker call it; it calls no other Worker. What it reads of the world it reads
+// over the public internet: an outside client's document, and the manifest of an app of the mind
+// (./asking-app.ts).
 import { platformOriginOf } from "iterate/mind-api";
 import { type AuthConfig, authConfigOf } from "./config.ts";
 

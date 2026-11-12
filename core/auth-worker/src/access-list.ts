@@ -7,6 +7,7 @@
 // A CLIENT SAYS ITS OWN NAME AND LOGO (./client-mark.ts). So a client also says where the access
 // went: that is the one thing here a client cannot claim for another.
 import { mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
+import { appTile } from "./asking-app.ts";
 import { clientTile, shownLogoOf } from "./client-mark.ts";
 import { type Env, iterateConfigOf } from "./env.ts";
 import { type ClientWithAccess, mindHostResourceOf, type SignIn } from "./oauth.ts";
@@ -18,8 +19,28 @@ const day = (at: number) => new Date(at).toISOString().slice(0, 10);
 /** The name a person reads for a client. */
 const nameOf = (client: ClientWithAccess) => client.name || "An app";
 
-/** The client's mark. One place, so a kind of client that has a mark of its own gets it here. */
+/** The icon of one of the mind's own apps: its client's logo, which counts from the app's own
+ *  origin alone. */
+const ownIconOf = (client: ClientWithAccess) =>
+  client.host &&
+  URL.canParse(client.logoUri || "") &&
+  new URL(client.logoUri!).origin === client.host
+    ? client.logoUri!
+    : null;
+
+/** The client's mark. One of the mind's own apps has its own icon or its initials, as on the
+ *  sign-in pages (./asking-app.ts), and never a built-in brand mark. Any other client has the
+ *  mark of ./client-mark.ts. */
 const tileOf = (client: ClientWithAccess) =>
+  client.host ? ownAppTile(client, client.host) : otherTile(client);
+
+const ownAppTile = (client: ClientWithAccess, origin: string) =>
+  appTile(
+    { host: new URL(origin).host, origin, name: nameOf(client), icon: ownIconOf(client) },
+    { small: true },
+  );
+
+const otherTile = (client: ClientWithAccess) =>
   clientTile(
     {
       name: nameOf(client),
@@ -105,10 +126,11 @@ export function clientsWithAccess(
 }
 
 /** The origins that the list's pictures come from, for the page's `img-src`: each is a verified
- *  client's own logo on its own domain. */
+ *  client's own logo on its own domain, or the icon of one of the mind's own apps on its own host. */
 export function logoOriginsOf(clients: ClientWithAccess[]): string | undefined {
   const origins = new Set(
     clients.flatMap((client) => {
+      if (client.host) return ownIconOf(client) ? [client.host] : [];
       const logo = shownLogoOf(client);
       return logo ? [logo.origin] : [];
     }),

@@ -1,6 +1,7 @@
 import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
 import { mindMcpNameOf } from "iterate/mind-api";
 import { plainPageCssHash, standalonePage } from "iterate/standalone-page";
+import { type AskingApp, appTile } from "./asking-app.ts";
 import { clientTile, shownLogoOf } from "./client-mark.ts";
 
 export const text = (value: string) =>
@@ -112,13 +113,57 @@ export function homePage(input: {
   });
 }
 
-/** The sign-in page of a mind that mails no code: the passkey, and Google when the mind offers it. */
-export function signInPage(domain: string, next: string, google = false) {
+/** A SIGN-IN THAT AN APP OF THIS MIND STARTED (./asking-app.ts), as each page of it says so. The
+ *  app is the OAuth client that asks, and it is presented as the consent page presents an outside
+ *  client: its tile beside the mind's mark, its name, where it is, and what it gets. A person who
+ *  is no member of the mind reads here that the app learns their address and no more, that the
+ *  sign-in makes them no member, and how to leave. `heading` is the page's `h1` and the app's
+ *  host under it; `about` is the block of facts, for the page's end. `signUps` is the stack's
+ *  rule for a new address, where the page mails a code: the block then says it, and the page says
+ *  it nowhere else. */
+export function appSignIn(
+  app: AskingApp,
+  domain: string,
+  {
+    heading = `Sign in to ${app.name}`,
+    signUps,
+  }: { heading?: string; signUps?: "anyone" | "members" } = {},
+) {
+  const name = text(app.name);
+  const membership =
+    signUps === "anyone"
+      ? "Anyone can sign in. A new address gets an account of its own, with no access to the mind itself."
+      : signUps === "members"
+        ? `${domain} takes no new sign-ups: a code goes only to an address that is already a member. Any other address gets no code and no error.`
+        : `Signing in does not make you a member of ${domain}.`;
+  return {
+    title: `Sign in to ${app.name}`,
+    asker: appTile(app),
+    imageOrigin: app.icon ? app.origin : undefined,
+    heading: `<h1>${text(heading)}</h1>
+      <p class="muted where">${text(app.host)}</p>`,
+    about: `<div class="about" data-app="${text(app.host)}">
+        <p><strong>${name}</strong> is an app of <strong>${text(domain)}</strong>, which runs it.</p>
+        <ul>
+          <li>It learns your email address, and nothing else.</li>
+          <li>${text(membership)}</li>
+          <li>To leave, sign out in the app, or see <a href="/sign-ins">your sign-ins</a>.</li>
+        </ul>
+      </div>`,
+  };
+}
+
+/** The sign-in page of a mind that mails no code: the passkey, and Google when the mind offers it.
+ *  With `app`, the sign-in is for that app of the mind (`appSignIn`). */
+export function signInPage(domain: string, next: string, google = false, app?: AskingApp | null) {
   const passkey = passkeySignIn(next, "alone");
+  const asking = app ? appSignIn(app, domain) : null;
   return page({
-    title: `Sign in to ${domain}`,
-    body: `<h1>Sign in to ${text(domain)}</h1>
-      ${passkey.body}${google ? googleSignIn(next) : ""}`,
+    title: asking?.title || `Sign in to ${domain}`,
+    asker: asking?.asker,
+    imageOrigin: asking?.imageOrigin,
+    body: `${asking?.heading || `<h1>Sign in to ${text(domain)}</h1>`}
+      ${passkey.body}${google ? googleSignIn(next) : ""}${asking?.about || ""}`,
     script: passkey.script,
   });
 }
@@ -216,22 +261,31 @@ export function otherAccountForm(next: string, label = "Use another account") {
 }
 
 /** THE ACCOUNT CHOOSER: who this browser is signed in as, before an authorization goes on. `here`
- *  is the authorization request without its `prompt`, a path of this origin. */
-export function chooserPage(input: { domain: string; email: string; here: string }) {
+ *  is the authorization request without its `prompt`, a path of this origin. With `app`, the
+ *  request is that app's own sign-in, and the page says so (`appSignIn`). */
+export function chooserPage(input: {
+  domain: string;
+  email: string;
+  here: string;
+  app?: AskingApp | null;
+}) {
   const url = new URL(input.here, "https://issuer.invalid");
   // a GET form sends its fields as the query, so each parameter of the request is one
   const fields = [...url.searchParams]
     .map(([name, value]) => `<input type="hidden" name="${text(name)}" value="${text(value)}">`)
     .join("");
+  const asking = input.app ? appSignIn(input.app, input.domain) : null;
   return page({
-    title: `Sign in to ${input.domain}`,
-    body: `<h1>Sign in to ${text(input.domain)}</h1>
+    title: asking?.title || `Sign in to ${input.domain}`,
+    asker: asking?.asker,
+    imageOrigin: asking?.imageOrigin,
+    body: `${asking?.heading || `<h1>Sign in to ${text(input.domain)}</h1>`}
       <p>You are signed in as <strong>${text(input.email)}</strong>.</p>
       <form method="get" action="${text(url.pathname)}" class="stack">
         ${fields}
-        <button type="submit">Continue as ${text(input.email)}</button>
+        <button type="submit">Continue as ${text(input.email)}${input.app ? ` to ${text(input.app.name)}` : ""}</button>
       </form>
-      <div>${otherAccountForm(input.here)}</div>`,
+      <div>${otherAccountForm(input.here)}</div>${asking?.about || ""}`,
   });
 }
 
@@ -252,6 +306,8 @@ export function consentPage(input: {
   domain: string;
   resource: string;
   host?: string;
+  /** That host as the app it is (./asking-app.ts): the page names it as the app names itself. */
+  app?: AskingApp;
   /** The authorization request, a path of this origin: where "use another account" comes back. */
   here: string;
   headers: Headers;
@@ -274,8 +330,8 @@ export function consentPage(input: {
       imageOrigin: shownLogoOf(details)?.origin,
       body: `${
         input.host
-          ? `<h1>${name} wants to use ${text(input.host)} as you</h1>
-        <p>${name} will learn that you are <strong>${text(input.email)}</strong>, and can use ${text(input.host)} as you. It gets nothing else in ${domain}.</p>`
+          ? `<h1>${name} wants to use ${text(input.app?.name || input.host)} as you</h1>
+        <p>${name} will learn that you are <strong>${text(input.email)}</strong>, and can use ${text(input.app?.name || input.host)} as you. It gets nothing else in ${domain}.</p>${input.app && input.app.name !== input.host ? `<p class="muted">${text(input.app.name)} is an app of ${domain}, at ${text(input.host)}.</p>` : ""}`
           : `<h1>${name} wants to access ${domain}</h1>
         <p>${name} will use ${domain} through ${text(input.resource)}, as <strong>${text(input.email)}</strong>. It can read and change everything in this mind.</p>`
       }

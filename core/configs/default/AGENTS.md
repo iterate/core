@@ -323,6 +323,14 @@ to return:
 The paths under `/.iterate/` on every host are the platform's: a form that POSTs to
 `/.iterate/sign-out` signs the person out.
 
+A person who signs in from an app's host sees which app asks: the mind's sign-in pages show the
+app's name and icon, its host, that the app learns their email address and no more, and that the
+sign-in makes them no member. The app says its name and icon in a web app manifest at
+`/manifest.webmanifest` on its own host (`name`, and `icons` with a `src` on the same host), which
+must answer without a sign-in. `apps/guestbook/public/` has one, with `icon.svg` beside it. An
+app with no manifest is shown by its host and its initials. A changed manifest shows within five
+minutes.
+
 A guestbook where anyone signed in keeps their own notes, each person's in a context of its own,
 and only members see who wrote:
 

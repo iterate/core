@@ -136,6 +136,24 @@ main.asked h1 {
 text-align: center;
 text-wrap: balance;
 }
+main.asked .where {
+margin-top: -0.875rem;
+text-align: center;
+overflow-wrap: anywhere;
+}
+.about {
+padding: 0.75rem 1rem;
+border: 1px solid var(--border);
+border-radius: var(--radius);
+color: var(--muted-foreground);
+font-size: 0.875rem;
+}
+.about p {
+margin-bottom: 0.375rem;
+}
+.about strong {
+color: var(--foreground);
+}
 .mark rect {
 fill: var(--foreground);
 }
@@ -393,4 +411,4 @@ grid-column: 2;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-jLwk2bb2QY2RMMEYSHWFUbPJa9OM5BPDcinVqzk+yBo='";
+export const plainPageCssHash = "'sha256-b086NhpjuYap1cyhDl3uDHkP5h+7Jbwa67ix8CfwW/U='";

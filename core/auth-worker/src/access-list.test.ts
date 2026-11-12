@@ -87,6 +87,31 @@ test("a page allows a picture from a verified client's own domain alone", () => 
   expect(logoOriginsOf([claimed, elsewhere])).toBeUndefined();
 });
 
+test("one of the mind's own apps has its own name and icon, from its own host alone, and never a brand's mark", () => {
+  const app = {
+    ...clientOf([codex]),
+    name: "Guestbook",
+    host: "https://guestbook.example.com",
+    logoUri: "https://guestbook.example.com/icon.svg",
+  };
+  const drawn = clientsWithAccess(env, [app], end);
+  expect(drawn).toContain(
+    `<div class="tile small" data-app-mark="icon"><img src="https://guestbook.example.com/icon.svg" alt="" referrerpolicy="no-referrer"></div>`,
+  );
+  expect(words(drawn)).toContain("Guestbook");
+  expect(logoOriginsOf([app])).toBe("https://guestbook.example.com");
+  // an icon elsewhere is not the app's own: its initials, and no origin for the page to allow
+  const elsewhere = { ...app, logoUri: "https://cdn.example.net/icon.svg" };
+  expect(clientsWithAccess(env, [elsewhere], end)).toContain(
+    `<div class="tile small" data-app-mark="initials">GU</div>`,
+  );
+  expect(logoOriginsOf([elsewhere])).toBeUndefined();
+  // an app of the mind that calls itself Codex is not OpenAI's
+  expect(clientsWithAccess(env, [{ ...app, name: "Codex", logoUri: undefined }], end)).toContain(
+    `<div class="tile small" data-app-mark="initials">CO</div>`,
+  );
+});
+
 test("a form names one sign-in or all of one client, and a form that names neither ends nothing", () => {
   const posted = (fields: Record<string, string>) => {
     const form = new FormData();
