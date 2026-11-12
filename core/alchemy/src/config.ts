@@ -14,7 +14,18 @@ export const MindConfig = z
         "a lowercase name of letters, digits and dashes, at most 40",
       ),
     accountId: z.string().regex(/^[0-9a-f]{32}$/, "a Cloudflare account id: 32 hex characters"),
-    domain: z.string(),
+    // NEVER `iterate.<a domain>`: `iterate.<domain>` is the platform's host of the stack on
+    // `<domain>`, where the auth Worker publishes the stack's key and its sign-in. A stack on
+    // `iterate.example.co.uk` serves its mind's loaded code on that very host, so that code could
+    // answer as the stack of `example.co.uk` (or of `co.uk` from `iterate.co.uk`) to iterate
+    // Cloud and to anything else that reads `https://iterate.<domain>/keys/stack.json`.
+    // `iterate.com` is a domain like any other: no domain follows its first label.
+    domain: z
+      .string()
+      .refine(
+        (domain) => !/^iterate\.[^.]+\../i.test(domain),
+        "not a domain named iterate.<domain>: that name is the platform's host of <domain>",
+      ),
     // `platform`: `iterate.<domain>` alone, for a zone that serves other things. Absent: the apex, every
     // name under it, and the zone's mail.
     hostnames: z.enum(["all", "platform"]).optional(),
