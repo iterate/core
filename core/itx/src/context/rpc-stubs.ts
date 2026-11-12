@@ -4,7 +4,13 @@ import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
 import type { RewriteRuleConfigured } from "iterate/api";
-import { parse, print, type ItxExpression } from "iterate/expression";
+import {
+  normalizedItxExpression,
+  parse,
+  print,
+  type ItxExpression,
+  type ItxExpressionInput,
+} from "iterate/expression";
 import { causeHeader } from "../cause.ts";
 import {
   ITX_APP_HEADER,
@@ -44,43 +50,85 @@ function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequ
   };
 }
 
-/** WHAT A REDIAL SETS AGAIN: its events, less each rule that is not this lend's to set. A name
- *  that another row holds now stays that row's: someone pointed it elsewhere or masked it while
- *  the pager was down. A name with no row takes the rule only when the context itself un-set it
- *  at the pager's close (`unset`, the context's own record): with no such record somebody removed
- *  the row, and that is their word too. The lend then comes back with no name, and its lender
- *  lends again to ask for one. A name that is still this lend takes the rule. */
+/** What a pager's close un-set for one lent key, as the context records it until the key's next
+ *  attach: the rules by their match, the subscriptions and the fetch routes by their name. */
+export type UnsetByClose = { rules: string[]; subscriptions: string[]; fetchRoutes: string[] };
+
+/** The record as stored. A list alone is a record from before it held more than rules. */
+export function unsetByClose(stored: UnsetByClose | string[] | undefined): UnsetByClose {
+  if (Array.isArray(stored)) return { rules: stored, subscriptions: [], fetchRoutes: [] };
+  return stored || { rules: [], subscriptions: [], fetchRoutes: [] };
+}
+
+/** WHAT A REDIAL SETS AGAIN: its events, less each row that is not this lend's to set. A lend's
+ *  rows are its rule, the subscription that delivers to its callback, and its fetch route. A row
+ *  that names something else now stays as it is: someone pointed the name elsewhere or masked it
+ *  while the pager was down. A name with no row takes the row only when the context itself un-set
+ *  it at the pager's close (`unset`, the context's own record): with no such record somebody
+ *  removed the row, and that is their word too. The lend then comes back without it, and its
+ *  lender lends again to ask for it. A row that is still this lend's is set again. */
 export function eventsOfARedial(
   events: StreamEventInput[],
-  rules: readonly ItxExpressionRewriteRule[],
-  unset: ReadonlySet<string>,
+  rows: {
+    rules: readonly ItxExpressionRewriteRule[];
+    subscriptionTargets: Readonly<Record<string, ItxExpression>>;
+    fetchRouteTargets: Readonly<Record<string, ItxExpression>>;
+  },
+  unset: UnsetByClose,
 ): StreamEventInput[] {
+  /** Whether the row is this lend's to set: the same target still, or gone by the close alone. */
+  const own = (row: ItxExpression | null | undefined, target: unknown, unsetHere: boolean) =>
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- undefined is no row; null is a mask, which is a row and somebody's word
+    row === undefined
+      ? unsetHere
+      : !!row &&
+        !!target &&
+        print(row) === print(normalizedItxExpression(target as ItxExpressionInput));
   return events.filter((event) => {
-    if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") return true;
-    // The cast: the lender's own session wrote the event, as a rule (iterate-context.ts `provide`).
-    const { match, target } = normalizeRewriteRuleConfigured(
-      event.payload as RewriteRuleConfigured,
-    );
-    const row = rules.find((rule) => print(rule.match) === print(match));
-    if (!row) return unset.has(print(match));
-    return !!row.target && !!target && print(row.target) === print(target);
+    // The casts below: the lender's own session wrote each event (iterate-context.ts `provide`
+    // and `subscribe`), as a row of the kind its type names.
+    if (event.type === "events.iterate.com/itx/rewrite-rule-configured") {
+      const { match, target } = normalizeRewriteRuleConfigured(
+        event.payload as RewriteRuleConfigured,
+      );
+      const row = rows.rules.find((rule) => print(rule.match) === print(match));
+      return own(row && row.target, target, unset.rules.includes(print(match)));
+    }
+    if (event.type === "events.iterate.com/itx/subscription-configured") {
+      const { name, target } = event.payload as { name: string; target: unknown };
+      const row = Object.hasOwn(rows.subscriptionTargets, name)
+        ? rows.subscriptionTargets[name]
+        : undefined;
+      return own(row, target, unset.subscriptions.includes(name));
+    }
+    if (event.type === "events.iterate.com/itx/fetch-route-configured") {
+      const { fetchRouteName, target } = event.payload as {
+        fetchRouteName: string;
+        target: unknown;
+      };
+      const row = Object.hasOwn(rows.fetchRouteTargets, fetchRouteName)
+        ? rows.fetchRouteTargets[fetchRouteName]
+        : undefined;
+      return own(row, target, unset.fetchRoutes.includes(fetchRouteName));
+    }
+    return true;
   });
 }
-/** WHAT AN ATTACH APPENDS, AND WHEN THE RECORD OF THE LAST CLOSE ENDS. The record (`unset`: the
- *  rule matches that the key's last close un-set) speaks for one attach that lands. It is ended
- *  only after the append came back: an attach that the stream refuses (a paused stream, a 5xx to
- *  the lender) changed nothing, the lender dials again, and that redial must still find the
- *  record, or it would take the name for one that somebody removed and come back without it. */
+/** WHAT AN ATTACH APPENDS, AND WHEN THE RECORD OF THE LAST CLOSE ENDS. The record (what the key's
+ *  last close un-set) speaks for one attach that lands. It is ended only after the append came
+ *  back: an attach that the stream refuses (a paused stream, a 5xx to the lender) changed
+ *  nothing, the lender dials again, and that redial must still find the record, or it would take
+ *  a row for one that somebody removed and come back without it. */
 export function appendAtAttach(input: {
   events: StreamEventInput[];
   redial: boolean;
-  rules: readonly ItxExpressionRewriteRule[];
-  record: { read(): string[] | undefined; end(): void };
+  rows: Parameters<typeof eventsOfARedial>[1];
+  record: { read(): UnsetByClose | string[] | undefined; end(): void };
   /** Appends, and throws when the stream refuses. */
   append: (events: StreamEventInput[]) => void;
 }): void {
-  const { events, redial, rules, record } = input;
-  const kept = redial ? eventsOfARedial(events, rules, new Set(record.read())) : events;
+  const { events, redial, rows, record } = input;
+  const kept = redial ? eventsOfARedial(events, rows, unsetByClose(record.read())) : events;
   if (kept.length > 0) input.append(kept);
   record.end();
 }

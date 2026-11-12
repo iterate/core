@@ -50,6 +50,7 @@ import {
   parseFetchExpression,
   itxExpressionEndingInFetch,
   appendAtAttach,
+  type UnsetByClose,
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
@@ -176,9 +177,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       appendAtAttach({
         events,
         redial,
-        rules: Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
+        rows: this.#rowsForRpcStubCensus(),
         record: {
-          read: () => this.ctx.storage.kv.get<string[]>(record),
+          read: () => this.ctx.storage.kv.get<UnsetByClose | string[]>(record),
           end: () => void this.ctx.storage.kv.delete(record),
         },
         append: (kept) =>
@@ -209,14 +210,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       rpcStubKey,
       ...this.#rowsForRpcStubCensus(),
     });
-    // Kept until the key's next attach: a redial sets a rule again only where this close un-set
+    // Kept until the key's next attach: a redial sets a row again only where this close un-set
     // it, so a row that somebody removed while the lend was live stays removed (rpc-stubs.ts
     // `eventsOfARedial`).
-    if (ruleUnsets.length > 0)
-      this.ctx.storage.kv.put(
-        `rpc-stub-unset:${rpcStubKey}`,
-        ruleUnsets.map(({ match }) => print(match)),
-      );
+    if (ruleUnsets.length + subscriptionNames.length + fetchRouteNames.length > 0)
+      this.ctx.storage.kv.put<UnsetByClose>(`rpc-stub-unset:${rpcStubKey}`, {
+        rules: ruleUnsets.map(({ match }) => print(match)),
+        subscriptions: subscriptionNames,
+        fetchRoutes: fetchRouteNames,
+      });
     const unset = (event: StreamEventInput) => {
       try {
         this.#appendAndRunCommittedEffects([event]);
