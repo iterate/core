@@ -318,14 +318,21 @@ async function sinkNames(account: string, call: Call) {
   const names: string[] = [];
   const per = 50;
   let last = "";
+  let counted: number | undefined;
   for (let page = 1; page <= 40; page += 1) {
     const answer = await call("GET", `${account}/pipelines/v1/sinks?page=${page}&per_page=${per}`);
-    // The cast: Cloudflare's documented answer, a page of the account's sinks by name.
-    const result = (answer.body as { result?: { name?: string }[] } | null)?.result;
+    // The cast: Cloudflare's documented answer, a page of the account's sinks by name, with the
+    // count of all of them.
+    const body = answer.body as {
+      result?: { name?: string }[];
+      result_info?: { total_count?: number };
+    } | null;
+    const result = body?.result;
     if (answer.status !== 200 || !result)
       return {
         unread: `Cloudflare answered ${answer.status} when asked for the account's pipeline sinks`,
       };
+    if (typeof body?.result_info?.total_count === "number") counted = body.result_info.total_count;
     const got = result.map((sink) => String(sink.name));
     // an address that ignores `page` gives the same page again: it has no more
     if (JSON.stringify(got) === last) break;
@@ -333,5 +340,10 @@ async function sinkNames(account: string, call: Call) {
     names.push(...got);
     if (got.length < per) break;
   }
+  // A sink that was not given reads as a table that no sink writes, and that table would go.
+  if (counted !== undefined && counted !== names.length)
+    return {
+      unread: `Cloudflare gave ${names.length} of the account's ${counted} pipeline sinks, so which tables are written is not known`,
+    };
   return { names };
 }

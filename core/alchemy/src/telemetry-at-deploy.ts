@@ -49,10 +49,18 @@ export async function deployAroundTelemetry(input: {
         'Note: the stack\'s telemetry tables could not be looked at. The deploy goes on. When a table is left from an earlier time telemetry was on, the deploy fails at its sink ("writing to existing Catalog tables is not yet supported"): run the deploy again then.',
       );
   } else {
+    // One line in each case, so that the deploy's output shows that the step ran.
     try {
       wasOn = await input.catalogOn();
-    } catch {
-      // a read that did not answer: the deploy goes on, and the next turn-on drops what is left
+      say(
+        wasOn
+          ? `Telemetry is off in the config of ${input.name}, and the data catalog of ${input.bucket} is on: when this deploy has turned telemetry off, its tables are dropped.`
+          : `Telemetry is off for ${input.name}, and so is its data catalog: nothing to do for its tables.`,
+      );
+    } catch (error) {
+      say(
+        `Telemetry is off for ${input.name}. Whether its data catalog is on could not be read (${error instanceof Error ? error.message : String(error)}), so no table is dropped after this deploy. The next deploy with telemetry on drops a table that is left.`,
+      );
     }
   }
 

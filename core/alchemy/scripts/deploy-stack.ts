@@ -15,11 +15,11 @@
 // The output of Alchemy is read for step 2, so it goes through a pipe. A person at a terminal who
 // did not pass `--yes` has a question to answer: their deploy keeps the terminal, and is not
 // tried again.
-import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { accountUrl, callWithToken } from "../src/cloudflare-call.ts";
 import { loadMindConfig, type MindConfig, resourceNamesOf, stageOf } from "../src/config.ts";
-import { deployUntilBound, NOT_BOUND } from "../src/deploy-until-bound.ts";
+import { deployTry } from "../src/deploy-try.ts";
+import { deployUntilBound } from "../src/deploy-until-bound.ts";
 import { deployAroundTelemetry } from "../src/telemetry-at-deploy.ts";
 import { dropTelemetryTables } from "../src/telemetry-tables.ts";
 
@@ -38,40 +38,13 @@ const tables =
 
 const piped = args.includes("--yes") || !process.stdin.isTTY || !process.stdout.isTTY;
 const deploy = () =>
-  new Promise<{ code: number; notBound: boolean }>((done) => {
-    const alchemy = spawn(
-      process.execPath,
-      [`${import.meta.dirname}/../node_modules/alchemy/bin/cli.js`, "deploy", ...args],
-      {
-        cwd: `${import.meta.dirname}/..`,
-        stdio: piped ? ["inherit", "pipe", "pipe"] : "inherit",
-      },
-    );
-    let notBound = false;
-    // The words can come in two pieces: the end of each piece is kept for the next.
-    const through = (to: NodeJS.WriteStream) => {
-      let end = "";
-      return (piece: Buffer) => {
-        to.write(piece);
-        const text = end + piece.toString();
-        if (text.includes(NOT_BOUND)) notBound = true;
-        end = text.slice(-NOT_BOUND.length);
-      };
-    };
-    alchemy.stdout?.on("data", through(process.stdout));
-    alchemy.stderr?.on("data", through(process.stderr));
-    const stop = (signal: NodeJS.Signals) => alchemy.kill(signal);
-    process.on("SIGINT", stop);
-    process.on("SIGTERM", stop);
-    alchemy.on("error", (error) => {
-      console.error(`Alchemy's deploy did not start: ${error.message}`);
-      done({ code: 1, notBound: false });
-    });
-    alchemy.on("close", (code) => {
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
-      done({ code: code ?? 1, notBound });
-    });
+  deployTry({
+    command: process.execPath,
+    args: [`${import.meta.dirname}/../node_modules/alchemy/bin/cli.js`, "deploy", ...args],
+    cwd: `${import.meta.dirname}/..`,
+    piped,
+    out: (piece) => void process.stdout.write(piece),
+    err: (piece) => void process.stderr.write(piece),
   });
 
 const untilBound = () =>

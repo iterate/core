@@ -18,10 +18,11 @@ export const NOT_BOUND = "Pipeline binding error";
  *  waits. A refusal can last about five minutes. */
 const WAITS = [20, 40, 60, 90, 120, 180];
 
-/** Runs `deploy` until it succeeds, fails for another reason, or the tries are used: the exit code
- *  of the last one. `say` gets one line for each try after the first, before its wait. */
+/** Runs `deploy` until it succeeds, fails for another reason, a signal stopped it (`stopped`), or
+ *  the tries are used: the exit code of the last one. `say` gets one line for each try after the
+ *  first, before its wait. */
 export async function deployUntilBound(input: {
-  deploy: () => Promise<{ code: number; notBound: boolean }>;
+  deploy: () => Promise<{ code: number; notBound: boolean; stopped?: boolean }>;
   pause: (seconds: number) => Promise<void>;
   say: (line: string) => void;
   waits?: readonly number[];
@@ -29,8 +30,8 @@ export async function deployUntilBound(input: {
   const waits = input.waits || WAITS;
   const most = waits.length + 1;
   for (let tries = 1; ; tries += 1) {
-    const { code, notBound } = await input.deploy();
-    if (code === 0 || !notBound) return code;
+    const { code, notBound, stopped } = await input.deploy();
+    if (code === 0 || !notBound || stopped) return code;
     const wait = waits[tries - 1];
     if (wait === undefined) {
       input.say(

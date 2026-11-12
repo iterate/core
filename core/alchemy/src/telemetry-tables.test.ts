@@ -516,6 +516,24 @@ void test("at a deploy, a bucket that could be neither marked nor removed is sai
   assert.equal(answer.bucketLeft, true);
 });
 
+void test("at a deploy, a list of sinks shorter than Cloudflare's count of them stops the step before it writes", async () => {
+  // more sinks than the step reads: the stack's own are past the last page it asked for
+  const cloudflare = pretendCloudflare({
+    catalogs: { "iterate-one-telemetry": { on: true, tables: [...ALL] } },
+    buckets: ["iterate-one-telemetry"],
+    sinks: Array.from({ length: 2000 }, (_, at) => `other_${at}_sink`),
+    sinksCounted: 2003,
+  });
+  assert.deepEqual(await deploying(cloudflare), {
+    failed: true,
+    lines: [
+      "Cloudflare gave 2000 of the account's 2003 pipeline sinks, so which tables are written is not known: no table is dropped.",
+    ],
+  });
+  assert.deepEqual(cloudflare.writes, []);
+  assert.deepEqual(cloudflare.catalogs["iterate-one-telemetry"], { on: true, tables: ALL });
+});
+
 /** An account as Cloudflare answers for it: its Workers, its pipeline sinks, its R2 buckets with their objects, and
  *  each bucket name's data catalog, which outlives its bucket. A catalog that is turned on writes
  *  three objects into its bucket, and a bucket lists two objects at a time. `refuse` names what
@@ -529,6 +547,8 @@ function pretendCloudflare(
     buckets?: string[];
     workers?: string[];
     sinks?: string[];
+    /** how many sinks Cloudflare says the account has, when that is not the length of `sinks` */
+    sinksCounted?: number;
     /** what a bucket of `buckets` holds at the start */
     objects?: Record<string, string[]>;
   },
@@ -573,7 +593,10 @@ function pretendCloudflare(
       // 50 sinks at a time, as the step asks for them
       const page = Number(new URL(url).searchParams.get("page"));
       const sinks = (held.sinks || []).slice((page - 1) * 50, page * 50);
-      return answer(200, { result: sinks.map((name) => ({ name })) });
+      return answer(200, {
+        result: sinks.map((name) => ({ name })),
+        result_info: { total_count: held.sinksCounted ?? (held.sinks || []).length },
+      });
     }
     if (product === "r2") {
       const [, bucket, , sent] = rest;

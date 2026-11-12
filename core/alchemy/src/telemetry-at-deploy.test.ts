@@ -89,8 +89,8 @@ void test("a deploy that turned telemetry off drops the tables after Alchemy has
   });
   assert.equal(code, 0);
   assert.deepEqual(did, ["read", "deploy", "drop"]);
-  assert.match(said[0]!, /^This deploy turned telemetry off for one\. .* with the rows in them/);
-  assert.equal(said[1], "Dropped: table telemetry.logs");
+  assert.match(said[1]!, /^This deploy turned telemetry off for one\. .* with the rows in them/);
+  assert.equal(said[2], "Dropped: table telemetry.logs");
 });
 
 void test("a deploy with telemetry off that failed, or of a stack whose catalog is off, drops nothing", async () => {
@@ -103,6 +103,19 @@ void test("a deploy with telemetry off that failed, or of a stack whose catalog 
   const unread = await run({ telemetry: false, catalogOn: new Error("fetch failed") });
   assert.deepEqual(unread.did, ["read", "deploy"]);
   assert.equal(unread.code, 0);
+});
+
+void test("with telemetry off, a line before the deploy says what the step found", async () => {
+  assert.deepEqual((await run({ telemetry: false, catalogOn: false })).said, [
+    "Telemetry is off for one, and so is its data catalog: nothing to do for its tables.",
+  ]);
+  assert.equal(
+    (await run({ telemetry: false, catalogOn: true, code: 1 })).said[0],
+    "Telemetry is off in the config of one, and the data catalog of iterate-one-telemetry is on: when this deploy has turned telemetry off, its tables are dropped.",
+  );
+  assert.deepEqual((await run({ telemetry: false, catalogOn: new Error("fetch failed") })).said, [
+    "Telemetry is off for one. Whether its data catalog is on could not be read (fetch failed), so no table is dropped after this deploy. The next deploy with telemetry on drops a table that is left.",
+  ]);
 });
 
 void test("the step after a turn-off fails no deploy: a table or a bucket left is said in a note", async () => {
