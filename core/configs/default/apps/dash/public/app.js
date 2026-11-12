@@ -59,6 +59,7 @@ import {
   UsersIcon,
   WaypointsIcon,
 } from "@iterate-com/ui/icons";
+import { kitPages } from "./kit-pages.js";
 
 // ── the member's itx ──
 // As apps/agents/public/app.js: one WebSocket to this host's /itx, a capnweb session whose root is
@@ -139,30 +140,15 @@ const kits = {
   repo: () => import("@iterate-com/ui/components/repo-ide/repo-ide"),
   secrets: () => import("@iterate-com/ui/components/secrets-page"),
 };
-const loaded = new Map();
+const pages = kitPages(kits);
 
-/** The kit's module for `page`: `{ module }` once it is here, `{ error }` when it did not load,
- *  and neither while it loads. A page with no module of the kit (the overview) has an empty one. */
+/** The kit's module for `page` (./kit-pages.js): `{ module }` once it is here, `{ error }` when it
+ *  did not load, and neither while it loads. Opening a page starts its part; what the page's part
+ *  is comes from the store, so it is the open page's own and never another page's. A part that
+ *  did not load stays so until the page is loaded again: the view says that. */
 function useKit(page) {
-  const [, redraw] = useState(0);
-  const [error, setError] = useState();
-  useEffect(() => {
-    setError(undefined);
-    if (!kits[page] || loaded.has(page)) return undefined;
-    let current = true;
-    kits[page]().then(
-      (module) => {
-        loaded.set(page, module);
-        if (current) redraw((count) => count + 1);
-      },
-      (failure) =>
-        current && setError(failure instanceof Error ? failure.message : String(failure)),
-    );
-    return () => {
-      current = false;
-    };
-  }, [page]);
-  return { module: kits[page] ? loaded.get(page) : {}, error };
+  useEffect(() => pages.load(page), [page]);
+  return useSyncExternalStore(pages.subscribe, () => pages.read(page));
 }
 
 // ── the URL ──
@@ -257,7 +243,10 @@ function App() {
   let view = html`<${Overview} telemetryOff=${telemetryOff} />`;
   if (kitError)
     view = html`
-      <p role="alert" className="dash-note dash-error">This page did not load: ${kitError}</p>
+      <p role="alert" className="dash-note dash-error">
+        This page did not load: ${kitError}. ${" "}
+        <a href=${location.href}>Load the page again</a> to try once more.
+      </p>
     `;
   else if (!kit) view = html`<p className="dash-note" data-spinner="true">Loading the page…</p>`;
   else if (page === "contexts")

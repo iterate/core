@@ -34,7 +34,14 @@ test("the default config's pages and folders load here as the platform's loader 
   expect(docsIndex).toMatch(/<title>Docs<\/title>/);
   expect(Object.keys(docsFiles)).toEqual(own);
   expect(dashIndex).toMatch(/<title>Dash<\/title>/);
-  expect(Object.keys(dashFiles)).toEqual(own);
+  // the Dash's page has one more script: the store of each page's part of the kit
+  expect(Object.keys(dashFiles)).toEqual([
+    "app.css",
+    "app.js",
+    "icon.svg",
+    "kit-pages.js",
+    "manifest.webmanifest",
+  ]);
   expect(voiceIndex).toMatch(/<title>Voice<\/title>/);
   expect(Object.keys(voiceFiles)).toEqual([
     "app.css",
