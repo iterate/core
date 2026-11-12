@@ -12,6 +12,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { request as httpsRequest } from "node:https";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { mindApiUrlOf, platformOriginOf } from "iterate/mind-api";
@@ -48,6 +49,41 @@ if (
   process.exit(2);
 }
 const issuer = platformOriginOf(domain);
+
+// A CALL THAT A RULE HOLDS ANSWERS AFTER THE GATE'S FIVE MINUTES. Node's `fetch` gives up on a
+// request after five minutes with no byte of an answer: the two end at the same moment, and which
+// comes first is chance. So this proof's calls of the mind's API go by node:https, which waits
+// for as long as the mind takes.
+const fetchWithItsLimit = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const request = new Request(input, init);
+  if (request.method !== "POST" || request.url !== mindApiUrlOf(domain))
+    return fetchWithItsLimit(request);
+  const body = Buffer.from(await request.arrayBuffer());
+  return new Promise<Response>((answered, failed) => {
+    const sent = httpsRequest(
+      request.url,
+      { method: "POST", headers: Object.fromEntries(request.headers) },
+      (answer) => {
+        const chunks: Buffer[] = [];
+        answer.on("data", (chunk: Buffer) => chunks.push(chunk));
+        answer.on("error", failed);
+        answer.on("end", () =>
+          answered(
+            new Response(Buffer.concat(chunks), {
+              status: answer.statusCode,
+              headers: Object.entries(answer.headers).flatMap(([name, value]) =>
+                value ? [[name, String(value)] as [string, string]] : [],
+              ),
+            }),
+          ),
+        );
+      },
+    );
+    sent.on("error", failed);
+    sent.end(body);
+  });
+};
 const page_ = `${issuer}/secrets/approvals`;
 const shots = env.ITERATE_PROOF_SHOTS || mkdtempSync(join(tmpdir(), "act-approval-proof-"));
 mkdirSync(shots, { recursive: true });
@@ -184,6 +220,21 @@ async function unlockRules() {
   await page.getByRole("button", { name: "Unlock with passkey" }).click();
 }
 
+/** The proof's own secret goes, and its rule first. A deleted secret keeps its rule, which only
+ *  a signed removal takes away: a run that deleted the secret alone left a rule on the page. */
+async function removeProofSecret() {
+  if (!proofSecret) return;
+  const path = proofSecret;
+  await page.goto(page_);
+  const rule = page.locator(`form[data-rule]:has(input[name="path"][value="${path}"])`);
+  if (await rule.count()) {
+    await rule.getByRole("button", { name: "Remove, signed" }).click();
+    await rule.waitFor({ state: "detached", timeout: 15_000 });
+  }
+  await root().secrets.delete(path);
+  proofSecret = "";
+}
+
 async function cleanUp() {
   bridge?.kill("SIGINT");
   // on /keys, with the passkey: a session alone removes no key
@@ -201,7 +252,7 @@ async function cleanUp() {
     await page.getByRole("button", { name: "Lock these rules" }).waitFor();
   }
   await setRulesBySession([]);
-  if (proofSecret) await root().secrets.delete(proofSecret);
+  await removeProofSecret().catch(() => undefined);
   // a proposal that was approved or rejected is gone already, and its rejection changes nothing
   for (const reject of proposals)
     await page.evaluate(
@@ -1234,8 +1285,7 @@ await run(
       ended.status === 403 || ended.refused,
       `the held send ended with ${JSON.stringify(ended)}`,
     );
-    await root().secrets.delete(secret);
-    proofSecret = "";
+    await removeProofSecret();
     return {
       detail: `itx.approvals.propose answered a link to the page; proposed and not signed, a JMAP send went through to Fastmail (401 for the made-up token); the page said what the rule holds and what stays free; signed with the passkey, a read went through (401) and a send waited on the page until the member rejected it (${JSON.stringify(ended).slice(0, 80)})`,
     };
