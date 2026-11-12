@@ -7,6 +7,7 @@ import { html, useMemo, useRef, useState } from "@iterate-com/ui/page";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@iterate-com/ui/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/ui/card";
+import { Checkbox } from "@iterate-com/ui/components/ui/checkbox";
 import { Input } from "@iterate-com/ui/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
 import { Textarea } from "@iterate-com/ui/components/ui/textarea";
@@ -23,7 +24,8 @@ import { agentHref, pageLink } from "./nav.js";
 /** `offers`: other kinds' choices, `{ value: "<kind>/<choice>", label, kind, choice, fields,
  *  byPerson }`.
  *  `choice`: the picked offer's value, or `iterate`. `typed(name)`: a field's value as typed, if
- *  it was; `onField(name, value)` types it. `describe(offer, fields)`: the kind's line about them.
+ *  it was; `onField(name, value)` types it. A field is a line of text, or a tick box
+ *  (`type: "checkbox"`), whose value is "on" when ticked and "" when not. `describe(offer, fields)`: the kind's line about them.
  *  `onStart(offer, path, fields)` starts the picked kind's agent; `onStarted(path, kind)` opens it.
  *  `person`: the folder of the person signed in (agent-rows.js `personOf`): a new agent is born
  *  in it, and their agents come first. */
@@ -160,7 +162,17 @@ function KindPicker({ offers, picked, fields, onChoice, onField, describe }) {
     enabled: Boolean(picked),
     placeholderData: keepPreviousData,
   });
-  const input = (field) => html`
+  const box = (field) => html`
+    <label key=${`${picked.value}/${field.name}`} class="flex h-7 items-center gap-1.5 text-xs">
+      <${Checkbox}
+        name=${field.name}
+        checked=${fields[field.name] === "on"}
+        onCheckedChange=${(ticked) => onField(field.name, ticked ? "on" : "")}
+      />
+      ${field.label}
+    </label>
+  `;
+  const text = (field) => html`
     <${Input}
       key=${`${picked.value}/${field.name}`}
       name=${field.name}
@@ -185,7 +197,7 @@ function KindPicker({ offers, picked, fields, onChoice, onField, describe }) {
             html`<${NativeSelectOption} key=${offer.value} value=${offer.value}>${offer.label}<//>`,
         )}
       <//>
-      ${picked?.fields.map(input)}
+      ${picked?.fields.map((field) => (field.type === "checkbox" ? box(field) : text(field)))}
     </div>
     ${picked && line.data && html`<p class="text-xs text-muted-foreground">${withCode(line.data)}</p>`}
   `;
