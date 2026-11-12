@@ -163,6 +163,19 @@ test("a verb's rule holds that verb, or every verb under a prefix, and no other"
   expect(ruleHolds(ActRule.parse({ verb: "email.send" }), send)).toBe(false);
 });
 
+test("the gate reads a verb's rule as the kernel does: the rule's name and every name under it, with .* or without", () => {
+  // the kernel holds these two calls and asks the gate, which must not free them
+  const under = { act: "itx.whatsapp.sendMessage.now", args: ["jo"] };
+  const itself = { act: "itx.whatsapp", args: ["jo"] };
+  expect(ruleHolds(ActRule.parse({ verb: "itx.whatsapp.sendMessage" }), under)).toBe(true);
+  expect(ruleHolds(ActRule.parse({ verb: "itx.whatsapp" }), under)).toBe(true);
+  expect(ruleHolds(ActRule.parse({ verb: "itx.whatsapp.*" }), itself)).toBe(true);
+  // a name that only begins with the same letters is another name
+  expect(ruleHolds(ActRule.parse({ verb: "itx.whats" }), itself)).toBe(false);
+  expect(ruleHolds(ActRule.parse({ verb: "itx.whats.*" }), itself)).toBe(false);
+  expect(ruleHolds(ActRule.parse({ verb: "itx.whatsapp.send" }), under)).toBe(false);
+});
+
 test("a rule is a verb, with recipients for a mail alone", () => {
   for (const rule of [
     { verb: "secrets.set" },
@@ -229,6 +242,17 @@ test.for([
     false,
   ],
   ["a verb in place of a prefix", [{ verb: "itx.x.*" }], [{ verb: "itx.x.y" }], false],
+  // with .* or without, a rule holds its name and every name under it
+  ["a name in place of every verb under it", [{ verb: "itx.x.*" }], [{ verb: "itx.x" }], true],
+  [
+    "every verb under a name in place of the name",
+    [{ verb: "itx.x" }],
+    [{ verb: "itx.x.*" }],
+    true,
+  ],
+  ["a name above in place of a verb", [{ verb: "itx.x.y" }], [{ verb: "itx.x" }], true],
+  ["a verb under a name in place of the name", [{ verb: "itx.x" }], [{ verb: "itx.x.y" }], false],
+  ["a name that only begins the same", [{ verb: "itx.xy" }], [{ verb: "itx.x" }], false],
 ] as const)("%s: tighter is %s", ([, before, after, tighter]) => {
   const parsed = (rules: readonly unknown[]) => rules.map((rule) => ActRule.parse(rule));
   expect(rulesTighten(parsed(before), parsed(after))).toBe(tighter);

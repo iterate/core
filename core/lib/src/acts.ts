@@ -60,7 +60,8 @@ export const EMAIL_SEND = "email.send";
 
 /** A RULE names a verb. `email.send` is a mail; with `to`, only a mail to a recipient that matches
  *  one of its patterns (`*@example.com`, `jo@example.com`, `*`). `itx.whatsapp.sendMessage` is a
- *  call of that verb, and `itx.whatsapp.*` of every verb under it. */
+ *  call of that verb, and `itx.whatsapp.*` of every verb under it. Each holds the calls under its
+ *  name too, and a call of the name itself (`heldNameOf`). */
 export const ActRule = z
   .object({
     verb: z
@@ -243,6 +244,15 @@ function isPlainJson(value: unknown): boolean {
   );
 }
 
+/** THE NAME A RULE HOLDS: its verb, without the `.*` of "every verb under it". A rule holds a call
+ *  of that name and of every name under it, with `.*` or without. The kernel reads a rule so
+ *  (core/itx/src/context/held-verbs.ts `heldVerbOf`), and the gate reads it here: were the gate
+ *  narrower, it would answer `free` for an act that the kernel held and asked it about. */
+const heldNameOf = (rule: ActRule): string =>
+  rule.verb.endsWith(".*") ? rule.verb.slice(0, -2) : rule.verb;
+const atOrUnder = (name: string, held: string): boolean =>
+  name === held || name.startsWith(`${held}.`);
+
 /** Whether a rule holds the act. */
 export function ruleHolds(rule: ActRule, act: Act): boolean {
   if (isMailAct(act)) {
@@ -252,8 +262,7 @@ export function ruleHolds(rule: ActRule, act: Act): boolean {
       rule.to!.some((pattern) => addressMatches(pattern, address)),
     );
   }
-  if (rule.verb.endsWith(".*")) return act.act.startsWith(rule.verb.slice(0, -1));
-  return rule.verb === act.act;
+  return atOrUnder(act.act, heldNameOf(rule));
 }
 
 /** Whether a rule's pattern names the recipient. The boundary sends to one address alone
@@ -270,8 +279,7 @@ export function rulesTighten(before: readonly ActRule[], after: readonly ActRule
   return before.every((old) =>
     after.some(
       (now) =>
-        (now.verb === old.verb ||
-          (now.verb.endsWith(".*") && old.verb.startsWith(now.verb.slice(0, -1)))) &&
+        atOrUnder(heldNameOf(old), heldNameOf(now)) &&
         (!now.to ||
           (old.to &&
             old.to.every((pattern) => now.to!.includes(pattern) || now.to!.includes("*")))),

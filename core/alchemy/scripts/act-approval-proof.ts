@@ -621,6 +621,39 @@ await run(
   },
 );
 
+await run(
+  "a rule that names the bridge holds a verb under that name: the gate reads a rule as the kernel does",
+  async () => {
+    // one name above the verb, and no `.*`: the kernel holds the call and asks the gate about it
+    const above = SEND.replace(/\.sendMessage$/, "");
+    const rules = await root().approvals.setRules([{ verb: above }]);
+    must(rules.length === 1, `the rules are ${JSON.stringify(rules)}`);
+    await settled(7_000);
+    const text = `under a name ${marker}`;
+    const call = send(text);
+    const held = await heldDigest(SEND).catch(async (error: unknown) => {
+      // a gate that reads the rule more narrowly answers "free", and the call runs at once
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; the call ended with ${JSON.stringify(await call).slice(0, 200)}`,
+      );
+    });
+    await page.goto(`${page_}?digest=${held}`);
+    await checked(held);
+    page.once("dialog", (dialog) => void dialog.accept("not under that name"));
+    await page.locator("[data-acts]").getByRole("button", { name: "Reject them" }).click();
+    const ended = await call;
+    await root().approvals.setRules([{ verb: SEND }]);
+    must(!said.includes(text), "the bridge was called with no approval");
+    must(
+      "refused" in ended && ended.refused.includes("not under that name"),
+      `the call ended with ${JSON.stringify(ended)}`,
+    );
+    return {
+      detail: `the rule ${above} held ${SEND} as act ${held.slice(0, 12)}; ${ended.refused.slice(0, 100)}`,
+    };
+  },
+);
+
 await run("an agent proposes a rule, and the member's passkey signs it into one", async () => {
   const proposed = await root().approvals.propose({ verb: "email.send", to: ["*@example.org"] });
   must(proposed.signAt === page_, `it says to sign at ${proposed.signAt}`);
