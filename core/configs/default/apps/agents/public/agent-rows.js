@@ -47,10 +47,15 @@ export function byRecentActivity(rows) {
 
 /** A browser-created agent lives at `/agents/web/<moment>`. An agent is its path. */
 export function newWebAgentPath(date) {
+  return newAgentPath("web", date);
+}
+
+/** Another kind's new agent: `/agents/<kind>/<moment>`. */
+export function newAgentPath(folder, date) {
   const slug = date
     .toISOString()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return `/agents/web/${slug}`;
+  return `/agents/${folder}/${slug}`;
 }

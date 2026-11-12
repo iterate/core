@@ -6,12 +6,17 @@ import {
   html,
   render,
   useCallback,
-  useEffect,
   useMemo,
   useState,
   useSyncExternalStore,
 } from "@iterate-com/ui/page";
-import { AgentKindViewFrame, useAgentKindViewLink } from "@iterate-com/ui/agent-kind-view/host";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import {
+  AgentKindHiddenFrame,
+  AgentKindViewFrame,
+  useAgentKindViewLink,
+  useAgentKindViewLinks,
+} from "@iterate-com/ui/agent-kind-view/host";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import { AgentChat } from "@iterate-com/ui/components/agent-chat/agent-chat";
 import { Toaster } from "@iterate-com/ui/components/ui/sonner";
@@ -83,23 +88,45 @@ function ownStyleSheetsAsText() {
   return ownStylesInPage;
 }
 
-/** A kind's file, as the config repo has it now: read once for each file. Null when it cannot be
- *  read; the frame then shows the agent's events. */
-const kindSources = new Map();
-function kindSourceOf(file) {
-  if (!kindSources.has(file))
-    kindSources.set(
-      file,
-      itx.repos
-        .get("/repos/config")
-        .readFile(file)
-        .then(
-          (source) => (typeof source === "string" ? source : null),
-          () => null,
-        ),
+/** A kind's file, as the config repo has it now, or null when it cannot be read (the frame then
+ *  shows the agent's events). Read once for each file: its query is never stale. */
+const kindSourceQuery = (file) => ({
+  queryKey: ["kind-source", file],
+  queryFn: () =>
+    itx.repos
+      .get("/repos/config")
+      .readFile(file)
+      .then(
+        (source) => (typeof source === "string" ? source : null),
+        () => null,
+      ),
+  staleTime: Infinity,
+});
+
+// ── the last start ──
+// HOW THE LAST NEW AGENT WAS STARTED, in this browser: its choice (`iterate`, or an offer's
+// `<kind>/<choice>`) and its fields, which New agent offers again. Storage that can't be read is
+// no last start.
+const LAST_START = `agents/last-start/${location.hostname}`;
+function lastStart() {
+  try {
+    return (
+      JSON.parse(localStorage.getItem(LAST_START) || "null") || { choice: "iterate", fields: {} }
     );
-  return kindSources.get(file);
+  } catch {
+    return { choice: "iterate", fields: {} };
+  }
 }
+function rememberStart(start) {
+  try {
+    localStorage.setItem(LAST_START, JSON.stringify(start));
+  } catch {
+    // no storage: nothing remembered
+  }
+}
+
+/** The page's reads that aren't live: kind files, the kinds' New agent lines. */
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 // ── the URL ──
 // THE PAGE IS A LINK: `?agent=<path>` is the open agent, and `?chat=<json>` the chat's own choices
@@ -135,10 +162,15 @@ function App() {
   const { liveState } = useIterateContext(catalog.stub, CATALOG);
   const listed = liveState.agents?.value;
   const agents = useMemo(() => agentRowsOf(listed), [listed]);
-  const open = useCallback((path) => navigate({ agent: path, chat: undefined }), [navigate]);
+  const open = useCallback(
+    (path) => navigate({ agent: path, chat: undefined, kind: undefined, new: undefined }),
+    [navigate],
+  );
   const row = agents.find((one) => one.path === agent);
-  // iterate's own kind is the chat this page draws itself; another kind with a file draws its own
-  const kindFile = row?.kind && row.kind !== "iterate" ? kindFiles[row.kind] : undefined;
+  // iterate's own kind is the chat this page draws itself; another kind with a file draws its own.
+  // An agent New agent just started has no catalog row yet: `?kind=` names its kind until it does.
+  const kind = row?.kind || params.get("kind");
+  const kindFile = kind && kind !== "iterate" ? kindFiles[kind] : undefined;
   const chat =
     agent &&
     html`
@@ -151,15 +183,40 @@ function App() {
         onSave=${(saved) => navigate({ chat: saved }, { replace: true })}
       />
     `;
+  // New agent's choice and its fields: the URL's (`?new=`, `?field.<name>=`), else how the last
+  // agent was started here
+  const last = lastStart();
+  const choice = params.get("new") || last.choice;
   const home =
     !agent &&
     html`
-      <${AgentsHome}
-        agents=${agents}
-        onOpen=${open}
-        onCreate=${(path) => itx.agents.create(path)}
-        onMessage=${(path, message) => itx.agents.get(path).message({ message })}
-      />
+      <${NewAgentKinds}>
+        ${({ offers, ready, start, describe }) => html`
+          <${AgentsHome}
+            agents=${agents}
+            offers=${offers}
+            ready=${ready}
+            choice=${choice}
+            typed=${(name) =>
+              params.get(`field.${name}`) ??
+              (last.choice === choice ? last.fields[name] : undefined)}
+            onChoice=${(next) => navigate({ new: next || "iterate" }, { replace: true })}
+            onField=${(name, value) => navigate({ [`field.${name}`]: value }, { replace: true })}
+            describe=${describe}
+            onStart=${async (offer, path, fields) => {
+              await start(offer, path, fields);
+              rememberStart({ choice: offer.value, fields });
+            }}
+            onStarted=${(path, started) => navigate({ agent: path, kind: started, new: undefined })}
+            onOpen=${open}
+            onCreate=${async (path) => {
+              await itx.agents.create(path);
+              rememberStart({ choice: "iterate", fields: {} });
+            }}
+            onMessage=${(path, message) => itx.agents.get(path).message({ message })}
+          />
+        `}
+      <//>
     `;
   return html`
     <${AppShell}
@@ -205,26 +262,87 @@ function useSavedState(saved, onSave) {
   return [state, change];
 }
 
+/** NEW AGENT'S OTHER KINDS: each kind's file but iterate's, loaded in a frame no one sees (a kind's
+ *  code runs only in a frame), which reports the kind's `newAgent` choices and fields (the
+ *  picker's offers) and makes the events that start one. None until the files are read. */
+function NewAgentKinds({ children }) {
+  const files = useQuery({
+    queryKey: ["new-agent-kinds"],
+    queryFn: () =>
+      Promise.all(
+        Object.entries(kindFiles)
+          .filter(([kind]) => kind !== "iterate")
+          .map(async ([kind, file]) => ({
+            kind,
+            name: file,
+            source: await queryClient.fetchQuery(kindSourceQuery(file)),
+          })),
+      ).then((read) => read.filter((one) => one.source)),
+    staleTime: Infinity,
+  });
+  const kinds = useMemo(() => files.data || [], [files.data]);
+  const { links, loaded } = useAgentKindViewLinks(kinds);
+  // every kind's file read, and each one's frame has reported (its offers, or none)
+  const ready = files.isSuccess && kinds.every((_, index) => loaded[index]);
+  const offers = useMemo(
+    () =>
+      kinds.flatMap(({ kind }, index) => {
+        const report = loaded[index];
+        const newAgent = report && "newAgent" in report ? report.newAgent : undefined;
+        return (newAgent?.choices || []).map((option) => ({
+          value: `${kind}/${option.id}`,
+          label: `${option.label} (${kind})`,
+          kind,
+          choice: option.id,
+          fields: newAgent?.fields || [],
+        }));
+      }),
+    [kinds, loaded],
+  );
+  // the kind's own start events, appended as the member who sent them
+  const start = useCallback(
+    async (offer, path, fields) => {
+      const link = links[kinds.findIndex(({ kind }) => kind === offer.kind)];
+      if (!link) throw new Error(`no kind ${offer.kind}`);
+      const events = await link.startEvents({ choice: offer.choice, fields, path });
+      await itx.cd(path).append(...events);
+    },
+    [kinds, links],
+  );
+  // the kind's line about the choice as typed (`newAgent.describe`), for under the picker
+  const describe = useCallback(
+    async (offer, fields) => {
+      const link = links[kinds.findIndex(({ kind }) => kind === offer.kind)];
+      return link ? await link.describe({ choice: offer.choice, fields, mind: domain }) : null;
+    },
+    [kinds, links],
+  );
+  return html`
+    ${links.map(
+      (link) => html`
+        <${AgentKindHiddenFrame} key=${link.name} link=${link} frameScript=${kindFrameScript} />
+      `,
+    )}
+    ${children({ offers, ready, start, describe })}
+  `;
+}
+
 /** AN AGENT OF A KIND THAT BRINGS ITS OWN CHAT VIEW (a coding session's, say). The view's code is
  *  a file of the config repo, which any member or any member's agent can change, so it does not
  *  run in this page: the UI kit puts it in a sandboxed frame. This page reads the agent's log live
  *  and hands it to the frame, and answers the frame's few verbs for this one agent. */
 function KindChat({ path, file, saved, onSave }) {
-  // the kind's file first: `undefined` while it is read, `null` when it cannot be
-  const [source, setSource] = useState(undefined);
-  useEffect(() => {
-    let wanted = true;
-    // the page's own style sheets first: the frame is made with what the page holds then
-    void Promise.all([kindSourceOf(file), ownStyleSheetsAsText()]).then(
-      ([text]) => wanted && setSource(text),
-    );
-    return () => {
-      wanted = false;
-    };
-  }, [file]);
-  if (source === undefined) return html`<p class="p-4 text-sm text-muted-foreground">Loading…</p>`;
+  const source = useQuery(kindSourceQuery(file));
+  // the page's own style sheets first: the frame is made with what the page holds then
+  const styles = useQuery({
+    queryKey: ["own-style-sheets"],
+    queryFn: ownStyleSheetsAsText,
+    staleTime: Infinity,
+  });
+  if (source.isPending || styles.isPending)
+    return html`<p class="p-4 text-sm text-muted-foreground">Loading…</p>`;
   return html`
-    <${KindFrame} path=${path} file=${file} source=${source} saved=${saved} onSave=${onSave} />
+    <${KindFrame} path=${path} file=${file} source=${source.data} saved=${saved} onSave=${onSave} />
   `;
 }
 
@@ -335,4 +453,7 @@ function Chat({ path, row, saved, onSave }) {
   `;
 }
 
-render(html`<${App} />`, document.getElementById("root"));
+render(
+  html`<${QueryClientProvider} client=${queryClient}><${App} /><//>`,
+  document.getElementById("root"),
+);
