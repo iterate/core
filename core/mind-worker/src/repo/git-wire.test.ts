@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { encodeCommit, manifestOf, type RawGitObject } from "./git-wire.ts";
+import { encodeCommit, manifestOf, parseTree, type RawGitObject } from "./git-wire.ts";
 
 const PLATFORM = { name: "iterate", email: "iterate@example.com" };
 
@@ -73,4 +73,19 @@ test("a tree that names one subtree many times over is refused, not expanded wit
   expect([...manifestOf([{ mode: "40000", name: "root", oid: oidOf(2) }], objects).keys()]).toEqual(
     ["root/a/a/file", "root/a/b/file", "root/b/a/file", "root/b/b/file"],
   );
+});
+
+test("a tree entry has a name that git itself would take: none that is a way up, empty, or holds a slash", () => {
+  const entry = (name: string) =>
+    Uint8Array.from([
+      ...new TextEncoder().encode(`100644 ${name}\0`),
+      ...new Uint8Array(20).fill(0xab),
+    ]);
+  expect(parseTree(entry("notes.md"))).toEqual([
+    { mode: "100644", name: "notes.md", oid: "ab".repeat(20) },
+  ]);
+  // a name with dots in it is a name; `.git` is one git refuses, as a checkout would become a repo
+  expect(parseTree(entry("..notes"))).toHaveLength(1);
+  for (const name of ["", ".", "..", "a/b", "/abs", ".git", ".GIT"])
+    expect(() => parseTree(entry(name)), JSON.stringify(name)).toThrow("a tree entry is named");
 });

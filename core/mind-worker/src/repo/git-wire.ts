@@ -256,9 +256,16 @@ export function parseTree(payload: Uint8Array): TreeEntry[] {
     if (space < 0 || nul < 0 || nul + 21 > payload.length) {
       throw new Error(`malformed tree entry at byte ${cursor}`);
     }
+    const name = textDecoder.decode(payload.subarray(space + 1, nul));
+    // What git itself refuses in a tree (its fsck): a commit made on top of such a tree would
+    // write one that no git client checks out.
+    if (!name || name === "." || name === ".." || name.includes("/") || /^\.git$/i.test(name))
+      throw new Error(
+        `a tree entry is named ${JSON.stringify(name)}: not "", ".", "..", ".git", and no "/"`,
+      );
     entries.push({
       mode: textDecoder.decode(payload.subarray(cursor, space)),
-      name: textDecoder.decode(payload.subarray(space + 1, nul)),
+      name,
       oid: toHex(payload.subarray(nul + 1, nul + 21)),
     });
     cursor = nul + 21;
