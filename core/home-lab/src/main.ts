@@ -50,6 +50,14 @@ const mf = new Miniflare({
         manifest: moduleOf(await bundle(`${import.meta.dirname}/link/worker.ts`)),
         env: {
           DOMAIN: { type: "text", value: domain },
+          REPOS_ORIGIN: { type: "text", value: repos.origin },
+          // the mind's requests that name no secret leave through this: public addresses alone
+          INTERNET: {
+            type: "network",
+            allow: ["public"],
+            // without it the binding has no TLS at all, and every https request fails
+            tlsOptions: { trustBrowserCas: true },
+          },
           MIND: { type: "worker", worker: "mind", exportName: "Mind" },
           LINK: { type: "durable-object", worker: "link", exportName: "Link" },
           TOKEN: {

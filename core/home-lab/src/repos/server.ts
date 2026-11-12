@@ -2,11 +2,14 @@ import { spawn, spawnSync } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { repoGrantOf } from "./token.ts";
 
 // as core/mind-worker's `repoArtifactName` spells one
 const REPO_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
-/** Git's basic-auth password, or a bearer, must be `token`; it listens on loopback only. */
+/** Git's basic-auth password, or a bearer, must be `token`, which opens everything, or a repo's
+ *  own token (./token.ts), which opens that repo's git traffic alone. It listens on loopback only. */
 export async function serveRepos(input: { dir: string; token: string; port: number }) {
   const { dir, token } = input;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -18,11 +21,20 @@ export async function serveRepos(input: { dir: string; token: string; port: numb
   });
 
   async function answer(request: IncomingMessage, response: ServerResponse) {
-    if (!holdsToken(request.headers.authorization, token))
-      return void response
-        .writeHead(401, { "www-authenticate": 'Basic realm="iterate home lab"' })
-        .end("This store answers only the home lab's token.\n");
     const url = new URL(request.url || "/", "http://127.0.0.1");
+    const offered = offeredToken(request.headers.authorization);
+    if (!sameText(offered, token)) {
+      // a repo's own token: that repo's git traffic alone, and a push only with "write"
+      const grant = await repoGrantOf(token, offered);
+      const repo = /^\/([^/]+)\.git\//.exec(url.pathname)?.[1];
+      const pushes =
+        url.pathname.endsWith("/git-receive-pack") ||
+        url.searchParams.get("service") === "git-receive-pack";
+      if (!grant || grant.repo !== repo || (pushes && grant.scope !== "write"))
+        return void response
+          .writeHead(401, { "www-authenticate": 'Basic realm="iterate home lab"' })
+          .end("This store answers the home lab's token, or a repo's own token for that repo.\n");
+    }
     if (url.pathname === "/_repos" && request.method === "GET")
       return json(response, 200, {
         repos: readdirSync(dir)
@@ -62,7 +74,9 @@ export async function serveRepos(input: { dir: string; token: string; port: numb
 
   await new Promise<void>((listening) => server.listen(input.port, "127.0.0.1", listening));
   return {
-    origin: `http://127.0.0.1:${String(input.port)}`,
+    // the port it listens on: the one asked for, or the free one that port 0 got. The cast: a
+    // server that listens on a TCP port has an address of this shape
+    origin: `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`,
     close: () => server.close(),
   };
 }
@@ -127,15 +141,17 @@ async function gitHttpBackend(
   response.end();
 }
 
-function holdsToken(authorization: string | undefined, token: string) {
+/** A bearer, or the password of git's basic auth. */
+function offeredToken(authorization: string | undefined) {
   const [scheme, credential] = (authorization || "").split(" ");
-  const offered =
-    scheme === "Bearer"
-      ? credential
-      : scheme === "Basic" && credential
-        ? Buffer.from(credential, "base64").toString().split(":").slice(1).join(":")
-        : "";
-  const [a, b] = [Buffer.from(offered || ""), Buffer.from(token)];
+  if (scheme === "Bearer") return credential || "";
+  return scheme === "Basic" && credential
+    ? Buffer.from(credential, "base64").toString().split(":").slice(1).join(":")
+    : "";
+}
+
+function sameText(offered: string, token: string) {
+  const [a, b] = [Buffer.from(offered), Buffer.from(token)];
   return a.length === b.length && timingSafeEqual(a, b);
 }
 

@@ -1,9 +1,11 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import { repoToken } from "./token.ts";
 
 type StoreProps = { origin: string; token: string };
 
 /** The part of Artifacts core/mind-worker calls (src/context/cf-artifacts.ts), over the launcher's git
- *  store. One token serves every repo and scope. */
+ *  store. The store's token is the platform's own; a token that a repo hands out is for that repo
+ *  and scope alone, and ends (./token.ts). */
 export class HomeArtifacts extends WorkerEntrypoint<unknown, StoreProps> {
   async create(name: string) {
     await store(this.ctx.props, "PUT", `/_repos/${encodeURIComponent(name)}`);
@@ -44,10 +46,11 @@ class HomeRepo extends RpcTarget {
     return { remote: `${this.#props.origin}/${this.#name}.git` };
   }
 
-  createToken(_scope: "read" | "write", ttlSeconds: number) {
+  async createToken(scope: "read" | "write", ttlSeconds: number) {
+    const expires = Date.now() + ttlSeconds * 1000;
     return {
-      plaintext: this.#props.token,
-      expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+      plaintext: await repoToken(this.#props.token, { repo: this.#name, scope, expires }),
+      expiresAt: new Date(expires).toISOString(),
     };
   }
 }

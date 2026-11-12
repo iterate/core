@@ -5,12 +5,17 @@ import { mindProvideUrlOf } from "iterate/mind-api";
 import { FACTS_HEADER } from "iterate/facts";
 import { secretPathsReferenced } from "iterate/secret-placeholder";
 import type { Door as BoundaryDoor, MindTarget, ProvideSession } from "iterate/workers";
+import { isOwnHost } from "./own-host.ts";
 import { forwardEveryMethod, relayTo } from "./relay.ts";
 
 export { HomeArtifacts } from "../repos/artifacts.ts";
 
 type LinkEnv = {
   DOMAIN: string;
+  /** The launcher's git store on this machine (../repos/server.ts), `http://127.0.0.1:<port>`. */
+  REPOS_ORIGIN: string;
+  /** The way out to public addresses alone (the launcher's network rule). */
+  INTERNET: Fetcher;
   MIND: MindTarget;
   LINK: DurableObjectNamespace<Link>;
   /** The launcher: `GET` answers a live token for `iterate.<domain>/provide`. */
@@ -24,6 +29,12 @@ export default {
     const link = env.LINK.getByName(domain);
     // the launcher's start request; nothing on the internet has this name
     if (url.hostname === "link.home-lab.invalid") return Response.json(await link.start());
+    // THE PORT ANSWERS ITS OWN NAMES ALONE. A web page that points a name of its own at this
+    // machine (DNS rebinding) sends that name as the Host, and gets no page of the mind.
+    if (!isOwnHost(url.hostname))
+      return new Response("This port answers localhost and <label>.localhost alone.\n", {
+        status: 421,
+      });
     url.hostname = url.hostname.endsWith(".localhost")
       ? `${url.hostname.slice(0, -".localhost".length)}.${domain}`
       : domain;
@@ -45,9 +56,17 @@ export class Door extends WorkerEntrypoint<LinkEnv> {
     if (secretPathsReferenced(request).length > 0)
       return this.env.LINK.getByName(this.env.DOMAIN).fetch(request);
     // a host of the mind's own domain is the stack's boundary: any other is outside it
-    const { hostname } = new URL(request.url);
+    const { hostname, origin } = new URL(request.url);
     const own = hostname === this.env.DOMAIN || hostname.endsWith(`.${this.env.DOMAIN}`);
-    const answer = await fetch(own ? request : leavingTheStack(request));
+    // THE MIND'S CODE REACHES PUBLIC ADDRESSES ALONE, as on Cloudflare. On a home network this
+    // machine's other ports and the machines beside it (a router, a NAS) are private addresses:
+    // `INTERNET` connects to none, and workerd checks the address it connects to, so a name that
+    // resolves to one is refused too. The one address of this machine that the mind needs is its
+    // own git store.
+    const answer =
+      origin === this.env.REPOS_ORIGIN
+        ? await fetch(request)
+        : await this.env.INTERNET.fetch(own ? request : leavingTheStack(request));
     if (answer.webSocket) return answer;
     const headers = new Headers(answer.headers);
     // only the vault writes a secret's facts: an upstream's would be forged

@@ -152,6 +152,29 @@ export async function homeLabChecks(domain: string): Promise<Check[]> {
         return { pass: status === 200, detail: `example.com ${String(status)}` };
       },
     ),
+    await attempt(
+      "home lab: loaded code reaches no private address of the home machine or its network",
+      async () => {
+        // the launcher's own port by its address, by a public name that resolves to it, and a
+        // usual address of a home router. workerd refuses the connection, and the code gets no
+        // answer of the machine: a thrown error, or the kernel's own 500 for one.
+        const tried = (await run(`async () => {
+          const reached = {};
+          for (const url of ["http://127.0.0.1:8789/", "http://localtest.me:8789/", "http://192.168.0.1/"])
+            reached[url] = await fetch(url, { signal: AbortSignal.timeout(5000) }).then(
+              async (answer) => answer.status + " " + (await answer.text()).slice(0, 60),
+              (error) => "refused: " + String(error.message).slice(0, 60),
+            );
+          return reached;
+        }`)) as Record<string, string>;
+        return {
+          pass: Object.values(tried).every(
+            (answer) => answer.startsWith("refused") || answer.startsWith("500 "),
+          ),
+          detail: JSON.stringify(tried),
+        };
+      },
+    ),
     await sandboxEcho(run, marker),
   );
   return checks;
