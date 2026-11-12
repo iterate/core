@@ -28,18 +28,15 @@ export async function firstOwnerResponse(env: Env, request: Request): Promise<Re
     subject: ticket.email,
     email: ticket.email,
   });
-  console.info({ event: "auth.signed-in", method: "first-owner-ticket", userId: user.id });
+  const { method } = ticket;
+  console.info({ event: "auth.signed-in", method, userId: user.id });
   const facts = new AccountFacts();
   facts.add(user.id, {
     type: "events.iterate.com/account/signed-in",
-    payload: { method: "first-owner-ticket", at: now },
+    payload: { method, at: now },
   });
   return facts.on(
-    json(
-      {},
-      200,
-      new Headers({ "set-cookie": await sessionCookie(env, user, "first-owner-ticket") }),
-    ),
+    json({}, 200, new Headers({ "set-cookie": await sessionCookie(env, user, method) })),
   );
 }
 
@@ -47,10 +44,13 @@ async function spentTicket(
   env: Env,
   given: string | undefined,
   now: number,
-): Promise<Pick<FirstOwnerTicket, "email"> | { refused: string }> {
+): Promise<
+  | (Pick<FirstOwnerTicket, "email"> & { method: "first-owner-ticket" | "member-link" })
+  | { refused: string }
+> {
   const hash = given ? await sha256Hex(given) : "";
   const members = hash ? await spentMemberTicket(env, hash, now) : null;
-  if (members) return members;
+  if (members) return "refused" in members ? members : { ...members, method: "member-link" };
   if (!env.FIRST_OWNER_TICKET) return { refused: "no ticket is bound" };
   const ticket = firstOwnerTicketOf(env.FIRST_OWNER_TICKET, iterateConfigOf(env), now);
   if ("refused" in ticket) return ticket;
@@ -63,7 +63,7 @@ async function spentTicket(
   )
     .bind(ticket.hash, now)
     .first();
-  return spent ? ticket : { refused: "used before" };
+  return spent ? { ...ticket, method: "first-owner-ticket" } : { refused: "used before" };
 }
 
 /** A link an owner made for a member (./members.ts `memberLink`), spent by this call: null when

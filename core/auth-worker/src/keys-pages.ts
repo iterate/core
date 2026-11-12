@@ -75,12 +75,14 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
   const owed = standing === "passkey-owed";
   // Such a session adds a passkey, on /keys, and no more. An address proven by a code adds the
   // first one alone: with a passkey held, the session is from before it, and its holder signs in
-  // again. The owner's ticket adds one beside those the owner lost.
+  // again. The owner's ticket adds one beside those the owner lost, and a member's link, which
+  // went the ticket's way before it had a name of its own, does as the ticket does.
   // A full sign-in by Google (`google.signsInAlone`) holds no key to sign with: its person's first
   // passkey is added as a proven address adds one.
   const proven =
     owed || (session.method === "google" && !(await holdsPasskey(env, session.userId)));
-  const first = proven && session.method !== "first-owner-ticket";
+  const first =
+    proven && session.method !== "first-owner-ticket" && session.method !== "member-link";
   if (owed && (pathname !== KEYS_PATH || (first && (await holdsPasskey(env, session.userId))))) {
     if (post) return json({ error: "Sign in with your passkey first." }, 403);
     return new Response(null, {

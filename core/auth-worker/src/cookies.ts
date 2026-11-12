@@ -11,8 +11,10 @@ const SESSION_SECONDS = 30 * 24 * 3600;
 const FLOW_COOKIE = "__Host-iterate-auth-sign-in";
 const FLOW_SECONDS = 10 * 60;
 
-/** How a session was opened, kept in its cookie as `method`: what the person proved to get it. */
-const SignInMethod = z.enum(["email", "google", "passkey", "first-owner-ticket"]);
+/** How a session was opened, kept in its cookie as `method`: what the person proved to get it.
+ *  "first-owner-ticket" is a deploy's ticket for the stack's owner, and "member-link" a link that
+ *  an owner made for a member with no passkey (./first-owner.ts). */
+const SignInMethod = z.enum(["email", "google", "passkey", "first-owner-ticket", "member-link"]);
 export type SignInMethod = z.infer<typeof SignInMethod>;
 
 /** `method` is absent in a cookie made before the claim was. */
@@ -36,8 +38,12 @@ export async function sessionCookie(
   key?: string,
 ) {
   const claims = { email: user.email, method, key };
-  // the ticket's session lasts as long as a ticket: it is there to add a passkey, and no key ends it
-  const seconds = method === "first-owner-ticket" ? FIRST_OWNER_TICKET_MS / 1000 : SESSION_SECONDS;
+  // a ticket's or a link's session lasts as long as a ticket: it is there to add a passkey, and no
+  // key ends it
+  const seconds =
+    method === "first-owner-ticket" || method === "member-link"
+      ? FIRST_OWNER_TICKET_MS / 1000
+      : SESSION_SECONDS;
   return cookie(SESSION_COOKIE, await sign(env, "session", claims, user.id, seconds), seconds);
 }
 
