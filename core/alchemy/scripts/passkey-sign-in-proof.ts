@@ -211,6 +211,105 @@ await run("a member: a session alone adds none, the passkey signs the add", asyn
   return `with no signature: 403; ${member} added by the passkey's signature, then removed`;
 });
 
+await run(
+  "an owner's link and a member's keys: the link signs in a member who holds no passkey, a link made before is worth nothing once the member holds one, and each takes the owner's passkey",
+  async () => {
+    const member = `proof-${crypto.randomUUID().slice(0, 8)}@example.test`;
+    const row = page.locator("li", { hasText: member });
+    const form = (type: string) => page.locator(`form[data-signed$="${type}"]`);
+    /** An owner's act on the member, by the page's own form and the owner's passkey: the page
+     *  that comes back, as text. */
+    const pressed = async (type: string, button: string) => {
+      await page.goto(`${issuer}/members`);
+      await form(type).getByLabel("The member's email").fill(member);
+      // the page's script asks the passkey first, and posts the form when it has the statement
+      const posted = page.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" && new URL(response.url()).pathname === "/members",
+      );
+      await form(type).getByRole("button", { name: button }).click();
+      await posted;
+      await page.waitForLoadState("load");
+      return page.locator("body").innerText();
+    };
+    await page.goto(`${issuer}/members`);
+    // a run that stopped in this step left its member: such a row goes first
+    const left = page.locator("li", { hasText: /proof-[0-9a-f]{8}@example\.test/ });
+    while (await left.count()) {
+      const one = left.first();
+      const address = /proof-[0-9a-f]{8}@example\.test/.exec(await one.innerText())![0];
+      await one.getByRole("button", { name: "Remove" }).click();
+      await page.locator("li", { hasText: address }).waitFor({ state: "detached" });
+    }
+    await page.getByLabel("Email", { exact: true }).fill(member);
+    await page.getByRole("button", { name: "Add a member" }).click();
+    await row.waitFor();
+    // The session alone, as a script that stole it posts the page's own forms: no statement.
+    for (const action of ["link", "remove-keys"]) {
+      const bare = z
+        .string()
+        .parse(
+          await page.evaluate(
+            `fetch("/members", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ action: ${JSON.stringify(action)}, email: ${JSON.stringify(member)}, signed: "" }) }).then((answer) => answer.text())`,
+          ),
+        );
+      must(
+        bare.includes("This takes a press of your passkey"),
+        `with the session alone, "${action}" was not refused`,
+      );
+    }
+    // Two links while the member holds no passkey. The owner's passkey signs each.
+    const linkOf = async () => {
+      const said = await pressed("member-link-made", "Make a sign-in link");
+      const link = /https:\/\/\S+\/keys\/first#[\w-]+/.exec(said)?.[0];
+      must(link, `the page shows no link: ${said.slice(0, 200)}`);
+      return link;
+    };
+    const [first, second] = [await linkOf(), await linkOf()];
+    // The member, in a browser of their own with a key of their own: the first link signs in.
+    const theirs = await browser.newContext();
+    const theirPage = await theirs.newPage();
+    theirPage.setDefaultTimeout(15_000);
+    const theirCdp = await theirs.newCDPSession(theirPage);
+    await theirCdp.send("WebAuthn.enable");
+    await authenticator(theirCdp, "internal", true);
+    await theirPage.goto(first);
+    await theirPage.waitForURL(`${issuer}/keys`);
+    const how = await addPasskey(theirPage, issuer, `proof member ${label.slice(6)}`);
+    // The second link was never used. It was made for a member with no passkey, and this member
+    // holds one now: in a third browser it signs nobody in.
+    const elsewhere = await browser.newContext();
+    const late = await elsewhere.newPage();
+    await late.goto(second);
+    await late.getByText("This link was used before").waitFor();
+    await late.goto(`${issuer}/keys`);
+    must(
+      new URL(late.url()).pathname.startsWith("/sign-in"),
+      `the link made before signed somebody in: at ${late.url()}`,
+    );
+    await elsewhere.close();
+    // And the owner makes no new one for this member.
+    const refused = await pressed("member-link-made", "Make a sign-in link");
+    must(
+      refused.includes(`${member} has a passkey here`),
+      `a link was made: ${refused.slice(0, 200)}`,
+    );
+    // The owner's passkey removes the member's keys: the member's session ends with them.
+    const removed = await pressed("member-keys-removed", "Remove this member's keys");
+    must(removed.includes(`${member} has no keys now`), `the keys stay: ${removed.slice(0, 200)}`);
+    await theirPage.goto(`${issuer}/keys`);
+    must(
+      new URL(theirPage.url()).pathname.startsWith("/sign-in"),
+      `the member is still signed in after the keys were removed: at ${theirPage.url()}`,
+    );
+    await theirs.close();
+    await page.goto(`${issuer}/members`);
+    await row.getByRole("button", { name: "Remove" }).click();
+    await row.waitFor({ state: "detached" });
+    return `with the session alone neither is done; the first link signed ${member} in and a passkey was added (${how}); the second link, made before, then signed nobody in; no new link for a member with a passkey; the owner's passkey removed the member's keys and ended the member's session; the member is removed`;
+  },
+);
+
 await run("signed out, the passkey signs in from the sign-in page", async () => {
   await context.clearCookies();
   await page.goto(`${issuer}/keys`);

@@ -421,6 +421,10 @@ await run(
 // ── a verb: a stand-in for a WhatsApp bridge, itx.proofWhatsapp.jonas.sendMessage(jid, { text }) ──
 
 const SEND = "itx.proofWhatsapp.jonas.sendMessage";
+/** THE BRIDGE'S STUB BY ITS KEY, as a script of the mind reads it: from the row that gives the lent
+ *  name to the stub. The list of stub keys holds other things too, a page's live subscription for
+ *  one, so the key is not "the last one". */
+const BRIDGE_KEY = `(await (async () => { const row = (await itx.cd("/").rewriteRules.list()).find((rule) => rule.match === "${SEND.split(".").slice(0, -1).join(".")}"); return /rpcStubs\\.get\\((["'])(.*?)\\1\\)/.exec(typeof row.target === "string" ? row.target : JSON.stringify(row.target))[2]; })())`;
 const send = (text: string) =>
   root()
     .run(`async (itx) => ${SEND}("jo@s.whatsapp.net", { text: ${JSON.stringify(text)} })`)
@@ -523,7 +527,7 @@ await run(
   async () => {
     const call = root()
       .run(
-        `async (itx) => { const keys = await itx.cd("/").rpcStubs.list(); return itx.cd("/").rpcStubs.get(keys.at(-1)).sendMessage("jo@s.whatsapp.net", { text: "by its key ${marker}" }); }`,
+        `async (itx) => { const key = ${BRIDGE_KEY}; return itx.cd("/").rpcStubs.get(key).sendMessage("jo@s.whatsapp.net", { text: "by its key ${marker}" }); }`,
       )
       .then(
         (answer) => ({ answer: JSON.stringify(answer) }),
@@ -550,9 +554,12 @@ await run(
     const byKey = (text: string, steps: (key: string) => unknown[]) =>
       root()
         .run(
-          `async (itx) => { const key = (await itx.cd("/").rpcStubs.list()).at(-1); return itx.invoke(${JSON.stringify(
-            ["itx", ["cd", "/"], "rpcStubs", ...steps("THE-KEY")],
-          ).replace('"THE-KEY"', "key")}); }`,
+          `async (itx) => { const key = ${BRIDGE_KEY}; return itx.invoke(${JSON.stringify([
+            "itx",
+            ["cd", "/"],
+            "rpcStubs",
+            ...steps("THE-KEY"),
+          ]).replace('"THE-KEY"', "key")}); }`,
         )
         .then(
           (answer) => ({ answer: JSON.stringify(answer) }),
@@ -853,6 +860,41 @@ if (env.ITERATE_PROOF_LATE !== "0")
       };
     },
   );
+
+await run(
+  "loaded code writes no ingress row whose target is a built-in: such a row would answer the next visitor of the mind's hosts, as that visitor",
+  async () => {
+    const INGRESS = "events.iterate.com/itx/ingress-configured";
+    const rows = async () => (await eventsOf("/")).filter((event) => event.type === INGRESS);
+    const before = await rows();
+    // a script is loaded code: it writes a row with `itx.append`
+    const attempt = await root()
+      .run(
+        `async (itx) => itx.append({ type: "${INGRESS}", payload: { target: "itx.builtins.cd('/').secrets" } })`,
+      )
+      .then(
+        (answer) => ({ answer: JSON.stringify(answer) }),
+        (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+      );
+    const after = await rows();
+    if (after.length !== before.length) {
+      // The row was written. The mind's hosts answer by it: put the row from before back at once,
+      // as the member, and then say what happened.
+      const was = before.at(-1);
+      must(was, "an ingress row was written, and the mind had none before to put back");
+      await root().append({ type: INGRESS, payload: was.payload });
+    }
+    must(
+      after.length === before.length,
+      "loaded code wrote an ingress row (the row from before is back)",
+    );
+    must(
+      "refused" in attempt && attempt.refused.includes("is not a loaded worker's word"),
+      `the append ended with ${JSON.stringify(attempt)}`,
+    );
+    return { detail: `no row was written: ${attempt.refused.slice(0, 130)}` };
+  },
+);
 
 await run(
   "the member removes the bridge's key on /keys with the passkey, and the bridge lends no more",
