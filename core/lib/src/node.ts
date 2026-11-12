@@ -18,6 +18,7 @@ import { readSession, removeSession, writeSession, type StoredSession } from "./
 import { loginFlowFor, type LoginFlow } from "./cli/device-login/flow.ts";
 import { deviceLogin, showsColors } from "./cli/device-login/index.ts";
 import { oauthLogin, refreshOAuthSession } from "./cli/oauth.ts";
+import { openPageCommand } from "./cli/open-page.ts";
 import { withTimeout } from "./lib.ts";
 import { mindAddressOf, mindApiUrlOf } from "./mind-api.ts";
 
@@ -81,15 +82,11 @@ export async function signInToMind(
 /** The authorization URL, printed, and opened in this computer's browser unless a coding agent
  *  runs this process or `ITERATE_SKIP_BROWSER_OPEN=1`. */
 export async function openForSignIn(url: URL, print: (line: string) => void) {
+  // checked first: a page that is refused is neither opened nor offered to the person to open
+  const { command, args } = openPageCommand(url, process.platform);
   print(`\nOpen this page to sign in:\n\n  ${url.href}\n`);
   if (isCodingAgent(process.env) || process.env.ITERATE_SKIP_BROWSER_OPEN === "1") return;
   const { execFile } = await import("node:child_process");
-  const { command, args } =
-    process.platform === "darwin"
-      ? { command: "open", args: [url.href] }
-      : process.platform === "win32"
-        ? { command: "cmd", args: ["/c", "start", "", url.href] }
-        : { command: "xdg-open", args: [url.href] };
   execFile(command, args, (error) => {
     if (error) print(`Could not open a browser (${error.message}): open the URL above yourself.`);
   });
