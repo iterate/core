@@ -17,8 +17,10 @@ import { join } from "node:path";
 import { accountUrl, callWithToken } from "../src/cloudflare-call.ts";
 import { loadMindConfig, resourceNamesOf, stageOf } from "../src/config.ts";
 
-/** The stacks this proof may turn: prototypes that serve nobody. Add a prototype's domain here. */
-const PROTOTYPES = ["blifto.com"];
+/** The stacks this proof may turn: prototypes that serve nobody. Add a prototype's domain here.
+ *  The last two are the stack gate's, which turns the one it holds in every run
+ *  (scripts/ci/stack-smoke.ts `PLACES`). */
+const PROTOTYPES = ["blifto.com", "yupdu.com", "yappoy.com"];
 const TABLES = ["events", "logs", "spans"];
 
 const args = process.argv.slice(2);

@@ -451,8 +451,9 @@ or that holds table rows, is the stack's, and nothing in it goes.
 `scripts/telemetry-toggle-proof.ts --stage <name>` proves it on a prototype stack: four deploys
 (off, on, off, on), and after each what the account shows. **It needs a token that may make API
 tokens** (Account API Tokens Edit): a turn-off deletes the stack's two account tokens and a
-turn-on makes them again. The dev account's deploy token may not, so the stack smoke gate
-(`docs/testing.md`) cannot run this proof until it has such a token.
+turn-on makes them again. The dev account's deploy token may not; the account has a second token
+that may (`docs/api-keys.md`). The proof turns only a stack whose domain is in its list of
+prototypes. The stack smoke gate (`docs/testing.md`) runs it in every run, on the stack it holds.
 
 ## A provided mind
 
