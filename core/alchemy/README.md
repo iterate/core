@@ -418,6 +418,42 @@ Revoke that token after it. The same permission is needed again by a `destroy` (
 tokens) and by a deploy of a version that changes what a token may do. The iterate Cloud asks for
 it in a second consent of its own: a deployment's "Turn on telemetry", and then its "Update".
 
+**Telemetry turns off and on again.** `pnpm run deploy` ends in `scripts/deploy-stack.ts`, which
+does three things around Alchemy's deploy, for the CLI and for iterate Cloud alike:
+
+- Cloudflare can refuse the upload of a Worker that binds to the stack's log pipelines ("Pipeline
+  binding error"). Any such upload can meet it: one that turns telemetry on, seconds after the
+  pipelines were made, and an everyday deploy on pipelines that are hours old. The deploy is
+  then tried again after a wait, seven times at most, with one line for each try. What it made
+  stays, so a new try uploads only the Workers that did not go. A deploy that still fails then
+  fails: it never goes on with telemetry off.
+- R2 keeps a data catalog's tables when the catalog is turned off, and a new sink refuses a
+  table that exists. So a deploy that turned telemetry off drops the stack's three tables after
+  Alchemy has ended (`src/telemetry-tables.ts`, the same step as after a destroy), and prints a
+  line for each.
+- A deploy with telemetry on looks first for a table of the stack's that no sink writes: one
+  left from an earlier turn-off or from a deploy that failed. It names each and drops it.
+  A table whose sink is there stays.
+
+**A table with no sink goes with its rows.** That state is also the one between a sink's delete
+and its new making: a sink that Alchemy replaces, a turn-on that failed part-way. The table may
+then hold the stack's telemetry history, and the step drops it. That is the price of a turn-on
+that works at all: nothing can write such a table again. The line that names the table says that
+its rows go.
+
+**The step never empties the stack's bucket.** To reach the tables of a catalog whose bucket is
+gone, the step makes the bucket for a moment, with a mark in it, and removes it again. When it
+cannot remove it, the deploy does not start: Alchemy, with `--adopt`, would take that bucket as
+the stack's own, the mark in it too. The next deploy removes the bucket first. And at a deploy
+the mark alone does not make a bucket the step's: a bucket that a sink of the stack writes to,
+or that holds table rows, is the stack's, and nothing in it goes.
+
+`scripts/telemetry-toggle-proof.ts --stage <name>` proves it on a prototype stack: four deploys
+(off, on, off, on), and after each what the account shows. **It needs a token that may make API
+tokens** (Account API Tokens Edit): a turn-off deletes the stack's two account tokens and a
+turn-on makes them again. The dev account's deploy token may not, so the stack smoke gate
+(`docs/testing.md`) cannot run this proof until it has such a token.
+
 ## A provided mind
 
 A stack's mind can run on a machine of your own: the same mind Worker, in local workerd

@@ -314,11 +314,213 @@ void test("a bucket with no mark is the stack's own: its tables go and the bucke
   assert.equal(cloudflare.catalogs["iterate-one-telemetry"]?.on, true);
 });
 
-/** An account as Cloudflare answers for it: its Workers, its R2 buckets with their objects, and
+const SINKS = ALL.map((table) => `iterate_one_telemetry_${table}_sink`);
+const deploying = (cloudflare: ReturnType<typeof pretendCloudflare>) =>
+  dropTelemetryTables({
+    accountId: ACCOUNT,
+    name: "one",
+    call: cloudflare.call,
+    pause: async () => {},
+    when: "deploying",
+  });
+
+void test("at a deploy, the tables that a turn-off left go while the stack is deployed, and are named first", async () => {
+  // as a deploy with telemetry off leaves a stack that had it: its Workers, no sink, no bucket,
+  // the catalog off, the tables kept
+  const cloudflare = pretendCloudflare({
+    catalogs: { "iterate-one-telemetry": { on: false, tables: ["logs", "spans"] } },
+    workers: ["iterate-one-boundary", "iterate-one-mind"],
+    sinks: ["iterate_two_telemetry_logs_sink"],
+  });
+
+  const { failed, lines } = await deploying(cloudflare);
+
+  assert.equal(failed, false);
+  assert.deepEqual(lines, [
+    "Left over from an earlier time telemetry was on: telemetry.logs, telemetry.spans in the data catalog of iterate-one-telemetry, with no log pipeline. Cloudflare lets no new pipeline write to a table that exists, so they go now, with the rows in them.",
+    "Dropped: table telemetry.logs in the data catalog of iterate-one-telemetry",
+    "Dropped: table telemetry.spans in the data catalog of iterate-one-telemetry",
+    "Dropped: namespace telemetry in the data catalog of iterate-one-telemetry",
+  ]);
+  assert.deepEqual(cloudflare.catalogs["iterate-one-telemetry"], { on: false, tables: [] });
+  assert.deepEqual(cloudflare.buckets, []);
+  // a second deploy finds none
+  assert.deepEqual(await deploying(cloudflare), {
+    failed: false,
+    lines: ["the data catalog of iterate-one-telemetry has no table left over"],
+  });
+});
+
+void test("at a deploy, a stack whose sinks write its tables is left as it is, after two reads", async () => {
+  const cloudflare = pretendCloudflare({
+    catalogs: { "iterate-one-telemetry": { on: true, tables: [...ALL] } },
+    buckets: ["iterate-one-telemetry"],
+    workers: ["iterate-one-boundary", "iterate-one-telemetry"],
+    // the stack's three sinks are on the second page
+    sinks: [...Array.from({ length: 50 }, (_, at) => `other_${at}_sink`), ...SINKS],
+  });
+
+  assert.deepEqual(await deploying(cloudflare), {
+    failed: false,
+    lines: ["The log pipelines of one write its three tables: none is left over."],
+  });
+  assert.deepEqual(cloudflare.writes, []);
+  assert.deepEqual(cloudflare.catalogs["iterate-one-telemetry"], { on: true, tables: ALL });
+});
+
+void test("at a deploy, a table whose sink is there stays with its namespace, and one with no sink goes", async () => {
+  // as a deploy that failed at two sinks leaves it: the bucket and the catalog on, one sink made
+  const cloudflare = pretendCloudflare({
+    catalogs: { "iterate-one-telemetry": { on: true, tables: [...ALL] } },
+    buckets: ["iterate-one-telemetry"],
+    sinks: ["iterate_one_telemetry_events_sink"],
+  });
+
+  const { failed, lines } = await deploying(cloudflare);
+
+  assert.equal(failed, false);
+  assert.equal(lines.length, 3);
+  assert.match(lines[0]!, /^Left over .*: telemetry\.logs, telemetry\.spans in /);
+  assert.deepEqual(cloudflare.catalogs["iterate-one-telemetry"], { on: true, tables: ["events"] });
+  assert.deepEqual(cloudflare.buckets, ["iterate-one-telemetry"]);
+  assert.equal(
+    cloudflare.writes.some((written) => written.includes('/namespaces/telemetry "')),
+    false,
+  );
+});
+
+void test("at a deploy, sinks that cannot be read stop the step before it writes", async () => {
+  const cloudflare = pretendCloudflare(
+    { catalogs: { "iterate-one-telemetry": { on: false, tables: [...ALL] } } },
+    { refuse: "sinks" },
+  );
+  assert.deepEqual(await deploying(cloudflare), {
+    failed: true,
+    lines: [
+      "Cloudflare answered 403 when asked for the account's pipeline sinks: no table is dropped.",
+    ],
+  });
+  assert.deepEqual(cloudflare.writes, []);
+});
+
+void test("at a deploy, a stack that never had telemetry is left after one read", async () => {
+  const cloudflare = pretendCloudflare({ workers: ["iterate-one-boundary"] });
+  assert.deepEqual(await deploying(cloudflare), {
+    failed: false,
+    lines: ["iterate-one-telemetry never had a data catalog: no table to drop"],
+  });
+  assert.deepEqual(cloudflare.writes, []);
+});
+
+const MARK = "iterate-made-this-bucket-to-drop-its-tables";
+
+void test("at a deploy, a marked bucket with a sink beside it is not emptied: it is the stack's bucket", async () => {
+  // as a deploy with --adopt leaves a bucket that this step could not remove: the stack's own
+  // now, the mark still in it, and one sink missing
+  const cloudflare = pretendCloudflare({
+    catalogs: { "iterate-one-telemetry": { on: true, tables: [...ALL] } },
+    buckets: ["iterate-one-telemetry"],
+    objects: { "iterate-one-telemetry": [MARK, "__r2_data_catalog/c/t/data/1.parquet"] },
+    sinks: ["iterate_one_telemetry_events_sink", "iterate_one_telemetry_logs_sink"],
+  });
+
+  const answer = await deploying(cloudflare);
+
+  assert.equal(answer.failed, false);
+  assert.equal(answer.bucketLeft, undefined);
+  assert.equal(
+    answer.lines[0],
+    "The bucket iterate-one-telemetry has this step's mark in it, and a log pipeline of the stack writes to it: it is the stack's bucket, and nothing in it goes.",
+  );
+  // the table with no sink goes, as at any deploy; the bucket and all it holds stay
+  assert.deepEqual(cloudflare.catalogs["iterate-one-telemetry"], {
+    on: true,
+    tables: ["events", "logs"],
+  });
+  assert.deepEqual(cloudflare.objectsOf("iterate-one-telemetry"), [
+    MARK,
+    "__r2_data_catalog/c/t/data/1.parquet",
+  ]);
+  assert.equal(
+    cloudflare.writes.some((written) => written.includes("/r2/buckets/")),
+    false,
+  );
+});
+
+void test("at a deploy, a marked bucket that holds table rows is not emptied, with no sink beside it", async () => {
+  for (const rows of ["__r2_data_catalog/c/t/data/1.parquet", "a-file-of-the-stack"]) {
+    const cloudflare = pretendCloudflare({
+      catalogs: { "iterate-one-telemetry": { on: true, tables: [...ALL] } },
+      buckets: ["iterate-one-telemetry"],
+      objects: { "iterate-one-telemetry": [MARK, rows] },
+    });
+
+    const answer = await deploying(cloudflare);
+
+    assert.equal(answer.failed, false, rows);
+    assert.equal(answer.bucketLeft, undefined, rows);
+    assert.equal(
+      answer.lines[0],
+      "The bucket iterate-one-telemetry has this step's mark in it, and it holds table rows: it is the stack's bucket, and nothing in it goes.",
+    );
+    assert.deepEqual(cloudflare.objectsOf("iterate-one-telemetry"), [MARK, rows]);
+    assert.deepEqual(cloudflare.buckets, ["iterate-one-telemetry"]);
+  }
+});
+
+void test("at a deploy, a marked bucket whose objects cannot be listed stops the step before it writes", async () => {
+  const cloudflare = pretendCloudflare(
+    {
+      catalogs: { "iterate-one-telemetry": { on: true, tables: [...ALL] } },
+      buckets: ["iterate-one-telemetry"],
+      objects: { "iterate-one-telemetry": [MARK] },
+    },
+    { refuse: "list" },
+  );
+  const answer = await deploying(cloudflare);
+  assert.equal(answer.failed, true);
+  assert.match(answer.lines[0]!, /whose bucket it is stays unknown, and nothing in it goes/);
+  assert.deepEqual(cloudflare.writes, []);
+});
+
+void test("at a deploy, the step's own bucket that could not be removed is said (bucketLeft), and the next run removes it", async () => {
+  const cloudflare = pretendCloudflare(
+    {
+      catalogs: { "iterate-one-telemetry": { on: false, tables: [...ALL] } },
+      workers: ["iterate-one-boundary"],
+    },
+    { refuse: "remove" },
+  );
+
+  const first = await deploying(cloudflare);
+  assert.equal(first.failed, true);
+  assert.equal(first.bucketLeft, true);
+  assert.deepEqual(cloudflare.buckets, ["iterate-one-telemetry"]);
+
+  // the bucket holds the mark and the catalog's own files, no sink is there: this step's still
+  cloudflare.allow();
+  assert.deepEqual(await deploying(cloudflare), {
+    failed: false,
+    lines: ["the data catalog of iterate-one-telemetry has no table left over"],
+  });
+  assert.deepEqual(cloudflare.buckets, []);
+});
+
+void test("at a deploy, a bucket that could be neither marked nor removed is said too (bucketLeft)", async () => {
+  const cloudflare = pretendCloudflare(
+    { catalogs: { "iterate-one-telemetry": { on: false, tables: [...ALL] } } },
+    { refuse: "mark,remove" },
+  );
+  const answer = await deploying(cloudflare);
+  assert.equal(answer.failed, true);
+  assert.equal(answer.bucketLeft, true);
+});
+
+/** An account as Cloudflare answers for it: its Workers, its pipeline sinks, its R2 buckets with their objects, and
  *  each bucket name's data catalog, which outlives its bucket. A catalog that is turned on writes
  *  three objects into its bucket, and a bucket lists two objects at a time. `refuse` names what
- *  Cloudflare refuses: a table's drop, "enable", "bucket" (its making), "mark" (the mark's
- *  writing), "second mark" (its second writing alone), "mark read", "object" (an object's delete), "remove" (the bucket's delete); "never on" enables and
+ *  Cloudflare refuses: a table's drop, "sinks" (their list), "enable", "bucket" (its making), "mark" (the mark's
+ *  writing), "second mark" (its second writing alone), "mark read", "list" (a bucket's objects), "object" (an object's delete), "remove" (the bucket's delete); "never on" enables and
  *  stays off, and "mark lost" answers 200 to the mark's writing and keeps no mark. Two of them at
  *  once are written with a comma. */
 function pretendCloudflare(
@@ -326,13 +528,18 @@ function pretendCloudflare(
     catalogs?: Record<string, { on: boolean; tables: string[] }>;
     buckets?: string[];
     workers?: string[];
+    sinks?: string[];
+    /** what a bucket of `buckets` holds at the start */
+    objects?: Record<string, string[]>;
   },
   options: { refuse?: string } = {},
 ) {
   const catalogs: Record<string, { on: boolean; tables: string[] } | undefined> = structuredClone(
     held.catalogs || {},
   );
-  const objects = new Map<string, string[]>((held.buckets || []).map((bucket) => [bucket, []]));
+  const objects = new Map<string, string[]>(
+    (held.buckets || []).map((bucket) => [bucket, [...(held.objects?.[bucket] || [])]]),
+  );
   const workers = held.workers || [];
   const writes: string[] = [];
   const namespaceGone = new Set<string>();
@@ -361,6 +568,13 @@ function pretendCloudflare(
     const [product, ...rest] = parts.slice(4);
     if (product === "workers")
       return workers.includes(rest[1]!) ? answer(200, { success: true }) : answer(404);
+    if (product === "pipelines") {
+      if (refuses("sinks")) return answer(403);
+      // 50 sinks at a time, as the step asks for them
+      const page = Number(new URL(url).searchParams.get("page"));
+      const sinks = (held.sinks || []).slice((page - 1) * 50, page * 50);
+      return answer(200, { result: sinks.map((name) => ({ name })) });
+    }
     if (product === "r2") {
       const [, bucket, , sent] = rest;
       const key = sent && decodeURIComponent(sent);
@@ -372,6 +586,7 @@ function pretendCloudflare(
       }
       const inIt = objects.get(bucket);
       if (!inIt) return answer(404);
+      if (rest[2] === "objects" && !key && refuses("list")) return answer(500);
       if (rest[2] === "objects" && !key)
         return answer(200, { result: inIt.slice(0, 2).map((each) => ({ key: each })) });
       if (key) {
