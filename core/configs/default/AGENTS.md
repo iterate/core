@@ -424,6 +424,12 @@ tab closes. The first person who typed is the commit's author, the others are `C
   `docs/comment-reopened` (`{ thread }`) follow it. `apps/docs/processors/comments.ts` has every
   type and its fields. A doc must have been opened once in the page before it takes comments: the
   page is what starts its processor.
+- **To take the app out of a mind, disable its processors first.** Each doc that was opened has
+  a processor row `doc` on its context, and the root has the row `docs`, which gets every commit
+  of every repo. A row outlives the code it names, and then each event goes to a class that no
+  longer loads. So before the commit that removes `apps/docs/processors/`:
+  `await itx.processors.disable("docs")`, and `await itx.cd(path).processors.disable("doc")` for
+  each opened doc (the root's log names them: events of type `docs/opened`, `{ repo, path }`).
 - **A mind that got these files without the packages** (its `package.json` was changed by hand
   before the template had them) shows "Couldn't open this doc for editing" with the reason. Add
   the three packages to `"dependencies"`, at the versions the default config names.
