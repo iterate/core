@@ -1400,6 +1400,12 @@ export interface IterateContextApi {
         | { path: string; outcome: "failed"; error: string; answerLost?: true }
       )[]
     >;
+    /** The stack's own Cloudflare API token, kept at `/secrets/cloudflare`: written when the
+     *  stack has one that the vault lacks, deleted when the stack has none any more, and a secret
+     *  that somebody else put at the path left as it is
+     *  (core/mind-worker/src/context/cloudflare-token.ts). The root asks for this once in each of
+     *  its incarnations: no agent needs to. */
+    keepCloudflareToken(): Promise<{ path: string; outcome: "set" | "deleted" | "unchanged" }>;
     /** The link to a form on the platform's own hostname where a person enters a value an agent
      *  must never see in chat. The form shows the secret's path, its pin, what it may be used for
      *  (`SecretUses`) and `description` as the requester's words, and answers a signed-in member

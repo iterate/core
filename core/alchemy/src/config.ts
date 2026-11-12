@@ -66,6 +66,10 @@ export const MindConfig = z
     error:
       "the sign-in with Google goes through an iterate Cloud's Google client: add cloud: { origin }, or sign in another way",
   })
+  .refine(({ mind, cloudflareToken }) => !(mind?.provided && cloudflareToken), {
+    path: ["cloudflareToken"],
+    error: "a provided mind runs elsewhere: its stack has no mind Worker to hold the token",
+  })
   .refine(({ hostnames, mail }) => !(hostnames === "platform" && mail), {
     path: ["mail"],
     error: 'a stack with hostnames: "platform" does not own the zone\'s mail',

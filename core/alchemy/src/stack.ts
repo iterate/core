@@ -93,7 +93,7 @@ export const mindStack = (config: MindConfig) =>
     // The telemetry part first: every other Worker exports its logs and traces to its destinations.
     const telemetry = config.telemetry && (yield* telemetryPart(names));
     const observability = observabilityOf(telemetry?.destinations);
-    if (config.cloudflareToken) yield* cloudflareTokenPart(names);
+    const cloudflareToken = config.cloudflareToken && (yield* cloudflareTokenPart(names));
 
     const authSettings = { ...config.auth, ...(provided && { provide: true as const }) };
     // Parsed here, so a config auth would refuse fails the deploy, not the first request.
@@ -221,6 +221,11 @@ export const mindStack = (config: MindConfig) =>
             BROWSER: Cloudflare.Workers.Browser(),
             IMAGES: Cloudflare.Images.Images(),
             ...(telemetry && { TELEMETRY_METRICS: telemetry.metrics }),
+            // the mind's vault keeps it (core/mind-worker/src/context/cloudflare-token.ts)
+            ...(cloudflareToken && {
+              CLOUDFLARE_TOKEN: cloudflareToken.value,
+              CLOUDFLARE_TOKEN_ID: cloudflareToken.tokenId,
+            }),
           },
         });
       });
@@ -344,9 +349,9 @@ export const mindStack = (config: MindConfig) =>
     return { domain, boundary: boundary.workerName, config };
   });
 
-/** The mind's own API token of its account. Its value stays in the stack's state, as the telemetry
- *  tokens' do: a deploy that changes nothing about it asks Cloudflare nothing, and a destroy, or a
- *  deploy whose config no longer asks for it, deletes it. */
+/** The mind's own API token of its account, bound to the mind Worker. Its value stays in the
+ *  stack's state, as the telemetry tokens' do: a deploy that changes nothing about it asks
+ *  Cloudflare nothing, and a destroy, or a deploy whose config no longer asks for it, deletes it. */
 const cloudflareTokenPart = (names: ReturnType<typeof resourceNamesOf>) =>
   Effect.gen(function* () {
     const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;

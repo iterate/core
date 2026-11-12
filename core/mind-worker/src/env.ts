@@ -20,6 +20,11 @@ declare global {
       /** Never returned or logged. */
       MIND_SIGNING_KEY: string;
       TELEMETRY_METRICS?: AnalyticsEngineDataset;
+      /** The stack's own API token of its Cloudflare account, when it has one, and the token's id
+       *  at Cloudflare. The value is never returned or logged: the vault keeps it
+       *  (context/cloudflare-token.ts). */
+      CLOUDFLARE_TOKEN?: string;
+      CLOUDFLARE_TOKEN_ID?: string;
       /** Never read: the binding gives the class `ctx.exports.SandboxContainer` its containers. */
       SANDBOX_CONTAINER: DurableObjectNamespace<SandboxContainer>;
       BROWSER: BrowserRun;

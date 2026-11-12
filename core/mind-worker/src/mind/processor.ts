@@ -61,6 +61,10 @@ const LogAnswer = z.array(
 );
 const FilesAnswer = z.record(z.string(), z.union([z.string(), z.object({ base64: z.string() })]));
 const CommitAnswer = z.object({ commitOid: z.string().nullable() });
+const CloudflareTokenKept = z.object({
+  path: z.string(),
+  outcome: z.enum(["set", "deleted", "unchanged"]),
+});
 
 /** The config templates this build bundles (the generated config-templates.js, which the facet
  *  hands over): each folder of core/configs by its name, with its files. */
@@ -116,6 +120,9 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
   #templateFollowed = false;
   /** When this root last looked for the grants' daily refresh; 0 before the first look. */
   #grantRefreshLookedAt = 0;
+  /** Whether this incarnation asked the vault to keep the stack's Cloudflare token
+   *  (`#keepCloudflareToken`). */
+  #cloudflareTokenAsked = false;
   // The template commit this incarnation made: known here before the record of it is kept.
   #templateCommit: { commitOid: string; template: string } | undefined;
   // One publication runs at a time and drains, oldest first: a commit that lands while one is in
@@ -290,6 +297,10 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     // The persons' grants are refreshed once a day: the root gets what does that, and looks
     // again at most once an hour (`#armGrantRefresh`).
     if (state.creation?.status === "created") runInBackground(() => this.#armGrantRefresh());
+    if (state.creation?.status === "created" && !this.#cloudflareTokenAsked) {
+      this.#cloudflareTokenAsked = true;
+      runInBackground(() => this.#keepCloudflareToken());
+    }
     // A failed creation is asked for again, once per incarnation: only the root's birth writes the
     // request, so a failure that stood would leave the mind with no site for good.
     if (state.creation?.status === "failed" && !this.#retriedFailedCreation) {
@@ -464,6 +475,32 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
         event: "mind.grant-refresh-not-armed",
         namespace: "mind",
         message: "the root did not get the schedule that refreshes the persons' grants",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** THE STACK'S OWN CLOUDFLARE TOKEN IS KEPT IN THE VAULT (context/cloudflare-token.ts), asked
+   *  once per incarnation: a deploy, which brings the token or takes it away, restarts the root.
+   *  Never throws: the next incarnation asks again. */
+  async #keepCloudflareToken(): Promise<void> {
+    try {
+      using itx = this.getItx();
+      const kept = CloudflareTokenKept.parse(
+        await itx.invoke(["itx", "builtins", "secrets", ["keepCloudflareToken"]]),
+      );
+      if (kept.outcome !== "unchanged")
+        console.info({
+          event: "mind.cloudflare-token-kept",
+          namespace: "mind",
+          message: `the stack's Cloudflare token in the vault: ${kept.outcome}`,
+          path: kept.path,
+        });
+    } catch (error) {
+      console.info({
+        event: "mind.cloudflare-token-not-kept",
+        namespace: "mind",
+        message: "the vault was not asked to keep the stack's Cloudflare token",
         error: error instanceof Error ? error.message : String(error),
       });
     }

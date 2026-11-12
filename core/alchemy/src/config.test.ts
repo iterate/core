@@ -62,6 +62,14 @@ void test("a config may ask for the mind's Cloudflare token, and only by `true`"
     );
 });
 
+void test("a provided mind may not ask for the token: its stack has no mind Worker to hold it", () => {
+  assert.equal(
+    MindConfig.safeParse({ ...stack, mind: { provided: true }, cloudflareToken: true }).success,
+    false,
+  );
+  assert.equal(MindConfig.safeParse({ ...stack, mind: { provided: true } }).success, true);
+});
+
 void test("a config that asks for the mind's Cloudflare token is one the stack may keep in its state store", async () => {
   const folder = mkdtempSync(join(tmpdir(), "mind-config-"));
   const named = process.env.ITERATE_MIND_CONFIG;

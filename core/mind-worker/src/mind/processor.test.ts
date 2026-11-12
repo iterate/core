@@ -113,6 +113,14 @@ test("the first wake of an incarnation gives the root what refreshes the persons
   });
 });
 
+test("the first wake of an incarnation asks the vault to keep the stack's Cloudflare token, and a second pass does not again", async () => {
+  const mind = mindOf({ owes: false });
+  mind.deliver(mind.state);
+  mind.deliver(mind.state);
+  await mind.settled();
+  expect(mind).toMatchObject({ vault: ["keepCloudflareToken"] });
+});
+
 test.for([
   ["a schedule of the mind's own under the key is left as it is", { schedule: true }, "row"],
   ["a row that is there is not written again", { row: true }, "schedule"],
@@ -195,9 +203,15 @@ function mindOf({
   // The root's own schedules and rows, as the daily refresh of the grants asks for them: what it
   // read and what it wrote, in order.
   const root = { schedule: there.schedule, row: there.row, did: [] as string[] };
+  /** What the root asked of the vault, in order. */
+  const vault: string[] = [];
   const ofTheRoot = (expression: ItxExpression): { answer: unknown } | undefined => {
     const [registry, last] = [expression[2], expression.at(-1)];
     const [verb, argument] = Array.isArray(last) ? last : [];
+    if (registry === "secrets") {
+      vault.push(String(verb));
+      return { answer: { path: "/secrets/cloudflare", outcome: "unchanged" } };
+    }
     if (registry === "subscriptions" && verb === "get") return { answer: root.row ? {} : null };
     if (registry === "schedules" && verb === "get")
       return {
@@ -298,6 +312,7 @@ function mindOf({
     facts,
     platformFacts,
     root,
+    vault,
     deliver,
     /** The state once the fact of commit `commitOid` arrived at `offset`: its publication is owed. */
     owing: (commitOid: string, offset: number): MindState => ({

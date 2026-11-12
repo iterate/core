@@ -510,7 +510,15 @@ it. The token still reads names: a bucket's, a namespace's, a database's, a secr
 Its value stays in the stack's state, as the telemetry tokens' do, and **Account API Tokens Edit
 is needed** by the same deploys: the one that makes the token, a `destroy` or a deploy without
 the field (each deletes it), and a deploy of a version that changes what the token may do. Any
-other deploy asks Cloudflare nothing about it. No Worker is bound to the token yet.
+other deploy asks Cloudflare nothing about it.
+
+**The mind keeps the token in its vault.** The stack binds the token to the mind Worker, and at
+the root's first wake after a deploy the mind stores it at `/secrets/cloudflare`, pinned to
+`https://api.cloudflare.com` and `https://mcp.cloudflare.com`
+(`core/mind-worker/src/context/cloudflare-token.ts`). The mind's code uses it as any secret, with
+a placeholder, and never sees its value. A secret that somebody else put at that path is left as
+it is. A deploy without the field deletes the token at Cloudflare, and the mind then deletes what
+it stored. A provided mind may not ask for the token: its stack has no mind Worker.
 
 ## A provided mind
 
