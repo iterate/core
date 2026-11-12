@@ -214,6 +214,11 @@ const SecretHmacVerificationInput = z.object({
 const deletedWhileStored = (path: string) =>
   `secret ${path}: it was deleted while this value was being stored, and the value is not kept. Set it again if it is still wanted`;
 
+/** What came of a refresh on word (`refreshGrant`). */
+export type GrantRefresh =
+  | { outcome: "refreshed" | "not-a-brokered-grant" }
+  | { outcome: "failed"; error: string };
+
 class RefreshFailed extends Error {
   readonly facts: SecretFact[];
   readonly lent: Facts;
@@ -1015,6 +1020,42 @@ export class SecretDurableObject extends DurableObject<Env> {
       if (row.until > now) rows.push(row);
       else this.ctx.storage.kv.delete(key);
     return rows;
+  }
+
+  /** A PERSON'S GRANT THAT THE ITERATE CLOUD BROKERS, REFRESHED ON WORD. A refresh runs otherwise
+   *  only after the provider refused the token (the retry in `#fetchWithSecret`). A mind that
+   *  works with an installation's tokens never uses the person's own, so that never comes: the
+   *  Cloud, which reads at each refresh what the person still administers, would not read it
+   *  again, and the refresh token would end unused. The answer says what came of it:
+   *  - `refreshed`: the provider gave a new token, and the secret holds it;
+   *  - `failed`: the refresh did not end well, with the error's words. The secret is as it was:
+   *    a refused refresh deletes nothing, and the Cloud ends what the person connected;
+   *  - `not-a-brokered-grant`: nothing is set here, or what is set is no such grant.
+   *  A refresh that runs already for a use is joined, never doubled. */
+  async refreshGrant(path: string): Promise<SecretAnswer<GrantRefresh>> {
+    this.#pathOf(path);
+    const current = this.#current();
+    const refresh = current?.cell.refresh;
+    if (
+      !current ||
+      refresh?.kind !== "oauth-refresh-token" ||
+      !refresh.client ||
+      !("cloud" in refresh.client)
+    )
+      return { result: { outcome: "not-a-brokered-grant" }, facts: [] };
+    try {
+      const events = await this.#refresh(path, current.cell.nonce);
+      return {
+        result: { outcome: "refreshed" },
+        facts: events.length ? [{ path, events }] : [],
+      };
+    } catch (error) {
+      if (!(error instanceof RefreshFailed)) throw error;
+      return {
+        result: { outcome: "failed", error: error.message },
+        facts: [{ path, events: error.facts }, ...error.lent],
+      };
+    }
   }
 
   async approvals(path: string): Promise<{ rule: ApprovalRule | null; held: HeldRow[] }> {

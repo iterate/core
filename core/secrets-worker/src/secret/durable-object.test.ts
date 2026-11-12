@@ -8,6 +8,7 @@ import { decodeFacts, FACTS_HEADER } from "iterate/facts";
 import { expect, test, vi } from "vitest";
 import type { Envelope } from "iterate/signed";
 import { hmacSha256Hex } from "../secrets.ts";
+import { encryptSecretMaterial } from "../secret-at-rest.ts";
 import { APPROVED, HOLD_MS, MAX_WAITING, REJECTED, SecretDurableObject } from "./durable-object.ts";
 
 // workerd's own comparison, which Node's Web Crypto has not got
@@ -512,6 +513,59 @@ test("an ask of the Cloud that the rule does not name goes at once, with no valu
   }).toEqual({ status: 200, sends: 1, namesTheSecret: null });
 });
 
+test("a person's grant that the Cloud brokers is refreshed on word: the Cloud is asked with the stack's statement, and the secret holds what the provider gave", async () => {
+  const { secret } = await vault({ cloud: CLOUD_OF_GRANTS, material: GRANT });
+  const cloud = cloudThatAnswers(() =>
+    Response.json({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 28800 }),
+  );
+
+  expect(await secret.refreshGrant(PATH)).toEqual({
+    result: { outcome: "refreshed" },
+    facts: [{ path: PATH, events: [REFRESHED(true)] }],
+  });
+  // the next refresh sends the token that this one brought: each refresh token works once
+  await secret.refreshGrant(PATH);
+
+  expect(cloud).toMatchObject({
+    asked: [
+      { url: `${CLOUD_OF_GRANTS}/clients/github/token`, refreshToken: "old-refresh", signed: true },
+      { url: `${CLOUD_OF_GRANTS}/clients/github/token`, refreshToken: "new-refresh", signed: true },
+    ],
+  });
+});
+
+test("a refresh on word that the provider refuses says so, and the secret is as it was", async () => {
+  const { secret } = await vault({ cloud: CLOUD_OF_GRANTS, material: GRANT });
+  const cloud = cloudThatAnswers(() => new Response("bad_refresh_token", { status: 401 }));
+
+  const refused = await secret.refreshGrant(PATH);
+  // it deletes nothing: the secret is set, and the next try sends the same refresh token
+  await secret.refreshGrant(PATH);
+
+  expect(refused).toMatchObject({
+    result: { outcome: "failed", error: expect.stringContaining("answered 401") },
+    facts: [{ path: PATH, events: [{ payload: { kind: "oauth-refresh-token", ok: false } }] }],
+  });
+  expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: true });
+  expect(cloud.asked.map((ask) => ask.refreshToken)).toEqual(["old-refresh", "old-refresh"]);
+});
+
+test("a refresh on word of a secret that is no grant of the Cloud's asks nobody", async () => {
+  // a plain token; and a grant with a client of the mind's own would refresh when its provider asks
+  const { secret } = await vault();
+  const cloud = cloudThatAnswers(() => Response.json({}));
+
+  expect(await secret.refreshGrant(PATH)).toEqual({
+    result: { outcome: "not-a-brokered-grant" },
+    facts: [],
+  });
+  await secret.secret(PATH, "delete", {});
+  expect(await secret.refreshGrant(PATH)).toMatchObject({
+    result: { outcome: "not-a-brokered-grant" },
+  });
+  expect(cloud).toMatchObject({ asked: [] });
+});
+
 test("a rule cannot be loosened without a signature, and a member's signed statement removes it", async () => {
   const { secret, decide } = await vault();
   const by = { userId: "user_aaaa", email: "member@example.com" };
@@ -530,7 +584,12 @@ test("a rule cannot be loosened without a signature, and a member's signed state
 /** A vault with one secret and its rule. With `cloud`, the secret is one connected through the
  *  Cloud's client `github`, and the stack signs what it asks of that Cloud. */
 async function vault(
-  options: { cloud?: string; rule?: { methods: string[]; hosts: string[] } } = {},
+  options: {
+    cloud?: string;
+    rule?: { methods: string[]; hosts: string[] };
+    /** What the secret holds, when a plain token is not enough: a grant's tokens. */
+    material?: Record<string, string>;
+  } = {},
 ) {
   const sent: { authorization: string | null; body: string; extra: string | null }[] = [];
   const upstream = vi.fn(async (request: Request) => {
@@ -594,24 +653,47 @@ async function vault(
   const state = fakeState(PATH);
   const secret = new SecretDurableObject(state as never, env as never);
   await secret.secret(PATH, "set", {
-    material: "real-token-aaaa",
+    material: options.material || "real-token-aaaa",
     urls: ["https://gmail.googleapis.com"],
   });
   if (options.cloud) {
     // Only a connect through the Cloud's own page makes such a secret (`set` refuses a client):
     // the stored cell is given what that connect writes, the client's name and its broker.
-    const current = state.storage.kv.get("current") as { cell: object };
-    state.storage.kv.put("current", {
-      ...current,
+    // The value is sealed again with it: a cell opens only as the thing it was sealed as.
+    // the cast: the stored cell, as the object's own seal wrote it a moment ago
+    const current = state.storage.kv.get("current") as {
       cell: {
-        ...current.cell,
-        refresh: {
-          kind: "oauth-refresh-token",
-          tokenEndpoint: `${options.cloud}/clients/github/token`,
-          client: { cloud: "github" },
-        },
-      },
-    });
+        context: string;
+        urls: string[];
+        version: number;
+        nonce: string;
+        material: unknown;
+        refresh: unknown;
+        placement: string;
+        operations: string[];
+        lendTo?: string[] | null;
+      };
+    };
+    const {
+      context,
+      urls,
+      version,
+      nonce,
+      material: _sealed,
+      refresh: _none,
+      ...use
+    } = current.cell;
+    const refresh = {
+      kind: "oauth-refresh-token" as const,
+      tokenEndpoint: `${options.cloud}/clients/github/token`,
+      client: { cloud: "github" },
+    };
+    const material = await encryptSecretMaterial(
+      options.material || "real-token-aaaa",
+      { context, urls, refresh, version, nonce, use },
+      env.SECRETS_AT_REST_KEY,
+    );
+    state.storage.kv.put("current", { ...current, cell: { ...current.cell, refresh, material } });
   }
   await secret.tightenRule(PATH, {
     rule: options.rule || { methods: ["POST"], hosts: ["gmail.googleapis.com"] },
@@ -700,4 +782,26 @@ function fakeState(name: string) {
       },
     },
   };
+}
+
+const CLOUD_OF_GRANTS = "https://cloud.example.com";
+/** A person's grant as a connect through the Cloud leaves it: the tokens and the client's id. */
+const GRANT = { accessToken: "old-access", refreshToken: "old-refresh", clientId: "Iv1.client" };
+const REFRESHED = (ok: boolean) => ({
+  type: "events.iterate.com/secret/refreshed",
+  payload: { kind: "oauth-refresh-token", ok },
+});
+
+/** The Cloud's token route, standing in for `fetch`: what each call asked, and `answer` to it. */
+function cloudThatAnswers(answer: () => Response) {
+  const asked: { url: string; refreshToken: string | null; signed: boolean }[] = [];
+  vi.stubGlobal("fetch", async (request: Request) => {
+    asked.push({
+      url: request.url,
+      refreshToken: new URLSearchParams(await request.text()).get("refresh_token"),
+      signed: request.headers.has("iterate-statement"),
+    });
+    return answer();
+  });
+  return { asked };
 }
