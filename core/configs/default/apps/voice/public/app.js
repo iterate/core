@@ -95,11 +95,13 @@ const voiceModule = (pin, name) => import(`${MODULES}/${VOICE}@${pin}/${name}`);
 async function turnVoiceOn(say) {
   say("Finding the newest build of voice…");
   // npm's `main` tag, as esm.iterate.com resolves it: the page pins the exact build it names
-  const newest = await fetch(`${MODULES}/${VOICE}@main/package.json`);
+  const [newest, tip] = await Promise.all([
+    fetch(`${MODULES}/${VOICE}@main/package.json`),
+    repo().tip(),
+  ]);
   if (!newest.ok) throw new Error(`${MODULES} answered ${newest.status} for ${VOICE}@main`);
-  const { version } = await newest.json();
-  const tip = await repo().tip();
-  const [manifest, worker, voiceFile] = await Promise.all([
+  const [{ version }, manifest, worker, voiceFile] = await Promise.all([
+    newest.json(),
     repo().readFile("package.json", { commitOid: tip }),
     repo().readFile("worker.ts", { commitOid: tip }),
     repo()

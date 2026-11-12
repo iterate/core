@@ -68,7 +68,11 @@ const domain = location.hostname.split(".").slice(1).join(".") || location.hostn
 // for their version: the source's, which ../app.ts answers, and the pins of the three packages in
 // package.json, so a changed pin starts them anew too.
 const PROCESSOR_PACKAGES = ["yjs", "diff", "node-diff3"];
-const processors = await (await fetch("/processors.json")).json();
+const processorsAnswer = await fetch("/processors.json");
+// a refusal is said as it is: its body is no list of processors
+if (!processorsAnswer.ok)
+  throw new Error(`Docs cannot start: /processors.json answered ${processorsAnswer.status}`);
+const processors = await processorsAnswer.json();
 const manifest = JSON.parse(
   (await itx.repos.get("/repos/config").readFile("package.json")) || "{}",
 );

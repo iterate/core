@@ -57,9 +57,10 @@ export class DocsProcessor extends StreamProcessor<DocsState> {
     // a repo Docs never opened a doc in (or nested deeper than /repos/<name>) has nothing to tell
     if (!commit.success || !/^\/repos\/[^/]+$/.test(commit.data.path)) return;
     const repo = commit.data.path;
+    const opened = new Set(state.opened);
     const changed = commit.data.changedPaths
       .map((path) => docContextPath({ repo, path }))
-      .filter((context) => state.opened.includes(context));
+      .filter((context) => opened.has(context));
     if (changed.length === 0) return;
     blockProcessorWhile(async () => {
       using itx = this.#getItx();

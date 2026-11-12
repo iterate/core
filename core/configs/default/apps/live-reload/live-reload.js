@@ -23,10 +23,15 @@ const scrolled = (within) =>
     .filter(([, top, left]) => top || left);
 
 // ── AFTER A RELOAD THAT THIS FILE ASKED FOR: what the person saw stays until the app is drawn ──
-const held = sessionStorage.getItem(HELD);
+// What this file kept before the reload, or nothing when it kept nothing or it cannot be read:
+// the page then draws with no cover, as on any load.
+let held = null;
+try {
+  held = JSON.parse(sessionStorage.getItem(HELD) || "null");
+} catch {}
+sessionStorage.removeItem(HELD);
 if (held) {
-  sessionStorage.removeItem(HELD);
-  const { html, height, scrolls, scrollY } = JSON.parse(held);
+  const { html, height, scrolls, scrollY } = held;
   const live = app();
   // The same element again, so the page's own styles draw it as before. It comes after the live
   // one, so the app finds its own element by id. Markup set this way runs no script.
@@ -105,14 +110,16 @@ const tagOf = (path, cache) =>
 const tags = new Map();
 /** The files that changed since the page loaded them, each with its new tag. */
 async function changedFiles() {
-  const changed = [];
-  for (const path of ownFiles()) {
-    const before = tags.get(path) || (await tagOf(path, "force-cache"));
-    const now = await tagOf(path, "no-cache");
-    if (before) tags.set(path, before);
-    if (before && now && now !== before) changed.push({ path, tag: now });
-  }
-  return changed;
+  // the page's few files, all asked at once
+  const checked = await Promise.all(
+    ownFiles().map(async (path) => {
+      const before = tags.get(path) || (await tagOf(path, "force-cache"));
+      const now = await tagOf(path, "no-cache");
+      if (before) tags.set(path, before);
+      return before && now && now !== before ? [{ path, tag: now }] : [];
+    }),
+  );
+  return checked.flat();
 }
 
 // ── WHAT A CHANGE DOES ──

@@ -8,6 +8,7 @@ import { Card, CardContent, CardFooter } from "@iterate-com/ui/components/ui/car
 import { Textarea } from "@iterate-com/ui/components/ui/textarea";
 
 const post = (path, body) =>
+  // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check -- a refusal's body is JSON with its reason: it is read whatever the status, and `ok` goes with it
   fetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -19,8 +20,8 @@ function App() {
   const load = useCallback(
     () =>
       fetch("/entries.json")
-        .then((answer) => answer.json())
-        .then(setBook),
+        // a read that failed keeps what the page shows: the next one is ten seconds away
+        .then((answer) => (answer.ok ? answer.json().then(setBook) : undefined)),
     [],
   );
   useEffect(() => {

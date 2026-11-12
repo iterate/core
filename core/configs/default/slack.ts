@@ -338,6 +338,7 @@ export async function callSlack(
     throw new Error(`${JSON.stringify(method)} is no Slack method: a name like chat.postMessage`);
   const form = new URLSearchParams();
   // through JSON first, so that an argument left undefined is no argument
+  // react-doctor-disable-next-line react-doctor/no-json-parse-stringify-clone -- not a clone: the round trip is what drops an argument left undefined, and a structured clone keeps it
   for (const [name, value] of Object.entries(JSON.parse(JSON.stringify(args)) as object))
     form.set(name, typeof value === "string" ? value : JSON.stringify(value));
   const answer = await itx.fetch(

@@ -64,9 +64,10 @@ const kindFiles = await itx.kv.get("agent-kinds").then(
 // script is one file of the same build of the kit that this page pins in its import map: a
 // classic script, so it is named by its place in the package, and `?raw` asks the server for the
 // file as it is (without it, the server answers a module that wraps the file).
-const kit = JSON.parse(document.querySelector('script[type="importmap"]').textContent).imports[
-  "@iterate-com/ui/"
-];
+const importMap = JSON.parse(
+  document.querySelector('script[type="importmap"]')?.textContent || "{}",
+);
+const kit = importMap.imports?.["@iterate-com/ui/"] || "";
 const kindFrameScript = `${kit}dist/agent-kind-view-frame.js?raw`;
 /** THE FRAME HAS NO SIGN-IN, so it cannot ask this host for a file: a request from it is answered
  *  as nobody's. The kit's frame copies this page's style sheets into its own document, links as
