@@ -29,6 +29,13 @@ export type Caller = {
   // The SHA-256 of what a delivery delivers: a target answers only what it names, so nothing it
   // reaches can hand a subscriber an event its log never held.
   delivery?: string;
+  // This call runs the target of a stored row: a subscription's delivery, or the ingress row for
+  // a request. Loaded code may have written the row, in parts that each passed its wall
+  // (./context/itx-expression-rewriting.ts `admitLoadedCodeRow`): a rule with a hole and a call
+  // that fills it. So a row that this call writes is checked as loaded code's own is
+  // (./context/built-ins.ts `append`). Set only where a row's target is run, and it stays on the
+  // caller across contexts.
+  runsRow?: true;
   copiedFrom?: EventCopiedFrom;
   cause?: Cause;
   onBehalfOf?: OnBehalfOf;
@@ -37,6 +44,7 @@ export const ITX_GRANT_HEADER = "x-itx-grant";
 // Stripped from every Request that arrives from outside.
 export const ITX_APP_HEADER = "x-itx-app";
 export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
+export const ITX_RUNS_ROW_HEADER = "x-itx-runs-row";
 
 // A writer's own `source` is dropped but `processor`. `origin` is advisory: a `run-requested`
 // anyone appends runs, and is stamped, where it lands.

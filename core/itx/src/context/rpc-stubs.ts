@@ -8,6 +8,7 @@ import { causeHeader } from "../cause.ts";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
+  ITX_RUNS_ROW_HEADER,
   ITX_GRANT_HEADER,
   type Caller,
 } from "../caller.ts";
@@ -297,6 +298,7 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
     ITX_GRANT_HEADER,
     ITX_CALLER_PATH_HEADER,
     ITX_APP_HEADER,
+    ITX_RUNS_ROW_HEADER,
     RPC_STUB_PAGER_WEBSOCKET_HEADER,
     FETCH_UPGRADE_SOCKET_HEADER,
     FETCH_UPGRADE_EYEBALL_HEADER,
@@ -313,6 +315,7 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
   if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
   if (caller.path) headers.set(ITX_CALLER_PATH_HEADER, caller.path);
   if (caller.app) headers.set(ITX_APP_HEADER, "1");
+  if (caller.runsRow) headers.set(ITX_RUNS_ROW_HEADER, "1");
 }
 
 // Untrusted: shape-checked by the resolver and walled before anything runs.

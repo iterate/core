@@ -609,6 +609,20 @@ export function admitLoadedCodeRow(
   admitLoadedCodeExpression(expression, landsAt);
 }
 
+/** WHOSE ROWS ARE CHECKED: loaded code's, and those of a call that runs a stored row's target
+ *  (`Caller.runsRow`). Loaded code may have written the row that runs, and the check on each row
+ *  it writes does not see what two rows make together: a rule with a hole, and a call that fills
+ *  it, are a row with a built-in target only when the call runs. No check of spellings closes
+ *  that, so the row is checked here, where it is written. */
+export function admitRowsOfCall(
+  caller: Caller,
+  events: readonly { type: string; payload?: unknown }[],
+  landsAt: string,
+): void {
+  if (!caller.app && !caller.runsRow) return;
+  for (const event of events) admitLoadedCodeRow(event, landsAt);
+}
+
 // While a context's table holds its bare `itx ⇒ null`, only a member's session (a principal) may
 // re-point or remove it: anything else would bring back `cd`, and with it the whole mind.
 export function refuseLiftingAJail(
@@ -998,6 +1012,7 @@ export class ItxExpressionResolver {
       ...held,
       at: by.readAt,
       ...(caller.app && { byLoadedCode: true as const }),
+      ...(caller.runsRow && { byRow: true as const }),
       resolved: await sha256Hex(print(named)),
     });
     if (approved === text) return approved;

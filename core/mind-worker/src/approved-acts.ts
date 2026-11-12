@@ -33,8 +33,8 @@ export async function runApprovedAct(
       return { ok: true as const, sent: { path: EMAIL_PATH, offset: sent.offset } };
     }
     // A verb, called at the context that read its name (iterate/acts `VerbAct`, `at`). The call
-    // arrives there as the caller's call did: with the caller's context as its origin, and as
-    // loaded code's when loaded code asked. An act
+    // arrives there as the caller's call did: with the caller's context as its origin, as
+    // loaded code's when loaded code asked, and as a row's run when a stored row's run asked. An act
     // that names no context was held by a build before this one: it is called from its caller's
     // context, and the kernel refuses it, since the text it makes now names one. The gate lets
     // the act go once, and the kernel says whether the call still is that act
@@ -50,6 +50,7 @@ export async function runApprovedAct(
         approvedAct: held.text,
         ...(at !== caller && { path: caller }),
         ...(act.byLoadedCode && { app: true as const }),
+        ...(act.byRow && { runsRow: true as const }),
       });
     // what a verb answers may be anything: the fact keeps what JSON can say of it
     return { ok: true as const, result: jsonOf(result) };

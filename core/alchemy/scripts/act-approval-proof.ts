@@ -1601,6 +1601,83 @@ await run(
 );
 
 await run(
+  "loaded code writes no row in two parts: a rule with a hole and a subscription whose call fills it are each written, and the row that they make is refused when the subscription's target is run",
+  async () => {
+    const RULE = "events.iterate.com/itx/rewrite-rule-configured";
+    const at = `/proof/row-in-two-parts-${marker}`;
+    const name = `proof-row-in-two-parts-${marker}`;
+    const part = `proofPart${marker}`;
+    const escape = `itx.proofEscapeInParts${marker}`;
+    const opensTheRoot = "itx.builtins.cd('/')";
+    // Neither row is a row with a built-in target, so the check on a row that loaded code writes
+    // passes each. The rule's target appends whatever the call gives it, as a rule.
+    const rows = [
+      {
+        type: RULE,
+        payload: {
+          match: `itx.${part}`,
+          target: ["itx", ["append", { type: RULE, "...@": true }]],
+        },
+      },
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: {
+          name,
+          consumes: [`proof/go-${marker}`],
+          target: ["itx", [part, { payload: { match: escape, target: opensTheRoot } }]],
+        },
+      },
+    ];
+    const attempt = await root()
+      .cd(at)
+      .run(
+        `async (itx) => { await itx.append(...${JSON.stringify(rows)}); await itx.append({ type: "proof/go-${marker}", payload: {} }); return "written"; }`,
+      )
+      .then(
+        (answer) => ({ answer: String(answer), refused: "" }),
+        // no answer: the call was refused, with these words
+        (error: unknown) => ({
+          answer: "",
+          refused: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    // the subscription gets the time to run; a rule that lands is seen at once
+    let landed: unknown = null;
+    for (let waited = 0; waited < 12 && !landed; waited += 2) {
+      await settled(2_000);
+      landed = await root().cd(at).rewriteRules.get(escape);
+    }
+    const halted = z
+      .object({ halted: z.object({ error: z.string() }).optional() })
+      .nullable()
+      .parse(await root().cd(at).subscriptions.get(name));
+    // whatever came of it, the proof's rows go, as the member
+    await root()
+      .cd(at)
+      .subscribe({ name, target: null })
+      .catch(() => undefined);
+    await root()
+      .cd(at)
+      .append({ type: RULE, payload: { match: `itx.${part}`, target: null } });
+    if (landed)
+      await root()
+        .cd(at)
+        .append({ type: RULE, payload: { match: escape, target: null, ifTarget: opensTheRoot } });
+    must(
+      attempt.answer === "written",
+      `loaded code's two rows were not written: ${JSON.stringify(attempt)}`,
+    );
+    must(!landed, `the rule landed in ${at}, and is taken out again: ${JSON.stringify(landed)}`);
+    // The security fact is that no rule landed. Why the run stopped is the subscription's own
+    // word, which the detail quotes.
+    const why = halted?.halted?.error || "the subscription has not said why yet";
+    return {
+      detail: `both rows were written and no rule landed; the subscription's run stopped: ${why.slice(0, 130)}`,
+    };
+  },
+);
+
+await run(
   "the member removes the bridge's key on /keys with the passkey, and the bridge lends no more",
   async () => {
     await page.goto(`${issuer}/keys`);

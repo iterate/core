@@ -80,7 +80,9 @@ export async function serveHostRequest(args: {
     const ingress = itxExpressionEndingInFetch(routing.ingressTarget);
     // Refused here, so an unpublished mind costs the root no call per request.
     resolveItxExpression(() => rules, ingress, implicitRootsAt("/"));
-    const answer = await resolverUnder(caller).invoke(ingress, request);
+    // The ingress row's target is run as the person who asks, and as a row's run
+    // (`Caller.runsRow`): a member's request writes no row that loaded code could not write.
+    const answer = await resolverUnder({ ...caller, runsRow: true }).invoke(ingress, request);
     if (
       unserved &&
       answer instanceof Response &&

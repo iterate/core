@@ -46,7 +46,7 @@ import {
   terminalFetchOf,
 } from "./rpc-stubs.ts";
 import { refuseMoreArguments } from "./held-verbs.ts";
-import { admitLoadedCodeRow, namesAWorker } from "./itx-expression-rewriting.ts";
+import { admitRowsOfCall, namesAWorker } from "./itx-expression-rewriting.ts";
 import {
   assertFacetSourceWithinCeiling,
   contentHashOfWorkerModules,
@@ -158,7 +158,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const ownContext = () => deps.context(path);
   const append = async (...events: StreamEventInput[]) => {
     const caller = deps.caller();
-    if (caller.app) for (const event of events) admitLoadedCodeRow(event, path);
+    admitRowsOfCall(caller, events, path);
     refusePlatformIdempotencyKeys(events, caller);
     // stable retry effects: during a delivery, an unkeyed event is keyed the same on every attempt
     const writeKey = caller.cause?.writeKey;

@@ -110,6 +110,9 @@ test("a held call may name the context whose table read its name, as a path of t
     byLoadedCode: true,
   });
   expect(actOfText(JSON.stringify({ ...act, byLoadedCode: false }))).toBeNull();
+  // and that a stored row's run asked
+  expect(actOfText(JSON.stringify({ ...act, byRow: true }))).toEqual({ ...act, byRow: true });
+  expect(actOfText(JSON.stringify({ ...act, byRow: false }))).toBeNull();
 });
 
 test.for([

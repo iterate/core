@@ -30,6 +30,7 @@ import { causeOfDelivery, deepestCause, newChain, parseCause, type Cause } from 
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
+  ITX_RUNS_ROW_HEADER,
   ITX_GRANT_HEADER,
   isConfigPointerMatch,
   refuseNonPlatformWrites,
@@ -802,9 +803,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   readonly #subscriptionDelivery = new SubscriptionDelivery({
     stream: this.#stream,
-    // Never with delivery authority, whatever the store holds.
+    // Never with delivery authority, whatever the store holds. And as a row's run
+    // (`Caller.runsRow`): a target that is a call is run here, when its head is read.
     evaluateItxExpression: (itxExpression) =>
-      this.#callerStorage.run({ principal: null }, () =>
+      this.#callerStorage.run({ principal: null, runsRow: true }, () =>
         this.#itxExpressionResolver.evaluate(itxExpression),
       ),
     refuseHeldVerb: (target) =>
@@ -819,7 +821,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#facetHost.callFacetAsPlatform(facetHandle, [["catchUpFromLog"]], cause),
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
     runAsDelivery: async (events, call, delivery) => {
-      const caller: Caller = { principal: null, cause: causeOfDelivery(events) };
+      const caller: Caller = { principal: null, runsRow: true, cause: causeOfDelivery(events) };
       if (delivery) caller.cause = { ...caller.cause!, writeKey: delivery };
       caller.delivery = await sha256Hex(JSON.stringify(delivery ? events[0] : events));
       return this.#callerStorage.run(caller, call);
@@ -1332,6 +1334,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const grant = headers.get(ITX_GRANT_HEADER) || undefined;
         const callerPath = headers.get(ITX_CALLER_PATH_HEADER) || undefined;
         headers.delete(ITX_CALLER_PATH_HEADER);
+        const runsRow = headers.get(ITX_RUNS_ROW_HEADER) !== null;
+        headers.delete(ITX_RUNS_ROW_HEADER);
         const cause = parseCause(headers.get(ITERATE_CAUSE_HEADER)) ?? newChain("a request");
         headers.delete(ITERATE_CAUSE_HEADER);
         const forwarded = new Request(request, {
@@ -1344,6 +1348,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           path: callerPath,
           cause,
           ...(app && { app: true as const }),
+          ...(runsRow && { runsRow: true as const }),
         };
         const result = await this.#callerStorage.run(caller, () =>
           this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),

@@ -176,6 +176,30 @@ test("an act that loaded code asked for says so, and its late approval runs as l
   });
 });
 
+test("an act that a stored row's run asked for says so, and its late approval runs as a row's run or not at all", async () => {
+  const mind = mindWith([{ verb: "itx.agents.delete" }]);
+  // as the ingress row's target is run for a request: the person who asks, and the mark
+  const rowsRun = { principal: null, runsRow: true } as const;
+  await mind
+    .at("/", rowsRun)
+    .invoke("itx.agents.delete", "/agents/one")
+    .catch(() => undefined);
+  const text = mind.asked[0]!.text;
+  const approved = (caller: Caller) =>
+    mind.at("/", caller).invokeApproved(text, "itx.agents.delete", ["/agents/one"]);
+
+  // without the mark the call is another act: what it writes would not be checked
+  await expect(approved({ principal: null })).rejects.toThrow(
+    "changed while it waited for a member's approval",
+  );
+  await approved(rowsRun);
+
+  expect({ held: mind.held(), ran: mind.ran }).toMatchObject({
+    held: [{ act: "itx.agents.delete", at: "/", byRow: true }],
+    ran: ["/agents: delete /agents/one"],
+  });
+});
+
 test("a subscription does not deliver to a verb that a rule holds across contexts, and delivers to the verb beside it", async () => {
   const mind = mindWith([{ verb: "itx.agents.delete" }]);
 

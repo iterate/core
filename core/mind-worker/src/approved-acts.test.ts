@@ -57,6 +57,17 @@ test("an act that loaded code asked for is called as loaded code", async () => {
   ]);
 });
 
+test("an act that a stored row's run asked for is called as a row's run", async () => {
+  const mind = pretendMind();
+  const text = actText({ act: "itx.config.slack", args: [], at: "/", byRow: true });
+
+  await runApprovedAct(mind.deps, { digest: "d5", text, from: "/" });
+
+  expect(mind.calls.map(({ caller }) => caller)).toEqual([
+    { principal: null, approvedAct: text, runsRow: true },
+  ]);
+});
+
 /** A mind whose every context answers a call with where it ran, and a gate that lets each act go. */
 function pretendMind() {
   const calls: { at: string; expression: unknown; caller: unknown }[] = [];
