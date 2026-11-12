@@ -23,13 +23,18 @@ import { agentTitle, byRecentActivity, mineFirst, personAt, topLevelAgents } fro
 /** A link that changes this page's URL: a plain left click stays on the page, and any other click
  *  is the browser's (a new tab). */
 export function pageLink(href, go) {
-  const onClick = (event) => {
+  return html`<a href=${href} onClick=${linkClick(go)} />`;
+}
+
+/** A link's click as this page's own navigation (`go`): a plain left click alone, so a click with
+ *  a modifier still opens the address in a new tab or window. */
+export function linkClick(go) {
+  return (event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
       return;
     event.preventDefault();
     go();
   };
-  return html`<a href=${href} onClick=${onClick} />`;
 }
 
 export const agentHref = (path) => `?agent=${encodeURIComponent(path)}`;

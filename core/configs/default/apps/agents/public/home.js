@@ -19,7 +19,7 @@ import {
   newAgentPath,
   topLevelAgents,
 } from "./agent-rows.js";
-import { agentHref, pageLink } from "./nav.js";
+import { agentHref, linkClick } from "./nav.js";
 
 /** `offers`: other kinds' choices, `{ value: "<kind>/<choice>", label, kind, choice, fields,
  *  byPerson }`.
@@ -141,23 +141,27 @@ export function AgentsHome({
             </h2>
             <ul class="agents-home-recent">
               ${recent.map(
+                // the link holds the card: the kit's Card is a plain div, and takes no link
                 (row) => html`
                   <li key=${row.path} data-agent-path=${row.path}>
-                    <${Card}
-                      size="sm"
-                      render=${pageLink(agentHref(row.path), () => onOpen(row.path))}
+                    <a
+                      href=${agentHref(row.path)}
+                      onClick=${linkClick(() => onOpen(row.path))}
+                      class="block rounded-xl outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                      <${CardHeader}>
-                        <${CardTitle} className="flex items-center gap-2">
-                          <${BotIcon}
-                            className="size-4 shrink-0 text-muted-foreground"
-                            aria-hidden
-                          />
-                          <span class="truncate">${agentTitle(row)}</span>
+                      <${Card} size="sm" className="transition-colors hover:bg-accent/40">
+                        <${CardHeader}>
+                          <${CardTitle} className="flex items-center gap-2">
+                            <${BotIcon}
+                              className="size-4 shrink-0 text-muted-foreground"
+                              aria-hidden
+                            />
+                            <span class="truncate">${agentTitle(row)}</span>
+                          <//>
+                          <${CardDescription} className="truncate text-2xs">${row.path}<//>
                         <//>
-                        <${CardDescription} className="truncate text-2xs">${row.path}<//>
                       <//>
-                    <//>
+                    </a>
                   </li>
                 `,
               )}
