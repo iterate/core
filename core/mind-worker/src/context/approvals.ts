@@ -1,6 +1,6 @@
 import type { ItxHostRootContext } from "core-itx";
 import type { ActRule } from "iterate/acts";
-import { reportIssue } from "iterate/lib";
+import { releasedAnswer, reportIssue } from "iterate/lib";
 import { platformOriginOf } from "iterate/mind-api";
 import type { Door } from "iterate/workers";
 import { hopCaller } from "./hop-caller.ts";
@@ -27,15 +27,21 @@ export function approvalsRoot(
         .invoke(["itx", "builtins", ["append", ...events]], [], { ...from(), platform: true })
         .catch((error: unknown) => reportIssue("approval.facts-not-recorded", error, { path }));
   };
+  // Each answer of the gate is copied and released (iterate/lib `releasedAnswer`): left alone, it
+  // keeps its call's session open for as long as the code that asked runs.
   return {
-    rules: () => egress.actRules(),
+    rules: () => releasedAnswer(egress.actRules()),
     setRules: async (rules: ActRule[]) => {
-      const set = await egress.setActRules({ rules, from: from().path || context.path });
+      const set = await releasedAnswer(
+        egress.setActRules({ rules, from: from().path || context.path }),
+      );
       await record(set.facts);
       return set.rules;
     },
     propose: async (rule: ActRule) => {
-      const proposed = await egress.proposeActRule({ rule, from: from().path || context.path });
+      const proposed = await releasedAnswer(
+        egress.proposeActRule({ rule, from: from().path || context.path }),
+      );
       await record(proposed.facts);
       return { id: proposed.id, signAt: `${platformOriginOf(domain)}/secrets/approvals` };
     },

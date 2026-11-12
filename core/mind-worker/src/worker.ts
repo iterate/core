@@ -43,7 +43,7 @@ import { BROWSER_ROOT_DESCRIPTION, cfBrowser } from "./context/browser.ts";
 import { IMAGES_ROOT_DESCRIPTION, mindImages } from "./context/images.ts";
 import { EmailFacet } from "./email/durable-object.ts";
 import { runApprovedAct } from "./approved-acts.ts";
-import { heldVerbRules } from "./context/held-verb-rules.ts";
+import { gateOf } from "./context/held-verb-rules.ts";
 import { EMAIL_PATH, emailRoot, receiveEmail } from "./integrations/email.ts";
 import {
   INTEGRATIONS_ROOT_DESCRIPTION,
@@ -107,10 +107,7 @@ defineItxHost({
     ),
   // The vault's gate for acts. The kernel asks for the verb rules on each call a context resolves
   // by its own table: kept a few seconds, so a new rule holds within that time.
-  acts: {
-    verbRules: heldVerbRules(() => env.DOOR.actRules()),
-    ask: (input) => env.DOOR.act(input),
-  },
+  acts: gateOf(() => env.DOOR),
   loader: { prepareConfinedWorker },
   // A getter: the bindings are read when the kernel first reads the roots, never during module
   // evaluation.
