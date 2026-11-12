@@ -318,6 +318,28 @@ test("a row that merges the call's object into its own holds a call with the pin
   ).toBeNull();
 });
 
+// `itx.slack.pin => itx.config.slack("pins.add", { channel: @ })`: the hole is inside an argument.
+const PIN: ItxExpression = [...WORKER, ["slack", "pins.add", { channel: { "@": true } }]];
+
+test.for([
+  ["an argument after the row's", ["slack", "pins.add", { channel: "C1" }, "more"]],
+  ["a key beside the row's", ["slack", "pins.add", { channel: "C1", timestamp: "1" }]],
+] as const)(
+  "the call a row makes, given %s, is refused: it does the same and no row could have made it",
+  ([, call]) => {
+    expect(held(["itx.slack.pin"], [...WORKER, [...call]])).toEqual({
+      refused: expect.stringContaining("only as the call its row makes"),
+    });
+  },
+);
+
+test("a call with a hole inside an argument is held as the argument its caller gave", () => {
+  expect(held(["itx.slack.pin"], [...WORKER, ["slack", "pins.add", { channel: "C1" }]])).toEqual({
+    act: "itx.slack.pin",
+    args: ["C1"],
+  });
+});
+
 test("a held call that a row fills in is one call: what goes on after it is refused", () => {
   expect(
     held(["itx.slack.postMessage"], [...WORKER, ["slack", "chat.postMessage", {}], "ok"]),
@@ -334,9 +356,7 @@ function held(verbs: readonly string[], resolved: ItxExpression, extraArgs: unkn
       verb[1] === "whatsapp"
         ? [...STUB, ...verb.slice(2)]
         : verb[1] === "slack"
-          ? verb[2] === "react"
-            ? REACT
-            : POST
+          ? { react: REACT, pin: PIN }[String(verb[2])] || POST
           : verb[1] === "config"
             ? [...WORKER, ...verb.slice(2)]
             : verb[1] === "agents"

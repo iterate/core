@@ -91,38 +91,64 @@ function sameStep(ofRule: ItxExpression[number], ofCall: ItxExpression[number] |
  *  call of its own, and what the row pins ("chat.postMessage") says which. A rule on such a name
  *  is resolved with the hole left in place (`verbWithAHole`), and a call is the rule's verb when
  *  it is the same call around the hole: the same name, and every pinned argument the same. */
-function sameCallAroundTheHole(ofRule: unknown[], ofCall: ItxExpression[number] | undefined) {
-  if (!Array.isArray(ofCall) || ofRule[0] !== ofCall[0]) return false;
+function sameCallAroundTheHole(
+  ofRule: unknown[],
+  ofCall: ItxExpression[number] | undefined,
+): AroundTheHole {
+  if (!Array.isArray(ofCall) || ofRule[0] !== ofCall[0]) return "other";
   const pinned = ofRule.slice(1);
   // an argument that is the hole itself takes every argument from there on: nothing after it
   // can be laid beside the call's
   const open = pinned.findIndex(isItxExpressionHole);
   const compared = open === -1 ? pinned : pinned.slice(0, open);
-  if (open === -1 && ofCall.length - 1 !== pinned.length) return false;
-  return compared.every((value, index) => sameAroundTheHole(value, ofCall[index + 1]));
+  if (ofCall.length - 1 < compared.length) return "other";
+  const beyond = open === -1 && ofCall.length - 1 > pinned.length;
+  return worstOf([
+    ...compared.map((value, index) => sameAroundTheHole(value, ofCall[index + 1])),
+    beyond ? "more" : "same",
+  ]);
 }
+
+/** How a call lies beside the call a row makes. "more": every pinned value is there, and the call
+ *  gives an argument or a key that the row's call has no place for. A function does not read what
+ *  it does not name, so that call does what the row's call does, and it is not the row's call:
+ *  no row could have made it, and its approval could not be run as the rule's name.
+ *
+ *  A call that gives LESS is another call: a pinned value that is the function's own default
+ *  (null, false, 0, "") is not there when the call leaves it out, and the kernel does not know
+ *  a function's defaults. So a rule on a name that a row fills in holds that row's call; a rule
+ *  on the function under it holds every call of it. */
+type AroundTheHole = "same" | "more" | "other";
+const worstOf = (all: AroundTheHole[]): AroundTheHole =>
+  all.includes("other") ? "other" : all.includes("more") ? "more" : "same";
+
+/** An argument that is a list of JSON. */
+const isJsonList = (value: unknown): value is unknown[] => Array.isArray(value);
 
 /** An argument that is an object of JSON: keys and values, no list. */
 const isJsonObject = (value: unknown): value is Record<string, unknown> =>
   value instanceof Object && !Array.isArray(value);
 
-function sameAroundTheHole(pinned: unknown, given: unknown): boolean {
-  if (isItxExpressionHole(pinned)) return true;
-  if (Array.isArray(pinned))
-    return (
-      Array.isArray(given) &&
-      given.length === pinned.length &&
-      pinned.every((value, index) => sameAroundTheHole(value, given[index]))
-    );
-  if (!isJsonObject(pinned)) return jsonEqual(pinned, given);
-  if (!isJsonObject(given)) return false;
+function sameAroundTheHole(pinned: unknown, given: unknown): AroundTheHole {
+  if (isItxExpressionHole(pinned)) return "same";
+  if (Array.isArray(pinned)) {
+    if (!Array.isArray(given) || given.length < pinned.length) return "other";
+    return worstOf([
+      ...pinned.map((value, index) => sameAroundTheHole(value, given[index])),
+      given.length > pinned.length ? "more" : "same",
+    ]);
+  }
+  if (!isJsonObject(pinned)) return jsonEqual(pinned, given) ? "same" : "other";
+  if (!isJsonObject(given)) return "other";
   // `...@` merges the caller's object in: the pinned keys are there, and others may be
   const merges = pinned[ITX_EXPRESSION_MERGE_KEY] === true;
   const keys = Object.keys(pinned).filter((key) => key !== ITX_EXPRESSION_MERGE_KEY);
-  return (
-    (merges || Object.keys(given).length === keys.length) &&
-    keys.every((key) => Object.hasOwn(given, key) && sameAroundTheHole(pinned[key], given[key]))
-  );
+  return worstOf([
+    ...keys.map((key) =>
+      Object.hasOwn(given, key) ? sameAroundTheHole(pinned[key], given[key]) : "other",
+    ),
+    merges || Object.keys(given).length === keys.length ? "same" : "more",
+  ]);
 }
 
 /** WHAT THE CALLER GAVE THE RULE'S NAME, read back out of the call the row made of it. The act is
@@ -140,7 +166,7 @@ function givenAroundTheHole(ofRule: unknown[], ofCall: unknown[]): unknown[] {
 
 function givenInside(pinned: unknown, given: unknown): unknown[] {
   if (isItxExpressionHole(pinned)) return [given];
-  if (Array.isArray(pinned) && Array.isArray(given))
+  if (isJsonList(pinned) && isJsonList(given))
     return pinned.flatMap((value, index) => givenInside(value, given[index]));
   if (!isJsonObject(pinned) || !isJsonObject(given)) return [];
   const keys = Object.keys(pinned).filter((key) => key !== ITX_EXPRESSION_MERGE_KEY);
@@ -218,12 +244,13 @@ function heldAs(
     const filledIn = target[here];
     if (Array.isArray(filledIn) && containsItxExpressionHole(filledIn)) {
       const call = resolved[here];
-      if (
-        !target.slice(0, here).every((step, index) => sameStep(step, resolved[index])) ||
-        !Array.isArray(call) ||
-        !sameCallAroundTheHole(filledIn, call)
-      )
-        continue;
+      if (!target.slice(0, here).every((step, index) => sameStep(step, resolved[index]))) continue;
+      const beside = sameCallAroundTheHole(filledIn, call);
+      if (beside === "other" || !Array.isArray(call)) continue;
+      if (beside === "more")
+        return {
+          refused: `${name} waits for a member's approval, and can be held only as the call its row makes: this call gives more than the row has a place for`,
+        };
       if (resolved.length > target.length || extraArgs.length > 0)
         return {
           refused: `${name} waits for a member's approval, and can be held only as one call: names, then one call with its arguments, and nothing after it`,
