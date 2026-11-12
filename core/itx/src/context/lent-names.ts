@@ -31,7 +31,10 @@ export function isLendOf(resolved: ItxExpressionInput, match: ItxExpressionInput
  *  under it, but the stub lent as this very name before. A row with no target is a row: the mind
  *  masked the name, and a lend under a mask would answer where the mind said that nothing does. A
  *  row under the name would be left as an island in what the key lends. The bare row (`itx`
- *  alone) is a context's link or its jail and no name. */
+ *  alone) is a context's link or its jail and no name.
+ *
+ *  A lend of this very name is free whoever lent it: a row does not say who wrote it, and a member
+ *  gave the key this name. So a key takes the name from a member's own lend of it. */
 export function nameIsFree(
   own: ItxExpressionInput,
   rows: readonly { match: ItxExpressionInput; target: ItxExpressionInput | null }[],
