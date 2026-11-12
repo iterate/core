@@ -56,6 +56,7 @@ import {
   BookOpenIcon,
   BotIcon,
   ChartLineIcon,
+  CompassIcon,
   FolderGit2Icon,
   KeyRoundIcon,
   LayoutDashboardIcon,
@@ -105,8 +106,14 @@ const apps = [
     icon: BotIcon,
     about: "Every agent of the mind, and a chat with each.",
   },
-  { name: "Voice", host: "voice", icon: PhoneIcon, about: "Call the mind from this browser." },
+  {
+    name: "Onboarding",
+    host: "onboarding",
+    icon: CompassIcon,
+    about: "A chat that sets the mind up with you.",
+  },
   { name: "Docs", host: "docs", icon: BookOpenIcon, about: "The config repo, read as pages." },
+  { name: "Voice", host: "voice", icon: PhoneIcon, about: "Call the mind from this browser." },
 ].map((app) => ({ ...app, href: `https://${app.host}.${domain}` }));
 
 /** Where a member answers what waits for a yes: the stack's own page, which asks for a passkey. */

@@ -1,4 +1,5 @@
 import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
+import { mindMcpNameOf } from "iterate/mind-api";
 import { plainPageCssHash, standalonePage } from "iterate/standalone-page";
 import { clientTile, shownLogoOf } from "./client-mark.ts";
 
@@ -52,7 +53,9 @@ export function page(
   );
 }
 
-/** The platform's start page: a member's ways into the mind, or the sign-in for anyone else. */
+/** The platform's start page: a member's ways into the mind, or the sign-in for anyone else.
+ *  The apps are the ones a new mind's config repo mounts, each on its own host. The platform does
+ *  not read the config, so an app the owner removed is still named here, and answers "Not found". */
 export function homePage(input: {
   domain: string;
   email: string | null;
@@ -71,9 +74,17 @@ export function homePage(input: {
       wide: true,
       body: `<h1>${text(domain)}</h1>
       <p>You are signed in as <strong>${text(email)}</strong>.</p>
+      <h2>Apps</h2>
       <ul class="stack">
-        ${input.dash ? link("/dash", "Open the Dash", "your mind's events, files and settings") : ""}
-        ${link(`https://agents.${domain}`, "Open the Agents app", "talk to your mind's agents")}
+        ${link(`https://dash.${domain}`, "Dash", "your mind from above: its events, files, secrets and settings")}
+        ${input.dash ? link("/dash", "Hosted Dash", "the same pages, hosted by iterate") : ""}
+        ${link(`https://agents.${domain}`, "Agents", "talk to your mind's agents")}
+        ${link(`https://onboarding.${domain}`, "Onboarding", "a chat that sets your mind up with you")}
+        ${link(`https://docs.${domain}`, "Docs", "your mind's config repo, read as pages")}
+        ${link(`https://voice.${domain}`, "Voice", "call your mind from this browser")}
+      </ul>
+      <h2>Access</h2>
+      <ul class="stack">
         ${link("/members", "People", "who may sign in")}
         ${link("/keys", "Your keys", "your passkeys, and the keys of services you allowed")}
         ${link("/secrets/", "Secrets", "the keys and passwords your mind uses")}
@@ -82,7 +93,7 @@ export function homePage(input: {
       </ul>
       <h2>Connect Claude Code</h2>
       <p>The MCP address of this mind is <code>${text(input.mcp)}</code>. Run this, then sign in when Claude Code asks:</p>
-      <pre><code>claude mcp add --transport http ${text(domain)} ${text(input.mcp)}</code></pre>
+      <pre><code>claude mcp add --transport http ${text(mindMcpNameOf(domain))} ${text(input.mcp)}</code></pre>
       ${signOut}`,
     });
   }

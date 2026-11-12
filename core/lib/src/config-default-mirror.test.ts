@@ -3,6 +3,7 @@
 // The worker mounts its apps, whose page and folder of files the platform's loader hands over:
 // here core/lib's vitest config does (vitest.config-file-imports.ts).
 /// <reference path="../../configs/default/files.d.ts" />
+import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import index from "../../configs/default/apps/agents/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
@@ -42,6 +43,17 @@ test("the default config's pages and folders load here as the platform's loader 
     "playback-worklet.js",
     "turn-on.js",
   ]);
+});
+
+test("the Dash's overview leads to every other app the default worker mounts", () => {
+  // the hosts the worker's `fetch` answers: one `case "<host>":` each
+  const worker = readFileSync(new URL("../../configs/default/worker.ts", import.meta.url), "utf8");
+  const mounted = [...worker.matchAll(/^ {6}case "([a-z]+)":/gm)].map(([, host]) => host);
+  expect(mounted).toEqual(["agents", "onboarding", "docs", "dash", "voice"]);
+  const linked = [...String(dashFiles["app.js"]).matchAll(/\bhost: "([a-z]+)"/g)].map(
+    ([, host]) => host,
+  );
+  expect(linked.toSorted()).toEqual(mounted.filter((host) => host !== "dash").toSorted());
 });
 
 const ORIGIN =

@@ -142,7 +142,9 @@ repository's sync uses the installation's secret and is not held):
 The mind has an MCP server at `https://iterate.<domain>/mcp`.
 
 - Claude (the app or claude.ai): Settings, Connectors, "Add custom connector", with that address.
-- Claude Code: `claude mcp add --transport http iterate https://iterate.<domain>/mcp`.
+- Claude Code: `claude mcp add --transport http <name> https://iterate.<domain>/mcp`, where
+  `<name>` is the domain with a hyphen for each dot (`example-com` for `example.com`). Claude Code
+  refuses a name with a dot in it, and a name for each mind keeps two minds apart.
 
 The owner signs in to the mind when Claude first uses it. Ask them to have Claude run
 `itx.whoami()` and tell you what it answered.

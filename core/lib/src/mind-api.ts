@@ -11,6 +11,11 @@ export const mindApiUrlOf = (address: string) => `${platformOriginOf(address)}/a
 /** Also the MCP server's OAuth resource identifier. */
 export const mindMcpUrlOf = (address: string) => `${platformOriginOf(address)}/mcp`;
 
+/** The name a coding agent's CLI keeps the mind's MCP server under (`claude mcp add … <name>`,
+ *  `codex mcp add <name>`): the address with a hyphen for each dot. A person with two minds then
+ *  has two servers, and Claude Code refuses a name with a dot in it. */
+export const mindMcpNameOf = (address: string) => address.replace(/[^a-zA-Z0-9_-]/g, "-");
+
 /** Also the OAuth resource identifier of the credential a home lab presents there. */
 export const mindProvideUrlOf = (address: string) => `${platformOriginOf(address)}/provide`;
 

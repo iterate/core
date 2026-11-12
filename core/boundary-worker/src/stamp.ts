@@ -11,6 +11,7 @@ import {
   type PlatformRoute,
   platformOriginOf,
   mindApiUrlOf,
+  mindMcpNameOf,
   mindMcpUrlOf,
   protectedResourceMetadataUrlOf,
   type MindResourceMetadata,
@@ -181,7 +182,7 @@ async function isDiscoverProbe(request: Request) {
 function mcpHelp(request: Request, domain: string) {
   const origin = platformOriginOf(domain);
   const mcp = mindMcpUrlOf(domain);
-  const add = `claude mcp add --transport http iterate ${mcp}`;
+  const add = `claude mcp add --transport http ${mindMcpNameOf(domain)} ${mcp}`;
   if (request.method === "GET" && request.headers.get("accept")?.includes("text/html"))
     return {
       type: "text/html; charset=utf-8",
