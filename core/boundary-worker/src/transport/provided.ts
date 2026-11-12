@@ -56,6 +56,8 @@ export const providedMind = (ctx: ExecutionContext): MindTransport => ({
         });
       },
     }),
+  // The three casts below: `invoke` answers `unknown`, and each call is one of `MindTarget`'s by
+  // name, which the provided mind answers with that method's own result.
   append: (path, events, fromAuth) =>
     throughTheMind(["append"], [path, events, fromAuth]) as ReturnType<MindTarget["append"]>,
   runAct: (held) => throughTheMind(["runAct"], [held]) as ReturnType<MindTarget["runAct"]>,
@@ -96,6 +98,8 @@ export async function serveProvide(
     endsAt: identity.expiresAt * 1000,
     endReason: "the token for this link ended: dial again",
     root: (rootContext) =>
+      // The cast: the boundary declares no `GlobalProps`, so `ctx.exports` has no typed member.
+      // `Door` is an export of ../worker.provided.ts, the main module of the build that serves this.
       new ProvideSessionTarget(rootContext, (ctx.exports as unknown as { Door: Fetcher }).Door),
   });
 }
@@ -116,8 +120,8 @@ class ProvideSessionTarget extends RpcTarget {
     return this.#root.provide("itx.mind", mind, { description: "the provided mind" });
   }
 
-  // Each call of the home lab's is a call on the door, made by this invocation, which releases the
-  // answer (../provided-door.ts).
+  // Each call of the home lab's is a call on the `Door` class, made by this invocation, which
+  // releases the answer (../provided-door.ts).
   get door() {
     return this.#door;
   }
