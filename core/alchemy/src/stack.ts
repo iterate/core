@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { platformOriginOf } from "iterate/mind-api";
+import { cloudflareTokenPoliciesOf } from "./cloudflare-token.ts";
 import { type MindConfig, resourceNamesOf } from "./config.ts";
 
 /** A path in `core/`, from this file: a deploy from any working directory finds it. */
@@ -92,6 +93,7 @@ export const mindStack = (config: MindConfig) =>
     // The telemetry part first: every other Worker exports its logs and traces to its destinations.
     const telemetry = config.telemetry && (yield* telemetryPart(names));
     const observability = observabilityOf(telemetry?.destinations);
+    if (config.cloudflareToken) yield* cloudflareTokenPart(names);
 
     const authSettings = { ...config.auth, ...(provided && { provide: true as const }) };
     // Parsed here, so a config auth would refuse fails the deploy, not the first request.
@@ -317,6 +319,18 @@ export const mindStack = (config: MindConfig) =>
     // Alchemy keeps the output in the state store once a deploy succeeded: a deploy with no config file
     // reads the config back from it (./config.ts `storedMindConfig`).
     return { domain, boundary: boundary.workerName, config };
+  });
+
+/** The mind's own API token of its account. Its value stays in the stack's state, as the telemetry
+ *  tokens' do: a deploy that changes nothing about it asks Cloudflare nothing, and a destroy, or a
+ *  deploy whose config no longer asks for it, deletes it. */
+const cloudflareTokenPart = (names: ReturnType<typeof resourceNamesOf>) =>
+  Effect.gen(function* () {
+    const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
+    return yield* Cloudflare.ApiToken.AccountApiToken("MindCloudflareToken", {
+      name: names.cloudflareToken,
+      policies: cloudflareTokenPoliciesOf(accountId),
+    });
   });
 
 const telemetryPart = (names: ReturnType<typeof resourceNamesOf>) =>

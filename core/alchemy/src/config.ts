@@ -55,9 +55,8 @@ export const MindConfig = z
     // by the link Cloudflare mails to it.
     mail: z.union([z.literal(true), z.strictObject({ forwardTo: z.email() })]).optional(),
     telemetry: z.literal(true).optional(),
-    // The mind's own Cloudflare API token, which reads its account and deploys nothing. No deploy
-    // reads the field yet. The config is strict, and a stack is deployed again from the config it
-    // keeps: the commit a stack may be rolled back to must take the field before a deploy keeps it.
+    // The mind's own API token of its account, which reads the account and deploys nothing
+    // (./cloudflare-token.ts says what it may do; stack.ts makes it).
     cloudflareToken: z.literal(true).optional(),
     // The Cloud's key, which signs the events it delivers, is one of `auth.keys`.
     cloud: z.strictObject({ origin: z.url({ protocol: /^https$/ }) }).optional(),
@@ -238,6 +237,7 @@ export const resourceNamesOf = (name: string) => {
     telemetryBucket: `${prefix}-telemetry`,
     telemetryDataset: `${prefix.replaceAll("-", "_")}_metrics`,
     telemetryTables: `${prefix.replaceAll("-", "_")}_telemetry`,
+    cloudflareToken: `${prefix}-cloudflare`,
     // At most 54 characters (Alchemy's state store).
     state: `${prefix}-state`,
   };

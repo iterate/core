@@ -478,6 +478,26 @@ turn-on makes them again. The dev account's deploy token may not; the account ha
 that may (`docs/api-keys.md`). The proof turns only a stack whose domain is in its list of
 prototypes. The stack smoke gate (`docs/testing.md`) runs it in every run, on the stack it holds.
 
+## The mind's Cloudflare token
+
+`cloudflareToken: true` in the config adds one API token of the account,
+`iterate-<name>-cloudflare`, for the mind itself. It reads the account and its zones. It writes
+observability, telemetry, pipelines and alerts. It deploys nothing.
+
+**The rule: it reads everything, except what yields a credential that can do more than the token
+itself.** So it has no read of a D1 database's rows, a KV namespace's values, an R2 bucket's
+objects, a Logpush job, or the account's API tokens, and no write of a Worker, a route, a
+container, a DNS record, a zone, the registrar or a setting. `src/cloudflare-token.ts` has the
+rule, each read that is left out with what it could yield, and the eight writes.
+`src/cloudflare-token.test.ts` holds them against the catalog of permission groups that Alchemy
+ships: a catalog with a new read group fails there until somebody has asked the rule's question of
+it. The token still reads names: a bucket's, a namespace's, a database's, a secret's.
+
+Its value stays in the stack's state, as the telemetry tokens' do, and **Account API Tokens Edit
+is needed** by the same deploys: the one that makes the token, a `destroy` or a deploy without
+the field (each deletes it), and a deploy of a version that changes what the token may do. Any
+other deploy asks Cloudflare nothing about it. No Worker is bound to the token yet.
+
 ## A provided mind
 
 A stack's mind can run on a machine of your own: the same mind Worker, in local workerd
