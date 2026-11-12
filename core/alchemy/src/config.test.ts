@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { MindConfig } from "./config.ts";
+import { loadMindConfig, MindConfig } from "./config.ts";
 
 const stack = {
   name: "proof",
@@ -46,4 +49,32 @@ void test("a forward address at the stack's own domain, or under it, is refused:
     MindConfig.safeParse({ ...stack, mail: { forwardTo: "team@notmind.example" } }).success,
     true,
   );
+});
+
+void test("a config may ask for the mind's Cloudflare token, and only by `true`", () => {
+  assert.equal(MindConfig.parse({ ...stack, cloudflareToken: true }).cloudflareToken, true);
+  assert.equal(MindConfig.parse(stack).cloudflareToken, undefined);
+  for (const cloudflareToken of [false, "true", {}])
+    assert.equal(
+      MindConfig.safeParse({ ...stack, cloudflareToken }).success,
+      false,
+      JSON.stringify(cloudflareToken),
+    );
+});
+
+void test("a config that asks for the mind's Cloudflare token is one the stack may keep in its state store", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "mind-config-"));
+  const named = process.env.ITERATE_MIND_CONFIG;
+  try {
+    process.env.ITERATE_MIND_CONFIG = join(folder, "mind.config.json");
+    writeFileSync(
+      process.env.ITERATE_MIND_CONFIG,
+      JSON.stringify({ ...stack, cloudflareToken: true }),
+    );
+    assert.equal((await loadMindConfig(undefined)).cloudflareToken, true);
+  } finally {
+    if (named) process.env.ITERATE_MIND_CONFIG = named;
+    else delete process.env.ITERATE_MIND_CONFIG;
+    rmSync(folder, { recursive: true });
+  }
 });

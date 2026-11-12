@@ -55,6 +55,10 @@ export const MindConfig = z
     // by the link Cloudflare mails to it.
     mail: z.union([z.literal(true), z.strictObject({ forwardTo: z.email() })]).optional(),
     telemetry: z.literal(true).optional(),
+    // The mind's own Cloudflare API token, which reads its account and deploys nothing. No deploy
+    // reads the field yet. The config is strict, and a stack is deployed again from the config it
+    // keeps: the commit a stack may be rolled back to must take the field before a deploy keeps it.
+    cloudflareToken: z.literal(true).optional(),
     // The Cloud's key, which signs the events it delivers, is one of `auth.keys`.
     cloud: z.strictObject({ origin: z.url({ protocol: /^https$/ }) }).optional(),
   })
@@ -129,6 +133,7 @@ const PUBLIC_FIELDS = new Set([
   // an address mail is forwarded to: it is in every forwarded mail's headers
   "mail.forwardTo",
   "telemetry",
+  "cloudflareToken",
 ]);
 
 function unlistedFields(value: unknown, path = ""): string[] {
