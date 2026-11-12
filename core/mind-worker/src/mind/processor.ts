@@ -1,3 +1,4 @@
+import type { ScheduledAppend } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
 import { errorCode, jsonEqual } from "iterate/lib";
 import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
@@ -78,6 +79,13 @@ type PublicationAttempt =
   // `superseded`: main moved on before the commit was looked at, which says nothing about it
   | { kind: "refused"; error: string; superseded?: true };
 
+/** The schedule's key and the row's name at the root, the event that the schedule appends, and
+ *  its period (`#armGrantRefreshOnce`). The Cloud ends a GitHub claim that is not made again
+ *  within its limit of days: a day is well under it, and one failed day loses nothing. */
+const GRANT_REFRESH = "grant-refresh";
+const GRANT_REFRESH_DUE = "events.iterate.com/secret/grants-refresh-due";
+const GRANT_REFRESH_EVERY_MS = 24 * 60 * 60_000;
+
 export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<typeof MindContract>> {
   readonly contract = MindContract;
 
@@ -103,6 +111,7 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
   #creating = false;
   #retriedFailedCreation = false;
   #templateFollowed = false;
+  #grantRefreshArmed = false;
   // The template commit this incarnation made: known here before the record of it is kept.
   #templateCommit: { commitOid: string; template: string } | undefined;
   // One publication runs at a time and drains, oldest first: a commit that lands while one is in
@@ -274,6 +283,9 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     // at the end of the publication above. A deploy restarts the root, whose next wake is
     // delivered here.
     if (this.#templateMayFollow()) runInBackground(() => this.#followTemplateOnce(append));
+    // The persons' grants are refreshed once a day: the root gets what does that, once per
+    // incarnation, so a mind that lived before this code gets it at its next deploy.
+    if (state.creation?.status === "created") runInBackground(() => this.#armGrantRefreshOnce());
     // A failed creation is asked for again, once per incarnation: only the root's birth writes the
     // request, so a failure that stood would leave the mind with no site for good.
     if (state.creation?.status === "failed" && !this.#retriedFailedCreation) {
@@ -379,6 +391,74 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
       !this.#publishing &&
       !this.#templateFollowed
     );
+  }
+
+  /** THE PERSONS' GRANTS THAT THE ITERATE CLOUD BROKERS ARE REFRESHED ONCE A DAY
+   *  (core/secrets-worker/src/grant-refresh.ts says why). The root gets two things for it, each
+   *  only when it is not there: a schedule under the key `grant-refresh`, whose event comes once
+   *  a day, and the row that answers that event with `itx.secrets.refreshGrants()`. The row fans
+   *  out, so a day whose refresh fails is said as that event's failure and holds no later day.
+   *
+   *  A MIND'S OWN SCHEDULE UNDER THAT KEY IS LEFT AS IT IS: with another period, or with another
+   *  event, which turns the refresh off. A schedule that was only cancelled is set again at the
+   *  next incarnation.
+   *
+   *  A SCHEDULE WHOSE FIRE FAILED IS PARKED, and a parked one fires no more until it is set
+   *  again: left so, one failed day would end the refresh for good. It is set again as it is
+   *  defined, the mind's own too, once per incarnation.
+   *
+   *  Never throws: the next incarnation tries again. */
+  async #armGrantRefreshOnce(): Promise<void> {
+    if (this.#grantRefreshArmed) return;
+    this.#grantRefreshArmed = true;
+    try {
+      // one stub a call, as the seed does
+      const call = async (...steps: ItxExpression) => {
+        using itx = this.getItx();
+        return await itx.invoke(["itx", "builtins", ...steps]);
+      };
+      if (!(await call("subscriptions", ["get", GRANT_REFRESH])))
+        await call([
+          "append",
+          {
+            type: "events.iterate.com/itx/subscription-configured",
+            payload: {
+              name: GRANT_REFRESH,
+              consumes: [GRANT_REFRESH_DUE],
+              ordered: false,
+              target: ["itx", "builtins", "secrets", "refreshGrants"],
+            },
+          },
+        ]);
+      // The table's own row, or null: `invoke` answers untyped.
+      const schedule = (await call("schedules", ["get", GRANT_REFRESH])) as ScheduledAppend | null;
+      if (!schedule || schedule.failure) {
+        await call("schedules", [
+          "set",
+          {
+            key: GRANT_REFRESH,
+            when: schedule?.when || { everyMs: GRANT_REFRESH_EVERY_MS },
+            events: schedule?.events || [{ type: GRANT_REFRESH_DUE, payload: {} }],
+          },
+        ]);
+        if (schedule?.failure)
+          console.info({
+            event: "mind.grant-refresh-schedule-set-again",
+            namespace: "mind",
+            message: "the schedule that refreshes the persons' grants was parked by a failed fire",
+            error: schedule.failure.error,
+            failedAtOffset: schedule.failure.offset,
+          });
+      }
+    } catch (error) {
+      this.#grantRefreshArmed = false;
+      console.info({
+        event: "mind.grant-refresh-not-armed",
+        namespace: "mind",
+        message: "the root did not get the schedule that refreshes the persons' grants",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   // A config repo is seeded once, and this code bundles the template it was built with: a mind
