@@ -84,7 +84,7 @@ export function secretPathsIn(value: string): string[] {
 
 /** THE SECRET A REQUEST USES, as egress names it on the request it hands the secrets Worker: the
  *  path its placeholder spells. Egress deletes any copy a caller sent and sets its own, and only
- *  egress binds the entrypoint that reads it (core/secrets-worker worker.ts `SecretUse`). */
+ *  egress binds the entrypoint that reads it (core/secrets-worker rpc.ts `SecretUse`). */
 export const SECRET_USE_HEADER = "x-itx-secret-use";
 
 /** On an answer the vault gave itself, its `VaultAnswerKind`. The secrets Worker strips it from
