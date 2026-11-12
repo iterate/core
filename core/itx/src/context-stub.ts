@@ -54,10 +54,18 @@ export function contextStub(
                 throw codedError(code, message, data);
               }
               // workerd puts the session's disposer on the wrapper; whoever gets an answer
-              // releases the answer itself, so it moves onto the answer.
+              // releases the answer itself, so it moves onto the answer. A plain value (a number,
+              // a string, nothing) has nowhere to carry it and holds no stub of the other context:
+              // its session is released here, or it would stay open until the runtime drops it
+              // with "An RPC result was not disposed properly".
               const { data, [Symbol.dispose]: dispose } = result;
-              if (dispose && data instanceof Object && !data[Symbol.dispose])
-                Object.defineProperty(data, Symbol.dispose, { value: dispose, configurable: true });
+              if (dispose && data instanceof Object) {
+                if (!data[Symbol.dispose])
+                  Object.defineProperty(data, Symbol.dispose, {
+                    value: dispose,
+                    configurable: true,
+                  });
+              } else dispose?.();
               return data;
             } catch (error) {
               release();
