@@ -17,6 +17,7 @@ import { type MindConfig, resourceNamesOf } from "./config.ts";
 
 /** A path in `core/`, from this file: a deploy from any working directory finds it. */
 import { publishedSandboxImageIn } from "./sandbox-image.ts";
+import { storedPathOf } from "./stored-path.ts";
 
 const core = (path: string) => resolve(import.meta.dirname, "../..", path);
 /** Without it a Worker's fetch to a hostname of its own zone skips every Worker's route there: a
@@ -97,7 +98,7 @@ export const mindStack = (config: MindConfig) =>
     authConfigOf(domain, authSettings);
     const db = yield* Cloudflare.D1.Database("AuthDb", {
       name: names.authDb,
-      migrations: core("auth-worker/migrations"),
+      migrations: storedPathOf(core("auth-worker/migrations")),
     });
     const kv = yield* Cloudflare.KV.Namespace("AuthKv", { title: names.authKv });
     const authSendEmail = yield* Cloudflare.Email.SendEmail("AUTH_SEND_EMAIL");
