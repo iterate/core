@@ -1278,6 +1278,58 @@ await run(
 );
 
 await run(
+  "loaded code writes no row whose target carries a row: a subscription that would append a rule when it runs is refused, and no rule lands",
+  async () => {
+    const RULE = "events.iterate.com/itx/rewrite-rule-configured";
+    // a context of the proof's own: what lands, lands there
+    const at = `/proof/row-in-a-call-${marker}`;
+    const name = `proof-row-in-a-call-${marker}`;
+    const escape = `itx.proofEscape${marker}`;
+    const opensTheRoot = "itx.builtins.cd('/')";
+    // The row's target is a call of `append` with a rule in its arguments. A row runs as the
+    // platform's delivery, which checks no row: so the rule would land when the event comes.
+    const subscription = {
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: {
+        name,
+        consumes: [`proof/go-${marker}`],
+        target: [
+          "itx",
+          ["append", { type: RULE, payload: { match: escape, target: opensTheRoot } }],
+        ],
+      },
+    };
+    const attempt = await root()
+      .cd(at)
+      .run(
+        `async (itx) => { await itx.append(${JSON.stringify(subscription)}); await itx.append({ type: "proof/go-${marker}", payload: {} }); }`,
+      )
+      .then(
+        (answer) => ({ answer: JSON.stringify(answer) }),
+        (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+      );
+    // a row that was written gets the time to run
+    await settled(8_000);
+    const landed = await root().cd(at).rewriteRules.get(escape);
+    // whatever came of it, the proof's rows go, as the member
+    await root()
+      .cd(at)
+      .subscribe({ name, target: null })
+      .catch(() => undefined);
+    if (landed)
+      await root()
+        .cd(at)
+        .append({ type: RULE, payload: { match: escape, target: null, ifTarget: opensTheRoot } });
+    must(!landed, `the rule landed in ${at}, and is taken out again: ${JSON.stringify(landed)}`);
+    must(
+      "refused" in attempt && attempt.refused.includes("is not a loaded worker's word"),
+      `the append ended with ${JSON.stringify(attempt)}`,
+    );
+    return { detail: `no row was written: ${attempt.refused.slice(0, 130)}` };
+  },
+);
+
+await run(
   "the member removes the bridge's key on /keys with the passkey, and the bridge lends no more",
   async () => {
     await page.goto(`${issuer}/keys`);

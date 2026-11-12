@@ -517,10 +517,28 @@ function admitLoadedCodeExpression(expression: ItxExpression, from: string): voi
           if (namesAWorker(arg)) admitWorkerName(sourceExpression);
           else admitLoadedCodeExpression(sourceExpression, at);
         }
+        // A ROW IN A CALL'S ARGUMENTS IS A ROW. A row's target such as
+        // `itx.append({ type: rewrite-rule-configured, payload: … })` writes that row when the
+        // row runs, and the row runs as the platform's delivery, which checks no row. So the row
+        // is checked here, where loaded code names it: in an event, in a list of events, or in a
+        // schedule's.
+        for (const event of rowEventsIn(arg)) admitLoadedCodeRow(event, at);
       }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string")
       at = resolveContextPath(at, step[1]);
   }
+}
+
+/** The events of the kernel's own namespace in a call's argument, however deep: each may be a row
+ *  (`admitLoadedCodeRow` says which types are). */
+function rowEventsIn(arg: unknown, depth = 0): { type: string; payload?: unknown }[] {
+  if (!(typeof arg === "object" && !!arg) || depth > 8) return [];
+  const { type } = arg as { type?: unknown };
+  const own =
+    typeof type === "string" && type.startsWith("events.iterate.com/itx/")
+      ? [arg as { type: string; payload?: unknown }]
+      : [];
+  return [...own, ...Object.values(arg).flatMap((value) => rowEventsIn(value, depth + 1))];
 }
 
 type WorkerSpecShape = { source?: unknown; cacheKey?: unknown };
