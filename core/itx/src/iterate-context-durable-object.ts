@@ -49,6 +49,7 @@ import {
   ITX_EXPRESSION_FETCH_HEADER,
   parseFetchExpression,
   itxExpressionEndingInFetch,
+  eventsOfARedial,
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
@@ -170,12 +171,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     rpcStubFetch: this.#rpcStubFetch,
     ctx: this.ctx,
     // The DO owns both ends of a lent stub's rule: this sets it, `#unsetWhatNamesRpcStub` un-sets it.
-    appendEvents: (events) =>
+    appendEvents: (events, redial) => {
+      const rules = Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules);
       void this.#appendAndRunCommittedEffects(
-        events.map((event) =>
+        (redial ? eventsOfARedial(events, rules) : events).map((event) =>
           stampCaller(event, { principal: null }, this.#durableObjectAddress.path),
         ),
-      ),
+      );
+    },
     // Ephemeral: the log must never claim a socket is open.
     onPresence: (kind, rpcStubKey) => {
       void this.append({

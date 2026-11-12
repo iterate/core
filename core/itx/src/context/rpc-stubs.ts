@@ -3,7 +3,8 @@ import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
-import { parse, type ItxExpression } from "iterate/expression";
+import type { RewriteRuleConfigured } from "iterate/api";
+import { parse, print, type ItxExpression } from "iterate/expression";
 import { causeHeader } from "../cause.ts";
 import {
   ITX_APP_HEADER,
@@ -18,16 +19,49 @@ import {
   type RpcStubFetchServer,
   type RpcStubFetchTransport,
 } from "./fetch-upgrade.ts";
+import {
+  type ItxExpressionRewriteRule,
+  normalizeRewriteRuleConfigured,
+} from "./itx-expression-rewriting.ts";
 
 export const RPC_STUB_PAGER_WEBSOCKET_HEADER = "x-itx-rpc-stub-pager";
-export type RpcStubPagerAttachRequest = { rpcStubKey: string; appendEvents: StreamEventInput[] };
+// `redial`: the lender's session lost its pager and dials again, with the events of its first dial.
+export type RpcStubPagerAttachRequest = {
+  rpcStubKey: string;
+  appendEvents: StreamEventInput[];
+  redial?: boolean;
+};
 // URI-encoded (rpc-stub-relay.ts): a header is a ByteString, and a key or an event is not.
 function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequest {
   const decoded = JSON.parse(decodeURIComponent(header)) as Partial<RpcStubPagerAttachRequest>;
   // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of JSON.parse output; the `Partial<...>` cast is a claim, not a guarantee
   if (typeof decoded?.rpcStubKey !== "string" || !Array.isArray(decoded.appendEvents))
     throw new Error("expected { rpcStubKey: string, appendEvents: [] }");
-  return { rpcStubKey: decoded.rpcStubKey, appendEvents: decoded.appendEvents };
+  return {
+    rpcStubKey: decoded.rpcStubKey,
+    appendEvents: decoded.appendEvents,
+    redial: decoded.redial === true,
+  };
+}
+
+/** WHAT A REDIAL SETS AGAIN: its events, less each rule whose name another row holds now. While
+ *  the pager was down someone pointed the name elsewhere or masked it, and that is their word: the
+ *  lend comes back with no name, and its lender lends again to ask for one. A name with no row
+ *  (the context un-set the lend's rule when the pager closed) and a name that is still this lend
+ *  take the rule. */
+export function eventsOfARedial(
+  events: StreamEventInput[],
+  rules: readonly ItxExpressionRewriteRule[],
+): StreamEventInput[] {
+  return events.filter((event) => {
+    if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") return true;
+    // The cast: the lender's own session wrote the event, as a rule (iterate-context.ts `provide`).
+    const { match, target } = normalizeRewriteRuleConfigured(
+      event.payload as RewriteRuleConfigured,
+    );
+    const row = rules.find((rule) => print(rule.match) === print(match));
+    return !row || (!!row.target && !!target && print(row.target) === print(target));
+  });
 }
 const RPC_STUB_PAGER_WEBSOCKET_TAG = "itx-rpc-stub-pager-websocket";
 // Distinctive literals: the auto-response is DO-wide (fetch-upgrade sockets too), so a plain "ping"
@@ -70,13 +104,13 @@ export class RpcStubDirectory {
   // workerd may deliver both webSocketError and webSocketClose for one drop
   readonly #closedRpcStubPagerSockets = new WeakSet<WebSocket>();
 
-  readonly #appendEvents: (events: StreamEventInput[]) => void;
+  readonly #appendEvents: (events: StreamEventInput[], redial: boolean) => void;
 
   constructor(deps: {
     ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
     onPresence: (kind: "attached" | "detached", rpcStubKey: string) => void;
     rpcStubFetch: RpcStubFetchServer;
-    appendEvents: (events: StreamEventInput[]) => void;
+    appendEvents: (events: StreamEventInput[], redial: boolean) => void;
   }) {
     this.#ctx = deps.ctx;
     this.#onPresence = deps.onPresence;
@@ -146,14 +180,14 @@ export class RpcStubDirectory {
         { status: 400 },
       );
     }
-    const { rpcStubKey, appendEvents } = attachRequest;
+    const { rpcStubKey, appendEvents, redial } = attachRequest;
     const hadPager = this.#rpcStubPagerFor(rpcStubKey) !== undefined;
     const pair = new WebSocketPair();
     this.#ctx.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
     pair[1].serializeAttachment({ rpcStubKey } satisfies RpcStubPagerRecord);
     // The set half, with the pager already accepted, so a push the commit fans out finds it.
     try {
-      if (appendEvents.length > 0) this.#appendEvents(appendEvents);
+      if (appendEvents.length > 0) this.#appendEvents(appendEvents, redial === true);
     } catch (error) {
       this.#closedRpcStubPagerSockets.add(pair[1]); // its close must not report a presence it never had
       try {

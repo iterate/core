@@ -143,13 +143,13 @@ export async function lendRpcStubOverPager(
   // dup first: a value that is not a stub fails here, before any socket
   const sessionRpcStub = clientRpcStub.dup();
   const lendEnded: { reason: string | null } = { reason: null };
-  const dialPager = () =>
+  const dialPager = (redial = false) =>
     durableObjectStub().fetch("https://rpc-stub-pager.internal/", {
       headers: {
         Upgrade: "websocket",
         // URI-encoded: a header is a ByteString, and a key or an event is not
         [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeURIComponent(
-          JSON.stringify({ rpcStubKey, appendEvents } satisfies RpcStubPagerAttachRequest),
+          JSON.stringify({ rpcStubKey, appendEvents, redial } satisfies RpcStubPagerAttachRequest),
         ),
       },
     });
@@ -282,7 +282,7 @@ export async function lendRpcStubOverPager(
     answeredAt: number;
   }): Promise<void> => {
     const redialed = await redial(
-      dialPager,
+      () => dialPager(true),
       () => Boolean(lendEnded.reason),
       RPC_STUB_PAGER_REDIAL_DEADLINE_MS,
     );
