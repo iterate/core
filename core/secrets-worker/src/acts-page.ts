@@ -147,6 +147,7 @@ export function actRules(gate: Gate): string {
     )
     .join("");
   return `<h2>Rules for mail and calls</h2>
+${lock(gate.locked)}
 <p>A mail, or a call of a verb, that a rule names waits here for a signed yes. Its caller waits five minutes. After that you can still approve it for a day, and it is done then.</p>
 <p class="muted">A mail is held whatever sends it. A call of a verb is held when the mind's agents or its loaded code make it. It is not held if the mind's own Worker was changed to skip the rule, which the owner of a home lab can do.</p>
 ${rules ? `<ul>${rules}</ul>` : `<p class="muted">No rule for mail or calls yet.</p>`}
@@ -155,19 +156,37 @@ ${rules ? `<ul>${rules}</ul>` : `<p class="muted">No rule for mail or calls yet.
 <label>What waits <input name="verb" value="email.send" size="44" required></label>
 <label>For a mail: only to these recipients, or leave empty for every mail <input name="to" placeholder="*@example.com, jo@example.org" size="44"></label>
 <p class="muted">email.send is a mail. itx.whatsapp.sendMessage is one verb, and itx.whatsapp.* every verb under it.</p>
-<p class="actions"><button type="submit">Add the rule</button></p></form>
-<h3>${gate.locked ? "These rules are locked" : "These rules are open"}</h3>
-<p>${
-    gate.locked
-      ? "A rule that holds more saves at once. Anything that holds less is signed with your key, and the mind's agents can only ask for a rule."
-      : "Any member, and the mind's own agents, can add, change and remove these rules with no signature. Lock them when you have the rules you want: from then on a change that holds less needs your key."
-  }</p>
-${
-  // Unlock is not where Lock was: a second press in that place would undo the lock.
-  gate.locked
-    ? `<details><summary>Unlock these rules</summary><p class="muted">Unlocked, any member and the mind's own agents change these rules with no signature.</p><p class="actions"><button type="button" class="link" data-lock="${GATE_UNLOCKED}">Unlock, signed</button></p></details>`
-    : `<p class="actions"><button type="button" class="link" data-lock="${GATE_LOCKED}">Lock, signed</button></p>`
-}`;
+<p class="actions"><button type="submit">Add the rule</button></p></form>`;
+}
+
+/** THE LOCK OF THE RULES FOR MAIL AND CALLS: how they stand in one line, a button beside it, and
+ *  the dialog that the button opens. The dialog says what the press means before the passkey
+ *  asks, and its own button signs: so Lock and Unlock each take two deliberate presses, and a
+ *  second press where the first was undoes nothing. The dialog is in the page's HTML from the
+ *  start (the browser's own <dialog>), closed. One lock button on the page: the one for how
+ *  the rules stand now. */
+function lock(locked: boolean): string {
+  const state = locked
+    ? `<p><strong>These rules are locked.</strong> The mind's own agents and code can only ask for a rule. A change that holds less takes a passkey.</p><button type="button" class="outline" data-opens="lock-dialog">Unlock these rules</button>`
+    : `<p><strong>These rules are open.</strong> Any member, and the mind's own agents and code, can add, change and remove them with no signature.</p><button type="button" data-opens="lock-dialog">Lock these rules</button>`;
+  const means = locked
+    ? [
+        "Any member, and the mind's own agents and code, can then add, change and remove these rules with no signature.",
+        "So an agent can take away the rule that holds its own mail or call.",
+        "You can lock the rules again at any time.",
+      ]
+    : [
+        "The mind's own agents and code can no longer add, change or remove these rules. They can only ask for a rule, and a member approves it here.",
+        "A member can still add a rule that holds more, with no key. A change that holds less takes a passkey.",
+        "To unlock, a member presses Unlock here and signs with a passkey.",
+      ];
+  return `<div class="state">${state}</div>
+<dialog id="lock-dialog" aria-labelledby="lock-dialog-title">
+<h2 id="lock-dialog-title">${locked ? "Unlock" : "Lock"} the rules for mail and calls?</h2>
+<ul>${means.map((line) => `<li>${escaped(line)}</li>`).join("")}</ul>
+<p role="alert" data-type="error" data-dialog-failure hidden></p>
+<p class="actions"><button type="button" class="outline" data-close>Cancel</button> <button type="button" data-lock="${locked ? GATE_UNLOCKED : GATE_LOCKED}">${locked ? "Unlock" : "Lock"} with passkey</button></p>
+</dialog>`;
 }
 
 /** What the script reads beside the page's own data. */
@@ -315,8 +334,20 @@ if (proposals) {
     }
   });
 }
-document.querySelector("[data-lock]").addEventListener("click", (event) =>
-  sign({ path: data.actsPath, type: event.target.dataset.lock }).catch(fail));
+// THE LOCK IS CONFIRMED IN A DIALOG that says what the press means. The button beside the state
+// opens it; Cancel and Escape close it; its own button signs. What goes wrong is said in the
+// dialog, which stays open: the page's own failure line is behind it.
+for (const opener of document.querySelectorAll("[data-opens]"))
+  opener.addEventListener("click", () => document.getElementById(opener.dataset.opens).showModal());
+for (const dialog of document.querySelectorAll("dialog")) {
+  const said = dialog.querySelector("[data-dialog-failure]");
+  dialog.querySelector("[data-close]").addEventListener("click", () => dialog.close());
+  dialog.querySelector("[data-lock]").addEventListener("click", (event) =>
+    sign({ path: data.actsPath, type: event.target.dataset.lock }).catch((error) => {
+      said.textContent = String(error && error.message || error);
+      said.hidden = false;
+    }));
+}
 
 if (wanted) document.getElementById("act-" + wanted)?.scrollIntoView({ block: "center" });
 `;

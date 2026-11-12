@@ -380,6 +380,45 @@ flex-wrap: wrap;
 align-items: center;
 gap: 0.75rem 1.25rem;
 }
+.state {
+display: flex;
+flex-wrap: wrap;
+align-items: center;
+justify-content: space-between;
+gap: 0.75rem 1rem;
+padding: 0.75rem 1rem;
+border: 1px solid var(--border);
+border-radius: var(--radius);
+}
+.state > p {
+flex: 1 1 14rem;
+}
+dialog {
+box-sizing: border-box;
+width: calc(100% - 2rem);
+max-width: 28rem;
+padding: 1.5rem;
+border: 1px solid var(--border);
+border-radius: calc(var(--radius) + 4px);
+background: var(--card);
+color: var(--card-foreground);
+box-shadow: 0 10px 15px -3px rgb(0 0 0 / 10%);
+overflow-wrap: anywhere;
+}
+dialog[open] {
+display: flex;
+flex-direction: column;
+gap: 1rem;
+}
+dialog::backdrop {
+background: color-mix(in oklab, var(--foreground) 50%, transparent);
+}
+dialog li + li {
+margin-top: 0.375rem;
+}
+dialog .actions {
+justify-content: flex-end;
+}
 .access-list {
 list-style: none;
 padding: 0;
@@ -420,4 +459,4 @@ grid-column: 2;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-GIggyUaQkIQ4IBVDUe+JiNmZis3xwoJEjAVQIVyGMow='";
+export const plainPageCssHash = "'sha256-cF5rIxWIyf1YSVzzugqjVn1M9bSZ9L2MsMwYfFu4Zq0='";

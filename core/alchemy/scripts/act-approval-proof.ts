@@ -177,10 +177,11 @@ const proposals: string[] = [];
 let proofSecret = "";
 /** What the bridge's process printed: its link, that it is live, and each call it got. */
 let said = "";
-/** Unlock is in a closed block, "Unlock these rules": open it, then press. */
+/** Unlock is two presses: the button beside "These rules are locked" opens a dialog that says
+ *  what unlocking means, and the dialog's own button signs. */
 async function unlockRules() {
-  await page.getByText("Unlock these rules").click();
-  await page.getByRole("button", { name: "Unlock, signed" }).click();
+  await page.getByRole("button", { name: "Unlock these rules" }).click();
+  await page.getByRole("button", { name: "Unlock with passkey" }).click();
 }
 
 async function cleanUp() {
@@ -195,9 +196,9 @@ async function cleanUp() {
     }
   }
   await page.goto(page_);
-  if (await page.getByText("Unlock these rules").count()) {
+  if (await page.getByRole("button", { name: "Unlock these rules" }).count()) {
     await unlockRules();
-    await page.getByRole("button", { name: "Lock, signed" }).waitFor();
+    await page.getByRole("button", { name: "Lock these rules" }).waitFor();
   }
   await setRulesBySession([]);
   if (proofSecret) await root().secrets.delete(proofSecret);
@@ -568,7 +569,9 @@ await run(
   "locked with the passkey: the session alone can no longer take the rule away, a signature can",
   async () => {
     await page.goto(page_);
-    await page.getByRole("button", { name: "Lock, signed" }).click();
+    // Lock is two presses too: the button, then the dialog's own
+    await page.getByRole("button", { name: "Lock these rules" }).click();
+    await page.getByRole("button", { name: "Lock with passkey" }).click();
     await page.getByText("These rules are locked").waitFor();
     const bySession = await setRulesBySession([]);
     must(
@@ -581,10 +584,10 @@ await run(
       .getByRole("button", { name: "Remove" })
       .click();
     await page.getByText("No rule for mail or calls yet.").waitFor();
-    // Unlock is not where Lock was: a second press of that place unlocks nothing
+    // the button that signs an unlock is in a dialog, which is closed until Unlock is pressed
     must(
-      !(await page.getByRole("button", { name: "Unlock, signed" }).isVisible()),
-      "locked, the page shows Unlock at once, where Lock was",
+      !(await page.getByRole("button", { name: "Unlock with passkey" }).isVisible()),
+      "locked, the page shows 'Unlock with passkey' with no dialog opened",
     );
     await unlockRules();
     await page.getByText("These rules are open").waitFor();
