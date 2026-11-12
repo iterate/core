@@ -100,9 +100,29 @@ export const actsData = (gate: Gate) => ({
   actsPath: APPROVALS_CONTEXT,
 });
 
+/** WHAT THE APPROVER READS OF A MAIL'S BODY: each part that goes, the text and the HTML. Most
+ *  mail programs show the HTML part when there is one, so a mail with a harmless text and another
+ *  HTML would be read as one thing here and as another by its recipient. It runs in the page: the
+ *  script below carries its source. */
+export const mailBodiesOf = (act: { text: string | null; html: string | null }) => [
+  ...(act.text ? [{ label: act.html ? "Text part" : "", body: act.text }] : []),
+  ...(act.html
+    ? [
+        {
+          label: act.text
+            ? "HTML part, which most mail programs show in place of the text. Its source:"
+            : "This mail has no plain text. Its HTML source:",
+          body: act.html,
+        },
+      ]
+    : []),
+  ...(act.text || act.html ? [] : [{ label: "", body: "(no text)" }]),
+];
+
 // Runs after the page's own script (./approvals-page.ts): `data`, `enc`, `sha256`, `hex`, `sign`,
 // `fail`, `wanted` and `tickedAtOpen` are its.
 export const ACTS_SCRIPT = `
+const mailBodiesOf = ${mailBodiesOf.toString()};
 const line = (label, value, strong) => {
   const p = document.createElement("p");
   const name = document.createElement(strong ? "strong" : "span");
@@ -119,10 +139,12 @@ for (const held of data.acts) {
     parts.append(line("From", act.from, true), line("Replies go to", act.replyTo || act.from, true), line("To", act.to.join(", ")));
     if (act.cc.length) parts.append(line("Copy to", act.cc.join(", ")));
     parts.append(line("Subject", act.subject));
-    const body = document.createElement("pre");
-    body.textContent = act.text || act.html || "(no text)";
-    parts.append(body);
-    if (!act.text && act.html) parts.append(line("", "This mail has no plain text: what you see is its HTML source."));
+    for (const part of mailBodiesOf(act)) {
+      if (part.label) parts.append(line(part.label, "", true));
+      const body = document.createElement("pre");
+      body.textContent = part.body;
+      parts.append(body);
+    }
     for (const file of act.attachments) parts.append(line("Attached", file.filename + " (" + file.contentType + ", " + file.size + " bytes)"));
   } else {
     parts.append(line("Call", act.act, true));

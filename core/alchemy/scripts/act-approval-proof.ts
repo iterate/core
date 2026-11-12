@@ -308,6 +308,46 @@ await run(
   },
 );
 
+await run(
+  "a mail with a text part and another HTML part shows both to the approver, and a recipient that is not one address is refused",
+  async () => {
+    const subject = `two bodies ${marker}`;
+    const html = `<p>Pay at <a href="https://example.net/${marker}">this link</a>.</p>`;
+    const send = (to: string) =>
+      root()
+        .email.send({ to, subject, text: `See you at five, ${marker}.`, html })
+        .then(
+          () => ({ sent: true as const }),
+          (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+        );
+    // a name before the address can hold another address: a rule would read the first one
+    const odd = await send(`"<approval-${marker}@example.org>" <approval-${marker}@${domain}>`);
+    must(
+      "refused" in odd && odd.refused.includes("its address alone"),
+      `a recipient with a name ended with ${JSON.stringify(odd)}`,
+    );
+    const refused = send(`approval-${marker}@${domain}`);
+    const held = await heldDigest(subject);
+    await page.goto(`${page_}?digest=${held}`);
+    await checked(held);
+    const words = (await page.locator(`#act-${held}`).innerText()).replace(/\s+/g, " ");
+    must(
+      words.includes(`See you at five, ${marker}.`) && words.includes(html),
+      `the page shows: ${words.slice(0, 300)}`,
+    );
+    must(words.includes("HTML part"), "the page does not say that the mail has an HTML part");
+    page.once("dialog", (dialog) => void dialog.accept("two bodies"));
+    await page.locator("[data-acts]").getByRole("button", { name: "Reject them" }).click();
+    await page.locator(`#act-${held}`).waitFor({ state: "detached" });
+    const answer = await refused;
+    must("refused" in answer, `it ended with ${JSON.stringify(answer)}`);
+    return {
+      detail:
+        "the page shows the text and the HTML's source, and names the HTML part; a recipient with a name before its address is refused before anything waits",
+    };
+  },
+);
+
 if (env.ITERATE_PROOF_LATE !== "0")
   await run(
     "a mail whose caller gave up after five minutes is approved later: it is sent then, and the caller's context says so",

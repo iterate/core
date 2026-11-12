@@ -187,6 +187,38 @@ export async function mailActOf(message: MailToSend): Promise<MailAct> {
   };
 }
 
+/** One address and nothing else: no name before it, no angle brackets, no second address. */
+const BARE_ADDRESS = /^[^\s<>",;:()[\]\\@]+@[A-Za-z0-9.-]+$/;
+
+/** WHY THE BOUNDARY DOES NOT SEND TO THESE RECIPIENTS, or null. A recipient is one address alone.
+ *  A name before the address can hold another address in angle brackets
+ *  (`"<safe@x>" <leak@evil>`): a rule and an approver would read the first, and the mail service
+ *  sends to the last. */
+export function recipientsRefusal(recipients: readonly string[]): string | null {
+  // by its place: an empty recipient is odd too
+  const at = recipients.findIndex((recipient) => !BARE_ADDRESS.test(recipient));
+  return at < 0
+    ? null
+    : `name each recipient by its address alone, as jo@example.com: ${JSON.stringify(recipients[at]!.slice(0, 80))} is not one`;
+}
+
+/** THE HEADERS OF THE MAIL THAT GOES: the three that the act holds, made again from the act, and
+ *  whether the mail says that a program wrote it. Every other header that the sender gave is left
+ *  out, since no approver saw it: a Bcc, or a second Reply-To in another letter case. */
+export function mailHeadersOf(act: MailAct, given: Record<string, string>): Record<string, string> {
+  const automatic = Object.entries(given).find(
+    ([name]) => name.toLowerCase() === "auto-submitted",
+  )?.[1];
+  return Object.fromEntries(
+    Object.entries({
+      "Reply-To": act.replyTo,
+      "In-Reply-To": act.inReplyTo,
+      References: act.references,
+      "Auto-Submitted": automatic && /^auto-(?:generated|replied)$/.test(automatic) && automatic,
+    }).filter((header): header is [string, string] => Boolean(header[1])),
+  );
+}
+
 /** A call of `verb` as an act, or why it cannot wait: only plain JSON can be shown and signed. */
 export function verbActOf(verb: string, args: unknown[]): VerbAct | { refused: string } {
   if (args.every(isPlainJson)) return { act: verb, args };
@@ -222,10 +254,11 @@ export function ruleHolds(rule: ActRule, act: Act): boolean {
   return rule.verb === act.act;
 }
 
-/** `Name <jo@example.com>` and `jo@example.com` are the same recipient. */
+/** Whether a rule's pattern names the recipient. The boundary sends to one address alone
+ *  (`recipientsRefusal`); a recipient that is anything else is held by every pattern. */
 function addressMatches(pattern: string, recipient: string): boolean {
-  const address = (/<([^>]+)>/.exec(recipient)?.[1] || recipient).trim().toLowerCase();
-  if (pattern === "*") return true;
+  if (pattern === "*" || !BARE_ADDRESS.test(recipient)) return true;
+  const address = recipient.toLowerCase();
   if (pattern.startsWith("*@")) return address.endsWith(pattern.slice(1));
   return address === pattern;
 }

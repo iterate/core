@@ -28,6 +28,14 @@ test("a mail no rule holds is reserved while it goes, and a held mail nobody app
   expect(unanswered.reservations()).toEqual([]);
 });
 
+test("a recipient that is no single address is refused before anything is reserved or asked", async () => {
+  const mind = mindWith([{ sent: true, messageId: "<m3@example.com>" }]);
+  await expect(mind.send('"<safe@example.org>" <leak@example.net>')).rejects.toThrow(
+    "its address alone",
+  );
+  expect({ asked: mind.asked, reserved: mind.reservations() }).toEqual({ asked: [], reserved: [] });
+});
+
 type Outcome = Awaited<ReturnType<Door["sendEmail"]>>;
 
 const held: Outcome = {
@@ -85,6 +93,6 @@ function mindWith(outcomes: Outcome[]) {
   return {
     asked,
     reservations: () => [...reservations],
-    send: () => root.send({ to: "jo@example.org", subject: "Hello", text: "A mail." }),
+    send: (to = "jo@example.org") => root.send({ to, subject: "Hello", text: "A mail." }),
   };
 }

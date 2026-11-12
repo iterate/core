@@ -6,7 +6,7 @@ import {
   refuseActPastLimit,
   sha256Hex,
 } from "core-itx";
-import { ACT_DONE, type GateAnswer, type MailAct } from "iterate/acts";
+import { ACT_DONE, type GateAnswer, type MailAct, recipientsRefusal } from "iterate/acts";
 import type { EmailSendInput, StreamPage } from "iterate/api";
 import { EmailContract } from "iterate/email";
 import { codedError, errorCode, ITERATE_CAUSE_HEADER, reportIssue } from "iterate/lib";
@@ -123,6 +123,9 @@ async function sendEmail(
       "INVALID_INPUT",
       "itx.email.send: name a recipient (`to`, `cc`, or `inReplyToOffset`) and a `text` or `html` body",
     );
+  // as the boundary asks, said here in the caller's own words
+  const odd = recipientsRefusal([...to, ...cc]);
+  if (odd) throw codedError("INVALID_INPUT", `itx.email.send: ${odd}`);
   const attachments = await Promise.all(
     (request.attachments || []).map(async ({ path, filename }) => {
       const object = await scope.files.get(path.replace(/^\/+/, ""));

@@ -1,5 +1,12 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { actText, EMAIL_SEND, mailActOf } from "iterate/acts";
+import {
+  actOfText,
+  actText,
+  isMailAct,
+  mailActOf,
+  mailHeadersOf,
+  recipientsRefusal,
+} from "iterate/acts";
 import { withFacts } from "iterate/facts";
 import {
   causeLeavingTheStack,
@@ -55,7 +62,9 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
   // THE GATE FOR ACTS, for the mind's own code. A mail is asked about by `sendEmail` below alone:
   // through `act` the mind could spend a mail's approval and send nothing.
   async act(input: Parameters<DoorService["act"]>[0]) {
-    if (input.text.includes(`"act":"${EMAIL_SEND}"`))
+    // as the gate reads the text: a text that is no act is the gate's to refuse
+    const act = actOfText(input.text);
+    if (act && isMailAct(act))
       throw codedError("FORBIDDEN", "the gate is asked about a mail by sending it, never apart");
     return this.env.SECRETS.act(input);
   }
@@ -76,11 +85,14 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     const domain = this.env.DOMAIN;
     if (!message.from.email.toLowerCase().endsWith(`@${domain}`))
       return { sent: false as const, error: `mail leaves from an address @${domain} alone` };
+    const odd = recipientsRefusal([...message.to, ...message.cc]);
+    if (odd) return { sent: false as const, error: odd };
     // THE GATE FIRST (iterate/acts): the mail as its approver reads it is made here, from what is
     // about to be sent, so a mind cannot have one mail approved and another sent. `free` and `go`
     // go on: `go` is the gate's mark that a member approved this mail, set once.
+    const act = await mailActOf(message);
     const gate = await this.env.SECRETS.act({
-      text: actText(await mailActOf(message)),
+      text: actText(act),
       from: options?.from,
       wait: options?.wait,
     });
@@ -95,9 +107,10 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
               : "this mail waits for a member's approval",
         gate,
       };
-    // a mail leaves the stack as a request to another host does
-    const { [ITERATE_CAUSE_HEADER]: cause, ...headers } = message.headers;
-    const mark = causeLeavingTheStack(cause);
+    // The headers that go are made again from the act, so none goes that an approver did not see.
+    // Our mark goes beside them: a mail leaves the stack as a request to another host does.
+    const headers = mailHeadersOf(act, message.headers);
+    const mark = causeLeavingTheStack(message.headers[ITERATE_CAUSE_HEADER]);
     try {
       const { messageId } = await this.env.SEND_EMAIL.send({
         from: message.from,

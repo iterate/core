@@ -3,6 +3,8 @@ import {
   ActRule,
   actText,
   mailActOf,
+  mailHeadersOf,
+  recipientsRefusal,
   RUN_ACTS_HEADER,
   ruleHolds,
   runApprovedActs,
@@ -50,7 +52,7 @@ test.for([
   ["a mail to a domain", { verb: "email.send", to: ["*@example.net"] }, ["jo@example.net"], true],
   ["a mail to another domain", { verb: "email.send", to: ["*@example.net"] }, ["jo@x.org"], false],
   [
-    "a named recipient, by display name",
+    "a recipient with a name before its address, which every pattern holds",
     { verb: "email.send", to: ["jo@x.org"] },
     ["Jo <JO@x.org>"],
     true,
@@ -89,6 +91,60 @@ test("a late approval names its acts by their ids, so the vault's answer stays s
 test("a copy counts as a recipient", async () => {
   const act = await mailActOf(mail({ to: ["a@x.org"], cc: ["jo@example.net"] }));
   expect(ruleHolds(ActRule.parse({ verb: "email.send", to: ["*@example.net"] }), act)).toBe(true);
+});
+
+test.for([
+  ["a name before the address", "Jo <jo@example.net>"],
+  // a rule and an approver would read safe@example.org; the mail service sends to the last address
+  ["a name that holds another address", '"<safe@example.org>" <leak@example.net>'],
+  ["two addresses in one", "a@example.org, leak@example.net"],
+  ["an address in angle brackets", "<jo@example.net>"],
+  ["a space", "jo @example.net"],
+  ["no address at all", "undisclosed-recipients:;"],
+])("a recipient with %s is refused: the boundary sends to one address alone", ([, recipient]) => {
+  expect(recipientsRefusal(["a@example.org", recipient])).toContain("its address alone");
+});
+
+test("recipients that are each one address are taken", () => {
+  // a tag, capitals and an apostrophe are parts of real addresses
+  expect(
+    recipientsRefusal(["a@example.org", "Jo.Smith+tag@Sub.Example.net", "o'brien@example.org"]),
+  ).toBeNull();
+  expect(recipientsRefusal([])).toBeNull();
+  expect(recipientsRefusal(["a@example.org", ""])).toContain("its address alone");
+});
+
+test("a recipient that is no single address is held by every rule for mail, whatever its pattern", async () => {
+  // such a mail never leaves the boundary; were one asked about, no pattern would let it by
+  const act = { ...(await mailActOf(mail())), to: ['"<safe@example.org>" <leak@example.net>'] };
+  expect(ruleHolds(ActRule.parse({ verb: "email.send", to: ["*@example.net"] }), act)).toBe(true);
+  expect(ruleHolds(ActRule.parse({ verb: "email.send", to: ["nobody@x.org"] }), act)).toBe(true);
+});
+
+test("the mail that goes has the act's own three headers and no other that its sender gave", async () => {
+  const given = {
+    "reply-to": "alice@example.com",
+    // a second one in another letter case, a blind copy and a resend: no approver saw them
+    "Reply-To": "attacker@example.net",
+    Bcc: "leak@example.net",
+    "Resent-To": "leak@example.net",
+    "In-Reply-To": "<m1@example.org>",
+    References: "<m0@example.org> <m1@example.org>",
+    "Auto-Submitted": "auto-generated",
+    "X-Iterate-Cause": "one",
+  };
+  const act = await mailActOf(mail({ headers: given }));
+  expect(mailHeadersOf(act, given)).toEqual({
+    "Reply-To": "alice@example.com",
+    "In-Reply-To": "<m1@example.org>",
+    References: "<m0@example.org> <m1@example.org>",
+    "Auto-Submitted": "auto-generated",
+  });
+  // what the act holds is what the approver's page shows as "Replies go to"
+  expect(act).toMatchObject({ replyTo: "alice@example.com" });
+  expect(mailHeadersOf(await mailActOf(mail()), { "Auto-Submitted": "no; Bcc: x@y.z" })).toEqual(
+    {},
+  );
 });
 
 test("a verb's rule holds that verb, or every verb under a prefix, and no other", () => {
