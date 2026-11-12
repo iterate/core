@@ -120,7 +120,11 @@ export function homePage(input: {
  *  sign-in makes them no member, and how to leave. `heading` is the page's `h1` and the app's
  *  host under it; `about` is the block of facts, for the page's end. `signUps` is the stack's
  *  rule for a new address, where the page mails a code: the block then says it, and the page says
- *  it nowhere else. */
+ *  it nowhere else.
+ *
+ *  AN APP FOR MEMBERS (the Dash, the Agents app: `app.members`) says who it is for, and what is
+ *  true of it: a member's sign-in lets its page act as that member in the whole mind. It does not
+ *  invite a new address: "Dash is for people with access to it". */
 export function appSignIn(
   app: AskingApp,
   domain: string,
@@ -130,23 +134,39 @@ export function appSignIn(
   }: { heading?: string; signUps?: "anyone" | "members" } = {},
 ) {
   const name = text(app.name);
+  // THE MIND BY THE HOST OF ITS OWN PAGES, which a person can open: the block begins "<App> is an
+  // app of iterate.<domain>", and no line says "member", a word that the page explains nowhere.
+  const mind = `iterate.${domain}`;
+  // what signing in gives a person in an app for anyone, in one short sentence
   const membership =
     signUps === "anyone"
-      ? "Anyone can sign in. A new address gets an account of its own, with no access to the mind itself."
+      ? `You get an account of your own, with no access to ${mind} itself.`
       : signUps === "members"
-        ? `${domain} takes no new sign-ups: a code goes only to an address that is already a member. Any other address gets no code and no error.`
-        : `Signing in does not make you a member of ${domain}.`;
+        ? "No new sign-ups here: only an address that can already sign in gets a code. Any other address gets no code and no error."
+        : `Signing in gives you no access to ${mind} itself.`;
+  // what another address gets from a page that mails codes, for an app that is for members
+  const others =
+    signUps === "anyone"
+      ? " Any other address gets an account of its own, and no access."
+      : signUps === "members"
+        ? " Any other address gets no code and no error."
+        : "";
+  const facts = app.members
+    ? [
+        `${app.name} is for people with access to it.${others}`,
+        "It works as you: it can read and change everything that you can.",
+      ]
+    : ["It learns your email address, and nothing else.", membership];
   return {
     title: `Sign in to ${app.name}`,
     asker: appTile(app),
     imageOrigin: app.icon ? app.origin : undefined,
     heading: `<h1>${text(heading)}</h1>
       <p class="muted where">${text(app.host)}</p>`,
-    about: `<div class="about" data-app="${text(app.host)}">
-        <p><strong>${name}</strong> is an app of <strong>${text(domain)}</strong>, which runs it.</p>
+    about: `<div class="about" data-app="${text(app.host)}"${app.members ? " data-for-members" : ""}>
+        <p><strong>${name}</strong> is an app of <strong>${text(mind)}</strong>.</p>
         <ul>
-          <li>It learns your email address, and nothing else.</li>
-          <li>${text(membership)}</li>
+          ${facts.map((fact) => `<li>${text(fact)}</li>`).join("\n          ")}
           <li>To leave, sign out in the app, or see <a href="/sign-ins">your sign-ins</a>.</li>
         </ul>
       </div>`,

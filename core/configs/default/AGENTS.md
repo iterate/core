@@ -229,7 +229,10 @@ apps/<name>/
 - **An app says what it is called and has an icon: `public/manifest.webmanifest` and
   `public/icon.svg`.** Its page links both, so a browser tab shows the icon. `worker.ts` answers
   these two files before its guard (`app.open`, `apps/open-files.ts`), so they are public: the
-  mind's sign-in pages read them. Every other file of an app is behind the guard.
+  mind's sign-in pages read them. Every other file of an app is behind the guard. An app whose
+  guard is `this.auth.require` says `"iterate": { "for": "members" }` in its manifest: the
+  sign-in page then says "Dash is an app of iterate.<domain>" and "Dash is for people with access to it", and invites no new address. An app
+  for end users (the guestbook) leaves it out.
 - **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** The Agents,
   onboarding, docs and guestbook apps serve that one file at `/live-reload.js` (`app.ts`), and
   each page loads it in its head; the Dash and the Voice app do not.

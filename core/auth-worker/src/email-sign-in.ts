@@ -87,11 +87,10 @@ async function askingOf(env: Env, next: string, heading?: string) {
   return { ...said, app };
 }
 
-/** The mind's own line above a form: who gets a code, and `more` after it. A page with an app's
- *  block says who gets a code there, so it keeps `more` alone. */
-function ruleAbove(env: Env, asking: object | null, more = "") {
-  if (asking) return more && `<p class="muted">${text(more)}</p>`;
-  return `<p class="muted">${text(`${whoGetsACode(env)} ${more}`.trim())}</p>`;
+/** The mind's own line above a form: who gets a code. A page with an app's block says that
+ *  there, so it has no such line. */
+function ruleAbove(env: Env, asking: object | null) {
+  return asking ? "" : `<p class="muted">${text(whoGetsACode(env))}</p>`;
 }
 
 async function addressPage(env: Env, request: Request, error?: string, typed = "") {
@@ -193,24 +192,23 @@ async function codePage(env: Env, request: Request, error?: string, status = 200
   if (!challenge) return restart(env, "/");
   // the code is for the app that the sign-in started from, and the page still says which
   const asking = await askingOf(env, challenge.next, "Enter your code");
-  const head = asking
-    ? `${asking.heading}
-      <p class="muted">You sign in to <strong>${text(asking.app.name)}</strong>.</p>`
-    : "<h1>Enter your code</h1>";
+  // ONE SENTENCE OVER THE FIELD: whose code, for which sign-in, and how long it lasts. What to do
+  // when no code comes is under the button, with the way back.
+  const where = asking ? `sign in to <strong>${text(asking.app.name)}</strong>` : "sign in here";
   return page({
     title: "Enter your code",
     asker: asking?.asker,
     imageOrigin: asking?.imageOrigin,
     status,
-    body: `${head}
-      <p class="muted">If <strong>${text(challenge.email)}</strong> may sign in here, a code is on its way. It expires in 10 minutes.</p>
-      ${ruleAbove(env, asking, "No code after a minute? Check the spam folder, then send a new one.")}
+    body: `${asking?.heading || "<h1>Enter your code</h1>"}
+      <p class="muted">If <strong>${text(challenge.email)}</strong> may ${where}, a code is on its way. It expires in 10 minutes.</p>
+      ${ruleAbove(env, asking)}
       ${error ? `<p role="alert">${text(error)}</p>` : ""}
       <form method="post" action="${CODE_PATH}" class="stack">
-        <label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+        <label>Code <input class="code" name="code" inputmode="numeric" autocomplete="one-time-code" autofocus required></label>
         <button type="submit">Sign in</button>
       </form>
-      <p><a href="${text(`${EMAIL_SIGN_IN_PATH}?${new URLSearchParams({ next: challenge.next })}`)}">Use another email, or send a new code</a></p>${asking?.about || ""}`,
+      <p class="muted">No code after a minute? Check the spam folder, or <a href="${text(`${EMAIL_SIGN_IN_PATH}?${new URLSearchParams({ next: challenge.next })}`)}">use another email or send a new code</a>.</p>${asking?.about || ""}`,
   });
 }
 

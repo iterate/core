@@ -32,13 +32,9 @@ const ownIconOf = (client: ClientWithAccess) =>
  *  sign-in pages (./asking-app.ts), and never a built-in brand mark. Any other client has the
  *  mark of ./client-mark.ts. */
 const tileOf = (client: ClientWithAccess) =>
-  client.host ? ownAppTile(client, client.host) : otherTile(client);
-
-const ownAppTile = (client: ClientWithAccess, origin: string) =>
-  appTile(
-    { host: new URL(origin).host, origin, name: nameOf(client), icon: ownIconOf(client) },
-    { small: true },
-  );
+  client.host
+    ? appTile({ name: nameOf(client), icon: ownIconOf(client) }, { small: true })
+    : otherTile(client);
 
 const otherTile = (client: ClientWithAccess) =>
   clientTile(

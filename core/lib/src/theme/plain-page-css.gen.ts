@@ -149,7 +149,10 @@ color: var(--muted-foreground);
 font-size: 0.875rem;
 }
 .about p {
-margin-bottom: 0.375rem;
+margin-bottom: 0.5rem;
+}
+.about li + li {
+margin-top: 0.25rem;
 }
 .about strong {
 color: var(--foreground);
@@ -227,6 +230,12 @@ border: 1px solid var(--input);
 border-radius: calc(var(--radius) - 2px);
 background: transparent;
 color: inherit;
+}
+input.code {
+font-size: 1.125rem;
+font-variant-numeric: tabular-nums;
+letter-spacing: 0.25em;
+text-align: center;
 }
 pre,
 code {
@@ -411,4 +420,4 @@ grid-column: 2;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-b086NhpjuYap1cyhDl3uDHkP5h+7Jbwa67ix8CfwW/U='";
+export const plainPageCssHash = "'sha256-GIggyUaQkIQ4IBVDUe+JiNmZis3xwoJEjAVQIVyGMow='";
