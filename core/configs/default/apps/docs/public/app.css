@@ -1,4 +1,4 @@
-/* app.css — the page's own layout. @iterate-com/ui's stylesheet holds the utility classes its own
+/* app.css — the page's own layout. @iterate-com/ui's stylesheets hold the classes its own
    components use and no others, so what this page adds is written here as plain CSS, on the
    theme's variables (apps/theme.css). */
 html,
@@ -7,82 +7,34 @@ body,
   height: 100%;
 }
 
-.docs-file {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-}
-
-.docs-bar {
-  display: flex;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.docs-bar button[aria-pressed] {
-  padding: 0.125rem 0.5rem;
-  border-radius: calc(var(--radius) - 2px);
-  color: var(--muted-foreground);
-  font-size: 0.8125rem;
-}
-
-.docs-bar button[aria-pressed="true"] {
-  background: var(--secondary);
-  color: var(--foreground);
-}
-
-.docs-body {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
-}
-
-.docs-markdown {
-  margin-inline: auto;
-  width: 100%;
-  max-width: 48rem;
-  padding: 1.5rem 2rem;
-  font-size: 0.875rem;
-}
-
-.docs-plain {
-  margin: 0;
-  padding: 1rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.8125rem;
-  white-space: pre-wrap;
-}
-
+/* a line in place of a doc: it is being read, it is not text, it is not there */
 .docs-note {
   padding: 1rem;
   color: var(--muted-foreground);
   font-size: 0.875rem;
 }
 
-.docs-commits {
-  margin: 0;
-  padding: 0.5rem 1rem;
-  list-style: none;
-}
-
-.docs-commits li {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.875rem;
-}
-
-.docs-commits a {
+/* the repo picker in the sidebar's label, when the mind has more than one repo */
+.docs-repo {
+  max-width: 100%;
+  border: 0;
+  background: transparent;
   color: inherit;
+  font: inherit;
 }
 
-.docs-commits small {
-  color: var(--muted-foreground);
+/* The file tree fills what the sidebar has left: the tree draws only the rows that fit its own
+   height, so its box needs one. The sidebar's group and its content are made columns that grow. */
+.docs-files,
+.docs-files [data-slot="sidebar-group-content"] {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+/* The tree's element says "light dark" for itself, which would follow the visitor's system. It
+   takes the page's scheme (apps/theme.css) instead, so it is light when the apps are light. */
+.docs-files [aria-label="Files"] > * {
+  color-scheme: inherit;
 }

@@ -15,10 +15,11 @@ test("Turn voice on pins the build, adds voice.ts, and takes the comment off two
     version: "1.2.3",
   });
   expect(Object.keys(files)).toEqual(["package.json", "worker.ts", "voice.ts"]);
-  // every other field of package.json keeps its value
+  // every other field of package.json and every other dependency keeps its value
+  const manifest = JSON.parse(config("package.json"));
   expect(JSON.parse(files["package.json"]!)).toEqual({
-    ...JSON.parse(config("package.json")),
-    dependencies: { "@iterate-com/voice": "1.2.3" },
+    ...manifest,
+    dependencies: { ...manifest.dependencies, "@iterate-com/voice": "1.2.3" },
   });
   // worker.ts is the same file, but for the two lines
   const before = config("worker.ts").split("\n");

@@ -2,6 +2,11 @@
   "name": "@iterate-com/config-default",
   "type": "module",
   "main": "worker.ts",
+  "dependencies": {
+    "diff": "8.0.4",
+    "node-diff3": "3.2.1",
+    "yjs": "13.6.33"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260925.1",
     "iterate": "main",
