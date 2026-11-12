@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { platformOriginOf } from "iterate/mind-api";
+import { challengeOf, STATEMENTS_PATH, statementText } from "iterate/signed";
 import { z } from "zod";
 import { addPasskey, authenticator, lendPasskey, touched } from "./proof-passkeys.ts";
 
@@ -212,7 +213,7 @@ await run("a member: a session alone adds none, the passkey signs the add", asyn
 });
 
 await run(
-  "an owner's link and a member's keys: the link signs in a member who holds no passkey, a link made before is worth nothing once the member holds one, and each takes the owner's passkey",
+  "an owner's link and a member's keys: the link signs in a member who holds no passkey, a link made before is worth nothing once the member holds one, each takes the owner's passkey, and a removed member's key adds no event",
   async () => {
     const member = `proof-${crypto.randomUUID().slice(0, 8)}@example.test`;
     const row = page.locator("li", { hasText: member });
@@ -288,6 +289,58 @@ await run(
       `the link made before signed somebody in: at ${late.url()}`,
     );
     await elsewhere.close();
+    // THE MEMBER'S PASSKEY ADDS AN EVENT WHILE THE ADDRESS IS A MEMBER, AND NONE ONCE THE OWNER
+    // REMOVED THE MEMBER. Removal takes the member's row and leaves the passkey: a session removes
+    // no key. So the key is live then, and its address is no member.
+    const theirKey = z
+      .object({ keys: z.array(z.object({ key: z.string(), credentialId: z.string().nullable() })) })
+      .parse(await theirPage.evaluate(`fetch("/keys.json").then((answer) => answer.json())`))
+      .keys.find((key) => key.credentialId);
+    must(theirKey?.credentialId, "the member's passkey is not in /keys.json");
+    /** A statement at a context of the proof, signed by the member's passkey in the member's
+     *  browser, as the pages' own script signs one, and sent to the intake. */
+    const stated = async (word: string) => {
+      const now = Date.now();
+      const statement = statementText({
+        mind: domain,
+        path: "/proof/statements",
+        type: "events.iterate.com/proof/said",
+        payload: { word, member },
+        at: now,
+        expires: now + 60_000,
+      });
+      const signing = `(async () => {
+        const b64u = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+        const unb64u = (text) => Uint8Array.from(atob(text.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0));
+        const assertion = await navigator.credentials.get({ publicKey: {
+          challenge: unb64u(${JSON.stringify(await challengeOf(statement))}),
+          rpId: location.hostname,
+          userVerification: "required",
+          allowCredentials: [{ type: "public-key", id: unb64u(${JSON.stringify(theirKey.credentialId)}) }],
+        } });
+        const { signature, authenticatorData, clientDataJSON } = assertion.response;
+        const envelope = { statement: ${JSON.stringify(statement)}, signature: { format: "webauthn", key: ${JSON.stringify(theirKey.key)}, sig: b64u(signature), authenticatorData: b64u(authenticatorData), clientDataJSON: b64u(clientDataJSON) } };
+        const answer = await fetch(${JSON.stringify(STATEMENTS_PATH)}, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(envelope) });
+        return { status: answer.status, body: await answer.text() };
+      })()`;
+      return z
+        .object({ status: z.number(), body: z.string() })
+        .parse(await theirPage.evaluate(signing));
+    };
+    const asMember = await stated("as a member");
+    must(asMember.status === 200, `a member's statement ended with ${JSON.stringify(asMember)}`);
+    await page.goto(`${issuer}/members`);
+    await row.getByRole("button", { name: "Remove" }).click();
+    await row.waitFor({ state: "detached" });
+    const removedMember = await stated("after the removal");
+    // the owner adds the member again whatever came of it: the rest of the step needs the member
+    await page.getByLabel("Email", { exact: true }).fill(member);
+    await page.getByRole("button", { name: "Add a member" }).click();
+    await row.waitFor();
+    must(
+      removedMember.status === 403 && removedMember.body.includes("is not a member here"),
+      `a removed member's statement ended with ${JSON.stringify(removedMember).slice(0, 300)}`,
+    );
     // And the owner makes no new one for this member.
     const refused = await pressed("member-link-made", "Make a sign-in link");
     must(
@@ -306,7 +359,7 @@ await run(
     await page.goto(`${issuer}/members`);
     await row.getByRole("button", { name: "Remove" }).click();
     await row.waitFor({ state: "detached" });
-    return `with the session alone neither is done; the first link signed ${member} in and a passkey was added (${how}); the second link, made before, then signed nobody in; no new link for a member with a passkey; the owner's passkey removed the member's keys and ended the member's session; the member is removed`;
+    return `with the session alone neither is done; the first link signed ${member} in and a passkey was added (${how}); the second link, made before, then signed nobody in; the member's passkey added an event, and none once the owner removed the member (${removedMember.body.slice(0, 90)}); no new link for a member with a passkey; the owner's passkey removed the member's keys and ended the member's session; the member is removed`;
   },
 );
 

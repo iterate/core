@@ -50,6 +50,24 @@ test("another member's passkey is no press of the owner's, and a member with a p
   expect(stack).toMatchObject({ changed: [] });
 });
 
+test("removal of a member ends what the member was given, each grant with its tokens, and no other person's", async () => {
+  const stack = await stackOf({
+    kept: [
+      "grant:user_member:g1",
+      "token:user_member:g1:t1",
+      "token:user_member:g1:t2",
+      "grant:user_member:g2",
+      "grant:user_other:g9",
+      "token:user_other:g9:t1",
+    ],
+  });
+  await stack.post({ action: "remove", email: "member@example.org" });
+  expect(stack).toMatchObject({
+    changed: ["member@example.org removed"],
+    kept: ["grant:user_other:g9", "token:user_other:g9:t1"],
+  });
+});
+
 const DOMAIN = "example.com";
 const ISSUER = "https://iterate.example.com";
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
@@ -69,9 +87,16 @@ async function keyPair() {
 
 /** A stack with an owner who is signed in with a passkey, and two added members. Of D1, what the
  *  members page and a statement's check read and write. `changed` names each write that counts. */
-async function stackOf({ withPasskey = [] }: { withPasskey?: string[] } = {}) {
+async function stackOf({
+  withPasskey = [],
+  kept = [],
+}: { withPasskey?: string[]; kept?: string[] } = {}) {
   const [ownerKey, otherKey, stackKey] = [await keyPair(), await keyPair(), await keyPair()];
   const changed: string[] = [];
+  // the OAuth library's store, by its keys: a grant, and each token of it under the grant's name
+  const store = new Map(
+    kept.map((name) => [name, { id: name.split(":")[2], userId: name.split(":")[1] }]),
+  );
   const seen = new Set<unknown>();
   const prepare = (sql: string, bound: unknown[] = []) => ({
     bind: (...values: unknown[]) => prepare(sql, values),
@@ -80,7 +105,13 @@ async function stackOf({ withPasskey = [] }: { withPasskey?: string[] } = {}) {
         return { key: stackKey.key, public_key: stackKey.publicKey, private_key: stackKey.pkcs8 };
       // the session's own passkey is live
       if (sql.includes("from keys where id = ?1 and user_id = ?2")) return { 1: 1 };
+      if (sql.startsWith("delete from members where email")) {
+        changed.push(`${String(bound[0])} removed`);
+        return { email: bound[0] };
+      }
       if (sql.includes("from members where email")) return { 1: 1 };
+      if (sql.startsWith("select id from users where email"))
+        return { id: `user_${String(bound[0]).split("@")[0]}` };
       if (sql.includes("format = 'webauthn'"))
         return withPasskey.includes(String(bound[0])) ? { 1: 1 } : null;
       throw new Error(`not expected: ${sql}`);
@@ -129,6 +160,14 @@ async function stackOf({ withPasskey = [] }: { withPasskey?: string[] } = {}) {
       batch: async (statements: ReturnType<typeof prepare>[]) =>
         statements.map((statement) => statement.counted()),
     },
+    OAUTH_KV: {
+      list: async ({ prefix }: { prefix: string }) => ({
+        keys: [...store.keys()].filter((name) => name.startsWith(prefix)).map((name) => ({ name })),
+        list_complete: true,
+      }),
+      get: async (name: string) => store.get(name) ?? null,
+      delete: async (name: string) => void store.delete(name),
+    },
     // the cast: the members page reads these bindings and no other
   } as unknown as Env;
   const cookie = (
@@ -150,6 +189,10 @@ async function stackOf({ withPasskey = [] }: { withPasskey?: string[] } = {}) {
   });
   return {
     changed,
+    /** What the OAuth library's store still holds. */
+    get kept() {
+      return [...store.keys()];
+    },
     owner: member(ownerKey),
     other: member(otherKey),
     /** The members page's own form, posted by the owner's session. Answers the page's text. */
@@ -165,6 +208,8 @@ async function stackOf({ withPasskey = [] }: { withPasskey?: string[] } = {}) {
         async () => null,
       );
       if (!answer) throw new Error("the members page did not answer");
+      // a change that ends with a redirect has no page
+      if (answer.status === 303) return "";
       // the page writes an apostrophe as a numbered entity
       return (await answer.text()).replaceAll(/&#(\d+);/g, (_all, code) =>
         String.fromCharCode(Number(code)),

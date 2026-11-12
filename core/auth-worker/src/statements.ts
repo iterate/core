@@ -2,7 +2,7 @@ import { envelopeOf, statementHashOf } from "iterate/signed";
 import { withFacts } from "iterate/facts";
 import type { Env } from "./env.ts";
 import { canonicalPath, underPaths } from "./key-rules.ts";
-import { verifiedStatement } from "./keys.ts";
+import { personKeyRefusal, verifiedStatement } from "./keys.ts";
 
 // Ingress appends these events as the platform, so the kernel's guard on platform facts
 // (core/itx caller.ts `refuseNonPlatformWrites`) cannot catch them: this list must.
@@ -30,6 +30,9 @@ export async function statementsResponse(env: Env, request: Request): Promise<Re
   const verified = await verifiedStatement(env, envelope, { once: false });
   if ("refused" in verified) return Response.json(verified, { status: 403 });
   const { signer, statement, paths } = verified;
+  // a person's key has no paths, so it adds at any path: only a member's does
+  const notThisPerson = personKeyRefusal(signer);
+  if (notThisPerson) return Response.json({ refused: notThisPerson }, { status: 403 });
   if (!canonicalPath(statement.path))
     return Response.json(
       { refused: "name the context by its own path: no empty, . or .. segment" },

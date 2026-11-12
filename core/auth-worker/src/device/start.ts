@@ -1,7 +1,7 @@
 import { CimdFetchError } from "@cloudflare/workers-oauth-provider";
 import { calculatePKCECodeChallenge, generateRandomCodeVerifier } from "oauth4webapi";
 import { type Env, issuerOf, iterateConfigOf } from "../env.ts";
-import { verifiedStatement } from "../keys.ts";
+import { personKeyRefusal, verifiedStatement } from "../keys.ts";
 import { authorizationServer, oauthHelpers } from "../oauth.ts";
 import {
   CALLBACK_PATH,
@@ -187,6 +187,9 @@ async function signerOf(
     payload.reason !== asked.reason
   )
     return { refused: "the statement's payload is not { client, seconds, reason } as asked" };
+  // the page says "the key this mind trusts": a removed member's key is not one
+  const notThisPerson = personKeyRefusal(verified.signer);
+  if (notThisPerson) return { refused: notThisPerson };
   const { principal, label, key } = verified.signer;
   return { actor: principal.actor, label, key };
 }

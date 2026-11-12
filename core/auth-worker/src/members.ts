@@ -237,6 +237,13 @@ async function remove(env: Env, actor: Session, typed: string): Promise<Outcome>
       status: 404,
     };
   const facts = new AccountFacts();
+  const person = await env.DB.prepare("select id from users where email = ?1")
+    .bind(email)
+    .first<{ id: string }>();
+  // What the member was given ends now, as for a blocked person: an app's sign-in, the CLI's, a
+  // hostname's own. The keys stay, since a session removes no key (./signed-change.ts): the
+  // members row is what ends them (./keys.ts `personKeyRefusal`).
+  if (person) await endGrantsOf(env, person.id, facts);
   facts.add(actor.userId, {
     type: "events.iterate.com/account/member-removed",
     payload: { email },

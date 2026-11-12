@@ -84,6 +84,22 @@ export async function verifiedStatement(
   };
 }
 
+/** WHY A PERSON'S KEY DOES NOT SIGN THIS, or null. A person's key signs while its address is a
+ *  member: removal of a member takes the members row and leaves the keys, since a session removes
+ *  no key (./signed-change.ts), so the row is what ends them. And a passkey that checked nobody is
+ *  anyone's who holds the device, as at a sign-in. A service's key has no address: its `paths` and
+ *  `provide` say what it may do. */
+export function personKeyRefusal(
+  signer: Exclude<Verified, { refused: string }>["signer"],
+): string | null {
+  const { email } = signer.principal;
+  if (!email) return null;
+  if (!signer.member) return `${email} is not a member here, so its key signs nothing`;
+  if (signer.userVerified === false)
+    return "the passkey did not check that it is you, by a PIN, a fingerprint or a face";
+  return null;
+}
+
 /** After a mailed code or a sign-in at Google proved `user`'s address, which is all it proves. A member
  *  who holds a passkey is refused: mail is no way round a passkey. A member who holds none goes to
  *  /keys to add the first. Anyone else goes on, since a session gives a non-member nothing. */
