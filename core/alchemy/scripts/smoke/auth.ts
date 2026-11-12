@@ -15,7 +15,7 @@ import {
 } from "iterate/signed";
 import { z } from "zod";
 import { signerOf } from "./approvals.ts";
-import { attempt, type Check } from "./lib.ts";
+import { attempt, type Check, mindRoot } from "./lib.ts";
 
 /** core/auth-worker/src/cookies.ts `SESSION_COOKIE`, which the package does not export. */
 const ISSUER_SESSION_COOKIE = "__Host-iterate-auth-session";
@@ -722,6 +722,18 @@ async function membersChecks(domain: string): Promise<Check[]> {
       return {
         pass: status === 200 && members.success && members.data.config.length > 0,
         detail: `${status}, ${members.success ? `${members.data.config.length} config rules, ${members.data.added.length} added` : "no list"}`,
+      };
+    }),
+    await attempt("members: the mind's own code asks whether an address is a member", async () => {
+      const named = Members.safeParse((await call("GET")).body)
+        .data?.config.map((rule) => z.object({ email: z.string() }).safeParse(rule).data?.email)
+        .find(Boolean);
+      // through the door to the auth Worker: the config's own member, and an address nobody named
+      const has = (address: string) => mindRoot(domain, token).members.has(address);
+      const [member, stranger] = [named ? await has(named) : null, await has(email)];
+      return {
+        pass: member !== false && stranger === false,
+        detail: `a member the config names: ${member ?? "none named by address"}; ${email.slice(0, 14)}…: ${stranger}`,
       };
     }),
     await attempt("members: a member's token adds no one", async () => {

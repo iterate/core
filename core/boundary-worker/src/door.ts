@@ -129,6 +129,10 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     }
   }
 
+  async isMember(email: Parameters<DoorService["isMember"]>[0]) {
+    return this.env.AUTH.isMember(email);
+  }
+
   async queryTelemetry(...[sql, hours]: Parameters<DoorService["queryTelemetry"]>) {
     return this.#telemetry().query(sql, hours);
   }

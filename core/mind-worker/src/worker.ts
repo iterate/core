@@ -117,6 +117,11 @@ defineItxHost({
     return {
       ...(env.TELEMETRY_METRICS && telemetryRoots(() => env.DOOR)),
       ...libraryRoots,
+      members: {
+        description:
+          "who is a member of the mind now, as its sign-in knows it: `members.has(email)` answers true or false",
+        build: () => ({ has: (email: string) => env.DOOR.isMember(String(email)) }),
+      },
       kv: {
         description:
           "key-value strings, the mind's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",

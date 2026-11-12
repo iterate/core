@@ -6,6 +6,7 @@ import {
   refuseSlackSender,
   slackContentOf,
   slackMessageOf,
+  slackSenderIsMember,
   slackSenderMay,
 } from "../../configs/default/slack.ts";
 
@@ -92,6 +93,32 @@ test.for([
     ...facts,
   });
   expect(await slackSenderMay(mind, { teamId: "T1", user: "U1" })).toBeNull();
+});
+
+test("a workspace member who is no member of the mind instructs no agent, and a member does", async () => {
+  const ada = { team_id: "T1", is_email_confirmed: true, profile: { email: "ada@example.com" } };
+  const asked: string[] = [];
+  const mindWith = (members: string[], user: Record<string, unknown> = ada) => ({
+    ...slackMind(user),
+    members: {
+      has: async (email: string) => {
+        asked.push(email);
+        return members.includes(email);
+      },
+    },
+  });
+  const message = { teamId: "T1", user: "U1" };
+  expect(await slackSenderIsMember(mindWith(["ada@example.com"]), message)).toBe(true);
+  expect(await slackSenderIsMember(mindWith(["grace@example.com"]), message)).toBe(false);
+  // membership is asked for each message: one mind, two messages, two questions
+  const mind = mindWith(["ada@example.com"]);
+  await slackSenderIsMember(mind, message);
+  await slackSenderIsMember(mind, message);
+  expect(asked).toEqual(Array(4).fill("ada@example.com"));
+  // a guest is refused by Slack's record alone: the stack is not asked
+  const guest = mindWith(["ada@example.com"], { ...ada, is_restricted: true });
+  expect(await slackSenderIsMember(guest, message)).toBe(false);
+  expect(asked).toHaveLength(4);
 });
 
 test("when Slack does not answer, nobody may, and the next message asks again", async () => {

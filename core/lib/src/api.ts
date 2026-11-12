@@ -1551,6 +1551,10 @@ export interface IterateContextApi {
    *  each cut to this mind's rows of the last `hours` (default 24, at most 720), and answers the
    *  rows with the SQL that ran. Throws on a deployment with no warehouse. */
   telemetry: { query(sql: string, options?: { hours?: number }): Promise<TelemetryRows> };
+  /** WHO IS A MEMBER OF THE MIND NOW, as the stack's sign-in knows it: the addresses its config
+   *  names and the members an owner added. `has(email)` answers true or false. The mind's own
+   *  code asks it to decide whose words from outside, such as a chat message, are a member's. */
+  members: { has(email: string): Promise<boolean> };
   /** The mind's email, `<slug>@iterate.app` (core/lib/src/email.ts has its events and
    *  threads). `send` answers the `email/sent` event. */
   email: {

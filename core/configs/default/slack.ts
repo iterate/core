@@ -4,9 +4,10 @@
 // itself, through `itx.config.slack(method, args)`: the token stays in the vault.
 //
 // WHOSE WORDS REACH AN AGENT: an agent holds the whole `itx`, so a message is an instruction with
-// the mind's full reach. Only a full member of the workspace with an email that Slack confirmed
-// gets one (`slackSenderMay`): never a bot, an app, a guest, or a person of another workspace in
-// a shared channel.
+// the mind's full reach. Only a member of the mind gets one (`slackSenderIsMember`): a full
+// member of the workspace whose email, which Slack confirmed, is a member's address here
+// (`itx.members.has`). Never a bot, an app, a guest, a person of another workspace in a shared
+// channel, or a colleague in the workspace who is no member of this mind.
 
 /** The secret a member linked the workspace into, through iterate Cloud's Slack app. */
 const SLACK_SECRET = "/secrets/slack";
@@ -81,6 +82,17 @@ type SlackItx = {
   };
 };
 
+/** WHETHER THE SENDER IS A MEMBER OF THE MIND: Slack says who the sender is (`slackSenderMay`),
+ *  and the stack's sign-in says whether that address is a member now. The second answer is asked
+ *  for each message and never kept, so a removed member's next message reaches no agent. */
+export async function slackSenderIsMember(
+  itx: SlackItx & { members: { has(email: string): Promise<boolean> } },
+  message: { teamId: string; user: string },
+): Promise<boolean> {
+  const email = await slackSenderMay(itx, message);
+  return email ? itx.members.has(email) : false;
+}
+
 /** How long Slack's answer about one user is kept: a person who became a guest, or left, is
  *  refused within this time. */
 const SENDER_KEPT_MS = 10 * 60_000;
@@ -149,7 +161,7 @@ export async function refuseSlackSender(
   await callSlack(itx, "chat.postMessage", {
     channel: message.channel,
     thread_ts: message.thread,
-    text: "I take instructions only from full members of this workspace, not from guests, apps or people of another workspace.",
+    text: "I take instructions only from members of this mind.",
   });
 }
 

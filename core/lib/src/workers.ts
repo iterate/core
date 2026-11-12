@@ -55,6 +55,8 @@ export interface Door {
   actRules: SecretsService["actRules"];
   setActRules: SecretsService["setActRules"];
   proposeActRule: SecretsService["proposeActRule"];
+  /** Whether `email` is a member of the mind now, as the auth Worker knows it (`AuthService`). */
+  isMember(email: string): Promise<boolean>;
   /** Refused in a stack without the telemetry part. */
   queryTelemetry(sql: string, hours?: number): Promise<TelemetryAnswer>;
   sendEvents(events: StreamEvent[]): Promise<void>;

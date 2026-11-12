@@ -15,7 +15,7 @@ import {
   refuseSlackSender,
   slackContentOf,
   slackMessageOf,
-  slackSenderMay,
+  slackSenderIsMember,
 } from "./slack.ts";
 
 // The integration packages this mind hosts (a Telegram bot, your own GitHub App, …), one element
@@ -155,9 +155,9 @@ export default class extends IterateConfigEntrypoint {
         if (event.source?.signer?.principal.actor !== "iterate-cloud") break;
         const message = slackMessageOf(event.payload);
         if (!message) break;
-        // An agent holds the whole itx: a guest, an app or a person of another workspace gets
-        // none, and one short answer when they asked for one (slack.ts `slackSenderMay`).
-        if (!(await slackSenderMay(itx, message))) {
+        // An agent holds the whole itx: only a member of the mind gets one, and anyone else one
+        // short answer when they asked for one (slack.ts `slackSenderIsMember`).
+        if (!(await slackSenderIsMember(itx, message))) {
           await refuseSlackSender(itx, message);
           break;
         }
