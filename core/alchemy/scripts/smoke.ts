@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import {
   platformOriginOf,
   mindApiUrlOf,
@@ -19,6 +21,7 @@ import { secretChecks } from "./smoke/secrets.ts";
 import { modelChecks } from "./smoke/model.ts";
 import { appsChecks } from "./smoke/apps.ts";
 import { HOMEPAGE, leftoverChanges, markedHomepage, withChange } from "./smoke/config-repo.ts";
+import { templateFollowed } from "./smoke/template-follow.ts";
 import { attempt, type Check, mindRoot, mindWorkerIs, ownsPlatformAlone } from "./smoke/lib.ts";
 
 /** Checks the stack deployed on `domain`, the zone of its mind config. */
@@ -454,6 +457,31 @@ const mindBirthChecks = async (domain: string) => {
         detail: `the config repo does not publish: its tip ${tip.slice(0, 10) || "(none)"} is not what the mind runs (${published?.slice(0, 10) || "nothing"})${template ? ", and the tip is the platform's own template commit" : ""}. ${template || refused || "No refusal of the tip is on the root's log yet."}`,
       };
     }),
+    // Said, never failed: an app whose file its owner changed stays at its version by the
+    // owner's choice (core/mind-worker/src/mind/template-update.ts), and this is where a deploy
+    // names it. What is behind is read off the repo, laid beside this checkout's template
+    // (./smoke/template-follow.ts); the mind compares at its root's first wake after a deploy, so
+    // the check asks again for a minute while an app differs and nothing says why.
+    await attempt("birth: what follows the template", async () => {
+      const template = templateFiles();
+      let said = { settled: false, detail: "" };
+      for (let tries = 0; tries < 20 && !said.settled; tries += 1) {
+        if (tries > 0) await new Promise((resolve) => setTimeout(resolve, 3_000));
+        // one round trip: a capnweb HTTP batch takes every call made before its first await
+        const repo = root().repos.get("/repos/config");
+        const [manifest, ...texts] = await Promise.all(
+          ["package.json", ...template.map(({ path }) => path)].map((path) =>
+            repo.readFile(path).catch(() => undefined),
+          ),
+        );
+        const files = template.map((file, index) => ({
+          ...file,
+          repo: typeof texts[index] === "string" ? texts[index] : undefined,
+        }));
+        said = templateFollowed(files, await newestTemplateFact(root), packagesOf(manifest));
+      }
+      return { pass: true, detail: said.detail };
+    }),
     await attempt("hostnames: the apex answers the config worker's page", async () => {
       const { status, body } = await pageOnceItHas(`https://${domain}/`, HOMEPAGE, 10_000);
       return {
@@ -620,5 +648,79 @@ const filesAndCallerChecks = async (domain: string) => {
     }),
   ];
 };
+
+/** The newest `mind/template-applied` on the root, if any: the fact has no end marker, so each
+ *  later one is asked for until none comes. */
+async function newestTemplateFact(root: () => ReturnType<typeof mindRoot>) {
+  let newest: { offset: number; payload?: unknown } | undefined;
+  for (let after = 0; ;) {
+    const next = await root()
+      .waitForEvent({
+        type: "events.iterate.com/mind/template-applied",
+        afterOffset: after,
+        timeoutMs: 1_500,
+      })
+      .catch(() => undefined);
+    if (!next) break;
+    newest = next;
+    after = next.offset;
+  }
+  return newest && TemplateApplied.parse(newest.payload || {});
+}
+const TemplateApplied = z.object({
+  appsLeftOld: z
+    .array(
+      z.object({
+        app: z.string(),
+        yours: z.array(z.string()),
+        lacksPackages: z.array(z.string()),
+        imports: z.array(z.string()).optional(),
+        importedBy: z.array(z.string()).optional(),
+        notWritten: z.array(z.string()).optional(),
+      }),
+    )
+    .default([]),
+  leftAlone: z.array(z.object({ path: z.string(), lacks: z.array(z.string()) })).default([]),
+  heldBack: z
+    .array(
+      z.object({
+        path: z.string(),
+        imports: z.array(z.string()),
+        importedBy: z.array(z.string()).optional(),
+      }),
+    )
+    .default([]),
+});
+
+/** The names in the dependencies of a package.json's text; undefined when it cannot be read. */
+function packagesOf(manifest: unknown): Set<string> | undefined {
+  try {
+    const { dependencies } = z
+      .object({ dependencies: z.record(z.string(), z.string()).default({}) })
+      .parse(JSON.parse(String(manifest)));
+    return new Set(Object.keys(dependencies));
+  } catch {
+    return undefined;
+  }
+}
+
+/** The default template's files that a mind's repo is laid beside: every text file of an app, and
+ *  every code file outside the apps (worker.ts and what it imports), so that a file the mind held
+ *  back for another file's sake can be checked against that other file. Read from this checkout,
+ *  which is what a smoke after a deploy runs from. */
+function templateFiles(): { path: string; template: string }[] {
+  const folder = join(import.meta.dirname, "../../configs/default");
+  return (
+    readdirSync(folder, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => relative(folder, join(entry.parentPath, entry.name)))
+      .filter((path) => path.startsWith("apps/") || /\.(?:ts|tsx|js|jsx|mjs)$/.test(path))
+      .filter((path) => !path.includes("node_modules/"))
+      .map((path) => ({ path, template: readFileSync(join(folder, path), "utf8") }))
+      // a file that is not text has no text to compare
+      .filter((file) => !file.template.includes("\u0000"))
+      .sort((a, b) => a.path.localeCompare(b.path))
+  );
+}
 
 void createCli(import.meta).run();
