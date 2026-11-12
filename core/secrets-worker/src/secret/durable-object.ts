@@ -81,6 +81,7 @@ import {
 } from "../approval.ts";
 import { INDEX, SET } from "../approvals-index.ts";
 import { LegacySealedCell, type SealedCell, type SecretFact, type Signer } from "./contract.ts";
+import { lendRefusal, operationRefusal, placementRefusal } from "./refusals.ts";
 import { runExchangeCode } from "./exchange-jail.ts";
 import {
   SecretKeyAgreement,
@@ -557,7 +558,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     const refusal = !record.operations.includes(verb)
       ? {
           code: "FORBIDDEN" as const,
-          message: `${verb}: ${path} was not made to answer it. A secret answers the operations it was made with — itx.secrets.set(path, material, { urls, operations: ["${verb}"] }), or collectFromUser and beginOAuth with the same option, which the person who gives it sees.`,
+          message: operationRefusal(verb, path, record.operations),
         }
       : signs && this.#rule()
         ? {
@@ -669,7 +670,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       ? // a secret that waits for approval is spent with one alone
         `secrets: ${path} has an approval rule, so it is lent to no other secret's token request`
       : lendTo && !lendTo.includes(borrower)
-        ? `secrets: ${path} does not lend to ${borrower} — set it again with lendTo: ["${borrower}"]`
+        ? lendRefusal(path, borrower, lendTo)
         : !originPinned(origin, current.cell.urls)
           ? `secrets: the secret ${path} is pinned to ${current.cell.urls.join(", ")}, not ${origin} — so it is never sent there as a client secret`
           : null;
@@ -1339,9 +1340,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       // a secret placed in headers alone is never spliced into a URL, where a host may log it,
       // redirect with it or quote it back
       if (record.placement === "header" && secretPathsIn(request.url).length)
-        throw new SecretRefused(
-          `itx.fetch: the secret ${path} is placed in headers alone — not in a request's URL (set it again with placement: "url" to allow that)`,
-        );
+        throw new SecretRefused(placementRefusal(path));
       return { nonce: current.cell.nonce, record };
     };
     const usedFact = (status: number): SecretFact => ({
