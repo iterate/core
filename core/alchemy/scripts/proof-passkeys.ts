@@ -32,6 +32,11 @@ export async function addPasskey(
   if (signed) {
     await touch.theOld?.();
     await confirm.click();
+    // The virtual authenticator at times answers a press with nothing ("No passkey was used"):
+    // a person presses again, and so does this, once.
+    const unanswered = page.locator("#status", { hasText: "No passkey was used" });
+    await listed.or(unanswered).first().waitFor();
+    if (await unanswered.isVisible()) await confirm.click();
   }
   await listed.waitFor().catch(async () => {
     throw new Error(`not listed; ${await said()}`);

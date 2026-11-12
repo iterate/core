@@ -41,6 +41,7 @@ import { isBlocked } from "./blocked.ts";
 import { isMember, membersResponse, standingOf } from "./members.ts";
 import { verifiedStatement } from "./keys.ts";
 import { keysPagesResponse } from "./keys-pages.ts";
+import { signInsResponse } from "./sign-ins-page.ts";
 import { keyTokenIdentity, keyTokenResponse } from "./key-tokens.ts";
 import { signedByStack } from "./stack-key.ts";
 import { statementsResponse } from "./statements.ts";
@@ -110,6 +111,8 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
       return firstOwnerResponse(this.env, request);
     if (pathname === KEY_TOKEN_PATH && request.method === "POST")
       return keyTokenResponse(this.env, request);
+    const signIns = await signInsResponse(this.env, request);
+    if (signIns) return signIns;
     const keys = await keysPagesResponse(this.env, request);
     if (keys) return keys;
     if (pathname === STATEMENTS_PATH && request.method === "POST")

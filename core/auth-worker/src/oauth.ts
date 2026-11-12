@@ -11,6 +11,7 @@ import { HOST_SESSION_PREFIX, type TokenIdentity } from "iterate/workers";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
 import { admitted, TOO_MANY } from "./device/limits.ts";
+import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { isBlocked } from "./blocked.ts";
 import { isMember } from "./members.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
@@ -329,22 +330,53 @@ export async function endGrantsOf(env: Env, userId: string, facts: AccountFacts)
   }
 }
 
-/** One live sign-in of a person, as /keys lists it: a grant, whose client holds tokens. */
+/** One live sign-in of a person, as /keys and the members page list it: a grant, whose client
+ *  holds tokens. An app's, a CLI's, a device's, an MCP client's, or a mind hostname's own. */
 export type SignIn = {
   id: string;
+  /** The person whose access it is. */
+  userId: string;
+  clientId: string;
   /** The client's own name, or "" for one that gave none: a mind hostname's own sign-in. */
   clientName: string;
   /** What it is for: a resource of the stack, or a mind hostname's origin. Absent on a grant made
    *  before grants kept it. */
   resource?: string;
-  /** The host the grant's code went to: the client's own address. */
+  /** Where the grant's code went: the client's own address, and its host. */
+  redirectUri?: string;
   goesTo?: string;
-  /** Epoch seconds. `endsAt` moves at each refresh: it is when an unused sign-in ends. */
+  /** The mind hostname whose own sign-in this is, read from where its code went: a browser's
+   *  session on one of the mind's pages or apps. */
+  host?: string;
+  /** The code went to this stack's own device page: a CLI or a device typed a code. */
+  device: boolean;
+  scopes: string[];
+  /** The client's own logo, as it gave it when the grant was made, and the domain that its client
+   *  ID is a document on. A picture is shown only with both (client-mark.ts `shownLogoOf`). */
+  logoUri?: string;
+  clientDomain?: string;
+  /** Epoch seconds. `endsAt` moves at each renewal: it is when an unused sign-in ends. */
   createdAt: number;
   endsAt?: number;
+  /** Its client renews it by use: it holds a refresh token. A mind hostname's own sign-in and a
+   *  let-in hold none, and end at `endsAt` whatever their use. */
+  renews: boolean;
+  /** Epoch seconds: when its client last renewed it. The store keeps no time of use: a client
+   *  that works renews within the hour, so this is the last hour of use, read from `endsAt`.
+   *  Absent before the first renewal, and on a sign-in that does not renew. */
+  renewedAt?: number;
+  /** Epoch milliseconds: a let-in's fixed end, which no use moves. */
+  until?: number;
 };
 
-const SignInMetadata = z.object({ clientName: z.string(), resource: z.string().optional() });
+/** What a grant keeps for these lists, written when it is made (./authorize.ts `complete`). */
+export const SignInMetadata = z.object({
+  clientName: z.string(),
+  resource: z.string().optional(),
+  logoUri: z.string().optional(),
+  until: z.number().optional(),
+});
+export type SignInMetadata = z.infer<typeof SignInMetadata>;
 
 /** The mind hostname whose own sign-in a grant is, read from where its code went: for a grant
  *  made before grants kept their resource. */
@@ -354,7 +386,76 @@ function hostOfOwnCallback(env: Env, redirectUri: string | undefined) {
   return host && redirectUri === hostCallbackOf(host) ? host : undefined;
 }
 
-export async function signInsOf(env: Env, userId: string): Promise<SignIn[]> {
+/** One OAuth client that holds access as a person, with its live sessions and grants. */
+export type ClientWithAccess = {
+  clientId: string;
+  /** The client's own name. A mind hostname's own client is named by its host, and a client that
+   *  gave no name is "". */
+  name: string;
+  /** The mind hostname whose own client this is: one of the mind's pages or apps. */
+  host?: string;
+  /** Where its access goes, and what it gave of itself, as its newest sign-in has them. */
+  redirectUri?: string;
+  goesTo?: string;
+  device: boolean;
+  logoUri?: string;
+  clientDomain?: string;
+  /** Newest first. */
+  signIns: SignIn[];
+};
+
+/** THE SESSIONS AND GRANTS OF A PERSON, BY OAUTH CLIENT. The one list of who holds access as a
+ *  person, member or not: each client once, with every live sign-in it holds under it. An app or
+ *  a CLI that the person let in is a client, an MCP client is one, and so is each of the mind's
+ *  own hostnames, whose page holds a browser's session. /keys shows a member their own, the
+ *  members page shows an owner every member's, and /sign-ins shows a person who is no member
+ *  their own (./access-list.ts draws all three). `endAccess` is the one way to end any of it. */
+export async function sessionsByClientOf(env: Env, userId: string): Promise<ClientWithAccess[]> {
+  const clients = new Map<string, ClientWithAccess>();
+  for (const signIn of await signInsOf(env, userId)) {
+    const client = clients.get(signIn.clientId);
+    if (client) client.signIns.push(signIn);
+    else
+      clients.set(signIn.clientId, {
+        clientId: signIn.clientId,
+        name: signIn.host ? new URL(signIn.host).host : signIn.clientName,
+        host: signIn.host,
+        redirectUri: signIn.redirectUri,
+        goesTo: signIn.goesTo,
+        device: signIn.device,
+        logoUri: signIn.logoUri,
+        clientDomain: signIn.clientDomain,
+        signIns: [signIn],
+      });
+  }
+  return [...clients.values()];
+}
+
+/** THE ONE REVOKE: ends one sign-in of a person, or every sign-in that one client holds as that
+ *  person, each with its tokens. Answers how many it ended: a sign-in or a client that is not
+ *  that person's ends nothing. */
+export async function endAccess(
+  env: Env,
+  userId: string,
+  which: { signIn: string } | { client: string },
+  facts: AccountFacts,
+): Promise<number> {
+  const helpers = oauthHelpers(env);
+  const ending = (await signInsOf(env, userId)).filter((signIn) =>
+    "signIn" in which ? signIn.id === which.signIn : signIn.clientId === which.client,
+  );
+  for (const signIn of ending) {
+    await helpers.revokeGrant(signIn.id, userId);
+    facts.add(userId, {
+      type: "events.iterate.com/account/grant-ended",
+      payload: { grantId: signIn.id },
+      idempotencyKey: `account/grant-ended/${signIn.id}`,
+    });
+  }
+  return ending.length;
+}
+
+async function signInsOf(env: Env, userId: string): Promise<SignIn[]> {
   const helpers = oauthHelpers(env);
   const signIns: SignIn[] = [];
   let cursor: string | undefined;
@@ -362,37 +463,46 @@ export async function signInsOf(env: Env, userId: string): Promise<SignIn[]> {
     const page = await helpers.listUserGrants(userId, { cursor });
     for (const grant of page.items) {
       const metadata = SignInMetadata.safeParse(grant.metadata);
+      // The library sets a grant's end one idle limit ahead at each exchange of a grant that
+      // holds a refresh token, and one access token's life ahead, once, on a grant that holds none.
+      const renewedAt = grant.expiresAt && grant.expiresAt - SESSION_IDLE_SECONDS;
+      // A hostname's own sign-in is one access token, which the page's cookie holds: the page
+      // never renews it, whatever end the library gave the grant.
+      const host = hostOfOwnCallback(env, grant.redirectUri);
+      const renews =
+        !host && !metadata.data?.until && !!renewedAt && renewedAt >= grant.createdAt - 60;
       signIns.push({
         id: grant.id,
+        userId,
+        clientId: grant.clientId,
         // a client that gave no name is kept by its id, which says nothing to a person
         clientName:
           metadata.data?.clientName && metadata.data.clientName !== grant.clientId
             ? metadata.data.clientName
             : "",
         resource: metadata.data?.resource || hostOfOwnCallback(env, grant.redirectUri),
+        redirectUri: grant.redirectUri,
         goesTo: URL.canParse(grant.redirectUri || "")
           ? new URL(grant.redirectUri!).host
           : undefined,
+        host,
+        device: grant.redirectUri === `${issuerOf(env)}${DEVICE_CALLBACK_PATH}`,
+        scopes: grant.scope,
+        logoUri: metadata.data?.logoUri,
+        // as the library says it on the consent page: a client ID that is a document on a domain
+        clientDomain: /^https:\/\/[^/]+\/./.test(grant.clientId)
+          ? new URL(grant.clientId).hostname
+          : undefined,
         createdAt: grant.createdAt,
-        endsAt: grant.expiresAt,
+        endsAt: host ? grant.createdAt + HOST_ACCESS_TOKEN_SECONDS : grant.expiresAt,
+        renews,
+        renewedAt: renews && renewedAt && renewedAt > grant.createdAt + 60 ? renewedAt : undefined,
+        until: metadata.data?.until,
       });
     }
     cursor = page.cursor;
   } while (cursor);
   return signIns.sort((a, b) => b.createdAt - a.createdAt);
-}
-
-/** Ends one grant of a person, with its tokens. A grant id that is not theirs ends nothing. */
-export async function endGrant(env: Env, userId: string, grantId: string, facts: AccountFacts) {
-  const helpers = oauthHelpers(env);
-  if (!(await grantHeld(helpers, userId, grantId))) return false;
-  await helpers.revokeGrant(grantId, userId);
-  facts.add(userId, {
-    type: "events.iterate.com/account/grant-ended",
-    payload: { grantId },
-    idempotencyKey: `account/grant-ended/${grantId}`,
-  });
-  return true;
 }
 
 async function grantHeld(

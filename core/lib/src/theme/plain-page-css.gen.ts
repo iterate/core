@@ -352,8 +352,45 @@ display: flex;
 flex-wrap: wrap;
 align-items: center;
 gap: 0.75rem 1.25rem;
+}
+.access-list {
+list-style: none;
+padding: 0;
+}
+.access {
+display: grid;
+grid-template-columns: auto minmax(0, 1fr) auto;
+gap: 0.25rem 0.75rem;
+align-items: start;
+padding: 0.75rem 0;
+border-top: 1px solid var(--border);
+}
+.access p {
+margin: 0;
+overflow-wrap: anywhere;
+}
+.access-sessions {
+list-style: none;
+margin: 0.25rem 0 0;
+padding: 0;
+}
+.access-sessions li {
+display: flex;
+flex-wrap: wrap;
+justify-content: space-between;
+gap: 0 0.75rem;
+padding: 0.125rem 0;
+overflow-wrap: anywhere;
+}
+@media (max-width: 30rem) {
+.access {
+grid-template-columns: auto minmax(0, 1fr);
+}
+.access form {
+grid-column: 2;
+}
 }`;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-YgQw5lAofwZAaGOsLIxH+QZHHuIualOhzZyZOxoB4E4='";
+export const plainPageCssHash = "'sha256-jLwk2bb2QY2RMMEYSHWFUbPJa9OM5BPDcinVqzk+yBo='";

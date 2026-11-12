@@ -13,7 +13,8 @@ import {
   serviceKeyRequestOf,
 } from "./key-rules.ts";
 import { holdsPasskey } from "./keys.ts";
-import { endGrant, mindHostResourceOf, type SignIn, signInsOf } from "./oauth.ts";
+import { clientsWithAccess, endFields, type Ends, endsOf, logoOriginsOf } from "./access-list.ts";
+import { endAccess, sessionsByClientOf } from "./oauth.ts";
 import { standingOf } from "./members.ts";
 import { errorPage, notMemberPage, page, text } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
@@ -90,9 +91,9 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
   if (pathname === REMOVE_PATH) return removed(env, request, session);
   if (pathname === END_SIGN_IN_PATH) {
     const facts = new AccountFacts();
-    const form = await request.formData();
-    await endGrant(env, session.userId, String(form.get("signIn") || ""), facts);
-    return facts.on(seeOther(KEYS_PATH));
+    const ends = endsOf(await request.formData().catch(() => null));
+    if (ends) await endAccess(env, session.userId, ends, facts);
+    return facts.on(seeOther(`${KEYS_PATH}#access`));
   }
   if (pathname === KEYS_PATH)
     return post
@@ -173,30 +174,30 @@ async function keysPage(
     return `<li>${text(key.label)} <span class="muted">(${what}, ${when})</span> ${remove}</li>`;
   };
   // A session that owes a passkey ends nothing, as it removes nothing.
-  const signIns = held ? [] : await signInsOf(env, session.userId);
-  const signInItem = (signIn: SignIn) => {
-    const host = signIn.resource && mindHostResourceOf(env, signIn.resource);
-    const what = host
-      ? `your sign-in on ${text(new URL(host).host)}`
-      : signIn.resource
-        ? `the mind, through ${text(new URL(signIn.resource).pathname)}`
-        : signIn.goesTo
-          ? `access went to ${text(signIn.goesTo)}`
-          : "the mind or one of its pages";
-    const ends = signIn.endsAt ? `, ends ${day(signIn.endsAt * 1000)} if it is not used` : "";
-    // a hostname's own sign-in has no client name: the page there is what holds it
-    const name = signIn.clientName || (host ? `This browser, on ${new URL(host).host}` : "An app");
-    return `<li>${text(name)} <span class="muted">(${what}, since ${day(signIn.createdAt * 1000)}${ends})</span>
-        <form method="post" action="${END_SIGN_IN_PATH}" class="inline">
-          <input type="hidden" name="signIn" value="${text(signIn.id)}">
-          <button type="submit" class="link">Sign out</button>
-        </form></li>`;
-  };
+  const access = held ? [] : await sessionsByClientOf(env, session.userId);
+  const end = (ends: Ends, button: string) =>
+    `<form method="post" action="${END_SIGN_IN_PATH}" class="inline">
+          ${endFields(ends)}
+          <button type="submit" class="link">${button}</button>
+        </form>`;
+  const clients = access.filter((client) => !client.host);
+  const pages = access.filter((client) => client.host);
   const signedIn = held
     ? ""
-    : `<h2>Where you are signed in</h2>
-      <p>Each app, CLI, bridge or agent that you let in holds a sign-in. One lasts for as long as it is used, and ends after 7 days with no use. Sign one out here, and it stops working at once.</p>
-      ${signIns.length ? `<ul>${signIns.map(signInItem).join("")}</ul>` : `<p class="muted">Nothing is signed in as you.</p>`}`;
+    : `<h2 id="access">Apps and devices with access</h2>
+      <p>Each app, CLI, device or agent that you let in holds access to ${text(domain)} as you. Under its name is each sign-in it holds, and what that reaches. A sign-in lasts for as long as it is used, and ends after 7 days with no use. Revoke one here, and it stops working with every token it holds.</p>
+      ${
+        clients.length
+          ? `<ul class="access-list">${clientsWithAccess(env, clients, end)}</ul>`
+          : `<p class="muted">No app or device has access as you.</p>`
+      }
+      ${
+        pages.length
+          ? `<h2>This mind's own pages</h2>
+      <p>A browser that opened one of the mind's pages or apps as you holds a sign-in there. Each ends by itself within a day.</p>
+      <ul class="access-list">${clientsWithAccess(env, pages, end)}</ul>`
+          : ""
+      }`;
   const passkeys = results.filter(
     (key) => key.user_id && key.format === "webauthn" && !key.revoked_at,
   ).length;
@@ -226,6 +227,7 @@ async function keysPage(
       ${signedIn}
       ${next && !held ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
     script: `${signScript(domain)}${PASSKEY_SCRIPT}`,
+    imageOrigin: logoOriginsOf(access),
   });
 }
 

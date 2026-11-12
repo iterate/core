@@ -352,3 +352,43 @@ button svg {
   align-items: center;
   gap: 0.75rem 1.25rem;
 }
+/* an app or a device with access (auth Worker access-list.ts): its mark, what it is and what it
+   reaches, and the button that ends it; on a phone the button goes under the words */
+.access-list {
+  list-style: none;
+  padding: 0;
+}
+.access {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.25rem 0.75rem;
+  align-items: start;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+}
+.access p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+/* a client's sign-ins, each with its own button at the end of its line */
+.access-sessions {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+}
+.access-sessions li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0 0.75rem;
+  padding: 0.125rem 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 30rem) {
+  .access {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .access form {
+    grid-column: 2;
+  }
+}

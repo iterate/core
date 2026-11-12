@@ -13,6 +13,7 @@ import {
   grantedScopes,
   hostCallbackOf,
   oauthHelpers,
+  type SignInMetadata,
   mindHostResourceOf,
 } from "./oauth.ts";
 import { passkeyOwedResponse, standingOf } from "./members.ts";
@@ -90,7 +91,7 @@ async function describe(env: Env, request: Request) {
     isTrustedClient(env, authRequest)
   ) {
     const client = await helpers.lookupClient(authRequest.clientId);
-    return approve(env, session, authRequest, client?.clientName, new Headers());
+    return approve(env, session, authRequest, client, new Headers());
   }
   // describe first: a failed lookup leaves nothing in KV
   const details = await helpers.describeConsent(authRequest);
@@ -143,7 +144,7 @@ async function decide(env: Env, request: Request) {
   const refused = await notMemberRefusal(env, session, hostResource, "/");
   if (refused) return refused;
   const client = await helpers.lookupClient(approved.request.clientId);
-  return approve(env, session, approved.request, client?.clientName, approved.headers);
+  return approve(env, session, approved.request, client, approved.headers);
 }
 
 // A mind hostname takes anyone's identity, and gives a member's the mind: so a member's
@@ -161,13 +162,17 @@ async function notMemberRefusal(
   return notMemberPage({ domain, email: session.email, here });
 }
 
+/** What a grant keeps of its client: the name and the logo that the client gave. */
+type AskingClient = { clientName?: string; logoUri?: string } | null;
+
 async function complete(
   env: Env,
   session: Session,
   authRequest: AuthRequest,
   hostResource: string | null,
-  clientName?: string,
+  client?: AskingClient,
 ) {
+  const clientName = client?.clientName;
   const letIn = isDeviceRequest(env, authRequest)
     ? (await deviceStore(env.OAUTH_KV).byKey(authRequest.state))?.letIn
     : undefined;
@@ -187,7 +192,12 @@ async function complete(
     request: authRequest,
     userId: session.userId,
     // what /keys shows of this sign-in (./oauth.ts `signInsOf`)
-    metadata: { clientName: clientName || authRequest.clientId, resource: authRequest.resource },
+    metadata: {
+      clientName: clientName || authRequest.clientId,
+      resource: authRequest.resource,
+      logoUri: client?.logoUri,
+      until: props.deadline,
+    } satisfies SignInMetadata,
     scope: authRequest.scope,
     revokeExistingGrants: false,
     props,
@@ -199,16 +209,17 @@ async function approve(
   env: Env,
   session: Session,
   authRequest: AuthRequest,
-  clientName: string | undefined,
+  client: AskingClient,
   headers: Headers,
 ) {
+  const clientName = client?.clientName;
   const hostResource = mindHostResourceOf(env, authRequest.resource);
   const { redirectTo, grantId, props } = await complete(
     env,
     session,
     authRequest,
     hostResource,
-    clientName,
+    client,
   );
   const facts = new AccountFacts();
   facts.add(session.userId, {

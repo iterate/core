@@ -16,7 +16,8 @@ import { sha256Hex } from "./device/protocol.ts";
 import { type Session, sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import { blockedOf } from "./blocked.ts";
-import { endGrantsOf } from "./oauth.ts";
+import { clientsWithAccess, endFields, type Ends, endsOf, logoOriginsOf } from "./access-list.ts";
+import { type ClientWithAccess, endAccess, endGrantsOf, sessionsByClientOf } from "./oauth.ts";
 import { errorPage, notMemberPage, page, text } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
 import {
@@ -150,6 +151,20 @@ export async function membersResponse(
     if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
     return outcome.facts.on(await membersPage(env, { owner, notice: outcome.notice }));
   }
+  if (action === "end-access") {
+    const outcome = owner
+      ? await endAccessOf(env, email, endsOf(form))
+      : {
+          error: "Only an owner, a member the stack's config names, ends another member's access.",
+        };
+    if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
+    return outcome.facts.on(
+      new Response(null, {
+        status: 303,
+        headers: { location: `${MEMBERS_PATH}#access`, "cache-control": "no-store" },
+      }),
+    );
+  }
   if (action !== "remove")
     return membersPage(env, {
       owner,
@@ -222,6 +237,38 @@ async function add(env: Env, change: SignedChange): Promise<Outcome> {
   if (added)
     facts.add(principal.actor, { type: MEMBER_ADDED, payload: { email, ...signerOf(change) } });
   return { facts };
+}
+
+/** An owner ends an app's or a device's access of a member: one sign-in, or all that one client
+ *  holds as that member. It takes the owner's session alone, as the removal of a member does: it
+ *  lets fewer act, and removes no key. The member can let the app in again. */
+async function endAccessOf(env: Env, typed: string, ends: Ends | null): Promise<Outcome> {
+  const person = await env.DB.prepare("select id from users where email = ?1")
+    .bind(typed.trim().toLowerCase())
+    .first<{ id: string }>();
+  const facts = new AccountFacts();
+  if (!person || !ends || !(await endAccess(env, person.id, ends, facts)))
+    return { error: "That access is not there any more.", status: 404 };
+  console.info({ event: "auth.member-access-ended", of: person.id });
+  return { facts };
+}
+
+/** Each member's apps and devices with access, for an owner. A browser's own sign-in on one of
+ *  the mind's pages is left out: it ends by itself within a day. */
+async function accessOfMembers(
+  env: Env,
+): Promise<{ email: string; clients: ClientWithAccess[] }[]> {
+  const { results } = await env.DB.prepare("select id, email from users order by email").all<{
+    id: string;
+    email: string;
+  }>();
+  const members: { email: string; clients: ClientWithAccess[] }[] = [];
+  for (const person of results) {
+    if (!(await isMember(env, person.email))) continue;
+    const clients = (await sessionsByClientOf(env, person.id)).filter((client) => !client.host);
+    if (clients.length) members.push({ email: person.email, clients });
+  }
+  return members;
 }
 
 async function remove(env: Env, actor: Session, typed: string): Promise<Outcome> {
@@ -435,6 +482,22 @@ async function membersPage(
         </form></li>`,
     )
     .join("");
+  const access = owner ? await accessOfMembers(env) : [];
+  const accessRows = access
+    .map(({ email, clients }) =>
+      clientsWithAccess(
+        env,
+        clients,
+        (ends, button) => `<form method="post" action="${MEMBERS_PATH}" class="inline">
+          <input type="hidden" name="action" value="end-access">
+          <input type="hidden" name="email" value="${text(email)}">
+          ${endFields(ends)}
+          <button type="submit" class="link">${button}</button>
+        </form>`,
+        email,
+      ),
+    )
+    .join("");
   const blockedRows = owner
     ? (await blockedOf(env))
         .map(
@@ -466,7 +529,10 @@ async function membersPage(
       <p class="muted">Your passkey signs the add: a session or a token alone adds no one. A new member signs in once with a code by email, and adds a passkey. After that, only the passkey signs the member in.</p>
       ${
         owner
-          ? `<h2>A member lost a passkey</h2>
+          ? `<h2 id="access">Apps and devices with access</h2>
+      <p>Each app, CLI, device or agent that a member let in, and what it reaches as that member. Revoke one, and it and every token it holds stop working at once. The member can let it in again. A member sees and revokes their own on the keys page.</p>
+      ${accessRows ? `<ul class="access-list">${accessRows}</ul>` : `<p class="muted">No app or device has access.</p>`}
+      <h2>A member lost a passkey</h2>
       <p>Remove the member's keys. This signs the member out of every app and device. A code by email then signs the member in once, to add a new passkey.</p>
       <form method="post" action="${MEMBERS_PATH}" class="stack" data-signed="${MEMBER_KEYS_REMOVED}">
         <input type="hidden" name="action" value="remove-keys">
@@ -495,6 +561,7 @@ async function membersPage(
           : ""
       }`,
     script: `${signScript(domain)}${ADD_SCRIPT}`,
+    imageOrigin: logoOriginsOf(access.flatMap(({ clients }) => clients)),
   });
 }
 
