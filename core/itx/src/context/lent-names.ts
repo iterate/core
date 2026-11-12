@@ -27,6 +27,27 @@ export function isLendOf(resolved: ItxExpressionInput, match: ItxExpressionInput
   );
 }
 
+/** WHETHER A NAME IS FREE FOR A KEY'S LEND, BY A CONTEXT'S ROWS: no row is at the name, above it or
+ *  under it, but the stub lent as this very name before. A row with no target is a row: the mind
+ *  masked the name, and a lend under a mask would answer where the mind said that nothing does. A
+ *  row under the name would be left as an island in what the key lends. The bare row (`itx`
+ *  alone) is a context's link or its jail and no name. */
+export function nameIsFree(
+  own: ItxExpressionInput,
+  rows: readonly { match: ItxExpressionInput; target: ItxExpressionInput | null }[],
+): boolean {
+  const namesOf = (name: ItxExpressionInput) =>
+    parseItxExpressionPrefix(name).map((step) => itxExpressionStepName(step));
+  const mine = namesOf(own);
+  return rows.every(({ match, target }) => {
+    const theirs = namesOf(match);
+    if (theirs.length < 2) return true;
+    const shared = Math.min(mine.length, theirs.length);
+    if (!mine.slice(0, shared).every((name, index) => name === theirs[index])) return true;
+    return theirs.length === mine.length && !!target && isLendOf(target, own);
+  });
+}
+
 /** Why a live stub is not lent at `match`, or null when it may be. `roots` are the names that are
  *  the platform's at the mind's root (`implicitRootsAt("/")`): the kernel's and the host's. */
 export function lendRefusal(match: ItxExpressionInput, roots: ReadonlySet<string>): string | null {

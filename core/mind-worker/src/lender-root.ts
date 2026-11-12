@@ -1,8 +1,17 @@
 import { RpcTarget } from "capnweb";
-import { type ClientRpcStub, isLendOf, type IterateContextRpcTarget, lendRefusal } from "core-itx";
+import {
+  type ClientRpcStub,
+  type IterateContextRpcTarget,
+  lendRefusal,
+  nameIsFree,
+} from "core-itx";
 import { canonicalItxExpressionPrefix, type ItxExpressionInput } from "iterate/expression";
-import { codedError, errorCode } from "iterate/lib";
+import { codedError } from "iterate/lib";
 import type { Lender } from "iterate/principal";
+import { z } from "zod";
+
+/** What `rewriteRules.list()` answers, as far as the lend reads it. */
+const TableRows = z.array(z.object({ match: z.string(), target: z.string().nullable() }));
 
 /** WHAT A KEY'S TOKEN REACHES (core/auth-worker/src/key-tokens.ts): the one lend a member allowed
  *  its key, and nothing of the mind. `iterate provide --key` runs against it: `whoami` proves the
@@ -57,18 +66,15 @@ export class LenderRoot extends RpcTarget {
     });
   }
 
-  /** WHETHER THE NAME IS THE KEY'S TO TAKE, BY THE MIND'S OWN TABLE: nothing answers at it, or the
-   *  key's lend from before does. A row of the mind's own at it or above it (`itx.agents`, from an
-   *  app) is not a built-in root, so only the table knows it. A table that cannot be read lends
-   *  nothing. */
+  /** WHETHER THE NAME IS THE KEY'S TO TAKE, BY THE MIND'S OWN TABLE (core-itx `nameIsFree`): no
+   *  row of the root is at it, above it or under it, but the key's lend from before. A row of the
+   *  mind's own (`itx.agents`, from an app) is not a built-in root, so only the table knows it;
+   *  and asking what the name resolves to would read a mask, and a row under the name, as
+   *  nothing. A table that cannot be read lends nothing. */
   async #nameInTheTable(own: string): Promise<boolean> {
-    try {
-      const chain = await this.#root.invoke(["itx", "builtins", "rewriteRules", ["resolve", own]]);
-      const resolved: unknown = Array.isArray(chain) ? chain.at(-1) : undefined;
-      return typeof resolved === "string" && isLendOf(resolved, own);
-    } catch (error) {
-      if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") return true;
-      throw error;
-    }
+    const rows = TableRows.parse(
+      await this.#root.invoke(["itx", "builtins", "rewriteRules", ["list"]]),
+    );
+    return nameIsFree(own, rows);
   }
 }
