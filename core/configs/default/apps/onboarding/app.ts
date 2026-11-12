@@ -8,6 +8,8 @@ import {
   type IterateConfigProcessEventArgs,
 } from "iterate/sdk";
 import theme from "../theme.css";
+// oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
+import liveReload from "../live-reload/";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import files from "./public/";
@@ -43,7 +45,10 @@ export function onboardingApp() {
       if (url.pathname === "/.auth/logout")
         return new Response(null, { status: 307, headers: { location: "/.iterate/sign-out" } });
       // the app's own files, and the one theme file that every app of this mind shares
-      return serveFiles(request, { index, files: { ...files, "theme.css": theme } });
+      return serveFiles(request, {
+        index,
+        files: { ...files, ...liveReload, "theme.css": theme },
+      });
     },
   };
 }

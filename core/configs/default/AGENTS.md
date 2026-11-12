@@ -214,6 +214,13 @@ apps/<name>/
   (`app.ts`) and its page links it after the UI kit's style sheet. It holds the colours and the
   corners (shadcn's theme variables). The apps are light, whatever the visitor's system says; to
   make them all dark, change `light` to `dark` in the file's `color-scheme` line.
+- **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** Each app serves
+  that one file at `/live-reload.js` (`app.ts`), and its page loads it in its head.
+  When a commit is published, a stylesheet that changed is swapped in place. A page whose
+  script changed reloads once nobody types in it, and what the person saw stays over the app
+  until the app has drawn itself again. A member's page hears of a publication at once; any
+  page looks when its tab comes to the front. To turn it off for an app, take the line out of
+  its `index.html`.
 - **The member's `itx` in the page.** `host.auth.itx(request)`, answered from a path of the app's
   choosing, makes that path a WebSocket to the mind's `itx` for the member who is signed in on
   that host: `newWebSocketRpcSession(new WebSocket("/itx"))`, a capnweb session

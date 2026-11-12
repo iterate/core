@@ -30,6 +30,11 @@
         document.documentElement.classList.add("dark");
     </script>
     <link rel="stylesheet" href="/app.css" />
+    <!-- The page takes a new commit by itself: apps/live-reload/live-reload.js says how. Take
+         this line out, and the page changes at its next load only. It is in the head, where the
+         browser can wait for it before it draws: after a reload that the script asked for,
+         nothing is drawn before the script has put what the person saw back over the app. -->
+    <script type="module" src="/live-reload.js" blocking="render"></script>
   </head>
   <body>
     <div id="root"><p class="p-4 text-sm text-muted-foreground">Connecting…</p></div>

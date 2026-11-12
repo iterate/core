@@ -11,6 +11,8 @@
 // code alone acts for them, and it builds no path from what they send.
 import { serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
 import type { Person } from "iterate/principal";
+// oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
+import liveReload from "../live-reload/";
 import {
   ENTRY_APPROVED,
   ENTRY_REMOVED,
@@ -73,7 +75,8 @@ export function guestbookApp() {
       const metadata = protectedResourceResponse(request);
       if (metadata) return metadata;
       if (url.pathname === "/mcp") return mcpResponse(request, { person, viewer, book });
-      return serveFiles(request, { index, files });
+      // the app's own files, and the one script that every app of this mind shares
+      return serveFiles(request, { index, files: { ...files, ...liveReload } });
     },
   };
 }
