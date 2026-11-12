@@ -9,7 +9,8 @@
 //   MCP           how to connect Claude Code or the Codex CLI to the mind
 //
 // The larger parts are components of @iterate-com/ui, loaded through the import map in
-// index.html: `ContextExplorer`, `RepoIde`, `SecretsPage`, `IntegrationsPage`, `AnalyticsPage`
+// index.html, EACH WHEN ITS PAGE FIRST OPENS (`kits` below): the overview loads none of them.
+// They are: `ContextExplorer`, `RepoIde`, `SecretsPage`, `IntegrationsPage`, `AnalyticsPage`
 // and `McpConnect` are the ones iterate's hosted Dash draws. This file is the wiring: the member's
 // itx, the URL, the sidebar and the overview. Change them here.
 //
@@ -27,22 +28,8 @@ import {
   useState,
   useSyncExternalStore,
 } from "@iterate-com/ui/page";
-import {
-  AnalyticsPage,
-  telemetryQueryOf,
-  TelemetryOff,
-} from "@iterate-com/ui/components/analytics-page";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import { ApprovalsAlert } from "@iterate-com/ui/components/approvals-alert";
-import {
-  ContextExplorer,
-  contextPathOf,
-  contextViewStateOf,
-} from "@iterate-com/ui/components/context-explorer/context-explorer";
-import { IntegrationsPage } from "@iterate-com/ui/components/integrations-page";
-import { McpConnect } from "@iterate-com/ui/components/mcp-connect";
-import { RepoIde, repoIdeSearchOf } from "@iterate-com/ui/components/repo-ide/repo-ide";
-import { SecretsPage, secretsPageStateOf } from "@iterate-com/ui/components/secrets-page";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/ui/card";
 import {
   SidebarGroup,
@@ -140,6 +127,44 @@ const access = [
   { name: "Members", href: `${stack}/members`, icon: UsersIcon, about: "Who may use this mind." },
 ];
 
+// ── a page's part of the kit ──
+// A PAGE'S COMPONENT IS LOADED WHEN ITS PAGE FIRST OPENS, once. The overview loads none of them:
+// the repo IDE, the charts and the YAML reader are most of what the kit weighs. A page you add
+// names its module here and takes it as `kit`.
+const kits = {
+  analytics: () => import("@iterate-com/ui/components/analytics-page"),
+  contexts: () => import("@iterate-com/ui/components/context-explorer/context-explorer"),
+  integrations: () => import("@iterate-com/ui/components/integrations-page"),
+  mcp: () => import("@iterate-com/ui/components/mcp-connect"),
+  repo: () => import("@iterate-com/ui/components/repo-ide/repo-ide"),
+  secrets: () => import("@iterate-com/ui/components/secrets-page"),
+};
+const loaded = new Map();
+
+/** The kit's module for `page`: `{ module }` once it is here, `{ error }` when it did not load,
+ *  and neither while it loads. A page with no module of the kit (the overview) has an empty one. */
+function useKit(page) {
+  const [, redraw] = useState(0);
+  const [error, setError] = useState();
+  useEffect(() => {
+    setError(undefined);
+    if (!kits[page] || loaded.has(page)) return undefined;
+    let current = true;
+    kits[page]().then(
+      (module) => {
+        loaded.set(page, module);
+        if (current) redraw((count) => count + 1);
+      },
+      (failure) =>
+        current && setError(failure instanceof Error ? failure.message : String(failure)),
+    );
+    return () => {
+      current = false;
+    };
+  }, [page]);
+  return { module: kits[page] ? loaded.get(page) : {}, error };
+}
+
 // ── the URL ──
 // THE PAGE IS A LINK: `?page=contexts|repo|secrets|integrations|analytics|mcp` is the page (none:
 // the overview),
@@ -224,20 +249,26 @@ function App() {
   const search = useSyncExternalStore(subscribeToUrl, () => location.search);
   const params = useMemo(() => new URLSearchParams(search), [search]);
   const page = params.get("page") || "overview";
-  const context = contextPathOf(params.get("context") || "");
+  const { module: kit, error: kitError } = useKit(page);
   // Asked once here, for the sidebar, the overview and the Analytics page: a mind with no
   // telemetry shows Analytics as "Off" everywhere, and its page says how to turn it on.
   const hasTelemetry = useServes("telemetry");
   const telemetryOff = hasTelemetry === false;
   let view = html`<${Overview} telemetryOff=${telemetryOff} />`;
-  if (page === "contexts") view = html`<${Contexts} path=${context} search=${search} />`;
-  if (page === "repo")
-    view = html`<${Repo} name=${params.get("repo") || "config"} search=${search} />`;
-  if (page === "secrets") view = html`<${Secrets} search=${search} />`;
-  if (page === "integrations") view = html`<${Integrations} />`;
-  if (page === "analytics") view = html`<${Analytics} serves=${hasTelemetry} />`;
-  if (page === "mcp")
-    view = html`<div className="dash-scroll"><${McpConnect} server=${`${stack}/mcp`} /></div>`;
+  if (kitError)
+    view = html`
+      <p role="alert" className="dash-note dash-error">This page did not load: ${kitError}</p>
+    `;
+  else if (!kit) view = html`<p className="dash-note" data-spinner="true">Loading the page…</p>`;
+  else if (page === "contexts")
+    view = html`<${Contexts} kit=${kit} path=${params.get("context") || ""} search=${search} />`;
+  else if (page === "repo")
+    view = html`<${Repo} kit=${kit} name=${params.get("repo") || "config"} search=${search} />`;
+  else if (page === "secrets") view = html`<${Secrets} kit=${kit} search=${search} />`;
+  else if (page === "integrations") view = html`<${Integrations} kit=${kit} />`;
+  else if (page === "analytics") view = html`<${Analytics} kit=${kit} serves=${hasTelemetry} />`;
+  else if (page === "mcp")
+    view = html`<div className="dash-scroll"><${kit.McpConnect} server=${`${stack}/mcp`} /></div>`;
   return html`
     <${AppShell}
       app="Dash"
@@ -254,7 +285,7 @@ function App() {
 }
 
 /** Any context of the mind, live. The explorer knows no router: these are its links. */
-function Contexts({ path, search }) {
+function Contexts({ kit, path, search }) {
   const [view, patchView] = useView(search);
   const links = useMemo(
     () => ({
@@ -267,12 +298,12 @@ function Contexts({ path, search }) {
     [],
   );
   return html`
-    <${ContextExplorer}
+    <${kit.ContextExplorer}
       openRoot=${() => itx.cd("/")}
       deps=${[]}
-      path=${path}
+      path=${kit.contextPathOf(path)}
       links=${links}
-      state=${contextViewStateOf(view)}
+      state=${kit.contextViewStateOf(view)}
       onStateChange=${patchView}
     />
   `;
@@ -311,10 +342,9 @@ function PartIsOff({ title, children }) {
 
 /** ONE function for the page's life: the kit's pages read again when they are handed another. */
 const openIntegrations = () => itx.cd("/integrations");
-const telemetry = telemetryQueryOf(itx);
 
 /** What the mind's packages registered, live from one subscription. */
-function Integrations() {
+function Integrations({ kit }) {
   const serves = useServes("integrations");
   if (serves === undefined)
     return html`<p className="dash-note" data-spinner="true">Reading the mind…</p>`;
@@ -322,24 +352,27 @@ function Integrations() {
     return html`<${PartIsOff} title="Integrations">This mind has no integrations yet.<//>`;
   return html`
     <div className="dash-scroll">
-      <${IntegrationsPage} openRegistry=${openIntegrations} deps=${[]} mind=${domain} />
+      <${kit.IntegrationsPage} openRegistry=${openIntegrations} deps=${[]} mind=${domain} />
     </div>
   `;
 }
 
 /** The mind's telemetry. A mind without telemetry is asked nothing: the kit's page says that it
  *  is off, what turns it on and who can. `serves` is the shell's one answer (undefined: asking). */
-function Analytics({ serves }) {
+function Analytics({ kit, serves }) {
+  // one function for the page's life: the page reads again when it is handed another
+  const telemetry = useMemo(() => kit.telemetryQueryOf(itx), [kit]);
   if (serves === undefined)
     return html`<p className="dash-note" data-spinner="true">Reading the mind…</p>`;
-  if (!serves) return html`<div className="dash-scroll"><${TelemetryOff} mind=${domain} /></div>`;
-  return html`<div className="dash-scroll"><${AnalyticsPage} query=${telemetry} /></div>`;
+  if (!serves)
+    return html`<div className="dash-scroll"><${kit.TelemetryOff} mind=${domain} /></div>`;
+  return html`<div className="dash-scroll"><${kit.AnalyticsPage} query=${telemetry} /></div>`;
 }
 
 /** The mind's secrets. This page reads the list, and reads it again after a set or a delete. The
  *  sheet's state is `?view`, so New secret and a row's Update are links: opening one is a new entry
  *  in the history, and Back closes it. */
-function Secrets({ search }) {
+function Secrets({ kit, search }) {
   const [view] = useView(search);
   // undefined while the page reads; then `{ secrets }`, `{ off }` for a mind with no vault, or `{ error }`
   const [list, setList] = useState();
@@ -359,10 +392,10 @@ function Secrets({ search }) {
   if (list.off) return html`<p className="dash-note">This mind has no vault for secrets yet.</p>`;
   return html`
     <div className="dash-scroll">
-      <${SecretsPage}
+      <${kit.SecretsPage}
         itx=${itx}
         secrets=${list.secrets}
-        state=${secretsPageStateOf(view)}
+        state=${kit.secretsPageStateOf(view)}
         onStateChange=${(next, replace) =>
           go(
             hrefOf({ view: Object.keys(next).length ? JSON.stringify(next) : undefined }),
@@ -376,7 +409,7 @@ function Secrets({ search }) {
 
 /** One repo of the mind as a small IDE. It follows the repo's commits live, so the mind's root
  *  is held while the page is up. */
-function Repo({ name, search }) {
+function Repo({ kit, name, search }) {
   const [view, patchView] = useView(search);
   const root = useContextStub(() => itx.cd("/"), []);
   if (root.error) return html`<p role="alert" className="dash-note dash-error">${root.error}</p>`;
@@ -384,13 +417,13 @@ function Repo({ name, search }) {
   const email = principal?.email;
   return html`
     <div className="dash-fill">
-      <${RepoIde}
+      <${kit.RepoIde}
         key=${name}
         mind=${root.stub}
         mindId=${domain}
         repoPath=${`/repos/${name}`}
         author=${email ? { name: email, email } : undefined}
-        search=${repoIdeSearchOf(view)}
+        search=${kit.repoIdeSearchOf(view)}
         onSearchChange=${patchView}
       />
     </div>
