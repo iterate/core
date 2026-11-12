@@ -122,11 +122,19 @@ export async function slackSenderMay(
   now = Date.now(),
 ): Promise<string | null> {
   const key = `slack-sender:${message.teamId}:${message.user}`;
-  const kept = JSON.parse((await itx.kv.get(key)) || "null") as {
-    email: string | null;
-    until: number;
-  } | null;
-  if (kept && kept.until > now) return kept.email;
+  const keptText = await itx.kv.get(key);
+  // The cast: this function wrote the value itself, below. A value that is no JSON, or that has
+  // no time, counts as none kept, so that one bad value cannot stop every later message.
+  const kept = (() => {
+    try {
+      return JSON.parse(keptText || "null") as { email?: string | null; until?: number } | null;
+    } catch {
+      return null;
+    }
+  })();
+  if (kept?.until && kept.until > now) return kept.email || null;
+  // The cast: Slack's documented answer. Every field read below is checked where it is read, and
+  // an answer without `ok` and `user` is no answer.
   const answer = (await callSlack(itx, "users.info", { user: message.user })) as {
     ok?: boolean;
     user?: SlackUser;

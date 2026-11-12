@@ -121,6 +121,19 @@ test("a workspace member who is no member of the mind instructs no agent, and a 
   expect(asked).toHaveLength(4);
 });
 
+test("a kept value of another shape is read as none kept, and Slack is asked", async () => {
+  const mind = slackMind({
+    team_id: "T1",
+    is_email_confirmed: true,
+    profile: { email: "ada@example.com" },
+  });
+  for (const kept of [JSON.stringify({ member: true }), "not json", JSON.stringify("text")]) {
+    await mind.kv.put("slack-sender:T1:U1", kept);
+    expect(await slackSenderMay(mind, { teamId: "T1", user: "U1" })).toBe("ada@example.com");
+  }
+  expect(mind.calls).toHaveLength(3);
+});
+
 test("when Slack does not answer, nobody may, and the next message asks again", async () => {
   const mind = slackMind(null);
   expect(await slackSenderMay(mind, { teamId: "T1", user: "U1" })).toBeNull();

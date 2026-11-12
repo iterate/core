@@ -728,7 +728,8 @@ async function membersChecks(domain: string): Promise<Check[]> {
       const named = Members.safeParse((await call("GET")).body)
         .data?.config.map((rule) => z.object({ email: z.string() }).safeParse(rule).data?.email)
         .find(Boolean);
-      // through the door to the auth Worker: the config's own member, and an address nobody named
+      // the mind asks the boundary, which asks the auth Worker: the config's own member, and an
+      // address nobody named
       const has = (address: string) => mindRoot(domain, token).members.has(address);
       const [member, stranger] = [named ? await has(named) : null, await has(email)];
       return {
