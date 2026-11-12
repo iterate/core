@@ -457,6 +457,11 @@ platform wrote there; a file you changed or deleted is yours, and stays.
   platform's again. An app that the last update left at its version then follows at the mind's
   next restart. Where no app was left, a file you set back waits for the next deploy that brings
   a different template: the same template is not compared twice.
+- **An app with one file that is yours on purpose** (an `app.ts` of your own, a file you took
+  out) stays at its version whole, at every deploy: its page does not follow. To bring the page
+  up, commit the other files of the app yourself, each with the bytes of the template at the
+  version the mind runs (`core/configs/default/apps/<name>/` in https://github.com/iterate/core).
+  The page's files go together: `index.html` names the modules that `public/` imports.
 
 ## What waits for a member's yes
 
