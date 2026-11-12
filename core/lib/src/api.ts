@@ -234,12 +234,17 @@ export type SecretRefresh =
    *  is kept. The source is part of the record, so changing it is a `set` like the material's. */
   | { kind: "worker"; source: string };
 
-/** A SECRET'S SEALED CELL — what every fact that writes material carries (`secret/set`, a
- *  `secret/refreshed` that minted, `secret/resealed`): the record with its material sealed under
- *  the deployment's secrets key and bound to this one secret and write
- *  (core/secrets-worker/src/secret-at-rest.ts says how, and what opens it). The log is the secret:
- *  a backup of it and the key is everything. `itx.cd(path).facets.get("secret").snapshot()` answers
- *  the current one as `state.material.sealed`. */
+/** A SEALED CELL OF THE FROZEN PLATFORM: a secret's record with its material sealed under that
+ *  deployment's secrets key and bound to the one secret and write. There every fact that wrote
+ *  material carried one, and the secret facet's `snapshot()` answered the current one as
+ *  `state.material.sealed`.
+ *
+ *  ON A MIND'S OWN STACK NO FACT CARRIES A CELL AND NO VERB READS ONE OUT: the secret's object
+ *  keeps its cell in its own storage alone (`SealedCell`,
+ *  core/secrets-worker/src/secret/contract.ts), so a copy of the logs holds no value. This shape
+ *  stays for a move in: `secrets.importSealed(path, cell, proof)` takes one such cell once, with a
+ *  proof under the stack's at-rest key, and seals its material again as the stack's own.
+ *  packages/mind-backup reads and opens these cells. */
 export type SealedSecretCell = {
   /** The secret's context name (its Durable Object's), the first part of the cell's binding. */
   context: string;
