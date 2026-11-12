@@ -58,9 +58,7 @@ export async function refreshBrokeredGrants(
       .catch((error: unknown) => thrown(path, error));
     if (result.outcome === "not-a-brokered-grant") continue;
     rows.push(
-      result.outcome === "failed"
-        ? { path, outcome: "failed", error: result.error }
-        : { path, outcome: result.outcome },
+      result.outcome === "failed" ? { path, ...result } : { path, outcome: result.outcome },
     );
     allFacts.push(...facts);
   }

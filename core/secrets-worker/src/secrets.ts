@@ -456,6 +456,23 @@ export async function oauthTokensOf(
 // Resolves a placeholder (`clientSecretReferenceOf`) for the request alone.
 export type ClientSecretOf = (clientSecret: string, tokenEndpoint: string) => Promise<string>;
 
+/** A REFRESH REQUEST THAT GOT NO ANSWER: no decision of the provider came back. The request
+ *  failed on its way, or the answer was 408, 429 or 5xx. Where the request left, the provider may
+ *  have issued the new tokens, and a refresh token that works once is then spent: only a later
+ *  try with the same token tells. A refusal is an answer, and is never this.
+ *  `notAtOnce`: one more request at once would do harm, and the caller's next run asks again.
+ *  A 429 says that the far side gets too many requests. A 504 says that the Cloud's call to
+ *  the provider still goes on: the Cloud keeps its late answer for the same token, and a second
+ *  call now would show the provider a token that is in use. */
+export class RefreshUnanswered extends Error {
+  readonly notAtOnce: boolean;
+  // Not a parameter property: erasable syntax only.
+  constructor(message: string, notAtOnce = false) {
+    super(message);
+    this.notAtOnce = notAtOnce;
+  }
+}
+
 // RFC 6749 §6.
 export async function refreshSecretMaterial(
   refresh: Extract<SecretRefresh, { kind: "oauth-refresh-token" }>,
@@ -467,15 +484,23 @@ export async function refreshSecretMaterial(
   const refreshToken = stringField(record, "refreshToken", refresh.kind);
   const clientId = stringField(record, "clientId", refresh.kind);
   const clientSecret = typeof record.clientSecret === "string" ? record.clientSecret : "";
-  const response = await fetchFn(
-    oauthTokenRequest({
-      tokenEndpoint: refresh.tokenEndpoint,
-      clientId,
-      clientSecret: await clientSecretOf(clientSecret, refresh.tokenEndpoint),
-      clientAuth: refresh.clientAuth || "client_secret_basic",
-      params: { grant_type: "refresh_token", refresh_token: refreshToken },
-    }),
-  );
+  const request = oauthTokenRequest({
+    tokenEndpoint: refresh.tokenEndpoint,
+    clientId,
+    clientSecret: await clientSecretOf(clientSecret, refresh.tokenEndpoint),
+    clientAuth: refresh.clientAuth || "client_secret_basic",
+    params: { grant_type: "refresh_token", refresh_token: refreshToken },
+  });
+  const response = await fetchFn(request).catch((error: unknown) => {
+    throw new RefreshUnanswered(
+      `${refresh.kind}: the token endpoint did not answer (${error instanceof Error ? error.message : String(error)})`,
+    );
+  });
+  if (response.status === 408 || response.status === 429 || response.status >= 500)
+    throw new RefreshUnanswered(
+      `${refresh.kind}: the token endpoint answered ${response.status}`,
+      response.status === 429 || response.status === 504,
+    );
   // The client secret stays as held: a placeholder, never the value it resolved to.
   return { ...record, ...(await oauthTokensOf(response, refresh.kind)) };
 }

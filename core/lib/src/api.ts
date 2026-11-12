@@ -1375,11 +1375,12 @@ export interface IterateContextApi {
      *  Cloud a grant is of: one row for each. core/secrets-worker/src/grant-refresh.ts says why a
      *  mind asks for this, and when.
      *  `fresh`: refreshed within the last hour, and left alone. `failed`: the secret is as it
-     *  was, and the person may have to connect again. */
+     *  was, and the person may have to connect again. `answerLost`: no answer came, so nobody
+     *  refused; the next refresh tells if the grant still stands. */
     refreshGrants(): Promise<
       (
         | { path: string; outcome: "refreshed" | "fresh" }
-        | { path: string; outcome: "failed"; error: string }
+        | { path: string; outcome: "failed"; error: string; answerLost?: true }
       )[]
     >;
     /** The link to a form on the platform's own hostname where a person enters a value an agent

@@ -75,6 +75,29 @@ test("a grant whose refresh throws is said as failed, with a fact on its log, an
   });
 });
 
+test("a grant whose refresh got no answer says so in its row: nobody refused it", async () => {
+  const vault = pretendVault({
+    "/secrets/github-lee": {
+      outcome: "failed",
+      error: "the token endpoint answered 502",
+      answerLost: true,
+    },
+  });
+
+  expect(await refreshBrokeredGrants(vault.deps)).toMatchObject({
+    result: {
+      grants: [
+        {
+          path: "/secrets/github-lee",
+          outcome: "failed",
+          error: "the token endpoint answered 502",
+          answerLost: true,
+        },
+      ],
+    },
+  });
+});
+
 test("a vault with no grant asks no object", async () => {
   const vault = pretendVault({});
 
@@ -110,7 +133,7 @@ test("a vault with more grants than one call refreshes says where it stopped, an
 
 type Outcome =
   | { outcome: "refreshed" | "fresh" | "not-a-brokered-grant" }
-  | { outcome: "failed"; error: string };
+  | { outcome: "failed"; error: string; answerLost?: true };
 
 /** A vault whose set secrets are these grants, each with what its refresh on word answers, and
  *  one plain token beside them. It says which objects were asked. */

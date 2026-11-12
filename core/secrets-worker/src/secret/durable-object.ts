@@ -57,6 +57,7 @@ import {
   type SecretUse,
   SecretRefused,
   refreshSecretMaterial,
+  RefreshUnanswered,
   secretMaterialStringOf,
   secretsEqual,
   sha256Hex,
@@ -218,19 +219,27 @@ const deletedWhileStored = (path: string) =>
 /** What came of a refresh on word (`refreshGrant`). */
 export type GrantRefresh =
   | { outcome: "refreshed" | "fresh" | "not-a-brokered-grant" }
-  | { outcome: "failed"; error: string };
+  | { outcome: "failed"; error: string; answerLost?: true };
 /** When a refresh on word last brought new tokens, and for how long a grant is fresh after it. */
 const GRANT_REFRESHED_AT = "grant-refreshed-at";
 const GRANT_FRESH_MS = 60 * 60_000;
+/** How often one refresh on word asks while no answer comes: once more, with the same token. */
+const GRANT_TRIES = 2;
 
 class RefreshFailed extends Error {
   readonly facts: SecretFact[];
   readonly lent: Facts;
+  /** No answer came (../secrets.ts `RefreshUnanswered`): the provider did not refuse. */
+  readonly answerLost: boolean;
+  /** One more try at once may help: no answer came, and the answer did not say "not at once". */
+  readonly askAgain: boolean;
   // Not parameter properties: erasable syntax only, as in secrets.ts.
-  constructor(message: string, facts: SecretFact[], lent: Facts) {
+  constructor(message: string, facts: SecretFact[], lent: Facts, unanswered?: RefreshUnanswered) {
     super(message);
     this.facts = facts;
     this.lent = lent;
+    this.answerLost = Boolean(unanswered);
+    this.askAgain = Boolean(unanswered) && !unanswered?.notAtOnce;
   }
 }
 
@@ -1032,6 +1041,9 @@ export class SecretDurableObject extends DurableObject<Env> {
    *  - `refreshed`: the provider gave a new token, and the secret holds it;
    *  - `failed`: the refresh did not end well, with the error's words. The secret is as it was:
    *    a refused refresh deletes nothing, and the Cloud ends what the person connected;
+   *  - `failed` with `answerLost`: no decision of the provider came (../secrets.ts
+   *    `RefreshUnanswered`). One more try is made at once with the same token, unless the
+   *    answer was 429 or 504: the Cloud may hold the answer that was lost on its way here;
    *  - `fresh`: a refresh on word brought new tokens within the last hour. A provider's refresh
    *    token works once, and each refresh risks an answer that is lost: one is not spent for
    *    nothing;
@@ -1056,20 +1068,28 @@ export class SecretDurableObject extends DurableObject<Env> {
     const { material } = await this.#open(path, current);
     if (!isRecord(material) || typeof material.refreshToken !== "string")
       return { result: { outcome: "not-a-brokered-grant" }, facts: [] };
-    try {
-      const events = await this.#refresh(path, current.cell.nonce);
-      this.ctx.storage.kv.put(GRANT_REFRESHED_AT, Date.now());
-      return {
-        result: { outcome: "refreshed" },
-        facts: events.length ? [{ path, events }] : [],
-      };
-    } catch (error) {
-      if (!(error instanceof RefreshFailed)) throw error;
-      return {
-        result: { outcome: "failed", error: error.message },
-        facts: [{ path, events: error.facts }, ...error.lent],
-      };
-    }
+    // the facts of a try whose answer was lost, kept for the answer of the try after it
+    const lost: SecretFact[] = [];
+    for (let tries = 1; ; tries += 1)
+      try {
+        const events = [...lost, ...(await this.#refresh(path, current.cell.nonce))];
+        this.ctx.storage.kv.put(GRANT_REFRESHED_AT, Date.now());
+        return { result: { outcome: "refreshed" }, facts: events.length ? [{ path, events }] : [] };
+      } catch (error) {
+        if (!(error instanceof RefreshFailed)) throw error;
+        if (error.askAgain && tries < GRANT_TRIES) {
+          lost.push(...error.facts);
+          continue;
+        }
+        return {
+          result: {
+            outcome: "failed",
+            error: error.message,
+            ...(error.answerLost && { answerLost: true }),
+          },
+          facts: [{ path, events: [...lost, ...error.facts] }, ...error.lent],
+        };
+      }
   }
 
   async approvals(path: string): Promise<{ rule: ApprovalRule | null; held: HeldRow[] }> {
@@ -1559,16 +1579,19 @@ export class SecretDurableObject extends DurableObject<Env> {
         );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.info({ event: "secret.refreshed", path, ok: false, error: message });
+      const answerLost = error instanceof RefreshUnanswered;
+      console.info({ event: "secret.refreshed", path, ok: false, answerLost, error: message });
       throw new RefreshFailed(
         message,
         [
           {
             type: "events.iterate.com/secret/refreshed",
-            payload: { kind: refresh.kind, ok: false, error: message },
+            // `answerLost` on every failed refresh: false says that the provider refused
+            payload: { kind: refresh.kind, ok: false, error: message, answerLost },
           },
         ],
         error instanceof LendRefused ? error.facts : [],
+        answerLost ? error : undefined,
       );
     }
     const before = this.#current();

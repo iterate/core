@@ -58,9 +58,11 @@ export type SecretFact =
       };
     }
   | { type: "events.iterate.com/secret/deleted"; payload: { path: string } }
+  // `answerLost`, on a refresh that failed: true when no answer came, so the provider may have
+  // issued tokens that never arrived; false when the provider refused.
   | {
       type: "events.iterate.com/secret/refreshed";
-      payload: { kind: SecretRefreshKind; ok: boolean; error?: string };
+      payload: { kind: SecretRefreshKind; ok: boolean; error?: string; answerLost?: boolean };
     }
   // The request as received: its placeholders, never a value.
   | {

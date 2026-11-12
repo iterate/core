@@ -139,10 +139,12 @@ export type SecretRefusal = { refused: { code: "FORBIDDEN"; message: string }; f
 
 /** What came of the refresh on word of one person's grant (`SecretsService.refreshGrants`):
  *  `refreshed`, the provider gave new tokens; `fresh`, it was refreshed within the last hour and
- *  is left alone; `failed`, with the error's words, and the secret is as it was. */
+ *  is left alone; `failed`, with the error's words, and the secret is as it was. `answerLost`:
+ *  it failed because no answer came, not because the provider refused. The provider may have
+ *  issued new tokens that never arrived, and the next try tells. */
 export type GrantRefreshed =
   | { path: string; outcome: "refreshed" | "fresh" }
-  | { path: string; outcome: "failed"; error: string };
+  | { path: string; outcome: "failed"; error: string; answerLost?: true };
 
 /** One call's part of a refresh of the grants: the rows of the grants it asked, and `next`, the
  *  path to go on from, when the vault holds more grants than one call refreshes. */

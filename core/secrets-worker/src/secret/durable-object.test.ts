@@ -566,13 +566,116 @@ test("a refresh on word that the provider refuses says so, and the secret is as 
   // it deletes nothing: the secret is set, and the next try sends the same refresh token
   await secret.refreshGrant(PATH);
 
-  expect(refused).toMatchObject({
+  // a refusal is the provider's answer: it is not said as a lost one, and one call asks once
+  expect(refused).toEqual({
     result: { outcome: "failed", error: expect.stringContaining("answered 401") },
-    facts: [{ path: PATH, events: [{ payload: { kind: "oauth-refresh-token", ok: false } }] }],
+    facts: [
+      {
+        path: PATH,
+        events: [
+          {
+            type: "events.iterate.com/secret/refreshed",
+            payload: {
+              kind: "oauth-refresh-token",
+              ok: false,
+              answerLost: false,
+              error: expect.stringContaining("answered 401"),
+            },
+          },
+        ],
+      },
+    ],
   });
   expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: true });
   expect(cloud.asked.map((ask) => ask.refreshToken)).toEqual(["old-refresh", "old-refresh"]);
 });
+
+test("a refresh on word whose answer does not arrive is tried once more with the same refresh token, and the log has both", async () => {
+  const { secret } = await vault({ cloud: CLOUD_OF_GRANTS, material: GRANT });
+  const answers = [
+    () => {
+      throw new Error("Network connection lost.");
+    },
+    () => Response.json({ access_token: "new-access", refresh_token: "new-refresh" }),
+  ];
+  const cloud = cloudThatAnswers(() => answers.shift()!());
+
+  expect(await secret.refreshGrant(PATH)).toEqual({
+    result: { outcome: "refreshed" },
+    facts: [
+      {
+        path: PATH,
+        events: [
+          {
+            type: "events.iterate.com/secret/refreshed",
+            payload: {
+              kind: "oauth-refresh-token",
+              ok: false,
+              answerLost: true,
+              error: expect.stringContaining("Network connection lost."),
+            },
+          },
+          REFRESHED(true),
+        ],
+      },
+    ],
+  });
+  expect(cloud.asked.map((ask) => ask.refreshToken)).toEqual(["old-refresh", "old-refresh"]);
+});
+
+test("a refresh on word that is answered 502 twice says that the answer was lost, asks no third time, and the secret is as it was", async () => {
+  const { secret } = await vault({ cloud: CLOUD_OF_GRANTS, material: GRANT });
+  const cloud = cloudThatAnswers(() => new Response("no decision", { status: 502 }));
+
+  const lost = await secret.refreshGrant(PATH);
+  // the next day's try sends the same refresh token: only the provider knows if it is spent
+  await secret.refreshGrant(PATH);
+
+  expect(lost).toMatchObject({
+    result: { outcome: "failed", answerLost: true, error: expect.stringContaining("answered 502") },
+    facts: [
+      {
+        path: PATH,
+        events: [
+          { payload: { ok: false, answerLost: true } },
+          { payload: { ok: false, answerLost: true } },
+        ],
+      },
+    ],
+  });
+  expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: true });
+  expect(cloud.asked.map((ask) => ask.refreshToken)).toEqual([
+    "old-refresh",
+    "old-refresh",
+    "old-refresh",
+    "old-refresh",
+  ]);
+});
+
+test.for([
+  [429, "the provider said that it gets too many requests"],
+  [
+    504,
+    "the Cloud's call to the provider goes on, and a second one would show a token that is in use",
+  ],
+] as const)(
+  "a refresh on word that is answered %i is not asked again at once: %s",
+  async ([status]) => {
+    const { secret } = await vault({ cloud: CLOUD_OF_GRANTS, material: GRANT });
+    const cloud = cloudThatAnswers(() => new Response("not now", { status }));
+
+    expect(await secret.refreshGrant(PATH)).toMatchObject({
+      // no decision on the grant came, so it is no refusal: the next run asks again
+      result: {
+        outcome: "failed",
+        answerLost: true,
+        error: expect.stringContaining(`answered ${status}`),
+      },
+      facts: [{ path: PATH, events: [{ payload: { ok: false, answerLost: true } }] }],
+    });
+    expect(cloud.asked.map((ask) => ask.refreshToken)).toEqual(["old-refresh"]);
+  },
+);
 
 test("a grant of the Cloud's whose provider gave no refresh token has nothing to refresh: nobody is asked, and no failure is said", async () => {
   // a Slack workspace that does not rotate its tokens gives one bot token that does not end
