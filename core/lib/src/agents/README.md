@@ -7,13 +7,17 @@ deployment's own build and upgrades with it, like `iterate/sdk`.
 
 ## Install
 
-A mind's config repo re-exports the app's two classes from `agents.ts` and installs the app
-from its init case (core/configs/default does both). It lists no dependency: `iterate/*` comes
-from the platform.
+A mind's config repo re-exports the app's two classes from one module and installs the app
+from its init case, naming that module (core/configs/default does both, from
+`apps/agents/backend.ts`; with no `module`, it is `agents.ts`). It lists no dependency:
+`iterate/*` comes from the platform.
 
 ```ts
-// agents.ts
-export { AgentCollectionDurableObject, AgentDurableObject } from "iterate/agents";
+// apps/agents/backend.ts
+import { AgentCollectionDurableObject, AgentDurableObject } from "iterate/agents";
+
+AgentCollectionDurableObject.module = "apps/agents/backend.ts"; // where it starts each agent from
+export { AgentCollectionDurableObject, AgentDurableObject };
 ```
 
 ```ts
@@ -21,15 +25,16 @@ import { installAgents } from "iterate/agents/install";
 
 // in processEvent, the init case
 case "events.iterate.com/mind/worker-updated":
-  await installAgents(itx);
+  await installAgents(itx, { module: "apps/agents/backend.ts" });
 ```
 
 `installAgents` enables the catalog processor on `/agents` and writes the `itx.agents` rewrite rule
 on the root to the collection facet there; it does the same every time, and disables the catalog
 the root held before it moved. Every facet of the app, the collection's and each
-agent's, names its class in `agents.ts` of the mind's published config
-(`{ className, mainModule: "agents.ts", source: itx.cd('/').config }`, `agentsFacetSpec`), so
-nothing is copied into the mind. A commit that changes what `agents.ts` bundles restarts the
+agent's, names its class in that module of the mind's published config
+(`{ className, mainModule: "apps/agents/backend.ts", source: itx.cd('/').config }`,
+`agentsFacetSpec`), so nothing is copied into the mind. A commit that changes what that module
+bundles restarts the
 agents on their next call, and so does a platform deploy (every loader cache key folds in the
 deployment).
 

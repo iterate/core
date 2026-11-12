@@ -182,8 +182,8 @@ An app is a folder under `apps/`, and a convention, not a framework. `apps/agent
 app, on `agents.<domain>` for members: copy the folder to start one of your own.
 `apps/onboarding/` is the onboarding app, on `onboarding.<domain>` for members: one agent thread,
 the chat with the agent at `/agents/onboarding`, where a new owner starts. `apps/onboarding/onboarding.md` is what
-that agent is told: `apps/agents/backend.ts` names it as the agent's standing instructions, read
-fresh before each request.
+that agent is told: `apps/agents/backend.ts` names it, after `AGENTS.md`, as the agent's standing
+instructions, read fresh before each request.
 `apps/docs/` is the docs app, on `docs.<domain>` for members: this repo read in a browser, its files
 in the sidebar, a file beside them (markdown rendered, code as code) and the commits that changed
 it. It reads through the member's `itx` and writes nothing.
@@ -204,19 +204,23 @@ apps/<name>/
 ```
 
 - **Mount it** in `worker.ts`: import the function, call it once, and give it a case in `fetch`:
-  `case "agents": return this.auth.require(request) || agents.fetch(request, this);`.
+  `case "agents": return this.auth.require(request) || agents.fetch(request, this);`. An app
+  with an `install` (the Agents and onboarding apps) also needs it in the init case: a changed
+  `worker.ts` keeps `agents.install(itx)`, `publishAgentKinds(itx, agentKinds)` and
+  `onboarding.install(itx)` there.
 - **No build.** A module imports a file that is not code and gets its text, or its bytes when it is
   not text (`import index from "./index.html"`). An import that ends in `/` is every file under
   that folder, by path (`import files from "./public/"`). `serveFiles(request, { index, files })`
   from `iterate/sdk` answers a path that names a file with that file, and any other page load with
   `index`. So a commit publishes the page with the worker, as one thing.
-- **The page loads packages from a URL**, pinned in its import map (the page below shows how).
-- **One look for every app: `apps/theme.css`.** Each app serves that one file at `/theme.css`
-  (`app.ts`) and its page links it after the UI kit's style sheet. It holds the colours and the
-  corners (shadcn's theme variables). The apps are light, whatever the visitor's system says; to
-  make them all dark, change `light` to `dark` in the file's `color-scheme` line.
-- **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** Each app serves
-  that one file at `/live-reload.js` (`app.ts`), and its page loads it in its head.
+- **The page loads packages from a URL**, pinned in its import map (the page above shows how).
+- **One look for every app: `apps/theme.css`.** Each app but the guestbook serves that one file
+  at `/theme.css` (`app.ts`) and its page links it after the UI kit's style sheet. It holds the
+  colours and the corners (shadcn's theme variables). The apps are light, whatever the visitor's
+  system says; to make them all dark, change `light` to `dark` in the file's `color-scheme` line.
+- **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** The Agents,
+  onboarding, docs and guestbook apps serve that one file at `/live-reload.js` (`app.ts`), and
+  each page loads it in its head; the Dash and the Voice app do not.
   When a commit is published, a stylesheet that changed is swapped in place. A page whose
   script changed reloads once nobody types in it, and what the person saw stays over the app
   until the app has drawn itself again. A member's page hears of a publication at once; any
@@ -369,7 +373,24 @@ It is off in a new mind. To turn it on:
    `case "guestbook"` in `fetch`.
 2. People who are not members sign in only when the stack's config opens that:
    `login.methods.email.anyone: true` mails a sign-in code to any address that asks (the stack
-   must handle mail; at most 20 such codes an hour). Without it, only members can write.
+   must handle mail; at most 20 such codes an hour), and `login.methods.google` signs in anyone
+   with a Google account. Without one of them, only members can write.
+
+## What waits for a member's yes
+
+A rule makes an act wait until a member approves it with a passkey, on
+`https://iterate.<domain>/secrets/approvals`. A mind has no rule until someone sets one.
+
+- A rule on a secret names methods and hosts: an `itx.fetch` with that secret that matches waits.
+  A member sets it on the page. After five minutes the call answers 403 and says it still waits;
+  once approved, the same request sent again goes.
+- `itx.approvals` holds the rules for acts: `email.send` (a mail, or with `to` a mail to some
+  recipients alone), a verb such as `itx.whatsapp.sendMessage`, or every verb under a name,
+  `itx.whatsapp.*`. `rules()` reads them, `setRules([...])` replaces them while the gate is open,
+  and `propose(rule)` asks a member to sign one once a member has locked it. A held call waits
+  five minutes, then throws; a member can still approve it for a day, and it is done then.
+- What a rule does not promise: a mail is held whatever sends it, but a verb is held only when the
+  mind's agents or loaded code call it, not from a mind Worker changed to skip the rule.
 
 ## How the platform works
 

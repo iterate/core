@@ -29,10 +29,18 @@ A deploy stops before it changes anything when the account has `iterate-<name>-p
 Workers (`scripts/refuse-older-stack.ts`). Erase it with the older version's `destroy`, or keep it
 on the older version.
 
-The package scripts load `core/alchemy/.secrets` when it exists (git ignores it). Until real
-sign-in is proven, `ITERATE_PROTOTYPE_TOKEN=<a long random string>` there is a stand-in for it: the
-deploy binds it to the auth Worker, which answers one prototype identity for exactly that token, and
-the smoke check then also checks the mind's API on `api.<zone>`.
+The package scripts load `core/alchemy/.secrets` when it exists (git ignores it).
+`ITERATE_PROTOTYPE_TOKEN=<a long random string>` there is a stand-in member: the deploy binds it to
+the auth Worker, which answers one prototype member for exactly that token.
+
+The smoke check needs that token for every check of the mind itself, through its API at
+`iterate.<zone>/api`; without it, those checks pass as skipped and say why. With it, the smoke
+commits to the mind's config repo and takes its changes out again, and first takes out what an
+earlier run left. The approvals checks also need `ITERATE_SMOKE_PETSHOP_ORIGIN`,
+`ITERATE_SMOKE_APPROVER_KEY` and `ITERATE_SMOKE_SERVICE_KEY` (keys that the config's `auth.keys`
+names), the Cloud's checks `ITERATE_SMOKE_CLOUD_ORIGIN` (the config's `cloud.origin`), and the
+check of the sign-in limits `ITERATE_SMOKE_LIMITS=1`. On a mind whose `worker.ts` is its own, the
+checks of the default config's site are skipped.
 
 ## The stored config
 
@@ -54,7 +62,7 @@ stored only once it is shown to be public.
 ## An upgrade on the side, and a fork
 
 A stack is what its state store says it is: `iterate-<name>-state` in the mind's own account holds
-the Alchemy state, the two generated keys and the stored config. So any checkout that has the
+the Alchemy state, the generated keys and the stored config. So any checkout that has the
 account's credentials can deploy over a stack that another checkout, or the iterate Cloud, made.
 Nothing is kept in the checkout.
 
@@ -155,10 +163,13 @@ a token for the API, the MCP server or `/provide` goes to a member alone (`login
 to prove an address beside a passkey, one or both:
 
 - `email: {}`, a mailed code: six digits from `sign-in@<zone>` through the stack's own boundary,
-  so the stack depends on nobody. The config must have its `email` part, or the deploy is refused.
-  A code goes only to an address that an `email` or `emailDomain` rule of `allow` names. With
+  so the stack depends on nobody. The config must have `mail: true`, or the deploy is refused.
+  A code goes only to a member: an address that an `email` or `emailDomain` rule of `allow` names,
+  or one added on `/members`. With
   `email: { anyone: true }` any other address that asks is mailed too, at most 20 such codes an
   hour for the whole stack: use it when people who are not members sign in to the mind's pages.
+  An owner blocks such a person on `/members`: no code goes to that address or its `+tags`, Google
+  signs it in to nothing, and its sessions and tokens end.
 
 - `google: {}`, "Sign in with Google", through the Google client of the iterate Cloud the config
   names (`cloud: { origin }`; without it the deploy is refused). Google is the identity provider:
@@ -175,18 +186,19 @@ to prove an address beside a passkey, one or both:
   for a member who has none, and nothing else. Such a session still signs nothing: adding a member
   or a further passkey takes a passkey.
 
-With no method (`methods` left out, or `{}`), a passkey is the only way to sign in, and the only
-way to a first passkey is a deploy's ticket (`scripts/first-owner-ticket.ts`). A ticket is for an
-owner: a person `allow` names by address. A member who is no owner (one an owner added on
-`/members`, or one an `emailDomain` rule names) cannot get a first passkey on such a mind. Name
-each person by address, or give the mind a method.
+With no method (`methods` left out, or `{}`), a passkey is the only way to sign in. An owner, a
+person `allow` names by address, gets a first passkey by a deploy's ticket
+(`scripts/first-owner-ticket.ts`). A member who is no owner gets one by a sign-in link that an owner
+makes on `/members`, with a press of the owner's passkey: it is for a member with no passkey, and
+signs that member in once, within 24 hours, to add one. The owner passes the link on.
 
 A member signs in with a passkey, and with nothing else. Every stack's sign-in page has "Sign in
 with a passkey": one the member added on `https://iterate.<zone>/keys`. It signs in the member
 whose key it is, while that address is a member and the key is not removed, and the passkey must
 verify its user (a PIN, a fingerprint or a face). Its session on `iterate.<zone>` ends when that
 passkey is removed. The grants that session gave do not: an app or a CLI it signed in stays so
-until its grant ends, or until an owner removes the member's keys.
+until its grant ends (after 7 days with no use), until the member signs it out on `/keys`, which
+lists each one, or until an owner removes the member's keys.
 
 A mailed code proves an address and no more. For a member who holds no passkey, it opens
 a session that does one thing: it adds the first passkey on `/keys`, and every other page sends
@@ -199,10 +211,12 @@ Who may act grows only by a signature (`core/auth-worker/src/signed-change.ts`).
 add a further passkey for a person who holds one, each takes a statement that a member's key
 signed: on `/members` and `/keys` the person's passkey signs it, and a script sends
 `{ statement, signature }` to `POST /members`. A session's cookie or a member's token does neither,
-so whoever steals one adds no one. To remove a member or a key takes no signature. A new passkey
+so whoever steals one adds no one. To remove a key, the person's passkey signs too, and so does an
+owner's when the owner removes a member's keys or makes a member's sign-in link. To remove a
+member takes a member's session or token, and no signature. A new passkey
 is made on another device than the one that signs it: no device holds two passkeys of one person.
-Two ways in sign nothing: a person's first passkey, after a mailed code, and the
-passkey the owner's ticket adds.
+Two ways in sign nothing: a person's first passkey, and the passkey that a ticket or a member's
+link adds.
 
 A rule of `allow` that names no exact address (`subaddresses`, `emailDomain`, `everyone`) admits
 addresses nobody named. Each one is a member with no passkey until it adds one, so whoever reads
@@ -220,20 +234,20 @@ the key last asked for a token.
 A lost passkey has two ways back in, and neither is mail:
 
 - A member who is no owner asks an owner. An owner is a member an `email` rule of `allow` names.
-  On `/members` the owner removes that member's keys, which also ends every grant the member
-  gave (the apps, the CLI, a mind hostname's session). A code then signs the member in once,
-  to add a new passkey.
+  On `/members` the owner removes that member's keys, with a press of the owner's passkey, which
+  also ends every grant the member gave (the apps, the CLI, a mind hostname's session). A code,
+  or a sign-in link the owner makes, then signs the member in once, to add a new passkey.
 - An owner runs a deploy with a first owner's ticket. `node scripts/first-owner-ticket.ts
   <address>` prints a ticket and a variable. Deploy with `ITERATE_FIRST_OWNER_TICKET=<variable>`,
   then open `https://iterate.<zone>/keys/first#<ticket>`. The ticket signs in that one owner, once
-  and within 15 minutes, on a new stack and on one with users and keys alike. Its session lasts 15
-  minutes and opens `/keys` alone: the passkey added there makes it that passkey's session, which
+  and within 24 hours, on a new stack and on one with users and keys alike. Its session lasts 24
+  hours and opens `/keys` alone: the passkey added there makes it that passkey's session, which
   then removes the lost ones. So whoever can deploy to the Cloudflare account is the root of the
   stack's sign-in. The auth Worker holds the ticket's hash alone, and the next deploy without the
   variable removes that.
 
 A new stack's owner gets the first passkey the same way: by the ticket of the first deploy, or,
-when its 15 minutes are over, by a code.
+when its 24 hours are over, by a code.
 
 A client whose metadata document and redirect are on an origin in `auth.trustedClients` gets no
 consent page.
@@ -242,7 +256,7 @@ State is in the account, in the state-store Worker `iterate-<name>-state`, which
 `ITERATE_STATE_STORE=local` keeps it in `.alchemy/` instead (git-ignored), with the generated keys in
 clear: for a throwaway stack only.
 
-The zone's mail becomes the mind's: the stack turns Email Routing on and takes its catch-all
+With `mail: true`, the zone's mail becomes the mind's: the stack turns Email Routing on and takes its catch-all
 rule, and a `destroy` turns Email Routing off for the whole zone.
 
 ## The API token
@@ -272,12 +286,15 @@ least a deploy needs.
 
 ## What a deploy makes
 
-- Two generated keys, kept in Alchemy's state: the secrets Worker's at-rest key and the auth
-  Worker's signing key. Each is bound to its Worker as a secret. A stack that holds values sealed
+- Generated keys, kept in Alchemy's state: the secrets Worker's at-rest key, the auth Worker's
+  signing key and, for a mind Worker, the mind's signing key. Each is bound to its Worker as a secret. A stack that holds values sealed
   under a key from elsewhere says `atRestKey: "environment"`, and then
   every deploy needs `ITERATE_SECRETS_AT_REST_KEY`: one without it is refused.
 - The auth Worker's D1 database of people, `iterate-<name>-auth-db`, migrated from
   `core/auth-worker/migrations`, and its KV namespace for the OAuth library, `iterate-<name>-auth-kv`.
+- For a mind Worker: its KV namespace `iterate-<name>-mind-kv`, the files bucket
+  `iterate-<name>-files` and the repos' Artifacts namespace `iterate-<name>-repos`, which
+  `scripts/repos-namespace.ts` makes before the deploy when it is missing.
 - The four Workers. Only the boundary has routes: `<zone>/*` and `*.<zone>/*`, or with
   `hostnames: "platform"` `iterate.<zone>/*` alone.
 - Proxied `AAAA 100::` records for the apex and `*` (or `iterate` alone), so the routes receive
@@ -288,14 +305,13 @@ least a deploy needs.
   pushed. A deploy with no Docker sets `sandboxImage` in the config's `mind`:
   - `"published"`: `scripts/sandbox-image.ts` copies the same image, built once and published at
     `ghcr.io/iterate/iterate-dev-image` (the digest is pinned in `src/sandbox-image.ts`), into the
-    account's registry through the registry API, and the stack names it there. A deploy after the
-    first copies nothing.
+    account's registry through the registry API, and the stack names it there. A later deploy
+    copies only the layers that the account's registry does not have yet.
 
-    A first deploy takes longer by the copy and the preparation. Measured on bimplin.com
-    (11 November 2026):
-    - the copy of about 1.29 GB took 20 minutes from a home connection, at about 1 MB/s up;
-    - Cloudflare prepared the image in 1 minute 35 seconds;
-    - the rest of the deploy took about 1 minute.
+    A first deploy takes longer by the copy and the preparation. The image's layers at the pinned
+    digest are about 1.6 GB: from a home connection at about 1 MB/s up, the copy takes about half
+    an hour. On bimplin.com, Cloudflare prepared the image in 1 minute 35 seconds, and the rest of
+    the deploy took about 1 minute.
 
     From a machine in a data centre, such as the Cloud's deploy run, the copy is limited by that
     machine's link.
@@ -305,9 +321,17 @@ least a deploy needs.
 
 ## Telemetry
 
-`telemetry: true` in the config adds the warehouse of `docs/telemetry.md` to the
-stack, in the mind's own account (`core/telemetry-worker`). Without it, a stack runs as before, and the
+`telemetry: true` in the config adds a warehouse of the stack's events, logs, spans and metrics
+to the stack, in the mind's own account (`core/telemetry-worker`). Without it, the
 mind has no `itx.telemetry`, so the Dash's Analytics page says it is not served.
+
+The mind reads it with `itx.telemetry.query(sql, { hours })`: one `SELECT` over `events`, `logs`,
+`spans` or `metrics`, over the last day unless `hours` says otherwise. From `core/alchemy`, with a
+session of `iterate login <zone>`:
+
+```sh
+pnpm run itx <zone> 'itx.telemetry.query("SELECT type, count(*) FROM events GROUP BY type")'
+```
 
 What a deploy makes with it:
 
@@ -352,7 +376,8 @@ CLOUDFLARE_API_TOKEN=<one that also has Account API Tokens Edit> CLOUDFLARE_ACCO
 ```
 
 Revoke that token after it. The same permission is needed again by a `destroy` (it deletes the two
-tokens) and by a deploy of a version that changes what a token may do.
+tokens) and by a deploy of a version that changes what a token may do. The iterate Cloud asks for
+it in a second consent of its own: a deployment's "Turn on telemetry", and then its "Update".
 
 ## A provided mind
 
@@ -360,8 +385,8 @@ A stack's mind can run on a machine of your own: the same mind Worker, in local 
 (`core/home-lab`). The stack then deploys no mind Worker, no Artifacts namespace and no
 bucket. The boundary serves `https://iterate.<zone>/provide`, where the home lab dials in with a
 token the auth Worker issued for that URL, provides the mind, and gets the boundary's door back.
-The boundary forwards to it every request that is not the issuer's, the secrets pages' or the
-telemetry intake's, and inbound mail.
+The boundary forwards to it every request that is not the issuer's or the secrets pages', and
+inbound mail.
 With nothing connected, the mind's hostnames answer 503.
 
 **After a deploy that changes the boundary, restart the mind at home.** A deploy does not move

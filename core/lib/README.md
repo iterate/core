@@ -21,14 +21,14 @@ Nothing in `core/` imports outside `core/` ([core/AGENTS.md](../AGENTS.md);
 Code the platform loads for a mind (the config entrypoint, a facet, a worker behind a rewrite rule)
 imports each symbol from one path, and the loader links this deployment's own build of it:
 
-| Path                       | What it holds                                                                                                                                                                              |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `iterate/sdk`              | The workerd hosts: `IterateConfigEntrypoint`, `FacetDurableObject`, `StreamProcessorDurableObject`, their types, and capnweb's constructors                                                |
-| `iterate/stream/processor` | A processor's surface: `StreamProcessor`, `defineProcessorContract`, `LiveState`, the event and contract types. It runs in Node too                                                        |
-| `iterate/stream/contract`  | `defineProcessorContract` and the contract types alone, which `iterate/stream/processor` re-exports. Code a browser loads imports it: the engine needs `node:async_hooks`                  |
-| `iterate/email`            | The `email` facet's contract, `email/received` and `email/sent` and the threads they fold into                                                                                             |
-| `iterate/agents`           | The agents app's two classes, which a config's `agents.ts` re-exports; `iterate/agents/install` installs it; `iterate/agents/kinds` is kinds of agent ([its README](src/agents/README.md)) |
-| `zod`                      | zod, one copy per isolate, so a schema user code makes is the one the SDK checks                                                                                                           |
+| Path                       | What it holds                                                                                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iterate/sdk`              | The workerd hosts: `IterateConfigEntrypoint`, `FacetDurableObject`, `StreamProcessorDurableObject`, their types, and capnweb's constructors                                                             |
+| `iterate/stream/processor` | A processor's surface: `StreamProcessor`, `defineProcessorContract`, `LiveState`, the event and contract types. It runs in Node too                                                                     |
+| `iterate/stream/contract`  | `defineProcessorContract` and the contract types alone, which `iterate/stream/processor` re-exports. Code a browser loads imports it: the engine needs `node:async_hooks`                               |
+| `iterate/email`            | The `email` facet's contract, `email/received` and `email/sent` and the threads they fold into                                                                                                          |
+| `iterate/agents`           | The agents app's two classes, which a config's `apps/agents/backend.ts` re-exports; `iterate/agents/install` installs it; `iterate/agents/kinds` is kinds of agent ([its README](src/agents/README.md)) |
+| `zod`                      | zod, one copy per isolate, so a schema user code makes is the one the SDK checks                                                                                                                        |
 
 ```js
 import { StreamProcessorDurableObject } from "iterate/sdk";
@@ -133,7 +133,7 @@ jail confines the code that runs in it, not the contexts it creates through a gr
 ```ts
 import { reduceProcessor } from "iterate/stream/test-support";
 
-// test/helpers/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
+// durable ticks are reduced, ephemeral pokes are not
 const state = reduceProcessor(new PresenceProcessor(), [{ type: "tick" }, { type: "poke" }]);
 // state.ticks === 1
 ```
@@ -211,7 +211,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   prefix.
 - **A domain namespace** is the singular name of the kind of context whose log the event belongs
   to, which is the defining contract's slug when there is one: `account`, `organization`,
-  `mind`, `repo`, `workspace`, `sandbox`, `deployment`, `secret`, `approval`, `agent`,
+  `mind`, `repo`, `workspace`, `sandbox`, `secret`, `approval`, `agent`,
   `voice-agent`. A fact
   cross-posted to another log keeps its own namespace: `repo/created` on `/` is still a repo fact.
 - **An integration** uses its own name as its namespace, for example `chrome`, `slack`, `google`,
@@ -233,16 +233,14 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   takes one of three shapes:
   - `<x>-settled` is the one terminal fact when the asker reads a result. It names
     `requestOffset` and carries the outcome: succeeded, failed or cancelled, a status, or an error.
-    Examples: `itx/run-*`, `agent/llm-request-*`, `mind/hostname-add-*`, `deployment/run-*`.
+    Examples: `itx/run-*`, `agent/llm-request-*`.
   - `<verb-ed>` or `<verb>-failed` is used when success is a fact that other logs wait on, like a
-    certificate: `create-requested` → `created` or `create-failed`, `delete-requested` → `deleted`,
-    `hostname-remove-requested` → `hostname-removed`. A failure that is retried rather than
-    reported gets no `-failed` fact.
+    certificate: `create-requested` → `created` or `create-failed`, `delete-requested` → `deleted`.
+    A failure that is retried rather than reported gets no `-failed` fact.
   - An answer that is also a fact of its own names the ask's offset: the assistant's
     `agent/context-added` carries the `llmRequestOffset` of the `llm-request-requested` it answers.
 - **One verb pair per kind of change:**
-  - `added` / `removed` for membership in a set: `organization/member-added`,
-    `organization/mind-added`, hostnames.
+  - `added` / `removed` for membership in a set: `account/member-added`, `account/key-added`.
   - `created` / `deleted` for an entity with a lifecycle: minds, repos, workspaces, sandboxes,
     agents.
   - `set` / `deleted` for a keyed value: `secret/*`.
@@ -259,7 +257,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   (`voice-agent/mic-frame`, `agent/llm-response-frame`), a heartbeat (`voice-agent/keepalive`), and
   a diagnostic record (`itx/alarm-trace`). A durable event is never a noun.
 - **Families and prefixes.** Code matches some families by prefix: `…/itx/run-`,
-  `…/itx/subscription-`, `…/itx/schedule-`, `…/mind/hostname-`. Before naming a new type, check
+  `…/itx/subscription-`, `…/itx/schedule-`. Before naming a new type, check
   it doesn't join one of these families by accident. Never match `…/itx/` as a whole: it is not a
   permission boundary, and it catches live-state deltas, stub presence and child
   announcements.
@@ -274,13 +272,15 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `itx`                                  | `core/itx/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `core/itx/src/context/built-ins.ts`, `core/itx/src/fetch-routes.ts`, `core/itx/src/iterate-context-durable-object.ts`, `core/lib/src/stream/{run,processor}.ts` |
 | `account`                              | `core/auth-worker/src/account-facts.ts`                                                                                                                                                                                                                                                                |
-| `organization`                         | `core/lib/src/api.ts` (named there only; no Worker of the stack appends one)                                                                                                                                                                                                                           |
+| `organization`                         | none: the namespace is allowed, and no code defines one                                                                                                                                                                                                                                                |
 | `mind`, `repo`, `workspace`, `sandbox` | `core/mind-worker/src/mind/contract.ts` and `core/mind-worker/src/<name>/contract.ts` (repo, workspace and sandbox also use `mind/entity-lifecycle.ts`)                                                                                                                                                |
 | `secret`                               | `core/secrets-worker/src/secret/contract.ts`                                                                                                                                                                                                                                                           |
+| `approval`                             | `core/lib/src/acts.ts` (the acts a gate holds for a member's yes, and their rules)                                                                                                                                                                                                                     |
 | `agent`                                | `core/lib/src/agents/contract.ts`                                                                                                                                                                                                                                                                      |
 | `voice-agent`                          | `packages/voice/src/voice-agent.ts`                                                                                                                                                                                                                                                                    |
 | `chrome`                               | `packages/browser-extension/public/panel.js`                                                                                                                                                                                                                                                           |
 | `email`                                | `core/lib/src/email.ts`                                                                                                                                                                                                                                                                                |
+| `mcp`                                  | `core/mind-worker/src/integrations/mcp.ts` (a delivery to a context's MCP webhook)                                                                                                                                                                                                                     |
 | `webhook`                              | `core/mind-worker/src/integrations/webhooks.ts` (a delivery to a webhook context of a mind stack)                                                                                                                                                                                                      |
 | `cloud`                                | `core/auth-worker/src/device/protocol.ts` (the statement the iterate Cloud signs to ask to be let in: shown with the request, never appended)                                                                                                                                                          |
 | `integration`                          | `core/lib/src/integrations.ts` (the registry a mind's packages write into; its fold is `core/mind-worker/src/integrations/registry.ts`)                                                                                                                                                                |

@@ -150,7 +150,10 @@ The owner signs in to the mind when Claude first uses it. Ask them to have Claud
 ## 8. People and passkeys
 
 - Another member: you cannot add one. The owner adds them at `https://iterate.<domain>/members` and
-  signs it with their passkey. Ask who should join, then send the owner there.
+  signs it with their passkey. Ask who should join, then send the owner there. The new member signs
+  in once and adds a passkey; after that only the passkey signs them in. That first sign-in is a
+  code by email or Google, when the stack's config offers them, or a one-use sign-in link the
+  owner makes on the same page, good for 24 hours.
 - A second passkey, on another device, so that a lost device does not lock the owner out: at
   `https://iterate.<domain>/keys`. A passkey they have signs the new one, so they do it themselves.
 
@@ -165,5 +168,8 @@ the owner the result at `https://<domain>/`.
 ## Where to look
 
 - `https://iterate.<domain>/` is the start page: people, keys, secrets and approvals.
+- `https://dash.<domain>` is the Dash: every app, every context live, the code as a small IDE,
+  the secrets, the integrations, the telemetry and how to connect a coding agent.
+- `https://agents.<domain>` is the Agents app: every agent of the mind, and a chat with each.
 - `https://docs.<domain>` shows the mind's code and notes, with each file's history.
 - `https://iterate.<domain>/self-test` checks the whole installation.

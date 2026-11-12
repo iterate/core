@@ -6,7 +6,7 @@ secrets vault stay in the cloud. Deploy the stack with `mind: { provided: true }
 (`core/alchemy/README.md`, "A provided mind").
 
 ```sh
-node src/main.ts <zone>   # in core/home-lab, Node 24+; --port 8789 --git-port 8790 --name --bundle <js>
+node src/main.ts <zone>   # in core/home-lab, Node 24+; --port 8789 --git-port 8790 --name --template default --bundle <js> --telemetry
 ```
 
 The first run signs you in for `https://iterate.<zone>/provide` (the CLI's session store, as
@@ -19,14 +19,20 @@ an open socket: the link stays with the boundary instance that accepted it, whic
 from before the deploy until the socket ends (a restart here, or the end of the token's hour). The
 stack's other Workers change at once.
 
+**To upgrade, deploy the stack's Workers first, then restart the mind here.** From `core/alchemy` at
+the new commit, `pnpm run deploy --stage <name>` with the stack's config. Then check out the same
+commit on this machine, run `pnpm install`, and restart this process, so that its new connection
+meets the new boundary. Then run `pnpm run smoke <zone>` from `core/alchemy`. `.home-lab/<zone>/`
+stays as it is.
+
 **Local**: contexts, KV, R2, the Worker Loader (`state/`), the repos, the sandboxes, the link.
 **The cloud's**: every request in (the boundary), every request out that names a secret (the
 boundary's door, which has the vault fill it in), every secret verb, sign-in, mail. A secret's facts land in the local
 `/secrets/<name>` context; its value never reaches this machine. A request that names no secret
 leaves from this machine, to public addresses alone: the mind's code reaches no other port of
 this machine and nothing on your home network, as a mind on Cloudflare reaches none. A service of
-yours that the mind should use needs a public address. The local port answers `localhost` and
-`<label>.localhost` alone. Everything lives in `.home-lab/<zone>/`.
+yours that the mind should use needs a public address. The local port answers this machine's own
+names alone: `localhost`, `<label>.localhost` and the loopback address. Everything lives in `.home-lab/<zone>/`.
 
 Measured on 2026-11-10 from a laptop, medians of 12: a request with a secret took 251 ms at home
 and 293 ms on a stack whose mind is a Worker; a vault verb 46 ms and 28 ms. A 20 MB download
