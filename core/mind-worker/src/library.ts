@@ -21,6 +21,7 @@ import { connectToCapnweb } from "./library/capnweb.ts";
 import { connectToOpenApi } from "./library/openapi.ts";
 import { WORKSPACES_ROOT_DESCRIPTION } from "./workspace/contract.ts";
 import { SANDBOXES_ROOT_DESCRIPTION } from "./sandbox/contract.ts";
+import { egressRuleOfStart, ruleThenStart } from "./sandbox/egress-rule.ts";
 import { connectToMcpAt } from "./integrations/mcp.ts";
 
 /** The one host root the library reads, which the kernel's `LibraryItx` does not name. */
@@ -227,6 +228,29 @@ function entityHandle(
         [first[0], first[1], (request: Request) => callerContext.invoke([["fetch", request]])],
         ...rest,
       ]);
+    }
+    // a start's `egress` is a rule on the sandbox's context, admitted as the caller's (egress-rule.ts)
+    const egress =
+      name === "sandbox" ? egressRuleOfStart(itxExpressionSteps, caller, entityPath) : null;
+    if (egress) {
+      // the box's own rule for `itx.fetch`, if it has one: an inherited row names its context
+      const rows = z
+        .array(
+          z.looseObject({
+            match: z.unknown(),
+            context: z.string().optional(),
+          }),
+        )
+        .parse(await context.invoke(["rewriteRules", ["list"]]));
+      const own = rows.find(
+        (row) => row.match === "itx.fetch" && (!row.context || row.context === entityPath),
+      );
+      return ruleThenStart(
+        egress.rule,
+        !!own,
+        async (event) => (await itx.cd(entityPath)).invoke([["append", event]]),
+        async () => context.invoke(["facets", ["get", name], ...egress.steps]),
+      );
     }
     // a sandbox's `container` is replayed by the facet, where the container's objects live
     if (name === "sandbox" && first === "container")

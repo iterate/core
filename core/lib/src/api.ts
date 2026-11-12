@@ -1055,6 +1055,9 @@ export type SandboxContainerStartOptions = {
  *  `containerSnapshot` and `from` at most. */
 export type SandboxStartOptions = SandboxContainerStartOptions & {
   from?: string;
+  /** What answers the sandbox's requests in place of the mind's `itx.fetch`: a rule for `itx.fetch`
+   *  on the sandbox's context, written as the caller's. It stays until another start names one. */
+  egress?: ItxExpressionInput;
 };
 
 /** What a sandbox's `files.stat` and `files.lstat` answer (the `iterate fs` tool's, run in the

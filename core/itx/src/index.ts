@@ -23,7 +23,7 @@ export {
   type Cause,
 } from "./cause.ts";
 export { unavailableError } from "./unavailable.ts";
-export { implicitRootsAt } from "./context/itx-expression-rewriting.ts";
+export { admitRowsOfCall, implicitRootsAt } from "./context/itx-expression-rewriting.ts";
 export { lendRefusal, nameIsFree } from "./context/lent-names.ts";
 export { DurableObjectNameCodec } from "./context/paths.ts";
 export {
