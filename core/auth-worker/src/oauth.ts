@@ -5,6 +5,7 @@ import {
   type TokenExchangeCallbackOptions,
   type TokenExchangeCallbackResult,
 } from "@cloudflare/workers-oauth-provider";
+import { codedError } from "iterate/lib";
 import { platformOriginOf } from "iterate/mind-api";
 import { HOST_SESSION_PREFIX, type TokenIdentity } from "iterate/workers";
 import { z } from "zod";
@@ -81,6 +82,31 @@ export async function withKnownResource(env: Env, request: Request): Promise<Req
 
 export const hostCallbackOf = (hostResource: string) =>
   `${hostResource}${HOST_SESSION_PREFIX}callback`;
+
+/** The OAuth client a mind hostname signs its visitors in with, made at the host's first sign-in.
+ *  Two first sign-ins at once may each make one; the last id kept is used from then on, and the
+ *  other still works for the sign-in that holds it. The library never expires a client, and a mind
+ *  whose code asks every hostname's visitor to sign in would make one for each name a stranger
+ *  thinks of: so new ones are counted like new registrations, 120 in ten minutes for the stack. */
+export async function hostClientOf(env: Env, host: string): Promise<string> {
+  const hostResource = mindHostResourceOf(env, `https://${host}`);
+  if (!hostResource) throw codedError("INVALID_INPUT", `${host} is not a hostname of this mind`);
+  const key = `iterate-host-client:${new URL(hostResource).host}`;
+  const kept = await env.OAUTH_KV.get(key);
+  if (kept) return kept;
+  if (!(await admitted(env, "host-client", new Request(hostResource))))
+    throw codedError("FORBIDDEN", TOO_MANY);
+  const { clientId } = await oauthHelpers(env, hostResource).createClient({
+    clientName: new URL(hostResource).host,
+    clientUri: hostResource,
+    redirectUris: [hostCallbackOf(hostResource)],
+    tokenEndpointAuthMethod: "none",
+    grantTypes: ["authorization_code"],
+    responseTypes: ["code"],
+  });
+  await env.OAUTH_KV.put(key, clientId);
+  return clientId;
+}
 
 // A grant lives for as long as its client keeps refreshing it, and ends once it has been idle for
 // SESSION_IDLE_SECONDS. Only a let-in grant has a `deadline` (epoch ms), from which it is refused.

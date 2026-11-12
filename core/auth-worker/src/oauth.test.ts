@@ -7,6 +7,7 @@ import {
   type GrantProps,
   knownResourceOf,
   withKnownResource,
+  hostClientOf,
 } from "./oauth.ts";
 
 const NOW = Date.UTC(2026, 10, 12);
@@ -61,6 +62,48 @@ test.for([
     expect(grantedScopes(requested, host)).toEqual(granted);
   },
 );
+
+test("a hostname's sign-in client is made once, and new ones are counted: a refused one stores nothing", async () => {
+  const kv = new Map<string, string>();
+  let admit = true;
+  let asked = 0;
+  const stack = {
+    ...env,
+    OAUTH_KV: {
+      get: async (key: string, type?: unknown) => {
+        const kept = kv.get(key);
+        return kept && type ? JSON.parse(kept) : kept || null;
+      },
+      put: async (key: string, value: string) => void kv.set(key, value),
+    },
+    DB: {
+      prepare: (sql: string) => ({ bind: (...bound: unknown[]) => ({ sql, bound }) }),
+      // the admission's two statements: the sweep, then the count that admits or not
+      batch: async (statements: { bound: unknown[] }[]) => {
+        asked += 1;
+        expect(statements[1]!.bound.slice(0, 2)).toEqual(["host-client", null]);
+        return [{}, { results: admit ? [{ admitted: 1 }] : [] }];
+      },
+    },
+  } as unknown as Env;
+  const first = await hostClientOf(stack, "guestbook.example.com");
+  expect(first).toEqual(expect.any(String));
+  // the same host again asks nobody: its client is kept
+  expect(await hostClientOf(stack, "guestbook.example.com")).toBe(first);
+  expect(asked).toBe(1);
+  // past the stack's count, a name nobody saw before gets no client and no row
+  admit = false;
+  const rows = [...kv.keys()];
+  await expect(hostClientOf(stack, "made-up-1234.example.com")).rejects.toThrow(
+    "Too many sign-ins",
+  );
+  expect([...kv.keys()]).toEqual(rows);
+  // the host that has its client still signs in
+  expect(await hostClientOf(stack, "guestbook.example.com")).toBe(first);
+  await expect(hostClientOf(stack, "elsewhere.test")).rejects.toThrow(
+    "not a hostname of this mind",
+  );
+});
 
 // the one thing these read of the stack: its domain and the resources its config names
 const env = {

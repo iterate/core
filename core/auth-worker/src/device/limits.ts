@@ -13,7 +13,13 @@ where (?2 is null or (select count(*) from admissions
       < 120
 returning 1 as admitted`;
 
-export async function admitted(env: Env, kind: "device" | "registration", request: Request) {
+/** `host-client` is asked with no address (the boundary asks for a visitor it does not name), so
+ *  the stack's own count alone holds it. */
+export async function admitted(
+  env: Env,
+  kind: "device" | "registration" | "host-client",
+  request: Request,
+) {
   const now = Date.now();
   const [, added] = await env.DB.batch([
     env.DB.prepare("delete from admissions where created_at <= ?1").bind(now - WINDOW_MS),

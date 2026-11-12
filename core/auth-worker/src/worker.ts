@@ -1,19 +1,16 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { KEY_TOKEN_PATH, STATEMENTS_PATH } from "iterate/signed";
-import { codedError } from "iterate/lib";
 import { mindMcpUrlOf } from "iterate/mind-api";
 import type { AuthService, TokenIdentity } from "iterate/workers";
 import {
   AUTHORIZE_ENDPOINT,
   authorizationServer,
   CLIENT_REGISTRATION_ENDPOINT,
-  hostCallbackOf,
-  oauthHelpers,
-  mindHostResourceOf,
   withKnownResource,
   tokenEndpointResponse,
   tokenIdentity,
   TOKEN_ENDPOINT,
+  hostClientOf,
 } from "./oauth.ts";
 import { authorizeResponse } from "./authorize.ts";
 import { deviceCallbackResponse } from "./device/callback.ts";
@@ -129,24 +126,8 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
     );
   }
 
-  // Two first sign-ins at once may each register a client; the last id kept is used from then on,
-  // and the other still works for the sign-in that holds it. The library never expires these.
   async hostClient(host: Parameters<AuthService["hostClient"]>[0]) {
-    const hostResource = mindHostResourceOf(this.env, `https://${host}`);
-    if (!hostResource) throw codedError("INVALID_INPUT", `${host} is not a hostname of this mind`);
-    const key = `iterate-host-client:${new URL(hostResource).host}`;
-    const kept = await this.env.OAUTH_KV.get(key);
-    if (kept) return kept;
-    const { clientId } = await oauthHelpers(this.env, hostResource).createClient({
-      clientName: new URL(hostResource).host,
-      clientUri: hostResource,
-      redirectUris: [hostCallbackOf(hostResource)],
-      tokenEndpointAuthMethod: "none",
-      grantTypes: ["authorization_code"],
-      responseTypes: ["code"],
-    });
-    await this.env.OAUTH_KV.put(key, clientId);
-    return clientId;
+    return hostClientOf(this.env, host);
   }
 
   async isMember(email: Parameters<AuthService["isMember"]>[0]) {
