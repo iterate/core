@@ -409,7 +409,7 @@ async function membersPage(
       <ul>${fromConfig}${addedRows}</ul>
       ${wide}
       <form id="add" class="stack">
-        <input type="email" name="email" autocomplete="off" required aria-label="Email">
+        <label>Email <input type="email" name="email" autocomplete="off" required></label>
         <button type="submit">Add a member</button>
         <p id="status" class="muted" role="status"></p>
       </form>
@@ -420,14 +420,14 @@ async function membersPage(
       <p>Remove the member's keys. This signs the member out of every app and device. A code by email then signs the member in once, to add a new passkey.</p>
       <form method="post" action="${MEMBERS_PATH}" class="stack">
         <input type="hidden" name="action" value="remove-keys">
-        <input type="email" name="email" autocomplete="off" required aria-label="The member's email">
+        <label>The member's email <input type="email" name="email" autocomplete="off" required></label>
         <button type="submit">Remove this member's keys</button>
       </form>
       <h2>A sign-in link for a member</h2>
       <p>For a member who has no passkey here and cannot get a code by email. The link signs the member in once, to add a passkey. Whoever holds the link is that member, so pass it on yourself.</p>
       <form method="post" action="${MEMBERS_PATH}" class="stack">
         <input type="hidden" name="action" value="link">
-        <input type="email" name="email" autocomplete="off" required aria-label="The member's email">
+        <label>The member's email <input type="email" name="email" autocomplete="off" required></label>
         <button type="submit">Make a sign-in link</button>
       </form>
       <h2>Block a person who is not a member</h2>
@@ -435,7 +435,7 @@ async function membersPage(
       <ul>${blockedRows}</ul>
       <form method="post" action="${MEMBERS_PATH}" class="stack">
         <input type="hidden" name="action" value="block">
-        <input type="email" name="email" autocomplete="off" required aria-label="The person's email">
+        <label>The person's email <input type="email" name="email" autocomplete="off" required></label>
         <button type="submit">Block this person</button>
       </form>`
           : ""

@@ -212,7 +212,7 @@ function summaryOf(text: string): string {
 
 function ruleForm(path: string, rule: ApprovalRule | null): string {
   const field = (name: string, label: string, value: string, required = "required") =>
-    `<label>${label}<br><input name="${name}" value="${escaped(value)}" size="44" ${required}></label>`;
+    `<label>${label} <input name="${name}" value="${escaped(value)}" size="44" ${required}></label>`;
   return `<form method="post" action="${RULES_PATH}" class="stack" data-rule>
 ${path ? `<input type="hidden" name="path" value="${escaped(path)}"><h3>${escaped(path)}</h3>` : `<h3>A new rule</h3>${field("path", "Secret", "/secrets/")}`}
 ${field("methods", "Methods", rule?.methods.join(", ") ?? "POST")}

@@ -133,19 +133,40 @@ ul {
   margin: 0;
   padding-left: 1.25rem;
 }
+/* a list with nothing in it takes no room */
+ul:empty {
+  display: none;
+}
 fieldset {
   margin: 0;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
-/* a field's name over the field */
+/* a thing to choose's own words are inside its box, over the rest, not on the box's border */
+legend {
+  float: left;
+  width: 100%;
+  margin-bottom: 0.5rem;
+  padding: 0;
+}
+legend + * {
+  clear: both;
+}
+/* a field's name over the field; no wider than the form, so a long field narrows on a phone */
 label {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
+  max-width: 100%;
   font-size: 0.875rem;
   font-weight: 500;
+}
+/* a tick box and its words share one line */
+label:has(> input:is([type="checkbox"], [type="radio"])) {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.5rem;
 }
 input,
 select,

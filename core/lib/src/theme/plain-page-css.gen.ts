@@ -152,18 +152,36 @@ ul {
 margin: 0;
 padding-left: 1.25rem;
 }
+ul:empty {
+display: none;
+}
 fieldset {
 margin: 0;
 padding: 0.75rem 1rem;
 border: 1px solid var(--border);
 border-radius: var(--radius);
 }
+legend {
+float: left;
+width: 100%;
+margin-bottom: 0.5rem;
+padding: 0;
+}
+legend + * {
+clear: both;
+}
 label {
 display: flex;
 flex-direction: column;
 gap: 0.375rem;
+max-width: 100%;
 font-size: 0.875rem;
 font-weight: 500;
+}
+label:has(> input:is([type="checkbox"], [type="radio"])) {
+flex-direction: row;
+align-items: baseline;
+gap: 0.5rem;
 }
 input,
 select,
@@ -328,4 +346,4 @@ gap: 0.75rem 1.25rem;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-b069qk4MqOs+KbNx4h/n5/jTY/uJVfcFumIvEUtcp18='";
+export const plainPageCssHash = "'sha256-ZEiPjBzOmW+U2S1Nq1fgm2ldV3mIAjpI6nEbOTnOxsA='";

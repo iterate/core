@@ -78,8 +78,8 @@ export function actRules(gate: Gate): string {
 ${rules ? `<ul>${rules}</ul>` : `<p class="muted">No rule for mail or calls yet.</p>`}
 <form class="stack" data-act-rule>
 <h3>A new rule</h3>
-<label>What waits<br><input name="verb" value="email.send" size="44" required></label>
-<label>For a mail: only to these recipients, or leave empty for every mail<br><input name="to" placeholder="*@example.com, jo@example.org" size="44"></label>
+<label>What waits <input name="verb" value="email.send" size="44" required></label>
+<label>For a mail: only to these recipients, or leave empty for every mail <input name="to" placeholder="*@example.com, jo@example.org" size="44"></label>
 <p class="muted">email.send is a mail. itx.whatsapp.sendMessage is one verb, and itx.whatsapp.* every verb under it.</p>
 <p class="actions"><button type="submit">Add the rule</button></p></form>
 ${proposed ? `<h3>Rules an agent asks for</h3><ul>${proposed}</ul>` : ""}
