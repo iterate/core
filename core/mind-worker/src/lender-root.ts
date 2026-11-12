@@ -66,11 +66,10 @@ export class LenderRoot extends RpcTarget {
     });
   }
 
-  /** WHETHER THE NAME IS THE KEY'S TO TAKE, BY THE MIND'S OWN TABLE (core-itx `nameIsFree`): no
-   *  row of the root is at it, above it or under it, but the key's lend from before. A row of the
-   *  mind's own (`itx.agents`, from an app) is not a built-in root, so only the table knows it;
-   *  and asking what the name resolves to would read a mask, and a row under the name, as
-   *  nothing. A table that cannot be read lends nothing. */
+  /** Whether the name is the key's to take, by the rows of the mind's root (core-itx
+   *  `nameIsFree` says which rows count, and why). The whole list is read, not what the name
+   *  resolves to: a mask, and a row under the name, resolve to nothing. A table that cannot be
+   *  read lends nothing. */
   async #nameInTheTable(own: string): Promise<boolean> {
     const rows = TableRows.parse(
       await this.#root.invoke(["itx", "builtins", "rewriteRules", ["list"]]),
