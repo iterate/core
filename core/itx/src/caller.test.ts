@@ -49,6 +49,12 @@ test("only the platform says that a forward of a mail failed: a member reads it 
   expect(() => refuseNonPlatformWrites(failed, { principal: null })).toThrow(/platform's own/);
 });
 
+test("only the platform says that the mail provider refused a mail: a member reads it as the provider's words", () => {
+  const failed = [{ type: "events.iterate.com/email/send-failed" }];
+  expect(() => refuseNonPlatformWrites(failed, platform)).not.toThrow();
+  expect(() => refuseNonPlatformWrites(failed, { principal: null })).toThrow(/platform's own/);
+});
+
 test.for([
   "events.iterate.com/approval/rule-proposed",
   "events.iterate.com/approval/rule-proposal-signed",

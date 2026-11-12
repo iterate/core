@@ -248,10 +248,16 @@ export type OutboundEmail = {
   attachments: { filename: string; contentType: string; content: Uint8Array; path?: string }[];
 };
 
-/** `gate`: why the mail was not sent, when an approval rule holds it (./acts.ts). */
+/** `gate`: why the mail was not sent, when an approval rule holds it (./acts.ts). `code`: the mail
+ *  provider's error code, when it refused the mail and gave one. */
 export type EmailOutcome =
   | { sent: true; messageId: string }
-  | { sent: false; error: string; gate?: Exclude<GateAnswer, { state: "free" | "go" }> };
+  | {
+      sent: false;
+      error: string;
+      code?: string;
+      gate?: Exclude<GateAnswer, { state: "free" | "go" }>;
+    };
 
 /** Each file is a stream: Workers RPC sends a stream beside its 32 MiB call limit, and capnweb sends
  *  one chunk a message. */

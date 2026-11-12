@@ -220,8 +220,15 @@ async function sendEmail(
   }
   if (!outcome.sent) {
     await release();
-    if (!outcome.gate)
+    if (!outcome.gate) {
+      // The log says it too, so the refusal is not known to this caller alone. A fact that does not
+      // land is reported, and the caller still gets the refusal.
+      await recordEmail(scope.emailContext, scope.caller, {
+        type: "events.iterate.com/email/send-failed",
+        payload: { from, to, cc, subject, error: outcome.error, code: outcome.code || null },
+      }).catch((error: unknown) => reportIssue("email.send-failed-not-recorded", error));
       throw codedError("UNAVAILABLE", `itx.email.send: the boundary refused it: ${outcome.error}`);
+    }
     await recordGateFacts(scope.contextOf, scope.caller, outcome.gate.facts);
     const at = `${platformOriginOf(scope.domain)}/secrets/approvals?digest=${outcome.gate.digest}`;
     throw codedError(

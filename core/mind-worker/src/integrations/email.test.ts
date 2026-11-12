@@ -61,6 +61,56 @@ test("an answer to a mail whose subject arrived as two lines goes with that subj
   expect(mind.sent.map((message) => message.subject)).toEqual(["Re: Hello Bcc: leak@example.net"]);
 });
 
+test("a mail the provider refuses is said on the mail log, and the caller still gets the refusal", async () => {
+  const mind = mindWith([
+    { sent: false, error: "the recipient is suppressed", code: "E_RECIPIENT_SUPPRESSED" },
+  ]);
+  await expect(mind.send()).rejects.toThrow(
+    "itx.email.send: the boundary refused it: the recipient is suppressed",
+  );
+  expect(mind.appended).toMatchObject([
+    {
+      event: {
+        type: "events.iterate.com/email/send-failed",
+        payload: {
+          from: "mind@example.com",
+          to: ["jo@example.org"],
+          cc: [],
+          subject: "Hello",
+          error: "the recipient is suppressed",
+          code: "E_RECIPIENT_SUPPRESSED",
+        },
+      },
+      // as the platform, from the context that sent it
+      caller: { platform: true, path: "/agents/one" },
+    },
+  ]);
+  expect(mind.reservations()).toEqual([]);
+});
+
+test("a refusal whose fact does not land still reaches the caller as the provider's refusal", async () => {
+  const mind = mindWith([{ sent: false, error: "the provider is down" }], undefined, {
+    appendFails: true,
+  });
+  await expect(mind.send()).rejects.toMatchObject({
+    code: "UNAVAILABLE",
+    message: "itx.email.send: the boundary refused it: the provider is down",
+  });
+});
+
+test("a mail an approval rule refuses records no send-failed fact: the gate's facts say it", async () => {
+  const rejected: GateAnswer = {
+    state: "rejected",
+    digest: "d".repeat(64),
+    facts: [],
+    by: "jo@example.org",
+    reason: "no",
+  };
+  const mind = mindWith([{ sent: false, error: "rejected", gate: rejected }]);
+  await expect(mind.send()).rejects.toThrow("rejected");
+  expect(mind).toMatchObject({ appended: [] });
+});
+
 type Outcome = Awaited<ReturnType<Door["sendEmail"]>>;
 
 const held: Outcome = {
@@ -71,8 +121,13 @@ const held: Outcome = {
 
 /** A mind whose boundary answers `outcomes` in turn. `asked` keeps, for each call of the boundary,
  *  whether it waits and which reservations stand at that moment. */
-function mindWith(outcomes: Outcome[], stored?: Record<string, unknown>) {
+function mindWith(
+  outcomes: Outcome[],
+  stored?: Record<string, unknown>,
+  options: { appendFails?: boolean } = {},
+) {
   const reservations = new Set<string>();
+  const appended: { event: unknown; caller: unknown }[] = [];
   const asked: { wait: boolean; reserved: string[] }[] = [];
   const sent: { subject: string }[] = [];
   const emailContext = {
@@ -82,9 +137,13 @@ function mindWith(outcomes: Outcome[], stored?: Record<string, unknown>) {
       return { reserved: true };
     },
     releaseSend: async (key: string) => void reservations.delete(key),
-    invoke: async (expression: unknown[]) => {
+    invoke: async (expression: unknown[], _args: unknown[], caller: unknown) => {
       const [verb, event] = [expression.at(-1)].flat();
-      if (verb === "append") return [{ ...Object(event), offset: 1 }];
+      if (verb === "append") {
+        if (options.appendFails) throw new Error("the log is unreachable");
+        appended.push({ event, caller });
+        return [{ ...Object(event), offset: 1 }];
+      }
       // a mail this mind sent before, at the offset that is asked for
       if (verb === "readEvents")
         return {
@@ -127,6 +186,7 @@ function mindWith(outcomes: Outcome[], stored?: Record<string, unknown>) {
   );
   return {
     asked,
+    appended,
     reservations: () => [...reservations],
     sent,
     send: (to = "jo@example.org", subject = "Hello") => root.send({ to, subject, text: "A mail." }),

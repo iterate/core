@@ -148,9 +148,11 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
         await this.env.SECRETS.actNotDone(gate.digest).catch((failed: unknown) =>
           reportIssue("approval.not-given-back", failed, { digest: gate.digest }),
         );
+      const code = (error as { code?: unknown } | null)?.code;
       return {
         sent: false as const,
         error: error instanceof Error ? error.message : String(error),
+        ...(typeof code === "string" && { code }),
       };
     }
   }

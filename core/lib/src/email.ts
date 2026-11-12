@@ -1,6 +1,7 @@
 // email.ts — EMAIL's events and threads: a mind's mail, every message in or out on one context,
 // `/integrations/email`, inbound as `email/received` and each
-// `itx.email.send` as `email/sent`, both appended by the platform (core/mind-worker/src/integrations/email.ts).
+// `itx.email.send` as `email/sent` (`email/send-failed` when the provider refuses it), all appended
+// by the platform (core/mind-worker/src/integrations/email.ts).
 // The first-party `email` facet there folds them into threads (core/mind-worker/src/email/processor.ts); a config
 // repo reads its state and parses a message with this contract (core/configs/default/worker.ts). An
 // inbound message's bytes, as it arrived, and each attachment's are mind files under `/email/`.
@@ -115,6 +116,20 @@ export const EmailContract = defineProcessorContract({
         /** Why: Cloudflare's words, or the stack's own, which start "not forwarded:"
          *  (core/boundary-worker/src/mail.ts `receivedMail` says what each does to the delivery). */
         error: z.string(),
+      }),
+    },
+    "events.iterate.com/email/send-failed": {
+      description:
+        "The mail provider refused a message from `itx.email.send`; nothing was sent (platform fact).",
+      payloadSchema: z.object({
+        from: z.string(),
+        to: z.array(z.string()),
+        cc: z.array(z.string()),
+        subject: z.string(),
+        /** The provider's words, as the boundary gave them. */
+        error: z.string(),
+        /** The provider's error code (such as `E_RECIPIENT_SUPPRESSED`), null when it gave none. */
+        code: z.string().nullable(),
       }),
     },
   },
