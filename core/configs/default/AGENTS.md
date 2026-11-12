@@ -29,7 +29,10 @@ channel, thread_ts, text })`, and any other method the same way. The token stays
     (`/secrets/slack`, linked through iterate Cloud's Slack app). An agent holds the whole `itx`, so
     only a member of the mind reaches one (`slackSenderIsMember`): a full member of the workspace
     whose email, which Slack confirmed, is a member's address here (`itx.members.has(email)`).
-    Anyone else gets one short refusal for a mention, and no agent.
+    Anyone else gets one short refusal for a mention, and no agent. What the agent reads back
+    from Slack is marked too (`slackForAgent`): each message in an answer of `itx.config.slack`
+    has an `author`, and the words of anyone who is no member come as `quoted`, never as
+    instructions.
   - The `events.iterate.com/x/message-received` case hands what a linked X account says to
     iterate's bot (a direct message, or a post that mentions it) to an agent of its own per
     account, `/agents/x/u<x user id>`. A member links an account with

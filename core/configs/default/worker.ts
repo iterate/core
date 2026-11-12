@@ -16,9 +16,9 @@ import { voiceApp } from "./apps/voice/app.ts";
 // line and off `installVoice` in the init case below, in the commit that adds the package.
 // import { installVoice } from "@iterate-com/voice/install";
 import {
-  callSlack,
   refuseSlackSender,
   slackContentOf,
+  slackForAgent,
   slackMessageOf,
   slackSenderIsMember,
 } from "./slack.ts";
@@ -302,9 +302,10 @@ export default class extends IterateConfigEntrypoint {
   }
 
   /** `itx.config.slack(method, args)`: any method of Slack's Web API, as the workspace's bot
-   *  (slack.ts). An agent of a Slack thread answers with it. */
+   *  (slack.ts). An agent of a Slack thread answers with it, and reads the thread with it: each
+   *  message in the answer says who wrote it, and a non-member's words come as a quote. */
   async slack(method: string, args?: Record<string, unknown>) {
     using itx = this.getItx();
-    return await callSlack(itx, method, args);
+    return await slackForAgent(itx, method, args);
   }
 }
