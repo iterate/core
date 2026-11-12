@@ -47,7 +47,9 @@ export async function refreshBrokeredGrants(
   const rows: GrantRefreshed[] = [];
   const allFacts: SecretAnswer<GrantsRefreshed>["facts"] = [];
   for (const { path } of asked) {
-    const { result, facts } = await deps.refresh(path, clients);
+    const { result, facts } = await deps
+      .refresh(path, clients)
+      .catch((error: unknown) => thrown(path, error));
     if (result.outcome === "not-a-brokered-grant") continue;
     rows.push(
       result.outcome === "failed"
@@ -58,4 +60,27 @@ export async function refreshBrokeredGrants(
   }
   const next = grants.length > asked.length ? asked.at(-1)?.path : undefined;
   return { result: { grants: rows, next }, facts: allFacts };
+}
+
+/** A GRANT WHOSE REFRESH THROWS STOPS NO OTHER. An object answers `failed` when its provider
+ *  refused. It throws when it has no answer: its stored value does not open, or the object
+ *  itself did not answer. Each walk starts at the first path, so a throw that stood would keep
+ *  every grant behind it from a refresh for good. It is that grant's own failure, with the fact
+ *  that a refresh on word writes. */
+function thrown(path: string, error: unknown): SecretAnswer<GrantRefresh> {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    result: { outcome: "failed", error: message },
+    facts: [
+      {
+        path,
+        events: [
+          {
+            type: "events.iterate.com/secret/refreshed",
+            payload: { kind: "oauth-refresh-token", ok: false, error: message },
+          },
+        ],
+      },
+    ],
+  };
 }

@@ -37,6 +37,46 @@ test("each grant of the Cloud's clients is asked to refresh, one after another: 
   });
 });
 
+test("a grant whose refresh throws is said as failed, with a fact on its log, and the grants behind it are still refreshed", async () => {
+  const vault = pretendVault({
+    // its stored value does not open, or its object does not answer: no outcome, a throw
+    "/secrets/github-broken": new Error(
+      "the stored material of /secrets/github-broken cannot be opened",
+    ),
+    "/secrets/github-jo": { outcome: "refreshed" },
+  });
+
+  expect(await refreshBrokeredGrants(vault.deps)).toEqual({
+    result: {
+      grants: [
+        {
+          path: "/secrets/github-broken",
+          outcome: "failed",
+          error: "the stored material of /secrets/github-broken cannot be opened",
+        },
+        { path: "/secrets/github-jo", outcome: "refreshed" },
+      ],
+      next: undefined,
+    },
+    facts: [
+      {
+        path: "/secrets/github-broken",
+        events: [
+          {
+            type: "events.iterate.com/secret/refreshed",
+            payload: {
+              kind: "oauth-refresh-token",
+              ok: false,
+              error: "the stored material of /secrets/github-broken cannot be opened",
+            },
+          },
+        ],
+      },
+      { path: "/secrets/github-jo", events: [{ type: "refreshed", payload: { ok: true } }] },
+    ],
+  });
+});
+
 test("a vault with no grant asks neither the Cloud nor any object", async () => {
   const vault = pretendVault({});
 
@@ -77,7 +117,7 @@ type Outcome =
 /** A vault whose set secrets are these grants, each with what its refresh on word answers, and
  *  one plain token beside them. It says which objects were asked, with which clients, and how
  *  often the Cloud was asked for its clients. */
-function pretendVault(grants: Record<string, Outcome>) {
+function pretendVault(grants: Record<string, Outcome | Error>) {
   const seen = { asked: [] as string[], clientsGiven: [] as string[][], cloudAsked: 0 };
   const set: SecretDescription[] = [
     { path: "/secrets/a-plain-token", set: true },
@@ -96,6 +136,7 @@ function pretendVault(grants: Record<string, Outcome>) {
         seen.asked.push(path);
         seen.clientsGiven.push(clients);
         const result = grants[path]!;
+        if (result instanceof Error) throw result;
         const ok = result.outcome === "refreshed";
         return {
           result,
