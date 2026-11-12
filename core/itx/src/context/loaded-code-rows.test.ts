@@ -32,6 +32,85 @@ test.for(ROWS)("loaded code writes a %s row whose target is a name of its own co
   expect(() => admitLoadedCodeRow({ type, payload: { target: null } }, "/apps/x")).not.toThrow();
 });
 
+// THE ROWS A PACKAGE'S WORKER WRITES WHEN IT SETS UP A CONTEXT OF ITS OWN: loaded code's to write.
+// These are the shapes the voice package provisions a device with (its worker.ts
+// `ensureVoiceDevice`), kept here because a package's test cannot name the kernel: the context's
+// bare `itx` pointed at the context that asked, a subscription to a facet whose source is the
+// root's config, and subscriptions that copy events to another path.
+test.for(["/", "/child"])(
+  "loaded code writes the rows that set up a context of its own under %s",
+  (asker) => {
+    const device = "/voice/pin";
+    const agent = "/agents/voice/pin";
+    const rows: [landsAt: string, row: { type: string; payload: unknown }][] = [
+      [
+        device,
+        {
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: "itx", target: `itx.cd(${JSON.stringify(asker)})` },
+        },
+      ],
+      [
+        device,
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: {
+            name: "voice-agent",
+            target: [
+              "itx",
+              "facets",
+              [
+                "get",
+                "voice-agent",
+                {
+                  className: "VoiceAgentDurableObject",
+                  mainModule: "voice.ts",
+                  source: ["itx", ["cd", "/"], "config"],
+                },
+              ],
+              "processEventBatch",
+            ],
+            consumes: ["*"],
+          },
+        },
+      ],
+      [
+        device,
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: {
+            name: "voice-agent-warm-up",
+            consumes: ["events.iterate.com/voice-agent/call-started"],
+            target: { path: agent, type: "events.iterate.com/agent/warm-up-requested" },
+          },
+        },
+      ],
+      [
+        agent,
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: {
+            name: "voice-relay",
+            consumes: ["events.iterate.com/agent/paused"],
+            target: { path: device, payload: "payload" },
+          },
+        },
+      ],
+    ];
+    for (const [landsAt, row] of rows) expect(() => admitLoadedCodeRow(row, landsAt)).not.toThrow();
+    // and the same context's `itx` pointed at a built-in is not
+    expect(() =>
+      admitLoadedCodeRow(
+        {
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: "itx", target: "itx.builtins.cd('/')" },
+        },
+        device,
+      ),
+    ).toThrow("is not a loaded worker's word");
+  },
+);
+
 // A row whose target is a call that carries a row (./itx-expression-rewriting.ts
 // `admitLoadedCodeExpression`).
 const escape = {
