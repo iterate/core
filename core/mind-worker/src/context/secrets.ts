@@ -26,8 +26,12 @@ import { hopCaller } from "./hop-caller.ts";
 export const SECRETS_ROOT_DESCRIPTION =
   'the mind\'s secrets, kept in the secrets Worker: `secrets.set("/secrets/<name>", material, { urls, refresh?, public? })` · `delete(path)` · `describe(path)` → { set, urls, refresh, public } · `list()` · `collectFromUser({ path, egress: { urls }, description?, fields?, redirectUrl? })` → { url } a person opens to type the value · `beginOAuth(path, { authorizationEndpoint, tokenEndpoint, clientId, clientSecret?, scope?, urls?, next? })` → { authorizationUrl, nonce } · `oauthResult(path, { nonce })` · `oauthCallbackUrl()` · `signHmac(path, { payload, field?, encoding? })` · `verifyHmac(path, { payload, signature, field? })` · `verifyEquals(path, { value, field? })`; use one in `itx.fetch` as `getSecret("/secrets/<name>")` in a header (or the URL), sent only to its `urls`. Each fact lands on `/secrets/<name>`. What a secret may be used for is fixed when it is made (`set`, `collectFromUser`, `beginOAuth`) and shown to whoever gives it: `placement: "url"` lets its placeholder sit in a URL, else headers alone; `operations: ["signHmac", …]` names the operations it answers, else none, each limited per minute; `lendTo: ["/secrets/<name>", …]` names the secrets whose refresh may borrow it as a client secret or an App key, else none; `anyoneWithLink: true` lets anyone holding the link fill the form or consent, else a signed-in member alone';
 
-/** How many of the vault's sessions `list()` has open at once. */
+/** How many of the vault's sessions `list()` has open at once, where it asks path by path. */
 const DESCRIBED_AT_ONCE = 16;
+
+/** Whether a call failed because its receiver has no such verb: a Worker from before the verb. */
+const isNoSuchVerb = (error: unknown) =>
+  error instanceof Error && /does not implement|is not a function/.test(error.message);
 
 export function secretsRoot(context: ItxHostRootContext, egress: Door) {
   const record = async <T>(answer: Promise<SecretAnswer<T> | SecretRefusal>): Promise<T> => {
@@ -55,6 +59,8 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
     ) => record(call("set", path, { ...options, material })),
     delete: (path: string) => record(call("delete", path, undefined)),
     describe,
+    // The secrets that are set, in one call of the vault. The paths that the mind's log names go
+    // along as `known`: core/secrets-worker/src/secret-list.ts says what the vault does with them.
     list: async (): Promise<SecretDescription[]> => {
       const parent = context.context("/secrets");
       const paths = new Set<string>();
@@ -72,13 +78,19 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
         if (page.atHead || page.scannedThroughOffset <= after) break;
         after = page.scannedThroughOffset;
       }
-      // A few at a time: the log names every path the mind ever had, a deleted secret's too, and
-      // each is one call of the vault.
-      const sorted = [...paths].sort();
+      const known = [...paths].sort();
+      try {
+        return await releasedAnswer(egress.listSecrets(known));
+      } catch (error) {
+        if (!isNoSuchVerb(error)) throw error;
+      }
+      // A boundary from before the vault kept its list: a home lab's Workers deploy apart from
+      // its mind, and a stack's deploy swaps its Workers one after another. Each path is asked,
+      // a few at a time, since each is one call of the vault.
       const described: SecretDescription[] = [];
-      for (let from = 0; from < sorted.length; from += DESCRIBED_AT_ONCE)
+      for (let from = 0; from < known.length; from += DESCRIBED_AT_ONCE)
         described.push(
-          ...(await Promise.all(sorted.slice(from, from + DESCRIBED_AT_ONCE).map(describe))),
+          ...(await Promise.all(known.slice(from, from + DESCRIBED_AT_ONCE).map(describe))),
         );
       return described.filter((secret) => secret.set);
     },

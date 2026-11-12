@@ -297,6 +297,67 @@ test("a delete that comes in while a new value is being sealed is the later word
   expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: true });
 });
 
+test("a secret's object keeps its own row in the vault's list of set secrets: there when it is set, gone when it is deleted, and right when the two cross", async () => {
+  const { secret, listedAsSet } = await vault();
+  const value = { material: "newer-token-bbbb", urls: ["https://gmail.googleapis.com"] };
+  expect(listedAsSet()).toEqual([PATH]);
+  await secret.secret(PATH, "delete", {});
+  expect(listedAsSet()).toEqual([]);
+  // a set that a delete overtakes stores nothing, and leaves no row
+  await secret.secret(PATH, "set", value);
+  const lost = expect(secret.secret(PATH, "set", value)).rejects.toThrow("deleted while");
+  await secret.secret(PATH, "delete", {});
+  await lost;
+  expect(await secret.secret(PATH, "describe", {})).toEqual({ path: PATH, set: false });
+  expect(listedAsSet()).toEqual([]);
+  await secret.secret(PATH, "set", value);
+  expect(listedAsSet()).toEqual([PATH]);
+  // the vault's list asks for this when a row and its object disagree: the object writes what it is
+  await secret.keepListed(PATH);
+  expect(listedAsSet()).toEqual([PATH]);
+});
+
+test("a set whose value a delete took while the vault's list was written is refused, and no fact says that the secret is set", async () => {
+  const { secret, listedAsSet, holdListCall } = await vault();
+  const value = { material: "newer-token-bbbb", urls: ["https://gmail.googleapis.com"] };
+  // a write calls the list once before it stores and once after: the second call is held open
+  const afterTheStore = holdListCall(2);
+  const set = secret.secret(PATH, "set", value).then(
+    () => "set",
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+  const letGo = await afterTheStore;
+  // the value is stored now, and the delete takes it
+  const deleted = await secret.secret(PATH, "delete", {});
+  letGo();
+
+  expect(await set).toContain("deleted while this value was being stored");
+  expect(deleted).toMatchObject({
+    facts: [{ path: PATH, events: [{ type: "events.iterate.com/secret/deleted" }] }],
+  });
+  expect(await secret.secret(PATH, "describe", {})).toEqual({ path: PATH, set: false });
+  expect(listedAsSet()).toEqual([]);
+});
+
+test("a delete that a set overtook while the vault's list was written gives no fact: the set's own fact is the last word", async () => {
+  const { secret, listedAsSet, holdListCall } = await vault();
+  const value = { material: "newer-token-bbbb", urls: ["https://gmail.googleapis.com"] };
+  // a delete clears the object and then calls the list: that call is held open
+  const afterTheClear = holdListCall(1);
+  const deleted = secret.secret(PATH, "delete", {});
+  const letGo = await afterTheClear;
+  // nothing is held now, and the set stores a value
+  const set = await secret.secret(PATH, "set", value);
+  letGo();
+
+  expect(await deleted).toMatchObject({ result: { path: PATH }, facts: [] });
+  expect(set).toMatchObject({
+    facts: [{ path: PATH, events: [{ type: "events.iterate.com/secret/set" }] }],
+  });
+  expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: true });
+  expect(listedAsSet()).toEqual([PATH]);
+});
+
 test("an import with no proof keeps nothing of the cell: the cell with its proof is still taken after it, once", async () => {
   const { secret } = await vault();
   // a cell of an old mind: its value does not open here, which the proof does not depend on
@@ -479,11 +540,35 @@ async function vault(
     return new Response("sent");
   });
   vi.stubGlobal("fetch", upstream);
+  const sets = new Map<string, Set<string>>();
+  const list: { calls: number; wait?: (call: number) => Promise<void> } = { calls: 0 };
   const env = {
     DOMAIN: "example.com",
     CLOUD_ORIGIN: options.cloud,
     SECRETS_AT_REST_KEY: "at-rest-key-for-tests-only",
-    APPROVALS: { getByName: () => ({ add: async () => {}, remove: async () => {} }) },
+    // the vault's sets of paths, by name: "index" (a rule or a held request) and "set"
+    APPROVALS: {
+      getByName: (name: string) => {
+        const paths = sets.get(name) ?? new Set<string>();
+        sets.set(name, paths);
+        // A call of the list is a call of another object: it lets another call of the secret's
+        // object in. A test holds one call open to put a set or a delete into that moment.
+        const called = async () => {
+          list.calls += 1;
+          await list.wait?.(list.calls);
+        };
+        return {
+          add: async (path: string) => {
+            await called();
+            paths.add(path);
+          },
+          remove: async (path: string) => {
+            await called();
+            paths.delete(path);
+          },
+        };
+      },
+    },
     // believes the statement: who signed is the key the envelope names
     AUTH: {
       sign: async (input: object) => ({
@@ -552,6 +637,17 @@ async function vault(
     sent,
     decide,
     approve: (digest: string) => decide(MEMBER, { type: APPROVED, about: [digest] }),
+    /** The paths in the vault's set of secrets that are set. */
+    listedAsSet: () => [...(sets.get("set") ?? [])],
+    /** Holds the list's call that is `after` calls from now open. Answers a promise that settles
+     *  when that call has come, with the function that lets it go on. */
+    holdListCall: (after: number) => {
+      const at = list.calls + after;
+      return new Promise<() => void>((reached) => {
+        list.wait = (call) =>
+          call === at ? new Promise<void>((go) => reached(go)) : Promise.resolve();
+      });
+    },
   };
 }
 

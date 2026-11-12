@@ -41,6 +41,7 @@ export interface Door {
    *  `fetch` fails inside the zone. */
   fetch(request: Request): Promise<Response>;
   secret: SecretCall;
+  listSecrets: SecretsService["listSecrets"];
   /** A mail that an approval rule names waits in the vault's gate (./acts.ts). The first call
    *  answers `gate.state: "held"` at once; a call with `wait` waits for the member's answer.
    *  `from` is the caller's claim of where the mail began. */
@@ -187,6 +188,10 @@ export type SecretCall = <V extends SecretVerb>(
 export interface SecretsService {
   fetch(request: Request): Promise<Response>;
   secret: SecretCall;
+  /** THE SECRETS THAT ARE SET, IN ONE CALL: the vault keeps their paths, so it asks about no
+   *  secret that was deleted. `known` is the mind's own list of the paths it ever had: a vault
+   *  that held secrets before it kept its list asks about those once, and never reads it after. */
+  listSecrets(known?: string[]): Promise<SecretDescription[]>;
   /** THE GATE FOR ACTS (./acts.ts): what it says of a mail or of a verb's call, by its exact
    *  text. `from` is the caller's claim of where the act began. With `wait`, a held act's answer
    *  comes when a member decided, or after five minutes. */

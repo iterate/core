@@ -231,10 +231,21 @@ export function releaseRpcSessions(rpcSessions: readonly unknown[]): void {
  *  call's session open until its disposer runs, and behind that session every session the callee
  *  opened to answer. Left alone, each stays open for as long as the code that holds the answer
  *  lives: until the Worker is replaced, or for a socket's whole life. Enough of them fill the
- *  callee's memory: the vault ended with "Worker exceeded memory limit", and every approval that
- *  waited in it ended too. For plain data the caller keeps a copy and lets the session go. */
-export async function releasedAnswer<T>(answer: Promise<T>): Promise<T> {
-  const held = await answer;
+ *  callee's memory, and a Worker over its memory limit ends every call that waits in it. For
+ *  plain data the caller keeps a copy and lets the session go.
+ *
+ *  A CALL THAT IS REFUSED HOLDS ITS SESSION TOO, and there is no answer to release: the call's own
+ *  promise carries the disposer then. So `call` is the call as it was made, not a promise made
+ *  from it: a wrapper (`Promise.resolve(call)`, an `async` function's return) has no disposer. */
+export async function releasedAnswer<T>(call: PromiseLike<T>): Promise<T> {
+  let held: T;
+  try {
+    held = await call;
+  } catch (error) {
+    // workerd puts the disposer on the promise of a call across Workers; a plain promise has none
+    (call as Partial<Disposable>)[Symbol.dispose]?.();
+    throw error;
+  }
   if (typeof held !== "object" || held === null) return held;
   let copy: T;
   try {

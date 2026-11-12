@@ -35,7 +35,9 @@ export class ProvidedDoor extends RpcTarget {
           if (typeof name === "symbol" || name === "then" || name === "dup" || name in target)
             return Reflect.get(target, name, receiver);
           return function (this: ProvidedDoor, ...args: unknown[]) {
-            return releasedAnswer(Promise.resolve(this.#door[name]!(...args)));
+            // the call itself, not a promise made from it: a refused call is released by its own
+            // promise's disposer (iterate/lib `releasedAnswer`)
+            return releasedAnswer(this.#door[name]!(...args) as PromiseLike<unknown>);
           };
         },
       }),

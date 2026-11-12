@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { releasedAnswer } from "iterate/lib";
 import {
   assertSecretPath,
   SECRET_OAUTH_CALLBACK_PATH,
@@ -7,10 +8,11 @@ import {
 } from "iterate/secret-placeholder";
 import type { SecretsService, SecretVerb, SecretVerbs } from "iterate/workers";
 import { ActsGate, GATE } from "./acts-gate.ts";
-import { ApprovalsIndex, INDEX } from "./approvals-index.ts";
+import { ApprovalsIndex, INDEX, SET } from "./approvals-index.ts";
 import { isApprovalsPath, secretApprovals } from "./approvals-page.ts";
 import type { Env } from "./env.ts";
 import { SECRET_COLLECT_PATH, secretCollect } from "./secret-collect.ts";
+import { listSetSecrets } from "./secret-list.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { SECRET_OAUTH_START_PATH, secretOAuthStart } from "./secret-oauth-start.ts";
 import { SecretDurableObject } from "./secret/durable-object.ts";
@@ -54,6 +56,25 @@ export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
     return this.#secret(path).secret(path, verb, input) as Promise<SecretVerbs[V]["answer"]>;
   }
   /* oxlint-enable iterate/mechanical-class-impl */
+
+  /** The secrets that are set, in one call (./secret-list.ts). `known` is the mind's own list of
+   *  paths, used until the vault's set is complete. */
+  async listSecrets(known: string[] = []) {
+    return listSetSecrets(
+      {
+        list: this.env.APPROVALS.getByName(SET),
+        secretOf: (path) => {
+          const secret = this.#secret(path);
+          return {
+            // copied and let go at once: a list asks many objects in one call of this Worker
+            describe: (asked) => releasedAnswer(secret.secret(asked, "describe", undefined)),
+            keepListed: (asked) => secret.keepListed(asked),
+          };
+        },
+      },
+      known,
+    );
+  }
 
   async act(input: Parameters<SecretsService["act"]>[0]) {
     return this.#gate().act(input);

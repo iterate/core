@@ -154,6 +154,40 @@ export async function secretChecks(domain: string): Promise<Check[]> {
       },
     ),
     await attempt(
+      "secrets: list() names the secrets that are set, and none that was deleted",
+      async () => {
+        const mark = crypto.randomUUID().slice(0, 8);
+        const kept = [1, 2, 3].map((at) => `/secrets/smoke-listed-${mark}-${at}`);
+        const gone = [1, 2].map((at) => `/secrets/smoke-unlisted-${mark}-${at}`);
+        for (const made of [...kept, ...gone])
+          await root().secrets.set(made, crypto.randomUUID(), { urls: [ECHO] });
+        for (const deleted of gone) await root().secrets.delete(deleted);
+        try {
+          // from loaded code, as a page of the mind asks; a second list is the same list
+          const listed = z
+            .array(z.array(z.string()))
+            .parse(
+              await root().run(
+                `async (itx) => [(await itx.secrets.list()).map((secret) => secret.path), (await itx.secrets.list()).map((secret) => secret.path)]`,
+              ),
+            );
+          const [first, again] = listed;
+          const wrong = [
+            ...kept.filter((made) => !first!.includes(made)).map((made) => `${made} is not listed`),
+            ...gone.filter((made) => first!.includes(made)).map((made) => `${made} is listed`),
+            ...(first!.join() === again!.join() ? [] : ["a second list differs"]),
+          ];
+          return {
+            pass: wrong.length === 0,
+            detail:
+              wrong.join("; ") || `${first!.length} listed: the 3 set ones, not the 2 deleted`,
+          };
+        } finally {
+          for (const made of kept) await root().secrets.delete(made);
+        }
+      },
+    ),
+    await attempt(
       "secrets: the collection form sends a signed-out browser to sign in",
       async () => {
         const { url } = await root().secrets.collectFromUser({

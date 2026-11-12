@@ -79,7 +79,7 @@ import {
   ruleMatches,
   ruleNames,
 } from "../approval.ts";
-import { INDEX } from "../approvals-index.ts";
+import { INDEX, SET } from "../approvals-index.ts";
 import { LegacySealedCell, type SealedCell, type SecretFact, type Signer } from "./contract.ts";
 import { runExchangeCode } from "./exchange-jail.ts";
 import {
@@ -211,6 +211,9 @@ const SecretHmacVerificationInput = z.object({
   field: z.string().min(1).optional(),
 });
 
+const deletedWhileStored = (path: string) =>
+  `secret ${path}: it was deleted while this value was being stored, and the value is not kept. Set it again if it is still wanted`;
+
 class RefreshFailed extends Error {
   readonly facts: SecretFact[];
   readonly lent: Facts;
@@ -326,9 +329,15 @@ export class SecretDurableObject extends DurableObject<Env> {
     this.ctx.storage.kv.put("deleted-through", this.#version());
     for (const key of ["current", "pending", "completed", "collecting"])
       this.ctx.storage.kv.delete(key);
-    const events: SecretFact[] = held
-      ? [{ type: "events.iterate.com/secret/deleted", payload: { path } }]
-      : [];
+    await this.keepListed(path);
+    // THE FACT SAYS WHAT THE OBJECT IS WHEN THE CALL ENDS. The call to the vault's list lets
+    // another call of this object in: a set that landed meanwhile is the later word, and its own
+    // fact says that the secret is set. A fact of this delete, which could land in the log after
+    // that one, would say that the secret is gone.
+    const events: SecretFact[] =
+      held && !this.#current()
+        ? [{ type: "events.iterate.com/secret/deleted", payload: { path } }]
+        : [];
     if (held) console.info({ event: "secret.deleted", path, version: held.cell.version });
     return { result: { path }, facts: events.length ? [{ path, events }] : [] };
   }
@@ -412,20 +421,44 @@ export class SecretDurableObject extends DurableObject<Env> {
     // reserved before the seal awaits, so two writes in flight never share a version
     const version = this.#version() + 1;
     this.ctx.storage.kv.put("version", version);
+    // Into the vault's list before the value is stored, so the list never lacks a set secret. It
+    // is awaited here, before the check below: between that check and the store nothing awaits.
+    await this.env.APPROVALS.getByName(SET).add(path);
     const cell = await this.#sealCell(path, record, version);
     // A DELETE THAT CAME IN WHILE THE SEAL AWAITED IS THE LATER WORD. With no value held, this
     // write would store its own and undo the delete. It stores nothing and says so, and no fact
     // says the secret was set.
-    if (version <= (this.ctx.storage.kv.get<number>("deleted-through") ?? 0))
-      throw codedError(
-        "SECRET_NOT_SET",
-        `secret ${path}: it was deleted while this value was being stored, and the value is not kept. Set it again if it is still wanted`,
-      );
+    if (version <= (this.ctx.storage.kv.get<number>("deleted-through") ?? 0)) {
+      // this write's early row in the vault's list goes with it
+      await this.keepListed(path);
+      throw codedError("SECRET_NOT_SET", deletedWhileStored(path));
+    }
     const current = this.#current();
     if (!current || current.cell.version < version)
       this.ctx.storage.kv.put<Current>("current", { cell, public: publicFields });
     console.info({ event: "secret.set", path, version, urls: record.urls, imported });
-    return this.#setFact(path, record, publicFields, imported, by);
+    await this.keepListed(path);
+    const fact = await this.#setFact(path, record, publicFields, imported, by);
+    // As above, after the last await: a delete that came in while the list was written is the
+    // later word. The value is gone, so no fact says that the secret was set.
+    if (version <= (this.ctx.storage.kv.get<number>("deleted-through") ?? 0))
+      throw codedError("SECRET_NOT_SET", deletedWhileStored(path));
+    return fact;
+  }
+
+  /** THE VAULT'S LIST OF SET SECRETS SAYS WHAT THIS OBJECT IS (../secret-list.ts). The object
+   *  writes its own row, and reads itself again after the write has landed: a set and a delete
+   *  that cross each write once, in either order, and whichever lands last is checked by its own
+   *  writer, which writes again when the object changed meanwhile. So the list ends as the
+   *  object is. The vault's `listSecrets` calls it for a path whose row and object disagree. */
+  async keepListed(path: string): Promise<void> {
+    this.#pathOf(path);
+    const list = this.env.APPROVALS.getByName(SET);
+    for (;;) {
+      const set = Boolean(this.#current());
+      await (set ? list.add(path) : list.remove(path));
+      if (Boolean(this.#current()) === set) return;
+    }
   }
 
   async #setFact(
