@@ -30,20 +30,20 @@ test("a vault that cannot be reached stops no call and lifts no rule: the last r
 });
 
 test("the gate's answers are released when the kernel has read them: a rules read and an ask leave no session of the boundary open", async () => {
-  const door = pretendDoor();
-  const gate = gateOf(() => door.egress);
+  const boundary = pretendBoundary();
+  const gate = gateOf(() => boundary.egress);
 
   expect(await gate.verbRules()).toEqual([verb]);
-  expect(door.open()).toBe(0);
+  expect(boundary.open()).toBe(0);
   // an ask is answered and let go at once: the caller that waits is the next ask, not this answer
   expect(await gate.ask({ text: "an act's text" })).toEqual({ state: "free", facts: [] });
-  expect(door.open()).toBe(0);
-  expect(door).toMatchObject({ asked: 2, released: 2 });
+  expect(boundary.open()).toBe(0);
+  expect(boundary).toMatchObject({ asked: 2, released: 2 });
 });
 
 /** The boundary's two calls of the gate, as Workers RPC answers them: an object that holds its
  *  call's session open until its disposer runs. */
-function pretendDoor() {
+function pretendBoundary() {
   let open = 0;
   const counts = { asked: 0, released: 0 };
   const held = <T extends object>(answer: T): T => {

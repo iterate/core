@@ -27,8 +27,7 @@ export function approvalsRoot(
         .invoke(["itx", "builtins", ["append", ...events]], [], { ...from(), platform: true })
         .catch((error: unknown) => reportIssue("approval.facts-not-recorded", error, { path }));
   };
-  // Each answer of the gate is copied and released (iterate/lib `releasedAnswer`): left alone, it
-  // keeps its call's session open for as long as the code that asked runs.
+  // each answer of the gate is copied and released: iterate/lib `releasedAnswer` says why
   return {
     rules: () => releasedAnswer(egress.actRules()),
     setRules: async (rules: ActRule[]) => {

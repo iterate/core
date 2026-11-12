@@ -3,14 +3,12 @@ import { releasedAnswer, reportIssue } from "iterate/lib";
 import type { Door } from "iterate/workers";
 
 /** THE VAULT'S GATE AS THE KERNEL ASKS IT (core-itx `ItxHost.acts`), through the boundary. Each
- *  answer is copied and released (iterate/lib `releasedAnswer`). An answer that is left alone
- *  keeps its call's session open for as long as the code that made the call runs, and a context
- *  that works for a long time (an agent's turn, a call that waits for a member) asks again every
- *  few seconds. `door` is read at each call: the binding is not there when this is first read. */
-export function gateOf(door: () => Pick<Door, "actRules" | "act">) {
+ *  answer is copied and released: iterate/lib `releasedAnswer` says why. `boundary` is read at
+ *  each call: the binding is not there when this is first read. */
+export function gateOf(boundary: () => Pick<Door, "actRules" | "act">) {
   return {
-    verbRules: heldVerbRules(() => releasedAnswer(door().actRules())),
-    ask: (input: Parameters<Door["act"]>[0]) => releasedAnswer(door().act(input)),
+    verbRules: heldVerbRules(() => releasedAnswer(boundary().actRules())),
+    ask: (input: Parameters<Door["act"]>[0]) => releasedAnswer(boundary().act(input)),
   };
 }
 
