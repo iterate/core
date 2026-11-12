@@ -53,6 +53,21 @@ const MARKS = {
   },
 };
 
+/** The mark that a word stands for: the scheme of a client's own redirect, or the first word of
+ *  the name it gives. */
+const MARK_BY_WORD: Record<string, keyof typeof MARKS> = {
+  claude: "claude",
+  cursor: "cursor",
+  codex: "openai",
+  chatgpt: "openai",
+  openai: "openai",
+  zed: "zed",
+  windsurf: "windsurf",
+  "google gemini": "gemini",
+  gemini: "gemini",
+  opencode: "opencode",
+};
+
 /** The built-in mark of a client we know, and which one. First by what a client cannot claim for
  *  another: its verified domain, and where its access goes. Else by the name it gives, at the
  *  name's start alone, so "Not Codex" and "My ChatGPT helper" get initials. */
@@ -68,16 +83,13 @@ export function knownMarkOf(client: {
   const openai = /(^|\.)(chatgpt\.com|openai\.com)$/;
   if (anthropic.test(domain) || anthropic.test(host)) return "claude";
   if (openai.test(domain) || openai.test(host)) return "openai";
-  const scheme = /^(cursor|zed|windsurf):/i.exec(client.redirectUri)?.[1];
-  if (scheme) return scheme.toLowerCase() as "cursor" | "zed" | "windsurf";
+  const scheme = /^(cursor|zed|windsurf):/i.exec(client.redirectUri)?.[1]?.toLowerCase();
+  if (scheme) return MARK_BY_WORD[scheme] ?? null;
   const named =
     /^(claude|cursor|codex|chatgpt|openai|zed|windsurf|google gemini|gemini|opencode)\b/i
       .exec(client.name.trim())?.[1]
       ?.toLowerCase();
-  if (!named) return null;
-  if (named === "codex" || named === "chatgpt") return "openai";
-  if (named === "google gemini") return "gemini";
-  return named as keyof typeof MARKS;
+  return (named && MARK_BY_WORD[named]) || null;
 }
 
 /** The client's own logo, when it may be shown: the client's domain is verified, and the logo is
