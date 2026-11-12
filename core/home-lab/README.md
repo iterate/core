@@ -54,6 +54,12 @@ With Docker answering, the launcher builds `images/iterate-dev-image` once per c
 cloud, and leave as the mind's own do: through the cloud when one names a secret, else from here. Without Docker, the launcher says so and a sandbox
 refuses ("this class has no container"). No disk snapshots are tested at home.
 
+For each sandbox, local workerd starts a second container beside it, `<name>-proxy` from
+`cloudflare/proxy-everything`, which carries the sandbox's traffic. When the sandbox ends, workerd
+removes the sandbox and leaves that sidecar running. The launcher removes the ones whose sandbox
+is gone (`src/sandbox-sidecars.ts`): at its start, every five minutes, and when it stops. It
+touches no other container.
+
 ## Telemetry
 
 With a stack that has the telemetry part (`core/alchemy/README.md`, "Telemetry"), start with
@@ -62,6 +68,15 @@ link, and `itx.telemetry.query` and the Dash's Analytics page answer from it. Th
 tables hold nothing of the mind at home: Cloudflare exports the traces and Workers Logs of its
 own Workers, and local workerd exports neither. A trace of a request to the mind ends at the boundary.
 Without the flag the mind has no `itx.telemetry`, as on a stack without the part.
+
+## Known log lines
+
+- `RPC connection broken for non-DISCONNECTED reason … capnp/serialize-async.c++ … expected
+expectedSizeInWords <= options.traversalLimitInWords […] incoming RPC message exceeds size
+limit`: once in each run of the launcher, about half a minute after its start or right at it.
+  It is a local link of workerd on this machine, not the link to the stack: no call fails with
+  it, and the link stays connected. It is there since the first run (workerd 1.20261104.1), and
+  which local link it is has not been found.
 
 ## Gaps
 

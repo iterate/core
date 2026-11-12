@@ -9,6 +9,7 @@ import { addressOf, mindToken } from "iterate/node";
 import { mindProvideUrlOf } from "iterate/mind-api";
 import { Log, LogLevel, Miniflare, Response } from "miniflare";
 import { serveRepos } from "./repos/server.ts";
+import { sweepSidecars } from "./sandbox-sidecars.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -123,12 +124,21 @@ The mind ${domain} runs on this machine, in local workerd.
   not at home                    Workers AI, Browser Run, Images: see README.md
 `);
 
+// workerd leaves a sandbox's sidecar container running when the sandbox ends
+// (sandbox-sidecars.ts): those left by an earlier run go now, and those of this run every five
+// minutes and at the end.
+const sidecarsSwept = "image" in sandboxes && sweepSidecars();
+if (sidecarsSwept)
+  console.log(`Sandbox sidecar containers left by an earlier run, removed: ${sidecarsSwept}.`);
+if ("image" in sandboxes) setInterval(sweepSidecars, 5 * 60_000).unref();
+
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.once(
     signal,
     () =>
       void mf.dispose().then(() => {
         repos.close();
+        if ("image" in sandboxes) sweepSidecars();
         process.exit(0);
       }),
   );
