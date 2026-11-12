@@ -76,6 +76,7 @@ import {
   type ItxExpressionRewriteRule,
 } from "./context/itx-expression-rewriting.ts";
 import { buildBuiltIns } from "./context/built-ins.ts";
+import { refuseMoreArguments } from "./context/held-verbs.ts";
 import { nameActiveSpan } from "./iterate-context.ts";
 import { contextReach } from "./context/stateless-context.ts";
 import { FacetHost } from "./context/facet-host.ts";
@@ -676,13 +677,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     invokeAs: (caller, call) => this.#invokeInProcess(call, [], caller),
     // A genuine RpcTarget, so a mid-chain call pipelines: workerd rejects a Proxy (workerd#6873).
     rpcStubs: {
-      get: (rpcStubKey) =>
-        new RpcStubHandle((itxExpressionSteps) => {
+      get: (rpcStubKey, ...more: unknown[]) => {
+        refuseMoreArguments("rpcStubs.get(key)", more);
+        // A key that is no string could still find a stub by how it prints: one stub, one spelling.
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- the key is a step's argument, which a caller writes: its declared type is not what arrives
+        if (typeof rpcStubKey !== "string")
+          throw codedError("INVALID_INPUT", "rpcStubs.get(key) takes a stub's key, a string");
+        return new RpcStubHandle((itxExpressionSteps) => {
           this.#residency.pinCallStarted();
           return this.#rpcStubs
             .invokeRpcStub(rpcStubKey, itxExpressionSteps)
             .finally(() => this.#residency.pinCallEnded());
-        }),
+        });
+      },
       list: () => this.#rpcStubs.listRpcStubKeys(),
     },
     claimFacetAlarm: (name, at) => {
@@ -692,7 +699,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       if (at === null && !firstPartyFacetClassOf(name)) this.#residency.armUnclaimedFacetSweep();
     },
     facets: {
-      get: (name, spec) => this.#facetHost.handle(name, spec),
+      get: (name, spec, ...more: unknown[]) => {
+        refuseMoreArguments("facets.get(name, spec)", more);
+        return this.#facetHost.handle(name, spec);
+      },
       abort: (name, reason) => this.#facetHost.abort(name, reason),
     },
     abortAfterTheAnswer: (message) => this.#abortAfterTheAnswer(message),

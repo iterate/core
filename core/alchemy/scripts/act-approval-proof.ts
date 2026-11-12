@@ -544,6 +544,66 @@ await run(
 );
 
 await run(
+  "the same function by another spelling of a step is held too: an argument more where the stub is found, and the stub's own invoke",
+  async () => {
+    // Each call is one expression, given whole to `itx.invoke`, with the stub found by its key.
+    const byKey = (text: string, steps: (key: string) => unknown[]) =>
+      root()
+        .run(
+          `async (itx) => { const key = (await itx.cd("/").rpcStubs.list()).at(-1); return itx.invoke(${JSON.stringify(
+            ["itx", ["cd", "/"], "rpcStubs", ...steps("THE-KEY")],
+          ).replace('"THE-KEY"', "key")}); }`,
+        )
+        .then(
+          (answer) => ({ answer: JSON.stringify(answer) }),
+          (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+        )
+        .then((ended) => ({ ...ended, text }));
+    const rejected = async (text: string, steps: (key: string) => unknown[]) => {
+      const call = byKey(text, steps);
+      const held = await heldDigest(SEND).catch(async (error: unknown) => {
+        // a kernel that reads the step as another thing asks nobody, and the call runs at once
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)}; the call ended with ${JSON.stringify(await call).slice(0, 200)}`,
+        );
+      });
+      await page.goto(`${page_}?digest=${held}`);
+      await checked(held);
+      page.once("dialog", (dialog) => void dialog.accept("not by that spelling"));
+      await page.locator("[data-acts]").getByRole("button", { name: "Reject them" }).click();
+      const ended = await call;
+      must(
+        "refused" in ended && ended.refused.includes("not by that spelling"),
+        `the call ended with ${JSON.stringify(ended)}`,
+      );
+      must(!said.includes(text), "the bridge was called with no approval");
+    };
+    const to = "jo@s.whatsapp.net";
+    // `get(key, 0)`: the function that finds a stub read its first argument alone
+    const more = `an argument more ${marker}`;
+    await rejected(more, (key) => [
+      ["get", key, 0],
+      ["sendMessage", to, { text: more }],
+    ]);
+    // `stub.invoke([[verb, ...]])`: the stub's handle hands those steps to the stub
+    const door = `its own invoke ${marker}`;
+    await rejected(door, (key) => [
+      ["get", key],
+      ["invoke", [["sendMessage", to, { text: door }]]],
+    ]);
+    // and where no rule is in the way, the spelling is an error by itself
+    const free = await byKey("", (key) => [["get", key, 0], ["chats"]]);
+    must(
+      "refused" in free && free.refused.includes("takes no argument after its own"),
+      `chats() by get(key, 0) ended with ${JSON.stringify(free)}`,
+    );
+    return {
+      detail: `get(key, 0).sendMessage and get(key).invoke([[sendMessage]]) each waited as ${SEND} and ended by the rejection; get(key, 0).chats(): ${free.refused.slice(0, 80)}`,
+    };
+  },
+);
+
+await run(
   "the held verb with a name read after its call is refused: the call would run whatever comes after it",
   async () => {
     // One expression: the call, then a name of its answer. It is given whole to `invoke`: a chain

@@ -1,10 +1,13 @@
 import { ActRule } from "iterate/acts";
 import type { ItxExpression } from "iterate/expression";
 import { expect, test } from "vitest";
-import { calledNameOf, heldVerbOf } from "./held-verbs.ts";
+import { calledNameOf, heldVerbOf, refuseMoreArguments } from "./held-verbs.ts";
 
 // where the mind's rule `itx.whatsapp` points: the stub a bridge lent
 const STUB: ItxExpression = ["itx", "builtins", "rpcStubs", ["get", "k1"]];
+// where `itx.config` points: the worker of the mind's own code
+const SPEC = { repo: "/repos/config", ref: "main" };
+const WORKER: ItxExpression = ["itx", "builtins", "workers", ["get", SPEC]];
 
 test("a call of the verb a rule names is held, with its arguments", () => {
   expect(
@@ -114,6 +117,129 @@ test("the same function by another name is held all the same", () => {
   });
 });
 
+// THE SAME FUNCTION BY ANOTHER SPELLING OF A STEP. Each of these reaches the function the rule
+// names. The walk does the same thing for each, and none was held.
+const SAID = ["jo", { text: "hi" }];
+const OTHER_SPELLINGS: [what: string, resolved: ItxExpression, extraArgs: unknown[]][] = [
+  [
+    "an argument more on the step that finds the stub, which the finder does not read",
+    ["itx", "builtins", "rpcStubs", ["get", "k1", 0], ["sendMessage", ...SAID]],
+    [],
+  ],
+  [
+    "the stub's own invoke, given the call as its steps",
+    [...STUB, ["invoke", [["sendMessage", ...SAID]]]],
+    [],
+  ],
+  [
+    "invoke read as a name and then called",
+    [...STUB, "invoke", ["", [["sendMessage", ...SAID]]]],
+    [],
+  ],
+  [
+    "an invoke inside an invoke",
+    [...STUB, ["invoke", [["invoke", [["sendMessage", ...SAID]]]]]],
+    [],
+  ],
+  [
+    "invoke given the verb's name, and the arguments beside the expression",
+    [...STUB, ["invoke", ["sendMessage"]]],
+    SAID,
+  ],
+  ["the verb read as a name and then called", [...STUB, "sendMessage", ["", ...SAID]], []],
+];
+test.for(OTHER_SPELLINGS)(
+  "a held verb reached by %s is held as the same act",
+  ([, resolved, extra]) => {
+    expect(held(["itx.whatsapp.sendMessage"], resolved, [...extra])).toEqual({
+      act: "itx.whatsapp.sendMessage",
+      args: SAID,
+    });
+    expect(held(["itx.whatsapp.*"], resolved, [...extra])).toEqual({
+      act: "itx.whatsapp.sendMessage",
+      args: SAID,
+    });
+  },
+);
+
+test("a verb of a worker is held by the same spellings: an argument more on the step that loads it, and its own invoke", () => {
+  const post = { act: "itx.config.slack", args: ["chat.postMessage", { text: "hi" }] };
+  const call: ItxExpression[number] = ["slack", "chat.postMessage", { text: "hi" }];
+  expect([
+    held(["itx.config.slack"], [...WORKER, call]),
+    held(["itx.config.slack"], ["itx", "builtins", "workers", ["get", SPEC, 0], call]),
+    held(["itx.config.slack"], [...WORKER, ["invoke", [call]]]),
+    // the same spec with its keys in another order is the same worker
+    held(
+      ["itx.config.slack"],
+      ["itx", "builtins", "workers", ["get", { ref: "main", repo: "/repos/config" }], call],
+    ),
+  ]).toEqual([post, post, post, post]);
+});
+
+test("the stub called through its own applyRoot is the stub called", () => {
+  expect(held(["itx.whatsapp.*"], [...STUB, ["applyRoot", ["x"]]])).toEqual({
+    act: "itx.whatsapp",
+    args: ["x"],
+  });
+});
+
+test("a function of the thing that is itself named invoke is still held by a rule that names it", () => {
+  // read as the walk does it, the steps end at `x`; as written, they call `thing.invoke`
+  expect(held(["itx.whatsapp.thing.invoke"], [...STUB, "thing", ["invoke", [["x"]]]])).toEqual({
+    act: "itx.whatsapp.thing.invoke",
+    args: [[["x"]]],
+  });
+});
+
+test("an invoke whose steps are no list is refused where a rule holds a verb of that thing: nobody could read what it calls", () => {
+  const unread = { refused: expect.stringContaining("write the call itself") };
+  expect([
+    held(["itx.whatsapp.sendMessage"], [...STUB, ["invoke", "sendMessage('jo')"]]),
+    held(["itx.whatsapp.*"], [...STUB, ["invoke", { steps: [["sendMessage"]] }]]),
+    held(["itx.whatsapp.sendMessage"], [...STUB, ["invoke", [["sendMessage", "jo"], 7]]]),
+  ]).toEqual([unread, unread, unread]);
+  // on another stub it is no business of this rule
+  expect(
+    held(
+      ["itx.whatsapp.sendMessage"],
+      ["itx", "builtins", "rpcStubs", ["get", "other"], ["invoke", "x"]],
+    ),
+  ).toBeNull();
+});
+
+test("another verb stays free by every spelling, and so does another stub", () => {
+  expect([
+    held(["itx.whatsapp.sendMessage"], [...STUB, ["invoke", [["logout"]]]]),
+    held(
+      ["itx.whatsapp.sendMessage"],
+      ["itx", "builtins", "rpcStubs", ["get", "k1", 0], ["logout"]],
+    ),
+    held(
+      ["itx.whatsapp.sendMessage"],
+      ["itx", "builtins", "rpcStubs", ["get", "other", 0], ["sendMessage"]],
+    ),
+    // a first argument that is another key is another stub, whatever comes after it
+    held(
+      ["itx.whatsapp.sendMessage"],
+      ["itx", "builtins", "rpcStubs", ["get", "k2", "k1"], ["sendMessage"]],
+    ),
+    held(
+      ["itx.config.slack"],
+      ["itx", "builtins", "workers", ["get", { repo: "/repos/other" }], ["slack"]],
+    ),
+  ]).toEqual([null, null, null, null, null]);
+});
+
+test("a step that finds a thing takes its own arguments and no more", () => {
+  expect(() => refuseMoreArguments("rpcStubs.get(key)", [])).not.toThrow();
+  expect(() => refuseMoreArguments("rpcStubs.get(key)", [0])).toThrow(
+    "rpcStubs.get(key) takes no argument after its own, and got 1 more",
+  );
+  // an argument that is given as undefined is given
+  expect(() => refuseMoreArguments("workers.get(spec)", [undefined])).toThrow("got 1 more");
+});
+
 const REFUSED: [what: string, resolved: ItxExpression, extraArgs: unknown[]][] = [
   ["a call in the middle", [...STUB, ["chat", "jo"], ["send", "hi"]], []],
   ["a call of what a call answered", [...STUB, ["sendMessage", "jo"]], ["again"]],
@@ -134,6 +260,11 @@ function held(verbs: readonly string[], resolved: ItxExpression, extraArgs: unkn
     resolved,
     extraArgs,
     // the context's own table: `itx.whatsapp` is the stub, and anything under it follows
-    (verb) => (verb[1] === "whatsapp" ? [...STUB, ...verb.slice(2)] : null),
+    (verb) =>
+      verb[1] === "whatsapp"
+        ? [...STUB, ...verb.slice(2)]
+        : verb[1] === "config"
+          ? [...WORKER, ...verb.slice(2)]
+          : null,
   );
 }

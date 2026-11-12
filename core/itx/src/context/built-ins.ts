@@ -45,6 +45,7 @@ import {
   stampCallerHeaders,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
+import { refuseMoreArguments } from "./held-verbs.ts";
 import { admitLoadedCodeRow, namesAWorker } from "./itx-expression-rewriting.ts";
 import {
   assertFacetSourceWithinCeiling,
@@ -489,8 +490,9 @@ export function workersRoot(deps: {
 }): BuiltInScope["workers"] {
   const { path, iterateContextName } = deps;
   return {
-    get: (spec: Parameters<BuiltInScope["workers"]["get"]>[0]) =>
-      new InvokeHandle(async (methodSteps) => {
+    get: (spec: Parameters<BuiltInScope["workers"]["get"]>[0], ...more: unknown[]) => {
+      refuseMoreArguments("workers.get(spec)", more);
+      return new InvokeHandle(async (methodSteps) => {
         const [call] = methodSteps;
         if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
           throw new Error(
@@ -591,7 +593,8 @@ export function workersRoot(deps: {
             throw isLoadedWorkerPlatformFailure(failure) ? unavailableNow(failure) : failure;
           });
         }
-      }),
+      });
+    },
   };
 }
 
