@@ -321,6 +321,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     deployId: deployId(),
     path: this.#durableObjectAddress.path,
     birthEvents: itxHost().birthEvents?.(this.#durableObjectAddress.path),
+    wakeEvents: () => itxHost().wakeEvents?.(this.#durableObjectAddress.path) || [],
     wakeRecordDetail: () => this.#residency.wakeRecordDetail(),
     cause: () => this.#callerStorage.getStore()?.cause,
     onCommit: (freshEvents, afterOffset, throughOffset) => {

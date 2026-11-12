@@ -15,6 +15,10 @@ export interface ItxHost {
   mindSlug?: string;
   /** Appended in the same batch as the birth and first wake records. */
   birthEvents?(path: string): readonly StreamEventInput[];
+  /** Asked at every wake of a context, its birth too. Each has an idempotency key and lands once
+   *  per context: what a host starts to want later reaches the contexts that exist
+   *  (./stream/wake-events.ts). */
+  wakeEvents?(path: string): readonly StreamEventInput[];
   /** Without it, a run's writes are attributed to nobody. */
   signingSecret?(): Promise<string>;
   firstPartyFacets: Record<string, FirstPartyFacet>;

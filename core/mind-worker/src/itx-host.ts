@@ -18,7 +18,7 @@ import {
   secretsRoot,
   sendRecordingSecretFacts,
 } from "./context/secrets.ts";
-import { PLATFORM_BIRTH_EVENTS, telemetryRoots } from "./context/telemetry.ts";
+import { platformWakeEvents, telemetryRoots } from "./context/telemetry.ts";
 import { URL_ROOT_DESCRIPTION, urlRoot } from "./context/url.ts";
 import { WEBHOOKS_ROOT_DESCRIPTION, webhooksRoot } from "./context/webhooks.ts";
 import { prepareConfinedWorker } from "./context/worker-loader.ts";
@@ -76,9 +76,9 @@ defineItxHost({
   },
   birthEvents: (path) => [
     ...MIND_CONTEXT_BIRTH_EVENTS,
-    ...(env.TELEMETRY_METRICS ? PLATFORM_BIRTH_EVENTS : []),
     ...(path === "/" ? rootBirthEvents(env.MIND_TEMPLATE) : integrationBirthEvents(path)),
   ],
+  wakeEvents: () => platformWakeEvents(Boolean(env.TELEMETRY_METRICS)),
   get metrics() {
     return env.TELEMETRY_METRICS;
   },

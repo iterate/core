@@ -197,6 +197,10 @@ integrations, its telemetry (when the stack has it), and how to connect a coding
 Its larger parts are components of `@iterate-com/ui`, the ones iterate's hosted Dash draws;
 `public/app.js` is the wiring, the sidebar and the overview, and it is yours to change.
 
+When telemetry is turned on for a mind that exists, each context starts to send its events at
+its next wake, with its whole log from the first event. A context that never wakes again sends
+nothing: touch it (any read of it) to send its history.
+
 ```
 apps/<name>/
   index.html   the page; one file goes a long way

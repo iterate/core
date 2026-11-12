@@ -37,14 +37,22 @@ export const telemetryRoots = (egress: () => Pick<Door, "queryTelemetry" | "send
     },
   }) satisfies Record<string, ItxHostRoot>;
 
-// An ordered row: what fails the hook is its destination, which fails every event alike.
-export const PLATFORM_BIRTH_EVENTS = [
-  {
-    type: "events.iterate.com/itx/subscription-configured",
-    payload: {
-      name: "platform",
-      target: "itx.builtins.platformHook.deliverEvents",
-      afterOffset: 0,
-    },
-  },
-] as const;
+/** THE ROW THAT SENDS A CONTEXT'S EVENTS TO THE PLATFORM, as a wake event (core-itx
+ *  `ItxHost.wakeEvents`): every context gets it once, at its first wake while telemetry is on, also
+ *  one that was born or restored while telemetry was off. As a birth event it reached only the
+ *  contexts born after a turn-on. An ordered row: what fails the hook is its destination, which
+ *  fails every event alike. A row that a mind removes stays removed: the key is spent. */
+export const platformWakeEvents = (telemetryOn: boolean) =>
+  telemetryOn
+    ? [
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          idempotencyKey: "itx/platform-subscription",
+          payload: {
+            name: "platform",
+            target: "itx.builtins.platformHook.deliverEvents",
+            afterOffset: 0,
+          },
+        } as const,
+      ]
+    : [];

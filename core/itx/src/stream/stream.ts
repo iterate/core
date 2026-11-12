@@ -16,6 +16,7 @@ import {
 import { newChain, recordRefusal, refuseActPastLimit, storedCause, type Cause } from "../cause.ts";
 import type { Caller } from "../caller.ts";
 import { reduceScheduledAppends } from "./scheduled-appends.ts";
+import { eventsOwedAtWake } from "./wake-events.ts";
 import {
   CoreContract,
   STREAM_RECORD_TYPES,
@@ -61,6 +62,8 @@ interface StreamDeps {
   storage: DurableObjectStorageSlice;
   path: string;
   birthEvents?: readonly StreamEventInput[];
+  // Asked at every wake, the birth too: each lands once (./wake-events.ts).
+  wakeEvents?: () => readonly StreamEventInput[];
   // Once per offset-advancing commit, ephemerals included, after the waiters settle.
   onCommit: (freshEvents: StreamEvent[], afterOffset: number, throughOffset: number) => void;
   wakeRecordDetail?: () => Record<string, unknown>;
@@ -73,6 +76,7 @@ export class Stream {
   readonly storage: StreamStorage;
   readonly #path: string;
   readonly #birthEvents: readonly StreamEventInput[];
+  readonly #wakeEvents: NonNullable<StreamDeps["wakeEvents"]>;
   readonly #onCommit: StreamDeps["onCommit"];
   readonly #wakeRecordDetail: StreamDeps["wakeRecordDetail"];
   readonly #ambientCause: StreamDeps["cause"];
@@ -91,6 +95,7 @@ export class Stream {
     this.storage = new StreamStorage(deps.storage, deps.deployId || "this deploy");
     this.#path = deps.path;
     this.#birthEvents = deps.birthEvents || [];
+    this.#wakeEvents = deps.wakeEvents || (() => []);
     this.#onCommit = deps.onCommit;
     this.#wakeRecordDetail = deps.wakeRecordDetail;
     this.#ambientCause = deps.cause;
@@ -159,6 +164,7 @@ export class Stream {
       ...this.#birthEvents.map((event) => ({ ...event, source })),
     );
     this.#wakeRecorded = true;
+    this.#appendOwedAtWake(source);
   }
 
   // Every run the last incarnation left open is settled `interrupted` in the same batch: a run is
@@ -204,6 +210,43 @@ export class Stream {
       ...interrupted,
     );
     this.#wakeRecorded = true;
+    this.#appendOwedAtWake(cause && { cause });
+  }
+
+  /** The host's wake events that this context has not had (./wake-events.ts), appended AFTER the
+   *  wake record and by themselves: a host's event that the stream refuses (a pause that came
+   *  between, a payload the reducer throws on) must never fail a wake, or the context could not
+   *  be reached at all, its own resume included. They go to the log as birth events do, with no
+   *  `normalizeControlEvent`: a host's event that needs it must come normalized. */
+  #appendOwedAtWake(source: StreamEventInput["source"]): void {
+    try {
+      const owed = eventsOwedAtWake(
+        this.#wakeEvents(),
+        (key) => !!this.storage.readEventByIdempotencyKey(key),
+        Object.keys(this.#coreReducedState.subscriptions),
+        !!this.#coreReducedState.paused,
+      );
+      if (owed.length === 0) return;
+      this.append(...owed.map((event) => ({ ...event, source })));
+      for (const event of owed)
+        console.log({
+          event: "context.wake-event-appended",
+          namespace: "stream",
+          message: "a context got an event its host wants on every context, at this wake",
+          path: this.#path,
+          type: event.type,
+          idempotencyKey: event.idempotencyKey,
+        });
+    } catch (error) {
+      console.error({
+        event: "context.wake-event-refused",
+        namespace: "stream",
+        message:
+          "a host's wake event was not appended; the wake went on, and the next wake asks again",
+        path: this.#path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   #refusePastLoopLimit(cause: Cause, act: string): void {
