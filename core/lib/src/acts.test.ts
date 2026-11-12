@@ -101,6 +101,17 @@ test("a held call may carry the kernel's mark of what its name was, and nothing 
   expect(actOfText(JSON.stringify({ ...act, platform: true }))).toBeNull();
 });
 
+test("a held call may name the context whose table read its name, as a path of the mind, and say that loaded code asked", () => {
+  const act = { act: "itx.whatsapp.sendMessage", args: ["jo"], at: "/agents/one" };
+  expect(actOfText(JSON.stringify(act))).toEqual(act);
+  expect(actOfText(JSON.stringify({ ...act, at: "agents/one" }))).toBeNull();
+  expect(actOfText(JSON.stringify({ ...act, byLoadedCode: true }))).toEqual({
+    ...act,
+    byLoadedCode: true,
+  });
+  expect(actOfText(JSON.stringify({ ...act, byLoadedCode: false }))).toBeNull();
+});
+
 test.for([
   ["a name before the address", "Jo <jo@example.net>"],
   // a rule and an approver would read safe@example.org; the mail service sends to the last address

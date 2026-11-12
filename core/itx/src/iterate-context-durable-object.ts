@@ -1168,9 +1168,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         caller.cause,
       );
     this.#residency.inboundCallStarted();
-    const result = await this.#invokeInProcess(call, args, caller).finally(() =>
-      this.#residency.inboundCallEnded(caller.app === true),
-    );
+    // An approved act's text is for this one call (`Caller.approvedAct`).
+    const { approvedAct, ...asCalled } = caller;
+    const result = await (
+      approvedAct
+        ? this.#callerStorage.run(asCalled, () =>
+            this.#itxExpressionResolver.invokeApproved(approvedAct, call, args),
+          )
+        : this.#invokeInProcess(call, args, caller)
+    ).finally(() => this.#residency.inboundCallEnded(caller.app === true));
     // Every Workers-RPC caller arrives here, so the caller's session ends with the call, whatever
     // the caller disposes.
     return itxAnswerDetachedFromSession(result, call, args);

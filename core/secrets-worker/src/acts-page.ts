@@ -148,6 +148,8 @@ for (const held of data.acts) {
     for (const file of act.attachments) parts.append(line("Attached", file.filename + " (" + file.contentType + ", " + file.size + " bytes)"));
   } else {
     parts.append(line("Call", act.act, true));
+    // the context whose table says what that name is: one name may be two functions in two contexts
+    if (act.at) parts.append(line("In context", act.at));
     const args = document.createElement("pre");
     args.textContent = JSON.stringify(act.args, null, 2);
     parts.append(args);

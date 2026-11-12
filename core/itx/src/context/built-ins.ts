@@ -643,9 +643,17 @@ export function callContext(
       describe: () => ({ name: "fetch", path }),
     });
   }
+  // A call of the handle that the call answered is a new call: an approved act's text is for the
+  // one call that it arrives with (`Caller.approvedAct`), and does not go with the next.
+  const { approvedAct: _spent, ...afterTheCall } = made;
   return Promise.resolve(contextOf().invoke(expression, args, callerNow())).then((result) =>
-    materializeItxHandleReference(result, (handleExpression) =>
-      contextOf().invoke(handleExpression, [], callerNow()),
-    ),
+    materializeItxHandleReference(result, (handleExpression) => {
+      const now = delivery?.();
+      return contextOf().invoke(
+        handleExpression,
+        [],
+        now ? { ...afterTheCall, delivery: now } : afterTheCall,
+      );
+    }),
   );
 }

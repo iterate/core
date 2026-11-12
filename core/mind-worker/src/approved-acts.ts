@@ -32,17 +32,24 @@ export async function runApprovedAct(
       );
       return { ok: true as const, sent: { path: EMAIL_PATH, offset: sent.offset } };
     }
-    // A verb, from where its caller called it. The gate lets it go once. The call carries the
-    // approved text and is not the platform's: the kernel says whether it still is that act
+    // A verb, called at the context that read its name (iterate/acts `VerbAct`, `at`). The call
+    // arrives there as the caller's call did: with the caller's context as its origin, and as
+    // loaded code's when loaded code asked. An act
+    // that names no context was held by a build before this one: it is called from its caller's
+    // context, and the kernel refuses it, since the text it makes now names one. The gate lets
+    // the act go once, and the kernel says whether the call still is that act
     // (core/itx/src/context/itx-expression-rewriting.ts `#heldUntilApproved`).
     const gate = await deps.egress.act({ text: held.text, from: caller });
     if (gate.state !== "go") throw new Error(`the gate says "${gate.state}": it is not to do now`);
     const names = normalizedItxExpression(act.act);
+    const at = act.at || caller;
     const result = await deps
-      .contextAt(caller)
+      .contextAt(at)
       .invoke([...names.slice(0, -1), [String(names.at(-1)), ...act.args]], [], {
         principal: null,
         approvedAct: held.text,
+        ...(at !== caller && { path: caller }),
+        ...(act.byLoadedCode && { app: true as const }),
       });
     // what a verb answers may be anything: the fact keeps what JSON can say of it
     return { ok: true as const, result: jsonOf(result) };

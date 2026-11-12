@@ -120,12 +120,17 @@ const MailAct = z.strictObject({
 });
 export type MailAct = z.infer<typeof MailAct>;
 
-/** A call of a verb: its name and its arguments, which are plain JSON. `resolved` is the kernel's
- *  mark of what the name was when the act was held (a hash): the same name on another function is
- *  another act. */
+/** A call of a verb: its name and its arguments, which are plain JSON. `at` is the context whose
+ *  table read the name when the act was held: a caller in another context may read the same name
+ *  as another function, so an approval that comes late is done at `at`. `byLoadedCode` says that
+ *  the mind's loaded code asked: an approval that comes late is done as loaded code is, with its
+ *  limits. `resolved` is the kernel's mark of what the name was then (a hash): the same name on
+ *  another function is another act. */
 const VerbAct = z.strictObject({
   act: z.string().startsWith("itx."),
   args: z.array(z.unknown()),
+  at: z.string().startsWith("/").optional(),
+  byLoadedCode: z.literal(true).optional(),
   resolved: z.string().optional(),
 });
 export type VerbAct = z.infer<typeof VerbAct>;

@@ -593,6 +593,46 @@ await run(
 );
 
 await run(
+  "an agent's context calls the bridge that is lent at the root: its table sends the name to the root, the call waits there, and the approval runs it",
+  async () => {
+    // An agent's context has the row `itx => itx.cd('/')`: a name it has no row for is the root's.
+    const below = `/proof/agent-${marker}`;
+    await root()
+      .cd(below)
+      .append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx", target: "itx.cd('/')" },
+      });
+    const text = `from a context below the root ${marker}`;
+    const call = root()
+      .cd(below)
+      .run(`async (itx) => ${SEND}("jo@s.whatsapp.net", { text: ${JSON.stringify(text)} })`)
+      .then(
+        (answer) => ({ answer: JSON.stringify(answer) }),
+        (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+      );
+    const held = await heldDigest(SEND).catch(async (error: unknown) => {
+      // a kernel that asks with the table of the caller's context finds no rule, and the call runs
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; the call ended with ${JSON.stringify(await call).slice(0, 200)}`,
+      );
+    });
+    must(!said.includes(text), "the bridge was called with no approval");
+    await page.goto(`${page_}?digest=${held}`);
+    await checked(held);
+    await page.locator("[data-acts]").getByRole("button", { name: "Approve the chosen" }).click();
+    const ended = await call;
+    must(
+      "answer" in ended && ended.answer.includes(text) && said.includes(text),
+      `the call ended with ${JSON.stringify(ended)}`,
+    );
+    return {
+      detail: `the call from ${below} was held as act ${held.slice(0, 12)}; approved with the passkey, the bridge got it and the call answered ${ended.answer}`,
+    };
+  },
+);
+
+await run(
   "the same function by the stub's own key is held too, and a rejection ends the call",
   async () => {
     const call = root()
@@ -733,6 +773,69 @@ await run(
 );
 
 await run(
+  "a rule for a verb whose row crosses to another context holds it: itx.agents is a facet of /agents, by the root's name and by the facet's own",
+  async () => {
+    const row = (await root().rewriteRules.list()).find((one) => one.match === "itx.agents");
+    const target = row?.target || "";
+    must(
+      /cd\((["'])\/agents\1\)\.facets\.get\((["'])agents\2,/.test(target),
+      `itx.agents is not a facet of /agents that is found with a spec: ${target.slice(0, 120)}`,
+    );
+    const rules = await root().approvals.setRules([{ verb: SEND }, { verb: "itx.agents.delete" }]);
+    must(rules.length === 2, `the rules are ${JSON.stringify(rules)}`);
+    await settled(7_000);
+    /** The script's call must wait as `itx.agents.delete`: what the page says of it, and the
+     *  rejection ends the call. */
+    const rejected = async (reason: string, script: string) => {
+      const call = root()
+        .run(script)
+        .then(
+          (answer) => ({ answer: JSON.stringify(answer) }),
+          (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+        );
+      const held = await heldDigest("itx.agents.delete").catch(async (error: unknown) => {
+        await root().approvals.setRules([{ verb: SEND }]);
+        // a kernel that reads the rule's name where the call arrives finds no such name there
+        throw new Error(
+          `${reason}: ${error instanceof Error ? error.message : String(error)}; the call ended with ${JSON.stringify(await call).slice(0, 200)}`,
+        );
+      });
+      await page.goto(`${page_}?digest=${held}`);
+      await checked(held);
+      const words = (await page.locator(`#act-${held}`).innerText()).replace(/\s+/g, " ");
+      page.once("dialog", (dialog) => void dialog.accept(reason));
+      await page.locator("[data-acts]").getByRole("button", { name: "Reject them" }).click();
+      const ended = await call;
+      must(
+        "refused" in ended && ended.refused.includes(reason),
+        `the call ended with ${JSON.stringify(ended)}`,
+      );
+      return words;
+    };
+    // an agent that never was: where a kernel does not hold the call, nothing is deleted
+    const none = `/agents/proof/none-${marker}`;
+    const words = await rejected(
+      "not by the root's name",
+      `async (itx) => itx.agents.delete(${JSON.stringify(none)})`,
+    );
+    must(
+      words.includes("Call itx.agents.delete") && words.includes("In context /"),
+      `the page does not say which context read the name: ${words.slice(0, 200)}`,
+    );
+    // The facet found by its name alone, with no spec, is the same facet. With the same argument
+    // it is the same act too, which the member just rejected: so it names another agent.
+    await rejected(
+      "not by the facet's own name",
+      `async (itx) => itx.invoke(${JSON.stringify(["itx", ["cd", "/agents"], "facets", ["get", "agents"], ["delete", `${none}-2`]])})`,
+    );
+    await root().approvals.setRules([{ verb: SEND }]);
+    return {
+      detail: `itx.agents.delete(path) and itx.cd("/agents").facets.get("agents").delete(path) each waited as itx.agents.delete, read in context /, and ended by the rejection`,
+    };
+  },
+);
+
+await run(
   "a held verb whose name becomes another function while it waits is not run when a member approves it",
   async () => {
     const call = send(`re-pointed ${marker}`);
@@ -755,6 +858,38 @@ await run(
       `the call ended with ${JSON.stringify(ended)}`,
     );
     return { detail: ended.refused.slice(0, 150) };
+  },
+);
+
+await run(
+  "a held verb whose name goes, while it waits, to a function that no rule holds is not run when a member approves it",
+  async () => {
+    // The rule names the bridge: it holds every verb of the bridge, and no other function.
+    const bridgeName = SEND.split(".").slice(0, -1).join(".");
+    const rules = await root().approvals.setRules([{ verb: bridgeName }]);
+    must(rules.length === 1, `the rules are ${JSON.stringify(rules)}`);
+    await settled(7_000);
+    const call = send(`to no rule's function ${marker}`);
+    const held = await heldDigest(SEND);
+    // While it waits, a row for the verb's own name sends it to a function outside the rule.
+    const row = { match: SEND, target: "itx.whoami" };
+    const rule = "events.iterate.com/itx/rewrite-rule-configured";
+    await root().append({ type: rule, payload: row });
+    await page.goto(`${page_}?digest=${held}`);
+    await checked(held);
+    await page.locator("[data-acts]").getByRole("button", { name: "Approve the chosen" }).click();
+    const ended = await call;
+    // the row and the rule go whatever the call did: the steps after this one use the name
+    await root().append({
+      type: rule,
+      payload: { match: SEND, target: null, ifTarget: row.target },
+    });
+    await root().approvals.setRules([{ verb: SEND }]);
+    must(
+      "refused" in ended && ended.refused.includes("changed while it waited"),
+      `the member approved a message, and the call ended with ${JSON.stringify(ended).slice(0, 300)}`,
+    );
+    return { detail: ended.refused.slice(0, 170) };
   },
 );
 
@@ -812,17 +947,24 @@ await run(
   async () => {
     // A row's delivery calls its target itself. No caller is there who could wait for a member.
     // Loaded code writes the row as an event: its `subscribe` lends a live callback only.
-    // Three rows hear one event. One aims at a verb of the bridge that no rule names, one at the
-    // bridge's held verb, and one at a held verb of the mind's own code.
+    // Four rows hear one event. One aims at a verb of the bridge that no rule names, one at the
+    // bridge's held verb, one at a held verb of the mind's own code, and one at a held verb whose
+    // row crosses to another context.
     const own = "itx.config.slack";
-    const rules = await root().approvals.setRules([{ verb: SEND }, { verb: own }]);
-    must(rules.length === 2, `the rules are ${JSON.stringify(rules)}`);
+    const across = "itx.agents.delete";
+    const rules = await root().approvals.setRules([
+      { verb: SEND },
+      { verb: own },
+      { verb: across },
+    ]);
+    must(rules.length === 3, `the rules are ${JSON.stringify(rules)}`);
     await settled(7_000);
     const type = `proof/said-${marker}`;
     const rows = {
       free: { name: `proof-free-verb-${marker}`, target: SEND.replace(/sendMessage$/, "heard") },
       lent: { name: `proof-held-verb-${marker}`, target: SEND },
       own: { name: `proof-held-own-verb-${marker}`, target: own },
+      across: { name: `proof-held-verb-across-${marker}`, target: across },
     };
     const configured = Object.values(rows).map((row) =>
       JSON.stringify({
@@ -841,11 +983,15 @@ await run(
       await until("the bridge hears the event by the row that no rule holds", 40, async () =>
         got("BRIDGE HEARD"),
       );
-      // The kernel walks the mind's own verb itself, so that row halts and says why.
-      const halted = await until("the row to the mind's own held verb halts", 40, async () => {
-        const read = JSON.stringify(await root().subscriptions.get(rows.own.name));
-        return read.includes('"halted"') && read;
-      });
+      // The kernel walks the mind's own verb itself, so that row halts and says why. So does the
+      // row whose verb is a facet's of another context.
+      const haltedRow = (name: string, what: string) =>
+        until(`the row to ${what} halts`, 40, async () => {
+          const read = JSON.stringify(await root().subscriptions.get(name));
+          return read.includes('"halted"') && read;
+        });
+      const halted = await haltedRow(rows.own.name, "the mind's own held verb");
+      const haltedAcross = await haltedRow(rows.across.name, "the held verb of another context");
       // A delivery to a live stub is a push: its refusal is dropped with a line in the Worker's
       // log, and the row stays. So the proof of the bridge's verb is that no call comes, well
       // after the same event reached the bridge by the other row.
@@ -856,6 +1002,11 @@ await run(
         ...(halted.includes("waits for a member's approval")
           ? []
           : [`the row to the mind's own verb halted for another reason: ${halted.slice(0, 300)}`]),
+        ...(haltedAcross.includes("waits for a member's approval")
+          ? []
+          : [
+              `the row to the verb of another context halted for another reason: ${haltedAcross.slice(0, 300)}`,
+            ]),
         ...(called ? [`the bridge was called for the event: ${called.slice(0, 200)}`] : []),
       ];
       must(faults.length === 0, faults.join("; "));
@@ -865,28 +1016,60 @@ await run(
     }
     return {
       detail:
-        "one event, three rows: the bridge heard it by the row no rule names; the row to the mind's own held verb halted and says why; 10 s later the bridge's held verb had no call",
+        "one event, four rows: the bridge heard it by the row no rule names; the row to the mind's own held verb and the row to a held verb of another context (itx.agents.delete) each halted and say why; 10 s later the bridge's held verb had no call",
     };
   },
 );
 
 if (env.ITERATE_PROOF_LATE !== "0")
   await run(
-    "a call whose caller gave up after five minutes is approved later: the bridge gets it then, and a name re-pointed meanwhile is not run",
+    "a call whose caller gave up after five minutes is approved later: the bridge gets it then, also when its caller's context reads the name as another function, and a name re-pointed meanwhile is not run",
     async () => {
       const kept = `late ${marker}`;
       const moved = `late and re-pointed ${marker}`;
-      // two calls wait at once: each is its own act
+      const far = `late, from a context that reads the name as another ${marker}`;
+      const rule = "events.iterate.com/itx/rewrite-rule-configured";
+      const across = "itx.agents.delete";
+      await root().approvals.setRules([{ verb: SEND }, { verb: across }]);
+      await settled(7_000);
+      // four calls wait at once: each is its own act
       const first = send(kept);
       const heldKept = await heldDigest(SEND);
       const second = send(moved);
       const heldMoved = await heldDigest(SEND);
-      for (const ended of await Promise.all([first, second]))
+      // The third caller is in a context of its own, whose table gives the verb's name to another
+      // function of the bridge. It names the mind's root, so the root's table reads the name.
+      const elsewhere = `/proof/late-${marker}`;
+      const masked = { match: SEND, target: "itx.proofWhatsapp.jonas.chats" };
+      await root().cd(elsewhere).append({ type: rule, payload: masked });
+      const third = root()
+        .cd(elsewhere)
+        .run(
+          `async (itx) => itx.cd("/").proofWhatsapp.jonas.sendMessage("jo@s.whatsapp.net", { text: ${JSON.stringify(far)} })`,
+        )
+        .then(
+          (answer) => ({ answer: JSON.stringify(answer) }),
+          (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+        );
+      const heldFar = await heldDigest(SEND);
+      // The fourth call names a facet of another context by the facet's own name, with no spec.
+      // The rule's name finds that facet with one, and a late approval calls the rule's name.
+      const none = `/agents/proof/none-late-${marker}`;
+      const fourth = root()
+        .run(
+          `async (itx) => itx.invoke(${JSON.stringify(["itx", ["cd", "/agents"], "facets", ["get", "agents"], ["delete", none]])})`,
+        )
+        .then(
+          (answer) => ({ answer: JSON.stringify(answer) }),
+          (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+        );
+      const heldAcross = await heldDigest(across);
+      for (const ended of await Promise.all([first, second, third, fourth]))
         must(
           "refused" in ended && ended.refused.includes("can be approved for a day"),
           `a call ended with ${JSON.stringify(ended)}`,
         );
-      must(!said.includes(kept), "the bridge was called with no approval");
+      must(!said.includes(kept) && !said.includes(far), "the bridge was called with no approval");
       const approve = async (digest: string) => {
         await page.goto(`${page_}?digest=${digest}`);
         await checked(digest);
@@ -896,9 +1079,9 @@ if (env.ITERATE_PROOF_LATE !== "0")
           .click();
       };
       // the member's API session called from the mind's root, so that is the caller's context
-      const doneFact = (digest: string) =>
-        until("the fact on the caller's context", 90, async () =>
-          (await eventsOf("/")).findLast(
+      const doneFact = (digest: string, caller = "/") =>
+        until(`the fact on the caller's context ${caller}`, 90, async () =>
+          (await eventsOf(caller)).findLast(
             (event) => event.type === TYPES.done && event.payload.digest === digest,
           ),
         );
@@ -906,9 +1089,30 @@ if (env.ITERATE_PROOF_LATE !== "0")
       const done = await doneFact(heldKept);
       must(done.payload.ok === true, `act-done says ${JSON.stringify(done.payload)}`);
       must(said.includes(kept), "act-done says ok, and the bridge printed no call");
+      // The third act is done where it was held, at the root, and not by the caller's own name.
+      const doneFar = await (async () => {
+        await approve(heldFar);
+        return doneFact(heldFar, elsewhere);
+      })().finally(() =>
+        root()
+          .cd(elsewhere)
+          .append({ type: rule, payload: { match: SEND, target: null, ifTarget: masked.target } }),
+      );
+      must(
+        doneFar.payload.ok === true && said.includes(far),
+        `the bridge ${said.includes(far) ? "got" : "did not get"} the call from ${elsewhere}, and act-done there says ${JSON.stringify(doneFar.payload).slice(0, 300)}`,
+      );
+      // The fourth act is the rule's own verb, whatever spelling its caller used. Its agent never
+      // was, so the function's own answer is the mark that the call reached it.
+      await approve(heldAcross);
+      const doneAcross = await doneFact(heldAcross);
+      must(
+        String(doneAcross.payload.error).includes("nothing to delete"),
+        `the call by the facet's own name was not done: act-done says ${JSON.stringify(doneAcross.payload).slice(0, 300)}`,
+      );
+      await root().approvals.setRules([{ verb: SEND }]);
       // The second act's name goes to another function of the bridge before the member approves.
       const row = { match: SEND, target: "itx.proofWhatsapp.jonas.chats" };
-      const rule = "events.iterate.com/itx/rewrite-rule-configured";
       await root().append({ type: rule, payload: row });
       // the kernel reads the mind's table again within five seconds
       await settled(7_000);
@@ -926,7 +1130,7 @@ if (env.ITERATE_PROOF_LATE !== "0")
       );
       must(!said.includes(moved), "the bridge was called for the name that was re-pointed");
       return {
-        detail: `both calls threw after five minutes; approved later, the bridge got the first and / holds act-done { ok: true }; the second, re-pointed before its approval, was not run: ${String(notRun.payload.error).slice(0, 90)}`,
+        detail: `all four calls threw after five minutes; approved later, the bridge got the first and / holds act-done { ok: true }; it got the one from ${elsewhere} too, whose own table gives the name to chats(), and that context holds act-done { ok: true }; the call by the facet's own name reached itx.agents.delete (its answer: nothing to delete); the second, re-pointed before its approval, was not run: ${String(notRun.payload.error).slice(0, 90)}`,
       };
     },
   );

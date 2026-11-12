@@ -22,7 +22,7 @@ import {
   type ItxExpressionInput,
   type ItxExpressionPrefix,
 } from "iterate/expression";
-import { ACT_DONE, actText } from "iterate/acts";
+import { ACT_DONE, actOfText, type ActRule, actText } from "iterate/acts";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { crossingOneMore, newChain, recordRefusal, type Cause } from "../cause.ts";
 import { isConfigPointerMatch, sha256Hex, type Caller } from "../caller.ts";
@@ -796,8 +796,24 @@ export class ItxExpressionResolver {
   // Live `extraArgs` fold into a call that ends in a name before resolving, so a mask refuses
   // `invoke("itx.kv.get", "k")` exactly as it refuses `itx.kv.get("k")`.
   async invoke(call: ItxExpressionInput, ...extraArgs: unknown[]): Promise<unknown> {
+    return this.#invoked(call, extraArgs);
+  }
+
+  // THE ONE CALL THAT COMES WITH AN APPROVED ACT'S TEXT (`Caller.approvedAct`): the call that does
+  // an act a member approved after its caller stopped waiting, or a call that another context
+  // sent on after its approval. The text is for this call alone. It is given by hand, and the
+  // caller that the walk and every call made on the way see does not carry it.
+  async invokeApproved(
+    approved: string,
+    call: ItxExpressionInput,
+    extraArgs: unknown[],
+  ): Promise<unknown> {
+    return this.#invoked(call, extraArgs, approved);
+  }
+
+  async #invoked(call: ItxExpressionInput, extraArgs: unknown[], approved?: string) {
     try {
-      return (await this.#dispatch(call, extraArgs)).value;
+      return (await this.#dispatch(call, extraArgs, approved)).value;
     } catch (error) {
       recordRefusal(error, (cause, message) =>
         this.#reach.recordLoopLimit(this.#path, cause, message),
@@ -832,14 +848,7 @@ export class ItxExpressionResolver {
         return;
       }
     }
-    const held = heldVerbOf(verbRules, called, route.extraArgs, (verb) => {
-      try {
-        return resolveItxExpression(() => table, verb, implicitRootsAt(route.at)).at(-1)!;
-      } catch {
-        return null;
-      }
-    });
-    if (held)
+    if (await this.#heldBy(verbRules, called, route.extraArgs, route.at, table))
       throw codedError(
         "PERMANENT_FAILURE",
         `${JSON.stringify(print(name))} waits for a member's approval when it is called, so a subscription does not deliver to it: nobody is there to wait`,
@@ -894,9 +903,8 @@ export class ItxExpressionResolver {
   }
 
   // A snapshot may expire while the next is read: the route is resolved again, a bounded number of times.
-  async #dispatch(call: ItxExpressionInput, extraArgs: unknown[]) {
-    // An act that a member approved after its caller stopped waiting arrives with its text.
-    let approved = this.#caller().approvedAct;
+  // `approved`: the text of the act that this call is said to be (`invokeApproved`).
+  async #dispatch(call: ItxExpressionInput, extraArgs: unknown[], approved?: string) {
     for (let routes = 0; routes < SNAPSHOT_REREADS; routes++) {
       const { route, validUntil, rules } = await this.#route(call, extraArgs);
       if (Date.now() >= validUntil) continue;
@@ -911,9 +919,16 @@ export class ItxExpressionResolver {
         // again, and must still be the act the member approved.
         if (approved && waited) continue;
       }
+      // An approved text goes on with a call that is sent on: the context where the call arrives
+      // says whether the call still is that act.
       const value =
         route.kind === "located"
-          ? await this.#reach.located(route.at, route.expression, route.extraArgs, route.caller)
+          ? await this.#reach.located(
+              route.at,
+              route.expression,
+              route.extraArgs,
+              approved ? { ...route.caller, approvedAct: approved } : route.caller,
+            )
           : await this.#walk(route.builtIns, route.fixedPoint, route.extraArgs);
       return { value, validUntil, route };
     }
@@ -924,11 +939,13 @@ export class ItxExpressionResolver {
   }
 
   // A VERB AN APPROVAL RULE NAMES WAITS FOR A MEMBER'S YES (./held-verbs.ts, the host's `acts`).
-  // Asked with the table that resolved the call, the table of `route.at`, so every name for one
-  // function meets the same rule. The platform's own calls are not held. An act that a member
+  // Asked by both readings of a rule's name (`#heldBy`), so every name for one function meets the
+  // same rule. The platform's own calls are not held. An act that a member
   // approved after its caller stopped waiting is no platform's call: it comes with the approved
-  // text (`Caller.approvedAct`), and runs only when the call is still that act. Answers the act's
-  // text once a member approved it, and nothing for a call that no rule names.
+  // text (`invokeApproved`), and runs only when the call is still that act. A CALL THAT COMES WITH
+  // AN APPROVED TEXT AND IS NOT HELD NOW IS REFUSED: its name went to a function that no rule
+  // names, or its rule is gone, and the member read another call. Answers the act's text once a
+  // member approved it, and nothing for a call that no rule names.
   async #heldUntilApproved(
     route: { fixedPoint: ItxExpression; extraArgs: unknown[]; at: string },
     rules: readonly ItxExpressionRewriteRule[],
@@ -936,30 +953,37 @@ export class ItxExpressionResolver {
   ): Promise<string | undefined> {
     const gate = itxHost().acts;
     const caller = this.#caller();
-    if (!gate || caller.platform) return undefined;
-    const verbRules = await gate.verbRules();
-    if (verbRules.length === 0) return undefined;
-    const held = heldVerbOf(verbRules, route.fixedPoint, route.extraArgs, (verb) => {
-      try {
-        return resolveItxExpression(() => rules, verb, implicitRootsAt(route.at)).at(-1)!;
-      } catch {
-        return null;
-      }
-    });
-    if (!held) return undefined;
+    if (caller.platform) return undefined;
+    const changed = (name: string) =>
+      codedError(
+        "FORBIDDEN",
+        `${name} changed while it waited for a member's approval: call it again`,
+      );
+    const verbRules = gate ? await gate.verbRules() : [];
+    const by =
+      verbRules.length > 0
+        ? await this.#heldBy(verbRules, route.fixedPoint, route.extraArgs, route.at, rules)
+        : null;
+    if (!gate || !by) {
+      if (approved) throw changed(actOfText(approved)?.act || "the approved call");
+      return undefined;
+    }
+    const { held } = by;
     if ("refused" in held) throw codedError("FORBIDDEN", held.refused);
-    // The act carries a mark of what its name is now. A name that is re-pointed while the act
-    // waits, or before a late approval is done, makes another text: not the one a member signed.
+    // The act's marks (iterate/acts `VerbAct`): the context that read its name, whether loaded
+    // code asked, and what that context reads the name as now. The last is of the act's name, not
+    // of the call as it is spelled: every spelling of one function is one act, and a late
+    // approval, which calls the act's name, makes the same text.
+    const named =
+      (await by.read(normalizedItxExpression(held.act))) ?? calledNameOf(route.fixedPoint);
     const text = actText({
       ...held,
-      resolved: await sha256Hex(print(calledNameOf(route.fixedPoint))),
+      at: by.readAt,
+      ...(caller.app && { byLoadedCode: true as const }),
+      resolved: await sha256Hex(print(named)),
     });
     if (approved === text) return approved;
-    if (approved)
-      throw codedError(
-        "FORBIDDEN",
-        `${held.act} changed while it waited for a member's approval: call it again`,
-      );
+    if (approved) throw changed(held.act);
     const from = caller.path || this.#path;
     // The gate's facts are the platform's own, on the context it names.
     const record = (facts: { path: string; events: StreamEventInput[] }[]) =>
@@ -991,6 +1015,87 @@ export class ItxExpressionResolver {
           : `${held.act} waits for a member's approval, at ${where}. It can be approved for a day. When it is, it is done then, and this context gets an event that says so (${ACT_DONE}): do not call it again.`,
       { digest: answer.digest, state: answer.state },
     );
+  }
+
+  // THE CALL AS AN ACT THAT A RULE HOLDS, AND WHO READ THE RULE'S NAME. A rule's name is read
+  // twice. First by the table that resolved the call, the table of `at`. Then from the mind's
+  // root, where a member writes it, through every context its rows cross (`#readFromRoot`): the
+  // root's `itx.agents` is a facet of `/agents`, the call is walked there, and the table there has
+  // no name `itx.agents`. `readAt` is the context whose table read the name that holds the call,
+  // and `read` reads any name as that context does, at `at`.
+  async #heldBy(
+    verbRules: readonly ActRule[],
+    called: ItxExpression,
+    extraArgs: readonly unknown[],
+    at: string,
+    rules: readonly ItxExpressionRewriteRule[],
+  ) {
+    const readHere = (verb: ItxExpression) => {
+      try {
+        return resolveItxExpression(() => rules, verb, implicitRootsAt(at)).at(-1)!;
+      } catch {
+        return null;
+      }
+    };
+    const readFromRoot = async (verb: ItxExpression) => {
+      const read = await this.#readFromRoot(verb);
+      return read?.at === at ? read.fixedPoint : null;
+    };
+    const names: ItxExpression[] = [];
+    const here = heldVerbOf(verbRules, called, extraArgs, (verb) => {
+      names.push(verb);
+      return readHere(verb);
+    });
+    if (here)
+      return { held: here, readAt: at, read: async (verb: ItxExpression) => readHere(verb) };
+    const fromRoot = new Map<string, ItxExpression>();
+    for (const verb of names) {
+      const read = await readFromRoot(verb);
+      if (read) fromRoot.set(print(verb), read);
+    }
+    if (fromRoot.size === 0) return null;
+    const held = heldVerbOf(
+      verbRules,
+      called,
+      extraArgs,
+      (verb) => fromRoot.get(print(verb)) ?? null,
+    );
+    return held ? { held, readAt: "/", read: readFromRoot } : null;
+  }
+
+  // WHERE A RULE'S NAME ENDS WHEN THE MIND'S ROOT READS IT, and what it is there: resolved by the
+  // root's table and by the table of each context that a `cd` in a row sends it on to, as a call
+  // of that name from the root is routed, without calling any of them. Null when a table on the
+  // way has no row for it.
+  async #readFromRoot(
+    verb: ItxExpression,
+  ): Promise<{ at: string; fixedPoint: ItxExpression } | null> {
+    let at = "/";
+    let entered = verb;
+    // a row that sends a name back where it came from ends here, as a name that no rule reads
+    for (let hops = 0; hops < 8; hops++) {
+      const rules =
+        at === this.#path && this.#rewriteRules
+          ? this.#rewriteRules()
+          : (await this.#reach.snapshotOf(at)).rules;
+      let fixedPoint: ItxExpression;
+      try {
+        fixedPoint = resolveItxExpression(() => rules, entered, implicitRootsAt(at)).at(-1)!;
+      } catch {
+        return null;
+      }
+      const cdStep = fixedPoint[2];
+      if (
+        fixedPoint.length <= 3 ||
+        !Array.isArray(cdStep) ||
+        cdStep[0] !== "cd" ||
+        typeof cdStep[1] !== "string"
+      )
+        return { at, fixedPoint };
+      at = resolveContextPath("/", cdStep[1]);
+      entered = ["itx", ...fixedPoint.slice(3)];
+    }
+    return null;
   }
 
   // Admitted whole, as its caller made it, then resolved through every context its chain crosses
