@@ -304,7 +304,7 @@ await run(
       const statement = statementText({
         mind: domain,
         path: "/proof/statements",
-        type: "events.iterate.com/proof/said",
+        type: "events.iterate.com/test/said",
         payload: { word, member },
         at: now,
         expires: now + 60_000,
