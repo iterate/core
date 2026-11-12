@@ -1,7 +1,13 @@
 // The default config's Slack agent (core/configs/default/slack.ts): which deliveries reach an
 // agent, the agent's path for a thread, and the call that answers through the vault.
 import { expect, test } from "vitest";
-import { callSlack, slackContentOf, slackMessageOf } from "../../configs/default/slack.ts";
+import {
+  callSlack,
+  refuseSlackSender,
+  slackContentOf,
+  slackMessageOf,
+  slackSenderMay,
+} from "../../configs/default/slack.ts";
 
 test("a mention starts the agent of its own thread", () => {
   const message = slackMessageOf(
@@ -44,6 +50,68 @@ test.for([
   expect(slackMessageOf(delivery(event))).toBeNull();
 });
 
+test("a person of another workspace, in a shared channel, reaches no agent", () => {
+  expect(
+    slackMessageOf(delivery({ type: "app_mention", ts: "20.1", user_team: "T-OTHER" })),
+  ).toBeNull();
+  // the workspace's own person, as Slack names their team
+  expect(
+    slackMessageOf(delivery({ type: "app_mention", ts: "20.1", user_team: "T1" })),
+  ).toMatchObject({ teamId: "T1", user: "U1" });
+});
+
+test("a full member of the workspace with a confirmed email may instruct an agent, and Slack is asked once", async () => {
+  const mind = slackMind({
+    team_id: "T1",
+    is_email_confirmed: true,
+    profile: { email: "Ada@Example.com" },
+  });
+  expect(await slackSenderMay(mind, { teamId: "T1", user: "U1" }, 1000)).toBe("ada@example.com");
+  expect(await slackSenderMay(mind, { teamId: "T1", user: "U1" }, 2000)).toBe("ada@example.com");
+  expect(mind.calls.map(({ method, form }) => [method, form.user])).toEqual([["users.info", "U1"]]);
+  // the answer is kept for ten minutes, and asked for again after
+  await slackSenderMay(mind, { teamId: "T1", user: "U1" }, 1000 + 10 * 60_000 + 1);
+  expect(mind.calls).toHaveLength(2);
+});
+
+test.for([
+  ["a bot", { is_bot: true }],
+  ["an app's user", { is_app_user: true }],
+  ["a guest of several channels", { is_restricted: true }],
+  ["a guest of one channel", { is_restricted: true, is_ultra_restricted: true }],
+  ["a person of another workspace", { is_stranger: true }],
+  ["a user of another team", { team_id: "T-OTHER" }],
+  ["a deactivated user", { deleted: true }],
+  ["a user whose email Slack did not confirm", { is_email_confirmed: false }],
+  ["a user with no email", { profile: {} }],
+] as const)("%s may not instruct an agent", async ([, facts]) => {
+  const mind = slackMind({
+    team_id: "T1",
+    is_email_confirmed: true,
+    profile: { email: "eve@example.com" },
+    ...facts,
+  });
+  expect(await slackSenderMay(mind, { teamId: "T1", user: "U1" })).toBeNull();
+});
+
+test("when Slack does not answer, nobody may, and the next message asks again", async () => {
+  const mind = slackMind(null);
+  expect(await slackSenderMay(mind, { teamId: "T1", user: "U1" })).toBeNull();
+  expect(await slackSenderMay(mind, { teamId: "T1", user: "U1" })).toBeNull();
+  expect(mind.calls).toHaveLength(2);
+});
+
+test("a refused mention gets one short answer for its thread, and other words of a thread get none", async () => {
+  const mind = slackMind(null);
+  const mention = { teamId: "T1", channel: "C1", thread: "17.000100", starts: true };
+  await refuseSlackSender(mind, mention);
+  await refuseSlackSender(mind, mention);
+  await refuseSlackSender(mind, { ...mention, thread: "18.000200", starts: false });
+  expect(mind.calls.map(({ method, form }) => [method, form.channel, form.thread_ts])).toEqual([
+    ["chat.postMessage", "C1", "17.000100"],
+  ]);
+});
+
 test("a call goes to Slack's method with the secret named, never the token", async () => {
   const requests: Request[] = [];
   const answer = await callSlack(
@@ -77,5 +145,25 @@ function delivery(event: Record<string, unknown>) {
     teamId: "T1",
     slackRequestTimestamp: "1",
     body: { authorizations: [{ user_id: "UBOT" }], event: { channel: "C1", user: "U1", ...event } },
+  };
+}
+
+/** The part of a mind that slack.ts uses: a key-value store in memory, and a Slack that answers
+ *  `users.info` with `user` (null: Slack refuses) and records each call. */
+function slackMind(user: Record<string, unknown> | null) {
+  const kept = new Map<string, string>();
+  const calls: { method: string; form: Record<string, string> }[] = [];
+  return {
+    calls,
+    kv: {
+      get: async (key: string) => kept.get(key) ?? null,
+      put: async (key: string, value: string) => void kept.set(key, value),
+    },
+    fetch: async (request: Request) => {
+      const method = new URL(request.url).pathname.replace("/api/", "");
+      calls.push({ method, form: Object.fromEntries(new URLSearchParams(await request.text())) });
+      if (method !== "users.info") return Response.json({ ok: true });
+      return Response.json(user ? { ok: true, user } : { ok: false, error: "user_not_found" });
+    },
   };
 }

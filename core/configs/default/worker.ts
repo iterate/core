@@ -10,7 +10,13 @@ import { agentsApp } from "./apps/agents/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
-import { callSlack, slackContentOf, slackMessageOf } from "./slack.ts";
+import {
+  callSlack,
+  refuseSlackSender,
+  slackContentOf,
+  slackMessageOf,
+  slackSenderMay,
+} from "./slack.ts";
 
 // The integration packages this mind hosts (a Telegram bot, your own GitHub App, …), one element
 // each: AGENTS.md, and the recipes at https://github.com/jonastemplestein/iterategrations.
@@ -149,6 +155,12 @@ export default class extends IterateConfigEntrypoint {
         if (event.source?.signer?.principal.actor !== "iterate-cloud") break;
         const message = slackMessageOf(event.payload);
         if (!message) break;
+        // An agent holds the whole itx: a guest, an app or a person of another workspace gets
+        // none, and one short answer when they asked for one (slack.ts `slackSenderMay`).
+        if (!(await slackSenderMay(itx, message))) {
+          await refuseSlackSender(itx, message);
+          break;
+        }
         if (message.starts) await itx.agents.create(message.agent);
         else if (!(await itx.agents.list()).some((agent) => agent.path === message.agent)) break;
         await itx

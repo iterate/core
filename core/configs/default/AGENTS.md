@@ -26,7 +26,10 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
     direct message starts one; a later message of the thread reaches the same agent. The agent
     answers by calling Slack's Web API itself: `await itx.config.slack("chat.postMessage", {
 channel, thread_ts, text })`, and any other method the same way. The token stays in the vault
-    (`/secrets/slack`, linked through iterate Cloud's Slack app).
+    (`/secrets/slack`, linked through iterate Cloud's Slack app). An agent holds the whole `itx`, so
+    only a full member of the workspace with an email that Slack confirmed reaches one
+    (`slackSenderMay`): a bot, an app, a guest and a person of another workspace get one short
+    refusal for a mention, and no agent.
   - The `events.iterate.com/x/message-received` case hands what a linked X account says to
     iterate's bot (a direct message, or a post that mentions it) to an agent of its own per
     account, `/agents/x/u<x user id>`. A member links an account with
