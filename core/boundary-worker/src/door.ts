@@ -11,6 +11,7 @@ import {
 import { SECRET_USE_HEADER, secretPathsReferenced } from "iterate/secret-placeholder";
 import type { Door as DoorService, SecretVerb, SecretVerbs } from "iterate/workers";
 import type { DoorEnv } from "./env.ts";
+import { ownRequestHeaders } from "./own-request.ts";
 
 export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
   async fetch(request: Parameters<DoorService["fetch"]>[0]) {
@@ -38,10 +39,11 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     // mind's stamps. No answer keeps a facts header: the mind would append what it says.
     const inbound = (this.ctx.exports as unknown as { default: Fetcher }).default;
     if (!ownDomain) return withFacts(await fetch(leavingTheStack(outbound)), []);
-    // The mind's own request to one of its hosts is nobody's: it carries no session in.
-    const ownHeaders = new Headers(outbound.headers);
-    ownHeaders.delete("cookie");
-    return withFacts(await inbound.fetch(new Request(outbound, { headers: ownHeaders })), []);
+    // The mind's own request to one of its hosts is nobody's (./own-request.ts).
+    return withFacts(
+      await inbound.fetch(new Request(outbound, { headers: ownRequestHeaders(outbound.headers) })),
+      [],
+    );
   }
 
   /* oxlint-disable iterate/mechanical-class-impl -- a generic method: `Parameters<>` of the contract would lose `V`, which ties each verb to its input and its answer */
