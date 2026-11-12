@@ -3,7 +3,7 @@ import { challengeOf, statementText } from "iterate/signed";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
 import { sessionCookie } from "./cookies.ts";
-import { TOO_MANY } from "./device/limits.ts";
+import { clientOf, TOO_MANY } from "./device/limits.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import { verifiedStatement } from "./keys.ts";
 
@@ -17,9 +17,8 @@ const WINDOW_MS = 10 * 60_000;
 // minutes. ?1 challenge, ?2 client, ?3 now, ?4 expires at.
 const INSERT_CHALLENGE = `insert into passkey_challenges (challenge, client, created_at, expires_at)
 select ?1, ?2, ?3, ?4
-where (?2 is null or (select count(*) from passkey_challenges
-                      where client = ?2 and created_at > ?3 - ${WINDOW_MS})
-                     < 20)
+where (select count(*) from passkey_challenges
+       where client = ?2 and created_at > ?3 - ${WINDOW_MS}) < 20
   and (select count(*) from passkey_challenges where created_at > ?3 - ${WINDOW_MS}) < 120
 returning challenge`;
 
@@ -53,12 +52,7 @@ async function challenge(env: Env, request: Request) {
   const made = await challengeOf(statement);
   const [, added] = await env.DB.batch([
     env.DB.prepare("delete from passkey_challenges where created_at <= ?1").bind(now - WINDOW_MS),
-    env.DB.prepare(INSERT_CHALLENGE).bind(
-      made,
-      request.headers.get("cf-connecting-ip") || null,
-      now,
-      now + LIFETIME_MS,
-    ),
+    env.DB.prepare(INSERT_CHALLENGE).bind(made, clientOf(request), now, now + LIFETIME_MS),
   ]);
   if (!added?.results[0]) {
     console.warn({ event: "auth.admission-refused", kind: "passkey" });

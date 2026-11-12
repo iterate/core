@@ -13,17 +13,26 @@ where (?2 is null or (select count(*) from admissions
       < 120
 returning 1 as admitted`;
 
-/** `host-client` is asked with no address (the boundary asks for a visitor it does not name), so
- *  the stack's own count alone holds it. */
+/** The client a limit counts a request for: the address the edge names, or the mind's own
+ *  requests' one address, which the boundary sets (core/boundary-worker `own-request.ts`). A
+ *  request with no address at all is counted too, all such as one client: no caller is exempt from
+ *  the per-client limit, or it could use up the stack's and stop the members' sign-ins. */
+export function clientOf(request: Request): string {
+  return request.headers.get("cf-connecting-ip") || "no-address";
+}
+
+/** `host-client` alone is asked with no client: the boundary asks for a visitor it does not name,
+ *  so the stack's own count holds it. */
 export async function admitted(
   env: Env,
   kind: "device" | "registration" | "host-client",
   request: Request,
 ) {
   const now = Date.now();
+  const client = kind === "host-client" ? null : clientOf(request);
   const [, added] = await env.DB.batch([
     env.DB.prepare("delete from admissions where created_at <= ?1").bind(now - WINDOW_MS),
-    env.DB.prepare(ADMIT).bind(kind, request.headers.get("cf-connecting-ip") || null, now),
+    env.DB.prepare(ADMIT).bind(kind, client, now),
   ]);
   const allowed = Boolean(added?.results[0]);
   if (!allowed) console.warn({ event: "auth.admission-refused", kind });

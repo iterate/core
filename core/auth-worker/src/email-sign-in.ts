@@ -6,6 +6,7 @@ import { isBlocked } from "./blocked.ts";
 import { emailAllowed } from "./config.ts";
 import { sessionCookie } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
+import { clientOf } from "./device/limits.ts";
 import { type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
 import { errorPage, googleSignIn, page, passkeySignIn, text } from "./pages.ts";
 import { addressProven } from "./keys.ts";
@@ -39,9 +40,8 @@ select ?1, ?2, ?3, ?4, ?5, ?6, ?7,
   ?9, ?10
 where not exists (select 1 from email_challenges where inbox = ?3 and created_at > ?9 - ${MINUTE})
   and (select count(*) from email_challenges where inbox = ?3 and created_at > ?9 - ${HOUR}) < 5
-  and (?4 is null or (select count(*) from email_challenges
-                      where client = ?4 and created_at > ?9 - ${10 * MINUTE})
-                     < 20)
+  and (select count(*) from email_challenges
+       where client = ?4 and created_at > ?9 - ${10 * MINUTE}) < 20
 returning mailed`;
 
 // RFC 2606 and 6761 names are never mailed (a bounce costs the sender's reputation), but get a
@@ -113,7 +113,7 @@ async function start(env: Env, request: Request) {
       id,
       email,
       email.replace(/\+[^@]*@/, "@"),
-      request.headers.get("cf-connecting-ip"),
+      clientOf(request),
       await sha256Hex(`${id}:${code}`),
       next,
       named ? 1 : 0,
