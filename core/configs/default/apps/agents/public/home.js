@@ -2,16 +2,16 @@
 // the agents that were active most recently, each opening its chat. A new agent is iterate's
 // unless the picker above the box names another kind's choice ("codex (acp)", from each kind
 // file's `newAgent`): then that kind starts it, with the picked choice's fields, and the message
-// goes to it after.
+// goes to it after. The picker and the rules that read a kind's file are the UI kit's
+// (`new-agent-picker`, `lib/new-agent`), the ones iterate's hosted Agents app has.
 import { html, useMemo, useRef, useState } from "@iterate-com/ui/page";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@iterate-com/ui/components/ui/button";
+import { NewAgentPicker } from "@iterate-com/ui/components/new-agent-picker";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/ui/card";
-import { Checkbox } from "@iterate-com/ui/components/ui/checkbox";
-import { Input } from "@iterate-com/ui/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
 import { Textarea } from "@iterate-com/ui/components/ui/textarea";
 import { BotIcon } from "@iterate-com/ui/icons";
+import { newAgentValues } from "@iterate-com/ui/lib/new-agent";
 import {
   agentTitle,
   byRecentActivity,
@@ -46,9 +46,16 @@ export function AgentsHome({
   onMessage,
 }) {
   const picked = offers.find((offer) => offer.value === choice);
-  const fields = Object.fromEntries(
-    (picked?.fields || []).map((field) => [field.name, typed(field.name) ?? field.defaultValue]),
-  );
+  // the picked choice's fields: as typed, else as the kind's file starts them, for this person
+  const fields = newAgentValues(picked, typed, person);
+  // the kind's line about them (`newAgent.describe`); the line of the fields as they were stays
+  // until the kind has said the new one
+  const line = useQuery({
+    queryKey: ["new-agent-line", picked?.value, fields],
+    queryFn: () => describe(picked, fields),
+    enabled: Boolean(picked),
+    placeholderData: keepPreviousData,
+  });
   const [message, setMessage] = useState("");
   // The agent born for a first message that then failed to send, and the choice it was born
   // of: sending again with the same choice goes to it, so a retry leaves no empty agent behind.
@@ -91,7 +98,16 @@ export function AgentsHome({
       <form class="flex flex-col gap-2" onSubmit=${send}>
         ${
           offers.length > 0 &&
-          html`<${KindPicker} ...${{ offers, picked, fields, onChoice, onField, describe }} />`
+          html`
+            <${NewAgentPicker}
+              offers=${offers}
+              picked=${picked}
+              values=${fields}
+              onChoice=${onChoice}
+              onField=${onField}
+              line=${line.data}
+            />
+          `
         }
         <${Textarea}
           name="message"
@@ -151,65 +167,4 @@ export function AgentsHome({
       }
     </div>
   `;
-}
-
-/** The picker above the box: iterate, or another kind's choice, the picked choice's fields, and
- *  under them the kind's own line about the choice as typed (`newAgent.describe`). */
-function KindPicker({ offers, picked, fields, onChoice, onField, describe }) {
-  const line = useQuery({
-    queryKey: ["new-agent-line", picked?.value, fields],
-    queryFn: () => describe(picked, fields),
-    enabled: Boolean(picked),
-    placeholderData: keepPreviousData,
-  });
-  const box = (field) => html`
-    <label key=${`${picked.value}/${field.name}`} class="flex h-7 items-center gap-1.5 text-xs">
-      <${Checkbox}
-        name=${field.name}
-        checked=${fields[field.name] === "on"}
-        onCheckedChange=${(ticked) => onField(field.name, ticked ? "on" : "")}
-      />
-      ${field.label}
-    </label>
-  `;
-  const text = (field) => html`
-    <${Input}
-      key=${`${picked.value}/${field.name}`}
-      name=${field.name}
-      aria-label=${field.label}
-      placeholder=${field.label}
-      value=${fields[field.name]}
-      onInput=${(change) => onField(field.name, change.target.value)}
-      className="h-7 w-40 font-mono text-xs"
-    />
-  `;
-  return html`
-    <div class="flex flex-wrap items-center gap-2">
-      <${NativeSelect}
-        size="sm"
-        aria-label="Kind of agent"
-        value=${picked?.value || ""}
-        onChange=${(change) => onChoice(change.target.value || undefined)}
-      >
-        <${NativeSelectOption} value="">iterate<//>
-        ${offers.map(
-          (offer) =>
-            html`<${NativeSelectOption} key=${offer.value} value=${offer.value}>${offer.label}<//>`,
-        )}
-      <//>
-      ${picked?.fields.map((field) => (field.type === "checkbox" ? box(field) : text(field)))}
-    </div>
-    ${picked && line.data && html`<p class="text-xs text-muted-foreground">${withCode(line.data)}</p>`}
-  `;
-}
-
-/** Text with `backticks` around code: the code in <code>, which a person can select and copy. */
-function withCode(text) {
-  return text
-    .split("`")
-    .map((part, index) =>
-      index % 2
-        ? html`<code class="select-all rounded bg-muted px-1 font-mono">${part}</code>`
-        : part,
-    );
 }

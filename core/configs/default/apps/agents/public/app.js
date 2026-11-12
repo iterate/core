@@ -20,6 +20,7 @@ import {
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import { AgentChat } from "@iterate-com/ui/components/agent-chat/agent-chat";
 import { Toaster } from "@iterate-com/ui/components/ui/sonner";
+import { newAgentOffers } from "@iterate-com/ui/lib/new-agent";
 import { newWebSocketRpcSession, useContextStub, useIterateContext } from "@iterate-com/ui/live";
 import { agentRowsOf, personOf } from "./agent-rows.js";
 import { AgentsHome } from "./home.js";
@@ -204,7 +205,19 @@ function App() {
             typed=${(name) =>
               params.get(`field.${name}`) ??
               (last.choice === choice ? last.fields[name] : undefined)}
-            onChoice=${(next) => navigate({ new: next || "iterate" }, { replace: true })}
+            onChoice=${(next) => {
+              // every kind has a Runner: what was typed for one kind's is not another kind's
+              const kindOf = (value) => offers.find((offer) => offer.value === value)?.kind;
+              const typedFields = [...params.keys()].filter((key) => key.startsWith("field."));
+              navigate(
+                {
+                  ...(kindOf(next) !== kindOf(choice) &&
+                    Object.fromEntries(typedFields.map((key) => [key, undefined]))),
+                  new: next || "iterate",
+                },
+                { replace: true },
+              );
+            }}
             onField=${(name, value) => navigate({ [`field.${name}`]: value }, { replace: true })}
             describe=${describe}
             onStart=${async (offer, path, fields) => {
@@ -300,20 +313,7 @@ function NewAgentKinds({ children }) {
     () =>
       kinds.flatMap(({ kind }, index) => {
         const report = loaded[index];
-        const newAgent = report && "newAgent" in report ? report.newAgent : undefined;
-        return (newAgent?.choices || []).map((option) => ({
-          value: `${kind}/${option.id}`,
-          // a choice named as its kind is said once: "claude", not "claude (claude)"
-          label: option.label === kind ? option.label : `${option.label} (${kind})`,
-          kind,
-          choice: option.id,
-          // the kind's word that this choice's agents may live in a person's folder
-          byPerson: option.byPerson === true,
-          // a field may be for some of the kind's choices alone (`choices`)
-          fields: (newAgent?.fields || []).filter(
-            (field) => !field.choices || field.choices.includes(option.id),
-          ),
-        }));
+        return newAgentOffers(kind, report && "newAgent" in report ? report.newAgent : undefined);
       }),
     [kinds, loaded],
   );
