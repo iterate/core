@@ -4,6 +4,7 @@ import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import filesTool from "../generated/sandbox-files-tool.js";
 import { SANDBOX_BASE_IMAGE, SANDBOX_IMAGE, SANDBOX_MAX_BUSY_MS } from "./contract.ts";
+import { narrowedSecretList } from "./secret-list.ts";
 
 const INTERCEPT_CA = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 /** A command does not inherit the container's own `env` on Cloudflare (measured:
@@ -255,13 +256,19 @@ export class SandboxContainer extends DurableObject {
   async begin(options: SandboxStartOptions = {}): Promise<boolean> {
     await this.#touch();
     const container = this.#container;
+    const { image, containerSnapshot, secrets, ...rest } = options;
     if (container.running) {
+      // a list given to a running sandbox applies now: its egress holds the list it started with
+      if (secrets) {
+        const current = await this.ctx.storage.get<string[]>(EGRESS_SECRETS);
+        await this.ctx.storage.put(EGRESS_SECRETS, narrowedSecretList(current, secrets));
+        await this.#intercept();
+      }
       await container.setInactivityTimeout(INACTIVITY_BACKSTOP_MS);
       return false;
     }
     this.#toolReady = false;
     const began = Date.now();
-    const { image, containerSnapshot, secrets, ...rest } = options;
     if (secrets) await this.ctx.storage.put(EGRESS_SECRETS, secrets);
     // the egress is registered first: a name looked up before it is would time out
     await this.#intercept();

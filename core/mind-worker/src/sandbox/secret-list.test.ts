@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { secretListRefusal } from "./secret-list.ts";
+import { narrowedSecretList, secretListRefusal } from "./secret-list.ts";
 
 test("a sandbox with no secret list may name any secret, as before", () => {
   expect(secretListRefusal(named('getSecret("/secrets/anthropic")'), undefined)).toBeNull();
@@ -22,6 +22,16 @@ test("a secret in the URL is refused like one in a header, and an empty list nam
   expect(secretListRefusal(request, ["/secrets/anthropic"])?.status).toBe(403);
   expect(await secretListRefusal(named('getSecret("/secrets/anthropic")'), [])!.text()).toContain(
     "may name no secret",
+  );
+});
+
+test("a running sandbox takes a narrower list at once and refuses a wider one", () => {
+  const four = ["/secrets/openai", "/secrets/anthropic", "/secrets/claude-current"];
+  expect(narrowedSecretList(undefined, four)).toEqual(four);
+  expect(narrowedSecretList(four, ["/secrets/anthropic"])).toEqual(["/secrets/anthropic"]);
+  expect(narrowedSecretList(four, [])).toEqual([]);
+  expect(() => narrowedSecretList(["/secrets/anthropic"], four)).toThrow(
+    /does not name \/secrets\/openai, \/secrets\/claude-current: stop it/,
   );
 });
 

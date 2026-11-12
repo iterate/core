@@ -14,3 +14,14 @@ export function secretListRefusal(request: Request, list: readonly string[] | un
     { status: 403, headers: { "content-type": "text/plain; charset=utf-8" } },
   );
 }
+
+/** The list a start names for a sandbox that already runs: narrower than the one its egress holds
+ *  (or the first one) applies at once; wider is refused, since processes inside are running already. */
+export function narrowedSecretList(current: readonly string[] | undefined, given: string[]) {
+  const wider = current ? given.filter((path) => !current.includes(path)) : [];
+  if (wider.length)
+    throw new Error(
+      `sandbox: the list of a running sandbox only narrows, and its list (${current!.join(", ") || "no secret"}) does not name ${wider.join(", ")}: stop it with .container.destroy(), then start it with the wider list`,
+    );
+  return given;
+}
