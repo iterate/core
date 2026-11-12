@@ -316,6 +316,7 @@ least a deploy needs.
 | Account · AI Gateway            | Edit  | the gateway `default`                          |
 | Account · Browser Rendering     | Edit  | `itx.browser`                                  |
 | Account · Email Sending         | Edit  | mail out, the sign-in code among it            |
+| Account · Queues                | Edit  | mail's events queue and its subscription       |
 | Account · Secrets Store         | Edit  | the state store's key                          |
 | Account · Workers Observability | Read  | reading the Workers' logs                      |
 | Zone · Zone                     | Read  | finding the zone by its name                   |
@@ -340,6 +341,19 @@ least a deploy needs.
   traffic. A record that already exists is not taken over: remove it, or deploy with `--adopt`.
 - With `mail: true` in the config: Email Routing on the zone, its catch-all rule delivering to the
   boundary, and Email Sending on the domain, which the boundary sends with.
+  - A Queue `iterate-<name>-events`, the stack's one queue of Cloudflare events, with
+    the boundary as its one consumer: a table in the boundary
+    (`core/boundary-worker/src/cloudflare-events.ts`) says what each message becomes on the mind.
+    Its first subscription puts the domain's Email Sending events on it (bounced, failed,
+    rejected, complained). Each such event becomes an `events.iterate.com/email/delivery-failed` fact on the
+    mind's `/integrations/email`, with the recipient, the sent mail's `messageId` and Cloudflare's
+    cause: a mail that the provider took and that bounced later is no longer known to Cloudflare
+    alone. An event the mind does not take is retried a minute apart, ten times, then dropped.
+    The subscription's id is kept in the stack's state. A first deploy creates it without reading
+    the account's list of subscriptions, which in an account of many can take longer than the deploy
+    may; when Cloudflare answers that the source already has one, the deploy reads the queue's own
+    subscriptions, at most five pages, and takes the one of its name, or fails and says to delete
+    the one in the way (`src/event-subscriptions.ts`).
 - With `mail: { forwardTo: "team@example.org" }`: the same, and the boundary then forwards each
   mail to that address as it arrived, with Email Routing's own forward: its From is the sender's,
   so a reply goes to the sender. The mind has the mail first. Cloudflare forwards only a mail

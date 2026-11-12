@@ -1,6 +1,8 @@
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Alchemy from "alchemy";
+import * as Layer from "effect/Layer";
 import { loadMindConfig, resourceNamesOf, stageOf } from "./src/config.ts";
+import { NarrowEventSubscriptionProvider } from "./src/event-subscriptions.ts";
 import { mindStack } from "./src/stack.ts";
 
 // The account's own store by default: local state would keep the generated keys in this checkout in
@@ -22,7 +24,9 @@ if (process.env.CLOUDFLARE_ACCOUNT_ID !== config.accountId)
 export default Alchemy.Stack(
   "mind",
   {
-    providers: Cloudflare.providers(),
+    // Alchemy's providers, with one of our own for event subscriptions: it never reads every
+    // subscription of the account (src/event-subscriptions.ts).
+    providers: NarrowEventSubscriptionProvider().pipe(Layer.provideMerge(Cloudflare.providers())),
     state:
       store === "cloudflare"
         ? Cloudflare.state({ workerName: resourceNamesOf(config.name).state })

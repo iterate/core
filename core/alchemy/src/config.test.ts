@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadMindConfig, MindConfig } from "./config.ts";
+import { loadMindConfig, MindConfig, resourceNamesOf } from "./config.ts";
 
 const stack = {
   name: "proof",
@@ -77,4 +77,10 @@ void test("a config that asks for the mind's Cloudflare token is one the stack m
     else delete process.env.ITERATE_MIND_CONFIG;
     rmSync(folder, { recursive: true });
   }
+});
+
+void test("the queue of the longest stack name fits a Cloudflare Queue's name", () => {
+  // a stack's name is at most 40 characters; a Queue's is at most 63
+  const { cloudflareEvents } = resourceNamesOf("a".repeat(40));
+  assert.ok(cloudflareEvents.length <= 63, `${cloudflareEvents.length} characters`);
 });

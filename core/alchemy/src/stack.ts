@@ -315,6 +315,29 @@ export const mindStack = (config: MindConfig) =>
       });
       // Email Sending on the apex adds the bounce and DKIM records the boundary's `send_email` needs.
       yield* Cloudflare.Email.SendingSubdomain("EmailSending", { zoneId: zone.id, name: domain });
+      // THE STACK'S ONE QUEUE OF CLOUDFLARE EVENTS, with the boundary as its one consumer
+      // (core/boundary-worker/src/cloudflare-events.ts): each event subscription of the stack
+      // feeds it, and a table there says what each message becomes on the mind.
+      //
+      // The first subscription: what became of each sent mail. Each failure becomes a fact on the
+      // mind's email log (core/boundary-worker/src/mail-outcomes.ts). Delivered and deferred mail
+      // is not asked for.
+      const cloudflareEvents = yield* Cloudflare.Queues.Queue("CloudflareEvents", {
+        name: names.cloudflareEvents,
+      });
+      yield* Cloudflare.Queues.Subscription("MailEventsSubscription", {
+        name: `${names.cloudflareEvents}-mail`,
+        source: { type: "email.sending", zoneId: zone.id, domain },
+        events: ["message.bounced", "message.failed", "message.rejected", "message.complained"],
+        queueId: cloudflareEvents.queueId,
+      });
+      // Bounded: an event the mind does not take (a provided mind that is not connected) is retried
+      // a minute apart, ten times, then dropped; the boundary logs each failure.
+      yield* Cloudflare.Queues.Consumer("CloudflareEventsConsumer", {
+        queueId: cloudflareEvents.queueId,
+        scriptName: boundary.workerName,
+        settings: { maxRetries: 10, retryDelay: 60 },
+      });
     }
     // Alchemy keeps the output in the state store once a deploy succeeded: a deploy with no config file
     // reads the config back from it (./config.ts `storedMindConfig`).

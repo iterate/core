@@ -240,5 +240,7 @@ export const resourceNamesOf = (name: string) => {
     cloudflareToken: `${prefix}-cloudflare`,
     // At most 54 characters (Alchemy's state store).
     state: `${prefix}-state`,
+    // At most 63 characters (a Queue's name): 55 with the longest stack name.
+    cloudflareEvents: `${prefix}-events`,
   };
 };

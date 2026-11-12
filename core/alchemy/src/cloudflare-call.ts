@@ -1,5 +1,6 @@
 // cloudflare-call.ts — what the destroy's clean-up steps share (telemetry-tables.ts,
-// dmarc-record.ts, state-store.ts): one call of Cloudflare's API, and whether a stack is still
+// dmarc-record.ts, state-store.ts), and the deploy's read of event subscriptions
+// (event-subscriptions.ts): one call of Cloudflare's API, and whether a stack is still
 // deployed.
 import { resourceNamesOf } from "./config.ts";
 
@@ -11,16 +12,20 @@ export type Call = (
 ) => Promise<{ status: number; body: unknown }>;
 
 /** The call that a clean-up script makes with its API token. */
-export const callWithToken =
-  (token: string): Call =>
+export const callWithToken = (token: string): Call =>
+  callWithHeaders({ authorization: `Bearer ${token}` });
+
+/** The call with these credentials' headers; `at` may move a URL of `CLOUDFLARE_API` elsewhere. */
+export const callWithHeaders =
+  (credentials: Record<string, string>, at = (url: string) => url): Call =>
   async (method, url, body) => {
-    const headers: Record<string, string> = { authorization: `Bearer ${token}` };
+    const headers: Record<string, string> = { ...credentials };
     const init: RequestInit = { method, headers };
     if (body) {
       headers["content-type"] = "application/json";
       init.body = JSON.stringify(body);
     }
-    const response = await fetch(url, init);
+    const response = await fetch(at(url), init);
     const text = await response.text();
     let answered: unknown = null;
     try {
@@ -31,8 +36,9 @@ export const callWithToken =
     return { status: response.status, body: answered };
   };
 
-export const accountUrl = (accountId: string) =>
-  `https://api.cloudflare.com/client/v4/accounts/${accountId}`;
+export const CLOUDFLARE_API = "https://api.cloudflare.com/client/v4";
+
+export const accountUrl = (accountId: string) => `${CLOUDFLARE_API}/accounts/${accountId}`;
 
 /** The first Worker of the stack that is still in the account, or a line that says why that could
  *  not be read. A clean-up step removes nothing while either is there: a stack that is deployed

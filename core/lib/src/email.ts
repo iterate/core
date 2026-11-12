@@ -132,6 +132,27 @@ export const EmailContract = defineProcessorContract({
         code: z.string().nullable(),
       }),
     },
+    "events.iterate.com/email/delivery-failed": {
+      description:
+        "Cloudflare took a sent message and could not deliver it to one recipient, or the recipient marked it as spam (platform fact).",
+      payloadSchema: z.object({
+        /** The sent message's id, bare, as `email/sent` stores it; null when Cloudflare gave none. */
+        messageId: z.string().nullable(),
+        /** The recipient it did not reach. */
+        to: z.string(),
+        /** Cloudflare's event: `bounced` (a permanent bounce, or retries ran out), `failed` (an
+         *  error that is not SMTP's), `rejected` (refused before delivery, e.g. a suppressed
+         *  recipient), `complained` (delivered, then marked as spam). */
+        kind: z.enum(["bounced", "failed", "rejected", "complained"]),
+        /** For a bounce, whether Cloudflare calls it hard (true) or soft (false); else null. */
+        permanent: z.boolean().nullable(),
+        /** Cloudflare's short reason (`permanent_failure`, `suppressed`, `abuse`, …), null when it
+         *  gave none. */
+        cause: z.string().nullable(),
+        /** Cloudflare's words, such as the receiving server's SMTP reply; null when it gave none. */
+        detail: z.string().nullable(),
+      }),
+    },
   },
   consumes: ["events.iterate.com/email/received", "events.iterate.com/email/sent"],
   emits: [],

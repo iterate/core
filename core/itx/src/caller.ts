@@ -92,6 +92,7 @@ const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/email/sent",
   "events.iterate.com/email/forward-failed",
   "events.iterate.com/email/send-failed",
+  "events.iterate.com/email/delivery-failed",
   "events.iterate.com/webhook/received",
   "events.iterate.com/mcp/webhook-received",
   // the vault's gate for acts (iterate/acts): its rules and its lock decide what waits

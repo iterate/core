@@ -55,6 +55,12 @@ test("only the platform says that the mail provider refused a mail: a member rea
   expect(() => refuseNonPlatformWrites(failed, { principal: null })).toThrow(/platform's own/);
 });
 
+test("only the platform says that a sent mail was not delivered: a member reads it as what Cloudflare said", () => {
+  const bounced = [{ type: "events.iterate.com/email/delivery-failed" }];
+  expect(() => refuseNonPlatformWrites(bounced, platform)).not.toThrow();
+  expect(() => refuseNonPlatformWrites(bounced, { principal: null })).toThrow(/platform's own/);
+});
+
 test.for([
   "events.iterate.com/approval/rule-proposed",
   "events.iterate.com/approval/rule-proposal-signed",
