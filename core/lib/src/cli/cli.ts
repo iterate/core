@@ -93,6 +93,14 @@ const resolveMind = async (given?: string): Promise<string> => {
 
 const connect = async (mind?: string) => connectMind({ address: await resolveMind(mind) });
 
+/** When the stored sign-in to the mind at `address` ends, as epoch ms: what a lend hands over
+ *  before (provide.ts, THE HANDOVER). A token given in the environment has no end known here. */
+function signInEndsAt(address: string): number | undefined {
+  if (process.env.ITERATE_MIND_TOKEN?.trim()) return undefined;
+  const ends = Date.parse(readSession(mindApiUrlOf(address))?.expiresAt || "");
+  return Number.isFinite(ends) ? ends : undefined;
+}
+
 /** `iterate login`: sign in to the mind at the typed address, check who that is, and make it the
  *  profile's mind. `chatgpt connect` signs in by this too. */
 const login = async (input: { address: string; device?: boolean; expectUser?: string }) => {
@@ -328,6 +336,7 @@ const launcherProcedures = {
       await shareMyComputer({
         connection: await connect(address),
         reconnect: () => connect(address),
+        endsAt: () => signInEndsAt(address),
         name: input.name,
       });
     }),
@@ -421,12 +430,7 @@ const launcherProcedures = {
           reconnect: () => connect(address),
           file,
           name,
-          // the stored sign-in's end; a token given in the environment has none known here
-          endsAt: () => {
-            if (process.env.ITERATE_MIND_TOKEN?.trim()) return undefined;
-            const ends = Date.parse(readSession(mindApiUrlOf(address))?.expiresAt || "");
-            return Number.isFinite(ends) ? ends : undefined;
-          },
+          endsAt: () => signInEndsAt(address),
         });
         return;
       }

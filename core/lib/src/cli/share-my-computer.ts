@@ -10,11 +10,14 @@ import computer, { description } from "./use-my-computer.ts";
 export async function shareMyComputer(input: {
   connection: MindConnection;
   reconnect: () => Promise<MindConnection>;
+  /** when the sign-in of the connection made last ends (provide.ts `runProvide`) */
+  endsAt?: () => number | undefined;
   name?: string;
 }) {
   await runProvide({
     connection: input.connection,
     reconnect: input.reconnect,
+    endsAt: input.endsAt,
     name: input.name || (await askComputerName()),
     file: { provide: computer, description },
   });
