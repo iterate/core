@@ -130,11 +130,12 @@ async function nothingLeft(domain: string, token: string): Promise<Check> {
   const paths = changes.map((change) => change.path).join(", ");
   try {
     const parent = await repo().tip();
-    const { commitOid } = (await repo().commitFiles({
+    const { commitOid } = await repo().commitFiles({
       message: "smoke: take out what an earlier run left",
       changes,
       parent,
-    })) as { commitOid: string };
+    });
+    if (!commitOid) throw new Error("the commit that takes them out changed nothing");
     const outcome = await root()
       .waitForEvent({
         type: [
@@ -146,7 +147,7 @@ async function nothingLeft(domain: string, token: string): Promise<Check> {
         timeoutMs: 120_000,
       })
       .then(
-        (event) => String((event as { type: string }).type.split("/").pop()),
+        (event) => String(event.type.split("/").pop()),
         () => "no outcome within 120 s",
       );
     return {
@@ -480,9 +481,8 @@ const mindBirthChecks = async (domain: string) => {
         const page = await withChange({
           land: async (message, changes) => {
             const parent = await repo().tip();
-            const { commitOid } = (await repo().commitFiles({ message, changes, parent })) as {
-              commitOid: string;
-            };
+            const { commitOid } = await repo().commitFiles({ message, changes, parent });
+            if (!commitOid) throw new Error(`${message}: the commit changed nothing`);
             return commitOid;
           },
           published: async (commitOid) => {
