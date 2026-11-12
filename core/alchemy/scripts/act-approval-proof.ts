@@ -171,6 +171,8 @@ const setRulesBySession = async (rules: unknown[]) =>
 const rule = { verb: "email.send", to: [`*@${domain}`] };
 let bridge: ChildProcess | undefined;
 let bridgeKey = "";
+/** What the bridge's process printed: its link, that it is live, and each call it got. */
+let said = "";
 async function cleanUp() {
   bridge?.kill("SIGINT");
   // on /keys, with the passkey: a session alone removes no key
@@ -435,12 +437,19 @@ await run(
       join(folder, "proof-whatsapp.mjs"),
       `export const description = "A stand-in of act-approval-proof.ts for a WhatsApp bridge: it sends nothing.";
 export default () => ({
-  sendMessage: (jid, content) => ({ sentTo: jid, text: content.text }),
+  // each call is printed, so the proof reads from the bridge itself whether it was called
+  sendMessage: (jid, content) => {
+    console.log("BRIDGE CALLED " + JSON.stringify([jid, content]).slice(0, 1200));
+    return { sentTo: jid, text: content.text };
+  },
   chats: () => ["jo@s.whatsapp.net"],
+  // what a subscription's row delivers to: no rule names it
+  heard: (events) => {
+    console.log("BRIDGE HEARD " + JSON.stringify(events).slice(0, 1200));
+  },
 });
 `,
     );
-    let said = "";
     bridge = spawn(
       process.execPath,
       [
@@ -601,6 +610,69 @@ await run("an agent proposes a rule, and the member's passkey signs it into one"
     detail: `itx.approvals.propose answered a link to the page; signed, the rules are ${JSON.stringify(rules)}`,
   };
 });
+
+await run(
+  "a subscription does not deliver to the held verb: the bridge is not called for its event",
+  async () => {
+    // A row's delivery calls its target itself. No caller is there who could wait for a member.
+    // Loaded code writes the row as an event: its `subscribe` lends a live callback only.
+    // Three rows hear one event. One aims at a verb of the bridge that no rule names, one at the
+    // bridge's held verb, and one at a held verb of the mind's own code.
+    const own = "itx.config.slack";
+    const rules = await root().approvals.setRules([{ verb: SEND }, { verb: own }]);
+    must(rules.length === 2, `the rules are ${JSON.stringify(rules)}`);
+    await settled(7_000);
+    const type = `proof/said-${marker}`;
+    const rows = {
+      free: { name: `proof-free-verb-${marker}`, target: SEND.replace(/sendMessage$/, "heard") },
+      lent: { name: `proof-held-verb-${marker}`, target: SEND },
+      own: { name: `proof-held-own-verb-${marker}`, target: own },
+    };
+    const configured = Object.values(rows).map((row) =>
+      JSON.stringify({
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: { ...row, consumes: [type] },
+      }),
+    );
+    await root().run(
+      `async (itx) => { for (const row of [${configured.join(", ")}]) await itx.append(row); await itx.append({ type: "${type}", payload: { said: "by a subscription ${marker}" } }); }`,
+    );
+    // the bridge prints each call it gets, and a delivery's call carries the event's type
+    const got = (mark: string) =>
+      said.split("\n").find((line) => line.startsWith(mark) && line.includes(type));
+    try {
+      // the row no rule holds delivers: a delivery does reach the bridge
+      await until("the bridge hears the event by the row that no rule holds", 40, async () =>
+        got("BRIDGE HEARD"),
+      );
+      // The kernel walks the mind's own verb itself, so that row halts and says why.
+      const halted = await until("the row to the mind's own held verb halts", 40, async () => {
+        const read = JSON.stringify(await root().subscriptions.get(rows.own.name));
+        return read.includes('"halted"') && read;
+      });
+      // A delivery to a live stub is a push: its refusal is dropped with a line in the Worker's
+      // log, and the row stays. So the proof of the bridge's verb is that no call comes, well
+      // after the same event reached the bridge by the other row.
+      await settled(10_000);
+      const called = got("BRIDGE CALLED");
+      // both faults are said, so a run against a kernel that does not ask shows the two of them
+      const faults = [
+        ...(halted.includes("waits for a member's approval")
+          ? []
+          : [`the row to the mind's own verb halted for another reason: ${halted.slice(0, 300)}`]),
+        ...(called ? [`the bridge was called for the event: ${called.slice(0, 200)}`] : []),
+      ];
+      must(faults.length === 0, faults.join("; "));
+    } finally {
+      for (const { name } of Object.values(rows)) await root().subscribe({ name, target: null });
+      await root().approvals.setRules([{ verb: SEND }]);
+    }
+    return {
+      detail:
+        "one event, three rows: the bridge heard it by the row no rule names; the row to the mind's own held verb halted and says why; 10 s later the bridge's held verb had no call",
+    };
+  },
+);
 
 await run(
   "the member removes the bridge's key on /keys with the passkey, and the bridge lends no more",

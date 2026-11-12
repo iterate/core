@@ -797,6 +797,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#callerStorage.run({ principal: null }, () =>
         this.#itxExpressionResolver.evaluate(itxExpression),
       ),
+    refuseHeldVerb: (target) =>
+      this.#callerStorage.run({ principal: null }, () =>
+        this.#itxExpressionResolver.refuseHeldVerb(target),
+      ),
     pushEventBatchToFacet: (facetHandle, events, range) =>
       this.#facetHost.callFacetAsPlatform(facetHandle, [
         ["processEventBatch", events, range, this.#directAppendFor(facetHandle)],

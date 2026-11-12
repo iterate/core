@@ -806,6 +806,46 @@ export class ItxExpressionResolver {
     }
   }
 
+  // A CALL THAT NOBODY WAITS FOR IS REFUSED WHEN AN APPROVAL RULE NAMES IT. A subscription's
+  // delivery reads its target's head here and then calls the head's function itself, past
+  // `#dispatch`, so `#heldUntilApproved` never sees that call. There is no caller who could wait
+  // for a member either: every batch of events would ask again. So a row whose target is a held
+  // verb delivers nothing, and its delivery halts with this. `name` is what the delivery calls.
+  async refuseHeldVerb(name: ItxExpression): Promise<void> {
+    const gate = itxHost().acts;
+    if (!gate) return;
+    const verbRules = await gate.verbRules();
+    if (verbRules.length === 0) return;
+    // as a call of the name with one argument, which is what a delivery makes of it
+    const { route, rules } = await this.#route(name, [null]);
+    let table = rules;
+    let called: ItxExpression;
+    if (route.kind === "walked") called = route.fixedPoint;
+    else {
+      // sent on: asked with the table of the context it goes to
+      table = (await this.#reach.snapshotOf(route.at)).rules;
+      try {
+        called = resolveItxExpression(() => table, route.expression, implicitRootsAt(route.at)).at(
+          -1,
+        )!;
+      } catch {
+        return;
+      }
+    }
+    const held = heldVerbOf(verbRules, called, route.extraArgs, (verb) => {
+      try {
+        return resolveItxExpression(() => table, verb, implicitRootsAt(route.at)).at(-1)!;
+      } catch {
+        return null;
+      }
+    });
+    if (held)
+      throw codedError(
+        "PERMANENT_FAILURE",
+        `${JSON.stringify(print(name))} waits for a member's approval when it is called, so a subscription does not deliver to it: nobody is there to wait`,
+      );
+  }
+
   // `validUntil`: until the first snapshot it read expires. `routedTo` moves when a rule re-points
   // what the target names.
   async evaluate(

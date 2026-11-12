@@ -177,6 +177,8 @@ type SubscriptionDeliveryDeps = {
   evaluateItxExpression: (
     expression: ItxExpression,
   ) => Promise<{ value: unknown; validUntil: number; routedTo: string }>;
+  /** Throws when an approval rule holds a call of `target` (the resolver's `refuseHeldVerb`). */
+  refuseHeldVerb: (target: ItxExpression) => Promise<void>;
   pushEventBatchToFacet: (
     facetHandle: FacetHandle,
     events: StreamEvent[],
@@ -204,6 +206,7 @@ export class SubscriptionDelivery {
   readonly #catchUpFacetFromLog: SubscriptionDeliveryDeps["catchUpFacetFromLog"];
   readonly #reconcileAlarm: SubscriptionDeliveryDeps["reconcileAlarm"];
   readonly #runAsDelivery: SubscriptionDeliveryDeps["runAsDelivery"];
+  readonly #refuseHeldVerb: SubscriptionDeliveryDeps["refuseHeldVerb"];
   readonly #appendCopy: SubscriptionDeliveryDeps["appendCopy"];
   readonly #abortIncarnation: SubscriptionDeliveryDeps["abortIncarnation"];
   readonly #metrics: Metrics;
@@ -221,6 +224,7 @@ export class SubscriptionDelivery {
     this.#catchUpFacetFromLog = deps.catchUpFacetFromLog;
     this.#reconcileAlarm = deps.reconcileAlarm;
     this.#runAsDelivery = deps.runAsDelivery;
+    this.#refuseHeldVerb = deps.refuseHeldVerb;
     this.#appendCopy = deps.appendCopy;
     this.#abortIncarnation = deps.abortIncarnation;
     this.#metrics = deps.metrics;
@@ -750,6 +754,8 @@ export class SubscriptionDelivery {
     // A Workers-RPC or capnweb result pins the callee's export table until disposed; a live client's push
     // runs on every commit, so leaving each result to GC would leak a slot per batch.
     const invoke = async (args: unknown[]): Promise<void> => {
+      // Asked at every delivery, not once for the row: the approval rules change under a row.
+      await this.#refuseHeldVerb(target);
       const walked = method
         ? (await walkSteps({ value: head, receiver: undefined }, [[method, ...args]])).value
         : await callOn(head, undefined, args);
