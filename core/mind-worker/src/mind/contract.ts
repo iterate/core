@@ -54,7 +54,7 @@ export const MindContract = defineProcessorContract({
   events: {
     "events.iterate.com/mind/create-requested": {
       description:
-        "The mind was born and asked for its config repo (the root's birth events, core/mind-worker's worker.ts), seeded from the template `configRepoTemplate` names, a folder of core/configs the build bundled. The processor lands created or create-failed; a request after the certificate is a harmless fact.",
+        "The mind was born and asked for its config repo (the root's birth events, core/mind-worker's itx-host.ts), seeded from the template `configRepoTemplate` names, a folder of core/configs the build bundled. The processor lands created or create-failed; a request after the certificate is a harmless fact.",
       payloadSchema: z.object({ configRepoTemplate: z.string().optional() }),
     },
     "events.iterate.com/mind/created": {

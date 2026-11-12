@@ -223,7 +223,7 @@ export async function runTunnel(input: {
       throw new Error(
         `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another ${hostname ? "--name or --hostname" : "--name"}.`,
       );
-    // a routing slug is its label under the mind's domain (core/mind-worker worker.ts
+    // a routing slug is its label under the mind's domain (core/mind-worker http.ts
     // `serveMindHost`)
     const url = `https://${hostname || `${tunnelName}.${connection.address}`}/`;
     using lend = await mind.provide(
