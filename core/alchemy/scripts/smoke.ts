@@ -16,6 +16,7 @@ import { homeLabChecks } from "./smoke/home-lab.ts";
 import { approvalChecks } from "./smoke/approvals.ts";
 import { cloudChecks } from "./smoke/cloud.ts";
 import { secretChecks } from "./smoke/secrets.ts";
+import { modelChecks } from "./smoke/model.ts";
 import { appsChecks } from "./smoke/apps.ts";
 import { HOMEPAGE, leftoverChanges, markedHomepage, withChange } from "./smoke/config-repo.ts";
 import { attempt, type Check, mindRoot, mindWorkerIs, ownsPlatformAlone } from "./smoke/lib.ts";
@@ -90,6 +91,7 @@ export default async function smoke(
     ...(await authChecks(domain)),
     ...(await filesAndCallerChecks(domain)),
     ...(await secretChecks(domain)),
+    ...(await modelChecks(domain)),
     ...(await approvalChecks(domain)),
     ...(await cloudChecks(domain)),
     ...(await sandboxChecks(domain)),
