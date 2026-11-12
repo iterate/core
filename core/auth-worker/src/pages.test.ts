@@ -192,17 +192,36 @@ test("a known client's mark goes by where its access goes, or by its name", asyn
       redirectHost: "cursor://x/callback",
     }),
   ).toContain(`data-client-mark="known"`);
+  // Codex, as its own client document says it: a verified domain, and access to this computer
   expect(
     await html({
-      clientName: "ChatGPT",
-      redirectUri: "https://chatgpt.com/x",
+      clientName: "Codex",
+      clientDomain: "chatgpt.com",
+      logoUri: "https://persistent.oaistatic.com/sonic/misc/openai-logo.png",
+      redirectUri: "http://127.0.0.1:1455/callback",
+      redirectHost: "127.0.0.1:1455",
+      redirectIsLoopback: true,
+    }),
+  ).toContain(`<div class="tile" data-client-mark="known" data-client="openai"><svg`);
+  expect(
+    await html({
+      clientName: "An app",
+      redirectUri: "https://chatgpt.com/connector_platform_oauth_redirect",
       redirectHost: "chatgpt.com",
     }),
-  ).toContain(`<div class="tile" data-client-mark="initials">CH</div>`);
+  ).toContain(`data-client="openai"`);
+  expect(
+    await html({
+      clientName: "Notes",
+      redirectUri: "https://notes.example.org/callback",
+      redirectHost: "notes.example.org",
+    }),
+  ).toContain(`<div class="tile" data-client-mark="initials">NO</div>`);
 });
 
 test("a device's sign-in shows who asks by the name the device gives: a known mark, or its initials", () => {
   expect(deviceTile("Claude Code")).toContain(`data-client-mark="known"`);
+  expect(deviceTile("Codex")).toContain(`data-client-mark="known" data-client="openai"`);
   expect(deviceTile("iterate CLI on a laptop")).toBe(
     `<div class="tile" data-client-mark="initials">IT</div>`,
   );

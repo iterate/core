@@ -122,6 +122,16 @@ width: 100%;
 height: 100%;
 object-fit: contain;
 }
+.tile.small {
+flex: none;
+width: 2rem;
+height: 2rem;
+font-size: 0.75rem;
+}
+.tile.small svg {
+width: 1.125rem;
+height: 1.125rem;
+}
 main.asked h1 {
 text-align: center;
 text-wrap: balance;
@@ -346,4 +356,4 @@ gap: 0.75rem 1.25rem;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-ZEiPjBzOmW+U2S1Nq1fgm2ldV3mIAjpI6nEbOTnOxsA='";
+export const plainPageCssHash = "'sha256-YgQw5lAofwZAaGOsLIxH+QZHHuIualOhzZyZOxoB4E4='";

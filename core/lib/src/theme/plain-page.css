@@ -103,6 +103,17 @@ main.wide {
   height: 100%;
   object-fit: contain;
 }
+/* the same tile in a row of a list: who a sign-in or a key belongs to */
+.tile.small {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  font-size: 0.75rem;
+}
+.tile.small svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
 main.asked h1 {
   text-align: center;
   text-wrap: balance;
