@@ -80,11 +80,14 @@ type PublicationAttempt =
   | { kind: "refused"; error: string; superseded?: true };
 
 /** The schedule's key and the row's name at the root, the event that the schedule appends, and
- *  its period (`#armGrantRefreshOnce`). The Cloud ends a GitHub claim that is not made again
+ *  its period (`#armGrantRefresh`). The Cloud ends a GitHub claim that is not made again
  *  within its limit of days: a day is well under it, and one failed day loses nothing. */
 const GRANT_REFRESH = "grant-refresh";
 const GRANT_REFRESH_DUE = "events.iterate.com/secret/grants-refresh-due";
 const GRANT_REFRESH_EVERY_MS = 24 * 60 * 60_000;
+/** How long one look at that schedule and row holds: the root looks again at its first pass
+ *  after it (`#armGrantRefresh`). */
+const GRANT_REFRESH_LOOK_EVERY_MS = 60 * 60_000;
 
 export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<typeof MindContract>> {
   readonly contract = MindContract;
@@ -111,7 +114,8 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
   #creating = false;
   #retriedFailedCreation = false;
   #templateFollowed = false;
-  #grantRefreshArmed = false;
+  /** When this root last looked for the grants' daily refresh; 0 before the first look. */
+  #grantRefreshLookedAt = 0;
   // The template commit this incarnation made: known here before the record of it is kept.
   #templateCommit: { commitOid: string; template: string } | undefined;
   // One publication runs at a time and drains, oldest first: a commit that lands while one is in
@@ -283,9 +287,9 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     // at the end of the publication above. A deploy restarts the root, whose next wake is
     // delivered here.
     if (this.#templateMayFollow()) runInBackground(() => this.#followTemplateOnce(append));
-    // The persons' grants are refreshed once a day: the root gets what does that, once per
-    // incarnation, so a mind that lived before this code gets it at its next deploy.
-    if (state.creation?.status === "created") runInBackground(() => this.#armGrantRefreshOnce());
+    // The persons' grants are refreshed once a day: the root gets what does that, and looks
+    // again at most once an hour (`#armGrantRefresh`).
+    if (state.creation?.status === "created") runInBackground(() => this.#armGrantRefresh());
     // A failed creation is asked for again, once per incarnation: only the root's birth writes the
     // request, so a failure that stood would leave the mind with no site for good.
     if (state.creation?.status === "failed" && !this.#retriedFailedCreation) {
@@ -399,18 +403,22 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
    *  a day, and the row that answers that event with `itx.secrets.refreshGrants()`. The row fans
    *  out, so a day whose refresh fails is said as that event's failure and holds no later day.
    *
+   *  THE ROOT LOOKS AGAIN, AT MOST ONCE AN HOUR, at its first pass after that hour. A root whose
+   *  object stays awake (open connections keep it so) has one incarnation for days: a look once
+   *  per incarnation left such a root with no schedule after one was cancelled.
+   *
    *  A MIND'S OWN SCHEDULE UNDER THAT KEY IS LEFT AS IT IS: with another period, or with another
    *  event, which turns the refresh off. A schedule that was only cancelled is set again at the
-   *  next incarnation.
+   *  next look.
    *
    *  A SCHEDULE WHOSE FIRE FAILED IS PARKED, and a parked one fires no more until it is set
    *  again: left so, one failed day would end the refresh for good. It is set again as it is
-   *  defined, the mind's own too, once per incarnation.
+   *  defined, the mind's own too, at the next look.
    *
-   *  Never throws: the next incarnation tries again. */
-  async #armGrantRefreshOnce(): Promise<void> {
-    if (this.#grantRefreshArmed) return;
-    this.#grantRefreshArmed = true;
+   *  Never throws: a look that failed is made again at the next pass. */
+  async #armGrantRefresh(): Promise<void> {
+    if (Date.now() - this.#grantRefreshLookedAt < GRANT_REFRESH_LOOK_EVERY_MS) return;
+    this.#grantRefreshLookedAt = Date.now();
     try {
       // one stub a call, as the seed does
       const call = async (...steps: ItxExpression) => {
@@ -451,7 +459,7 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
           });
       }
     } catch (error) {
-      this.#grantRefreshArmed = false;
+      this.#grantRefreshLookedAt = 0;
       console.info({
         event: "mind.grant-refresh-not-armed",
         namespace: "mind",

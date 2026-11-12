@@ -3,7 +3,7 @@
 // publisher that record what they are asked.
 import type { ItxExpression } from "iterate/expression";
 import type { StreamEventInput } from "iterate/stream/processor";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { MindContract, type MindState } from "./contract.ts";
 import { MindProcessor } from "./processor.ts";
 import type { MindPublisher } from "./publication.ts";
@@ -132,6 +132,32 @@ test("a schedule under the key whose fire failed fires no more, so it is set aga
       did: ["schedule grant-refresh every 6 h: events.iterate.com/secret/grants-refresh-due"],
     },
   });
+});
+
+test("a root that stays awake looks again an hour after its last look: a schedule that was cancelled since is set again, and within the hour nothing is asked", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    // a mind's own schedule under the key (a hold) and the row: the first look writes nothing
+    const mind = mindOf({ owes: false, there: { schedule: true, row: true } });
+    mind.deliver(mind.state);
+    await mind.settled();
+    // the hold is cancelled, and the root's object does not start anew: its bridges keep it awake
+    mind.root.schedule = undefined;
+    vi.setSystemTime(Date.now() + 59 * 60_000);
+    mind.deliver(mind.state);
+    await mind.settled();
+    const withinTheHour = [...mind.root.did];
+    vi.setSystemTime(Date.now() + 2 * 60_000);
+    mind.deliver(mind.state);
+    await mind.settled();
+
+    expect({ withinTheHour, afterIt: mind.root.did }).toEqual({
+      withinTheHour: [],
+      afterIt: ["schedule grant-refresh every 24 h: events.iterate.com/secret/grants-refresh-due"],
+    });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("a mind that is not created yet gets no schedule", async () => {
