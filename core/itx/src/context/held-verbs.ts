@@ -5,6 +5,9 @@
 // each rule's verb. A call that ends at the same place is held, whatever it was called.
 import { type ActRule, EMAIL_SEND, type VerbAct, verbActOf } from "iterate/acts";
 import {
+  containsItxExpressionHole,
+  isItxExpressionHole,
+  ITX_EXPRESSION_MERGE_KEY,
   type ItxExpression,
   itxExpressionStepName,
   normalizedItxExpression,
@@ -83,6 +86,69 @@ function sameStep(ofRule: ItxExpression[number], ofCall: ItxExpression[number] |
   );
 }
 
+/** A RULE'S VERB WHOSE ROW FILLS IN THE CALL'S ARGUMENTS. A row may point a name at a call with a
+ *  hole, `itx.slack.postMessage => itx.config.slack("chat.postMessage", @)`: the name is then a
+ *  call of its own, and what the row pins ("chat.postMessage") says which. A rule on such a name
+ *  is resolved with the hole left in place (`verbWithAHole`), and a call is the rule's verb when
+ *  it is the same call around the hole: the same name, and every pinned argument the same. */
+function sameCallAroundTheHole(ofRule: unknown[], ofCall: ItxExpression[number] | undefined) {
+  if (!Array.isArray(ofCall) || ofRule[0] !== ofCall[0]) return false;
+  const pinned = ofRule.slice(1);
+  // an argument that is the hole itself takes every argument from there on: nothing after it
+  // can be laid beside the call's
+  const open = pinned.findIndex(isItxExpressionHole);
+  const compared = open === -1 ? pinned : pinned.slice(0, open);
+  if (open === -1 && ofCall.length - 1 !== pinned.length) return false;
+  return compared.every((value, index) => sameAroundTheHole(value, ofCall[index + 1]));
+}
+
+/** An argument that is an object of JSON: keys and values, no list. */
+const isJsonObject = (value: unknown): value is Record<string, unknown> =>
+  value instanceof Object && !Array.isArray(value);
+
+function sameAroundTheHole(pinned: unknown, given: unknown): boolean {
+  if (isItxExpressionHole(pinned)) return true;
+  if (Array.isArray(pinned))
+    return (
+      Array.isArray(given) &&
+      given.length === pinned.length &&
+      pinned.every((value, index) => sameAroundTheHole(value, given[index]))
+    );
+  if (!isJsonObject(pinned)) return jsonEqual(pinned, given);
+  if (!isJsonObject(given)) return false;
+  // `...@` merges the caller's object in: the pinned keys are there, and others may be
+  const merges = pinned[ITX_EXPRESSION_MERGE_KEY] === true;
+  const keys = Object.keys(pinned).filter((key) => key !== ITX_EXPRESSION_MERGE_KEY);
+  return (
+    (merges || Object.keys(given).length === keys.length) &&
+    keys.every((key) => Object.hasOwn(given, key) && sameAroundTheHole(pinned[key], given[key]))
+  );
+}
+
+/** WHAT THE CALLER GAVE THE RULE'S NAME, read back out of the call the row made of it. The act is
+ *  the name with these: its late approval calls the name with them, and the row fills the call in
+ *  again. A hole that is an argument took every argument from there on. A hole inside an
+ *  argument is the one argument the caller gave: a nested `@` is that argument whole, and a `...@`
+ *  is the keys the row did not pin (a pinned key the caller also gave was overwritten). */
+function givenAroundTheHole(ofRule: unknown[], ofCall: unknown[]): unknown[] {
+  const pinned = ofRule.slice(1);
+  const open = pinned.findIndex(isItxExpressionHole);
+  if (open !== -1) return ofCall.slice(open + 1);
+  const found = pinned.flatMap((value, index) => givenInside(value, ofCall[index + 1]));
+  return found.slice(0, 1);
+}
+
+function givenInside(pinned: unknown, given: unknown): unknown[] {
+  if (isItxExpressionHole(pinned)) return [given];
+  if (Array.isArray(pinned) && Array.isArray(given))
+    return pinned.flatMap((value, index) => givenInside(value, given[index]));
+  if (!isJsonObject(pinned) || !isJsonObject(given)) return [];
+  const keys = Object.keys(pinned).filter((key) => key !== ITX_EXPRESSION_MERGE_KEY);
+  const nested = keys.flatMap((key) => givenInside(pinned[key], given[key]));
+  if (nested.length > 0 || pinned[ITX_EXPRESSION_MERGE_KEY] !== true) return nested;
+  return [Object.fromEntries(Object.entries(given).filter(([key]) => !keys.includes(key)))];
+}
+
 /** A STEP THAT FINDS A THING TAKES ITS OWN ARGUMENTS AND NO MORE (`rpcStubs.get(key)`,
  *  `workers.get(spec)`, `facets.get(name, spec)`). A rule is compared by the steps that reach its
  *  verb. A finder that read its first argument and let a second one pass gave the same thing a
@@ -148,6 +214,22 @@ function heldAs(
     if (resolved.length < target.length) continue;
     // every step before the rule's last is the same step; its last is the same name, called or not
     const here = target.length - 1;
+    // The rule's verb is a call that its row fills in: the call around the hole is the act.
+    const filledIn = target[here];
+    if (Array.isArray(filledIn) && containsItxExpressionHole(filledIn)) {
+      const call = resolved[here];
+      if (
+        !target.slice(0, here).every((step, index) => sameStep(step, resolved[index])) ||
+        !Array.isArray(call) ||
+        !sameCallAroundTheHole(filledIn, call)
+      )
+        continue;
+      if (resolved.length > target.length || extraArgs.length > 0)
+        return {
+          refused: `${name} waits for a member's approval, and can be held only as one call: names, then one call with its arguments, and nothing after it`,
+        };
+      return verbActOf(name, givenAroundTheHole(filledIn, call));
+    }
     const same = target.every((step, index) =>
       index < here
         ? sameStep(step, resolved[index])

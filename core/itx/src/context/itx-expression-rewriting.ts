@@ -234,6 +234,46 @@ function fillItxExpressionHoles(
   );
 }
 
+/** A RULE'S VERB AS A CALL WHOSE ARGUMENTS ARE NOT KNOWN: the name, called with a hole. A row whose
+ *  target has an `@` resolves a name only when it is called, and puts the call's arguments where
+ *  the `@` is. Resolved this way, the target keeps what the row pins and has the hole where the
+ *  arguments go, which is what a call is compared against (./held-verbs.ts). */
+function verbWithAHole(verb: ItxExpression): ItxExpression {
+  const last = verb.at(-1);
+  return typeof last === "string" ? [...verb.slice(0, -1), [last, { "@": true }]] : verb;
+}
+
+/** WHAT A RULE'S VERB IS: the name as it resolves, or, when its row fills in the call's arguments,
+ *  the call with the hole in it. `called` is the name resolved as a call with a hole. A row with no
+ *  `@` only hands the arguments on, so `called` is then `name` called with the hole and no more:
+ *  the name is the verb. Any other `called` has what the row pins around the hole. */
+function filledInOrName(
+  name: ItxExpression | null,
+  called: ItxExpression | null,
+): ItxExpression | null {
+  // The cast: `mergeHoleKept` changes objects among a call's arguments only, so steps stay steps.
+  const withHole = called && (called.map(mergeHoleKept) as ItxExpression);
+  if (!name || !called) return withHole || name;
+  const last = name.at(-1);
+  const handedOn: ItxExpression =
+    typeof last === "string"
+      ? [...name.slice(0, -1), [last, { "@": true }]]
+      : [...name, ["", { "@": true }]];
+  return jsonEqual(called, handedOn) ? name : withHole;
+}
+
+/** A `...@` of a row merges the argument's keys into its own object. Read with the hole as the
+ *  argument (`verbWithAHole`), that object holds the hole's one key, `"@"`, beside the row's keys:
+ *  it is written back as the `...@` it was, so the call is still one with a hole. */
+function mergeHoleKept(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(mergeHoleKept);
+  if (!(value instanceof Object) || isItxExpressionHole(value)) return value;
+  // The cast: an object that is no list, off a parsed expression, so its keys are strings.
+  const { "@": hole, ...pinned } = value as Record<string, unknown>;
+  const kept = Object.fromEntries(Object.entries(pinned).map(([k, v]) => [k, mergeHoleKept(v)]));
+  return hole === true ? { ...kept, [ITX_EXPRESSION_MERGE_KEY]: true } : kept;
+}
+
 function applyItxExpressionRewriteRule(
   target: ItxExpression,
   match: ItxExpressionPrefixMatch,
@@ -1065,16 +1105,25 @@ export class ItxExpressionResolver {
     at: string,
     rules: readonly ItxExpressionRewriteRule[],
   ) {
+    // A name is read twice, as it is written and as a call with a hole (`verbWithAHole`): the
+    // second reading shows a row that fills in the call's arguments (`filledInOrName`).
     const readHere = (verb: ItxExpression) => {
-      try {
-        return resolveItxExpression(() => rules, verb, implicitRootsAt(at)).at(-1)!;
-      } catch {
-        return null;
-      }
+      const read = (spelled: ItxExpression) => {
+        try {
+          return resolveItxExpression(() => rules, spelled, implicitRootsAt(at)).at(-1)!;
+        } catch {
+          return null;
+        }
+      };
+      return filledInOrName(read(verb), read(verbWithAHole(verb)));
     };
     const readFromRoot = async (verb: ItxExpression) => {
-      const read = await this.#readFromRoot(verb);
-      return read?.at === at ? read.fixedPoint : null;
+      const [name, called] = await Promise.all([
+        this.#readFromRoot(verb),
+        this.#readFromRoot(verbWithAHole(verb)),
+      ]);
+      const here = (read: typeof name) => (read?.at === at ? read.fixedPoint : null);
+      return filledInOrName(here(name), here(called));
     };
     const names: ItxExpression[] = [];
     const here = heldVerbOf(verbRules, called, extraArgs, (verb) => {

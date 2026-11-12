@@ -274,6 +274,56 @@ test.for(REFUSED)(
   },
 );
 
+// Rows that fill in the call (`sameCallAroundTheHole` in ./held-verbs.ts): one pins a method, one
+// merges the call's fields into its own.
+const POST: ItxExpression = [...WORKER, ["slack", "chat.postMessage", { "@": true }]];
+const REACT: ItxExpression = [
+  ...WORKER,
+  ["slack", "reactions.add", { channel: "C1", "...@": true }],
+];
+
+test("a rule on a name whose row fills in the call's arguments holds that call, by every name that reaches it", () => {
+  const call: ItxExpression = [
+    ...WORKER,
+    ["slack", "chat.postMessage", { channel: "C1", text: "hi" }],
+  ];
+  expect(held(["itx.slack.postMessage"], call)).toEqual({
+    act: "itx.slack.postMessage",
+    args: [{ channel: "C1", text: "hi" }],
+  });
+  // the pinned argument says which call it is: another method of the same function is not held
+  expect(
+    held(["itx.slack.postMessage"], [...WORKER, ["slack", "chat.delete", { ts: "1" }]]),
+  ).toBeNull();
+  // the name read as a value, and another function of the worker, are no call of it
+  expect(held(["itx.slack.postMessage"], [...WORKER, "slack"])).toBeNull();
+  expect(
+    held(["itx.slack.postMessage"], [...WORKER, ["other", "chat.postMessage", {}]]),
+  ).toBeNull();
+});
+
+test("a row that merges the call's object into its own holds a call with the pinned keys, whatever else it gives", () => {
+  expect(
+    held(
+      ["itx.slack.react"],
+      [...WORKER, ["slack", "reactions.add", { channel: "C1", name: "eyes" }]],
+    ),
+  ).toEqual({ act: "itx.slack.react", args: [{ name: "eyes" }] });
+  // another channel is not the call the row makes
+  expect(
+    held(
+      ["itx.slack.react"],
+      [...WORKER, ["slack", "reactions.add", { channel: "C2", name: "eyes" }]],
+    ),
+  ).toBeNull();
+});
+
+test("a held call that a row fills in is one call: what goes on after it is refused", () => {
+  expect(
+    held(["itx.slack.postMessage"], [...WORKER, ["slack", "chat.postMessage", {}], "ok"]),
+  ).toEqual({ refused: expect.stringContaining("only as one call") });
+});
+
 function held(verbs: readonly string[], resolved: ItxExpression, extraArgs: unknown[] = []) {
   return heldVerbOf(
     verbs.map((verb) => ActRule.parse({ verb })),
@@ -283,16 +333,20 @@ function held(verbs: readonly string[], resolved: ItxExpression, extraArgs: unkn
     (verb) =>
       verb[1] === "whatsapp"
         ? [...STUB, ...verb.slice(2)]
-        : verb[1] === "config"
-          ? [...WORKER, ...verb.slice(2)]
-          : verb[1] === "agents"
-            ? [
-                "itx",
-                "builtins",
-                "facets",
-                ["get", "agents", { className: "Agents" }],
-                ...verb.slice(2),
-              ]
-            : null,
+        : verb[1] === "slack"
+          ? verb[2] === "react"
+            ? REACT
+            : POST
+          : verb[1] === "config"
+            ? [...WORKER, ...verb.slice(2)]
+            : verb[1] === "agents"
+              ? [
+                  "itx",
+                  "builtins",
+                  "facets",
+                  ["get", "agents", { className: "Agents" }],
+                  ...verb.slice(2),
+                ]
+              : null,
   );
 }

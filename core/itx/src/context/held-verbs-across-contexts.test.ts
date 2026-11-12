@@ -116,6 +116,47 @@ test("a call by the stub's own invoke is the same act as a call by the lent name
   });
 });
 
+test.for([
+  { verb: "itx.shout", given: "jo", ran: "/: send loud jo" },
+  { verb: "itx.tag", given: { name: "eyes" }, ran: '/: send {"name":"eyes","kind":"tag"}' },
+])(
+  "a held call of $verb, whose row pins part of the call, is held with what its caller gave, and its late approval runs that call",
+  async ({ verb, given, ran }) => {
+    const mind = mindWith([{ verb }]);
+    await mind
+      .at("/")
+      .invoke(verb, given)
+      .catch(() => undefined);
+    expect({ held: mind.held(), ran: mind.ran }).toEqual({
+      held: [expect.objectContaining({ act: verb, args: [given] })],
+      ran: [],
+    });
+    await mind.at("/").invokeApproved(mind.asked[0]!.text, verb, [given]);
+    expect(mind).toMatchObject({ ran: [ran] });
+  },
+);
+
+test("a rule on a name whose row fills in the call's arguments holds the call, and its late approval runs it once", async () => {
+  const mind = mindWith([{ verb: "itx.say" }]);
+  await mind
+    .at("/")
+    .invoke("itx.say", "jo")
+    .catch(() => undefined);
+  // held, by the name the member wrote, with the arguments the call gave: nothing ran
+  expect({ held: mind.held(), ran: mind.ran }).toEqual({
+    held: [expect.objectContaining({ act: "itx.say", args: ["jo"] })],
+    ran: [],
+  });
+  // the same function by the bridge's own name is the same call, and is held too
+  await mind
+    .at("/")
+    .invoke(["itx", "rpcStubs", ["get", "k"], ["send", "jo"]])
+    .catch(() => undefined);
+  expect({ asks: mind.asked.length, ran: mind.ran }).toEqual({ asks: 2, ran: [] });
+  await mind.at("/").invokeApproved(mind.asked[0]!.text, "itx.say", ["jo"]);
+  expect(mind).toMatchObject({ ran: ["/: send jo"] });
+});
+
 test("an approved text for a call that no rule holds now is refused: the member read a call that a rule held", async () => {
   const mind = mindWith([{ verb: "itx.agents.delete" }]);
   await mind
@@ -220,6 +261,18 @@ const tables: Record<string, ItxExpressionRewriteRule[]> = {
     },
     // a bridge that is lent at the root
     { match: ["itx", "bridge"], target: ["itx", "rpcStubs", ["get", "k"]] },
+    // a name whose row fills in the call: `itx.say(to)` is the bridge's `send(to)`
+    { match: ["itx", "say"], target: ["itx", "rpcStubs", ["get", "k"], ["send", { "@": true }]] },
+    // rows that pin part of the call: `itx.shout(to)` is `send("loud", to)`, and `itx.tag(fields)`
+    // is `send({ kind: "tag", ...fields })`
+    {
+      match: ["itx", "shout"],
+      target: ["itx", "rpcStubs", ["get", "k"], ["send", "loud", { "@": true }]],
+    },
+    {
+      match: ["itx", "tag"],
+      target: ["itx", "rpcStubs", ["get", "k"], ["send", { kind: "tag", "...@": true }]],
+    },
   ],
   "/agents": [{ match: ["itx", "own"], target: ["itx", "facets", ["get", "agents", spec]] }],
 };
@@ -263,7 +316,14 @@ function mindWith(rules: ActRule[]) {
       rewriteRules: () => rows[path]!,
       builtIns: {
         facets: { get: () => collection },
-        rpcStubs: { get: () => ({ send: (to: string) => ran.push(`${path}: send ${to}`) }) },
+        rpcStubs: {
+          get: () => ({
+            send: (...sent: unknown[]) =>
+              ran.push(
+                `${path}: send ${sent.map((one) => (typeof one === "string" ? one : JSON.stringify(one))).join(" ")}`,
+              ),
+          }),
+        },
       },
       reach: {
         recordLoopLimit: () => undefined,
