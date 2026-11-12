@@ -339,6 +339,21 @@ pipelines, one dataset and two destinations; the stack's other Workers write eve
 span twice, to Cloudflare and to the warehouse. Pipelines, R2 and R2 SQL bill by what is written,
 stored and scanned.
 
+**Account API Tokens Edit is needed once.** The deploy that turns telemetry on makes the two
+tokens, and their values stay in the stack's state. A later deploy with a token that may not make
+API tokens passes: nothing about the two tokens changed, so the deploy asks Cloudflare nothing
+about them. So a stack whose everyday deploy token must not make tokens (one that CI holds) gets
+its telemetry from one deploy with a short-lived token that may:
+
+```sh
+pnpm run config --stage <name> > mind.config.local.json   # then add "telemetry": true to it
+CLOUDFLARE_API_TOKEN=<one that also has Account API Tokens Edit> CLOUDFLARE_ACCOUNT_ID=… \
+  ITERATE_MIND_CONFIG=mind.config.local.json pnpm run deploy --stage <name>
+```
+
+Revoke that token after it. The same permission is needed again by a `destroy` (it deletes the two
+tokens) and by a deploy of a version that changes what a token may do.
+
 ## A provided mind
 
 A stack's mind can run on a machine of your own: the same mind Worker, in local workerd
