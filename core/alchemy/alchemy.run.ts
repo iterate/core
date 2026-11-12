@@ -3,6 +3,7 @@ import * as Alchemy from "alchemy";
 import * as Layer from "effect/Layer";
 import { loadMindConfig, resourceNamesOf, stageOf } from "./src/config.ts";
 import { NarrowEventSubscriptionProvider } from "./src/event-subscriptions.ts";
+import { GoneQueueConsumerProvider } from "./src/queue-consumers.ts";
 import { mindStack } from "./src/stack.ts";
 
 // The account's own store by default: local state would keep the generated keys in this checkout in
@@ -24,9 +25,13 @@ if (process.env.CLOUDFLARE_ACCOUNT_ID !== config.accountId)
 export default Alchemy.Stack(
   "mind",
   {
-    // Alchemy's providers, with one of our own for event subscriptions: it never reads every
-    // subscription of the account (src/event-subscriptions.ts).
-    providers: NarrowEventSubscriptionProvider().pipe(Layer.provideMerge(Cloudflare.providers())),
+    // Alchemy's providers, with two of our own: event subscriptions, which never read every
+    // subscription of the account (src/event-subscriptions.ts), and queue consumers, whose delete
+    // on a queue that is gone counts as done (src/queue-consumers.ts).
+    providers: NarrowEventSubscriptionProvider().pipe(
+      Layer.provideMerge(GoneQueueConsumerProvider()),
+      Layer.provideMerge(Cloudflare.providers()),
+    ),
     state:
       store === "cloudflare"
         ? Cloudflare.state({ workerName: resourceNamesOf(config.name).state })
