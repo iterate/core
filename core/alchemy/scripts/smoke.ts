@@ -23,6 +23,7 @@ import { appsChecks } from "./smoke/apps.ts";
 import { HOMEPAGE, leftoverChanges, markedHomepage, withChange } from "./smoke/config-repo.ts";
 import { templateFollowed } from "./smoke/template-follow.ts";
 import { attempt, type Check, mindRoot, mindWorkerIs, ownsPlatformAlone } from "./smoke/lib.ts";
+import { reasonOf } from "./smoke/reason.ts";
 
 /** Checks the stack deployed on `domain`, the zone of its mind config. */
 export default async function smoke(
@@ -116,7 +117,6 @@ async function nothingLeft(domain: string, token: string): Promise<Check> {
   const check = "repos: nothing of an earlier smoke run is left in /repos/config";
   const root = () => mindRoot(domain, token);
   const repo = () => root().repos.get("/repos/config");
-  const said = (error: unknown) => (error instanceof Error ? error.message : String(error));
   let changes;
   try {
     const { paths } = await repo().listFiles();
@@ -128,7 +128,7 @@ async function nothingLeft(domain: string, token: string): Promise<Check> {
     return {
       check,
       pass: true,
-      detail: `skipped: the config repo did not answer (${said(error)})`,
+      detail: `skipped: the config repo did not answer (${reasonOf(error)})`,
     };
   }
   if (!changes.length) return { check, pass: true, detail: "nothing was left" };
@@ -161,7 +161,7 @@ async function nothingLeft(domain: string, token: string): Promise<Check> {
       detail: `took out ${paths} in ${commitOid.slice(0, 12)} (${outcome})`,
     };
   } catch (error) {
-    return { check, pass: false, detail: `${paths} left in the repo: ${said(error)}` };
+    return { check, pass: false, detail: `${paths} left in the repo: ${reasonOf(error)}` };
   }
 }
 

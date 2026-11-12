@@ -1,6 +1,7 @@
 import { newHttpBatchRpcSession } from "capnweb";
 import type { IterateContextApi } from "iterate/api";
 import { mindApiUrlOf } from "iterate/mind-api";
+import { reasonOf } from "./reason.ts";
 
 export type Check = { check: string; pass: boolean; detail: string };
 
@@ -73,7 +74,7 @@ export async function attempt(
   try {
     return { check, ...(await run()) };
   } catch (error) {
-    return { check, pass: false, detail: error instanceof Error ? error.message : String(error) };
+    return { check, pass: false, detail: reasonOf(error) };
   }
 }
 
