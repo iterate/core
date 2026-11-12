@@ -925,9 +925,10 @@ export class ItxExpressionResolver {
 
   // A VERB AN APPROVAL RULE NAMES WAITS FOR A MEMBER'S YES (./held-verbs.ts, the host's `acts`).
   // Asked with the table that resolved the call, the table of `route.at`, so every name for one
-  // function meets the same rule. The platform's own calls are not held: an act that a member approved
-  // after its caller stopped waiting is done as the platform. Answers the act's text once a
-  // member approved it, and nothing for a call that no rule names.
+  // function meets the same rule. The platform's own calls are not held. An act that a member
+  // approved after its caller stopped waiting is no platform's call: it comes with the approved
+  // text (`Caller.approvedAct`), and runs only when the call is still that act. Answers the act's
+  // text once a member approved it, and nothing for a call that no rule names.
   async #heldUntilApproved(
     route: { fixedPoint: ItxExpression; extraArgs: unknown[]; at: string },
     rules: readonly ItxExpressionRewriteRule[],

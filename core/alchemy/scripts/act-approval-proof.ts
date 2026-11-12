@@ -7,8 +7,8 @@
 // ITERATE_PROOF_SESSION_COOKIE  the member's session cookie's value on iterate.<domain>
 // ITERATE_PROOF_PASSKEY         that member's software passkey's file: { credentialId, privateKey }
 // ITERATE_PROOF_SHOTS           the folder for screenshots (default: a new temp folder)
-// ITERATE_PROOF_LATE=0          leave out the approval after the caller stopped waiting (it waits
-//                               the caller's five minutes)
+// ITERATE_PROOF_LATE=0          leave out the two approvals after the caller stopped waiting, a
+//                               mail's and a verb's (each waits the caller's five minutes)
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -732,6 +732,67 @@ await run(
     };
   },
 );
+
+if (env.ITERATE_PROOF_LATE !== "0")
+  await run(
+    "a call whose caller gave up after five minutes is approved later: the bridge gets it then, and a name re-pointed meanwhile is not run",
+    async () => {
+      const kept = `late ${marker}`;
+      const moved = `late and re-pointed ${marker}`;
+      // two calls wait at once: each is its own act
+      const first = send(kept);
+      const heldKept = await heldDigest(SEND);
+      const second = send(moved);
+      const heldMoved = await heldDigest(SEND);
+      for (const ended of await Promise.all([first, second]))
+        must(
+          "refused" in ended && ended.refused.includes("can be approved for a day"),
+          `a call ended with ${JSON.stringify(ended)}`,
+        );
+      must(!said.includes(kept), "the bridge was called with no approval");
+      const approve = async (digest: string) => {
+        await page.goto(`${page_}?digest=${digest}`);
+        await checked(digest);
+        await page
+          .locator("[data-acts]")
+          .getByRole("button", { name: "Approve the chosen" })
+          .click();
+      };
+      // the member's API session called from the mind's root, so that is the caller's context
+      const doneFact = (digest: string) =>
+        until("the fact on the caller's context", 90, async () =>
+          (await eventsOf("/")).findLast(
+            (event) => event.type === TYPES.done && event.payload.digest === digest,
+          ),
+        );
+      await approve(heldKept);
+      const done = await doneFact(heldKept);
+      must(done.payload.ok === true, `act-done says ${JSON.stringify(done.payload)}`);
+      must(said.includes(kept), "act-done says ok, and the bridge printed no call");
+      // The second act's name goes to another function of the bridge before the member approves.
+      const row = { match: SEND, target: "itx.proofWhatsapp.jonas.chats" };
+      const rule = "events.iterate.com/itx/rewrite-rule-configured";
+      await root().append({ type: rule, payload: row });
+      // the kernel reads the mind's table again within five seconds
+      await settled(7_000);
+      const notRun = await (async () => {
+        await approve(heldMoved);
+        return doneFact(heldMoved);
+      })().finally(() =>
+        // the row goes whatever came of it: the steps after this one use the name
+        root().append({ type: rule, payload: { match: SEND, target: null, ifTarget: row.target } }),
+      );
+      must(
+        notRun.payload.ok === false &&
+          String(notRun.payload.error).includes("changed while it waited"),
+        `act-done says ${JSON.stringify(notRun.payload)}`,
+      );
+      must(!said.includes(moved), "the bridge was called for the name that was re-pointed");
+      return {
+        detail: `both calls threw after five minutes; approved later, the bridge got the first and / holds act-done { ok: true }; the second, re-pointed before its approval, was not run: ${String(notRun.payload.error).slice(0, 90)}`,
+      };
+    },
+  );
 
 await run(
   "the member removes the bridge's key on /keys with the passkey, and the bridge lends no more",
