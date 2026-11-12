@@ -97,6 +97,22 @@ body,
   gap: 0.5rem;
 }
 
+/* "Off" beside the name of a part that the mind does not have (Analytics with no telemetry) */
+.dash-off {
+  margin-left: auto;
+  padding: 0 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 4px);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+}
+
+.dash-off-badge {
+  color: var(--muted-foreground);
+}
+
 .dash-card svg {
   width: 1rem;
   height: 1rem;

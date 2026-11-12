@@ -14,9 +14,10 @@
 // itx, the URL, the sidebar and the overview. Change them here.
 //
 // WHAT THE PAGE ASKS BY ITSELF: the count of what waits for approval (the kit asks once when the
-// page opens, then every five minutes while the tab is in front), and the live charts of
-// Analytics (every thirty seconds while that page is shown). Every other read is one that a
-// person's click starts.
+// page opens, then every five minutes while the tab is in front), whether the mind has telemetry
+// (once, when the page opens: the sidebar and the overview say "Off" when it has none), and the
+// live charts of Analytics (every thirty seconds while that page is shown). Every other read is
+// one that a person's click starts.
 import {
   html,
   render,
@@ -26,7 +27,11 @@ import {
   useState,
   useSyncExternalStore,
 } from "@iterate-com/ui/page";
-import { AnalyticsPage, telemetryQueryOf } from "@iterate-com/ui/components/analytics-page";
+import {
+  AnalyticsPage,
+  telemetryQueryOf,
+  TelemetryOff,
+} from "@iterate-com/ui/components/analytics-page";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import { ApprovalsAlert } from "@iterate-com/ui/components/approvals-alert";
 import {
@@ -220,13 +225,17 @@ function App() {
   const params = useMemo(() => new URLSearchParams(search), [search]);
   const page = params.get("page") || "overview";
   const context = contextPathOf(params.get("context") || "");
-  let view = html`<${Overview} />`;
+  // Asked once here, for the sidebar, the overview and the Analytics page: a mind with no
+  // telemetry shows Analytics as "Off" everywhere, and its page says how to turn it on.
+  const hasTelemetry = useServes("telemetry");
+  const telemetryOff = hasTelemetry === false;
+  let view = html`<${Overview} telemetryOff=${telemetryOff} />`;
   if (page === "contexts") view = html`<${Contexts} path=${context} search=${search} />`;
   if (page === "repo")
     view = html`<${Repo} name=${params.get("repo") || "config"} search=${search} />`;
   if (page === "secrets") view = html`<${Secrets} search=${search} />`;
   if (page === "integrations") view = html`<${Integrations} />`;
-  if (page === "analytics") view = html`<${Analytics} />`;
+  if (page === "analytics") view = html`<${Analytics} serves=${hasTelemetry} />`;
   if (page === "mcp")
     view = html`<div className="dash-scroll"><${McpConnect} server=${`${stack}/mcp`} /></div>`;
   return html`
@@ -234,7 +243,7 @@ function App() {
       app="Dash"
       mind=${domain}
       mindHref=${() => "./"}
-      nav=${html`<${Nav} page=${page} waiting=${waiting} />`}
+      nav=${html`<${Nav} page=${page} waiting=${waiting} telemetryOff=${telemetryOff} />`}
       account=${principal}
       locationKey=${location.pathname + search}
     >
@@ -318,18 +327,12 @@ function Integrations() {
   `;
 }
 
-/** The mind's telemetry. A stack without telemetry is asked nothing: the page says that it is off. */
-function Analytics() {
-  const serves = useServes("telemetry");
+/** The mind's telemetry. A mind without telemetry is asked nothing: the kit's page says that it
+ *  is off, what turns it on and who can. `serves` is the shell's one answer (undefined: asking). */
+function Analytics({ serves }) {
   if (serves === undefined)
     return html`<p className="dash-note" data-spinner="true">Reading the mind…</p>`;
-  if (!serves)
-    return html`
-      <${PartIsOff} title="Analytics">
-        Telemetry is off for this mind, so there is nothing to chart. Telemetry is a part of the
-        stack: a deploy with telemetry on adds it, and this page then shows the mind's charts.
-      <//>
-    `;
+  if (!serves) return html`<div className="dash-scroll"><${TelemetryOff} mind=${domain} /></div>`;
   return html`<div className="dash-scroll"><${AnalyticsPage} query=${telemetry} /></div>`;
 }
 
@@ -395,7 +398,7 @@ function Repo({ name, search }) {
 }
 
 /** Who is signed in, and the way to everything else. */
-function Overview() {
+function Overview({ telemetryOff }) {
   return html`
     <div className="dash-scroll">
       <div className="dash-overview">
@@ -436,7 +439,10 @@ function Overview() {
             {
               name: "Analytics",
               icon: ChartLineIcon,
-              about: "The mind's telemetry: events, lag, storage, a SQL box.",
+              about: telemetryOff
+                ? "Telemetry is off. The page says how to turn it on."
+                : "The mind's telemetry: events, lag, storage, a SQL box.",
+              off: telemetryOff,
               link: linkTo(pageOf("analytics")),
             },
             {
@@ -457,7 +463,8 @@ function Overview() {
   `;
 }
 
-/** One group of the overview: a card for each row, and the whole card is the link. */
+/** One group of the overview: a card for each row, and the whole card is the link. A row that is
+ *  `off` says "Off" beside its name. */
 function Cards({ title, rows }) {
   return html`
     <section>
@@ -468,7 +475,10 @@ function Cards({ title, rows }) {
             <a key=${row.name} className="dash-card" ...${row.link}>
               <${Card}>
                 <${CardHeader}>
-                  <${CardTitle}><${row.icon} aria-hidden="true" />${row.name}<//>
+                  <${CardTitle}>
+                    <${row.icon} aria-hidden="true" />${row.name}
+                    ${row.off ? html`<span className="dash-off">Off</span>` : null}
+                  <//>
                   <${CardDescription}>${row.about}<//>
                 <//>
               <//>
@@ -480,8 +490,9 @@ function Cards({ title, rows }) {
   `;
 }
 
-/** The sidebar: the Dash's three pages, then the mind's apps and the pages about access. */
-function Nav({ page, waiting }) {
+/** The sidebar: the Dash's pages, then the mind's apps and the pages about access. Analytics
+ *  stays in its place for a mind with no telemetry, muted, with "Off" beside it. */
+function Nav({ page, waiting, telemetryOff }) {
   const pages = [
     {
       name: "Overview",
@@ -507,6 +518,7 @@ function Nav({ page, waiting }) {
       name: "Analytics",
       icon: ChartLineIcon,
       page: "analytics",
+      off: telemetryOff,
       link: linkTo(pageOf("analytics")),
     },
     { name: "MCP", icon: PlugIcon, page: "mcp", link: linkTo(pageOf("mcp")) },
@@ -522,11 +534,13 @@ function Nav({ page, waiting }) {
                 <${SidebarMenuButton}
                   isActive=${row.page === page}
                   tooltip=${row.name}
+                  className=${row.off ? "text-muted-foreground" : undefined}
                   render=${html`<a ...${row.link} />`}
                 >
                   <${row.icon} />
                   <span>${row.name}</span>
                 <//>
+                ${row.off ? html`<${SidebarMenuBadge} className="dash-off-badge">Off<//>` : null}
               <//>
             `,
           )}
