@@ -9,7 +9,11 @@ import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 import { agentsApp } from "./apps/agents/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
+import { voiceApp } from "./apps/voice/app.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
+// Voice is off (AGENTS.md, "Voice"). The Voice app's "Turn voice on" takes the "// " off this
+// line and off `installVoice` in the init case below, in the commit that adds the package.
+// import { installVoice } from "@iterate-com/voice/install";
 import {
   callSlack,
   refuseSlackSender,
@@ -27,6 +31,7 @@ const integrations: Integration[] = [];
 const agents = agentsApp();
 const onboarding = onboardingApp();
 const docs = docsApp();
+const voice = voiceApp();
 // The guestbook, an example of an app for end users, people who are not members (AGENTS.md, "The
 // guestbook"). To turn it on, uncomment this line, its import above and its case in `fetch`.
 // const guestbook = guestbookApp();
@@ -49,6 +54,8 @@ export default class extends IterateConfigEntrypoint {
         // where each kind's file is, for the Agents app's chat (`agentKinds`, above)
         await publishAgentKinds(itx, agentKinds);
         await onboarding.install(itx);
+        // Voice, when it is on: the service at `itx.voice`, which the Voice app calls.
+        // await installVoice(itx);
         // A heartbeat, for a mind that should wake on its own (to check on itself and repair what
         // it finds, say): uncommented, it appends `heartbeat` on `/` every five minutes and wakes the
         // mind each time. Set again unchanged, it keeps its clock. Commenting it out again does
@@ -271,6 +278,8 @@ export default class extends IterateConfigEntrypoint {
         return this.auth.require(request) || onboarding.fetch(request, this);
       case "docs": // the docs app, for members: the config repo, read in a browser
         return this.auth.require(request) || docs.fetch(request, this);
+      case "voice": // the Voice app, for members: call the mind from a browser
+        return this.auth.require(request) || voice.fetch(request, this);
       // case "guestbook": // the guestbook, for everyone: no guard here, its routes ask for who they need
       //   return guestbook.fetch(request, this);
       case null: {

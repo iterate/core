@@ -13,6 +13,9 @@ import docsFiles from "../../configs/default/apps/docs/public/";
 import onboardingIndex from "../../configs/default/apps/onboarding/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import onboardingFiles from "../../configs/default/apps/onboarding/public/";
+import voiceIndex from "../../configs/default/apps/voice/index.html";
+// oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
+import voiceFiles from "../../configs/default/apps/voice/public/";
 import Config from "../../configs/default/worker.ts";
 
 test("the default config's pages and folders load here as the platform's loader makes them", () => {
@@ -25,6 +28,15 @@ test("the default config's pages and folders load here as the platform's loader 
   expect(Object.keys(onboardingFiles)).toEqual(["app.css", "app.js"]);
   expect(docsIndex).toMatch(/<title>Docs<\/title>/);
   expect(Object.keys(docsFiles)).toEqual(["app.css", "app.js"]);
+  expect(voiceIndex).toMatch(/<title>Voice<\/title>/);
+  expect(Object.keys(voiceFiles)).toEqual([
+    "app.css",
+    "app.js",
+    "audio.js",
+    "capture-worklet.js",
+    "playback-worklet.js",
+    "turn-on.js",
+  ]);
 });
 
 const ORIGIN =

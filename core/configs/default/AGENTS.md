@@ -187,6 +187,8 @@ fresh before each request.
 `apps/docs/` is the docs app, on `docs.<domain>` for members: this repo read in a browser, its files
 in the sidebar, a file beside them (markdown rendered, code as code) and the commits that changed
 it. It reads through the member's `itx` and writes nothing.
+`apps/voice/` is the Voice app, on `voice.<domain>` for members: a call to the mind from a browser
+("Voice", below).
 
 ```
 apps/<name>/
@@ -223,6 +225,27 @@ apps/<name>/
   `itx.cd(path).facets.get(name, { className, mainModule: "apps/<name>/backend.ts", source: itx.cd("/").config })`.
 - **People who are not members** never get `itx`. Their page talks to your code: answer its
   requests in the app's `fetch`, and check `host.auth.person(request)` there.
+
+### Voice
+
+`apps/voice/` makes a browser a voice device of the mind. Call opens the microphone; a live model
+(OpenAI's, with the mind's key at `/secrets/openai`) listens and speaks; what it cannot answer it
+hands to the device's own agent, `/agents/voice/<device>`, an agent like any other, which
+remembers every call. The code is the package `@iterate-com/voice`; its README says how a call
+works.
+
+Voice is off in a new mind, because it needs that package and a key. The page says so, and its
+"Turn voice on" makes this commit in the member's name. To make it by hand:
+
+```text
+package.json   "dependencies": { "@iterate-com/voice": "<a build of npm's main tag, pinned>" }
+voice.ts       export { default, VoiceAgentDurableObject } from "@iterate-com/voice";
+worker.ts      take the "// " off the import of installVoice, and off installVoice(itx) in the init case
+```
+
+The page then asks for the OpenAI key once, if the mind has none. The page loads its voice code
+from the build that `package.json` pins, so the page and the mind's relay are one build: to
+upgrade, change that pin. A commit that changes what `voice.ts` bundles ends the calls in progress.
 
 ## Accounts through iterate Cloud
 
