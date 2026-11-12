@@ -21,8 +21,9 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
     and the website. So only the platform's own record of a member's mail sent straight from their
     domain starts one; a forward, a list's copy, a re-sent old message, an auto-reply or a bounce
     starts none. A reply to a mail an agent sent goes back to that agent (`mail-replies.ts`), from
-    a member, and from an outside person whose sender Cloudflare proved: that agent wrote to them
-    first, so their answer is expected. Their text comes marked as an outside person's answer, not
+    a member, and from an outside person whose sender Cloudflare proved and whom that agent wrote
+    to (their address is in the `to` or `cc` of its mail in the thread): their answer is
+    expected. A proven sender whom no agent wrote to reaches none, though they name the thread. Their text comes marked as an outside person's answer, not
     a member's request. An outside person's mail that no agent's mail came before reaches no
     agent, and neither does an automated mail. The `events.iterate.com/email/delivery-failed`
     case tells the agent that sent a mail when it bounced or was refused.

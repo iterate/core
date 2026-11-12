@@ -81,23 +81,28 @@ export default class extends IterateConfigEntrypoint {
           event.payload,
         );
         // the cheap first test: a mail that would reach no agent even in a thread an agent wrote in
-        if (whoGetsTheMail({ ...email, sentFrom: ["/agents/any"] }) === null) break;
+        if (
+          whoGetsTheMail({ ...email, sent: [{ origin: "/agents/any", to: [email.from] }] }) === null
+        )
+          break;
         const threads = emailThreads(itx);
         await threads.waitUntilProcessed({ offset: event.offset });
         const { state } = await threads.snapshot();
         const threadOffset = Object.keys(state.threads).find((offset) =>
           state.threads[offset]!.messageOffsets.includes(event.offset),
         );
-        // who sent the thread's earlier mails from this mind, oldest first
-        const sentFrom: string[] = [];
+        // the thread's earlier mails that this mind sent, oldest first: who sent each, and to whom
+        const sent: { origin: string; to: string[] }[] = [];
         for (const offset of threadOffset ? state.threads[threadOffset]!.messageOffsets : []) {
           if (offset >= event.offset) continue;
           const earlier = await emailEventAt(itx, offset);
-          if (earlier?.type === "events.iterate.com/email/sent") {
-            sentFrom.push(earlier.source?.origin || "");
-          }
+          if (earlier?.type !== "events.iterate.com/email/sent") continue;
+          const mail = EmailContract.events["events.iterate.com/email/sent"].payloadSchema.parse(
+            earlier.payload,
+          );
+          sent.push({ origin: earlier.source?.origin || "", to: [...mail.to, ...mail.cc] });
         }
-        const target = whoGetsTheMail({ ...email, sentFrom });
+        const target = whoGetsTheMail({ ...email, sent });
         if (!target) break;
         const agent = target.agent || `/agents/email/t${threadOffset || event.offset}`;
         if (!target.agent) await itx.agents.create(agent);
