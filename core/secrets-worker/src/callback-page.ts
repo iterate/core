@@ -14,11 +14,13 @@ export function plainPage(
   formAction = "'none'",
   scriptNonce?: string,
   wide = false,
+  // what the browser's tab says: a page a person keeps open names itself
+  title = "iterate",
 ): Response {
   const script = scriptNonce ? `script-src 'nonce-${scriptNonce}'; connect-src 'self'; ` : "";
   return new Response(
     standalonePage({
-      title: "iterate",
+      title,
       head: `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`,
       body,
       wide,

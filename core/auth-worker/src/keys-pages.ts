@@ -217,7 +217,7 @@ async function keysPage(
       <p>A key lets you sign in to ${text(domain)} and approve things in it: a passkey in your password manager, or a security key such as a YubiKey.</p>
       ${results.length ? `<ul>${results.map(item).join("")}</ul>` : `<p class="muted">You have no keys here yet.</p>`}
       <form id="add" class="stack" data-challenge="${text(challenge)}" data-user="${text(session.userId)}" data-email="${text(session.email)}" data-rp="${text(new URL(issuer).hostname)}"${owed ? "" : " data-sign"}>
-        <input name="label" required maxlength="100" aria-label="Name" placeholder="Name it, such as YubiKey">
+        <input name="label" required maxlength="100" size="28" aria-label="Name" placeholder="Name it, such as YubiKey">
         <button type="submit">Add a passkey</button>
         <p id="status" class="muted" role="status"></p>
       </form>

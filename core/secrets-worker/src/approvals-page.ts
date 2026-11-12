@@ -202,6 +202,7 @@ async function page(deps: ApprovalsDeps): Promise<Response> {
     "'self'",
     nonce,
     true,
+    "Approvals",
   );
 }
 
