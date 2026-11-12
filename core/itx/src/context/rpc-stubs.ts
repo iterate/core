@@ -44,14 +44,16 @@ function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequ
   };
 }
 
-/** WHAT A REDIAL SETS AGAIN: its events, less each rule whose name another row holds now. While
- *  the pager was down someone pointed the name elsewhere or masked it, and that is their word: the
- *  lend comes back with no name, and its lender lends again to ask for one. A name with no row
- *  (the context un-set the lend's rule when the pager closed) and a name that is still this lend
- *  take the rule. */
+/** WHAT A REDIAL SETS AGAIN: its events, less each rule that is not this lend's to set. A name
+ *  that another row holds now stays that row's: someone pointed it elsewhere or masked it while
+ *  the pager was down. A name with no row takes the rule only when the context itself un-set it
+ *  at the pager's close (`unset`, the context's own record): with no such record somebody removed
+ *  the row, and that is their word too. The lend then comes back with no name, and its lender
+ *  lends again to ask for one. A name that is still this lend takes the rule. */
 export function eventsOfARedial(
   events: StreamEventInput[],
   rules: readonly ItxExpressionRewriteRule[],
+  unset: ReadonlySet<string>,
 ): StreamEventInput[] {
   return events.filter((event) => {
     if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") return true;
@@ -60,8 +62,27 @@ export function eventsOfARedial(
       event.payload as RewriteRuleConfigured,
     );
     const row = rules.find((rule) => print(rule.match) === print(match));
-    return !row || (!!row.target && !!target && print(row.target) === print(target));
+    if (!row) return unset.has(print(match));
+    return !!row.target && !!target && print(row.target) === print(target);
   });
+}
+/** WHAT AN ATTACH APPENDS, AND WHEN THE RECORD OF THE LAST CLOSE ENDS. The record (`unset`: the
+ *  rule matches that the key's last close un-set) speaks for one attach that lands. It is ended
+ *  only after the append came back: an attach that the stream refuses (a paused stream, a 5xx to
+ *  the lender) changed nothing, the lender dials again, and that redial must still find the
+ *  record, or it would take the name for one that somebody removed and come back without it. */
+export function appendAtAttach(input: {
+  events: StreamEventInput[];
+  redial: boolean;
+  rules: readonly ItxExpressionRewriteRule[];
+  record: { read(): string[] | undefined; end(): void };
+  /** Appends, and throws when the stream refuses. */
+  append: (events: StreamEventInput[]) => void;
+}): void {
+  const { events, redial, rules, record } = input;
+  const kept = redial ? eventsOfARedial(events, rules, new Set(record.read())) : events;
+  if (kept.length > 0) input.append(kept);
+  record.end();
 }
 const RPC_STUB_PAGER_WEBSOCKET_TAG = "itx-rpc-stub-pager-websocket";
 // Distinctive literals: the auto-response is DO-wide (fetch-upgrade sockets too), so a plain "ping"
@@ -104,13 +125,19 @@ export class RpcStubDirectory {
   // workerd may deliver both webSocketError and webSocketClose for one drop
   readonly #closedRpcStubPagerSockets = new WeakSet<WebSocket>();
 
-  readonly #appendEvents: (events: StreamEventInput[], redial: boolean) => void;
+  readonly #appendEvents: (
+    events: StreamEventInput[],
+    lend: { rpcStubKey: string; redial: boolean },
+  ) => void;
 
   constructor(deps: {
     ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
     onPresence: (kind: "attached" | "detached", rpcStubKey: string) => void;
     rpcStubFetch: RpcStubFetchServer;
-    appendEvents: (events: StreamEventInput[], redial: boolean) => void;
+    appendEvents: (
+      events: StreamEventInput[],
+      lend: { rpcStubKey: string; redial: boolean },
+    ) => void;
   }) {
     this.#ctx = deps.ctx;
     this.#onPresence = deps.onPresence;
@@ -187,7 +214,8 @@ export class RpcStubDirectory {
     pair[1].serializeAttachment({ rpcStubKey } satisfies RpcStubPagerRecord);
     // The set half, with the pager already accepted, so a push the commit fans out finds it.
     try {
-      if (appendEvents.length > 0) this.#appendEvents(appendEvents, redial === true);
+      // also with nothing to append: the attach ends the record of what the last close un-set
+      this.#appendEvents(appendEvents, { rpcStubKey, redial: redial === true });
     } catch (error) {
       this.#closedRpcStubPagerSockets.add(pair[1]); // its close must not report a presence it never had
       try {

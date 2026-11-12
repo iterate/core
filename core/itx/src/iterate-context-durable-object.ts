@@ -49,7 +49,7 @@ import {
   ITX_EXPRESSION_FETCH_HEADER,
   parseFetchExpression,
   itxExpressionEndingInFetch,
-  eventsOfARedial,
+  appendAtAttach,
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
@@ -171,13 +171,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     rpcStubFetch: this.#rpcStubFetch,
     ctx: this.ctx,
     // The DO owns both ends of a lent stub's rule: this sets it, `#unsetWhatNamesRpcStub` un-sets it.
-    appendEvents: (events, redial) => {
-      const rules = Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules);
-      void this.#appendAndRunCommittedEffects(
-        (redial ? eventsOfARedial(events, rules) : events).map((event) =>
-          stampCaller(event, { principal: null }, this.#durableObjectAddress.path),
-        ),
-      );
+    appendEvents: (events, { rpcStubKey, redial }) => {
+      const record = `rpc-stub-unset:${rpcStubKey}`;
+      appendAtAttach({
+        events,
+        redial,
+        rules: Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
+        record: {
+          read: () => this.ctx.storage.kv.get<string[]>(record),
+          end: () => void this.ctx.storage.kv.delete(record),
+        },
+        append: (kept) =>
+          void this.#appendAndRunCommittedEffects(
+            kept.map((event) =>
+              stampCaller(event, { principal: null }, this.#durableObjectAddress.path),
+            ),
+          ),
+      });
     },
     // Ephemeral: the log must never claim a socket is open.
     onPresence: (kind, rpcStubKey) => {
@@ -199,6 +209,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       rpcStubKey,
       ...this.#rowsForRpcStubCensus(),
     });
+    // Kept until the key's next attach: a redial sets a rule again only where this close un-set
+    // it, so a row that somebody removed while the lend was live stays removed (rpc-stubs.ts
+    // `eventsOfARedial`).
+    if (ruleUnsets.length > 0)
+      this.ctx.storage.kv.put(
+        `rpc-stub-unset:${rpcStubKey}`,
+        ruleUnsets.map(({ match }) => print(match)),
+      );
     const unset = (event: StreamEventInput) => {
       try {
         this.#appendAndRunCommittedEffects([event]);
