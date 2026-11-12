@@ -4,7 +4,7 @@ import { MindConfig } from "./config.ts";
 
 const stack = {
   name: "proof",
-  accountId: "0123456789abcdef0123456789abcdef",
+  accountId: "0".repeat(32),
   domain: "mind.example",
   auth: { login: { methods: {}, allow: [{ email: "ada@sender.example" }] } },
 };
