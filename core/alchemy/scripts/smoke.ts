@@ -17,7 +17,8 @@ import { approvalChecks } from "./smoke/approvals.ts";
 import { cloudChecks } from "./smoke/cloud.ts";
 import { secretChecks } from "./smoke/secrets.ts";
 import { appsChecks } from "./smoke/apps.ts";
-import { attempt, mindRoot, mindWorkerIs, ownsPlatformAlone } from "./smoke/lib.ts";
+import { HOMEPAGE, leftoverChanges, markedHomepage, withChange } from "./smoke/config-repo.ts";
+import { attempt, type Check, mindRoot, mindWorkerIs, ownsPlatformAlone } from "./smoke/lib.ts";
 
 /** Checks the stack deployed on `domain`, the zone of its mind config. */
 export default async function smoke(
@@ -34,6 +35,9 @@ export default async function smoke(
   // skipped on a mind whose worker.ts is its own (./smoke/lib.ts `DEFAULT_SITE`). A mind that does
   // not answer yet is checked as the default.
   const stackToken = process.env.ITERATE_PROTOTYPE_TOKEN;
+  // first, since a homepage that still carries an earlier run's marker reads as a site of the
+  // mind's own, and every check of the default site would then be skipped
+  const left = stackToken ? [await nothingLeft(domain, stackToken)] : [];
   if (stackToken)
     await mindRoot(domain, stackToken)
       .repos.get("/repos/config")
@@ -50,6 +54,7 @@ export default async function smoke(
       })) === 426;
   if (provided) {
     const results = [
+      ...left,
       await pageContains(`${platformOriginOf(domain)}/`, "Sign-in for"),
       await pageContains(`${platformOriginOf(domain)}/secrets/`, "secrets:"),
       ...(await homeLabChecks(domain)),
@@ -67,6 +72,7 @@ export default async function smoke(
     return report(results);
   }
   const results = [
+    ...left,
     await pageContains(`${platformOriginOf(domain)}/`, "Sign-in for"),
     await pageContains(`${platformOriginOf(domain)}/secrets/`, "secrets:"),
     ...(await skeletonHops(`${mindApiUrlOf(domain)}/_skeleton`)),
@@ -93,6 +99,64 @@ export default async function smoke(
     ...(await telemetryChecks(domain)),
   ];
   report(results);
+}
+
+/**
+ * Takes out of the mind's config repo what an earlier run of this smoke left in it
+ * (./smoke/config-repo.ts `leftoverChanges`), in one commit, and waits for that commit's outcome so
+ * that the checks after it read the published site. A repo that does not answer is left alone: a
+ * mind not born yet has none. A leftover that cannot be taken out fails the check.
+ */
+async function nothingLeft(domain: string, token: string): Promise<Check> {
+  const check = "repos: nothing of an earlier smoke run is left in /repos/config";
+  const root = () => mindRoot(domain, token);
+  const repo = () => root().repos.get("/repos/config");
+  const said = (error: unknown) => (error instanceof Error ? error.message : String(error));
+  let changes;
+  try {
+    const { paths } = await repo().listFiles();
+    const worker = paths.includes("worker.ts")
+      ? String(await repo().readFile("worker.ts"))
+      : undefined;
+    changes = leftoverChanges({ paths, worker });
+  } catch (error) {
+    return {
+      check,
+      pass: true,
+      detail: `skipped: the config repo did not answer (${said(error)})`,
+    };
+  }
+  if (!changes.length) return { check, pass: true, detail: "nothing was left" };
+  const paths = changes.map((change) => change.path).join(", ");
+  try {
+    const parent = await repo().tip();
+    const { commitOid } = (await repo().commitFiles({
+      message: "smoke: take out what an earlier run left",
+      changes,
+      parent,
+    })) as { commitOid: string };
+    const outcome = await root()
+      .waitForEvent({
+        type: [
+          "events.iterate.com/mind/worker-updated",
+          "events.iterate.com/mind/worker-update-failed",
+        ],
+        payload: { commitOid },
+        afterOffset: 0,
+        timeoutMs: 120_000,
+      })
+      .then(
+        (event) => String((event as { type: string }).type.split("/").pop()),
+        () => "no outcome within 120 s",
+      );
+    return {
+      check,
+      pass: true,
+      detail: `took out ${paths} in ${commitOid.slice(0, 12)} (${outcome})`,
+    };
+  } catch (error) {
+    return { check, pass: false, detail: `${paths} left in the repo: ${said(error)}` };
+  }
 }
 
 function report(results: { check: string; pass: boolean; detail: string }[]) {
@@ -388,13 +452,9 @@ const mindBirthChecks = async (domain: string) => {
       };
     }),
     await attempt("hostnames: the apex answers the config worker's page", async () => {
-      const { status, body } = await pageOnceItHas(
-        `https://${domain}/`,
-        "Homepage of mind ",
-        10_000,
-      );
+      const { status, body } = await pageOnceItHas(`https://${domain}/`, HOMEPAGE, 10_000);
       return {
-        pass: status === 200 && body.startsWith("Homepage of mind "),
+        pass: status === 200 && body.startsWith(HOMEPAGE),
         detail: `${status} ${body.trim().slice(0, 80)}`,
       };
     }),
@@ -415,29 +475,37 @@ const mindBirthChecks = async (domain: string) => {
         const repo = () => root().repos.get("/repos/config");
         const files = await repo().listFiles();
         const original = (await repo().readFile("worker.ts")) as string;
-        const changed = original.replace(
-          "Homepage of mind ",
-          `Homepage (smoke ${marker}) of mind `,
-        );
+        const changed = original.replace(HOMEPAGE, markedHomepage(marker));
         if (changed === original) throw new Error("worker.ts holds no homepage text to change");
-        const commit = async (content: string, message: string) => {
-          const parent = await repo().tip();
-          const { commitOid } = (await repo().commitFiles({
-            message,
-            changes: [{ path: "worker.ts", content }],
-            parent,
-          })) as { commitOid: string };
-          const outcome = await outcomeOf(commitOid);
-          if (outcome.type !== "events.iterate.com/mind/worker-updated")
-            throw new Error(`commit ${commitOid} was not published: ${outcome.payload.error}`);
-          return commitOid;
-        };
-        const commitOid = await commit(changed, `smoke ${marker}: change the homepage`);
-        const page = await pageOnceItHas(`https://${domain}/`, `smoke ${marker}`, 10_000);
-        await commit(original, `smoke ${marker}: put the homepage back`);
+        const page = await withChange({
+          land: async (message, changes) => {
+            const parent = await repo().tip();
+            const { commitOid } = (await repo().commitFiles({ message, changes, parent })) as {
+              commitOid: string;
+            };
+            return commitOid;
+          },
+          published: async (commitOid) => {
+            const outcome = await outcomeOf(commitOid);
+            if (outcome.type !== "events.iterate.com/mind/worker-updated")
+              throw new Error(`commit ${commitOid} was not published: ${outcome.payload.error}`);
+          },
+          change: {
+            message: `smoke ${marker}: change the homepage`,
+            changes: [{ path: "worker.ts", content: changed }],
+          },
+          back: {
+            message: `smoke ${marker}: put the homepage back`,
+            changes: [{ path: "worker.ts", content: original }],
+          },
+          during: async (commitOid) => ({
+            commitOid,
+            ...(await pageOnceItHas(`https://${domain}/`, `smoke ${marker}`, 10_000)),
+          }),
+        });
         return {
           pass: page.body.includes(`smoke ${marker}`),
-          detail: `${JSON.stringify(files).slice(0, 80)}; ${commitOid.slice(0, 12)} served: ${page.body.includes(`smoke ${marker}`)}`,
+          detail: `${JSON.stringify(files).slice(0, 80)}; ${page.commitOid.slice(0, 12)} served: ${page.body.includes(`smoke ${marker}`)}`,
         };
       },
     ),

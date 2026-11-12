@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import type { RepoFileChange } from "iterate/api";
 import { platformOriginOf } from "iterate/mind-api";
+import { markedFile, withChange } from "./config-repo.ts";
 import { attempt, type Check, mindRoot, mounts } from "./lib.ts";
 
 /** One request by hand: Node's `fetch` sends no `Upgrade` and no `Sec-Fetch-*`. Answers what came
@@ -63,11 +64,10 @@ export async function appsChecks(domain: string): Promise<Check[]> {
     if (outcome.type !== "events.iterate.com/mind/worker-updated")
       throw new Error(`commit ${commitOid} was not published: ${outcome.payload.error}`);
   };
-  const commit = async (message: string, changes: RepoFileChange[]) => {
+  const land = async (message: string, changes: RepoFileChange[]) => {
     const parent = await repo().tip();
     const { commitOid } = await repo().commitFiles({ message, changes, parent });
     if (!commitOid) throw new Error(`${message}: the commit changed nothing`);
-    await published(commitOid);
     return commitOid;
   };
   const files = await repo().listFiles();
@@ -90,29 +90,33 @@ export async function appsChecks(domain: string): Promise<Check[]> {
       async () => {
         // not UTF-8, and with a NUL: bytes a text read would mangle
         const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 255, 254]);
-        const path = `smoke-${marker}.bin`;
-        const commitOid = await commit(`smoke ${marker}: a file that is not text`, [
-          { path, bytes },
-        ]);
-        try {
-          const all = await repo().files({ commitOid });
-          const text = await repo().modules({ commitOid });
-          const kept = all[path];
-          const refused = await repo()
-            .readFile(path, { commitOid })
-            .then(
-              () => false,
-              () => true,
-            );
-          const same =
-            typeof kept === "object" && kept.base64 === Buffer.from(bytes).toString("base64");
-          return {
-            pass: same && !Object.hasOwn(text, path) && refused,
-            detail: `bytes kept: ${same}; left out of the text files: ${!Object.hasOwn(text, path)}; readFile refuses it: ${refused}`,
-          };
-        } finally {
-          await commit(`smoke ${marker}: remove the file`, [{ path, delete: true }]);
-        }
+        const path = markedFile(marker);
+        return withChange({
+          land,
+          published,
+          change: {
+            message: `smoke ${marker}: a file that is not text`,
+            changes: [{ path, bytes }],
+          },
+          back: { message: `smoke ${marker}: remove the file`, changes: [{ path, delete: true }] },
+          during: async (commitOid) => {
+            const all = await repo().files({ commitOid });
+            const text = await repo().modules({ commitOid });
+            const kept = all[path];
+            const refused = await repo()
+              .readFile(path, { commitOid })
+              .then(
+                () => false,
+                () => true,
+              );
+            const same =
+              typeof kept === "object" && kept.base64 === Buffer.from(bytes).toString("base64");
+            return {
+              pass: same && !Object.hasOwn(text, path) && refused,
+              detail: `bytes kept: ${same}; left out of the text files: ${!Object.hasOwn(text, path)}; readFile refuses it: ${refused}`,
+            };
+          },
+        });
       },
     ),
     await attempt("hostnames: a signed-out page load of the Agents app signs in", async () => {
