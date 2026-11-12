@@ -27,7 +27,8 @@ export type SecretRecord = {
   refresh: SecretRefresh | null;
 } & SecretUse;
 
-// `lendTo` null is every path: an import's alone (`UNLIMITED_USE`), never a new secret's.
+// `lendTo` null is every path: an import's (`UNLIMITED_USE`), and a new secret's only when its
+// maker says `lendTo: null` outright.
 export type SecretUse = {
   placement: "header" | "url";
   operations: SecretOperation[];
@@ -53,9 +54,18 @@ export function secretUseOf(
     SECRET_OPERATIONS.some((name) => name === operation);
   if (!Array.isArray(operations) || !operations.every(known))
     throw new Error(`secrets: operations names some of ${SECRET_OPERATIONS.join(", ")}`);
-  const lendTo = options?.lendTo ?? [];
+  // Absent is no path, the default. Null is every path, said outright: it is what `describe()`
+  // answers for a secret that lends to every path, so a secret set again from its description is
+  // not narrowed, and it is the one way to lend to secrets whose paths are not known yet. Any
+  // other value that is no list of paths ("", 0, false) is refused below.
+  const given = options?.lendTo;
+  if (given === null) return { placement, operations: [...new Set(operations)], lendTo: null };
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- as above: only an absent lendTo is the default
+  const lendTo = given === undefined ? [] : given;
   if (!Array.isArray(lendTo) || !lendTo.every((path) => SECRET_PATH.test(String(path))))
-    throw new Error("secrets: lendTo lists secret paths, /secrets/<name>");
+    throw new Error(
+      "secrets: lendTo lists secret paths, /secrets/<name>, or is null for every secret of the mind",
+    );
   return { placement, operations: [...new Set(operations)], lendTo: [...new Set<string>(lendTo)] };
 }
 

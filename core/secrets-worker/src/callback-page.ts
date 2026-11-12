@@ -86,9 +86,12 @@ export function useLines(
     use.operations.length
       ? `<p>The mind may sign and verify with it: ${use.operations.join(", ")}.</p>`
       : "",
-    use.lendTo?.length
-      ? `<p>The refresh of these secrets may borrow it: ${use.lendTo.map(escaped).join(", ")}.</p>`
-      : "",
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- null is every path; an empty list is no path
+    use.lendTo === null
+      ? "<p>The refresh of any secret of this mind may borrow it.</p>"
+      : use.lendTo.length
+        ? `<p>The refresh of these secrets may borrow it: ${use.lendTo.map(escaped).join(", ")}.</p>`
+        : "",
     anyoneWithLink ? "<p>Anyone with this link can use this page, signed in or not.</p>" : "",
   ].join("");
 }

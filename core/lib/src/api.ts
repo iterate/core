@@ -297,8 +297,9 @@ export type SecretUses = {
   operations?: SecretOperation[];
   /** The secrets whose refresh may borrow its material, by path: as a client secret or a GitHub
    *  App's key that their refresh names with `getSecret("/secrets/<name>", { field })`. Default:
-   *  none. */
-  lendTo?: string[];
+   *  none. `null`: every secret of the mind, for a client secret whose accounts' paths are not
+   *  known when it is made; it is what `describe` answers for such a secret. */
+  lendTo?: string[] | null;
 };
 
 /** The input an agent gives `itx.secrets.collectFromUser`: the write-only secret path, the

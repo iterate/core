@@ -432,6 +432,25 @@ test("a POST that a header makes a DELETE is held by a rule for DELETE, and a pl
   }).toEqual({ statuses: [200, 202], kinds: [null, "held"], sends: 1 });
 });
 
+test("a secret made to lend to every secret says so when described, and is the same after it is set again with what it said", async () => {
+  const { secret } = await vault();
+  const made = { material: "client-secret-aaaa", urls: ["https://gmail.googleapis.com"] };
+  await secret.secret(PATH, "set", { ...made, lendTo: null });
+  const described = await secret.secret(PATH, "describe", undefined);
+  expect(described).toMatchObject({ lendTo: null, placement: "header", operations: [] });
+  // set again from what `describe` answered: nothing is narrowed
+  const { lendTo, placement, operations } = described as Record<string, unknown>;
+  await secret.secret(PATH, "set", { ...made, lendTo, placement, operations });
+  expect(await secret.secret(PATH, "describe", undefined)).toMatchObject({
+    lendTo: null,
+    placement: "header",
+    operations: [],
+  });
+  // and with no word on it, a secret lends to no other
+  await secret.secret(PATH, "set", made);
+  expect(await secret.secret(PATH, "describe", undefined)).toMatchObject({ lendTo: [] });
+});
+
 test("a secret with an approval rule signs nothing on the side, and still checks a signature", async () => {
   const { secret, decide } = await vault();
   await secret.secret(PATH, "set", {

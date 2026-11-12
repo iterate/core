@@ -11,7 +11,7 @@ const link = startLinkOf(PLATFORM, "/secrets/github", "n-1");
 const target = {
   authorizationUrl: `https://provider.example/authorize?client_id=c&state=${stateOf({ path: "/secrets/github", nonce: "n-1" })}`,
   urls: ["https://api.provider.example"],
-  use: { placement: "header" as const, operations: [], lendTo: null },
+  use: { placement: "header" as const, operations: [], lendTo: [] },
   anyoneWithLink: true,
 };
 test("a client of the mind's own shows the page to confirm on, and goes to the provider from its link", async () => {
@@ -103,6 +103,17 @@ test("a client of iterate Cloud's whose secret is to be used in an unusual way s
     302,
     "https://cloud.example/clients/github/begin",
   ]);
+});
+
+test("a client of iterate Cloud's whose secret is lent to every secret says so here first", async () => {
+  const cloud = {
+    ...target,
+    use: { ...target.use, lendTo: null },
+    beginAt: "https://cloud.example/clients/github/begin",
+  };
+  const page = await secretOAuthStart(navigation(link), async () => cloud);
+  expect(page).toMatchObject({ status: 200 });
+  expect(await page.text()).toContain("The refresh of any secret of this mind may borrow it");
 });
 
 test("a connect through a Cloud client names the accounts whose installations the mind asks for", () => {
