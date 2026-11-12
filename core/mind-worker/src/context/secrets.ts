@@ -62,6 +62,8 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
     for (let after = 0; ;) {
       const page = await parent.read(after, 500);
       for (const event of page.events) {
+        // Read as a field that may be there: a `child-created` event has it, any other payload
+        // has not, and the check below takes it only as a string.
         const childPath = (event.payload as { childPath?: unknown } | undefined)?.childPath;
         if (
           event.type === "events.iterate.com/itx/child-created" &&

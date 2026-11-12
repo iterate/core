@@ -300,6 +300,9 @@ export class SandboxContainer extends DurableObject {
   /** With the internet off, nothing else resolves or connects. */
   async #intercept(): Promise<void> {
     if (!this.ctx.id.name) throw new Error("SandboxContainer: its name is the sandbox's context");
+    // `ctx.exports` holds the entrypoints that the Worker's main module exports, and is typed from
+    // that module. The module exports this class, so this file cannot name its type: the cast
+    // names the one entrypoint that is used here (./egress.ts, exported by ../worker.ts).
     const { SandboxEgress } = this.ctx.exports as unknown as {
       SandboxEgress: (options: { props: { iterateContextName: string } }) => Fetcher;
     };

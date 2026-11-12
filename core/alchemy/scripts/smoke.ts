@@ -457,11 +457,9 @@ const mindBirthChecks = async (domain: string) => {
         detail: `the config repo does not publish: its tip ${tip.slice(0, 10) || "(none)"} is not what the mind runs (${published?.slice(0, 10) || "nothing"})${template ? ", and the tip is the platform's own template commit" : ""}. ${template || refused || "No refusal of the tip is on the root's log yet."}`,
       };
     }),
-    // Said, never failed: an app whose file its owner changed stays at its version by the
-    // owner's choice (core/mind-worker/src/mind/template-update.ts), and this is where a deploy
-    // names it. What is behind is read off the repo, laid beside this checkout's template
-    // (./smoke/template-follow.ts); the mind compares at its root's first wake after a deploy, so
-    // the check asks again for a minute while an app differs and nothing says why.
+    // Said, never failed: an app that does not follow the template stays so by its owner's
+    // choice (core/mind-worker/src/mind/template-update.ts), and this is where a deploy names it.
+    // ./smoke/template-follow.ts says what is compared, and why the check asks again for a minute.
     await attempt("birth: what follows the template", async () => {
       const template = templateFiles();
       let said = { settled: false, detail: "" };
