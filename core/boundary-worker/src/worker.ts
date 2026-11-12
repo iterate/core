@@ -1,60 +1,16 @@
-import { runApprovedActs } from "iterate/acts";
-import { recordFacts as recorded } from "iterate/facts";
-import { platformRouteOf } from "iterate/mind-api";
+// worker.ts — THE BOUNDARY, for a stack whose mind is a Worker: the one Worker with routes. It
+// composes the request policy (./http.ts), the mail handler (./mail.ts) and the mind's service
+// binding (./transport/bound.ts). ./worker.provided.ts is the build for a mind that runs elsewhere.
 import type { Env } from "./env.ts";
-import { mindHostResponse } from "./host-session.ts";
-import { parseEmail } from "./mail.ts";
-import { confinedAnswer, httpsRedirect, stampedRequest } from "./stamp.ts";
+import { boundaryResponse } from "./http.ts";
+import { receivedMail } from "./mail.ts";
+import { boundMind } from "./transport/bound.ts";
 
-export { Door } from "./door.ts";
+export { Door } from "./rpc.ts";
 
 export default {
-  async fetch(request, env, ctx) {
-    const secure = httpsRedirect(request);
-    if (secure) return secure;
-    const domain = env.DOMAIN;
-    const route = platformRouteOf(new URL(request.url), domain);
-    // `fromAuth`: only the auth Worker's answer names the signer of an event (the key it verified)
-    const recordFacts = (response: Response, fromAuth = false) => {
-      const { answer, recorded: appended } = recorded(response, (path, events) =>
-        env.MIND.append(path, events, fromAuth),
-      );
-      ctx.waitUntil(appended);
-      return answer;
-    };
-    if (!route)
-      return mindHostResponse(request, { auth: env.AUTH, domain, recordFacts }, (forwarded) =>
-        env.MIND.fetch(forwarded),
-      );
-    if (route === "provide") return new Response("Not found", { status: 404 });
-    const { forwarded, answer } = await stampedRequest(request, { auth: env.AUTH, route, domain });
-    if (answer) return answer;
-    if (route === "auth") return recordFacts(await env.AUTH.fetch(forwarded), true);
-    if (route === "secrets") {
-      // an approval of an act whose caller stopped waiting: the mind does the act now
-      const { answer: answered, ran } = runApprovedActs(
-        await env.SECRETS.fetch(forwarded),
-        async (digest) => {
-          const held = await env.SECRETS.approvedAct(digest);
-          if (held) await env.MIND.runAct(held);
-        },
-      );
-      ctx.waitUntil(ran);
-      return recordFacts(answered);
-    }
-    return confinedAnswer(await env.MIND.fetch(forwarded));
-  },
-
+  fetch: (request, env, ctx) => boundaryResponse(request, env, ctx, boundMind(env)),
   // A failure throws, so Cloudflare delivers the mail again; the fact's idempotency key keeps a retry
   // after a committed append from landing twice.
-  async email(message, env) {
-    await env.MIND.receiveEmail(
-      await parseEmail({
-        from: message.from,
-        to: message.to,
-        raw: message.raw,
-        isMember: (address) => env.AUTH.isMember(address),
-      }),
-    );
-  },
+  email: (message, env) => receivedMail(message, env, boundMind(env)),
 } satisfies ExportedHandler<Env>;

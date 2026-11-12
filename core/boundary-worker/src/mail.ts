@@ -1,10 +1,27 @@
 // Pure (binds nothing, calls nobody) and one file, so it can move into the mind whole.
-import type { ReceivedEmail } from "iterate/workers";
+import type { AuthService, MindTarget, ReceivedEmail } from "iterate/workers";
 import PostalMime, { type Address } from "postal-mime";
 
 const BODY_MAX_CHARS = 100_000;
 
-export async function parseEmail(input: {
+/** THE BOUNDARY'S MAIL HANDLER: a mail that Cloudflare delivers goes to the mind, with what the
+ *  boundary knows of its sender. A failure throws, so Cloudflare delivers the mail again. */
+export async function receivedMail(
+  message: ForwardableEmailMessage,
+  env: { AUTH: Pick<AuthService, "isMember"> },
+  mind: Pick<MindTarget, "receiveEmail">,
+) {
+  await mind.receiveEmail(
+    await parseEmail({
+      from: message.from,
+      to: message.to,
+      raw: message.raw,
+      isMember: (address) => env.AUTH.isMember(address),
+    }),
+  );
+}
+
+async function parseEmail(input: {
   from: string;
   to: string;
   raw: ReadableStream<Uint8Array> | ArrayBuffer;

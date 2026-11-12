@@ -240,7 +240,7 @@ export const mindStack = (config: MindConfig) =>
         });
       return yield* Cloudflare.Worker("Boundary", {
         ...shared,
-        main: core("boundary-worker/src/provided.ts"),
+        main: core("boundary-worker/src/worker.provided.ts"),
         compatibility: { date: COMPATIBILITY_DATE, flags: ["nodejs_compat", STRICTLY_PUBLIC] },
         // One `/provide` session is one long invocation: every call through it counts against its limits.
         limits: { subrequests: 1_000_000, cpuMs: 300_000 },
