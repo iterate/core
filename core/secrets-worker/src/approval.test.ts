@@ -181,10 +181,12 @@ test("a letter written as an escape once more, inside a string that its host rea
     ruleMatches(rule, "POST", url, body("mutation { deleteRepo }")),
     ruleMatches(rule, "POST", url, body("mutation { \\u0064eleteRepo }")),
     ruleMatches(rule, "POST", url, body("mutation { \\u{64}eleteRepo }")),
+    // an escape may have any count of leading zeros
+    ruleMatches(rule, "POST", url, body("mutation { \\u{0000064}eleteRepo }")),
     ruleMatches(rule, "POST", url, body("query { viewer { login } }")),
     // an escape for no character at all is left as it is written, and nothing throws
     ruleMatches(rule, "POST", url, body("query { \\u{FFFFFF} }")),
-  ]).toEqual([true, true, true, false, false]);
+  ]).toEqual([true, true, true, true, false, false]);
 });
 
 test("a string of the body that is only marks which are not seen is refused: it would compare as nothing", () => {

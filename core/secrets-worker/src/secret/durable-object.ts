@@ -1227,27 +1227,19 @@ export class SecretDurableObject extends DurableObject<Env> {
     const substituted = new Set<string>();
     const answered = (response: Response, own?: VaultAnswerKind) =>
       answerOf(response, [{ path, events: facts }, ...lent], substituted, own);
-    // An ask of the Cloud uses no value of the secret: nothing is substituted, pinned or held, and
-    // every header that names the secret is taken off.
-    const connected = this.#current()?.cell.refresh;
-    const ask = askOf(
-      request,
-      this.env.CLOUD_ORIGIN,
-      connected?.kind === "oauth-refresh-token" && connected.client && "cloud" in connected.client
-        ? connected.client.cloud
-        : undefined,
-    );
-    if (ask) {
-      const bare = new Headers(headers);
-      for (const [name, value] of headers) if (secretPathsIn(value).length) bare.delete(name);
-      console.info({ event: "secret.used", path, method: request.method, url: request.url });
-      const response = await this.#brokered(ask, "ask")(new Request(request, { headers: bare }));
-      facts.push({
-        type: "events.iterate.com/secret/used",
-        payload: { method: request.method, url: request.url, status: response.status },
-      });
-      return answered(response);
-    }
+    // An ask of the Cloud uses no value of the secret: nothing is substituted or pinned. It is
+    // still a request that the secret's connection makes, so the secret's rule holds it as any
+    // other. Asked of the request that is sent: a wait call sends the stored text.
+    const askFor = (sent: Request) => {
+      const connected = this.#current()?.cell.refresh;
+      return askOf(
+        sent,
+        this.env.CLOUD_ORIGIN,
+        connected?.kind === "oauth-refresh-token" && connected.client && "cloud" in connected.client
+          ? connected.client.cloud
+          : undefined,
+      );
+    };
     let held: { digest: string; release?: () => void } | undefined;
     // read below, and only for a rule that names strings of the body
     let body: string | null = null;
@@ -1306,7 +1298,9 @@ export class SecretDurableObject extends DurableObject<Env> {
       return response;
     };
     try {
-      let stored = await read();
+      let ask = askFor(request);
+      // an ask goes to the Cloud, outside the secret's pinned hosts: no value is read for it
+      let stored = ask ? null : await read();
       // A wait call is held whatever the rule says now: what it may send is the stored text alone.
       const rule = this.#rule();
       if (rule && upgrades)
@@ -1314,20 +1308,40 @@ export class SecretDurableObject extends DurableObject<Env> {
           `itx.fetch: ${path} has an approval rule, so it opens no WebSocket`,
         );
       if (
-        stored &&
+        (stored || ask) &&
         !waitFor &&
         rule?.jsonStrings &&
         ruleNames(rule, methodsOf(request), request.url)
       )
         body = await bodyTextOf(request);
       if (
-        stored &&
+        (stored || ask) &&
         (waitFor || (rule && ruleMatches(rule, methodsOf(request), request.url, body)))
       ) {
         const approved = await this.#hold(path, request, waitFor, facts);
         held = { digest: approved.digest, release: approved.release };
         request = approved.request;
-        stored = await read();
+        ask = askFor(request);
+        stored = ask ? null : await read();
+      }
+      if (ask) {
+        // every header that names the secret is taken off: the Cloud gets no placeholder
+        const bare = new Headers(request.headers);
+        for (const [name, value] of request.headers)
+          if (secretPathsIn(value).length) bare.delete(name);
+        // no await from the mark to the dispatch, as in `send`
+        held?.release?.();
+        if (held) held.release = undefined;
+        console.info({
+          event: "secret.used",
+          path,
+          method: request.method,
+          url: request.url,
+          ...(held && { digest: held.digest }),
+        });
+        const response = await this.#brokered(ask, "ask")(new Request(request, { headers: bare }));
+        facts.push(usedFact(response.status));
+        return answered(response);
       }
       // Refused here too, not only at egress: this object is the boundary that holds the bytes.
       const resolve = (named: string) => {

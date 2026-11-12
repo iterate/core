@@ -392,6 +392,65 @@ test("a secret with an approval rule signs nothing on the side, and still checks
   expect(await signed()).toMatchObject({ result: expect.stringMatching(/^[0-9a-f]{64}$/) });
 });
 
+test("an ask of the Cloud that the secret's rule names is held, and is sent once a member approves it", async () => {
+  const CLOUD = "https://cloud.example.com";
+  const { secret, upstream, approve } = await vault({
+    cloud: CLOUD,
+    rule: { methods: ["POST"], hosts: ["cloud.example.com"] },
+  });
+  const ask = () =>
+    useRequest(`${CLOUD}/clients/github/ask/reply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "an answer for a person" }),
+    });
+  const first = await secret.fetch(ask());
+  const { digest } = (await first.clone().json()) as { digest: string };
+  // held as any request the rule names: nothing has gone to the Cloud
+  expect({
+    status: first.status,
+    kind: first.headers.get(VAULT_ANSWER_HEADER),
+    sends: upstream.mock.calls.length,
+  }).toEqual({ status: 202, kind: "held", sends: 0 });
+  const waited = secret.fetch(
+    useRequest(`${CLOUD}/clients/github/ask/reply`, {
+      method: "POST",
+      headers: { [SECRET_HELD_HEADER]: digest },
+    }),
+  );
+  await approve(digest);
+  const answer = await waited;
+  const [sent] = upstream.mock.calls.map(([request]) => request);
+  expect({
+    status: answer.status,
+    sends: upstream.mock.calls.length,
+    url: sent?.url,
+    // the Cloud gets the stack's signed statement and no header that names the secret
+    namesTheSecret: sent?.headers.get("authorization"),
+    facts: decodeFacts(answer.headers.get(FACTS_HEADER) || "")[0]?.events.at(-1),
+  }).toMatchObject({
+    status: 200,
+    sends: 1,
+    url: `${CLOUD}/clients/github/ask/reply`,
+    namesTheSecret: null,
+    facts: { type: "events.iterate.com/secret/used", payload: { status: 200, digest } },
+  });
+});
+
+test("an ask of the Cloud that the rule does not name goes at once, with no value of the secret", async () => {
+  const CLOUD = "https://cloud.example.com";
+  // the rule names the provider's host, not the Cloud's
+  const { secret, upstream } = await vault({ cloud: CLOUD });
+  const answer = await secret.fetch(
+    useRequest(`${CLOUD}/clients/github/ask/reply`, { method: "POST", body: "{}" }),
+  );
+  expect({
+    status: answer.status,
+    sends: upstream.mock.calls.length,
+    namesTheSecret: upstream.mock.calls[0]?.[0].headers.get("authorization"),
+  }).toEqual({ status: 200, sends: 1, namesTheSecret: null });
+});
+
 test("a rule cannot be loosened without a signature, and a member's signed statement removes it", async () => {
   const { secret, decide } = await vault();
   const by = { userId: "user_aaaa", email: "member@example.com" };
@@ -405,7 +464,11 @@ test("a rule cannot be loosened without a signature, and a member's signed state
   expect(await secret.approvals(PATH)).toEqual({ rule: null, held: [] });
 });
 
-async function vault() {
+/** A vault with one secret and its rule. With `cloud`, the secret is one connected through the
+ *  Cloud's client `github`, and the stack signs what it asks of that Cloud. */
+async function vault(
+  options: { cloud?: string; rule?: { methods: string[]; hosts: string[] } } = {},
+) {
   const sent: { authorization: string | null; body: string; extra: string | null }[] = [];
   const upstream = vi.fn(async (request: Request) => {
     sent.push({
@@ -418,10 +481,15 @@ async function vault() {
   vi.stubGlobal("fetch", upstream);
   const env = {
     DOMAIN: "example.com",
+    CLOUD_ORIGIN: options.cloud,
     SECRETS_AT_REST_KEY: "at-rest-key-for-tests-only",
     APPROVALS: { getByName: () => ({ add: async () => {}, remove: async () => {} }) },
     // believes the statement: who signed is the key the envelope names
     AUTH: {
+      sign: async (input: object) => ({
+        statement: JSON.stringify(input),
+        signature: { format: "p256", key: "key-stack", sig: "sig" },
+      }),
       verify: async (envelope: Envelope) => ({
         signer: {
           principal: { actor: envelope.signature.key },
@@ -442,8 +510,24 @@ async function vault() {
     material: "real-token-aaaa",
     urls: ["https://gmail.googleapis.com"],
   });
+  if (options.cloud) {
+    // Only a connect through the Cloud's own page makes such a secret (`set` refuses a client):
+    // the stored cell is given what that connect writes, the client's name and its broker.
+    const current = state.storage.kv.get("current") as { cell: object };
+    state.storage.kv.put("current", {
+      ...current,
+      cell: {
+        ...current.cell,
+        refresh: {
+          kind: "oauth-refresh-token",
+          tokenEndpoint: `${options.cloud}/clients/github/token`,
+          client: { cloud: "github" },
+        },
+      },
+    });
+  }
   await secret.tightenRule(PATH, {
-    rule: { methods: ["POST"], hosts: ["gmail.googleapis.com"] },
+    rule: options.rule || { methods: ["POST"], hosts: ["gmail.googleapis.com"] },
     by: { userId: "user_aaaa", email: "member@example.com" },
   });
   const decide = (

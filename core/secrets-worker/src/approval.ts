@@ -127,7 +127,8 @@ function isJson(text: string): boolean {
  *  own (GraphQL in JSON) reads it so. */
 const comparable = (string: string) =>
   string
-    .replace(/\\u\{([0-9a-f]{1,6})\}|\\u([0-9a-f]{4})/gi, (written, braced, plain) => {
+    // any count of leading zeros: `\u{0000064}` is `d` to a language that reads the escape
+    .replace(/\\u\{0*([0-9a-f]{1,6})\}|\\u([0-9a-f]{4})/gi, (written, braced, plain) => {
       const code = Number.parseInt(braced || plain, 16);
       return code <= 0x10ffff ? String.fromCodePoint(code) : written;
     })
