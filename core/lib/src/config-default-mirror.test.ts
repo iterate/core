@@ -7,6 +7,9 @@ import { expect, test } from "vitest";
 import index from "../../configs/default/apps/agents/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import files from "../../configs/default/apps/agents/public/";
+import dashIndex from "../../configs/default/apps/dash/index.html";
+// oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
+import dashFiles from "../../configs/default/apps/dash/public/";
 import docsIndex from "../../configs/default/apps/docs/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import docsFiles from "../../configs/default/apps/docs/public/";
@@ -28,6 +31,8 @@ test("the default config's pages and folders load here as the platform's loader 
   expect(Object.keys(onboardingFiles)).toEqual(["app.css", "app.js"]);
   expect(docsIndex).toMatch(/<title>Docs<\/title>/);
   expect(Object.keys(docsFiles)).toEqual(["app.css", "app.js"]);
+  expect(dashIndex).toMatch(/<title>Dash<\/title>/);
+  expect(Object.keys(dashFiles)).toEqual(["app.css", "app.js"]);
   expect(voiceIndex).toMatch(/<title>Voice<\/title>/);
   expect(Object.keys(voiceFiles)).toEqual([
     "app.css",

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dash</title>
+    <!-- iterate's components, pinned to one build. To upgrade, change the version here. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@iterate-com/ui/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261112T004247Z-941f842/",
+          "react": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261112T004247Z-941f842/react",
+          "react/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261112T004247Z-941f842/react/",
+          "react-dom": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261112T004247Z-941f842/react-dom",
+          "react-dom/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261112T004247Z-941f842/react-dom/",
+          "lucide-react": "https://esm.iterate.com/lucide-react@1.48.0?external=react,react-dom"
+        }
+      }
+    </script>
+    <link
+      rel="stylesheet"
+      href="https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261112T004247Z-941f842/styles.css"
+    />
+    <!-- The look of this mind's apps: apps/theme.css, one file for every app. One line there
+         makes them all dark. shadcn's components also ask for the class `dark`, so the script
+         puts it on <html> when the file says dark. -->
+    <link rel="stylesheet" href="/theme.css" />
+    <script>
+      if (getComputedStyle(document.documentElement).colorScheme === "dark")
+        document.documentElement.classList.add("dark");
+    </script>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div id="root"><p class="p-4 text-sm text-muted-foreground">Connecting…</p></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

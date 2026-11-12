@@ -7,6 +7,7 @@ import {
 } from "iterate/sdk";
 import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 import { agentsApp } from "./apps/agents/app.ts";
+import { dashApp } from "./apps/dash/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 import { voiceApp } from "./apps/voice/app.ts";
@@ -31,6 +32,7 @@ const integrations: Integration[] = [];
 const agents = agentsApp();
 const onboarding = onboardingApp();
 const docs = docsApp();
+const dash = dashApp();
 const voice = voiceApp();
 // The guestbook, an example of an app for end users, people who are not members (AGENTS.md, "The
 // guestbook"). To turn it on, uncomment this line, its import above and its case in `fetch`.
@@ -278,6 +280,8 @@ export default class extends IterateConfigEntrypoint {
         return this.auth.require(request) || onboarding.fetch(request, this);
       case "docs": // the docs app, for members: the config repo, read in a browser
         return this.auth.require(request) || docs.fetch(request, this);
+      case "dash": // the Dash, for members: the mind seen from above
+        return this.auth.require(request) || dash.fetch(request, this);
       case "voice": // the Voice app, for members: call the mind from a browser
         return this.auth.require(request) || voice.fetch(request, this);
       // case "guestbook": // the guestbook, for everyone: no guard here, its routes ask for who they need
