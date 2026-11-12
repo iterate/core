@@ -30,11 +30,10 @@ export const SECRETS_ROOT_DESCRIPTION =
 const DESCRIBED_AT_ONCE = 16;
 
 /** THE VAULT'S ANSWER, COPIED AND RELEASED. An answer that crosses Workers RPC holds its call's
- *  session open until its disposer runs: the boundary's, and behind it the vault's. Nothing
- *  released these, so each stayed open until the Worker was replaced, and a mind that was asked
- *  often (a page's `secrets.list()` every 30 s, one call a path) filled the vault's memory: the
- *  vault ended with "Worker exceeded memory limit", and every approval that waited in it ended
- *  too. The vault answers plain data, so the mind keeps a copy and lets the session go. */
+ *  session open until its disposer runs: the boundary's, and behind it the vault's. Left alone,
+ *  each stays open until the Worker is replaced, and enough of them fill the vault's memory: the
+ *  vault ends with "Worker exceeded memory limit", and every approval that waits in it ends too.
+ *  The vault answers plain data, so the mind keeps a copy and lets the session go. */
 export async function releasedAnswer<T>(answer: Promise<T>): Promise<T> {
   const held = await answer;
   if (typeof held !== "object" || held === null) return held;
@@ -44,6 +43,8 @@ export async function releasedAnswer<T>(answer: Promise<T>): Promise<T> {
   } catch {
     return held; // not plain data: whoever reads it releases it
   }
+  // workerd puts the disposer on what a call across Workers answers; the answer's own type, the
+  // vault's plain data, does not name it
   (held as Partial<Disposable>)[Symbol.dispose]?.();
   return copy;
 }
