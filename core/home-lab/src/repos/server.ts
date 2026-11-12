@@ -23,10 +23,10 @@ export async function serveRepos(input: { dir: string; token: string; port: numb
   async function answer(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     // THE PATH IS DECODED ONCE, HERE, and that one text is what every check below reads and what
-    // git gets. Judged undecoded and handed on decoded, `/x.git/git-receive-%70ack` was no push to
-    // the check and a push to git: a repo's read token pushed. A path that still holds a `%` after
-    // one decoding was encoded twice, or is no path of a repo: no name here has one. A `..` would
-    // name a path outside the store.
+    // git gets. A check on the undecoded path and git on the decoded one would disagree:
+    // `/x.git/git-receive-%70ack` is no push to such a check and a push to git, so a repo's read
+    // token would push. A path that still holds a `%` after one decoding is encoded twice, or is
+    // no path of a repo: no name here has one. A `..` would name a path outside the store.
     const path = decodedOnce(url.pathname);
     if (!path || path.includes("%") || path.split("/").includes(".."))
       return void response.writeHead(400, { "content-type": "text/plain" }).end("Not a path\n");
