@@ -1,5 +1,8 @@
 // Every request a container makes is the mind's own `itx.fetch`, as a call, never a request to
 // the context's `fetch`: that one routes on headers, and a container controls every header it sends.
+// Both resolve `itx.fetch` on the sandbox's context, so a rewrite rule there for `itx.fetch` sees
+// every request, handshakes included: that rule is how a mind limits one sandbox (contract.ts says
+// how to write it). Its target passes a socket on only through `env.ITX.fetch`, never over RPC.
 import { WorkerEntrypoint } from "cloudflare:workers";
 import {
   contextAt,
@@ -9,18 +12,10 @@ import {
   stampCallerHeaders,
 } from "core-itx";
 import type { Env } from "../env.ts";
-import { secretListRefusal } from "./secret-list.ts";
 
-/** Its props name the sandbox's context, which the container cannot reach, and the sandbox's
- *  secret list when it has one (secret-list.ts): a request naming another secret goes nowhere. */
-export class SandboxEgress extends WorkerEntrypoint<
-  Env,
-  { iterateContextName: string; secrets?: string[] }
-> {
+/** Its props name the sandbox's context, which the container cannot reach. */
+export class SandboxEgress extends WorkerEntrypoint<Env, { iterateContextName: string }> {
   override async fetch(request: Request): Promise<Response> {
-    // before the handshake's own route too: a WebSocket must not be the way round the list
-    const refused = secretListRefusal(request, this.ctx.props.secrets);
-    if (refused) return refused;
     const { path } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket")
       return this.#upgrade(request, path);

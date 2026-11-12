@@ -16,7 +16,6 @@ import {
 import { SandboxFiles } from "./files.ts";
 import { outputForLog } from "./exec-record.ts";
 import { SandboxProcessor } from "./processor.ts";
-import { startOnce } from "./start-once.ts";
 
 /** `replay` is `container`'s: library.ts calls it. */
 export const sandboxVerbs = ["start", "exec", "configure", "files", "replay"] as const;
@@ -30,13 +29,10 @@ const StartOptions = z
     instance: SandboxInstance.optional(),
     labels: z.record(z.string(), z.string()).optional(),
     from: z.string().min(1).optional(),
-    // the secrets the sandbox's requests may name, from this start on (secret-list.ts); none given
-    // keeps the list it had, and a sandbox that never had one may name any
-    secrets: z.array(z.string().startsWith("/secrets/")).optional(),
     // strict: `enableInternet` is refused, not ignored: a sandbox's only way out is the mind's egress
   })
   .strict();
-const ContainerStartOptions = StartOptions.omit({ from: true, secrets: true });
+const ContainerStartOptions = StartOptions.omit({ from: true });
 const ExecOptions = z.object({
   cwd: z.string().min(1).optional(),
   env: z.record(z.string(), z.string()).optional(),
@@ -109,14 +105,7 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     return [...this.#calls.values()].some((began) => began > since);
   }
   #stopping?: Promise<unknown>;
-  /** One start at a time (start-once.ts). A start that joins one in flight then hands its own
-   *  secret list to the running container, which narrows it at once or refuses a wider one. */
-  #begin = startOnce<z.input<typeof StartOptions>>(
-    (options) => this.#start(options),
-    async ({ secrets }) => {
-      if (secrets) await this.#container.begin({ secrets });
-    },
-  );
+  #starting?: Promise<void>;
 
   async #use<T>(work: (container: DurableObjectStub<SandboxContainer>) => Promise<T>): Promise<T> {
     while (this.#stopping) await this.#stopping;
@@ -175,13 +164,13 @@ export class SandboxFacet extends StreamProcessorDurableObject<
   /** A caller waits at most 50 seconds: the platform ends a call at a minute without an answer, and
    *  pulling a new image onto a host can take longer. The start goes on. */
   async #up(options: z.input<typeof StartOptions>): Promise<void> {
-    const started = this.#begin(options);
+    this.#starting ??= this.#start(options).finally(() => (this.#starting = undefined));
     let timer: ReturnType<typeof setTimeout> | undefined;
     const slow = new Promise<"slow">((resolve) => {
       timer = setTimeout(() => resolve("slow"), 50_000);
     });
     try {
-      if ((await Promise.race([started.then(() => "up" as const), slow])) === "slow")
+      if ((await Promise.race([this.#starting.then(() => "up" as const), slow])) === "slow")
         throw new Error(
           `sandbox ${this.#path} is still starting (the first start of an image on a host pulls it): the start goes on, so try again`,
         );

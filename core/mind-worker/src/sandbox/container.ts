@@ -4,7 +4,6 @@ import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import filesTool from "../generated/sandbox-files-tool.js";
 import { SANDBOX_BASE_IMAGE, SANDBOX_IMAGE, SANDBOX_MAX_BUSY_MS } from "./contract.ts";
-import { narrowedSecretList } from "./secret-list.ts";
 
 const INTERCEPT_CA = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 /** A command does not inherit the container's own `env` on Cloudflare (measured:
@@ -70,9 +69,6 @@ const REACHABLE: ReadonlySet<string> = new Set([
   "resize",
 ]);
 
-/** Where a sandbox keeps its secret list, for every later start (an idle sandbox restarts). */
-const EGRESS_SECRETS = "egressSecrets";
-
 /** NEVER `enableInternet`: a sandbox's only way out is the mind's egress. */
 export type SandboxStartOptions = {
   image?: string;
@@ -81,8 +77,6 @@ export type SandboxStartOptions = {
   env?: Record<string, string>;
   instance?: ContainerStartupOptions["instance"];
   labels?: Record<string, string>;
-  /** The secrets the sandbox's requests may name (secret-list.ts), kept until a start names others. */
-  secrets?: string[];
 };
 
 /** `timeoutMs` stands for the `signal` that cannot cross an RPC. */
@@ -256,20 +250,13 @@ export class SandboxContainer extends DurableObject {
   async begin(options: SandboxStartOptions = {}): Promise<boolean> {
     await this.#touch();
     const container = this.#container;
-    const { image, containerSnapshot, secrets, ...rest } = options;
     if (container.running) {
-      // a list given to a running sandbox applies now: its egress holds the list it started with
-      if (secrets) {
-        const current = await this.ctx.storage.get<string[]>(EGRESS_SECRETS);
-        await this.ctx.storage.put(EGRESS_SECRETS, narrowedSecretList(current, secrets));
-        await this.#intercept();
-      }
       await container.setInactivityTimeout(INACTIVITY_BACKSTOP_MS);
       return false;
     }
     this.#toolReady = false;
     const began = Date.now();
-    if (secrets) await this.ctx.storage.put(EGRESS_SECRETS, secrets);
+    const { image, containerSnapshot, ...rest } = options;
     // the egress is registered first: a name looked up before it is would time out
     await this.#intercept();
     container.start({
@@ -314,14 +301,9 @@ export class SandboxContainer extends DurableObject {
   async #intercept(): Promise<void> {
     if (!this.ctx.id.name) throw new Error("SandboxContainer: its name is the sandbox's context");
     const { SandboxEgress } = this.ctx.exports as unknown as {
-      SandboxEgress: (options: {
-        props: { iterateContextName: string; secrets?: string[] };
-      }) => Fetcher;
+      SandboxEgress: (options: { props: { iterateContextName: string } }) => Fetcher;
     };
-    const secrets = await this.ctx.storage.get<string[]>(EGRESS_SECRETS);
-    const egress = SandboxEgress({
-      props: { iterateContextName: this.ctx.id.name, secrets },
-    });
+    const egress = SandboxEgress({ props: { iterateContextName: this.ctx.id.name } });
     await this.#container.interceptAllOutboundHttp(egress);
     await this.#container.interceptOutboundHttps("*", egress);
   }

@@ -1051,13 +1051,9 @@ export type SandboxContainerStartOptions = {
 /** What the sandbox's own `start` takes: the container API's, and `from`, the path of another
  *  sandbox of this mind whose snapshot this one starts from (a golden toolset made once, then
  *  started many times). That snapshot is this sandbox's disk from then on. One of `image`,
- *  `containerSnapshot` and `from` at most. `secrets` is the sandbox's own list of secrets: from
- *  then on, at every later start too, a request the sandbox makes may name these by a placeholder
- *  and no other secret of the mind (its egress answers 403). A sandbox never given a list may
- *  name any. */
+ *  `containerSnapshot` and `from` at most. */
 export type SandboxStartOptions = SandboxContainerStartOptions & {
   from?: string;
-  secrets?: string[];
 };
 
 /** What a sandbox's `files.stat` and `files.lstat` answer (the `iterate fs` tool's, run in the
