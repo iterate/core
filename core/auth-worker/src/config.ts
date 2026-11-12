@@ -78,6 +78,13 @@ export const AuthSettings = z.strictObject({
   /** Origins whose clients are approved with no consent page: a client whose id (its metadata
    *  document's URL) and redirect are both on one of them (./authorize.ts). */
   trustedClients: z.array(Origin).optional(),
+  /** A DEVICE'S APPROVAL (./device/page.ts). "Sign in a device" and "Let … in" give a device, or
+   *  an agent somewhere else, a token for the whole mind as the member who continues. With
+   *  `passkey: true`, Continue on that page is a statement that one of the member's passkeys
+   *  signs, with the member checked (a PIN, a fingerprint or a face), as allowing a key is
+   *  (./keys-pages.ts). A stolen session then signs in no device. Without it, the session alone
+   *  continues: a member who holds no passkey on this browser can still continue. */
+  devices: z.strictObject({ passkey: z.literal(true).optional() }).optional(),
   /** Root keys: their statements count with no row here. A key with an `email` is a person's, a
    *  member while `login.allow` admits it: it approves, and adds members and keys, at no path at
    *  all. `paths` confines what a service's key may add through `POST /statements`; without it,

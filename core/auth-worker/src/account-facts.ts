@@ -56,6 +56,15 @@ const MemberRemoved = z.object({ email: z.string().min(1) });
 const PersonBlocked = z.object({ email: z.string().min(1) });
 const MemberLinkMade = z.object({ email: z.string().min(1), expires: z.number() });
 const MemberAdded = SignedBy.extend({ email: z.string().min(1) });
+/** A device's request that a member's passkey signed to continue (./device/page.ts), as the page
+ *  showed it. The grant itself is `consent-approved`, and for a let-in `let-in-approved`. */
+const DeviceConfirmed = SignedBy.extend({
+  userCode: z.string().min(1),
+  clientId: z.string().min(1),
+  clientName: z.string(),
+  resource: z.string(),
+  letIn: z.object({ seconds: z.number().int(), reason: z.string() }).optional(),
+});
 const LetInApproved = z.object({
   grantId: z.string().min(1),
   clientId: z.string().min(1),
@@ -81,6 +90,10 @@ export type AccountFact = (
   | { type: "events.iterate.com/account/person-blocked"; payload: z.infer<typeof PersonBlocked> }
   | { type: "events.iterate.com/account/person-unblocked"; payload: z.infer<typeof PersonBlocked> }
   | { type: "events.iterate.com/account/let-in-approved"; payload: z.infer<typeof LetInApproved> }
+  | {
+      type: "events.iterate.com/account/device-confirmed";
+      payload: z.infer<typeof DeviceConfirmed>;
+    }
   | { type: "events.iterate.com/account/key-added"; payload: z.infer<typeof KeyAdded> }
   | { type: "events.iterate.com/account/key-removed"; payload: z.infer<typeof KeyRemoved> }
 ) & { idempotencyKey?: string };

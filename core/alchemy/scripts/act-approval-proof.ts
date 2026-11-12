@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { platformOriginOf } from "iterate/mind-api";
+import { mindApiUrlOf, platformOriginOf } from "iterate/mind-api";
 import { keyIdOf } from "iterate/signed";
 import { z } from "zod";
 import { authenticator, lendPasskey } from "./proof-passkeys.ts";
@@ -1134,6 +1134,113 @@ if (env.ITERATE_PROOF_LATE !== "0")
       };
     },
   );
+
+await run(
+  "a device's sign-in: where the mind asks for it, Continue is a press of the member's passkey, and the session alone signs in no device",
+  async () => {
+    const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+    const metadata = z
+      .object({
+        registration_endpoint: z.string(),
+        device_authorization_endpoint: z.string(),
+        token_endpoint: z.string(),
+        revocation_endpoint: z.string().optional(),
+      })
+      .parse(await (await fetch(`${issuer}/.well-known/oauth-authorization-server`)).json());
+    // a device asks: a client of its own, then a code for its person to confirm
+    const registration = await fetch(metadata.registration_endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: `proof device ${marker}`,
+        token_endpoint_auth_method: "none",
+        grant_types: [DEVICE_GRANT, "refresh_token"],
+      }),
+    });
+    must(registration.status === 201, `the device's registration answered ${registration.status}`);
+    const client = z.object({ client_id: z.string() }).parse(await registration.json()).client_id;
+    const asked = await fetch(metadata.device_authorization_endpoint, {
+      method: "POST",
+      body: new URLSearchParams({
+        client_id: client,
+        scope: "iterate",
+        resource: mindApiUrlOf(domain),
+      }),
+    });
+    must(asked.ok, `the device's request answered ${asked.status}`);
+    const codes = z
+      .object({
+        device_code: z.string(),
+        user_code: z.string(),
+        verification_uri_complete: z.string(),
+      })
+      .parse(await asked.json());
+    const poll = async () =>
+      z.object({ error: z.string().optional(), access_token: z.string().optional() }).parse(
+        await (
+          await fetch(metadata.token_endpoint, {
+            method: "POST",
+            body: new URLSearchParams({
+              grant_type: DEVICE_GRANT,
+              device_code: codes.device_code,
+              client_id: client,
+            }),
+          })
+        ).json(),
+      );
+    /** After Continue: the consent of the grant itself, then the device's token, revoked again. */
+    const signedIn = async () => {
+      await page.getByRole("button", { name: "Allow", exact: true }).click();
+      await page.getByText("The device is signed in").waitFor();
+      // a device polls every five seconds
+      let token: string | undefined;
+      for (let tries = 0; tries < 8 && !token; tries += 1) {
+        await settled(5_500);
+        token = (await poll()).access_token;
+      }
+      must(token, "the device got no token after Continue and the consent");
+      if (metadata.revocation_endpoint)
+        await fetch(metadata.revocation_endpoint, {
+          method: "POST",
+          body: new URLSearchParams({ token, client_id: client }),
+        });
+    };
+    await page.goto(codes.verification_uri_complete);
+    const press = page.getByRole("button", { name: "Continue with your passkey" });
+    if (!(await press.count())) {
+      // A mind whose config does not ask for it: the page and the flow are as they were, and
+      // nothing of the press is proven here.
+      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await signedIn();
+      return {
+        detail:
+          "this mind does not ask for the passkey (auth.devices.passkey is not set): a plain Continue and the consent signed the device in, as before (its token revoked again)",
+      };
+    }
+    // The session alone: the page's own form, with no statement. A string, as this package's
+    // types have no DOM.
+    const bare = z
+      .object({ status: z.number(), text: z.string() })
+      .parse(
+        await page.evaluate(
+          `fetch(location.pathname, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ user_code: ${JSON.stringify(codes.user_code)}, action: "confirm" }) }).then(async (answer) => ({ status: answer.status, text: await answer.text() }))`,
+        ),
+      );
+    must(
+      bare.status === 403 && bare.text.includes("takes a press of your passkey"),
+      `with no statement the page answered ${bare.status}`,
+    );
+    const waiting = await poll();
+    must(waiting.error === "authorization_pending", `the device got ${JSON.stringify(waiting)}`);
+    // the press, then the consent of the grant itself
+    await press.click();
+    await signedIn();
+    return {
+      detail:
+        "with the session alone the page answered 403 and the device waited on; Continue asked for the passkey, the consent followed, and the device got its token (revoked again)",
+    };
+  },
+);
 
 await run(
   "loaded code writes no ingress row whose target is a built-in: such a row would answer the next visitor of the mind's hosts, as that visitor",

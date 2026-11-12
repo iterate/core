@@ -100,6 +100,9 @@ const PUBLIC_FIELDS = new Set([
   "auth.login.allow[].emailDomain",
   "auth.login.allow[].everyone",
   "auth.trustedClients[]",
+  // a switch, and the key with no switch in it
+  "auth.devices",
+  "auth.devices.passkey",
   // a key's public half, who it speaks for, and where it may add events: nothing a holder could sign with
   "auth.keys[].actor",
   "auth.keys[].email",

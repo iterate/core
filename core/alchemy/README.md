@@ -252,6 +252,10 @@ when its 24 hours are over, by a code.
 A client whose metadata document and redirect are on an origin in `auth.trustedClients` gets no
 consent page.
 
+With `auth.devices: { passkey: true }`, a member continues a device's sign-in ("Sign in a device",
+"Let … in") with a press of a passkey that checks its user, as a key is allowed. Without it, the
+session alone continues.
+
 State is in the account, in the state-store Worker `iterate-<name>-state`, which the mind owns.
 `ITERATE_STATE_STORE=local` keeps it in `.alchemy/` instead (git-ignored), with the generated keys in
 clear: for a throwaway stack only.
