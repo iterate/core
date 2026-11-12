@@ -7,13 +7,16 @@
 // code made from it) stays.
 //
 // AN APP IS ONE UNIT (`apps/<name>/`). Its files are written all together or not at all: when
-// somebody changed or deleted one of them, or the repo's own package.json lacks a package the
-// app's new files import, the app stays at the version it has (`appsLeftOld`). Half of a newer
-// app beside half of an older one loads, and does not work. A file of the platform's that
+// somebody changed or deleted one of them, the app stays at the version it has (`appsLeftOld`).
+// Half of a newer app beside half of an older one loads, and does not work. A file of the
+// platform's that
 // imports a file not written for that reason is not written either (`heldBack`, or its own app
 // in `appsLeftOld`): the commit never names a file it does not bring. And what a file held back
 // imports is held back with it, so that an older file never meets a newer one it was not
 // written for. One shared file that moves can so keep several apps at their version.
+// A package that newer files import is added to a package.json that is somebody's
+// (`packagesAdded`): the one thing the platform writes into a file that is not its own. A package
+// listed there at an older version than the template's is left, and named (`packagesOlder`).
 //
 // THE WAY BACK to the platform's file is to commit it: a file that is the template's bytes, or
 // any bytes the platform wrote there before (`TemplateKept.written` keeps the last few), is the
@@ -130,17 +133,25 @@ export function templateChanges(input: {
         input.current[manifest],
       )
     : [];
+  // THE PACKAGES THAT THE NEWER FILES IMPORT ARE ADDED to a package.json that is somebody's: each
+  // one the file does not list, at the template's version, and nothing else of the file changes.
+  // So no app stays old for a package, unless the file cannot be read as JSON. Which packages
+  // are added is decided at the end, from the files that are written after all.
+  const templateManifest = input.template.find((file) => file.path === manifest)?.content;
+  const listable = manifestWith(input.current[manifest], templateManifest, lacked) !== null;
+  const lacking = listable ? [] : lacked;
   const appsLeftOld = [...new Set(writes.map((write) => appOf(write.path)))]
     .filter(Boolean)
     .map((app) => ({
       app,
       yours: leftAlone.filter((file) => appOf(file.path) === app).map((file) => file.path),
-      lacksPackages: lacked.filter((name) =>
+      lacksPackages: lacking.filter((name) =>
         input.template.some(
           (file) => appOf(file.path) === app && packagesOf(file.path, file.content).includes(name),
         ),
       ),
-      // filled below, for an app that stays old only because of another one
+      // Filled below, for an app that stays old only because of another one. The casts: an empty
+      // list has no element type of its own, and these two hold paths.
       imports: [] as string[],
       importedBy: [] as string[],
       notWritten: writes.filter((write) => appOf(write.path) === app).map((write) => write.path),
@@ -228,6 +239,20 @@ export function templateChanges(input: {
   // read once more (`brokenByUpdate`). When anything in it is broken, the update writes NOTHING,
   // and the fact says what (`refused`). A commit that does not load keeps every later commit of
   // the mind's from being published, which is worse than a mind that waits one deploy.
+  // Only a package that a file written after all imports is added: a file kept back brings none.
+  const listed = manifestWith(
+    input.current[manifest],
+    templateManifest,
+    lacked.filter((name) =>
+      changes.some((file) => packagesOf(file.path, file.content).includes(name)),
+    ),
+  );
+  let packagesAdded = listed ? listed.added : [];
+  // A package that somebody lists at an older version than the template's stays as it is: no
+  // line of theirs is changed. It is named, when a file written here imports it.
+  let packagesOlder = olderPins(input.current[manifest], templateManifest).filter(({ name }) =>
+    changes.some((file) => packagesOf(file.path, file.content).includes(name)),
+  );
   const refused = brokenByUpdate({
     current: input.current,
     changes,
@@ -235,14 +260,18 @@ export function templateChanges(input: {
       .filter((item) => item.kind === "replaced" && withheld.has(item.path))
       .map((item) => item.path),
     appsLeftOld: appsLeftOld.map((app) => app.app),
+    packages: { lacked, added: packagesAdded.map((one) => one.name) },
   });
   if (refused.length > 0) {
     changes = [];
     added = [];
     replaced = [];
     putBack = [];
+    packagesAdded = [];
+    packagesOlder = [];
     platforms = input.template.map((file) => file.path).filter((path) => same.includes(path));
   }
+  if (listed && packagesAdded.length > 0) changes.push({ path: manifest, content: listed.content });
   if (putBack.length) {
     const back = new Set(putBack.map((file) => file.path));
     leftAlone = leftAlone.filter((file) => !back.has(file.path));
@@ -257,6 +286,8 @@ export function templateChanges(input: {
     appsLeftOld,
     heldBack,
     refused,
+    packagesAdded,
+    packagesOlder,
   };
 }
 
@@ -293,7 +324,9 @@ function olderImportersOf(
  *  - each of its relative imports is a file of the tree (a folder: some file under it);
  *  - none of them is a file that stays at its older version;
  *  - no file that stays at its older version imports it (by the repo's text of that file);
- *  - it is not a file of an app that stays whole.
+ *  - it is not a file of an app that stays whole;
+ *  - each package it imports that the repo's package.json lacked is one this update adds.
+ * And of each package the update adds: a file it writes imports it.
  * It does not depend on how the set to write was reached, so a rule that the comparison lacks
  * shows here as a refusal and not as a config repo that no longer loads.
  */
@@ -302,6 +335,9 @@ export function brokenByUpdate(input: {
   changes: readonly { path: string; content: string }[];
   held: readonly string[];
   appsLeftOld: readonly string[];
+  /** The template's packages that the repo's package.json `lacked` before the update, and those
+   *  of them that the update adds. */
+  packages?: { lacked: readonly string[]; added: readonly string[] };
 }): { path: string; why: string }[] {
   const tree = new Set([...Object.keys(input.current), ...input.changes.map((file) => file.path)]);
   const held = new Set(input.held);
@@ -322,6 +358,17 @@ export function brokenByUpdate(input: {
         broken.push({ path, why: `is imported by ${older}, which stays at its older version` });
     }
   }
+  const { lacked, added } = input.packages || { lacked: [], added: [] };
+  for (const { path, content } of input.changes)
+    for (const name of packagesOf(path, content))
+      if (lacked.includes(name) && !added.includes(name))
+        broken.push({ path, why: `imports the package ${name}, which package.json does not list` });
+  for (const name of added)
+    if (!input.changes.some((file) => packagesOf(file.path, file.content).includes(name)))
+      broken.push({
+        path: "package.json",
+        why: `would list ${name}, which no file written in this update imports`,
+      });
   return broken;
 }
 
@@ -344,6 +391,57 @@ function packagesLacked(template: string | undefined, current: RepoFiles[string]
   return theirs && ours ? Object.keys(theirs).filter((name) => !Object.hasOwn(ours, name)) : [];
 }
 const Manifest = z.object({ dependencies: z.record(z.string(), z.string()).default({}) });
+
+/** Somebody's package.json with `names` added to its dependencies, at the template's versions:
+ *  the file's own keys, order and indent stay. Null when either manifest is no JSON object, or
+ *  no name is to add. */
+function manifestWith(
+  current: RepoFiles[string] | undefined,
+  template: string | undefined,
+  names: readonly string[],
+): { content: string; added: { name: string; version: string }[] } | null {
+  if (typeof current !== "string" || !template || names.length === 0) return null;
+  try {
+    const versions = Manifest.parse(JSON.parse(template)).dependencies;
+    const ours = z.record(z.string(), z.unknown()).parse(JSON.parse(current));
+    const added = names.map((name) => ({ name, version: versions[name]! }));
+    const dependencies = {
+      ...Manifest.parse(ours).dependencies,
+      ...Object.fromEntries(added.map(({ name, version }) => [name, version])),
+    };
+    const indent = /^([ \t]+)"/m.exec(current)?.[1] || 2;
+    const content = JSON.stringify({ ...ours, dependencies }, null, indent);
+    return { content: current.endsWith("\n") ? `${content}\n` : content, added };
+  } catch {
+    return null;
+  }
+}
+
+/** The packages that both manifests list, where somebody's version is older than the template's:
+ *  each with both versions. Only versions that are three numbers (after a `^` or `~`) are
+ *  compared; a link, a tag or a range is not judged. */
+function olderPins(
+  current: RepoFiles[string] | undefined,
+  template: string | undefined,
+): { name: string; yours: string; template: string }[] {
+  const numbers = (version: string) =>
+    /^[\^~]?(\d+)\.(\d+)\.(\d+)/.exec(version)?.slice(1).map(Number);
+  try {
+    const theirs = Manifest.parse(JSON.parse(String(template))).dependencies;
+    const ours = Manifest.parse(JSON.parse(String(current))).dependencies;
+    return Object.keys(theirs)
+      .filter((name) => Object.hasOwn(ours, name))
+      .map((name) => ({ name, yours: ours[name]!, template: theirs[name]! }))
+      .filter(({ yours, template: newer }) => {
+        const [mine, platforms] = [numbers(yours), numbers(newer)];
+        if (!mine || !platforms) return false;
+        const differs = mine.findIndex((part, index) => part !== platforms[index]);
+        return differs !== -1 && mine[differs]! < platforms[differs]!;
+      });
+  } catch {
+    return [];
+  }
+}
 
 /** The packages that a module imports by name: `from "yjs"`, `import "x/y"`, `import("@a/b/c")`
  *  are `yjs`, `x` and `@a/b`. Read as `importsOf` reads relative imports. */

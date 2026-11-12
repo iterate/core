@@ -26,6 +26,8 @@ test("a repo untouched since its seed gets the whole newer template: new files a
     appsLeftOld: [],
     heldBack: [],
     refused: [],
+    packagesAdded: [],
+    packagesOlder: [],
   });
 });
 
@@ -215,7 +217,7 @@ test("an app is written whole or not at all: one file of it that somebody change
   ]);
 });
 
-test("an app whose new files import a package that somebody's package.json does not list stays at its version, and follows once it is listed", () => {
+test("a package that newer files import is added to somebody's package.json, at the template's version, and nothing else of that file changes", () => {
   const seed = {
     "package.json": '{"dependencies":{}}',
     "worker.ts": "new worker\n",
@@ -225,30 +227,53 @@ test("an app whose new files import a package that somebody's package.json does 
   };
   const template = [
     ...withDocs(),
+    // `diff` is the template's too, and no file written here imports it
     { path: "package.json", content: '{"dependencies":{"yjs":"13.6.33","diff":"8.0.4"}}' },
   ];
-  const theirs = { ...seed, "package.json": '{"name":"mine","dependencies":{"diff":"8.0.4"}}' };
-  expect(
-    templateChanges({ template, current: theirs, ...platformWrote(seed, theirs) }),
-  ).toMatchObject({
-    changes: [],
-    appsLeftOld: [
-      {
-        app: "docs",
-        yours: [],
-        lacksPackages: ["yjs"],
-        notWritten: ["apps/docs/app.ts", "apps/docs/public/app.js", "apps/docs/processors/doc.ts"],
-      },
-    ],
+  const mine =
+    '{\n\t"name": "mine",\n\t"dependencies": {\n\t\t"pako": "^3.0.2"\n\t},\n\t"private": true\n}\n';
+  const theirs = { ...seed, "package.json": mine };
+  const { changes, appsLeftOld, packagesAdded, platforms, leftAlone } = templateChanges({
+    template,
+    current: theirs,
+    ...platformWrote(seed, theirs),
   });
-  const listed = { ...seed, "package.json": '{"name":"mine","dependencies":{"yjs":"13.6.33"}}' };
-  expect(
-    templateChanges({ template, current: listed, ...platformWrote(seed, listed) }),
-  ).toMatchObject({
-    added: ["apps/docs/processors/doc.ts"],
-    replaced: ["apps/docs/app.ts", "apps/docs/public/app.js"],
+  expect({ appsLeftOld, packagesAdded }).toEqual({
     appsLeftOld: [],
+    packagesAdded: [{ name: "yjs", version: "13.6.33" }],
   });
+  expect(changes.at(-1)).toEqual({
+    path: "package.json",
+    content:
+      '{\n\t"name": "mine",\n\t"dependencies": {\n\t\t"pako": "^3.0.2",\n\t\t"yjs": "13.6.33"\n\t},\n\t"private": true\n}\n',
+  });
+  // the file stays somebody's: named as left alone, and no file of the platform's
+  expect(leftAlone.map((file) => file.path)).toEqual(["package.json"]);
+  expect(platforms).not.toContain("package.json");
+});
+
+test("an app that stays old for a file of its own gets no package, and a package.json that is no JSON is not written", () => {
+  const seed = {
+    "package.json": '{"dependencies":{}}',
+    "apps/docs/app.ts": "old app\n",
+    "apps/docs/public/app.js": "old page\n",
+  };
+  const template = [
+    ...withDocs().filter((file) => file.path.startsWith("apps/docs/")),
+    { path: "package.json", content: '{"dependencies":{"yjs":"13.6.33"}}' },
+  ];
+  const changed = {
+    ...seed,
+    "package.json": '{"name":"mine"}',
+    "apps/docs/public/app.js": "my own page\n",
+  };
+  expect(
+    templateChanges({ template, current: changed, ...platformWrote(seed, changed) }),
+  ).toMatchObject({ changes: [], packagesAdded: [], appsLeftOld: [{ app: "docs" }] });
+  const broken = { ...seed, "package.json": "{ not json" };
+  expect(
+    templateChanges({ template, current: broken, ...platformWrote(seed, broken) }),
+  ).toMatchObject({ packagesAdded: [], appsLeftOld: [] });
 });
 
 test("a file of the platform's that imports a file of an app left old is held back with it: the commit never names a file it does not bring", () => {
@@ -513,8 +538,8 @@ test("a deleted shared file is not put back newer while a file held at its older
   });
 });
 
-// THE LAST LOOK. Each case is what an update decided before the rule that now prevents it: the
-// guard is fed that decision as it was, and names what it would break.
+// THE LAST LOOK. Each case is a decision that the comparison's rules do not make: the guard is
+// given it as a set of changes, and names what it would break.
 const OLD_DOCS = {
   "apps/docs/app.ts": 'import { openFile } from "../open-files.ts";\nold docs\n',
   "apps/docs/page.js": "my own page\n",
@@ -605,6 +630,86 @@ test("the last look passes an update that brings what it names", () => {
       appsLeftOld: [],
     }),
   ).toEqual([]);
+});
+
+test("a package is added only for a file that is written after all: a file kept back brings none", () => {
+  const seed = {
+    "package.json": '{"dependencies":{}}',
+    "worker.ts": "old worker\n",
+    "apps/docs/app.ts": "old app\n",
+    "apps/docs/page.js": "old page\n",
+  };
+  const template = [
+    // only the newer worker imports yjs, and it is held back for the Docs app left old
+    { path: "worker.ts", content: 'import * as Y from "yjs";\nimport "./apps/docs/app.ts";\n' },
+    { path: "apps/docs/app.ts", content: "new app\n" },
+    { path: "apps/docs/page.js", content: "new page\n" },
+    { path: "package.json", content: '{"dependencies":{"yjs":"13.6.33"}}' },
+  ];
+  const current = {
+    ...seed,
+    "package.json": '{"name":"mine","dependencies":{}}',
+    "apps/docs/page.js": "my own page\n",
+  };
+  expect(templateChanges({ template, current, ...platformWrote(seed, current) })).toMatchObject({
+    changes: [],
+    packagesAdded: [],
+    refused: [],
+    heldBack: [{ path: "worker.ts" }],
+  });
+});
+
+test.for([
+  {
+    fault:
+      "a file is written that imports a package which package.json lacked and the update does not add",
+    packages: { lacked: ["yjs"], added: [] },
+    says: "worker.ts imports the package yjs, which package.json does not list",
+  },
+  {
+    fault: "a package is added that no file written in the update imports",
+    packages: { lacked: ["yjs", "diff"], added: ["yjs", "diff"] },
+    says: "package.json would list diff, which no file written in this update imports",
+  },
+])("the last look refuses an update in which $fault", ({ packages, says }) => {
+  const broken = brokenByUpdate({
+    current: {},
+    changes: [{ path: "worker.ts", content: 'import * as Y from "yjs";\n' }],
+    held: [],
+    appsLeftOld: [],
+    packages,
+  });
+  expect(broken.map(({ path, why }) => `${path} ${why}`)).toContain(says);
+});
+
+test("a package that somebody lists at an older version than the template's is left as it is, and named when a written file imports it", () => {
+  const seed = {
+    "package.json": '{"dependencies":{}}',
+    "apps/docs/merge.ts": "old merge\n",
+  };
+  const template = [
+    { path: "apps/docs/merge.ts", content: 'import { diffLines } from "diff";\n' },
+    {
+      path: "package.json",
+      content: '{"dependencies":{"diff":"8.0.4","yjs":"13.6.33","pako":"3.0.2","link":"1.0.0"}}',
+    },
+  ];
+  // diff is older; yjs is older and no written file imports it; pako is newer; link is no version
+  const mine =
+    '{"dependencies":{"diff":"^0.0.1","yjs":"1.0.0","pako":"4.0.0","link":"https://example.com/x"}}';
+  const current = { ...seed, "package.json": mine };
+  const { changes, packagesAdded, packagesOlder, refused } = templateChanges({
+    template,
+    current,
+    ...platformWrote(seed, current),
+  });
+  expect({ packagesAdded, packagesOlder, refused }).toEqual({
+    packagesAdded: [],
+    packagesOlder: [{ name: "diff", yours: "^0.0.1", template: "8.0.4" }],
+    refused: [],
+  });
+  // the file is written, and package.json is not
+  expect(changes.map((change) => change.path)).toEqual(["apps/docs/merge.ts"]);
 });
 
 test("the record keeps the last four versions the platform wrote at a path, each once", () => {

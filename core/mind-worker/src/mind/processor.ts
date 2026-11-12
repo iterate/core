@@ -465,6 +465,8 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
       appsLeftOld,
       heldBack,
       refused,
+      packagesAdded,
+      packagesOlder,
     } = templateChanges({
       template,
       current,
@@ -535,6 +537,8 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
                 appsLeftOld,
                 heldBack,
                 refused,
+                packagesAdded,
+                packagesOlder,
               },
             }
           : undefined,

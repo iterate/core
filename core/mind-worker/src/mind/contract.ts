@@ -129,6 +129,14 @@ export const MindContract = defineProcessorContract({
         // the update wrote nothing, because the tree it would have left does not load: each file
         // it would have written, with what was wrong (absent on a fact from before the rule)
         refused: z.array(z.object({ path: z.string(), why: z.string() })).optional(),
+        // packages added to a package.json that is somebody's, because files written in this
+        // update import them (absent on a fact from before the rule)
+        packagesAdded: z.array(z.object({ name: z.string(), version: z.string() })).optional(),
+        // packages that a file written in this update imports, and that the repo's own
+        // package.json lists at an older version than the template's: left as they are
+        packagesOlder: z
+          .array(z.object({ name: z.string(), yours: z.string(), template: z.string() }))
+          .optional(),
       }),
     },
     "events.iterate.com/mind/template-not-published": {
