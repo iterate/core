@@ -213,6 +213,15 @@ test("the mail that goes has the act's own three headers and no other that its s
   );
 });
 
+test("the mail that goes keeps its hop count between minds, and only a number", async () => {
+  const act = await mailActOf(mail());
+  expect({
+    number: mailHeadersOf(act, { "X-Iterate-Mail-Hops": "4" }),
+    text: mailHeadersOf(act, { "X-Iterate-Mail-Hops": "4\r\nBcc: leak@example.net" }),
+    zero: mailHeadersOf(act, { "X-Iterate-Mail-Hops": "0" }),
+  }).toEqual({ number: { "X-Iterate-Mail-Hops": "4" }, text: {}, zero: {} });
+});
+
 test("a verb's rule holds that verb, or every verb under a prefix, and no other", () => {
   const send = { act: "itx.whatsapp.sendMessage", args: ["jo", { text: "hello" }] };
   expect(ruleHolds(ActRule.parse({ verb: "itx.whatsapp.sendMessage" }), send)).toBe(true);

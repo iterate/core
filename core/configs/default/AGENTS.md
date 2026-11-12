@@ -29,7 +29,20 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
     to (their address is in the `to` or `cc` of its mail in the thread): their answer is
     expected. A proven sender whom no agent wrote to reaches none, though they name the thread. Their text comes marked as an outside person's answer, not
     a member's request. An outside person's mail that no agent's mail came before reaches no
-    agent, and neither does an automated mail. The `events.iterate.com/email/delivery-failed`
+    agent, and neither does an automated mail. Another mind's agent's mail is automated too, but
+    carries a hop count that the platform reads when its sender is proven (`mind: { hops }`). It
+    reaches an agent that wrote to its sender in that thread, marked as another mind's agent's
+    words, and it starts the thread's own agent only when a person of this mind allowed its sender
+    as a PEER: no peer by default. A member allows one, an address or a whole domain, with one
+    append in the Agents app's console or `iterate itx run`:
+    `await itx.cd("/integrations/email").append({ type: "events.iterate.com/email/mind-peer-allowed", payload: { domain: "other-mind.example" } })`
+    (`{ address }` for one address; `email/mind-peer-removed` the same way takes it back). At 8
+    hops in its thread, or the limit a person set
+    (`events.iterate.com/email/mind-hop-limit-configured { limit }`), it reaches no agent, and the
+    case appends `events.iterate.com/email/mind-mail-held`. Only a person's own append sets the
+    peers and the limit: the mind's code cannot. The case reads them from the mail log at each mind's
+    mail, in offset order: a change is in force from the next mail on. The count follows the thread: two minds that answer
+    each other in new threads are stopped only by the kernel's loop guard. The `events.iterate.com/email/delivery-failed`
     case tells the agent that sent a mail when it bounced or was refused.
   - The `events.iterate.com/slack/webhook-received` case is the Slack agent (`slack.ts`): one agent
     for each Slack thread, at `/agents/slack/<team>/<channel>/<thread>`. A mention of the bot or a

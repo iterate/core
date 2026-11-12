@@ -46,16 +46,21 @@ test("a subject with a line break is refused before anything is reserved or aske
 
 test("an answer to a mail whose subject arrived as two lines goes with that subject on one line", async () => {
   const mind = mindWith([{ sent: true, messageId: "<m5@example.com>" }], {
-    messageId: "m0@example.org",
-    from: "mind@example.com",
-    to: ["jo@example.org"],
-    cc: [],
-    subject: "Hello\r\nBcc: leak@example.net",
-    text: "A mail.",
-    html: null,
-    inReplyTo: null,
-    references: [],
-    attachments: [],
+    stored: {
+      type: "events.iterate.com/email/sent",
+      payload: {
+        messageId: "m0@example.org",
+        from: "mind@example.com",
+        to: ["jo@example.org"],
+        cc: [],
+        subject: "Hello\r\nBcc: leak@example.net",
+        text: "A mail.",
+        html: null,
+        inReplyTo: null,
+        references: [],
+        attachments: [],
+      },
+    },
   });
   await mind.answer(7);
   expect(mind.sent.map((message) => message.subject)).toEqual(["Re: Hello Bcc: leak@example.net"]);
@@ -89,9 +94,7 @@ test("a mail the provider refuses is said on the mail log, and the caller still 
 });
 
 test("a refusal whose fact does not land still reaches the caller as the provider's refusal", async () => {
-  const mind = mindWith([{ sent: false, error: "the provider is down" }], undefined, {
-    appendFails: true,
-  });
+  const mind = mindWith([{ sent: false, error: "the provider is down" }], { appendFails: true });
   await expect(mind.send()).rejects.toMatchObject({
     code: "UNAVAILABLE",
     message: "itx.email.send: the boundary refused it: the provider is down",
@@ -111,6 +114,31 @@ test("a mail an approval rule refuses records no send-failed fact: the gate's fa
   expect(mind).toMatchObject({ appended: [] });
 });
 
+test("a mail that answers no mail goes as the first hop", async () => {
+  const mind = mindWith([{ sent: true, messageId: "<m6@example.com>" }]);
+  await mind.send();
+  expect(mind.sent).toMatchObject([{ headers: { "X-Iterate-Mail-Hops": "1" } }]);
+});
+
+test("an answer in a thread where another mind's mail came at hop 3 goes as hop 4", async () => {
+  const mind = mindWith([{ sent: true, messageId: "<m7@example.com>" }], {
+    stored: { type: "events.iterate.com/email/received", payload: received({ hops: 3 }) },
+    mindHops: 3,
+  });
+  await mind.answer(7);
+  expect(mind.sent).toMatchObject([
+    { to: ["agent@other.example"], headers: { "X-Iterate-Mail-Hops": "4" } },
+  ]);
+});
+
+test("an answer to a person's mail goes as the first hop", async () => {
+  const mind = mindWith([{ sent: true, messageId: "<m8@example.com>" }], {
+    stored: { type: "events.iterate.com/email/received", payload: received(null) },
+  });
+  await mind.answer(7);
+  expect(mind.sent).toMatchObject([{ headers: { "X-Iterate-Mail-Hops": "1" } }]);
+});
+
 type Outcome = Awaited<ReturnType<Door["sendEmail"]>>;
 
 const held: Outcome = {
@@ -120,16 +148,20 @@ const held: Outcome = {
 };
 
 /** A mind whose boundary answers `outcomes` in turn. `asked` keeps, for each call of the boundary,
- *  whether it waits and which reservations stand at that moment. */
+ *  whether it waits and which reservations stand at that moment. `stored` is the event at any
+ *  offset that is asked for; the `email` facet puts it in one thread, whose `mindHops` is given. */
 function mindWith(
   outcomes: Outcome[],
-  stored?: Record<string, unknown>,
-  options: { appendFails?: boolean } = {},
+  options: {
+    stored?: { type: string; payload: unknown };
+    mindHops?: number;
+    appendFails?: boolean;
+  } = {},
 ) {
   const reservations = new Set<string>();
   const appended: { event: unknown; caller: unknown }[] = [];
   const asked: { wait: boolean; reserved: string[] }[] = [];
-  const sent: { subject: string }[] = [];
+  const sent: { subject: string; to: string[]; headers: Record<string, string> }[] = [];
   const emailContext = {
     reserveSend: async (key: string) => {
       if (reservations.has(key)) return { reserved: false };
@@ -144,12 +176,16 @@ function mindWith(
         appended.push({ event, caller });
         return [{ ...Object(event), offset: 1 }];
       }
-      // a mail this mind sent before, at the offset that is asked for
       if (verb === "readEvents")
+        return { events: [{ offset: Number(event) + 1, ...options.stored }] };
+      if (verb === "snapshot")
         return {
-          events: [
-            { offset: Number(event) + 1, type: "events.iterate.com/email/sent", payload: stored },
-          ],
+          state: {
+            threads: {
+              "7": { subject: "Hello", messageOffsets: [7], mindHops: options.mindHops },
+            },
+            threadOffsetByMessageId: {},
+          },
         };
       return undefined;
     },
@@ -163,7 +199,7 @@ function mindWith(
     context: () => emailContext,
   };
   const egress = {
-    sendEmail: async (message: { subject: string }, options?: { wait?: boolean }) => {
+    sendEmail: async (message: (typeof sent)[number], options?: { wait?: boolean }) => {
       sent.push(message);
       asked.push({
         wait: Boolean(options?.wait),
@@ -191,5 +227,26 @@ function mindWith(
     sent,
     send: (to = "jo@example.org", subject = "Hello") => root.send({ to, subject, text: "A mail." }),
     answer: (inReplyToOffset: number) => root.send({ inReplyToOffset, text: "An answer." }),
+  };
+}
+
+/** A mail that reached this mind: another mind's agent's at `mind.hops`, or a person's. */
+function received(mind: { hops: number } | null) {
+  return {
+    messageId: "m0@other.example",
+    from: "agent@other.example",
+    to: ["mind@example.com"],
+    cc: [],
+    subject: "Hello",
+    text: "A mail.",
+    html: null,
+    inReplyTo: null,
+    references: [],
+    attachments: [],
+    envelope: { from: "agent@other.example", to: "mind@example.com" },
+    sender: { verified: true, member: false, direct: true },
+    automated: Boolean(mind),
+    authentication: { spf: "pass", dkim: "pass", dmarc: "pass" },
+    mind,
   };
 }

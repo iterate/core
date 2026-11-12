@@ -3,6 +3,10 @@ import { receivedMail } from "./mail.ts";
 
 const GROUP = "team@group.example";
 
+/** Cloudflare's record that the sender's domain signed the mail and its server handed it over. */
+const PROVEN =
+  "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=sender.example; spf=pass smtp.mailfrom=ada@sender.example";
+
 test("a mail goes to the mind and, with no forward address, nowhere else", async () => {
   const mail = delivered();
   await receivedMail(mail.message, mail.env(), mail.mind);
@@ -89,6 +93,38 @@ test("a mail that the mind did not take is not forwarded: the next delivery does
   expect(mail).toMatchObject({ did: [] });
 });
 
+test.for([
+  {
+    name: "a proven mail with a hop count is another mind's mail, and is still automated",
+    headers: [PROVEN, "Auto-Submitted: auto-generated", "X-Iterate-Mail-Hops: 3"],
+    expected: { mind: { hops: 3 }, automated: true, sender: { verified: true } },
+  },
+  {
+    name: "an unproven mail's hop count is not read: anyone can write the header",
+    headers: ["Auto-Submitted: auto-generated", "X-Iterate-Mail-Hops: 3"],
+    expected: { mind: null, automated: true, sender: { verified: false } },
+  },
+  {
+    name: "a hop count of zero is no hop count",
+    headers: [PROVEN, "Auto-Submitted: auto-generated", "X-Iterate-Mail-Hops: 0"],
+    expected: { mind: null, automated: true },
+  },
+  {
+    name: "a hop count that is not a whole number is no hop count",
+    headers: [PROVEN, "Auto-Submitted: auto-generated", "X-Iterate-Mail-Hops: three"],
+    expected: { mind: null, automated: true },
+  },
+  {
+    name: "a proven person's mail is no mind's mail, and not automated",
+    headers: [PROVEN],
+    expected: { mind: null, automated: false, sender: { verified: true } },
+  },
+])("$name", async ({ headers, expected }) => {
+  const mail = delivered({ headers });
+  await receivedMail(mail.message, mail.env(), mail.mind);
+  expect(mail).toMatchObject({ received: [expected] });
+});
+
 /** One mail as Cloudflare hands it to the Worker, with a mind and a forward that say what they did,
  *  or fail with the words given. */
 function delivered(
@@ -98,14 +134,18 @@ function delivered(
     /** One address, or one for each `X-Forwarded-To` line, the newest first. */
     forwardedTo?: string | string[];
     append?: string;
+    /** Header lines above the mail's own. */
+    headers?: string[];
   } = {},
 ) {
   const did: string[] = [];
+  const received: unknown[] = [];
   const appended: { path: string; events: unknown[] }[] = [];
   const headers = new Headers({ "message-id": "<m1@sender.example>" });
   for (const address of [fails.forwardedTo || []].flat()) headers.append("x-forwarded-to", address);
   const raw = new TextEncoder().encode(
     [
+      ...(fails.headers || []),
       "From: Ada <ada@sender.example>",
       "To: hello@mind.example",
       "Subject: hello",
@@ -117,6 +157,8 @@ function delivered(
   return {
     did,
     appended,
+    /** The payload of each `email/received` the mind got. */
+    received,
     // The cast: of Cloudflare's message, the handler reads the envelope, the headers and the bytes and
     // calls `forward`.
     message: {
@@ -137,9 +179,10 @@ function delivered(
       MAIL_FORWARD_TO: forwardTo,
     }),
     mind: {
-      receiveEmail: async () => {
+      receiveEmail: async (mail: { events: { payload?: unknown }[] }) => {
         if (fails.mind) throw new Error(fails.mind);
         did.push("the mind got it");
+        received.push(...mail.events.map((event) => event.payload));
       },
       append: async (path: string, events: unknown[]) => {
         if (fails.append) throw new Error(fails.append);

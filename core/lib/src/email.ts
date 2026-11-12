@@ -1,7 +1,9 @@
 // email.ts — EMAIL's events and threads: a mind's mail, every message in or out on one context,
 // `/integrations/email`, inbound as `email/received` and each
 // `itx.email.send` as `email/sent` (`email/send-failed` when the provider refuses it), all appended
-// by the platform (core/mind-worker/src/integrations/email.ts).
+// by the platform (core/mind-worker/src/integrations/email.ts). Two are a mind's own: its config
+// holds another mind's mail at a hop limit (`email/mind-mail-held`), which a member may set
+// (`email/mind-hop-limit-configured`).
 // The first-party `email` facet there folds them into threads (core/mind-worker/src/email/processor.ts); a config
 // repo reads its state and parses a message with this contract (core/configs/default/worker.ts). An
 // inbound message's bytes, as it arrived, and each attachment's are mind files under `/email/`.
@@ -43,7 +45,17 @@ export const EmailContract = defineProcessorContract({
     /** Every thread, keyed by the offset of its first message: that message's subject and the
      *  offset of every message in it, oldest first. */
     threads: z
-      .record(z.string(), z.object({ subject: z.string(), messageOffsets: z.array(z.number()) }))
+      .record(
+        z.string(),
+        z.object({
+          subject: z.string(),
+          messageOffsets: z.array(z.number()),
+          /** The most hops of another mind's mail received in the thread (`mind.hops` of
+           *  `email/received`); absent when the thread holds none. `itx.email.send` sends an
+           *  answer in the thread one hop further. */
+          mindHops: z.number().optional(),
+        }),
+      )
       .default({}),
     /** Each message's Message-ID → the offset of its thread's first message: how a reply finds
      *  its thread. */
@@ -97,6 +109,11 @@ export const EmailContract = defineProcessorContract({
           dkim: z.string().nullable(),
           dmarc: z.string().nullable(),
         }),
+        /** Another mind's mail: its `X-Iterate-Mail-Hops` header, read only when `sender.verified`
+         *  (iterate/lib `MAIL_HOPS_HEADER`). `hops` counts the mails between minds in its thread up to this
+         *  one. Null for every other mail; absent on a mail recorded before the platform read it.
+         *  Such a mail is `automated` too: what answers it decides. */
+        mind: z.object({ hops: z.number().int().positive() }).nullable().optional(),
       }),
     },
     "events.iterate.com/email/sent": {
@@ -153,10 +170,42 @@ export const EmailContract = defineProcessorContract({
         detail: z.string().nullable(),
       }),
     },
+    "events.iterate.com/email/mind-mail-held": {
+      description:
+        "A received mail of another mind's agent reached its hop limit and woke no agent (the mind's config appends it).",
+      payloadSchema: z.object({
+        /** The `email/received` event's offset. */
+        offset: z.number(),
+        hops: z.number(),
+        /** The limit it met: `email/mind-hop-limit-configured`, or the config's default. */
+        limit: z.number(),
+      }),
+    },
+    "events.iterate.com/email/mind-hop-limit-configured": {
+      description:
+        "The hop count at which a received mail of another mind's agent wakes no agent (a person appends it; the config counts no other).",
+      payloadSchema: z.object({ limit: z.number().int().positive() }),
+    },
+    "events.iterate.com/email/mind-peer-allowed": {
+      description:
+        "Another mind's agent at this address, or anywhere in this domain, may start an agent here by mail (a person appends it; the config counts no other).",
+      payloadSchema: z.union([z.object({ address: z.email() }), z.object({ domain: z.string() })]),
+    },
+    "events.iterate.com/email/mind-peer-removed": {
+      description:
+        "Takes back an `email/mind-peer-allowed` of the same address or domain (a person appends it).",
+      payloadSchema: z.union([z.object({ address: z.email() }), z.object({ domain: z.string() })]),
+    },
   },
   consumes: ["events.iterate.com/email/received", "events.iterate.com/email/sent"],
   emits: [],
 });
+
+/** The hop count of a mail that answers a thread: one more than the most hops of another mind's
+ *  mail received in it, and 1 when it holds none. */
+export function nextMailHops(receivedHops: readonly number[]): number {
+  return Math.max(0, ...receivedHops) + 1;
+}
 
 /** The reduced threads (the contract's `stateSchema`). */
 export type EmailState = ProcessorState<typeof EmailContract>;

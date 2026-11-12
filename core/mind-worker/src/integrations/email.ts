@@ -14,8 +14,15 @@ import {
   recipientsRefusal,
 } from "iterate/acts";
 import type { EmailSendInput, StreamPage } from "iterate/api";
-import { EmailContract } from "iterate/email";
-import { codedError, errorCode, ITERATE_CAUSE_HEADER, reportIssue } from "iterate/lib";
+import { EmailContract, type EmailState, nextMailHops } from "iterate/email";
+import type { ItxExpression } from "iterate/expression";
+import {
+  codedError,
+  errorCode,
+  ITERATE_CAUSE_HEADER,
+  MAIL_HOPS_HEADER,
+  reportIssue,
+} from "iterate/lib";
 import { platformOriginOf } from "iterate/mind-api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import type { Door, ReceivedEmail } from "iterate/workers";
@@ -110,6 +117,9 @@ async function sendEmail(
   const answered = request.inReplyToOffset
     ? await answeredMessageOf(scope.emailContext, request.inReplyToOffset, scope.caller)
     : null;
+  const hops = request.inReplyToOffset
+    ? await hopsOfAnswer(scope.emailContext, request.inReplyToOffset, scope.caller)
+    : 1;
   const to = request.to ? [request.to].flat() : answered?.to || [];
   const cc = request.cc ? [request.cc].flat() : answered?.cc || [];
   const subject = request.subject || answered?.subject || "";
@@ -185,6 +195,7 @@ async function sendEmail(
     html: request.html,
     headers: {
       "Auto-Submitted": "auto-generated",
+      [MAIL_HOPS_HEADER]: String(hops),
       ...(scope.caller.cause && { [ITERATE_CAUSE_HEADER]: causeHeader(scope.caller.cause) }),
       ...(answered?.inReplyTo && {
         "In-Reply-To": `<${answered.inReplyTo}>`,
@@ -393,6 +404,23 @@ async function answeredMessageOf(emailContext: ReachableContext, offset: number,
     inReplyTo: message.messageId,
     references: [...message.references, ...(message.messageId ? [message.messageId] : [])],
   };
+}
+
+/** THE HOP COUNT OF AN ANSWER: one past the most hops of another mind's mail in the thread of the
+ *  message at `offset`, as the `email` facet folded it (iterate/email `nextMailHops`). */
+async function hopsOfAnswer(emailContext: ReachableContext, offset: number, caller: Caller) {
+  const asPlatform: Caller = { ...caller, platform: true };
+  const facet: ItxExpression = ["itx", "builtins", "facets", ["get", "email"]];
+  await emailContext.invoke([...facet, ["waitUntilProcessed", { offset }]], [], asPlatform);
+  // The cast: `invoke` answers `unknown`, and the `email` facet's snapshot is its contract's state
+  // (iterate/email `EmailContract`), as recordEmail and answeredMessageOf above read it.
+  const { state } = (await emailContext.invoke([...facet, ["snapshot"]], [], asPlatform)) as {
+    state: EmailState;
+  };
+  const thread = Object.values(state.threads).find((candidate) =>
+    candidate.messageOffsets.includes(offset),
+  );
+  return nextMailHops(thread?.mindHops ? [thread.mindHops] : []);
 }
 
 /** Under Email Service's 2,048-byte header limit; RFC 5322 3.6.4 keeps the first id. */

@@ -23,10 +23,16 @@ export class EmailProcessor extends StreamProcessor<
             .map((id) => (id ? state.threadOffsetByMessageId[id] : undefined))
             .find((offset) => offset !== undefined) ?? event.offset;
         const thread = state.threads[threadOffset] ?? { subject, messageOffsets: [] };
+        // another mind's mail: the thread keeps its most hops, which an answer goes one past
+        const hops = event.type === "events.iterate.com/email/received" && event.payload.mind?.hops;
         return {
           threads: {
             ...state.threads,
-            [threadOffset]: { ...thread, messageOffsets: [...thread.messageOffsets, event.offset] },
+            [threadOffset]: {
+              ...thread,
+              messageOffsets: [...thread.messageOffsets, event.offset],
+              ...(hops && { mindHops: Math.max(thread.mindHops ?? 0, hops) }),
+            },
           },
           threadOffsetByMessageId: messageId
             ? { ...state.threadOffsetByMessageId, [messageId]: threadOffset }

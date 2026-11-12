@@ -4,7 +4,7 @@
 // signs a statement that names the id. A request sent with a secret is held the same way by its
 // secret (core/secrets-worker/src/approval.ts): this module is everything else.
 import { z } from "zod";
-import { reportIssue } from "./lib.ts";
+import { MAIL_HOPS_HEADER, mailHopsOf, reportIssue } from "./lib.ts";
 
 /** The context that holds the gate's facts. */
 export const APPROVALS_CONTEXT = "/approvals";
@@ -235,19 +235,22 @@ export function mailHeaderRefusal(
   return odd ? `a mail's header is one line, and ${odd[0]} has a line break` : null;
 }
 
-/** THE HEADERS OF THE MAIL THAT GOES: the three that the act holds, made again from the act, and
- *  whether the mail says that a program wrote it. Every other header that the sender gave is left
- *  out, since no approver saw it: a Bcc, or a second Reply-To in another letter case. */
+/** THE HEADERS OF THE MAIL THAT GOES: the three that the act holds, made again from the act,
+ *  whether the mail says that a program wrote it, and its hop count between minds (./lib.ts
+ *  `MAIL_HOPS_HEADER`), a number alone. Every other header that the sender gave is left out, since
+ *  no approver saw it: a Bcc, or a second Reply-To in another letter case. */
 export function mailHeadersOf(act: MailAct, given: Record<string, string>): Record<string, string> {
-  const automatic = Object.entries(given).find(
-    ([name]) => name.toLowerCase() === "auto-submitted",
-  )?.[1];
+  const valueOf = (header: string) =>
+    Object.entries(given).find(([name]) => name.toLowerCase() === header.toLowerCase())?.[1];
+  const automatic = valueOf("auto-submitted");
+  const hops = mailHopsOf(valueOf(MAIL_HOPS_HEADER));
   return Object.fromEntries(
     Object.entries({
       "Reply-To": act.replyTo,
       "In-Reply-To": act.inReplyTo,
       References: act.references,
       "Auto-Submitted": automatic && /^auto-(?:generated|replied)$/.test(automatic) && automatic,
+      [MAIL_HOPS_HEADER]: hops && String(hops),
     }).filter((header): header is [string, string] => Boolean(header[1])),
   );
 }

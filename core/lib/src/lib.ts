@@ -77,6 +77,17 @@ export function errorCode(error: unknown): ErrorCode | undefined {
     : undefined;
 }
 
+/** THE HOP COUNT OF MAIL BETWEEN MINDS. `itx.email.send` writes it on every mail beside
+ *  `Auto-Submitted`, and the boundary reads it on a received mail whose sender is proven: so a
+ *  mind's agent can answer another mind's agent, and the two stop at a limit (the mind's config, iterate/email `nextMailHops`). */
+export const MAIL_HOPS_HEADER = "X-Iterate-Mail-Hops";
+
+/** The header's value as a hop count: a positive whole number in digits, else null. */
+export function mailHopsOf(value: string | undefined): number | null {
+  const digits = value?.trim() ?? "";
+  return /^[1-9]\d{0,8}$/.test(digits) ? Number(digits) : null;
+}
+
 /** OUR MARK (core/itx/src/cause.ts): what the platform sends — a request, a mail — carries the cause of
  *  the code that sent it here, as JSON; a request that comes back with it resumes its chain. */
 export const ITERATE_CAUSE_HEADER = "X-Iterate-Cause";

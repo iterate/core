@@ -1,4 +1,5 @@
 // Pure (binds nothing, calls nobody) and one file, so it can move into the mind whole.
+import { MAIL_HOPS_HEADER, mailHopsOf } from "iterate/lib";
 import type { AuthService, MindTarget, ReceivedEmail } from "iterate/workers";
 import PostalMime, { type Address } from "postal-mime";
 
@@ -113,6 +114,13 @@ async function parseEmail(input: {
   const from = addressesOf(email.from && [email.from])[0] ?? input.from;
   const { authentication, verified, direct } = authenticationOf(email.headers, from);
   const member = verified && (await input.isMember(from));
+  // Another mind's mail says how many hops its thread has gone between minds. Anyone can write the
+  // header, so it counts only on a mail whose sender is proven.
+  const hops = verified
+    ? mailHopsOf(
+        email.headers.find((header) => header.key === MAIL_HOPS_HEADER.toLowerCase())?.value,
+      )
+    : null;
   return {
     events: [
       {
@@ -142,6 +150,7 @@ async function parseEmail(input: {
           sender: { verified, member, direct },
           automated: isAutomated(email.headers, input.from),
           authentication,
+          mind: hops ? { hops } : null,
         },
       },
     ],
