@@ -78,7 +78,8 @@ export function authorizationServerOf(mind: DiscoveredMind): oauth.Authorization
 /** FIND A MIND'S ISSUER from its address, by standards alone:
  *   1. the API's protected-resource metadata (RFC 9728) for `https://iterate.<address>/api`, whose
  *      `resource` must be that URL exactly, and whose first `authorization_servers` entry is the
- *      issuer, which must be `https://iterate.<address>` itself;
+ *      issuer. A default mind's issuer is `https://iterate.<address>`: that is its convention, and
+ *      no rule here. A mind names the issuer it chose, on any https host;
  *   2. that issuer's authorization-server metadata (RFC 8414), whose `issuer` must be the issuer
  *      exactly, and whose endpoints are the ones the sign-in uses.
  *  Every URL is https, except an issuer or endpoint on a local origin when `local` (an app in local
@@ -116,11 +117,6 @@ export async function discoverMind(
   if (!issuer) return { error: `${address} does not name a sign-in provider.` };
   if (!allowed(issuer))
     return { error: `${address} names a sign-in provider that does not use https.` };
-  // A mind's sign-in provider is its own platform host. The metadata is the answer of whoever
-  // serves the address: another issuer there would get the person's sign-in and their tokens.
-  // An app in local development is the one exception (`local`).
-  if (issuer !== platformOriginOf(address) && new URL(issuer).protocol === "https:")
-    return { error: `${address} names a sign-in provider that is not its own.` };
 
   const issuerHost = new URL(issuer).host;
   let as: oauth.AuthorizationServer;

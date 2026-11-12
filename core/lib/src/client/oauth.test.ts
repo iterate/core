@@ -41,7 +41,8 @@ test("neither answering names both platform hostnames that were asked", async ()
   });
 });
 
-test("a mind's sign-in provider is its own platform host: another https issuer in its metadata is refused, and never asked", async () => {
+test("a mind's sign-in provider is the one its own metadata names: its platform host by convention, or another https host of its choosing", async () => {
+  // the default mind: the issuer is the platform host
   expect(await discover("https://iterate.afoop.com")).toMatchObject({
     found: {
       address: "afoop.com",
@@ -49,15 +50,30 @@ test("a mind's sign-in provider is its own platform host: another https issuer i
       endpoints: { authorization: "https://iterate.afoop.com/authorize" },
     },
   });
-  for (const issuer of [
-    "https://sign-in.attacker.example",
-    "https://afoop.com",
-    "https://iterate.afoop.com.attacker.example",
-    "https://iterate.afoop.com/other",
-  ])
-    // refused, and only the mind's own metadata was read: the other issuer is never asked
+  // a mind that keeps its sign-in elsewhere: discovery follows what the mind says
+  expect(await discover("https://login.afoop-identity.example")).toEqual({
+    found: {
+      address: "afoop.com",
+      resource: "https://iterate.afoop.com/api",
+      issuer: "https://login.afoop-identity.example",
+      endpoints: {
+        authorization: "https://login.afoop-identity.example/authorize",
+        token: "https://login.afoop-identity.example/oauth2/token",
+      },
+      issParameter: false,
+    },
+    // the mind's metadata is read at the address the person named, then the issuer it names
+    asked: [
+      "https://iterate.afoop.com/.well-known/oauth-protected-resource/api",
+      "https://login.afoop-identity.example/.well-known/oauth-authorization-server",
+    ],
+  });
+});
+
+test("an issuer that does not use https is refused, and never asked", async () => {
+  for (const issuer of ["http://login.afoop-identity.example", "http://localhost:8788"])
     expect(await discover(issuer), issuer).toEqual({
-      found: { error: "afoop.com names a sign-in provider that is not its own." },
+      found: { error: "afoop.com names a sign-in provider that does not use https." },
       asked: ["https://iterate.afoop.com/.well-known/oauth-protected-resource/api"],
     });
 });
