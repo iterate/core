@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as Cloudflare from "@alchemy.run/cloudflare";
@@ -21,6 +22,29 @@ const core = (path: string) => resolve(import.meta.dirname, "../..", path);
 /** Without it a Worker's fetch to a hostname of its own zone skips every Worker's route there: a
  *  stack that shares its zone with another Worker (the iterate Cloud, an issuer) must reach it. */
 const STRICTLY_PUBLIC = "global_fetch_strictly_public";
+
+/** The tag that says which commit of iterate a stack runs, on its boundary Worker. Its reader is the
+ *  iterate Cloud (internal-packages/installer: container/run.sh `not_unknown_stack`,
+ *  worker/deployments.js `taggedCommits`): it does not put its own iterate over one that it does
+ *  not have, unless the owner asks for exactly that. The 40 hex of the commit alone, never a
+ *  branch's name. A deploy from another commit changes the tag, so it updates this Worker. */
+const COMMIT_TAG = "iterate-commit:";
+/** The commit this deploy is made from: `ITERATE_COMMIT` (a deploy from a packed tree, which has no
+ *  git), else the checkout's HEAD. Unknown: the Worker gets no tag, and the deploy goes on. */
+const commitOfDeploy = () => {
+  const given = process.env.ITERATE_COMMIT?.trim();
+  if (given) return /^[0-9a-f]{40}$/.test(given) ? given : undefined;
+  try {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: import.meta.dirname,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return /^[0-9a-f]{40}$/.test(head) ? head : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 export const mindStack = (config: MindConfig) =>
   Effect.gen(function* () {
@@ -201,8 +225,10 @@ export const mindStack = (config: MindConfig) =>
     const declaredBoundary = Effect.gen(function* () {
       const boundarySendEmail = yield* Cloudflare.Email.SendEmail("SEND_EMAIL");
       const hostnames = config.hostnames || "all";
+      const commit = commitOfDeploy();
       const shared = {
         name: names.boundary,
+        ...(commit && { tags: [`${COMMIT_TAG}${commit}`] }),
         observability,
         codeUpdateStrategy: { mode: "immediate" } satisfies Cloudflare.WorkerCodeUpdateStrategy,
         workersDev: { enabled: false, previewsEnabled: false },
