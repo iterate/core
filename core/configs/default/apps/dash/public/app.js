@@ -58,7 +58,7 @@ import {
   ShieldCheckIcon,
   UsersIcon,
   WaypointsIcon,
-} from "lucide-react";
+} from "@iterate-com/ui/icons";
 
 // ── the member's itx ──
 // As apps/agents/public/app.js: one WebSocket to this host's /itx, a capnweb session whose root is

@@ -217,6 +217,12 @@ apps/<name>/
   from `iterate/sdk` answers a path that names a file with that file, and any other page load with
   `index`. So a commit publishes the page with the worker, as one thing.
 - **The page loads packages from a URL**, pinned in its import map (the page above shows how).
+- **Icons come from the UI package: `@iterate-com/ui/icons`.** It has the icons these apps use
+  and the common ones (`BotIcon`, `PlusIcon`, …; Lucide's, by lucide-react's names). Do not import
+  `lucide-react` in a page: from a module server it is one module of every icon Lucide has,
+  826 kB for the few a page shows. The import map still names it, so a page that does import it
+  keeps working. For an icon the package does not have, import its own file, which is 4 kB:
+  `import CompassIcon from "https://esm.iterate.com/lucide-react@1.48.0/dist/esm/icons/compass.js?external=react"`.
 - **One look for every app: `apps/theme.css`.** Each app but the guestbook serves that one file
   at `/theme.css` (`app.ts`) and its page links it after the UI kit's style sheet. It holds the
   colours and the corners (shadcn's theme variables). The apps are light, whatever the visitor's

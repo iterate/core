@@ -13,7 +13,7 @@ import {
 } from "@iterate-com/ui/components/ui/sidebar";
 import { Toaster } from "@iterate-com/ui/components/ui/sonner";
 import { newWebSocketRpcSession, useContextStub, useIterateContext } from "@iterate-com/ui/live";
-import { BotIcon, MessageCircleIcon } from "lucide-react";
+import { BotIcon, MessageCircleIcon } from "@iterate-com/ui/icons";
 
 // app.ts says the same: the mind's one onboarding agent.
 const AGENT = "/agents/onboarding";

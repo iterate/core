@@ -4,7 +4,7 @@ import { html, useMemo, useRef, useState } from "@iterate-com/ui/page";
 import { Button } from "@iterate-com/ui/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/ui/card";
 import { Textarea } from "@iterate-com/ui/components/ui/textarea";
-import { BotIcon } from "lucide-react";
+import { BotIcon } from "@iterate-com/ui/icons";
 import { agentTitle, byRecentActivity, newWebAgentPath, topLevelAgents } from "./agent-rows.js";
 import { agentHref, pageLink } from "./nav.js";
 

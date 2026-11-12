@@ -11,7 +11,13 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@iterate-com/ui/components/ui/sidebar";
-import { BotIcon, BoxIcon, PinIcon, SquarePenIcon, SquareTerminalIcon } from "lucide-react";
+import {
+  BotIcon,
+  BoxIcon,
+  PinIcon,
+  SquarePenIcon,
+  SquareTerminalIcon,
+} from "@iterate-com/ui/icons";
 import { agentTitle, byRecentActivity, topLevelAgents } from "./agent-rows.js";
 
 /** A link that changes this page's URL: a plain left click stays on the page, and any other click

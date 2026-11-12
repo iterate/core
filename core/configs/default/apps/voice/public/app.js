@@ -23,7 +23,7 @@ import {
   SidebarMenuItem,
 } from "@iterate-com/ui/components/ui/sidebar";
 import { newWebSocketRpcSession } from "@iterate-com/ui/live";
-import { BotIcon, PhoneIcon } from "lucide-react";
+import { BotIcon, PhoneIcon } from "@iterate-com/ui/icons";
 import { base64ToInt16, int16ToBase64, openAudio } from "./audio.js";
 import { VOICE, filesWithVoiceOn } from "./turn-on.js";
 

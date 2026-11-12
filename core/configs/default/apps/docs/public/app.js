@@ -25,7 +25,7 @@ import {
   SidebarMenuSubItem,
 } from "@iterate-com/ui/components/ui/sidebar";
 import { newWebSocketRpcSession } from "@iterate-com/ui/live";
-import { ChevronDownIcon, ChevronRightIcon, FileIcon, FileTextIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, FileIcon, FileTextIcon } from "@iterate-com/ui/icons";
 import { Streamdown } from "streamdown";
 
 const REPO = "/repos/config";
