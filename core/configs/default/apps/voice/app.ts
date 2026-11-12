@@ -1,8 +1,6 @@
-// app.ts — THE VOICE APP, as worker.ts mounts it: one page that calls the mind from this browser.
-// The browser is a voice device (@iterate-com/voice): its microphone goes to the mind's live model,
-// and the device's own agent, /agents/voice/<device>, answers what the model hands over. The page
-// does all of it through the member's own `itx`. Voice is off until the config repo installs it
-// (AGENTS.md, "Voice"): the page says so, and makes that commit when the member asks.
+// app.ts — THE VOICE APP, as worker.ts mounts it: the host of one page. It answers the member's
+// `itx` socket, what the UI kit's shell asks of its host, and the app's files. What the page does
+// is said in public/app.js.
 import { serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
 import theme from "../theme.css";
 import index from "./index.html";

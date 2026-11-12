@@ -1,7 +1,7 @@
-// turn-on.js — THE COMMIT THAT TURNS VOICE ON, as the files it changes. It is the commit a person
-// would make by hand (AGENTS.md, "Voice"): package.json pins a build of the package, voice.ts
-// names the package's service and relay, and the two lines of worker.ts that install voice lose
-// their "// ". The page (app.js) makes the commit; this file only says what is in it.
+// turn-on.js — WHAT THE CONFIG REPO HOLDS WITH VOICE ON (AGENTS.md, "Voice"): package.json pins a
+// build of the package, voice.ts names the package's service and relay, and worker.ts has its two
+// install lines as code, not as comments. `filesWithVoiceOn` gives those files, and the page
+// (app.js) commits them.
 export const VOICE = "@iterate-com/voice";
 
 // the two lines of worker.ts, as code: the default config has each as a comment
