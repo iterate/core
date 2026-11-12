@@ -20,6 +20,7 @@
 // The Cloud's erase drops the same tables for a deployment it erases
 // (internal-packages/installer/container/takeover.mjs). This is a second copy of that rule:
 // `core/` is published alone and imports nothing from there.
+import { callWithToken } from "../src/cloudflare-call.ts";
 import { stageOf } from "../src/config.ts";
 import { dropTelemetryTables } from "../src/telemetry-tables.ts";
 
@@ -35,23 +36,7 @@ if (!name || !accountId || !token) {
 const { failed, lines } = await dropTelemetryTables({
   accountId,
   name,
-  call: async (method, url, body) => {
-    const headers: Record<string, string> = { authorization: `Bearer ${token}` };
-    const init: RequestInit = { method, headers };
-    if (body) {
-      headers["content-type"] = "application/json";
-      init.body = JSON.stringify(body);
-    }
-    const response = await fetch(url, init);
-    const text = await response.text();
-    let answered: unknown = null;
-    try {
-      answered = JSON.parse(text);
-    } catch {
-      // an answer with no JSON (a 204) has nothing to read
-    }
-    return { status: response.status, body: answered };
-  },
+  call: callWithToken(token),
 });
 for (const line of lines) console.log(line);
 if (failed) {

@@ -2,6 +2,7 @@
 // (src/state-store.ts says what that is, and why a destroy leaves it).
 //
 //   pnpm run destroy:state --stage <name>
+import { callWithToken } from "../src/cloudflare-call.ts";
 import { stageOf } from "../src/config.ts";
 import { removeStateStore } from "../src/state-store.ts";
 
@@ -17,17 +18,7 @@ if (!name || !accountId || !token) {
 const { failed, lines } = await removeStateStore({
   accountId,
   name,
-  call: async (method, url) => {
-    const response = await fetch(url, { method, headers: { authorization: `Bearer ${token}` } });
-    const text = await response.text();
-    let body: unknown = null;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      // an answer with no JSON has nothing to read
-    }
-    return { status: response.status, body };
-  },
+  call: callWithToken(token),
 });
 for (const line of lines) console.log(line);
 if (failed) process.exit(1);

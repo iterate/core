@@ -138,7 +138,8 @@ export async function dropTelemetryTables(input: {
     const namespace = `${CATALOG}/${accountId}/${bucket}/v1/${catalog.id}/namespaces/${TABLES.namespace}`;
     const listed = await call("GET", `${catalogUrl}/namespaces/${TABLES.namespace}/tables`);
     if (listed.status === 200) {
-      // The cast: as for the catalog above.
+      // The cast: Cloudflare's documented answer, a list of the namespace's tables by name; one
+      // that is not there reads as no table.
       const identifiers =
         (listed.body as { result?: { identifiers?: { name: string }[] } } | null)?.result
           ?.identifiers ?? [];
@@ -189,7 +190,8 @@ export async function dropTelemetryTables(input: {
     // a catalog writes its tables' metadata into the bucket: every page of it, the mark last
     for (let page = 0; page < 50 && emptied; page += 1) {
       const objects = await call("GET", `${bucketUrl}/objects?per_page=1000`);
-      // The cast: as for the catalog above.
+      // The cast: Cloudflare's documented answer, a page of the bucket's objects by key; one
+      // that is not there reads as an empty page.
       const keys = ((objects.body as { result?: { key: string }[] } | null)?.result ?? [])
         .map((object) => object.key)
         .filter((key) => key !== MADE_HERE);

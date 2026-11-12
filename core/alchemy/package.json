@@ -7,7 +7,7 @@
     "test": "node --test 'scripts/**/*.test.ts' 'src/**/*.test.ts'",
     "deploy": "f() { node --env-file-if-exists=.secrets scripts/refuse-older-stack.ts \"$@\" && pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets scripts/repos-namespace.ts \"$@\" && node --env-file-if-exists=.secrets scripts/sandbox-image.ts \"$@\" && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js deploy \"$@\"; }; f",
     "plan": "pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js plan",
-    "destroy": "f() { node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js destroy \"$@\" && node --env-file-if-exists=.secrets scripts/drop-telemetry-tables.ts \"$@\"; }; f",
+    "destroy": "f() { domain=$(node --env-file-if-exists=.secrets scripts/remove-dmarc-record.ts --print-domain \"$@\") || return 1; node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js destroy \"$@\" && node --env-file-if-exists=.secrets scripts/drop-telemetry-tables.ts \"$@\" && node --env-file-if-exists=.secrets scripts/remove-dmarc-record.ts --domain \"$domain\" \"$@\"; }; f",
     "destroy:state": "node --env-file-if-exists=.secrets scripts/remove-state-store.ts",
     "config": "node --env-file-if-exists=.secrets scripts/config.ts",
     "smoke": "node --env-file-if-exists=.secrets scripts/smoke.ts",

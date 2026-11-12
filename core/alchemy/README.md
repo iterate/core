@@ -55,7 +55,13 @@ repos, members and secrets. It needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCO
   the stack is gone for good, `pnpm run destroy:state --stage <name>` removes all three, and
   refuses while a Worker of the stack is still deployed. Deleting the Worker by hand leaves the
   two secrets, and a Secrets Store holds a limited number.
-- It leaves the zone.
+- It leaves the zone, with no DNS record of the stack in it. Cloudflare's Email Sending writes
+  the TXT record `_dmarc.<domain>` at a deploy and leaves it when it is turned off, so
+  `scripts/remove-dmarc-record.ts` removes it after the destroy, when its content is still what
+  Email Sending wrote (`v=DMARC1; p=reject;`). A DMARC record with other content is yours and
+  stays. The token needs Zone · DNS Edit, as a deploy does. `destroy` reads the stack's domain
+  before Alchemy's destroy, which clears a stored config. By hand, after a destroy:
+  `node scripts/remove-dmarc-record.ts --stage <name> --domain <domain>`.
 - **A stack with telemetry: its own tables are dropped after it** (`scripts/drop-telemetry-tables.ts`,
   run by `destroy` when Alchemy's destroy has ended well). R2 keeps a data catalog's tables when
   the catalog is turned off and when its bucket is deleted, and gives them back to a new bucket
