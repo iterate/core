@@ -1,4 +1,3 @@
-// Carried over from iterate/docs@fba5c21 (packages/docs/src/frames.ts).
 // frames.ts — HOW A DOC IS CO-EDITED: what the Docs app's browsers and the doc's processor
 // (doc.ts) say to each other on the doc's own context. A doc is a markdown file in one of the
 // mind's repos, and each open doc is one context, `/docs/<repo name>/<path in the repo>`

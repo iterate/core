@@ -1,4 +1,3 @@
-// Carried over from iterate/docs@fba5c21 (packages/docs/src/root.ts and contract.ts).
 // root.ts — THE DOCS PROCESSOR on the mind's root (frames.ts): which docs have been opened, by
 // their contexts' paths, and a `docs/commit-noticed` to each one a commit to its repo changed. The
 // doc's processor reads the commit itself (doc.ts); the notice only says to look. Its own saves

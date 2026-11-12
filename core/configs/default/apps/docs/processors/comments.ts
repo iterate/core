@@ -1,4 +1,3 @@
-// Carried over from iterate/docs@fba5c21 (packages/docs/src/comments.ts).
 // comments.ts — COMMENTS ON A DOC: durable events on the doc's own context (frames.ts), never
 // text in the file. A thread points at the text it's about by quoting it (anchor.ts), or at the
 // whole doc; its comments are the events that added and replied to it. Any member of the mind may

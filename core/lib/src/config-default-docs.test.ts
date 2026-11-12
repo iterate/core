@@ -1,4 +1,3 @@
-// Carried over from iterate/docs@fba5c21 (packages/docs/src/processor.test.ts and anchor.test.ts).
 // The default config's Docs processors (core/configs/default/apps/docs/processors/classes.ts): one open doc's
 // processor over an in-memory log, node:sqlite and a fake repo; the comments it reduces; the root's
 // processor that tells open docs of a commit; where a quote is found again; and that worker.ts never

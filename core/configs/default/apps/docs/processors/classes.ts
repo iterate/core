@@ -1,4 +1,3 @@
-// Carried over from iterate/docs@fba5c21 (packages/docs/src/durable-object.ts and index.ts).
 // processors/classes.ts — THE DOCS APP'S PROCESSORS: two Durable Object classes that let people co-edit a
 // markdown file of one of this mind's repos in the browser, with comments, and save it as commits.
 //

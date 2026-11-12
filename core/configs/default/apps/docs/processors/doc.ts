@@ -1,4 +1,3 @@
-// Carried over from iterate/docs@fba5c21 (packages/docs/src/processor.ts and contract.ts).
 // doc.ts — ONE OPEN DOC (frames.ts): its text as a Y.Doc, the edits its browsers send, and its
 // autosave. Git stays the source of truth; the Y.Doc is the session's buffer, and an edit is safe
 // once it's here (the table below), so commits can be few.

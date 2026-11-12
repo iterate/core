@@ -1,4 +1,3 @@
-// Carried over from iterate/docs@fba5c21 (packages/docs/src/merge.ts).
 // merge.ts — MERGING a commit someone else made into the text being edited, the way git merges:
 // ours and theirs both changed base. The result goes into the live text as small edits, so people
 // typing elsewhere in the doc, even in the same sentence, keep their keystrokes. `diff3Merge` is

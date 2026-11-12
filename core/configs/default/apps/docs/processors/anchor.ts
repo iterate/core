@@ -1,4 +1,3 @@
-// Carried over from iterate/docs@fba5c21 (packages/docs/src/anchor.ts).
 // anchor.ts — WHERE A COMMENT POINTS: a quote of the text it's about, never a position. A
 // position goes stale with every edit before it; a quote is found again in whatever the text is now
 // (a reload, an agent's rewrite, a commit made in git), the way a reader would find it. The page
