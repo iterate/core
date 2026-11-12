@@ -14,6 +14,11 @@ The first run signs you in for `https://iterate.<zone>/provide` (the CLI's sessi
 seeded and published. Then `http://localhost:8789/` is the apex, `<label>.localhost:8789` is
 `<label>.<zone>` (nobody signed in), and through the stack `https://<zone>/` is the same mind.
 
+**After a deploy that changes the stack's boundary, restart this process.** A deploy does not move
+an open socket: the link stays with the boundary instance that accepted it, which runs the code
+from before the deploy until the socket ends (a restart here, or the end of the token's hour). The
+stack's other Workers change at once.
+
 **Local**: contexts, KV, R2, the Worker Loader (`state/`), the repos, the sandboxes, the link.
 **The cloud's**: every request in (the boundary), every request out that names a secret (the
 boundary's door, which has the vault fill it in), every secret verb, sign-in, mail. A secret's facts land in the local
