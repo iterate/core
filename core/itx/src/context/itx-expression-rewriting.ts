@@ -555,6 +555,8 @@ function admitWorkerName(name: ItxExpression): void {
 
 // Otherwise a jail granted `itx.append` would write itself `itx.x ⇒ itx.builtins.cd('/').x`. A
 // removal is refused: it hands the name back to what lies beneath, a jail's null or a parent link.
+// An ingress row is a row too: its target answers the next request on the mind's hosts, as the
+// person who makes that request, so loaded code names no built-in there either.
 export function admitLoadedCodeRow(
   event: { type: string; payload?: unknown },
   landsAt: string,
@@ -566,7 +568,8 @@ export function admitLoadedCodeRow(
   }
   if (
     event.type !== "events.iterate.com/itx/rewrite-rule-configured" &&
-    event.type !== "events.iterate.com/itx/subscription-configured"
+    event.type !== "events.iterate.com/itx/subscription-configured" &&
+    event.type !== "events.iterate.com/itx/ingress-configured"
   )
     return;
   const payload = event.payload as { target?: unknown } | undefined;
