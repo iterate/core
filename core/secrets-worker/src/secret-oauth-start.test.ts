@@ -71,6 +71,40 @@ test("a client of iterate Cloud's has its one page at the Cloud: this browser is
   expect([preview.status, preview.headers.get("set-cookie")]).toEqual([200, null]);
 });
 
+test("a client of iterate Cloud's whose secret is to be used in an unusual way shows that here first, then goes to the Cloud", async () => {
+  const cloud = {
+    ...target,
+    use: {
+      placement: "url" as const,
+      operations: ["signHmac" as const],
+      lendTo: ["/secrets/other"],
+    },
+    returnTo: `${PLATFORM}/secrets/oauth/callback`,
+    beginAt: "https://cloud.example/clients/github/begin",
+  };
+  const page = await secretOAuthStart(navigation(link), async () => cloud);
+  const html = await page.text();
+  expect(page).toMatchObject({ status: 200 });
+  // what the Cloud's own page cannot say
+  for (const line of [
+    "It may be placed in a URL",
+    "sign and verify with it: signHmac",
+    "/secrets/other",
+  ])
+    expect(html).toContain(line);
+  const [cookie] = page.headers.get("set-cookie")!.split(";");
+  const proceed = new URL(
+    /<a href="([^"]+)">Continue/.exec(html)![1]!.replace(/&(amp|#38);/g, "&"),
+    link,
+  ).href;
+  const on = await secretOAuthStart(navigation(proceed, cookie), async () => cloud);
+  const there = new URL(on.headers.get("location")!);
+  expect([on.status, there.origin + there.pathname]).toEqual([
+    302,
+    "https://cloud.example/clients/github/begin",
+  ]);
+});
+
 test("a connect through a Cloud client names the accounts whose installations the mind asks for", () => {
   const cloud = {
     name: "github",

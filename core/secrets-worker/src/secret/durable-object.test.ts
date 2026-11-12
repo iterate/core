@@ -344,6 +344,28 @@ test("a POST that a header makes a DELETE is held by a rule for DELETE, and a pl
   }).toEqual({ statuses: [200, 202], kinds: [null, "held"], sends: 1 });
 });
 
+test("a secret with an approval rule signs nothing on the side, and still checks a signature", async () => {
+  const { secret, decide } = await vault();
+  await secret.secret(PATH, "set", {
+    material: "signing-key-aaaa",
+    urls: ["https://gmail.googleapis.com"],
+    operations: ["signHmac", "verifyHmac"],
+  });
+  const signed = () => secret.secret(PATH, "signHmac", { payload: "pay 5 to jo" });
+  // the rule of `vault()` stands: what the secret signed would leave in a request it never sees
+  expect(await signed()).toMatchObject({
+    refused: { code: "FORBIDDEN", message: expect.stringContaining("has an approval rule") },
+  });
+  expect(
+    await secret.secret(PATH, "verifyHmac", { payload: "pay 5 to jo", signature: "00" }),
+  ).toMatchObject({ result: false });
+  await decide(MEMBER, {
+    type: "events.iterate.com/secret/approval-rule-configured",
+    payload: { rule: null },
+  });
+  expect(await signed()).toMatchObject({ result: expect.stringMatching(/^[0-9a-f]{64}$/) });
+});
+
 test("a rule cannot be loosened without a signature, and a member's signed statement removes it", async () => {
   const { secret, decide } = await vault();
   const by = { userId: "user_aaaa", email: "member@example.com" };

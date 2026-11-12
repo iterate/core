@@ -505,19 +505,29 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (now - this.#minute.start >= 60_000)
       this.#minute = { start: now, operations: 0, falseVerifications: 0 };
     const counted = verb !== "verifyHmac";
+    // A SECRET THAT WAITS FOR APPROVAL SIGNS NOTHING ON THE SIDE. A rule holds the requests that
+    // leave with the secret. A signature or a shared secret made from it here would leave in a
+    // request of the mind's own, which the rule never sees. To check a signature, and to read a
+    // public key, sends nothing as the secret.
+    const signs = verb === "signHmac" || verb === "signWithKey" || verb === "deriveSharedSecret";
     const refusal = !record.operations.includes(verb)
       ? {
           code: "FORBIDDEN" as const,
           message: `${verb}: ${path} was not made to answer it. A secret answers the operations it was made with — itx.secrets.set(path, material, { urls, operations: ["${verb}"] }), or collectFromUser and beginOAuth with the same option, which the person who gives it sees.`,
         }
-      : (counted && this.#minute.operations >= OPERATIONS_PER_MINUTE) ||
-          (verb === "verifyEquals" &&
-            this.#minute.falseVerifications >= FALSE_VERIFICATIONS_PER_MINUTE)
+      : signs && this.#rule()
         ? {
             code: "FORBIDDEN" as const,
-            message: `${verb}: ${path} has answered its limit for this minute (${OPERATIONS_PER_MINUTE} operations, ${FALSE_VERIFICATIONS_PER_MINUTE} wrong guesses of its value); try again after ${new Date(this.#minute.start + 60_000).toISOString()}.`,
+            message: `${verb}: ${path} has an approval rule, so it signs nothing here: what it signed would leave in a request that the rule does not see. Keep a key that signs in a secret with no rule.`,
           }
-        : null;
+        : (counted && this.#minute.operations >= OPERATIONS_PER_MINUTE) ||
+            (verb === "verifyEquals" &&
+              this.#minute.falseVerifications >= FALSE_VERIFICATIONS_PER_MINUTE)
+          ? {
+              code: "FORBIDDEN" as const,
+              message: `${verb}: ${path} has answered its limit for this minute (${OPERATIONS_PER_MINUTE} operations, ${FALSE_VERIFICATIONS_PER_MINUTE} wrong guesses of its value); try again after ${new Date(this.#minute.start + 60_000).toISOString()}.`,
+            }
+          : null;
     const factsOf = (outcome: "answered" | "refused") => [
       {
         path,

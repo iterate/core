@@ -66,8 +66,11 @@ export async function secretOAuthStart(
   const bound = `${await startCookieNameOf(start, path, nonce)}=${start}; ${cookieAttributes}; Max-Age=3600`;
   // ONE PAGE TO CONFIRM ON. A client of iterate Cloud's has it at the Cloud, before the provider,
   // so this browser is bound to the attempt here and goes straight on. Any other client has it
-  // here.
-  if (!began && !target.beginAt) {
+  // here. The Cloud's page does not know how the mind will use the secret. So when the mind asked
+  // for more than the usual (the secret in a URL, signing with it, lending it), this page says so
+  // first, and the Cloud's page comes after it.
+  const unusual = useLines(target.use, false);
+  if (!began && (!target.beginAt || unusual)) {
     url.searchParams.set("start", start);
     const page = plainPage(
       200,
