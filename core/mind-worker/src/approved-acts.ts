@@ -32,8 +32,10 @@ export async function runApprovedAct(
       );
       return { ok: true as const, sent: { path: EMAIL_PATH, offset: sent.offset } };
     }
-    // A verb, from where its caller called it. The gate lets it go once, and the call itself is
-    // the platform's, which no rule holds.
+    // A verb, from where its caller called it. The gate lets it go once. The call is not the
+    // platform's, which no rule holds: it carries the approved text, and the kernel runs it only
+    // when the call, as the mind's table resolves it now, is still that act. A name that was
+    // re-pointed since it was held is another function, which nobody approved.
     const gate = await deps.egress.act({ text: held.text, from: caller });
     if (gate.state !== "go") throw new Error(`the gate says "${gate.state}": it is not to do now`);
     const names = normalizedItxExpression(act.act);
@@ -41,7 +43,7 @@ export async function runApprovedAct(
       .contextAt(caller)
       .invoke([...names.slice(0, -1), [String(names.at(-1)), ...act.args]], [], {
         principal: null,
-        platform: true,
+        approvedAct: held.text,
       });
     // what a verb answers may be anything: the fact keeps what JSON can say of it
     return { ok: true as const, result: jsonOf(result) };

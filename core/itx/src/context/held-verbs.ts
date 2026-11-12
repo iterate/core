@@ -11,6 +11,17 @@ import {
 } from "iterate/expression";
 import { jsonEqual } from "iterate/lib";
 
+/** WHAT A CALL'S NAME IS RIGHT NOW: the resolved call with the arguments of its last step taken
+ *  off. A rule and an act name a verb as its owner writes it, and the mind's table says what that
+ *  name is. The table can change between the moment an act is held and the moment it is done. So
+ *  a held act carries a mark of this (the resolver hashes it), and an act whose name has become
+ *  another function is another act, which nobody approved. A step that only finds the thing
+ *  (`rpcStubs.get(key)`) keeps its argument: it says which thing. */
+export function calledNameOf(resolved: ItxExpression): ItxExpression {
+  const last = resolved.at(-1);
+  return Array.isArray(last) ? [...resolved.slice(0, -1), last[0]] : resolved;
+}
+
 /** The call as an act to hold, why it cannot be held as it is written, or null when no rule names
  *  it. `resolved` is the call after its context's rules; `resolvedVerb` resolves a rule's verb by
  *  the same rules, null when it names nothing there.

@@ -119,10 +119,13 @@ const MailAct = z.strictObject({
 });
 export type MailAct = z.infer<typeof MailAct>;
 
-/** A call of a verb: its name and its arguments, which are plain JSON. */
+/** A call of a verb: its name and its arguments, which are plain JSON. `resolved` is the kernel's
+ *  mark of what the name was when the act was held (a hash): the same name on another function is
+ *  another act. */
 const VerbAct = z.strictObject({
   act: z.string().startsWith("itx."),
   args: z.array(z.unknown()),
+  resolved: z.string().optional(),
 });
 export type VerbAct = z.infer<typeof VerbAct>;
 

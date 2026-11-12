@@ -595,6 +595,32 @@ await run(
   },
 );
 
+await run(
+  "a held verb whose name becomes another function while it waits is not run when a member approves it",
+  async () => {
+    const call = send(`re-pointed ${marker}`);
+    const held = await heldDigest(SEND);
+    // While it waits, the mind's table gives the name to another function of the same bridge.
+    const row = { match: SEND, target: "itx.proofWhatsapp.jonas.chats" };
+    const rule = "events.iterate.com/itx/rewrite-rule-configured";
+    await root().append({ type: rule, payload: row });
+    await page.goto(`${page_}?digest=${held}`);
+    await checked(held);
+    await page.locator("[data-acts]").getByRole("button", { name: "Approve the chosen" }).click();
+    const ended = await call;
+    // the row goes whatever the call did: the steps after this one use the name
+    await root().append({
+      type: rule,
+      payload: { match: SEND, target: null, ifTarget: row.target },
+    });
+    must(
+      "refused" in ended && ended.refused.includes("changed while it waited"),
+      `the call ended with ${JSON.stringify(ended)}`,
+    );
+    return { detail: ended.refused.slice(0, 150) };
+  },
+);
+
 await run("an agent proposes a rule, and the member's passkey signs it into one", async () => {
   const proposed = await root().approvals.propose({ verb: "email.send", to: ["*@example.org"] });
   must(proposed.signAt === page_, `it says to sign at ${proposed.signAt}`);

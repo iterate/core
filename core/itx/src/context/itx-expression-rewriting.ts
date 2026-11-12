@@ -25,12 +25,12 @@ import {
 import { ACT_DONE, actText } from "iterate/acts";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { crossingOneMore, newChain, recordRefusal, type Cause } from "../cause.ts";
-import { isConfigPointerMatch, type Caller } from "../caller.ts";
+import { isConfigPointerMatch, sha256Hex, type Caller } from "../caller.ts";
 import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { itxHost } from "../host.ts";
 import { unavailableError } from "../unavailable.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
-import { heldVerbOf } from "./held-verbs.ts";
+import { calledNameOf, heldVerbOf } from "./held-verbs.ts";
 import { SNAPSHOT_REREADS, type RuleSnapshot } from "./rule-snapshots.ts";
 
 // Apart from the scope on purpose: the core reduce and the DO's `list()` read it, and neither may
@@ -895,7 +895,8 @@ export class ItxExpressionResolver {
 
   // A snapshot may expire while the next is read: the route is resolved again, a bounded number of times.
   async #dispatch(call: ItxExpressionInput, extraArgs: unknown[]) {
-    let approved: string | undefined;
+    // An act that a member approved after its caller stopped waiting arrives with its text.
+    let approved = this.#caller().approvedAct;
     for (let routes = 0; routes < SNAPSHOT_REREADS; routes++) {
       const { route, validUntil, rules } = await this.#route(call, extraArgs);
       if (Date.now() >= validUntil) continue;
@@ -946,7 +947,12 @@ export class ItxExpressionResolver {
     });
     if (!held) return undefined;
     if ("refused" in held) throw codedError("FORBIDDEN", held.refused);
-    const text = actText(held);
+    // The act carries a mark of what its name is now. A name that is re-pointed while the act
+    // waits, or before a late approval is done, makes another text: not the one a member signed.
+    const text = actText({
+      ...held,
+      resolved: await sha256Hex(print(calledNameOf(route.fixedPoint))),
+    });
     if (approved === text) return approved;
     if (approved)
       throw codedError(

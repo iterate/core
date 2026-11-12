@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
   ActRule,
+  actOfText,
   actText,
   mailActOf,
   mailHeadersOf,
@@ -91,6 +92,12 @@ test("a late approval names its acts by their ids, so the vault's answer stays s
 test("a copy counts as a recipient", async () => {
   const act = await mailActOf(mail({ to: ["a@x.org"], cc: ["jo@example.net"] }));
   expect(ruleHolds(ActRule.parse({ verb: "email.send", to: ["*@example.net"] }), act)).toBe(true);
+});
+
+test("a held call may carry the kernel's mark of what its name was, and nothing else beside its name and arguments", () => {
+  const act = { act: "itx.whatsapp.sendMessage", args: ["jo"], resolved: "a".repeat(64) };
+  expect(actOfText(JSON.stringify(act))).toEqual(act);
+  expect(actOfText(JSON.stringify({ ...act, platform: true }))).toBeNull();
 });
 
 test.for([

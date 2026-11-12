@@ -18,6 +18,11 @@ export type Caller = {
   app?: true;
   // Set only by the host's own code, on a fact it vouches for (`refuseNonPlatformWrites`).
   platform?: true;
+  // Set only by the host's own code, on the one call that does an act a member approved after its
+  // caller stopped waiting: the act's exact text. The call is no platform's call. The resolver
+  // makes the act's text again from what the call is now, and runs it only when that is the text
+  // approved (./context/itx-expression-rewriting.ts `#heldUntilApproved`).
+  approvedAct?: string;
   // The key that signed what this call appends, as the auth Worker verified it. Set only where the
   // auth Worker's own answer is appended (the mind Worker's `Mind.append`): an event never names its
   // own signer.

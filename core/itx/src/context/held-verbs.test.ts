@@ -1,7 +1,7 @@
 import { ActRule } from "iterate/acts";
 import type { ItxExpression } from "iterate/expression";
 import { expect, test } from "vitest";
-import { heldVerbOf } from "./held-verbs.ts";
+import { calledNameOf, heldVerbOf } from "./held-verbs.ts";
 
 // where the mind's rule `itx.whatsapp` points: the stub a bridge lent
 const STUB: ItxExpression = ["itx", "builtins", "rpcStubs", ["get", "k1"]];
@@ -83,6 +83,20 @@ const NOT_HELD: [what: string, rules: string[], resolved: ItxExpression][] = [
 ];
 test.for(NOT_HELD)("a rule does not hold %s", ([, rules, resolved]) => {
   expect(held(rules, resolved)).toBeNull();
+});
+
+test("what a call's name is now leaves out the call's own arguments and keeps which thing it is", () => {
+  const send = (...args: unknown[]): ItxExpression => [...STUB, ["sendMessage", ...args]];
+  // the same function with other arguments is the same name
+  expect(calledNameOf(send("jo", { text: "hi" }))).toEqual(calledNameOf(send("al")));
+  expect(calledNameOf(send("jo"))).toEqual([...STUB, "sendMessage"]);
+  // arguments beside the expression: its end is the name already
+  expect(calledNameOf([...STUB, "sendMessage"])).toEqual([...STUB, "sendMessage"]);
+  // another stub, and another function of the same stub, are other names
+  expect(
+    calledNameOf(["itx", "builtins", "rpcStubs", ["get", "k2"], ["sendMessage", "jo"]]),
+  ).not.toEqual(calledNameOf(send("jo")));
+  expect(calledNameOf([...STUB, ["logout"]])).not.toEqual(calledNameOf(send("jo")));
 });
 
 test("the same function by another name is held all the same", () => {
