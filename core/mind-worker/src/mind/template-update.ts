@@ -148,7 +148,14 @@ export function templateChanges(input: {
   // does not bring, and the config repo would no longer load; one that imports a file left at its
   // older version may ask it for what only the newer one exports. A file under `apps/` takes its
   // whole app with it; any other file is held back alone (`heldBack`).
-  const withheld = new Set(appsLeftOld.flatMap((app) => app.notWritten));
+  // A file that somebody deleted in an app left old counts as not written too: its importer is
+  // held back, where `putBack` below would write the newer file into the older app.
+  const withheld = new Set(
+    appsLeftOld.flatMap((app) => [
+      ...app.notWritten,
+      ...app.yours.filter((path) => deleted.has(path)),
+    ]),
+  );
   const heldBack: { path: string; imports: string[] }[] = [];
   for (let moved = true; moved;) {
     moved = false;

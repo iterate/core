@@ -287,6 +287,49 @@ test("a file of the platform's that imports a file of an app left old is held ba
   ]);
 });
 
+test("two files outside apps that import each other, one of which imports an app left old, are both held back, and the comparison ends", () => {
+  const seed = {
+    "worker.ts": "old worker\n",
+    "routes.ts": "old routes\n",
+    "apps/docs/app.ts": "old app\n",
+    "apps/docs/public/app.js": "old page\n",
+  };
+  const template = [
+    { path: "worker.ts", content: 'import "./routes.ts";\nnew worker\n' },
+    { path: "routes.ts", content: 'import "./worker.ts";\nimport "./apps/docs/app.ts";\n' },
+    { path: "apps/docs/app.ts", content: "new app\n" },
+    { path: "apps/docs/public/app.js", content: "new page\n" },
+  ];
+  const current = { ...seed, "apps/docs/public/app.js": "my own page\n" };
+  expect(templateChanges({ template, current, ...platformWrote(seed, current) })).toMatchObject({
+    changes: [],
+    heldBack: [
+      { path: "routes.ts", imports: ["apps/docs/app.ts"] },
+      { path: "worker.ts", imports: ["routes.ts"] },
+    ],
+  });
+});
+
+test("a file somebody deleted in an app left old is not put back by a newer importer: the importer is held back", () => {
+  const seed = {
+    "worker.ts": "old worker\n",
+    "apps/docs/app.ts": "old app\n",
+    "apps/docs/extra.ts": "old extra\n",
+  };
+  const template = [
+    { path: "worker.ts", content: 'import "./apps/docs/extra.ts";\nnew worker\n' },
+    { path: "apps/docs/app.ts", content: "new app\n" },
+    { path: "apps/docs/extra.ts", content: "new extra\n" },
+  ];
+  const current = { "worker.ts": "old worker\n", "apps/docs/app.ts": "old app\n" };
+  expect(templateChanges({ template, current, ...platformWrote(seed, current) })).toMatchObject({
+    changes: [],
+    putBack: [],
+    heldBack: [{ path: "worker.ts", imports: ["apps/docs/extra.ts"] }],
+    appsLeftOld: [{ app: "docs", yours: ["apps/docs/extra.ts"], notWritten: ["apps/docs/app.ts"] }],
+  });
+});
+
 test("an app that is all new, and the worker that imports it, are written: nothing of it is anybody's", () => {
   const seed = { "worker.ts": "old worker\n" };
   const template = [
