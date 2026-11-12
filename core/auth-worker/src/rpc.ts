@@ -49,9 +49,8 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
   // a key's `paths` stay here: only the intake reads them
   async verify(envelope: Parameters<AuthService["verify"]>[0]) {
     const verified = await verifiedStatement(this.env, envelope);
-    return "refused" in verified
-      ? verified
-      : { signer: verified.signer, statement: verified.statement };
+    if ("refused" in verified) return verified;
+    return { signer: verified.signer, statement: verified.statement };
   }
 
   // only a Worker of the stack reaches this, over a binding

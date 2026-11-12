@@ -1,8 +1,7 @@
 // remove-dmarc-record.ts — AFTER A DESTROY, THE ZONE HOLDS NO DNS RECORD OF THE STACK
 // (src/dmarc-record.ts says which record a destroy leaves, and why). `pnpm run destroy` runs this
-// twice: with `--print-domain` BEFORE Alchemy's destroy, and with `--domain <that>` after it. A
-// stack deployed with no config file keeps its config in its state, which the destroy clears, so
-// the domain cannot be read afterwards.
+// twice: with `--print-domain` BEFORE Alchemy's destroy, and with `--domain <that>` after it
+// (`domainFor` there says why the domain is read first).
 //
 // By hand, after a destroy: `node scripts/remove-dmarc-record.ts --stage <name> --domain <domain>`.
 import { callWithToken } from "../src/cloudflare-call.ts";
