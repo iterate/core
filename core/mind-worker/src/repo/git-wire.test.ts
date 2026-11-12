@@ -29,7 +29,8 @@ test("a commit's author and committer are one line each: a name or address that 
 });
 
 test("a tree that names one subtree many times over is refused, not expanded without end", () => {
-  // 20 levels, each naming the level below twice: 2^20 files from 20 small objects
+  // 60 levels, each naming the level below twice: 2^60 files from 60 small objects. The refusal
+  // comes from counting each distinct tree once, so it does not depend on how long a walk takes.
   const objects = new Map<string, RawGitObject>();
   const oidOf = (level: number) => level.toString(16).padStart(40, "0");
   const tree = (entries: [mode: string, name: string, oid: string][]) =>
@@ -44,7 +45,7 @@ test("a tree that names one subtree many times over is refused, not expanded wit
     type: "tree",
     payload: tree([["100644", "file", "f".repeat(40)]]),
   });
-  for (let level = 1; level <= 20; level += 1)
+  for (let level = 1; level <= 60; level += 1)
     objects.set(oidOf(level), {
       oid: oidOf(level),
       type: "tree",
@@ -53,9 +54,21 @@ test("a tree that names one subtree many times over is refused, not expanded wit
         ["40000", "b", oidOf(level - 1)],
       ]),
     });
-  expect(() => manifestOf([{ mode: "40000", name: "root", oid: oidOf(20) }], objects)).toThrow(
-    "more than 200000 files",
+  const started = performance.now();
+  expect(() => manifestOf([{ mode: "40000", name: "root", oid: oidOf(60) }], objects)).toThrow(
+    "more than 200000 paths",
   );
+  // folders with no file in them are paths too: 2^60 empty folders are refused the same way
+  objects.set(oidOf(0), { oid: oidOf(0), type: "tree", payload: new Uint8Array() });
+  expect(() => manifestOf([{ mode: "40000", name: "root", oid: oidOf(60) }], objects)).toThrow(
+    "more than 200000 paths",
+  );
+  expect(performance.now() - started).toBeLessThan(500);
+  objects.set(oidOf(0), {
+    oid: oidOf(0),
+    type: "tree",
+    payload: tree([["100644", "file", "f".repeat(40)]]),
+  });
   // an ordinary tree is read as before
   expect([...manifestOf([{ mode: "40000", name: "root", oid: oidOf(2) }], objects).keys()]).toEqual(
     ["root/a/a/file", "root/a/b/file", "root/b/a/file", "root/b/b/file"],

@@ -15,31 +15,59 @@ const textEncoder = new TextEncoder();
 // drop it.
 export type RepoManifest = Map<string, { oid: string; mode: string }>;
 
-/** The most files one commit's tree may hold. A tree names its subtrees by their ids, so a few
- *  small objects that each name the one below twice make 2^depth files: a pulled pack is not
- *  trusted to be a tree somebody wrote. */
-const MAX_TREE_FILES = 200_000;
+/** The most paths (files and folders) one commit's tree may hold. A tree names its subtrees by
+ *  their ids, so a few small objects that each name the one below twice make 2^depth paths: a
+ *  pulled pack is not trusted to be a tree somebody wrote. */
+const MAX_TREE_PATHS = 200_000;
 
-export function manifestOf(
-  entries: TreeEntry[],
-  objects: Map<string, RawGitObject>,
-  prefix = "",
-  manifest: RepoManifest = new Map(),
-): RepoManifest {
-  for (const entry of entries) {
-    const path = prefix + entry.name;
-    if (entry.mode === "40000") {
+export function manifestOf(entries: TreeEntry[], objects: Map<string, RawGitObject>): RepoManifest {
+  // Counted before anything is expanded, once for each distinct tree: the count of a tree named a
+  // million times is read a million times, and its files are never listed.
+  if (pathsUnder(entries, objects, new Map()) > MAX_TREE_PATHS)
+    throw new Error(`the tree holds more than ${MAX_TREE_PATHS} paths`);
+  const manifest: RepoManifest = new Map();
+  const walk = (level: TreeEntry[], prefix: string) => {
+    for (const entry of level) {
+      const path = prefix + entry.name;
+      if (entry.mode !== "40000") {
+        manifest.set(path, { oid: entry.oid, mode: entry.mode });
+        continue;
+      }
       const tree = objects.get(entry.oid);
       if (tree?.type !== "tree")
         throw new Error(`the pack omitted the tree ${entry.oid} (${path}/)`);
-      manifestOf(parseTree(tree.payload), objects, `${path}/`, manifest);
-    } else {
-      if (manifest.size >= MAX_TREE_FILES)
-        throw new Error(`the tree holds more than ${MAX_TREE_FILES} files`);
-      manifest.set(path, { oid: entry.oid, mode: entry.mode });
+      walk(parseTree(tree.payload), `${path}/`);
     }
-  }
+  };
+  walk(entries, "");
   return manifest;
+}
+
+/** How many paths `entries` hold, every folder and every file under them, stopping once past the
+ *  limit. `counted` keeps each tree's own count by its id. A tree the pack omitted counts as one
+ *  path: `manifestOf` names it when it gets there. */
+function pathsUnder(
+  entries: TreeEntry[],
+  objects: Map<string, RawGitObject>,
+  counted: Map<string, number>,
+): number {
+  let paths = 0;
+  for (const entry of entries) {
+    paths += 1;
+    if (entry.mode === "40000") {
+      let under = counted.get(entry.oid);
+      if (under === undefined) {
+        const tree = objects.get(entry.oid);
+        // a tree inside itself has no end: an id is a hash, so only a made-up pack holds one
+        counted.set(entry.oid, Infinity);
+        under = tree?.type === "tree" ? pathsUnder(parseTree(tree.payload), objects, counted) : 0;
+        counted.set(entry.oid, under);
+      }
+      paths += under;
+    }
+    if (paths > MAX_TREE_PATHS) return paths;
+  }
+  return paths;
 }
 
 // children before their parent
