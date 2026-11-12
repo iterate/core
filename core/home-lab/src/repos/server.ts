@@ -22,31 +22,38 @@ export async function serveRepos(input: { dir: string; token: string; port: numb
 
   async function answer(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url || "/", "http://127.0.0.1");
+    // THE PATH IS DECODED ONCE, HERE, and that one text is what every check below reads and what
+    // git gets. Judged undecoded and handed on decoded, `/x.git/git-receive-%70ack` was no push to
+    // the check and a push to git: a repo's read token pushed. A path that still holds a `%` after
+    // one decoding was encoded twice, or is no path of a repo: no name here has one. A `..` would
+    // name a path outside the store.
+    const path = decodedOnce(url.pathname);
+    if (!path || path.includes("%") || path.split("/").includes(".."))
+      return void response.writeHead(400, { "content-type": "text/plain" }).end("Not a path\n");
     const offered = offeredToken(request.headers.authorization);
     if (!sameText(offered, token)) {
       // a repo's own token: that repo's git traffic alone, and a push only with "write"
       const grant = await repoGrantOf(token, offered);
-      const repo = /^\/([^/]+)\.git\//.exec(url.pathname)?.[1];
+      const repo = /^\/([^/]+)\.git\//.exec(path)?.[1];
+      // git reads the last `service` of a query that names two: any of them counts
       const pushes =
-        url.pathname.endsWith("/git-receive-pack") ||
-        url.searchParams.get("service") === "git-receive-pack";
+        path.endsWith("/git-receive-pack") ||
+        url.searchParams.getAll("service").includes("git-receive-pack");
       if (!grant || grant.repo !== repo || (pushes && grant.scope !== "write"))
         return void response
           .writeHead(401, { "www-authenticate": 'Basic realm="iterate home lab"' })
           .end("This store answers the home lab's token, or a repo's own token for that repo.\n");
     }
-    if (url.pathname === "/_repos" && request.method === "GET")
+    if (path === "/_repos" && request.method === "GET")
       return json(response, 200, {
         repos: readdirSync(dir)
           .filter((entry) => entry.endsWith(".git"))
           .map((entry) => ({ name: entry.slice(0, -".git".length) })),
       });
-    const admin = url.pathname.match(/^\/_repos\/([^/]+)$/);
-    if (admin) return manage(request.method || "GET", decodeURIComponent(admin[1]!), response);
-    // a decoded `..` would name a path outside the store
-    if (decodeURIComponent(url.pathname).split("/").includes(".."))
-      return void response.writeHead(400, { "content-type": "text/plain" }).end("Not a path\n");
-    if (/^\/[^/]+\.git\//.test(url.pathname)) return gitHttpBackend(request, response, url, dir);
+    const admin = path.match(/^\/_repos\/([^/]+)$/);
+    if (admin) return manage(request.method || "GET", admin[1]!, response);
+    if (/^\/[^/]+\.git\//.test(path))
+      return gitHttpBackend(request, response, { path, query: url.search.slice(1) }, dir);
     response.writeHead(404, { "content-type": "text/plain" }).end("Not found\n");
   }
 
@@ -81,11 +88,20 @@ export async function serveRepos(input: { dir: string; token: string; port: numb
   };
 }
 
+/** A URL's path with its percent-encoding taken off once, or null when it is not valid encoding. */
+function decodedOnce(pathname: string): string | null {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+}
+
 // The body is read whole so CONTENT_LENGTH is known. `GIT_PROTOCOL` is what turns on protocol v2.
 async function gitHttpBackend(
   request: IncomingMessage,
   response: ServerResponse,
-  url: URL,
+  asked: { path: string; query: string },
   dir: string,
 ) {
   const chunks: Buffer[] = [];
@@ -99,8 +115,8 @@ async function gitHttpBackend(
       GIT_HTTP_EXPORT_ALL: "1",
       GIT_PROTOCOL: header("git-protocol"),
       REQUEST_METHOD: request.method || "GET",
-      PATH_INFO: decodeURIComponent(url.pathname),
-      QUERY_STRING: url.search.slice(1),
+      PATH_INFO: asked.path,
+      QUERY_STRING: asked.query,
       CONTENT_TYPE: header("content-type"),
       CONTENT_LENGTH: String(body.length),
       HTTP_CONTENT_ENCODING: header("content-encoding"),

@@ -57,6 +57,57 @@ void test("a repo's token opens that repo's git traffic alone: no other repo, no
   }
 });
 
+void test("a read token pushes by no spelling of the path: the store judges the path that git gets", async () => {
+  const store = await serveRepos({
+    dir: mkdtempSync(join(tmpdir(), "repos-")),
+    token: STORE,
+    port: 0,
+  });
+  try {
+    const ask = async (token: string, path: string, method = "POST") =>
+      (
+        await fetch(`${store.origin}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).status;
+    assert.equal(await ask(STORE, "/_repos/scratch", "PUT"), 201);
+    const expires = Date.now() + HOUR;
+    const read = await repoToken(STORE, { repo: "scratch", scope: "read", expires });
+    const write = await repoToken(STORE, { repo: "scratch", scope: "write", expires });
+    assert.deepEqual(
+      [
+        // git decodes the path, so this is a push: it was judged undecoded, and passed
+        await ask(read, "/scratch.git/git-receive-%70ack"),
+        await ask(read, "/scratch.git/%67it-receive-pack"),
+        // encoded twice: no path of a repo, with any token
+        await ask(read, "/scratch.git/git-receive-%2570ack"),
+        await ask(write, "/scratch.git/git-receive-%2570ack"),
+        await ask(STORE, "/scratch.git/git-receive-%2570ack"),
+        // an encoding that is none
+        await ask(read, "/scratch.git/git-receive-%zzack"),
+        // git reads the last service of two
+        await ask(
+          read,
+          "/scratch.git/info/refs?service=git-upload-pack&service=git-receive-pack",
+          "GET",
+        ),
+        await ask(read, "/scratch.git/info/refs?service=git-receive-%70ack", "GET"),
+        // a way out of the repo behind an encoded slash is no path
+        await ask(read, "/scratch.git%2F..%2Fconfig.git/info/refs?service=git-upload-pack", "GET"),
+      ],
+      [401, 401, 400, 400, 400, 400, 401, 401, 400],
+    );
+    // the same spellings with the write token reach git, which answers them itself
+    assert.notEqual(await ask(write, "/scratch.git/git-receive-%70ack"), 401);
+    // and a read is still a read
+    assert.equal(await ask(read, "/scratch.git/info/refs?service=git-upload-pack", "GET"), 200);
+    assert.equal(await ask(read, "/scratch.git/info/refs?service=git-upload-%70ack", "GET"), 200);
+  } finally {
+    store.close();
+  }
+});
+
 void test("a request that git refuses before it reads the body is answered, and the store goes on", async () => {
   const store = await serveRepos({
     dir: mkdtempSync(join(tmpdir(), "repos-")),
