@@ -37,3 +37,13 @@ void test("a forward address counts as the stack's mail: one hostname of a zone 
   assert.equal(MindConfig.safeParse({ ...stack, auth: mailed, mail: forward }).success, true);
   assert.equal(MindConfig.safeParse({ ...stack, auth: mailed }).success, false);
 });
+
+void test("a forward address at the stack's own domain, or under it, is refused: such a mail comes back to the stack", () => {
+  for (const forwardTo of ["team@mind.example", "team@sub.mind.example", "team@MIND.example"])
+    assert.equal(MindConfig.safeParse({ ...stack, mail: { forwardTo } }).success, false, forwardTo);
+  // another domain that only ends in the same letters is no part of it
+  assert.equal(
+    MindConfig.safeParse({ ...stack, mail: { forwardTo: "team@notmind.example" } }).success,
+    true,
+  );
+});

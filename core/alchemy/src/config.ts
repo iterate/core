@@ -73,6 +73,16 @@ export const MindConfig = z
       'a mailed sign-in code needs the zone\'s mail, which a stack with hostnames: "platform" does not own: sign in another way',
   })
   .refine(
+    ({ domain, mail }) =>
+      !(mail instanceof Object) ||
+      !`.${mail.forwardTo.split("@")[1]}`.toLowerCase().endsWith(`.${domain.toLowerCase()}`),
+    {
+      path: ["mail", "forwardTo"],
+      error:
+        "not an address of the stack's own domain: its mail comes to the stack, so the forward would come back",
+    },
+  )
+  .refine(
     ({ auth, hostnames, mail }) => hostnames === "platform" || !auth.login.methods.email || mail,
     {
       path: ["auth", "login", "methods", "email"],

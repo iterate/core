@@ -102,6 +102,21 @@ export const EmailContract = defineProcessorContract({
       description: "The mind sent a message through `itx.email.send` (platform fact).",
       payloadSchema: EmailMessage,
     },
+    "events.iterate.com/email/forward-failed": {
+      description:
+        "The stack could not forward a received message to its `mail.forwardTo` address (platform fact). The mind has the message.",
+      payloadSchema: z.object({
+        /** The address the message was delivered to. */
+        to: z.string(),
+        /** The stack's forward address. */
+        forwardTo: z.string(),
+        /** The message's Message-ID header as written, null when it has none. */
+        messageId: z.string().nullable(),
+        /** Why: Cloudflare's words, or the stack's own, which start "not forwarded:"
+         *  (core/boundary-worker/src/mail.ts `receivedMail` says what each does to the delivery). */
+        error: z.string(),
+      }),
+    },
   },
   consumes: ["events.iterate.com/email/received", "events.iterate.com/email/sent"],
   emits: [],

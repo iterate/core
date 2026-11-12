@@ -345,8 +345,24 @@ least a deploy needs.
   so a reply goes to the sender. The mind has the mail first. Cloudflare forwards only a mail
   whose sender is proven (SPF or DKIM): one that is not stays in the mind alone. The address must
   be a verified destination address of the account's Email Routing: add it in the dashboard
-  (Email Routing, Destination addresses) and confirm the link Cloudflare mails to it. Until
-  then each forward fails, and with it the delivery.
+  (Email Routing, Destination addresses) and confirm the link Cloudflare mails to it.
+  - **The cost of a forward address that does not work.** While the address is not verified, is
+    removed from the account, or refuses mail, every mail to the mind fails for its sender: the
+    mind keeps the mail, the delivery fails, and the sender gets it back. Each failed forward is
+    an `events.iterate.com/email/forward-failed` fact on the mind's `/integrations/email`, with
+    Cloudflare's words.
+  - The address is not one of the stack's own domain (the config refuses it), and a mail that
+    Email Routing forwarded to it before (its `X-Forwarded-To` names the address) is not
+    forwarded again, so an address that leads back to the stack makes no loop. Any sender can
+    write that header, so a mail that is not forwarded for it is an `email/forward-failed` fact
+    too.
+  - Cloudflare writes one `X-Forwarded-To` line for each forward and keeps the earlier lines
+    (seen on a mail that passed two forwards), so the stop also ends a loop that goes through
+    another forward before it comes back. A loop of two stacks' forwards was not run as such:
+    do not build one.
+  - **Before a rollback.** A release from before `mail.forwardTo` refuses a config that names it.
+    After a rollback to such a release, every deploy and update of the stack fails until its
+    config says `mail: true` again: change the config first.
 - The sandboxes' image, `images/iterate-dev-image` of `core/mind-worker`, built with the local Docker and
   pushed. A deploy with no Docker sets `sandboxImage` in the config's `mind`:
   - `"published"`: `scripts/sandbox-image.ts` copies the same image, built once and published at

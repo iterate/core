@@ -4,8 +4,15 @@ import PostalMime, { type Address } from "postal-mime";
 
 const BODY_MAX_CHARS = 100_000;
 
+/** The mind's email log. */
+const EMAIL_PATH = "/integrations/email";
+
 /** What Cloudflare says when it will not forward a mail whose sender nobody proved. */
 const NOT_FORWARDABLE = "non-authenticated emails cannot be forwarded";
+
+/** What the fact says of a mail that names the forward address in its `X-Forwarded-To`. */
+const FORWARDED_BEFORE =
+  "not forwarded: the mail's X-Forwarded-To says it was forwarded to this address before";
 
 /** THE BOUNDARY'S MAIL HANDLER: a mail that Cloudflare delivers goes to the mind, with what the
  *  boundary knows of its sender. A failure throws, so Cloudflare delivers the mail again.
@@ -13,13 +20,23 @@ const NOT_FORWARDABLE = "non-authenticated emails cannot be forwarded";
  *  With `MAIL_FORWARD_TO` (the stack's `mail.forwardTo`) the mail is then forwarded there AS IT
  *  ARRIVED, by Email Routing's own `forward`: its From is the sender's, so a reply goes to the
  *  sender. After the mind has it, so a mail that is never forwarded is still kept; the mind takes
- *  the same mail once, however often it is delivered. Cloudflare forwards only a mail whose
- *  sender is proven: one that is not is kept and not forwarded. Any other failure of the forward
- *  fails the delivery. */
+ *  the same mail once, however often it is delivered.
+ *
+ *  A forward that fails is a fact on the mind's email log, `email/forward-failed`, with
+ *  Cloudflare's words. Cloudflare forwards only a mail whose sender is proven: one that is not is
+ *  kept and not forwarded, and the delivery stands. Any other failure (an address that is not a
+ *  verified destination, or that refuses) fails the delivery too, so its sender gets it back:
+ *  while it lasts, every mail to the mind fails for its sender.
+ *
+ *  A mail that Email Routing forwarded to `MAIL_FORWARD_TO` before (its `X-Forwarded-To` says so)
+ *  is not forwarded again: an address that leads back here ends at its second visit. Cloudflare
+ *  writes one such header line for each forward, the address bare, and keeps the earlier lines
+ *  and one that the sender wrote. Any sender can write the header, so this too is an
+ *  `email/forward-failed` fact. */
 export async function receivedMail(
   message: ForwardableEmailMessage,
   env: { AUTH: Pick<AuthService, "isMember">; MAIL_FORWARD_TO?: string },
-  mind: Pick<MindTarget, "receiveEmail">,
+  mind: Pick<MindTarget, "receiveEmail" | "append">,
 ) {
   await mind.receiveEmail(
     await parseEmail({
@@ -29,17 +46,36 @@ export async function receivedMail(
       isMember: (address) => env.AUTH.isMember(address),
     }),
   );
-  if (!env.MAIL_FORWARD_TO) return;
+  const forwardTo = env.MAIL_FORWARD_TO;
+  if (!forwardTo) return;
+  // The fact never changes what becomes of the delivery: an append that the mind refuses is logged.
+  const notForwarded = async (error: string) => {
+    const payload = { to: message.to, forwardTo, messageId: message.headers.get("message-id") };
+    try {
+      await mind.append(EMAIL_PATH, [
+        { type: "events.iterate.com/email/forward-failed", payload: { ...payload, error } },
+      ]);
+    } catch (appendError) {
+      console.error({
+        event: "mail.forward-failed-not-recorded",
+        namespace: "boundary",
+        message: "a forward failed, and the mind did not take the fact that says so",
+        ...payload,
+        error,
+        appendError: String(appendError),
+      });
+    }
+  };
+  const forwardedBefore = (message.headers.get("x-forwarded-to") ?? "")
+    .toLowerCase()
+    .split(",")
+    .map((address) => address.trim());
+  if (forwardedBefore.includes(forwardTo.toLowerCase())) return notForwarded(FORWARDED_BEFORE);
   try {
-    await message.forward(env.MAIL_FORWARD_TO);
+    await message.forward(forwardTo);
   } catch (error) {
+    await notForwarded(String(error));
     if (!String(error).includes(NOT_FORWARDABLE)) throw error;
-    console.info({
-      event: "mail.not-forwarded",
-      namespace: "boundary",
-      message: "a mail whose sender nobody proved is kept by the mind and not forwarded",
-      to: message.to,
-    });
   }
 }
 
