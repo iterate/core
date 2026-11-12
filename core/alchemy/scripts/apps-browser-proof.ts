@@ -101,7 +101,8 @@ try {
   const body = await page.locator("body").innerText();
   record(
     "a message from the page starts an agent, and its chat shows",
-    path.startsWith("/agents/web/") && body.includes(said.slice(0, 30)),
+    // in the member's own folder, or at the top for a person with no address
+    /^\/agents\/(people\/[^/]+\/)?web\//.test(path) && body.includes(said.slice(0, 30)),
     `agent ${path || "(none)"}; answered: ${/pineapple/i.test(body.replace(said, ""))}`,
   );
 

@@ -116,6 +116,16 @@ finds it. The app runs `view` in a sandboxed frame with only that agent's log an
 server-only import is a stand-in that throws if the view touches it. A kind whose agents run
 elsewhere (iterate's in the platform) needs no `processEvent`.
 
+An agent that a member starts in the Agents app is born in that person's folder:
+`/agents/people/<person>/web/<moment>` for iterate's own, and
+`/agents/people/<person>/<kind>/<moment>` for a kind's choice that says `byPerson: true` in its
+`newAgent.choices`. `<person>` is the local part of the address the member signs in with, in
+lower case, with `-` for each run of other characters than a-z and 0-9, 40 characters at most.
+The list shows a person their own agents first, and another person's with that folder's name
+before the title. The folder is a label, not proof of who started an agent, and two members with
+the same local part at two domains share one folder. `people` is a name that no long-lived agent
+(`/agents/<name>`) may take.
+
 `worker.ts` reaches the mind through the `itx` that `processEvent` is handed, or through
 `using itx = this.getItx()`: when the block ends, the scope, every call made through it and every
 handle it awaited are released. Put it in the smallest block that holds its calls, await every

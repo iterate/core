@@ -21,7 +21,7 @@ import { AppShell } from "@iterate-com/ui/components/app-shell";
 import { AgentChat } from "@iterate-com/ui/components/agent-chat/agent-chat";
 import { Toaster } from "@iterate-com/ui/components/ui/sonner";
 import { newWebSocketRpcSession, useContextStub, useIterateContext } from "@iterate-com/ui/live";
-import { agentRowsOf } from "./agent-rows.js";
+import { agentRowsOf, personOf } from "./agent-rows.js";
 import { AgentsHome } from "./home.js";
 import { AgentsNav } from "./nav.js";
 
@@ -48,6 +48,8 @@ socket.addEventListener("close", () => {
 
 // Who is signed in, as the session itself says: the foot of the sidebar shows them.
 const { principal } = await itx.whoami();
+// the folder of this person's agents, from the address they signed in with
+const person = personOf(principal?.email);
 
 // The mind is its domain, and this host is one label under it.
 const domain = location.hostname.split(".").slice(1).join(".") || location.hostname;
@@ -195,6 +197,7 @@ function App() {
         ${({ offers, ready, start, describe }) => html`
           <${AgentsHome}
             agents=${agents}
+            person=${person}
             offers=${offers}
             ready=${ready}
             choice=${choice}
@@ -224,7 +227,15 @@ function App() {
       app="Agents"
       mind=${domain}
       mindHref=${() => "./"}
-      nav=${html`<${AgentsNav} mind=${domain} agents=${agents} agent=${agent} onOpen=${open} />`}
+      nav=${html`
+        <${AgentsNav}
+          mind=${domain}
+          agents=${agents}
+          agent=${agent}
+          person=${person}
+          onOpen=${open}
+        />
+      `}
       header=${agent ? html`<span class="truncate text-sm">${agent}</span>` : null}
       account=${principal}
       locationKey=${href}
@@ -295,6 +306,8 @@ function NewAgentKinds({ children }) {
           label: `${option.label} (${kind})`,
           kind,
           choice: option.id,
+          // the kind's word that this choice's agents may live in a person's folder
+          byPerson: option.byPerson === true,
           fields: newAgent?.fields || [],
         }));
       }),

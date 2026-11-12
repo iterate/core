@@ -14,18 +14,22 @@ import { BotIcon } from "@iterate-com/ui/icons";
 import {
   agentTitle,
   byRecentActivity,
+  mineFirst,
   newAgentPath,
-  newWebAgentPath,
   topLevelAgents,
 } from "./agent-rows.js";
 import { agentHref, pageLink } from "./nav.js";
 
-/** `offers`: other kinds' choices, `{ value: "<kind>/<choice>", label, kind, choice, fields }`.
+/** `offers`: other kinds' choices, `{ value: "<kind>/<choice>", label, kind, choice, fields,
+ *  byPerson }`.
  *  `choice`: the picked offer's value, or `iterate`. `typed(name)`: a field's value as typed, if
  *  it was; `onField(name, value)` types it. `describe(offer, fields)`: the kind's line about them.
- *  `onStart(offer, path, fields)` starts the picked kind's agent; `onStarted(path, kind)` opens it. */
+ *  `onStart(offer, path, fields)` starts the picked kind's agent; `onStarted(path, kind)` opens it.
+ *  `person`: the folder of the person signed in (agent-rows.js `personOf`): a new agent is born
+ *  in it, and their agents come first. */
 export function AgentsHome({
   agents,
+  person,
   offers = [],
   ready,
   choice,
@@ -47,7 +51,10 @@ export function AgentsHome({
   // The agent born for a first message that then failed to send, and the choice it was born
   // of: sending again with the same choice goes to it, so a retry leaves no empty agent behind.
   const born = useRef(undefined);
-  const recent = useMemo(() => byRecentActivity(topLevelAgents(agents)).slice(0, 8), [agents]);
+  const recent = useMemo(
+    () => mineFirst(byRecentActivity(topLevelAgents(agents)), person).slice(0, 8),
+    [agents, person],
+  );
   // A remembered kind's choice before the kinds have reported their offers: Start waits for them,
   // rather than start iterate's agent in its place.
   const waiting = !picked && choice !== "iterate" && !ready;
@@ -57,7 +64,10 @@ export function AgentsHome({
       // (`picked`) or as iterate's.
       let path = born.current?.choice === choice ? born.current.path : undefined;
       if (!path) {
-        path = picked ? newAgentPath(picked.kind, new Date()) : newWebAgentPath(new Date());
+        // iterate's own agent, and a kind's choice that says so, are born in the person's folder
+        path = picked
+          ? newAgentPath(picked.kind, new Date(), picked.byPerson ? person : undefined)
+          : newAgentPath("web", new Date(), person);
         if (picked) await onStart(picked, path, fields);
         else await onCreate(path);
         born.current = { path, choice };

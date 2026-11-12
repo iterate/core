@@ -18,7 +18,7 @@ import {
   SquarePenIcon,
   SquareTerminalIcon,
 } from "@iterate-com/ui/icons";
-import { agentTitle, byRecentActivity, topLevelAgents } from "./agent-rows.js";
+import { agentTitle, byRecentActivity, mineFirst, personAt, topLevelAgents } from "./agent-rows.js";
 
 /** A link that changes this page's URL: a plain left click stays on the page, and any other click
  *  is the browser's (a new tab). */
@@ -34,13 +34,19 @@ export function pageLink(href, go) {
 
 export const agentHref = (path) => `?agent=${encodeURIComponent(path)}`;
 
-export function AgentsNav({ mind, agents, agent, onOpen }) {
+/** `person`: the folder of the person signed in (agent-rows.js `personOf`). Their agents come
+ *  first, and another person's agent says whose it is. */
+export function AgentsNav({ mind, agents, agent, person, onOpen }) {
   const { pinned, togglePinned } = usePinnedAgents(mind);
-  const ordered = useMemo(() => byRecentActivity(topLevelAgents(agents)), [agents]);
+  const ordered = useMemo(
+    () => mineFirst(byRecentActivity(topLevelAgents(agents)), person),
+    [agents, person],
+  );
   const row = (item) => html`
     <${AgentsNavRow}
       key=${item.path}
       row=${item}
+      other=${personAt(item.path) === person ? undefined : personAt(item.path)}
       active=${item.path === agent}
       pinned=${pinned.has(item.path)}
       onOpen=${onOpen}
@@ -89,7 +95,8 @@ export function AgentsNav({ mind, agents, agent, onOpen }) {
   `;
 }
 
-function AgentsNavRow({ row, active, pinned, onOpen, onTogglePinned }) {
+/** `other`: the person whose agent this is, when it is another person's. */
+function AgentsNavRow({ row, other, active, pinned, onOpen, onTogglePinned }) {
   const KindIcon = kindIcon(row.kind);
   return html`
     <${SidebarMenuItem} data-agent-path=${row.path}>
@@ -107,7 +114,10 @@ function AgentsNavRow({ row, active, pinned, onOpen, onTogglePinned }) {
           }
         </span>
         <span class="flex min-w-0 flex-col">
-          <span class="truncate text-sm">${agentTitle(row)}</span>
+          <span class="truncate text-sm">
+            ${other && html`<span class="text-muted-foreground" data-agent-person>${other}${" "}</span>`}
+            ${agentTitle(row)}
+          </span>
           <span class="truncate text-2xs text-muted-foreground">${row.path}</span>
         </span>
       <//>

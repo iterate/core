@@ -44,14 +44,19 @@ Importing `iterate/agents` registers `itx.agents` on iterate/api's `InstalledApp
 ## What an agent is
 
 An agent is any context under `/agents`, at any depth. Iterate's own agents live there
-(`/agents/web/<moment>`, `/agents/email/t<thread>`), and so can anything else that is a
+(`/agents/people/<person>/web/<moment>` for one that a member starts in the Agents app,
+`/agents/email/t<thread>`), and so can anything else that is a
 conversation with a title, a status and a way to message it, such as a coding session a bridge
 appends to (`/agents/claude/<session>`, its subagents beneath it). Every context announces itself to
 each of its ancestors when it first wakes (`itx/child-created`), and the catalog on `/agents` folds
 those announcements, so it lists every context below it with no registration step. Anything
 appended under `/agents` is listed, whether or not it is an agent: that is the rule. A row's
-`parent` is the nearest row above it, so `/agents/web`, which only holds the web agents, is the
-parent of each of them.
+`parent` is the nearest row above it, so `/agents/people/<person>/web`, which only holds that
+person's web agents, is the parent of each of them.
+
+`/agents/people` holds a folder for each person, named by the local part of the address they
+sign in with. It is a name that no long-lived agent may take: `/agents/<name>` is such an
+agent's place. Two members with the same local part at two domains share one folder.
 
 `itx.agents.list()` reads a whole list from `/agents` in one go, so showing a list of agents wakes
 none of them. Each row is small and the same for every kind of agent: `kind` (what runs it:
