@@ -173,8 +173,14 @@ export type SecretVerbs = {
   set: { input: unknown; answer: SecretAnswer<{ path: string }> };
   delete: { input: undefined; answer: SecretAnswer<{ path: string }> };
   describe: { input: undefined; answer: SecretDescription };
-  /** `proof`: the HMAC-SHA256 of `[path, cell]` as JSON under the at-rest key. */
+  /** ./api.ts `secrets.importSealed` says what the proof is over and which cells are taken. */
   importSealed: { input: { cell: string; proof: string }; answer: SecretAnswer<{ path: string }> };
+  /** ./api.ts `secrets.exportSealed` says what the proof is over, when it ends, and what the
+   *  sealed text is. */
+  exportSealed: {
+    input: { proof: string; until: number };
+    answer: SecretAnswer<{ sealed: string }>;
+  };
   /** `authorizationUrl` is the platform's start link, not the provider's URL. */
   beginOAuth: {
     input: unknown;

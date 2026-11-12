@@ -239,12 +239,12 @@ export type SecretRefresh =
  *  material carried one, and the secret facet's `snapshot()` answered the current one as
  *  `state.material.sealed`.
  *
- *  ON A MIND'S OWN STACK NO FACT CARRIES A CELL AND NO VERB READS ONE OUT: the secret's object
- *  keeps its cell in its own storage alone (`SealedCell`,
- *  core/secrets-worker/src/secret/contract.ts), so a copy of the logs holds no value. This shape
- *  stays for a move in: `secrets.importSealed(path, cell, proof)` takes one such cell once, with a
- *  proof under the stack's at-rest key, and seals its material again as the stack's own.
- *  packages/mind-backup reads and opens these cells. */
+ *  ON A MIND'S OWN STACK NO FACT CARRIES A CELL: the secret's object keeps its cell in its own
+ *  storage alone (`StoredSecret`, core/secrets-worker/src/secret/contract.ts), so a copy of the
+ *  logs holds no value. `secrets.exportSealed` hands that stored cell out, to a caller that proves
+ *  the at-rest key. This shape stays for a move in: `secrets.importSealed(path, cell, proof)`
+ *  takes one such cell once, with a proof under the stack's at-rest key, and seals its material
+ *  again as the stack's own. packages/mind-backup reads and opens these cells. */
 export type SealedSecretCell = {
   /** The secret's context name (its Durable Object's), the first part of the cell's binding. */
   context: string;
@@ -1376,6 +1376,18 @@ export interface IterateContextApi {
      *  (`SecretDescription`, iterate/workers). */
     describe(path: string): Promise<{ path: string; set: boolean }>;
     list(): Promise<SecretCatalogEntry[]>;
+    /** A secret's stored cell as text, for a backup: ciphertext that only the stack's at-rest key
+     *  opens, handed to a caller whose `proof` is the HMAC-SHA256 of
+     *  `[path, "exportSealed", until]` as JSON under that key. `until` is when the proof ends, in
+     *  milliseconds since the epoch, five minutes ahead at most. One fact on the secret's path
+     *  says that it left. */
+    exportSealed(path: string, proof: string, until: number): Promise<{ sealed: string }>;
+    /** A sealed cell, taken in once: one that `exportSealed` handed out on a stack with the same
+     *  at-rest key, which comes back as it was, or one of the frozen platform
+     *  (`SealedSecretCell`). `proof`: the HMAC-SHA256 of `[path, cell]` as JSON under that key.
+     *  AN OLDER CELL IS TAKEN OVER A NEWER VALUE, once: that is what a restore is for. A cell of
+     *  a grant whose refresh token works once holds a token that is spent by then. */
+    importSealed(path: string, cell: string, proof: string): Promise<{ path: string }>;
     /** The persons' grants that the iterate Cloud brokers, refreshed now, whichever client of the
      *  Cloud a grant is of: one row for each. core/secrets-worker/src/grant-refresh.ts says why a
      *  mind asks for this, and when.

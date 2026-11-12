@@ -81,7 +81,13 @@ import {
   ruleNames,
 } from "../approval.ts";
 import { INDEX, SET } from "../approvals-index.ts";
-import { LegacySealedCell, type SealedCell, type SecretFact, type Signer } from "./contract.ts";
+import {
+  LegacySealedCell,
+  type SealedCell,
+  type SecretFact,
+  type Signer,
+  StoredSecret,
+} from "./contract.ts";
 import { lendRefusal, operationRefusal, placementRefusal } from "./refusals.ts";
 import { runExchangeCode } from "./exchange-jail.ts";
 import {
@@ -93,7 +99,7 @@ import {
   x25519Sign,
 } from "./key-ops.ts";
 
-type Current = { cell: SealedCell; public?: Record<string, string> };
+type Current = StoredSecret;
 
 // Per fixed minute, in memory: an eviction resets them. `verifyHmac` is not counted.
 const OPERATIONS_PER_MINUTE = 300;
@@ -223,6 +229,8 @@ export type GrantRefresh =
 /** When a refresh on word last brought new tokens, and for how long a grant is fresh after it. */
 const GRANT_REFRESHED_AT = "grant-refreshed-at";
 const GRANT_FRESH_MS = 60 * 60_000;
+/** How far ahead an export's proof may name its end (`#exportSealed`). */
+const EXPORT_PROOF_MS = 5 * 60_000;
 /** How often one refresh on word asks while no answer comes: once more, with the same token. */
 const GRANT_TRIES = 2;
 
@@ -299,6 +307,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       delete: () => this.#delete(path),
       describe: () => this.#describe(path),
       importSealed: (input) => this.#importSealed(path, input.cell, input.proof),
+      exportSealed: (input) => this.#exportSealed(path, input.proof, input.until),
       beginOAuth: (input) => this.#beginOAuth(path, input),
       oauthResult: (input) => this.#oauthResult(path, input),
       collectFromUser: (input) => this.#collectFromUser(path, input),
@@ -377,6 +386,9 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   // `proof` is an HMAC under the at-rest key of the path and the cell, checked before anything opens.
   // The import writes over any value held: the old mind may have rotated a refresh token since.
+  /** A SEALED CELL, TAKEN IN: one that this vault handed out (`exportSealed`), which opens under
+   *  this stack's own key with its own binding and comes back with the use and the public fields
+   *  it had; or one of the frozen platform, which gets every use. */
   async #importSealed(
     path: string,
     // the JSON text the proof was made over: its bytes, not its keys' order, crossed every hop
@@ -384,7 +396,8 @@ export class SecretDurableObject extends DurableObject<Env> {
     proof: string,
   ): Promise<SecretAnswer<{ path: string }>> {
     this.#pathOf(path);
-    const legacy = LegacySealedCell.parse(JSON.parse(cell));
+    const sealed = z.union([StoredSecret, LegacySealedCell]).parse(JSON.parse(cell));
+    const nonce = "cell" in sealed ? sealed.cell.nonce : sealed.nonce;
     // The proof first: a call that proves nothing keeps nothing. Were the cell's nonce kept before
     // this check, a caller with no key could name a cell and shut its own import out for good, and
     // fill this object with nonces.
@@ -396,35 +409,106 @@ export class SecretDurableObject extends DurableObject<Env> {
         `secrets.importSealed: no proof under the at-rest key for ${path}`,
       );
     // A proof is good for ever, so each proven cell imports once. Read and kept with no await
-    // between, so two imports of one cell cannot both pass; kept on failure, and kept by `delete`.
+    // between, so two imports of one cell cannot both pass; kept by `delete`.
     const imported = this.ctx.storage.kv.get<string[]>("imported-nonces") || [];
-    if (imported.includes(legacy.nonce))
+    if (imported.includes(nonce))
       throw codedError(
         "FORBIDDEN",
         `secrets.importSealed: this cell of ${path} was imported once already`,
       );
-    this.ctx.storage.kv.put("imported-nonces", [...imported, legacy.nonce]);
-    let material: SecretMaterial;
+    this.ctx.storage.kv.put("imported-nonces", [...imported, nonce]);
+    const versionBefore = this.#version();
     try {
-      material = await decryptLegacySecretMaterial(
-        legacy.material,
-        { context: legacy.context, urls: legacy.urls, nonce: legacy.nonce },
-        this.#key(),
-      );
-    } catch {
-      throw codedError(
-        "INVALID_INPUT",
-        `secrets.importSealed: the cell for ${path} does not open under this stack's at-rest key`,
-      );
+      let record: SecretRecord;
+      let publicFields: Record<string, string> | undefined;
+      try {
+        record =
+          "cell" in sealed
+            ? await this.#recordOf(path, sealed.cell)
+            : {
+                material: await decryptLegacySecretMaterial(
+                  sealed.material,
+                  { context: sealed.context, urls: sealed.urls, nonce: sealed.nonce },
+                  this.#key(),
+                ),
+                urls: sealed.urls,
+                refresh: sealed.refresh,
+                ...UNLIMITED_USE,
+              };
+        // `PUBLIC` IS BESIDE THE CELL AND OUTSIDE ITS SEAL, so whoever changes a backup can write
+        // another. Each field is taken only when the material has it with that very value. A
+        // changed copy can then neither say another value, nor name a secret field to make it
+        // public: it would have to know that field's value.
+        if ("cell" in sealed && sealed.public) {
+          const given = Object.entries(sealed.public);
+          publicFields = publicFieldsOf(
+            record.material,
+            given.map(([name]) => name),
+          );
+          if (given.some(([name, value]) => publicFields?.[name] !== value))
+            throw new Error("a public field is not the material's");
+        }
+      } catch {
+        throw codedError(
+          "INVALID_INPUT",
+          `secrets.importSealed: the cell for ${path} does not open under this stack's at-rest key, or its public fields are not those of its material`,
+        );
+      }
+      const fact = await this.#write(path, record, { imported: true, public: publicFields });
+      return { result: { path }, facts: [{ path, events: [fact] }] };
+    } catch (error) {
+      // A CELL WHOSE VALUE IS NOT STORED WAS NOT IMPORTED, and its nonce is free again: it did
+      // not open, or its write failed, or a delete took the value while it was written. A changed
+      // copy has the true cell's nonce, and a restore holds no other copy of a cell: neither a
+      // damaged copy tried first nor a write that failed may shut the cell out for good. The
+      // guard reads what the object holds now, not what this import stored: a set that lands
+      // while a failing import is in flight keeps the nonce of a cell that was not imported.
+      if ((this.#current()?.cell.version ?? 0) <= versionBefore)
+        this.ctx.storage.kv.put(
+          "imported-nonces",
+          (this.ctx.storage.kv.get<string[]>("imported-nonces") || []).filter(
+            (each) => each !== nonce,
+          ),
+        );
+      throw error;
     }
-    const record: SecretRecord = {
-      material,
-      urls: legacy.urls,
-      refresh: legacy.refresh,
-      ...UNLIMITED_USE,
+  }
+
+  /** THE STORED CELL, HANDED OUT FOR A BACKUP, as the text that `importSealed` takes back. It is
+   *  ciphertext, which only the at-rest key opens, and it goes to a caller that proves that key
+   *  alone: so no ciphertext waits elsewhere for a day when the key leaks. The proof names the
+   *  time it ends, a few minutes ahead at most: a proof passes the mind's Worker and may stay in
+   *  a log, and one that was read there pulls nothing on a later day. It writes nothing here,
+   *  and one fact says that the cell left. */
+  async #exportSealed(
+    path: string,
+    proof: string,
+    until: number,
+  ): Promise<SecretAnswer<{ sealed: string }>> {
+    this.#pathOf(path);
+    const now = Date.now();
+    // a number alone: text would pass the comparisons below as the number it spells
+    if (!(typeof until === "number" && until > now && until <= now + EXPORT_PROOF_MS))
+      throw codedError(
+        "FORBIDDEN",
+        `secrets.exportSealed: the proof's time for ${path} is past, or more than five minutes ahead`,
+      );
+    const wanted = await hmacSha256Hex(this.#key(), JSON.stringify([path, "exportSealed", until]));
+    if (!(await secretsEqual(proof, wanted)))
+      throw codedError(
+        "FORBIDDEN",
+        `secrets.exportSealed: no proof under the at-rest key for ${path}`,
+      );
+    const current = this.#current();
+    if (!current)
+      throw codedError("SECRET_NOT_SET", `secrets.exportSealed: ${path} holds no material`);
+    console.info({ event: "secret.exported", path, version: current.cell.version });
+    return {
+      result: { sealed: JSON.stringify(current) },
+      facts: [
+        { path, events: [{ type: "events.iterate.com/secret/exported", payload: { path } }] },
+      ],
     };
-    const fact = await this.#write(path, record, { imported: true });
-    return { result: { path }, facts: [{ path, events: [fact] }] };
   }
 
   async #write(
@@ -515,28 +599,33 @@ export class SecretDurableObject extends DurableObject<Env> {
     return { context: path, urls, refresh, version, nonce, material, ...use };
   }
 
+  /** A cell of this path, opened with this stack's key: it opens only as what it was sealed as. */
+  async #recordOf(path: string, cell: SealedCell): Promise<SecretRecord> {
+    const material = await decryptSecretMaterial(
+      cell.material,
+      {
+        context: path,
+        urls: cell.urls,
+        refresh: cell.refresh,
+        version: cell.version,
+        nonce: cell.nonce,
+        use: cell.placement && {
+          placement: cell.placement,
+          operations: cell.operations || [],
+          lendTo: cell.lendTo,
+        },
+      },
+      this.#key(),
+    );
+    return { material, urls: cell.urls, refresh: cell.refresh, ...useOf(cell) };
+  }
+
   async #open(path: string, current: Current): Promise<SecretRecord> {
     const { cell } = current;
     try {
       if (cell.context !== path || cell.version > this.#version())
         throw new Error("not this secret's current cell");
-      const material = await decryptSecretMaterial(
-        cell.material,
-        {
-          context: path,
-          urls: cell.urls,
-          refresh: cell.refresh,
-          version: cell.version,
-          nonce: cell.nonce,
-          use: cell.placement && {
-            placement: cell.placement,
-            operations: cell.operations || [],
-            lendTo: cell.lendTo,
-          },
-        },
-        this.#key(),
-      );
-      return { material, urls: cell.urls, refresh: cell.refresh, ...useOf(cell) };
+      return await this.#recordOf(path, cell);
     } catch {
       throw new SecretRefused(
         `itx.fetch: the stored material of ${path} cannot be opened (another key, or another secret's record) — set the secret again`,

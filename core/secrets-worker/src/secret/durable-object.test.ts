@@ -6,6 +6,7 @@ import {
 } from "iterate/secret-placeholder";
 import { decodeFacts, FACTS_HEADER } from "iterate/facts";
 import { expect, test, vi } from "vitest";
+import { z } from "zod";
 import type { Envelope } from "iterate/signed";
 import { hmacSha256Hex } from "../secrets.ts";
 import { encryptSecretMaterial } from "../secret-at-rest.ts";
@@ -359,7 +360,7 @@ test("a delete that a set overtook while the vault's list was written gives no f
   expect(listedAsSet()).toEqual([PATH]);
 });
 
-test("an import with no proof keeps nothing of the cell: the cell with its proof is still taken after it, once", async () => {
+test("an import with no proof keeps nothing of the cell: the cell with its proof still gets as far as its value after it", async () => {
   const { secret } = await vault();
   // a cell of an old mind: its value does not open here, which the proof does not depend on
   const cell = JSON.stringify({
@@ -376,8 +377,178 @@ test("an import with no proof keeps nothing of the cell: the cell with its proof
   await expect(importing("0".repeat(64))).rejects.toThrow("no proof under the at-rest key");
   // The cell's own import is not shut out by that: it gets as far as the value.
   await expect(importing(proof)).rejects.toThrow("does not open under this stack's at-rest key");
-  // a proven cell is taken once: its proof is good for ever
-  await expect(importing(proof)).rejects.toThrow("imported once already");
+  // a cell that does not open was not imported: asked again, it gets as far as the value again
+  await expect(importing(proof)).rejects.toThrow("does not open under this stack's at-rest key");
+});
+
+test("the sealed cell leaves the vault only for a caller that proves the at-rest key, as ciphertext, and one fact says that it left", async () => {
+  const { secret } = await vault();
+
+  // whoever does not hold the at-rest key gets no ciphertext to keep for a day when the key leaks
+  await expect(
+    secret.secret(PATH, "exportSealed", { proof: "0".repeat(64), until: Date.now() + 60_000 }),
+  ).rejects.toThrow("no proof under the at-rest key");
+  const exported = await handedOut(secret);
+
+  expect(exported).toEqual({
+    result: { sealed: expect.not.stringContaining("real-token-aaaa") },
+    facts: [
+      {
+        path: PATH,
+        events: [{ type: "events.iterate.com/secret/exported", payload: { path: PATH } }],
+      },
+    ],
+  });
+  expect(JSON.parse(exported.result.sealed)).toMatchObject({
+    cell: { context: PATH, urls: ["https://gmail.googleapis.com"], version: 1 },
+  });
+});
+
+test.for([
+  ["that is past", -1_000],
+  ["more than five minutes ahead", 6 * 60_000],
+] as const)(
+  "an export's proof names a time %s: it hands nothing out, though the key made it",
+  async ([, from]) => {
+    const { secret } = await vault();
+
+    // a proof that was read in a log, on a later day, pulls no ciphertext
+    await expect(handedOut(secret, Date.now() + from)).rejects.toThrow("the proof's time");
+  },
+);
+
+test("an export's proof whose time is text is refused, though the key made it and the text spells a good time", async () => {
+  const { secret } = await vault();
+  const until = String(Date.now() + 60_000);
+  const proof = await hmacSha256Hex(
+    "at-rest-key-for-tests-only",
+    JSON.stringify([PATH, "exportSealed", until]),
+  );
+
+  await expect(secret.secret(PATH, "exportSealed", { proof, until })).rejects.toThrow(
+    "the proof's time",
+  );
+});
+
+test("a cell that the vault handed out is taken back after a delete, once, and the secret works as it did", async () => {
+  const { secret, sent } = await vault();
+  const { sealed } = (await handedOut(secret)).result;
+  await secret.secret(PATH, "delete", undefined);
+  const proof = await hmacSha256Hex("at-rest-key-for-tests-only", JSON.stringify([PATH, sealed]));
+  const importing = () => secret.secret(PATH, "importSealed", { cell: sealed, proof });
+
+  const imported = await importing();
+  // a read: the harness's rule holds a POST, which is not what this test is about
+  await secret.fetch(useRequest("https://gmail.googleapis.com/gmail/v1/users/me/profile", {}));
+
+  expect(imported).toMatchObject({
+    result: { path: PATH },
+    facts: [
+      {
+        path: PATH,
+        events: [
+          {
+            type: "events.iterate.com/secret/set",
+            // the use it had, not an import's wider one
+            payload: {
+              imported: true,
+              urls: ["https://gmail.googleapis.com"],
+              placement: "header",
+            },
+          },
+        ],
+      },
+    ],
+  });
+  expect(sent).toMatchObject([{ authorization: "Bearer real-token-aaaa" }]);
+  await expect(importing()).rejects.toThrow("imported once already");
+});
+
+test("a handed-out cell whose pin was changed does not open: an import cannot widen where a secret goes", async () => {
+  const { secret } = await vault();
+  const { sealed } = (await handedOut(secret)).result;
+  await secret.secret(PATH, "delete", undefined);
+  const stored = JSON.parse(sealed);
+  const widened = JSON.stringify({
+    ...stored,
+    cell: { ...stored.cell, urls: ["https://evil.example.com"] },
+  });
+
+  await expect(
+    secret.secret(PATH, "importSealed", {
+      cell: widened,
+      proof: await hmacSha256Hex("at-rest-key-for-tests-only", JSON.stringify([PATH, widened])),
+    }),
+  ).rejects.toThrow("does not open under this stack's at-rest key");
+  expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: false });
+  // The changed cell has the true cell's nonce. It wrote nothing, so it does not shut the true
+  // cell out: a damaged copy of a backup, tried first, must not lock out the good one.
+  expect(
+    await secret.secret(PATH, "importSealed", {
+      cell: sealed,
+      proof: await hmacSha256Hex("at-rest-key-for-tests-only", JSON.stringify([PATH, sealed])),
+    }),
+  ).toMatchObject({ result: { path: PATH } });
+});
+
+test("an import whose write did not end with the value stored leaves the cell free: a restore can try it again", async () => {
+  const { secret, holdListCall } = await vault();
+  const { sealed } = (await handedOut(secret)).result;
+  await secret.secret(PATH, "delete", undefined);
+  const proof = await hmacSha256Hex("at-rest-key-for-tests-only", JSON.stringify([PATH, sealed]));
+  const importing = () => secret.secret(PATH, "importSealed", { cell: sealed, proof });
+  // a write calls the list once before it stores and once after: the second call is held open
+  const afterTheStore = holdListCall(2);
+  const first = importing().then(
+    () => "imported",
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+  const letGo = await afterTheStore;
+  // the value is stored now, and a delete takes it
+  await secret.secret(PATH, "delete", undefined);
+  letGo();
+
+  expect(await first).toContain("deleted while this value was being stored");
+  // the person holds no other copy of this cell: it must not be spent by a write that failed
+  expect(await importing()).toMatchObject({ result: { path: PATH } });
+  await expect(importing()).rejects.toThrow("imported once already");
+});
+
+test("an import takes the public fields that stand beside the cell only when each is a field of the cell it opened, with that value", async () => {
+  const { secret } = await vault();
+  await secret.secret(PATH, "set", {
+    material: { clientId: "the-real-client", clientSecret: "real-secret-bbbb" },
+    urls: ["https://gmail.googleapis.com"],
+    public: ["clientId"],
+  });
+  const { sealed } = (await handedOut(secret)).result;
+  await secret.secret(PATH, "delete", undefined);
+  // `public` is beside the cell and outside its seal: whoever changes a backup can write another
+  const withPublic = async (fields: Record<string, string>) => {
+    const changed = JSON.stringify({ ...JSON.parse(sealed), public: fields });
+    return secret.secret(PATH, "importSealed", {
+      cell: changed,
+      proof: await hmacSha256Hex("at-rest-key-for-tests-only", JSON.stringify([PATH, changed])),
+    });
+  };
+
+  // another value for a public field: the catalog would say what the secret is not
+  await expect(withPublic({ clientId: "someone-else" })).rejects.toThrow("public fields");
+  // the name of a SECRET field: its value would go into the fact and the catalog. Whoever
+  // changed the copy does not know that value, so the copy cannot say it.
+  await expect(
+    withPublic({ clientId: "the-real-client", clientSecret: "a-guess" }),
+  ).rejects.toThrow("public fields");
+  expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: false });
+  // the copy as the vault handed it out comes back with its public field
+  await secret.secret(PATH, "importSealed", {
+    cell: sealed,
+    proof: await hmacSha256Hex("at-rest-key-for-tests-only", JSON.stringify([PATH, sealed])),
+  });
+  expect(await secret.secret(PATH, "describe", {})).toMatchObject({
+    set: true,
+    public: { clientId: "the-real-client" },
+  });
 });
 
 test("a rule with a path that never waits lets a file go there, and refuses the same bytes at the API's own address", async () => {
@@ -888,6 +1059,18 @@ function waitCall(digest: string, init: { body?: string; headers?: Record<string
     headers: { "content-type": "application/json", [SECRET_HELD_HEADER]: digest, ...init.headers },
     body: init.body,
   });
+}
+
+/** The secret's stored cell, as the vault hands it out to a caller that proves the at-rest key. */
+async function handedOut(secret: SecretDurableObject, until = Date.now() + 60_000) {
+  const proof = await hmacSha256Hex(
+    "at-rest-key-for-tests-only",
+    JSON.stringify([PATH, "exportSealed", until]),
+  );
+  // the object's verbs answer untyped
+  return z
+    .object({ result: z.object({ sealed: z.string() }), facts: z.array(z.unknown()) })
+    .parse(await secret.secret(PATH, "exportSealed", { proof, until }));
 }
 
 function useRequest(url: string, init: RequestInit) {

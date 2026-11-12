@@ -125,6 +125,8 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
     },
     importSealed: (path: string, cell: string, proof: string) =>
       record(call("importSealed", path, { cell, proof })),
+    exportSealed: (path: string, proof: string, until: number) =>
+      record(call("exportSealed", path, { proof, until })),
     collectFromUser: (input: { path?: unknown } & Record<string, unknown>) => {
       const { path, ...rest } = input ?? {};
       return call("collectFromUser", String(path), rest);

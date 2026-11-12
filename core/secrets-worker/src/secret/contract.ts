@@ -19,19 +19,28 @@ const EncryptedMaterial = z.object({
   ciphertext: z.string().min(1),
 });
 
-// Stored cells: `placement` and `operations` are absent from a cell sealed before records said what
-// a secret may be used for, `lendTo` from one sealed before they said whom it lends to.
-export type SealedCell = {
-  context: string;
-  urls: string[];
-  refresh: SecretRefresh | null;
-  version: number;
-  nonce: string;
-  material: z.infer<typeof EncryptedMaterial>;
-  placement?: "header" | "url";
-  operations?: SecretOperation[];
-  lendTo?: string[] | null;
-};
+/** A SECRET AS ITS OBJECT STORES IT, and as `exportSealed` hands it out and `importSealed` takes
+ *  it back: the sealed cell, and the values of its public fields. Stored cells: `placement` and
+ *  `operations` are absent from a cell sealed before records said what a secret may be used for,
+ *  `lendTo` from one sealed before they said whom it lends to. An import checks the shape alone:
+ *  a cell opens only with the exact bytes it was sealed with (../secret-at-rest.ts). `public` is
+ *  not in the seal: an import takes it only when it matches the opened material. */
+export const StoredSecret = z.object({
+  cell: z.object({
+    context: z.string().min(1),
+    urls: z.array(z.string()).min(1),
+    refresh: z.custom<SecretRefresh | null>((value) => !value || Object.hasOwn(value, "kind")),
+    version: z.number().int().positive(),
+    nonce: z.string().min(1),
+    material: EncryptedMaterial,
+    placement: z.enum(["header", "url"]).optional(),
+    operations: z.custom<SecretOperation[]>(Array.isArray).optional(),
+    lendTo: z.array(z.string()).nullish(),
+  }),
+  public: z.record(z.string(), z.string()).optional(),
+});
+export type StoredSecret = z.infer<typeof StoredSecret>;
+export type SealedCell = StoredSecret["cell"];
 
 export const LegacySealedCell = z.object({
   context: z.string().min(1),
@@ -58,6 +67,8 @@ export type SecretFact =
       };
     }
   | { type: "events.iterate.com/secret/deleted"; payload: { path: string } }
+  // the sealed cell left the vault, for a caller that proved the at-rest key
+  | { type: "events.iterate.com/secret/exported"; payload: { path: string } }
   // `answerLost`, on a refresh that failed: true when no answer came, so the provider may have
   // issued tokens that never arrived; false when the provider refused.
   | {
