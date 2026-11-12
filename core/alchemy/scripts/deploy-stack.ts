@@ -9,7 +9,7 @@
 //    (src/telemetry-tables.ts says why; src/telemetry-at-deploy.ts says when the deploy does
 //    not start).
 // 2. THE DEPLOY IS TRIED AGAIN when Cloudflare refused a Worker that binds to the stack's log
-//    pipelines (src/deploy-until-bound.ts).
+//    pipelines, or a new sink of them (src/deploy-until-bound.ts).
 // 3. AFTER A DEPLOY THAT TURNED TELEMETRY OFF: the same step as 1 (src/telemetry-at-deploy.ts).
 //
 // The output of Alchemy is read for step 2, so it goes through a pipe. A person at a terminal who

@@ -4,7 +4,7 @@
 //
 // - a turn-off leaves no table in the stack's data catalog (the next turn-on finds none left);
 // - a turn-on ends with the stack's three sinks, its telemetry Worker and its catalog on, also
-//   when Cloudflare refused a Worker that binds to the pipelines at the first try.
+//   when Cloudflare refused, at the first try, a Worker that binds to the pipelines or a new sink.
 //
 //   node --env-file-if-exists=.secrets scripts/telemetry-toggle-proof.ts --stage <name> [deploy flags]
 // CLOUDFLARE_API_TOKEN   a deploy's token, which may also make API tokens (README, "Telemetry")
@@ -122,7 +122,7 @@ for (const on of [false, true, false, true]) {
     // the line of src/deploy-until-bound.ts for each try after the first
     const tries = (printed.match(/Try \d+ of \d+ starts in/g) || []).length;
     console.log(
-      `     ${word}: ${tries} more ${tries === 1 ? "try" : "tries"} for a pipeline binding`,
+      `     ${word}: ${tries} more ${tries === 1 ? "try" : "tries"} after a refusal of Cloudflare's`,
     );
   } else {
     row(after.sinks.length === 0, `${word}: no sink of the stack is there`);

@@ -82,3 +82,18 @@ void test("a signal between two tries finds no listener of the deploy's: Node's 
     before,
   );
 });
+
+void test("a try whose new sink Cloudflare refused with 403, its line in two pieces, is tried again", async () => {
+  const line =
+    "ERROR (#1): InvalidSinkConfig: failed to validate Basin Catalog table: Unexpected, context: { status: 403 Forbidden, json: Forbidden }";
+  const cut = line.indexOf("Unexpected");
+  const run = deploys(
+    `process.stderr.write(${JSON.stringify(line.slice(0, cut))}); setTimeout(() => { process.stderr.write(${JSON.stringify(line.slice(cut))}); process.exit(1); }, 200);`,
+  );
+  assert.equal(await run.run(), 1);
+  assert.equal(run.tries, 3);
+  assert.match(
+    run.said[0]!,
+    /a new sink of the stack's log pipelines .* Try 2 of 3 starts in 0 seconds/,
+  );
+});

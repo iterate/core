@@ -1,12 +1,12 @@
 // deploy-try.ts — ONE TRY OF A DEPLOY: a child process whose output is passed on and read for
-// Cloudflare's words about a pipeline binding (scripts/deploy-stack.ts runs Alchemy's deploy with
-// it; src/deploy-until-bound.ts decides about the next try).
+// a refusal of Cloudflare's that ends by itself (scripts/deploy-stack.ts runs Alchemy's deploy
+// with it; src/deploy-until-bound.ts names the refusals and decides about the next try).
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
-import { NOT_BOUND } from "./deploy-until-bound.ts";
+import { type Refusal, REFUSAL_LENGTH, refusalIn } from "./deploy-until-bound.ts";
 
 /** Runs `command` to its end. `piped: false` gives the child the terminal: its output is not read
- *  then, and `notBound` stays false.
+ *  then, and `refused` stays empty.
  *
  *  A SIGNAL ENDS THE DEPLOY, NOT ONLY THIS TRY. While the child runs, SIGINT and SIGTERM to this
  *  process go on to the child, and this process waits for the child's end: Alchemy writes its
@@ -21,20 +21,20 @@ export function deployTry(input: {
   out: (piece: Buffer) => void;
   err: (piece: Buffer) => void;
 }) {
-  return new Promise<{ code: number; notBound: boolean; stopped: boolean }>((done) => {
+  return new Promise<{ code: number; refused: Refusal | undefined; stopped: boolean }>((done) => {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       stdio: input.piped ? ["inherit", "pipe", "pipe"] : "inherit",
     });
-    let notBound = false;
-    // The words can come in two pieces: the end of each piece is kept for the next.
+    let refused: Refusal | undefined;
+    // A refusal's line can come in two pieces: the end of each piece is kept for the next.
     const through = (to: (piece: Buffer) => void) => {
       let end = "";
       return (piece: Buffer) => {
         to(piece);
         const text = end + piece.toString();
-        if (text.includes(NOT_BOUND)) notBound = true;
-        end = text.slice(-NOT_BOUND.length);
+        refused ||= refusalIn(text);
+        end = text.slice(-REFUSAL_LENGTH);
       };
     };
     child.stdout?.on("data", through(input.out));
@@ -48,14 +48,14 @@ export function deployTry(input: {
     process.on("SIGTERM", stop);
     child.on("error", (error) => {
       console.error(`The deploy did not start: ${error.message}`);
-      done({ code: 1, notBound: false, stopped: false });
+      done({ code: 1, refused: undefined, stopped: false });
     });
     child.on("close", (code, killedBy) => {
       process.off("SIGINT", stop);
       process.off("SIGTERM", stop);
       const signal = got || killedBy;
-      if (signal) done({ code: 128 + constants.signals[signal], notBound, stopped: true });
-      else done({ code: code ?? 1, notBound, stopped: false });
+      if (signal) done({ code: 128 + constants.signals[signal], refused, stopped: true });
+      else done({ code: code ?? 1, refused, stopped: false });
     });
   });
 }
