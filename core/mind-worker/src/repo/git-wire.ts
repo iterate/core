@@ -15,21 +15,29 @@ const textEncoder = new TextEncoder();
 // drop it.
 export type RepoManifest = Map<string, { oid: string; mode: string }>;
 
+/** The most files one commit's tree may hold. A tree names its subtrees by their ids, so a few
+ *  small objects that each name the one below twice make 2^depth files: a pulled pack is not
+ *  trusted to be a tree somebody wrote. */
+const MAX_TREE_FILES = 200_000;
+
 export function manifestOf(
   entries: TreeEntry[],
   objects: Map<string, RawGitObject>,
   prefix = "",
+  manifest: RepoManifest = new Map(),
 ): RepoManifest {
-  const manifest: RepoManifest = new Map();
   for (const entry of entries) {
     const path = prefix + entry.name;
     if (entry.mode === "40000") {
       const tree = objects.get(entry.oid);
       if (tree?.type !== "tree")
         throw new Error(`the pack omitted the tree ${entry.oid} (${path}/)`);
-      for (const [nested, nestedEntry] of manifestOf(parseTree(tree.payload), objects, `${path}/`))
-        manifest.set(nested, nestedEntry);
-    } else manifest.set(path, { oid: entry.oid, mode: entry.mode });
+      manifestOf(parseTree(tree.payload), objects, `${path}/`, manifest);
+    } else {
+      if (manifest.size >= MAX_TREE_FILES)
+        throw new Error(`the tree holds more than ${MAX_TREE_FILES} files`);
+      manifest.set(path, { oid: entry.oid, mode: entry.mode });
+    }
   }
   return manifest;
 }
@@ -248,6 +256,14 @@ export function encodeCommit(input: {
   parents: string[];
   tree: string;
 }): Uint8Array {
+  // A header line is `author <name> <<email>> <time>`: a line break in a name or an address ends
+  // the header early (the real committer's line then reads as the message), and an angle bracket
+  // moves where the address ends.
+  for (const person of [input.author, input.committer])
+    if (/[\0\r\n<>]/.test(person.name + person.email))
+      throw new Error(
+        "a commit's author is one line: a name and an address with no line break, < or >",
+      );
   const at = `${Math.floor(input.author.date.getTime() / 1000)} +0000`;
   const lines = [
     `tree ${input.tree}`,
