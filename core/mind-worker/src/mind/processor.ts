@@ -26,6 +26,8 @@ import {
   seedOf,
   templateChanges,
   templateCommitMessage,
+  versionsWritten,
+  writtenWith,
   type RepoFiles,
   type TemplateKept,
 } from "./template-update.ts";
@@ -408,7 +410,11 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
   async #followTemplate() {
     const hash = await sha256Hex(JSON.stringify(this.templates));
     const kept = await this.kept.template();
-    if (kept?.hash === hash) return undefined;
+    // The same templates are compared again only where an app was left old and the repo moved
+    // since: its owner may have made the app's files the platform's again.
+    const tipNow = this.#newestState?.configRepoTip?.commitOid;
+    const sameTemplates = kept?.hash === hash;
+    if (sameTemplates && !(kept.leftOldAt && tipNow && kept.leftOldAt !== tipNow)) return undefined;
     const call = async (expression: ItxExpression) => {
       using itx = this.getItx();
       return await itx.invoke(expression);
@@ -443,17 +449,26 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     if (!Object.hasOwn(this.templates, name)) return { kept: { ...kept, hash }, fact: undefined };
     const template = await pinDependencies(this.#templateFilesOf(name));
     const now = await hashesOf(current);
+    // every version the record keeps counts: a file put back to an older one is the platform's
     const untouched = new Set(
       Object.keys(written).filter(
-        (path) => Object.hasOwn(now, path) && now[path] === written[path],
+        (path) => Object.hasOwn(now, path) && versionsWritten(written[path]).includes(now[path]!),
       ),
     );
-    const { changes, added, replaced, platforms, leftAlone, putBack } = templateChanges({
-      template,
-      current,
-      written: new Set(Object.keys(written)),
-      untouched,
-    });
+    const { changes, added, replaced, platforms, leftAlone, putBack, appsLeftOld, heldBack } =
+      templateChanges({
+        template,
+        current,
+        written: new Set(Object.keys(written)),
+        untouched,
+      });
+    for (const app of appsLeftOld)
+      console.info({
+        event: "mind.template-app-left-old",
+        namespace: "mind",
+        message: "the template's newer version of an app was not written: the app stays whole",
+        ...app,
+      });
     // only on the tip that was read: a commit made meanwhile refuses this one
     const commit = changes.length
       ? CommitAnswer.parse(
@@ -470,7 +485,10 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     const contents = new Map(template.map((file) => [file.path, file.content]));
     const nowWritten = Object.fromEntries(
       await Promise.all(
-        platforms.map(async (path) => [path, await sha256Hex(contents.get(path)!)] as const),
+        platforms.map(
+          async (path) =>
+            [path, writtenWith(written[path], await sha256Hex(contents.get(path)!))] as const,
+        ),
       ),
     );
     return {
@@ -479,9 +497,13 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
         template: name,
         written: { ...written, ...nowWritten },
         commit: commit?.commitOid || kept?.commit,
+        ...((appsLeftOld.length > 0 || heldBack.length > 0) && {
+          leftOldAt: commit?.commitOid || tip,
+        }),
       },
+      // a comparison of the same templates again says only what it wrote
       fact:
-        changes.length || leftAlone.length
+        changes.length || (leftAlone.length && !sameTemplates)
           ? {
               type: "events.iterate.com/mind/template-applied" as const,
               idempotencyKey: `mind/template-applied:${hash.slice(0, 16)}:${tip}`,
@@ -492,6 +514,8 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
                 replaced,
                 leftAlone,
                 putBack,
+                appsLeftOld,
+                heldBack,
               },
             }
           : undefined,

@@ -434,6 +434,22 @@ tab closes. The first person who typed is the commit's author, the others are `C
   before the template had them) shows "Couldn't open this doc for editing" with the reason. Add
   the three packages to `"dependencies"`, at the versions the default config names.
 
+## When the template moves on
+
+A deploy of newer platform code compares this repo with the template it brings, and commits what
+is newer (`template: core/configs/<name>`). It writes a file only when the file is still what the
+platform wrote there; a file you changed or deleted is yours, and stays.
+
+- **An app follows whole or not at all.** If one file under `apps/<name>/` is yours, or
+  `package.json` is yours and lacks a package the app's newer files import, the app stays at the
+  version it has. The root's event `mind/template-applied` names it (`appsLeftOld`). A file
+  of the platform's that imports a file of that app stays too (`heldBack`): `worker.ts`, when the
+  newer one imports the newer app.
+- **To follow the template again, commit the template's file over yours** (the files of
+  `core/configs/default` in https://github.com/iterate/core), and list the packages it names. A
+  file that is the template's bytes, or an earlier version the platform wrote, is the
+  platform's again. The app then follows at the mind's next restart.
+
 ## What waits for a member's yes
 
 A rule makes an act wait until a member approves it with a passkey, on

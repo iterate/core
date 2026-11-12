@@ -1,7 +1,7 @@
 // The rule by which a newer template reaches a config repo that exists (template-update.ts): what
 // the platform may write, and what it must leave alone.
 import { expect, test } from "vitest";
-import { importsOf, seedOf, templateChanges } from "./template-update.ts";
+import { importsOf, packagesOf, seedOf, templateChanges, writtenWith } from "./template-update.ts";
 
 test("a repo untouched since its seed gets the whole newer template: new files added, the platform's own files replaced", () => {
   const current = { "worker.ts": "old worker\n", "AGENTS.md": "old guide\n" };
@@ -14,6 +14,8 @@ test("a repo untouched since its seed gets the whole newer template: new files a
     platforms: ["worker.ts", "AGENTS.md", "apps/onboarding/app.ts"],
     leftAlone: [],
     putBack: [],
+    appsLeftOld: [],
+    heldBack: [],
   });
 });
 
@@ -175,6 +177,155 @@ test("a deleted file stays deleted when its importer is somebody's, or when its 
   ).toMatchObject({ changes: [], putBack: [] });
 });
 
+test("an app is written whole or not at all: one file of it that somebody changed keeps the whole app at its version", () => {
+  const seed = {
+    "worker.ts": "old worker\n",
+    "apps/docs/app.ts": "old app\n",
+    "apps/docs/public/app.js": "old page\n",
+    "apps/dash/app.ts": "old dash\n",
+  };
+  const current = { ...seed, "apps/docs/public/app.js": "my own page\n" };
+  const { changes, leftAlone, appsLeftOld } = templateChanges({
+    template: withDocs(),
+    current,
+    ...platformWrote(seed, current),
+  });
+  // the other app and the root's file move on; nothing under apps/docs is written
+  expect(changes.map((change) => change.path)).toEqual(["worker.ts", "apps/dash/app.ts"]);
+  expect(leftAlone.map((file) => file.path)).toEqual(["apps/docs/public/app.js"]);
+  expect(appsLeftOld).toEqual([
+    {
+      app: "docs",
+      yours: ["apps/docs/public/app.js"],
+      lacksPackages: [],
+      imports: [],
+      notWritten: ["apps/docs/app.ts", "apps/docs/processors/doc.ts"],
+    },
+  ]);
+});
+
+test("an app whose new files import a package that somebody's package.json does not list stays at its version, and follows once it is listed", () => {
+  const seed = {
+    "package.json": '{"dependencies":{}}',
+    "worker.ts": "new worker\n",
+    "apps/docs/app.ts": "old app\n",
+    "apps/docs/public/app.js": "old page\n",
+    "apps/dash/app.ts": "new dash\n",
+  };
+  const template = [
+    ...withDocs(),
+    { path: "package.json", content: '{"dependencies":{"yjs":"13.6.33","diff":"8.0.4"}}' },
+  ];
+  const theirs = { ...seed, "package.json": '{"name":"mine","dependencies":{"diff":"8.0.4"}}' };
+  expect(
+    templateChanges({ template, current: theirs, ...platformWrote(seed, theirs) }),
+  ).toMatchObject({
+    changes: [],
+    appsLeftOld: [
+      {
+        app: "docs",
+        yours: [],
+        lacksPackages: ["yjs"],
+        notWritten: ["apps/docs/app.ts", "apps/docs/public/app.js", "apps/docs/processors/doc.ts"],
+      },
+    ],
+  });
+  const listed = { ...seed, "package.json": '{"name":"mine","dependencies":{"yjs":"13.6.33"}}' };
+  expect(
+    templateChanges({ template, current: listed, ...platformWrote(seed, listed) }),
+  ).toMatchObject({
+    added: ["apps/docs/processors/doc.ts"],
+    replaced: ["apps/docs/app.ts", "apps/docs/public/app.js"],
+    appsLeftOld: [],
+  });
+});
+
+test("a file of the platform's that imports a file of an app left old is held back with it: the commit never names a file it does not bring", () => {
+  const seed = {
+    "worker.ts": "old worker\n",
+    "AGENTS.md": "old guide\n",
+    "apps/docs/app.ts": "old app\n",
+    "apps/docs/public/app.js": "old page\n",
+    "apps/dash/app.ts": "old dash\n",
+  };
+  const template = [
+    // the newer worker imports a file that the newer Docs app adds
+    {
+      path: "worker.ts",
+      content: 'import { doc } from "./apps/docs/processors/doc.ts";\nnew worker\n',
+    },
+    { path: "AGENTS.md", content: "new guide\n" },
+    { path: "apps/docs/app.ts", content: "new app\n" },
+    { path: "apps/docs/public/app.js", content: "new page\n" },
+    { path: "apps/docs/processors/doc.ts", content: "export const doc = 1;\n" },
+    // and the newer Dash imports the newer Docs app's own module
+    { path: "apps/dash/app.ts", content: 'import "../docs/app.ts";\nnew dash\n' },
+  ];
+  const current = { ...seed, "apps/docs/public/app.js": "my own page\n" };
+  const { changes, heldBack, appsLeftOld } = templateChanges({
+    template,
+    current,
+    ...platformWrote(seed, current),
+  });
+  expect(changes.map((change) => change.path)).toEqual(["AGENTS.md"]);
+  expect(heldBack).toEqual([{ path: "worker.ts", imports: ["apps/docs/processors/doc.ts"] }]);
+  expect(appsLeftOld).toEqual([
+    {
+      app: "docs",
+      yours: ["apps/docs/public/app.js"],
+      lacksPackages: [],
+      imports: [],
+      notWritten: ["apps/docs/app.ts", "apps/docs/processors/doc.ts"],
+    },
+    {
+      app: "dash",
+      yours: [],
+      lacksPackages: [],
+      imports: ["apps/docs/app.ts"],
+      notWritten: ["apps/dash/app.ts"],
+    },
+  ]);
+});
+
+test("an app that is all new, and the worker that imports it, are written: nothing of it is anybody's", () => {
+  const seed = { "worker.ts": "old worker\n" };
+  const template = [
+    { path: "worker.ts", content: 'import { app } from "./apps/notes/app.ts";\nnew worker\n' },
+    { path: "apps/notes/app.ts", content: 'import "./public/";\nexport const app = 1;\n' },
+    { path: "apps/notes/public/app.js", content: "the page\n" },
+  ];
+  expect(templateChanges({ template, current: seed, ...platformWrote(seed, seed) })).toMatchObject({
+    added: ["apps/notes/app.ts", "apps/notes/public/app.js"],
+    replaced: ["worker.ts"],
+    heldBack: [],
+    appsLeftOld: [],
+  });
+});
+
+test("the record keeps the last four versions the platform wrote at a path, each once", () => {
+  // a record from before the list is one hash
+  expect(writtenWith("a", "b")).toEqual(["a", "b"]);
+  expect(writtenWith(["a", "b"], "a")).toEqual(["b", "a"]);
+  expect(writtenWith(["a", "b", "c", "d"], "e")).toEqual(["b", "c", "d", "e"]);
+  expect(writtenWith(undefined, "a")).toEqual(["a"]);
+});
+
+test("a module's packages are the names it imports that are no path: a scope keeps its second part", () => {
+  expect(
+    packagesOf(
+      "apps/docs/processors/doc.ts",
+      [
+        'import * as Y from "yjs";',
+        'import { diffLines } from "diff/lib/index.js";',
+        'const merge = await import("@scope/name/deep");',
+        'import { local } from "./local.ts";',
+        '// import "commented";',
+      ].join("\n"),
+    ),
+  ).toEqual(["yjs", "diff", "@scope/name"]);
+  expect(packagesOf("README.md", 'import "yjs";')).toEqual([]);
+});
+
 test("a module's imports are its relative ones, resolved from its folder; a comment's import is none", () => {
   expect(
     importsOf(
@@ -245,6 +396,17 @@ function newer() {
     },
     { path: "AGENTS.md", content: "new guide\n" },
     { path: "apps/onboarding/app.ts", content: "the app\n" },
+  ];
+}
+
+/** A template whose Docs app is newer in every file, and has a file more that imports a package. */
+function withDocs() {
+  return [
+    { path: "worker.ts", content: "new worker\n" },
+    { path: "apps/docs/app.ts", content: "new app\n" },
+    { path: "apps/docs/public/app.js", content: "new page\n" },
+    { path: "apps/docs/processors/doc.ts", content: 'import * as Y from "yjs";\n' },
+    { path: "apps/dash/app.ts", content: "new dash\n" },
   ];
 }
 

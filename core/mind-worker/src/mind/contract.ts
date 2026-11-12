@@ -97,6 +97,24 @@ export const MindContract = defineProcessorContract({
         // a deleted file that one of the platform's own files imports: written again, with one
         // file that imports it (absent on a fact from before the rule)
         putBack: z.array(z.object({ path: z.string(), importedBy: z.string() })).optional(),
+        // an app whose newer files were not written, so that it stays one version: `yours` are
+        // its files somebody changed or deleted, `lacksPackages` what the repo's own
+        // package.json does not list (absent on a fact from before the rule)
+        appsLeftOld: z
+          .array(
+            z.object({
+              app: z.string(),
+              yours: z.array(z.string()),
+              lacksPackages: z.array(z.string()),
+              // the files of another app left old that this app's newer files import
+              imports: z.array(z.string()).optional(),
+              notWritten: z.array(z.string()),
+            }),
+          )
+          .optional(),
+        // a file outside `apps/` that was not written because it imports a file that was not
+        // (absent on a fact from before the rule)
+        heldBack: z.array(z.object({ path: z.string(), imports: z.array(z.string()) })).optional(),
       }),
     },
     "events.iterate.com/mind/template-not-published": {
