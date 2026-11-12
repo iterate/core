@@ -151,8 +151,13 @@ function originRefusal(origin: string): string | null {
   return null;
 }
 
+// THE STORE IS NAMED AT THE FIXED POINT, `itx.builtins.cfArtifacts`: the facet fetches the remote
+// that the store names, with the Worker's own fetch, and sends the repo's token there. A rule of
+// the repo's context that gives `itx.cfArtifacts` another meaning must not choose that address.
 type RepoScope = ItxEntrypointScope & {
-  cfArtifacts: Omit<CfArtifactsApi, "get"> & { get(path: string): CfArtifactRepoApi };
+  builtins: {
+    cfArtifacts: Omit<CfArtifactsApi, "get"> & { get(path: string): CfArtifactRepoApi };
+  };
 };
 
 export class RepoFacet extends StreamProcessorDurableObject<
@@ -169,11 +174,11 @@ export class RepoFacet extends StreamProcessorDurableObject<
     {
       provision: async (path) => {
         using itx = this.getItx();
-        return await itx.cfArtifacts.create(path);
+        return await itx.builtins.cfArtifacts.create(path);
       },
       teardown: async (path) => {
         using itx = this.getItx();
-        return await itx.cfArtifacts.delete(path);
+        return await itx.builtins.cfArtifacts.delete(path);
       },
     },
   );
@@ -191,7 +196,7 @@ export class RepoFacet extends StreamProcessorDurableObject<
     if (this.#remoteRead) return this.#remoteRead;
     const path = this.#path;
     using itx = this.getItx();
-    const remote = await itx.cfArtifacts.get(path).remote();
+    const remote = await itx.builtins.cfArtifacts.get(path).remote();
     await this.ctx.storage.put("git-remote", remote, { allowUnconfirmed: true });
     return (this.#remoteRead = remote);
   }
@@ -211,7 +216,7 @@ export class RepoFacet extends StreamProcessorDurableObject<
     using itx = this.getItx();
     const [remote, minted] = await Promise.all([
       this.#remote(),
-      itx.cfArtifacts.get(path).createToken(scope, TOKEN_TTL_SECONDS),
+      itx.builtins.cfArtifacts.get(path).createToken(scope, TOKEN_TTL_SECONDS),
     ]);
     const token = { token: minted.plaintext, until: asked + TOKEN_TTL_SECONDS * 1000 };
     this.#tokens[scope] = token;

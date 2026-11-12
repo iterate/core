@@ -1,4 +1,6 @@
+import { RpcTarget } from "capnweb";
 import { mindApiUrlOf, mindProvideUrlOf, protectedResourceMetadataUrlOf } from "iterate/mind-api";
+import { connectMind } from "iterate/node";
 import { attempt, type Check, mindRoot } from "./lib.ts";
 
 const ECHO = "https://httpbin.org";
@@ -175,9 +177,64 @@ export async function homeLabChecks(domain: string): Promise<Check[]> {
         };
       },
     ),
+    await privateRemote(domain, token, marker),
     await sandboxEcho(run, marker),
   );
   return checks;
+}
+
+/** A store of repos whose every repo is at a usual address of a home router. */
+class PrivateArtifacts extends RpcTarget {
+  get() {
+    return new PrivateRepo();
+  }
+  create(path: string) {
+    return { path };
+  }
+  delete() {
+    return {};
+  }
+}
+class PrivateRepo extends RpcTarget {
+  remote() {
+    return "http://192.168.0.1";
+  }
+  createToken() {
+    return { plaintext: "no-token" };
+  }
+}
+
+// The mind Worker fetches a repo's remote itself, with no door. In one new context, a rule gives
+// `itx.cfArtifacts` the meaning of a lent store whose repos are at a private address. The repo's
+// facet must not ask that store, and no fetch of the mind Worker may reach that address: the
+// repo's log is answered from the real store, or it fails with no answer from the router.
+function privateRemote(domain: string, token: string, marker: string) {
+  return attempt(
+    "home lab: a repo whose store is re-pointed to a private address reaches nothing there",
+    async () => {
+      using connection = await connectMind({ address: domain, token, signIn: false });
+      const path = `/repos/smoke-private-${marker}`;
+      const context = connection.itx.cd(path);
+      using _lend = await context.provide(`itx.smokePrivate${marker}`, new PrivateArtifacts());
+      await context.append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.cfArtifacts", target: `itx.smokePrivate${marker}` },
+      });
+      const said = (error: unknown) =>
+        `error: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200);
+      const created = await connection.itx.repos.create(path).then(() => "created", said);
+      const log = await connection.itx.repos
+        .get(path)
+        .log()
+        .then((entries) => `${entries.length} commits from the real store`, said);
+      await connection.itx.repos.delete(path).catch(() => {});
+      return {
+        // the router's own answer reads "responded <status> for http://192.168.0.1"
+        pass: !/responded \d+ for http:\/\/192\.168/.test(`${created} ${log}`),
+        detail: `${created}; log: ${log}`,
+      };
+    },
+  );
 }
 
 // Skipped with the home lab's own refusal when it runs no container engine; a first start answers

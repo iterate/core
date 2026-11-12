@@ -52,7 +52,8 @@ const mf = new Miniflare({
         env: {
           DOMAIN: { type: "text", value: domain },
           REPOS_ORIGIN: { type: "text", value: repos.origin },
-          // the mind's requests that name no secret leave through this: public addresses alone
+          // the mind's requests that name no secret, and the mind Worker's own fetches, leave
+          // through this: public addresses alone
           INTERNET: {
             type: "network",
             allow: ["public"],
@@ -96,6 +97,8 @@ const mf = new Miniflare({
           },
         },
       },
+      // the mind Worker's own fetches (link/worker.ts `Outbound`): public addresses alone
+      dev: { outboundService: { type: "worker", worker: "link", exportName: "Outbound" } },
     },
   ],
   ...("image" in sandboxes && {
