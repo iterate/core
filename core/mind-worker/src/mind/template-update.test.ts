@@ -1,7 +1,16 @@
 // The rule by which a newer template reaches a config repo that exists (template-update.ts): what
 // the platform may write, and what it must leave alone.
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { expect, test } from "vitest";
-import { importsOf, packagesOf, seedOf, templateChanges, writtenWith } from "./template-update.ts";
+import {
+  brokenByUpdate,
+  importsOf,
+  packagesOf,
+  seedOf,
+  templateChanges,
+  writtenWith,
+} from "./template-update.ts";
 
 test("a repo untouched since its seed gets the whole newer template: new files added, the platform's own files replaced", () => {
   const current = { "worker.ts": "old worker\n", "AGENTS.md": "old guide\n" };
@@ -16,6 +25,7 @@ test("a repo untouched since its seed gets the whole newer template: new files a
     putBack: [],
     appsLeftOld: [],
     heldBack: [],
+    refused: [],
   });
 });
 
@@ -199,6 +209,7 @@ test("an app is written whole or not at all: one file of it that somebody change
       yours: ["apps/docs/public/app.js"],
       lacksPackages: [],
       imports: [],
+      importedBy: [],
       notWritten: ["apps/docs/app.ts", "apps/docs/processors/doc.ts"],
     },
   ]);
@@ -268,13 +279,16 @@ test("a file of the platform's that imports a file of an app left old is held ba
     ...platformWrote(seed, current),
   });
   expect(changes.map((change) => change.path)).toEqual(["AGENTS.md"]);
-  expect(heldBack).toEqual([{ path: "worker.ts", imports: ["apps/docs/processors/doc.ts"] }]);
+  expect(heldBack).toEqual([
+    { path: "worker.ts", imports: ["apps/docs/processors/doc.ts"], importedBy: [] },
+  ]);
   expect(appsLeftOld).toEqual([
     {
       app: "docs",
       yours: ["apps/docs/public/app.js"],
       lacksPackages: [],
       imports: [],
+      importedBy: [],
       notWritten: ["apps/docs/app.ts", "apps/docs/processors/doc.ts"],
     },
     {
@@ -282,6 +296,7 @@ test("a file of the platform's that imports a file of an app left old is held ba
       yours: [],
       lacksPackages: [],
       imports: ["apps/docs/app.ts"],
+      importedBy: [],
       notWritten: ["apps/dash/app.ts"],
     },
   ]);
@@ -343,6 +358,253 @@ test("an app that is all new, and the worker that imports it, are written: nothi
     heldBack: [],
     appsLeftOld: [],
   });
+});
+
+test("a file that the platform holds back keeps back what it imports: a shared file's newer version is not written under an app left old", () => {
+  const seed = {
+    "apps/open-files.ts": "export const openFile = 1;\n",
+    "apps/live-reload/client.js": "old reload\n",
+    "apps/docs/app.ts": 'import { openFile } from "../open-files.ts";\nimport "../live-reload/";\n',
+    "apps/docs/page.js": "old page\n",
+    "apps/dash/app.ts": 'import { openFile } from "../open-files.ts";\nold dash\n',
+  };
+  const template = [
+    // the shared file renames its export, and every app's newer app.ts asks for the new name
+    { path: "apps/open-files.ts", content: "export const openFileV2 = 1;\n" },
+    { path: "apps/live-reload/client.js", content: "new reload\n" },
+    {
+      path: "apps/docs/app.ts",
+      content: 'import { openFileV2 } from "../open-files.ts";\nimport "../live-reload/";\n',
+    },
+    { path: "apps/docs/page.js", content: "new page\n" },
+    {
+      path: "apps/dash/app.ts",
+      content: 'import { openFileV2 } from "../open-files.ts";\nnew dash\n',
+    },
+  ];
+  const current = { ...seed, "apps/docs/page.js": "my own page\n" };
+  const { changes, heldBack, appsLeftOld } = templateChanges({
+    template,
+    current,
+    ...platformWrote(seed, current),
+  });
+  // the older docs/app.ts stays, so what it imports stays; the newer dash/app.ts would then ask
+  // the older shared file for a name it does not export, so the Dash stays too
+  expect(changes).toEqual([]);
+  expect(heldBack).toEqual([
+    { path: "apps/open-files.ts", imports: [], importedBy: ["apps/docs/app.ts"] },
+  ]);
+  expect(appsLeftOld).toMatchObject([
+    { app: "docs", yours: ["apps/docs/page.js"], notWritten: ["apps/docs/app.ts"] },
+    { app: "live-reload", importedBy: ["apps/docs/app.ts"] },
+    { app: "dash", imports: ["apps/open-files.ts"] },
+  ]);
+});
+
+test("a file deleted in an app left old is not put back by a file of that app which holds the template's bytes", () => {
+  const seed = {
+    "apps/docs/a.js": 'import "./b.js";\nthe same a\n',
+    "apps/docs/b.js": "old b\n",
+    "apps/docs/page.js": "old page\n",
+    "apps/docs/app.ts": "old app\n",
+  };
+  const template = [
+    { path: "apps/docs/a.js", content: 'import "./b.js";\nthe same a\n' },
+    { path: "apps/docs/b.js", content: "new b\n" },
+    { path: "apps/docs/page.js", content: "new page\n" },
+    { path: "apps/docs/app.ts", content: "new app\n" },
+  ];
+  const current = {
+    "apps/docs/a.js": seed["apps/docs/a.js"],
+    "apps/docs/page.js": "my own page\n",
+    "apps/docs/app.ts": "old app\n",
+  };
+  expect(templateChanges({ template, current, ...platformWrote(seed, current) })).toMatchObject({
+    changes: [],
+    putBack: [],
+    appsLeftOld: [{ app: "docs", yours: ["apps/docs/b.js", "apps/docs/page.js"] }],
+  });
+});
+
+test("a deleted file is not put back when its newer version imports a file held back", () => {
+  const seed = {
+    "worker.ts": 'import "./lib.ts";\nthe same worker\n',
+    "lib.ts": "old lib\n",
+    "helper.ts": 'import "./apps/docs/app.ts";\nexport const helper = 1;\n',
+    "apps/docs/app.ts": "old app\n",
+    "apps/docs/page.js": "old page\n",
+  };
+  const template = [
+    { path: "worker.ts", content: 'import "./lib.ts";\nthe same worker\n' },
+    { path: "lib.ts", content: 'import { helperV2 } from "./helper.ts";\n' },
+    { path: "helper.ts", content: 'import "./apps/docs/app.ts";\nexport const helperV2 = 1;\n' },
+    { path: "apps/docs/app.ts", content: "new app\n" },
+    { path: "apps/docs/page.js", content: "new page\n" },
+  ];
+  const { "lib.ts": gone, ...kept } = seed;
+  const current = { ...kept, "apps/docs/page.js": "my own page\n" };
+  expect(gone).toBe("old lib\n");
+  expect(templateChanges({ template, current, ...platformWrote(seed, current) })).toMatchObject({
+    changes: [],
+    putBack: [],
+    heldBack: [{ path: "helper.ts", imports: ["apps/docs/app.ts"] }],
+  });
+});
+
+test("a deleted file that is not put back holds back the newer file that imports it: the commit names no file it does not bring", () => {
+  const seed = {
+    "worker.ts": "old worker\n",
+    "lib.ts": "old lib\n",
+    "helper.ts": 'import "./apps/docs/app.ts";\nexport const helper = 1;\n',
+    "apps/docs/app.ts": "old app\n",
+    "apps/docs/page.js": "old page\n",
+  };
+  const template = [
+    // the newer worker imports lib.ts, whose newer text imports a file that is held back
+    { path: "worker.ts", content: 'import "./lib.ts";\nnew worker\n' },
+    { path: "lib.ts", content: 'import { helperV2 } from "./helper.ts";\n' },
+    { path: "helper.ts", content: 'import "./apps/docs/app.ts";\nexport const helperV2 = 1;\n' },
+    { path: "apps/docs/app.ts", content: "new app\n" },
+    { path: "apps/docs/page.js", content: "new page\n" },
+  ];
+  const current = {
+    "worker.ts": "old worker\n",
+    "helper.ts": seed["helper.ts"],
+    "apps/docs/app.ts": "old app\n",
+    "apps/docs/page.js": "my own page\n",
+  };
+  expect(templateChanges({ template, current, ...platformWrote(seed, current) })).toMatchObject({
+    changes: [],
+    putBack: [],
+    refused: [],
+    heldBack: [
+      { path: "helper.ts", imports: ["apps/docs/app.ts"] },
+      { path: "worker.ts", imports: ["lib.ts"] },
+    ],
+  });
+});
+
+test("a deleted shared file is not put back newer while a file held at its older version imports it", () => {
+  const seed = {
+    "apps/open-files.ts": "export const openFile = 1;\n",
+    "apps/docs/app.ts": 'import { openFile } from "../open-files.ts";\nold docs\n',
+    "apps/docs/page.js": "old page\n",
+    "apps/dash/app.ts": 'import { openFileV2 } from "../open-files.ts";\nthe same dash\n',
+  };
+  const template = [
+    { path: "apps/open-files.ts", content: "export const openFileV2 = 1;\n" },
+    {
+      path: "apps/docs/app.ts",
+      content: 'import { openFileV2 } from "../open-files.ts";\nnew docs\n',
+    },
+    { path: "apps/docs/page.js", content: "new page\n" },
+    // the Dash holds the template's bytes already, and imports the deleted shared file
+    { path: "apps/dash/app.ts", content: seed["apps/dash/app.ts"] },
+  ];
+  const current = {
+    "apps/docs/app.ts": seed["apps/docs/app.ts"],
+    "apps/docs/page.js": "my own page\n",
+    "apps/dash/app.ts": seed["apps/dash/app.ts"],
+  };
+  expect(templateChanges({ template, current, ...platformWrote(seed, current) })).toMatchObject({
+    changes: [],
+    putBack: [],
+    refused: [],
+  });
+});
+
+// THE LAST LOOK. Each case is what an update decided before the rule that now prevents it: the
+// guard is fed that decision as it was, and names what it would break.
+const OLD_DOCS = {
+  "apps/docs/app.ts": 'import { openFile } from "../open-files.ts";\nold docs\n',
+  "apps/docs/page.js": "my own page\n",
+  "apps/open-files.ts": "export const openFile = 1;\n",
+  "worker.ts": "old worker\n",
+  "helper.ts": 'import "./apps/docs/app.ts";\n',
+};
+test.for([
+  {
+    fault: "a newer worker imports a file that the newer app adds, and the app was left old",
+    changes: [{ path: "worker.ts", content: 'import "./apps/docs/processors/doc.ts";\n' }],
+    says: "worker.ts imports apps/docs/processors/doc.ts, which is not in the repo after this update",
+  },
+  {
+    fault: "a newer importer had a file deleted in an app left old put back",
+    changes: [
+      { path: "worker.ts", content: 'import "./apps/docs/extra.ts";\n' },
+      { path: "apps/docs/extra.ts", content: "new extra\n" },
+    ],
+    says: "apps/docs/extra.ts is a file of apps/docs, which stays at its version",
+  },
+  {
+    fault: "a shared file's newer version was written under an app left old",
+    changes: [{ path: "apps/open-files.ts", content: "export const openFileV2 = 1;\n" }],
+    says: "apps/open-files.ts is imported by apps/docs/app.ts, which stays at its older version",
+  },
+  {
+    fault: "a file of the app that holds the template's bytes had a deleted file put back newer",
+    changes: [{ path: "apps/docs/b.js", content: "new b\n" }],
+    says: "apps/docs/b.js is a file of apps/docs, which stays at its version",
+  },
+  {
+    fault: "a file was put back newer beside a file held at its older version",
+    changes: [{ path: "lib.ts", content: 'import { helperV2 } from "./helper.ts";\n' }],
+    says: "lib.ts imports helper.ts, which stays at its older version",
+  },
+  {
+    fault: "a deleted file was not put back, and the newer file that imports it was written",
+    changes: [{ path: "worker.ts", content: 'import "./lib.ts";\nnew worker\n' }],
+    says: "worker.ts imports lib.ts, which is not in the repo after this update",
+  },
+  {
+    fault: "a deleted shared file was put back newer while an older held file imports it",
+    current: (({ "apps/open-files.ts": gone, ...rest }) => rest)(OLD_DOCS),
+    changes: [{ path: "apps/open-files.ts", content: "export const openFileV2 = 1;\n" }],
+    says: "apps/open-files.ts is imported by apps/docs/app.ts, which stays at its older version",
+  },
+])("the last look refuses an update in which $fault", ({ changes, says, current }) => {
+  const broken = brokenByUpdate({
+    current: current || OLD_DOCS,
+    changes,
+    held: ["apps/docs/app.ts", "helper.ts"],
+    appsLeftOld: ["docs"],
+  });
+  expect(broken.map(({ path, why }) => `${path} ${why}`)).toContain(says);
+});
+
+test("the default template itself passes the last look: a new mind gets every file of it", () => {
+  // The guard reads a file's text for imports as `importsOf` does, so a line of the template that
+  // only looks like an import (in a string, in a block comment) would name a file that is not
+  // there, and every mind's update would then write nothing. Such a line fails here instead.
+  const folder = join(import.meta.dirname, "../../../configs/default");
+  const template = readdirSync(folder, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && !entry.parentPath.includes("node_modules"))
+    .map((entry) => {
+      const path = relative(folder, join(entry.parentPath, entry.name));
+      return { path, content: readFileSync(join(folder, path), "utf8") };
+    });
+  const { refused, changes } = templateChanges({
+    template,
+    current: {},
+    written: new Set(),
+    untouched: new Set(),
+  });
+  expect({ refused, written: changes.length }).toEqual({ refused: [], written: template.length });
+  expect(template.length).toBeGreaterThan(40);
+});
+
+test("the last look passes an update that brings what it names", () => {
+  expect(
+    brokenByUpdate({
+      current: { "worker.ts": "old\n" },
+      changes: [
+        { path: "worker.ts", content: 'import "./apps/notes/";\n' },
+        { path: "apps/notes/app.ts", content: "the app\n" },
+      ],
+      held: [],
+      appsLeftOld: [],
+    }),
+  ).toEqual([]);
 });
 
 test("the record keeps the last four versions the platform wrote at a path, each once", () => {

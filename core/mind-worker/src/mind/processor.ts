@@ -455,12 +455,30 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
         (path) => Object.hasOwn(now, path) && versionsWritten(written[path]).includes(now[path]!),
       ),
     );
-    const { changes, added, replaced, platforms, leftAlone, putBack, appsLeftOld, heldBack } =
-      templateChanges({
-        template,
-        current,
-        written: new Set(Object.keys(written)),
-        untouched,
+    const {
+      changes,
+      added,
+      replaced,
+      platforms,
+      leftAlone,
+      putBack,
+      appsLeftOld,
+      heldBack,
+      refused,
+    } = templateChanges({
+      template,
+      current,
+      written: new Set(Object.keys(written)),
+      untouched,
+    });
+    if (refused.length > 0)
+      console.warn({
+        event: "mind.template-refused",
+        namespace: "mind",
+        message:
+          "the template's update would have left a config repo that does not load, so it wrote nothing",
+        template: name,
+        refused,
       });
     for (const app of appsLeftOld)
       console.info({
@@ -497,13 +515,13 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
         template: name,
         written: { ...written, ...nowWritten },
         commit: commit?.commitOid || kept?.commit,
-        ...((appsLeftOld.length > 0 || heldBack.length > 0) && {
+        ...((appsLeftOld.length > 0 || heldBack.length > 0 || refused.length > 0) && {
           leftOldAt: commit?.commitOid || tip,
         }),
       },
       // a comparison of the same templates again says only what it wrote
       fact:
-        changes.length || (leftAlone.length && !sameTemplates)
+        changes.length || ((leftAlone.length || refused.length) && !sameTemplates)
           ? {
               type: "events.iterate.com/mind/template-applied" as const,
               idempotencyKey: `mind/template-applied:${hash.slice(0, 16)}:${tip}`,
@@ -516,6 +534,7 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
                 putBack,
                 appsLeftOld,
                 heldBack,
+                refused,
               },
             }
           : undefined,
