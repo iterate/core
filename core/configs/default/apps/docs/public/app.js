@@ -226,7 +226,7 @@ function Files({ repo, list, path, open }) {
     </select>
   `;
   return html`
-    <${SidebarGroup} className="docs-files">
+    <${SidebarGroup}>
       <${SidebarGroupLabel}>${names.length > 1 ? picker : repo}<//>
       <${SidebarGroupContent}>
         <${DocTree} list=${list} openPath=${path} onOpen=${open} author=${author} />

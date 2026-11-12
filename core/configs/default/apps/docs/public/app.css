@@ -22,19 +22,3 @@ body,
   color: inherit;
   font: inherit;
 }
-
-/* The file tree fills what the sidebar has left: the tree draws only the rows that fit its own
-   height, so its box needs one. The sidebar's group and its content are made columns that grow. */
-.docs-files,
-.docs-files [data-slot="sidebar-group-content"] {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-}
-
-/* The tree's element says "light dark" for itself, which would follow the visitor's system. It
-   takes the page's scheme (apps/theme.css) instead, so it is light when the apps are light. */
-.docs-files [aria-label="Files"] > * {
-  color-scheme: inherit;
-}
