@@ -4,6 +4,7 @@ import {
   bodyTextOf,
   HELD_BODY_LIMIT,
   isTightening,
+  methodsOf,
   requestOfText,
   requestText,
   ruleMatches,
@@ -148,6 +149,52 @@ test.for([
   expect(
     ApprovalRule.safeParse({ methods: ["POST"], hosts: ["a.com"], freePaths: [path] }),
   ).toMatchObject({ success: false });
+});
+
+test("a request counts as every method it names: a POST that a header makes a DELETE is held by a rule for DELETE", () => {
+  const deletes = ApprovalRule.parse({ methods: ["DELETE"], hosts: ["gmail.googleapis.com"] });
+  const post = (headers: Record<string, string>) =>
+    methodsOf(new Request("https://gmail.googleapis.com/x", { method: "POST", headers }));
+  expect([
+    post({}),
+    post({ "X-HTTP-Method-Override": "delete" }),
+    post({ "x-http-method": "PATCH", "X-Method-Override": " Delete " }),
+  ]).toEqual([["POST"], ["POST", "DELETE"], ["POST", "PATCH", "DELETE"]]);
+  const url = "https://gmail.googleapis.com/x";
+  expect([
+    ruleMatches(deletes, post({}), url, null),
+    ruleMatches(deletes, post({ "X-HTTP-Method-Override": "delete" }), url, null),
+    ruleMatches(deletes, post({ "X-Method-Override": "DELETE" }), url, null),
+  ]).toEqual([false, true, true]);
+});
+
+test("a letter written as an escape once more, inside a string that its host reads again, is that letter", () => {
+  const rule = ApprovalRule.parse({
+    methods: ["POST"],
+    hosts: ["api.github.com"],
+    jsonStrings: ["deleteRepo"],
+  });
+  // GraphQL in JSON: JSON reads \\u0064 as the six characters \u0064, and GraphQL reads those as d
+  const body = (query: string) => JSON.stringify({ query });
+  const url = "https://api.github.com/graphql";
+  expect([
+    ruleMatches(rule, "POST", url, body("mutation { deleteRepo }")),
+    ruleMatches(rule, "POST", url, body("mutation { \\u0064eleteRepo }")),
+    ruleMatches(rule, "POST", url, body("mutation { \\u{64}eleteRepo }")),
+    ruleMatches(rule, "POST", url, body("query { viewer { login } }")),
+    // an escape for no character at all is left as it is written, and nothing throws
+    ruleMatches(rule, "POST", url, body("query { \\u{FFFFFF} }")),
+  ]).toEqual([true, true, true, false, false]);
+});
+
+test("a string of the body that is only marks which are not seen is refused: it would compare as nothing", () => {
+  const rule = (jsonStrings: string[]) =>
+    ApprovalRule.safeParse({ methods: ["POST"], hosts: ["a.com"], jsonStrings }).success;
+  expect([rule(["Send"]), rule(["\u200b"]), rule(["Send", "\u200b\u00ad"])]).toEqual([
+    true,
+    false,
+    false,
+  ]);
 });
 
 test("a rule with strings of the body still asks for its method and host first", () => {

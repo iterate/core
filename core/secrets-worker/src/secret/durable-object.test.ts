@@ -322,6 +322,28 @@ test("a rule with a path that never waits lets a file go there, and refuses the 
   }).toEqual({ statuses: [200, 415, 415], kinds: [null, "refused", "refused"], sends: 1 });
 });
 
+test("a POST that a header makes a DELETE is held by a rule for DELETE, and a plain POST is not", async () => {
+  const { secret, sent, decide } = await vault();
+  await decide(MEMBER, {
+    type: "events.iterate.com/secret/approval-rule-configured",
+    payload: { rule: { methods: ["DELETE"], hosts: ["gmail.googleapis.com"] } },
+  });
+  const post = (headers: Record<string, string>) =>
+    secret.fetch(
+      useRequest("https://gmail.googleapis.com/gmail/v1/users/me/messages/m1", {
+        method: "POST",
+        headers,
+        body: "{}",
+      }),
+    );
+  const answers = [await post({}), await post({ "X-HTTP-Method-Override": "DELETE" })];
+  expect({
+    statuses: answers.map((answer) => answer.status),
+    kinds: answers.map((answer) => answer.headers.get(VAULT_ANSWER_HEADER)),
+    sends: sent.length,
+  }).toEqual({ statuses: [200, 202], kinds: [null, "held"], sends: 1 });
+});
+
 test("a rule cannot be loosened without a signature, and a member's signed statement removes it", async () => {
   const { secret, decide } = await vault();
   const by = { userId: "user_aaaa", email: "member@example.com" };

@@ -24,7 +24,13 @@ export const ApprovalRule = z
           ),
       )
       .max(20, "name 20 strings of the body at most")
-      .optional(),
+      .optional()
+      // A string of marks that are not seen compares as nothing, and nothing is inside every
+      // string: such a rule would read as one that holds more, and would hold a body with no
+      // string in it not at all.
+      .refine((strings) => (strings || []).every((string) => comparable(string)), {
+        error: "a string of the body has a letter, a digit or a sign that is seen",
+      }),
     /** A request to a path under one of these never waits, whatever its body (`pathIsFree`). For
      *  a host that takes files at an address of its own: JMAP's upload, whose body is no JSON
      *  and would else always wait. Each starts and ends with `/` and names a folder at least. */
@@ -50,11 +56,22 @@ export const ApprovalRule = z
   }));
 export type ApprovalRule = z.infer<typeof ApprovalRule>;
 
+/** EVERY METHOD A HOST MAY TAKE THE REQUEST FOR: its own, and one that a header names. Some hosts
+ *  (Google's APIs among them) run a POST with `X-HTTP-Method-Override: DELETE` as a DELETE. A rule
+ *  that names DELETE holds that POST too. */
+export function methodsOf(request: { method: string; headers: Headers }): string[] {
+  const named = ["x-http-method-override", "x-http-method", "x-method-override"].flatMap(
+    (header) => request.headers.get(header) || [],
+  );
+  return [request.method, ...named].map((method) => method.trim().toUpperCase());
+}
+
 /** Whether the rule's methods and hosts name the request, at a path the rule does not free: all
- *  that a rule with no `jsonStrings` asks, and what is asked before a body is read. */
-export function ruleNames(rule: ApprovalRule, method: string, url: string): boolean {
+ *  that a rule with no `jsonStrings` asks, and what is asked before a body is read. `method` is
+ *  the request's own, or every method it may be taken for (`methodsOf`). */
+export function ruleNames(rule: ApprovalRule, method: string | string[], url: string): boolean {
   return (
-    rule.methods.includes(method.toUpperCase()) &&
+    [method].flat().some((one) => rule.methods.includes(one.toUpperCase())) &&
     rule.hosts.includes(new URL(url).hostname) &&
     !pathIsFree(rule.freePaths, url)
   );
@@ -77,7 +94,7 @@ function pathIsFree(freePaths: readonly string[] | undefined, url: string): bool
  *  other body waits, since the host may read a body in a way this does not. */
 export function ruleMatches(
   rule: ApprovalRule,
-  method: string,
+  method: string | string[],
   url: string,
   body: string | null,
 ): boolean {
@@ -105,9 +122,15 @@ function isJson(text: string): boolean {
 }
 
 /** A string as it is compared: letter case, compatibility forms, and characters that are not
- *  seen (controls, zero-width marks) do not make another string of it. */
+ *  seen (controls, zero-width marks) do not make another string of it. A letter written once more
+ *  as `\uXXXX` inside the string is that letter: a host that reads the string as a language of its
+ *  own (GraphQL in JSON) reads it so. */
 const comparable = (string: string) =>
   string
+    .replace(/\\u\{([0-9a-f]{1,6})\}|\\u([0-9a-f]{4})/gi, (written, braced, plain) => {
+      const code = Number.parseInt(braced || plain, 16);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : written;
+    })
     .normalize("NFKC")
     .replace(/[\p{Cc}\p{Cf}]/gu, "")
     .toLowerCase();

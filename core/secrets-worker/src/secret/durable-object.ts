@@ -73,6 +73,7 @@ import {
   HELD_BODY_LIMIT,
   HeldAnswer,
   isTightening,
+  methodsOf,
   requestOfText,
   requestText,
   ruleMatches,
@@ -1266,7 +1267,11 @@ export class SecretDurableObject extends DurableObject<Env> {
       // No await from here to the dispatch: a rule set while this request was being prepared (a
       // refresh can take seconds) holds it too.
       const ruleNow = this.#rule();
-      if (!held && ruleNow && (upgrades || ruleMatches(ruleNow, request.method, request.url, body)))
+      if (
+        !held &&
+        ruleNow &&
+        (upgrades || ruleMatches(ruleNow, methodsOf(request), request.url, body))
+      )
         throw new HeldAnswer(
           409,
           "refused",
@@ -1295,9 +1300,17 @@ export class SecretDurableObject extends DurableObject<Env> {
         throw new SecretRefused(
           `itx.fetch: ${path} has an approval rule, so it opens no WebSocket`,
         );
-      if (stored && !waitFor && rule?.jsonStrings && ruleNames(rule, request.method, request.url))
+      if (
+        stored &&
+        !waitFor &&
+        rule?.jsonStrings &&
+        ruleNames(rule, methodsOf(request), request.url)
+      )
         body = await bodyTextOf(request);
-      if (stored && (waitFor || (rule && ruleMatches(rule, request.method, request.url, body)))) {
+      if (
+        stored &&
+        (waitFor || (rule && ruleMatches(rule, methodsOf(request), request.url, body)))
+      ) {
         const approved = await this.#hold(path, request, waitFor, facts);
         held = { digest: approved.digest, release: approved.release };
         request = approved.request;
