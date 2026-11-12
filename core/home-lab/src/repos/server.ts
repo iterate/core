@@ -109,6 +109,10 @@ async function gitHttpBackend(
       REMOTE_ADDR: "127.0.0.1",
     },
   });
+  // The backend can answer and exit with its input unread (a request it refuses): the write then
+  // fails with EPIPE. Its own answer and exit code say what happened. With no listener that error
+  // would end the whole process, the mind with it.
+  backend.stdin.on("error", () => {});
   backend.stdin.end(body);
   let stderr = "";
   backend.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));

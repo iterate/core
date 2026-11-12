@@ -57,6 +57,34 @@ void test("a repo's token opens that repo's git traffic alone: no other repo, no
   }
 });
 
+void test("a request that git refuses before it reads the body is answered, and the store goes on", async () => {
+  const store = await serveRepos({
+    dir: mkdtempSync(join(tmpdir(), "repos-")),
+    token: STORE,
+    port: 0,
+  });
+  try {
+    const headers = { authorization: `Bearer ${STORE}` };
+    assert.equal(
+      (await fetch(`${store.origin}/_repos/scratch`, { method: "PUT", headers })).status,
+      201,
+    );
+    // no service of git by that name: `git http-backend` answers and exits with the body unread.
+    // Eight megabytes do not fit the pipe, so the write to it fails with EPIPE.
+    const refused = await fetch(`${store.origin}/scratch.git/no-such-service`, {
+      method: "POST",
+      headers,
+      body: new Uint8Array(8 * 1024 * 1024),
+    });
+    await refused.arrayBuffer();
+    assert.ok(refused.status >= 400, String(refused.status));
+    // the store's process is still there for the next request
+    assert.equal((await fetch(`${store.origin}/_repos/scratch`, { headers })).status, 200);
+  } finally {
+    store.close();
+  }
+});
+
 void test("a token that is over, changed, or signed by another store says nothing", async () => {
   const grant = { repo: "scratch", scope: "read", expires: Date.now() + HOUR } as const;
   const token = await repoToken(STORE, grant);
