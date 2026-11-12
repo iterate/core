@@ -94,6 +94,85 @@ test("a row's target may carry an event that is no row, and a row whose own targ
     ).not.toThrow();
 });
 
+// A LENT STUB. When loaded code lends a live object, `provide` writes a rule for it and
+// `subscribe` a subscription, each with the stub as its target (../iterate-context.ts).
+const RULE_ROW = "events.iterate.com/itx/rewrite-rule-configured";
+const SUBSCRIPTION = "events.iterate.com/itx/subscription-configured";
+
+test("loaded code writes the row of its own lend: a rule at the stub under the rule's match, and a subscription at the stub under its name", () => {
+  for (const row of [
+    {
+      type: RULE_ROW,
+      payload: { match: "itx.tools.browser", target: stubAt("itx.tools.browser") },
+    },
+    // the key is the match as `provide` spells it, whichever way the row spells the match
+    {
+      type: RULE_ROW,
+      payload: { match: ["itx", "tools", "browser"], target: stubAt("itx.tools.browser") },
+    },
+    {
+      type: RULE_ROW,
+      payload: {
+        match: "itx.tools.browser",
+        target: "itx.builtins.rpcStubs.get('itx.tools.browser')",
+      },
+    },
+    { type: SUBSCRIPTION, payload: { name: "live", target: stubAt("subscription:live") } },
+  ])
+    expect(() => admitLoadedCodeRow(row, "/apps/x")).not.toThrow();
+});
+
+test.for([
+  [
+    "a rule at the stub of another name",
+    { type: RULE_ROW, payload: { match: "itx.mine", target: stubAt("itx.whatsapp.jo") } },
+  ],
+  [
+    "a rule at a callback's stub",
+    { type: RULE_ROW, payload: { match: "itx.mine", target: stubAt("subscription:live") } },
+  ],
+  [
+    "a rule with a step after the stub",
+    { type: RULE_ROW, payload: { match: "itx.mine", target: stubAt("itx.mine", "send") } },
+  ],
+  [
+    "a rule with one more argument in the get",
+    {
+      type: RULE_ROW,
+      payload: {
+        match: "itx.mine",
+        target: ["itx", "builtins", "rpcStubs", ["get", "itx.mine", {}]],
+      },
+    },
+  ],
+  ["a rule whose match is no name", { type: RULE_ROW, payload: { match: 7, target: stubAt("7") } }],
+  [
+    "a subscription at the stub of another subscription",
+    { type: SUBSCRIPTION, payload: { name: "mine", target: stubAt("subscription:live") } },
+  ],
+  [
+    "a subscription at a lent name's stub",
+    { type: SUBSCRIPTION, payload: { name: "mine", target: stubAt("itx.whatsapp.jo") } },
+  ],
+  [
+    "a subscription with a step after the stub",
+    { type: SUBSCRIPTION, payload: { name: "mine", target: stubAt("subscription:mine", "push") } },
+  ],
+  [
+    "a subscription with no name",
+    { type: SUBSCRIPTION, payload: { target: stubAt("subscription:undefined") } },
+  ],
+  [
+    "an ingress row at a stub",
+    {
+      type: "events.iterate.com/itx/ingress-configured",
+      payload: { target: stubAt("itx.whatsapp.jo") },
+    },
+  ],
+] as const)("loaded code writes no row at a lent stub but its own lend's: %s", ([, row]) => {
+  expect(() => admitLoadedCodeRow(row, "/apps/x")).toThrow("is not a loaded worker's word");
+});
+
 // Rows in two parts, a rule with a hole and the call that fills it: `admitRowsOfCall` in
 // ./itx-expression-rewriting.ts says what the two make.
 const RULE = "events.iterate.com/itx/rewrite-rule-configured";
@@ -253,4 +332,9 @@ function mindWith(tables: Record<string, ItxExpressionRewriteRule[]>) {
     /** As the delivery loop reads a target that is a call: the call runs then. */
     run: (path: string, call: ItxExpression, caller: Caller) => at(path, caller).evaluate(call),
   };
+}
+
+/** A lent stub as a row's target: the stub under `key`, and what a row may spell after it. */
+function stubAt(key: string, ...after: unknown[]): unknown[] {
+  return ["itx", "builtins", "rpcStubs", ["get", key], ...after];
 }

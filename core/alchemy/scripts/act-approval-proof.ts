@@ -1688,6 +1688,73 @@ await run(
 );
 
 await run(
+  "loaded code writes no row at a lent stub but its own lend's: a rule at the stub of another name is refused, and its own callback still delivers",
+  async () => {
+    const RULE = "events.iterate.com/itx/rewrite-rule-configured";
+    const at = `/proof/own-lend-${marker}`;
+    const back = `itx.proofBack${marker}`;
+    const own = `proof-own-${marker}`;
+    // a stub that another lender would hold under its own name in this context
+    const foreign = {
+      type: RULE,
+      payload: {
+        match: back,
+        target: ["itx", "builtins", "rpcStubs", ["get", `itx.proofOther${marker}`]],
+      },
+    };
+    const attempt = await root()
+      .cd(at)
+      .run(`async (itx) => { await itx.append(${JSON.stringify(foreign)}); return "written"; }`)
+      .then(
+        (answer) => ({ answer: String(answer), refused: "" }),
+        // no answer: the call was refused, with these words
+        (error: unknown) => ({
+          answer: "",
+          refused: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    const landed = await root().cd(at).rewriteRules.get(back);
+    // Loaded code lends a callback of its own: `subscribe` writes the row at that stub for it.
+    const delivered = z.object({ got: z.number(), target: z.string().nullable() }).parse(
+      await root()
+        .cd(at)
+        .run(
+          `async (itx) => {
+            let got = 0;
+            await itx.subscribe({ name: ${JSON.stringify(own)}, consumes: ["proof/own-${marker}"], target: () => { got += 1; } });
+            await itx.append({ type: "proof/own-${marker}", payload: {} });
+            for (let turn = 0; turn < 40 && !got; turn += 1) await new Promise((resolve) => setTimeout(resolve, 250));
+            const row = await itx.subscriptions.get(${JSON.stringify(own)});
+            return { got, target: row ? String(row.target) : null };
+          }`,
+        ),
+    );
+    // whatever came of it, the proof's rows go, as the member
+    await root()
+      .cd(at)
+      .subscribe({ name: own, target: null })
+      .catch(() => undefined);
+    if (landed)
+      await root()
+        .cd(at)
+        .append({ type: RULE, payload: { match: back, target: null } });
+    must(!landed, `the rule landed in ${at}, and is taken out again: ${JSON.stringify(landed)}`);
+    must(
+      attempt.refused.includes("is not a loaded worker's word"),
+      `the append ended with ${JSON.stringify(attempt)}`,
+    );
+    must(
+      delivered.got === 1 &&
+        delivered.target === `itx.builtins.rpcStubs.get('subscription:${own}')`,
+      `loaded code's own callback: ${JSON.stringify(delivered)}`,
+    );
+    return {
+      detail: `the rule was refused: ${attempt.refused.slice(0, 90)}; the callback got its event through ${delivered.target}`,
+    };
+  },
+);
+
+await run(
   "the member removes the bridge's key on /keys with the passkey, and the bridge lends no more",
   async () => {
     await page.goto(`${issuer}/keys`);

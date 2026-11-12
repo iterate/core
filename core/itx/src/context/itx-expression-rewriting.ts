@@ -10,6 +10,7 @@ import {
 } from "iterate/lib";
 import type { RewriteRuleConfigured, RewriteRuleListEntry } from "iterate/api";
 import {
+  canonicalItxExpressionPrefix,
   normalizedItxExpression,
   containsItxExpressionHole,
   isItxExpressionHole,
@@ -647,8 +648,35 @@ export function admitLoadedCodeRow(
   // a live object is checked when it is lent; a copy target's path may be anywhere in the mind
   if (typeof target !== "string" && !Array.isArray(target)) return;
   const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
-  if (builtInsGetStep(expression, "rpcStubs")) return;
+  if (isOwnLendRow(event, expression)) return;
   admitLoadedCodeExpression(expression, landsAt);
+}
+
+/** THE ONE ROW AT A LENT STUB THAT LOADED CODE WRITES: the row that `provide` and `subscribe`
+ *  write for it when it lends a live object (../iterate-context.ts). A rule whose target is the
+ *  stub under the rule's own match, or a subscription whose target is the stub under its own
+ *  name: the `get` and its one key, with nothing after it. A stub under any other key is another
+ *  lender's, which this context's rows may keep from its code; and an ingress row is written by
+ *  neither verb. */
+function isOwnLendRow(event: { type: string; payload?: unknown }, target: ItxExpression): boolean {
+  const lent = builtInsGetStep(target, "rpcStubs");
+  if (!lent || lent.length !== 2 || target.length !== 4) return false;
+  const [, key] = lent;
+  // the row's fields by name: a row that loaded code wrote may hold anything
+  const fields = new Map<string, unknown>(Object.entries(Object(event.payload)));
+  if (event.type === "events.iterate.com/itx/subscription-configured") {
+    const name = fields.get("name");
+    return typeof name === "string" && key === `subscription:${name}`;
+  }
+  if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") return false;
+  const match = fields.get("match");
+  if (typeof match !== "string" && !Array.isArray(match)) return false;
+  try {
+    // as `provide` makes the key: one spelling for every spelling of the match
+    return key === canonicalItxExpressionPrefix(match);
+  } catch {
+    return false;
+  }
 }
 
 /** WHOSE ROWS ARE CHECKED: loaded code's, and those of a call that runs a stored row's target
