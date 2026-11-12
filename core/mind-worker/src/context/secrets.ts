@@ -15,6 +15,7 @@ import type { ReachableContext } from "core-itx";
 import { platformOriginOf } from "iterate/mind-api";
 import type {
   Door,
+  GrantRefreshed,
   SecretAnswer,
   SecretDescription,
   SecretRefusal,
@@ -24,10 +25,13 @@ import type {
 import { hopCaller } from "./hop-caller.ts";
 
 export const SECRETS_ROOT_DESCRIPTION =
-  'the mind\'s secrets, kept in the secrets Worker: `secrets.set("/secrets/<name>", material, { urls, refresh?, public? })` · `delete(path)` · `describe(path)` → { set, urls, refresh, public } · `list()` · `collectFromUser({ path, egress: { urls }, description?, fields?, redirectUrl? })` → { url } a person opens to type the value · `beginOAuth(path, { authorizationEndpoint, tokenEndpoint, clientId, clientSecret?, scope?, urls?, next? })` → { authorizationUrl, nonce } · `oauthResult(path, { nonce })` · `oauthCallbackUrl()` · `signHmac(path, { payload, field?, encoding? })` · `verifyHmac(path, { payload, signature, field? })` · `verifyEquals(path, { value, field? })`; use one in `itx.fetch` as `getSecret("/secrets/<name>")` in a header (or the URL), sent only to its `urls`. Each fact lands on `/secrets/<name>`. What a secret may be used for is fixed when it is made (`set`, `collectFromUser`, `beginOAuth`) and shown to whoever gives it: `placement: "url"` lets its placeholder sit in a URL, else headers alone; `operations: ["signHmac", …]` names the operations it answers, else none, each limited per minute; `lendTo: ["/secrets/<name>", …]` names the secrets whose refresh may borrow it as a client secret or an App key, else none; `anyoneWithLink: true` lets anyone holding the link fill the form or consent, else a signed-in member alone';
+  'the mind\'s secrets, kept in the secrets Worker: `secrets.set("/secrets/<name>", material, { urls, refresh?, public? })` · `delete(path)` · `describe(path)` → { set, urls, refresh, public } · `list()` · `refreshGrants()` → [{ path, outcome }] refreshes each grant of a person that the iterate Cloud brokers (the schedule of the mind calls it once a day) · `collectFromUser({ path, egress: { urls }, description?, fields?, redirectUrl? })` → { url } a person opens to type the value · `beginOAuth(path, { authorizationEndpoint, tokenEndpoint, clientId, clientSecret?, scope?, urls?, next? })` → { authorizationUrl, nonce } · `oauthResult(path, { nonce })` · `oauthCallbackUrl()` · `signHmac(path, { payload, field?, encoding? })` · `verifyHmac(path, { payload, signature, field? })` · `verifyEquals(path, { value, field? })`; use one in `itx.fetch` as `getSecret("/secrets/<name>")` in a header (or the URL), sent only to its `urls`. Each fact lands on `/secrets/<name>`. What a secret may be used for is fixed when it is made (`set`, `collectFromUser`, `beginOAuth`) and shown to whoever gives it: `placement: "url"` lets its placeholder sit in a URL, else headers alone; `operations: ["signHmac", …]` names the operations it answers, else none, each limited per minute; `lendTo: ["/secrets/<name>", …]` names the secrets whose refresh may borrow it as a client secret or an App key, else none; `anyoneWithLink: true` lets anyone holding the link fill the form or consent, else a signed-in member alone';
 
 /** How many of the vault's sessions `list()` has open at once, where it asks path by path. */
 const DESCRIBED_AT_ONCE = 16;
+
+/** How many calls of the vault one `refreshGrants()` makes: each refreshes twenty grants. */
+const MOST_REFRESH_CALLS = 50;
 
 /** Whether a call failed because its receiver has no such verb: a Worker from before the verb. */
 const isNoSuchVerb = (error: unknown) =>
@@ -51,6 +55,26 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
     (verb: SecretOperation) =>
     (path: string, input: unknown): Promise<string | boolean> =>
       record<string | boolean>(call(verb, path, input));
+  /** Every path of a secret that the mind's `/secrets` log names, a deleted secret's too. */
+  const knownPaths = async (): Promise<string[]> => {
+    const parent = context.context("/secrets");
+    const paths = new Set<string>();
+    for (let after = 0; ;) {
+      const page = await parent.read(after, 500);
+      for (const event of page.events) {
+        const childPath = (event.payload as { childPath?: unknown } | undefined)?.childPath;
+        if (
+          event.type === "events.iterate.com/itx/child-created" &&
+          typeof childPath === "string" &&
+          SECRET_PATH.test(childPath)
+        )
+          paths.add(childPath);
+      }
+      if (page.atHead || page.scannedThroughOffset <= after) break;
+      after = page.scannedThroughOffset;
+    }
+    return [...paths].sort();
+  };
   return {
     set: (
       path: string,
@@ -62,23 +86,7 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
     // The secrets that are set, in one call of the vault. The paths that the mind's log names go
     // along as `known`: core/secrets-worker/src/secret-list.ts says what the vault does with them.
     list: async (): Promise<SecretDescription[]> => {
-      const parent = context.context("/secrets");
-      const paths = new Set<string>();
-      for (let after = 0; ;) {
-        const page = await parent.read(after, 500);
-        for (const event of page.events) {
-          const childPath = (event.payload as { childPath?: unknown } | undefined)?.childPath;
-          if (
-            event.type === "events.iterate.com/itx/child-created" &&
-            typeof childPath === "string" &&
-            SECRET_PATH.test(childPath)
-          )
-            paths.add(childPath);
-        }
-        if (page.atHead || page.scannedThroughOffset <= after) break;
-        after = page.scannedThroughOffset;
-      }
-      const known = [...paths].sort();
+      const known = await knownPaths();
       try {
         return await releasedAnswer(egress.listSecrets(known));
       } catch (error) {
@@ -93,6 +101,25 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
           ...(await Promise.all(known.slice(from, from + DESCRIBED_AT_ONCE).map(describe))),
         );
       return described.filter((secret) => secret.set);
+    },
+    // The persons' grants that the Cloud brokers, refreshed now: the mind's schedule calls it
+    // once a day (core/secrets-worker/src/grant-refresh.ts says why). One call of the vault, and
+    // each grant's outcome is a fact on that secret's log.
+    refreshGrants: async () => {
+      const known = await knownPaths();
+      const grants: GrantRefreshed[] = [];
+      // The vault refreshes twenty at a time and says where it stopped: the mind goes on from
+      // there, so every grant is reached, and each one's row is in the answer.
+      for (let after: string | undefined, calls = 0; calls < MOST_REFRESH_CALLS; calls += 1) {
+        const walked = await record(releasedAnswer(egress.refreshGrants(known, after)));
+        grants.push(...walked.grants);
+        if (!walked.next) return grants;
+        after = walked.next;
+      }
+      throw codedError(
+        "UNAVAILABLE",
+        `secrets.refreshGrants: more grants than ${MOST_REFRESH_CALLS} calls of the vault reach; ${grants.length} were asked, the last at ${grants.at(-1)?.path}`,
+      );
     },
     importSealed: (path: string, cell: string, proof: string) =>
       record(call("importSealed", path, { cell, proof })),

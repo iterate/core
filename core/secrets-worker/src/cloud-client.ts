@@ -39,6 +39,24 @@ const CloudClient = z.object({
 });
 export type CloudClient = z.infer<typeof CloudClient> & { name: string };
 
+/** The names of the Cloud's clients that are GitHub Apps: the ones that mint an installation's
+ *  token. None when the stack names no Cloud. A Cloud that does not answer is an error: a caller
+ *  that asks which grants to refresh must not read "none" from a Cloud that is down. */
+export async function githubClientsOf(origin: string | undefined): Promise<string[]> {
+  if (!origin) return [];
+  const answer = await fetch(`${origin}/.well-known/iterate-cloud`, { redirect: "manual" });
+  const facts: unknown = answer.ok ? await answer.json().catch(() => null) : null;
+  const parsed = z.object({ clients: z.record(z.string(), z.unknown()) }).safeParse(facts);
+  if (!parsed.success)
+    throw codedError(
+      "UNAVAILABLE",
+      `secrets: the Cloud at ${origin} did not say which clients it has (${answer.status})`,
+    );
+  return Object.entries(parsed.data.clients).flatMap(([name, client]) =>
+    CloudClient.safeParse(client).data?.installationTokenEndpoint ? [name] : [],
+  );
+}
+
 /** The Cloud's client `name`, as the Cloud at `origin` publishes it. Every address the Cloud names
  *  for itself must be on `origin`: the config named that Cloud, and no other host gets a code or a
  *  sealed token. */

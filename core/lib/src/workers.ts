@@ -42,6 +42,7 @@ export interface Door {
   fetch(request: Request): Promise<Response>;
   secret: SecretCall;
   listSecrets: SecretsService["listSecrets"];
+  refreshGrants: SecretsService["refreshGrants"];
   /** A mail that an approval rule names waits in the vault's gate (./acts.ts). The first call
    *  answers `gate.state: "held"` at once; a call with `wait` waits for the member's answer.
    *  `from` is the caller's claim of where the mail began. */
@@ -136,6 +137,17 @@ export type SecretAnswer<T> = { result: T; facts: Facts };
 /** The caller appends the facts, then throws `FORBIDDEN` with the message. */
 export type SecretRefusal = { refused: { code: "FORBIDDEN"; message: string }; facts: Facts };
 
+/** What came of the refresh on word of one person's grant (`SecretsService.refreshGrants`):
+ *  `refreshed`, the provider gave new tokens; `fresh`, it was refreshed within the last hour and
+ *  is left alone; `failed`, with the error's words, and the secret is as it was. */
+export type GrantRefreshed =
+  | { path: string; outcome: "refreshed" | "fresh" }
+  | { path: string; outcome: "failed"; error: string };
+
+/** One call's part of a refresh of the grants: the rows of the grants it asked, and `next`, the
+ *  path to go on from, when the vault holds more grants than one call refreshes. */
+export type GrantsRefreshed = { grants: GrantRefreshed[]; next?: string };
+
 export type SecretDescription = {
   path: string;
   set: boolean;
@@ -192,6 +204,13 @@ export interface SecretsService {
    *  secret that was deleted. `known` is the mind's own list of the paths it ever had: a vault
    *  that held secrets before it kept its list asks about those once, and never reads it after. */
   listSecrets(known?: string[]): Promise<SecretDescription[]>;
+  /** THE PERSONS' GRANTS THAT THE ITERATE CLOUD BROKERS, REFRESHED ON WORD, GitHub's for now: one
+   *  row for each, and the facts for the mind's log. A mind never uses such a grant, so nothing
+   *  else refreshes it, and the Cloud reads only at a refresh what its person still administers.
+   *  `known` is as for `listSecrets`. One call refreshes twenty grants at most, by path, and
+   *  answers `next` when there are more: the caller calls again with it as `after`, so every
+   *  grant is reached. */
+  refreshGrants(known?: string[], after?: string): Promise<SecretAnswer<GrantsRefreshed>>;
   /** THE GATE FOR ACTS (./acts.ts): what it says of a mail or of a verb's call, by its exact
    *  text. `from` is the caller's claim of where the act began. With `wait`, a held act's answer
    *  comes when a member decided, or after five minutes. */

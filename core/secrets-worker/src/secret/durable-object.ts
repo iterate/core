@@ -216,8 +216,11 @@ const deletedWhileStored = (path: string) =>
 
 /** What came of a refresh on word (`refreshGrant`). */
 export type GrantRefresh =
-  | { outcome: "refreshed" | "not-a-brokered-grant" }
+  | { outcome: "refreshed" | "fresh" | "not-a-brokered-grant" }
   | { outcome: "failed"; error: string };
+/** When a refresh on word last brought new tokens, and for how long a grant is fresh after it. */
+const GRANT_REFRESHED_AT = "grant-refreshed-at";
+const GRANT_FRESH_MS = 60 * 60_000;
 
 class RefreshFailed extends Error {
   readonly facts: SecretFact[];
@@ -1030,9 +1033,13 @@ export class SecretDurableObject extends DurableObject<Env> {
    *  - `refreshed`: the provider gave a new token, and the secret holds it;
    *  - `failed`: the refresh did not end well, with the error's words. The secret is as it was:
    *    a refused refresh deletes nothing, and the Cloud ends what the person connected;
-   *  - `not-a-brokered-grant`: nothing is set here, or what is set is no such grant.
+   *  - `fresh`: a refresh on word brought new tokens within the last hour. A provider's refresh
+   *    token works once, and each refresh risks an answer that is lost: one is not spent for
+   *    nothing;
+   *  - `not-a-brokered-grant`: nothing is set here, or what is set is no such grant, or its
+   *    client is none of `clients`, when the caller names them.
    *  A refresh that runs already for a use is joined, never doubled. */
-  async refreshGrant(path: string): Promise<SecretAnswer<GrantRefresh>> {
+  async refreshGrant(path: string, clients?: string[]): Promise<SecretAnswer<GrantRefresh>> {
     this.#pathOf(path);
     const current = this.#current();
     const refresh = current?.cell.refresh;
@@ -1040,11 +1047,15 @@ export class SecretDurableObject extends DurableObject<Env> {
       !current ||
       refresh?.kind !== "oauth-refresh-token" ||
       !refresh.client ||
-      !("cloud" in refresh.client)
+      !("cloud" in refresh.client) ||
+      (clients && !clients.includes(refresh.client.cloud))
     )
       return { result: { outcome: "not-a-brokered-grant" }, facts: [] };
+    const last = this.ctx.storage.kv.get<number>(GRANT_REFRESHED_AT) ?? 0;
+    if (Date.now() - last < GRANT_FRESH_MS) return { result: { outcome: "fresh" }, facts: [] };
     try {
       const events = await this.#refresh(path, current.cell.nonce);
+      this.ctx.storage.kv.put(GRANT_REFRESHED_AT, Date.now());
       return {
         result: { outcome: "refreshed" },
         facts: events.length ? [{ path, events }] : [],

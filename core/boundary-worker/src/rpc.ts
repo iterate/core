@@ -78,6 +78,10 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     return this.env.SECRETS.listSecrets(known);
   }
 
+  async refreshGrants(...[known, after]: Parameters<DoorService["refreshGrants"]>) {
+    return this.env.SECRETS.refreshGrants(known, after);
+  }
+
   async setActRules(input: Parameters<DoorService["setActRules"]>[0]) {
     return this.env.SECRETS.setActRules(input);
   }

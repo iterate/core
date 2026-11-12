@@ -1367,6 +1367,16 @@ export interface IterateContextApi {
      *  (`SecretDescription`, iterate/workers). */
     describe(path: string): Promise<{ path: string; set: boolean }>;
     list(): Promise<SecretCatalogEntry[]>;
+    /** The persons' grants that the iterate Cloud brokers, refreshed now (GitHub's): one row for
+     *  each. A mind never uses such a grant, so nothing else refreshes it; the mind's own
+     *  schedule calls this once a day. `fresh`: refreshed within the last hour, and left alone.
+     *  `failed`: the secret is as it was, and the person may have to connect again. */
+    refreshGrants(): Promise<
+      (
+        | { path: string; outcome: "refreshed" | "fresh" }
+        | { path: string; outcome: "failed"; error: string }
+      )[]
+    >;
     /** The link to a form on the platform's own hostname where a person enters a value an agent
      *  must never see in chat. The form shows the secret's path, its pin, what it may be used for
      *  (`SecretUses`) and `description` as the requester's words, and answers a signed-in member

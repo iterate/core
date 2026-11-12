@@ -60,6 +60,26 @@ test("with a boundary from before the vault kept its list, list() asks path by p
   expect(vault.open()).toBe(0);
 });
 
+test("refreshGrants() goes on where the vault stopped until every grant is reached: the rows of all are the answer, each one's fact lands on its secret's log, and each answer is released", async () => {
+  const vault = pretendVault(new Set(), { keepsItsList: true });
+  const known = ["/secrets/github-jo", "/secrets/github-sam", "/secrets/other"];
+  const mind = mindWith(known);
+  const secrets = secretsRoot(mind, vault.egress);
+
+  expect(await secrets.refreshGrants()).toEqual([
+    { path: "/secrets/github-jo", outcome: "refreshed" },
+    { path: "/secrets/github-sam", outcome: "refreshed" },
+  ]);
+  expect({ vault, appended: appends.get(mind) }).toMatchObject({
+    vault: { lists: [known, known], asked: 2, released: 2 },
+    appended: [
+      { path: "/secrets/github-jo", types: ["proof/refreshed"] },
+      { path: "/secrets/github-sam", types: ["proof/refreshed"] },
+    ],
+  });
+  expect(vault.open()).toBe(0);
+});
+
 /** The boundary's `secret`, as Workers RPC answers it: an object that holds its call's session
  *  open until its disposer runs. It counts the sessions that are open. */
 function pretendVault(
@@ -107,10 +127,27 @@ function pretendVault(
       ),
     );
   };
+  // The vault's refresh of the persons' grants: one row and one fact for each grant it holds.
+  // The vault's refresh of the persons' grants, one grant in a call: it says where it stopped
+  // until the last one.
+  const grants = ["/secrets/github-jo", "/secrets/github-sam"];
+  const refreshGrants = async (known?: string[], after?: string) => {
+    lists.push(known);
+    counts.asked += 1;
+    open += 1;
+    const path = grants.find((grant) => grant > (after || ""))!;
+    return held({
+      result: {
+        grants: [{ path, outcome: "refreshed" }],
+        ...(path !== grants.at(-1) && { next: path }),
+      },
+      facts: [{ path, events: [{ type: "proof/refreshed" }] }],
+    });
+  };
   return {
     lists,
     egress: (keepsItsList
-      ? { secret, listSecrets }
+      ? { secret, listSecrets, refreshGrants }
       : refusesTheList
         ? { secret, listSecrets: noSuchVerb }
         : { secret }) as unknown as Door,
@@ -132,12 +169,20 @@ function mindWith(paths: string[]): ItxHostRootContext {
     type: "events.iterate.com/itx/child-created",
     payload: { childPath },
   }));
-  return {
+  const mind = {
     path: "/",
     caller: () => ({ principal: null }),
-    context: () => ({
+    context: (path: string) => ({
       read: async () => ({ events, atHead: true, scannedThroughOffset: events.length }),
-      append: async () => [],
+      append: async (...appended: { type: string }[]) => {
+        appends.get(mind)!.push({ path, types: appended.map((event) => event.type) });
+        return [];
+      },
     }),
   } as unknown as ItxHostRootContext;
+  appends.set(mind, []);
+  return mind;
 }
+
+/** What each stand-in mind was asked to append, and where. */
+const appends = new WeakMap<ItxHostRootContext, { path: string; types: string[] }[]>();

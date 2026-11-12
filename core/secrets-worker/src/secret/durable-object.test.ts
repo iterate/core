@@ -519,12 +519,17 @@ test("a person's grant that the Cloud brokers is refreshed on word: the Cloud is
     Response.json({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 28800 }),
   );
 
+  vi.useFakeTimers({ toFake: ["Date"] });
   expect(await secret.refreshGrant(PATH)).toEqual({
     result: { outcome: "refreshed" },
     facts: [{ path: PATH, events: [REFRESHED(true)] }],
   });
-  // the next refresh sends the token that this one brought: each refresh token works once
+  // within the hour it is fresh: a refresh token works once, and one is not spent for nothing
+  expect(await secret.refreshGrant(PATH)).toEqual({ result: { outcome: "fresh" }, facts: [] });
+  // an hour later the next refresh sends the token that the first one brought
+  vi.setSystemTime(Date.now() + 61 * 60_000);
   await secret.refreshGrant(PATH);
+  vi.useRealTimers();
 
   expect(cloud).toMatchObject({
     asked: [
@@ -548,6 +553,22 @@ test("a refresh on word that the provider refuses says so, and the secret is as 
   });
   expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: true });
   expect(cloud.asked.map((ask) => ask.refreshToken)).toEqual(["old-refresh", "old-refresh"]);
+});
+
+test("a refresh on word for the Cloud's GitHub clients leaves a grant of another client alone", async () => {
+  const { secret } = await vault({ cloud: CLOUD_OF_GRANTS, material: GRANT });
+  const cloud = cloudThatAnswers(() =>
+    Response.json({ access_token: "new-access", refresh_token: "new-refresh" }),
+  );
+
+  // the grant's client is the Cloud's `github`
+  expect(await secret.refreshGrant(PATH, ["x", "slack"])).toMatchObject({
+    result: { outcome: "not-a-brokered-grant" },
+  });
+  expect(cloud).toMatchObject({ asked: [] });
+  expect(await secret.refreshGrant(PATH, ["github"])).toMatchObject({
+    result: { outcome: "refreshed" },
+  });
 });
 
 test("a refresh on word of a secret that is no grant of the Cloud's asks nobody", async () => {
