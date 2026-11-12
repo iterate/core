@@ -1,0 +1,14 @@
+{
+  "name": "Docs",
+  "short_name": "Docs",
+  "description": "The mind's config repo, read as pages.",
+  "start_url": "/",
+  "display": "browser",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

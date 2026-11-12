@@ -10,6 +10,7 @@ import {
 import theme from "../theme.css";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import liveReload from "../live-reload/";
+import { openFile } from "../open-files.ts";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import files from "./public/";
@@ -19,6 +20,9 @@ const ONBOARDING_AGENT = "/agents/onboarding";
 
 export function onboardingApp() {
   return {
+    /** The app's manifest and icon, for anyone: worker.ts asks this before its guard
+     *  (../open-files.ts). */
+    open: (request: Request) => openFile(request, files),
     /** The init hook's part (worker.ts, `mind/worker-updated`), after the Agents app's install:
      *  the agent, if it does not exist yet. Creating it starts no model turn. Idempotent. */
     async install(itx: IterateConfigProcessEventArgs<"agents">["itx"]) {

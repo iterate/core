@@ -1,0 +1,14 @@
+{
+  "name": "Onboarding",
+  "short_name": "Onboarding",
+  "description": "A chat that sets the mind up with you.",
+  "start_url": "/",
+  "display": "browser",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

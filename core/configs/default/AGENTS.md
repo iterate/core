@@ -221,6 +221,10 @@ apps/<name>/
   at `/theme.css` (`app.ts`) and its page links it after the UI kit's style sheet. It holds the
   colours and the corners (shadcn's theme variables). The apps are light, whatever the visitor's
   system says; to make them all dark, change `light` to `dark` in the file's `color-scheme` line.
+- **An app says what it is called and has an icon: `public/manifest.webmanifest` and
+  `public/icon.svg`.** Its page links both, so a browser tab shows the icon. `worker.ts` answers
+  these two files before its guard (`app.open`, `apps/open-files.ts`), so they are public: the
+  mind's sign-in pages read them. Every other file of an app is behind the guard.
 - **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** The Agents,
   onboarding, docs and guestbook apps serve that one file at `/live-reload.js` (`app.ts`), and
   each page loads it in its head; the Dash and the Voice app do not.

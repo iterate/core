@@ -7,12 +7,16 @@ import { serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
 import theme from "../theme.css";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import liveReload from "../live-reload/";
+import { openFile } from "../open-files.ts";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import files from "./public/";
 
 export function agentsApp() {
   return {
+    /** The app's manifest and icon, for anyone: worker.ts asks this before its guard
+     *  (../open-files.ts). */
+    open: (request: Request) => openFile(request, files),
     /** The init hook's part (worker.ts, `mind/worker-updated`): the catalog on /agents and the
      *  `itx.agents` rule, from the classes backend.ts exports. Idempotent. */
     install: (itx: Parameters<typeof installAgents>[0]) =>

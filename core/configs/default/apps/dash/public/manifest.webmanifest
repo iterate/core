@@ -1,0 +1,14 @@
+{
+  "name": "Dash",
+  "short_name": "Dash",
+  "description": "The mind seen from above.",
+  "start_url": "/",
+  "display": "browser",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

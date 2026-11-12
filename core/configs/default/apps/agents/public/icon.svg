@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The Agents app's mark: Lucide's "bot" (https://lucide.dev, ISC license), white on a
+       square. manifest.webmanifest names it, and the mind's sign-in pages show it. -->
+  <rect width="64" height="64" fill="#18181b" />
+  <g
+    transform="translate(14 14) scale(1.5)"
+    fill="none"
+    stroke="#fff"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M12 8V4H8" />
+    <rect width="16" height="12" x="4" y="8" rx="2" />
+    <path d="M2 14h2" />
+    <path d="M20 14h2" />
+    <path d="M15 13v2" />
+    <path d="M9 13v2" />
+  </g>
+</svg>

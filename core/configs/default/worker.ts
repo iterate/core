@@ -268,22 +268,28 @@ export default class extends IterateConfigEntrypoint {
   // Every host of the mind: one case each, on `x-iterate-routing-slug` (`agents` for
   // agents.<domain>, null on the apex). The guard beside a case says who may come: none for a
   // public site, `this.auth.require` for members, `this.auth.requirePerson` for anyone signed in
-  // (AGENTS.md, "People who are not members"). A package answers the requests on its own slug.
+  // (AGENTS.md, "People who are not members"). Before the guard, an app answers anyone for its
+  // manifest and its icon (`open`, apps/open-files.ts): the sign-in pages show them. The `?.` is
+  // for an app.ts of yours that has no `open`. A package answers the requests on its own slug.
   async fetch(request: Request) {
     const routingSlug = request.headers.get("x-iterate-routing-slug");
     const integration = integrations.find((candidate) => candidate.routingSlug === routingSlug);
     if (integration?.fetch) return integration.fetch(request, this);
     switch (routingSlug) {
       case "agents": // the Agents app, for members
-        return this.auth.require(request) || agents.fetch(request, this);
+        return agents.open?.(request) || this.auth.require(request) || agents.fetch(request, this);
       case "onboarding": // the onboarding app, for members: one chat with /agents/onboarding
-        return this.auth.require(request) || onboarding.fetch(request, this);
+        return (
+          onboarding.open?.(request) ||
+          this.auth.require(request) ||
+          onboarding.fetch(request, this)
+        );
       case "docs": // the docs app, for members: the config repo, read in a browser
-        return this.auth.require(request) || docs.fetch(request, this);
+        return docs.open?.(request) || this.auth.require(request) || docs.fetch(request, this);
       case "dash": // the Dash, for members: the mind seen from above
-        return this.auth.require(request) || dash.fetch(request, this);
+        return dash.open?.(request) || this.auth.require(request) || dash.fetch(request, this);
       case "voice": // the Voice app, for members: call the mind from a browser
-        return this.auth.require(request) || voice.fetch(request, this);
+        return voice.open?.(request) || this.auth.require(request) || voice.fetch(request, this);
       // case "guestbook": // the guestbook, for everyone: no guard here, its routes ask for who they need
       //   return guestbook.fetch(request, this);
       case null: {

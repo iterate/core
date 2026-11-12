@@ -29,21 +29,52 @@ test("the default config's pages and folders load here as the platform's loader 
   expect(files["app.js"]).toEqual(expect.any(String));
   expect(Object.keys(files)).toEqual(Object.keys(files).toSorted());
   expect(onboardingIndex).toMatch(/<title>Welcome to iterate<\/title>/);
-  expect(Object.keys(onboardingFiles)).toEqual(["app.css", "app.js"]);
+  const own = ["app.css", "app.js", "icon.svg", "manifest.webmanifest"];
+  expect(Object.keys(onboardingFiles)).toEqual(own);
   expect(docsIndex).toMatch(/<title>Docs<\/title>/);
-  expect(Object.keys(docsFiles)).toEqual(["app.css", "app.js"]);
+  expect(Object.keys(docsFiles)).toEqual(own);
   expect(dashIndex).toMatch(/<title>Dash<\/title>/);
-  expect(Object.keys(dashFiles)).toEqual(["app.css", "app.js"]);
+  expect(Object.keys(dashFiles)).toEqual(own);
   expect(voiceIndex).toMatch(/<title>Voice<\/title>/);
   expect(Object.keys(voiceFiles)).toEqual([
     "app.css",
     "app.js",
     "audio.js",
     "capture-worklet.js",
+    "icon.svg",
+    "manifest.webmanifest",
     "playback-worklet.js",
     "turn-on.js",
   ]);
 });
+
+test.for(["agents", "onboarding", "docs", "dash", "voice"])(
+  "the %s app says its name and its icon to anyone, and nothing else before a sign-in",
+  async (host) => {
+    const refusal = new Response("Sign in\n", { status: 401 });
+    // a bare instance, with a guard that lets nobody in
+    const config = Object.create(Config.prototype, {
+      auth: { value: { require: () => refusal } },
+    }) as { fetch(request: Request): Promise<Response> };
+    const ask = (path: string) =>
+      config.fetch(
+        new Request(`https://${host}.example.com${path}`, {
+          headers: { "x-iterate-routing-slug": host },
+        }),
+      );
+    const manifest = await ask("/manifest.webmanifest");
+    expect(manifest.headers.get("content-type")).toBe("application/manifest+json");
+    const said = (await manifest.json()) as { name: string; icons: { src: string }[] };
+    expect(said.name).toMatch(/^[A-Z][a-z]+$/);
+    expect(said.icons.map((icon) => icon.src)).toEqual(["/icon.svg"]);
+    const icon = await ask("/icon.svg");
+    expect(icon.headers.get("content-type")).toBe("image/svg+xml");
+    expect(await icon.text()).toMatch(/^<svg /);
+    // the page, its script and every other path are the guard's
+    for (const path of ["/", "/app.js", "/itx", "/manifest.webmanifest/x", "/icon.svg.map"])
+      expect(await ask(path)).toBe(refusal);
+  },
+);
 
 test("the Dash's overview leads to every other app the default worker mounts", () => {
   // the hosts the worker's `fetch` answers: one `case "<host>":` each

@@ -1,0 +1,14 @@
+{
+  "name": "Agents",
+  "short_name": "Agents",
+  "description": "Every agent of the mind, and a chat with each.",
+  "start_url": "/",
+  "display": "browser",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
