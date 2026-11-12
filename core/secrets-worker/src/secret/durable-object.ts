@@ -1027,20 +1027,18 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   /** A PERSON'S GRANT THAT THE ITERATE CLOUD BROKERS, REFRESHED ON WORD. A refresh runs otherwise
-   *  only after the provider refused the token (the retry in `#fetchWithSecret`). A mind that
-   *  works with an installation's tokens never uses the person's own, so that never comes: the
-   *  Cloud, which reads at each refresh what the person still administers, would not read it
-   *  again, and the refresh token would end unused. The answer says what came of it:
+   *  only after the provider refused the token (the retry in `#fetchWithSecret`);
+   *  ../grant-refresh.ts says why such a grant needs one on word. The answer says what came of it:
    *  - `refreshed`: the provider gave a new token, and the secret holds it;
    *  - `failed`: the refresh did not end well, with the error's words. The secret is as it was:
    *    a refused refresh deletes nothing, and the Cloud ends what the person connected;
    *  - `fresh`: a refresh on word brought new tokens within the last hour. A provider's refresh
    *    token works once, and each refresh risks an answer that is lost: one is not spent for
    *    nothing;
-   *  - `not-a-brokered-grant`: nothing is set here, or what is set is no such grant, or its
-   *    client is none of `clients`, when the caller names them.
+   *  - `not-a-brokered-grant`: nothing is set here, or what is set is no such grant, or it holds
+   *    no refresh token, so nothing is there to refresh.
    *  A refresh that runs already for a use is joined, never doubled. */
-  async refreshGrant(path: string, clients?: string[]): Promise<SecretAnswer<GrantRefresh>> {
+  async refreshGrant(path: string): Promise<SecretAnswer<GrantRefresh>> {
     this.#pathOf(path);
     const current = this.#current();
     const refresh = current?.cell.refresh;
@@ -1048,12 +1046,16 @@ export class SecretDurableObject extends DurableObject<Env> {
       !current ||
       refresh?.kind !== "oauth-refresh-token" ||
       !refresh.client ||
-      !("cloud" in refresh.client) ||
-      (clients && !clients.includes(refresh.client.cloud))
+      !("cloud" in refresh.client)
     )
       return { result: { outcome: "not-a-brokered-grant" }, facts: [] };
     const last = this.ctx.storage.kv.get<number>(GRANT_REFRESHED_AT) ?? 0;
     if (Date.now() - last < GRANT_FRESH_MS) return { result: { outcome: "fresh" }, facts: [] };
+    // A provider that gave no refresh token gave a token that does not end (a Slack workspace
+    // that does not rotate its tokens). A failure each day would say that a good grant is broken.
+    const { material } = await this.#open(path, current);
+    if (!isRecord(material) || typeof material.refreshToken !== "string")
+      return { result: { outcome: "not-a-brokered-grant" }, facts: [] };
     try {
       const events = await this.#refresh(path, current.cell.nonce);
       this.ctx.storage.kv.put(GRANT_REFRESHED_AT, Date.now());

@@ -2,11 +2,11 @@ import type { SecretDescription } from "iterate/workers";
 import { expect, test } from "vitest";
 import { refreshBrokeredGrants } from "./grant-refresh.ts";
 
-test("each grant of the Cloud's clients is asked to refresh, one after another: a row for each, its facts, and a failed one stops no other", async () => {
+test("each grant that the Cloud brokers is asked to refresh, whichever client it is of, one after another: a row for each, its facts, and a failed one stops no other", async () => {
   const vault = pretendVault({
     "/secrets/github-jo": { outcome: "refreshed" },
     "/secrets/github-sam": { outcome: "failed", error: "the token endpoint answered 401" },
-    "/secrets/github-kim": { outcome: "fresh" },
+    "/secrets/x-kim": { outcome: "fresh" },
     // a grant with a client of the mind's own: its object says that it is none of the Cloud's
     "/secrets/gmail": { outcome: "not-a-brokered-grant" },
   });
@@ -15,12 +15,12 @@ test("each grant of the Cloud's clients is asked to refresh, one after another: 
     result: {
       grants: [
         { path: "/secrets/github-jo", outcome: "refreshed" },
-        { path: "/secrets/github-kim", outcome: "fresh" },
         {
           path: "/secrets/github-sam",
           outcome: "failed",
           error: "the token endpoint answered 401",
         },
+        { path: "/secrets/x-kim", outcome: "fresh" },
       ],
       next: undefined,
     },
@@ -31,9 +31,7 @@ test("each grant of the Cloud's clients is asked to refresh, one after another: 
   });
   expect(vault).toMatchObject({
     // a plain token has no refresh: its object is not asked
-    asked: ["/secrets/github-jo", "/secrets/github-kim", "/secrets/github-sam", "/secrets/gmail"],
-    clientsGiven: [["github"], ["github"], ["github"], ["github"]],
-    cloudAsked: 1,
+    asked: ["/secrets/github-jo", "/secrets/github-sam", "/secrets/gmail", "/secrets/x-kim"],
   });
 });
 
@@ -77,11 +75,11 @@ test("a grant whose refresh throws is said as failed, with a fact on its log, an
   });
 });
 
-test("a vault with no grant asks neither the Cloud nor any object", async () => {
+test("a vault with no grant asks no object", async () => {
   const vault = pretendVault({});
 
   expect(await refreshBrokeredGrants(vault.deps)).toEqual({ result: { grants: [] }, facts: [] });
-  expect(vault).toMatchObject({ asked: [], cloudAsked: 0 });
+  expect(vault).toMatchObject({ asked: [] });
 });
 
 test("a vault with more grants than one call refreshes says where it stopped, and the next call goes on from there: every grant is reached once", async () => {
@@ -115,10 +113,9 @@ type Outcome =
   | { outcome: "failed"; error: string };
 
 /** A vault whose set secrets are these grants, each with what its refresh on word answers, and
- *  one plain token beside them. It says which objects were asked, with which clients, and how
- *  often the Cloud was asked for its clients. */
+ *  one plain token beside them. It says which objects were asked. */
 function pretendVault(grants: Record<string, Outcome | Error>) {
-  const seen = { asked: [] as string[], clientsGiven: [] as string[][], cloudAsked: 0 };
+  const seen = { asked: [] as string[] };
   const set: SecretDescription[] = [
     { path: "/secrets/a-plain-token", set: true },
     ...Object.keys(grants)
@@ -128,13 +125,8 @@ function pretendVault(grants: Record<string, Outcome | Error>) {
   return Object.assign(seen, {
     deps: {
       set: async () => set,
-      clients: async () => {
-        seen.cloudAsked += 1;
-        return ["github"];
-      },
-      refresh: async (path: string, clients: string[]) => {
+      refresh: async (path: string) => {
         seen.asked.push(path);
-        seen.clientsGiven.push(clients);
         const result = grants[path]!;
         if (result instanceof Error) throw result;
         const ok = result.outcome === "refreshed";

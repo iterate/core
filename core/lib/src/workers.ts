@@ -204,9 +204,9 @@ export interface SecretsService {
    *  secret that was deleted. `known` is the mind's own list of the paths it ever had: a vault
    *  that held secrets before it kept its list asks about those once, and never reads it after. */
   listSecrets(known?: string[]): Promise<SecretDescription[]>;
-  /** THE PERSONS' GRANTS THAT THE ITERATE CLOUD BROKERS, REFRESHED ON WORD, GitHub's for now: one
-   *  row for each, and the facts for the mind's log. A mind never uses such a grant, so nothing
-   *  else refreshes it, and the Cloud reads only at a refresh what its person still administers.
+  /** THE PERSONS' GRANTS THAT THE ITERATE CLOUD BROKERS, REFRESHED ON WORD, whichever client of
+   *  the Cloud a grant is of: one row for each, and the facts for the mind's log.
+   *  core/secrets-worker/src/grant-refresh.ts says why these grants need a refresh on word.
    *  `known` is as for `listSecrets`. One call refreshes twenty grants at most, by path, and
    *  answers `next` when there are more: the caller calls again with it as `after`, so every
    *  grant is reached. */

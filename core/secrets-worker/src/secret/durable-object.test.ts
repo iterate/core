@@ -574,20 +574,19 @@ test("a refresh on word that the provider refuses says so, and the secret is as 
   expect(cloud.asked.map((ask) => ask.refreshToken)).toEqual(["old-refresh", "old-refresh"]);
 });
 
-test("a refresh on word for the Cloud's GitHub clients leaves a grant of another client alone", async () => {
-  const { secret } = await vault({ cloud: CLOUD_OF_GRANTS, material: GRANT });
-  const cloud = cloudThatAnswers(() =>
-    Response.json({ access_token: "new-access", refresh_token: "new-refresh" }),
-  );
+test("a grant of the Cloud's whose provider gave no refresh token has nothing to refresh: nobody is asked, and no failure is said", async () => {
+  // a Slack workspace that does not rotate its tokens gives one bot token that does not end
+  const { secret } = await vault({
+    cloud: CLOUD_OF_GRANTS,
+    material: { accessToken: "a-bot-token", clientId: "slack.client" },
+  });
+  const cloud = cloudThatAnswers(() => Response.json({}));
 
-  // the grant's client is the Cloud's `github`
-  expect(await secret.refreshGrant(PATH, ["x", "slack"])).toMatchObject({
+  expect(await secret.refreshGrant(PATH)).toEqual({
     result: { outcome: "not-a-brokered-grant" },
+    facts: [],
   });
   expect(cloud).toMatchObject({ asked: [] });
-  expect(await secret.refreshGrant(PATH, ["github"])).toMatchObject({
-    result: { outcome: "refreshed" },
-  });
 });
 
 test("a refresh on word of a secret that is no grant of the Cloud's asks nobody", async () => {

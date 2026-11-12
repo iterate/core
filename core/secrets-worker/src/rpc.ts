@@ -6,7 +6,6 @@ import { releasedAnswer } from "iterate/lib";
 import { SECRET_PATH, SECRET_USE_HEADER } from "iterate/secret-placeholder";
 import type { SecretsService, SecretVerb, SecretVerbs } from "iterate/workers";
 import { SET } from "./approvals-index.ts";
-import { githubClientsOf } from "./cloud-client.ts";
 import type { Env } from "./env.ts";
 import { refreshBrokeredGrants } from "./grant-refresh.ts";
 import { secretsResponse } from "./http.ts";
@@ -46,15 +45,13 @@ export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
     );
   }
 
-  /** The persons' grants of the Cloud's GitHub clients, refreshed on word (./grant-refresh.ts). */
+  /** The persons' grants that the Cloud brokers, refreshed on word (./grant-refresh.ts). */
   async refreshGrants(...[known, after]: Parameters<SecretsService["refreshGrants"]>) {
     return refreshBrokeredGrants(
       {
         set: () => this.listSecrets(known),
-        clients: () => githubClientsOf(this.env.CLOUD_ORIGIN),
         // copied and let go at once, as a list's answers are
-        refresh: (path, clients) =>
-          releasedAnswer(secretObject(this.env, path).refreshGrant(path, clients)),
+        refresh: (path) => releasedAnswer(secretObject(this.env, path).refreshGrant(path)),
       },
       after,
     );

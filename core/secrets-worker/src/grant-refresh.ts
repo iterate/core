@@ -1,12 +1,21 @@
-// grant-refresh.ts — THE PERSONS' GRANTS THAT THE ITERATE CLOUD BROKERS, REFRESHED ON WORD. A mind
-// works with an installation's tokens and never uses the grant of the person who connected the
-// account, so nothing refreshes it (./secret/durable-object.ts `refreshGrant` says what follows
-// from that). The mind's schedule calls this once a day: the vault walks its list of set secrets
-// (./secret-list.ts) and asks each object that holds such a grant to refresh.
+// grant-refresh.ts — THE PERSONS' GRANTS THAT THE ITERATE CLOUD BROKERS, REFRESHED ON WORD. The
+// mind's schedule calls this once a day: the vault walks its list of set secrets
+// (./secret-list.ts) and asks each object that holds such a grant to refresh
+// (./secret/durable-object.ts `refreshGrant`).
 //
-// GITHUB'S CLIENTS ALONE, for now: the Cloud ends a GitHub claim that is not made again within its
-// limit, and makes it again at a refresh. A grant of another client refreshes when its provider
-// refuses a token, as before.
+// EVERY CLIENT OF THE CLOUD. The Cloud reads only at a refresh what a person still administers,
+// and what it does then differs by provider:
+// - GitHub: a mind works with an installation's tokens and never uses the grant of the person who
+//   connected the account, so nothing else refreshes it. At a refresh the Cloud makes that
+//   person's claim again, and it ends a claim that is not made again within its limit of days.
+// - X: the account is the person's own, and a refresh makes its claim again.
+// - Slack: the claim is made at the install alone, and a refresh changes none.
+// - Google: the Cloud has no claim.
+// A refresh that GitHub, X or Slack refuses says that the person's grant is over, and the Cloud
+// then lets go of what that person connected for this mind. So a mind learns within a day that a
+// grant ended, where it was at its next use of the token before.
+// A grant with a client of the mind's own is no grant of the Cloud's: it refreshes when its
+// provider refuses a token, as before.
 import type {
   GrantRefreshed,
   GrantsRefreshed,
@@ -23,10 +32,8 @@ const GRANTS_IN_ONE_CALL = 20;
 type RefreshDeps = {
   /** The secrets that are set (./secret-list.ts). */
   set(): Promise<SecretDescription[]>;
-  /** The names of the Cloud's clients whose persons' grants are refreshed here. */
-  clients(): Promise<string[]>;
-  /** A secret's object: its refresh on word, for a grant of one of `clients`. */
-  refresh(path: string, clients: string[]): Promise<SecretAnswer<GrantRefresh>>;
+  /** A secret's object: its refresh on word. */
+  refresh(path: string): Promise<SecretAnswer<GrantRefresh>>;
 };
 
 /** One row for each grant that was asked, by path, and the facts for the mind's log. One grant
@@ -42,13 +49,12 @@ export async function refreshBrokeredGrants(
     .filter((secret) => secret.refresh === "oauth-refresh-token" && secret.path > after)
     .sort((a, b) => (a.path < b.path ? -1 : 1));
   if (!grants.length) return { result: { grants: [] }, facts: [] };
-  const clients = await deps.clients();
   const asked = grants.slice(0, GRANTS_IN_ONE_CALL);
   const rows: GrantRefreshed[] = [];
   const allFacts: SecretAnswer<GrantsRefreshed>["facts"] = [];
   for (const { path } of asked) {
     const { result, facts } = await deps
-      .refresh(path, clients)
+      .refresh(path)
       .catch((error: unknown) => thrown(path, error));
     if (result.outcome === "not-a-brokered-grant") continue;
     rows.push(
