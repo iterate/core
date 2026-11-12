@@ -23,7 +23,7 @@ import { addPasskey, authenticator, lendPasskey, touched } from "./proof-passkey
 import { signerOf, slackToken } from "./smoke/approvals.ts";
 import { mindRoot } from "./smoke/lib.ts";
 
-const PROTOTYPES = ["jispwoso.com", "templesteins.com"];
+const PROTOTYPES = ["jispwoso.com", "afoop.com"];
 /** A live stack is proven only when named twice, and nothing the proof made is left on it. */
 const live =
   Boolean(process.env.ITERATE_PROOF_LIVE) && process.env.ITERATE_PROOF_LIVE === process.argv[2];

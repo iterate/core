@@ -16,7 +16,7 @@ import { chromium } from "playwright";
 import { z } from "zod";
 import { mindRoot } from "./smoke/lib.ts";
 
-const PROTOTYPES = ["jispwoso.com", "templesteins.com"];
+const PROTOTYPES = ["jispwoso.com", "afoop.com"];
 const domain = process.argv[2];
 const token = process.env.ITERATE_PROTOTYPE_TOKEN;
 const sessionFile = process.env.ITERATE_PROOF_SESSION_FILE;
