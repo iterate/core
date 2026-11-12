@@ -35,6 +35,8 @@ void test("the token deploys nothing, makes no token, and changes no name or set
     "Account Settings Write",
     "Registrar Domains Admin",
     "AI Gateway Write",
+    // a webhook destination: a lasting export of the account's alerts to any URL
+    "Notifications Write",
   ]) {
     assert.ok(
       PERMISSION_GROUPS.some((group) => group.name === name),
@@ -58,7 +60,7 @@ void test("a read that is left out is a group of the catalog, and the token does
 // of each new read what cloudflare-token.ts asks: does it yield a credential that can do more
 // than this token? A changed list also changes the token of every stack at its next deploy.
 void test("the token's groups are as many as were looked at, and none is there twice", () => {
-  assert.equal(groups.account.length, 147);
+  assert.equal(groups.account.length, 142);
   assert.equal(groups.zone.length, 45);
   assert.equal(new Set(held.map(({ id }) => id)).size, held.length);
 });

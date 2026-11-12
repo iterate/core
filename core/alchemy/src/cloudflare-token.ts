@@ -23,10 +23,18 @@ export const CLOUDFLARE_TOKEN_READS_LEFT_OUT = {
   "SSL and Certificates Read": "a client certificate's private key",
   "Zaraz Read": "the values of Zaraz's variables",
   "Workers AI Custom Models Read": "no credential: Cloudflare no longer lists this group",
+  "Workers Scripts Read":
+    "a Worker's plain-text bindings, in clear: in a shared account another's API token can be one",
+  "Workers Tail Read": "a live tail of any Worker: its requests, their URLs and headers",
+  "Turnstile Sites Read": "a Turnstile widget's secret",
+  "Account Settings Read": "a Turnstile widget's secret, and a secondary DNS TSIG secret",
 } as const;
 
-/** What the token may change. "Workers Observability Write" is also what reads a Worker's logs:
- *  Cloudflare's query of them is a POST that takes no read group. */
+/** What the token may change. No write makes a lasting export of the account's data, but one:
+ *  "Workers Observability Write" can make an observability destination (logs and traces sent to
+ *  a URL). It stays because it is also what reads a Worker's logs: Cloudflare's query of them is a
+ *  POST that takes no read group, and no narrower group exists. The template's call refuses a
+ *  destinations path (core/configs/default/cloudflare.ts); the token itself does not. */
 export const CLOUDFLARE_TOKEN_WRITES = [
   "Workers Observability Write",
   "Workers Observability Telemetry Write",
@@ -34,7 +42,6 @@ export const CLOUDFLARE_TOKEN_WRITES = [
   "Pipelines Send",
   "Workers R2 Data Catalog Write",
   "Zone Observability Write",
-  "Notifications Write",
   "Health Checks Write",
 ] as const;
 
