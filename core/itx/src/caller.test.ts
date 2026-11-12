@@ -42,3 +42,29 @@ test("a signed statement is held to the rule that guards the platform's facts", 
   expect(() => refuseNonPlatformWrites(mail, { ...platform, signer })).toThrow(/platform's own/);
   expect(() => refuseNonPlatformWrites(mail, { principal: null })).toThrow(/platform's own/);
 });
+
+test.for([
+  "events.iterate.com/approval/rule-proposed",
+  "events.iterate.com/approval/rule-proposal-signed",
+  "events.iterate.com/approval/rule-proposal-rejected",
+  "events.iterate.com/approval/rule-set",
+])("only the platform appends %s: a reader counts the open proposals by these facts", (type) => {
+  // An end that anyone could append would hide a proposal that still waits on the gate.
+  const fact = [{ type, payload: { id: "p1", proposal: "p1" } }];
+  expect(() => refuseNonPlatformWrites(fact, platform)).not.toThrow();
+  for (const other of [
+    { principal: null },
+    { principal: null, app: true as const },
+    { principal: { actor: "user_1", email: "jo@example.net" } },
+  ])
+    expect(() => refuseNonPlatformWrites(fact, other)).toThrow(
+      `${type} is the platform's own fact: no one else appends or schedules it`,
+    );
+  // and no one schedules it for later
+  expect(() =>
+    refuseNonPlatformWrites(
+      [{ type: "events.iterate.com/itx/schedule-set", payload: { events: fact } }],
+      { principal: null, app: true },
+    ),
+  ).toThrow("is the platform's own fact");
+});

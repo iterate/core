@@ -1,57 +1,97 @@
+import { Script } from "node:vm";
 import { expect, test } from "vitest";
-import { ACTS_SCRIPT, mailBodiesOf } from "./acts-page.ts";
-import { ruleForm, ruleFromLink, SCRIPT, tickedAtOpen } from "./approvals-page.ts";
+import { ITX_PERSON_HEADER, ITX_PRINCIPAL_HEADER } from "iterate/principal";
+import { ACTS_SCRIPT, mailBodiesOf, proposedRules, secretRuleInWords } from "./acts-page.ts";
+import { ruleForm, SCRIPT, secretApprovals, tickedAtOpen } from "./approvals-page.ts";
 
-test("a link fills in a secret's rule under 'A new rule': the page shows its words, and saves nothing by itself", () => {
-  const link = new URL(
-    "https://iterate.example.com/secrets/approvals?path=/secrets/fastmail&methods=POST&hosts=api.fastmail.com&jsonStrings=EmailSubmission/set&freePaths=/jmap/upload/#offered",
-  );
-  const offered = ruleFromLink(link.searchParams);
-  expect(offered).toEqual({
-    path: "/secrets/fastmail",
-    rule: {
-      methods: ["POST"],
-      hosts: ["api.fastmail.com"],
-      jsonStrings: ["EmailSubmission/set"],
-      freePaths: ["/jmap/upload/"],
+test("no value of the page comes from its address: a link with a rule's words in its query fills in nothing", async () => {
+  // the link of an earlier build, which filled the form 'A new rule' from its query
+  const link =
+    "https://iterate.example.com/secrets/approvals?path=/secrets/from-a-link&methods=PATCH&hosts=evil.example&jsonStrings=Zzyzx&freePaths=/zz/";
+  const member = { userId: "user_1", email: "jo@example.net" };
+  const opened = await secretApprovals(
+    new Request(link, {
+      headers: {
+        [ITX_PERSON_HEADER]: JSON.stringify(member),
+        [ITX_PRINCIPAL_HEADER]: JSON.stringify({ actor: member.userId, email: member.email }),
+      },
+    }),
+    {
+      mind: "example.com",
+      index: { paths: async () => [], remove: async () => undefined },
+      // no secret has a rule, so none is read; and the page's GET decides nothing
+      secretOf: () => {
+        throw new Error("the page read a secret");
+      },
+      gate: {
+        state: async () => ({ locked: false, rules: [], proposed: [], held: [] }),
+        setRules: async () => ({ facts: [] }),
+        decide: async () => ({ result: {}, facts: [] }),
+        proposalTaken: async () => ({ facts: [] }),
+        rejectProposal: async () => ({ facts: [] }),
+      },
     },
-  });
-  const form = ruleForm("", offered!.rule, offered!.path);
-  // the form that a member fills by hand, with the link's words in its fields, and its one Save
-  for (const filled of [
-    'name="path" value="/secrets/fastmail"',
+  );
+  const html = await opened.text();
+  // the form that a member fills by hand, as it is with no link: its own first values, one Save
+  for (const plain of [
+    'name="path" value="/secrets/"',
     'name="methods" value="POST"',
-    'name="hosts" value="api.fastmail.com"',
-    'name="jsonStrings" value="EmailSubmission/set"',
-    'name="freePaths" value="/jmap/upload/"',
-    "A link filled in this rule for /secrets/fastmail.",
-    "nothing is saved until you press Save",
+    'name="hosts" value=""',
+    'name="jsonStrings" value=""',
+    'name="freePaths" value=""',
     '<button type="submit">Save</button>',
   ])
-    expect(form).toContain(filled);
+    expect(html).toContain(plain);
+  for (const fromTheLink of ["/secrets/from-a-link", "PATCH", "evil.example", "Zzyzx", "/zz/"])
+    expect(html).not.toContain(fromTheLink);
   // a new rule has no signed buttons: those are for a rule that a secret has
-  expect(form).not.toContain("data-sign-rule");
+  expect(ruleForm("", null)).not.toContain("data-sign-rule");
 });
 
-test.for([
-  ["no path", "methods=POST&hosts=example.com"],
-  ["a path that is no secret's", "path=/agents/one&methods=POST&hosts=example.com"],
-  ["a path with markup", "path=/secrets/%3Cscript%3E&methods=POST"],
-])("a link with %s offers no rule", ([, query]) => {
-  expect(ruleFromLink(new URLSearchParams(query))).toBeNull();
+test("a proposed rule waits as a held act does: a row to tick with what it holds, what stays free, its exact text and who asked, and the two buttons of what waits", () => {
+  const rule = {
+    secret: "/secrets/fastmail",
+    methods: ["POST"],
+    hosts: ["api.fastmail.com"],
+    jsonStrings: ["EmailSubmission/set"],
+    freePaths: ["/jmap/upload/"],
+  };
+  expect(secretRuleInWords(rule)).toBe(
+    "A request with /secrets/fastmail waits when it is POST to api.fastmail.com and its JSON body holds EmailSubmission/set (a body that is no JSON waits too). What stays free: a request whose JSON body holds none of them; a request to /jmap/upload/, whatever its body; every other method and host.",
+  );
+  const listed = proposedRules({
+    locked: true,
+    rules: [],
+    held: [],
+    proposed: [
+      { id: "p1", rule, from: "/agents/a", at: 0 },
+      { id: "p2", rule: { verb: "email.send" }, at: 0 },
+    ],
+  });
+  // a row as a held act's is: a box to tick, and the two buttons of what waits
+  expect(listed.match(/<input type="checkbox" data-pick="p[12]">/g)).toHaveLength(2);
+  expect(listed).toContain('<button type="button" data-approve>Approve the chosen</button>');
+  expect(listed).toContain("data-reject>Reject them</button>");
+  expect(listed).toContain("A proposed rule, asked for from /agents/a at 1970-01-01 00:00 UTC.");
+  expect(listed).toContain("/secrets/fastmail has no rule now.");
+  // the exact rule under its words, written as text
+  expect(listed.replaceAll(/&(?:quot|#34);/g, '"')).toContain('"EmailSubmission/set"');
+  // approved, it takes the place of the rule that is there: the row says which one that is
+  expect(
+    proposedRules(
+      { locked: true, rules: [], held: [], proposed: [{ id: "p1", rule, at: 0 }] },
+      () => ({ methods: ["POST", "PUT"], hosts: ["api.fastmail.com"] }),
+    ),
+  ).toContain(
+    "It takes the place of the rule that /secrets/fastmail has now: A request with /secrets/fastmail waits when it is POST or PUT to api.fastmail.com. What stays free: every other method and host.",
+  );
+  // nothing proposed: no part of the page
+  expect(proposedRules({ locked: true, rules: [], held: [], proposed: [] })).toBe("");
 });
 
-test("a link's words are written into the form as text, and a long list is cut", () => {
-  const offered = ruleFromLink(
-    new URLSearchParams({
-      path: "/secrets/x",
-      methods: "POST",
-      hosts: `"><script>alert(1)</script>, ${Array.from({ length: 40 }, (_, at) => `h${at}.example`).join(",")}`,
-    }),
-  )!;
-  expect(offered.rule.hosts).toHaveLength(20);
-  const form = ruleForm("", offered.rule, offered.path);
-  expect(form).not.toContain("<script>alert(1)");
+test("the page's script parses: a slip in the template that holds it shows here, and not in a member's browser", () => {
+  expect(() => new Script(`${SCRIPT}${ACTS_SCRIPT}`)).not.toThrow();
 });
 
 test("the page ticks the one row its link names, and only when its own hash of the row is the row's id", () => {

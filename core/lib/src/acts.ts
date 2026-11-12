@@ -18,6 +18,10 @@ export const ACT_HOLD_EXPIRED = "events.iterate.com/approval/hold-expired";
 export const ACT_DONE = "events.iterate.com/approval/act-done";
 export const RULE_SET = "events.iterate.com/approval/rule-set";
 export const RULE_PROPOSED = "events.iterate.com/approval/rule-proposed";
+export const RULE_PROPOSAL_REJECTED = "events.iterate.com/approval/rule-proposal-rejected";
+/** A member signed a proposed rule for a request with a secret into that secret's rule. A proposed
+ *  rule for an act ends with `rule-set`, whose payload names the proposal. */
+export const RULE_PROPOSAL_SIGNED = "events.iterate.com/approval/rule-proposal-signed";
 export const GATE_LOCKED = "events.iterate.com/approval/locked";
 export const GATE_UNLOCKED = "events.iterate.com/approval/unlocked";
 

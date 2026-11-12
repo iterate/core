@@ -6,7 +6,17 @@ import type { Door } from "iterate/workers";
 import { hopCaller } from "./hop-caller.ts";
 
 export const APPROVALS_ROOT_DESCRIPTION =
-  "what waits for a member's signed yes before it is done: `approvals.rules()` → { locked, rules } · `approvals.setRules([{ verb, to? }])` replaces the rules while they are open (not locked) · `approvals.propose({ verb, to? })` → { id, signAt } asks a member to sign one rule at `signAt` · `approvals.secretRuleLink(path, { methods, hosts, jsonStrings?, freePaths? })` → the link that opens the approvals page with a rule for a request with the secret at `path` filled in, for a member to read and save (only a member saves a secret's rule). A rule's `verb` is `email.send` (with `to: [\"*@example.com\"]` for mail to some recipients alone), one verb such as `itx.whatsapp.sendMessage`, or every verb under a name, `itx.whatsapp.*`. A held call waits five minutes for the member, then throws; the act can be approved for a day, and is done then";
+  "what waits for a member's signed yes before it is done: `approvals.rules()` → { locked, rules } · `approvals.setRules([{ verb, to? }])` replaces the rules while they are open (not locked) · `approvals.propose({ verb, to? })` → { id, signAt } asks a member to sign one rule at `signAt`; with `{ secret, methods, hosts, jsonStrings?, freePaths? }`, where `secret` is a secret's path, it proposes a rule for a request with that secret; a proposal holds nothing, and only a member puts a rule for a secret in force, so this is the one way for code or an agent to get one. A rule's `verb` is `email.send` (with `to: [\"*@example.com\"]` for mail to some recipients alone), one verb such as `itx.whatsapp.sendMessage`, or every verb under a name, `itx.whatsapp.*`. A held call waits five minutes for the member, then throws; the act can be approved for a day, and is done then";
+
+/** A rule for a request with a secret, as the mind's code proposes it: the vault checks it, and a
+ *  member signs it as that secret's rule. */
+type SecretRuleProposal = {
+  secret: string;
+  methods: string[];
+  hosts: string[];
+  jsonStrings?: string[];
+  freePaths?: string[];
+};
 
 /** The vault's gate for acts (iterate/acts), as the mind's own code reaches it. The gate decides:
  *  once a member locked it, `setRules` is refused and `propose` is the way. */
@@ -37,27 +47,16 @@ export function approvalsRoot(
       await record(set.facts);
       return set.rules;
     },
-    // A secret's rule is a member's to save: the link opens the approvals page with these words
-    // filled in under "A new rule" (core/secrets-worker/src/approvals-page.ts `ruleFromLink`).
-    secretRuleLink: (
-      path: string,
-      rule: { methods: string[]; hosts: string[]; jsonStrings?: string[]; freePaths?: string[] },
-    ) =>
-      `${platformOriginOf(domain)}/secrets/approvals?${new URLSearchParams({
-        path,
-        // a list that is not given, or is given as nothing, is no part of the link
-        ...Object.fromEntries(
-          Object.entries(rule).flatMap(([field, words]) =>
-            words?.length ? [[field, words.join(",")]] : [],
-          ),
-        ),
-      })}#offered`,
-    propose: async (rule: ActRule) => {
+    // A rule for an act, or with `secret` a rule for a request with that secret. Either is a
+    // proposal alone: the gate keeps it, and a member approves it with a key or rejects it, on
+    // the approvals page beside the acts that wait. `signAt` is that page's address and holds no
+    // word of the rule: what a member signs there is what the vault kept.
+    propose: async (rule: ActRule | SecretRuleProposal) => {
       const proposed = await releasedAnswer(
         egress.proposeActRule({ rule, from: from().path || context.path }),
       );
       await record(proposed.facts);
-      return { id: proposed.id, signAt: `${platformOriginOf(domain)}/secrets/approvals` };
+      return { id: proposed.id, signAt: `${platformOriginOf(domain)}/secrets/approvals#proposed` };
     },
   };
 }

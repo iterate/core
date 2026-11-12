@@ -26,6 +26,8 @@ import {
   GATE_UNLOCKED,
   type GateAnswer,
   isMailAct,
+  RULE_PROPOSAL_REJECTED,
+  RULE_PROPOSAL_SIGNED,
   RULE_PROPOSED,
   RULE_SET,
   ruleHolds,
@@ -33,7 +35,9 @@ import {
   sha256Hex,
 } from "iterate/acts";
 import { codedError } from "iterate/lib";
+import { SECRET_PATH } from "iterate/secret-placeholder";
 import type { Envelope } from "iterate/signed";
+import { ApprovalRule } from "./approval.ts";
 import type { Env } from "./env.ts";
 import type { Signer } from "./secret/contract.ts";
 
@@ -52,7 +56,20 @@ export type HeldAct = {
   reason?: string;
 };
 
-export type ProposedRule = { id: string; rule: ActRule; from?: string; at: number };
+/** A RULE FOR A REQUEST WITH A SECRET, AS THE MIND'S CODE PROPOSES IT: the secret's path, and the
+ *  rule as a member would save it (./approval.ts `ApprovalRule`). The gate keeps it beside the
+ *  proposed rules for acts and puts it in force never: a member signs it as the secret's own rule
+ *  (the secret's object, `decide`), and only then it holds a request. */
+export type ProposedSecretRule = ApprovalRule & { secret: string };
+export const isSecretRule = (rule: ActRule | ProposedSecretRule): rule is ProposedSecretRule =>
+  "secret" in rule;
+
+export type ProposedRule = {
+  id: string;
+  rule: ActRule | ProposedSecretRule;
+  from?: string;
+  at: number;
+};
 
 /** Who changes the rules with no signature: a member's session on the page, or the mind's code. */
 export type RuleWriter = { member: { userId: string; email: string } } | { mind: string };
@@ -213,9 +230,7 @@ export class ActsGate extends DurableObject<Env> {
     rule: unknown;
     from?: string;
   }): Promise<{ id: string; facts: GateFacts }> {
-    const parsed = ActRule.safeParse(input.rule);
-    if (!parsed.success) throw codedError("INVALID_INPUT", problemsOf(parsed.error));
-    const rule = parsed.data;
+    const rule = proposedRuleOf(input.rule);
     const id = (await sha256Hex(JSON.stringify(rule))).slice(0, 16);
     const known = this.#proposed().some((proposal) => proposal.id === id);
     if (!known && this.#proposed().length >= MOST_PROPOSED)
@@ -227,12 +242,50 @@ export class ActsGate extends DurableObject<Env> {
       at: Date.now(),
       from: input.from,
     });
-    console.info({ event: "approval.rule-proposed", id, verb: rule.verb });
+    console.info({
+      event: "approval.rule-proposed",
+      id,
+      ...(isSecretRule(rule) ? { secret: rule.secret } : { verb: rule.verb }),
+    });
     return {
       id,
       facts: factsOf({
         type: RULE_PROPOSED,
         payload: { id, rule, from: input.from },
+      }),
+    };
+  }
+
+  /** A member signed a secret's rule that names a proposal (the secret's own object took the
+   *  statement): the proposal is done when it was for that secret and is that rule. */
+  async proposalTaken(id: string, secret: string, rule: unknown): Promise<{ facts: GateFacts }> {
+    const proposal = this.ctx.storage.kv.get<ProposedRule>(`proposed:${id}`);
+    if (!proposal || !isSecretRule(proposal.rule) || proposal.rule.secret !== secret)
+      return { facts: [] };
+    const { secret: _path, ...proposed } = proposal.rule;
+    const signed = ApprovalRule.safeParse(rule);
+    if (!signed.success || JSON.stringify(signed.data) !== JSON.stringify(proposed))
+      return { facts: [] };
+    this.ctx.storage.kv.delete(`proposed:${id}`);
+    // the rule's own fact, with its signature, is on the secret's log: this one says that the
+    // proposal is open no more
+    return { facts: factsOf({ type: RULE_PROPOSAL_SIGNED, payload: { id, secret } }) };
+  }
+
+  /** A member says no to a proposed rule, with the session alone: nothing was in force, and
+   *  nothing is let through. Answers no fact for a proposal that is not there. */
+  async rejectProposal(input: {
+    id: string;
+    by: { userId: string; email: string };
+  }): Promise<{ facts: GateFacts }> {
+    const proposal = this.ctx.storage.kv.get<ProposedRule>(`proposed:${input.id}`);
+    if (!proposal) return { facts: [] };
+    this.ctx.storage.kv.delete(`proposed:${input.id}`);
+    console.info({ event: "approval.rule-proposal-rejected", id: input.id });
+    return {
+      facts: factsOf({
+        type: RULE_PROPOSAL_REJECTED,
+        payload: { id: input.id, rule: proposal.rule, by: input.by },
       }),
     };
   }
@@ -282,10 +335,12 @@ export class ActsGate extends DurableObject<Env> {
         return refuse(error instanceof Error ? error.message : String(error));
       }
       this.#setRules(rules);
-      // the proposal this takes up, when the page named one
+      // the proposal this takes up, when the page named one: the fact names it, so that a reader
+      // of the log knows which proposals are open
       const proposal = statement.payload?.proposal;
-      if (typeof proposal === "string") this.ctx.storage.kv.delete(`proposed:${proposal}`);
-      return done(RULE_SET, { rules });
+      if (typeof proposal !== "string") return done(RULE_SET, { rules });
+      this.ctx.storage.kv.delete(`proposed:${proposal}`);
+      return done(RULE_SET, { rules, proposal });
     }
     if (statement.type !== ACT_APPROVED && statement.type !== ACT_REJECTED)
       return refuse(`the gate does not act on ${statement.type}`);
@@ -384,6 +439,25 @@ function rulesOf(given: unknown): ActRule[] {
   // one rule a verb: a second would say the same or less
   const byVerb = new Map(rules.map((rule) => [rule.verb, rule]));
   return [...byVerb.values()].sort((a, b) => (a.verb < b.verb ? -1 : 1));
+}
+
+/** What the mind's code may propose: a rule for an act, or with `secret` a rule for a request
+ *  with that secret. */
+function proposedRuleOf(given: unknown): ActRule | ProposedSecretRule {
+  // the fields of what was given, by name: `secret` says which kind of rule it is
+  const fields = new Map<string, unknown>(Object.entries(Object(given)));
+  const secret = fields.get("secret");
+  if (secret === undefined) {
+    const act = ActRule.safeParse(given);
+    if (!act.success) throw codedError("INVALID_INPUT", problemsOf(act.error));
+    return act.data;
+  }
+  if (typeof secret !== "string" || !SECRET_PATH.test(secret))
+    throw codedError("INVALID_INPUT", "a rule for a secret names it as /secrets/<name>");
+  fields.delete("secret");
+  const rule = ApprovalRule.safeParse(Object.fromEntries(fields));
+  if (!rule.success) throw codedError("INVALID_INPUT", problemsOf(rule.error));
+  return { secret, ...rule.data };
 }
 
 const problemsOf = (error: { issues: { message: string }[] }) =>

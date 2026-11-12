@@ -12,11 +12,19 @@ import {
   GATE_UNLOCKED,
   RULE_SET,
 } from "iterate/acts";
-import type { HeldAct, ProposedRule } from "./acts-gate.ts";
+import {
+  type HeldAct,
+  isSecretRule,
+  type ProposedRule,
+  type ProposedSecretRule,
+} from "./acts-gate.ts";
 import { summaryOf } from "./acts-gate.ts";
+import type { ApprovalRule } from "./approval.ts";
 import { escaped } from "./callback-page.ts";
 
 export const ACT_RULES_PATH = "/secrets/approvals/act-rules";
+/** A member's no to a proposed rule, by the page's own post with the session. */
+export const PROPOSALS_PATH = "/secrets/approvals/proposals";
 
 type Gate = {
   locked: boolean;
@@ -33,6 +41,26 @@ const ruleInWords = ({ verb, to }: ActRule) =>
     : verb.endsWith(".*")
       ? `Every call under ${verb.slice(0, -2)}`
       : `A call of ${verb}`;
+
+/** What a proposed rule for a request with a secret holds, and what stays free, in words. */
+export function secretRuleInWords({
+  secret,
+  methods,
+  hosts,
+  jsonStrings,
+  freePaths,
+}: ProposedSecretRule) {
+  const which = `A request with ${secret} waits when it is ${methods.join(" or ")} to ${hosts.join(" or ")}`;
+  const body = jsonStrings?.length
+    ? ` and its JSON body holds ${jsonStrings.join(" or ")} (a body that is no JSON waits too)`
+    : "";
+  const free = [
+    jsonStrings?.length ? "a request whose JSON body holds none of them" : "",
+    freePaths?.length ? `a request to ${freePaths.join(" or ")}, whatever its body` : "",
+    "every other method and host",
+  ].filter(Boolean);
+  return `${which}${body}. What stays free: ${free.join("; ")}.`;
+}
 
 /** The acts that wait: one group each, newest first. Empty when none waits. */
 export function heldActs(gate: Gate): string {
@@ -58,18 +86,42 @@ export function heldActs(gate: Gate): string {
   return `<section data-acts><h2>Mail and calls</h2>${groups}<p class="actions"><button type="button" data-approve>Approve the chosen</button> <button type="button" class="link" data-reject>Reject them</button></p></section>`;
 }
 
-/** The rules for acts, the rules an agent proposed, and the lock. */
+/** THE RULES THAT WAIT FOR A MEMBER'S YES: what an agent or the mind's code proposed. Each is a
+ *  row as a held act's is, in the same place: tick it, read it, approve or reject. A proposal is
+ *  no rule and holds nothing until a member approves it with a key. The row has the rule in
+ *  words and its exact text, who asked and when. `ruleNowOf` answers the rule that a secret has
+ *  now: an approved rule for a secret takes that rule's place, so the row says it, in the same
+ *  words, and a signature never makes a rule hold less unseen. */
+export function proposedRules(
+  gate: Gate,
+  ruleNowOf: (secret: string) => ApprovalRule | null | undefined = () => null,
+): string {
+  if (!gate.proposed.length) return "";
+  const rows = gate.proposed
+    .map(({ id, rule, from, at }) => {
+      const when = `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+      const now = isSecretRule(rule) && ruleNowOf(rule.secret);
+      const replaces =
+        isSecretRule(rule) &&
+        (now
+          ? `It takes the place of the rule that ${rule.secret} has now: ${secretRuleInWords({ ...now, secret: rule.secret })}`
+          : `${rule.secret} has no rule now.`);
+      return `<fieldset id="proposal-${escaped(id)}" data-proposal="${escaped(id)}">
+<legend><label><input type="checkbox" data-pick="${escaped(id)}"> ${escaped(isSecretRule(rule) ? secretRuleInWords(rule) : ruleInWords(rule))}</label></legend>
+${replaces ? `<p data-replaces>${escaped(replaces)}</p>` : ""}
+<p class="muted">A proposed rule, asked for ${from ? `from ${escaped(from)} ` : ""}at ${when}. It holds nothing until you approve it.</p>
+<details open><summary>The exact rule you sign for</summary><pre>${escaped(JSON.stringify(rule, null, 1))}</pre></details></fieldset>`;
+    })
+    .join("");
+  return `<section data-proposals id="proposed"><h2>Proposed rules</h2>${rows}<p class="actions"><button type="button" data-approve>Approve the chosen</button> <button type="button" class="link" data-reject>Reject them</button></p></section>`;
+}
+
+/** The rules for acts, and the lock. */
 export function actRules(gate: Gate): string {
   const rules = gate.rules
     .map(
       (rule, index) =>
         `<li>${escaped(ruleInWords(rule))} <span class="muted">(${escaped(rule.verb)})</span> <button type="button" class="link" data-drop-act-rule="${index}">Remove</button></li>`,
-    )
-    .join("");
-  const proposed = gate.proposed
-    .map(
-      ({ id, rule, from }) =>
-        `<li>${escaped(ruleInWords(rule))} <span class="muted">(${escaped(rule.verb)}${from ? `, asked for from ${escaped(from)}` : ""})</span> <button type="button" data-take-proposal="${escaped(id)}">Sign it into a rule</button></li>`,
     )
     .join("");
   return `<h2>Rules for mail and calls</h2>
@@ -82,7 +134,6 @@ ${rules ? `<ul>${rules}</ul>` : `<p class="muted">No rule for mail or calls yet.
 <label>For a mail: only to these recipients, or leave empty for every mail <input name="to" placeholder="*@example.com, jo@example.org" size="44"></label>
 <p class="muted">email.send is a mail. itx.whatsapp.sendMessage is one verb, and itx.whatsapp.* every verb under it.</p>
 <p class="actions"><button type="submit">Add the rule</button></p></form>
-${proposed ? `<h3>Rules an agent asks for</h3><ul>${proposed}</ul>` : ""}
 <h3>${gate.locked ? "These rules are locked" : "These rules are open"}</h3>
 <p>${
     gate.locked
@@ -180,14 +231,12 @@ if (acts) {
 
 // A change of the rules goes with the session alone when the gate takes it so (open, or a rule
 // that holds more), and is signed when the gate says it needs a signature.
-async function setActRules(rules, proposal) {
-  if (!proposal) {
-    const answer = await fetch("${ACT_RULES_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rules }) });
-    if (answer.ok) return location.reload();
-    const { error, signed } = await answer.json();
-    if (!signed) throw new Error(error);
-  }
-  await sign({ path: data.actsPath, type: data.actTypes.rules, payload: proposal ? { rules, proposal } : { rules } });
+async function setActRules(rules) {
+  const answer = await fetch("${ACT_RULES_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rules }) });
+  if (answer.ok) return location.reload();
+  const { error, signed } = await answer.json();
+  if (!signed) throw new Error(error);
+  await sign({ path: data.actsPath, type: data.actTypes.rules, payload: { rules } });
 }
 const actRule = document.querySelector("[data-act-rule]");
 actRule.addEventListener("submit", (event) => {
@@ -199,11 +248,46 @@ actRule.addEventListener("submit", (event) => {
 for (const button of document.querySelectorAll("[data-drop-act-rule]"))
   button.addEventListener("click", () =>
     setActRules(data.gate.rules.filter((rule, index) => String(index) !== button.dataset.dropActRule)).catch(fail));
-for (const button of document.querySelectorAll("[data-take-proposal]"))
-  button.addEventListener("click", () => {
-    const { rule, id } = data.gate.proposed.find((proposal) => proposal.id === button.dataset.takeProposal);
-    setActRules([...data.gate.rules.filter((old) => old.verb !== rule.verb), rule], id).catch(fail);
+// A proposed rule is approved as a held act is: ticked, read, approved. Each rule is a signed
+// statement of its own, so each chosen rule asks for the key once. A rule for a request with a
+// secret is signed as that secret's own rule, and a rule for an act as the new list of rules;
+// either statement names the proposal, so the gate knows it is done.
+const proposals = document.querySelector("[data-proposals]");
+if (proposals) {
+  const chosen = () => [...proposals.querySelectorAll("[data-pick]:checked")].map((box) => data.gate.proposed.find((proposal) => proposal.id === box.dataset.pick));
+  proposals.querySelector("[data-approve]").addEventListener("click", async () => {
+    let rules = data.gate.rules;
+    let approved = 0;
+    try {
+      for (const { id, rule } of chosen()) {
+        if ("secret" in rule) {
+          const { secret, ...words } = rule;
+          await sign({ path: secret, type: data.types.rule, payload: { rule: words, proposal: id } }, true);
+        } else {
+          rules = [...rules.filter((old) => old.verb !== rule.verb), rule];
+          await sign({ path: data.actsPath, type: data.actTypes.rules, payload: { rules, proposal: id } }, true);
+        }
+        approved += 1;
+      }
+      if (approved) location.reload();
+    } catch (error) {
+      fail(approved ? new Error(approved + " approved, and then: " + (error && error.message || error) + " Load the page again to see what waits.") : error);
+    }
   });
+  // A no takes the session alone: a proposal holds nothing, so nothing is let through.
+  proposals.querySelector("[data-reject]").addEventListener("click", async () => {
+    try {
+      const ids = chosen().map((proposal) => proposal.id);
+      for (const id of ids) {
+        const answer = await fetch("${PROPOSALS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reject: id }) });
+        if (!answer.ok) throw new Error((await answer.json()).error);
+      }
+      if (ids.length) location.reload();
+    } catch (error) {
+      fail(error);
+    }
+  });
+}
 document.querySelector("[data-lock]").addEventListener("click", (event) =>
   sign({ path: data.actsPath, type: event.target.dataset.lock }).catch(fail));
 

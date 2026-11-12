@@ -94,6 +94,9 @@ const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/approval/act-done",
   "events.iterate.com/approval/rule-set",
   "events.iterate.com/approval/rule-proposed",
+  // the two ends of a proposal that a reader counts by: anyone else's would hide one that is open
+  "events.iterate.com/approval/rule-proposal-signed",
+  "events.iterate.com/approval/rule-proposal-rejected",
   "events.iterate.com/approval/locked",
   "events.iterate.com/approval/unlocked",
 ]);

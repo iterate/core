@@ -1,3 +1,16 @@
+// approvals-page.ts — THE PAGE WHERE A MEMBER'S KEY SIGNS, at /secrets/approvals of the platform's
+// origin. A passkey's prompt does not show what it signs, so a member trusts this page to show
+// it, and the mind's code, which may be hostile, has no part in the page:
+// - The vault serves it. The boundary sends /secrets of the platform's origin here before the
+//   mind sees a request, and an answer of the mind on that origin is an attachment in a sandbox.
+// - It loads nothing from elsewhere: one script, by a nonce, and fetches to its own origin.
+// - What the mind supplies is data, written as text: an act's text, a proposed rule, a name. The
+//   words that say what a rule holds are made here.
+// - No value comes from the page's address but `?digest=`, which ticks the one held row it names.
+// - A press that was made on another origin, for another relying party or for another statement
+//   is refused (iterate/signed `verifySignature`), and a statement counts once.
+// The first two steps of core/alchemy/scripts/act-approval-proof.ts show this on a stack.
+//
 // The page's script hashes each stored text itself and offers approval only when that hash is the
 // digest. The signature is the credential, so the statements route asks for no session.
 import { APPROVALS_CONTEXT, RUN_ACTS_HEADER } from "iterate/acts";
@@ -8,7 +21,15 @@ import type { SecretAnswer } from "iterate/workers";
 import { z } from "zod";
 import type { Envelope } from "iterate/signed";
 import type { GateDecision, GateFacts, GateState, RuleWriter } from "./acts-gate.ts";
-import { ACT_RULES_PATH, ACTS_SCRIPT, actRules, actsData, heldActs } from "./acts-page.ts";
+import {
+  ACT_RULES_PATH,
+  ACTS_SCRIPT,
+  actRules,
+  actsData,
+  heldActs,
+  PROPOSALS_PATH,
+  proposedRules,
+} from "./acts-page.ts";
 import type { ApprovalRule, HeldRequest } from "./approval.ts";
 import { admitted, callbackPage, escaped, plainPage } from "./callback-page.ts";
 import type { HeldRow } from "./secret/durable-object.ts";
@@ -51,6 +72,11 @@ type ApprovalsDeps = {
     state(): Promise<GateState>;
     setRules(input: { rules: unknown; by: RuleWriter }): Promise<{ facts: GateFacts }>;
     decide(envelope: Envelope): Promise<{ result: GateDecision; facts: GateFacts }>;
+    proposalTaken(id: string, secret: string, rule: unknown): Promise<{ facts: GateFacts }>;
+    rejectProposal(input: {
+      id: string;
+      by: { userId: string; email: string };
+    }): Promise<{ facts: GateFacts }>;
   };
 };
 
@@ -59,7 +85,8 @@ export const isApprovalsPath = (pathname: string) =>
   pathname === SECRET_APPROVALS_PATH ||
   pathname === STATEMENTS_PATH ||
   pathname === RULES_PATH ||
-  pathname === ACT_RULES_PATH;
+  pathname === ACT_RULES_PATH ||
+  pathname === PROPOSALS_PATH;
 
 export async function secretApprovals(request: Request, deps: ApprovalsDeps): Promise<Response> {
   const { pathname } = new URL(request.url);
@@ -111,10 +138,19 @@ export async function secretApprovals(request: Request, deps: ApprovalsDeps): Pr
       );
     }
   }
-  if (pathname === SECRET_APPROVALS_PATH && request.method === "GET")
-    return page(deps, ruleFromLink(new URL(request.url).searchParams));
+  // A member's no to a proposed rule. The session alone: a proposal holds nothing.
+  if (pathname === PROPOSALS_PATH && request.method === "POST") {
+    const body = z.object({ reject: z.string() }).safeParse(await request.json().catch(() => null));
+    if (!body.success) return Response.json({ error: "name the proposal" }, { status: 400 });
+    const { facts } = await deps.gate.rejectProposal({ id: body.data.reject, by });
+    return withFacts(Response.json({ ok: true }), facts);
+  }
+  if (pathname === SECRET_APPROVALS_PATH && request.method === "GET") return page(deps);
   return new Response("Method not allowed", { status: 405 });
 }
+
+/** A statement that sets a secret's rule and names the proposal it takes up. */
+const SignedRule = z.object({ payload: z.object({ proposal: z.string(), rule: z.unknown() }) });
 
 // The secret's object checks the path again once the statement is verified.
 async function statement(request: Request, deps: ApprovalsDeps): Promise<Response> {
@@ -140,46 +176,18 @@ async function statement(request: Request, deps: ApprovalsDeps): Promise<Respons
   if (typeof path !== "string" || !SECRET_PATH.test(path))
     return refuse("the statement names no secret");
   const answer = await deps.secretOf(path).decide(path, envelope);
-  const reply = answer.result.error
-    ? refuse(answer.result.error, 403)
-    : Response.json({ ok: true });
-  return withFacts(reply, answer.facts);
+  if (answer.result.error) return withFacts(refuse(answer.result.error, 403), answer.facts);
+  // A rule that a member signed for a proposal: the gate, which kept the proposal, is told. The
+  // secret's own object verified the statement and took the rule; the gate compares it again.
+  const signed = SignedRule.safeParse(JSON.parse(envelope.statement));
+  const taken = signed.success
+    ? await deps.gate.proposalTaken(signed.data.payload.proposal, path, signed.data.payload.rule)
+    : { facts: [] };
+  return withFacts(Response.json({ ok: true }), [...answer.facts, ...taken.facts]);
 }
 
 // The script shows a request's parts, from the text it hashed.
-/** A RULE THAT A LINK OFFERS. A secret's rule is a member's to save: the mind's code cannot set
- *  one. So the mind's code, or an agent, hands a member a link to this page with the rule's words
- *  in it, `?path=/secrets/<name>&methods=POST&hosts=<host>&jsonStrings=…&freePaths=…`, and the
- *  page opens with them filled in under "A new rule". Nothing is saved until the member presses
- *  Save, which goes through the same checks as a rule typed by hand. The link holds a rule's
- *  words and no secret. Null when the link names no secret's path. */
-export function ruleFromLink(
-  link: URLSearchParams,
-): { path: string; rule: Record<RuleField, string[]> } | null {
-  const path = link.get("path") || "";
-  if (!SECRET_PATH.test(path)) return null;
-  // as the form's own post reads a field: words with commas or spaces between them
-  const words = (name: RuleField) =>
-    (link.get(name) || "")
-      .split(/[\s,]+/)
-      .filter(Boolean)
-      .slice(0, 20);
-  return {
-    path,
-    rule: {
-      methods: words("methods"),
-      hosts: words("hosts"),
-      jsonStrings: words("jsonStrings"),
-      freePaths: words("freePaths"),
-    },
-  };
-}
-type RuleField = "methods" | "hosts" | "jsonStrings" | "freePaths";
-
-async function page(
-  deps: ApprovalsDeps,
-  offered: ReturnType<typeof ruleFromLink>,
-): Promise<Response> {
+async function page(deps: ApprovalsDeps): Promise<Response> {
   const secrets: { path: string; rule: ApprovalRule | null; held: HeldRow[] }[] = [];
   for (const path of await deps.index.paths()) {
     const { rule, held } = await deps.secretOf(path).approvals(path);
@@ -213,12 +221,14 @@ async function page(
     `<p role="alert" data-type="error" data-keys hidden>You have no passkey or security key here. <a href="/keys?next=${encodeURIComponent(SECRET_APPROVALS_PATH)}">Add one</a>, then come back.</p>`,
     `<p role="alert" data-type="error" data-failure hidden></p>`,
     heldActs(gate),
-    requests || (gate.held.length ? "" : "<p>Nothing waits for approval.</p>"),
+    proposedRules(gate, (path) => secrets.find((secret) => secret.path === path)?.rule),
+    requests ||
+      (gate.held.length || gate.proposed.length ? "" : "<p>Nothing waits for approval.</p>"),
     actRules(gate),
     "<h2>Rules for requests with a secret</h2>",
     "<p>A request with a secret whose method and host its rule names waits here for a signed yes. Adding a method or a host saves at once; anything else is signed with your key.</p>",
     rules,
-    ruleForm("", offered?.rule || null, offered?.path),
+    ruleForm("", null),
   ].join("");
   const data = {
     mind: deps.mind,
@@ -244,20 +254,18 @@ function summaryOf(text: string): string {
   return `${held.method} ${held.url}`;
 }
 
-/** A rule's form: a secret's own rule, or "A new rule" with no path. `offered` is the secret that
- *  a link names for a new rule (`ruleFromLink`), with the link's words as the rule. */
+/** A rule's form: a secret's own rule, or "A new rule" with no path. NO VALUE OF A FORM COMES
+ *  FROM THE PAGE'S ADDRESS: a member saves or signs what the page shows, so what it shows is the
+ *  vault's own or what the member typed. A rule that someone else wants is a proposal, which the
+ *  vault keeps with who asked (./acts-gate.ts `propose`). */
 export function ruleForm(
   path: string,
   rule: Pick<ApprovalRule, "methods" | "hosts" | "jsonStrings" | "freePaths"> | null,
-  offered?: string,
 ): string {
   const field = (name: string, label: string, value: string, required = "required") =>
     `<label>${label} <input name="${name}" value="${escaped(value)}" size="44" ${required}></label>`;
-  const fromLink = offered
-    ? `<p id="offered"><strong>A link filled in this rule for ${escaped(offered)}.</strong> Read it: nothing is saved until you press Save. A request with that secret which the rule names then waits here for your signed yes.</p>`
-    : "";
   return `<form method="post" action="${RULES_PATH}" class="stack" data-rule>
-${path ? `<input type="hidden" name="path" value="${escaped(path)}"><h3>${escaped(path)}</h3>` : `<h3>A new rule</h3>${fromLink}${field("path", "Secret", offered || "/secrets/")}`}
+${path ? `<input type="hidden" name="path" value="${escaped(path)}"><h3>${escaped(path)}</h3>` : `<h3>A new rule</h3>${field("path", "Secret", "/secrets/")}`}
 ${field("methods", "Methods", rule?.methods.join(", ") ?? "POST")}
 ${field("hosts", "Hosts", rule?.hosts.join(", ") ?? "")}
 ${field("jsonStrings", "Only when the JSON body holds one of these, or leave empty for every request", rule?.jsonStrings?.join(", ") ?? "", "")}
@@ -301,7 +309,8 @@ const keysLoaded = fetch("/keys.json", { credentials: "same-origin" })
   .then((answer) => answer.ok ? answer.json() : { keys: [] })
   .then((answer) => { keys = answer.keys || []; document.querySelector("[data-keys]").hidden = keys.length > 0; });
 
-async function sign(fields) {
+// stay: the caller signs more than one statement, and loads the page again itself.
+async function sign(fields, stay) {
   await keysLoaded;
   if (!keys.length) throw new Error("Add a passkey or a security key first.");
   const now = Date.now();
@@ -321,7 +330,7 @@ async function sign(fields) {
   }) });
   const result = await answer.json();
   if (result.error) throw new Error(result.error);
-  location.reload();
+  if (!stay) location.reload();
 }
 
 for (const held of data.held) {

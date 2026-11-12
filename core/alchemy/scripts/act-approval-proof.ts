@@ -15,9 +15,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { mindApiUrlOf, platformOriginOf } from "iterate/mind-api";
-import { keyIdOf } from "iterate/signed";
+import { type Envelope, keyIdOf, statementText } from "iterate/signed";
 import { z } from "zod";
-import { authenticator, lendPasskey } from "./proof-passkeys.ts";
+import { authenticator, credentialIdOf, lendPasskey, pressedAt } from "./proof-passkeys.ts";
 import { mindRoot } from "./smoke/lib.ts";
 
 /** core/auth-worker/src/cookies.ts `SESSION_COOKIE`, which the package does not export. */
@@ -171,6 +171,10 @@ const setRulesBySession = async (rules: unknown[]) =>
 const rule = { verb: "email.send", to: [`*@${domain}`] };
 let bridge: ChildProcess | undefined;
 let bridgeKey = "";
+/** The ids of the rules that this run proposed: a run that stops takes the open ones away. */
+const proposals: string[] = [];
+/** The secret that a step made for itself, until that step removed it. */
+let proofSecret = "";
 /** What the bridge's process printed: its link, that it is live, and each call it got. */
 let said = "";
 async function cleanUp() {
@@ -191,9 +195,174 @@ async function cleanUp() {
     await page.getByRole("button", { name: "Lock, signed" }).waitFor();
   }
   await setRulesBySession([]);
+  if (proofSecret) await root().secrets.delete(proofSecret);
+  // a proposal that was approved or rejected is gone already, and its rejection changes nothing
+  for (const reject of proposals)
+    await page.evaluate(
+      `fetch("/secrets/approvals/proposals", { method: "POST", headers: { "content-type": "application/json" }, body: ${JSON.stringify(JSON.stringify({ reject }))} }).then((answer) => answer.status)`,
+    );
 }
 
 console.log(`proving a mail that waits for approval on ${issuer}; screenshots in ${shots}`);
+
+// The two steps that come first show on a stack what core/secrets-worker/src/approvals-page.ts
+// says of the page where a passkey signs.
+await run(
+  "each page where a passkey signs is the platform's own: it loads from its own origin alone, and an answer of the mind on that origin is an attachment in a sandbox",
+  async () => {
+    const loaded: { origin: string; kind: string }[] = [];
+    const note = (request: { url(): string; resourceType(): string }) =>
+      loaded.push({ origin: new URL(request.url()).origin, kind: request.resourceType() });
+    page.on("request", note);
+    const policies: string[] = [];
+    for (const path of ["/secrets/approvals", "/keys", "/members", "/oauth2/device"]) {
+      const answer = await page.goto(`${issuer}${path}`, { waitUntil: "networkidle" });
+      const policy = answer?.headers()["content-security-policy"] || "";
+      must(new URL(page.url()).origin === issuer, `${path} led to ${page.url()}`);
+      // nothing by default, no frame, no base; a script by the page's own nonce and from no host
+      must(
+        policy.startsWith("default-src 'none'") &&
+          policy.includes("frame-ancestors 'none'") &&
+          policy.includes("base-uri 'none'") &&
+          !/script-src[^;]*(https?:|\*|'unsafe|'self')/.test(policy),
+        `${path} has the policy ${policy}`,
+      );
+      policies.push(policy.replace(/'nonce-[^']+'/, "'nonce-…'"));
+    }
+    page.off("request", note);
+    // a picture is no code: a verified client's own logo may come from its own domain
+    const elsewhere = loaded.filter(({ origin, kind }) => origin !== issuer && kind !== "image");
+    must(!elsewhere.length, `a page loaded ${JSON.stringify(elsewhere)}`);
+    const minds = await fetch(`${issuer}/api/proof-${marker}`);
+    const [disposition, policy, sniff] = [
+      "content-disposition",
+      "content-security-policy",
+      "x-content-type-options",
+    ].map((name) => minds.headers.get(name) || "");
+    must(
+      disposition.startsWith("attachment") &&
+        policy.startsWith("sandbox") &&
+        !policy.includes("allow-same-origin") &&
+        sniff === "nosniff",
+      `the mind's answer at /api has ${JSON.stringify({ disposition, policy, sniff })}`,
+    );
+    const related = await fetch(`${issuer}/.well-known/webauthn`);
+    must(!related.ok, `/.well-known/webauthn answered ${related.status}: it names other origins`);
+    return {
+      detail: `${loaded.length} requests of four pages, each to ${issuer}; the approvals page's policy is ${policies[0]}; the mind's answer at /api/… is ${minds.status} with ${disposition} and ${policy}; /.well-known/webauthn is ${related.status}`,
+    };
+  },
+);
+
+await run(
+  "a press on another host of the mind signs nothing: the browser makes none there for the platform's passkey, and the server refuses one that is made anyway",
+  async () => {
+    const file = z.string().parse(env.ITERATE_PROOF_PASSKEY);
+    const rpId = new URL(issuer).hostname;
+    const other = `https://proof-${marker}.${domain}`;
+    const here = { origin: issuer, rpId };
+    const { rules } = await root().approvals.rules();
+    const now = Date.now();
+    // a statement that sets the rules for mail and calls: here, to the rules that are there
+    const statement = () =>
+      statementText({
+        mind: domain,
+        path: "/approvals",
+        type: "events.iterate.com/approval/rule-set",
+        payload: { rules },
+        at: now,
+        expires: now + 5 * 60_000,
+      });
+    const posted = async (envelope: Envelope, origin = issuer) => {
+      const answer = await fetch(`${page_}/statements`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin },
+        body: JSON.stringify(envelope),
+      });
+      const said = z
+        .object({ error: z.string().optional(), ok: z.boolean().optional() })
+        .parse(await answer.json());
+      return said.error || (said.ok ? "taken" : `HTTP ${answer.status}`);
+    };
+    const refusals = {
+      // what a page of the mind's own would send, were a browser to make the press for it
+      onAnotherHost: await posted(await pressedAt(file, statement(), { origin: other, rpId })),
+      // A host under the platform's, the one other place where a browser makes this press. No
+      // such host is served: the zone's wildcard name and certificate reach one label alone.
+      underThePlatform: await posted(
+        await pressedAt(file, statement(), { origin: `https://proof.${rpId}`, rpId }),
+      ),
+      // the relying party that a browser does allow such a page: the mind's bare domain
+      forTheBareDomain: await posted(
+        await pressedAt(file, statement(), { origin: issuer, rpId: domain }),
+      ),
+      // a press for one statement, sent with another
+      forAnotherStatement: await posted(await pressedAt(file, statement(), here, statement())),
+    };
+    must(
+      refusals.onAnotherHost === "the assertion was made on another origin" &&
+        refusals.underThePlatform === refusals.onAnotherHost &&
+        refusals.forTheBareDomain === "the assertion is for another relying party" &&
+        refusals.forAnotherStatement === "the assertion is for another statement",
+      `the server said ${JSON.stringify(refusals)}`,
+    );
+    const pressedHere = await pressedAt(file, statement(), here);
+    const [first, again] = [await posted(pressedHere), await posted(pressedHere)];
+    must(
+      first === "taken" && again === "the statement was seen before",
+      `a press on the platform's own page was ${first}, and the same press again was ${again}`,
+    );
+
+    // The browser's side, on a page that the mind serves: the passkey is for the platform's host,
+    // and a browser makes a press for a relying party only on that host or one under it.
+    await page.goto(`${other}/`).catch(() => undefined);
+    must(new URL(page.url()).origin === other, `${other} led to ${page.url()}`);
+    const pressOn = async (relyingParty: string) =>
+      z.string().parse(
+        await page.evaluate(`(async () => {
+          const id = Uint8Array.from(atob(${JSON.stringify(credentialIdOf(file))}.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0));
+          try {
+            await navigator.credentials.get({ publicKey: {
+              challenge: crypto.getRandomValues(new Uint8Array(32)),
+              rpId: ${JSON.stringify(relyingParty)},
+              userVerification: "required",
+              allowCredentials: [{ type: "public-key", id }],
+              timeout: 10000,
+            } });
+            return "a press";
+          } catch (error) {
+            return error.name;
+          }
+        })()`),
+      );
+    const answered = {
+      forThePlatform: await pressOn(rpId),
+      forTheBareDomain: await pressOn(domain),
+    };
+    must(
+      answered.forThePlatform === "SecurityError" && answered.forTheBareDomain !== "a press",
+      `on ${other} the browser answered ${JSON.stringify(answered)}`,
+    );
+
+    // A session's write from a page of the mind's own: the cookie rides it, and it counts for nothing.
+    await page.goto(page_);
+    const bySession = await setRulesBySession(rules);
+    const cookie = `${SESSION_COOKIE}=${env.ITERATE_PROOF_SESSION_COOKIE}`;
+    const fromTheMind = await fetch(`${issuer}/secrets/approvals/act-rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: other, cookie },
+      body: JSON.stringify({ rules }),
+      redirect: "manual",
+    });
+    must(
+      bySession.status === 200 && fromTheMind.status !== 200,
+      `the session's write was ${bySession.status} from the page and ${fromTheMind.status} from ${other}`,
+    );
+    return {
+      detail: `the server refused a press for ${other} and one for https://proof.${rpId} (${refusals.onAnotherHost}), one for the bare domain (${refusals.forTheBareDomain}) and one sent with another statement (${refusals.forAnotherStatement}); it took a press for ${issuer} once (${again}); on ${other} the browser answered ${answered.forThePlatform} for ${rpId} and ${answered.forTheBareDomain} for ${domain}; a session's write of the rules was ${bySession.status} from the page and ${fromTheMind.status} with the origin ${other}`,
+    };
+  },
+);
 
 await run(
   "the member opens /secrets/approvals on a phone and adds a rule: a mail to the mind's own domain waits",
@@ -928,9 +1097,15 @@ await run(
 
 await run("an agent proposes a rule, and the member's passkey signs it into one", async () => {
   const proposed = await root().approvals.propose({ verb: "email.send", to: ["*@example.org"] });
-  must(proposed.signAt === page_, `it says to sign at ${proposed.signAt}`);
+  must(proposed.signAt === `${page_}#proposed`, `it says to sign at ${proposed.signAt}`);
+  proposals.push(proposed.id);
+  // It waits where the held mail and calls wait: the member ticks it, reads it and approves.
+  // The page is loaded by its plain address: a browser that is on the page already does not
+  // load it again for an address that differs by its fragment alone.
   await page.goto(page_);
-  await page.getByRole("button", { name: "Sign it into a rule" }).click();
+  const waits = page.locator("section[data-proposals]#proposed");
+  await waits.locator(`[data-proposal="${proposed.id}"]`).getByRole("checkbox").check();
+  await waits.getByRole("button", { name: "Approve the chosen" }).click();
   await page
     .locator("li", { hasText: "A mail to *@example.org" })
     .getByRole("button", { name: "Remove" })
@@ -941,6 +1116,102 @@ await run("an agent proposes a rule, and the member's passkey signs it into one"
     detail: `itx.approvals.propose answered a link to the page; signed, the rules are ${JSON.stringify(rules)}`,
   };
 });
+
+await run(
+  "an agent proposes a rule for a request with a secret: it holds nothing until the member signs it, and then a JMAP send waits while a read goes",
+  async () => {
+    // A secret of the proof's own for Fastmail's API, with a made-up token: Fastmail answers it
+    // 401, so nothing can be read or sent. What counts is which requests the vault lets through.
+    const secret = `/secrets/proof-fastmail-${marker}`;
+    proofSecret = secret;
+    await root().secrets.set(secret, `not-a-token-${marker}`, {
+      urls: ["https://api.fastmail.com/"],
+    });
+    const jmap = (methodCalls: unknown[]) =>
+      root()
+        .run(
+          `async (itx) => { const response = await itx.fetch(new Request("https://api.fastmail.com/jmap/api/", { method: "POST", headers: { authorization: 'Bearer getSecret("${secret}")', "content-type": "application/json" }, body: ${JSON.stringify(JSON.stringify({ using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"], methodCalls }))} })); return response.status; }`,
+        )
+        .then(
+          (status) => ({ status: Number(status), refused: "" }),
+          // no status: the call was refused, with these words
+          (error: unknown) => ({
+            status: 0,
+            refused: error instanceof Error ? error.message : String(error),
+          }),
+        );
+    const read = [["Email/query", { accountId: "u0", limit: 1 }, "0"]];
+    const send = [
+      ["Email/set", { accountId: "u0", create: { draft: { subject: `proof ${marker}` } } }, "0"],
+      ["EmailSubmission/set", { accountId: "u0", create: { sent: { emailId: "#draft" } } }, "1"],
+    ];
+    const rule = {
+      secret,
+      methods: ["POST"],
+      hosts: ["api.fastmail.com"],
+      jsonStrings: ["EmailSubmission/set"],
+      freePaths: ["/jmap/upload/"],
+    };
+    // the agent's side: loaded code proposes, and can do no more
+    const proposed = z
+      .object({ id: z.string(), signAt: z.string() })
+      .parse(await root().run(`async (itx) => itx.approvals.propose(${JSON.stringify(rule)})`));
+    must(proposed.signAt === `${page_}#proposed`, `it says to sign at ${proposed.signAt}`);
+    // a proposal is no rule: the send goes through to Fastmail, which refuses the made-up token
+    const unsigned = await jmap(send);
+    must(
+      unsigned.status === 401,
+      `with the rule proposed and not signed, a JMAP send ended with ${JSON.stringify(unsigned)}`,
+    );
+    // The page has it among what waits, with what it holds, what stays free, and that the secret
+    // has no rule now. The member ticks it and approves, as for a held act.
+    proposals.push(proposed.id);
+    await page.goto(page_);
+    const row = page.locator(`section[data-proposals] [data-proposal="${proposed.id}"]`);
+    const words = (await row.innerText()).replace(/\s+/g, " ");
+    must(
+      words.includes(
+        `A request with ${secret} waits when it is POST to api.fastmail.com and its JSON body holds EmailSubmission/set`,
+      ) &&
+        words.includes("What stays free") &&
+        words.includes(`${secret} has no rule now.`),
+      `the page says of the proposal: ${words.slice(0, 300)}`,
+    );
+    await row.getByRole("checkbox").check();
+    await page
+      .locator("section[data-proposals]")
+      .getByRole("button", { name: "Approve the chosen" })
+      .click();
+    await row.waitFor({ state: "detached" });
+    await page.locator("form[data-rule] h3", { hasText: secret }).waitFor();
+    // In force now: a read goes, and a send waits.
+    const reads = await jmap(read);
+    must(
+      reads.status === 401,
+      `with the rule signed, a JMAP read ended with ${JSON.stringify(reads)}`,
+    );
+    const held = jmap(send);
+    const waits = page.locator(`section[data-secret="${secret}"]`);
+    await until("the JMAP send on the approvals page", 40, async () => {
+      await page.goto(page_);
+      return (await waits.count()) > 0;
+    });
+    // the member rejects it, so that the caller's call ends now
+    await waits.locator("[data-pick]:not([disabled])").first().check();
+    page.once("dialog", (dialog) => void dialog.accept("the proof rejects it"));
+    await waits.getByRole("button", { name: "Reject them" }).click();
+    const ended = await held;
+    must(
+      ended.status === 403 || ended.refused,
+      `the held send ended with ${JSON.stringify(ended)}`,
+    );
+    await root().secrets.delete(secret);
+    proofSecret = "";
+    return {
+      detail: `itx.approvals.propose answered a link to the page; proposed and not signed, a JMAP send went through to Fastmail (401 for the made-up token); the page said what the rule holds and what stays free; signed with the passkey, a read went through (401) and a send waited on the page until the member rejected it (${JSON.stringify(ended).slice(0, 80)})`,
+    };
+  },
+);
 
 await run(
   "a subscription does not deliver to the held verb: the bridge is not called for its event",

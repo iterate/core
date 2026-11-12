@@ -5,6 +5,8 @@ import {
   ACT_REJECTED,
   GATE_LOCKED,
   GATE_UNLOCKED,
+  RULE_PROPOSAL_REJECTED,
+  RULE_PROPOSAL_SIGNED,
   RULE_PROPOSED,
   RULE_SET,
   sha256Hex,
@@ -218,12 +220,70 @@ test("a rule the mind proposes is no rule until a member signs it", async () => 
   // asked for twice, it is one proposal
   expect(await gate.propose({ rule: { verb: "email.send" } })).toEqual({ id, facts: [] });
   expect(await gate.act({ text: MAIL })).toMatchObject({ state: "free" });
-  await decide(MEMBER, {
-    type: RULE_SET,
-    payload: { rules: [{ verb: "email.send" }], proposal: id },
-  });
+  // the fact names the proposal that the signed rules take up
+  expect(
+    await decide(MEMBER, {
+      type: RULE_SET,
+      payload: { rules: [{ verb: "email.send" }], proposal: id },
+    }),
+  ).toMatchObject({ facts: [{ events: [{ type: RULE_SET, payload: { proposal: id } }] }] });
   expect(await gate.state()).toMatchObject({ rules: [{ verb: "email.send" }], proposed: [] });
   expect(await gate.act({ text: MAIL })).toMatchObject({ state: "held" });
+});
+
+test("the mind proposes a rule for a request with a secret: the gate keeps it, puts nothing in force, and drops it when a member signed that rule for that secret", async () => {
+  const { gate } = vault();
+  const fastmail = {
+    secret: "/secrets/fastmail",
+    methods: ["post"],
+    hosts: ["API.fastmail.com"],
+    jsonStrings: ["EmailSubmission/set"],
+    freePaths: ["/jmap/upload/"],
+  };
+  const { id, facts } = await gate.propose({ rule: fastmail, from: "/agents/a" });
+  // kept as a member would save it: the rule's own checks ran, and its words are in one form
+  const kept = { ...fastmail, methods: ["POST"], hosts: ["api.fastmail.com"] };
+  expect(facts).toMatchObject([
+    { events: [{ type: RULE_PROPOSED, payload: { id, rule: kept, from: "/agents/a" } }] },
+  ]);
+  expect(await gate.state()).toMatchObject({ rules: [], proposed: [{ id, rule: kept }] });
+  const { secret, ...rule } = kept;
+  // a rule that a member signed for another secret, or another rule, is not this proposal
+  expect(await gate.proposalTaken(id, "/secrets/other", rule)).toEqual({ facts: [] });
+  expect(await gate.proposalTaken(id, secret, { ...rule, hosts: ["example.com"] })).toEqual({
+    facts: [],
+  });
+  expect(await gate.state()).toMatchObject({ proposed: [{ id }] });
+  // the proposal's own rule, signed for its own secret: it is open no more, and the log says so
+  expect(await gate.proposalTaken(id, secret, rule)).toMatchObject({
+    facts: [{ events: [{ type: RULE_PROPOSAL_SIGNED, payload: { id, secret } }] }],
+  });
+  expect(await gate.state()).toMatchObject({ proposed: [] });
+});
+
+test.for([
+  ["a secret that is no path", { secret: "fastmail", methods: ["POST"], hosts: ["a.example"] }],
+  ["no host", { secret: "/secrets/x", methods: ["POST"], hosts: [] }],
+  [
+    "a word the rule has not",
+    { secret: "/secrets/x", methods: ["POST"], hosts: ["a.example"], verb: "email.send" },
+  ],
+])("a proposed rule for a secret with %s is refused, and nothing is kept", async ([, rule]) => {
+  const { gate } = vault();
+  await expect(gate.propose({ rule })).rejects.toThrow();
+  expect(await gate.state()).toMatchObject({ proposed: [] });
+});
+
+test("a member rejects a proposed rule with the session alone: it is gone, and the log says who said no", async () => {
+  const { gate } = vault();
+  const { id } = await gate.propose({ rule: { verb: "itx.whatsapp.sendMessage" } });
+  const by = { userId: "user_1", email: "jo@example.net" };
+  expect(await gate.rejectProposal({ id, by })).toMatchObject({
+    facts: [{ events: [{ type: RULE_PROPOSAL_REJECTED, payload: { id, by } }] }],
+  });
+  expect(await gate.state()).toMatchObject({ rules: [], proposed: [] });
+  // a proposal that is not there: nothing happens, and nothing is written
+  expect(await gate.rejectProposal({ id, by })).toEqual({ facts: [] });
 });
 
 test("a rule taken away frees what waited under it", async () => {
