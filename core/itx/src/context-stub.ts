@@ -53,20 +53,10 @@ export function contextStub(
                 const { code, message, data } = result.error;
                 throw codedError(code, message, data);
               }
-              // workerd puts the session's disposer on the wrapper; whoever gets an answer
-              // releases the answer itself, so it moves onto the answer. A plain value (a number,
-              // a string, nothing) has nowhere to carry it and holds no stub of the other context:
-              // its session is released here, or it would stay open until the runtime drops it
-              // with "An RPC result was not disposed properly".
+              // workerd puts the session's disposer on the wrapper. Plain data is copied and the
+              // session let go; an answer that holds a stub gets the disposer, for its holder.
               const { data, [Symbol.dispose]: dispose } = result;
-              if (dispose && data instanceof Object) {
-                if (!data[Symbol.dispose])
-                  Object.defineProperty(data, Symbol.dispose, {
-                    value: dispose,
-                    configurable: true,
-                  });
-              } else dispose?.();
-              return data;
+              return releasedWhenPlain(data, dispose && (() => dispose.call(result)));
             } catch (error) {
               release();
               throw error;
@@ -95,6 +85,73 @@ export function contextStub(
   };
 }
 
+/** A JSON object as an answer holds one: Object's own prototype and string keys alone. Its call's
+ *  disposer, which workerd puts on an answer under `Symbol.dispose`, is not a key of the data. */
+function isJsonObject(value: object): value is Record<string, unknown> {
+  return (
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Reflect.ownKeys(value).every((key) => typeof key === "string" || key === Symbol.dispose)
+  );
+}
+
+/** `value` copied when it is plain data all the way down (JSON's kinds, and `undefined`), else
+ *  `NOT_PLAIN`: a stub, a function, a Date, bytes or any object with a class of its own is not
+ *  copied, because a copy of a stub is not the stub. */
+const NOT_PLAIN = Symbol("not plain");
+function plainCopy(value: unknown): unknown {
+  if (typeof value === "function" || typeof value === "symbol") return NOT_PLAIN;
+  // a number, a string, a boolean, nothing
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- an answer off the wire is of any kind: an object alone is walked
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    const copy = value.map(plainCopy);
+    return copy.includes(NOT_PLAIN) ? NOT_PLAIN : copy;
+  }
+  if (!isJsonObject(value)) return NOT_PLAIN;
+  const copy = {};
+  for (const [key, held] of Object.entries(value)) {
+    const copied = plainCopy(held);
+    if (copied === NOT_PLAIN) return NOT_PLAIN;
+    // Defined, never assigned: an event's payload is anyone's JSON, and a key named `__proto__`
+    // is data there. An assignment would set the copy's prototype in place of the key.
+    Object.defineProperty(copy, key, {
+      value: copied,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return copy;
+}
+
+/** A context's answer with its call's session let go, when the answer is plain data: the caller
+ *  gets a copy. An answer that crosses Workers RPC keeps its session open until its disposer
+ *  runs, and for plain data nobody ran it: the runtime then logs "An RPC result was not disposed
+ *  properly". An answer that holds a stub is handed on as it is, with `dispose` on it, for
+ *  whoever holds it. As core/mind-worker's `releasedAnswer` does for the vault's answers. */
+function releasedWhenPlain<T>(held: T, dispose: (() => void) | undefined): T {
+  if (!dispose) return held;
+  const copy = plainCopy(held);
+  if (copy !== NOT_PLAIN) {
+    dispose();
+    // `plainCopy` answers `unknown`; a copy of plain data has the shape of what it copies
+    return copy as T;
+  }
+  if (held instanceof Object && !(Symbol.dispose in held))
+    Object.defineProperty(held, Symbol.dispose, { value: dispose, configurable: true });
+  return held;
+}
+
+/** `releasedWhenPlain` for a verb that answers the value itself, with its disposer on it. */
+async function released<T>(answer: Promise<T> | T): Promise<T> {
+  const held = await answer;
+  // An answer of any type may carry its call's disposer: `Partial<Disposable>` says "perhaps",
+  // which no type of the answer itself does.
+  const dispose =
+    held instanceof Object ? (held as Partial<Disposable>)[Symbol.dispose] : undefined;
+  return releasedWhenPlain(held, dispose && (() => dispose.call(held)));
+}
+
 export function reachableContext(
   namespace: Pick<IterateContextNamespace, "getByName">,
   address: DurableObjectAddress,
@@ -105,9 +162,9 @@ export function reachableContext(
   const stub = () => namespace.getByName(address.name);
   return {
     fetch: hop.fetch,
-    append: (...events) => stub().append(...events),
-    read: (...page) => stub().read(...page),
-    reserveSend: (key) => stub().reserveSend(key),
+    append: (...events) => released(stub().append(...events)),
+    read: (...page) => released(stub().read(...page)),
+    reserveSend: (key) => released(stub().reserveSend(key)),
     releaseSend: (key) => stub().releaseSend(key),
     invoke: (call, args = [], caller = { principal: null }) =>
       hop.invoke(normalizedItxExpression(call), args, caller),
