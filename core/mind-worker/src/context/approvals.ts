@@ -6,7 +6,7 @@ import type { Door } from "iterate/workers";
 import { hopCaller } from "./hop-caller.ts";
 
 export const APPROVALS_ROOT_DESCRIPTION =
-  "what waits for a member's signed yes before it is done: `approvals.rules()` → { locked, rules } · `approvals.setRules([{ verb, to? }])` replaces the rules while they are open (not locked) · `approvals.propose({ verb, to? })` → { id, signAt } asks a member to sign one rule at `signAt`. A rule's `verb` is `email.send` (with `to: [\"*@example.com\"]` for mail to some recipients alone), one verb such as `itx.whatsapp.sendMessage`, or every verb under a name, `itx.whatsapp.*`. A held call waits five minutes for the member, then throws; the act can be approved for a day, and is done then";
+  "what waits for a member's signed yes before it is done: `approvals.rules()` → { locked, rules } · `approvals.setRules([{ verb, to? }])` replaces the rules while they are open (not locked) · `approvals.propose({ verb, to? })` → { id, signAt } asks a member to sign one rule at `signAt` · `approvals.secretRuleLink(path, { methods, hosts, jsonStrings?, freePaths? })` → the link that opens the approvals page with a rule for a request with the secret at `path` filled in, for a member to read and save (only a member saves a secret's rule). A rule's `verb` is `email.send` (with `to: [\"*@example.com\"]` for mail to some recipients alone), one verb such as `itx.whatsapp.sendMessage`, or every verb under a name, `itx.whatsapp.*`. A held call waits five minutes for the member, then throws; the act can be approved for a day, and is done then";
 
 /** The vault's gate for acts (iterate/acts), as the mind's own code reaches it. The gate decides:
  *  once a member locked it, `setRules` is refused and `propose` is the way. */
@@ -37,6 +37,18 @@ export function approvalsRoot(
       await record(set.facts);
       return set.rules;
     },
+    // A secret's rule is a member's to save: the link opens the approvals page with these words
+    // filled in under "A new rule" (core/secrets-worker/src/approvals-page.ts `ruleFromLink`).
+    secretRuleLink: (
+      path: string,
+      rule: { methods: string[]; hosts: string[]; jsonStrings?: string[]; freePaths?: string[] },
+    ) =>
+      `${platformOriginOf(domain)}/secrets/approvals?${new URLSearchParams({
+        path,
+        ...Object.fromEntries(
+          Object.entries(rule).map(([field, words]) => [field, words.join(",")]),
+        ),
+      })}#offered`,
     propose: async (rule: ActRule) => {
       const proposed = await releasedAnswer(
         egress.proposeActRule({ rule, from: from().path || context.path }),

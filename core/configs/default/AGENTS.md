@@ -396,6 +396,9 @@ A rule makes an act wait until a member approves it with a passkey, on
   `itx.whatsapp.*`. `rules()` reads them, `setRules([...])` replaces them while the gate is open,
   and `propose(rule)` asks a member to sign one once a member has locked it. A held call waits
   five minutes, then throws; a member can still approve it for a day, and it is done then.
+  A rule for a request with a secret is a member's to save, and no code sets one:
+  `secretRuleLink("/secrets/<name>", { methods, hosts, jsonStrings?, freePaths? })` answers a
+  link that opens the approvals page with the rule filled in. Give the member the link.
 - What a rule does not promise: a mail is held whatever sends it, but a verb is held only when the
   mind's agents or loaded code call it, not from a mind Worker changed to skip the rule.
 

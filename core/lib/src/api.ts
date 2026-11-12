@@ -1569,11 +1569,17 @@ export interface IterateContextApi {
   };
   /** WHAT WAITS FOR A MEMBER'S SIGNED YES before it is done (./acts.ts): a mail, or a call of a
    *  verb, that a rule names. `setRules` replaces the rules while they are open; once a member
-   *  locked them it is refused, and `propose` asks a member to sign one rule at `signAt`. */
+   *  locked them it is refused, and `propose` asks a member to sign one rule at `signAt`. A rule
+   *  for a request with a secret is a member's to save: `secretRuleLink` answers the link that
+   *  opens the approvals page with that rule filled in, for a member to read and save. */
   approvals: {
     rules(): Promise<{ locked: boolean; rules: ActRule[] }>;
     setRules(rules: ActRule[]): Promise<ActRule[]>;
     propose(rule: ActRule): Promise<{ id: string; signAt: string }>;
+    secretRuleLink(
+      path: string,
+      rule: { methods: string[]; hosts: string[]; jsonStrings?: string[]; freePaths?: string[] },
+    ): Promise<string>;
   };
   /** An MCP server over Streamable HTTP, through this context's egress; its events subscribed to
    *  land on this context. */

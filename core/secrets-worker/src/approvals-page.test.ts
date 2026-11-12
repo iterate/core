@@ -1,6 +1,58 @@
 import { expect, test } from "vitest";
 import { ACTS_SCRIPT, mailBodiesOf } from "./acts-page.ts";
-import { SCRIPT, tickedAtOpen } from "./approvals-page.ts";
+import { ruleForm, ruleFromLink, SCRIPT, tickedAtOpen } from "./approvals-page.ts";
+
+test("a link fills in a secret's rule under 'A new rule': the page shows its words, and saves nothing by itself", () => {
+  const link = new URL(
+    "https://iterate.example.com/secrets/approvals?path=/secrets/fastmail&methods=POST&hosts=api.fastmail.com&jsonStrings=EmailSubmission/set&freePaths=/jmap/upload/#offered",
+  );
+  const offered = ruleFromLink(link.searchParams);
+  expect(offered).toEqual({
+    path: "/secrets/fastmail",
+    rule: {
+      methods: ["POST"],
+      hosts: ["api.fastmail.com"],
+      jsonStrings: ["EmailSubmission/set"],
+      freePaths: ["/jmap/upload/"],
+    },
+  });
+  const form = ruleForm("", offered!.rule, offered!.path);
+  // the form that a member fills by hand, with the link's words in its fields, and its one Save
+  for (const filled of [
+    'name="path" value="/secrets/fastmail"',
+    'name="methods" value="POST"',
+    'name="hosts" value="api.fastmail.com"',
+    'name="jsonStrings" value="EmailSubmission/set"',
+    'name="freePaths" value="/jmap/upload/"',
+    "A link filled in this rule for /secrets/fastmail.",
+    "nothing is saved until you press Save",
+    '<button type="submit">Save</button>',
+  ])
+    expect(form).toContain(filled);
+  // a new rule has no signed buttons: those are for a rule that a secret has
+  expect(form).not.toContain("data-sign-rule");
+});
+
+test.for([
+  ["no path", "methods=POST&hosts=example.com"],
+  ["a path that is no secret's", "path=/agents/one&methods=POST&hosts=example.com"],
+  ["a path with markup", "path=/secrets/%3Cscript%3E&methods=POST"],
+])("a link with %s offers no rule", ([, query]) => {
+  expect(ruleFromLink(new URLSearchParams(query))).toBeNull();
+});
+
+test("a link's words are written into the form as text, and a long list is cut", () => {
+  const offered = ruleFromLink(
+    new URLSearchParams({
+      path: "/secrets/x",
+      methods: "POST",
+      hosts: `"><script>alert(1)</script>, ${Array.from({ length: 40 }, (_, at) => `h${at}.example`).join(",")}`,
+    }),
+  )!;
+  expect(offered.rule.hosts).toHaveLength(20);
+  const form = ruleForm("", offered.rule, offered.path);
+  expect(form).not.toContain("<script>alert(1)");
+});
 
 test("the page ticks the one row its link names, and only when its own hash of the row is the row's id", () => {
   expect([

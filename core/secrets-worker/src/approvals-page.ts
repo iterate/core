@@ -111,7 +111,8 @@ export async function secretApprovals(request: Request, deps: ApprovalsDeps): Pr
       );
     }
   }
-  if (pathname === SECRET_APPROVALS_PATH && request.method === "GET") return page(deps);
+  if (pathname === SECRET_APPROVALS_PATH && request.method === "GET")
+    return page(deps, ruleFromLink(new URL(request.url).searchParams));
   return new Response("Method not allowed", { status: 405 });
 }
 
@@ -146,7 +147,39 @@ async function statement(request: Request, deps: ApprovalsDeps): Promise<Respons
 }
 
 // The script shows a request's parts, from the text it hashed.
-async function page(deps: ApprovalsDeps): Promise<Response> {
+/** A RULE THAT A LINK OFFERS. A secret's rule is a member's to save: the mind's code cannot set
+ *  one. So the mind's code, or an agent, hands a member a link to this page with the rule's words
+ *  in it, `?path=/secrets/<name>&methods=POST&hosts=<host>&jsonStrings=…&freePaths=…`, and the
+ *  page opens with them filled in under "A new rule". Nothing is saved until the member presses
+ *  Save, which goes through the same checks as a rule typed by hand. The link holds a rule's
+ *  words and no secret. Null when the link names no secret's path. */
+export function ruleFromLink(
+  link: URLSearchParams,
+): { path: string; rule: Record<RuleField, string[]> } | null {
+  const path = link.get("path") || "";
+  if (!SECRET_PATH.test(path)) return null;
+  // as the form's own post reads a field: words with commas or spaces between them
+  const words = (name: RuleField) =>
+    (link.get(name) || "")
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .slice(0, 20);
+  return {
+    path,
+    rule: {
+      methods: words("methods"),
+      hosts: words("hosts"),
+      jsonStrings: words("jsonStrings"),
+      freePaths: words("freePaths"),
+    },
+  };
+}
+type RuleField = "methods" | "hosts" | "jsonStrings" | "freePaths";
+
+async function page(
+  deps: ApprovalsDeps,
+  offered: ReturnType<typeof ruleFromLink>,
+): Promise<Response> {
   const secrets: { path: string; rule: ApprovalRule | null; held: HeldRow[] }[] = [];
   for (const path of await deps.index.paths()) {
     const { rule, held } = await deps.secretOf(path).approvals(path);
@@ -185,7 +218,7 @@ async function page(deps: ApprovalsDeps): Promise<Response> {
     "<h2>Rules for requests with a secret</h2>",
     "<p>A request with a secret whose method and host its rule names waits here for a signed yes. Adding a method or a host saves at once; anything else is signed with your key.</p>",
     rules,
-    ruleForm("", null),
+    ruleForm("", offered?.rule || null, offered?.path),
   ].join("");
   const data = {
     mind: deps.mind,
@@ -211,11 +244,20 @@ function summaryOf(text: string): string {
   return `${held.method} ${held.url}`;
 }
 
-function ruleForm(path: string, rule: ApprovalRule | null): string {
+/** A rule's form: a secret's own rule, or "A new rule" with no path. `offered` is the secret that
+ *  a link names for a new rule (`ruleFromLink`), with the link's words as the rule. */
+export function ruleForm(
+  path: string,
+  rule: Pick<ApprovalRule, "methods" | "hosts" | "jsonStrings" | "freePaths"> | null,
+  offered?: string,
+): string {
   const field = (name: string, label: string, value: string, required = "required") =>
     `<label>${label} <input name="${name}" value="${escaped(value)}" size="44" ${required}></label>`;
+  const fromLink = offered
+    ? `<p id="offered"><strong>A link filled in this rule for ${escaped(offered)}.</strong> Read it: nothing is saved until you press Save. A request with that secret which the rule names then waits here for your signed yes.</p>`
+    : "";
   return `<form method="post" action="${RULES_PATH}" class="stack" data-rule>
-${path ? `<input type="hidden" name="path" value="${escaped(path)}"><h3>${escaped(path)}</h3>` : `<h3>A new rule</h3>${field("path", "Secret", "/secrets/")}`}
+${path ? `<input type="hidden" name="path" value="${escaped(path)}"><h3>${escaped(path)}</h3>` : `<h3>A new rule</h3>${fromLink}${field("path", "Secret", offered || "/secrets/")}`}
 ${field("methods", "Methods", rule?.methods.join(", ") ?? "POST")}
 ${field("hosts", "Hosts", rule?.hosts.join(", ") ?? "")}
 ${field("jsonStrings", "Only when the JSON body holds one of these, or leave empty for every request", rule?.jsonStrings?.join(", ") ?? "", "")}
