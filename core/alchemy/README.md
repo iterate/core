@@ -42,6 +42,35 @@ names), the Cloud's checks `ITERATE_SMOKE_CLOUD_ORIGIN` (the config's `cloud.ori
 check of the sign-in limits `ITERATE_SMOKE_LIMITS=1`. On a mind whose `worker.ts` is its own, the
 checks of the default config's site are skipped.
 
+## Destroy
+
+`pnpm run destroy --stage <name>` removes what a deploy made, with the mind's contexts, files,
+repos, members and secrets. It needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+
+- **It leaves the state store**, on purpose: a fork's stack keeps its state there, and a stack
+  deployed again reads its keys from it. That is three things in the account: the Worker
+  `iterate-<name>-state`, and two secrets in the account's Secrets Store,
+  `AlchemyStateStoreToken_iterate_<name>_state` and
+  `AlchemyStateStoreEncryptionKey_iterate_<name>_state` (a `-` in the name is written `_`). When
+  the stack is gone for good, `pnpm run destroy:state --stage <name>` removes all three, and
+  refuses while a Worker of the stack is still deployed. Deleting the Worker by hand leaves the
+  two secrets, and a Secrets Store holds a limited number.
+- It leaves the zone.
+- **A stack with telemetry: its own tables are dropped after it** (`scripts/drop-telemetry-tables.ts`,
+  run by `destroy` when Alchemy's destroy has ended well). R2 keeps a data catalog's tables when
+  the catalog is turned off and when its bucket is deleted, and gives them back to a new bucket
+  of the same name. A sink refuses a table that exists, so the same stack deployed again would
+  get no telemetry. The step drops `telemetry.events`, `telemetry.logs` and `telemetry.spans` in
+  the catalog of the stack's own bucket, `iterate-<name>-telemetry`, then the namespace when it
+  holds nothing else, and prints a line for each. To reach them it makes that bucket for a
+  moment, turns its catalog on, and puts both back. Another stack's tables are in another
+  bucket's catalog. It drops nothing while a Worker of the stack is deployed, so a destroy that
+  you cancel at its question leaves the tables.
+- A stack with telemetry also needs Account · Account API Tokens Edit on the token: the destroy
+  deletes the stack's two API tokens.
+- When the step could not run (no credentials, or Cloudflare refused it), run it by hand before
+  the stack is deployed again: `node scripts/drop-telemetry-tables.ts --stage <name>`.
+
 ## The stored config
 
 Each deploy that succeeds keeps its config in the stack's state store, `iterate-<name>-state` in
@@ -129,7 +158,7 @@ node node_modules/alchemy/bin/cli.js destroy fork/alchemy.run.ts --stage <name> 
 
 `resourceNamesOf(config.name)` gives the names of the mind's own Workers, for a binding by name.
 Each stack has its own `destroy`. The mind's leaves the state store, `iterate-<name>-state`, in the
-account: delete that Worker by hand when both stacks are gone.
+account: remove it when both stacks are gone (`pnpm run destroy:state`, "Destroy" above).
 
 ## One hostname of a zone
 

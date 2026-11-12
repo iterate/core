@@ -4,10 +4,11 @@
   "description": "The Alchemy program that deploys one mind as a stack of Workers",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test 'scripts/**/*.test.ts'",
+    "test": "node --test 'scripts/**/*.test.ts' 'src/**/*.test.ts'",
     "deploy": "f() { node --env-file-if-exists=.secrets scripts/refuse-older-stack.ts \"$@\" && pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets scripts/repos-namespace.ts \"$@\" && node --env-file-if-exists=.secrets scripts/sandbox-image.ts \"$@\" && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js deploy \"$@\"; }; f",
     "plan": "pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js plan",
-    "destroy": "node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js destroy",
+    "destroy": "f() { node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js destroy \"$@\" && node --env-file-if-exists=.secrets scripts/drop-telemetry-tables.ts \"$@\"; }; f",
+    "destroy:state": "node --env-file-if-exists=.secrets scripts/remove-state-store.ts",
     "config": "node --env-file-if-exists=.secrets scripts/config.ts",
     "smoke": "node --env-file-if-exists=.secrets scripts/smoke.ts",
     "import-secrets": "node --env-file-if-exists=.secrets scripts/import-secrets.ts",
