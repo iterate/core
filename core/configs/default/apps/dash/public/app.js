@@ -1,12 +1,14 @@
-// app.js — THE DASH'S PAGE: the mind seen from above. Three pages in one:
+// app.js — THE DASH'S PAGE: the mind seen from above. Four pages in one:
 //
 //   Overview   who is signed in, and the way to every app and every page about access
 //   Contexts   any context of the mind, live: its log, its processors, who is here
 //   Repo       the config repo as a small IDE: files, an editor, a diff, commits
+//   MCP        how to connect Claude Code or the Codex CLI to the mind
 //
 // The larger parts are components of @iterate-com/ui, loaded through the import map in
-// index.html: `ContextExplorer` and `RepoIde` are the ones iterate's hosted Dash draws. This file
-// is the wiring: the member's itx, the URL, the sidebar and the overview. Change them here.
+// index.html: `ContextExplorer`, `RepoIde` and `McpConnect` are the ones iterate's hosted Dash
+// draws. This file is the wiring: the member's itx, the URL, the sidebar and the overview. Change
+// them here.
 import {
   html,
   render,
@@ -22,6 +24,7 @@ import {
   contextPathOf,
   contextViewStateOf,
 } from "@iterate-com/ui/components/context-explorer/context-explorer";
+import { McpConnect } from "@iterate-com/ui/components/mcp-connect";
 import { RepoIde, repoIdeSearchOf } from "@iterate-com/ui/components/repo-ide/repo-ide";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/ui/card";
 import {
@@ -43,6 +46,7 @@ import {
   KeyRoundIcon,
   LayoutDashboardIcon,
   PhoneIcon,
+  PlugIcon,
   ShieldCheckIcon,
   UsersIcon,
   WaypointsIcon,
@@ -110,7 +114,7 @@ const access = [
 ];
 
 // ── the URL ──
-// THE PAGE IS A LINK: `?page=contexts|repo` is the page (none: the overview), `?context=<path>`
+// THE PAGE IS A LINK: `?page=contexts|repo|mcp` is the page (none: the overview), `?context=<path>`
 // the context shown, `?repo=<name>` the repo (none: config), and `?view=<json>` what the page's
 // own view holds (the explorer's filter and inspected event, the IDE's open file and panes).
 const subscribeToUrl = (listener) => {
@@ -196,6 +200,8 @@ function App() {
   if (page === "contexts") view = html`<${Contexts} path=${context} search=${search} />`;
   if (page === "repo")
     view = html`<${Repo} name=${params.get("repo") || "config"} search=${search} />`;
+  if (page === "mcp")
+    view = html`<div className="dash-scroll"><${McpConnect} server=${`${stack}/mcp`} /></div>`;
   return html`
     <${AppShell}
       app="Dash"
@@ -286,6 +292,12 @@ function Overview() {
               about: "The mind's own code: read it, change it, commit.",
               link: linkTo(pageOf("repo")),
             },
+            {
+              name: "MCP",
+              icon: PlugIcon,
+              about: "Connect Claude Code or the Codex CLI to this mind.",
+              link: linkTo(pageOf("mcp")),
+            },
           ]}
         />
         <${Cards} title="Apps" rows=${apps.map((app) => ({ ...app, link: { href: app.href } }))} />
@@ -332,6 +344,7 @@ function Nav({ page, waiting }) {
     },
     { name: "Contexts", icon: WaypointsIcon, page: "contexts", link: linkTo(pageOf("contexts")) },
     { name: "Config repo", icon: FolderGit2Icon, page: "repo", link: linkTo(pageOf("repo")) },
+    { name: "MCP", icon: PlugIcon, page: "mcp", link: linkTo(pageOf("mcp")) },
   ];
   return html`
     <${SidebarGroup}>
