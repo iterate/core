@@ -3,6 +3,7 @@
 import { contextAt, type Caller } from "core-itx";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 
+// The cast: `invoke` answers `unknown`, and the built-in `append` answers the events it wrote.
 export const appendAsPlatform = async (
   path: string,
   events: StreamEventInput[],
