@@ -353,6 +353,40 @@ const mindBirthChecks = async (domain: string) => {
         detail: `worker-updated at ${published.offset}; mind/created at ${created.offset}`,
       };
     }),
+    // The mind runs the commit that is published, and every other check here passes on that commit
+    // when the config repo's tip does not load (core/mind-worker/src/mind/processor.ts says what
+    // the platform records then). So this compares the two: every three seconds, for ninety at
+    // most, since a deploy's template commit is published seconds after the root wakes.
+    await attempt("birth: the config repo's tip is what the mind runs", async () => {
+      let tip = "";
+      let published: string | null = null;
+      for (let tries = 0; tries < 30; tries += 1) {
+        tip = (await root().repos.get("/repos/config").tip()) || "";
+        // a capnweb stub erases the facet's type: the handle is cast
+        const mind = root().facets.get("mind") as unknown as {
+          snapshot(): Promise<{ state: { publishedCommit: string | null } }>;
+        };
+        published = (await mind.snapshot()).state.publishedCommit;
+        if (tip && published === tip) break;
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+      }
+      if (tip && published === tip)
+        return { pass: true, detail: `commit ${tip.slice(0, 10)} is published` };
+      // why: the refusal of the tip, and whether the tip is the platform's own template commit
+      const refusalOf = (type: string) =>
+        root()
+          .waitForEvent({ type, payload: { commitOid: tip }, afterOffset: 0, timeoutMs: 2_000 })
+          .then(
+            (event) => String(Object(event.payload).error || ""),
+            () => undefined,
+          );
+      const template = await refusalOf("events.iterate.com/mind/template-not-published");
+      const refused = await refusalOf("events.iterate.com/mind/worker-update-failed");
+      return {
+        pass: false,
+        detail: `the config repo does not publish: its tip ${tip.slice(0, 10) || "(none)"} is not what the mind runs (${published?.slice(0, 10) || "nothing"})${template ? ", and the tip is the platform's own template commit" : ""}. ${template || refused || "No refusal of the tip is on the root's log yet."}`,
+      };
+    }),
     await attempt("hostnames: the apex answers the config worker's page", async () => {
       const { status, body } = await pageOnceItHas(
         `https://${domain}/`,

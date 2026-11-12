@@ -73,7 +73,8 @@ export type KeptByTheFacet = {
 
 type PublicationAttempt =
   | { kind: "admitted"; mainModule: string; manifest: WorkerManifest }
-  | { kind: "refused"; error: string };
+  // `superseded`: main moved on before the commit was looked at, which says nothing about it
+  | { kind: "refused"; error: string; superseded?: true };
 
 export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<typeof MindContract>> {
   readonly contract = MindContract;
@@ -100,6 +101,8 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
   #creating = false;
   #retriedFailedCreation = false;
   #templateFollowed = false;
+  // The template commit this incarnation made: known here before the record of it is kept.
+  #templateCommit: { commitOid: string; template: string } | undefined;
   // One publication runs at a time and drains, oldest first: a commit that lands while one is in
   // flight is next, without waiting for another delivery.
   #unpublished: MindState["unpublishedCommits"] = [];
@@ -445,7 +448,7 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
         (path) => Object.hasOwn(now, path) && now[path] === written[path],
       ),
     );
-    const { changes, added, replaced, platforms, leftAlone } = templateChanges({
+    const { changes, added, replaced, platforms, leftAlone, putBack } = templateChanges({
       template,
       current,
       written: new Set(Object.keys(written)),
@@ -463,6 +466,7 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
           ),
         )
       : null;
+    if (commit?.commitOid) this.#templateCommit = { commitOid: commit.commitOid, template: name };
     const contents = new Map(template.map((file) => [file.path, file.content]));
     const nowWritten = Object.fromEntries(
       await Promise.all(
@@ -470,7 +474,12 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
       ),
     );
     return {
-      kept: { hash, template: name, written: { ...written, ...nowWritten } },
+      kept: {
+        hash,
+        template: name,
+        written: { ...written, ...nowWritten },
+        commit: commit?.commitOid || kept?.commit,
+      },
       fact:
         changes.length || leftAlone.length
           ? {
@@ -482,10 +491,19 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
                 added,
                 replaced,
                 leftAlone,
+                putBack,
               },
             }
           : undefined,
     };
+  }
+
+  // The template that `commitOid` applied, when it is the platform's last template commit: this
+  // incarnation's, or the one the record keeps from an earlier incarnation.
+  async #templateOf(commitOid: string): Promise<string | undefined> {
+    if (this.#templateCommit?.commitOid === commitOid) return this.#templateCommit.template;
+    const kept = await this.kept.template();
+    return kept?.commit === commitOid ? kept.template : undefined;
   }
 
   #templateFilesOf(name: string) {
@@ -541,11 +559,25 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
         clearTimeout(budget);
       }
       if (attempt.kind === "refused") {
-        await landOnce(publisher, {
-          type: "events.iterate.com/mind/worker-update-failed",
-          idempotencyKey: `mind/publication:${generation}`,
-          payload: { commitOid, generation, error: attempt.error },
-        });
+        const refused: StreamEventInput[] = [
+          {
+            type: "events.iterate.com/mind/worker-update-failed",
+            idempotencyKey: `mind/publication:${generation}`,
+            payload: { commitOid, generation, error: attempt.error },
+          },
+        ];
+        // THE PLATFORM'S OWN COMMIT DOES NOT LOAD: a fact of its own, in the same batch. The mind
+        // goes on with the commit published before, so nothing looks broken and a deploy ends
+        // well: a deploy's check reads this fact. The commit is not undone: its tree and this
+        // fact are how the cause is found.
+        const template = attempt.superseded ? undefined : await this.#templateOf(commitOid);
+        if (template)
+          refused.push({
+            type: "events.iterate.com/mind/template-not-published",
+            idempotencyKey: `mind/template-not-published:${generation}`,
+            payload: { template, commitOid, error: attempt.error },
+          });
+        await landOnce(publisher, ...refused);
         return true;
       }
       const { mainModule, manifest } = attempt;
@@ -588,6 +620,7 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     if (head !== commitOid)
       return {
         kind: "refused",
+        superseded: true,
         error: `main moved on to ${head || "no commit (unborn)"} before this commit was published`,
       };
     // once: an attempt run again probes what the repo holds

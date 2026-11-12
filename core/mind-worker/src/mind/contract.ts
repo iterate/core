@@ -94,6 +94,18 @@ export const MindContract = defineProcessorContract({
         added: z.array(z.string()),
         replaced: z.array(z.string()),
         leftAlone: z.array(z.object({ path: z.string(), lacks: z.array(z.string()) })),
+        // a deleted file that one of the platform's own files imports: written again, with one
+        // file that imports it (absent on a fact from before the rule)
+        putBack: z.array(z.object({ path: z.string(), importedBy: z.string() })).optional(),
+      }),
+    },
+    "events.iterate.com/mind/template-not-published": {
+      description:
+        "The platform's own commit of a template (`template-applied`'s `commitOid`) was refused publication, and `error` says why. The mind still runs the commit published before it, and no later commit publishes until the config repo loads again. Not said for a commit that a newer one replaced before it was published.",
+      payloadSchema: z.object({
+        template: z.string(),
+        commitOid: z.string().min(1),
+        error: z.string(),
       }),
     },
   },
@@ -119,6 +131,7 @@ export const MindContract = defineProcessorContract({
     "events.iterate.com/mind/create-failed",
     "events.iterate.com/itx/ingress-configured",
     "events.iterate.com/mind/template-applied",
+    "events.iterate.com/mind/template-not-published",
   ],
 });
 

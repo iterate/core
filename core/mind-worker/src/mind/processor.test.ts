@@ -46,12 +46,62 @@ test("with nothing owed, the first wake compares the template at once, and a sec
   expect(mind.committed).toHaveLength(1);
 });
 
+test("the platform's own template commit that does not load is said as a fact of its own, with why", async () => {
+  // main stays at the template's commit, and the config repo it holds does not load
+  const mind = mindOf({ owes: false, head: "template" });
+  mind.deliver(mind.state);
+  await mind.settled();
+  expect(mind.committed).toHaveLength(1);
+  // the commit's own fact arrives: its publication is owed
+  mind.deliver(mind.owing("template", 7));
+  await mind.settled();
+  expect(mind.platformFacts).toMatchObject([
+    {
+      type: "events.iterate.com/mind/worker-update-failed",
+      payload: { commitOid: "template", generation: 7 },
+    },
+    {
+      type: "events.iterate.com/mind/template-not-published",
+      idempotencyKey: "mind/template-not-published:7",
+      payload: { template: "default", commitOid: "template" },
+    },
+  ]);
+  // why: the publication's own words
+  const [failed, said] = mind.platformFacts.map((fact) => Object(fact.payload).error);
+  expect(said).toBe(failed);
+  expect(said).toEqual(expect.stringMatching(/\S/));
+  expect(mind.kept).toMatchObject({ commit: "template" });
+});
+
+test("a template commit that a newer commit replaced is not said so, and neither is somebody's commit that does not load", async () => {
+  // main is at another commit when the template's commit is looked at
+  const replaced = mindOf({ owes: false, head: "another commit" });
+  replaced.deliver(replaced.state);
+  await replaced.settled();
+  replaced.deliver(replaced.owing("template", 7));
+  await replaced.settled();
+  expect(replaced.platformFacts.map((fact) => fact.type)).toEqual([
+    "events.iterate.com/mind/worker-update-failed",
+  ]);
+  // somebody's own commit after the template's: its failure is its own fact alone
+  const theirs = mindOf({ owes: false, head: "theirs" });
+  theirs.deliver(theirs.state);
+  await theirs.settled();
+  theirs.deliver(theirs.owing("theirs", 9));
+  await theirs.settled();
+  expect(theirs.platformFacts.map((fact) => fact.type)).toEqual([
+    "events.iterate.com/mind/worker-update-failed",
+  ]);
+});
+
 /** A created mind on `/`, seeded from an older template and untouched since, and the processor
- *  with everything it reaches recorded. `owes`: its newest commit is not published yet. */
-function mindOf({ owes }: { owes: boolean }) {
+ *  with everything it reaches recorded. `owes`: its newest commit is not published yet. `head`:
+ *  the commit main is at when a publication looks (by default another one: main moved on). */
+function mindOf({ owes, head = "another commit" }: { owes: boolean; head?: string }) {
   const asked: string[] = [];
   const committed: unknown[] = [];
   const facts: StreamEventInput[] = [];
+  const platformFacts: StreamEventInput[] = [];
   const background: Promise<unknown>[] = [];
   let kept: TemplateKept | undefined;
   const seeded = { "worker.ts": "the older worker\n" };
@@ -90,14 +140,16 @@ function mindOf({ owes }: { owes: boolean }) {
       runInBackground: (work: () => Promise<unknown>) => void background.push(work()),
     } as unknown as Parameters<MindProcessor["processEvent"]>[0]);
   const publisher: MindPublisher = {
-    // main moved on: the publication is refused, which is an outcome like any other
-    head: async () => "another commit",
+    // by default main moved on: the publication is refused, which is an outcome like any other.
+    // A commit that main is at does not load here: the probe below answers nothing of a config.
+    head: async () => head,
     files: async () => seeded,
     identityOf: async () => "identity",
     probe: async () => ({}),
     // The platform's fact lands on `/` and is delivered to this processor before the publication's
     // own work returns: the order a root's log gives.
-    appendAsPlatform: async () => {
+    appendAsPlatform: async (...events: StreamEventInput[]) => {
+      platformFacts.push(...events);
       asked.push("publication:outcome delivered while it runs");
       deliver({ ...state, unpublishedCommits: [], lastPublicationFactOffset: 6 });
     },
@@ -122,7 +174,14 @@ function mindOf({ owes }: { owes: boolean }) {
     asked,
     committed,
     facts,
+    platformFacts,
     deliver,
+    /** The state once the fact of commit `commitOid` arrived at `offset`: its publication is owed. */
+    owing: (commitOid: string, offset: number): MindState => ({
+      ...state,
+      configRepoTip: { commitOid, offset },
+      unpublishedCommits: [{ commitOid, offset }],
+    }),
     get kept() {
       return kept;
     },

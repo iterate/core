@@ -1,7 +1,7 @@
 // The rule by which a newer template reaches a config repo that exists (template-update.ts): what
 // the platform may write, and what it must leave alone.
 import { expect, test } from "vitest";
-import { seedOf, templateChanges } from "./template-update.ts";
+import { importsOf, seedOf, templateChanges } from "./template-update.ts";
 
 test("a repo untouched since its seed gets the whole newer template: new files added, the platform's own files replaced", () => {
   const current = { "worker.ts": "old worker\n", "AGENTS.md": "old guide\n" };
@@ -13,6 +13,7 @@ test("a repo untouched since its seed gets the whole newer template: new files a
     replaced: ["worker.ts", "AGENTS.md"],
     platforms: ["worker.ts", "AGENTS.md", "apps/onboarding/app.ts"],
     leftAlone: [],
+    putBack: [],
   });
 });
 
@@ -86,6 +87,120 @@ test("a file the platform wrote and somebody deleted is not put back", () => {
   expect(changes.map((change) => change.path)).toEqual(["worker.ts", "apps/onboarding/app.ts"]);
   expect(added).toEqual(["apps/onboarding/app.ts"]);
   expect(leftAlone).toEqual([{ path: "AGENTS.md", lacks: [] }]);
+});
+
+test("a deleted file is put back when a file the platform writes in the same update imports it", () => {
+  // the exception of template-update.ts's header: a deleted folder, and a newer template whose
+  // app.ts imports it
+  const wrote = {
+    "apps/docs/app.ts": "the docs app\n",
+    "apps/live-reload/live-reload.js": "reload\n",
+    "AGENTS.md": "a guide\n",
+  };
+  const current = { "apps/docs/app.ts": "the docs app\n" };
+  const template = [
+    {
+      path: "apps/docs/app.ts",
+      content: 'import liveReload from "../live-reload/";\nthe docs app\n',
+    },
+    { path: "apps/live-reload/live-reload.js", content: "reload\n" },
+    { path: "AGENTS.md", content: "a guide\n" },
+  ];
+  const { changes, replaced, platforms, leftAlone, putBack } = templateChanges({
+    template,
+    current,
+    ...platformWrote(wrote, current),
+  });
+  expect(putBack).toEqual([
+    { path: "apps/live-reload/live-reload.js", importedBy: "apps/docs/app.ts" },
+  ]);
+  expect(changes.map((change) => change.path)).toEqual([
+    "apps/docs/app.ts",
+    "apps/live-reload/live-reload.js",
+  ]);
+  expect(replaced).toEqual(["apps/docs/app.ts"]);
+  expect(platforms).toEqual(["apps/docs/app.ts", "apps/live-reload/live-reload.js"]);
+  // the guide that nothing imports stays deleted
+  expect(leftAlone).toEqual([{ path: "AGENTS.md", lacks: [] }]);
+});
+
+test("a deleted file that an unchanged file of the platform's imports is put back too, and what it imports with it", () => {
+  const wrote = {
+    "worker.ts": 'import { app } from "./apps/docs/app.ts";\n',
+    "apps/docs/app.ts": 'import index from "./index.html";\nimport files from "./public/";\n',
+    "apps/docs/index.html": "<p>docs</p>\n",
+    "apps/docs/public/app.js": "page\n",
+    "apps/docs/public/app.css": "style\n",
+  };
+  const template = Object.entries(wrote).map(([path, content]) => ({ path, content }));
+  // the whole app deleted, and the worker that mounts it left as the platform wrote it
+  const current = { "worker.ts": wrote["worker.ts"] };
+  const { changes, putBack, leftAlone } = templateChanges({
+    template,
+    current,
+    ...platformWrote(wrote, current),
+  });
+  expect(putBack).toEqual([
+    { path: "apps/docs/app.ts", importedBy: "worker.ts" },
+    { path: "apps/docs/index.html", importedBy: "apps/docs/app.ts" },
+    { path: "apps/docs/public/app.js", importedBy: "apps/docs/app.ts" },
+    { path: "apps/docs/public/app.css", importedBy: "apps/docs/app.ts" },
+  ]);
+  expect(changes.map((change) => change.path)).toEqual(putBack.map((file) => file.path));
+  expect(leftAlone).toEqual([]);
+});
+
+test("a deleted file stays deleted when its importer is somebody's, or when its folder still has a file", () => {
+  const wrote = {
+    "worker.ts": 'import { app } from "./apps/docs/app.ts";\n',
+    "apps/docs/app.ts": 'import files from "./public/";\n',
+    "apps/docs/public/app.js": "page\n",
+    "apps/docs/public/home.js": "home\n",
+  };
+  const template = Object.entries(wrote).map(([path, content]) => ({ path, content }));
+  // one file of a folder deleted: the folder's import still answers
+  const oneGone = { ...wrote } as Record<string, string>;
+  delete oneGone["apps/docs/public/home.js"];
+  expect(
+    templateChanges({ template, current: oneGone, ...platformWrote(wrote, oneGone) }),
+  ).toMatchObject({
+    changes: [],
+    putBack: [],
+    leftAlone: [{ path: "apps/docs/public/home.js", lacks: [] }],
+  });
+  // the app deleted and its mount taken out of worker.ts: the owner's worker imports nothing
+  const unmounted = { "worker.ts": "// no docs app here\n" };
+  expect(
+    templateChanges({ template, current: unmounted, ...platformWrote(wrote, unmounted) }),
+  ).toMatchObject({ changes: [], putBack: [] });
+});
+
+test("a module's imports are its relative ones, resolved from its folder; a comment's import is none", () => {
+  expect(
+    importsOf(
+      "apps/agents/app.ts",
+      [
+        'import { serveFiles } from "iterate/sdk";',
+        'import theme from "../theme.css";',
+        "import index from './index.html';",
+        'import files from "./public/";',
+        '// import { guestbookApp } from "../guestbook/app.ts";',
+        ' * import "./in-a-block-comment.ts";',
+        'const kind = () => import("../../agent-kinds/iterate.ts");',
+        'import "./side-effect.js";',
+      ].join("\n"),
+    ),
+  ).toEqual([
+    "apps/theme.css",
+    "apps/agents/index.html",
+    "apps/agents/public/",
+    "agent-kinds/iterate.ts",
+    "apps/agents/side-effect.js",
+  ]);
+  // a page is not code: its script addresses are the host's, not the repo's
+  expect(
+    importsOf("apps/agents/index.html", '<script type="module" src="/app.js"></script>'),
+  ).toEqual([]);
 });
 
 test("a repo that is the template already changes nothing, and nothing is ever deleted", () => {

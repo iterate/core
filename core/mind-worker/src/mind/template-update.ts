@@ -6,6 +6,11 @@
 // with the template's lines it lacks. Nothing is deleted, so a module an older template had (and
 // code made from it) stays.
 //
+// ONE EXCEPTION, so that the platform's own commit can always publish: a file somebody deleted IS
+// put back when one of the platform's own files imports it (`putBack`). Otherwise a newer
+// template that gives a file of the platform's an import of a deleted file or folder writes the
+// import and leaves its target out, and the config repo no longer loads.
+//
 // What the platform wrote is its own record, by path (`TemplateKept.written`), and never read off
 // a later commit's tree: that tree also holds the files it left alone. A mind older than the
 // record starts it from its seed, the one commit whose whole tree is the platform's.
@@ -21,6 +26,9 @@ export type TemplateKept = {
   template?: string;
   /** The SHA-256 of what the platform last wrote, by path. */
   written?: Record<string, string>;
+  /** The platform's last commit of a template. When its publication is refused, that is said as a
+   *  fact of its own (`mind/template-not-published`). */
+  commit?: string;
 };
 
 /** The message of the commit that applies a template. */
@@ -42,7 +50,9 @@ export function seedOf(
 
 /** What the template changes at the repo's tip. `current` is the tip's files. `written` are the
  *  paths the platform wrote before, and `untouched` those of them whose file is still byte for byte
- *  what it wrote. `platforms` are the paths that hold the template's own bytes afterwards. */
+ *  what it wrote. `platforms` are the paths that hold the template's own bytes afterwards.
+ *  `putBack` are the deleted files that the platform's own files import, each with one file that
+ *  imports it: they are written again, and are not in `leftAlone`. */
 export function templateChanges(input: {
   template: readonly { path: string; content: string }[];
   current: RepoFiles;
@@ -53,12 +63,16 @@ export function templateChanges(input: {
   const added: string[] = [];
   const replaced: string[] = [];
   const platforms: string[] = [];
-  const leftAlone: { path: string; lacks: string[] }[] = [];
+  let leftAlone: { path: string; lacks: string[] }[] = [];
+  /** The template's files that the platform wrote and somebody deleted. */
+  const deleted = new Set<string>();
   for (const { path, content } of input.template) {
     if (!Object.hasOwn(input.current, path)) {
       // the platform wrote it and it is gone: somebody deleted it
-      if (input.written.has(path)) leftAlone.push({ path, lacks: [] });
-      else {
+      if (input.written.has(path)) {
+        deleted.add(path);
+        leftAlone.push({ path, lacks: [] });
+      } else {
         added.push(path);
         platforms.push(path);
         changes.push({ path, content });
@@ -84,5 +98,49 @@ export function templateChanges(input: {
       : [];
     leftAlone.push({ path, lacks: lacks.slice(0, 40) });
   }
-  return { changes, added, replaced, platforms, leftAlone };
+  // WHAT THE PLATFORM'S OWN FILES IMPORT MUST BE THERE. Each file that holds the template's bytes
+  // after this update is read once, a file put back too (it can import another deleted one).
+  const contents = new Map(input.template.map((file) => [file.path, file.content]));
+  const there = new Set([...Object.keys(input.current), ...changes.map((change) => change.path)]);
+  const putBack: { path: string; importedBy: string }[] = [];
+  for (let next = 0; next < platforms.length; next += 1) {
+    const importer = platforms[next]!;
+    for (const target of importsOf(importer, contents.get(importer)!)) {
+      // a folder is every file under it: its import fails only when no file is there
+      const isFolder = target.endsWith("/");
+      if (isFolder ? [...there].some((path) => path.startsWith(target)) : there.has(target))
+        continue;
+      for (const path of [...deleted].filter((gone) =>
+        isFolder ? gone.startsWith(target) : gone === target,
+      )) {
+        deleted.delete(path);
+        there.add(path);
+        changes.push({ path, content: contents.get(path)! });
+        platforms.push(path);
+        putBack.push({ path, importedBy: importer });
+      }
+    }
+  }
+  if (putBack.length) {
+    const back = new Set(putBack.map((file) => file.path));
+    leftAlone = leftAlone.filter((file) => !back.has(file.path));
+  }
+  return { changes, added, replaced, platforms, leftAlone, putBack };
+}
+
+/** The repo paths that a module's relative imports name: `from "./x.ts"`, `import "./x.css"`,
+ *  `import("./x.ts")`, each resolved against the module's own folder. An import that ends in `/`
+ *  names a folder (the loader hands over every file under it). Read from the text of a code file,
+ *  line by line: an import in a comment is none, and a file that is not code imports nothing. */
+export function importsOf(path: string, content: string): string[] {
+  if (!/\.(?:ts|tsx|js|jsx|mjs)$/.test(path)) return [];
+  const targets = new Set<string>();
+  for (const line of content.split("\n")) {
+    if (/^\s*(?:\/\/|\/\*|\*)/.test(line)) continue;
+    for (const [, , specifier] of line.matchAll(
+      /(?:\bfrom\s*|\bimport\s*\(?\s*)(["'])(\.{1,2}\/[^"']*)\1/g,
+    ))
+      targets.add(new URL(specifier!, `file:///${path}`).pathname.slice(1));
+  }
+  return [...targets];
 }
