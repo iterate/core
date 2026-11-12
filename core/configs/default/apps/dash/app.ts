@@ -1,8 +1,8 @@
 // app.ts — THE DASH, as worker.ts mounts it: the mind seen from above, in a browser. One page
-// (public/app.js) shows an overview with the way to every app, and any context of the mind,
-// live. Its larger part is a component of @iterate-com/ui, the one iterate's hosted Dash draws.
-// It works through the member's own `itx`: what a member may do there, a member may do here,
-// and nobody else gets in (worker.ts guards the host).
+// (public/app.js) shows an overview with the way to every app, any context of the mind, live, and
+// the config repo as a small IDE. Its larger parts are components of @iterate-com/ui, the same
+// ones iterate's hosted Dash draws. It works through the member's own `itx`: what a member may
+// do there, a member may do here, and nobody else gets in (worker.ts guards the host).
 import { serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
 import theme from "../theme.css";
 import index from "./index.html";

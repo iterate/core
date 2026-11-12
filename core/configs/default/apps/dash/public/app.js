@@ -1,11 +1,12 @@
-// app.js — THE DASH'S PAGE: the mind seen from above. Two pages in one:
+// app.js — THE DASH'S PAGE: the mind seen from above. Three pages in one:
 //
 //   Overview   who is signed in, and the way to every app and every page about access
 //   Contexts   any context of the mind, live: its log, its processors, who is here
+//   Repo       the config repo as a small IDE: files, an editor, a diff, commits
 //
-// The larger part is a component of @iterate-com/ui, loaded through the import map in index.html:
-// `ContextExplorer` is the one iterate's hosted Dash draws. This file is the wiring: the member's
-// itx, the URL, the sidebar and the overview. Change them here.
+// The larger parts are components of @iterate-com/ui, loaded through the import map in
+// index.html: `ContextExplorer` and `RepoIde` are the ones iterate's hosted Dash draws. This file
+// is the wiring: the member's itx, the URL, the sidebar and the overview. Change them here.
 import { html, render, useCallback, useMemo, useSyncExternalStore } from "@iterate-com/ui/page";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
@@ -13,6 +14,7 @@ import {
   contextPathOf,
   contextViewStateOf,
 } from "@iterate-com/ui/components/context-explorer/context-explorer";
+import { RepoIde, repoIdeSearchOf } from "@iterate-com/ui/components/repo-ide/repo-ide";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/ui/card";
 import {
   SidebarGroup,
@@ -23,10 +25,11 @@ import {
   SidebarMenuItem,
 } from "@iterate-com/ui/components/ui/sidebar";
 import { Toaster } from "@iterate-com/ui/components/ui/sonner";
-import { newWebSocketRpcSession } from "@iterate-com/ui/live";
+import { newWebSocketRpcSession, useContextStub } from "@iterate-com/ui/live";
 import {
   BookOpenIcon,
   BotIcon,
+  FolderGit2Icon,
   KeyRoundIcon,
   LayoutDashboardIcon,
   PhoneIcon,
@@ -94,8 +97,9 @@ const access = [
 ];
 
 // ── the URL ──
-// THE PAGE IS A LINK: `?page=contexts` is the page (none: the overview), `?context=<path>` the
-// context shown, and `?view=<json>` what the explorer holds (its filter, the inspected event).
+// THE PAGE IS A LINK: `?page=contexts|repo` is the page (none: the overview), `?context=<path>`
+// the context shown, `?repo=<name>` the repo (none: config), and `?view=<json>` what the page's
+// own view holds (the explorer's filter and inspected event, the IDE's open file and panes).
 const subscribeToUrl = (listener) => {
   addEventListener("popstate", listener);
   return () => removeEventListener("popstate", listener);
@@ -130,7 +134,13 @@ const linkTo = (change) => ({
 });
 
 /** The keys that name a page, cleared: a link to a page starts from none of the last one's. */
-const pageOf = (page, more = {}) => ({ page, context: undefined, view: undefined, ...more });
+const pageOf = (page, more = {}) => ({
+  page,
+  context: undefined,
+  repo: undefined,
+  view: undefined,
+  ...more,
+});
 
 /** `?view=<json>` as an object, and the way a view patches it: an absent key is dropped, and the
  *  change replaces the history's entry, so Back leaves the page and not each keystroke. */
@@ -161,6 +171,8 @@ function App() {
   const context = contextPathOf(params.get("context") || "");
   let view = html`<${Overview} />`;
   if (page === "contexts") view = html`<${Contexts} path=${context} search=${search} />`;
+  if (page === "repo")
+    view = html`<${Repo} name=${params.get("repo") || "config"} search=${search} />`;
   return html`
     <${AppShell}
       app="Dash"
@@ -201,6 +213,29 @@ function Contexts({ path, search }) {
   `;
 }
 
+/** One repo of the mind as a small IDE. It follows the repo's commits live, so the mind's root
+ *  is held while the page is up. */
+function Repo({ name, search }) {
+  const [view, patchView] = useView(search);
+  const root = useContextStub(() => itx.cd("/"), []);
+  if (root.error) return html`<p role="alert" className="dash-note dash-error">${root.error}</p>`;
+  if (!root.stub) return html`<p className="dash-note" data-spinner="true">Opening the mind…</p>`;
+  const email = principal?.email;
+  return html`
+    <div className="dash-fill">
+      <${RepoIde}
+        key=${name}
+        mind=${root.stub}
+        mindId=${domain}
+        repoPath=${`/repos/${name}`}
+        author=${email ? { name: email, email } : undefined}
+        search=${repoIdeSearchOf(view)}
+        onSearchChange=${patchView}
+      />
+    </div>
+  `;
+}
+
 /** Who is signed in, and the way to everything else. */
 function Overview() {
   return html`
@@ -221,6 +256,12 @@ function Overview() {
               icon: WaypointsIcon,
               about: "Any context's log, live: agents, integrations, repos, secrets.",
               link: linkTo(pageOf("contexts")),
+            },
+            {
+              name: "Config repo",
+              icon: FolderGit2Icon,
+              about: "The mind's own code: read it, change it, commit.",
+              link: linkTo(pageOf("repo")),
             },
           ]}
         />
@@ -267,6 +308,7 @@ function Nav({ page }) {
       link: linkTo(pageOf(undefined)),
     },
     { name: "Contexts", icon: WaypointsIcon, page: "contexts", link: linkTo(pageOf("contexts")) },
+    { name: "Config repo", icon: FolderGit2Icon, page: "repo", link: linkTo(pageOf("repo")) },
   ];
   return html`
     <${SidebarGroup}>
