@@ -55,8 +55,7 @@ test("a part that did not load says so on its own page alone, and its page's nex
   // another page, and the overview, which has no part of the kit, do not show that failure
   expect(pages.read("secrets")).toEqual({});
   expect(pages.read("overview")).toEqual({ module: {} });
-  // the page is opened again: a browser keeps a module's failed load for the life of the page, so
-  // a second import would fail the same way. The page says the failure, with the way to reload.
+  // the page is opened again: no second import (public/kit-pages.js says why)
   pages.load("repo");
   expect(pages.read("repo")).toEqual({ error: "Failed to fetch dynamically imported module" });
   expect(imports).toHaveBeenCalledTimes(1);

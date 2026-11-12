@@ -142,10 +142,8 @@ const kits = {
 };
 const pages = kitPages(kits);
 
-/** The kit's module for `page` (./kit-pages.js): `{ module }` once it is here, `{ error }` when it
- *  did not load, and neither while it loads. Opening a page starts its part; what the page's part
- *  is comes from the store, so it is the open page's own and never another page's. A part that
- *  did not load stays so until the page is loaded again: the view says that. */
+/** Starts the open page's part of the kit and reads its answer; ./kit-pages.js says what an
+ *  answer is. */
 function useKit(page) {
   useEffect(() => pages.load(page), [page]);
   return useSyncExternalStore(pages.subscribe, () => pages.read(page));
