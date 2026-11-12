@@ -15,6 +15,7 @@ import { voiceApp } from "./apps/voice/app.ts";
 // Voice is off (AGENTS.md, "Voice"). The Voice app's "Turn voice on" takes the "// " off this
 // line and off `installVoice` in the init case below, in the commit that adds the package.
 // import { installVoice } from "@iterate-com/voice/install";
+import { cloudflareForAgent } from "./cloudflare.ts";
 import { DeliveryFailure, deliveryFailureNote, whoGetsTheMail } from "./mail-replies.ts";
 import {
   refuseSlackSender,
@@ -373,6 +374,13 @@ export default class extends IterateConfigEntrypoint {
   async slack(method: string, args?: Record<string, unknown>) {
     using itx = this.getItx();
     return await slackForAgent(itx, method, args);
+  }
+
+  /** `itx.config.cloudflare(tool, args)`: a tool of Cloudflare's own MCP server, called with the
+   *  API token of the mind's own account (cloudflare.ts; AGENTS.md, "Cloudflare"). */
+  async cloudflare(tool: string, args?: Record<string, unknown>) {
+    using itx = this.getItx();
+    return await cloudflareForAgent(itx, tool, args);
   }
 }
 
