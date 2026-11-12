@@ -87,11 +87,27 @@ export function contextStub(
 
 /** A JSON object as an answer holds one: Object's own prototype and string keys alone. Its call's
  *  disposer, which workerd puts on an answer under `Symbol.dispose`, is not a key of the data. */
-function isJsonObject(value: object): value is Record<string, unknown> {
+function isJsonObject(value: unknown): value is Record<string, unknown> {
   return (
+    value instanceof Object &&
     Object.getPrototypeOf(value) === Object.prototype &&
     Reflect.ownKeys(value).every((key) => typeof key === "string" || key === Symbol.dispose)
   );
+}
+
+const PLAIN_SCALAR_KINDS = new Set(["string", "number", "bigint", "boolean", "undefined"]);
+/** A value that is its own copy: a string, a number, a boolean, a bigint or nothing. A symbol is
+ *  not one (it does not cross the wire), and a function is a stub. */
+type PlainScalar = string | number | bigint | boolean | null | undefined;
+function isPlainScalar(value: unknown): value is PlainScalar {
+  return value === null || PLAIN_SCALAR_KINDS.has(typeof value);
+}
+
+/** The disposer workerd puts on an answer that crossed Workers RPC, bound to it, when it has one. */
+function disposerOf(answer: unknown): (() => void) | undefined {
+  if (!(answer instanceof Object) || !(Symbol.dispose in answer)) return undefined;
+  const dispose = answer[Symbol.dispose];
+  return typeof dispose === "function" ? () => void dispose.call(answer) : undefined;
 }
 
 /** `value` copied when it is plain data all the way down (JSON's kinds, and `undefined`), else
@@ -99,10 +115,7 @@ function isJsonObject(value: object): value is Record<string, unknown> {
  *  copied, because a copy of a stub is not the stub. */
 const NOT_PLAIN = Symbol("not plain");
 function plainCopy(value: unknown): unknown {
-  if (typeof value === "function" || typeof value === "symbol") return NOT_PLAIN;
-  // a number, a string, a boolean, nothing
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- an answer off the wire is of any kind: an object alone is walked
-  if (!value || typeof value !== "object") return value;
+  if (isPlainScalar(value)) return value;
   if (Array.isArray(value)) {
     const copy = value.map(plainCopy);
     return copy.includes(NOT_PLAIN) ? NOT_PLAIN : copy;
@@ -145,11 +158,7 @@ function releasedWhenPlain<T>(held: T, dispose: (() => void) | undefined): T {
 /** `releasedWhenPlain` for a verb that answers the value itself, with its disposer on it. */
 async function released<T>(answer: Promise<T> | T): Promise<T> {
   const held = await answer;
-  // An answer of any type may carry its call's disposer: `Partial<Disposable>` says "perhaps",
-  // which no type of the answer itself does.
-  const dispose =
-    held instanceof Object ? (held as Partial<Disposable>)[Symbol.dispose] : undefined;
-  return releasedWhenPlain(held, dispose && (() => dispose.call(held)));
+  return releasedWhenPlain(held, disposerOf(held));
 }
 
 export function reachableContext(

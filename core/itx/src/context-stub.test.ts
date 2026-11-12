@@ -97,3 +97,56 @@ test("a key named __proto__ in an event's payload is data: the copy holds it as 
   // and a copy: the original went with its session
   expect(Object.is(page.events, stored)).toBe(false);
 });
+
+test("the named guards answer as the hand checks did: which answers are let go at once, and which are kept", async () => {
+  let next: unknown;
+  let disposed = 0;
+  const namespace = {
+    getByName: () => ({
+      invokeSafe: async () => ({
+        ok: true,
+        data: next,
+        [Symbol.dispose]: () => void (disposed += 1),
+      }),
+    }),
+  };
+  const context = reachableContext(namespace as never, DurableObjectNameCodec.address("/"), "test");
+  class Stub {}
+  const tag = Symbol("tag");
+  // "let go": plain data, so the session's disposer ran before the caller saw the answer.
+  // "kept": not plain data, so the answer is the one handed in and its session is still open.
+  const table: [name: string, value: unknown, expected: "let go" | "kept"][] = [
+    ["zero", 0, "let go"],
+    ["not a number", Number.NaN, "let go"],
+    ["an empty string", "", "let go"],
+    ["false", false, "let go"],
+    ["a bigint", 10n, "let go"],
+    ["null", null, "let go"],
+    ["undefined", undefined, "let go"],
+    ["an empty object", {}, "let go"],
+    ["an empty array", [], "let go"],
+    ["nested data", { list: [1, "two", { three: null, four: undefined }] }, "let go"],
+    ["a symbol", tag, "kept"],
+    ["a function", () => 1, "kept"],
+    ["an object with no prototype", Object.create(null), "kept"],
+    ["an object with a symbol key", { [tag]: 1 }, "kept"],
+    ["an object of a class", new Stub(), "kept"],
+    ["a Map", new Map(), "kept"],
+    ["bytes", new Uint8Array(2), "kept"],
+    ["a Date", new Date(0), "kept"],
+    ["a symbol deep in data", { list: [{ at: tag }] }, "kept"],
+    ["a function deep in an array", [[1, () => 1]], "kept"],
+  ];
+  for (const [name, value, expected] of table) {
+    next = value;
+    const before = disposed;
+    const answer = await context.invoke("itx.whoami()");
+    expect(disposed - before, name).toBe(expected === "let go" ? 1 : 0);
+    if (expected === "kept") expect(answer, name).toBe(value);
+    else {
+      expect(answer, name).toEqual(value);
+      // an object's copy is another object: the original went with its session
+      if (value instanceof Object) expect(answer, name).not.toBe(value);
+    }
+  }
+});
