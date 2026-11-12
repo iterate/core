@@ -65,10 +65,12 @@ const messageOf = (error) => (error instanceof Error ? error.message : String(er
 /** The build of voice the config repo pins, whether `itx.voice` is installed (the init case in
  *  worker.ts writes that rule), and whether the mind has the live model's key. */
 async function readVoice() {
-  const [manifest, rule, secrets] = await Promise.all([
+  // the one secret is asked about by its path: `secrets.list()` asks the vault about every secret
+  // the mind ever had
+  const [manifest, rule, key] = await Promise.all([
     repo().readFile("package.json"),
     itx.rewriteRules.get("itx.voice"),
-    itx.secrets.list(),
+    itx.secrets.describe("/secrets/openai"),
   ]);
   let pin;
   try {
@@ -79,7 +81,7 @@ async function readVoice() {
   return {
     pin,
     installed: Boolean(rule?.target),
-    hasKey: secrets.some((secret) => secret.path === "/secrets/openai"),
+    hasKey: key.set,
   };
 }
 
