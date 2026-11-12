@@ -358,15 +358,9 @@ export class SecretDurableObject extends DurableObject<Env> {
   ): Promise<SecretAnswer<{ path: string }>> {
     this.#pathOf(path);
     const legacy = LegacySealedCell.parse(JSON.parse(cell));
-    // A proof is good for ever, so each cell imports once. Taken before the first await, kept on
-    // failure, and kept by `delete`.
-    const imported = this.ctx.storage.kv.get<string[]>("imported-nonces") || [];
-    if (imported.includes(legacy.nonce))
-      throw codedError(
-        "FORBIDDEN",
-        `secrets.importSealed: this cell of ${path} was imported once already`,
-      );
-    this.ctx.storage.kv.put("imported-nonces", [...imported, legacy.nonce]);
+    // The proof first: a call that proves nothing keeps nothing. Were the cell's nonce kept before
+    // this check, a caller with no key could name a cell and shut its own import out for good, and
+    // fill this object with nonces.
     if (
       !(await secretsEqual(proof, await hmacSha256Hex(this.#key(), JSON.stringify([path, cell]))))
     )
@@ -374,6 +368,15 @@ export class SecretDurableObject extends DurableObject<Env> {
         "FORBIDDEN",
         `secrets.importSealed: no proof under the at-rest key for ${path}`,
       );
+    // A proof is good for ever, so each proven cell imports once. Read and kept with no await
+    // between, so two imports of one cell cannot both pass; kept on failure, and kept by `delete`.
+    const imported = this.ctx.storage.kv.get<string[]>("imported-nonces") || [];
+    if (imported.includes(legacy.nonce))
+      throw codedError(
+        "FORBIDDEN",
+        `secrets.importSealed: this cell of ${path} was imported once already`,
+      );
+    this.ctx.storage.kv.put("imported-nonces", [...imported, legacy.nonce]);
     let material: SecretMaterial;
     try {
       material = await decryptLegacySecretMaterial(

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import {
   SECRET_HELD_HEADER,
   SECRET_USE_HEADER,
@@ -6,7 +7,11 @@ import {
 import { decodeFacts, FACTS_HEADER } from "iterate/facts";
 import { expect, test, vi } from "vitest";
 import type { Envelope } from "iterate/signed";
+import { hmacSha256Hex } from "../secrets.ts";
 import { APPROVED, HOLD_MS, MAX_WAITING, REJECTED, SecretDurableObject } from "./durable-object.ts";
+
+// workerd's own comparison, which Node's Web Crypto has not got
+Object.assign(crypto.subtle, { timingSafeEqual });
 
 const PATH = "/secrets/gmail";
 const MEMBER = "key-member";
@@ -290,6 +295,27 @@ test("a delete that comes in while a new value is being sealed is the later word
   // a value set after the delete is kept
   await secret.secret(PATH, "set", { material: "newest", urls: ["https://gmail.googleapis.com"] });
   expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: true });
+});
+
+test("an import with no proof keeps nothing of the cell: the cell with its proof is still taken after it, once", async () => {
+  const { secret } = await vault();
+  // a cell of an old mind: its value does not open here, which the proof does not depend on
+  const cell = JSON.stringify({
+    context: "old-mind:/secrets/gmail",
+    urls: ["https://gmail.googleapis.com"],
+    refresh: null,
+    nonce: "nonce-of-the-old-cell",
+    material: { algorithm: "AES-256-GCM+SECRET-V1", iv: "AAAA", ciphertext: "AAAA" },
+  });
+  const proof = await hmacSha256Hex("at-rest-key-for-tests-only", JSON.stringify([PATH, cell]));
+  const importing = (given: string) => secret.secret(PATH, "importSealed", { cell, proof: given });
+
+  // whoever does not hold the at-rest key names the cell and proves nothing
+  await expect(importing("0".repeat(64))).rejects.toThrow("no proof under the at-rest key");
+  // The cell's own import is not shut out by that: it gets as far as the value.
+  await expect(importing(proof)).rejects.toThrow("does not open under this stack's at-rest key");
+  // a proven cell is taken once: its proof is good for ever
+  await expect(importing(proof)).rejects.toThrow("imported once already");
 });
 
 test("a rule with a path that never waits lets a file go there, and refuses the same bytes at the API's own address", async () => {
