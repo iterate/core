@@ -1,15 +1,22 @@
-// app.js — THE DASH'S PAGE: the mind seen from above. Five pages in one:
+// app.js — THE DASH'S PAGE: the mind seen from above. Seven pages in one:
 //
-//   Overview   who is signed in, and the way to every app and every page about access
-//   Contexts   any context of the mind, live: its log, its processors, who is here
-//   Repo       the config repo as a small IDE: files, an editor, a diff, commits
-//   Secrets    what the mind may send where: set a secret, update it, delete it
-//   MCP        how to connect Claude Code or the Codex CLI to the mind
+//   Overview      who is signed in, and the way to every app and every page about access
+//   Contexts      any context of the mind, live: its log, its processors, who is here
+//   Repo          the config repo as a small IDE: files, an editor, a diff, commits
+//   Secrets       what the mind may send where: set a secret, update it, delete it
+//   Integrations  what the mind's packages registered, with their connections
+//   Analytics     the mind's telemetry, when its stack has telemetry
+//   MCP           how to connect Claude Code or the Codex CLI to the mind
 //
 // The larger parts are components of @iterate-com/ui, loaded through the import map in
-// index.html: `ContextExplorer`, `RepoIde`, `SecretsPage` and `McpConnect` are the ones
-// iterate's hosted Dash draws. This file is the wiring: the member's itx, the URL, the sidebar and
-// the overview. Change them here.
+// index.html: `ContextExplorer`, `RepoIde`, `SecretsPage`, `IntegrationsPage`, `AnalyticsPage`
+// and `McpConnect` are the ones iterate's hosted Dash draws. This file is the wiring: the member's
+// itx, the URL, the sidebar and the overview. Change them here.
+//
+// WHAT THE PAGE ASKS BY ITSELF: the count of what waits for approval (the kit asks once when the
+// page opens, then every five minutes while the tab is in front), and the live charts of
+// Analytics (every thirty seconds while that page is shown). Every other read is one that a
+// person's click starts.
 import {
   html,
   render,
@@ -19,6 +26,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "@iterate-com/ui/page";
+import { AnalyticsPage, telemetryQueryOf } from "@iterate-com/ui/components/analytics-page";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import { ApprovalsAlert } from "@iterate-com/ui/components/approvals-alert";
 import {
@@ -26,6 +34,7 @@ import {
   contextPathOf,
   contextViewStateOf,
 } from "@iterate-com/ui/components/context-explorer/context-explorer";
+import { IntegrationsPage } from "@iterate-com/ui/components/integrations-page";
 import { McpConnect } from "@iterate-com/ui/components/mcp-connect";
 import { RepoIde, repoIdeSearchOf } from "@iterate-com/ui/components/repo-ide/repo-ide";
 import { SecretsPage, secretsPageStateOf } from "@iterate-com/ui/components/secrets-page";
@@ -43,8 +52,10 @@ import { Toaster } from "@iterate-com/ui/components/ui/sonner";
 import { titleWithCount, useWaitingApprovals } from "@iterate-com/ui/lib/waiting-approvals";
 import { newWebSocketRpcSession, useContextStub } from "@iterate-com/ui/live";
 import {
+  BlocksIcon,
   BookOpenIcon,
   BotIcon,
+  ChartLineIcon,
   FolderGit2Icon,
   KeyRoundIcon,
   LayoutDashboardIcon,
@@ -118,7 +129,8 @@ const access = [
 ];
 
 // ── the URL ──
-// THE PAGE IS A LINK: `?page=contexts|repo|secrets|mcp` is the page (none: the overview),
+// THE PAGE IS A LINK: `?page=contexts|repo|secrets|integrations|analytics|mcp` is the page (none:
+// the overview),
 // `?context=<path>` the context shown, `?repo=<name>` the repo (none: config), and `?view=<json>`
 // what the page's own view holds (the explorer's filter and inspected event, the IDE's open file
 // and panes, the secrets page's open sheet).
@@ -206,6 +218,8 @@ function App() {
   if (page === "repo")
     view = html`<${Repo} name=${params.get("repo") || "config"} search=${search} />`;
   if (page === "secrets") view = html`<${Secrets} search=${search} />`;
+  if (page === "integrations") view = html`<${Integrations} />`;
+  if (page === "analytics") view = html`<${Analytics} />`;
   if (page === "mcp")
     view = html`<div className="dash-scroll"><${McpConnect} server=${`${stack}/mcp`} /></div>`;
   return html`
@@ -246,6 +260,70 @@ function Contexts({ path, search }) {
       onStateChange=${patchView}
     />
   `;
+}
+
+/** Whether the mind serves `itx.<root>` (a part that not every stack has): undefined while the
+ *  page asks, which it does once. */
+function useServes(root) {
+  const [serves, setServes] = useState();
+  useEffect(() => {
+    let current = true;
+    itx.rewriteRules.get(`itx.${root}`).then(
+      (rule) => current && setServes(Boolean(rule?.target)),
+      () => current && setServes(false),
+    );
+    return () => {
+      current = false;
+    };
+  }, [root]);
+  return serves;
+}
+
+/** A page for a part that the mind's stack does not have: its title and one plain line. */
+function PartIsOff({ title, children }) {
+  return html`
+    <div className="dash-scroll">
+      <div className="dash-overview">
+        <header>
+          <h1>${title}</h1>
+          <p className="dash-muted">${children}</p>
+        </header>
+      </div>
+    </div>
+  `;
+}
+
+/** ONE function for the page's life: the kit's pages read again when they are handed another. */
+const openIntegrations = () => itx.cd("/integrations");
+const telemetry = telemetryQueryOf(itx);
+
+/** What the mind's packages registered, live from one subscription. */
+function Integrations() {
+  const serves = useServes("integrations");
+  if (serves === undefined)
+    return html`<p className="dash-note" data-spinner="true">Reading the mind…</p>`;
+  if (!serves)
+    return html`<${PartIsOff} title="Integrations">This mind has no integrations yet.<//>`;
+  return html`
+    <div className="dash-scroll">
+      <${IntegrationsPage} openRegistry=${openIntegrations} deps=${[]} mind=${domain} />
+    </div>
+  `;
+}
+
+/** The mind's telemetry. A stack without telemetry is asked nothing: the page says that it is off. */
+function Analytics() {
+  const serves = useServes("telemetry");
+  if (serves === undefined)
+    return html`<p className="dash-note" data-spinner="true">Reading the mind…</p>`;
+  if (!serves)
+    return html`
+      <${PartIsOff} title="Analytics">
+        Telemetry is off for this mind, so there is nothing to chart. Telemetry is a part of the
+        stack: a deploy with telemetry on adds it, and this page then shows the mind's charts.
+      <//>
+    `;
+  return html`<div className="dash-scroll"><${AnalyticsPage} query=${telemetry} /></div>`;
 }
 
 /** The mind's secrets. This page reads the list, and reads it again after a set or a delete. The
@@ -343,6 +421,18 @@ function Overview() {
               link: linkTo(pageOf("secrets")),
             },
             {
+              name: "Integrations",
+              icon: BlocksIcon,
+              about: "What the mind's packages registered, and their connections.",
+              link: linkTo(pageOf("integrations")),
+            },
+            {
+              name: "Analytics",
+              icon: ChartLineIcon,
+              about: "The mind's telemetry: events, lag, storage, a SQL box.",
+              link: linkTo(pageOf("analytics")),
+            },
+            {
               name: "MCP",
               icon: PlugIcon,
               about: "Connect Claude Code or the Codex CLI to this mind.",
@@ -399,6 +489,18 @@ function Nav({ page, waiting }) {
       icon: LockKeyholeIcon,
       page: "secrets",
       link: linkTo(pageOf("secrets")),
+    },
+    {
+      name: "Integrations",
+      icon: BlocksIcon,
+      page: "integrations",
+      link: linkTo(pageOf("integrations")),
+    },
+    {
+      name: "Analytics",
+      icon: ChartLineIcon,
+      page: "analytics",
+      link: linkTo(pageOf("analytics")),
     },
     { name: "MCP", icon: PlugIcon, page: "mcp", link: linkTo(pageOf("mcp")) },
   ];
