@@ -87,10 +87,10 @@ export class Door extends WorkerEntrypoint<LinkEnv> {
   }
 }
 
-/** THE MIND WORKER'S OWN FETCHES, the ones it makes with no door: its repos' git transport and
- *  its module loader. They leave as loaded code's do, to public addresses alone, and to this
- *  machine's own git store. workerd's default for a Worker reaches private addresses too, and on a
- *  home network those are the router and the machines beside this one. */
+/** THE MIND WORKER'S OWN FETCHES, the ones that do not go through `Door` above: its repos' git
+ *  transport and its module loader. They leave as loaded code's do, to public addresses alone,
+ *  and to this machine's own git store. workerd's default for a Worker reaches private addresses
+ *  too, and on a home network those are the router and the machines beside this one. */
 export class Outbound extends WorkerEntrypoint<LinkEnv> {
   override fetch(request: Request): Promise<Response> {
     return new URL(request.url).origin === this.env.REPOS_ORIGIN

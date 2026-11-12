@@ -204,10 +204,11 @@ class PrivateRepo extends RpcTarget {
   }
 }
 
-// The mind Worker fetches a repo's remote itself, with no door. In one new context, a rule gives
-// `itx.cfArtifacts` the meaning of a lent store whose repos are at a private address. The repo's
-// facet must not ask that store, and no fetch of the mind Worker may reach that address: the
-// repo's log is answered from the real store, or it fails with no answer from the router.
+// The check for two rules: the repo facet's fixed name for its store
+// (core/mind-worker/src/repo/durable-object.ts `RepoScope`) and the mind Worker's outbound at
+// home (core/home-lab/src/link/worker.ts `Outbound`). In one new context, a rule gives
+// `itx.cfArtifacts` the meaning of a lent store whose repos are at a private address. It passes
+// when the repo's log is answered from the real store, or fails with no answer from the router.
 function privateRemote(domain: string, token: string, marker: string) {
   return attempt(
     "home lab: a repo whose store is re-pointed to a private address reaches nothing there",
