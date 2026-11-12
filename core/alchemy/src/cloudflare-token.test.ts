@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PERMISSION_GROUPS } from "@alchemy.run/cloudflare/ApiToken";
 import {
+  CLOUDFLARE_TOKEN_NOT_GRANTED_BY_THE_CLOUD,
   CLOUDFLARE_TOKEN_READS_LEFT_OUT,
   CLOUDFLARE_TOKEN_WRITES,
   cloudflareTokenGroupsOf,
@@ -56,11 +57,15 @@ void test("a read that is left out is a group of the catalog, and the token does
   }
 });
 
+void test("the token holds no group that iterate Cloud's consent cannot grant: Cloudflare refuses the whole token for one", () => {
+  for (const name of CLOUDFLARE_TOKEN_NOT_GRANTED_BY_THE_CLOUD) assert.ok(!names.has(name), name);
+});
+
 // A catalog that gains or loses a read group changes these numbers. Before you change them, ask
 // of each new read what cloudflare-token.ts asks: does it yield a credential that can do more
 // than this token? A changed list also changes the token of every stack at its next deploy.
 void test("the token's groups are as many as were looked at, and none is there twice", () => {
-  assert.equal(groups.account.length, 142);
+  assert.equal(groups.account.length, 77);
   assert.equal(groups.zone.length, 45);
   assert.equal(new Set(held.map(({ id }) => id)).size, held.length);
 });

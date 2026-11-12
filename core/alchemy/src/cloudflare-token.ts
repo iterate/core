@@ -45,6 +45,81 @@ export const CLOUDFLARE_TOKEN_WRITES = [
   "Health Checks Write",
 ] as const;
 
+/** Groups that iterate Cloud's consent cannot grant. A token that a person's OAuth sign-in makes may
+ *  hold only what the sign-in's scopes cover, and Cloudflare refuses the WHOLE token for one group
+ *  more, naming each such group: these are the ones it names for the consent's scopes, which ask
+ *  nothing for Access, Zero Trust or the network products (internal-packages/installer/worker/
+ *  scopes.js says why). The list is fixed, not found at each deploy: a token whose list changes is
+ *  updated in place, and an update needs the right to make tokens, which an everyday Update of the
+ *  Cloud does not hold. */
+export const CLOUDFLARE_TOKEN_NOT_GRANTED_BY_THE_CLOUD = [
+  "Access: Audit Logs Read",
+  "Access: Custom Pages Read",
+  "Access: Device Posture Read",
+  "Access: Groups Read",
+  "Access: Identity Providers Read",
+  "Access: Keys Read",
+  "Access: Mutual TLS Certificates Read",
+  "Access: Organizations Read",
+  "Access: Organizations, Identity Providers, and Groups Read",
+  "Access: Policy Test Read",
+  "Access: SAML Certificates Read",
+  "Access: SCIM Logs Read",
+  "Access: SCIM Population Read",
+  "Access: SSH Auditing Read",
+  "Access: Service Tokens Read",
+  "Access: Users Read",
+  "Account API Gateway Read",
+  "Account Abuse Protection PII Read",
+  "Account Firewall Access Rules Read",
+  "Account Security Center Insights Read",
+  "Account Security Insights Partner Integrations Read",
+  "Account WAF Read",
+  "Account Waiting Rooms Read",
+  "Address Maps Read",
+  "Allow Request Tracer Read",
+  "Application Security Reports Read",
+  "Billing Read",
+  "CASB Read",
+  "China Network Steering Read",
+  "Cloud Email Security: Read",
+  "Cloud Workload Security Read",
+  "Cloudflare CDS Compute Account Read",
+  "Cloudflare DEX Read",
+  "Cloudflare One Connector: WARP Read",
+  "Cloudflare One Connector: cloudflared Read",
+  "Cloudflare One Connectors Read",
+  "Cloudflare One Networks Read",
+  "Cloudforce One Read",
+  "Connectivity Directory Read",
+  "DDoS Botnet Feed Read",
+  "DDoS Protection Read",
+  "DLS: Read",
+  "DNS Firewall Read",
+  "DNS View Read",
+  "Field Extractors Read",
+  "Fraud Feedback Read",
+  "HTTP Applications Read",
+  "IOT Read",
+  "IP Prefixes: BGP On Demand Read",
+  "IP Prefixes: Read",
+  "Load Balancers Account Read",
+  "Load Balancing: Monitors and Pools Read",
+  "Magic Network Monitoring Config Read",
+  "Magic Transit Read",
+  "Magic WAN Read",
+  "OAuth Client Read",
+  "Resource Library Read",
+  "Rule Policies Read",
+  "SSO Connector Read",
+  "Tag Read",
+  "Trust and Safety Read",
+  "URL Scanner Read",
+  "Zero Trust Read",
+  "Zero Trust Resilience Read",
+  "Zero Trust: PII Read",
+] as const;
+
 const ACCOUNT_SCOPE = "com.cloudflare.api.account";
 const ZONE_SCOPE = "com.cloudflare.api.account.zone";
 
@@ -53,9 +128,16 @@ const ZONE_SCOPE = "com.cloudflare.api.account.zone";
 export function cloudflareTokenGroupsOf() {
   const leftOut: Record<string, string> = CLOUDFLARE_TOKEN_READS_LEFT_OUT;
   const writes: readonly string[] = CLOUDFLARE_TOKEN_WRITES;
+  // by id: a renamed group is in the catalog under both its names
+  const notGranted: readonly string[] = CLOUDFLARE_TOKEN_NOT_GRANTED_BY_THE_CLOUD;
+  const refusedIds = new Set(
+    PERMISSION_GROUPS.filter(({ name }) => notGranted.includes(name)).map(({ id }) => id),
+  );
   const held = new Map(
     PERMISSION_GROUPS.filter(
-      ({ name }) => (/ read$/i.test(name) && !(name in leftOut)) || writes.includes(name),
+      ({ id, name }) =>
+        !refusedIds.has(id) &&
+        ((/ read$/i.test(name) && !(name in leftOut)) || writes.includes(name)),
     ).map((group) => [group.id, group]),
   );
   const scoped = (scope: string) => [...held.values()].filter(({ scopes }) => scopes[0] === scope);
