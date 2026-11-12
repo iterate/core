@@ -131,8 +131,8 @@ const isJsonObject = (value: unknown): value is Record<string, unknown> =>
 
 function sameAroundTheHole(pinned: unknown, given: unknown): AroundTheHole {
   if (isItxExpressionHole(pinned)) return "same";
-  if (Array.isArray(pinned)) {
-    if (!Array.isArray(given) || given.length < pinned.length) return "other";
+  if (isJsonList(pinned)) {
+    if (!isJsonList(given) || given.length < pinned.length) return "other";
     return worstOf([
       ...pinned.map((value, index) => sameAroundTheHole(value, given[index])),
       given.length > pinned.length ? "more" : "same",
