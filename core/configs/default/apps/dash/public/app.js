@@ -7,8 +7,16 @@
 // The larger parts are components of @iterate-com/ui, loaded through the import map in
 // index.html: `ContextExplorer` and `RepoIde` are the ones iterate's hosted Dash draws. This file
 // is the wiring: the member's itx, the URL, the sidebar and the overview. Change them here.
-import { html, render, useCallback, useMemo, useSyncExternalStore } from "@iterate-com/ui/page";
+import {
+  html,
+  render,
+  useCallback,
+  useEffect,
+  useMemo,
+  useSyncExternalStore,
+} from "@iterate-com/ui/page";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
+import { ApprovalsAlert } from "@iterate-com/ui/components/approvals-alert";
 import {
   ContextExplorer,
   contextPathOf,
@@ -21,10 +29,12 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@iterate-com/ui/components/ui/sidebar";
 import { Toaster } from "@iterate-com/ui/components/ui/sonner";
+import { titleWithCount, useWaitingApprovals } from "@iterate-com/ui/lib/waiting-approvals";
 import { newWebSocketRpcSession, useContextStub } from "@iterate-com/ui/live";
 import {
   BookOpenIcon,
@@ -80,10 +90,13 @@ const apps = [
   { name: "Docs", host: "docs", icon: BookOpenIcon, about: "The config repo, read as pages." },
 ].map((app) => ({ ...app, href: `https://${app.host}.${domain}` }));
 
+/** Where a member answers what waits for a yes: the stack's own page, which asks for a passkey. */
+const approvals = `${stack}/secrets/approvals`;
+
 const access = [
   {
     name: "Approvals",
-    href: `${stack}/secrets/approvals`,
+    href: approvals,
     icon: ShieldCheckIcon,
     about: "What waits for your yes, and the rules that make it wait.",
   },
@@ -164,7 +177,17 @@ function useView(search) {
   return [view, patchView];
 }
 
+/** How the kit's reader of approvals asks this mind: with the page's one `itx`. */
+const read = (ask) => ask(itx);
+
 function App() {
+  // WHAT WAITS FOR A MEMBER'S YES is said on every page: the alert at the top of the sidebar, the
+  // number beside "Approvals", and the count before the tab's title. An agent stands still until
+  // a member answers. The kit asks again every 30 seconds while the tab is in front.
+  const waiting = useWaitingApprovals(domain, read);
+  useEffect(() => {
+    document.title = titleWithCount(document.title, waiting);
+  }, [waiting]);
   const search = useSyncExternalStore(subscribeToUrl, () => location.search);
   const params = useMemo(() => new URLSearchParams(search), [search]);
   const page = params.get("page") || "overview";
@@ -178,7 +201,7 @@ function App() {
       app="Dash"
       mind=${domain}
       mindHref=${() => "./"}
-      nav=${html`<${Nav} page=${page} />`}
+      nav=${html`<${Nav} page=${page} waiting=${waiting} />`}
       account=${principal}
       locationKey=${location.pathname + search}
     >
@@ -299,7 +322,7 @@ function Cards({ title, rows }) {
 }
 
 /** The sidebar: the Dash's three pages, then the mind's apps and the pages about access. */
-function Nav({ page }) {
+function Nav({ page, waiting }) {
   const pages = [
     {
       name: "Overview",
@@ -313,6 +336,7 @@ function Nav({ page }) {
   return html`
     <${SidebarGroup}>
       <${SidebarGroupContent}>
+        <${ApprovalsAlert} waiting=${waiting} render=${html`<a href=${approvals} />`} />
         <${SidebarMenu}>
           ${pages.map(
             (row) => html`
@@ -332,12 +356,13 @@ function Nav({ page }) {
       <//>
     <//>
     <${Links} title="Apps" rows=${apps} />
-    <${Links} title="Access" rows=${access} />
+    <${Links} title="Access" rows=${access} counts=${{ Approvals: waiting }} />
   `;
 }
 
-/** A group of the sidebar whose rows leave the Dash: another app, or a page of the stack. */
-function Links({ title, rows }) {
+/** A group of the sidebar whose rows leave the Dash: another app, or a page of the stack. A row
+ *  named in `counts` shows its number. */
+function Links({ title, rows, counts = {} }) {
   return html`
     <${SidebarGroup}>
       <${SidebarGroupLabel}>${title}<//>
@@ -350,6 +375,7 @@ function Links({ title, rows }) {
                   <${row.icon} />
                   <span>${row.name}</span>
                 <//>
+                ${counts[row.name] ? html`<${SidebarMenuBadge}>${counts[row.name]}<//>` : null}
               <//>
             `,
           )}
