@@ -197,9 +197,8 @@ const BARE_ADDRESS = /^[^\s<>",;:()[\]\\@]+@[A-Za-z0-9.-]+$/;
 export function recipientsRefusal(recipients: readonly string[]): string | null {
   // by its place: an empty recipient is odd too
   const at = recipients.findIndex((recipient) => !BARE_ADDRESS.test(recipient));
-  return at < 0
-    ? null
-    : `name each recipient by its address alone, as jo@example.com: ${JSON.stringify(recipients[at]!.slice(0, 80))} is not one`;
+  if (at < 0) return null;
+  return `name each recipient by its address alone, as jo@example.com: ${JSON.stringify(recipients[at]!.slice(0, 80))} is not one`;
 }
 
 /** THE HEADERS OF THE MAIL THAT GOES: the three that the act holds, made again from the act, and
