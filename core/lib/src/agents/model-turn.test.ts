@@ -181,6 +181,39 @@ test("a stalled answer whose cancellation rejects its pending read, as workerd's
   });
 });
 
+test("a request through the AI Gateway names the mind by its slug, and by its id only where the mind has one", async () => {
+  /** One turn of an agent of such a mind: how it settled, and the gateway its request named. */
+  const turnOf = async (mind: { mindId?: string; mindSlug?: string }) => {
+    const agent = agentWithModel({ mind });
+    const settled = settledOf(await agent.turn("What is the answer?"));
+    const [options] = agent.sentOptions as { gateway: unknown }[];
+    return [settled, options!.gateway];
+  };
+  // Strictly equal: a name the mind does not have is no key at all, never a key that is
+  // undefined. A mind on its own stack: `whoami` answers a slug and no id.
+  const [, ofStack] = await turnOf({ mindSlug: "example-com" });
+  expect(ofStack).toStrictEqual({
+    id: "default",
+    skipCache: true,
+    metadata: { mindSlug: "example-com", streamPath: PATH, context: "agent-turn" },
+  });
+  // the frozen platform's mind has both
+  const [, ofBoth] = await turnOf({ mindId: "mind_t", mindSlug: "t" });
+  expect(ofBoth).toStrictEqual({
+    id: "default",
+    skipCache: true,
+    metadata: { mindId: "mind_t", mindSlug: "t", streamPath: PATH, context: "agent-turn" },
+  });
+  // a context that names no mind still asks: nothing is refused here
+  const [settled, ofNameless] = await turnOf({});
+  expect(settled).toMatchObject({ result: { status: "succeeded" } });
+  expect(ofNameless).toStrictEqual({
+    id: "default",
+    skipCache: true,
+    metadata: { streamPath: PATH, context: "agent-turn" },
+  });
+});
+
 test("with the default order and no secret set, the request goes through the AI Gateway and nothing is sent to fetch", async () => {
   const sentToFetch: Request[] = [];
   const { turn, sent } = agentWithModel({
@@ -754,11 +787,15 @@ function agentWithModel(options: {
   fetch?: (request: Request) => Promise<Response>;
   /** `itx.secrets.describe`; by default no secret is set. */
   describe?: (path: string) => Promise<{ path: string; set: boolean }>;
+  /** What `itx.whoami` says of the mind; by default a slug and an id, as the frozen platform's. */
+  mind?: { mindId?: string; mindSlug?: string };
 }) {
   const sent: Record<string, unknown>[] = [];
+  /** the options of each `itx.ai.run`: the gateway and what the request tells it */
+  const sentOptions: unknown[] = [];
   const sleeps: number[] = [];
   const itx = {
-    whoami: async () => ({ mindId: "mind_t", path: PATH, mindSlug: "t" }),
+    whoami: async () => ({ ...(options.mind || { mindId: "mind_t", mindSlug: "t" }), path: PATH }),
     repos: {
       get: async () => ({
         readFile: async (file: string) => (file === "AGENTS.md" ? "Be brief." : null),
@@ -767,8 +804,9 @@ function agentWithModel(options: {
     cd: () => ({ rewriteRules: { list: async () => [] } }),
     secrets: { describe: options.describe || (async (path: string) => ({ path, set: false })) },
     ai: {
-      run: async (_model: string, body: Record<string, unknown>) => {
+      run: async (_model: string, body: Record<string, unknown>, runOptions: unknown) => {
         sent.push(body);
+        sentOptions.push(runOptions);
         if (options.model) return options.model();
         return sse([
           { type: "response.output_text.delta", delta: "forty" },
@@ -839,7 +877,7 @@ function agentWithModel(options: {
     if (!intent) throw new Error("the loop asked for no request");
     return commit(intent);
   };
-  return { turn, commit, sent, sleeps, state: () => state };
+  return { turn, commit, sent, sentOptions, sleeps, state: () => state };
 }
 
 /** `frames` as the Responses API streams them. A number among them is that many milliseconds of

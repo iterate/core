@@ -1222,17 +1222,18 @@ export interface IterateContextApi {
     get(key: ScheduleKey): ScheduledAppend | null;
   };
   /** `principal` is who is calling, when the call has one: a person through the mind's API. Code
-   *  the mind loaded calls as itself and gets none. */
+   *  the mind loaded calls as itself and gets none. A mind names itself by `mindSlug`. A mind on
+   *  its own stack has no `mindId`: only the frozen platform, which holds many minds, answers one. */
   whoami():
     | {
-        mindId: string;
+        mindId?: string;
         path: string;
         mindSlug?: string;
         mindUrl?: string;
         principal?: Principal;
       }
     | Promise<{
-        mindId: string;
+        mindId?: string;
         path: string;
         mindSlug?: string;
         mindUrl?: string;

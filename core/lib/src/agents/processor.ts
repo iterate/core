@@ -12,7 +12,7 @@
 // The event log spells an answer's content as its prose plus the call rendered as a `<codemode>`
 // block, the format the Agents app, the relays and voice read.
 import { z } from "zod";
-import { bytesToBase64, errorCode } from "../lib.ts";
+import { bytesToBase64, errorCode, mindNamesOf } from "../lib.ts";
 import {
   type ConsumedEvent,
   type EmittedEventInput,
@@ -66,6 +66,10 @@ import {
  *  an account's first authenticated request; unified billing pays the provider, no key anywhere. A
  *  property of the code, not of a deployment. */
 const AI_GATEWAY_ID = "default";
+
+/** What `whoami` says of an agent's context. A mind on its own stack names itself by `mindSlug`
+ *  and has no `mindId`; the frozen platform answers both. */
+type AgentIdentity = { mindId?: string; mindSlug?: string; path: string };
 /** How long a new message waits for this loop's own running script before a turn starts anyway:
  *  the call's result then comes back before the message is read, so the call is followed by its
  *  output and nothing in the prompt has to move. A script still running after this is answered
@@ -511,9 +515,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     { controller: AbortController; partialText: string }
   >();
 
-  #identityRead?: { mindId: string; path: string };
+  #identityRead?: AgentIdentity;
   /** Which context this is — its mind and path — read once. */
-  async #identity(): Promise<{ mindId: string; path: string }> {
+  async #identity(): Promise<AgentIdentity> {
     if (this.#identityRead) return this.#identityRead;
     using itx = this.deps.getItx();
     return (this.#identityRead = await itx.whoami());
@@ -2196,7 +2200,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     const read = (response: Response, attempt: StreamAttempt) =>
       readAnswer(model, response, attempt, { onAnswer, onDelta });
     const gateway = async (attempt: StreamAttempt) => {
-      const { mindId, path } = await this.#identity();
+      const identity = await this.#identity();
       using itx = this.deps.getItx();
       const raw: unknown = await raceAbort(
         attempt.signal,
@@ -2212,7 +2216,12 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             gateway: {
               id: AI_GATEWAY_ID,
               skipCache: true,
-              metadata: { mindId, streamPath: path, context: "agent-turn" },
+              // for the gateway's spend rules: which mind and which agent
+              metadata: {
+                ...mindNamesOf(identity),
+                streamPath: identity.path,
+                context: "agent-turn",
+              },
             },
           },
         ),

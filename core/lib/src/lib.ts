@@ -544,3 +544,18 @@ export function environmentFaviconSvg(
 }
 
 const FAVICON_BACKGROUNDS = { preview: "#7C3AED", dev: "#0F766E" };
+
+/** The names a mind has, of what `whoami` answered (api.ts says which mind has which), for the
+ *  metadata of a request to the AI Gateway. A name the mind does not have gets no key: the
+ *  binding's metadata takes no undefined value, and a spend rule partitions on the keys it finds. */
+export function mindNamesOf(who: { mindId?: string; mindSlug?: string }): {
+  mindId?: string;
+  mindSlug?: string;
+} {
+  return {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- a missing name must be a missing key, as the docstring says
+    ...(who.mindId && { mindId: who.mindId }),
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- as the line above
+    ...(who.mindSlug && { mindSlug: who.mindSlug }),
+  };
+}
