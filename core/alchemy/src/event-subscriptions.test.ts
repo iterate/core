@@ -97,6 +97,8 @@ void test("an answer Cloudflare refuses ends the read with a line that says so",
   });
   assert.equal(read.found, undefined);
   assert.match(read.unfound!, /answered 403/);
+  // a refusal, not a read that found none
+  assert.equal(read.refused, true);
 });
 
 void test("a first deploy with no stored id creates the subscription and lists nothing", async () => {

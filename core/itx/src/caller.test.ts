@@ -62,6 +62,18 @@ test("only the platform says that a sent mail was not delivered: a member reads 
 });
 
 test.for([
+  "events.iterate.com/repo/pushed",
+  "events.iterate.com/repo/cloned",
+  "events.iterate.com/repo/fetched",
+  "events.iterate.com/repo/token-created",
+  "events.iterate.com/repo/token-revoked",
+])("only the platform says %s: a reader takes it as what Cloudflare said of the repo", (type) => {
+  const fact = [{ type, payload: {} }];
+  expect(() => refuseNonPlatformWrites(fact, platform)).not.toThrow();
+  expect(() => refuseNonPlatformWrites(fact, { principal: null })).toThrow(/platform's own/);
+});
+
+test.for([
   "events.iterate.com/approval/rule-proposed",
   "events.iterate.com/approval/rule-proposal-signed",
   "events.iterate.com/approval/rule-proposal-rejected",

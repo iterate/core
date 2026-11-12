@@ -34,7 +34,7 @@ export type EventSubscriptionRow = {
   name: string;
   enabled: boolean;
   events: string[];
-  source: { type?: string };
+  source: { type?: string; namespace?: string; repo_name?: string };
   destination: { queue_id?: string };
   created_at: string;
   modified_at: string;
@@ -42,13 +42,17 @@ export type EventSubscriptionRow = {
 
 /** The subscription on `queueId` that `matches`, read with Cloudflare's `queue_id` filter. Only
  *  when Cloudflare refuses that filter (405) are the account's subscriptions read, newest first.
- *  Either way at most `EVENT_SUBSCRIPTION_PAGES` pages; `unfound` says why none was found. */
+ *  Either way at most `EVENT_SUBSCRIPTION_PAGES` pages; `unfound` says why none was found, and
+ *  `refused` that Cloudflare did not answer a page. */
 export async function findQueueEventSubscription(input: {
   accountId: string;
   queueId: string;
   matches: (row: EventSubscriptionRow) => boolean;
   call: Call;
-}): Promise<{ found: EventSubscriptionRow; unfound?: never } | { found?: never; unfound: string }> {
+}): Promise<
+  | { found: EventSubscriptionRow; unfound?: never; refused?: never }
+  | { found?: never; unfound: string; refused?: true }
+> {
   const list = `${accountUrl(input.accountId)}/event_subscriptions/subscriptions`;
   const order = `order=created_at&direction=desc&per_page=${EVENT_SUBSCRIPTION_PAGE_ROWS}`;
   let filter = `&queue_id=${encodeURIComponent(input.queueId)}`;
@@ -63,6 +67,7 @@ export async function findQueueEventSubscription(input: {
     if (answer.status !== 200)
       return {
         unfound: `Cloudflare answered ${answer.status} to the list of event subscriptions (page ${page})`,
+        refused: true,
       };
     pages++;
     // The cast: Cloudflare's documented answer, a page of subscriptions.

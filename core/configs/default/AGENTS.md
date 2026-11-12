@@ -2,6 +2,10 @@
 
 This repository is the mind's code. A commit to `main` publishes it: the platform loads
 `worker.ts`, the `main` in `package.json`, and every context of the mind runs the new code.
+A `git push` to `main` of this repo's remote publishes the same way. A force push to `main`
+publishes the older commit and leaves the mind's later commits behind: its `repo/pushed` fact on
+`/repos/config` says `forced: true` and names the commit it left behind (`leftBehind`); push that
+commit back to restore them.
 
 `worker.ts` extends `IterateConfigEntrypoint` from `iterate/sdk`, which holds the hosts (a
 processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/stream/processor`):

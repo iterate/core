@@ -55,6 +55,9 @@ repos, members and secrets. It needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCO
   the stack is gone for good, `pnpm run destroy:state --stage <name>` removes all three, and
   refuses while a Worker of the stack is still deployed. Deleting the Worker by hand leaves the
   two secrets, and a Secrets Store holds a limited number.
+- Before Alchemy's destroy, `scripts/artifacts-subscriptions.ts --remove` deletes the config
+  repo's Artifacts subscription: Alchemy does not know it, and a queue with a subscription may
+  refuse its delete.
 - It leaves the zone, with no DNS record of the stack in it. Cloudflare's Email Sending writes
   the TXT record `_dmarc.<domain>` at a deploy and leaves it when it is turned off, so
   `scripts/remove-dmarc-record.ts` removes it after the destroy, when its content is still what
@@ -316,7 +319,7 @@ least a deploy needs.
 | Account · AI Gateway            | Edit  | the gateway `default`                          |
 | Account · Browser Rendering     | Edit  | `itx.browser`                                  |
 | Account · Email Sending         | Edit  | mail out, the sign-in code among it            |
-| Account · Queues                | Edit  | mail's events queue and its subscription       |
+| Account · Queues                | Edit  | the events queue and its subscriptions         |
 | Account · Secrets Store         | Edit  | the state store's key                          |
 | Account · Workers Observability | Read  | reading the Workers' logs                      |
 | Zone · Zone                     | Read  | finding the zone by its name                   |
@@ -335,6 +338,27 @@ least a deploy needs.
 - For a mind Worker: its KV namespace `iterate-<name>-mind-kv`, the files bucket
   `iterate-<name>-files` and the repos' Artifacts namespace `iterate-<name>-repos`, which
   `scripts/repos-namespace.ts` makes before the deploy when it is missing.
+  - The stack's queue of Cloudflare events (below), and the config repo's subscription to it,
+    which `scripts/artifacts-subscriptions.ts` makes after the deploy: Alchemy does not know
+    Artifacts as a source. Each push to `repos--config` becomes a fact on the mind's
+    `/repos/config` (`events.iterate.com/repo/pushed`,
+    `core/boundary-worker/src/artifacts-events.ts`), and a `git push` to its `main` publishes
+    the mind, about 6 seconds after the push. A push that the mind could not publish after three
+    tries is the fact `events.iterate.com/repo/push-not-published` on `/repos/config`; the repo
+    tries again at its next event, and `announceTip()` publishes the tip by hand.
+  - A write token of the config repo's remote is a right to publish the mind. Its holder can
+    publish with a `git push`, at once, with no itx call, for the token's life. Each write token
+    that is made is the fact `events.iterate.com/repo/token-created` on `/repos/config`: its id,
+    its scope and its expiry, never the token. The mind's own commits make such tokens too. A
+    read token is no fact: the mind's own reads make several a minute.
+  - The stack asks Cloudflare for pushes and tokens made alone. Clones, fetches and revoked
+    tokens have a row in the boundary but are not asked for (`EVENTS` in
+    `src/artifacts-subscriptions.ts` widens it). A repo that the mind makes after the
+    deploy has no subscription: after a push to it, call `announceTip()` on it. The step reads
+    the queue's own subscriptions as the stack's other subscriptions are read
+    (`src/event-subscriptions.ts`). When Cloudflare answers that the repo has a subscription on
+    another queue (one a destroy left behind), it reads the account's, newest first, at most 100
+    pages, deletes that one and makes its own; past that bound it fails and says what to delete.
 - The four Workers. Only the boundary has routes: `<zone>/*` and `*.<zone>/*`, or with
   `hostnames: "platform"` `iterate.<zone>/*` alone.
 - Proxied `AAAA 100::` records for the apex and `*` (or `iterate` alone), so the routes receive
@@ -344,7 +368,8 @@ least a deploy needs.
   - A Queue `iterate-<name>-events`, the stack's one queue of Cloudflare events, with
     the boundary as its one consumer: a table in the boundary
     (`core/boundary-worker/src/cloudflare-events.ts`) says what each message becomes on the mind.
-    Its first subscription puts the domain's Email Sending events on it (bounced, failed,
+    A stack with a mind Worker has it too, with mail or without.
+    Mail's subscription puts the domain's Email Sending events on it (bounced, failed,
     rejected, complained). Each such event becomes an `events.iterate.com/email/delivery-failed` fact on the
     mind's `/integrations/email`, with the recipient, the sent mail's `messageId` and Cloudflare's
     cause: a mail that the provider took and that bounced later is no longer known to Cloudflare

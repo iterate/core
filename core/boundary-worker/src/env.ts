@@ -17,6 +17,8 @@ export type DoorEnv = {
 
 export type Env = DoorEnv & {
   MIND: MindTarget;
+  /** The stack's Artifacts namespace, which holds the mind's repos (core/alchemy `names.repos`). */
+  REPOS_NAMESPACE: string;
 };
 
 declare global {

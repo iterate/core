@@ -22,5 +22,6 @@ export default {
   // no stub. The fact's idempotency key keeps a retry from landing twice.
   email: (message, env, ctx) => receivedMail(message, env, providedMind(ctx)),
   // With no mind provided, each event is retried until it is or the consumer's retries run out.
+  // Mail's rows alone: a provided mind keeps its repos where it runs, not in Artifacts.
   queue: (batch, _env, ctx) => cloudflareEvents(batch, providedMind(ctx), mailRows),
 } satisfies ExportedHandler<Cloudflare.Env>;

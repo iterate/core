@@ -10,9 +10,9 @@ import type {
   RepoLogEntry,
   RepoSyncResult,
 } from "iterate/api";
-import { codedError } from "iterate/lib";
+import { codedError, errorCode } from "iterate/lib";
 import { SECRET_PLACEHOLDER } from "iterate/secret-placeholder";
-import type { EventInput, ReduceArgs } from "iterate/stream/processor";
+import type { EventInput, ProcessEventArgs, ReduceArgs } from "iterate/stream/processor";
 import {
   DurableObjectNameCodec,
   refuseActPastLimit,
@@ -46,12 +46,18 @@ import {
 import {
   OriginSet,
   RepoContract,
+  RepoPushed,
   type CommitCompleted,
   type RepoState,
   PLATFORM_AUTHOR,
 } from "./contract.ts";
 
 const REF = "refs/heads/main";
+/** The commit whose `repo/commit-completed` landed last (`#commitFact`). */
+const LANDED_KEY = "commit-fact-landed";
+/** The offset of the push to main whose fact is settled: landed for it, or for a newer tip
+ *  (`#landPushedTip`). A push is its offset, so a push again of the same commit is owed again. */
+const SETTLED_PUSH_KEY = "push-settled";
 const TOKEN_TTL_SECONDS = 300;
 /** An operation must not outlive its token. */
 const TOKEN_REUSE_MARGIN_MS = 60_000;
@@ -125,13 +131,90 @@ export const repoVerbs = [
   "push",
 ] as const;
 
+/** How the processor lands a push's fact: the facet's `#landPushedTip`, and the waits between tries. */
+/** A push to main: its commit, and its offset on the repo's log, which makes each push its own. */
+type Push = { oid: string; at: number };
+type PushLanding = {
+  land: (pushed: Push) => Promise<void>;
+  notPublished: (pushed: string, error: unknown) => Promise<void>;
+  retryWaitsMs: () => readonly number[];
+};
+
 class RepoProcessor extends EntityLifecycleProcessor<RepoState> {
+  readonly #push: PushLanding;
+  constructor(
+    push: PushLanding,
+    ...lifecycle: ConstructorParameters<typeof EntityLifecycleProcessor<RepoState>>
+  ) {
+    super(...lifecycle);
+    this.#push = push;
+  }
+
   override reduce(args: ReduceArgs<RepoState>): RepoState | undefined {
+    if (args.event.type === "events.iterate.com/repo/pushed") {
+      const pushed = RepoPushed.safeParse(args.event.payload);
+      if (!pushed.success) return undefined;
+      const { ref, after } = pushed.data;
+      // a push to another branch, or a delete of main, publishes nothing
+      if (ref !== REF || !after || after === ZERO_OID) return undefined;
+      return { ...args.state, mainPushedTo: after, mainPushedAt: args.event.offset };
+    }
     if (args.event.type !== "events.iterate.com/repo/origin-set") return super.reduce(args);
     const { origin } = OriginSet.parse(args.event.payload);
     // a fact appended around `setOrigin` is held to its rules
     if (origin && originRefusal(origin)) return undefined;
     return { ...args.state, origin };
+  }
+
+  // per incarnation: the push last seen at the head, and the one whose fact is settled
+  #pushedTo: Push | null = null;
+  #settledPush: number | null = null;
+  #landingPush = false;
+
+  // In the background, so a failure holds no later event. Each push is tried three times; after the
+  // third failure the repo's log says so (`repo/push-not-published`, once for each commit), the
+  // engine reports the error, the push stays owed in state, and the next pass at the head tries it
+  // again. The fact's own pass may start one more round; that round's fact has the same key, so
+  // it adds no event and no further pass.
+  override processEvent(args: ProcessEventArgs<RepoState>): undefined {
+    super.processEvent(args);
+    const { state, delivery, runInBackground } = args;
+    if (!delivery.caughtUp || state.creation?.status !== "created" || state.deletion) return;
+    this.#pushedTo =
+      state.mainPushedTo && state.mainPushedAt !== null
+        ? { oid: state.mainPushedTo, at: state.mainPushedAt }
+        : null;
+    if (this.#landingPush || !this.#pushedTo || this.#pushedTo.at === this.#settledPush) return;
+    this.#landingPush = true;
+    runInBackground(async () => {
+      try {
+        for (
+          let owed = this.#pushedTo;
+          owed && owed.at !== this.#settledPush;
+          owed = this.#pushedTo
+        ) {
+          await this.#landWithRetries(owed);
+          this.#settledPush = owed.at;
+        }
+      } finally {
+        this.#landingPush = false;
+      }
+    });
+  }
+
+  async #landWithRetries(pushed: Push): Promise<void> {
+    let failure: unknown;
+    for (const wait of [0, ...this.#push.retryWaitsMs()]) {
+      if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+      try {
+        return await this.#push.land(pushed);
+      } catch (error) {
+        failure = error;
+      }
+    }
+    // a failed append of this fact goes to the engine in place of the push's error
+    await this.#push.notPublished(pushed.oid, failure);
+    throw failure;
   }
 }
 
@@ -167,7 +250,15 @@ export class RepoFacet extends StreamProcessorDurableObject<
 > {
   static override publicMethods = [...super.publicMethods, ...repoVerbs];
 
+  /** The waits between the three tries of a push's fact. */
+  protected readonly pushRetryWaitsMs: readonly number[] = [2_000, 10_000];
+
   processor = new RepoProcessor(
+    {
+      land: (pushed) => this.#landPushedTip(pushed),
+      notPublished: (pushed, error) => this.#pushNotPublished(pushed, error),
+      retryWaitsMs: () => this.pushRetryWaitsMs,
+    },
     RepoContract,
     () => this.getItx(),
     () => this.#path,
@@ -313,20 +404,64 @@ export class RepoFacet extends StreamProcessorDurableObject<
       const path = await this.#created();
       const [newest] = await this.log({ limit: 1 });
       if (!newest) return null;
-      const owed = await this.ctx.storage.get<OwedFact>("commit-fact");
-      await this.#commitFact(
-        owed?.commitOid === newest.oid
-          ? owed
-          : {
-              path,
-              commitOid: newest.oid,
-              message: newest.message,
-              changedPaths: [],
-              key: occurrenceKey(path, newest.oid),
-            },
-      );
+      await this.#tipFact(path, newest);
       return newest.oid;
     });
+  }
+
+  // A push to main lands the tip's fact unless its commit's fact or the tip's landed already. A
+  // commit, a pull and `announceTip` land their facts inside `#serialized` before their push's own
+  // event arrives, so one commit publishes once. The tip may be newer than the push: it is what the
+  // mind must publish. A settled push is kept, so a new incarnation does not read the git log for it.
+  #landPushedTip({ oid: pushed, at }: Push): Promise<void> {
+    return this.#serialized(async () => {
+      const [settled, landed] = await Promise.all([
+        this.ctx.storage.get<number | string>(SETTLED_PUSH_KEY),
+        this.ctx.storage.get<string>(LANDED_KEY),
+      ]);
+      // `landed === pushed`: that commit's fact is the newest that landed, so it runs already
+      if (settled === at || landed === pushed) return;
+      const path = await this.#created();
+      const [newest] = await this.log({ limit: 1 });
+      // a main with no commit yet settles nothing: the next pass reads it again
+      if (!newest) return;
+      if (newest.oid !== landed) await this.#tipFact(path, newest);
+      await this.ctx.storage.put(SETTLED_PUSH_KEY, at);
+    });
+  }
+
+  // Once for each commit: a later round's words may differ, and the key it shares with the first
+  // then answers IDEMPOTENCY_CONFLICT, which means the fact is there.
+  async #pushNotPublished(commitOid: string, error: unknown): Promise<void> {
+    const path = this.#path;
+    using itx = this.getItx();
+    try {
+      await itx.append({
+        type: "events.iterate.com/repo/push-not-published",
+        payload: {
+          commitOid,
+          error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+        },
+        idempotencyKey: `repo/push-not-published:${path}:${commitOid}`,
+      });
+    } catch (refusal) {
+      if (errorCode(refusal) !== "IDEMPOTENCY_CONFLICT") throw refusal;
+    }
+  }
+
+  async #tipFact(path: string, newest: RepoLogEntry): Promise<void> {
+    const owed = await this.ctx.storage.get<OwedFact>("commit-fact");
+    await this.#commitFact(
+      owed?.commitOid === newest.oid
+        ? owed
+        : {
+            path,
+            commitOid: newest.oid,
+            message: newest.message,
+            changedPaths: [],
+            key: occurrenceKey(path, newest.oid),
+          },
+    );
   }
 
   async readFile(path: string, options?: { commitOid: string }): Promise<string | null> {
@@ -576,6 +711,7 @@ export class RepoFacet extends StreamProcessorDurableObject<
     using itx = this.getItx();
     await itx.cd("/").append(committed);
     await itx.append(committed);
+    await this.ctx.storage.put(LANDED_KEY, payload.commitOid);
     await this.ctx.storage.delete("commit-fact");
   }
 

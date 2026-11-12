@@ -95,6 +95,12 @@ const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/email/delivery-failed",
   "events.iterate.com/webhook/received",
   "events.iterate.com/mcp/webhook-received",
+  // what Cloudflare said of a repo; a push to the config repo's main publishes the mind
+  "events.iterate.com/repo/pushed",
+  "events.iterate.com/repo/cloned",
+  "events.iterate.com/repo/fetched",
+  "events.iterate.com/repo/token-created",
+  "events.iterate.com/repo/token-revoked",
   // the vault's gate for acts (iterate/acts): its rules and its lock decide what waits
   "events.iterate.com/approval/act-held",
   "events.iterate.com/approval/act-approved",
