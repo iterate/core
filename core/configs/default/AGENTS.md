@@ -448,7 +448,9 @@ platform wrote there; a file you changed or deleted is yours, and stays.
 - **To follow the template again, commit the template's file over yours** (the files of
   `core/configs/default` in https://github.com/iterate/core), and list the packages it names. A
   file that is the template's bytes, or an earlier version the platform wrote, is the
-  platform's again. The app then follows at the mind's next restart.
+  platform's again. An app that the last update left at its version then follows at the mind's
+  next restart. Where no app was left, a file you set back waits for the next deploy that brings
+  a different template: the same template is not compared twice.
 
 ## What waits for a member's yes
 
