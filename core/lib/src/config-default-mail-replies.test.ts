@@ -96,6 +96,24 @@ test("an outside person's reply goes to the agent that wrote to THEM, in to or c
   });
 });
 
+test("a person the agent named as 'Name <address>' still gets their reply through", () => {
+  const sent = [{ origin: "/agents/web/a1", to: ["Ada Lovelace <Ada@Outside.Example>"] }];
+  expect(whoGetsTheMail({ sender: outsider, automated: false, from: ADA, sent })).toEqual({
+    agent: "/agents/web/a1",
+    from: "outside",
+  });
+  // the received From is the platform's parsed address: one that ends in another's <address> is
+  // not read as that address
+  expect(
+    whoGetsTheMail({
+      sender: outsider,
+      automated: false,
+      from: `eve@elsewhere.example <${ADA}>`,
+      sent,
+    }),
+  ).toBe(null);
+});
+
 test("an automated mail reaches no agent, even a member's reply to an agent", () => {
   expect(
     whoGetsTheMail({ sender: member, automated: true, from: ADA, sent: by("/agents/web/a1") }),

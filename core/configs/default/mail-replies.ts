@@ -7,7 +7,10 @@
 //    `to` or `cc` of that agent's mail in the thread), and its text is marked as an outside
 //    person's. The thread alone is no proof: a mail names its thread itself (In-Reply-To), so
 //    anybody who has seen one Message-ID of it could answer in it. The agent wrote to that person
-//    first, so their answer is expected; it is still not a member's word.
+//    first, so their answer is expected; it is still not a member's word. The agent's answer to
+//    it (`inReplyToOffset`) goes to the mail's Reply-To when it has one: a person the agent
+//    wrote to can so bring a third address into the thread, and that address's own mail then
+//    reaches the agent too, because the agent wrote to it.
 // 2. A MEMBER'S MAIL THAT STARTS A THREAD, or answers one no agent wrote in, goes to the thread's
 //    own agent, `/agents/email/t<thread>`. An outside person's mail that no agent's mail came
 //    before reaches no agent: anyone can write to this mind, and only a member may ask it things.
@@ -41,11 +44,13 @@ export function whoGetsTheMail(mail: {
   if (mail.automated) return null;
   const member = mail.sender.member && mail.sender.direct;
   if (!member && !mail.sender.verified) return null;
-  const from = mail.from.toLowerCase();
+  // The platform's parsed address already, and the one string here that an outside sender shapes:
+  // lower case alone, never the part in angle brackets.
+  const from = mail.from.trim().toLowerCase();
   const wrote = mail.sent.findLast(
     ({ origin, to }) =>
       origin.startsWith("/agents/") &&
-      (member || to.some((address) => address.toLowerCase() === from)),
+      (member || to.some((address) => bareAddress(address) === from)),
   );
   if (wrote) return { agent: wrote.origin, from: member ? "member" : "outside" };
   return member ? { agent: null, from: "member" } : null;
@@ -60,6 +65,11 @@ export const DeliveryFailure = z.object({
   cause: z.string().nullable(),
   detail: z.string().nullable(),
 });
+
+/** The address alone, in lower case: `Ada <Ada@Example.org>` and `ada@example.org` are one. */
+function bareAddress(written: string) {
+  return (/<([^<>]+)>\s*$/.exec(written)?.[1] || written).trim().toLowerCase();
+}
 
 /** How much of the receiving server's own reply an agent is shown. */
 const SERVER_WORDS_MAX = 300;
