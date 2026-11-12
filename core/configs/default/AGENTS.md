@@ -19,8 +19,13 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
     folded it into its thread; the agent replies with `itx.email.send({ inReplyToOffset })`. An
     agent acts with the mind root's full reach: every context, secret-backed call, repository
     and the website. So only the platform's own record of a member's mail sent straight from their
-    domain reaches one; a forward, a list's copy, a re-sent old message, an auto-reply or a bounce
-    is ignored.
+    domain starts one; a forward, a list's copy, a re-sent old message, an auto-reply or a bounce
+    starts none. A reply to a mail an agent sent goes back to that agent (`mail-replies.ts`), from
+    a member, and from an outside person whose sender Cloudflare proved: that agent wrote to them
+    first, so their answer is expected. Their text comes marked as an outside person's answer, not
+    a member's request. An outside person's mail that no agent's mail came before reaches no
+    agent, and neither does an automated mail. The `events.iterate.com/email/delivery-failed`
+    case tells the agent that sent a mail when it bounced or was refused.
   - The `events.iterate.com/slack/webhook-received` case is the Slack agent (`slack.ts`): one agent
     for each Slack thread, at `/agents/slack/<team>/<channel>/<thread>`. A mention of the bot or a
     direct message starts one; a later message of the thread reaches the same agent. The agent
