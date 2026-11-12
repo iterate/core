@@ -45,8 +45,11 @@ export function approvalsRoot(
     ) =>
       `${platformOriginOf(domain)}/secrets/approvals?${new URLSearchParams({
         path,
+        // a list that is not given, or is given as nothing, is no part of the link
         ...Object.fromEntries(
-          Object.entries(rule).map(([field, words]) => [field, words.join(",")]),
+          Object.entries(rule).flatMap(([field, words]) =>
+            words?.length ? [[field, words.join(",")]] : [],
+          ),
         ),
       })}#offered`,
     propose: async (rule: ActRule) => {

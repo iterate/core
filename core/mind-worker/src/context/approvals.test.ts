@@ -21,6 +21,30 @@ test("what the gate answers the mind's own code is released when it has been rea
   expect(gate).toMatchObject({ asked: 3, released: 3, appended: 2 });
 });
 
+test("the link for a secret's rule holds the lists that are given, and a list given as nothing is no part of it", () => {
+  const approvals = approvalsRoot(mind(), pretendGate().egress, "example.com");
+  const page = "https://iterate.example.com/secrets/approvals";
+  expect(
+    approvals.secretRuleLink("/secrets/fastmail", {
+      methods: ["POST"],
+      hosts: ["api.fastmail.com"],
+      jsonStrings: ["EmailSubmission/set"],
+      freePaths: ["/jmap/upload/"],
+    }),
+  ).toBe(
+    `${page}?path=%2Fsecrets%2Ffastmail&methods=POST&hosts=api.fastmail.com&jsonStrings=EmailSubmission%2Fset&freePaths=%2Fjmap%2Fupload%2F#offered`,
+  );
+  // a caller that spreads an object with the two lists unset, or empty, hands them over so
+  expect(
+    approvals.secretRuleLink("/secrets/x", {
+      methods: ["POST", "PUT"],
+      hosts: ["example.com"],
+      jsonStrings: undefined,
+      freePaths: [],
+    }),
+  ).toBe(`${page}?path=%2Fsecrets%2Fx&methods=POST%2CPUT&hosts=example.com#offered`);
+});
+
 const rule = ActRule.parse({ verb: "itx.whatsapp.sendMessage" });
 
 /** The boundary's calls of the gate, as Workers RPC answers them: each answer holds its call's
