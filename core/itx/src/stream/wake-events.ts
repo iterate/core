@@ -1,9 +1,9 @@
 // wake-events.ts — WHAT A HOST WANTS ON EVERY CONTEXT, ALSO ON ONE THAT WAS BORN BEFORE IT WANTED
 // IT. A birth event reaches a context once, when it is born (stream.ts `appendBirthRecord`). So
-// what a host starts to want later never reaches the contexts that exist: a mind whose telemetry
-// was turned on had the row that sends a context's events on the few contexts born after it. A
-// wake event is asked for at every wake and lands once: its idempotency key says that the context
-// has had it. A context that never wakes again has no new events either.
+// what a host starts to want later never reaches the contexts that exist: the row that sends a
+// context's events to a platform, when telemetry is turned on for a mind that lives. A wake event
+// is asked for at every wake and lands once: its idempotency key says that the context has had
+// it. A context that never wakes again has no new events either.
 import type { StreamEventInput } from "iterate/stream/processor";
 
 /**
