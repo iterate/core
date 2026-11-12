@@ -83,10 +83,12 @@ export function eventsOfARedial(
       ? unsetHere
       : !!row &&
         !!target &&
+        // `target` is the target of one of the lender's own events (WHY THE CASTS ARE SAFE,
+        // below): an expression, in any of its spellings
         print(row) === print(normalizedItxExpression(target as ItxExpressionInput));
   return events.filter((event) => {
-    // The casts below: the lender's own session wrote each event (iterate-context.ts `provide`
-    // and `subscribe`), as a row of the kind its type names.
+    // WHY THE CASTS ARE SAFE, here and in `own`: the lender's own session wrote each event
+    // (iterate-context.ts `provide` and `subscribe`), as a row of the kind its type names.
     if (event.type === "events.iterate.com/itx/rewrite-rule-configured") {
       const { match, target } = normalizeRewriteRuleConfigured(
         event.payload as RewriteRuleConfigured,
@@ -95,6 +97,7 @@ export function eventsOfARedial(
       return own(row && row.target, target, unset.rules.includes(print(match)));
     }
     if (event.type === "events.iterate.com/itx/subscription-configured") {
+      // the lender's own row of this type (above)
       const { name, target } = event.payload as { name: string; target: unknown };
       const row = Object.hasOwn(rows.subscriptionTargets, name)
         ? rows.subscriptionTargets[name]
@@ -102,6 +105,7 @@ export function eventsOfARedial(
       return own(row, target, unset.subscriptions.includes(name));
     }
     if (event.type === "events.iterate.com/itx/fetch-route-configured") {
+      // the lender's own row of this type (above)
       const { fetchRouteName, target } = event.payload as {
         fetchRouteName: string;
         target: unknown;

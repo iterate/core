@@ -1368,9 +1368,9 @@ export interface IterateContextApi {
     describe(path: string): Promise<{ path: string; set: boolean }>;
     list(): Promise<SecretCatalogEntry[]>;
     /** The persons' grants that the iterate Cloud brokers, refreshed now (GitHub's): one row for
-     *  each. A mind never uses such a grant, so nothing else refreshes it; the mind's own
-     *  schedule calls this once a day. `fresh`: refreshed within the last hour, and left alone.
-     *  `failed`: the secret is as it was, and the person may have to connect again. */
+     *  each. core/secrets-worker/src/grant-refresh.ts says why a mind asks for this, and when.
+     *  `fresh`: refreshed within the last hour, and left alone. `failed`: the secret is as it
+     *  was, and the person may have to connect again. */
     refreshGrants(): Promise<
       (
         | { path: string; outcome: "refreshed" | "fresh" }
