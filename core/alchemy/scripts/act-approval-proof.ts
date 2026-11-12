@@ -534,6 +534,58 @@ await run(
   },
 );
 
+await run(
+  "the held verb with a name read after its call is refused: the call would run whatever comes after it",
+  async () => {
+    // One expression: the call, then a name of its answer. It is given whole to `invoke`: a chain
+    // written as code sends its call alone, and that call is held as any call is.
+    const expression = JSON.stringify([
+      ...SEND.split(".").slice(0, -1),
+      ["sendMessage", "jo@s.whatsapp.net", { text: `goes on ${marker}` }],
+      "sentTo",
+    ]);
+    const ended = await root()
+      .run(`async (itx) => itx.invoke(${expression})`)
+      .then(
+        (answer) => ({ answer: JSON.stringify(answer) }),
+        (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+      );
+    must(
+      "refused" in ended && ended.refused.includes("nothing after it"),
+      `the call ended with ${JSON.stringify(ended)}`,
+    );
+    return { detail: ended.refused.slice(0, 170) };
+  },
+);
+
+await run(
+  "a verb of the mind's own code is held when a script calls it, as a lent verb is",
+  async () => {
+    // itx.config.slack is a function of the config's worker: a script's resolver walks it itself
+    const rules = await root().approvals.setRules([{ verb: SEND }, { verb: "itx.config.slack" }]);
+    must(rules.length === 2, `the rules are ${JSON.stringify(rules)}`);
+    await settled(7_000);
+    const call = root()
+      .run(`async (itx) => itx.config.slack("auth.test", { proof: "${marker}" })`)
+      .then(
+        (answer) => ({ answer: JSON.stringify(answer) }),
+        (error: unknown) => ({ refused: error instanceof Error ? error.message : String(error) }),
+      );
+    const held = await heldDigest("itx.config.slack");
+    await page.goto(`${page_}?digest=${held}`);
+    await checked(held);
+    page.once("dialog", (dialog) => void dialog.accept("not to Slack"));
+    await page.locator("[data-acts]").getByRole("button", { name: "Reject them" }).click();
+    const ended = await call;
+    must(
+      "refused" in ended && ended.refused.includes("not to Slack"),
+      `the call ended with ${JSON.stringify(ended)}`,
+    );
+    await root().approvals.setRules([{ verb: SEND }]);
+    return { detail: `held as act ${held.slice(0, 12)}; ${ended.refused.slice(0, 110)}` };
+  },
+);
+
 await run("an agent proposes a rule, and the member's passkey signs it into one", async () => {
   const proposed = await root().approvals.propose({ verb: "email.send", to: ["*@example.org"] });
   must(proposed.signAt === page_, `it says to sign at ${proposed.signAt}`);

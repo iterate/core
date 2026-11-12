@@ -20,7 +20,7 @@ test("a call of the verb a rule names is held, with its arguments", () => {
   });
 });
 
-test("a rule for every verb under a name holds each of them, and not the name itself", () => {
+test("a rule for every verb under a name holds each of them, and the name itself when it is called", () => {
   expect(held(["itx.whatsapp.*"], [...STUB, ["logout"]])).toEqual({
     act: "itx.whatsapp.logout",
     args: [],
@@ -29,15 +29,48 @@ test("a rule for every verb under a name holds each of them, and not the name it
     act: "itx.whatsapp.groups.leave",
     args: ["g1"],
   });
-  expect(held(["itx.whatsapp.*"], STUB, ["x"])).toBeNull();
+  // the stub itself called, where a bridge lends a function: it could answer the same verbs
+  expect(held(["itx.whatsapp.*"], STUB, ["x"])).toEqual({ act: "itx.whatsapp", args: ["x"] });
+  // the stub read as a value is no call
+  expect(held(["itx.whatsapp.*"], STUB)).toBeNull();
 });
+
+test("a rule for one verb holds every verb under it too: a function reached through the verb is the verb's", () => {
+  expect(held(["itx.whatsapp.sendMessage"], [...STUB, "sendMessage", ["now"]])).toEqual({
+    act: "itx.whatsapp.sendMessage.now",
+    args: [],
+  });
+  expect(held(["itx.whatsapp.sendMessage"], [...STUB, "sendMessage", "now"], ["jo"])).toEqual({
+    act: "itx.whatsapp.sendMessage.now",
+    args: ["jo"],
+  });
+});
+
+// THE CALL RUNS WHATEVER COMES AFTER IT. Each of these calls the verb and then goes on, and so
+// ended in something that is no call of the verb: none was held, and each ran.
+const GOES_ON: [what: string, resolved: ItxExpression, extraArgs: unknown[]][] = [
+  ["a name of its answer is read", [...STUB, ["sendMessage", "jo", { text: "hi" }], "ok"], []],
+  ["a function of its answer is called", [...STUB, ["sendMessage", "jo"], ["toString"]], []],
+  ["two names of its answer are read", [...STUB, ["sendMessage", "jo"], "key", "id"], []],
+  ["its answer is called", [...STUB, ["sendMessage", "jo"]], ["again"]],
+];
+test.for(GOES_ON)(
+  "a call of a held verb after which %s is refused, by a rule for the verb and by a rule for every verb under its name",
+  ([, resolved, extra]) => {
+    const refused = { refused: expect.stringContaining("nothing after it") };
+    expect([
+      held(["itx.whatsapp.sendMessage"], resolved, [...extra]),
+      held(["itx.whatsapp.*"], resolved, [...extra]),
+    ]).toEqual([refused, refused]);
+  },
+);
 
 const NOT_HELD: [what: string, rules: string[], resolved: ItxExpression][] = [
   ["another verb of the same stub", ["itx.whatsapp.sendMessage"], [...STUB, ["logout"]]],
   [
-    "a verb under the one the rule names",
+    "a name under the verb read as a value",
     ["itx.whatsapp.sendMessage"],
-    [...STUB, "sendMessage", ["now"]],
+    [...STUB, "sendMessage", "length"],
   ],
   [
     "another stub",

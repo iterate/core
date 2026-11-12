@@ -859,7 +859,11 @@ export class ItxExpressionResolver {
     for (let routes = 0; routes < SNAPSHOT_REREADS; routes++) {
       const { route, validUntil, rules } = await this.#route(call, extraArgs);
       if (Date.now() >= validUntil) continue;
-      if (route.kind === "walked" && route.at === this.#path && this.#rewriteRules) {
+      // Every call that is walked here, whoever walks it: a context's own object, or a resolver
+      // with no object behind it (a script's, an agent's, loaded code's), which walks a worker's
+      // verb and a portable root itself. A call that is sent on is walked, and so asked about,
+      // where it arrives.
+      if (route.kind === "walked") {
         const waited = !approved;
         approved = await this.#heldUntilApproved(route, rules, approved);
         // The wait is minutes long, and the table may have moved under it: the call is routed
@@ -879,12 +883,12 @@ export class ItxExpressionResolver {
   }
 
   // A VERB AN APPROVAL RULE NAMES WAITS FOR A MEMBER'S YES (./held-verbs.ts, the host's `acts`).
-  // Asked where this context resolved the call by its own table, so every name for one function
-  // meets the same rule. The platform's own calls are not held: an act that a member approved
+  // Asked with the table that resolved the call, the table of `route.at`, so every name for one
+  // function meets the same rule. The platform's own calls are not held: an act that a member approved
   // after its caller stopped waiting is done as the platform. Answers the act's text once a
   // member approved it, and nothing for a call that no rule names.
   async #heldUntilApproved(
-    route: { fixedPoint: ItxExpression; extraArgs: unknown[] },
+    route: { fixedPoint: ItxExpression; extraArgs: unknown[]; at: string },
     rules: readonly ItxExpressionRewriteRule[],
     approved: string | undefined,
   ): Promise<string | undefined> {
@@ -895,7 +899,7 @@ export class ItxExpressionResolver {
     if (verbRules.length === 0) return undefined;
     const held = heldVerbOf(verbRules, route.fixedPoint, route.extraArgs, (verb) => {
       try {
-        return resolveItxExpression(() => rules, verb, implicitRootsAt(this.#path)).at(-1)!;
+        return resolveItxExpression(() => rules, verb, implicitRootsAt(route.at)).at(-1)!;
       } catch {
         return null;
       }
