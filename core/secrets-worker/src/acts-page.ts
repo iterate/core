@@ -140,7 +140,12 @@ ${rules ? `<ul>${rules}</ul>` : `<p class="muted">No rule for mail or calls yet.
       ? "A rule that holds more saves at once. Anything that holds less is signed with your key, and the mind's agents can only ask for a rule."
       : "Any member, and the mind's own agents, can add, change and remove these rules with no signature. Lock them when you have the rules you want: from then on a change that holds less needs your key."
   }</p>
-<p class="actions"><button type="button" class="link" data-lock="${gate.locked ? GATE_UNLOCKED : GATE_LOCKED}">${gate.locked ? "Unlock, signed" : "Lock, signed"}</button></p>`;
+${
+  // Unlock is not where Lock was: a second press in that place would undo the lock.
+  gate.locked
+    ? `<details><summary>Unlock these rules</summary><p class="muted">Unlocked, any member and the mind's own agents change these rules with no signature.</p><p class="actions"><button type="button" class="link" data-lock="${GATE_UNLOCKED}">Unlock, signed</button></p></details>`
+    : `<p class="actions"><button type="button" class="link" data-lock="${GATE_LOCKED}">Lock, signed</button></p>`
+}`;
 }
 
 /** What the script reads beside the page's own data. */

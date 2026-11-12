@@ -177,6 +177,12 @@ const proposals: string[] = [];
 let proofSecret = "";
 /** What the bridge's process printed: its link, that it is live, and each call it got. */
 let said = "";
+/** Unlock is in a closed block, "Unlock these rules": open it, then press. */
+async function unlockRules() {
+  await page.getByText("Unlock these rules").click();
+  await page.getByRole("button", { name: "Unlock, signed" }).click();
+}
+
 async function cleanUp() {
   bridge?.kill("SIGINT");
   // on /keys, with the passkey: a session alone removes no key
@@ -189,9 +195,8 @@ async function cleanUp() {
     }
   }
   await page.goto(page_);
-  const unlock = page.getByRole("button", { name: "Unlock, signed" });
-  if (await unlock.count()) {
-    await unlock.click();
+  if (await page.getByText("Unlock these rules").count()) {
+    await unlockRules();
     await page.getByRole("button", { name: "Lock, signed" }).waitFor();
   }
   await setRulesBySession([]);
@@ -576,7 +581,12 @@ await run(
       .getByRole("button", { name: "Remove" })
       .click();
     await page.getByText("No rule for mail or calls yet.").waitFor();
-    await page.getByRole("button", { name: "Unlock, signed" }).click();
+    // Unlock is not where Lock was: a second press of that place unlocks nothing
+    must(
+      !(await page.getByRole("button", { name: "Unlock, signed" }).isVisible()),
+      "locked, the page shows Unlock at once, where Lock was",
+    );
+    await unlockRules();
     await page.getByText("These rules are open").waitFor();
     const free = await mail(`free ${marker}`);
     must("sent" in free, `with no rule the mail ended with ${JSON.stringify(free)}`);
