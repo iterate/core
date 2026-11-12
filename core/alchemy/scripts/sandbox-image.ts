@@ -1,6 +1,6 @@
 // With `mind.sandboxImage: "published"`, copies the published sandbox image (../src/sandbox-image.ts)
-// into the mind's own registry, registry.cloudflare.com/<account>/iterate-dev-image, by the
-// registry API alone: no Docker. Every blob and the manifest already there is skipped, so a deploy
+// into the mind's own registry, registry.cloudflare.com/<account>/<SANDBOX_IMAGE_REPOSITORY>, by
+// the registry API alone: no Docker. Every blob and the manifest already there is skipped, so a deploy
 // after the first copies nothing. The push credentials come from the deploy's own token and last an
 // hour.
 import { createHash } from "node:crypto";
@@ -13,7 +13,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream } from "node:stream/web";
 import { loadMindConfig, stageOf } from "../src/config.ts";
-import { PUBLISHED_SANDBOX_IMAGE } from "../src/sandbox-image.ts";
+import { PUBLISHED_SANDBOX_IMAGE, SANDBOX_IMAGE_REPOSITORY } from "../src/sandbox-image.ts";
 
 const MANIFEST_TYPES = [
   "application/vnd.oci.image.manifest.v1+json",
@@ -180,16 +180,19 @@ async function copySandboxImage() {
   const source: Registry = { host: host!, repo: path.join("/") };
   const target: Registry = {
     host: "registry.cloudflare.com",
-    repo: `${config.accountId}/iterate-dev-image`,
+    repo: `${config.accountId}/${SANDBOX_IMAGE_REPOSITORY}`,
     basic: await pushCredentials(config.accountId, token),
   };
   const targetToken = (await tokenFor(target, "pull,push")) || "";
+  // A GET, not a HEAD: Cloudflare's registry can answer a HEAD with 200 for a manifest whose content
+  // and layers it has lost, and a GET with 404.
   const present = await call(
     target,
     `/v2/${target.repo}/manifests/${digest}`,
-    { method: "HEAD", headers: { accept: MANIFEST_TYPES } },
+    { headers: { accept: MANIFEST_TYPES } },
     targetToken,
   );
+  await present.body?.cancel();
   if (present.ok) return console.log(`the sandbox image ${digest} is in the mind's registry`);
   const sourceToken = await tokenFor(source, "pull");
   const read = await call(

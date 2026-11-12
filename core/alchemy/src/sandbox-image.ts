@@ -10,6 +10,12 @@ export const PUBLISHED_SANDBOX_IMAGE = {
   digest: "sha256:03e19e40cae1cddd093802f5cab2e0b7273395a0abebea0a111c07e23dceb419",
 };
 
-/** Where the copy lands: the repository is the image's name in the mind's account. */
+/** The repository the copy lands in, in the mind's account. Cloudflare keeps a failed preparation of
+ *  an image address and answers it again, even after the image is deleted and pushed again: another
+ *  repository name is another address, and the way past one. Every repository of an account reads
+ *  the same layers, so a new name copies only the manifest. */
+export const SANDBOX_IMAGE_REPOSITORY = "iterate-sandbox";
+
+/** Where the copy lands. */
 export const publishedSandboxImageIn = (accountId: string) =>
-  `registry.cloudflare.com/${accountId}/iterate-dev-image@${PUBLISHED_SANDBOX_IMAGE.digest}`;
+  `registry.cloudflare.com/${accountId}/${SANDBOX_IMAGE_REPOSITORY}@${PUBLISHED_SANDBOX_IMAGE.digest}`;
