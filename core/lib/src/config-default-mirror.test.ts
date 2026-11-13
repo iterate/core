@@ -38,6 +38,10 @@ test("the default config's pages and folders load here as the platform's loader 
   expect(Object.keys(dashFiles)).toEqual([
     "app.css",
     "app.js",
+    "brands/github.svg",
+    "brands/google.svg",
+    "brands/slack.svg",
+    "brands/x.svg",
     "icon.svg",
     "kit-pages.js",
     "manifest.webmanifest",

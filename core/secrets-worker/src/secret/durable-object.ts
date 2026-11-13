@@ -374,11 +374,15 @@ export class SecretDurableObject extends DurableObject<Env> {
     const current = this.#current();
     if (!current) return { path, set: false };
     const { cell } = current;
+    // whose client refreshes it: iterate Cloud's, by the Cloud's name for the client
+    const client = cell.refresh && "client" in cell.refresh ? cell.refresh.client : undefined;
+    const cloud = client && "cloud" in client ? client.cloud : undefined;
     return {
       path,
       set: true,
       urls: cell.urls,
       ...(cell.refresh && { refresh: cell.refresh.kind }),
+      cloud,
       public: current.public,
       ...useOf(cell),
     };

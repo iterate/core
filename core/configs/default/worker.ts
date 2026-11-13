@@ -16,6 +16,7 @@ import { voiceApp } from "./apps/voice/app.ts";
 // line and off `installVoice` in the init case below, in the commit that adds the package.
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
+import { cloudAccountsEvent } from "./cloud-accounts.ts";
 import { cloudflareForAgent } from "./cloudflare.ts";
 import { gmailEvent } from "./gmail.ts";
 import {
@@ -378,11 +379,14 @@ export default class extends IterateConfigEntrypoint {
     // contract is iterate/sdk `Integration`. The map is async, so a hook that throws before its
     // first await fails like one that rejects.
     const kinds = await Promise.all(agentKinds.map(async (kind) => (await kind.load()).default));
-    const hooks = await Promise.allSettled(
-      [...integrations, ...kinds].map(async (integration) =>
+    const hooks = await Promise.allSettled([
+      ...[...integrations, ...kinds].map(async (integration) =>
         integration.processEvent?.({ event, itx }),
       ),
-    );
+      // The "iterate Cloud" card on the Dash's Integrations page: what the Cloud's apps offer, and
+      // a row for each account a member connected through one (cloud-accounts.ts).
+      cloudAccountsEvent(itx, event),
+    ]);
     const failed = hooks.find((hook) => hook.status === "rejected");
     if (failed) throw failed.reason;
   }

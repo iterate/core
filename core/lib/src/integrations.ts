@@ -1,14 +1,15 @@
 // integrations.ts — THE INTEGRATION REGISTRY: what a mind's packages (iterate/sdk `Integration`)
 // tell the Dash about themselves. A package appends two kinds of fact on the mind's
 // `/integrations` context, and the first-party `integration` facet there folds them into the state
-// the Dash's Integrations page renders (core/mind-worker/src/integrations/registry.ts). Both are SET semantics:
-// the whole card or row again whenever anything changes, or null to take it away.
+// the Dash's Integrations page renders (core/mind-worker/src/integrations/registry.ts). All are SET semantics:
+// the whole card, row or heading again whenever anything changes, or null to take it away.
 //   integration/configured             the card: a title, a description, a status, buttons
 //   integration/connection-configured  one connection's row under a card: its account, status, buttons
+//   integration/section-configured     a section's heading: cards that name the section stand under it
 // A button's target is where the Dash sends the person: an absolute http(s) URL, or a place in the
 // mind (`routingSlug` and `path`) whose URL the Dash composes (iterate/mind-ingress
 // `mindPublicUrlOf`), so a package needs no origin when it registers, and the link follows a
-// rename or a primary hostname. The Dash renders what the mind's own code wrote, so every string
+// rename or a primary hostname. An icon is an https URL or such a place: a file its package serves. The Dash renders what the mind's own code wrote, so every string
 // is capped and the fold keeps the state within INTEGRATION_STATE_MAX_BYTES, half the checkpoint
 // limit on a facet's state.
 import { z } from "zod";
@@ -61,15 +62,19 @@ const IntegrationAction = z.union([
   z.strictObject({ label: Label, ...IntegrationPlace.shape }),
 ]);
 
+/** A square image the Dash shows beside a title (the service's own mark): an https URL, or a
+ *  place in this mind, a file that the package serves on its own host. */
+const IntegrationIcon = z.union([z.url({ protocol: /^https$/ }).max(2048), IntegrationPlace]);
+export type IntegrationIcon = z.infer<typeof IntegrationIcon>;
+
 /** THE CARD a package registers: what the Dash shows for the integration, connected or not. */
 export const IntegrationCard = z.strictObject({
   title: z.string().min(1).max(80),
   description: z.string().max(400).optional(),
-  /** A square image the Dash shows beside the title: an https URL (the service's own mark). */
-  icon: z
-    .url({ protocol: /^https$/ })
-    .max(2048)
-    .optional(),
+  icon: IntegrationIcon.optional(),
+  /** The section the card stands under (`integration/section-configured`). A card that names
+   *  none, or one that has no heading, stands with the mind's other cards. */
+  section: Slug.optional(),
   status: IntegrationStatus.optional(),
   /** The card's buttons (Connect, Set up, …), at most four. */
   actions: z.array(IntegrationAction).max(4).default([]),
@@ -91,6 +96,15 @@ export const IntegrationConnection = z.strictObject({
 });
 export type IntegrationConnection = z.infer<typeof IntegrationConnection>;
 
+/** A SECTION'S HEADING: what stands above the cards that name the section, with a few sentences
+ *  on what they have in common (who offers them, why to use them, how to connect one). */
+export const IntegrationSection = z.strictObject({
+  title: z.string().min(1).max(80),
+  description: z.string().max(600).optional(),
+  icon: IntegrationIcon.optional(),
+});
+export type IntegrationSection = z.infer<typeof IntegrationSection>;
+
 export const IntegrationRegistryContract = defineProcessorContract({
   slug: "integration",
   version: "1",
@@ -101,6 +115,8 @@ export const IntegrationRegistryContract = defineProcessorContract({
     integrations: z.record(z.string(), IntegrationCard).default({}),
     /** Every connection's row, by `<integration>/<connection>`, under a card that exists. */
     connections: z.record(z.string(), IntegrationConnection).default({}),
+    /** Every section's heading, by the section's name. */
+    sections: z.record(z.string(), IntegrationSection).default({}),
   }),
   events: {
     "events.iterate.com/integration/configured": {
@@ -121,10 +137,19 @@ export const IntegrationRegistryContract = defineProcessorContract({
         row: IntegrationConnection.nullable(),
       }),
     },
+    "events.iterate.com/integration/section-configured": {
+      description:
+        "A package set a section's heading, or set it again with a change; a null heading removes it, and its cards stand with the mind's other cards.",
+      payloadSchema: z.strictObject({
+        section: Slug,
+        heading: IntegrationSection.nullable(),
+      }),
+    },
   },
   consumes: [
     "events.iterate.com/integration/configured",
     "events.iterate.com/integration/connection-configured",
+    "events.iterate.com/integration/section-configured",
   ],
   emits: [],
 });

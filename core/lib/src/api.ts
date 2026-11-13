@@ -264,6 +264,9 @@ export type SecretCatalogEntry = {
   path: string;
   urls: string[];
   refresh?: SecretRefresh["kind"];
+  /** The iterate Cloud's client that brokers the secret's refresh (`refresh.client.cloud`): an
+   *  account that a member connected through iterate's own app at a provider. */
+  cloud?: string;
   /** For exchange code (`refresh.kind` "worker"): the SHA-256 of its source, hex — which code it is. */
   refreshSourceSha256?: string;
   createdAt: string;
@@ -435,6 +438,9 @@ export type SecretOAuthOptions = {
    *  a placeholder that names no such secret. */
   clientSecret?: string;
   client?: SecretOAuthClient;
+  /** With a GitHub App of the Cloud's: the member goes to the App's install page first, and the
+   *  installation they choose there is connected. */
+  install?: boolean;
   /** Where the platform's callback sends the human once the tokens are stored: an absolute URL on
    *  the platform's origin or the Dash's, or a page of this mind's, `{ routingSlug?, path }`:
    *  `routingSlug`'s host (the apex when absent) at `path` (a query is fine), composed by the

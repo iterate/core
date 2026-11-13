@@ -7,6 +7,7 @@ import {
   type IntegrationConnection,
   IntegrationRegistryContract,
   type IntegrationRegistryState,
+  type IntegrationSection,
 } from "iterate/integrations";
 import { jsonEqual } from "iterate/lib";
 import type { ItxEntrypointScope, ItxHostRootContext } from "core-itx";
@@ -40,7 +41,7 @@ class IntegrationRegistryProcessor extends StreamProcessor<
           const connections = Object.fromEntries(
             Object.entries(state.connections).filter(([key]) => !key.startsWith(`${integration}/`)),
           );
-          return { integrations: rest, connections };
+          return { ...state, integrations: rest, connections };
         }
         if (jsonEqual(current || null, card)) return undefined;
         return withinBudget({ ...state, integrations: { ...rest, [integration]: card } });
@@ -56,13 +57,23 @@ class IntegrationRegistryProcessor extends StreamProcessor<
           return undefined;
         return withinBudget({ ...state, connections: { ...rest, [key]: row } });
       }
+      case "events.iterate.com/integration/section-configured": {
+        const { section, heading } = event.payload;
+        const current = Object.hasOwn(state.sections, section)
+          ? state.sections[section]
+          : undefined;
+        const { [section]: _dropped, ...rest } = state.sections;
+        if (!heading) return current ? { ...state, sections: rest } : undefined;
+        if (jsonEqual(current || null, heading)) return undefined;
+        return withinBudget({ ...state, sections: { ...rest, [section]: heading } });
+      }
       default:
         return undefined;
     }
   }
 }
 
-/** The card or row that would take the state past the budget is left out. */
+/** The card, row or heading that would take the state past the budget is left out. */
 function withinBudget(next: IntegrationRegistryState): IntegrationRegistryState | undefined {
   const bytes = new TextEncoder().encode(JSON.stringify(next)).length;
   return bytes <= INTEGRATION_STATE_MAX_BYTES ? next : undefined;
@@ -114,8 +125,13 @@ export function integrationsRoot(context: ItxHostRootContext) {
         type: "events.iterate.com/integration/connection-configured",
         payload: { integration, connection, row },
       }),
+    setSection: (section: string, heading: IntegrationSection | null) =>
+      append({
+        type: "events.iterate.com/integration/section-configured",
+        payload: { section, heading },
+      }),
   };
 }
 
 export const INTEGRATIONS_ROOT_DESCRIPTION =
-  "the mind's integration packages, registered on /integrations: `integrations.list()` → { integrations, connections } · `integrations.register(name, card | null)` · `integrations.setConnection(name, connection, row | null)`; a package keeps its credentials in `itx.secrets`";
+  "the mind's integration packages, registered on /integrations: `integrations.list()` → { integrations, connections, sections } · `integrations.register(name, card | null)` · `integrations.setConnection(name, connection, row | null)` · `integrations.setSection(name, heading | null)`; a package keeps its credentials in `itx.secrets`";

@@ -387,6 +387,11 @@ Google (Gmail) or X through iterate's own app there. The mind needs no OAuth cli
   that changes in between were not reported (`google/calendar-sync-lost`). Events that the
   calendar held before the connect are not read. Deleting the secret ends it at the next day's
   event, and the last channel ends by itself within two days.
+- The Dash's Integrations page shows these accounts under the heading "iterate Cloud"
+  (`cloud-accounts.ts`): a card for each app the Cloud offers, and on it one row for each
+  account, with its secret. A row appears when the secret is set and goes when it is deleted,
+  with nothing for you to register. To disconnect an account, delete its secret. The apps'
+  marks are the Dash's own files, `apps/dash/public/brands/`.
 - To keep `/repos/config` and a GitHub repository one history through that App, a member links
   them once: `linkThroughCloud(itx, { repository: "acme/config" })` from
   `@iterate-com/github-sync/install`, after a connect that names the repository's account. From

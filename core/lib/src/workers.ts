@@ -155,6 +155,8 @@ export type SecretDescription = {
   set: boolean;
   urls?: string[];
   refresh?: SecretRefresh["kind"];
+  /** The iterate Cloud's client that brokers the secret's refresh, by the Cloud's name for it. */
+  cloud?: string;
   public?: Record<string, string>;
   placement?: "header" | "url";
   operations?: SecretOperation[];
