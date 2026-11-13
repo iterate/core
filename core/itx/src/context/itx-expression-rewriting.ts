@@ -556,9 +556,9 @@ function admitLoadedCodeExpression(expression: ItxExpression, from: string): voi
             `a webhook's signing secret is named only at the mind's root, and ${JSON.stringify(at)} is below it`,
           );
         if (isSourceSpec(arg)) {
-          const sourceExpression = normalizedItxExpression(arg.source);
-          if (namesAWorker(arg)) admitWorkerName(sourceExpression);
-          else admitLoadedCodeExpression(sourceExpression, at);
+          const sourceExpression = workerSourceExpressionOf(arg.source);
+          if (sourceExpression && namesAWorker(arg)) admitWorkerName(sourceExpression);
+          else if (sourceExpression) admitLoadedCodeExpression(sourceExpression, at);
         }
         // A ROW IN A CALL'S ARGUMENTS IS A ROW. A row's target such as
         // `itx.append({ type: rewrite-rule-configured, payload: … })` writes that row when the
@@ -587,6 +587,19 @@ function rowEventsIn(arg: unknown, depth = 0): { type: string; payload?: unknown
 }
 
 type WorkerSpecShape = { source?: unknown; cacheKey?: unknown };
+
+// A `source` names or produces a worker only as an itx expression: the resolver reaches nothing
+// from any other root, and every host reads a source through it. Anything else under a `source`
+// key is the callee's own data, such as the page script of CDP's
+// `Page.addScriptToEvaluateOnNewDocument({ source })`, and no host can load it as a worker.
+function workerSourceExpressionOf(source: ItxExpressionInput): ItxExpression | null {
+  try {
+    const expression = normalizedItxExpression(source);
+    return expression[0] === "itx" ? expression : null;
+  } catch {
+    return null;
+  }
+}
 
 const isSourceSpec = (arg: unknown): arg is WorkerSpecShape & { source: ItxExpressionInput } =>
   typeof arg === "object" &&

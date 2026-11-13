@@ -372,6 +372,41 @@ test("a row's run says so to the context that a fetch goes on to, and no request
   }).toEqual({ marked: "1", claimed: null });
 });
 
+test("a call's { source } that is no itx expression is the callee's data", () => {
+  for (const source of [
+    "window.report(JSON.stringify({ at: location.href }))",
+    "console.log(1)",
+    ["window", "report"],
+  ])
+    for (const spec of [{ source }, { source, cacheKey: "k" }])
+      expect(() =>
+        admitLoadedCodeRow(
+          {
+            type: ROWS[0]!,
+            payload: {
+              match: "itx.x",
+              target: ["itx", "chrome", ["cdp", 1, "Page.addScriptToEvaluateOnNewDocument", spec]],
+            },
+          },
+          "/apps/x",
+        ),
+      ).not.toThrow();
+});
+
+test("a call's { source } that is an itx expression is still walled as a worker's name or producer", () => {
+  const row = (spec: object) => ({
+    type: ROWS[0]!,
+    payload: { match: "itx.x", target: ["itx", "workers", ["get", spec]] },
+  });
+  expect(() =>
+    admitLoadedCodeRow(row({ source: "itx.builtins.cd('/').config" }), "/apps/x"),
+  ).toThrow("a worker's name only reads rules");
+  expect(() =>
+    admitLoadedCodeRow(row({ source: ["itx", "builtins", "secrets"], cacheKey: "k" }), "/apps/x"),
+  ).toThrow("is not a loaded worker's word");
+  expect(() => admitLoadedCodeRow(row({ source: "itx.cd('/').config" }), "/apps/x")).not.toThrow();
+});
+
 // the resolver asks the host for the gate of held acts: this mind has none
 defineItxHost({ firstPartyFacets: {} });
 
