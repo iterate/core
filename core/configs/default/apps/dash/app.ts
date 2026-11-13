@@ -1,10 +1,12 @@
 // app.ts — THE DASH, as worker.ts mounts it: the host of one page. It answers the member's `itx`
 // socket, what the UI kit's shell asks of its host, and the app's files. What the page shows is
 // said in public/app.js. One more path, `/connect/<app>`, is where the Integrations page's
-// "Connect" and "Add account" buttons lead (../../cloud-accounts.ts): it begins a connect through
-// that app of iterate Cloud's and sends the member on to it.
+// "Connect", "Add account" and "Connect again" buttons lead (../../cloud-accounts.ts): it begins a
+// connect through that app of iterate Cloud's, with the scopes ../../cloud-scopes.ts names, and
+// sends the member on to it.
 import { serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
 import theme from "../theme.css";
+import { CLOUD_SCOPES } from "../../cloud-scopes.ts";
 import { openFile } from "../open-files.ts";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
@@ -53,6 +55,8 @@ async function connectThroughCloud(
     const { authorizationUrl } = await itx.secrets.beginOAuth(path, {
       client: { cloud: app },
       install: app === "github",
+      // the mind's own choice for this app, else the Cloud's defaults (../../cloud-scopes.ts)
+      ...(Object.hasOwn(CLOUD_SCOPES, app) && CLOUD_SCOPES[app] && { scope: CLOUD_SCOPES[app] }),
       // back to this page, on the Dash's own host: the vault takes an absolute URL of the mind's
       next: `${url.origin}/?page=integrations`,
     });

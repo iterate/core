@@ -42,12 +42,18 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
       account: "ada@example.com",
       status: { kind: "ok" },
       details: { Secret: "/secrets/google" },
-      actions: [{ label: "Manage", routingSlug: "dash", path: "/?page=secrets" }],
+      // a person's grant is connected again to bring new scopes in (cloud-scopes.ts)
+      actions: [
+        { label: "Connect again", routingSlug: "dash", path: "/connect/google?secret=google" },
+        { label: "Manage", routingSlug: "dash", path: "/?page=secrets" },
+      ],
     },
     "github/github": expect.objectContaining({ account: "ada" }),
+    // an installation's token is the App's to mint: nothing to connect again
     "github/github-installation-7": expect.objectContaining({
       account: "acme",
       details: { Kind: "App installation", Secret: "/secrets/github-installation-7" },
+      actions: [{ label: "Manage", routingSlug: "dash", path: "/?page=secrets" }],
     }),
   });
 
@@ -206,6 +212,67 @@ test("every other secret stands under 'Keys and accounts', Cloud or none: one li
   const none = mind.appended.length;
   await cloudAccountsEvent(mind.itx, PUBLISHED);
   expect(mind.appended.length).toBe(none);
+});
+
+test("a row an older template made gets today's buttons at the next publish, with no service asked, once", async () => {
+  const mind = cloudMind();
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+  const manage = { label: "Manage", routingSlug: "dash", path: "/?page=secrets" };
+  // what the template before "Connect again" left: a person's rows with "Manage" alone, one of
+  // them a refusal
+  const registry = mind.itx.cd("/integrations");
+  const old = (integration: string, connection: string, row: Record<string, unknown>) =>
+    registry.append({
+      type: "events.iterate.com/integration/connection-configured",
+      payload: { integration, connection, row },
+    });
+  await old("iterate-cloud-google", "google", {
+    account: "ada@example.com",
+    status: { kind: "ok" },
+    details: { Secret: "/secrets/google" },
+    actions: [manage],
+  });
+  const refused = {
+    kind: "attention",
+    text: "GitHub refused the token. Connect the account again.",
+  };
+  await old("iterate-cloud-github", "github", {
+    account: "GitHub account",
+    status: refused,
+    details: { Secret: "/secrets/github" },
+    actions: [manage],
+  });
+  const installation = mind.registry().rows["github/github-installation-7"];
+  const [appended, asked] = [mind.appended.length, mind.asked.length];
+
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+
+  const { rows } = mind.registry();
+  expect(rows["google/google"]).toEqual({
+    account: "ada@example.com",
+    status: { kind: "ok" },
+    details: { Secret: "/secrets/google" },
+    actions: [
+      { label: "Connect again", routingSlug: "dash", path: "/connect/google?secret=google" },
+      manage,
+    ],
+  });
+  // a refusal keeps its words, and gets the same buttons
+  expect(rows["github/github"]).toEqual({
+    account: "GitHub account",
+    status: refused,
+    details: { Secret: "/secrets/github" },
+    actions: [
+      { label: "Connect again", routingSlug: "dash", path: "/connect/github?secret=github" },
+      manage,
+    ],
+  });
+  expect(rows["github/github-installation-7"]).toEqual(installation);
+  // each changed row once, and no service asked
+  expect([mind.appended.length - appended, mind.asked.length]).toEqual([2, asked]);
+
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+  expect([mind.appended.length - appended, mind.asked.length]).toEqual([2, asked]);
 });
 
 test("a mind that had a card for each service gets the one list at the next event", async () => {

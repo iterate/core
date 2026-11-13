@@ -36,8 +36,8 @@
 //
 // WHOSE ACCOUNT IT IS, for an account through the Cloud, the service is asked once, with the
 // secret's placeholder (the token never comes here): when the secret is set, and when a publish
-// finds a secret with no row. A service that refuses the token gets the row "Connect again"; one
-// that gives no answer leaves the row as it was.
+// finds a secret with no row. A service that refuses the token says so on the row; one that gives
+// no answer leaves the row as it was. A person's grant always has "Connect again".
 //
 // WHICH CLOUD, AND WHICH APPS, the vault says (`itx.secrets.cloud()`): the Cloud that the stack's
 // config names, and the clients it publishes. A mind whose stack names no Cloud has no "iterate
@@ -217,11 +217,13 @@ async function keepCloudSection(
       if (secret.cloud !== name) continue;
       const key = secret.path.split("/").at(-1)!;
       const before = registry.connections[`${integration}/${key}`];
+      // a row that stands keeps what the service said (no service is asked), and takes today's
+      // buttons: a row made by an older template differs once, and is appended once
       const row =
         before && secret.path !== changedSecret
           ? before
           : await rowOf(itx, name, app, secret, before);
-      if (row) rows[key] = row;
+      if (row) rows[key] = { ...row, actions: rowActionsOf(name, secret) };
     }
     const connected = Object.keys(rows).length;
     // the card before its rows: a row stands under a card that exists
@@ -453,18 +455,26 @@ async function rowOf(
       ? { kind: "ok" }
       : { kind: "attention", text: `${app.title} refused the token. Connect the account again.` },
     details: { ...(installation && { Kind: "App installation" }), Secret: secret.path },
-    actions: [
-      // an installation's token is the App's own to mint: there is nothing to connect again
-      ...(name || installation
-        ? []
-        : [
-            {
-              label: "Connect again",
-              routingSlug: "dash",
-              path: `/connect/${client}?secret=${secret.path.split("/").at(-1)}`,
-            },
-          ]),
-      { label: "Manage", routingSlug: "dash", path: "/?page=secrets" },
-    ],
+    actions: rowActionsOf(client, secret),
   };
+}
+
+/** A Cloud row's buttons, from the app, the secret and whose grant it is: for a new row and for
+ *  one that stands, so that a row made by an older template gets today's. A PERSON'S GRANT can
+ *  always be connected again: after a refusal, and to bring the scopes that cloud-scopes.ts names
+ *  now into a secret made before. An installation's token is the App's own to mint: there is
+ *  nothing to connect again. */
+function rowActionsOf(client: string, secret: Secret): Json[] {
+  return [
+    ...(secret.refresh === "github-app-installation"
+      ? []
+      : [
+          {
+            label: "Connect again",
+            routingSlug: "dash",
+            path: `/connect/${client}?secret=${secret.path.split("/").at(-1)}`,
+          },
+        ]),
+    { label: "Manage", routingSlug: "dash", path: "/?page=secrets" },
+  ];
 }

@@ -94,8 +94,8 @@ channel, thread_ts, text })`, and any other method the same way. The token stays
     member's instruction.
   - The `events.iterate.com/google/calendar-*` case puts the changes of a Google account's
     primary calendar on the mind's log as they happen (`calendar.ts`). The member's grant must
-    reach the calendar, and the default scopes do not: the connect names a calendar scope
-    ("Accounts through iterate Cloud", below). The Cloud then says which calendar was connected,
+    reach the calendar. The Cloud's default scopes do; a grant made before they did is connected
+    again ("Accounts through iterate Cloud", below). The Cloud then says which calendar was connected,
     the mind asks Google for a channel on its events, and Google's push for it comes through the
     Cloud, signed by the Cloud's key. Each changed event is one
     `events.iterate.com/google/calendar-event-changed` on the calendar's context,
@@ -391,9 +391,9 @@ Google (Gmail) or X through iterate's own app there. The mind needs no OAuth cli
   grant must read mail (the default scopes do). Deleting the secret ends it at the next day's
   event.
 - A Google calendar connected this way is watched too (`calendar.ts`), when the grant has a
-  calendar scope. The default scopes have none, so name every scope the grant should have at
-  the connect:
-  `itx.secrets.beginOAuth("/secrets/google", { client: { cloud: "google" }, scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.labels https://www.googleapis.com/auth/calendar" })`.
+  calendar scope. The Cloud's default scopes have one. A connect that names its own `scope`
+  gets those scopes alone, so it names a calendar scope too:
+  `itx.secrets.beginOAuth("/secrets/google", { client: { cloud: "google" }, scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar" })`.
   Each change of an event of the account's primary calendar arrives as
   `events.iterate.com/google/calendar-event-changed` on `/integrations/google/<address>`, with
   `{ id, status, summary, start, end, location, organizer, attendees, htmlLink, updated, recurringEventId }`.
@@ -405,6 +405,24 @@ Google (Gmail) or X through iterate's own app there. The mind needs no OAuth cli
   that changes in between were not reported (`google/calendar-sync-lost`). Events that the
   calendar held before the connect are not read. Deleting the secret ends it at the next day's
   event, and the last channel ends by itself within two days.
+- **More scopes.** The Dash's buttons ask for the Cloud's default scopes, unless
+  `cloud-scopes.ts` names this mind's own for the app (its comments have Google with Drive and
+  Docs, and X as the person). A secret keeps the scopes it was connected with: after a change
+  there, the member presses "Connect again" on the account's row. Keep the Gmail and Calendar
+  scopes in a Google entry, or their push ends. Each call takes the secret's placeholder header,
+  as above (`/secrets/google`, `/secrets/x`):
+  - Drive: `GET https://www.googleapis.com/drive/v3/files?q=name+contains+'plan'` lists files.
+  - Docs: `GET https://docs.googleapis.com/v1/documents/<id>` reads a document.
+  - A post as the person: `POST https://api.x.com/2/tweets` with `{ "text": "…" }`.
+  - A direct message: `POST https://api.x.com/2/dm_conversations/with/<user id>/messages` with
+    `{ "text": "…" }`.
+  - A like: `POST https://api.x.com/2/users/<own user id>/likes` with `{ "tweet_id": "…" }`.
+
+  Google shows an "unverified app" warning for Drive and Docs until iterate's app is verified
+  for them. X bills iterate for each post. A post is the person's own words in public: post only
+  what a member asked for. The bot's limits (a reply under a mention, no account named, no link)
+  are for @iterate alone.
+
 - The Dash's Integrations page shows these accounts under the heading "iterate Cloud"
   (`cloud-accounts.ts`): a card for each app the Cloud offers, and on it one row for each
   account, with its secret. A row appears when the secret is set and goes when it is deleted,
