@@ -73,6 +73,13 @@ channel, thread_ts, text })`, and any other method the same way. The token stays
     context shows; the vault signs that request, and the Cloud sends it as the bot only to an
     account this mind linked. Link a member's own account alone: whoever writes from a linked
     account speaks to an agent with the mind's reach.
+  - The `events.iterate.com/cloud/installation-handed-over` case gives the onboarding agent what
+    the person told iterate Cloud's installation agent before this mind existed
+    (`cloud-handover.ts`). The Cloud sends it once, on `/integrations/cloud`, signed by its key, and
+    names this mind's domain as `destination`; any other event of that type does nothing. The
+    summary lands once (keyed by the handover's id) on `/agents/onboarding` as the person's quoted
+    words, which raise no turn: the agent's greeting reads them. A mind made from an older
+    template has no case, and the event stays on `/integrations/cloud` unread.
   - The `events.iterate.com/google/gmail-*` case puts the mail of a Gmail mailbox on the mind's
     log as it arrives (`gmail.ts`). A member connects the mailbox through iterate Cloud's Google
     client ("iterate Cloud's apps", below). The Cloud then says which mailbox was connected, the

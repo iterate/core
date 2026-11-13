@@ -49,10 +49,13 @@ const { principal } = await itx.whoami();
 // The mind is its domain, and this host is one label under it.
 const domain = location.hostname.split(".").slice(1).join(".") || location.hostname;
 
-/** Anything said in the chat: by a person, by the agent, or by this page (below). */
+/** Anything said in the chat: by a person, by the agent, or by this page (below). Words that raise
+ *  no turn, like iterate Cloud's handover (../../cloud-handover.ts), are context, not a start. */
 const said = (event) =>
   event.type === "events.iterate.com/agent/message-received" ||
-  (event.type === "events.iterate.com/agent/context-added" && event.payload?.role !== "system");
+  (event.type === "events.iterate.com/agent/context-added" &&
+    event.payload?.role !== "system" &&
+    event.payload?.llmRequestPolicy?.behaviour !== "dont-trigger-request");
 
 function App() {
   const agent = useContextStub(() => itx.cd(AGENT), []);
