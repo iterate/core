@@ -6,10 +6,9 @@
 // connected through that app: whose account it is, and the secret that holds it. An agent
 // connects one the same way (AGENTS.md, "Accounts through iterate Cloud"), and its row appears.
 //
-// All of it is this file's word, kept by four events:
+// All of it is this file's word, kept by three events:
 //
 //   mind/worker-updated        every publish of this repo: the section is made true
-//   cloud/deployment-enrolled  the Cloud has this mind's key: the section appears
 //   secret/set                 a member connected an account, or connected one again: its row
 //   secret/deleted             an account was disconnected: its row goes
 //
@@ -22,14 +21,13 @@
 // that refuses the token gets the row "Connect again"; one that gives no answer leaves the row
 // as it was.
 //
-// A MIND WITH NO iterate Cloud (nothing ever enrolled it) has no section.
+// WHICH CLOUD, AND WHICH APPS, the vault says (`itx.secrets.cloud()`): the Cloud that the stack's
+// config names, and the clients it publishes. A mind whose stack names no Cloud has no section.
 import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
 
 /** The section's name in the registry, and the start of the name of each of its cards. */
 const SECTION = "iterate-cloud";
-const INTEGRATIONS = "/integrations";
-const ENROLLED = "events.iterate.com/cloud/deployment-enrolled";
 
 type Json = Record<string, unknown>;
 
@@ -106,13 +104,12 @@ type Secret = { path: string; refresh?: string; cloud?: string };
 /** The part of `itx` this file uses. */
 export type CloudAccountsItx = {
   fetch(request: Request): Promise<Response>;
-  secrets: { list(): Promise<Secret[]> };
+  secrets: {
+    list(): Promise<Secret[]>;
+    cloud(): Promise<{ origin: string; clients: string[] } | null>;
+  };
   cd(path: string): {
     append(event: { type: string; payload: Json }): Promise<unknown>;
-    readEvents(
-      afterOffset: number,
-      limit: number,
-    ): Promise<{ events: { type: string; payload?: unknown }[] }>;
     facets: {
       get<T>(name: string): T;
     };
@@ -121,7 +118,7 @@ export type CloudAccountsItx = {
 
 export type CloudAccountsEvent = { type: string; path: string; payload?: unknown };
 
-/** One of the four events above; any other event does nothing. */
+/** One of the three events above; any other event does nothing. */
 export async function cloudAccountsEvent(
   itx: CloudAccountsItx,
   event: CloudAccountsEvent,
@@ -131,8 +128,7 @@ export async function cloudAccountsEvent(
     (event.type === "events.iterate.com/secret/set" ||
       event.type === "events.iterate.com/secret/deleted");
   const published = event.path === "/" && event.type === "events.iterate.com/mind/worker-updated";
-  const enrolled = event.path === `${INTEGRATIONS}/cloud` && event.type === ENROLLED;
-  if (!secretChanged && !published && !enrolled) return;
+  if (!secretChanged && !published) return;
   // a secret that was set again may be another account's now: its row is asked for again
   const changed = secretChanged
     ? z.object({ path: z.string() }).safeParse(event.payload).data?.path
@@ -147,7 +143,7 @@ async function keepSection(
   itx: CloudAccountsItx,
   changedSecret: string | undefined,
 ): Promise<void> {
-  const registry = itx.cd(INTEGRATIONS);
+  const registry = itx.cd("/integrations");
   const { state } = await registry.facets
     .get<{ snapshot(): Promise<{ state: unknown }> }>("integration")
     .snapshot();
@@ -233,29 +229,15 @@ async function keepSection(
 }
 
 /** This mind's Cloud: its origin, and the apps that it offers and this file knows, in the Cloud's
- *  order. Null when nothing enrolled the mind, or the Cloud gave no list. */
+ *  order. Null when the stack names no Cloud, or the Cloud gave no list. */
 async function cloudOf(
   itx: CloudAccountsItx,
 ): Promise<{ origin: string; apps: [string, CloudApp][] } | null> {
-  const { events } = await itx
-    .cd(`${INTEGRATIONS}/cloud`)
-    .readEvents(0, 200)
-    .catch(() => ({ events: [] }));
-  const said = z
-    .object({ cloud: z.url({ protocol: /^https$/ }) })
-    .safeParse(events.findLast((event) => event.type === ENROLLED)?.payload).data?.cloud;
-  if (!said) return null;
-  const { origin } = new URL(said);
-  const answer = await itx
-    .fetch(new Request(`${origin}/.well-known/iterate-cloud`, { redirect: "manual" }))
-    .catch(() => null);
-  const clients = z
-    .object({ clients: z.record(z.string(), z.unknown()) })
-    .safeParse(answer?.ok ? await answer.json().catch(() => null) : null).data?.clients;
-  const apps = Object.keys(clients || {}).flatMap((name): [string, CloudApp][] =>
+  const cloud = await itx.secrets.cloud();
+  const apps = (cloud?.clients || []).flatMap((name): [string, CloudApp][] =>
     Object.hasOwn(APPS, name) ? [[name, APPS[name]!]] : [],
   );
-  return apps.length ? { origin, apps } : null;
+  return cloud && apps.length ? { origin: cloud.origin, apps } : null;
 }
 
 /** One account's row: the service asked whose account the secret is for. `before` stands when

@@ -26,7 +26,7 @@ import { keepCloudflareToken } from "./cloudflare-token.ts";
 import { hopCaller } from "./hop-caller.ts";
 
 export const SECRETS_ROOT_DESCRIPTION =
-  'the mind\'s secrets, kept in the secrets Worker: `secrets.set("/secrets/<name>", material, { urls, refresh?, public? })` · `delete(path)` · `describe(path)` → { set, urls, refresh, public } · `list()` · `refreshGrants()` → [{ path, outcome }] refreshes each grant of a person that the iterate Cloud brokers (the schedule of the mind calls it once a day) · `collectFromUser({ path, egress: { urls }, description?, fields?, redirectUrl? })` → { url } a person opens to type the value · `beginOAuth(path, { authorizationEndpoint, tokenEndpoint, clientId, clientSecret?, scope?, urls?, next? })` → { authorizationUrl, nonce } · `oauthResult(path, { nonce })` · `oauthCallbackUrl()` · `signHmac(path, { payload, field?, encoding? })` · `verifyHmac(path, { payload, signature, field? })` · `verifyEquals(path, { value, field? })`; use one in `itx.fetch` as `getSecret("/secrets/<name>")` in a header (or the URL), sent only to its `urls`. Each fact lands on `/secrets/<name>`. What a secret may be used for is fixed when it is made (`set`, `collectFromUser`, `beginOAuth`) and shown to whoever gives it: `placement: "url"` lets its placeholder sit in a URL, else headers alone; `operations: ["signHmac", …]` names the operations it answers, else none, each limited per minute; `lendTo: ["/secrets/<name>", …]` names the secrets whose refresh may borrow it as a client secret or an App key, else none; `anyoneWithLink: true` lets anyone holding the link fill the form or consent, else a signed-in member alone';
+  'the mind\'s secrets, kept in the secrets Worker: `secrets.set("/secrets/<name>", material, { urls, refresh?, public? })` · `delete(path)` · `describe(path)` → { set, urls, refresh, public } · `list()` · `cloud()` → { origin, clients } | null, the stack\'s iterate Cloud and the names of the clients it offers for `beginOAuth(path, { client: { cloud } })` · `refreshGrants()` → [{ path, outcome }] refreshes each grant of a person that the iterate Cloud brokers (the schedule of the mind calls it once a day) · `collectFromUser({ path, egress: { urls }, description?, fields?, redirectUrl? })` → { url } a person opens to type the value · `beginOAuth(path, { authorizationEndpoint, tokenEndpoint, clientId, clientSecret?, scope?, urls?, next? })` → { authorizationUrl, nonce } · `oauthResult(path, { nonce })` · `oauthCallbackUrl()` · `signHmac(path, { payload, field?, encoding? })` · `verifyHmac(path, { payload, signature, field? })` · `verifyEquals(path, { value, field? })`; use one in `itx.fetch` as `getSecret("/secrets/<name>")` in a header (or the URL), sent only to its `urls`. Each fact lands on `/secrets/<name>`. What a secret may be used for is fixed when it is made (`set`, `collectFromUser`, `beginOAuth`) and shown to whoever gives it: `placement: "url"` lets its placeholder sit in a URL, else headers alone; `operations: ["signHmac", …]` names the operations it answers, else none, each limited per minute; `lendTo: ["/secrets/<name>", …]` names the secrets whose refresh may borrow it as a client secret or an App key, else none; `anyoneWithLink: true` lets anyone holding the link fill the form or consent, else a signed-in member alone';
 
 /** How many of the vault's sessions `list()` has open at once, where it asks path by path. */
 const DESCRIBED_AT_ONCE = 16;
@@ -113,6 +113,16 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
           ...(await Promise.all(known.slice(from, from + DESCRIBED_AT_ONCE).map(describe))),
         );
       return described.filter((secret) => secret.set);
+    },
+    // The stack's iterate Cloud and the clients it publishes. A boundary from before the verb
+    // (a stack's deploy swaps its Workers one after another) answers as a stack with no Cloud.
+    cloud: async () => {
+      try {
+        return await releasedAnswer(egress.cloud());
+      } catch (error) {
+        if (!isNoSuchVerb(error)) throw error;
+        return null;
+      }
     },
     // The persons' grants that the Cloud brokers, refreshed now: the mind's schedule calls it
     // once a day (core/secrets-worker/src/grant-refresh.ts says why). One call of the vault, and

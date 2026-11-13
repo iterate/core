@@ -42,6 +42,7 @@ export interface Door {
   fetch(request: Request): Promise<Response>;
   secret: SecretCall;
   listSecrets: SecretsService["listSecrets"];
+  cloud: SecretsService["cloud"];
   refreshGrants: SecretsService["refreshGrants"];
   /** A mail that an approval rule names waits in the vault's gate (./acts.ts). The first call
    *  answers `gate.state: "held"` at once; a call with `wait` waits for the member's answer.
@@ -214,6 +215,10 @@ export interface SecretsService {
    *  secret that was deleted. `known` is the mind's own list of the paths it ever had: a vault
    *  that held secrets before it kept its list asks about those once, and never reads it after. */
   listSecrets(known?: string[]): Promise<SecretDescription[]>;
+  /** THE STACK'S ITERATE CLOUD, as its config names it, and the clients that Cloud publishes, by
+   *  name: what `beginOAuth(path, { client: { cloud } })` can go through. Null for a stack that
+   *  names no Cloud. No client when the Cloud gave no list. */
+  cloud(): Promise<{ origin: string; clients: string[] } | null>;
   /** THE PERSONS' GRANTS THAT THE ITERATE CLOUD BROKERS, REFRESHED ON WORD, whichever client of
    *  the Cloud a grant is of: one row for each, and the facts for the mind's log.
    *  core/secrets-worker/src/grant-refresh.ts says why these grants need a refresh on word.

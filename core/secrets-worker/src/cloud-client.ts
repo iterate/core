@@ -71,6 +71,21 @@ export async function cloudClientOf(
   return { ...client.data, name };
 }
 
+/** The Cloud at `origin` and the names of the clients it publishes; null for a stack that names
+ *  no Cloud, and no client when the Cloud gave no list. */
+export async function cloudOffered(
+  origin: string | undefined,
+): Promise<{ origin: string; clients: string[] } | null> {
+  if (!origin) return null;
+  const answer = await fetch(`${origin}/.well-known/iterate-cloud`, { redirect: "manual" }).catch(
+    () => null,
+  );
+  const parsed = z
+    .object({ clients: z.record(z.string(), z.unknown()) })
+    .safeParse(answer?.ok ? await answer.json().catch(() => null) : null);
+  return { origin, clients: Object.keys(parsed.data?.clients || {}) };
+}
+
 /** What the vault asks of the auth Worker: a statement signed by the stack's own key. */
 export type StatementSigner = (input: {
   path: string;

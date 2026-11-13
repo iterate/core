@@ -6,6 +6,7 @@ import { releasedAnswer } from "iterate/lib";
 import { SECRET_PATH, SECRET_USE_HEADER } from "iterate/secret-placeholder";
 import type { SecretsService, SecretVerb, SecretVerbs } from "iterate/workers";
 import { SET } from "./approvals-index.ts";
+import { cloudOffered } from "./cloud-client.ts";
 import type { Env } from "./env.ts";
 import { refreshBrokeredGrants } from "./grant-refresh.ts";
 import { secretsResponse } from "./http.ts";
@@ -43,6 +44,11 @@ export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
       },
       known,
     );
+  }
+
+  /** The stack's iterate Cloud and the clients it publishes (./cloud-client.ts). */
+  async cloud() {
+    return cloudOffered(this.env.CLOUD_ORIGIN);
   }
 
   /** The persons' grants that the Cloud brokers, refreshed on word (./grant-refresh.ts). */

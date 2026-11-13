@@ -1410,6 +1410,10 @@ export interface IterateContextApi {
         | { path: string; outcome: "failed"; error: string; answerLost?: true }
       )[]
     >;
+    /** The stack's iterate Cloud, as its config names it (`cloud.origin`), and the names of the
+     *  clients that Cloud publishes: each is a `client: { cloud: <name> }` of `beginOAuth`. Null
+     *  for a stack that names no Cloud; no client when the Cloud gave no list. */
+    cloud(): Promise<{ origin: string; clients: string[] } | null>;
     /** The stack's own Cloudflare API token, kept at `/secrets/cloudflare`: written when the
      *  stack has one that the vault lacks, deleted when the stack has none any more, and a secret
      *  that somebody else put at the path left as it is

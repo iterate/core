@@ -8,7 +8,7 @@ import { IntegrationRegistryContract } from "./integrations.ts";
 const CLOUD = "https://cloud.example.com";
 const PUBLISHED = { type: "events.iterate.com/mind/worker-updated", path: "/" };
 
-test("a mind that the Cloud enrolled gets the section: a card for each app the Cloud offers, and a row for each account connected through one", async () => {
+test("a mind whose stack names a Cloud gets the section: a card for each app the Cloud offers, and a row for each account connected through one", async () => {
   const mind = cloudMind();
 
   await cloudAccountsEvent(mind.itx, PUBLISHED);
@@ -100,18 +100,10 @@ test("a secret set again is asked for again, one that the service refuses says s
   expect(cards.google).toMatchObject({ actions: [{ label: "Connect" }] });
 });
 
-test("a mind that no Cloud enrolled has no section, an app the Cloud drops loses its card, and a Cloud that gives no list changes nothing", async () => {
-  const alone = cloudMind({ enrolled: false });
+test("a mind whose stack names no Cloud has no section, an app the Cloud drops loses its card, and a Cloud that gives no list changes nothing", async () => {
+  const alone = cloudMind({ cloud: false });
   await cloudAccountsEvent(alone.itx, PUBLISHED);
   expect([alone.registry().heading, alone.appended]).toEqual([undefined, []]);
-
-  // the enrolment itself brings the section
-  alone.enrol();
-  await cloudAccountsEvent(alone.itx, {
-    type: "events.iterate.com/cloud/deployment-enrolled",
-    path: "/integrations/cloud",
-  });
-  expect(Object.keys(alone.registry().cards)).toEqual(["google", "github", "slack"]);
 
   const mind = cloudMind();
   await cloudAccountsEvent(mind.itx, PUBLISHED);
@@ -121,7 +113,7 @@ test("a mind that no Cloud enrolled has no section, an app the Cloud drops loses
   expect(Object.keys(mind.registry().rows)).toEqual(["google/google"]);
 
   const before = mind.registry();
-  mind.cloudIsDown = true;
+  mind.offered = [];
   mind.secrets.clear();
   await cloudAccountsEvent(mind.itx, PUBLISHED);
   expect(mind.registry()).toEqual(before);
@@ -134,10 +126,10 @@ const set = (path: string) => ({
   payload: { path },
 });
 
-/** A mind that the Cloud at CLOUD enrolled, with a Google grant, a GitHub grant and a GitHub App
+/** A mind whose stack names the Cloud at CLOUD, with a Google grant, a GitHub grant and a GitHub App
  *  installation's secret through the Cloud's apps, a Google grant of an app of its own, and a
  *  key of another service. */
-function cloudMind({ enrolled = true } = {}) {
+function cloudMind({ cloud = true } = {}) {
   const secrets = new Map<string, { refresh?: string; cloud?: string }>([
     ["/secrets/google", { refresh: "oauth-refresh-token", cloud: "google" }],
     ["/secrets/github", { refresh: "oauth-refresh-token", cloud: "github" }],
@@ -152,13 +144,6 @@ function cloudMind({ enrolled = true } = {}) {
     ["/secrets/github-installation-7", { repositories: [{ owner: { login: "acme" } }] }],
   ]);
   const status = new Map<string, number>();
-  const cloudEvents: { type: string; payload?: unknown }[] = [];
-  const enrol = () =>
-    cloudEvents.push({
-      type: "events.iterate.com/cloud/deployment-enrolled",
-      payload: { cloud: CLOUD, key: "a-key" },
-    });
-  if (enrolled) enrol();
   const appended: { type: string; payload: unknown }[] = [];
   const state = {
     integrations: {} as Record<string, unknown>,
@@ -172,8 +157,6 @@ function cloudMind({ enrolled = true } = {}) {
     accounts,
     status,
     appended,
-    enrol,
-    cloudIsDown: false,
     /** The clients the Cloud publishes; `unknown` is one this file has no words for. */
     offered: ["google", "github", "slack", "unknown"],
     /** The secrets a service was asked about, in order. */
@@ -192,12 +175,6 @@ function cloudMind({ enrolled = true } = {}) {
     },
     itx: {
       fetch: async (request: Request) => {
-        if (request.url === `${CLOUD}/.well-known/iterate-cloud`)
-          return mind.cloudIsDown
-            ? new Response("down", { status: 503 })
-            : Response.json({
-                clients: Object.fromEntries(mind.offered.map((name) => [name, {}])),
-              });
         const secret = /getSecret\("([^"]+)"/.exec(request.headers.get("authorization") || "")?.[1];
         if (!secret) return new Response("no placeholder", { status: 400 });
         mind.asked.push(secret);
@@ -206,7 +183,10 @@ function cloudMind({ enrolled = true } = {}) {
           ? new Response("no", { status: refused })
           : Response.json(accounts.get(secret));
       },
-      secrets: { list: async () => [...secrets].map(([path, secret]) => ({ path, ...secret })) },
+      secrets: {
+        list: async () => [...secrets].map(([path, secret]) => ({ path, ...secret })),
+        cloud: async () => (cloud ? { origin: CLOUD, clients: mind.offered } : null),
+      },
       cd: (path: string) => ({
         // the registry's own fold, as far as this file uses it
         append: async (event: { type: string; payload: Record<string, unknown> }) => {
@@ -237,7 +217,6 @@ function cloudMind({ enrolled = true } = {}) {
             else delete state.connections[`${integration}/${connection}`];
           }
         },
-        readEvents: async () => ({ events: path === "/integrations/cloud" ? cloudEvents : [] }),
         facets: {
           get: <T>() => ({ snapshot: async () => ({ state: structuredClone(state) }) }) as T,
         },

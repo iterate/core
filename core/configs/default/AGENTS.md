@@ -392,6 +392,8 @@ Google (Gmail) or X through iterate's own app there. The mind needs no OAuth cli
   account, with its secret. A row appears when the secret is set and goes when it is deleted,
   with nothing for you to register. To disconnect an account, delete its secret. The apps'
   marks are the Dash's own files, `apps/dash/public/brands/`.
+- `await itx.secrets.cloud()` answers the stack's Cloud and the names of the apps it offers,
+  `{ origin, clients: ["github", "google", …] }`, or null for a stack with no Cloud.
 - To keep `/repos/config` and a GitHub repository one history through that App, a member links
   them once: `linkThroughCloud(itx, { repository: "acme/config" })` from
   `@iterate-com/github-sync/install`, after a connect that names the repository's account. From
