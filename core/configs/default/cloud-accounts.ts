@@ -253,12 +253,12 @@ async function rowOf(
 ): Promise<Json | undefined> {
   const installation = secret.refresh === "github-app-installation";
   const ask = (installation && app.installation) || app.whoami;
-  const field = installation ? "token" : "accessToken";
   const answer = await itx
     .fetch(
       new Request(ask.url, {
         headers: {
-          authorization: `Bearer getSecret(${JSON.stringify(secret.path)}, { field: "${field}" })`,
+          // a person's grant and an installation's secret both keep the token as `accessToken`
+          authorization: `Bearer getSecret(${JSON.stringify(secret.path)}, { field: "accessToken" })`,
           accept: "application/json",
         },
       }),

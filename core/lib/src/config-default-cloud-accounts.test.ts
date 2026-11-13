@@ -176,8 +176,12 @@ function cloudMind({ cloud = true } = {}) {
     },
     itx: {
       fetch: async (request: Request) => {
-        const secret = /getSecret\("([^"]+)"/.exec(request.headers.get("authorization") || "")?.[1];
-        if (!secret) return new Response("no placeholder", { status: 400 });
+        // every secret here keeps its token as `accessToken`: a placeholder for another field
+        // finds nothing, as the vault answers
+        const secret = /getSecret\("([^"]+)", \{ field: "accessToken" \}\)/.exec(
+          request.headers.get("authorization") || "",
+        )?.[1];
+        if (!secret) return new Response("no such field", { status: 401 });
         mind.asked.push(secret);
         const refused = status.get(secret);
         return refused

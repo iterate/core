@@ -19,8 +19,7 @@ export function dashApp() {
     fetch(request: Request, host: Pick<IterateConfigEntrypoint, "auth" | "getItx">) {
       const url = new URL(request.url);
       const app = /^\/connect\/([a-z0-9-]{1,40})$/.exec(url.pathname)?.[1];
-      if (app && request.method === "GET")
-        return connectThroughCloud(host, app, url.searchParams.get("secret"));
+      if (app && request.method === "GET") return connectThroughCloud(host, app, url);
       // The page's own socket (public/app.js opens it): the member's itx.
       if (url.pathname === "/itx") return host.auth.itx(request);
       // What @iterate-com/ui's shell asks of its host, as apps/agents/app.ts answers it: which
@@ -52,8 +51,9 @@ export function dashApp() {
 async function connectThroughCloud(
   host: Pick<IterateConfigEntrypoint, "getItx">,
   app: string,
-  again: string | null,
+  url: URL,
 ): Promise<Response> {
+  const again = url.searchParams.get("secret");
   using itx = host.getItx();
   try {
     const taken = new Set((await itx.secrets.list()).map((secret) => secret.path));
@@ -65,7 +65,8 @@ async function connectThroughCloud(
     const { authorizationUrl } = await itx.secrets.beginOAuth(path, {
       client: { cloud: app },
       install: app === "github",
-      next: { routingSlug: "dash", path: "/?page=integrations" },
+      // back to this page, on the Dash's own host: the vault takes an absolute URL of the mind's
+      next: `${url.origin}/?page=integrations`,
     });
     return new Response(null, { status: 303, headers: { location: authorizationUrl } });
   } catch (error) {
