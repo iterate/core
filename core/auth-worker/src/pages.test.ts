@@ -31,7 +31,7 @@ test("the sign-in page is the narrow card: the mark, a named email field, one ac
     new Request(`https://iterate.${DOMAIN}/sign-in/email?next=%2Fkeys`),
   );
   const html = await kept("sign-in", answer!);
-  expect(html).toContain(`<main><div class="mark"`);
+  expect(html).toContain(`<main class="centered"><div class="mark"`);
   expect(html).toContain(`<h1>Sign in to ${DOMAIN}</h1>`);
   expect(html).toMatch(/<label>Email <input type="email" name="email"/);
   expect(html).toContain(`<button type="submit">Send a code</button>`);
@@ -45,11 +45,11 @@ test("a mind that mails no code offers the passkey as the one action", async () 
   expect(html).not.toContain(`class="or"`);
 });
 
-test("an app that takes Cloudflare alone shows one button in Cloudflare's orange, and what Cloudflare shares; with other ways, each is under an or", async () => {
+test("an app that takes Cloudflare alone shows one button in Cloudflare's orange, and what Cloudflare shares; with other ways, each is a button in the app's order", async () => {
   const app = {
     host: `cloud.${DOMAIN}`,
     origin: `https://cloud.${DOMAIN}`,
-    name: "Cloud",
+    name: "iterate",
     icon: null,
     members: false,
   };
@@ -58,25 +58,42 @@ test("an app that takes Cloudflare alone shows one button in Cloudflare's orange
     "sign-in-cloudflare",
     methodsSignInPage({ domain: DOMAIN, next, methods: ["cloudflare"], app }),
   );
-  expect(html).toContain("<h1>Sign in to Cloud</h1>");
-  expect(html).toContain(`<p class="muted where">cloud.${DOMAIN}</p>`);
+  // the heading is the host the person signs in to, under the one mark: iterate's, for an app
+  // with no icon of its own
+  expect(html).toContain(`<main class="centered"><div class="mark"`);
+  expect(html).toContain(`<h1>Sign in to cloud.${DOMAIN}</h1>`);
+  expect(html).not.toMatch(/data-app-mark|class="asks"|is an app of|class="about"/);
   expect(html).toMatch(
     /<form method="get" action="\/sign-in\/cloudflare" class="stack">\s*<input type="hidden" name="next" value="\/oauth2\/auth\?client_id=c&#38;acr_values=cloudflare">\s*<button type="submit" class="cloudflare"><svg [^]*<\/svg>Sign in with Cloudflare<\/button>/,
   );
   expect(html).toContain(
-    `Cloudflare shares your name and email address with iterate.${DOMAIN}, and nothing else of your Cloudflare account.`,
+    `<p class="muted note">Cloudflare shares your name and email. Nothing else.</p>`,
   );
   // one way and no script: nothing sends the person on by itself, and no link goes to the
   // sign-ins page, which a sign-in at Cloudflare does not open
   expect(html).not.toMatch(/<script|class="or"|\/sign-ins/);
-  const both = await kept(
-    "sign-in-cloudflare-or-passkey",
-    methodsSignInPage({ domain: DOMAIN, next, methods: ["cloudflare", "passkey"], app }),
+  const three = await kept(
+    "sign-in-cloudflare-passkey-google",
+    methodsSignInPage({ domain: DOMAIN, next, methods: ["cloudflare", "passkey", "google"], app }),
   );
-  expect(both).toMatch(
-    /Sign in with Cloudflare<\/button>[^]*<p class="or">or<\/p>[^]*class="secondary">Sign in with a passkey/,
+  expect(three).toMatch(
+    /class="cloudflare">[^]*Sign in with Cloudflare<\/button>[^]*<button type="submit">Sign in with a passkey<\/button>[^]*class="outline">[^]*Sign in with Google<\/button>/,
   );
-  expect(both).toContain(`<a href="/sign-ins">your sign-ins</a>`);
+  expect(three).not.toContain(`class="or"`);
+  expect(three).toContain("<script");
+  // the app's own icon is the card's one mark
+  const icon = await kept(
+    "sign-in-app-icon",
+    methodsSignInPage({
+      domain: DOMAIN,
+      next,
+      methods: ["cloudflare"],
+      app: { ...app, icon: `https://cloud.${DOMAIN}/icon.svg` },
+    }),
+  );
+  expect(icon).toContain(
+    `<main class="centered"><div class="tile" data-app-mark="icon"><img src="https://cloud.${DOMAIN}/icon.svg"`,
+  );
 });
 
 test("the consent page asks one question, with Deny and Allow as a pair", async () => {
@@ -103,7 +120,10 @@ test("the consent page asks one question, with Deny and Allow as a pair", async 
     /<form method="post" action="\/sign-out" class="inline">\s*<input type="hidden" name="next" value="\/oauth2\/auth\?client_id=c&#38;state=s">\s*<button type="submit" class="link">Use another account<\/button>/,
   );
   // who asks: the mind's mark and Claude's own, side by side, and the heading says it
-  expect(html).toContain(`<main class="asked"><div class="asks"><div class="mark"`);
+  expect(html).toContain(
+    `<main class="centered"><div class="asks"><div class="mark" aria-hidden="true">`,
+  );
+  expect(html).toContain(`<span class="joins" aria-hidden="true"></span><div class="tile"`);
   expect(html).toContain(`data-client-mark="known"`);
   expect(html).toContain(`<h1>Claude Code wants to access ${DOMAIN}</h1>`);
   expect(html).toMatch(
@@ -145,7 +165,7 @@ test("a client's own logo is shown only for a verified domain, from that domain,
   expect(await kept("consent-own-logo", verified)).toContain(
     `<img src="https://cdn.example.org/logo.png" alt="" referrerpolicy="no-referrer">`,
   );
-  // a client that registered itself says its own logo: its initials are shown, and no image may load
+  // a client that registered itself says its own logo: no tile of it is shown, and no image may load
   for (const details of [
     { logoUri: "https://cdn.example.org/logo.png" },
     { clientDomain: "example.org", logoUri: "https://elsewhere.example/logo.png" },
@@ -156,7 +176,7 @@ test("a client's own logo is shown only for a verified domain, from that domain,
     expect(answer.headers.get("content-security-policy")).not.toContain("img-src");
     const html = await answer.text();
     expect(html).not.toContain("<img");
-    expect(html).toContain(`<div class="tile" data-client-mark="initials">NO</div>`);
+    expect(html).not.toMatch(/class="asks"|data-client-mark/);
   }
 });
 
@@ -207,7 +227,7 @@ test("a known client's mark goes by where its access goes, or by its name", asyn
       redirectUri: "https://notes.example.org/callback",
       redirectHost: "notes.example.org",
     }),
-  ).toContain(`<div class="tile" data-client-mark="initials">NO</div>`);
+  ).not.toContain("data-client-mark");
 });
 
 test("a device's sign-in shows who asks by the name the device gives: a known mark, or its initials", () => {
@@ -232,13 +252,28 @@ test("the account chooser says who is signed in, goes on as them, or signs out a
       here: "/oauth2/auth?client_id=c&state=s",
     }),
   );
-  expect(html).toContain("You are signed in as <strong>owner@example.net</strong>.");
+  expect(html).toContain(
+    `<p class="center">You are signed in as <strong>owner@example.net</strong>.</p>`,
+  );
   // the request's parameters ride the GET form, so "Continue" is the request without its prompt
   expect(html).toMatch(
     /<form method="get" action="\/oauth2\/auth" class="stack">\s*<input type="hidden" name="client_id" value="c"><input type="hidden" name="state" value="s">\s*<button type="submit">Continue as owner@example.net<\/button>/,
   );
   expect(html).toContain(`name="next" value="/oauth2/auth?client_id=c&#38;state=s"`);
   expect(html).toContain("Use another account");
+  const app = {
+    host: `cloud.${DOMAIN}`,
+    origin: `https://cloud.${DOMAIN}`,
+    name: "iterate",
+    icon: null,
+    members: false,
+  };
+  const forApp = await kept(
+    "chooser-app",
+    chooserPage({ domain: DOMAIN, email: "guest@example.net", here: "/oauth2/auth?x=1", app }),
+  );
+  expect(forApp).toContain(`<h1>Sign in to cloud.${DOMAIN}</h1>`);
+  expect(forApp).toContain(`<button type="submit">Continue as guest@example.net</button>`);
 });
 
 async function kept(name: string, answer: Response) {

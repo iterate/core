@@ -30,10 +30,14 @@
   --input: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 15%));
   --ring: light-dark(oklch(0.708 0 0), oklch(0.556 0 0));
   --link: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
-  /* Cloudflare's own orange, for "Sign in with Cloudflare", and dark words on it (7:1, where white
-     is under 3:1): one look in either theme */
+  /* Cloudflare's own orange, and dark words on it (7.7:1, where white is 2.6:1) */
   --cloudflare: #f6821f;
   --cloudflare-foreground: oklch(0.145 0 0);
+  /* "Sign in with Cloudflare": that orange a step deeper, where bold white words are 4.6:1 (AA),
+     and deeper still under the pointer; one look in either theme */
+  --cloudflare-button: #c65102;
+  --cloudflare-button-foreground: #fff;
+  --cloudflare-button-hover: #ad4702;
 }
 :root.dark {
   color-scheme: dark;

@@ -217,7 +217,7 @@ test("an app that says nothing, or whose host does not answer, is its host and i
   expect(web.asked).toHaveLength(1);
 });
 
-test("the mailed code's page for an app's sign-in shows the app as the client that asks: its tile, name, host and what it gets", async () => {
+test("the mailed code's page for an app's sign-in names the host it signs in to, under the app's own icon", async () => {
   const stack = stackWith({ [HOST]: { name: "Guestbook", icon: `${ORIGIN}/icon.svg` } });
   const client = await hostClientOf(stack.env, HOST);
   const next = `/oauth2/auth?${new URLSearchParams({ client_id: client, redirect_uri: hostCallbackOf(ORIGIN), resource: ORIGIN })}`;
@@ -226,25 +226,14 @@ test("the mailed code's page for an app's sign-in shows the app as the client th
     new Request(`https://iterate.${DOMAIN}/sign-in/email?${new URLSearchParams({ next })}`),
   );
   const html = await answer!.text();
-  expect(html).toContain("<title>Sign in to Guestbook</title>");
+  expect(html).toContain(`<title>Sign in to ${HOST}</title>`);
+  // the app's icon is the card's one mark: no pair, and no mark of iterate's beside it
   expect(html).toContain(
-    `<span aria-hidden="true">⇄</span><div class="tile" data-app-mark="icon"><img src="${ORIGIN}/icon.svg" alt="" referrerpolicy="no-referrer"></div>`,
+    `<main class="centered"><div class="tile" data-app-mark="icon"><img src="${ORIGIN}/icon.svg" alt="" referrerpolicy="no-referrer"></div><h1>Sign in to ${HOST}</h1>`,
   );
-  expect(html).toMatch(
-    /<h1>Sign in to Guestbook<\/h1>\s*<p class="muted where">guestbook\.example\.com<\/p>/,
-  );
-  // the mind by the host of its own pages
-  expect(html).toContain(
-    "<p><strong>Guestbook</strong> is an app of <strong>iterate.example.com</strong>.</p>",
-  );
-  expect(html).toContain("It learns your email address, and nothing else.");
-  // what signing in gives is said once, in the block, and the mind's own line is not above the form
-  expect(html.match(/You get an account of your own/g)).toHaveLength(1);
-  expect(html).toContain(
-    "<li>You get an account of your own, with no access to iterate.example.com itself.</li>",
-  );
+  expect(html).not.toMatch(/class="asks"|class="mark"|class="about"|is an app of/);
+  // the mind's own line of who gets a code is not on an app's page
   expect(html).not.toContain("Anyone can sign in");
-  expect(html).toContain(`see <a href="/sign-ins">your sign-ins</a>`);
   // the one image the page may load is on the app's own origin
   expect(answer!.headers.get("content-security-policy")).toContain(`img-src ${ORIGIN}`);
   // a sign-in for the mind itself is the mind's page, with no image at all
@@ -256,7 +245,7 @@ test("the mailed code's page for an app's sign-in shows the app as the client th
   expect(plain!.headers.get("content-security-policy")).not.toContain("img-src");
 });
 
-test("the four pages of an app's sign-in agree: each shows the app, its host and its block, and none says the mind's own line", async () => {
+test("the four pages of an app's sign-in agree: each shows the app's icon and its host, and none says the mind's own line", async () => {
   const stack = stackWith({ [HOST]: { name: "Guestbook", icon: `${ORIGIN}/icon.svg` } });
   const client = await hostClientOf(stack.env, HOST);
   const next = `/oauth2/auth?${new URLSearchParams({ client_id: client, redirect_uri: hostCallbackOf(ORIGIN), resource: ORIGIN })}`;
@@ -282,31 +271,22 @@ test("the four pages of an app's sign-in agree: each shows the app, its host and
     expect(html, page).toContain(
       `<div class="tile" data-app-mark="icon"><img src="${ORIGIN}/icon.svg"`,
     );
-    expect(html, page).toContain(`<p class="muted where">${HOST}</p>`);
-    expect(html, page).toContain(`<div class="about" data-app="${HOST}">`);
     expect(html, page).toContain(
-      "<strong>Guestbook</strong> is an app of <strong>iterate.example.com</strong>.",
+      name === "code" ? "<h1>Enter your code</h1>" : `<h1>Sign in to ${HOST}</h1>`,
     );
-    expect(html, page).toContain("It learns your email address, and nothing else.");
-    expect(html, page).toContain(`see <a href="/sign-ins">your sign-ins</a>`);
+    expect(html, page).not.toMatch(/class="about"|is an app of|Guestbook/);
     // the mind's own words for its own sign-in are not on an app's page
     expect(html, page).not.toContain(`Sign in to ${DOMAIN}`);
     expect(html, page).not.toContain(`Anyone can sign in to ${DOMAIN}`);
     expect(answer!.headers.get("content-security-policy"), page).toContain(`img-src ${ORIGIN}`);
   }
-  // a page that mails a code says who gets one, once, in the block
-  for (const answer of [
-    await mailed(`/sign-in/email?${new URLSearchParams({ next })}`),
-    await mailed("/sign-in/email/code", { cookie: "__Host-iterate-auth-code=abc" }),
-  ])
-    expect((await answer!.text()).match(/You get an account of your own/g)).toHaveLength(1);
-  // the code's page: one sentence over the field, which names the app; what to do when no code
+  // the code's page: one sentence over the field, which names the host; what to do when no code
   // comes is under the button, with the way back
   const code = await (await mailed("/sign-in/email/code", {
     cookie: "__Host-iterate-auth-code=abc",
   }))!.text();
   expect(code).toContain(
-    "If <strong>guest@example.net</strong> may sign in to <strong>Guestbook</strong>, a code is on its way. It expires in 10 minutes.",
+    `If <strong>guest@example.net</strong> may sign in to <strong>${HOST}</strong>, a code is on its way. It expires in 10 minutes.`,
   );
   expect(
     code.indexOf("No code after a minute? Check the spam folder, or <a href="),
@@ -326,7 +306,7 @@ test("the four pages of an app's sign-in agree: each shows the app, its host and
   expect(own).not.toContain(`class="about"`);
 });
 
-test("an app for members says so, says what a member's sign-in gives it, and invites no new address", async () => {
+test("an app for members says in one quiet line that it works as the person; an app for anyone says nothing of itself", () => {
   const dash = {
     host: `dash.${DOMAIN}`,
     origin: `https://dash.${DOMAIN}`,
@@ -334,45 +314,11 @@ test("an app for members says so, says what a member's sign-in gives it, and inv
     icon: null,
     members: true,
   };
-  const lines = (signUps?: "anyone" | "members") =>
-    [...appSignIn(dash, DOMAIN, { signUps }).about.matchAll(/<li>(.*?)<\/li>/g)].map(([, line]) =>
-      line!.replace(/<[^>]+>/g, ""),
-    );
-  const worksAsYou = "It works as you: it can read and change everything that you can.";
-  // "it" is the host of the mind's own pages, which the block's first sentence names
-  const forWhom = "Dash is for people with access to it.";
-  expect(appSignIn(dash, DOMAIN).about).toContain(
-    `<p><strong>Dash</strong> is an app of <strong>iterate.${DOMAIN}</strong>.</p>`,
-  );
-  // no page of an app says "member", which none of them explains
-  for (const members of [true, false])
-    for (const signUps of ["anyone", "members", undefined] as const)
-      expect(
-        appSignIn({ ...dash, members }, DOMAIN, { signUps }).about.replace(/<[^>]+>/g, ""),
-      ).not.toMatch(/member/i);
-  const leave = "To leave, sign out in the app, or see your sign-ins.";
-  // a page that mails a code to anyone
-  expect(lines("anyone")).toEqual([
-    `${forWhom} Any other address gets an account of its own, and no access.`,
-    worksAsYou,
-    leave,
-  ]);
-  // a page of a mind that takes no new sign-ups
-  expect(lines("members")).toEqual([
-    `${forWhom} Any other address gets no code and no error.`,
-    worksAsYou,
-    leave,
-  ]);
-  // a page that mails nothing: the passkey's, the chooser
-  expect(lines()).toEqual([forWhom, worksAsYou, leave]);
-  expect(lines("members").join(" ")).not.toMatch(/member/i);
-  // an app for anyone keeps its three lines
-  expect([...appSignIn({ ...dash, members: false }, DOMAIN).about.matchAll(/<li>/g)]).toHaveLength(
-    3,
-  );
-  expect(appSignIn({ ...dash, members: false }, DOMAIN).about).toContain(
-    "It learns your email address, and nothing else.",
-  );
+  expect(appSignIn(dash)).toMatchObject({
+    heading: `<h1>Sign in to dash.${DOMAIN}</h1>`,
+    about: `<p class="muted" data-for-members>It works as you: it can read and change everything that you can.</p>`,
+  });
+  expect(appSignIn({ ...dash, members: false })).toMatchObject({ about: "" });
 });
 
 test("the address page of an app for members, as the app's own manifest makes it", async () => {
@@ -387,35 +333,28 @@ test("the address page of an app for members, as the app's own manifest makes it
     new Request(`https://iterate.${DOMAIN}/sign-in/email?${new URLSearchParams({ next })}`),
   );
   const html = await answer!.text();
-  expect(html).toContain("<h1>Sign in to Dash</h1>");
-  expect(html).toContain(`<div class="about" data-app="dash.${DOMAIN}" data-for-members>`);
-  expect(html).toContain(`<strong>Dash</strong> is an app of <strong>iterate.${DOMAIN}</strong>.`);
-  expect(html).toContain(
-    "<li>Dash is for people with access to it. Any other address gets an account",
-  );
+  expect(html).toContain(`<h1>Sign in to dash.${DOMAIN}</h1>`);
+  expect(html).toContain("It works as you: it can read and change everything that you can.");
   expect(html).not.toContain("Anyone can sign in");
-  expect(html).not.toContain("It learns your email address");
 });
 
-test("the passkey's page, the chooser and a consent for the app's host name the app too, and a name is text", async () => {
-  const app = { host: HOST, origin: ORIGIN, name: `<b>Guest</b>book`, icon: null, members: false };
-  const passkey = await signInPage(DOMAIN, "/", false, app).text();
-  expect(passkey).toContain("<h1>Sign in to &#60;b&#62;Guest&#60;/b&#62;book</h1>");
-  expect(passkey).toContain(`<div class="tile" data-app-mark="initials">BG</div>`);
-  expect(passkey).not.toContain("<b>Guest");
-  const guestbook = { ...app, name: "Guestbook" };
+test("the passkey's page, the chooser and a consent for the app's host name the host, and a host is text", async () => {
+  const app = { host: HOST, origin: ORIGIN, name: "Guestbook", icon: null, members: false };
+  const passkey = await signInPage(DOMAIN, "/", false, { ...app, host: `<b>${HOST}</b>` }).text();
+  expect(passkey).toContain(`<h1>Sign in to &#60;b&#62;${HOST}&#60;/b&#62;</h1>`);
+  expect(passkey).not.toContain(`<b>${HOST}`);
+  // an app with no icon has no tile of initials: iterate's mark is the card's one
+  expect(passkey).toContain(`<main class="centered"><div class="mark"`);
+  expect(passkey).not.toContain("data-app-mark");
+  const guestbook = app;
   const chooser = await chooserPage({
     domain: DOMAIN,
     email: "guest@example.net",
     here: "/oauth2/auth?client_id=c",
     app: guestbook,
   }).text();
-  expect(chooser).toContain(
-    `<button type="submit">Continue as guest@example.net to Guestbook</button>`,
-  );
-  expect(chooser).toContain(`<p class="muted where">${HOST}</p>`);
-  // a page that mails no code says the membership plainly
-  expect(chooser).toContain(`<li>Signing in gives you no access to iterate.${DOMAIN} itself.</li>`);
+  expect(chooser).toContain(`<h1>Sign in to ${HOST}</h1>`);
+  expect(chooser).toContain(`<button type="submit">Continue as guest@example.net</button>`);
   // without an app, the chooser is the mind's own, as a member sees it
   const own = await chooserPage({ domain: DOMAIN, email: "m@example.net", here: "/x" }).text();
   expect(own).toContain(`<button type="submit">Continue as m@example.net</button>`);
@@ -432,12 +371,11 @@ test("the passkey's page, the chooser and a consent for the app's host name the 
     domain: DOMAIN,
     resource: "its API",
     host: HOST,
-    app: guestbook,
     here: "/oauth2/auth?client_id=c",
     headers: new Headers(),
   }).text();
-  expect(consent).toContain("<h1>Notes wants to use Guestbook as you</h1>");
-  expect(consent).toContain(`Guestbook is an app of ${DOMAIN}, at ${HOST}.`);
+  expect(consent).toContain(`<h1>Notes wants to use ${HOST} as you</h1>`);
+  expect(consent).not.toContain("is an app of");
 });
 
 /** A stack with an in-memory store, which already holds what the named hosts' apps say, as heard

@@ -8,7 +8,7 @@ import { mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
 import { SignInMethod } from "iterate/principal";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
-import { appOf, askingAppOf } from "./asking-app.ts";
+import { askingAppOf } from "./asking-app.ts";
 import {
   clearCloudflareSessionCookie,
   clearSessionCookie,
@@ -133,8 +133,6 @@ async function describe(env: Env, request: Request) {
     domain: iterateConfigOf(env).domain,
     resource: resourceInWords(env, authRequest.resource),
     host: hostResource ? new URL(hostResource).host : undefined,
-    // the app that the host is, by the name it gives itself
-    app: hostResource ? await appOf(env, hostResource) : undefined,
     here,
     headers: consent.headers,
   });

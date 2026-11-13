@@ -221,7 +221,7 @@ test("an app that names Cloudflare gives a code to Cloudflare's session alone, a
   );
   const html = await page.text();
   expect([page.status, html]).toEqual([200, expect.stringContaining("Sign in with Cloudflare")]);
-  expect(html).toContain("<h1>Sign in to Cloud</h1>");
+  expect(html).toContain("<h1>Sign in to cloud.example.com</h1>");
   expect(html).not.toMatch(/passkey|code by email/);
   // `prompt` ends Cloudflare's session and shows the page again, so no "Continue as" signs the
   // person straight back in; a session the app does not take gets the page too

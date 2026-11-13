@@ -76,20 +76,16 @@ function whoGetsACode(env: Env) {
     : `${domain} takes no new sign-ups: a code goes only to an address that is already a member. Any other address gets no code and no error.`;
 }
 
-/** The app that a sign-in is for, as both pages say it: its head, and its block with who gets a
- *  code. Null for the mind's own sign-in. */
+/** The app that a sign-in is for, as both pages say it (`appSignIn`). Null for the mind's own
+ *  sign-in. */
 async function askingOf(env: Env, next: string, heading?: string) {
   const app = await askingAppOf(env, next);
   if (!app) return null;
-  const said = appSignIn(app, iterateConfigOf(env).domain, {
-    heading,
-    signUps: anyoneGetsACode(env) ? "anyone" : "members",
-  });
-  return { ...said, app };
+  return { ...appSignIn(app, { heading }), app };
 }
 
-/** The mind's own line above a form: who gets a code. A page with an app's block says that
- *  there, so it has no such line. */
+/** The mind's own line above a form: who gets a code. An app's page leaves it out: its words
+ *  are the mind's, not the app's. */
 function ruleAbove(env: Env, asking: object | null) {
   return asking ? "" : `<p class="muted">${text(whoGetsACode(env))}</p>`;
 }
@@ -105,7 +101,8 @@ async function addressPage(env: Env, request: Request, error?: string, typed = "
   const asking = await askingOf(env, next);
   return page({
     title: asking?.title || `Sign in to ${domain}`,
-    asker: asking?.asker,
+    mark: asking?.mark,
+    centered: true,
     imageOrigin: asking?.imageOrigin,
     status: error ? 400 : 200,
     body: `${asking?.heading || `<h1>Sign in to ${text(domain)}</h1>`}
@@ -198,10 +195,11 @@ async function codePage(env: Env, request: Request, error?: string, status = 200
   const asking = await askingOf(env, challenge.next, "Enter your code");
   // ONE SENTENCE OVER THE FIELD: whose code, for which sign-in, and how long it lasts. What to do
   // when no code comes is under the button, with the way back.
-  const where = asking ? `sign in to <strong>${text(asking.app.name)}</strong>` : "sign in here";
+  const where = asking ? `sign in to <strong>${text(asking.app.host)}</strong>` : "sign in here";
   return page({
     title: "Enter your code",
-    asker: asking?.asker,
+    mark: asking?.mark,
+    centered: true,
     imageOrigin: asking?.imageOrigin,
     status,
     body: `${asking?.heading || "<h1>Enter your code</h1>"}

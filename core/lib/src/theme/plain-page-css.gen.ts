@@ -29,6 +29,9 @@ color-scheme: light;
 --link: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
 --cloudflare: #f6821f;
 --cloudflare-foreground: oklch(0.145 0 0);
+--cloudflare-button: #c65102;
+--cloudflare-button-foreground: #fff;
+--cloudflare-button-hover: #ad4702;
 }
 :root.dark {
 color-scheme: dark;
@@ -81,6 +84,11 @@ border: 0;
 border-radius: 0;
 box-shadow: none;
 }
+main.centered {
+max-width: 24rem;
+margin: 0 auto;
+padding-top: 3rem;
+}
 }
 .mark {
 display: flex;
@@ -90,24 +98,43 @@ width: 2.25rem;
 height: 2.25rem;
 border-radius: 22.37%;
 }
+main.centered {
+max-width: 24rem;
+gap: 1.5rem;
+padding: 2.5rem 2rem 2rem;
+}
+main.centered > .mark,
+main.centered > .tile,
+main.centered > .asks,
+main.centered > h1 {
+align-self: center;
+text-align: center;
+text-wrap: balance;
+}
+main.centered > .mark svg,
+main.centered > .tile {
+width: 2.75rem;
+height: 2.75rem;
+}
 .asks {
 display: flex;
 align-items: center;
-justify-content: center;
-gap: 1rem;
-color: var(--muted-foreground);
-font-size: 1.25rem;
+gap: 0.75rem;
 }
 .asks .mark svg,
-.tile {
-width: 3.5rem;
-height: 3.5rem;
-border-radius: 22.37%;
+.asks .tile {
+width: 2.75rem;
+height: 2.75rem;
+}
+.joins {
+width: 1.5rem;
+border-top: 2px dotted var(--ring);
 }
 .tile {
 box-sizing: border-box;
 display: grid;
 place-items: center;
+border-radius: 22.37%;
 overflow: hidden;
 border: 1px solid var(--border);
 background: var(--card);
@@ -116,8 +143,8 @@ font-size: 1.125rem;
 font-weight: 600;
 }
 .tile svg {
-width: 2rem;
-height: 2rem;
+width: 60%;
+height: 60%;
 }
 .tile img {
 width: 100%;
@@ -130,34 +157,26 @@ width: 2rem;
 height: 2rem;
 font-size: 0.75rem;
 }
-.tile.small svg {
-width: 1.125rem;
-height: 1.125rem;
+.ways {
+display: flex;
+flex-direction: column;
+gap: 0.625rem;
 }
-main.asked h1 {
+main.centered :is(.ways, .stack) > button:not(.link) {
+min-height: 2.875rem;
+font-size: 0.9375rem;
+}
+main.centered p {
+text-wrap: pretty;
+}
+main.centered > .center {
+text-align: center;
+}
+main.centered > .note {
+margin-top: -0.5rem;
+font-size: 0.8125rem;
 text-align: center;
 text-wrap: balance;
-}
-main.asked .where {
-margin-top: -0.875rem;
-text-align: center;
-overflow-wrap: anywhere;
-}
-.about {
-padding: 0.75rem 1rem;
-border: 1px solid var(--border);
-border-radius: var(--radius);
-color: var(--muted-foreground);
-font-size: 0.875rem;
-}
-.about p {
-margin-bottom: 0.5rem;
-}
-.about li + li {
-margin-top: 0.25rem;
-}
-.about strong {
-color: var(--foreground);
 }
 .mark rect {
 fill: var(--foreground);
@@ -351,21 +370,24 @@ button.outline:hover {
 background: var(--accent);
 }
 button.cloudflare {
-min-height: 2.75rem;
-background: var(--cloudflare);
-color: var(--cloudflare-foreground);
-font-size: 0.9375rem;
+background: var(--cloudflare-button);
+color: var(--cloudflare-button-foreground);
 font-weight: 600;
 }
 button.cloudflare:hover {
-background: color-mix(in oklab, var(--cloudflare) 88%, var(--cloudflare-foreground));
+background: var(--cloudflare-button-hover);
 }
-button svg {
-margin-right: 0.5rem;
-vertical-align: -0.2em;
+button:has(> svg) {
+display: inline-flex;
+align-items: center;
+justify-content: center;
+gap: 0.625rem;
+}
+button > svg {
+flex: none;
 }
 :focus-visible {
-outline: 3px solid color-mix(in oklab, var(--ring) 50%, transparent);
+outline: 2px solid color-mix(in oklab, var(--foreground) 70%, transparent);
 outline-offset: 2px;
 }
 .muted {
@@ -471,4 +493,4 @@ grid-column: 2;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-7i6UZH3kayrbreP/lJ3xyqx6ABpZKZZgEuFNlvW7ldE='";
+export const plainPageCssHash = "'sha256-fQ0xPDdwewssumsdWSH2GRZqatRTx/NsQVv30rrn/u0='";

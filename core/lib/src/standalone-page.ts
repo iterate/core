@@ -19,15 +19,27 @@ const MARK = `<div class="mark" aria-hidden="true"><svg viewBox="0 0 500 500" xm
  *  works in (their keys, the members, the approvals). In the body, a `button` is the main action,
  *  `button.secondary` another way, `button.link` an action that reads as a link, `.actions` a row
  *  of them, `.stack` a column of a form's parts, `.or` the line between two ways and `.muted` a
- *  quieter line; headings, lists, fieldsets, labels and `pre` have plain rules of their own. */
+ *  quieter line; headings, lists, fieldsets, labels and `pre` have plain rules of their own. A
+ *  `centered` card (a sign-in, a consent) has its mark and heading in the middle. */
 export function standalonePage(input: {
   title: string;
   head: string;
   body: string;
   wide?: boolean;
   /** Somebody asks for the mind (a consent, a device's sign-in): their tile, as HTML. The card's
-   *  head is then the mind's mark and that tile side by side, and its heading is centred. */
+   *  head is then the mind's mark and that tile side by side, and the card is `centered`. */
   asker?: string;
+  /** The one mark at the card's head in place of iterate's, as HTML: an app's own icon. */
+  mark?: string;
+  centered?: boolean;
 }) {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${input.title.replace(/[&<>"]/g, (character) => `&#${character.charCodeAt(0)};`)}</title><style>${plainPageCss}</style>${input.head}</head><body><main${input.wide ? ' class="wide"' : input.asker ? ' class="asked"' : ""}>${input.asker ? `<div class="asks">${MARK}<span aria-hidden="true">⇄</span>${input.asker}</div>` : MARK}${input.body}</main></body></html>`;
+  const head = input.asker
+    ? `<div class="asks">${MARK}<span class="joins" aria-hidden="true"></span>${input.asker}</div>`
+    : input.mark || MARK;
+  const card = input.wide
+    ? ' class="wide"'
+    : input.asker || input.centered
+      ? ' class="centered"'
+      : "";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${input.title.replace(/[&<>"]/g, (character) => `&#${character.charCodeAt(0)};`)}</title><style>${plainPageCss}</style>${input.head}</head><body><main${card}>${head}${input.body}</main></body></html>`;
 }
