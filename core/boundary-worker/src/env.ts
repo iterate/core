@@ -5,7 +5,6 @@ import type { AuthService, MindTarget, SecretsService, TelemetryService } from "
 // `Stub` mapping needs a branded entrypoint and turns `unknown` in an event's payload into `never`.
 export type DoorEnv = {
   DOMAIN: string;
-  HOSTNAMES: "all" | "platform";
   AUTH: AuthService;
   SECRETS: SecretsService;
   SECRET_USE: Fetcher;

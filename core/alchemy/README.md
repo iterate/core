@@ -196,17 +196,9 @@ node node_modules/alchemy/bin/cli.js destroy fork/alchemy.run.ts --stage <name> 
 Each stack has its own `destroy`. The mind's leaves the state store, `iterate-<name>-state`, in the
 account: remove it when both stacks are gone (`pnpm run destroy:state`, "Destroy" above).
 
-## One hostname of a zone
-
-`hostnames: "platform"` is for a zone that serves other things. The stack then makes the DNS record
-and the route for `iterate.<zone>` alone: no apex or wildcard, no mail routing and no Email
-Sending. The mind Worker still runs, and its own site has no hostname. `mail: true` and the
-mailed sign-in code are refused with it. Smoke it with `pnpm smoke <zone> worker platform`, which
-skips, by name, the checks of the apex, the subdomains and mail.
-
 ## A zone that other Workers share
 
-A stack with `hostnames: "all"` takes the routes `<zone>/*` and `*.<zone>/*`. Another Worker on the
+A stack takes the routes `<zone>/*` and `*.<zone>/*`. Another Worker on the
 same zone keeps a hostname only through a route of its own for that hostname: a more specific
 route wins over the wildcard. Add those routes before the stack takes the wildcard.
 
@@ -386,9 +378,8 @@ least a deploy needs.
     (`src/event-subscriptions.ts`). When Cloudflare answers that the repo has a subscription on
     another queue (one a destroy left behind), it reads the account's, newest first, at most 100
     pages, deletes that one and makes its own; past that bound it fails and says what to delete.
-- The four Workers. Only the boundary has routes: `<zone>/*` and `*.<zone>/*`, or with
-  `hostnames: "platform"` `iterate.<zone>/*` alone.
-- Proxied `AAAA 100::` records for the apex and `*` (or `iterate` alone), so the routes receive
+- The four Workers. Only the boundary has routes: `<zone>/*` and `*.<zone>/*`.
+- Proxied `AAAA 100::` records for the apex and `*`, so the routes receive
   traffic. A record that already exists is not taken over: remove it, or deploy with `--adopt`.
 - With `mail: true` in the config: Email Routing on the zone, its catch-all rule delivering to the
   boundary, and Email Sending on the domain, which the boundary sends with.

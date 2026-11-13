@@ -1,12 +1,10 @@
 // http.ts — THE AUTH WORKER'S ANSWER TO A REQUEST: every page and endpoint of the platform's host,
 // `iterate.<domain>`. Each path is tried in turn; what no path here takes is the OAuth provider's.
-import { mindMcpUrlOf } from "iterate/mind-api";
 import { KEY_TOKEN_PATH, STATEMENTS_PATH } from "iterate/signed";
 import { askingAppOf } from "./asking-app.ts";
 import { authorizeResponse } from "./authorize.ts";
 import { FIRST_OWNER_PATH } from "./config.ts";
 import { sessionOf } from "./cookies.ts";
-import { DASH_PATH, dashOriginOf, dashResponse } from "./dash.ts";
 import { cloudflareSignInResponse } from "./cloudflare-sign-in.ts";
 import { deviceCallbackResponse } from "./device/callback.ts";
 import { devicePageResponse } from "./device/page.ts";
@@ -36,13 +34,16 @@ import {
   tokenEndpointResponse,
   TOKEN_ENDPOINT,
 } from "./oauth.ts";
-import { homePage, signInPage, SIGN_OUT_PATH } from "./pages.ts";
+import { notMemberPage, signInPage, SIGN_OUT_PATH } from "./pages.ts";
 import { passkeySignInResponse } from "./passkey-sign-in.ts";
 import { selfTestResponse } from "./self-test.ts";
 import { SIGN_IN_PATH, signInHref, signOutResponse } from "./sign-in.ts";
 import { signInsResponse } from "./sign-ins-page.ts";
 import { statementsResponse } from "./statements.ts";
 import { whoIs } from "./who-is.ts";
+
+/** The Dash, the default config's app on its own host of the mind's domain. */
+const dashOriginOf = (domain: string) => `https://dash.${domain}`;
 
 export async function authResponse(asked: Request, env: Env, ctx: ExecutionContext) {
   const url = new URL(asked.url);
@@ -70,18 +71,19 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
   if (pathname === VERIFICATION_PATH && (get || request.method === "POST"))
     return devicePageResponse(env, request);
   if (pathname === DEVICE_CALLBACK_PATH && get) return deviceCallbackResponse(env, request);
+  // The platform's host has no start page: `/` leads to the Dash, whose own sign-in decides the
+  // rest. A signed-in person who is no member would only be refused there: that person reads it
+  // here.
   if (pathname === "/" && get) {
-    const session = await sessionOf(env, request);
     const { domain } = iterateConfigOf(env);
-    return homePage({
-      domain,
-      email: session?.email || null,
-      standing: session ? await standingOf(env, session) : null,
-      mcp: mindMcpUrlOf(domain),
-      dash: Boolean(dashOriginOf(env)),
+    const session = await sessionOf(env, request);
+    if (session && (await standingOf(env, session)) === "not-member")
+      return notMemberPage({ domain, email: session.email });
+    return new Response(null, {
+      status: 302,
+      headers: { location: `${dashOriginOf(domain)}/`, "cache-control": "no-store" },
     });
   }
-  if (pathname === DASH_PATH && get) return dashResponse(env);
   const selfTest = await selfTestResponse(env, request);
   if (selfTest) return selfTest;
   if (pathname === SIGN_IN_PATH && get) {

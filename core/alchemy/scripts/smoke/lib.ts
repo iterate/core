@@ -5,18 +5,6 @@ import { reasonOf } from "./reason.ts";
 
 export type Check = { check: string; pass: boolean; detail: string };
 
-// Checks a stack that owns `iterate.<domain>` alone cannot pass, by the start of their names.
-const NOT_ON_PLATFORM = [
-  "hostnames: ",
-  "repos: a commit to /repos/config republishes the site",
-  "home lab: the apex",
-  "home lab: with none connected, the apex",
-  "boundary: a page load of https://",
-  "boundary: a fetch of https://",
-  "mail: ",
-];
-let platformOnly = false;
-
 // CHECKS OF THE DEFAULT CONFIG'S OWN SITE, by the start of their names, each with the text of the
 // default worker.ts (core/configs/default) that it tests. A mind whose worker.ts is its own, such
 // as a shop or a redirect, answers its hostnames in its own way: those answers are that mind's to
@@ -47,21 +35,10 @@ export const mounts = (name: string) =>
   !mindWorker ||
   new RegExp(`^import [^\\n]*["']\\./apps/${name}/app(?:\\.ts)?["']`, "m").test(mindWorker);
 
-/** From now on `attempt` skips NOT_ON_PLATFORM: an ES module's importer cannot assign its `let`. */
-export function ownsPlatformAlone() {
-  platformOnly = true;
-}
-
 export async function attempt(
   check: string,
   run: () => Promise<{ pass: boolean; detail: string }>,
 ): Promise<Check> {
-  if (platformOnly && NOT_ON_PLATFORM.some((start) => check.startsWith(start)))
-    return {
-      check,
-      pass: true,
-      detail: 'skipped: the stack owns iterate.<domain> alone (hostnames: "platform")',
-    };
   const ownSite =
     mindWorker &&
     DEFAULT_SITE.find(([start, text]) => check.startsWith(start) && !mindWorker.includes(text));

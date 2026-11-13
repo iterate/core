@@ -12,7 +12,6 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
-import { platformOriginOf } from "iterate/mind-api";
 import { cloudflareTokenPoliciesOf } from "./cloudflare-token.ts";
 import { type MindConfig, resourceNamesOf } from "./config.ts";
 
@@ -253,7 +252,6 @@ export const mindStack = (config: MindConfig) =>
 
     const declaredBoundary = Effect.gen(function* () {
       const boundarySendEmail = yield* Cloudflare.Email.SendEmail("SEND_EMAIL");
-      const hostnames = config.hostnames || "all";
       const commit = commitOfDeploy();
       const shared = {
         name: names.boundary,
@@ -261,17 +259,13 @@ export const mindStack = (config: MindConfig) =>
         observability,
         codeUpdateStrategy: { mode: "immediate" } satisfies Cloudflare.WorkerCodeUpdateStrategy,
         workersDev: { enabled: false, previewsEnabled: false },
-        routes:
-          hostnames === "platform"
-            ? [{ pattern: `iterate.${domain}/*`, zoneName: domain }]
-            : [
-                { pattern: `${domain}/*`, zoneName: domain },
-                { pattern: `*.${domain}/*`, zoneName: domain },
-              ],
+        routes: [
+          { pattern: `${domain}/*`, zoneName: domain },
+          { pattern: `*.${domain}/*`, zoneName: domain },
+        ],
       };
       const bindings = {
         DOMAIN: domain,
-        HOSTNAMES: hostnames,
         AUTH: Cloudflare.WorkerEntrypoint(auth, { entrypoint: "Auth" }),
         SECRETS: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "Secrets" }),
         SECRET_USE: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "SecretUse" }),
@@ -319,10 +313,7 @@ export const mindStack = (config: MindConfig) =>
       Effect.orDie,
     );
     if (!zone) return yield* refuse(`the account ${accountId} has no zone ${domain}`);
-    const records =
-      config.hostnames === "platform"
-        ? { PlatformRecord: new URL(platformOriginOf(domain)).hostname }
-        : { ApexRecord: domain, WildcardRecord: `*.${domain}` };
+    const records = { ApexRecord: domain, WildcardRecord: `*.${domain}` };
     // A route fires only on a proxied hostname; with the Worker as the only origin, `AAAA 100::` is the
     // placeholder Alchemy's docs give.
     for (const [id, name] of Object.entries(records))

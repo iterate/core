@@ -30,12 +30,8 @@ void test("a forward address that is no address, and a mail setting with another
     assert.equal(MindConfig.safeParse({ ...stack, mail }).success, false, JSON.stringify(mail));
 });
 
-void test("a forward address counts as the stack's mail: one hostname of a zone refuses it, and a mailed code takes it", () => {
+void test("a forward address counts as the stack's mail: a mailed code takes it", () => {
   const forward = { forwardTo: "team@group.example" };
-  assert.equal(
-    MindConfig.safeParse({ ...stack, hostnames: "platform", mail: forward }).success,
-    false,
-  );
   const mailed = { login: { methods: { email: {} }, allow: stack.auth.login.allow } };
   assert.equal(MindConfig.safeParse({ ...stack, auth: mailed, mail: forward }).success, true);
   assert.equal(MindConfig.safeParse({ ...stack, auth: mailed }).success, false);
@@ -91,4 +87,9 @@ void test("the queue of the longest stack name fits a Cloudflare Queue's name", 
   // a stack's name is at most 40 characters; a Queue's is at most 63
   const { cloudflareEvents } = resourceNamesOf("a".repeat(40));
   assert.ok(cloudflareEvents.length <= 63, `${cloudflareEvents.length} characters`);
+});
+
+void test("a config's old default for hostnames is read and not kept; any other value is refused", () => {
+  assert.deepEqual(MindConfig.parse({ ...stack, hostnames: "all" }), MindConfig.parse(stack));
+  assert.equal(MindConfig.safeParse({ ...stack, hostnames: "platform" }).success, false);
 });

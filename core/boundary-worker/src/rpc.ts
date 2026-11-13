@@ -39,10 +39,7 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     }
     const domain = this.env.DOMAIN;
     const { hostname } = new URL(outbound.url);
-    const ownDomain =
-      this.env.HOSTNAMES === "platform"
-        ? hostname === `iterate.${domain}`
-        : hostname === domain || hostname.endsWith(`.${domain}`);
+    const ownDomain = hostname === domain || hostname.endsWith(`.${domain}`);
     // The global `fetch` fails inside the zone: the boundary's own handler answers, and strips the
     // mind's stamps. No answer keeps a facts header: the mind would append what it says.
     const inbound = (this.ctx.exports as unknown as { default: Fetcher }).default;

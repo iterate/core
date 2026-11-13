@@ -1,5 +1,4 @@
 import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
-import { mindMcpNameOf } from "iterate/mind-api";
 import { plainPageCssHash, standalonePage } from "iterate/standalone-page";
 import { type AskingApp, appTile } from "./asking-app.ts";
 import { clientTile, shownLogoOf } from "./client-mark.ts";
@@ -11,7 +10,7 @@ export const text = (value: string) =>
 // wherever that is.
 const CSP = `default-src 'none'; style-src ${plainPageCssHash}; frame-ancestors 'none'; base-uri 'none'`;
 
-/** One page. `wide` is a page a person reads or works in (the start page, the keys, the members);
+/** One page. `wide` is a page a person reads or works in (the keys, the members);
  *  without it the page is the narrow card of one question and one action. */
 export function page(
   input: {
@@ -52,65 +51,6 @@ export function page(
       headers,
     },
   );
-}
-
-/** The platform's start page: a member's ways into the mind, or the sign-in for anyone else.
- *  The apps are the ones a new mind's config repo mounts, each on its own host. The platform does
- *  not read the config, so an app the owner removed is still named here, and answers "Not found". */
-export function homePage(input: {
-  domain: string;
-  email: string | null;
-  standing: "member" | "passkey-owed" | "not-member" | null;
-  mcp: string;
-  /** Whether the config trusts a hosted Dash, which `/dash` leads to. */
-  dash: boolean;
-}) {
-  const { domain, email, standing } = input;
-  const signOut = `<form method="post" action="/sign-out"><button type="submit" class="link">Sign out</button></form>`;
-  if (email && standing === "member") {
-    const link = (href: string, label: string, about: string) =>
-      `<li><a href="${text(href)}">${text(label)}</a> <span class="muted">${text(about)}</span></li>`;
-    return page({
-      title: domain,
-      wide: true,
-      body: `<h1>${text(domain)}</h1>
-      <p>You are signed in as <strong>${text(email)}</strong>.</p>
-      <h2>Apps</h2>
-      <ul class="stack">
-        ${link(`https://dash.${domain}`, "Dash", "your mind from above: its events, files, secrets and settings")}
-        ${input.dash ? link("/dash", "Hosted Dash", "the same pages, hosted by iterate") : ""}
-        ${link(`https://agents.${domain}`, "Agents", "talk to your mind's agents")}
-        ${link(`https://onboarding.${domain}`, "Onboarding", "a chat that sets your mind up with you")}
-        ${link(`https://docs.${domain}`, "Docs", "your mind's config repo, read as pages")}
-        ${link(`https://voice.${domain}`, "Voice", "call your mind from this browser")}
-      </ul>
-      <h2>Access</h2>
-      <ul class="stack">
-        ${link("/members", "People", "who may sign in")}
-        ${link("/keys", "Your keys", "your passkeys, and the keys of services you allowed")}
-        ${link("/secrets/", "Secrets", "the keys and passwords your mind uses")}
-        ${link("/secrets/approvals", "Approvals", "requests that wait for your yes")}
-        ${link("/self-test", "Self-test", "check that everything works")}
-      </ul>
-      <h2>Connect Claude Code</h2>
-      <p>The MCP address of this mind is <code>${text(input.mcp)}</code>. Run this, then sign in when Claude Code asks:</p>
-      <pre><code>claude mcp add --transport http ${text(mindMcpNameOf(domain))} ${text(input.mcp)}</code></pre>
-      ${signOut}`,
-    });
-  }
-  const who =
-    email && standing === "passkey-owed"
-      ? `<p>You are signed in as <strong>${text(email)}</strong>. <a href="/keys">Add a passkey</a> to use the mind.</p>${signOut}`
-      : email
-        ? `<p>You are signed in as <strong>${text(email)}</strong>, which is not a member of ${text(domain)}.</p>${signOut}`
-        : `<p class="muted">You are not signed in.</p>
-       <p><a href="/sign-in">Sign in</a></p>`;
-  return page({
-    title: `Sign-in for ${domain}`,
-    body: `<h1>Sign-in for ${text(domain)}</h1>
-      <p>This is where you sign in to the iterate mind at ${text(domain)}, and allow apps to use it as you.</p>
-      ${who}`,
-  });
 }
 
 /** A SIGN-IN THAT AN APP OF THIS MIND STARTED (./asking-app.ts), as each page of it says so. The

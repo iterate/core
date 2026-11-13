@@ -1,14 +1,13 @@
 // The stack's own pages as a person meets them: each one card under the mark, narrow for one
 // question and one action, wide for a page to work in. With ITERATE_PAGES_OUT set to a folder, the
 // pages are also written there as files, for a look in a browser.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { emailSignInResponse } from "./email-sign-in.ts";
 import type { Env } from "./env.ts";
 import { deviceTile } from "./device/page.ts";
-import { chooserPage, consentPage, errorPage, homePage, signInPage } from "./pages.ts";
+import { chooserPage, consentPage, errorPage, page, signInPage } from "./pages.ts";
 
 const DOMAIN = "example.com";
 const env = {
@@ -71,60 +70,11 @@ test("the consent page asks one question, with Deny and Allow as a pair", async 
   );
 });
 
-test("a member's start page is the wide card, and a refusal the narrow one", async () => {
-  const start = await kept(
-    "start",
-    homePage({
-      domain: DOMAIN,
-      email: "owner@example.net",
-      standing: "member",
-      mcp: `https://iterate.${DOMAIN}/mcp`,
-      dash: false,
-    }),
-  );
-  expect(start).toContain(`<main class="wide"><div class="mark"`);
+test("a page to work in is the wide card, and a refusal the narrow one", async () => {
+  const wide = await kept("wide", page({ title: DOMAIN, body: `<h1>${DOMAIN}</h1>`, wide: true }));
+  expect(wide).toContain(`<main class="wide"><div class="mark"`);
   const refusal = await kept("refusal", errorPage("That link has ended."));
   expect(refusal).toContain(`<main><div class="mark"`);
-});
-
-test("a member's start page leads to every app of a new mind, and its command for Claude Code names the server with no dot", async () => {
-  const start = (dash: boolean) =>
-    homePage({
-      domain: DOMAIN,
-      email: "owner@example.net",
-      standing: "member",
-      mcp: `https://iterate.${DOMAIN}/mcp`,
-      dash,
-    }).text();
-  const html = await start(false);
-  const links = [...html.matchAll(/<li><a href="([^"]+)">([^<]+)<\/a>/g)].map(
-    ([, href, label]) => `${label}: ${href}`,
-  );
-  expect(links).toEqual([
-    `Dash: https://dash.${DOMAIN}`,
-    `Agents: https://agents.${DOMAIN}`,
-    `Onboarding: https://onboarding.${DOMAIN}`,
-    `Docs: https://docs.${DOMAIN}`,
-    `Voice: https://voice.${DOMAIN}`,
-    "People: /members",
-    "Your keys: /keys",
-    "Secrets: /secrets/",
-    "Approvals: /secrets/approvals",
-    "Self-test: /self-test",
-  ]);
-  // none is missing: the hosts that the worker of a new mind's config answers, one `case` each
-  const worker = readFileSync(
-    fileURLToPath(new URL("../../configs/default/worker.ts", import.meta.url).href),
-    "utf8",
-  );
-  for (const [, host] of worker.matchAll(/^ {6}case "([a-z]+)":/gm))
-    expect(html).toContain(`<li><a href="https://${host}.${DOMAIN}">`);
-  // Claude Code refuses a server's name with a dot in it
-  expect(html).toContain(
-    `<pre><code>claude mcp add --transport http ${DOMAIN.replaceAll(".", "-")} https://iterate.${DOMAIN}/mcp</code></pre>`,
-  );
-  // a config that trusts a hosted Dash gets that one too, beside the mind's own
-  expect(await start(true)).toContain(`<li><a href="/dash">Hosted Dash</a>`);
 });
 
 test("a client's own logo is shown only for a verified domain, from that domain, and the page's policy allows that one origin", async () => {

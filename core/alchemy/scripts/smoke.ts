@@ -22,7 +22,7 @@ import { modelChecks } from "./smoke/model.ts";
 import { appsChecks } from "./smoke/apps.ts";
 import { HOMEPAGE, leftoverChanges, markedHomepage, withChange } from "./smoke/config-repo.ts";
 import { templateFollowed } from "./smoke/template-follow.ts";
-import { attempt, type Check, mindRoot, mindWorkerIs, ownsPlatformAlone } from "./smoke/lib.ts";
+import { attempt, type Check, mindRoot, mindWorkerIs } from "./smoke/lib.ts";
 import { reasonOf } from "./smoke/reason.ts";
 
 /** Checks the stack deployed on `domain`, the zone of its mind config. */
@@ -32,10 +32,7 @@ export default async function smoke(
   /** `provided` for a stack whose mind runs elsewhere (core/home-lab); when not given, a stack
    *  whose `/provide` takes WebSockets (426 to a plain GET) is one. */
   mode?: "worker" | "provided",
-  /** The config's `hostnames`: `platform` for a stack that owns `iterate.<domain>` alone. */
-  hostnames?: "all" | "platform",
 ) {
-  if (hostnames === "platform") ownsPlatformAlone();
   // Which site the mind serves is in its config repo: a check of the default config's site is
   // skipped on a mind whose worker.ts is its own (./smoke/lib.ts `DEFAULT_SITE`). A mind that does
   // not answer yet is checked as the default.
@@ -60,7 +57,7 @@ export default async function smoke(
   if (provided) {
     const results = [
       ...left,
-      await pageContains(`${platformOriginOf(domain)}/`, "Sign-in for"),
+      await leadsToDash(domain),
       await pageContains(`${platformOriginOf(domain)}/secrets/`, "secrets:"),
       ...(await homeLabChecks(domain)),
       ...(await authChecks(domain)),
@@ -78,7 +75,7 @@ export default async function smoke(
   }
   const results = [
     ...left,
-    await pageContains(`${platformOriginOf(domain)}/`, "Sign-in for"),
+    await leadsToDash(domain),
     await pageContains(`${platformOriginOf(domain)}/secrets/`, "secrets:"),
     ...(await skeletonHops(`${mindApiUrlOf(domain)}/_skeleton`)),
     ...(process.env.ITERATE_PROTOTYPE_TOKEN
@@ -179,6 +176,19 @@ const pageContains = async (url: string, text: string) => {
     check: `GET ${url} contains ${JSON.stringify(text)}`,
     pass: response.ok && body.includes(text),
     detail: `${response.status}`,
+  };
+};
+
+/** The platform's host has no start page: `/` sends everyone to the Dash. */
+const leadsToDash = async (domain: string) => {
+  const url = `${platformOriginOf(domain)}/`;
+  const response = await fetch(url, { redirect: "manual" });
+  await response.body?.cancel();
+  const location = response.headers.get("location");
+  return {
+    check: `GET ${url} leads to the Dash`,
+    pass: response.status === 302 && location === `https://dash.${domain}/`,
+    detail: `${response.status} to ${location}`,
   };
 };
 

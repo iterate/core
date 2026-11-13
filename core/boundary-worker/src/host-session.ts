@@ -208,15 +208,20 @@ function withoutSessionCookies(answer: Response): Response {
   });
 }
 
+// The person's way out is this host's own sign-out: the sign-in that follows asks the issuer who
+// they are, and offers another account.
 function notMemberPage(domain: string, email: string) {
   return plainPage(
     "You can't continue",
     `You are signed in as ${email}, and that address is not a member of ${domain}. Ask the mind's owner to add it.`,
     403,
+    undefined,
+    `<form method="post" action="${SIGN_OUT_PATH}"><button type="submit">Use another account</button></form>`,
   );
 }
 
-function plainPage(title: string, message: string, status: number, setCookie?: string) {
+/** `after`: HTML of ours, after the message. */
+function plainPage(title: string, message: string, status: number, setCookie?: string, after = "") {
   const escaped = message.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
   const headers = new Headers({
     "content-type": "text/html; charset=utf-8",
@@ -224,7 +229,7 @@ function plainPage(title: string, message: string, status: number, setCookie?: s
   });
   if (setCookie) headers.set("set-cookie", setCookie);
   return new Response(
-    standalonePage({ title, head: "", body: `<h1>${title}</h1><p>${escaped}</p>` }),
+    standalonePage({ title, head: "", body: `<h1>${title}</h1><p>${escaped}</p>${after}` }),
     { status, headers },
   );
 }

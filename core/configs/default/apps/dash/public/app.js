@@ -48,6 +48,7 @@ import {
   BookOpenIcon,
   BotIcon,
   ChartLineIcon,
+  CircleCheckIcon,
   CompassIcon,
   FolderGit2Icon,
   KeyRoundIcon,
@@ -126,6 +127,12 @@ const access = [
     about: "Your passkeys, and the keys of your devices and tools.",
   },
   { name: "Members", href: `${stack}/members`, icon: UsersIcon, about: "Who may use this mind." },
+  {
+    name: "Self-test",
+    href: `${stack}/self-test`,
+    icon: CircleCheckIcon,
+    about: "Check that everything works.",
+  },
 ];
 
 // ── a page's part of the kit ──

@@ -156,7 +156,7 @@ function selfTestPage(env: Env, email: string) {
       <p id="summary" role="status"></p>
       <ul id="checks" class="stack"></ul>
       <p id="back" hidden></p>
-      <p><a href="/">Back to the start page</a></p>`,
+      <p><a href="/">Back to the Dash</a></p>`,
     script: `const DATA = ${JSON.stringify(data).replaceAll("<", "\\u003c")};\n${SCRIPT}`,
   });
 }

@@ -26,9 +26,9 @@ export const MindConfig = z
         (domain) => !/^iterate\.[^.]+\../i.test(domain),
         "not a domain named iterate.<domain>: that name is the platform's host of <domain>",
       ),
-    // `platform`: `iterate.<domain>` alone, for a zone that serves other things. Absent: the apex, every
-    // name under it, and the zone's mail.
-    hostnames: z.enum(["all", "platform"]).optional(),
+    // Every stack takes the apex and every name under it. A stack's stored config may still say
+    // so with this key: it is read and not kept.
+    hostnames: z.literal("all").optional(),
     // `{ provided: true }`: a mind that runs elsewhere (core/home-lab) and dials `/provide`.
     mind: z
       .strictObject({
@@ -70,15 +70,6 @@ export const MindConfig = z
     path: ["cloudflareToken"],
     error: "a provided mind runs elsewhere: its stack has no mind Worker to hold the token",
   })
-  .refine(({ hostnames, mail }) => !(hostnames === "platform" && mail), {
-    path: ["mail"],
-    error: 'a stack with hostnames: "platform" does not own the zone\'s mail',
-  })
-  .refine(({ auth, hostnames }) => !(hostnames === "platform" && auth.login.methods.email), {
-    path: ["auth", "login", "methods", "email"],
-    error:
-      'a mailed sign-in code needs the zone\'s mail, which a stack with hostnames: "platform" does not own: sign in another way',
-  })
   .refine(
     ({ domain, mail }) =>
       !(mail instanceof Object) ||
@@ -89,13 +80,11 @@ export const MindConfig = z
         "not an address of the stack's own domain: its mail comes to the stack, so the forward would come back",
     },
   )
-  .refine(
-    ({ auth, hostnames, mail }) => hostnames === "platform" || !auth.login.methods.email || mail,
-    {
-      path: ["auth", "login", "methods", "email"],
-      error: "a mailed sign-in code needs the stack's mail: add mail: true, or sign in another way",
-    },
-  );
+  .refine(({ auth, mail }) => !auth.login.methods.email || mail, {
+    path: ["auth", "login", "methods", "email"],
+    error: "a mailed sign-in code needs the stack's mail: add mail: true, or sign in another way",
+  })
+  .transform(({ hostnames: _, ...config }) => config);
 
 export type MindConfig = z.infer<typeof MindConfig>;
 
@@ -105,7 +94,6 @@ const PUBLIC_FIELDS = new Set([
   "name",
   "accountId",
   "domain",
-  "hostnames",
   "mind.provided",
   "mind.name",
   "mind.template",
