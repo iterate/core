@@ -33,6 +33,33 @@ The package scripts load `core/alchemy/.secrets` when it exists (git ignores it)
 `ITERATE_PROTOTYPE_TOKEN=<a long random string>` there is a stand-in member: the deploy binds it to
 the auth Worker, which answers one prototype member for exactly that token.
 
+**Sign in with Cloudflare** (`core/auth-worker/src/cloudflare-sign-in.ts`) is a method of the
+config, for the hostnames it names and no other:
+
+```ts
+auth: {
+  login: {
+    methods: { cloudflare: { clientId: "<the Cloudflare OAuth client's id>", hosts: ["cloud.example.com"] } },
+    allow: [/* … */],
+  },
+}
+```
+
+- The client's secret is never in the config. Every deploy of such a stack takes it from its
+  environment, `ITERATE_CLOUDFLARE_SIGN_IN_CLIENT_SECRET`, and a deploy without it is refused: the
+  stack stores the config, so no deploy forgets the hostnames, and none takes the secret away.
+  Keep the secret where the deploy's other credentials are (Doppler).
+- Register `https://iterate.<domain>/sign-in/cloudflare/callback` as a redirect URI of the client,
+  and the scope `user-details.read`. The sign-in asks that one scope and no `offline_access`.
+- A hostname in `hosts` gives a code or a token only to a person who signed in with Cloudflare,
+  whichever client asks: the hostname's own sign-in, and an MCP client of the app on it
+  (`https://cloud.example.com/mcp`). The mind's own sign-ins (a passkey, a mailed code, Google) do
+  not count there. The sign-in with Cloudflare counts nowhere else: not on another hostname, and
+  not for the mind's own API or MCP server at `iterate.<domain>`.
+- A person who signed in with Cloudflare is never a member there, whatever their address is: an
+  app on such a hostname guards with `auth.requirePerson`.
+- A stack whose secret is gone all the same lets nobody in to those hostnames.
+
 The smoke check needs that token for every check of the mind itself, through its API at
 `iterate.<zone>/api`; without it, those checks pass as skipped and say why. With it, the smoke
 commits to the mind's config repo and takes its changes out again, and first takes out what an

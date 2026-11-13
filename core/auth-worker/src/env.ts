@@ -33,6 +33,10 @@ declare global {
       CLOUD_ORIGIN?: string;
       /** Cloudflare Email Sending: how a mailed sign-in code leaves (./email-sign-in.ts). */
       SEND_EMAIL: SendEmail;
+      /** SIGN IN WITH CLOUDFLARE (./cloudflare-sign-in.ts): the secret of the Cloudflare OAuth
+       *  client the config names (`login.methods.cloudflare`). A deploy binds it whenever the
+       *  config has that method. Never returned or logged. */
+      CLOUDFLARE_SIGN_IN_CLIENT_SECRET?: string;
     }
   }
 }
@@ -56,6 +60,37 @@ export function iterateConfigOf(env: Env): AuthConfig {
  *  an iterate Cloud to lend its Google client. */
 export const offersGoogle = (env: Env) =>
   Boolean(iterateConfigOf(env).login.methods.google && env.CLOUD_ORIGIN);
+
+export type CloudflareSignIn = { clientId: string; clientSecret: string };
+
+/** The Cloudflare OAuth client this stack signs people in with (./cloudflare-sign-in.ts), or null:
+ *  the config's method names it, and the deploy bound its secret. A deploy refuses a config with
+ *  the method and no secret, so null with the method in the config is a stack somebody changed by
+ *  hand: its hostnames then let nobody in (`cloudflareAloneAt` still names them). */
+export function cloudflareSignInOf(env: Env): CloudflareSignIn | null {
+  const method = iterateConfigOf(env).login.methods.cloudflare;
+  return method && env.CLOUDFLARE_SIGN_IN_CLIENT_SECRET
+    ? { clientId: method.clientId, clientSecret: env.CLOUDFLARE_SIGN_IN_CLIENT_SECRET }
+    : null;
+}
+
+/** WHETHER `resource` IS SIGNED IN WITH CLOUDFLARE ALONE: it is the origin of a hostname the
+ *  config names (`login.methods.cloudflare.hosts`). The answer is the stack's stored config's, by
+ *  the resource a code or a token is for; no client, and nothing a request says beside that
+ *  resource, changes it. It does not ask whether the secret is bound: without one, nobody signs
+ *  in to such a hostname. */
+export function cloudflareAloneAt(env: Env, resource: string | null | undefined): boolean {
+  if (!resource || !URL.canParse(resource)) return false;
+  const hosts = iterateConfigOf(env).login.methods.cloudflare?.hosts || [];
+  return hosts.includes(new URL(resource).hostname);
+}
+
+/** THE ONE RULE OF WHICH SIGN-IN SERVES WHICH RESOURCE: a sign-in at Cloudflare serves the
+ *  hostnames that take Cloudflare alone and nothing else, and every other sign-in serves
+ *  everything else and none of them. `cloudflare`: whether the session or the grant is
+ *  Cloudflare's. */
+export const signInServes = (env: Env, cloudflare: boolean, resource: string | null | undefined) =>
+  cloudflareAloneAt(env, resource) === cloudflare;
 
 /** The issuer's origin: the platform's hostname under the mind's domain, `https://iterate.<domain>`
  *  (iterate/mind-api), where every page and endpoint of this Worker is. Ingress sends it every

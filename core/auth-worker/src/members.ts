@@ -53,7 +53,8 @@ export async function standingOf(
   env: Env,
   session: Session,
 ): Promise<"member" | "passkey-owed" | "not-member"> {
-  if (!(await isMember(env, session.email))) return "not-member";
+  // A sign-in at Cloudflare is never a member's, whatever its address (./cloudflare-sign-in.ts).
+  if (session.method === "cloudflare" || !(await isMember(env, session.email))) return "not-member";
   if (session.method === "passkey") return "member";
   const { google } = iterateConfigOf(env).login.methods;
   return session.method === "google" && google?.signsInAlone ? "member" : "passkey-owed";

@@ -14,7 +14,7 @@ import { admitted, TOO_MANY } from "./device/limits.ts";
 import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { isBlocked } from "./blocked.ts";
 import { isMember } from "./members.ts";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { type Env, issuerOf, iterateConfigOf, signInServes } from "./env.ts";
 
 export const AUTHORIZE_ENDPOINT = "/oauth2/auth";
 export const TOKEN_ENDPOINT = "/oauth2/token";
@@ -120,6 +120,9 @@ export async function hostClientOf(env: Env, host: string): Promise<string> {
 export const GrantProps = z.object({
   userId: z.string().startsWith("user_"),
   email: z.string(),
+  /** Only on a grant that a sign-in at Cloudflare made (./cloudflare-sign-in.ts): it serves the
+   *  hostnames that take Cloudflare alone, and its holder is never a member. */
+  method: z.literal("cloudflare").optional(),
   deadline: z.number().int().positive().optional(),
   letIn: z
     .object({
@@ -215,7 +218,11 @@ export async function tokenIdentity(
   const expiresAt = deadline
     ? Math.min(validated.expiresAt, Math.floor(deadline / 1000))
     : validated.expiresAt;
-  const member = await isMember(env, props.data.email);
+  // Asked at every use, so a hostname the config now names for Cloudflare alone refuses the token
+  // of a grant from before, and a Cloudflare grant opens nothing a later deploy stopped naming.
+  const cloudflare = props.data.method === "cloudflare";
+  if (!signInServes(env, cloudflare, resource)) return null;
+  const member = !cloudflare && (await isMember(env, props.data.email));
   if (expiresAt * 1000 <= Date.now() || (!hostResource && !member)) return null;
   // a member is never blocked, so only a mind hostname's token asks
   if (!member && (await isBlocked(env, props.data.email))) return null;
@@ -255,6 +262,8 @@ async function grantLifetime(
     throw refused("props_invalid", "The session is no longer active.");
   const grant = parsed.data;
   const hostResource = mindHostResourceOf(env, input.resource);
+  if (!signInServes(env, grant.method === "cloudflare", input.resource))
+    throw refused("sign_in_method", "The session is no longer active.");
   if (!hostResource && !(await isMember(env, grant.email)))
     throw refused("not_a_member", "The session is no longer active.");
   if (hostResource && (await isBlocked(env, grant.email)))

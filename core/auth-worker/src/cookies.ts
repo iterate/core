@@ -8,13 +8,24 @@ import { type Env, issuerOf } from "./env.ts";
 // it, or for everyone when AUTH_SIGNING_KEY changes. Membership is checked again on every use.
 const SESSION_COOKIE = "__Host-iterate-auth-session";
 const SESSION_SECONDS = 30 * 24 * 3600;
+// Cloudflare's session is kept apart from the mind's: ./cloudflare-sign-in.ts says why.
+const CLOUDFLARE_SESSION_COOKIE = "__Host-iterate-auth-cloudflare-session";
+const CLOUDFLARE_SESSION_SECONDS = 7 * 24 * 3600;
 const FLOW_COOKIE = "__Host-iterate-auth-sign-in";
 const FLOW_SECONDS = 10 * 60;
 
 /** How a session was opened, kept in its cookie as `method`: what the person proved to get it.
  *  "first-owner-ticket" is a deploy's ticket for the stack's owner, and "member-link" a link that
  *  an owner made for a member with no passkey (./first-owner.ts). */
-const SignInMethod = z.enum(["email", "google", "passkey", "first-owner-ticket", "member-link"]);
+const SignInMethod = z.enum([
+  "email",
+  "google",
+  "passkey",
+  "first-owner-ticket",
+  "member-link",
+  // never in the session's own cookie: `cloudflareSessionOf` alone answers it
+  "cloudflare",
+]);
 export type SignInMethod = z.infer<typeof SignInMethod>;
 
 /** `method` is absent in a cookie made before the claim was. */
@@ -34,7 +45,7 @@ type Flow = z.infer<typeof Flow>;
 export async function sessionCookie(
   env: Env,
   user: { id: string; email: string },
-  method: SignInMethod,
+  method: Exclude<SignInMethod, "cloudflare">,
   key?: string,
 ) {
   const claims = { email: user.email, method, key };
@@ -52,6 +63,8 @@ export async function sessionOf(env: Env, request: Request): Promise<Session | n
   const email = z.string().safeParse(claims?.email);
   if (!claims?.sub || !email.success) return null;
   const method = SignInMethod.safeParse(claims.method).data;
+  // this cookie is never made with it (`sessionCookie`), and one that says it is no session
+  if (method === "cloudflare") return null;
   // A lost device holds a passkey and its session: to remove the one must end the other.
   if (method === "passkey") {
     const live = await env.DB.prepare(
@@ -65,6 +78,31 @@ export async function sessionOf(env: Env, request: Request): Promise<Session | n
 }
 
 export const clearSessionCookie = cookie(SESSION_COOKIE, "", 0);
+
+export async function cloudflareSessionCookie(env: Env, user: { id: string; email: string }) {
+  return cookie(
+    CLOUDFLARE_SESSION_COOKIE,
+    await sign(
+      env,
+      "cloudflare-session",
+      { email: user.email },
+      user.id,
+      CLOUDFLARE_SESSION_SECONDS,
+    ),
+    CLOUDFLARE_SESSION_SECONDS,
+  );
+}
+
+/** The sign-in at Cloudflare this browser holds. The token's audience is this cookie's own, so the
+ *  mind's session cookie under this name is no session, and this one under that name is none. */
+export async function cloudflareSessionOf(env: Env, request: Request): Promise<Session | null> {
+  const claims = await verified(env, request, CLOUDFLARE_SESSION_COOKIE, "cloudflare-session");
+  const email = z.string().safeParse(claims?.email);
+  if (!claims?.sub || !email.success) return null;
+  return { userId: claims.sub, email: email.data, method: "cloudflare" };
+}
+
+export const clearCloudflareSessionCookie = cookie(CLOUDFLARE_SESSION_COOKIE, "", 0);
 
 export async function flowCookie(env: Env, flow: Flow) {
   return cookie(

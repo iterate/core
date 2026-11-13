@@ -1,5 +1,5 @@
 import { sameOriginPath } from "iterate/lib";
-import { clearSessionCookie } from "./cookies.ts";
+import { clearCloudflareSessionCookie, clearSessionCookie } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import { errorPage } from "./pages.ts";
 import { EMAIL_SIGN_IN_PATH } from "./email-sign-in.ts";
@@ -21,12 +21,12 @@ export async function signOutResponse(env: Env, request: Request) {
     return errorPage("Sign out from this site's own page.", 403);
   const form = await request.formData().catch(() => null);
   const next = String(form?.get("next") || "");
-  return new Response(null, {
-    status: 303,
-    headers: {
-      location: next ? signInHref(env, sameOriginPath(next, issuerOf(env))) : "/",
-      "set-cookie": clearSessionCookie,
-      "cache-control": "no-store",
-    },
+  const headers = new Headers({
+    location: next ? signInHref(env, sameOriginPath(next, issuerOf(env))) : "/",
+    "cache-control": "no-store",
   });
+  // a sign-in at Cloudflare is this browser's too
+  headers.append("set-cookie", clearSessionCookie);
+  headers.append("set-cookie", clearCloudflareSessionCookie);
+  return new Response(null, { status: 303, headers });
 }

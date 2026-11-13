@@ -7,6 +7,7 @@ import { authorizeResponse } from "./authorize.ts";
 import { FIRST_OWNER_PATH } from "./config.ts";
 import { sessionOf } from "./cookies.ts";
 import { DASH_PATH, dashOriginOf, dashResponse } from "./dash.ts";
+import { cloudflareSignInResponse } from "./cloudflare-sign-in.ts";
 import { deviceCallbackResponse } from "./device/callback.ts";
 import { devicePageResponse } from "./device/page.ts";
 import { devicePollResponse } from "./device/poll.ts";
@@ -98,6 +99,8 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
   if (emailSignIn) return emailSignIn;
   const googleSignIn = await googleSignInResponse(env, request);
   if (googleSignIn) return googleSignIn;
+  const cloudflareSignIn = await cloudflareSignInResponse(env, request);
+  if (cloudflareSignIn) return cloudflareSignIn;
   const passkeySignIn = await passkeySignInResponse(env, request);
   if (passkeySignIn) return passkeySignIn;
   if (pathname === SIGN_OUT_PATH && request.method === "POST") return signOutResponse(env, request);
