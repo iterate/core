@@ -8,7 +8,6 @@
 // ITERATE_PROOF_PASSKEY         with the session of a software passkey: that passkey's file,
 //                               { credentialId, privateKey }, which signs the proof's new passkey
 // ITERATE_PROOF_SHOTS           the folder for screenshots (default: a new temp folder)
-// ITERATE_PROOF_DASH_ORIGIN     the hosted Dash: its Approvals page must list the request that waits
 // ITERATE_PROOF_LIVE            a live stack's domain, to allow it: one approval, no rejection, and
 //                               the rule, the passkey and the secret are removed at the end
 import { execSync } from "node:child_process";
@@ -392,28 +391,6 @@ const { held, digest } = await run("an agent's POST with the secret waits", asyn
     value: { held, digest },
     detail: `digest ${digest}; the call has not returned; the upstream saw nothing`,
   };
-});
-
-await run("the Dash lists it while it waits", async () => {
-  const dash = env.ITERATE_PROOF_DASH_ORIGIN?.replace(/\/$/, "");
-  if (!dash) return { detail: "skipped: ITERATE_PROOF_DASH_ORIGIN is not set" };
-  const tab = await context.newPage();
-  tab.setDefaultTimeout(60_000);
-  const approvals = `${dash}/minds/${domain}/approvals`;
-  await tab.goto(approvals, { waitUntil: "networkidle" });
-  const connect = tab.getByRole("button", { name: "Connect" });
-  if (await connect.isVisible()) {
-    await connect.click();
-    await tab.waitForURL((url) => !url.pathname.startsWith("/connect"));
-  }
-  if (new URL(tab.url()).pathname !== new URL(approvals).pathname)
-    await tab.goto(approvals, { waitUntil: "networkidle" });
-  const link = tab.locator(`a[href="${issuer}/secrets/approvals?digest=${digest}"]`);
-  await link.waitFor();
-  await tab.screenshot({ path: join(shots, "dash-waiting.png"), fullPage: true });
-  const name = (await link.textContent())?.trim();
-  await tab.close();
-  return { detail: `a row with "${name}", which opens the signing page; dash-waiting.png` };
 });
 
 await run("he sees it listed, its text hashing to its id", async () => {

@@ -10,8 +10,8 @@
 //
 // The larger parts are components of @iterate-com/ui, loaded through the import map in
 // index.html, EACH WHEN ITS PAGE FIRST OPENS (`kits` below): the overview loads none of them.
-// They are: `ContextExplorer`, `RepoIde`, `SecretsPage`, `IntegrationsPage`, `AnalyticsPage`
-// and `McpConnect` are the ones iterate's hosted Dash draws. This file is the wiring: the member's
+// They are `ContextExplorer`, `RepoIde`, `SecretsPage`, `IntegrationsPage`, `AnalyticsPage`
+// and `McpConnect`. This file is the wiring: the member's
 // itx, the URL, the sidebar and the overview. Change them here.
 //
 // WHAT THE PAGE ASKS BY ITSELF: the count of what waits for approval (the kit asks once when the
