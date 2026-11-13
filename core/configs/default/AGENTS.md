@@ -77,6 +77,18 @@ channel, thread_ts, text })`, and any other method the same way. The token stays
     people's words and is this file's own word, not a platform fact: read the message again from
     Gmail by its id before an agent gets it, and mark its words as its sender's, never as a
     member's instruction.
+  - The `events.iterate.com/google/calendar-*` case puts the changes of a Google account's
+    primary calendar on the mind's log as they happen (`calendar.ts`). The member's grant must
+    reach the calendar, and the default scopes do not: the connect names a calendar scope
+    ("Accounts through iterate Cloud", below). The Cloud then says which calendar was connected,
+    the mind asks Google for a channel on its events, and Google's push for it comes through the
+    Cloud, signed by the Cloud's key. Each changed event is one
+    `events.iterate.com/google/calendar-event-changed` on the calendar's context,
+    `/integrations/google/<address>`: its id, status, title, times, place, organizer, attendees
+    and link, and no description. The case hands a change to no agent. To act on one, add a case
+    for that event. That event carries other people's words (an invitation's title is its
+    sender's) and is this file's own word, not a platform fact: read the event again from Google
+    by its id before an agent gets it, and mark its words as their sender's.
 - `fetch` serves every host of the mind. The `x-iterate-routing-slug` header names the host
   (`blog` for `blog.<domain>`, absent on the apex), so `fetch` is a `switch` on it, one case for each
   host. The guard beside a case says who may come: none for a public site, `this.auth.require`
@@ -360,6 +372,21 @@ Google (Gmail) or X through iterate's own app there. The mind needs no OAuth cli
   mailbox's history, so that mail in between was not read (`google/gmail-history-lost`). The
   grant must read mail (the default scopes do). Deleting the secret ends it at the next day's
   event.
+- A Google calendar connected this way is watched too (`calendar.ts`), when the grant has a
+  calendar scope. The default scopes have none, so name every scope the grant should have at
+  the connect:
+  `itx.secrets.beginOAuth("/secrets/google", { client: { cloud: "google" }, scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.labels https://www.googleapis.com/auth/calendar" })`.
+  Each change of an event of the account's primary calendar arrives as
+  `events.iterate.com/google/calendar-event-changed` on `/integrations/google/<address>`, with
+  `{ id, status, summary, start, end, location, organizer, attendees, htmlLink, updated, recurringEventId }`.
+  A deleted event has the status `cancelled`. Read the whole event with the calendar's secret:
+  `itx.fetch(new Request("https://www.googleapis.com/calendar/v3/calendars/primary/events/<id>", { headers: { authorization: 'Bearer getSecret("/secrets/google", { field: "accessToken" })' } }))`.
+  The same context's log says when the calendar got a new channel (`google/calendar-watched`,
+  once a day: a channel lives two days), when Google refused one
+  (`google/calendar-watch-failed`), and when Google no longer had the calendar's sync token, so
+  that changes in between were not reported (`google/calendar-sync-lost`). Events that the
+  calendar held before the connect are not read. Deleting the secret ends it at the next day's
+  event, and the last channel ends by itself within two days.
 - To keep `/repos/config` and a GitHub repository one history through that App, a member links
   them once: `linkThroughCloud(itx, { repository: "acme/config" })` from
   `@iterate-com/github-sync/install`, after a connect that names the repository's account. From

@@ -15,6 +15,7 @@ import { voiceApp } from "./apps/voice/app.ts";
 // Voice is off (AGENTS.md, "Voice"). The Voice app's "Turn voice on" takes the "// " off this
 // line and off `installVoice` in the init case below, in the commit that adds the package.
 // import { installVoice } from "@iterate-com/voice/install";
+import { calendarEvent } from "./calendar.ts";
 import { cloudflareForAgent } from "./cloudflare.ts";
 import { gmailEvent } from "./gmail.ts";
 import {
@@ -297,6 +298,13 @@ export default class extends IterateConfigEntrypoint {
         // mailbox's own context, `/integrations/<client>/<address>` (gmail.ts). No agent gets a
         // message by itself: add a case for that event to hand one to an agent.
         await gmailEvent(itx, event);
+        break;
+      case "events.iterate.com/google/calendar-connected":
+      case "events.iterate.com/google/calendar-push-received":
+      case "events.iterate.com/google/calendar-watch-requested":
+        // Calendar's push (calendar.ts). To hand a change to an agent, add a case for
+        // `google/calendar-event-changed`.
+        await calendarEvent(itx, event);
         break;
       case "events.iterate.com/github/webhook-received":
       case "events.iterate.com/repo/commit-completed": {
