@@ -1,6 +1,7 @@
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Alchemy from "alchemy";
 import * as Layer from "effect/Layer";
+import { MindCloudflareTokenProvider } from "./src/cloudflare-token.ts";
 import { loadMindConfig, resourceNamesOf, stageOf } from "./src/config.ts";
 import { NarrowEventSubscriptionProvider } from "./src/event-subscriptions.ts";
 import { GoneQueueConsumerProvider } from "./src/queue-consumers.ts";
@@ -25,11 +26,13 @@ if (process.env.CLOUDFLARE_ACCOUNT_ID !== config.accountId)
 export default Alchemy.Stack(
   "mind",
   {
-    // Alchemy's providers, with two of our own: event subscriptions, which never read every
-    // subscription of the account (src/event-subscriptions.ts), and queue consumers, whose delete
-    // on a queue that is gone counts as done (src/queue-consumers.ts).
+    // Alchemy's providers, with three of our own: event subscriptions, which never read every
+    // subscription of the account (src/event-subscriptions.ts), queue consumers, whose delete on a
+    // queue that is gone counts as done (src/queue-consumers.ts), and account API tokens, where the
+    // mind's own token drops a group that Cloudflare refuses (src/cloudflare-token.ts).
     providers: NarrowEventSubscriptionProvider().pipe(
       Layer.provideMerge(GoneQueueConsumerProvider()),
+      Layer.provideMerge(MindCloudflareTokenProvider()),
       Layer.provideMerge(Cloudflare.providers()),
     ),
     state:

@@ -78,7 +78,7 @@ const MindConfigFields = z.strictObject({
   // by the link Cloudflare mails to it.
   mail: z.union([z.literal(true), z.strictObject({ forwardTo: z.email() })]).optional(),
   telemetry: z.literal(true).optional(),
-  // The mind's own API token of its account, which reads the account and deploys nothing
+  // The mind's own API token of its account, with which its agents debug and configure the account
   // (./cloudflare-token.ts says what it may do; stack.ts makes it).
   cloudflareToken: z.literal(true).optional(),
   // The Cloud's key, which signs the events it delivers, is one of `auth.keys`.

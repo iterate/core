@@ -558,22 +558,32 @@ prototypes. The stack smoke gate (`docs/testing.md`) runs it in every run, on th
 ## The mind's Cloudflare token
 
 `cloudflareToken: true` in the config adds one API token of the account,
-`iterate-<name>-cloudflare`, for the mind itself. It reads the account and its zones. It writes
-observability, telemetry, pipelines and alerts. It deploys nothing.
+`iterate-<name>-cloudflare`, for the mind itself, so that its agents debug, profile and
+configure what the account runs, through Cloudflare's MCP server.
 
-**The rule: it reads everything, except what yields a credential that can do more than the token
-itself.** So it has no read of a D1 database's rows, a KV namespace's values, an R2 bucket's
-objects, a Logpush job, or the account's API tokens, and no write of a Worker, a route, a
-container, a DNS record, a zone, the registrar or a setting. `src/cloudflare-token.ts` has the
-rule, each read that is left out with what it could yield, and the six writes, one of which can still make an observability destination (the token needs it to read logs).
+**The rule: the account is the mind's sandbox.** The token reads the account and its zones. It
+writes the Workers platform (scripts, their settings, versions and deployments, Durable Objects,
+containers, D1, KV, R2, queues, AI Gateway, Workers AI, Browser Rendering, observability and
+pipelines) and the zones' DNS records, Workers routes and settings. It reaches nothing beyond the
+account and changes nobody's access: no API token, member, billing, registrar or zone write. A
+few reads of other products' secrets stay out. `src/cloudflare-token.ts` has the lists;
 `src/cloudflare-token.test.ts` holds them against the catalog of permission groups that Alchemy
-ships: a catalog with a new read group fails there until somebody has asked the rule's question of
-it. The token still reads names: a bucket's, a namespace's, a database's, a secret's.
+ships. **Every member and agent of the mind can use it**, as any secret of the mind.
+
+**A group that Cloudflare refuses is dropped at that deploy.** A token that a person's OAuth
+sign-in makes (iterate Cloud's run) may hold only the groups the sign-in's scopes cover, and
+Cloudflare refuses the whole token for one more, naming one policy's refused groups per try.
+The stack's provider (`mindCloudflareTokenProvider`) then makes the token without them, at most
+four tries, and the deploy's output has one line,
+`[MindCloudflareToken] Cloudflare refused <n> permission groups …: <names>`. The stack keeps
+the list it asked for, so a later deploy does not ask again until a release changes the list.
 
 Its value stays in the stack's state, as the telemetry tokens' do, and **Account API Tokens Edit
 is needed** by the same deploys: the one that makes the token, a `destroy` or a deploy without
-the field (each deletes it), and a deploy of a version that changes what the token may do. Any
-other deploy asks Cloudflare nothing about it.
+the field (each deletes it), and a deploy of a version that changes what the token may do.
+`ITERATE_KEEP_CLOUDFLARE_TOKEN=1` says that the deploy's access may not change API tokens: a
+token that exists then stays as it is, whatever the version (iterate Cloud sets it for an
+Update without that scope). Any other deploy asks Cloudflare nothing about it.
 
 **The mind keeps the token in its vault.** The stack binds the token to the mind Worker, and at
 the root's first wake after a deploy the mind stores it at `/secrets/cloudflare`, pinned to

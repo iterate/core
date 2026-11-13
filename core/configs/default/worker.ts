@@ -17,7 +17,7 @@ import { voiceApp } from "./apps/voice/app.ts";
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
 import { cloudAccountsEvent } from "./cloud-accounts.ts";
-import { cloudflareForAgent } from "./cloudflare.ts";
+import { cloudflareConnectionEvent, cloudflareForAgent } from "./cloudflare.ts";
 import { contextDescriptionsEvent } from "./context-descriptions.ts";
 import { gmailEvent } from "./gmail.ts";
 import {
@@ -387,6 +387,9 @@ export default class extends IterateConfigEntrypoint {
       // The "iterate Cloud" card on the Dash's Integrations page: what the Cloud's apps offer, and
       // a row for each account a member connected through one (cloud-accounts.ts).
       cloudAccountsEvent(itx, event),
+      // The "Cloudflare" card: the mind's connection to Cloudflare's MCP server, checked at each
+      // publish (cloudflare.ts).
+      cloudflareConnectionEvent(itx, event),
       // What each context is for, the line the mind's catalog shows: the table in
       // context-descriptions.ts, written at a context's birth and at each publish.
       contextDescriptionsEvent(itx, event),
@@ -446,7 +449,8 @@ export default class extends IterateConfigEntrypoint {
   }
 
   /** `itx.config.cloudflare(tool, args)`: a tool of Cloudflare's own MCP server, called with the
-   *  API token of the mind's own account (cloudflare.ts; AGENTS.md, "Cloudflare"). */
+   *  API token of the mind's own account, with which agents debug and configure the account
+   *  (cloudflare.ts; AGENTS.md, "Cloudflare"). */
   async cloudflare(tool: string, args?: Record<string, unknown>) {
     using itx = this.getItx();
     return await cloudflareForAgent(itx, tool, args);

@@ -12,7 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
-import { cloudflareTokenPoliciesOf } from "./cloudflare-token.ts";
+import { cloudflareTokenPoliciesOf, MIND_CLOUDFLARE_TOKEN } from "./cloudflare-token.ts";
 import {
   authSettingsOf,
   deployRefusalOf,
@@ -367,7 +367,7 @@ export const mindStack = (config: MindConfig) =>
 const cloudflareTokenPart = (names: ReturnType<typeof resourceNamesOf>) =>
   Effect.gen(function* () {
     const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
-    return yield* Cloudflare.ApiToken.AccountApiToken("MindCloudflareToken", {
+    return yield* Cloudflare.ApiToken.AccountApiToken(MIND_CLOUDFLARE_TOKEN, {
       name: names.cloudflareToken,
       policies: cloudflareTokenPoliciesOf(accountId),
     });

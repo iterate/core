@@ -38,6 +38,7 @@ test("the default config's pages and folders load here as the platform's loader 
   expect(Object.keys(dashFiles)).toEqual([
     "app.css",
     "app.js",
+    "brands/cloudflare.svg",
     "brands/github.svg",
     "brands/google.svg",
     "brands/slack.svg",
