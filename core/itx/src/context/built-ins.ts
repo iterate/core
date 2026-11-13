@@ -21,7 +21,7 @@ import {
   firstPartyFacetNames,
   firstPartyRowConsumesOf,
 } from "../first-party-facets.ts";
-import { itxHost, itxLoader, type LibraryItx } from "../host.ts";
+import { contexts, itxHost, itxLoader, type LibraryItx } from "../host.ts";
 import {
   ScheduleKey,
   ScheduledAppendInput,
@@ -36,6 +36,8 @@ import {
 } from "../fetch-routes.ts";
 import { unavailableError } from "../unavailable.ts";
 import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
+import { AWAKE_CONTEXT_PATH } from "./awake.ts";
+import { DurableObjectNameCodec } from "./paths.ts";
 import { requestScriptRun } from "./run.ts";
 import type { Connections } from "./connections.ts";
 import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
@@ -81,6 +83,7 @@ export interface BuiltInScope {
     get(rpcStubKey: string): RpcStubHandle;
   };
   rewriteRules: IterateContextApi["rewriteRules"];
+  contexts: IterateContextApi["contexts"];
   facets: Omit<IterateContextApi["facets"], "get"> & {
     get(name: string, spec?: FacetSpec): FacetHandle;
   };
@@ -397,6 +400,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       claim: async (name, at) => deps.claimFacetAlarm(name, at),
     },
     rewriteRules: deps.rewriteRules,
+    contexts: {
+      // asked of the object that holds the sockets and the rows, by a method that records no wake
+      // (awake.ts)
+      list: async (options) =>
+        contexts()
+          .getByName(DurableObjectNameCodec.stringify(AWAKE_CONTEXT_PATH))
+          .listContexts(options || {}),
+    },
     workers: workersRoot({
       path,
       iterateContextName,

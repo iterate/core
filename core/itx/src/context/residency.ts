@@ -107,15 +107,26 @@ export class Residency {
     this.#deps.reconcileAlarm();
   }
 
+  #workInFlight(): number {
+    return (
+      this.#inboundCallsInFlight +
+      this.#deps.facetHost.snapshot().facetWorkInFlight +
+      this.#deps.scriptRunsInFlight() +
+      this.#pinCallsInFlight
+    );
+  }
+
+  /** Work in flight, or pins this actor still waits to release: what its awake socket lasts as
+   *  long as (awake.ts). */
+  busy(): boolean {
+    return this.#workInFlight() > 0 || this.#pinReleaseTimer !== undefined;
+  }
+
   async alarmPassStarted(now: number): Promise<void> {
     const decision = decideQuietDeadline({
       armedFor: this.#unclaimedFacetSweepArmedFor,
       now,
-      workInFlight:
-        this.#inboundCallsInFlight +
-        this.#deps.facetHost.snapshot().facetWorkInFlight +
-        this.#deps.scriptRunsInFlight() +
-        this.#pinCallsInFlight,
+      workInFlight: this.#workInFlight(),
       lastCallEndedAt: this.#lastOutsideActivityEndedAt,
       windowMs: UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS,
     });

@@ -1186,6 +1186,41 @@ export type SandboxHandle = InvokeHandle & {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
 };
 
+export type ContextListOptions = {
+  /** Words that must all occur in the path or in anything the context said about itself. */
+  search?: string;
+  /** Only this context and the contexts below it. */
+  under?: string;
+  /** Only the contexts that have work now. */
+  awake?: boolean;
+  /** At most this many, 200 when absent and never more than 1,000. */
+  limit?: number;
+};
+
+/** One context as the mind's catalog lists it (`itx.contexts.list`). */
+export type ContextListing = {
+  path: string;
+  /** Present while the context has work, and for about a second after: when it woke (ms). */
+  awake?: { since: number };
+  createdAt?: string;
+  lastEventAt?: string;
+  /** The newest event that is not the kernel's own (`itx/*`). */
+  lastActivityAt?: string;
+  /** How many durable events its log holds. */
+  eventCount: number;
+  /** How many of each type, by type. */
+  eventTypes: Record<string, number>;
+  /** The last few types that are not the kernel's own, newest last. */
+  recentTypes: string[];
+  /** The names of the processors it hosts. */
+  processors: string[];
+  /** The size of its storage, in bytes. */
+  storageBytes?: number;
+  /** What the context is for, in its own words: its newest `events.iterate.com/itx/described`. */
+  description?: string;
+  metadata?: Record<string, unknown>;
+};
+
 /** An entity collection root (`itx.repos`, `itx.workspaces`, `itx.sandboxes`): `get(path)` the entity's handle,
  *  `list()` the mind catalog, `create(path)` the creation saga on that path (the parent link the
  *  caller's context writes first, then the processor row, the request, the terminal fact — created,
@@ -1488,6 +1523,11 @@ export interface IterateContextApi {
   /** The rpc stubs lent to this context right now, by key (a live session's `provide`): `get(key)`
    *  one, as a handle over its transport (offline ⇒ RPC_STUB_OFFLINE at call time). */
   rpcStubs: { get(rpcStubKey: string): InvokeHandle; list(): string[] };
+  /** THE MIND'S CATALOG OF ITS CONTEXTS, on the mind's root: `list(options)` answers what each
+   *  context last said about itself, the most recently active first, and which are awake now. A
+   *  context says it when it has had work, so a row is at most one wake behind its log
+   *  (core/itx/src/context/context-catalog.ts). */
+  contexts: { list(options?: ContextListOptions): Promise<ContextListing[]> };
   processors: {
     enable(
       name: string,

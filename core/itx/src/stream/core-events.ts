@@ -25,6 +25,14 @@ export const CoreEventCatalog = {
         "A file was deleted through `itx.files` or `itx.r2`, on the context that did it.",
       payloadSchema: z.object({ path: z.string().min(1) }),
     },
+    "events.iterate.com/itx/described": {
+      description:
+        "What this context is for, in its own words, and any metadata about it: the newest one stands, an absent field keeps what stood and null clears it. Every context folds it into the summary it sends to the mind's catalog (context/context-summary.ts), which `itx.contexts.list` answers.",
+      payloadSchema: z.object({
+        description: z.string().max(2_000).nullable().optional(),
+        metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+      }),
+    },
     "events.iterate.com/itx/child-created": {
       description:
         "A context under this one exists: every context appends it to each ancestor up to its root when it wakes (iterate-context-durable-object.ts `announceToAncestors`), keyed by the child's path, so it lands once per child. The Mind processor reduces the ones on `/` into its context registry.",

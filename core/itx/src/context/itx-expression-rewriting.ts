@@ -51,6 +51,8 @@ const BUILT_IN_ROOT_DESCRIPTIONS = {
   fetch: "the internet through the mind's egress: `itx.fetch(new Request(url))`",
   rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
   rewriteRules: "this table, described: `await rewriteRules.list()`",
+  contexts:
+    "the mind's catalog of its contexts, the most recently active first: `await itx.cd('/').contexts.list({ search?, under?, awake?, limit? })` → [{ path, awake?, lastActivityAt, eventCount, eventTypes, recentTypes, processors, description?, metadata? }]; a context describes itself with `itx.append({ type: 'events.iterate.com/itx/described', payload: { description, metadata } })`",
   facets:
     "a durable facet hosted here: `facets.get(name)` · `facets.abort(name, reason?)` resets that one facet",
   abort:

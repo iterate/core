@@ -12,6 +12,7 @@ import { z } from "zod";
 import { sandboxChecks } from "./smoke/sandboxes.ts";
 import { cliChecks } from "./smoke/cli.ts";
 import { integrationsChecks } from "./smoke/integrations.ts";
+import { awakeChecks } from "./smoke/awake.ts";
 import { telemetryChecks } from "./smoke/telemetry.ts";
 import { authChecks } from "./smoke/auth.ts";
 import { homeLabChecks } from "./smoke/home-lab.ts";
@@ -98,6 +99,7 @@ export default async function smoke(
     ...(await sandboxChecks(domain)),
     ...(await cliChecks(domain)),
     ...(await integrationsChecks(domain)),
+    ...(await awakeChecks(domain)),
     ...(await appsChecks(domain)),
     ...(await telemetryChecks(domain)),
   ];

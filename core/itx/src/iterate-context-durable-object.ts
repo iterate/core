@@ -22,7 +22,13 @@ import {
   normalizedItxExpression,
 } from "iterate/expression";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
-import type { RewriteRuleListEntry, StreamPage, SubscriptionListEntry } from "iterate/api";
+import type {
+  ContextListing,
+  ContextListOptions,
+  RewriteRuleListEntry,
+  StreamPage,
+  SubscriptionListEntry,
+} from "iterate/api";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
@@ -86,6 +92,17 @@ import { FacetHost } from "./context/facet-host.ts";
 import type { NamedWorker } from "./context/worker-loader.ts";
 import { firstPartyFacetClassOf } from "./first-party-facets.ts";
 import { Residency } from "./context/residency.ts";
+import {
+  AWAKE_CONTEXT_PATH,
+  AWAKE_WEBSOCKET_HEADER,
+  AwakeSocket,
+  acceptAwakeWebSocket,
+  awakeContextOf,
+  awakeContexts,
+  isAwakeWebSocket,
+} from "./context/awake.ts";
+import { ContextCatalog, type ContextSummaryMessage } from "./context/context-catalog.ts";
+import { ContextSummaryTracker } from "./context/context-summary.ts";
 import { egress } from "./context/egress.ts";
 import {
   SNAPSHOT_TTL_MS,
@@ -334,6 +351,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         this.#startRequestedRuns(events);
         return claimed;
       });
+      this.#contextSummary.committed(events);
       const woken = events.find((event) => event.type === "events.iterate.com/itx/woken");
       if (woken) this.#announceToAncestors(woken.source?.cause);
       this.#measureSize();
@@ -478,6 +496,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   #inboundRequestInOneTurn(call: string, cause?: Cause): void {
     this.#nameActiveSpan();
+    this.#awakeSocket.entered();
     this.#residency.inboundCallInOneTurn();
     this.#stream.appendWakeRecord({ cause: "call", caller: "other", call }, cause);
   }
@@ -954,6 +973,45 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     inboundCallsHeldChanged: () => this.#alarmCoordinator.watch(),
   });
 
+  // Held while this context has work, so the mind can list its awake contexts (awake.ts). The dial
+  // is a plain fetch of the accepting context's object: it is not a call of this context's caller.
+  readonly #awakeSocket = new AwakeSocket({
+    path: this.#durableObjectAddress.path,
+    busy: () => this.#residency.busy(),
+    summary: () =>
+      JSON.stringify({
+        ...this.#contextSummary.current(),
+        processors: Object.values(this.#stream.coreReducedState.subscriptions).flatMap((row) =>
+          row.hostedFacet ? [row.hostedFacet.name] : [],
+        ),
+        storageBytes: this.ctx.storage.sql.databaseSize,
+      } satisfies ContextSummaryMessage),
+    dial: () =>
+      contexts()
+        .getByName(DurableObjectNameCodec.stringify(AWAKE_CONTEXT_PATH))
+        .fetch("https://awake/", {
+          headers: {
+            Upgrade: "websocket",
+            [AWAKE_WEBSOCKET_HEADER]: encodeURIComponent(this.#durableObjectAddress.path),
+          },
+        }),
+  });
+
+  // What this context says about itself, folded from its log (context/context-summary.ts).
+  readonly #contextSummary = new ContextSummaryTracker({
+    kv: this.ctx.storage.kv,
+    read: (afterOffset, limit) => this.#stream.read(afterOffset, limit),
+  });
+
+  // The rows of the context that accepts the awake sockets (context/context-catalog.ts).
+  readonly #contextCatalog = new ContextCatalog(this.ctx.storage.sql);
+
+  /** The mind's catalog of its contexts, asked of the context that accepts their sockets. It
+   *  records no wake: a list reads the rows and the sockets this object holds. */
+  listContexts(options: ContextListOptions): ContextListing[] {
+    return this.#contextCatalog.list(options, awakeContexts(this.ctx));
+  }
+
   #traceAlarm(
     reason: AlarmTrace["reason"],
     before: number | null,
@@ -1064,6 +1122,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return;
     }
     try {
+      this.#awakeSocket.entered();
       await this.#alarmCoordinator.pass(async () => {
         await this.#residency.alarmPassStarted(wokeAt);
         // Recorded inside the hold, so a wake with nothing else owed ends with no alarm write.
@@ -1193,6 +1252,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         },
         caller.cause,
       );
+    this.#awakeSocket.entered();
     this.#residency.inboundCallStarted();
     // An approved act's text is for this one call (`Caller.approvedAct`).
     const { approvedAct, ...asCalled } = caller;
@@ -1316,6 +1376,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     this.#nameActiveSpan();
     const fromLoadedCode = request.headers.get(ITX_APP_HEADER) !== null;
+    // Before the wake record: an awake socket wakes the accepting context for one turn that writes
+    // nothing. Loaded code dials none, as it attaches no pager.
+    if (!fromLoadedCode) {
+      const awake = acceptAwakeWebSocket(this.ctx, this.#durableObjectAddress.path, request);
+      if (awake) return awake;
+    }
+    this.#awakeSocket.entered();
     const kind = fromLoadedCode ? "loaded" : "other";
     this.#stream.appendWakeRecord(
       { cause: "call", caller: kind, call: "fetch" },
@@ -1410,10 +1477,34 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    // A context's summary: one row written, no wake record.
+    if (isAwakeWebSocket(this.ctx, ws)) {
+      const { path } = awakeContextOf(ws);
+      try {
+        this.#contextCatalog.store(path, typeof message === "string" ? message : "");
+      } catch (error) {
+        console.info({
+          event: "context.catalog-summary-refused",
+          path,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
     this.#inboundRequestInOneTurn("webSocketMessage");
     this.#rpcStubFetch.handleWebSocketMessage(ws, message);
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
+    // An awake socket that closed is off the list already: no wake record, no entry.
+    if (isAwakeWebSocket(this.ctx, ws)) {
+      // echoed, as fetch-upgrade.ts `handleWebSocketClose` says why
+      try {
+        ws.close(1000, "closed");
+      } catch {
+        // already closing
+      }
+      return;
+    }
     this.#inboundRequestInOneTurn("webSocketClose");
     if (this.#rpcStubFetch.handleWebSocketClose(ws, code, reason)) return;
     this.#rpcStubs.rpcStubPagerClosed(ws);
