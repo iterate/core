@@ -3,7 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadMindConfig, MindConfig, resourceNamesOf } from "./config.ts";
+import { authConfigOf } from "core-auth-worker/config";
+import {
+  authSettingsOf,
+  deployRefusalOf,
+  loadMindConfig,
+  MindConfig,
+  resourceNamesOf,
+  storedConfigOf,
+} from "./config.ts";
 
 const stack = {
   name: "proof",
@@ -66,21 +74,144 @@ void test("a provided mind may not ask for the token: its stack has no mind Work
   assert.equal(MindConfig.safeParse({ ...stack, mind: { provided: true } }).success, true);
 });
 
-void test("a config that asks for the mind's Cloudflare token is one the stack may keep in its state store", async () => {
+// As a deploy loads a config file, with `env` in its environment: a field that PUBLIC_FIELDS does
+// not list is refused in the file. The test's own ITERATE_MIND__ variables (a shell with the
+// deploy's secrets) are set aside meanwhile.
+async function loadedFromFile(config: unknown, env: Record<string, string> = {}) {
   const folder = mkdtempSync(join(tmpdir(), "mind-config-"));
-  const named = process.env.ITERATE_MIND_CONFIG;
+  const given = { ...env, ITERATE_MIND_CONFIG: join(folder, "mind.config.json") };
+  const ambient = Object.keys(process.env).filter((key) => key.startsWith("ITERATE_MIND__"));
+  const before = [...new Set([...ambient, ...Object.keys(given)])].map(
+    (key) => [key, process.env[key]] as const,
+  );
   try {
-    process.env.ITERATE_MIND_CONFIG = join(folder, "mind.config.json");
-    writeFileSync(
-      process.env.ITERATE_MIND_CONFIG,
-      JSON.stringify({ ...stack, cloudflareToken: true }),
-    );
-    assert.equal((await loadMindConfig(undefined)).cloudflareToken, true);
+    for (const key of ambient) delete process.env[key];
+    Object.assign(process.env, given);
+    writeFileSync(given.ITERATE_MIND_CONFIG, JSON.stringify(config));
+    return await loadMindConfig(undefined);
   } finally {
-    if (named) process.env.ITERATE_MIND_CONFIG = named;
-    else delete process.env.ITERATE_MIND_CONFIG;
+    for (const [key, value] of before)
+      if (value) process.env[key] = value;
+      else delete process.env[key];
     rmSync(folder, { recursive: true });
   }
+}
+
+const cloudflare = { clientId: "proof-client", hosts: ["cloud.mind.example", "app.mind.example"] };
+const withCloudflare = {
+  ...stack,
+  auth: { login: { ...stack.auth.login, methods: { cloudflare } } },
+};
+const SECRET_VAR = "ITERATE_MIND__AUTH__LOGIN__METHODS__CLOUDFLARE__CLIENT_SECRET";
+
+void test("a config that asks for the mind's Cloudflare token is one the stack may keep in its state store", async () => {
+  assert.equal((await loadedFromFile({ ...stack, cloudflareToken: true })).cloudflareToken, true);
+});
+
+void test("a config with the sign-in with Cloudflare is one the stack may keep in its state store, and reads back the same", async () => {
+  const loaded = await loadedFromFile(withCloudflare);
+  assert.deepEqual(loaded.auth.login.methods.cloudflare, cloudflare);
+  // The stack stores the loaded config (./stack.ts), and a deploy with no config file parses it again.
+  assert.deepEqual(await loadedFromFile(storedConfigOf(loaded)), loaded);
+});
+
+void test("the deploy's environment sets a field by its ITERATE_MIND__ variable, on top of the file", async () => {
+  const loaded = await loadedFromFile(withCloudflare, {
+    [SECRET_VAR]: "proof-secret",
+    ITERATE_MIND__TELEMETRY: "true",
+    ITERATE_MIND__MIND__TEMPLATE: "minimal",
+    ITERATE_MIND__MAIL__FORWARD_TO: "team@group.example",
+  });
+  assert.deepEqual(loaded.auth.login.methods.cloudflare, {
+    ...cloudflare,
+    clientSecret: "proof-secret",
+  });
+  assert.equal(loaded.telemetry, true);
+  assert.equal(loaded.mind?.template, "minimal");
+  assert.deepEqual(loaded.mail, { forwardTo: "team@group.example" });
+});
+
+void test("the client's secret is in neither the stored config nor the auth Worker's settings, whose schema refuses it", async () => {
+  const loaded = await loadedFromFile(withCloudflare, { [SECRET_VAR]: "proof-secret" });
+  assert.deepEqual(storedConfigOf(loaded).auth.login.methods.cloudflare, cloudflare);
+  assert.doesNotMatch(JSON.stringify(storedConfigOf(loaded)), /proof-secret/);
+  const settings = authSettingsOf(loaded);
+  assert.doesNotMatch(JSON.stringify(settings), /proof-secret/);
+  assert.deepEqual(authConfigOf("mind.example", settings).login.methods.cloudflare, cloudflare);
+  assert.throws(() => authConfigOf("mind.example", loaded.auth));
+});
+
+void test("a config file that holds the client's secret is refused, and the refusal names its variable", async () => {
+  const withSecret = {
+    ...stack,
+    auth: {
+      login: { ...stack.auth.login, methods: { cloudflare: { ...cloudflare, clientSecret: "x" } } },
+    },
+  };
+  await assert.rejects(
+    loadedFromFile(withSecret),
+    new RegExp(`auth\\.login\\.methods\\.cloudflare\\.clientSecret \\(${SECRET_VAR}\\)`),
+  );
+});
+
+void test("a deploy of the sign-in with Cloudflare and no client's secret is refused, by the secret's variable", async () => {
+  assert.match(
+    deployRefusalOf(await loadedFromFile(withCloudflare)) || "",
+    new RegExp(`${SECRET_VAR} is not`),
+  );
+  assert.equal(
+    deployRefusalOf(await loadedFromFile(withCloudflare, { [SECRET_VAR]: "proof-secret" })),
+    undefined,
+  );
+  assert.equal(deployRefusalOf(await loadedFromFile(stack)), undefined);
+});
+
+void test("the client's secret in the environment of a stack with no sign-in with Cloudflare is ignored: one Doppler config deploys both", async () => {
+  const loaded = await loadedFromFile(stack, { [SECRET_VAR]: "proof-secret" });
+  assert.deepEqual(loaded, MindConfig.parse(stack));
+  assert.equal(deployRefusalOf(loaded), undefined);
+  // with the method's other fields from the environment too, the method is the config's
+  const both = await loadedFromFile(stack, {
+    [SECRET_VAR]: "proof-secret",
+    ITERATE_MIND__AUTH__LOGIN__METHODS__CLOUDFLARE__CLIENT_ID: "proof-client",
+    ITERATE_MIND__AUTH__LOGIN__METHODS__CLOUDFLARE__HOSTS: JSON.stringify(cloudflare.hosts),
+  });
+  assert.deepEqual(both.auth.login.methods.cloudflare, {
+    ...cloudflare,
+    clientSecret: "proof-secret",
+  });
+});
+
+void test("a variable the mind config does not name, and the old platform's ITERATE ones, fail no deploy", async (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  const unnamed = [
+    "ITERATE_MIND__NO_SUCH__FIELD",
+    "ITERATE_MIND__AUTH__LOGIN__NO_SUCH",
+    // under a leaf, a union, and an object the config does not have
+    "ITERATE_MIND__TELEMETRY__NO_SUCH",
+    "ITERATE_MIND__MAIL__NO_SUCH",
+    "ITERATE_MIND__CLOUD__NO_SUCH",
+    // an array's item: the array is set whole
+    "ITERATE_MIND__AUTH__LOGIN__ALLOW__EMAIL",
+  ];
+  const loaded = await loadedFromFile(
+    { ...stack, telemetry: true, mail: true },
+    {
+      ...Object.fromEntries(unnamed.map((key) => [key, "x"])),
+      // a bridge's: the mind it lends to
+      ITERATE_MIND: "a-slug",
+      ITERATE: "not JSON",
+      ITERATE__SECRETS_ENCRYPTION__KEY: "x",
+      ITERATE__LOGIN__METHODS__PASSWORD__PASSWORD: "x",
+    },
+  );
+  assert.deepEqual(loaded, MindConfig.parse({ ...stack, telemetry: true, mail: true }));
+  const warned = warn.mock.calls.map(({ arguments: [line] }) => String(line));
+  assert.deepEqual(
+    warned.map((line) => line.split(":")[0]),
+    unnamed,
+  );
+  assert.doesNotMatch(warned.join("\n"), /ITERATE__/);
 });
 
 void test("the queue of the longest stack name fits a Cloudflare Queue's name", () => {

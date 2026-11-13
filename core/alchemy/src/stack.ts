@@ -13,7 +13,13 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { cloudflareTokenPoliciesOf } from "./cloudflare-token.ts";
-import { type MindConfig, resourceNamesOf } from "./config.ts";
+import {
+  authSettingsOf,
+  deployRefusalOf,
+  type MindConfig,
+  resourceNamesOf,
+  storedConfigOf,
+} from "./config.ts";
 
 /** A path in `core/`, from this file: a deploy from any working directory finds it. */
 import { publishedSandboxImageIn } from "./sandbox-image.ts";
@@ -80,24 +86,11 @@ export const mindStack = (config: MindConfig) =>
       yield* Config.option(Config.Redacted("ITERATE_PROTOTYPE_TOKEN")),
     );
 
-    // SIGN IN WITH CLOUDFLARE (core/auth-worker/src/cloudflare-sign-in.ts). The client's id and
-    // the hostnames it is for are in the config (`auth.login.methods.cloudflare`), which the
-    // stack stores, so no deploy forgets them. The client's secret is never in the config: it
-    // comes from the deploy's environment, as the at-rest key above does. A deploy with the
-    // method and no secret is refused, so no deploy takes the secret away from a stack whose
-    // hostnames need it. A secret that no config asks for is not bound: one environment (a Doppler
-    // config) deploys stacks with the method and stacks without it.
-    const givenCloudflareSecret = Option.getOrUndefined(
-      yield* Config.option(Config.Redacted("ITERATE_CLOUDFLARE_SIGN_IN_CLIENT_SECRET")),
-    );
-    const cloudflareSecret =
-      givenCloudflareSecret && Redacted.value(givenCloudflareSecret)
-        ? givenCloudflareSecret
-        : undefined;
-    if (config.auth.login.methods.cloudflare && !cloudflareSecret)
-      return yield* refuse(
-        "auth.login.methods.cloudflare is set, but ITERATE_CLOUDFLARE_SIGN_IN_CLIENT_SECRET is not: its hostnames would let nobody in",
-      );
+    // SIGN IN WITH CLOUDFLARE (core/auth-worker/src/cloudflare-sign-in.ts): the client's secret is
+    // the deploy's alone (./config.ts `deployRefusalOf`, `storedConfigOf`).
+    const deployRefusal = deployRefusalOf(config);
+    if (deployRefusal) return yield* refuse(deployRefusal);
+    const cloudflareSecret = config.auth.login.methods.cloudflare?.clientSecret;
 
     // An empty value counts as none, as above. Never in the config: the stored config would keep it.
     const givenFirstOwnerTicket = Option.getOrUndefined(
@@ -113,7 +106,7 @@ export const mindStack = (config: MindConfig) =>
     const observability = observabilityOf(telemetry?.destinations);
     const cloudflareToken = config.cloudflareToken && (yield* cloudflareTokenPart(names));
 
-    const authSettings = { ...config.auth, ...(provided && { provide: true as const }) };
+    const authSettings = authSettingsOf(config);
     // Parsed here, so a config auth would refuse fails the deploy, not the first request.
     authConfigOf(domain, authSettings);
     const db = yield* Cloudflare.D1.Database("AuthDb", {
@@ -141,8 +134,9 @@ export const mindStack = (config: MindConfig) =>
         // oxlint-disable-next-line iterate/simple-truthiness-check -- an absent token is no binding: Alchemy's env takes a value for every key it is given, and `undefined` is none it can bind
         ...(prototypeToken && { ITERATE_PROTOTYPE_TOKEN: prototypeToken }),
         ...(firstOwnerTicket && { FIRST_OWNER_TICKET: JSON.stringify(firstOwnerTicket) }),
-        ...(config.auth.login.methods.cloudflare &&
-          cloudflareSecret && { CLOUDFLARE_SIGN_IN_CLIENT_SECRET: cloudflareSecret }),
+        ...(cloudflareSecret && {
+          CLOUDFLARE_SIGN_IN_CLIENT_SECRET: Redacted.make(cloudflareSecret),
+        }),
       },
     });
 
@@ -363,8 +357,8 @@ export const mindStack = (config: MindConfig) =>
       });
     }
     // Alchemy keeps the output in the state store once a deploy succeeded: a deploy with no config file
-    // reads the config back from it (./config.ts `storedMindConfig`).
-    return { domain, boundary: boundary.workerName, config };
+    // reads the config back from it (./config.ts `storedMindConfig`). No secret: `storedConfigOf`.
+    return { domain, boundary: boundary.workerName, config: storedConfigOf(config) };
   });
 
 /** The mind's own API token of its account, bound to the mind Worker. Its value stays in the

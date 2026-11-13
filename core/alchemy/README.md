@@ -45,10 +45,12 @@ auth: {
 }
 ```
 
-- The client's secret is never in the config. Every deploy of such a stack takes it from its
-  environment, `ITERATE_CLOUDFLARE_SIGN_IN_CLIENT_SECRET`, and a deploy without it is refused: the
-  stack stores the config, so no deploy forgets the hostnames, and none takes the secret away.
-  Keep the secret where the deploy's other credentials are (Doppler).
+- The client's secret is the config's field `clientSecret`, which only the deploy's environment
+  gives: `ITERATE_MIND__AUTH__LOGIN__METHODS__CLOUDFLARE__CLIENT_SECRET`. A config file that holds
+  it is refused, the stack stores it nowhere, and the auth Worker gets it as its own binding, never
+  in its settings. A deploy without it is refused: the stack stores the rest of the config, so no
+  deploy forgets the hostnames, and none takes the secret away. Keep the secret where the deploy's
+  other credentials are (Doppler).
 - Register `https://iterate.<domain>/sign-in/cloudflare/callback` as a redirect URI of the client,
   and the scope `user-details.read`. The sign-in asks that one scope and no `offline_access`.
 - A hostname in `hosts` gives a code or a token only to a person who signed in with Cloudflare,
@@ -123,6 +125,13 @@ ITERATE_MIND_CONFIG=mind.config.local.json pnpm run deploy --stage <name>   # ch
 The stored config holds no secret: the keys are in Alchemy's state. A config with a field that
 `src/config.ts` `PUBLIC_FIELDS` does not list is refused before the deploy, so a new field is
 stored only once it is shown to be public.
+
+The deploy's environment sets any field of the config on top of the file or the stored config, by
+the field's own variable (`iterate/app-config`): `ITERATE_MIND__`, then the path, `__` before each
+segment, each in SNAKE_CASE (`ITERATE_MIND__TELEMETRY=true`). A public field set so is stored; a
+secret is set this way alone, at every deploy, and never stored. A variable whose path the config
+does not name is warned about and ignored. `ITERATE_MIND` alone, and the old platform's
+`ITERATE__*`, are no part of it.
 
 ## An upgrade on the side, and a fork
 

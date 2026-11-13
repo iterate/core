@@ -68,7 +68,8 @@ export const AuthSettings = z.strictObject({
         google: z.strictObject({ signsInAlone: z.literal(true).optional() }).optional(),
         /** A Cloudflare OAuth client's id, and the hostnames of the mind that are signed in with
          *  Cloudflare alone: ./cloudflare-sign-in.ts says what that means. The client's secret is
-         *  the deploy's, never the config's (core/alchemy/src/stack.ts). */
+         *  never in these settings: the deploy takes it from its environment
+         *  (core/alchemy/src/config.ts) and binds it as CLOUDFLARE_SIGN_IN_CLIENT_SECRET. */
         cloudflare: z
           .strictObject({
             clientId: z.string().trim().min(1),
