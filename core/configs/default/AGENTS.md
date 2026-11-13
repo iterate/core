@@ -401,14 +401,18 @@ Google (Gmail) or X through iterate's own app there. The mind needs no OAuth cli
 When the stack's config says `cloudflareToken: true` (an owner turns it on in iterate Cloud), the
 mind holds an API token of its own Cloudflare account, in the vault at `/secrets/cloudflare`.
 `(await itx.secrets.describe("/secrets/cloudflare")).set` says whether this mind has one. With it
-you look at the account that the mind runs in: its Workers with their code and logs, analytics,
-zones and DNS records, queues, pipelines and the AI Gateway.
+you look at the account that the mind runs in: Workers' logs and invocations, the account's and
+each zone's analytics, the zones and their settings and routes, queues, pipelines, the AI
+Gateway, and the names of what the account holds.
 
-- **The token reads; it deploys nothing.** It writes observability, telemetry, pipelines and
-  alerts alone: a saved query, a log destination, a sink, a notification, a health check. It
-  changes no Worker, route, container, DNS record, zone or setting, and makes no API token. It
-  reads the names of D1 databases, KV namespaces and R2 buckets, and nothing that is in them.
-  Cloudflare answers 403 for all of that: say so, and do not look for a way round. The mind's own
+- **The token reads; it deploys nothing.** It writes observability, telemetry and pipelines
+  alone: a saved query, a pipeline and its sink, a zone's tracing. It changes no Worker, route,
+  container, DNS record, zone or setting, and makes no API token.
+- **What it cannot read**, by design: a Worker's code, settings or bindings, so it cannot list
+  the account's Workers either (a Worker's plain-text bindings can hold somebody's key); a zone's
+  DNS records; what is in a D1 database, a KV namespace or an R2 bucket (it reads their names);
+  Logpush jobs; the account's API tokens. Cloudflare answers 403, or for a list an empty one,
+  which says nothing about the account: say so, and do not look for a way round. The mind's own
   code changes by a commit to this repo, never through Cloudflare.
 - **Never make a lasting export:** an observability destination, a notification webhook or a
   Logpush job sends the account's data to an address for good, over every Worker of the account,
@@ -430,6 +434,9 @@ zones and DNS records, queues, pipelines and the AI Gateway.
 - The mind's own Workers are `iterate-<slug>-mind`, `-boundary`, `-secrets` and `-auth`, and with
   telemetry `-telemetry`; `<slug>` is `(await itx.whoami()).mindSlug`. The account may hold other
   people's things: say which Worker or zone you looked at.
+- Name a Worker by its name, never by a list. The second example below groups invocations by
+  `$metadata.service`: without its service filter it names every Worker of the account that ran
+  in the hour.
 
 The mind Worker's newest log lines (for its errors alone, add the filter
 `{ key: "$metadata.level", operation: "eq", type: "string", value: "error" }`):
