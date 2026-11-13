@@ -1307,6 +1307,8 @@ export interface IterateContextApi {
       cursor?: string;
       delimiter?: string;
       startAfter?: string;
+      /** R2 lists neither unless asked. */
+      include?: ("httpMetadata" | "customMetadata")[];
     }): Promise<{
       objects: R2ObjectRecord[];
       delimitedPrefixes: string[];

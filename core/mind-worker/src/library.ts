@@ -96,13 +96,18 @@ export const libraryRoots = {
   },
   files: {
     description:
-      "mind files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
+      "mind files: `files.get(path).put({ contentType, data })`, `data` bytes (text: `new TextEncoder().encode(text)`) or a base64 string · `.bytes()` · `.url()` · `files.list(prefix)`",
     build: ({ itx }): IterateContextApi["files"] => ({
       get: (path) => fileHandle(withR2(itx), path),
       list: async (prefix = "") => {
         const records: FileRecord[] = [];
         for (let cursor: string | undefined; ;) {
-          const page = await withR2(itx).r2.list({ prefix: fileKey(prefix), cursor });
+          // R2 lists no content type unless asked: without it every file reads as octet-stream
+          const page = await withR2(itx).r2.list({
+            prefix: fileKey(prefix),
+            cursor,
+            include: ["httpMetadata"],
+          });
           for (const object of page.objects) records.push(fileRecord(object));
           if (!page.truncated) return records;
           cursor = page.cursor;
@@ -283,7 +288,14 @@ function fileBytes(data: Uint8Array | ArrayBuffer | string): {
     return { bytes: data instanceof Uint8Array ? data : new Uint8Array(data) };
   const dataUrl = /^data:([^;,]*)(?:;[^,]*)?,(.*)$/s.exec(data);
   const base64 = dataUrl ? dataUrl[2]! : data;
-  const binary = atob(base64.replace(/\s+/g, ""));
+  let binary: string;
+  try {
+    binary = atob(base64.replace(/\s+/g, ""));
+  } catch {
+    throw new Error(
+      "files.get(path).put: a string `data` is base64 or a `data:` URL, and this one is neither; for text pass bytes: `data: new TextEncoder().encode(text)`",
+    );
+  }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return { bytes, ...(dataUrl?.[1] && { contentType: dataUrl[1] }) };
