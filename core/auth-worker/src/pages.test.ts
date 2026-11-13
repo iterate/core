@@ -70,8 +70,8 @@ test("an app that takes Cloudflare alone shows one button in Cloudflare's orange
     `<p class="muted note">Cloudflare shares your name and email. Nothing else.</p>`,
   );
   // one way and no script: nothing sends the person on by itself, and no link goes to the
-  // sign-ins page, which a sign-in at Cloudflare does not open
-  expect(html).not.toMatch(/<script|class="or"|\/sign-ins/);
+  // sessions page, which a sign-in at Cloudflare does not open
+  expect(html).not.toMatch(/<script|class="or"|\/sessions/);
   const three = await kept(
     "sign-in-cloudflare-passkey-google",
     methodsSignInPage({ domain: DOMAIN, next, methods: ["cloudflare", "passkey", "google"], app }),

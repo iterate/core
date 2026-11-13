@@ -158,6 +158,8 @@ The owner signs in to the mind when Claude first uses it. Ask them to have Claud
   owner makes on the same page, good for 24 hours.
 - A second passkey, on another device, so that a lost device does not lock the owner out: at
   `https://iterate.<domain>/keys`. A passkey they have signs the new one, so they do it themselves.
+- A device they lost, or a sign-in they do not know: `https://iterate.<domain>/sessions` lists
+  every browser and app signed in as them, and ends each one.
 
 ## 9. The mind's own code
 

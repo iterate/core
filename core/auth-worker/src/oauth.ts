@@ -351,7 +351,7 @@ export async function endGrantsOf(env: Env, userId: string, facts: AccountFacts)
   }
 }
 
-/** One live sign-in of a person, as /keys and the members page list it: a grant, whose client
+/** One live sign-in of a person, as /sessions and the members page list it: a grant, whose client
  *  holds tokens. An app's, a CLI's, a device's, an MCP client's, or a mind hostname's own. */
 export type SignIn = {
   id: string;
@@ -428,9 +428,8 @@ export type ClientWithAccess = {
 /** THE SESSIONS AND GRANTS OF A PERSON, BY OAUTH CLIENT. The one list of who holds access as a
  *  person, member or not: each client once, with every live sign-in it holds under it. An app or
  *  a CLI that the person let in is a client, an MCP client is one, and so is each of the mind's
- *  own hostnames, whose page holds a browser's session. /keys shows a member their own, the
- *  members page shows an owner every member's, and /sign-ins shows a person who is no member
- *  their own (./access-list.ts draws all three). `endAccess` is the one way to end any of it. */
+ *  own hostnames, whose page holds a browser's session. /sessions shows a person their own, member
+ *  or not, and the members page shows an owner every member's (./access-list.ts draws both). `endAccess` is the one way to end any of it. */
 export async function sessionsByClientOf(env: Env, userId: string): Promise<ClientWithAccess[]> {
   const clients = new Map<string, ClientWithAccess>();
   for (const signIn of await signInsOf(env, userId)) {

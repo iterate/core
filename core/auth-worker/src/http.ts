@@ -43,8 +43,8 @@ import {
 } from "./pages.ts";
 import { passkeySignInResponse } from "./passkey-sign-in.ts";
 import { selfTestResponse } from "./self-test.ts";
+import { sessionsResponse } from "./sessions-page.ts";
 import { methodsAskedIn, SIGN_IN_PATH, signInHref, signOutResponse } from "./sign-in.ts";
-import { signInsResponse } from "./sign-ins-page.ts";
 import { statementsResponse } from "./statements.ts";
 import { whoIs } from "./who-is.ts";
 
@@ -121,8 +121,8 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
     return firstOwnerResponse(env, request);
   if (pathname === KEY_TOKEN_PATH && request.method === "POST")
     return keyTokenResponse(env, request);
-  const signIns = await signInsResponse(env, request);
-  if (signIns) return signIns;
+  const sessions = await sessionsResponse(env, request);
+  if (sessions) return sessions;
   const keys = await keysPagesResponse(env, request);
   if (keys) return keys;
   if (pathname === STATEMENTS_PATH && request.method === "POST")

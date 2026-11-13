@@ -30,14 +30,13 @@ export async function firstOwnerResponse(env: Env, request: Request): Promise<Re
   });
   const { method } = ticket;
   console.info({ event: "auth.signed-in", method, userId: user.id });
+  const { setCookie, session } = await sessionCookie(env, request, user, method);
   const facts = new AccountFacts();
   facts.add(user.id, {
     type: "events.iterate.com/account/signed-in",
-    payload: { method, at: now },
+    payload: { method, session, at: now },
   });
-  return facts.on(
-    json({}, 200, new Headers({ "set-cookie": await sessionCookie(env, user, method) })),
-  );
+  return facts.on(json({}, 200, new Headers({ "set-cookie": setCookie })));
 }
 
 async function spentTicket(

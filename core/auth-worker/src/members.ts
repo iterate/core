@@ -13,7 +13,7 @@ import {
   memberByConfig,
 } from "./config.ts";
 import { sha256Hex } from "./device/protocol.ts";
-import { type Session, sessionOf } from "./cookies.ts";
+import { endSessions, type Session, sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import { blockedOf } from "./blocked.ts";
 import { clientsWithAccess, endFields, type Ends, endsOf, logoOriginsOf } from "./access-list.ts";
@@ -44,6 +44,9 @@ export async function isMember(env: Env, email: string): Promise<boolean> {
   if (atMindsDomain(config.domain, email)) return false;
   return memberByConfig(config, email) || (await isAdded(env, email));
 }
+
+/** Who changes the members: a session's person, or a member's token's. */
+type Actor = Pick<Session, "userId" | "email">;
 
 /** What a session is to this stack. Only a live passkey's session acts as a "member". A mailed code
  *  and a sign-in at Google prove an address and no more, and the owner's ticket is a deploy's
@@ -181,7 +184,7 @@ export async function membersResponse(
   );
 }
 
-async function jsonResponse(env: Env, request: Request, actor: Session, cors: Headers) {
+async function jsonResponse(env: Env, request: Request, actor: Actor, cors: Headers) {
   if (request.method === "GET") return json(await membersOf(env), 200, cors);
   if (request.method !== "DELETE") return json({ error: "GET, POST or DELETE" }, 405, cors);
   const body = z.object({ email: z.string() }).safeParse(await request.json().catch(() => null));
@@ -272,7 +275,7 @@ async function accessOfMembers(
   return members;
 }
 
-async function remove(env: Env, actor: Session, typed: string): Promise<Outcome> {
+async function remove(env: Env, actor: Actor, typed: string): Promise<Outcome> {
   const email = typed.trim().toLowerCase();
   const removed = await env.DB.prepare("delete from members where email = ?1 returning email")
     .bind(email)
@@ -289,9 +292,9 @@ async function remove(env: Env, actor: Session, typed: string): Promise<Outcome>
     .bind(email)
     .first<{ id: string }>();
   // What the member was given ends now, as for a blocked person: an app's sign-in, the CLI's, a
-  // hostname's own. The keys stay, since a session removes no key (./signed-change.ts): the
-  // members row is what ends them (./keys.ts `personKeyRefusal`).
-  if (person) await endGrantsOf(env, person.id, facts);
+  // hostname's own, the browsers' sessions here. The keys stay, since a session removes no key
+  // (./signed-change.ts): the members row is what ends them (./keys.ts `personKeyRefusal`).
+  if (person) await endAllOf(env, person.id, facts);
   facts.add(actor.userId, {
     type: "events.iterate.com/account/member-removed",
     payload: { email },
@@ -307,7 +310,7 @@ async function remove(env: Env, actor: Session, typed: string): Promise<Outcome>
  *  session posts it. A session alone, which can be stolen, does neither. */
 async function ownerPress(
   env: Env,
-  actor: Session,
+  actor: Actor,
   signed: unknown,
   type: string,
   typed: string,
@@ -324,7 +327,7 @@ async function ownerPress(
 
 async function removeKeys(
   env: Env,
-  actor: Session,
+  actor: Actor,
   typed: string,
   press: SignedChange,
 ): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
@@ -343,8 +346,9 @@ async function removeKeys(
     .all<{ id: string; label: string; userId: string }>();
   if (!results.length) return { error: `${email} has no keys here.` };
   const facts = new AccountFacts();
-  // what the lost device was given outlives its session: the apps, the CLI, a hostname's cookie
-  await endGrantsOf(env, results[0]!.userId, facts);
+  // what the lost device was given outlives its passkey: the apps, the CLI, a hostname's cookie,
+  // a browser's session opened by a mailed code
+  await endAllOf(env, results[0]!.userId, facts);
   for (const key of results)
     facts.add(key.userId, {
       type: "events.iterate.com/account/key-removed",
@@ -364,7 +368,7 @@ async function removeKeys(
 // Never for an owner: an owner's way in is a deploy's ticket.
 async function memberLink(
   env: Env,
-  actor: Session,
+  actor: Actor,
   typed: string,
   press: SignedChange,
 ): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
@@ -402,7 +406,7 @@ async function memberLink(
 // member is removed, not blocked, since a member's standing comes from the members' list.
 async function block(
   env: Env,
-  actor: Session,
+  actor: Actor,
   typed: string,
 ): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
   const email = typed.trim().toLowerCase();
@@ -418,8 +422,8 @@ async function block(
   const person = await env.DB.prepare("select id from users where email = ?1")
     .bind(email)
     .first<{ id: string }>();
-  // what they hold ends now: an app's session on a hostname, an agent's token
-  if (person) await endGrantsOf(env, person.id, facts);
+  // what they hold ends now: an app's session on a hostname, an agent's token, a browser's session
+  if (person) await endAllOf(env, person.id, facts);
   facts.add(actor.userId, {
     type: "events.iterate.com/account/person-blocked",
     payload: { email },
@@ -433,7 +437,7 @@ async function block(
 
 async function unblock(
   env: Env,
-  actor: Session,
+  actor: Actor,
   typed: string,
 ): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
   const email = typed.trim().toLowerCase();
@@ -614,4 +618,11 @@ function json(value: unknown, status: number, cors: Headers) {
   headers.set("content-type", "application/json");
   headers.set("cache-control", "no-store");
   return new Response(JSON.stringify(value), { status, headers });
+}
+
+/** EVERYTHING A PERSON HOLDS HERE ENDS: every grant (./oauth.ts `endGrantsOf`) and every
+ *  browser's session at the issuer (./cookies.ts `endSessions`). */
+async function endAllOf(env: Env, userId: string, facts: AccountFacts) {
+  await endGrantsOf(env, userId, facts);
+  await endSessions(env, userId, "all", facts);
 }

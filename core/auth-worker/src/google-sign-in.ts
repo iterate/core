@@ -203,13 +203,14 @@ async function finish(env: Env, request: Request, url: URL): Promise<Response> {
     ]);
   }
   console.info({ event: "auth.signed-in", method: "google", userId: user.id });
+  const { setCookie, session } = await sessionCookie(env, request, user, "google");
   const facts = new AccountFacts();
   facts.add(user.id, {
     type: "events.iterate.com/account/signed-in",
-    payload: { method: "google", at: Date.now() },
+    payload: { method: "google", session, at: Date.now() },
   });
   const headers = new Headers({ location: proven.location, "cache-control": "no-store" });
-  headers.append("set-cookie", await sessionCookie(env, user, "google"));
+  headers.append("set-cookie", setCookie);
   headers.append("set-cookie", clearFlowCookie);
   return facts.on(new Response(null, { status: 303, headers }));
 }

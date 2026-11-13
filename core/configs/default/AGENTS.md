@@ -610,7 +610,8 @@ sign-in makes them no member. The app says its name and icon in a web app manife
 `/manifest.webmanifest` on its own host (`name`, and `icons` with a `src` on the same host), which
 must answer without a sign-in. `apps/guestbook/public/` has one, with `icon.svg` beside it. An
 app with no manifest is shown by its host and its initials. A changed manifest shows within five
-minutes.
+minutes. A person, member or not, sees where they are signed in, and ends it, at
+`https://iterate.<domain>/sessions`: their browsers, and each app that holds a sign-in as them.
 
 A guestbook where anyone signed in keeps their own notes, each person's in a context of its own,
 and only members see who wrote:

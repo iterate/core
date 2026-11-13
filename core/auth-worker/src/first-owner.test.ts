@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { FIRST_OWNER_PATH } from "./config.ts";
+import { browserSessionsFake } from "./browser-sessions-fake.ts";
 import { sessionOf } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import type { Env } from "./env.ts";
@@ -35,9 +36,12 @@ test.for([
 /** A stack whose owner holds a deploy's ticket, and whose one other member holds an owner's link. */
 async function stack(): Promise<Env> {
   const linkHash = await sha256Hex("a-members-link");
+  const sessions = browserSessionsFake();
   const prepare = (sql: string, bound: unknown[] = []) => ({
     bind: (...values: unknown[]) => prepare(sql, values),
     first: async () => {
+      const session = sessions.statementOf(sql, bound);
+      if (session) return session.first();
       if (sql.startsWith("update member_tickets"))
         return bound[0] === linkHash ? { email: "member@example.org" } : null;
       if (sql.startsWith("select 1 from member_tickets")) return null;
@@ -48,9 +52,10 @@ async function stack(): Promise<Env> {
     },
     // `linkIdentity`'s three statements: the last one reads the user the first two made
     results: () =>
-      sql.trimStart().startsWith("select u.id")
+      sessions.statementOf(sql, bound)?.results() ??
+      (sql.trimStart().startsWith("select u.id")
         ? { results: [{ id: `user_${String(bound[1]).split("@")[0]}`, email: bound[1] }] }
-        : { results: [] },
+        : { results: [] }),
   });
   return {
     DOMAIN,

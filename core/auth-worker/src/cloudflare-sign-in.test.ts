@@ -10,6 +10,7 @@ import { authResponse } from "./http.ts";
 import { whoIs } from "./who-is.ts";
 import { CLOUDFLARE_SIGN_IN_SCOPE, cloudflareSignInResponse } from "./cloudflare-sign-in.ts";
 import { authConfigOf } from "./config.ts";
+import { browserSessionsFake } from "./browser-sessions-fake.ts";
 import { cloudflareSessionOf, flowCookie, sessionCookie, sessionOf } from "./cookies.ts";
 import type { Env } from "./env.ts";
 import { standingOf } from "./members.ts";
@@ -161,7 +162,15 @@ test("the two cookies are two kinds of session: neither is read as the other, an
   cloudflareOf({ success: true, result: { id: "cf-owner", email: OWNER } });
   const cloudflare = cloudflareCookieOf((await signedInAtCloudflare(env)).answer);
   const passkey = cookiePair(
-    await sessionCookie(env, { id: "user_owner", email: OWNER }, "passkey", "key-1"),
+    (
+      await sessionCookie(
+        env,
+        new Request(ISSUER),
+        { id: "user_owner", email: OWNER },
+        "passkey",
+        "key-1",
+      )
+    ).setCookie,
   );
   const at = (cookie: string) => new Request(ISSUER, { headers: { cookie } });
   // each under its own name
@@ -201,7 +210,14 @@ test("an app that names Cloudflare gives a code to Cloudflare's session alone, a
   // the mind's own sessions: the owner's passkey, and a mailed code's
   const passkey = await passkeyCookie(env);
   const mailed = cookiePair(
-    await sessionCookie(env, { id: "user_2", email: "ada@example.org" }, "email"),
+    (
+      await sessionCookie(
+        env,
+        new Request(ISSUER),
+        { id: "user_2", email: "ada@example.org" },
+        "email",
+      )
+    ).setCookie,
   );
 
   const cloud = await authorizationOf(env, CLOUD, { acr_values: "cloudflare" });
@@ -264,7 +280,14 @@ test("an app that names no way gets the mind's own sign-in, where Cloudflare's s
   // as if signed out: the mind's own sign-in, which mails a code here
   expect(pathOf(await other.ask(cloudflare))).toBe("/sign-in/email");
   const mailed = cookiePair(
-    await sessionCookie(env, { id: "user_2", email: "ada@example.org" }, "email"),
+    (
+      await sessionCookie(
+        env,
+        new Request(ISSUER),
+        { id: "user_2", email: "ada@example.org" },
+        "email",
+      )
+    ).setCookie,
   );
   const answer = await other.ask(`${mailed}; ${cloudflare}`);
   expect(pathOf(answer)).toBe(`${OTHER}/.iterate/callback`);
@@ -317,7 +340,14 @@ test("what a browser changes in the ways ends at the app's guard: every grant sa
   const { env } = stackOf();
   const passkey = await passkeyCookie(env);
   const mailed = cookiePair(
-    await sessionCookie(env, { id: "user_2", email: "ada@example.org" }, "email"),
+    (
+      await sessionCookie(
+        env,
+        new Request(ISSUER),
+        { id: "user_2", email: "ada@example.org" },
+        "email",
+      )
+    ).setCookie,
   );
   // ingress asked for Cloudflare; the browser took the ways out, or put another in their place
   for (const [extra, cookie, method] of [
@@ -510,6 +540,8 @@ function stackOf({
   secret = "THE-CLIENT-SECRET",
   kv = new Map<string, string>(),
   people = new Map<string, { id: string; email: string }>(),
+  // the passkey "key-1" is live
+  sessions = browserSessionsFake((key) => key === "key-1"),
 }: {
   /** false: a config with no such method */
   method?: boolean;
@@ -517,6 +549,7 @@ function stackOf({
   secret?: string | null;
   kv?: Map<string, string>;
   people?: Map<string, { id: string; email: string }>;
+  sessions?: ReturnType<typeof browserSessionsFake>;
 } = {}) {
   const prepare = (sql: string) => {
     const statement = {
@@ -527,8 +560,12 @@ function stackOf({
         return statement;
       },
       // the passkey "key-1" is live; nobody is blocked, and nobody was added as a member
-      first: async () => (sql.includes("from keys") && statement.bound[0] === "key-1" ? {} : null),
-      run: async () => ({ meta: { changes: 0 } }),
+      first: async () =>
+        sessions.statementOf(sql, statement.bound)?.first() ??
+        (sql.includes("from keys") && statement.bound[0] === "key-1" ? {} : null),
+      all: async () => sessions.statementOf(sql, statement.bound)?.all() ?? { results: [] },
+      run: async () =>
+        sessions.statementOf(sql, statement.bound)?.run() ?? { meta: { changes: 0 } },
     };
     return statement;
   };
@@ -559,6 +596,11 @@ function stackOf({
     DB: {
       prepare,
       batch: async (statements: ReturnType<typeof prepare>[]) => {
+        // ./cookies.ts `sessionCookie`
+        if (statements[0]!.sql.includes("browser_sessions"))
+          return statements.map((statement) =>
+            sessions.statementOf(statement.sql, statement.bound)!.results(),
+          );
         // ./users.ts `linkIdentity`: the person of (provider, subject), made at the first sign-in
         if (statements[0]!.sql.includes("insert into users")) {
           const [id, email, provider, subject] = statements[0]!.bound as string[];
@@ -571,7 +613,7 @@ function stackOf({
       },
     },
   } as unknown as Env;
-  return { env, kv, people };
+  return { env, kv, people, sessions };
 }
 
 function cookiePair(setCookie: string) {
@@ -680,7 +722,15 @@ function pathOf(answer: Response) {
 
 async function passkeyCookie(env: Env) {
   return cookiePair(
-    await sessionCookie(env, { id: "user_owner", email: OWNER }, "passkey", "key-1"),
+    (
+      await sessionCookie(
+        env,
+        new Request(ISSUER),
+        { id: "user_owner", email: OWNER },
+        "passkey",
+        "key-1",
+      )
+    ).setCookie,
   );
 }
 

@@ -1,6 +1,7 @@
 import { decodeFacts, FACTS_HEADER } from "iterate/facts";
 import { base64url, keyIdOf, signedP256, statementText } from "iterate/signed";
 import { expect, test } from "vitest";
+import { browserSessionsFake } from "../browser-sessions-fake.ts";
 import { sessionCookie } from "../cookies.ts";
 import type { Env } from "../env.ts";
 import { DEVICE_CONFIRMED, devicePageResponse, pressPayloadOf } from "./page.ts";
@@ -146,17 +147,20 @@ async function keyPair() {
 async function stackOf({ passkey = true, device = DEVICE } = {}) {
   const [ownerKey, otherKey, stackKey] = [await keyPair(), await keyPair(), await keyPair()];
   const seen = new Set<unknown>();
+  const sessions = browserSessionsFake();
   const prepare = (sql: string, bound: unknown[] = []) => ({
     bind: (...values: unknown[]) => prepare(sql, values),
     first: async () => {
+      const session = sessions.statementOf(sql, bound);
+      if (session) return session.first();
       if (sql.includes("from stack_key"))
         return { key: stackKey.key, public_key: stackKey.publicKey, private_key: stackKey.pkcs8 };
-      // the session's own passkey is live
-      if (sql.includes("from keys where id = ?1 and user_id = ?2")) return { 1: 1 };
       if (sql.includes("from members where email")) return { 1: 1 };
       throw new Error(`not expected: ${sql}`);
     },
     counted: () => {
+      const session = sessions.statementOf(sql, bound);
+      if (session) return session.results();
       if (sql.startsWith("delete from statements")) return { meta: { changes: 0 } };
       if (!sql.startsWith("insert into statements")) throw new Error(`not expected: ${sql}`);
       const fresh = !seen.has(bound[0]);
@@ -205,8 +209,14 @@ async function stackOf({ passkey = true, device = DEVICE } = {}) {
   };
   await start(device);
   const cookie = (
-    await sessionCookie(env, { id: "user_owner", email: "owner@example.net" }, "passkey", "key-1")
-  ).split(";")[0]!;
+    await sessionCookie(
+      env,
+      new Request(ISSUER),
+      { id: "user_owner", email: "owner@example.net" },
+      "passkey",
+      "key-1",
+    )
+  ).setCookie.split(";")[0]!;
   const member = (pair: Awaited<ReturnType<typeof keyPair>>) => ({
     signed: async (type: string, payload: Record<string, unknown>) => {
       const now = Date.now();

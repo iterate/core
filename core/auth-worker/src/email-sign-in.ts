@@ -278,16 +278,17 @@ async function finish(env: Env, request: Request) {
     ]);
   }
   console.info({ event: "auth.signed-in", method: "email", userId: user.id });
+  const { setCookie, session } = await sessionCookie(env, request, user, "email");
   const facts = new AccountFacts();
   facts.add(user.id, {
     type: "events.iterate.com/account/signed-in",
-    payload: { method: "email", at: Date.now() },
+    payload: { method: "email", session, at: Date.now() },
   });
   const headers = new Headers({
     location: proven.location,
     "cache-control": "no-store",
   });
-  headers.append("set-cookie", await sessionCookie(env, user, "email"));
+  headers.append("set-cookie", setCookie);
   headers.append("set-cookie", cookie("", 0));
   return facts.on(new Response(null, { status: 303, headers }));
 }

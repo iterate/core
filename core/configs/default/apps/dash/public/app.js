@@ -54,6 +54,7 @@ import {
   KeyRoundIcon,
   LayoutDashboardIcon,
   LockKeyholeIcon,
+  LogOutIcon,
   PhoneIcon,
   PlugIcon,
   ShieldCheckIcon,
@@ -125,6 +126,12 @@ const access = [
     href: `${stack}/keys`,
     icon: KeyRoundIcon,
     about: "Your passkeys, and the keys of your devices and tools.",
+  },
+  {
+    name: "Sessions",
+    href: `${stack}/sessions`,
+    icon: LogOutIcon,
+    about: "Where you are signed in, and the way to end it.",
   },
   { name: "Members", href: `${stack}/members`, icon: UsersIcon, about: "Who may use this mind." },
   {

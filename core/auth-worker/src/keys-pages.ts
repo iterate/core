@@ -1,6 +1,13 @@
 import { base64url, fromBase64url, keyIdOf } from "iterate/signed";
 import { type AccountFact, AccountFacts } from "./account-facts.ts";
-import { clearSessionCookie, type Session, sessionCookie, sessionOf } from "./cookies.ts";
+import {
+  type BrowserSession,
+  clearSessionCookie,
+  endSessions,
+  endThisSession,
+  sessionCookie,
+  sessionOf,
+} from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import {
   allowsExactly,
@@ -13,10 +20,9 @@ import {
   serviceKeyRequestOf,
 } from "./key-rules.ts";
 import { holdsPasskey } from "./keys.ts";
-import { clientsWithAccess, endFields, type Ends, endsOf, logoOriginsOf } from "./access-list.ts";
-import { endAccess, sessionsByClientOf } from "./oauth.ts";
 import { standingOf } from "./members.ts";
 import { errorPage, notMemberPage, page, text } from "./pages.ts";
+import { SESSIONS_PATH } from "./sessions-page.ts";
 import { signInHref } from "./sign-in.ts";
 import {
   KEY_ADDED,
@@ -32,7 +38,6 @@ const KEYS_PATH = "/keys";
 const KEYS_JSON_PATH = "/keys.json";
 const REMOVE_PATH = "/keys/remove";
 const ENROL_PATH = "/keys/enrol";
-const END_SIGN_IN_PATH = "/keys/sign-ins/end";
 
 const CHALLENGE_SECONDS = 5 * 60;
 const CHALLENGE_KEY_PREFIX = "iterate-key-challenge:";
@@ -48,7 +53,6 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
     (pathname === KEYS_PATH && (get || post)) ||
     (pathname === KEYS_JSON_PATH && get) ||
     (pathname === REMOVE_PATH && post) ||
-    (pathname === END_SIGN_IN_PATH && post) ||
     (pathname === ENROL_PATH && (get || post));
   if (!known) return null;
   const issuer = issuerOf(env);
@@ -85,18 +89,20 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
     proven && session.method !== "first-owner-ticket" && session.method !== "member-link";
   if (owed && (pathname !== KEYS_PATH || (first && (await holdsPasskey(env, session.userId))))) {
     if (post) return json({ error: "Sign in with your passkey first." }, 403);
-    return new Response(null, {
-      status: 302,
-      headers: { location: signIn, "set-cookie": clearSessionCookie, "cache-control": "no-store" },
-    });
+    const facts = new AccountFacts();
+    await endThisSession(env, session, facts);
+    return facts.on(
+      new Response(null, {
+        status: 302,
+        headers: {
+          location: signIn,
+          "set-cookie": clearSessionCookie,
+          "cache-control": "no-store",
+        },
+      }),
+    );
   }
   if (pathname === REMOVE_PATH) return removed(env, request, session);
-  if (pathname === END_SIGN_IN_PATH) {
-    const facts = new AccountFacts();
-    const ends = endsOf(await request.formData().catch(() => null));
-    if (ends) await endAccess(env, session.userId, ends, facts);
-    return facts.on(seeOther(`${KEYS_PATH}#access`));
-  }
   if (pathname === KEYS_PATH)
     return post
       ? passkeyAdded(env, request, session, { owed: proven, first })
@@ -129,7 +135,7 @@ const day = (at: number) => new Date(at).toISOString().slice(0, 10);
 
 async function keysPage(
   env: Env,
-  session: Session,
+  session: BrowserSession,
   next: string | null,
   /** The session adds a passkey with no signature: it holds no key to sign with. */
   owed: boolean,
@@ -175,35 +181,11 @@ async function keysPage(
         </form>`;
     return `<li>${text(key.label)} <span class="muted">(${what}, ${when})</span> ${remove}</li>`;
   };
-  // A session that owes a passkey ends nothing, as it removes nothing.
-  const access = held ? [] : await sessionsByClientOf(env, session.userId);
-  const end = (ends: Ends, button: string) =>
-    `<form method="post" action="${END_SIGN_IN_PATH}" class="inline">
-          ${endFields(ends)}
-          <button type="submit" class="link">${button}</button>
-        </form>`;
-  const clients = access.filter((client) => !client.host);
-  const pages = access.filter((client) => client.host);
-  const signedIn = held
-    ? ""
-    : `<h2 id="access">Apps and devices with access</h2>
-      <p>Each app, CLI, device or agent that you let in holds access to ${text(domain)} as you. Under its name is each sign-in it holds, and what that reaches. A sign-in lasts for as long as it is used, and ends after 7 days with no use. Revoke one here, and it stops working with every token it holds.</p>
-      ${
-        clients.length
-          ? `<ul class="access-list">${clientsWithAccess(env, clients, end)}</ul>`
-          : `<p class="muted">No app or device has access as you.</p>`
-      }
-      ${
-        pages.length
-          ? `<h2>This mind's own pages</h2>
-      <p>A browser that opened one of the mind's pages or apps as you holds a sign-in there. Each ends by itself within a day.</p>
-      <ul class="access-list">${clientsWithAccess(env, pages, end)}</ul>`
-          : ""
-      }`;
   const passkeys = results.filter(
     (key) => key.user_id && key.format === "webauthn" && !key.revoked_at,
   ).length;
   // No way on for a session that owes a passkey: every other page sends it back here.
+  const goesOn = !held;
   const ask = held
     ? `<p><strong>Add a passkey to go on.</strong> Only a passkey signs you in to ${text(domain)} after this.</p>`
     : owed
@@ -226,10 +208,9 @@ async function keysPage(
       </form>
       ${ask}
       <p id="removal" class="muted" role="status">${owed ? "" : "Removing a key takes a press of a passkey you have here."}</p>
-      ${signedIn}
-      ${next && !held ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
+      ${goesOn ? `<p class="muted">Where you are signed in, and the apps and tools that hold a sign-in as you: <a href="${SESSIONS_PATH}">Sessions</a>.</p>` : ""}
+      ${next && goesOn ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
     script: `${signScript(domain)}${PASSKEY_SCRIPT}`,
-    imageOrigin: logoOriginsOf(access),
   });
 }
 
@@ -298,7 +279,7 @@ for (const remove of document.querySelectorAll("form[data-remove]"))
 async function passkeyAdded(
   env: Env,
   request: Request,
-  session: Session,
+  session: BrowserSession,
   { owed, first }: { owed: boolean; first: boolean },
 ): Promise<Response> {
   let input: {
@@ -375,17 +356,23 @@ async function passkeyAdded(
     payload: { key, label: label.trim(), format: "webauthn", at, ...(change && signerOf(change)) },
     idempotencyKey: `account/key-added:${key}`,
   });
-  // The first passkey, made in this browser, makes the session that passkey's.
+  // The first passkey, made in this browser, makes the session that passkey's: a new one, and
+  // the one it replaces ends.
   const headers = new Headers({ "cache-control": "no-store" });
-  if (owed)
-    headers.set(
-      "set-cookie",
-      await sessionCookie(env, { id: session.userId, email: session.email }, "passkey", key),
-    );
+  if (owed) {
+    const user = { id: session.userId, email: session.email };
+    const made = await sessionCookie(env, request, user, "passkey", key);
+    await endSessions(env, session.userId, { session: session.id }, facts);
+    facts.add(session.userId, {
+      type: "events.iterate.com/account/signed-in",
+      payload: { method: "passkey", key, session: made.session, at: Date.now() },
+    });
+    headers.set("set-cookie", made.setCookie);
+  }
   return facts.on(Response.json({ key, label: label.trim() }, { headers }));
 }
 
-async function removed(env: Env, request: Request, session: Session): Promise<Response> {
+async function removed(env: Env, request: Request, session: BrowserSession): Promise<Response> {
   const form = await request.formData();
   const id = String(form.get("key") || "");
   // A session alone removes no key: whoever stole one could take a member's passkeys away.
@@ -432,7 +419,7 @@ async function removed(env: Env, request: Request, session: Session): Promise<Re
   return facts.on(seeOther(back));
 }
 
-async function keysJson(env: Env, session: Session): Promise<Response> {
+async function keysJson(env: Env, session: BrowserSession): Promise<Response> {
   const { results } = await env.DB.prepare(
     `select id, credential_id, label, format from keys
      where user_id = ?1 and revoked_at is null order by added_at`,
@@ -527,7 +514,11 @@ form.addEventListener("submit", async (event) => {
 });`;
 
 // A service's key a member removed is added again by a member's new consent; a person's key never is.
-async function serviceKeyAnswered(env: Env, request: Request, session: Session): Promise<Response> {
+async function serviceKeyAnswered(
+  env: Env,
+  request: Request,
+  session: BrowserSession,
+): Promise<Response> {
   const { domain, trustedClients } = iterateConfigOf(env);
   const form = await request.formData();
   const next = honouredNext(String(form.get("next") || ""), issuerOf(env), trustedClients);

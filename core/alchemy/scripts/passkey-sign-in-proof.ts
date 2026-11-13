@@ -382,7 +382,7 @@ await run(
 );
 
 await run(
-  "an app with access is listed on /keys with its mark and what it reaches, an owner sees it on the members page, and Revoke ends it: its refresh is refused",
+  "an app with access is listed on /sessions with its mark and what it reaches, an owner sees it on the members page, and Revoke ends it: its refresh is refused",
   async () => {
     // A Codex CLI's sign-in to the mind's MCP server, as `codex mcp add` makes one: a client that
     // registers itself, a code that goes to a port of this computer, and PKCE.
@@ -470,7 +470,7 @@ await run(
     const before = await reaches(held.access_token);
     must(before === 200, `the app's token did not reach the mind's MCP server: ${before}`);
 
-    // /keys lists the client once: its mark and name, where its access went, and under it the
+    // /sessions lists the client once: its mark and name, where its access went, and under it the
     // sign-in with what it reaches and Revoke. The list is read from a store that shows a new
     // entry within a minute, not at once.
     const row = page.locator("li.access", { hasText: goesTo });
@@ -486,7 +486,7 @@ await run(
         await page.waitForTimeout(3_000);
       }
     };
-    const shownAfter = await listed("/keys", true);
+    const shownAfter = await listed("/sessions", true);
     const words = (await row.innerText()).replace(/\s+/g, " ");
     for (const part of [
       "Codex",
@@ -509,16 +509,16 @@ await run(
         await page.screenshot({ path: join(shots, `${name}-${width}.png`) });
       }
     };
-    await pictured("keys-access");
+    await pictured("sessions-access");
     // An owner sees it on the members page, with the member's address.
     await listed("/members", true);
     const theirs = (await row.innerText()).replace(/\s+/g, " ");
     must(/Codex of \S+@\S+/.test(theirs), `the members page says: ${theirs.slice(0, 200)}`);
     await pictured("members-access");
-    // Revoke, on /keys: the grant and every token of it end.
-    await listed("/keys", true);
+    // Revoke, on /sessions: the grant and every token of it end.
+    await listed("/sessions", true);
     await row.getByRole("button", { name: "Revoke", exact: true }).click();
-    await page.getByRole("heading", { name: "Apps and devices with access" }).waitFor();
+    await page.getByRole("heading", { name: "Apps and tools signed in as you" }).waitFor();
     const revokedAt = Date.now();
     const refresh = await token({ grant_type: "refresh_token", refresh_token: held.refresh_token });
     must(
@@ -533,14 +533,14 @@ await run(
     }
     const tokenEnded = Math.round((Date.now() - revokedAt) / 1000);
     must(after === 401, `the app's token still reached the mind 90 s after Revoke: ${after}`);
-    const goneAfter = await listed("/keys", false);
-    return `"Codex", registered as codex mcp add does, was let in to the mind's MCP server; /keys listed the client ${shownAfter} s later with a known mark, where its access went and what its sign-in reaches, and the members page listed it with the member's address; no sideways scroll at 390 and 1280 px; after Revoke its refresh was refused at once (${refresh.status} ${JSON.stringify(refresh.body).slice(0, 80)}), its token, which reached the MCP server before, got 401 within ${tokenEnded} s, and the client was gone from the list ${goneAfter} s later`;
+    const goneAfter = await listed("/sessions", false);
+    return `"Codex", registered as codex mcp add does, was let in to the mind's MCP server; /sessions listed the client ${shownAfter} s later with a known mark, where its access went and what its sign-in reaches, and the members page listed it with the member's address; no sideways scroll at 390 and 1280 px; after Revoke its refresh was refused at once (${refresh.status} ${JSON.stringify(refresh.body).slice(0, 80)}), its token, which reached the MCP server before, got 401 within ${tokenEnded} s, and the client was gone from the list ${goneAfter} s later`;
   },
 );
 
 if (env.ITERATE_PROTOTYPE_TOKEN)
   await run(
-    "a person who is no member sees their own sign-ins at /sign-ins and ends one, and sees and ends nothing of another person's",
+    "a person who is no member sees their own sign-ins at /sessions and ends one, and sees and ends nothing of another person's",
     async () => {
       // An app of the mind has users of its own on a stack whose sign-in is open to anyone
       // (`login.methods.email.anyone`). Each stranger has an address at the mind's own domain,
@@ -581,15 +581,15 @@ if (env.ITERATE_PROTOTYPE_TOKEN)
         await theirPage.getByRole("button", { name: "Sign in" }).click();
         await theirPage.waitForURL((url) => url.host === app);
         const rows = theirPage.locator("li.access");
-        /** Opens /sign-ins until it lists `count` clients: the list shows a new entry or an
+        /** Opens /sessions until it lists `count` clients: the list shows a new entry or an
          *  ended one within a minute. */
         const lists = async (count: number) => {
           for (const from = Date.now(); ; await theirPage.waitForTimeout(3_000)) {
-            await theirPage.goto(`${issuer}/sign-ins`);
+            await theirPage.goto(`${issuer}/sessions`);
             if ((await rows.count()) === count) return;
             must(
               Date.now() - from < 90_000,
-              `/sign-ins lists ${await rows.count()} clients for ${address}, not ${count}, after 90 s`,
+              `/sessions lists ${await rows.count()} clients for ${address}, not ${count}, after 90 s`,
             );
           }
         };
@@ -602,12 +602,12 @@ if (env.ITERATE_PROTOTYPE_TOKEN)
       const said = (await first.theirPage.locator("main").innerText()).replace(/\s+/g, " ");
       must(
         said.includes(first.address) && said.includes(app) && !said.includes(second.address),
-        `/sign-ins says: ${said.slice(0, 300)}`,
+        `/sessions says: ${said.slice(0, 300)}`,
       );
-      must(!/passkey|Members/i.test(said), `/sign-ins shows more than sign-ins: ${said}`);
+      must(!/passkey|Members/i.test(said), `/sessions shows more than sign-ins: ${said}`);
       for (const width of [390, 1280]) {
         await first.theirPage.setViewportSize({ width, height: 900 });
-        await first.theirPage.screenshot({ path: join(shots, `sign-ins-${width}.png`) });
+        await first.theirPage.screenshot({ path: join(shots, `sessions-${width}.png`) });
       }
       // /keys stays a member's page.
       await first.theirPage.goto(`${issuer}/keys`);
@@ -620,7 +620,7 @@ if (env.ITERATE_PROTOTYPE_TOKEN)
       must(theirSignIn, "the first stranger's sign-in has no id on the page");
       // with the second stranger's own session, and the page's origin as a form of it sends
       const posted = (
-        await second.theirs.request.post(`${issuer}/sign-ins`, {
+        await second.theirs.request.post(`${issuer}/sessions`, {
           form: { signIn: theirSignIn },
           headers: { origin: issuer },
           maxRedirects: 0,
@@ -633,7 +633,7 @@ if (env.ITERATE_PROTOTYPE_TOKEN)
       await second.lists(1);
       await first.theirs.close();
       await second.theirs.close();
-      return `two strangers signed in to ${app} by a mailed code; each saw one client with one sign-in at /sign-ins and nothing else (no key, no member, not the other's address); /keys told a stranger that the address is not a member; the second stranger's post of the first one's sign-in (answer ${posted}) ended nothing; the first signed out and saw none, and the second still saw one`;
+      return `two strangers signed in to ${app} by a mailed code; each saw one client with one sign-in at /sessions and nothing else (no key, no member, not the other's address); /keys told a stranger that the address is not a member; the second stranger's post of the first one's sign-in (answer ${posted}) ended nothing; the first signed out and saw none, and the second still saw one`;
     },
   );
 
@@ -644,8 +644,57 @@ await run("signed out, the passkey signs in from the sign-in page", async () => 
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   await page.waitForURL(`${issuer}/keys`);
   await page.locator("li", { hasText: label }).waitFor();
-  return `at /keys as the key's member, through ${signIn}`;
+  // /sessions lists this browser, opened by the passkey
+  await page.goto(`${issuer}/sessions`);
+  const here = (await page.locator("li[data-current]").innerText()).replace(/\s+/g, " ");
+  must(
+    here.includes("(this browser)") && here.includes("signed in with a passkey"),
+    `/sessions says of this browser: ${here}`,
+  );
+  return `at /keys as the key's member, through ${signIn}; /sessions lists this browser: ${here}`;
 });
+
+await run(
+  "ending another browser on /sessions signs that browser out, and this one stays",
+  async () => {
+    // a second browser with the same passkey, copied from this one's authenticator
+    const theirs = await browser.newContext();
+    const theirPage = await theirs.newPage();
+    theirPage.setDefaultTimeout(15_000);
+    const theirCdp = await theirs.newCDPSession(theirPage);
+    await theirCdp.send("WebAuthn.enable");
+    const copy = await authenticator(theirCdp, "internal", true);
+    const { credentials } = await cdp.send("WebAuthn.getCredentials", { authenticatorId });
+    for (const credential of credentials)
+      await theirCdp.send("WebAuthn.addCredential", { authenticatorId: copy, credential });
+    await theirPage.goto(`${issuer}/keys`);
+    await theirPage.getByRole("button", { name: "Sign in with a passkey" }).click();
+    await theirPage.waitForURL(`${issuer}/keys`);
+    await theirPage.goto(`${issuer}/sessions`);
+    const theirSession = await theirPage.locator("li[data-current]").getAttribute("data-session");
+    must(theirSession, "the second browser's /sessions marks no row as this browser");
+    // this browser lists both, and ends the other one
+    await page.goto(`${issuer}/sessions`);
+    const other = page.locator(`li[data-session="${theirSession}"]`);
+    must(
+      (await other.count()) === 1 && (await other.getAttribute("data-current")) === null,
+      "/sessions does not list the second browser as another browser",
+    );
+    must((await page.locator("li[data-current]").count()) === 1, "/sessions marks no this browser");
+    await other.getByRole("button", { name: "End", exact: true }).click();
+    await other.waitFor({ state: "detached" });
+    const after = await theirs.request.get(`${issuer}/sessions`, { maxRedirects: 0 });
+    const to = new URL(after.headers().location || "", issuer).pathname;
+    must(
+      after.status() === 303 && to.startsWith("/sign-in"),
+      `the ended browser's /sessions answered ${after.status()} to ${to}`,
+    );
+    await page.goto(`${issuer}/sessions`);
+    must(page.url() === `${issuer}/sessions`, `this browser was signed out too: at ${page.url()}`);
+    await theirs.close();
+    return `the second browser, signed in by the same passkey, was listed and ended; its /sessions then answered ${after.status()} to ${to}, and this browser stayed signed in`;
+  },
+);
 
 await run("an answer counts once", async () => {
   await context.clearCookies();

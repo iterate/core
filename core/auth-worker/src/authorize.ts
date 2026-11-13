@@ -13,6 +13,7 @@ import {
   clearCloudflareSessionCookie,
   clearSessionCookie,
   cloudflareSessionOf,
+  endThisSession,
   type Session,
   sessionOf,
 } from "./cookies.ts";
@@ -86,15 +87,21 @@ async function describe(env: Env, request: Request) {
   // Cloudflare ends for either, and the person starts again on the page of the app's ways:
   // Cloudflare's own page says who is signed in there, and with no page of ours between,
   // Cloudflare would sign the same person straight back in.
-  if (prompt === "login" || (prompt && cloudflare))
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location: signIn,
-        "set-cookie": cloudflare ? clearCloudflareSessionCookie : clearSessionCookie,
-        "cache-control": "no-store",
-      },
-    });
+  if (prompt === "login" || (prompt && cloudflare)) {
+    // the browser's session ends with its cookie; Cloudflare's has no row
+    const facts = new AccountFacts();
+    await endThisSession(env, session, facts);
+    return facts.on(
+      new Response(null, {
+        status: 302,
+        headers: {
+          location: signIn,
+          "set-cookie": cloudflare ? clearCloudflareSessionCookie : clearSessionCookie,
+          "cache-control": "no-store",
+        },
+      }),
+    );
+  }
   // A hostname's own sign-in asks for the chooser only after that host's sign-out
   // (boundary-worker's host-session.ts): the press it needs is the way back into the app.
   const hostSignIn = hostResource && authRequest.redirectUri === hostCallbackOf(hostResource);

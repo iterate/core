@@ -14,7 +14,7 @@
 // in one colour and with no wordmark, and it names OpenAI's own clients and nothing else. Visual
 // Studio Code has no free mark, so it shows its initials.
 //
-// The list of a person's sign-ins (the keys page) draws the same tile, small:
+// The list of a person's sign-ins (/sessions, and an owner's /members) draws the same tile, small:
 //   clientTile(client, { small: true })
 
 const text = (value: string) =>

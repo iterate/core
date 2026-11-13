@@ -2,14 +2,19 @@ import { type Facts, withFacts } from "iterate/facts";
 import type { Envelope } from "iterate/signed";
 import { z } from "zod";
 
+/** `session`: the browser's session it opened (./cookies.ts `sessionCookie`). A sign-in at
+ *  Cloudflare has its own cookie and no such row. */
+const session = z.string().min(1);
 const SignedIn = z.union([
-  z.object({ method: z.literal("email"), at: z.number() }),
-  z.object({ method: z.literal("google"), at: z.number() }),
+  z.object({ method: z.literal("email"), session, at: z.number() }),
+  z.object({ method: z.literal("google"), session, at: z.number() }),
   z.object({ method: z.literal("cloudflare"), at: z.number() }),
-  z.object({ method: z.literal("passkey"), key: z.string().min(1), at: z.number() }),
-  z.object({ method: z.literal("first-owner-ticket"), at: z.number() }),
-  z.object({ method: z.literal("member-link"), at: z.number() }),
+  z.object({ method: z.literal("passkey"), key: z.string().min(1), session, at: z.number() }),
+  z.object({ method: z.literal("first-owner-ticket"), session, at: z.number() }),
+  z.object({ method: z.literal("member-link"), session, at: z.number() }),
 ]);
+/** A browser's session ended: at sign-out, on /sessions, or with its person's removal. */
+const SessionEnded = z.object({ session, at: z.number() });
 const ConsentApproved = z.object({
   clientId: z.string().min(1),
   clientName: z.string(),
@@ -83,6 +88,7 @@ export type AccountFact = (
       payload: z.infer<typeof ConsentApproved>;
     }
   | { type: "events.iterate.com/account/grant-ended"; payload: z.infer<typeof GrantEnded> }
+  | { type: "events.iterate.com/account/session-ended"; payload: z.infer<typeof SessionEnded> }
   | { type: "events.iterate.com/account/member-added"; payload: z.infer<typeof MemberAdded> }
   | { type: "events.iterate.com/account/member-removed"; payload: z.infer<typeof MemberRemoved> }
   | {

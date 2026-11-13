@@ -121,6 +121,18 @@ export async function authChecks(domain: string): Promise<Check[]> {
         };
       },
     ),
+    await attempt("auth: /sessions with no session goes to the sign-in, and back", async () => {
+      const response = await fetch(`${issuer}/sessions`, { redirect: "manual" });
+      const location = response.headers.get("location") || "";
+      const to = new URL(location, issuer);
+      return {
+        pass:
+          response.status === 303 &&
+          /^\/sign-in(\/email)?$/.test(to.pathname) &&
+          to.searchParams.get("next") === "/sessions",
+        detail: `${response.status} to ${location}`,
+      };
+    }),
     await attempt("auth: the token endpoint refuses a made-up code", async () => {
       const client = await registration;
       const response = await fetch(String(metadata?.token_endpoint), {

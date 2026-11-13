@@ -91,14 +91,14 @@ async function finish(env: Env, request: Request) {
     return refused("it did not check that it is you, by a PIN, a fingerprint or a face");
   const user = { id: principal.actor, email: principal.email };
   console.info({ event: "auth.signed-in", method: "passkey", userId: user.id });
+  const signer = verified.signer.key;
+  const { setCookie, session } = await sessionCookie(env, request, user, "passkey", signer);
   const facts = new AccountFacts();
   facts.add(user.id, {
     type: SIGNED_IN,
-    payload: { method: "passkey", key: verified.signer.key, at: Date.now() },
+    payload: { method: "passkey", key: signer, session, at: Date.now() },
   });
-  const headers = new Headers({
-    "set-cookie": await sessionCookie(env, user, "passkey", verified.signer.key),
-  });
+  const headers = new Headers({ "set-cookie": setCookie });
   return facts.on(json({ next: sameOriginPath(next || "/", issuerOf(env)) }, 200, headers));
 }
 

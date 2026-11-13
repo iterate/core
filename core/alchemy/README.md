@@ -274,8 +274,13 @@ with a passkey": one the member added on `https://iterate.<zone>/keys`. It signs
 whose key it is, while that address is a member and the key is not removed, and the passkey must
 verify its user (a PIN, a fingerprint or a face). Its session on `iterate.<zone>` ends when that
 passkey is removed. The grants that session gave do not: an app or a CLI it signed in stays so
-until its grant ends (after 7 days with no use), until the member signs it out on `/keys`, which
-lists each one, or until an owner removes the member's keys.
+until its grant ends (after 7 days with no use), until the member signs it out on `/sessions`,
+which lists each one, or until an owner removes the member's keys.
+
+`https://iterate.<zone>/sessions` is for anyone signed in, member or not: the person's browsers
+that hold a session at the issuer, each with its button that ends it, and the apps and tools that
+hold a sign-in as the person. Each browser's session is a row in the auth Worker's D1
+(`browser_sessions`), and its cookie holds the row's id: an ended row is no session.
 
 A mailed code proves an address and no more. For a member who holds no passkey, it opens
 a session that does one thing: it adds the first passkey on `/keys`, and every other page sends
