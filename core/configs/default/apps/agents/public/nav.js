@@ -18,7 +18,7 @@ import {
   SquarePenIcon,
   SquareTerminalIcon,
 } from "@iterate-com/ui/icons";
-import { agentTitle, byRecentActivity, mineFirst, personAt, topLevelAgents } from "./agent-rows.js";
+import { byRecentActivity, mineFirst, personAt, topLevelAgents } from "./agent-rows.js";
 
 /** A link that changes this page's URL: a plain left click stays on the page, and any other click
  *  is the browser's (a new tab). */
@@ -121,9 +121,16 @@ function AgentsNavRow({ row, other, active, pinned, onOpen, onTogglePinned }) {
         <span class="flex min-w-0 flex-col">
           <span class="truncate text-sm">
             ${other && html`<span class="text-muted-foreground" data-agent-person>${other}${" "}</span>`}
-            ${agentTitle(row)}
+            ${row.title || html`<span class="font-mono text-xs" title=${row.path}>${row.path}</span>`}
           </span>
-          <span class="truncate text-2xs text-muted-foreground">${row.path}</span>
+          ${
+            row.title &&
+            html`
+              <span class="truncate font-mono text-2xs text-muted-foreground" title=${row.path}>
+                ${row.path}
+              </span>
+            `
+          }
         </span>
       <//>
       <button

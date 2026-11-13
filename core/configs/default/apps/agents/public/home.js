@@ -12,13 +12,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/co
 import { Textarea } from "@iterate-com/ui/components/ui/textarea";
 import { BotIcon } from "@iterate-com/ui/icons";
 import { newAgentValues } from "@iterate-com/ui/lib/new-agent";
-import {
-  agentTitle,
-  byRecentActivity,
-  mineFirst,
-  newAgentPath,
-  topLevelAgents,
-} from "./agent-rows.js";
+import { byRecentActivity, mineFirst, newAgentPath, topLevelAgents } from "./agent-rows.js";
 import { agentHref, linkClick } from "./nav.js";
 
 /** `offers`: other kinds' choices, `{ value: "<kind>/<choice>", label, kind, choice, fields,
@@ -156,9 +150,24 @@ export function AgentsHome({
                               className="size-4 shrink-0 text-muted-foreground"
                               aria-hidden
                             />
-                            <span class="truncate">${agentTitle(row)}</span>
+                            <span
+                              class=${row.title ? "truncate" : "truncate font-mono"}
+                              title=${row.path}
+                            >
+                              ${row.title || row.path}
+                            </span>
                           <//>
-                          <${CardDescription} className="truncate text-2xs">${row.path}<//>
+                          ${
+                            row.title &&
+                            html`
+                              <${CardDescription}
+                                className="truncate font-mono text-2xs"
+                                title=${row.path}
+                              >
+                                ${row.path}
+                              <//>
+                            `
+                          }
                         <//>
                       <//>
                     </a>

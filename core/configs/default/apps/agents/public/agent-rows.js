@@ -34,11 +34,6 @@ export function topLevelAgents(rows) {
   });
 }
 
-/** What a list calls an agent: its title, or else the last segment of its path. */
-export function agentTitle(row) {
-  return row.title || row.path.split("/").filter(Boolean).at(-1) || row.path;
-}
-
 /** The agents, most recently active first; the path breaks a tie. */
 export function byRecentActivity(rows) {
   const at = (row) => row.lastActivityAt || row.createdAt;
