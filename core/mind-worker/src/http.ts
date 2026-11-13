@@ -60,8 +60,12 @@ async function skeletonChecks(request: Request, env: Env) {
     /** The boundary removes a cookie on the platform's hostname. */
     cookieReached: request.headers.has("cookie"),
     egressFetchStatus: (await door.fetch(new Request("https://example.com/"))).status,
-    authThroughEgressStatus: (await door.fetch(new Request(`${platformOriginOf(env.DOMAIN)}/`)))
-      .status,
+    // the issuer's own document: its `/` is a redirect to the Dash
+    authThroughEgressStatus: (
+      await door.fetch(
+        new Request(`${platformOriginOf(env.DOMAIN)}/.well-known/oauth-authorization-server`),
+      )
+    ).status,
     secretsEventCount:
       (await releasedAnswer(door.secret("/secrets/skeleton", "describe", undefined))).path ===
       "/secrets/skeleton"
