@@ -148,7 +148,6 @@ function cloudMind({ cloud = true } = {}) {
   const state = {
     integrations: {} as Record<string, unknown>,
     connections: {} as Record<string, unknown>,
-    sections: {} as Record<string, unknown>,
   };
   const events = IntegrationRegistryContract.events;
   const short = (key: string) => key.replace("iterate-cloud-", "");
@@ -164,9 +163,11 @@ function cloudMind({ cloud = true } = {}) {
     /** The section's heading, its cards by app, and its rows by `<app>/<secret's name>`. */
     registry() {
       return structuredClone({
-        heading: state.sections["iterate-cloud"],
+        heading: state.integrations["iterate-cloud"],
         cards: Object.fromEntries(
-          Object.entries(state.integrations).map(([key, card]) => [short(key), card]),
+          Object.entries(state.integrations)
+            .filter(([key]) => key !== "iterate-cloud")
+            .map(([key, card]) => [short(key), card]),
         ) as Record<string, unknown>,
         rows: Object.fromEntries(
           Object.entries(state.connections).map(([key, row]) => [short(key), row]),
@@ -202,11 +203,6 @@ function cloudMind({ cloud = true } = {}) {
               for (const key of Object.keys(state.connections))
                 if (key.startsWith(`${integration}/`)) delete state.connections[key];
             }
-          } else if (event.type === "events.iterate.com/integration/section-configured") {
-            const { section, heading } = events[
-              "events.iterate.com/integration/section-configured"
-            ].payloadSchema.parse(event.payload);
-            state.sections[section] = heading;
           } else {
             const { integration, connection, row } = events[
               "events.iterate.com/integration/connection-configured"

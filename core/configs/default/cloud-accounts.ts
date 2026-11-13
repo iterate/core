@@ -26,7 +26,8 @@
 import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
 
-/** The section's name in the registry, and the start of the name of each of its cards. */
+/** The heading's name in the registry: the cards under it name it as their `section`, and their
+ *  own names start with it. */
 const SECTION = "iterate-cloud";
 
 type Json = Record<string, unknown>;
@@ -96,7 +97,6 @@ const APPS: Record<string, CloudApp> = {
 const Registry = z.object({
   integrations: z.record(z.string(), z.unknown()).default({}),
   connections: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
-  sections: z.record(z.string(), z.unknown()).default({}),
 });
 
 type Secret = { path: string; refresh?: string; cloud?: string };
@@ -147,7 +147,7 @@ async function keepSection(
   const { state } = await registry.facets
     .get<{ snapshot(): Promise<{ state: unknown }> }>("integration")
     .snapshot();
-  const { integrations, connections, sections } = Registry.parse(state);
+  const { integrations, connections } = Registry.parse(state);
   const cloud = await cloudOf(itx);
   // no Cloud, or one that did not answer: a section that stands is left as it is
   if (!cloud) return;
@@ -157,11 +157,13 @@ async function keepSection(
     description:
       "iterate runs its own app at each of these services, and every mind may use it. You register no app and paste no secret. The tokens are kept in this mind's secrets, and the Cloud never holds them. Connect an account here, or ask your agent to.",
     icon: `${cloud.origin}/iterate-logo.svg`,
+    actions: [],
   };
-  if (!jsonEqual(sections[SECTION], heading))
+  // a card like any other: the cards below name it as their section, which makes it their heading
+  if (!jsonEqual(integrations[SECTION], heading))
     await registry.append({
-      type: "events.iterate.com/integration/section-configured",
-      payload: { section: SECTION, heading },
+      type: "events.iterate.com/integration/configured",
+      payload: { integration: SECTION, card: heading },
     });
 
   const secrets = await itx.secrets.list();

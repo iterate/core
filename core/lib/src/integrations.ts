@@ -1,11 +1,12 @@
 // integrations.ts — THE INTEGRATION REGISTRY: what a mind's packages (iterate/sdk `Integration`)
 // tell the Dash about themselves. A package appends two kinds of fact on the mind's
 // `/integrations` context, and the first-party `integration` facet there folds them into the state
-// the Dash's Integrations page renders (core/mind-worker/src/integrations/registry.ts). All are SET semantics:
-// the whole card, row or heading again whenever anything changes, or null to take it away.
+// the Dash's Integrations page renders (core/mind-worker/src/integrations/registry.ts). Both are SET semantics:
+// the whole card or row again whenever anything changes, or null to take it away.
 //   integration/configured             the card: a title, a description, a status, buttons
 //   integration/connection-configured  one connection's row under a card: its account, status, buttons
-//   integration/section-configured     a section's heading: cards that name the section stand under it
+// A card may name another card as its `section`: that card is then a heading, and the cards that
+// name it stand under it.
 // A button's target is where the Dash sends the person: an absolute http(s) URL, or a place in the
 // mind (`routingSlug` and `path`) whose URL the Dash composes (iterate/mind-ingress
 // `mindPublicUrlOf`), so a package needs no origin when it registers, and the link follows a
@@ -72,8 +73,9 @@ export const IntegrationCard = z.strictObject({
   title: z.string().min(1).max(80),
   description: z.string().max(400).optional(),
   icon: IntegrationIcon.optional(),
-  /** The section the card stands under (`integration/section-configured`). A card that names
-   *  none, or one that has no heading, stands with the mind's other cards. */
+  /** The card this one stands under, by its integration's name. That card is drawn as a heading
+   *  (its mark, title and description) above the cards that name it. A card that names none, or
+   *  one that is not registered, stands with the mind's other cards. */
   section: Slug.optional(),
   status: IntegrationStatus.optional(),
   /** The card's buttons (Connect, Set up, …), at most four. */
@@ -96,15 +98,6 @@ export const IntegrationConnection = z.strictObject({
 });
 export type IntegrationConnection = z.infer<typeof IntegrationConnection>;
 
-/** A SECTION'S HEADING: what stands above the cards that name the section, with a few sentences
- *  on what they have in common (who offers them, why to use them, how to connect one). */
-export const IntegrationSection = z.strictObject({
-  title: z.string().min(1).max(80),
-  description: z.string().max(600).optional(),
-  icon: IntegrationIcon.optional(),
-});
-export type IntegrationSection = z.infer<typeof IntegrationSection>;
-
 export const IntegrationRegistryContract = defineProcessorContract({
   slug: "integration",
   version: "1",
@@ -115,8 +108,6 @@ export const IntegrationRegistryContract = defineProcessorContract({
     integrations: z.record(z.string(), IntegrationCard).default({}),
     /** Every connection's row, by `<integration>/<connection>`, under a card that exists. */
     connections: z.record(z.string(), IntegrationConnection).default({}),
-    /** Every section's heading, by the section's name. */
-    sections: z.record(z.string(), IntegrationSection).default({}),
   }),
   events: {
     "events.iterate.com/integration/configured": {
@@ -137,19 +128,10 @@ export const IntegrationRegistryContract = defineProcessorContract({
         row: IntegrationConnection.nullable(),
       }),
     },
-    "events.iterate.com/integration/section-configured": {
-      description:
-        "A package set a section's heading, or set it again with a change; a null heading removes it, and its cards stand with the mind's other cards.",
-      payloadSchema: z.strictObject({
-        section: Slug,
-        heading: IntegrationSection.nullable(),
-      }),
-    },
   },
   consumes: [
     "events.iterate.com/integration/configured",
     "events.iterate.com/integration/connection-configured",
-    "events.iterate.com/integration/section-configured",
   ],
   emits: [],
 });
