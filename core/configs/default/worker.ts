@@ -384,8 +384,9 @@ export default class extends IterateConfigEntrypoint {
       ...[...integrations, ...kinds].map(async (integration) =>
         integration.processEvent?.({ event, itx }),
       ),
-      // The "iterate Cloud" card on the Dash's Integrations page: what the Cloud's apps offer, and
-      // a row for each account a member connected through one (cloud-accounts.ts).
+      // The sections of the Dash's Integrations page that the mind works out by itself: iterate
+      // Cloud's apps and accounts, every other key and account, and what a computer lends
+      // (cloud-accounts.ts).
       cloudAccountsEvent(itx, event),
       // The "Cloudflare" card: the mind's connection to Cloudflare's MCP server, checked at each
       // publish (cloudflare.ts).

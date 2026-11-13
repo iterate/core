@@ -1,6 +1,7 @@
-// The default config's "iterate Cloud" section (core/configs/default/cloud-accounts.ts): when a
-// mind has it, which secrets get a row under which card, and when a row is asked for again or
-// goes. The fake registry takes only what the real one takes (the contract's own schemas).
+// The default config's two sections of accounts (core/configs/default/cloud-accounts.ts): when a mind
+// has "iterate Cloud", which secrets get a row under which card, and when a row is asked for
+// again or goes; and "Keys and accounts", every other secret, by the service it is pinned to.
+// The fake registry takes only what the real one takes (the contract's own schemas).
 import { expect, test } from "vitest";
 import { cloudAccountsEvent } from "../../configs/default/cloud-accounts.ts";
 import { IntegrationRegistryContract } from "./integrations.ts";
@@ -55,10 +56,18 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
   await cloudAccountsEvent(mind.itx, PUBLISHED);
   expect([mind.appended.length, mind.asked.length]).toEqual([appended, asked]);
 
-  // an event that is none of the four, or a secret's fact on another log than the root's
-  await cloudAccountsEvent(mind.itx, { type: "events.iterate.com/secret/used", path: "/" });
-  await cloudAccountsEvent(mind.itx, { ...set("/secrets/google"), path: "/secrets/google" });
-  expect(mind.asked.length).toBe(asked);
+  // an event that is none of the four, or a secret's fact on another log than the secret's own
+  // (the root's, or one below it)
+  await cloudAccountsEvent(mind.itx, {
+    ...set("/secrets/google"),
+    type: "events.iterate.com/secret/used",
+  });
+  await cloudAccountsEvent(mind.itx, { ...set("/secrets/google"), path: "/" });
+  await cloudAccountsEvent(mind.itx, { ...set("/secrets/google"), path: "/secrets/google/x" });
+  expect([mind.appended.length, mind.asked.length]).toEqual([appended, asked]);
+  // on its own log, the fact asks the service again
+  await cloudAccountsEvent(mind.itx, set("/secrets/google"));
+  expect(mind.asked.length).toBe(asked + 1);
 });
 
 test("a secret set again is asked for again, one that the service refuses says so, and a deleted one loses its row", async () => {
@@ -88,11 +97,7 @@ test("a secret set again is asked for again, one that the service refuses says s
   });
 
   mind.secrets.delete("/secrets/google");
-  await cloudAccountsEvent(mind.itx, {
-    type: "events.iterate.com/secret/deleted",
-    path: "/",
-    payload: { path: "/secrets/google" },
-  });
+  await cloudAccountsEvent(mind.itx, deleted("/secrets/google"));
   const { cards, rows } = mind.registry();
   expect(Object.keys(rows)).toEqual(["github/github", "github/github-installation-7"]);
   // the card stays, with its first button again
@@ -103,7 +108,7 @@ test("a secret set again is asked for again, one that the service refuses says s
 test("a mind whose stack names no Cloud has no section, an app the Cloud drops loses its card, and a Cloud that gives no list changes nothing", async () => {
   const alone = cloudMind({ cloud: false });
   await cloudAccountsEvent(alone.itx, PUBLISHED);
-  expect([alone.registry().heading, alone.appended]).toEqual([undefined, []]);
+  expect(alone.registry()).toEqual({ heading: undefined, cards: {}, rows: {} });
 
   const mind = cloudMind();
   await cloudAccountsEvent(mind.itx, PUBLISHED);
@@ -119,10 +124,184 @@ test("a mind whose stack names no Cloud has no section, an app the Cloud drops l
   expect(mind.registry()).toEqual(before);
 });
 
-/** The root's fact that the secret at `path` was set. */
+test("every other secret stands under 'Keys and accounts', Cloud or none: a card for each service it is pinned to, a row for each secret, and no service asked", async () => {
+  const mind = cloudMind({ cloud: false });
+  // a second key of the same service, a key with no pin, and the stack's own Cloudflare token
+  mind.secrets.set("/secrets/openai-backup", { urls: ["https://api.openai.com/v1/"] });
+  mind.secrets.set("/secrets/scratch", { urls: [] });
+  mind.secrets.set("/secrets/cloudflare", { urls: ["https://api.cloudflare.com"] });
+
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+
+  const { heading, cards, rows } = mind.section("keys");
+  expect(heading).toEqual({
+    title: "Keys and accounts",
+    description: expect.stringContaining("ask your agent to connect"),
+    actions: [],
+  });
+  // no icon and no status: the page draws the first letter, and each row has its own dot
+  expect(cards).toEqual({
+    "googleapis-com": { title: "googleapis.com", section: "keys", actions: [] },
+    "openai-com": { title: "openai.com", section: "keys", actions: [] },
+    other: { title: "Other", section: "keys", actions: [] },
+  });
+  const manage = [{ label: "Manage", routingSlug: "dash", path: "/?page=secrets" }];
+  expect(rows).toEqual({
+    // a grant through an app of the mind's own says so
+    "googleapis-com/google-own-app": {
+      account: "/secrets/google-own-app",
+      status: { kind: "ok" },
+      details: {
+        Kind: "OAuth grant",
+        Hosts: "oauth2.googleapis.com, www.googleapis.com",
+      },
+      actions: manage,
+    },
+    "openai-com/openai": {
+      account: "/secrets/openai",
+      status: { kind: "ok" },
+      details: { Hosts: "api.openai.com" },
+      actions: manage,
+    },
+    "openai-com/openai-backup": expect.objectContaining({ account: "/secrets/openai-backup" }),
+    "other/scratch": {
+      account: "/secrets/scratch",
+      status: { kind: "ok" },
+      details: {},
+      actions: manage,
+    },
+  });
+  // the catalog alone: no service is asked whose account a key is
+  expect(mind).toMatchObject({ asked: [] });
+
+  // A RUN THAT CHANGES NOTHING adds nothing to the log
+  const appended = mind.appended.length;
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+  expect(mind.appended.length).toBe(appended);
+
+  // a deleted secret loses its row, and a service with none left loses its card
+  mind.secrets.delete("/secrets/openai-backup");
+  await cloudAccountsEvent(mind.itx, deleted("/secrets/openai-backup"));
+  expect(Object.keys(mind.section("keys").rows)).toEqual([
+    "googleapis-com/google-own-app",
+    "openai-com/openai",
+    "other/scratch",
+  ]);
+  mind.secrets.delete("/secrets/openai");
+  mind.secrets.delete("/secrets/scratch");
+  await cloudAccountsEvent(mind.itx, deleted("/secrets/scratch"));
+  expect(Object.keys(mind.section("keys").cards)).toEqual(["googleapis-com"]);
+
+  // the heading goes with its last card: a mind with no key shows no empty heading
+  mind.secrets.delete("/secrets/google-own-app");
+  await cloudAccountsEvent(mind.itx, deleted("/secrets/google-own-app"));
+  expect(mind.section("keys")).toEqual({ heading: undefined, cards: {}, rows: {} });
+  const none = mind.appended.length;
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+  expect(mind.appended.length).toBe(none);
+});
+
+test("a secret whose account a package of the mind shows already has no row under 'Keys and accounts'", async () => {
+  const mind = cloudMind({ cloud: false });
+  // a package's own Google connection, its grant, and its client's secret
+  mind.secrets.set("/secrets/own-google-042a1be3", {
+    urls: ["https://www.googleapis.com"],
+    refresh: "oauth-refresh-token",
+  });
+  mind.secrets.set("/secrets/own-google-app", { urls: ["https://oauth2.googleapis.com"] });
+  await mind.itx.cd("/integrations").append({
+    type: "events.iterate.com/integration/configured",
+    payload: { integration: "google", card: { title: "Google" } },
+  });
+  await mind.itx.cd("/integrations").append({
+    type: "events.iterate.com/integration/connection-configured",
+    payload: {
+      integration: "google",
+      connection: "042a1be3",
+      row: { account: "ada@example.com" },
+    },
+  });
+
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+
+  expect(Object.keys(mind.section("keys").rows)).toEqual([
+    "googleapis-com/google-own-app",
+    "googleapis-com/own-google-app",
+    "openai-com/openai",
+  ]);
+});
+
+test("each value a computer lends gets a card under 'Lent by a computer', and loses it when the lend ends", async () => {
+  const mind = cloudMind({ cloud: false });
+  mind.rules.push(
+    {
+      match: "itx.whatsapp.jeeves",
+      target: "itx.builtins.rpcStubs.get('itx.whatsapp.jeeves')",
+      description: `Jeeves's own WhatsApp account, +44 7700 900000. Send with send(to, text); ${"more ".repeat(60)}`,
+      context: "/",
+    },
+    {
+      match: "itx.phone",
+      target: "itx.builtins.rpcStubs.get('itx.phone')",
+      description: "A phone line ".repeat(30),
+      context: "/",
+    },
+  );
+
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+
+  const { heading, cards, rows } = mind.section("lent");
+  expect(heading).toMatchObject({ title: "Lent by a computer", actions: [] });
+  // the platform's own names are no lends: two cards, and no rows
+  expect(cards).toEqual({
+    "whatsapp-jeeves": {
+      title: "itx.whatsapp.jeeves",
+      description: "Jeeves's own WhatsApp account, +44 7700 900000.",
+      section: "lent",
+      status: { kind: "ok", text: "Connected" },
+      actions: [],
+    },
+    phone: expect.objectContaining({
+      title: "itx.phone",
+      description: `${"A phone line ".repeat(30).slice(0, 199)}…`,
+    }),
+  });
+  expect(rows).toEqual({});
+
+  // a bridge that signs in again sets the same rule again: nothing is appended
+  const appended = mind.appended.length;
+  await cloudAccountsEvent(mind.itx, ruleConfigured("itx.phone"));
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+  expect(mind.appended.length).toBe(appended);
+
+  // a lend that ends loses its card, and the last one takes the heading with it
+  mind.rules = mind.rules.filter((rule) => rule.match !== "itx.phone");
+  await cloudAccountsEvent(mind.itx, ruleConfigured("itx.phone"));
+  expect(Object.keys(mind.section("lent").cards)).toEqual(["whatsapp-jeeves"]);
+  mind.rules = mind.rules.filter((rule) => rule.match !== "itx.whatsapp.jeeves");
+  await cloudAccountsEvent(mind.itx, ruleConfigured("itx.whatsapp.jeeves"));
+  expect(mind.section("lent")).toEqual({ heading: undefined, cards: {}, rows: {} });
+});
+
+/** The root's fact that the rule for `match` was set or unset. */
+const ruleConfigured = (match: string) => ({
+  type: "events.iterate.com/itx/rewrite-rule-configured",
+  path: "/",
+  payload: { match, target: null },
+});
+
+/** The fact that the secret at `path` was set, on the secret's own log, where the secrets root
+ *  records it. */
 const set = (path: string) => ({
   type: "events.iterate.com/secret/set",
-  path: "/",
+  path,
+  payload: { path },
+});
+
+/** The fact that the secret at `path` was deleted, on the secret's own log. */
+const deleted = (path: string) => ({
+  type: "events.iterate.com/secret/deleted",
+  path,
   payload: { path },
 });
 
@@ -130,12 +309,27 @@ const set = (path: string) => ({
  *  installation's secret through the Cloud's apps, a Google grant of an app of its own, and a
  *  key of another service. */
 function cloudMind({ cloud = true } = {}) {
-  const secrets = new Map<string, { refresh?: string; cloud?: string }>([
-    ["/secrets/google", { refresh: "oauth-refresh-token", cloud: "google" }],
-    ["/secrets/github", { refresh: "oauth-refresh-token", cloud: "github" }],
-    ["/secrets/github-installation-7", { refresh: "github-app-installation", cloud: "github" }],
-    ["/secrets/google-own-app", { refresh: "oauth-refresh-token" }],
-    ["/secrets/openai", {}],
+  const secrets = new Map<string, { urls: string[]; refresh?: string; cloud?: string }>([
+    [
+      "/secrets/google",
+      { urls: ["https://www.googleapis.com"], refresh: "oauth-refresh-token", cloud: "google" },
+    ],
+    [
+      "/secrets/github",
+      { urls: ["https://api.github.com"], refresh: "oauth-refresh-token", cloud: "github" },
+    ],
+    [
+      "/secrets/github-installation-7",
+      { urls: ["https://api.github.com"], refresh: "github-app-installation", cloud: "github" },
+    ],
+    [
+      "/secrets/google-own-app",
+      {
+        urls: ["https://oauth2.googleapis.com", "https://www.googleapis.com"],
+        refresh: "oauth-refresh-token",
+      },
+    ],
+    ["/secrets/openai", { urls: ["https://api.openai.com"] }],
   ]);
   /** What each service answers for the account of a secret, and a status it answers instead. */
   const accounts = new Map<string, unknown>([
@@ -150,7 +344,6 @@ function cloudMind({ cloud = true } = {}) {
     connections: {} as Record<string, unknown>,
   };
   const events = IntegrationRegistryContract.events;
-  const short = (key: string) => key.replace("iterate-cloud-", "");
   const mind = {
     secrets,
     accounts,
@@ -160,20 +353,33 @@ function cloudMind({ cloud = true } = {}) {
     offered: ["google", "github", "slack", "unknown"],
     /** The secrets a service was asked about, in order. */
     asked: [] as string[],
-    /** The section's heading, its cards by app, and its rows by `<app>/<secret's name>`. */
-    registry() {
+    /** The root's rewrite rules, as `rewriteRules.list()` answers them: the platform's own names
+     *  alone, until a test lends one. */
+    rules: [
+      { match: "itx.secrets", target: "itx.builtins.secrets", context: "/" },
+      { match: "itx.config", target: "itx.builtins.config", context: "/" },
+    ] as { match: string; target: string | null; description?: string; context: string }[],
+    /** The heading `name`, the cards under it by the rest of their names, and their rows by
+     *  `<rest of the card's name>/<secret's name>`. */
+    section(name: string) {
+      const under = (key: string) => key.startsWith(`${name}-`);
+      const short = (key: string) => key.slice(name.length + 1);
       return structuredClone({
-        heading: state.integrations["iterate-cloud"],
+        heading: state.integrations[name],
         cards: Object.fromEntries(
           Object.entries(state.integrations)
-            .filter(([key]) => key !== "iterate-cloud")
+            .filter(([key]) => under(key))
             .map(([key, card]) => [short(key), card]),
         ) as Record<string, unknown>,
         rows: Object.fromEntries(
-          Object.entries(state.connections).map(([key, row]) => [short(key), row]),
+          Object.entries(state.connections)
+            .filter(([key]) => under(key))
+            .map(([key, row]) => [short(key), row]),
         ),
       });
     },
+    /** The "iterate Cloud" section, its cards by app. */
+    registry: () => mind.section("iterate-cloud"),
     itx: {
       fetch: async (request: Request) => {
         // every secret here keeps its token as `accessToken`: a placeholder for another field
@@ -192,6 +398,7 @@ function cloudMind({ cloud = true } = {}) {
         list: async () => [...secrets].map(([path, secret]) => ({ path, ...secret })),
         cloud: async () => (cloud ? { origin: CLOUD, clients: mind.offered } : null),
       },
+      rewriteRules: { list: async () => structuredClone(mind.rules) },
       cd: (path: string) => ({
         // the registry's own fold, as far as this file uses it
         append: async (event: { type: string; payload: Record<string, unknown> }) => {

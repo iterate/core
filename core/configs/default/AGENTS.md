@@ -411,6 +411,50 @@ Google (Gmail) or X through iterate's own app there. The mind needs no OAuth cli
   `config/github-mirrored` fact on the mind's root. When the two histories have diverged nothing moves, until a member calls
   `pull({ force: true })` (GitHub's wins) or `push({ force: true })` (the mind's wins).
 
+## The Integrations page
+
+The Dash's Integrations page (`?page=integrations`) is where a member sees what this mind is
+connected to. To connect a service, a member asks an agent; then it shows there.
+
+- Three sections appear by themselves (`cloud-accounts.ts`), and you register nothing for them:
+  - "iterate Cloud" (above).
+  - "Keys and accounts": one card for each service, and one row for each other secret in
+    `itx.secrets`, a key or an OAuth grant. So keep every credential in `itx.secrets`, pinned to
+    the service's origin, never in a file or in KV. A secret named `<card>-<row>` (or
+    `…-<card>-<row>`) of a row you registered is shown by that row alone.
+  - "Lent by a computer": one card for each value that `iterate provide` lends (WhatsApp, a
+    phone line), while the program runs. Never register a card for a lend.
+
+  The card names `iterate-cloud`, `keys` and `lent`, and every name that starts with one of them
+  and a dash, are `cloud-accounts.ts`'s: it replaces or removes a card of yours there.
+
+- Register a card yourself for what the page cannot see: a webhook you set up, a device, a bot,
+  a service with no secret.
+
+  ```ts
+  await itx.integrations.register("stripe-webhook", {
+    title: "Stripe webhook",
+    description: "Payment events, at /webhooks/stripe.",
+    status: { kind: "ok" },
+    actions: [{ label: "Open", url: "https://dashboard.stripe.com/webhooks" }],
+  });
+  await itx.integrations.setConnection("stripe-webhook", "acme", {
+    account: "acme (live mode)",
+    actions: [{ label: "Log", routingSlug: "dash", path: "/?page=contexts" }],
+  });
+  ```
+
+  A card or a row is set again whole whenever it changes, and `null` removes it (a card's
+  `null` removes its rows). A button leads to an absolute `url`, or to a place in the mind,
+  `{ routingSlug, path }`. `section` names another card, which is then drawn as their heading.
+
+- An MCP server: `itx.connectToMcp(url, { headers })` gives a live handle and keeps no record of
+  the server. Only the secret that its header names stays. So keep the server's credential in a
+  secret named for the server (`/secrets/linear-mcp`): that row is what shows.
+- When you connect, change or remove something for a member, read
+  `await itx.integrations.list()` as your last step. If the page does not say what is true now,
+  correct it. Then tell the member.
+
 ## Cloudflare
 
 When the stack's config says `cloudflareToken: true` (iterate Cloud's wizard sets it), the mind

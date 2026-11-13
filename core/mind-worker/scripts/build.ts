@@ -6,30 +6,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { build as esbuild } from "esbuild";
 import { createCli } from "trpc-cli";
+import { PLATFORM_ENTRIES } from "../src/platform-entries.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
-
-/** One zod per isolate, so a schema made by user code is the schema the SDK checks. */
-const PLATFORM_ENTRIES = [
-  "iterate/sdk",
-  "iterate/stream/processor",
-  "iterate/stream/contract",
-  "iterate/stream/run",
-  "iterate/email",
-  "iterate/integrations",
-  "iterate/api",
-  "iterate/lib",
-  "iterate/expression",
-  "iterate/principal",
-  "iterate/agents",
-  "iterate/agents/install",
-  "iterate/agents/kinds",
-  "iterate/agents/contract",
-  "iterate/agents/processor",
-  "iterate/agents/codemode-format",
-  "iterate/standalone-page",
-  "zod",
-] as const;
 
 /** One split esbuild graph, so `iterate/sdk` and `iterate/stream/processor` share one zod and one
  *  kernel; the resolver hands a loaded worker only what its imports reach. */

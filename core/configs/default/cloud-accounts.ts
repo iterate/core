@@ -1,34 +1,61 @@
-// cloud-accounts.ts — THE "iterate Cloud" SECTION of the Dash's Integrations page (worker.ts calls
-// `cloudAccountsEvent` for every event). The section's heading says what iterate Cloud's own apps
-// are and why to use them. Under it stands one card for each app that this mind's Cloud offers
-// (Google, GitHub, Slack, X): what it is for, and a button that begins a connect ("Connect", then
-// "Add account"; apps/dash/app.ts answers it). A card has one row for each account that a member
-// connected through that app: whose account it is, and the secret that holds it. An agent
-// connects one the same way (AGENTS.md, "Accounts through iterate Cloud"), and its row appears.
+// cloud-accounts.ts — EVERY SECTION OF THE DASH'S INTEGRATIONS PAGE THAT THE MIND CAN WORK OUT BY
+// ITSELF (worker.ts calls `cloudAccountsEvent` for every event). The name is from its first
+// section; a mind's own worker.ts imports it by that name. Three sections, each a heading card
+// with cards under it:
 //
-// All of it is this file's word, kept by three events:
+//   "iterate Cloud"      one card for each app that this mind's Cloud offers (Google, GitHub,
+//                        Slack, X): what it is for, and a button that begins a connect ("Connect",
+//                        then "Add account"; apps/dash/app.ts answers it). A card has one row for
+//                        each account that a member connected through that app: whose account it
+//                        is, and the secret that holds it. An agent connects one the same way
+//                        (AGENTS.md, "Accounts through iterate Cloud"), and its row appears.
+//   "Keys and accounts"  every other secret: a key, or a grant through an app of the mind's own.
+//                        One card for each service, by the host the secret is pinned to, and one
+//                        row for each secret. Only the catalog is read: no service is asked.
+//   "Lent by a computer" one card for each live value that a program on someone's computer lends
+//                        the mind (`iterate provide`: WhatsApp, a phone line). The card goes when
+//                        the program stops.
 //
-//   mind/worker-updated        every publish of this repo: the section is made true
-//   secret/set                 a member connected an account, or connected one again: its row
-//   secret/deleted             an account was disconnected: its row goes
+// All of it is this file's word, kept by four events:
+//
+//   mind/worker-updated          on the root: every publish of this repo, the sections made true
+//   secret/set                   on the secret's own log, `/secrets/<name>` (the secrets root
+//                                records a secret's fact there alone): set, or set again, its row
+//   secret/deleted               on the secret's own log: deleted, its row goes
+//   itx/rewrite-rule-configured  on the root: a lend began or ended, its card
 //
 // WHICH SECRET IS AN ACCOUNT OF WHICH APP, the catalog says (`itx.secrets.list()`): `cloud` is the
-// Cloud's name for the app that refreshes the secret. A secret of an app of the mind's own has
-// none, and is not here.
+// Cloud's name for the app that refreshes the secret. A secret with none is a key or a grant of
+// the mind's own, and stands under "Keys and accounts", unless a package of the mind shows its
+// account already (`keepKeysSection`).
 //
-// WHOSE ACCOUNT IT IS, the service is asked once, with the secret's placeholder (the token never
-// comes here): when the secret is set, and when a publish finds a secret with no row. A service
-// that refuses the token gets the row "Connect again"; one that gives no answer leaves the row
-// as it was.
+// WHAT IS LENT, the root's rewrite rules say (`itx.rewriteRules.list()`): a lend is a rule whose
+// target is the lent stub, `itx.builtins.rpcStubs.get('<match>')`. The platform's own names
+// (`itx.secrets`, `itx.config`, …) point elsewhere.
+//
+// WHOSE ACCOUNT IT IS, for an account through the Cloud, the service is asked once, with the
+// secret's placeholder (the token never comes here): when the secret is set, and when a publish
+// finds a secret with no row. A service that refuses the token gets the row "Connect again"; one
+// that gives no answer leaves the row as it was.
 //
 // WHICH CLOUD, AND WHICH APPS, the vault says (`itx.secrets.cloud()`): the Cloud that the stack's
-// config names, and the clients it publishes. A mind whose stack names no Cloud has no section.
+// config names, and the clients it publishes. A mind whose stack names no Cloud has no "iterate
+// Cloud" section. A section with no card has no heading either.
+//
+// THE NAMES `iterate-cloud`, `keys` AND `lent` (the headings), and every name that starts with one
+// of them and a dash, are this file's: it replaces or removes any other card registered there.
 import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
 
 /** The heading's name in the registry: the cards under it name it as their `section`, and their
  *  own names start with it. */
 const SECTION = "iterate-cloud";
+
+/** The "Keys and accounts" heading's name, and the start of each of its cards' names. */
+const KEYS = "keys";
+
+/** The "Lent by a computer" heading's name, and the start of each of its cards' names. */
+const LENT = "lent";
 
 type Json = Record<string, unknown>;
 
@@ -99,7 +126,7 @@ const Registry = z.object({
   connections: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
 });
 
-type Secret = { path: string; refresh?: string; cloud?: string };
+type Secret = { path: string; urls: string[]; refresh?: string; cloud?: string };
 
 /** The part of `itx` this file uses. */
 export type CloudAccountsItx = {
@@ -107,6 +134,9 @@ export type CloudAccountsItx = {
   secrets: {
     list(): Promise<Secret[]>;
     cloud(): Promise<{ origin: string; clients: string[] } | null>;
+  };
+  rewriteRules: {
+    list(): Promise<{ match: string; target: string | null; description?: string }[]>;
   };
   cd(path: string): {
     append(event: { type: string; payload: Json }): Promise<unknown>;
@@ -118,62 +148,74 @@ export type CloudAccountsItx = {
 
 export type CloudAccountsEvent = { type: string; path: string; payload?: unknown };
 
-/** One of the three events above; any other event does nothing. */
+/** The registry as this file reads it, and its append. */
+type Registry = z.output<typeof Registry> & {
+  append(event: { type: string; payload: Json }): Promise<unknown>;
+};
+
+/** One of the four events above; any other event does nothing. */
 export async function cloudAccountsEvent(
   itx: CloudAccountsItx,
   event: CloudAccountsEvent,
 ): Promise<void> {
+  // a secret's fact is on the secret's own log, `/secrets/<name>`, and on no other
   const secretChanged =
-    event.path === "/" &&
+    /^\/secrets\/[^/]+$/.test(event.path) &&
     (event.type === "events.iterate.com/secret/set" ||
       event.type === "events.iterate.com/secret/deleted");
+  const lendChanged =
+    event.path === "/" && event.type === "events.iterate.com/itx/rewrite-rule-configured";
   const published = event.path === "/" && event.type === "events.iterate.com/mind/worker-updated";
-  if (!secretChanged && !published) return;
+  if (!secretChanged && !lendChanged && !published) return;
   // a secret that was set again may be another account's now: its row is asked for again
-  const changed = secretChanged
-    ? z.object({ path: z.string() }).safeParse(event.payload).data?.path
-    : undefined;
-  await keepSection(itx, changed);
-}
-
-/** The section, made true: its heading, a card for each app, a row for each account. Only what
- *  differs from the registry is appended, so a publish that changes nothing adds nothing to the
- *  log. */
-async function keepSection(
-  itx: CloudAccountsItx,
-  changedSecret: string | undefined,
-): Promise<void> {
-  const registry = itx.cd("/integrations");
-  const { state } = await registry.facets
+  const changed = secretChanged ? event.path : undefined;
+  const context = itx.cd("/integrations");
+  const { state } = await context.facets
     .get<{ snapshot(): Promise<{ state: unknown }> }>("integration")
     .snapshot();
-  const { integrations, connections } = Registry.parse(state);
+  // each section writes cards of its own names alone, so one read serves all three
+  const registry: Registry = {
+    ...Registry.parse(state),
+    append: (append) => context.append(append),
+  };
+  // a lend's event needs no secret, and a secret's event no rule
+  if (!lendChanged) {
+    const secrets = await itx.secrets.list();
+    await keepCloudSection(itx, registry, secrets, changed);
+    await keepKeysSection(registry, secrets);
+  }
+  if (!secretChanged) await keepLentSection(registry, await itx.rewriteRules.list());
+}
+
+/** The "iterate Cloud" section, made true: its heading, a card for each app, a row for each
+ *  account. Only what differs from the registry is appended (here and in the other section), so
+ *  a publish that changes nothing adds nothing to the log. */
+async function keepCloudSection(
+  itx: CloudAccountsItx,
+  registry: Registry,
+  secrets: Secret[],
+  changedSecret: string | undefined,
+): Promise<void> {
   const cloud = await cloudOf(itx);
   // no Cloud, or one that did not answer: a section that stands is left as it is
   if (!cloud) return;
 
-  const heading = {
+  // a card like any other: the cards below name it as their section, which makes it their heading
+  await keepCard(registry, SECTION, {
     title: "iterate Cloud",
     description:
       "iterate runs its own app at each of these services, and every mind may use it. You register no app and paste no secret. The tokens are kept in this mind's secrets, and the Cloud never holds them. Connect an account here, or ask your agent to.",
     icon: `${cloud.origin}/iterate-logo.svg`,
     actions: [],
-  };
-  // a card like any other: the cards below name it as their section, which makes it their heading
-  if (!jsonEqual(integrations[SECTION], heading))
-    await registry.append({
-      type: "events.iterate.com/integration/configured",
-      payload: { integration: SECTION, card: heading },
-    });
+  });
 
-  const secrets = await itx.secrets.list();
   for (const [name, app] of cloud.apps) {
     const integration = `${SECTION}-${name}`;
     const rows: Record<string, Json> = {};
     for (const secret of secrets) {
       if (secret.cloud !== name) continue;
       const key = secret.path.split("/").at(-1)!;
-      const before = connections[`${integration}/${key}`];
+      const before = registry.connections[`${integration}/${key}`];
       const row =
         before && secret.path !== changedSecret
           ? before
@@ -181,7 +223,8 @@ async function keepSection(
       if (row) rows[key] = row;
     }
     const connected = Object.keys(rows).length;
-    const card = {
+    // the card before its rows: a row stands under a card that exists
+    await keepCard(registry, integration, {
       title: app.title,
       description: app.about,
       icon: { routingSlug: "dash", path: `/brands/${name}.svg` },
@@ -196,38 +239,175 @@ async function keepSection(
           path: `/connect/${name}`,
         },
       ],
-    };
-    // the card before its rows: a row stands under a card that exists
-    if (!jsonEqual(integrations[integration], card))
-      await registry.append({
-        type: "events.iterate.com/integration/configured",
-        payload: { integration, card },
-      });
-    // every row that differs, and a null for each row whose secret is gone
-    const gone = Object.keys(connections)
-      .filter((key) => key.startsWith(`${integration}/`))
-      .map((key) => key.slice(integration.length + 1))
-      .filter((connection) => !rows[connection]);
-    const changes: [string, Json | null][] = [
-      ...Object.entries(rows).filter(
-        ([key, row]) => !jsonEqual(connections[`${integration}/${key}`], row),
-      ),
-      ...gone.map((connection): [string, null] => [connection, null]),
-    ];
-    for (const [connection, row] of changes)
-      await registry.append({
-        type: "events.iterate.com/integration/connection-configured",
-        payload: { integration, connection, row },
-      });
+    });
+    await keepRows(registry, integration, rows);
   }
   // the card of an app that this Cloud no longer offers goes, and its rows with it
   const offered = new Set(cloud.apps.map(([name]) => `${SECTION}-${name}`));
-  for (const integration of Object.keys(integrations))
+  for (const integration of Object.keys(registry.integrations))
     if (integration.startsWith(`${SECTION}-`) && !offered.has(integration))
-      await registry.append({
-        type: "events.iterate.com/integration/configured",
-        payload: { integration, card: null },
-      });
+      await keepCard(registry, integration, null);
+}
+
+/** THE "KEYS AND ACCOUNTS" SECTION, made true from the catalog alone: a card for each service
+ *  that a secret with no Cloud is pinned to, and a row for each such secret. The stack's own
+ *  Cloudflare token (`/secrets/cloudflare`, AGENTS.md "Cloudflare") is the platform's, and is not
+ *  here.
+ *
+ *  The registry keeps its state under a byte budget, and drops a card or row past it: that one
+ *  would differ again at every event, and be appended again. So the first hundred secrets by path
+ *  are shown. A row is well under a kilobyte, which keeps the section far below the budget and
+ *  each event's appends bounded.
+ *
+ *  NO ACCOUNT TWICE: a package of the mind that shows an account keeps its row at
+ *  `<integration>/<connection>`, and by the contract's convention its secret at
+ *  `/secrets/<integration>-<connection>`, sometimes with a prefix (`own-google-042a1be3` for the
+ *  row `google/042a1be3`). Such a secret is that row's, and is not here again. */
+async function keepKeysSection(registry: Registry, secrets: Secret[]): Promise<void> {
+  const services = new Map<string, { title: string; rows: Record<string, Json> }>();
+  const ours = [`${SECTION}-`, `${KEYS}-`, `${LENT}-`];
+  const packaged = Object.keys(registry.connections)
+    .filter((key) => !ours.some((prefix) => key.startsWith(prefix)))
+    .map((key) => key.replace("/", "-"));
+  const shown = secrets
+    .filter((secret) => !secret.cloud && secret.path !== "/secrets/cloudflare")
+    .filter((secret) => {
+      const name = secret.path.split("/").at(-1)!;
+      return !packaged.some((account) => name === account || name.endsWith(`-${account}`));
+    })
+    .sort((a, b) => (a.path < b.path ? -1 : 1))
+    .slice(0, 100);
+  for (const secret of shown) {
+    const name = secret.path.split("/").at(-1)!;
+    // a connection's name has at most 64 characters, and a secret's may have more: such a secret
+    // gets no row, rather than a cut name that another secret might share
+    if (name.length > 64) continue;
+    const hosts = [
+      ...new Set(secret.urls.flatMap((url) => (URL.canParse(url) ? [new URL(url).hostname] : []))),
+    ];
+    // the registrable host, kept simple: the last two labels of the first pinned host. A host
+    // under a public suffix of two labels (`api.example.co.uk`) gets the coarse name `co.uk`
+    const service = hosts[0]?.split(".").slice(-2).join(".") || "";
+    // a card's name is a routing slug (core/lib/src/mind-ingress.ts `ROUTING_SLUG`): lower-case
+    // letters and digits in parts joined by single dashes, at most 63 characters. A URL's hostname
+    // is lower case already, so each run of other signs becomes one dash
+    const part = service.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const slug = `${KEYS}-${part}`;
+    // no host, or one that makes no card name (too long, or no letter or digit): "Other"
+    const fits = Boolean(part) && slug.length <= 63;
+    const integration = fits ? slug : `${KEYS}-other`;
+    const card = services.get(integration) || { title: fits ? service : "Other", rows: {} };
+    services.set(integration, card);
+    // a key has no refresh, and no kind
+    const grant = secret.refresh === "oauth-refresh-token";
+    const installation = secret.refresh === "github-app-installation";
+    card.rows[name] = {
+      // the path is the name an agent and the Secrets page use: no Secret detail repeats it
+      account: secret.path,
+      // a secret that is set is well: the row needs no words, the page shows its dot
+      status: { kind: "ok" },
+      details: {
+        ...(grant && { Kind: "OAuth grant" }),
+        ...(installation && { Kind: "App installation" }),
+        ...(hosts.length > 0 && { Hosts: hosts.join(", ").slice(0, 200) }),
+      },
+      actions: [{ label: "Manage", routingSlug: "dash", path: "/?page=secrets" }],
+    };
+  }
+
+  // the heading stands while it has a card: a mind with no key shows no empty heading
+  if (services.size)
+    await keepCard(registry, KEYS, {
+      title: "Keys and accounts",
+      description:
+        "What your agents stored in this mind's secrets to reach other services: an API key, or an account connected through an app of the mind's own. To add one, ask your agent to connect to the service. The values never leave the secrets Worker.",
+      actions: [],
+    });
+  for (const [integration, { title, rows }] of services) {
+    await keepCard(registry, integration, { title, section: KEYS, actions: [] });
+    await keepRows(registry, integration, rows);
+  }
+  // a service with no secret left loses its card, and its rows with it
+  for (const integration of Object.keys(registry.integrations))
+    if (integration.startsWith(`${KEYS}-`) && !services.has(integration))
+      await keepCard(registry, integration, null);
+  if (!services.size) await keepCard(registry, KEYS, null);
+}
+
+/** THE "LENT BY A COMPUTER" SECTION, made true from the root's rewrite rules: a card for each
+ *  lend, by its match. A bridge that signs in again sets the same rule again, and its card does
+ *  not differ: nothing is appended. The first hundred lends by match are shown, as for the keys. */
+async function keepLentSection(
+  registry: Registry,
+  rules: { match: string; target: string | null; description?: string }[],
+): Promise<void> {
+  const lends = new Map<string, Json>();
+  const shown = rules
+    .filter((rule) => rule.target?.includes("rpcStubs.get("))
+    .sort((a, b) => (a.match < b.match ? -1 : 1))
+    .slice(0, 100);
+  for (const { match, description = "" } of shown) {
+    const name = match.replace(/^itx\./, "").toLowerCase();
+    const integration = `${LENT}-${name.replaceAll(".", "-")}`;
+    // a card's name is a routing slug (core/lib/src/mind-ingress.ts `ROUTING_SLUG`): parts of
+    // letters and digits joined by single dashes, at most 63 characters. A match with a call step
+    // or other signs (`itx.ai.run('gpt-5')`, `itx.a_b`) makes none, and gets no card
+    if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(name) || integration.length > 63) continue;
+    // the lend's own words, to the end of the first sentence and 200 characters at most
+    const sentence = /^.*?[.!?](?=\s|$)/s.exec(description)?.[0] || description;
+    lends.set(integration, {
+      title: match.slice(0, 80),
+      description: sentence.length > 200 ? `${sentence.slice(0, 199)}…` : sentence,
+      section: LENT,
+      status: { kind: "ok", text: "Connected" },
+      actions: [],
+    });
+  }
+
+  // the heading stands while it has a card
+  if (lends.size)
+    await keepCard(registry, LENT, {
+      title: "Lent by a computer",
+      description:
+        "A program on someone's computer lends these to the mind while it runs, with iterate provide. When the program stops, its card goes.",
+      actions: [],
+    });
+  for (const [integration, card] of lends) await keepCard(registry, integration, card);
+  for (const integration of Object.keys(registry.integrations))
+    if (integration.startsWith(`${LENT}-`) && !lends.has(integration))
+      await keepCard(registry, integration, null);
+  if (!lends.size) await keepCard(registry, LENT, null);
+}
+
+/** A card set to `card`, or taken away with null, when the registry holds something else. */
+async function keepCard(registry: Registry, integration: string, card: Json | null) {
+  const before = Object.hasOwn(registry.integrations, integration)
+    ? registry.integrations[integration]
+    : undefined;
+  if (card ? jsonEqual(before, card) : !before) return;
+  await registry.append({
+    type: "events.iterate.com/integration/configured",
+    payload: { integration, card },
+  });
+}
+
+/** A card's rows made `rows`: every row that differs, and a null for each row that is gone. */
+async function keepRows(registry: Registry, integration: string, rows: Record<string, Json>) {
+  const gone = Object.keys(registry.connections)
+    .filter((key) => key.startsWith(`${integration}/`))
+    .map((key) => key.slice(integration.length + 1))
+    .filter((connection) => !rows[connection]);
+  const changes: [string, Json | null][] = [
+    ...Object.entries(rows).filter(
+      ([key, row]) => !jsonEqual(registry.connections[`${integration}/${key}`], row),
+    ),
+    ...gone.map((connection): [string, null] => [connection, null]),
+  ];
+  for (const [connection, row] of changes)
+    await registry.append({
+      type: "events.iterate.com/integration/connection-configured",
+      payload: { integration, connection, row },
+    });
 }
 
 /** This mind's Cloud: its origin, and the apps that it offers and this file knows, in the Cloud's
