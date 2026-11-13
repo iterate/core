@@ -425,8 +425,8 @@ connected to. To connect a service, a member asks an agent; then it shows there.
 
 - Three sections appear by themselves (`cloud-accounts.ts`), and you register nothing for them:
   - "iterate Cloud" (above).
-  - "Keys and accounts": one card for each service, and one row for each other secret in
-    `itx.secrets`, a key or an OAuth grant. So keep every credential in `itx.secrets`, pinned to
+  - "Keys and accounts": one list, with a row for each other secret in `itx.secrets`, a key or
+    an OAuth grant. So keep every credential in `itx.secrets`, pinned to
     the service's origin, never in a file or in KV. A secret named `<card>-<row>` (or
     `…-<card>-<row>`) of a row you registered is shown by that row alone.
   - "Lent by a computer": one card for each value that `iterate provide` lends (WhatsApp, a

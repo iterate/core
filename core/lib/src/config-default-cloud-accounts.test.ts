@@ -124,11 +124,13 @@ test("a mind whose stack names no Cloud has no section, an app the Cloud drops l
   expect(mind.registry()).toEqual(before);
 });
 
-test("every other secret stands under 'Keys and accounts', Cloud or none: a card for each service it is pinned to, a row for each secret, and no service asked", async () => {
+test("every other secret stands under 'Keys and accounts', Cloud or none: one list, a row for each secret in path order, and no service asked", async () => {
   const mind = cloudMind({ cloud: false });
-  // a second key of the same service, a key with no pin, and the stack's own Cloudflare token
+  // a second key of the same service, a key with no pin, a webhook's secret pinned to a made-up
+  // host, and the stack's own Cloudflare token
   mind.secrets.set("/secrets/openai-backup", { urls: ["https://api.openai.com/v1/"] });
   mind.secrets.set("/secrets/scratch", { urls: [] });
+  mind.secrets.set("/secrets/hook", { urls: ["https://webhook.invalid"] });
   mind.secrets.set("/secrets/cloudflare", { urls: ["https://api.cloudflare.com"] });
 
   await cloudAccountsEvent(mind.itx, PUBLISHED);
@@ -139,16 +141,12 @@ test("every other secret stands under 'Keys and accounts', Cloud or none: a card
     description: expect.stringContaining("ask your agent to connect"),
     actions: [],
   });
-  // no icon and no status: the page draws the first letter, and each row has its own dot
-  expect(cards).toEqual({
-    "googleapis-com": { title: "googleapis.com", section: "keys", actions: [] },
-    "openai-com": { title: "openai.com", section: "keys", actions: [] },
-    other: { title: "Other", section: "keys", actions: [] },
-  });
+  // one card: no icon, no description, no status, no button; each row has its own dot
+  expect(cards).toEqual({ secrets: { title: "Secrets (5)", section: "keys", actions: [] } });
   const manage = [{ label: "Manage", routingSlug: "dash", path: "/?page=secrets" }];
   expect(rows).toEqual({
     // a grant through an app of the mind's own says so
-    "googleapis-com/google-own-app": {
+    "secrets/google-own-app": {
       account: "/secrets/google-own-app",
       status: { kind: "ok" },
       details: {
@@ -157,20 +155,35 @@ test("every other secret stands under 'Keys and accounts', Cloud or none: a card
       },
       actions: manage,
     },
-    "openai-com/openai": {
+    // a `.invalid` host says nothing to a person
+    "secrets/hook": {
+      account: "/secrets/hook",
+      status: { kind: "ok" },
+      details: {},
+      actions: manage,
+    },
+    "secrets/openai": {
       account: "/secrets/openai",
       status: { kind: "ok" },
       details: { Hosts: "api.openai.com" },
       actions: manage,
     },
-    "openai-com/openai-backup": expect.objectContaining({ account: "/secrets/openai-backup" }),
-    "other/scratch": {
+    "secrets/openai-backup": expect.objectContaining({ account: "/secrets/openai-backup" }),
+    "secrets/scratch": {
       account: "/secrets/scratch",
       status: { kind: "ok" },
       details: {},
       actions: manage,
     },
   });
+  // appended in path order, the order the page draws them in
+  expect(Object.keys(rows)).toEqual([
+    "secrets/google-own-app",
+    "secrets/hook",
+    "secrets/openai",
+    "secrets/openai-backup",
+    "secrets/scratch",
+  ]);
   // the catalog alone: no service is asked whose account a key is
   expect(mind).toMatchObject({ asked: [] });
 
@@ -179,26 +192,48 @@ test("every other secret stands under 'Keys and accounts', Cloud or none: a card
   await cloudAccountsEvent(mind.itx, PUBLISHED);
   expect(mind.appended.length).toBe(appended);
 
-  // a deleted secret loses its row, and a service with none left loses its card
+  // a deleted secret loses its row
   mind.secrets.delete("/secrets/openai-backup");
   await cloudAccountsEvent(mind.itx, deleted("/secrets/openai-backup"));
-  expect(Object.keys(mind.section("keys").rows)).toEqual([
-    "googleapis-com/google-own-app",
-    "openai-com/openai",
-    "other/scratch",
-  ]);
-  mind.secrets.delete("/secrets/openai");
+  expect(Object.keys(mind.section("keys").rows)).not.toContain("secrets/openai-backup");
+
+  // the card and the heading go with the last row: a mind with no key shows no empty heading
+  for (const path of ["/secrets/google-own-app", "/secrets/hook", "/secrets/openai"])
+    mind.secrets.delete(path);
   mind.secrets.delete("/secrets/scratch");
   await cloudAccountsEvent(mind.itx, deleted("/secrets/scratch"));
-  expect(Object.keys(mind.section("keys").cards)).toEqual(["googleapis-com"]);
-
-  // the heading goes with its last card: a mind with no key shows no empty heading
-  mind.secrets.delete("/secrets/google-own-app");
-  await cloudAccountsEvent(mind.itx, deleted("/secrets/google-own-app"));
   expect(mind.section("keys")).toEqual({ heading: undefined, cards: {}, rows: {} });
   const none = mind.appended.length;
   await cloudAccountsEvent(mind.itx, PUBLISHED);
   expect(mind.appended.length).toBe(none);
+});
+
+test("a mind that had a card for each service gets the one list at the next event", async () => {
+  const mind = cloudMind({ cloud: false });
+  const registry = mind.itx.cd("/integrations");
+  await registry.append({
+    type: "events.iterate.com/integration/configured",
+    payload: { integration: "keys", card: { title: "Keys and accounts" } },
+  });
+  await registry.append({
+    type: "events.iterate.com/integration/configured",
+    payload: { integration: "keys-openai-com", card: { title: "openai.com", section: "keys" } },
+  });
+  await registry.append({
+    type: "events.iterate.com/integration/connection-configured",
+    payload: {
+      integration: "keys-openai-com",
+      connection: "openai",
+      row: { account: "openai" },
+    },
+  });
+
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+
+  const { heading, cards, rows } = mind.section("keys");
+  expect(heading).toMatchObject({ description: expect.stringContaining("ask your agent") });
+  expect(Object.keys(cards)).toEqual(["secrets"]);
+  expect(Object.keys(rows)).toEqual(["secrets/google-own-app", "secrets/openai"]);
 });
 
 test("a secret whose account a package of the mind shows already has no row under 'Keys and accounts'", async () => {
@@ -225,9 +260,9 @@ test("a secret whose account a package of the mind shows already has no row unde
   await cloudAccountsEvent(mind.itx, PUBLISHED);
 
   expect(Object.keys(mind.section("keys").rows)).toEqual([
-    "googleapis-com/google-own-app",
-    "googleapis-com/own-google-app",
-    "openai-com/openai",
+    "secrets/google-own-app",
+    "secrets/openai",
+    "secrets/own-google-app",
   ]);
 });
 

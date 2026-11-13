@@ -10,8 +10,9 @@
 //                        is, and the secret that holds it. An agent connects one the same way
 //                        (AGENTS.md, "Accounts through iterate Cloud"), and its row appears.
 //   "Keys and accounts"  every other secret: a key, or a grant through an app of the mind's own.
-//                        One card for each service, by the host the secret is pinned to, and one
-//                        row for each secret. Only the catalog is read: no service is asked.
+//                        One list, the card "Secrets (12)", with a row for
+//                        each secret: its path, its kind, the hosts it is pinned to. Only the
+//                        catalog is read: no service is asked.
 //   "Lent by a computer" one card for each live value that a program on someone's computer lends
 //                        the mind (`iterate provide`: WhatsApp, a phone line). The card goes when
 //                        the program stops.
@@ -51,7 +52,7 @@ import { z } from "zod";
  *  own names start with it. */
 const SECTION = "iterate-cloud";
 
-/** The "Keys and accounts" heading's name, and the start of each of its cards' names. */
+/** The "Keys and accounts" heading's name, and the start of its one card's name. */
 const KEYS = "keys";
 
 /** The "Lent by a computer" heading's name, and the start of each of its cards' names. */
@@ -249,10 +250,10 @@ async function keepCloudSection(
       await keepCard(registry, integration, null);
 }
 
-/** THE "KEYS AND ACCOUNTS" SECTION, made true from the catalog alone: a card for each service
- *  that a secret with no Cloud is pinned to, and a row for each such secret. The stack's own
- *  Cloudflare token (`/secrets/cloudflare`, AGENTS.md "Cloudflare") is the platform's, and is not
- *  here.
+/** THE "KEYS AND ACCOUNTS" SECTION, made true from the catalog alone: one card, "Secrets (<count>)",
+ *  with a row for each secret that has no Cloud, in path order. The stack's own Cloudflare token
+ *  (`/secrets/cloudflare`, AGENTS.md "Cloudflare") is the platform's, and is not here. This
+ *  card is the one `keys-` card: any other goes, and its rows with it.
  *
  *  The registry keeps its state under a byte budget, and drops a card or row past it: that one
  *  would differ again at every event, and be appended again. So the first hundred secrets by path
@@ -264,7 +265,7 @@ async function keepCloudSection(
  *  `/secrets/<integration>-<connection>`, sometimes with a prefix (`own-google-042a1be3` for the
  *  row `google/042a1be3`). Such a secret is that row's, and is not here again. */
 async function keepKeysSection(registry: Registry, secrets: Secret[]): Promise<void> {
-  const services = new Map<string, { title: string; rows: Record<string, Json> }>();
+  const list = `${KEYS}-secrets`;
   const ours = [`${SECTION}-`, `${KEYS}-`, `${LENT}-`];
   const packaged = Object.keys(registry.connections)
     .filter((key) => !ours.some((prefix) => key.startsWith(prefix)))
@@ -277,31 +278,23 @@ async function keepKeysSection(registry: Registry, secrets: Secret[]): Promise<v
     })
     .sort((a, b) => (a.path < b.path ? -1 : 1))
     .slice(0, 100);
+  // in path order: the registry keeps a new row at its end, and the page draws rows in the
+  // registry's order, so a secret set later stands last until a new list is made
+  const rows: Record<string, Json> = {};
   for (const secret of shown) {
     const name = secret.path.split("/").at(-1)!;
     // a connection's name has at most 64 characters, and a secret's may have more: such a secret
     // gets no row, rather than a cut name that another secret might share
     if (name.length > 64) continue;
+    // a package pins a webhook's secret to a made-up `.invalid` host (RFC 2606), which says
+    // nothing to a person
     const hosts = [
       ...new Set(secret.urls.flatMap((url) => (URL.canParse(url) ? [new URL(url).hostname] : []))),
-    ];
-    // the registrable host, kept simple: the last two labels of the first pinned host. A host
-    // under a public suffix of two labels (`api.example.co.uk`) gets the coarse name `co.uk`
-    const service = hosts[0]?.split(".").slice(-2).join(".") || "";
-    // a card's name is a routing slug (core/lib/src/mind-ingress.ts `ROUTING_SLUG`): lower-case
-    // letters and digits in parts joined by single dashes, at most 63 characters. A URL's hostname
-    // is lower case already, so each run of other signs becomes one dash
-    const part = service.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    const slug = `${KEYS}-${part}`;
-    // no host, or one that makes no card name (too long, or no letter or digit): "Other"
-    const fits = Boolean(part) && slug.length <= 63;
-    const integration = fits ? slug : `${KEYS}-other`;
-    const card = services.get(integration) || { title: fits ? service : "Other", rows: {} };
-    services.set(integration, card);
+    ].filter((host) => !host.endsWith(".invalid"));
     // a key has no refresh, and no kind
     const grant = secret.refresh === "oauth-refresh-token";
     const installation = secret.refresh === "github-app-installation";
-    card.rows[name] = {
+    rows[name] = {
       // the path is the name an agent and the Secrets page use: no Secret detail repeats it
       account: secret.path,
       // a secret that is set is well: the row needs no words, the page shows its dot
@@ -315,23 +308,30 @@ async function keepKeysSection(registry: Registry, secrets: Secret[]): Promise<v
     };
   }
 
-  // the heading stands while it has a card: a mind with no key shows no empty heading
-  if (services.size)
-    await keepCard(registry, KEYS, {
-      title: "Keys and accounts",
-      description:
-        "What your agents stored in this mind's secrets to reach other services: an API key, or an account connected through an app of the mind's own. To add one, ask your agent to connect to the service. The values never leave the secrets Worker.",
-      actions: [],
-    });
-  for (const [integration, { title, rows }] of services) {
-    await keepCard(registry, integration, { title, section: KEYS, actions: [] });
-    await keepRows(registry, integration, rows);
-  }
-  // a service with no secret left loses its card, and its rows with it
+  // any other `keys-` card goes, and its rows with it
   for (const integration of Object.keys(registry.integrations))
-    if (integration.startsWith(`${KEYS}-`) && !services.has(integration))
+    if (integration.startsWith(`${KEYS}-`) && integration !== list)
       await keepCard(registry, integration, null);
-  if (!services.size) await keepCard(registry, KEYS, null);
+  // the heading and the card stand while there is a row: a mind with no key shows no empty heading
+  if (Object.keys(rows).length === 0) {
+    await keepCard(registry, list, null);
+    await keepCard(registry, KEYS, null);
+    return;
+  }
+  await keepCard(registry, KEYS, {
+    title: "Keys and accounts",
+    description:
+      "What your agents stored in this mind's secrets to reach other services: an API key, or an account connected through an app of the mind's own. To add one, ask your agent to connect to the service. The values never leave the secrets Worker.",
+    actions: [],
+  });
+  // what the rows are, and how many: a title is required, and a blank one draws an empty mark and
+  // an empty line. It starts with a letter, which the page draws as the card's mark
+  await keepCard(registry, list, {
+    title: `Secrets (${Object.keys(rows).length})`,
+    section: KEYS,
+    actions: [],
+  });
+  await keepRows(registry, list, rows);
 }
 
 /** THE "LENT BY A COMPUTER" SECTION, made true from the root's rewrite rules: a card for each
