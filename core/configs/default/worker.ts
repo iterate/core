@@ -16,6 +16,7 @@ import { voiceApp } from "./apps/voice/app.ts";
 // line and off `installVoice` in the init case below, in the commit that adds the package.
 // import { installVoice } from "@iterate-com/voice/install";
 import { cloudflareForAgent } from "./cloudflare.ts";
+import { gmailEvent } from "./gmail.ts";
 import {
   DeliveryFailure,
   deliveryFailureNote,
@@ -288,6 +289,15 @@ export default class extends IterateConfigEntrypoint {
           });
         break;
       }
+      case "events.iterate.com/google/gmail-connected":
+      case "events.iterate.com/google/gmail-push-received":
+      case "events.iterate.com/google/gmail-watch-requested":
+        // A Gmail mailbox that a member connected through iterate Cloud's Google client: Gmail
+        // is asked to watch it, and each new message becomes `google/gmail-message-added` on the
+        // mailbox's own context, `/integrations/<client>/<address>` (gmail.ts). No agent gets a
+        // message by itself: add a case for that event to hand one to an agent.
+        await gmailEvent(itx, event);
+        break;
       case "events.iterate.com/github/webhook-received":
       case "events.iterate.com/repo/commit-completed": {
         // THIS REPO AND ITS GITHUB REPOSITORY ARE ONE HISTORY, once a member linked them

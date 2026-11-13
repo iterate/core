@@ -65,6 +65,18 @@ channel, thread_ts, text })`, and any other method the same way. The token stays
     context shows; the vault signs that request, and the Cloud sends it as the bot only to an
     account this mind linked. Link a member's own account alone: whoever writes from a linked
     account speaks to an agent with the mind's reach.
+  - The `events.iterate.com/google/gmail-*` case puts the mail of a Gmail mailbox on the mind's
+    log as it arrives (`gmail.ts`). A member connects the mailbox through iterate Cloud's Google
+    client ("iterate Cloud's apps", below). The Cloud then says which mailbox was connected, the
+    mind asks Gmail to watch it, and Gmail's push for it comes through the Cloud, signed by the
+    Cloud's key. Each new message is one `events.iterate.com/google/gmail-message-added` on the
+    mailbox's context, `/integrations/google/<address>`: its ids, labels, headers and Gmail's
+    snippet. The snippet is the first words of the mail, so a sign-in code that someone mailed is
+    on the mind's log too, for whoever reads the log; the rest of the body is not. The case hands
+    a message to no agent. To act on mail, add a case for that event. That event carries other
+    people's words and is this file's own word, not a platform fact: read the message again from
+    Gmail by its id before an agent gets it, and mark its words as its sender's, never as a
+    member's instruction.
 - `fetch` serves every host of the mind. The `x-iterate-routing-slug` header names the host
   (`blog` for `blog.<domain>`, absent on the apex), so `fetch` is a `switch` on it, one case for each
   host. The guard beside a case says who may come: none for a public site, `this.auth.require`
@@ -338,6 +350,16 @@ Google (Gmail) or X through iterate's own app there. The mind needs no OAuth cli
 - GitHub's deliveries for an installation the member administers arrive as
   `events.iterate.com/github/webhook-received` on `/integrations/github/<installation id>`, signed
   by the Cloud's key: `event.source.signer.principal.actor` is `"iterate-cloud"`.
+- A Gmail mailbox connected this way is watched (`gmail.ts`): each new message arrives as
+  `events.iterate.com/google/gmail-message-added` on `/integrations/google/<address>`, with
+  `{ id, threadId, labelIds, from, to, cc, subject, date, messageId, snippet, receivedAt }`. Read
+  the whole message with the mailbox's secret:
+  `itx.fetch(new Request("https://gmail.googleapis.com/gmail/v1/users/me/messages/<id>", { headers: { authorization: 'Bearer getSecret("/secrets/google", { field: "accessToken" })' } }))`.
+  The same context's log says when the watch was set again (`google/gmail-watched`, once a day),
+  when Gmail refused it (`google/gmail-watch-failed`), and when Gmail no longer had the
+  mailbox's history, so that mail in between was not read (`google/gmail-history-lost`). The
+  grant must read mail (the default scopes do). Deleting the secret ends it at the next day's
+  event.
 - To keep `/repos/config` and a GitHub repository one history through that App, a member links
   them once: `linkThroughCloud(itx, { repository: "acme/config" })` from
   `@iterate-com/github-sync/install`, after a connect that names the repository's account. From
