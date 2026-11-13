@@ -95,6 +95,9 @@ async function describe(env: Env, request: Request) {
         "cache-control": "no-store",
       },
     });
+  // A hostname's own sign-in asks for the chooser only after that host's sign-out
+  // (boundary-worker's host-session.ts): the press it needs is the way back into the app.
+  const hostSignIn = hostResource && authRequest.redirectUri === hostCallbackOf(hostResource);
   if (prompt === "select_account")
     return chooserPage({
       domain: iterateConfigOf(env).domain,
@@ -103,11 +106,12 @@ async function describe(env: Env, request: Request) {
       // an app's own sign-in says which app, to a person who is no member: a member's page is
       // the mind's own
       app: (await standingOf(env, session)) === "member" ? null : await askingAppOf(env, here),
+      signedOutOf: hostSignIn ? new URL(hostResource).host : undefined,
     });
   const refused = await notMemberRefusal(env, session, hostResource, here);
   if (refused) return refused;
   // a hostname's own sign-in: the code goes to ingress on that host alone, and is not a consent
-  if (hostResource && authRequest.redirectUri === hostCallbackOf(hostResource)) {
+  if (hostSignIn) {
     const { redirectTo } = await complete(env, session, authRequest, hostResource);
     return Response.redirect(redirectTo, 302);
   }

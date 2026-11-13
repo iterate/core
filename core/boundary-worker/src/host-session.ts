@@ -20,6 +20,7 @@ import { socketAnswer, stampedRequest } from "./stamp.ts";
 const FLOW_SECONDS = 10 * 60;
 const CALLBACK_PATH = `${HOST_SESSION_PREFIX}callback`;
 const SIGN_OUT_PATH = `${HOST_SESSION_PREFIX}sign-out`;
+const SIGNED_OUT_PATH = `${HOST_SESSION_PREFIX}signed-out`;
 
 // `clientId` is the one the sign-in found: the callback never asks for one, so a hand-made cookie
 // there makes no client.
@@ -108,6 +109,7 @@ async function hostSessionPathResponse(request: Request, deps: HostDeps) {
     return callbackResponse(request, deps);
   if (pathname === SIGN_OUT_PATH && request.method === "POST")
     return signOutResponse(request, deps);
+  if (pathname === SIGNED_OUT_PATH && request.method === "GET") return signedOutPage(request);
   return new Response("Not found\n", { status: 404 });
 }
 
@@ -178,12 +180,30 @@ async function signOutResponse(request: Request, deps: HostDeps) {
         console.warn({ event: "boundary.host-sign-out-not-revoked", message: String(error) }),
       );
   }
-  const headers = new Headers({ location: "/", "cache-control": "no-store" });
+  const headers = new Headers({ location: SIGNED_OUT_PATH, "cache-control": "no-store" });
   headers.append("set-cookie", cookie(HOST_SESSION_COOKIE, "", 0));
   // The issuer's own session lives on: without this, the next sign-in here would bring the same
   // person back with no question. A day is long enough for "sign out, then sign in as another".
   headers.append("set-cookie", cookie(SIGNED_OUT_COOKIE, "1", 24 * 3600));
   return new Response(null, { status: 303, headers });
+}
+
+// The sign-out's redirects stay on this host: a page's CSP `form-action 'self'` covers every
+// redirect after its form's POST, and the browser blocks one to the issuer, which leaves the page
+// that shows the person signed in. This page is a new navigation, and `/` begins the sign-in.
+function signedOutPage(request: Request) {
+  const host = new URL(request.url).host.replace(
+    /[&<>"']/g,
+    (character) => `&#${character.charCodeAt(0)};`,
+  );
+  return new Response(
+    standalonePage({
+      title: "Signed out",
+      head: '<meta http-equiv="refresh" content="0;url=/">',
+      body: `<h1>Signed out</h1><p>You are signed out of ${host}.</p><p><a href="/">Sign in again</a></p>`,
+    }),
+    { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } },
+  );
 }
 
 // The token endpoint is reached through the auth Worker's binding: a Worker's fetch to a route of

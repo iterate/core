@@ -272,6 +272,8 @@ export function chooserPage(input: {
   email: string;
   here: string;
   app?: AskingApp | null;
+  /** The host whose own sign-out sent the person here: the chooser says they left it. */
+  signedOutOf?: string;
 }) {
   const url = new URL(input.here, "https://issuer.invalid");
   // a GET form sends its fields as the query, so each parameter of the request is one
@@ -285,7 +287,11 @@ export function chooserPage(input: {
     centered: true,
     imageOrigin: asking?.imageOrigin,
     body: `${asking?.heading || `<h1>Sign in to ${text(input.domain)}</h1>`}
-      <p class="center">You are signed in as <strong>${text(input.email)}</strong>.</p>
+      <p class="center">${
+        input.signedOutOf
+          ? `You are signed out of ${text(input.signedOutOf)}. You are still signed in to ${text(input.domain)} as`
+          : "You are signed in as"
+      } <strong>${text(input.email)}</strong>.</p>
       <form method="get" action="${text(url.pathname)}" class="stack">
         ${fields}
         <button type="submit">Continue as ${text(input.email)}</button>

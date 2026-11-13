@@ -270,6 +270,14 @@ test("an app that names no way gets the mind's own sign-in, where Cloudflare's s
   expect(pathOf(answer)).toBe(`${OTHER}/.iterate/callback`);
   const token = await other.tokenFor(answer.headers.get("location")!);
   expect(await tokenIdentity(env, token, OTHER)).toMatchObject({ member: false, method: "email" });
+  // after the host's sign-out (`prompt`), the chooser says the person is signed out of the app, and
+  // a press signs them in again
+  const chooser = await (
+    await authorizationOf(env, OTHER, { prompt: "select_account" })
+  ).ask(mailed);
+  expect(await chooser.text()).toContain(
+    `<p class="center">You are signed out of guestbook.${DOMAIN}. You are still signed in to ${DOMAIN} as <strong>ada@example.org</strong>.</p>`,
+  );
   // and no request for the mind's own API reads Cloudflare's cookie, or the ways it names
   const api = await authResponse(
     new Request(

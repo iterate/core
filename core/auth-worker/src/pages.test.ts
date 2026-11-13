@@ -274,6 +274,19 @@ test("the account chooser says who is signed in, goes on as them, or signs out a
   );
   expect(forApp).toContain(`<h1>Sign in to cloud.${DOMAIN}</h1>`);
   expect(forApp).toContain(`<button type="submit">Continue as guest@example.net</button>`);
+  const signedOut = await kept(
+    "chooser-signed-out",
+    chooserPage({
+      domain: DOMAIN,
+      email: "guest@example.net",
+      here: "/oauth2/auth?x=1",
+      app,
+      signedOutOf: `<b>cloud.${DOMAIN}</b>`,
+    }),
+  );
+  expect(signedOut).toContain(
+    `<p class="center">You are signed out of &#60;b&#62;cloud.${DOMAIN}&#60;/b&#62;. You are still signed in to ${DOMAIN} as <strong>guest@example.net</strong>.</p>`,
+  );
 });
 
 async function kept(name: string, answer: Response) {
