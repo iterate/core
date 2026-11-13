@@ -1,10 +1,11 @@
 // catalog.test.ts — how the agents catalog on `/agents` folds the contexts that announce themselves
 // below it, death certificates from any context and the copies of each agent's events, as
 // declarative `{ events → state }` rows on the shared harness (iterate/stream/test-support
-// `reduceProcessor`).
+// `reduceProcessor`), and which `itx/described` line each copy puts on the agent's own log.
 
 import { expect, test } from "vitest";
-import { reduceProcessor } from "../stream/test-support.ts";
+import type { StreamEvent } from "../stream/processor.ts";
+import { committedEvent, reduceProcessor } from "../stream/test-support.ts";
 import { AgentCatalogProcessor, type AgentCatalogState } from "./catalog.ts";
 
 const path = "/agents/support";
@@ -295,8 +296,103 @@ test.for<{ name: string; events: Fact[]; state: AgentCatalogState }>([
     state: { agents: {}, deleted: { [path]: { deletedAt: new Date(2000).toISOString() } } },
   },
 ])("the catalog: $name", ({ events, state }) => {
-  expect(reduceProcessor(new AgentCatalogProcessor(), events)).toEqual(state);
+  expect(reduceProcessor(catalog().processor, events)).toEqual(state);
 });
+
+test.for<{
+  name: string;
+  events: Fact[];
+  described: { path: string; key: string; text: string }[];
+}>([
+  {
+    name: "a title the agent gave itself: its line, keyed by the copied event",
+    events: [announced(path), title("Fix the build", 10)],
+    described: [{ path, key: `agents/described:${path}@10`, text: "Fix the build" }],
+  },
+  {
+    name: "a description after the title: the title, a dash and the description",
+    events: [announced(path), title("Fix the build", 10), copy({ description: "CI is red" }, 11)],
+    described: [
+      { path, key: `agents/described:${path}@10`, text: "Fix the build" },
+      { path, key: `agents/described:${path}@11`, text: "Fix the build — CI is red" },
+    ],
+  },
+  {
+    name: "a person's first line, then the agent's own name: each once, later words nothing",
+    events: [
+      announced(path),
+      words("Please fix the build", 10),
+      words("And the docs", 20),
+      title("Fix the build", 30),
+    ],
+    described: [
+      { path, key: `agents/described:${path}@10`, text: "Please fix the build" },
+      { path, key: `agents/described:${path}@30`, text: "Fix the build" },
+    ],
+  },
+  {
+    name: "a status, an activity, an older title landing late or a copy without copiedFrom: nothing",
+    events: [
+      announced(path),
+      title("Newer", 20),
+      copy({ status: "working", activity: "Reading" }, 21),
+      title("Older", 10),
+      { ...title("Forged", 30), source: { origin: "/elsewhere" } },
+    ],
+    described: [{ path, key: `agents/described:${path}@20`, text: "Newer" }],
+  },
+])("an agent's line in the mind's catalog: $name", async ({ events, described }) => {
+  const { processor, appended } = catalog();
+  for (const [index, fact] of events.entries()) {
+    const blockers: (() => Promise<unknown>)[] = [];
+    processor.processEvent({
+      event: eventAt(index + 1, fact),
+      previousState: reduceProcessor(processor, events.slice(0, index)),
+      state: reduceProcessor(processor, events.slice(0, index + 1)),
+      append: async () => [],
+      blockProcessorWhile: (work) => blockers.push(work),
+      runInBackground: () => {},
+      delivery: { caughtUp: false },
+    });
+    for (const work of blockers) await work();
+  }
+  expect(appended).toEqual(
+    described.map(({ path, key, text }) => ({
+      path,
+      event: {
+        type: "events.iterate.com/itx/described",
+        idempotencyKey: key,
+        payload: { description: text },
+      },
+    })),
+  );
+});
+
+/** The catalog's processor, with a root that records each append it is asked for. */
+function catalog() {
+  const appended: { path: string; event: unknown }[] = [];
+  const itx = {
+    cd: (at: string) => ({
+      append: async (event: unknown) => {
+        appended.push({ path: at, event });
+        return [];
+      },
+    }),
+    [Symbol.dispose]() {},
+  };
+  // The processor reaches only `cd(path).append`: the fake has nothing else.
+  const processor = new AgentCatalogProcessor(() => itx as never);
+  return { processor, appended };
+}
+
+/** `fact` as the engine hands it over, at `offset` on `/agents`. */
+function eventAt(offset: number, fact: Fact) {
+  return {
+    ...committedEvent(offset, fact.type, fact.payload),
+    path: "/agents",
+    source: fact.source,
+  } as Parameters<AgentCatalogProcessor["processEvent"]>[0]["event"] & StreamEvent;
+}
 
 /** A row whose announcement was the `n`th event (the harness stamps each a second apart). */
 function bornAt(n: number) {

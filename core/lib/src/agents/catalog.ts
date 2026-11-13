@@ -3,9 +3,12 @@ import {
   defineProcessorContract,
   StreamProcessor,
   type ConsumedEvent,
+  type ProcessEventArgs,
   type ReduceArgs,
   type ProcessorState,
 } from "../stream/processor.ts";
+import type { IterateContextApi } from "../api.ts";
+import { errorCode, reportIssue } from "../lib.ts";
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { AgentHandleApi, AgentsRootApi } from "./api.ts";
 import { AgentContract } from "./contract.ts";
@@ -103,6 +106,13 @@ export class AgentCatalogProcessor extends StreamProcessor<
   ConsumedEvent<typeof AgentCatalogContract>
 > {
   readonly contract = AgentCatalogContract;
+  readonly #getItx: () => Pick<IterateContextApi, "cd"> & Disposable;
+
+  /** `getItx`: the scope of `/agents`, which reaches each agent's own log (`processEvent`). */
+  constructor(getItx: () => Pick<IterateContextApi, "cd"> & Disposable) {
+    super();
+    this.#getItx = getItx;
+  }
   /** Folds the contexts under `/agents` (each announces itself, `itx/child-created`) and the
    *  `agent/deleted` certificates posted here into the live and the dead agents. A birth counts
    *  once, and a death is terminal.
@@ -182,6 +192,55 @@ export class AgentCatalogProcessor extends StreamProcessor<
       },
     };
   }
+
+  /** EVERY AGENT SAYS WHAT IT IS FOR in the mind's catalog of contexts (`itx.contexts.list`): when
+   *  a copy changes an agent's line (`agentDescription`: its title, or the first words a person sent
+   *  it, and its description), the line goes onto the agent's own log as
+   *  `events.iterate.com/itx/described`. Every kind of agent gets it, iterate's or a bridge's, and
+   *  an activity or a status alone appends nothing. A copy row cannot do this: no copy is an
+   *  `itx/*` event. The key is the copied event's, so a batch delivered again appends nothing. An
+   *  agent whose line has not changed since this was deployed gets it at its next change. The
+   *  newest description stands, so a person's own stands until the agent's line changes again. A
+   *  failed append is reported, and waits for the agent's next change: it never holds the catalog. */
+  override processEvent({
+    event,
+    state,
+    previousState,
+    blockProcessorWhile,
+  }: ProcessEventArgs<AgentCatalogState, ConsumedEvent<typeof AgentCatalogContract>>): undefined {
+    if (event?.type !== "events.iterate.com/agent/listing-updated") return;
+    const from = event.source.copiedFrom;
+    if (!from) return;
+    const description = agentDescription(state.agents[from.path]);
+    if (!description || description === agentDescription(previousState.agents[from.path])) return;
+    blockProcessorWhile(async () => {
+      using itx = this.#getItx();
+      await itx
+        .cd(from.path)
+        .append({
+          type: "events.iterate.com/itx/described",
+          idempotencyKey: `agents/described:${from.path}@${String(from.offset)}`,
+          payload: { description },
+        })
+        .catch((error: unknown) => {
+          if (errorCode(error) === "IDEMPOTENCY_CONFLICT") return;
+          reportIssue("agents.catalog.described", error, { path: from.path });
+        });
+    });
+  }
+}
+
+/** An agent's line in the mind's catalog of contexts: its title, and its description after a
+ *  dash when it has both, at most 2,000 characters (the schema of `itx/described`). The title may
+ *  be only the first line a person sent (`titleFromWords`): it is still the best line there is. */
+function agentDescription(
+  row: Pick<AgentCatalogState["agents"][string], "title" | "description"> | undefined,
+): string | undefined {
+  const text =
+    row?.title && row.description
+      ? `${row.title} — ${row.description}`
+      : row?.title || row?.description;
+  return text?.slice(0, 2_000);
 }
 
 /** The rows with `path` added: its parent the nearest ancestor that is a row, and every row below it
@@ -235,7 +294,7 @@ export class AgentCollectionDurableObject
    *  another module sets it there, beside the export. */
   static module = AGENTS_MODULE;
 
-  processor = new AgentCatalogProcessor();
+  processor = new AgentCatalogProcessor(() => this.getItx());
   at(base: string) {
     return new AgentCollectionRpcTarget(
       () => this.getItx(),

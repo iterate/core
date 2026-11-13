@@ -18,6 +18,14 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
     published commit: it installs the agents app and creates the onboarding agent. It sets no
     schedule, so an idle mind sleeps; uncommenting the heartbeat there sets one that wakes it
     every five minutes.
+  - `context-descriptions.ts` gives each context the platform and this repo make a line that
+    says what it is for: its table maps a path (`/secrets/<name>`) to a text. The mind's catalog
+    shows the line (`await itx.cd("/").contexts.list()`, `description`). A context says it with
+    `itx.cd(path).append({ type: "events.iterate.com/itx/described", payload: { description } })`,
+    and the newest stands. The table's text lands when a context is born and at each publish,
+    once per text: a description that a person wrote later stands until the table's text
+    changes. Add a row for a kind of context your code makes. An agent's line is its title,
+    written by the Agents app.
   - The `events.iterate.com/email/received` case hands each email a member sends to the mind
     to an agent of its own per thread, `/agents/email/t<thread>`, once the `email` facet has
     folded it into its thread; the agent replies with `itx.email.send({ inReplyToOffset })`. An
