@@ -34,7 +34,7 @@ test("the default config's pages and folders load here as the platform's loader 
   expect(docsIndex).toMatch(/<title>Docs<\/title>/);
   expect(Object.keys(docsFiles)).toEqual(own);
   expect(dashIndex).toMatch(/<title>Dash<\/title>/);
-  // the Dash's page has one more script: the store of each page's part of the kit
+  // the Dash's page has the marks of iterate Cloud's apps too
   expect(Object.keys(dashFiles)).toEqual([
     "app.css",
     "app.js",
@@ -44,7 +44,6 @@ test("the default config's pages and folders load here as the platform's loader 
     "brands/slack.svg",
     "brands/x.svg",
     "icon.svg",
-    "kit-pages.js",
     "manifest.webmanifest",
   ]);
   expect(voiceIndex).toMatch(/<title>Voice<\/title>/);

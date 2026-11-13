@@ -21,31 +21,16 @@ import { AppShell } from "@iterate-com/ui/components/app-shell";
 import { AgentChat } from "@iterate-com/ui/components/agent-chat/agent-chat";
 import { Toaster } from "@iterate-com/ui/components/ui/sonner";
 import { newAgentOffers } from "@iterate-com/ui/lib/new-agent";
-import { newWebSocketRpcSession, useContextStub, useIterateContext } from "@iterate-com/ui/live";
+import { memberItx, mindOfHost, useContextStub, useIterateContext } from "@iterate-com/ui/live";
 import { agentRowsOf, personOf } from "./agent-rows.js";
 import { AgentsHome } from "./home.js";
 import { AgentsNav } from "./nav.js";
 
 // ── the member's itx ──
-// One WebSocket to this host's /itx, which app.ts answers: a capnweb session whose root is the
-// mind's itx, as the member the platform signed in on this host. The platform ends it when the
-// sign-in ends; a reload signs in again. Three closes in a minute stop the reloads.
-const socket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
-const itx = newWebSocketRpcSession(socket);
-socket.addEventListener("close", () => {
-  const now = Date.now();
-  let closes = [];
-  try {
-    closes = JSON.parse(sessionStorage.getItem("itx-closes") || "[]").filter(
-      (at) => now - at < 60_000,
-    );
-    sessionStorage.setItem("itx-closes", JSON.stringify([...closes, now]));
-  } catch {
-    // no storage: one reload is still right
-  }
-  if (closes.length < 3) setTimeout(() => location.reload(), 1000);
-  else document.getElementById("root").textContent = "Disconnected. Reload the page to connect.";
-});
+// One WebSocket to this host's /itx, which app.ts answers: the mind's itx, as the member the
+// platform signed in on this host. A close reloads the page, which signs in again
+// (@iterate-com/ui/live `memberItx`).
+const itx = memberItx();
 
 // Who is signed in, as the session itself says: the foot of the sidebar shows them.
 const { principal } = await itx.whoami();
@@ -53,7 +38,7 @@ const { principal } = await itx.whoami();
 const person = personOf(principal?.email);
 
 // The mind is its domain, and this host is one label under it.
-const domain = location.hostname.split(".").slice(1).join(".") || location.hostname;
+const domain = mindOfHost();
 
 // ── the kinds of agent ──
 // A kind of agent can bring its own chat view: its file in this repo (`agent-kinds/<kind>.ts`)

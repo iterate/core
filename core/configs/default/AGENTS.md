@@ -266,8 +266,11 @@ written together in a browser ("Docs", below).
 `apps/dash/` is the Dash, on `dash.<domain>` for members: an overview with the way to every app,
 any context of the mind, live, the config repo as a small IDE, the mind's secrets, its
 integrations, its telemetry (when the stack has it), and how to connect a coding agent over MCP.
-`https://iterate.<domain>/` has no page of its own: it sends everyone to the Dash. Its larger parts are components of `@iterate-com/ui`;
-`public/app.js` is the wiring, the sidebar and the overview, and it is yours to change.
+`https://iterate.<domain>/` has no page of its own: it sends everyone to the Dash. `public/app.js`
+is its contents, and it is yours to change: the list of pages (the sidebar and the overview's cards
+come from it), the apps and access pages it links to, and the overview's words. `Dash` and its
+pages are components of `@iterate-com/ui` (`components/dash`); a row can name a component of your
+own instead, and the file's header says how.
 
 When telemetry is turned on for a mind that exists, each context starts to send its events at
 its next wake, with its whole log from the first event. A context that never wakes again sends

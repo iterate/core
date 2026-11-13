@@ -24,30 +24,13 @@ export function agentsApp() {
 
     /** Every request on the app's host. worker.ts guards it, so a member alone gets here. */
     fetch(request: Request, host: Pick<IterateConfigEntrypoint, "auth">) {
-      const url = new URL(request.url);
       // The page's own socket (public/app.js opens it): the member's itx, which the platform
-      // serves for whoever it signed in on this host.
-      if (url.pathname === "/itx") return host.auth.itx(request);
-      // What @iterate-com/ui's shell asks of the host it runs on, for the head and the foot of its
-      // sidebar. It was written for an app with a sign-in gate of its own under /.auth/. Here the
-      // platform signs people in, so these three answers stand in for that gate. Nobody signed
-      // out gets this far: worker.ts's guard answers them first.
-      // the mind's address: this host, one label shorter
-      const mind = url.hostname.split(".").slice(1).join(".");
-      if (url.pathname === "/.auth/session.json") {
-        // which platform this page talks to: the mind's own
-        const platform = `https://iterate.${mind}`;
-        return Response.json({ issuer: platform, defaultIssuer: platform });
-      }
-      // the minds this browser is connected to, for the shell's switcher: this app serves one
-      if (url.pathname === "/.auth/minds.json")
-        return Response.json({
-          minds: [{ address: mind, lastUsedAt: Date.now() }],
-          lastUsed: mind,
-        });
-      // its "Sign out": the platform's own sign-out takes the POST
-      if (url.pathname === "/.auth/logout")
-        return new Response(null, { status: 307, headers: { location: "/.iterate/sign-out" } });
+      // serves for whoever it signed in on this host. And what @iterate-com/ui's shell asks of the
+      // host it runs on, for the head and the foot of its sidebar: the platform signs people in,
+      // so its three answers stand in for a sign-in gate of the app's own. Nobody signed out
+      // gets this far: worker.ts's guard answers them first.
+      const page = host.auth.memberPage(request);
+      if (page) return page;
       // A file of public/ by its path; any other page load is index.html.
       // the app's own files, and the one theme file that every app of this mind shares
       return serveFiles(request, {
