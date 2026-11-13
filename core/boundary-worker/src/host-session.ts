@@ -51,16 +51,23 @@ export async function mindHostResponse(
     domain: deps.domain,
   });
   const answer = withoutSessionCookies(await forward(stamp.forwarded));
-  const decision = mindHostSignInAnswerOf({ answer, request, caller: stamp.caller });
+  const decision = mindHostSignInAnswerOf({
+    answer,
+    request,
+    caller: stamp.caller,
+    method: stamp.method,
+  });
   if (!decision) return answer;
   await answer.body?.cancel();
-  if (decision === "sign-in") return signInResponse(request, deps);
   if (decision === "not-a-member") return notMemberPage(deps.domain, stamp.email || "");
-  return decision;
+  if (decision instanceof Response) return decision;
+  return signInResponse(request, deps, decision.methods);
 }
 
-// The one path that may make the host's client.
-async function signInResponse(request: Request, { auth, domain }: HostDeps) {
+// The one path that may make the host's client. `methods`: the ways the app takes, which the
+// issuer's sign-in offers (`acr_values`). The browser carries them and may change them: the
+// app's guard judges the session that comes back.
+async function signInResponse(request: Request, { auth, domain }: HostDeps, methods: string[]) {
   const url = new URL(request.url);
   const clientId = await auth.hostClient(url.host);
   const {
@@ -77,6 +84,7 @@ async function signInResponse(request: Request, { auth, domain }: HostDeps) {
   // OpenID Connect's `prompt`: the issuer says who is signed in there, and offers another account
   if (cookieValueOf(request.headers.get("cookie"), SIGNED_OUT_COOKIE) === "1")
     location.searchParams.set("prompt", "select_account");
+  if (methods.length) location.searchParams.set("acr_values", methods.join(" "));
   const flow = {
     state,
     verifier,

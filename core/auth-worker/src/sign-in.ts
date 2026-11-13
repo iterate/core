@@ -1,16 +1,40 @@
 import { sameOriginPath } from "iterate/lib";
+import { SignInMethod } from "iterate/principal";
 import { clearCloudflareSessionCookie, clearSessionCookie } from "./cookies.ts";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { type Env, issuerOf, iterateConfigOf, offersMethod } from "./env.ts";
 import { errorPage } from "./pages.ts";
 import { EMAIL_SIGN_IN_PATH } from "./email-sign-in.ts";
+import { mindHostResourceOf } from "./oauth.ts";
 
 export const SIGN_IN_PATH = "/sign-in";
 
-/** Where a person signs in: the mailed code's page when the mind mails codes, else the page with
- *  the passkey alone. Both have the passkey's button. */
+/** Where a person signs in: the page of the ways an app takes, when the request names them
+ *  (`methodsAskedIn`); else the mailed code's page when the mind mails codes, else the page with
+ *  the passkey alone. Each has the passkey's button. */
 export function signInHref(env: Env, next: string) {
-  const { methods } = iterateConfigOf(env).login;
-  return `${methods.email ? EMAIL_SIGN_IN_PATH : SIGN_IN_PATH}?${new URLSearchParams({ next })}`;
+  const mailed = iterateConfigOf(env).login.methods.email && !methodsAskedIn(env, next);
+  return `${mailed ? EMAIL_SIGN_IN_PATH : SIGN_IN_PATH}?${new URLSearchParams({ next })}`;
+}
+
+/** THE WAYS TO SIGN IN THAT AN APP TAKES, as the authorization request `next` (a path of this
+ *  issuer) names them: RFC 9470's `acr_values`, which ingress copies there from the app's guard
+ *  (iterate/sdk `auth.requirePerson`). Those this stack offers (./env.ts `offersMethod`), in the
+ *  request's order. Null when it names none, or asks for no mind hostname (the mind's API or MCP
+ *  server): the mind's own sign-in. Empty when it names only ways this stack does not offer:
+ *  nobody can sign in. It is routing: a browser can change it, and the app's guard judges the
+ *  session that comes back. */
+export function methodsAskedIn(env: Env, next: string): SignInMethod[] | null {
+  const issuer = issuerOf(env);
+  if (!URL.canParse(next, issuer)) return null;
+  const { searchParams } = new URL(next, issuer);
+  if (!mindHostResourceOf(env, searchParams.get("resource"))) return null;
+  const named = (searchParams.get("acr_values") || "").split(" ").filter(Boolean);
+  if (!named.length) return null;
+  const offered = named.flatMap((value) => {
+    const method = SignInMethod.safeParse(value);
+    return method.success && offersMethod(env, method.data) ? [method.data] : [];
+  });
+  return [...new Set(offered)];
 }
 
 /** Ends this browser's session at the issuer. With `next` (a path of this origin), the sign-in

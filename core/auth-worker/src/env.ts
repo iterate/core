@@ -3,6 +3,7 @@
 // over the public internet: an outside client's document, and the manifest of an app of the mind
 // (./asking-app.ts).
 import { platformOriginOf } from "iterate/mind-api";
+import type { SignInMethod } from "iterate/principal";
 import { type AuthConfig, authConfigOf } from "./config.ts";
 
 // THE BINDINGS are declared on `Cloudflare.Env`, which the OAuth library's types default to, as
@@ -66,7 +67,7 @@ export type CloudflareSignIn = { clientId: string; clientSecret: string };
 /** The Cloudflare OAuth client this stack signs people in with (./cloudflare-sign-in.ts), or null:
  *  the config's method names it, and the deploy bound its secret. A deploy refuses a config with
  *  the method and no secret, so null with the method in the config is a stack somebody changed by
- *  hand: its hostnames then let nobody in (`cloudflareAloneAt` still names them). */
+ *  hand: an app that takes Cloudflare alone then lets nobody in. */
 export function cloudflareSignInOf(env: Env): CloudflareSignIn | null {
   const method = iterateConfigOf(env).login.methods.cloudflare;
   return method && env.CLOUDFLARE_SIGN_IN_CLIENT_SECRET
@@ -74,23 +75,15 @@ export function cloudflareSignInOf(env: Env): CloudflareSignIn | null {
     : null;
 }
 
-/** WHETHER `resource` IS SIGNED IN WITH CLOUDFLARE ALONE: it is the origin of a hostname the
- *  config names (`login.methods.cloudflare.hosts`). The answer is the stack's stored config's, by
- *  the resource a code or a token is for; no client, and nothing a request says beside that
- *  resource, changes it. It does not ask whether the secret is bound: without one, nobody signs
- *  in to such a hostname. */
-export function cloudflareAloneAt(env: Env, resource: string | null | undefined): boolean {
-  if (!resource || !URL.canParse(resource)) return false;
-  const hosts = iterateConfigOf(env).login.methods.cloudflare?.hosts || [];
-  return hosts.includes(new URL(resource).hostname);
+/** WHETHER THIS STACK SIGNS PEOPLE IN BY `method` NOW, of the ways an app can name: a passkey
+ *  always, and each other way when the config has it (and, for Google and Cloudflare, what it
+ *  needs beside the config). An app that names only ways this answers false for lets nobody in. */
+export function offersMethod(env: Env, method: SignInMethod): boolean {
+  if (method === "cloudflare") return Boolean(cloudflareSignInOf(env));
+  if (method === "google") return offersGoogle(env);
+  if (method === "email") return Boolean(iterateConfigOf(env).login.methods.email);
+  return method === "passkey";
 }
-
-/** THE ONE RULE OF WHICH SIGN-IN SERVES WHICH RESOURCE: a sign-in at Cloudflare serves the
- *  hostnames that take Cloudflare alone and nothing else, and every other sign-in serves
- *  everything else and none of them. `cloudflare`: whether the session or the grant is
- *  Cloudflare's. */
-export const signInServes = (env: Env, cloudflare: boolean, resource: string | null | undefined) =>
-  cloudflareAloneAt(env, resource) === cloudflare;
 
 /** The issuer's origin: the platform's hostname under the mind's domain, `https://iterate.<domain>`
  *  (iterate/mind-api), where every page and endpoint of this Worker is. Ingress sends it every

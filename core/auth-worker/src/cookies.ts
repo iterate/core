@@ -1,4 +1,5 @@
 import { cookieValueOf } from "iterate/lib";
+import { SignInMethod } from "iterate/principal";
 import { jwtVerify, SignJWT } from "jose";
 import { z } from "zod";
 import { FIRST_OWNER_TICKET_MS } from "./config.ts";
@@ -14,21 +15,9 @@ const CLOUDFLARE_SESSION_SECONDS = 7 * 24 * 3600;
 const FLOW_COOKIE = "__Host-iterate-auth-sign-in";
 const FLOW_SECONDS = 10 * 60;
 
-/** How a session was opened, kept in its cookie as `method`: what the person proved to get it.
- *  "first-owner-ticket" is a deploy's ticket for the stack's owner, and "member-link" a link that
- *  an owner made for a member with no passkey (./first-owner.ts). */
-const SignInMethod = z.enum([
-  "email",
-  "google",
-  "passkey",
-  "first-owner-ticket",
-  "member-link",
-  // never in the session's own cookie: `cloudflareSessionOf` alone answers it
-  "cloudflare",
-]);
-export type SignInMethod = z.infer<typeof SignInMethod>;
-
-/** `method` is absent in a cookie made before the claim was. */
+/** How a session was opened (iterate/principal `SignInMethod`) is kept in its cookie as `method`.
+ *  "cloudflare" is never in the session's own cookie: `cloudflareSessionOf` alone answers it.
+ *  `method` is absent in a cookie made before the claim was. */
 export type Session = { userId: string; email: string; method?: SignInMethod };
 
 /** A sign-in at Google that this browser began (./google-sign-in.ts): where it goes after, and

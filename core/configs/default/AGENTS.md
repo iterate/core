@@ -522,9 +522,9 @@ mind (its API, its MCP server, every context), and anyone else reaches only what
 them. So a page can serve people who are not members, an app's end users.
 
 On every host of the mind, the platform holds the browser session. `fetch` gets each request
-stamped: `this.auth.person(request)` is `{ userId, email }` for anyone signed in, and a member is
-stamped as a principal too. Three guards, each `null` when the request may go on, else the answer
-to return:
+stamped: `this.auth.person(request)` is `{ userId, email, method }` for anyone signed in, and a
+member is stamped as a principal too. Three guards, each `null` when the request may go on, else
+the answer to return:
 
 - `this.auth.requirePerson(request)`: anyone signed in. Signed out, a page load signs them in and
   comes back; a fetch gets a `401`.
@@ -532,6 +532,20 @@ to return:
   (a fetch gets a `403`).
 - `this.auth.person(request)`: who they are, or `null`. Key what you keep for a person by
   `userId`, which never changes; an email can.
+
+An app chooses the ways to sign in it takes, of those the mind's stack offers (`"passkey"`,
+`"email"`, `"google"`, `"cloudflare"`), with `{ methods }` on `requirePerson` and `person`, in
+the order its sign-in page shows them. A person who signed in another way is nobody to that guard:
+a page load signs them in again on this host, and the sign-in page shows the app's ways alone.
+Without `methods`, every way counts but Cloudflare's, which counts only where an app names it.
+Check the bearer of an app's own MCP server the same way: `person(request, { methods })`, and add
+`acr_values="cloudflare"` to its `WWW-Authenticate`.
+
+```ts
+const refused = this.auth.requirePerson(request, { methods: ["cloudflare"] });
+if (refused) return refused;
+const person = this.auth.person(request, { methods: ["cloudflare"] })!; // method: "cloudflare"
+```
 
 The paths under `/.iterate/` on every host are the platform's: a form that POSTs to
 `/.iterate/sign-out` signs the person out.

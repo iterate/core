@@ -27,6 +27,8 @@ color-scheme: light;
 --input: light-dark(oklch(0.922 0 0), oklch(1 0 0 / 15%));
 --ring: light-dark(oklch(0.708 0 0), oklch(0.556 0 0));
 --link: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
+--cloudflare: #f6821f;
+--cloudflare-foreground: oklch(0.145 0 0);
 }
 :root.dark {
 color-scheme: dark;
@@ -348,6 +350,16 @@ color: var(--foreground);
 button.outline:hover {
 background: var(--accent);
 }
+button.cloudflare {
+min-height: 2.75rem;
+background: var(--cloudflare);
+color: var(--cloudflare-foreground);
+font-size: 0.9375rem;
+font-weight: 600;
+}
+button.cloudflare:hover {
+background: color-mix(in oklab, var(--cloudflare) 88%, var(--cloudflare-foreground));
+}
 button svg {
 margin-right: 0.5rem;
 vertical-align: -0.2em;
@@ -459,4 +471,4 @@ grid-column: 2;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-cF5rIxWIyf1YSVzzugqjVn1M9bSZ9L2MsMwYfFu4Zq0='";
+export const plainPageCssHash = "'sha256-7i6UZH3kayrbreP/lJ3xyqx6ABpZKZZgEuFNlvW7ldE='";

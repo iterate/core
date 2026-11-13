@@ -2,7 +2,7 @@
 import type { ActRule, GateAnswer } from "./acts.ts";
 import type { SecretOperation, SecretRefresh } from "./api.ts";
 import type { Facts } from "./facts.ts";
-import type { Principal } from "./principal.ts";
+import type { Principal, SignInMethod } from "./principal.ts";
 import type { Envelope, Statement } from "./signed.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
@@ -29,6 +29,9 @@ export type TokenIdentity = {
   /** Always true for the API, the MCP server and `/provide`; a mind hostname's token answers for
    *  anyone signed in. False for a key's token. */
   member: boolean;
+  /** How the person signed in to get the grant: absent for a key's token, and for a grant made
+   *  before grants kept it. */
+  method?: SignInMethod;
   /** A KEY'S TOKEN, never a person's (core/auth-worker/src/key-tokens.ts): the one capability name
    *  it may lend to the mind as `itx.<provide>`. It is live for the API alone, where it reaches
    *  that lend and nothing else of the mind. `principal.actor` is the key's service and `grant`

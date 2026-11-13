@@ -12,6 +12,7 @@ import { type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
 import { appSignIn, errorPage, googleSignIn, page, passkeySignIn, text } from "./pages.ts";
 import { addressProven } from "./keys.ts";
 import { isAdded } from "./members.ts";
+import { methodsAskedIn } from "./sign-in.ts";
 import { linkIdentity } from "./users.ts";
 
 export const EMAIL_SIGN_IN_PATH = "/sign-in/email";
@@ -96,7 +97,10 @@ function ruleAbove(env: Env, asking: object | null) {
 async function addressPage(env: Env, request: Request, error?: string, typed = "") {
   const { domain } = iterateConfigOf(env);
   const next = new URL(request.url).searchParams.get("next") || "/";
-  const passkey = passkeySignIn(next);
+  // an app that names the ways it takes (./sign-in.ts `methodsAskedIn`) gets no other way here
+  const methods = methodsAskedIn(env, next);
+  const passkey = !methods || methods.includes("passkey") ? passkeySignIn(next) : null;
+  const google = methods ? methods.includes("google") : offersGoogle(env);
   // a sign-in that an app of this mind started says which app, on each of its pages
   const asking = await askingOf(env, next);
   return page({
@@ -113,8 +117,8 @@ async function addressPage(env: Env, request: Request, error?: string, typed = "
         <label>Email <input type="email" name="email" value="${text(typed)}" autocomplete="email" placeholder="you@example.com" required></label>
         <button type="submit">Send a code</button>
       </form>
-      ${passkey.body}${offersGoogle(env) ? googleSignIn(next) : ""}${asking?.about || ""}`,
-    script: passkey.script,
+      ${passkey?.body || ""}${google ? googleSignIn(next) : ""}${asking?.about || ""}`,
+    script: passkey?.script,
   });
 }
 

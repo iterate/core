@@ -1,7 +1,7 @@
-// SIGN IN WITH CLOUDFLARE (./cloudflare-sign-in.ts), and the rule it comes with: a hostname the
-// deploy names takes Cloudflare's sign-in alone, and that sign-in serves nothing else. The tests
-// go through the Worker's own endpoints (the OAuth library included) against a store in memory;
-// Cloudflare is a stubbed `fetch`.
+// SIGN IN WITH CLOUDFLARE (./cloudflare-sign-in.ts says the rule). The tests go through the
+// Worker's own endpoints (the OAuth library included) against a store in memory; Cloudflare is a
+// stubbed `fetch`. The guard is tested in core/lib/src/sdk/auth.test.ts: here, every grant keeps
+// the way it began by.
 import { calculatePKCECodeChallenge, generateRandomCodeVerifier } from "oauth4webapi";
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
@@ -11,9 +11,15 @@ import { whoIs } from "./who-is.ts";
 import { CLOUDFLARE_SIGN_IN_SCOPE, cloudflareSignInResponse } from "./cloudflare-sign-in.ts";
 import { authConfigOf } from "./config.ts";
 import { cloudflareSessionOf, flowCookie, sessionCookie, sessionOf } from "./cookies.ts";
-import { cloudflareAloneAt, type Env, signInServes } from "./env.ts";
+import type { Env } from "./env.ts";
 import { standingOf } from "./members.ts";
-import { hostCallbackOf, hostClientOf, tokenEndpointResponse, tokenIdentity } from "./oauth.ts";
+import {
+  hostCallbackOf,
+  hostClientOf,
+  oauthHelpers,
+  tokenEndpointResponse,
+  tokenIdentity,
+} from "./oauth.ts";
 import { signOutResponse } from "./sign-in.ts";
 
 const DOMAIN = "example.com";
@@ -24,60 +30,29 @@ const OWNER = "owner@elsewhere.test";
 const CALLBACK = `${ISSUER}/sign-in/cloudflare/callback`;
 const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
 
-test("the config names the client and its hostnames, each a hostname of the mind that an app can have", () => {
+test("the config names the client alone: which app takes the way is the app's own word", () => {
   const config = (cloudflare: unknown) =>
     authConfigOf(DOMAIN, { login: { methods: { cloudflare }, allow: [{ email: OWNER }] } });
-  expect(config({ clientId: "id", hosts: ["cloud.example.com", "example.com"] })).toMatchObject({
-    login: {
-      methods: { cloudflare: { clientId: "id", hosts: ["cloud.example.com", "example.com"] } },
-    },
+  expect(config({ clientId: "id" })).toMatchObject({
+    login: { methods: { cloudflare: { clientId: "id" } } },
   });
   // without the method, nothing of it exists
   expect(authConfigOf(DOMAIN, { login: { allow: [{ email: OWNER }] } })).toMatchObject({
     login: { methods: {} },
   });
   for (const wrong of [
-    { clientId: "id", hosts: [] },
-    { clientId: "", hosts: ["cloud.example.com"] },
-    { hosts: ["cloud.example.com"] },
+    { clientId: "" },
+    {},
     // the secret is the deploy's, never the config's
-    { clientId: "id", clientSecret: "s", hosts: ["cloud.example.com"] },
-    { clientId: "id", hosts: ["cloud.elsewhere.test"] },
-    { clientId: "id", hosts: ["notexample.com"] },
-    // the platform's own hostname, where members sign in
-    { clientId: "id", hosts: ["iterate.example.com"] },
-    { clientId: "id", hosts: ["https://cloud.example.com"] },
+    { clientId: "id", clientSecret: "s" },
+    // no deploy pins the hostnames: an app names the way in its own code
+    { clientId: "id", hosts: ["cloud.example.com"] },
   ])
     expect(() => config(wrong)).toThrow();
 });
 
-test("which sign-in serves which resource is the stored config's list alone", () => {
-  const { env } = stackOf();
-  expect(cloudflareAloneAt(env, CLOUD)).toBe(true);
-  for (const resource of [
-    OTHER,
-    `${ISSUER}/api`,
-    `${ISSUER}/mcp`,
-    `https://cloud.${DOMAIN}.evil.test`,
-    "",
-    null,
-    "cloud",
-  ])
-    expect(cloudflareAloneAt(env, resource)).toBe(false);
-  // Cloudflare's sign-in serves the named hostname and nothing else; every other, the reverse
-  expect([signInServes(env, true, CLOUD), signInServes(env, false, CLOUD)]).toEqual([true, false]);
-  expect([signInServes(env, true, OTHER), signInServes(env, false, OTHER)]).toEqual([false, true]);
-  expect(signInServes(env, true, `${ISSUER}/api`)).toBe(false);
-  // with no such method, nothing changes for anybody, and a Cloudflare grant serves nothing
-  const none = stackOf({ hosts: null }).env;
-  expect([signInServes(none, false, CLOUD), signInServes(none, true, CLOUD)]).toEqual([
-    true,
-    false,
-  ]);
-});
-
 test("without the config's method, or without the deploy's secret, the sign-in does not exist", async () => {
-  for (const missing of [{ hosts: null }, { secret: null }]) {
+  for (const missing of [{ method: false }, { secret: null }]) {
     const { env } = stackOf(missing);
     for (const path of ["/sign-in/cloudflare", "/sign-in/cloudflare/callback?code=c&state=s"])
       expect(await cloudflareSignInResponse(env, new Request(ISSUER + path))).toMatchObject({
@@ -219,40 +194,48 @@ test("the two cookies are two kinds of session: neither is read as the other, an
   ]);
 });
 
-test("a hostname that takes Cloudflare alone gives a code to Cloudflare's session, and sends every other session to Cloudflare", async () => {
+test("an app that names Cloudflare gives a code to Cloudflare's session alone, and shows everyone else the page of its ways", async () => {
   const { env } = stackOf();
   cloudflareOf({ success: true, result: { id: "cf-owner", email: OWNER } });
   const cloudflare = cloudflareCookieOf((await signedInAtCloudflare(env)).answer);
   // the mind's own sessions: the owner's passkey, and a mailed code's
-  const passkey = cookiePair(
-    await sessionCookie(env, { id: "user_owner", email: OWNER }, "passkey", "key-1"),
-  );
+  const passkey = await passkeyCookie(env);
   const mailed = cookiePair(
     await sessionCookie(env, { id: "user_2", email: "ada@example.org" }, "email"),
   );
 
-  const cloud = await authorizationOf(env, CLOUD);
+  const cloud = await authorizationOf(env, CLOUD, { acr_values: "cloudflare" });
   for (const cookie of ["", passkey, mailed]) {
     const answer = await cloud.ask(cookie);
-    expect([answer.status, pathOf(answer)]).toEqual([302, "/sign-in/cloudflare"]);
-    // and it comes back to this same request
+    expect([answer.status, pathOf(answer)]).toEqual([302, "/sign-in"]);
+    // and it comes back to this same request, its ways and all
     expect(new URL(answer.headers.get("location")!).searchParams.get("next")).toMatch(
-      /^\/oauth2\/auth\?/,
+      /^\/oauth2\/auth\?.*acr_values=cloudflare/,
     );
   }
-  // nothing a request says names a sign-in: the same answers with every parameter one could try
-  const tampered = await authorizationOf(env, CLOUD, {
-    method: "passkey",
-    provider: "google",
-    login_hint: OWNER,
-    cloudflare: "false",
-  });
-  expect(pathOf(await tampered.ask(passkey))).toBe("/sign-in/cloudflare");
-  // `prompt` asks Cloudflare again, and never shows the mind's sign-in page
-  for (const prompt of ["login", "select_account"]) {
-    const again = await (await authorizationOf(env, CLOUD, { prompt })).ask(cloudflare);
-    expect(pathOf(again)).toBe("/sign-in/cloudflare");
-    expect(again.headers.get("set-cookie")).toMatch(/^__Host-iterate-auth-cloudflare-session=; /);
+  // the page has the app's one way, and sends nobody on by itself
+  const page = await authResponse(
+    new Request(new URL((await cloud.ask(passkey)).headers.get("location")!)),
+    env,
+    ctx,
+  );
+  const html = await page.text();
+  expect([page.status, html]).toEqual([200, expect.stringContaining("Sign in with Cloudflare")]);
+  expect(html).toContain("<h1>Sign in to Cloud</h1>");
+  expect(html).not.toMatch(/passkey|code by email/);
+  // `prompt` ends Cloudflare's session and shows the page again, so no "Continue as" signs the
+  // person straight back in; a session the app does not take gets the page too
+  for (const [prompt, cookie] of [
+    ["login", cloudflare],
+    ["select_account", cloudflare],
+    ["select_account", passkey],
+  ] as const) {
+    const again = await (
+      await authorizationOf(env, CLOUD, { acr_values: "cloudflare", prompt })
+    ).ask(cookie);
+    expect(pathOf(again)).toBe("/sign-in");
+    if (cookie === cloudflare)
+      expect(again.headers.get("set-cookie")).toMatch(/^__Host-iterate-auth-cloudflare-session=; /);
   }
 
   // Cloudflare's session gets the code, with the passkey's session beside it or not
@@ -260,59 +243,120 @@ test("a hostname that takes Cloudflare alone gives a code to Cloudflare's sessio
     const answer = await cloud.ask(cookie);
     expect([answer.status, pathOf(answer)]).toEqual([302, `${CLOUD}/.iterate/callback`]);
   }
-  const fresh = await authorizationOf(env, CLOUD);
+  const fresh = await authorizationOf(env, CLOUD, { acr_values: "cloudflare" });
   const token = await fresh.tokenFor((await fresh.ask(cloudflare)).headers.get("location")!);
   // the owner's address, and still no member: an app on the host sees a person, never a member
   expect(await tokenIdentity(env, token, CLOUD)).toMatchObject({
     principal: { email: OWNER },
     member: false,
+    method: "cloudflare",
   });
   // the token is for that hostname alone
   expect(await tokenIdentity(env, token, OTHER)).toBeNull();
   expect(await tokenIdentity(env, token, `${ISSUER}/api`)).toBeNull();
 });
 
-test("Cloudflare's session serves no other hostname, and the mind's API not at all", async () => {
+test("an app that names no way gets the mind's own sign-in, where Cloudflare's session counts for nothing", async () => {
   const { env } = stackOf();
   cloudflareOf({ success: true, result: { id: "cf-owner", email: OWNER } });
   const cloudflare = cloudflareCookieOf((await signedInAtCloudflare(env)).answer);
   const other = await authorizationOf(env, OTHER);
-  // as if signed out: the mind's own sign-in page
-  expect(pathOf(await other.ask(cloudflare))).toBe("/sign-in");
-  // and the hostname's own sign-ins work as before
+  // as if signed out: the mind's own sign-in, which mails a code here
+  expect(pathOf(await other.ask(cloudflare))).toBe("/sign-in/email");
   const mailed = cookiePair(
     await sessionCookie(env, { id: "user_2", email: "ada@example.org" }, "email"),
   );
-  const answer = await other.ask(mailed);
+  const answer = await other.ask(`${mailed}; ${cloudflare}`);
   expect(pathOf(answer)).toBe(`${OTHER}/.iterate/callback`);
   const token = await other.tokenFor(answer.headers.get("location")!);
-  expect(await tokenIdentity(env, token, OTHER)).toMatchObject({ member: false });
-});
-
-test("an MCP client of the app on such a hostname is held to the same sign-in, through the consent page", async () => {
-  const { env } = stackOf();
-  cloudflareOf({ success: true, result: { id: "cf-owner", email: OWNER } });
-  const cloudflare = cloudflareCookieOf((await signedInAtCloudflare(env)).answer);
-  const passkey = cookiePair(
-    await sessionCookie(env, { id: "user_owner", email: OWNER }, "passkey", "key-1"),
-  );
-  // the client registers itself, as any MCP client does, and names its server's URL as the resource
-  const registered = await authResponse(
-    new Request(`${ISSUER}/oauth2/register`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        client_name: "An MCP client",
-        redirect_uris: ["http://127.0.0.1:7777/callback"],
-        token_endpoint_auth_method: "none",
-      }),
-    }),
+  expect(await tokenIdentity(env, token, OTHER)).toMatchObject({ member: false, method: "email" });
+  // and no request for the mind's own API reads Cloudflare's cookie, or the ways it names
+  const api = await authResponse(
+    new Request(
+      `${ISSUER}/oauth2/auth?${new URLSearchParams({
+        response_type: "code",
+        client_id: await hostClientOf(env, `cloud.${DOMAIN}`),
+        redirect_uri: hostCallbackOf(CLOUD),
+        resource: `${ISSUER}/api`,
+        scope: "iterate",
+        state: "s",
+        acr_values: "cloudflare",
+        code_challenge: await calculatePKCECodeChallenge(generateRandomCodeVerifier()),
+        code_challenge_method: "S256",
+      })}`,
+      { headers: { cookie: cloudflare } },
+    ),
     env,
     ctx,
   );
-  const { client_id: clientId } = z
-    .object({ client_id: z.string() })
-    .parse(await registered.json());
+  expect(pathOf(api)).toBe("/sign-in/email");
+});
+
+test("the mailed code's page of an app that names its ways offers none of the others", async () => {
+  const { env } = stackOf();
+  const pageFor = async (ways: Record<string, string>) => {
+    const next = `/oauth2/auth?${new URLSearchParams({ resource: CLOUD, ...ways })}`;
+    const url = `${ISSUER}/sign-in/email?${new URLSearchParams({ next })}`;
+    return (await authResponse(new Request(url), env, ctx)).text();
+  };
+  expect(await pageFor({})).toContain('id="passkey"');
+  const email = await pageFor({ acr_values: "email" });
+  expect(email).toContain('action="/sign-in/email"');
+  expect(email).not.toContain('id="passkey"');
+});
+
+test("what a browser changes in the ways ends at the app's guard: every grant says the way it began by", async () => {
+  const { env } = stackOf();
+  const passkey = await passkeyCookie(env);
+  const mailed = cookiePair(
+    await sessionCookie(env, { id: "user_2", email: "ada@example.org" }, "email"),
+  );
+  // ingress asked for Cloudflare; the browser took the ways out, or put another in their place
+  for (const [extra, cookie, method] of [
+    [{}, passkey, "passkey"],
+    [{ acr_values: "email" }, mailed, "email"],
+  ] as const) {
+    const changed = await authorizationOf(env, CLOUD, extra);
+    const token = await changed.tokenFor((await changed.ask(cookie)).headers.get("location")!);
+    // a guard that names Cloudflare refuses this person (iterate/sdk `auth.requirePerson`)
+    expect(await tokenIdentity(env, token, CLOUD)).toMatchObject({ method });
+  }
+  // ways this stack does not offer let nobody in: Google needs a Cloud, and a made-up way is none
+  for (const acr_values of ["google", "carrier-pigeon"]) {
+    const answer = await (await authorizationOf(env, CLOUD, { acr_values })).ask(passkey);
+    expect([answer.status, answer.headers.get("location")]).toEqual([503, null]);
+    // and their sign-in page says so, where a redirect would go round
+    const next = `/oauth2/auth?${new URLSearchParams({ resource: CLOUD, acr_values })}`;
+    const page = await authResponse(
+      new Request(`${ISSUER}/sign-in?${new URLSearchParams({ next })}`),
+      env,
+      ctx,
+    );
+    expect([page.status, page.headers.get("location")]).toEqual([503, null]);
+  }
+});
+
+test("a grant from before grants kept their way says none, which no app that names its ways takes", async () => {
+  const { env } = stackOf();
+  const old = await authorizationOf(env, CLOUD);
+  const { redirectTo } = await oauthHelpers(env, CLOUD).completeAuthorization({
+    request: await old.request(),
+    userId: "user_owner",
+    metadata: { clientName: "cloud" },
+    scope: ["identity"],
+    revokeExistingGrants: false,
+    props: { userId: "user_owner", email: OWNER },
+  });
+  const identity = await tokenIdentity(env, await old.tokenFor(redirectTo), CLOUD);
+  expect(identity).toMatchObject({ principal: { email: OWNER }, method: undefined });
+});
+
+test("an MCP client of an app that names Cloudflare, which says the ways on (RFC 9470), signs in there through the consent page", async () => {
+  const { env } = stackOf();
+  cloudflareOf({ success: true, result: { id: "cf-owner", email: OWNER } });
+  const cloudflare = cloudflareCookieOf((await signedInAtCloudflare(env)).answer);
+  const passkey = await passkeyCookie(env);
+  const clientId = await registeredClientOf(env);
   const verifier = generateRandomCodeVerifier();
   const query = new URLSearchParams({
     response_type: "code",
@@ -321,13 +365,14 @@ test("an MCP client of the app on such a hostname is held to the same sign-in, t
     resource: `${CLOUD}/mcp`,
     scope: "identity",
     state: "s",
+    acr_values: "cloudflare",
     code_challenge: await calculatePKCECodeChallenge(verifier),
     code_challenge_method: "S256",
   });
   const ask = (cookie: string) =>
     authResponse(new Request(`${ISSUER}/oauth2/auth?${query}`, { headers: { cookie } }), env, ctx);
-  // no session, and a member's passkey session: to Cloudflare, with no consent page
-  for (const cookie of ["", passkey]) expect(pathOf(await ask(cookie))).toBe("/sign-in/cloudflare");
+  // no session, and a member's passkey session: the page of the app's ways, with no consent page
+  for (const cookie of ["", passkey]) expect(pathOf(await ask(cookie))).toBe("/sign-in");
 
   // Cloudflare's session gets the consent page, as that person
   const page = await ask(cloudflare);
@@ -336,21 +381,7 @@ test("an MCP client of the app on such a hostname is held to the same sign-in, t
   expect(html).toContain(OWNER);
   const handle = /name="handle" value="([^"]+)"/.exec(html)![1]!;
   const consentCookies = page.headers.getSetCookie().map(cookiePair).join("; ");
-  const decide = (cookie: string) =>
-    authResponse(
-      new Request(`${ISSUER}/oauth2/auth`, {
-        method: "POST",
-        headers: {
-          origin: ISSUER,
-          cookie: [cookie, consentCookies].filter(Boolean).join("; "),
-          "content-type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({ handle, decision: "allow" }),
-      }),
-      env,
-      ctx,
-    );
-  const approved = await decide(cloudflare);
+  const approved = await decided(env, handle, [cloudflare, consentCookies].join("; "));
   const location = new URL(approved.headers.get("location")!);
   expect(location.origin + location.pathname).toBe("http://127.0.0.1:7777/callback");
   const exchanged = await authResponse(
@@ -372,14 +403,16 @@ test("an MCP client of the app on such a hostname is held to the same sign-in, t
   const tokens = z
     .object({ access_token: z.string(), refresh_token: z.string() })
     .parse(await exchanged.json());
-  // the bearer of the app's /mcp: a person on that hostname, no member, and nobody anywhere else
+  // the bearer of the app's /mcp: a person on that hostname who began at Cloudflare, no member,
+  // and nobody anywhere else
   expect(await whoIs(env, tokens.access_token, CLOUD)).toMatchObject({
     principal: { email: OWNER },
     member: false,
+    method: "cloudflare",
   });
   expect(await whoIs(env, tokens.access_token, `${ISSUER}/mcp`)).toBeNull();
   expect(await whoIs(env, tokens.access_token, `${ISSUER}/api`)).toBeNull();
-  // an async client keeps its sign-in by refresh, and the refreshed token is held to the same rule
+  // an async client keeps its sign-in by refresh, and the refreshed token says the same way
   const refreshed = await authResponse(
     new Request(`${ISSUER}/oauth2/token`, {
       method: "POST",
@@ -395,41 +428,27 @@ test("an MCP client of the app on such a hostname is held to the same sign-in, t
     ctx,
   );
   const again = z.object({ access_token: z.string() }).parse(await refreshed.json());
-  expect(await whoIs(env, again.access_token, CLOUD)).toMatchObject({ member: false });
+  expect(await whoIs(env, again.access_token, CLOUD)).toMatchObject({
+    member: false,
+    method: "cloudflare",
+  });
 });
 
-test("a consent for such a hostname is not approved by the mind's own session", async () => {
+test("a consent begun for Cloudflare's session is not approved by the mind's own session", async () => {
   const { env } = stackOf();
   cloudflareOf();
   const cloudflare = cloudflareCookieOf((await signedInAtCloudflare(env)).answer);
-  const passkey = cookiePair(
-    await sessionCookie(env, { id: "user_owner", email: OWNER }, "passkey", "key-1"),
-  );
-  const registered = await authResponse(
-    new Request(`${ISSUER}/oauth2/register`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        client_name: "An MCP client",
-        redirect_uris: ["http://127.0.0.1:7777/callback"],
-        token_endpoint_auth_method: "none",
-      }),
-    }),
-    env,
-    ctx,
-  );
-  const { client_id: clientId } = z
-    .object({ client_id: z.string() })
-    .parse(await registered.json());
+  const passkey = await passkeyCookie(env);
   const page = await authResponse(
     new Request(
       `${ISSUER}/oauth2/auth?${new URLSearchParams({
         response_type: "code",
-        client_id: clientId,
+        client_id: await registeredClientOf(env),
         redirect_uri: "http://127.0.0.1:7777/callback",
         resource: CLOUD,
         scope: "identity",
         state: "s",
+        acr_values: "cloudflare",
         code_challenge: await calculatePKCECodeChallenge(generateRandomCodeVerifier()),
         code_challenge_method: "S256",
       })}`,
@@ -440,66 +459,52 @@ test("a consent for such a hostname is not approved by the mind's own session", 
   );
   const handle = /name="handle" value="([^"]+)"/.exec(await page.text())![1]!;
   // the form posted by a browser that holds the consent's cookie and the owner's passkey session,
-  // and no session of Cloudflare's
-  const answer = await authResponse(
-    new Request(`${ISSUER}/oauth2/auth`, {
-      method: "POST",
-      headers: {
-        origin: ISSUER,
-        cookie: [passkey, ...page.headers.getSetCookie().map(cookiePair)].join("; "),
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({ handle, decision: "allow" }),
-    }),
+  // and no session of Cloudflare's: the consent kept the ways it began with
+  const answer = await decided(
     env,
-    ctx,
+    handle,
+    [passkey, ...page.headers.getSetCookie().map(cookiePair)].join("; "),
   );
   expect(answer).toMatchObject({ status: 401 });
   expect(answer.headers.get("location")).toBeNull();
 });
 
-test("a deploy that names a hostname ends the tokens it gave before, and one that stops naming it ends Cloudflare's", async () => {
-  const before = stackOf({ hosts: null });
-  const passkey = cookiePair(
-    await sessionCookie(before.env, { id: "user_owner", email: OWNER }, "passkey", "key-1"),
-  );
-  const open = await authorizationOf(before.env, CLOUD);
-  const old = await open.tokenFor((await open.ask(passkey)).headers.get("location")!);
-  expect(await tokenIdentity(before.env, old, CLOUD)).toMatchObject({ member: true });
-  // the same store, deployed with the hostname named
-  const named = stackOf({ kv: before.kv, people: before.people }).env;
-  expect(await tokenIdentity(named, old, CLOUD)).toBeNull();
-
+test("a deploy that takes the way away, or loses its secret, ends Cloudflare's grants", async () => {
+  const before = stackOf();
   cloudflareOf();
-  const cloudflare = cloudflareCookieOf((await signedInAtCloudflare(named)).answer);
-  const closed = await authorizationOf(named, CLOUD);
-  const token = await closed.tokenFor((await closed.ask(cloudflare)).headers.get("location")!);
-  expect(await tokenIdentity(named, token, CLOUD)).toMatchObject({ member: false });
-  // deployed without the name again: Cloudflare's token opens nothing
-  expect(await tokenIdentity(before.env, token, CLOUD)).toBeNull();
+  const cloudflare = cloudflareCookieOf((await signedInAtCloudflare(before.env)).answer);
+  const cloud = await authorizationOf(before.env, CLOUD, { acr_values: "cloudflare" });
+  const token = await cloud.tokenFor((await cloud.ask(cloudflare)).headers.get("location")!);
+  expect(await tokenIdentity(before.env, token, CLOUD)).toMatchObject({ method: "cloudflare" });
+  // the same store, deployed without the method, or with its secret gone
+  for (const change of [{ method: false }, { secret: null }]) {
+    const { env } = stackOf({ ...change, kv: before.kv, people: before.people });
+    expect(await tokenIdentity(env, token, CLOUD)).toBeNull();
+  }
 });
 
-test("a named hostname whose secret is missing lets nobody in: the config still names it", async () => {
+test("an app that takes Cloudflare alone, on a stack whose secret is missing, lets nobody in", async () => {
   const { env } = stackOf({ secret: null });
-  expect(cloudflareAloneAt(env, CLOUD)).toBe(true);
-  const passkey = cookiePair(
-    await sessionCookie(env, { id: "user_owner", email: OWNER }, "passkey", "key-1"),
-  );
-  const answer = await (await authorizationOf(env, CLOUD)).ask(passkey);
+  const answer = await (
+    await authorizationOf(env, CLOUD, { acr_values: "cloudflare" })
+  ).ask(await passkeyCookie(env));
   expect(answer).toMatchObject({ status: 503 });
   expect(answer.headers.get("location")).toBeNull();
+  // the ways are an app's word for its own host: with Cloudflare among others, the others count
+  const either = await authorizationOf(env, CLOUD, { acr_values: "cloudflare passkey" });
+  expect(pathOf(await either.ask(await passkeyCookie(env)))).toBe(`${CLOUD}/.iterate/callback`);
 });
 
 /** A stack in memory: the OAuth library's store, and the few rows the sign-in reads. `people`
  *  holds each Cloudflare user id this stack linked. */
 function stackOf({
-  hosts = [`cloud.${DOMAIN}`],
+  method = true,
   secret = "THE-CLIENT-SECRET",
   kv = new Map<string, string>(),
   people = new Map<string, { id: string; email: string }>(),
 }: {
-  /** null: a config with no such method */
-  hosts?: string[] | null;
+  /** false: a config with no such method */
+  method?: boolean;
   /** null: a stack whose deploy bound no secret */
   secret?: string | null;
   kv?: Map<string, string>;
@@ -524,7 +529,8 @@ function stackOf({
     AUTH_SIGNING_KEY: "a-signing-key-for-tests-only",
     AUTH_SETTINGS: JSON.stringify({
       login: {
-        methods: hosts ? { cloudflare: { clientId: "the-client-id", hosts } } : {},
+        // the mind mails codes too, so its own sign-in is not the page of an app's ways
+        methods: { email: {}, ...(method && { cloudflare: { clientId: "the-client-id" } }) },
         allow: [{ email: OWNER }],
       },
     }),
@@ -572,6 +578,8 @@ function cloudflareOf(
   const calls: { url: string; body: URLSearchParams; authorization: string | null }[] = [];
   vi.stubGlobal("fetch", async (input: string | URL, init: RequestInit = {}) => {
     const url = String(input);
+    // the app's own word for its name (./asking-app.ts), for the sign-in pages
+    if (url === `${CLOUD}/manifest.webmanifest`) return Response.json({ name: "Cloud" });
     calls.push({
       url,
       body: new URLSearchParams(String(init.body || "")),
@@ -652,9 +660,53 @@ async function authorizationOf(env: Env, resource: string, extra: Record<string,
         new Request(`${ISSUER}/oauth2/auth?${query}`, { headers: { cookie } }),
       ),
     tokenFor,
+    /** The request as the OAuth library parses it, for a grant made by hand. */
+    request: () =>
+      oauthHelpers(env, resource).parseAuthRequest(new Request(`${ISSUER}/oauth2/auth?${query}`)),
   };
 }
 function pathOf(answer: Response) {
   const url = new URL(answer.headers.get("location")!);
   return url.origin === ISSUER ? url.pathname : url.origin + url.pathname;
+}
+
+async function passkeyCookie(env: Env) {
+  return cookiePair(
+    await sessionCookie(env, { id: "user_owner", email: OWNER }, "passkey", "key-1"),
+  );
+}
+
+/** An MCP client that registers itself, as any MCP client does. Answers its id. */
+async function registeredClientOf(env: Env) {
+  const registered = await authResponse(
+    new Request(`${ISSUER}/oauth2/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "An MCP client",
+        redirect_uris: ["http://127.0.0.1:7777/callback"],
+        token_endpoint_auth_method: "none",
+      }),
+    }),
+    env,
+    ctx,
+  );
+  return z.object({ client_id: z.string() }).parse(await registered.json()).client_id;
+}
+
+/** The consent page's form, allowed, from a browser that sends `cookie`. */
+function decided(env: Env, handle: string, cookie: string) {
+  return authResponse(
+    new Request(`${ISSUER}/oauth2/auth`, {
+      method: "POST",
+      headers: {
+        origin: ISSUER,
+        cookie,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ handle, decision: "allow" }),
+    }),
+    env,
+    ctx,
+  );
 }

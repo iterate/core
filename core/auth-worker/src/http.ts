@@ -34,10 +34,16 @@ import {
   tokenEndpointResponse,
   TOKEN_ENDPOINT,
 } from "./oauth.ts";
-import { notMemberPage, signInPage, SIGN_OUT_PATH } from "./pages.ts";
+import {
+  methodsSignInPage,
+  nobodySignsInPage,
+  notMemberPage,
+  signInPage,
+  SIGN_OUT_PATH,
+} from "./pages.ts";
 import { passkeySignInResponse } from "./passkey-sign-in.ts";
 import { selfTestResponse } from "./self-test.ts";
-import { SIGN_IN_PATH, signInHref, signOutResponse } from "./sign-in.ts";
+import { methodsAskedIn, SIGN_IN_PATH, signInHref, signOutResponse } from "./sign-in.ts";
 import { signInsResponse } from "./sign-ins-page.ts";
 import { statementsResponse } from "./statements.ts";
 import { whoIs } from "./who-is.ts";
@@ -89,6 +95,11 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
   if (pathname === SIGN_IN_PATH && get) {
     const next = url.searchParams.get("next") || "/";
     const { domain, login } = iterateConfigOf(env);
+    // an app that names the ways it takes gets those ways' buttons (./sign-in.ts `methodsAskedIn`)
+    const methods = methodsAskedIn(env, next);
+    if (methods?.length === 0) return nobodySignsInPage();
+    if (methods)
+      return methodsSignInPage({ domain, next, methods, app: await askingAppOf(env, next) });
     return login.methods.email
       ? Response.redirect(`${issuerOf(env)}${signInHref(env, next)}`, 302)
       : signInPage(domain, next, offersGoogle(env), await askingAppOf(env, next));

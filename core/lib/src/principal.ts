@@ -46,14 +46,29 @@ export function stampedLenderOf(request: Request): Lender | null {
   return lender ? StampedLender.parse(JSON.parse(lender)) : null;
 }
 
+/** HOW A PERSON SIGNED IN at the mind's issuer (core/auth-worker): what they proved to get the
+ *  session that a token or a host's session came from. "passkey", "email" (a mailed code),
+ *  "google" and "cloudflare" are ways an app can name (sdk/auth.ts `methods`); "first-owner-ticket"
+ *  and "member-link" are a deploy's ticket and an owner's link, which exist to add a passkey. */
+export const SignInMethod = z.enum([
+  "passkey",
+  "email",
+  "google",
+  "cloudflare",
+  "first-owner-ticket",
+  "member-link",
+]);
+export type SignInMethod = z.infer<typeof SignInMethod>;
+
 /** A signed-in person as a mind's host knows them, member or not: the auth Worker's user id
  *  and their email, and `impersonatedBy` the platform admin signed in as them, as on `Principal`.
  *  An app that hands out something personal refuses, or records, a person an admin is signed in
- *  as. */
+ *  as. `method` is how they signed in, absent for a session made before sessions said it. */
 export type Person = {
   userId: string;
   email: string;
   impersonatedBy?: { actor: string; email: string };
+  method?: SignInMethod;
 };
 
 /** The header ingress sets, as the JSON of a `Person`, on a mind host's Request from anyone

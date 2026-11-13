@@ -104,6 +104,72 @@ test("person reads the stamp; a person who is no member is not let through requi
   expect(auth.require(request)?.status).toBe(401);
 });
 
+// The guard's `methods`, as ./auth.ts "WAYS TO SIGN IN" says them.
+test.for<{
+  name: string;
+  method?: string;
+  methods?: ("passkey" | "email" | "google" | "cloudflare")[];
+  challenge: string | null;
+}>([
+  {
+    name: "Cloudflare's, where the app names it",
+    method: "cloudflare",
+    methods: ["cloudflare"],
+    challenge: null,
+  },
+  {
+    name: "a passkey's, where the app names Cloudflare alone",
+    method: "passkey",
+    methods: ["cloudflare"],
+    challenge:
+      'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication", acr_values="cloudflare"',
+  },
+  {
+    name: "an unknown way, where the app names ways",
+    methods: ["passkey"],
+    challenge:
+      'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication", acr_values="passkey"',
+  },
+  {
+    name: "a way this SDK does not know",
+    method: "carrier-pigeon",
+    methods: ["passkey"],
+    challenge:
+      'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication", acr_values="passkey"',
+  },
+  {
+    name: "Cloudflare's, where the app names no way",
+    method: "cloudflare",
+    challenge: 'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication"',
+  },
+  { name: "a mailed code's, where the app names no way", method: "email", challenge: null },
+  { name: "an unknown way, where the app names no way", challenge: null },
+])("requirePerson takes $name: $challenge", ({ method, methods, challenge }) => {
+  const request = workerRequest("GET", stampedBy(method));
+  const response = auth.requirePerson(request, { methods });
+  expect(response?.headers.get("WWW-Authenticate") ?? null).toBe(challenge);
+  // `person` is the same rule: a person the guard refuses is nobody to the app
+  expect(Boolean(auth.person(request, { methods }))).toBe(!challenge);
+});
+
+test("signed out, a guard that names ways says them, in its order, with no error", () => {
+  const response = auth.requirePerson(workerRequest("GET", {}), {
+    methods: ["cloudflare", "google"],
+  });
+  expect(response?.headers.get("WWW-Authenticate")).toBe(
+    'Bearer realm="iterate", scope="identity", acr_values="cloudflare google"',
+  );
+  expect(
+    auth.person(workerRequest("GET", stampedBy("cloudflare")), { methods: ["cloudflare"] }),
+  ).toMatchObject({ userId: "user_1", method: "cloudflare" });
+});
+
 function workerRequest(method: string, headers: Record<string, string>) {
   return new Request("https://worker.example/x", { method, headers });
+}
+
+function stampedBy(method?: string) {
+  return {
+    "x-itx-person": JSON.stringify({ userId: "user_1", email: "a@example.com", method }),
+  };
 }

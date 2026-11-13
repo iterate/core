@@ -3,7 +3,7 @@
 // `AuthSettings` under `auth` (core/alchemy/src/config.ts), and the stack binds them as the Worker's
 // `AUTH_SETTINGS` variable beside `DOMAIN` (`authConfigOf`). No Worker code here: the stack imports it.
 import { dnsName } from "iterate/app-config";
-import { mindApiUrlOf, mindMcpUrlOf, mindProvideUrlOf, platformOriginOf } from "iterate/mind-api";
+import { mindApiUrlOf, mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
 import { z } from "zod";
 
 /** An origin, `https://host[:port]`, spelled exactly as `new URL(…).origin` spells it. */
@@ -66,16 +66,12 @@ export const AuthSettings = z.strictObject({
          *  policy: Google alone signs a member in, passkey or not, and the Cloud is then trusted
          *  as much as Google for who a member is. */
         google: z.strictObject({ signsInAlone: z.literal(true).optional() }).optional(),
-        /** A Cloudflare OAuth client's id, and the hostnames of the mind that are signed in with
-         *  Cloudflare alone: ./cloudflare-sign-in.ts says what that means. The client's secret is
-         *  never in these settings: the deploy takes it from its environment
+        /** SIGN IN WITH CLOUDFLARE (./cloudflare-sign-in.ts): a Cloudflare OAuth client's id. It
+         *  makes the way exist, and an app of the mind chooses it in its own code (iterate/sdk
+         *  `auth.requirePerson(request, { methods: ["cloudflare"] })`): no app gets it otherwise.
+         *  The client's secret is never in these settings: the deploy takes it from its environment
          *  (core/alchemy/src/config.ts) and binds it as CLOUDFLARE_SIGN_IN_CLIENT_SECRET. */
-        cloudflare: z
-          .strictObject({
-            clientId: z.string().trim().min(1),
-            hosts: z.array(dnsName).min(1, "names no hostname, so the sign-in would serve nothing"),
-          })
-          .optional(),
+        cloudflare: z.strictObject({ clientId: z.string().trim().min(1) }).optional(),
       })
       .default({}),
     /** WHO IS A MEMBER, for now: a person is when one rule matches. Anyone a method vouches for
@@ -163,19 +159,6 @@ export const AuthConfig = AuthSettings.extend({
       path: ["login", "allow"],
       error:
         "a member's address may not be at the mind's own domain: the mind receives that address's mail, so the mind could sign in as that member",
-    },
-  )
-  .refine(
-    ({ domain, login }) =>
-      (login.methods.cloudflare?.hosts || []).every(
-        (host) =>
-          (host === domain || host.endsWith(`.${domain}`)) &&
-          host !== new URL(platformOriginOf(domain)).hostname,
-      ),
-    {
-      path: ["login", "methods", "cloudflare", "hosts"],
-      error:
-        "a hostname signed in with Cloudflare alone is a hostname of the mind that an app can have: under the mind's domain, and not the platform's own, where members sign in",
     },
   );
 export type AuthConfig = z.infer<typeof AuthConfig>;

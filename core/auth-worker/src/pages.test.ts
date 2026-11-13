@@ -7,7 +7,14 @@ import { expect, test } from "vitest";
 import { emailSignInResponse } from "./email-sign-in.ts";
 import type { Env } from "./env.ts";
 import { deviceTile } from "./device/page.ts";
-import { chooserPage, consentPage, errorPage, page, signInPage } from "./pages.ts";
+import {
+  chooserPage,
+  consentPage,
+  errorPage,
+  methodsSignInPage,
+  page,
+  signInPage,
+} from "./pages.ts";
 
 const DOMAIN = "example.com";
 const env = {
@@ -36,6 +43,40 @@ test("a mind that mails no code offers the passkey as the one action", async () 
   const html = await kept("sign-in-passkey-alone", signInPage(DOMAIN, "/"));
   expect(html).toContain(`<button type="submit">Sign in with a passkey</button>`);
   expect(html).not.toContain(`class="or"`);
+});
+
+test("an app that takes Cloudflare alone shows one button in Cloudflare's orange, and what Cloudflare shares; with other ways, each is under an or", async () => {
+  const app = {
+    host: `cloud.${DOMAIN}`,
+    origin: `https://cloud.${DOMAIN}`,
+    name: "Cloud",
+    icon: null,
+    members: false,
+  };
+  const next = "/oauth2/auth?client_id=c&acr_values=cloudflare";
+  const html = await kept(
+    "sign-in-cloudflare",
+    methodsSignInPage({ domain: DOMAIN, next, methods: ["cloudflare"], app }),
+  );
+  expect(html).toContain("<h1>Sign in to Cloud</h1>");
+  expect(html).toContain(`<p class="muted where">cloud.${DOMAIN}</p>`);
+  expect(html).toMatch(
+    /<form method="get" action="\/sign-in\/cloudflare" class="stack">\s*<input type="hidden" name="next" value="\/oauth2\/auth\?client_id=c&#38;acr_values=cloudflare">\s*<button type="submit" class="cloudflare"><svg [^]*<\/svg>Sign in with Cloudflare<\/button>/,
+  );
+  expect(html).toContain(
+    `Cloudflare shares your name and email address with iterate.${DOMAIN}, and nothing else of your Cloudflare account.`,
+  );
+  // one way and no script: nothing sends the person on by itself, and no link goes to the
+  // sign-ins page, which a sign-in at Cloudflare does not open
+  expect(html).not.toMatch(/<script|class="or"|\/sign-ins/);
+  const both = await kept(
+    "sign-in-cloudflare-or-passkey",
+    methodsSignInPage({ domain: DOMAIN, next, methods: ["cloudflare", "passkey"], app }),
+  );
+  expect(both).toMatch(
+    /Sign in with Cloudflare<\/button>[^]*<p class="or">or<\/p>[^]*class="secondary">Sign in with a passkey/,
+  );
+  expect(both).toContain(`<a href="/sign-ins">your sign-ins</a>`);
 });
 
 test("the consent page asks one question, with Deny and Allow as a pair", async () => {

@@ -1,4 +1,5 @@
 import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
+import type { SignInMethod } from "iterate/principal";
 import { plainPageCssHash, standalonePage } from "iterate/standalone-page";
 import { type AskingApp, appTile } from "./asking-app.ts";
 import { clientTile, shownLogoOf } from "./client-mark.ts";
@@ -64,14 +65,16 @@ export function page(
  *
  *  AN APP FOR MEMBERS (the Dash, the Agents app: `app.members`) says who it is for, and what is
  *  true of it: a member's sign-in lets its page act as that member in the whole mind. It does not
- *  invite a new address: "Dash is for people with access to it". */
+ *  invite a new address: "Dash is for people with access to it". `signIns: false` leaves out the
+ *  link to /sign-ins, which a sign-in at Cloudflare alone does not open (./sign-ins-page.ts). */
 export function appSignIn(
   app: AskingApp,
   domain: string,
   {
     heading = `Sign in to ${app.name}`,
     signUps,
-  }: { heading?: string; signUps?: "anyone" | "members" } = {},
+    signIns = true,
+  }: { heading?: string; signUps?: "anyone" | "members"; signIns?: boolean } = {},
 ) {
   const name = text(app.name);
   // THE MIND BY THE HOST OF ITS OWN PAGES, which a person can open: the block begins "<App> is an
@@ -107,7 +110,7 @@ export function appSignIn(
         <p><strong>${name}</strong> is an app of <strong>${text(mind)}</strong>.</p>
         <ul>
           ${facts.map((fact) => `<li>${text(fact)}</li>`).join("\n          ")}
-          <li>To leave, sign out in the app, or see <a href="/sign-ins">your sign-ins</a>.</li>
+          <li>To leave, sign out in the app${signIns ? `, or see <a href="/sign-ins">your sign-ins</a>` : ""}.</li>
         </ul>
       </div>`,
   };
@@ -127,6 +130,65 @@ export function signInPage(domain: string, next: string, google = false, app?: A
     script: passkey.script,
   });
 }
+
+/** THE PAGE OF THE WAYS AN APP TAKES (./sign-in.ts `methodsAskedIn`): a button for each way, the
+ *  first as the main action and each other under an "or", and no other way. With `app`, the
+ *  sign-in is for that app of the mind (`appSignIn`). The page never sends a person on by itself,
+ *  so they see where they are before they leave for Cloudflare. */
+export function methodsSignInPage(input: {
+  domain: string;
+  next: string;
+  methods: readonly SignInMethod[];
+  app: AskingApp | null;
+}) {
+  const { domain, next, methods } = input;
+  const asking = input.app
+    ? appSignIn(input.app, domain, { signIns: methods.some((method) => method !== "cloudflare") })
+    : null;
+  const passkey = passkeySignIn(next, methods[0] === "passkey" ? "alone" : undefined);
+  const ways = methods.map((method, index) => {
+    const way = (action: string, button: string) => `${index ? `<p class="or">or</p>` : ""}
+      <form method="get" action="${action}" class="stack">
+        <input type="hidden" name="next" value="${text(next)}">
+        ${button}
+      </form>`;
+    switch (method) {
+      case "cloudflare":
+        return `${way("/sign-in/cloudflare", `<button type="submit" class="cloudflare">${CLOUDFLARE_MARK}Sign in with Cloudflare</button>`)}
+      <p class="muted">Cloudflare shares your name and email address with iterate.${text(domain)}, and nothing else of your Cloudflare account.</p>`;
+      case "google":
+        return way(
+          "/sign-in/google",
+          `<button type="submit" class="outline">${GOOGLE_MARK}Sign in with Google</button>`,
+        );
+      case "email":
+        return way(
+          "/sign-in/email",
+          `<button type="submit"${index ? ` class="secondary"` : ""}>Sign in with a code by email</button>`,
+        );
+      case "passkey":
+        return passkey.body;
+      default:
+        // a deploy's ticket and an owner's link are no way an app can name (./env.ts `offersMethod`)
+        return "";
+    }
+  });
+  return page({
+    title: asking?.title || `Sign in to ${domain}`,
+    asker: asking?.asker,
+    imageOrigin: asking?.imageOrigin,
+    body: `${asking?.heading || `<h1>Sign in to ${text(domain)}</h1>`}
+      ${ways.join("")}${asking?.about || ""}`,
+    script: methods.includes("passkey") ? passkey.script : undefined,
+  });
+}
+
+/** An app names only ways to sign in that this stack does not offer (./env.ts `offersMethod`). */
+export const nobodySignsInPage = () =>
+  errorPage("This app takes a way to sign in that is not set up here, so nobody can sign in.", 503);
+
+/** A cloud, drawn here for "Sign in with Cloudflare": white on the button's orange. */
+const CLOUDFLARE_MARK = `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><g fill="#fff"><circle cx="7" cy="14" r="4"/><circle cx="12.5" cy="10.5" r="5.5"/><circle cx="18" cy="14.5" r="3.5"/><rect x="7" y="14" width="11" height="4"/></g></svg>`;
 
 /** Google's mark, as Google draws it: four colours, 18 pixels. */
 const GOOGLE_MARK = `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/></svg>`;

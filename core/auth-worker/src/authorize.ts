@@ -5,9 +5,10 @@ import {
   CimdFetchError,
 } from "@cloudflare/workers-oauth-provider";
 import { mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
+import { SignInMethod } from "iterate/principal";
+import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
 import { appOf, askingAppOf } from "./asking-app.ts";
-import { cloudflareSignInHref } from "./cloudflare-sign-in.ts";
 import {
   clearCloudflareSessionCookie,
   clearSessionCookie,
@@ -15,14 +16,7 @@ import {
   type Session,
   sessionOf,
 } from "./cookies.ts";
-import {
-  cloudflareAloneAt,
-  cloudflareSignInOf,
-  type Env,
-  issuerOf,
-  iterateConfigOf,
-  signInServes,
-} from "./env.ts";
+import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import {
   type GrantProps,
   grantedScopes,
@@ -32,8 +26,8 @@ import {
   mindHostResourceOf,
 } from "./oauth.ts";
 import { passkeyOwedResponse, standingOf } from "./members.ts";
-import { chooserPage, consentPage, errorPage, notMemberPage } from "./pages.ts";
-import { signInHref } from "./sign-in.ts";
+import { chooserPage, consentPage, errorPage, nobodySignsInPage, notMemberPage } from "./pages.ts";
+import { methodsAskedIn, signInHref } from "./sign-in.ts";
 import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { deviceStore } from "./device/store.ts";
 
@@ -79,17 +73,19 @@ async function describe(env: Env, request: Request) {
     );
   const authRequest = { ...parsed, scope };
   const { prompt, here } = promptOf(new URL(request.url));
-  // The session and the sign-in for this resource (./env.ts `cloudflareAloneAt`,
-  // ./cloudflare-sign-in.ts): whoever has no session of the right kind is sent to that sign-in.
-  const cloudflare = cloudflareAloneAt(env, authRequest.resource);
-  if (cloudflare && !cloudflareSignInOf(env))
-    return errorPage("The sign-in with Cloudflare is not set up here, so nobody can sign in.", 503);
-  const session = await sessionFor(env, request, authRequest.resource);
-  const signIn = `${issuerOf(env)}${cloudflare ? cloudflareSignInHref(here) : signInHref(env, here)}`;
+  // The ways to sign in that the app on a mind hostname takes (./sign-in.ts `methodsAskedIn`):
+  // whoever has no session made one of those ways is sent to the page of those ways.
+  const methods = methodsAskedIn(env, here);
+  if (methods?.length === 0) return nobodySignsInPage();
+  const session = await sessionFor(env, request, methods);
+  const cloudflare = session?.method === "cloudflare";
+  const signIn = `${issuerOf(env)}${signInHref(env, here)}`;
   if (!session) return Response.redirect(signIn, 302);
   // OpenID Connect's `prompt`. `login`: sign in again, whoever is signed in. `select_account`: say
-  // who is signed in and offer another account. Either comes back here without it. Cloudflare's
-  // own page says who is signed in there, so for its hostnames the two are one.
+  // who is signed in and offer another account. Either comes back here without it. A sign-in at
+  // Cloudflare ends for either, and the person starts again on the page of the app's ways:
+  // Cloudflare's own page says who is signed in there, and with no page of ours between,
+  // Cloudflare would sign the same person straight back in.
   if (prompt === "login" || (prompt && cloudflare))
     return new Response(null, {
       status: 302,
@@ -127,7 +123,9 @@ async function describe(env: Env, request: Request) {
   }
   // describe first: a failed lookup leaves nothing in KV
   const details = await helpers.describeConsent(authRequest);
-  const consent = await helpers.beginConsent(authRequest);
+  // the ways ride the consent to its approval (`ConsentMethods`)
+  const withMethods: AuthRequest & z.input<typeof ConsentMethods> = { ...authRequest, methods };
+  const consent = await helpers.beginConsent(withMethods);
   return consentPage({
     details,
     handle: consent.handle,
@@ -142,14 +140,23 @@ async function describe(env: Env, request: Request) {
   });
 }
 
-/** THE SESSION THAT MAY GET A CODE FOR `resource`, or null: Cloudflare's for a hostname that takes
- *  Cloudflare alone, the mind's own for everything else (./env.ts `signInServes`). Each is read
- *  from its own cookie, so nothing a browser sends turns one into the other. */
-async function sessionFor(env: Env, request: Request, resource: string | null | undefined) {
-  return cloudflareAloneAt(env, resource)
-    ? cloudflareSessionOf(env, request)
-    : sessionOf(env, request);
+/** THE SESSION THAT MAY GET A CODE, or null. With no `methods`, the mind's own session. With the
+ *  ways an app takes, the mind's own session when it began one of those ways, else Cloudflare's
+ *  when they name Cloudflare. Each is read from its own cookie, so nothing a browser sends turns
+ *  one into the other, and Cloudflare's is read for an app that names it alone. */
+async function sessionFor(
+  env: Env,
+  request: Request,
+  methods: readonly SignInMethod[] | null,
+): Promise<Session | null> {
+  const own = await sessionOf(env, request);
+  if (!methods || (own?.method && methods.includes(own.method))) return own;
+  return methods.includes("cloudflare") ? cloudflareSessionOf(env, request) : null;
 }
+
+/** The ways the app took, as a consent keeps them: the OAuth library keeps the request it begins
+ *  a consent with whole, and answers it at the approval. */
+const ConsentMethods = z.object({ methods: z.array(SignInMethod).nullish() });
 
 /** An authorization request's `prompt` (a space-separated list; `login` wins), and the request
  *  without it, as a path of the issuer: where a sign-in or the chooser goes on. */
@@ -185,8 +192,10 @@ async function decide(env: Env, request: Request) {
     return new Response(null, { status: 302, headers: denied.headers });
   }
   const approved = await helpers.approveConsent(request, handle);
-  // the resource is the one the consent was begun for, kept by the library: the form names none
-  const session = await sessionFor(env, request, approved.request.resource);
+  // the resource and the ways are the ones the consent was begun with, kept by the library: the
+  // form names neither
+  const kept = ConsentMethods.safeParse(approved.request).data?.methods;
+  const session = await sessionFor(env, request, kept || null);
   if (!session) return signedOut();
   const hostResource = mindHostResourceOf(env, approved.request.resource);
   const refused = await notMemberRefusal(env, session, hostResource, "/");
@@ -224,14 +233,14 @@ async function complete(
   const letIn = isDeviceRequest(env, authRequest)
     ? (await deviceStore(env.OAUTH_KV).byKey(authRequest.state))?.letIn
     : undefined;
-  // Every code is made here, so this is the last check of the rule the callers follow.
-  const cloudflare = session.method === "cloudflare";
-  if (!signInServes(env, cloudflare, authRequest.resource))
-    throw new Error("This sign-in does not serve what the code is for.");
+  // Every code is made here, so this is the last check of the rule the callers follow: a sign-in at
+  // Cloudflare serves a mind hostname alone (./cloudflare-sign-in.ts).
+  if (session.method === "cloudflare" && !hostResource)
+    throw new Error("A sign-in at Cloudflare serves a mind hostname alone.");
   const props: GrantProps = {
     userId: session.userId,
     email: session.email,
-    ...(cloudflare && ({ method: "cloudflare" } satisfies Pick<GrantProps, "method">)),
+    method: session.method,
     ...(letIn && {
       deadline: Date.now() + letIn.seconds * 1000,
       letIn: {

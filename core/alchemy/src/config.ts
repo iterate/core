@@ -133,10 +133,8 @@ const PUBLIC_FIELDS = new Set([
   "auth.login.methods.email.anyone",
   "auth.login.methods.google",
   "auth.login.methods.google.signsInAlone",
-  // a Cloudflare OAuth client's id, in every consent URL, and public hostnames; its `clientSecret`
-  // is no public field
+  // a Cloudflare OAuth client's id, in every consent URL; its `clientSecret` is no public field
   "auth.login.methods.cloudflare.clientId",
-  "auth.login.methods.cloudflare.hosts[]",
   "auth.login.allow[].email",
   "auth.login.allow[].subaddresses",
   "auth.login.allow[].emailDomain",
@@ -213,12 +211,11 @@ export const authSettingsOf = (config: MindConfig) => ({
 });
 
 /** Why a deploy of `config` is refused for a secret that its environment did not give, or
- *  undefined. Without the client's secret, the hostnames signed in with Cloudflare alone would let
- *  nobody in. */
+ *  undefined. Without the client's secret, an app that takes Cloudflare alone would let nobody in. */
 export function deployRefusalOf(config: MindConfig): string | undefined {
   const cloudflare = config.auth.login.methods.cloudflare;
   if (cloudflare && !cloudflare.clientSecret)
-    return `auth.login.methods.cloudflare is set, but ${configVarNameOf(CLOUDFLARE_CLIENT_SECRET, MIND_VARS)} is not: its hostnames would let nobody in`;
+    return `auth.login.methods.cloudflare is set, but ${configVarNameOf(CLOUDFLARE_CLIENT_SECRET, MIND_VARS)} is not: an app that takes Cloudflare alone would let nobody in`;
   return undefined;
 }
 

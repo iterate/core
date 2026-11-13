@@ -34,33 +34,44 @@ The package scripts load `core/alchemy/.secrets` when it exists (git ignores it)
 the auth Worker, which answers one prototype member for exactly that token.
 
 **Sign in with Cloudflare** (`core/auth-worker/src/cloudflare-sign-in.ts`) is a method of the
-config, for the hostnames it names and no other:
+config. The config makes the way exist for the stack; an app of the mind chooses it in its own
+code, so a new app needs no deploy:
 
 ```ts
 auth: {
   login: {
-    methods: { cloudflare: { clientId: "<the Cloudflare OAuth client's id>", hosts: ["cloud.example.com"] } },
+    methods: { cloudflare: { clientId: "<the Cloudflare OAuth client's id>" } },
     allow: [/* … */],
   },
 }
+```
+
+```js
+// in the mind's config repo, an app on its own hostname
+const refused = this.auth.requirePerson(request, { methods: ["cloudflare"] });
+if (refused) return refused;
+const person = this.auth.person(request, { methods: ["cloudflare"] });
 ```
 
 - The client's secret is the config's field `clientSecret`, which only the deploy's environment
   gives: `ITERATE_MIND__AUTH__LOGIN__METHODS__CLOUDFLARE__CLIENT_SECRET`. A config file that holds
   it is refused, the stack stores it nowhere, and the auth Worker gets it as its own binding, never
   in its settings. A deploy without it is refused: the stack stores the rest of the config, so no
-  deploy forgets the hostnames, and none takes the secret away. Keep the secret where the deploy's
+  deploy forgets the method, and none takes the secret away. Keep the secret where the deploy's
   other credentials are (Doppler).
 - Register `https://iterate.<domain>/sign-in/cloudflare/callback` as a redirect URI of the client,
   and the scope `user-details.read`. The sign-in asks that one scope and no `offline_access`.
-- A hostname in `hosts` gives a code or a token only to a person who signed in with Cloudflare,
-  whichever client asks: the hostname's own sign-in, and an MCP client of the app on it
-  (`https://cloud.example.com/mcp`). The mind's own sign-ins (a passkey, a mailed code, Google) do
-  not count there. The sign-in with Cloudflare counts nowhere else: not on another hostname, and
-  not for the mind's own API or MCP server at `iterate.<domain>`.
-- A person who signed in with Cloudflare is never a member there, whatever their address is: an
-  app on such a hostname guards with `auth.requirePerson`.
-- A stack whose secret is gone all the same lets nobody in to those hostnames.
+- The app's guard is the rule. Every grant keeps the way its session began by, the boundary stamps
+  it beside the person, and the guard refuses any other way on every request, the page's session
+  cookie and an MCP client's bearer alike. A person refused that way is signed in again on that
+  host, by a way the app names: the boundary passes the guard's ways to the issuer as RFC 9470's
+  `acr_values`, and the issuer shows a page with one button for each. That is routing, which a
+  browser can change; what it changes ends at the guard.
+- A sign-in with Cloudflare counts only where an app names it: a guard with no `methods` takes
+  every way but Cloudflare's. It is never a member, whatever its address is, never a session of
+  the mind's own pages, and never a token for the mind's API, MCP server or `/provide`.
+- A stack whose secret is gone all the same lets nobody in to an app that takes Cloudflare alone,
+  and ends the Cloudflare sign-ins it gave before.
 
 The smoke check needs that token for every check of the mind itself, through its API at
 `iterate.<zone>/api`; without it, those checks pass as skipped and say why. With it, the smoke

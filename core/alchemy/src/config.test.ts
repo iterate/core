@@ -97,7 +97,7 @@ async function loadedFromFile(config: unknown, env: Record<string, string> = {})
   }
 }
 
-const cloudflare = { clientId: "proof-client", hosts: ["cloud.mind.example", "app.mind.example"] };
+const cloudflare = { clientId: "proof-client" };
 const withCloudflare = {
   ...stack,
   auth: { login: { ...stack.auth.login, methods: { cloudflare } } },
@@ -170,11 +170,10 @@ void test("the client's secret in the environment of a stack with no sign-in wit
   const loaded = await loadedFromFile(stack, { [SECRET_VAR]: "proof-secret" });
   assert.deepEqual(loaded, MindConfig.parse(stack));
   assert.equal(deployRefusalOf(loaded), undefined);
-  // with the method's other fields from the environment too, the method is the config's
+  // with the method's client id from the environment too, the method is the config's
   const both = await loadedFromFile(stack, {
     [SECRET_VAR]: "proof-secret",
     ITERATE_MIND__AUTH__LOGIN__METHODS__CLOUDFLARE__CLIENT_ID: "proof-client",
-    ITERATE_MIND__AUTH__LOGIN__METHODS__CLOUDFLARE__HOSTS: JSON.stringify(cloudflare.hosts),
   });
   assert.deepEqual(both.auth.login.methods.cloudflare, {
     ...cloudflare,

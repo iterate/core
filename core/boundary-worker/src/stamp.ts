@@ -6,6 +6,7 @@ import {
   ITX_PRINCIPAL_HEADER,
   type Lender,
   type Person,
+  type SignInMethod,
 } from "iterate/principal";
 import {
   type PlatformRoute,
@@ -24,6 +25,9 @@ export type Stamped = {
   forwarded: Request;
   caller: MindHostCaller;
   email: string | null;
+  /** How the caller on a mind hostname signed in, when they did: the app's guard names the ways
+   *  it takes (./mind-host-sign-in.ts). */
+  method?: SignInMethod;
   answer?: Response;
 };
 
@@ -125,14 +129,17 @@ export async function stampedRequest(
     const person: Person = {
       userId: identity.principal.actor,
       email: identity.principal.email || "",
+      method: identity.method,
     };
     headers.set(ITX_PERSON_HEADER, JSON.stringify(person));
     if (caller === "member") stamp(headers, identity);
   }
+  const signedIn = identity && caller !== "anonymous" ? identity : null;
   return {
     forwarded: new Request(request, { headers }),
     caller,
-    email: caller === "anonymous" ? null : identity?.principal.email || null,
+    email: signedIn?.principal.email || null,
+    method: signedIn?.method,
   };
 }
 

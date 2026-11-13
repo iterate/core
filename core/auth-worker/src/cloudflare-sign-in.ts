@@ -1,16 +1,20 @@
-// cloudflare-sign-in.ts — SIGN IN WITH CLOUDFLARE, for the hostnames of the mind that take no
-// other sign-in. Off unless the config has the method (./config.ts `login.methods.cloudflare`)
-// and the deploy bound the client's secret (./env.ts `cloudflareSignInOf`).
+// cloudflare-sign-in.ts — SIGN IN WITH CLOUDFLARE, for the apps of the mind that take it. Off
+// unless the config has the method (./config.ts `login.methods.cloudflare`) and the deploy bound
+// the client's secret (./env.ts `cloudflareSignInOf`).
 //
-// WHAT IT IS FOR. A hostname the config names there is signed in with Cloudflare alone: a code or a token for it is given to a person who signed in here, and to
-// nobody else (./authorize.ts, ./oauth.ts `tokenIdentity`). Every other hostname, the API and the
-// MCP server keep the sign-ins they had, and this one counts for none of them.
+// WHAT IT IS FOR. An app on a mind hostname whose guard names `"cloudflare"` (iterate/sdk
+// `auth.requirePerson`, which says how a guard judges the way). The page of the ways the app names
+// (./pages.ts `methodsSignInPage`) has the button that starts here.
 //
 // WHAT IT PROVES, AND WHAT IT DOES NOT. Cloudflare says which of its users consented: an id and
 // the address on that Cloudflare account. This Worker does not know that Cloudflare checked the
-// address. So the sign-in never makes a member: it has a cookie of its own
-// (./cookies.ts `cloudflareSessionOf`) that only the authorization endpoint reads, and only for
-// those hostnames, and a token from it says `member: false` whatever its address is.
+// address. So the sign-in never makes a member, and counts only where an app names it:
+//   - it has a cookie of its own (./cookies.ts `cloudflareSessionOf`), which only the
+//     authorization endpoint reads, for an app on a mind hostname that names Cloudflare
+//     (./authorize.ts `sessionFor`); none of the mind's own pages reads it;
+//   - a code or a token from it is for a mind hostname alone, never the mind's API, MCP server or
+//     `/provide`, and says `member: false` whatever its address is (./oauth.ts `tokenIdentity`);
+//   - an app's guard that names no ways takes every way but this one (iterate/sdk).
 //
 //   GET /sign-in/cloudflare            makes the state and the PKCE pair, keeps them in this
 //                                      browser's cookie, and sends the browser to Cloudflare
@@ -35,6 +39,7 @@ import {
   iterateConfigOf,
 } from "./env.ts";
 import { errorPage } from "./pages.ts";
+import { signInHref } from "./sign-in.ts";
 import { linkIdentity } from "./users.ts";
 
 const CLOUDFLARE_SIGN_IN_PATH = "/sign-in/cloudflare";
@@ -46,10 +51,6 @@ export const CLOUDFLARE_SIGN_IN_SCOPE = "user-details.read";
 /** What marks this browser's flow cookie as Cloudflare's: the cookie is the one Google's sign-in
  *  uses, where this field is the id_token's nonce, a random UUID. */
 const FLOW_MARK = "cloudflare";
-
-/** Where a person signs in for a hostname that takes Cloudflare alone, then goes on to `next`. */
-export const cloudflareSignInHref = (next: string) =>
-  `${CLOUDFLARE_SIGN_IN_PATH}?${new URLSearchParams({ next })}`;
 
 export async function cloudflareSignInResponse(
   env: Env,
@@ -101,7 +102,7 @@ async function finish(
 ): Promise<Response> {
   const flow = await flowOf(env, request);
   const cleared = new Headers({ "set-cookie": clearFlowCookie });
-  const again = [{ href: cloudflareSignInHref(flow?.next || "/"), label: "Try again" }];
+  const again = [{ href: signInHref(env, flow?.next || "/"), label: "Try again" }];
   const code = url.searchParams.get("code");
   // The state binds Cloudflare's answer to the browser that began, and the mark to a flow that
   // began here, not at Google. A refusal at Cloudflare has no code.

@@ -345,6 +345,17 @@ button.outline {
 button.outline:hover {
   background: var(--accent);
 }
+/* "Sign in with Cloudflare", in Cloudflare's own orange: the one way of a page, so a size up */
+button.cloudflare {
+  min-height: 2.75rem;
+  background: var(--cloudflare);
+  color: var(--cloudflare-foreground);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+button.cloudflare:hover {
+  background: color-mix(in oklab, var(--cloudflare) 88%, var(--cloudflare-foreground));
+}
 button svg {
   margin-right: 0.5rem;
   vertical-align: -0.2em;

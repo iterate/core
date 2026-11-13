@@ -3,7 +3,12 @@
 // and answers the challenge that makes ingress sign a person in. The guards are below.
 import { z } from "zod";
 import { isSameOriginBrowserRequest } from "../lib.ts";
-import { ITX_PERSON_HEADER, ITX_PRINCIPAL_HEADER, type Person } from "../principal.ts";
+import {
+  ITX_PERSON_HEADER,
+  ITX_PRINCIPAL_HEADER,
+  type Person,
+  SignInMethod,
+} from "../principal.ts";
 import { ITERATE_SERVE_HEADER } from "../mind-ingress.ts";
 
 const Principal = z.object({ actor: z.string().min(1), email: z.string().optional() });
@@ -11,7 +16,13 @@ const PersonStamp = z.object({
   userId: z.string().min(1),
   email: z.string(),
   impersonatedBy: z.object({ actor: z.string().min(1), email: z.string() }).optional(),
+  // a way this SDK does not know is one no app names: the person counts as signed in by an
+  // unknown way
+  method: SignInMethod.optional().catch(undefined),
 });
+
+/** What the person guards take: `methods`, the ways to sign in that the app takes. */
+export type PersonOptions = { methods?: readonly SignInMethod[] };
 
 /** GUARDS FOR A MIND'S CONFIG WORKER, before it serves a page. Every hostname of the mind's
  *  domain but `iterate.<domain>` is the mind's own, and on each one ingress holds the browser
@@ -22,8 +33,25 @@ const PersonStamp = z.object({
  *  ARRIVES". The guards:
  *    - `auth.require` asks for a member, and `auth.requirePerson` for anyone signed in. Both answer
  *      null when the request may go on, else the answer to send.
- *    - `auth.person` reads the person, or null: `{ userId, email }`. `userId` is stable: key what
- *      the app keeps per person by it.
+ *    - `auth.person` reads the person, or null: `{ userId, email, method }`. `userId` is stable:
+ *      key what the app keeps per person by it.
+ *
+ *  WAYS TO SIGN IN. `auth.person` and `auth.requirePerson` take `{ methods }`: the ways to sign in
+ *  that the app takes, of those the stack's config offers (`"passkey"`, `"email"`, `"google"`,
+ *  `"cloudflare"`), in the order its sign-in page shows them. A person who signed in another way
+ *  is no person to that guard: `requirePerson` answers the challenge with RFC 9470's
+ *  `acr_values`, and for a page load ingress signs them in again on this host, by a way the app
+ *  names. Without `methods`, every way counts but Cloudflare's: a sign-in with Cloudflare counts
+ *  only where an app names it, because the stack does not know that Cloudflare checked the
+ *  address (core/auth-worker/src/cloudflare-sign-in.ts). A session from before sessions said how
+ *  they began counts only where an app names no `methods`. The guard is the rule: what the issuer
+ *  shows a person is routing, which a browser can change.
+ *
+ *  ```js
+ *  const refused = this.auth.requirePerson(request, { methods: ["cloudflare"] });
+ *  if (refused) return refused;
+ *  const person = this.auth.person(request, { methods: ["cloudflare"] }); // method: "cloudflare"
+ *  ```
  *
  *  Signed out, `auth.require` answers `401` with `WWW-Authenticate: Bearer realm="iterate"`, and
  *  `auth.requirePerson` the same with `scope="identity"`. For a page load, ingress turns that answer
@@ -55,16 +83,26 @@ export const auth = {
     }
     return signIn('Bearer realm="iterate"');
   },
-  requirePerson(request: Request): Response | null {
+  requirePerson(request: Request, options: PersonOptions = {}): Response | null {
     const refused = crossSiteRefusal(request);
     if (refused) return refused;
-    if (auth.person(request)) return null;
-    return signIn('Bearer realm="iterate", scope="identity"');
+    if (auth.person(request, options)) return null;
+    // RFC 9470's step-up challenge: the person here signed in by a way this app does not take
+    const params = ['realm="iterate"', 'scope="identity"'];
+    if (request.headers.has(ITX_PERSON_HEADER))
+      params.push('error="insufficient_user_authentication"');
+    if (options.methods) params.push(`acr_values="${options.methods.join(" ")}"`);
+    return signIn(`Bearer ${params.join(", ")}`);
   },
-  person(request: Request): Person | null {
-    const person = request.headers.get(ITX_PERSON_HEADER);
+  person(request: Request, { methods }: PersonOptions = {}): Person | null {
+    const stamp = request.headers.get(ITX_PERSON_HEADER);
+    if (!stamp) return null;
     // Platform-owned stamp; malformed means a defect.
-    return person ? PersonStamp.parse(JSON.parse(person)) : null;
+    const person = PersonStamp.parse(JSON.parse(stamp));
+    const taken = methods
+      ? Boolean(person.method && methods.includes(person.method))
+      : person.method !== "cloudflare";
+    return taken ? person : null;
   },
   /** THE MEMBER'S OWN `itx`, FOR THE PAGE THEY ARE ON: answer this from the path the page opens
    *  its WebSocket on (`new WebSocket("/itx")`, a capnweb session). It answers the member guard's
