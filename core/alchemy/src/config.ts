@@ -83,6 +83,28 @@ const MindConfigFields = z.strictObject({
   cloudflareToken: z.literal(true).optional(),
   // The Cloud's key, which signs the events it delivers, is one of `auth.keys`.
   cloud: z.strictObject({ origin: z.url({ protocol: /^https$/ }) }).optional(),
+  // Workers of the stack's own account, each bound to the mind Worker and called by the mind's code
+  // as `itx.services.<name>.<method>(...args)` (core/mind-worker/src/context/services.ts). A
+  // service binding resolves in its own account alone: a name is looked up there, and Cloudflare
+  // refuses the deploy when no Worker has it.
+  services: z
+    .array(
+      z.strictObject({
+        name: z.string().regex(/^[a-z][a-zA-Z0-9]{0,39}$/, "a camelCase name, at most 40"),
+        worker: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, "a Worker's name in the account"),
+        // a `WorkerEntrypoint` class the Worker exports; absent: its default export
+        entrypoint: z
+          .string()
+          .regex(/^[A-Za-z_$][\w$]*$/, "a class name")
+          .optional(),
+        description: z.string().trim().min(1).max(500).optional(),
+      }),
+    )
+    .refine(
+      (services) => new Set(services.map(({ name }) => name)).size === services.length,
+      "each service's name once",
+    )
+    .optional(),
 });
 
 export const MindConfig = MindConfigFields.refine(
@@ -93,6 +115,10 @@ export const MindConfig = MindConfigFields.refine(
       "the sign-in with Google goes through an iterate Cloud's Google client: add cloud: { origin }, or sign in another way",
   },
 )
+  .refine(({ mind, services }) => !(mind?.provided && services), {
+    path: ["services"],
+    error: "a provided mind runs elsewhere: its stack has no mind Worker to bind the services to",
+  })
   .refine(({ mind, cloudflareToken }) => !(mind?.provided && cloudflareToken), {
     path: ["cloudflareToken"],
     error: "a provided mind runs elsewhere: its stack has no mind Worker to hold the token",
@@ -156,6 +182,11 @@ const PUBLIC_FIELDS = new Set([
   "mail.forwardTo",
   "telemetry",
   "cloudflareToken",
+  // a Worker's name in the account, and the line the mind's capability list shows
+  "services[].name",
+  "services[].worker",
+  "services[].entrypoint",
+  "services[].description",
 ]);
 
 /** A group of fields in the config's tree: an object with a key. An empty object (`methods: {}`)

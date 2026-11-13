@@ -5,6 +5,7 @@
 // one reader of the principal's stamp, `stampedCallerOf`. How the platform admits and carries a
 // caller, and signs its own tokens, stays in the platform.
 import { z } from "zod";
+import { codedError } from "./lib.ts";
 
 /** Who is acting: a stable actor id (the auth Worker's user id) and, when known, an email. A
  *  platform admin signed in as someone else is two people (RFC 8693's subject and actor): the
@@ -102,4 +103,38 @@ export function stampedCallerOf(request: Request): {
     principal: principal ? StampedPrincipal.parse(JSON.parse(principal)) : null,
     grant: request.headers.get(ITX_GRANT_HEADER) || undefined,
   };
+}
+
+/** WHO CALLS A SERVICE, a Worker of the stack's own Cloudflare account that its config names
+ *  (core/alchemy `services`). The mind Worker puts it first in each call: `itx.services.<name>.
+ *  <method>(...args)` arrives at the bound entrypoint as `<method>(caller, ...args)`. The platform
+ *  writes it, never the calling code. A service trusts it because only a Worker of its own account
+ *  can bind it: any such Worker could also send one. `mind` is the stack's domain, `path` the
+ *  context that called, `onBehalfOf` the person a run acts for. */
+export const ServiceCaller = z.object({
+  mind: z.string(),
+  path: z.string(),
+  call: z.string(),
+  principal: StampedPrincipal.optional(),
+  grant: z.string().optional(),
+  onBehalfOf: z
+    .object({
+      principal: StampedPrincipal,
+      grant: z.string().optional(),
+      run: z.string().optional(),
+      call: z.string().optional(),
+    })
+    .optional(),
+});
+export type ServiceCaller = z.infer<typeof ServiceCaller>;
+
+/** A service's read of its first argument: a call that did not come through a mind's
+ *  `itx.services` is refused. */
+export function serviceCallerOf(value: unknown): ServiceCaller {
+  const parsed = ServiceCaller.safeParse(value);
+  if (parsed.success) return parsed.data;
+  throw codedError(
+    "INVALID_INPUT",
+    `not a mind's call: the first argument is no ServiceCaller (${parsed.error.message})`,
+  );
 }

@@ -223,3 +223,38 @@ void test("a config's old default for hostnames is read and not kept; any other 
   assert.deepEqual(MindConfig.parse({ ...stack, hostnames: "all" }), MindConfig.parse(stack));
   assert.equal(MindConfig.safeParse({ ...stack, hostnames: "platform" }).success, false);
 });
+
+const cloudService = {
+  name: "cloud",
+  worker: "proof-cloud",
+  entrypoint: "Service",
+  description: "installs minds",
+};
+
+void test("a config's services are kept whole in the stored config, and read back the same", async () => {
+  const loaded = await loadedFromFile({ ...stack, services: [cloudService] });
+  assert.deepEqual(loaded.services, [cloudService]);
+  assert.deepEqual(storedConfigOf(loaded).services, [cloudService]);
+});
+
+void test("a service named twice, a name no itx step takes, a provided mind's service and another key are refused", () => {
+  for (const services of [
+    [cloudService, { ...cloudService, worker: "other" }],
+    [{ ...cloudService, name: "the-cloud" }],
+    [{ ...cloudService, worker: "Proof Cloud" }],
+    [{ ...cloudService, accountId: "0".repeat(32) }],
+  ])
+    assert.equal(
+      MindConfig.safeParse({ ...stack, services }).success,
+      false,
+      JSON.stringify(services),
+    );
+  assert.equal(
+    MindConfig.safeParse({ ...stack, mind: { provided: true }, services: [cloudService] }).success,
+    false,
+  );
+  assert.equal(
+    MindConfig.safeParse({ ...stack, services: [{ name: "x", worker: "y" }] }).success,
+    true,
+  );
+});

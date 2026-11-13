@@ -29,6 +29,10 @@ declare global {
       SANDBOX_CONTAINER: DurableObjectNamespace<SandboxContainer>;
       BROWSER: BrowserRun;
       IMAGES: ImagesBinding;
+      /** The JSON of the services the stack binds (context/services.ts `ServiceListing`), each
+       *  as `SERVICE_<name>`, when its config names any. */
+      SERVICES?: string;
+      [service: `SERVICE_${string}`]: Service | undefined;
     }
     // Types `ctx.exports`.
     interface GlobalProps {

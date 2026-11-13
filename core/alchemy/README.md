@@ -598,6 +598,32 @@ a placeholder, and never sees its value. A secret that somebody else put at that
 it is. A deploy without the field deletes the token at Cloudflare, and the mind then deletes what
 it stored. A provided mind may not ask for the token: its stack has no mind Worker.
 
+## Services: Workers of the account that the mind calls
+
+`services` in the config binds Workers of the stack's own account to the mind Worker, and the
+mind's code calls each one as `itx.services.<name>.<method>(...args)`:
+
+```ts
+services: [{ name: "cloud", worker: "iterate-cloud-prd", entrypoint: "Service", description: "installs minds" }],
+```
+
+Each becomes a service binding `SERVICE_<name>` to that Worker's `WorkerEntrypoint` class
+(`entrypoint`, or the default export), and `SERVICES` lists them. The call is Workers RPC:
+`<method>(caller, ...args)`, where `caller` is the platform's word of who calls (iterate/principal
+`ServiceCaller`: the mind's domain, the calling context's path, the method, and the person behind
+the call, when there is one). The service reads it with `serviceCallerOf(caller)`.
+
+- **The trust rests on the account.** A service binding resolves in the deploying account alone,
+  so only a Worker of that account reaches the service this way. Any Worker of the account that
+  binds it can send any `caller`: the account is the boundary, not the mind.
+- **The Worker must exist first.** Cloudflare refuses the deploy of a binding to a Worker its
+  account has not got. A service that a deploy bound and that was deleted after fails the call.
+- **Codes:** a name the config does not bind answers `NO_SERVICE`, a method the entrypoint has
+  not got `NOT_A_METHOD`, a service's own coded error keeps its `code`, and a call with no
+  answer in ten minutes `TIMEOUT`.
+- The services are public fields of the stored config: no secret goes in one. A provided mind
+  has no mind Worker, and may not name any.
+
 ## A provided mind
 
 A stack's mind can run on a machine of your own: the same mind Worker, in local workerd

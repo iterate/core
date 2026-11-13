@@ -51,6 +51,7 @@ type ErrorCode =
   | "MIND_NAME_TAKEN" // minds.create({ mind }): a mind of that slug exists in another org; minds.rename(mind, { slug }): another mind holds the slug
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
+  | "NO_SERVICE" // itx.services.<name>: the stack's config binds no service of that name (core/alchemy config `services`)
   | "NO_FACET" // no facet of that name has been loaded into this context
   | "FACET_ABORTED" // the facet instance this call ran on was reset by `itx.facets.abort` (core/itx/src/context/facet-host.ts) — its next call starts it fresh
   | "FACET_RESTARTED" // the facet instance this call ran on was restarted by the platform under it — its source or loader identity changed, or another call on it timed out (core/itx/src/context/facet-host.ts) — its next call runs on the new instance

@@ -768,6 +768,18 @@ A rule makes an act wait until a member approves it with a passkey, on
 - What a rule does not promise: a mail is held whatever sends it, but a verb is held only when the
   mind's agents or loaded code call it, not from a mind Worker changed to skip the rule.
 
+## Services of the account
+
+When the stack's config names `services` (core/alchemy/README.md), `itx.services.<name>` is a
+Worker of the mind's own Cloudflare account, and `itx.services.<name>.<method>(...args)` calls
+that Worker's method with the platform's word of who calls first: the mind, the calling
+context's path and the person behind the call. `(await itx.rewriteRules.list())` at `/` shows
+the root with each service's line. Every context that reaches the root reaches every method. A
+jailed context reaches one method alone by a rule there that a member writes (loaded code names no
+`itx.builtins` in a row):
+`{ match: "itx.install", target: 'itx.builtins.cd("/").services.cloud.installBegin' }`, as the
+payload of an `events.iterate.com/itx/rewrite-rule-configured` event on that context.
+
 ## How the platform works
 
 The source code of the platform is public at https://github.com/iterate/core. Read it before you

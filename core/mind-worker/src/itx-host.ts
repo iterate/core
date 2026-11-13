@@ -18,6 +18,12 @@ import {
   secretsRoot,
   sendRecordingSecretFacts,
 } from "./context/secrets.ts";
+import {
+  ServiceListing,
+  type ServiceStub,
+  servicesRoot,
+  servicesRootDescription,
+} from "./context/services.ts";
 import { platformWakeEvents, telemetryRoots } from "./context/telemetry.ts";
 import { URL_ROOT_DESCRIPTION, urlRoot } from "./context/url.ts";
 import { WEBHOOKS_ROOT_DESCRIPTION, webhooksRoot } from "./context/webhooks.ts";
@@ -146,6 +152,9 @@ defineItxHost({
           }),
       },
       integrations: { description: INTEGRATIONS_ROOT_DESCRIPTION, build: integrationsRoot },
+      ...(env.SERVICES && {
+        services: servicesHostRoot(ServiceListing.parse(JSON.parse(env.SERVICES))),
+      }),
       // At every context: one with no parent link, such as `/integrations/webhooks/<name>`, finds them too.
       url: {
         description: URL_ROOT_DESCRIPTION,
@@ -160,6 +169,18 @@ defineItxHost({
     };
   },
   signingSecret: async () => env.MIND_SIGNING_KEY,
+});
+
+const servicesHostRoot = (listed: ServiceListing): ItxHostRoot => ({
+  description: servicesRootDescription(listed),
+  build: (scope) =>
+    servicesRoot(scope, {
+      listed,
+      // a service binding answers any method name, as a function: the stub's own type says so
+      binding: (name) => env[`SERVICE_${name}`] as ServiceStub | undefined,
+      domain: env.DOMAIN,
+      signingSecret: async () => env.MIND_SIGNING_KEY,
+    }),
 });
 
 const mindR2 = (scope: Parameters<typeof r2Root>[0]) =>

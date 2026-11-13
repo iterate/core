@@ -240,6 +240,7 @@ export const mindStack = (config: MindConfig) =>
               CLOUDFLARE_TOKEN: cloudflareToken.value,
               CLOUDFLARE_TOKEN_ID: cloudflareToken.tokenId,
             }),
+            ...(config.services && servicesEnvOf(config.services)),
           },
         });
       });
@@ -507,6 +508,24 @@ const observabilityOf = (destinations?: {
     destinations: destinations?.logs,
   },
   traces: { enabled: true, headSamplingRate: 1, persist: true, destinations: destinations?.traces },
+});
+
+/** The services of the config (./config.ts `services`) as the mind Worker's env: their listing as
+ *  SERVICES, and each as the service binding `SERVICE_<name>`. */
+const servicesEnvOf = (services: NonNullable<MindConfig["services"]>) => ({
+  SERVICES: JSON.stringify(services.map(({ name, description }) => ({ name, description }))),
+  ...Object.fromEntries(
+    services.map(({ name, worker, entrypoint }) => [
+      `SERVICE_${name}`,
+      {
+        ...Cloudflare.WorkerEntrypoint({ entrypoint }),
+        // A Worker no stack of this deploy declares: Alchemy lowers the binding from the Worker's
+        // `workerName` alone (WorkerAsyncBindings.ts `isWorkerEntrypoint`), and its Worker type
+        // asks for a whole resource, which only a declared Worker is.
+        worker: { workerName: worker } as unknown as Cloudflare.Worker,
+      },
+    ]),
+  ),
 });
 
 const refuse = (message: string) =>
