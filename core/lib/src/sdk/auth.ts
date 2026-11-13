@@ -119,6 +119,27 @@ export const auth = {
       })
     );
   },
+  /** WHAT A MEMBER'S PAGE OF @iterate-com/ui ASKS OF ITS APP'S HOST, or null for any other path:
+   *  `/itx`, its socket (`auth.itx`), and the three answers its shell's sidebar asks under
+   *  `/.auth/`, written for an app with a sign-in gate of its own. Here the platform signs people
+   *  in, so they say: the platform is the mind's own (`session.json`), this app serves one mind
+   *  (`minds.json`), and "Sign out" is the platform's (`logout`). Call it behind the member guard. */
+  memberPage(request: Request): Response | null {
+    const url = new URL(request.url);
+    // the mind's address: this host, one label shorter
+    const mind = url.hostname.split(".").slice(1).join(".");
+    if (url.pathname === "/itx") return auth.itx(request);
+    if (url.pathname === "/.auth/session.json") {
+      const platform = `https://iterate.${mind}`;
+      return Response.json({ issuer: platform, defaultIssuer: platform });
+    }
+    if (url.pathname === "/.auth/minds.json")
+      return Response.json({ minds: [{ address: mind, lastUsedAt: Date.now() }], lastUsed: mind });
+    // the platform's own sign-out takes the POST
+    if (url.pathname === "/.auth/logout")
+      return new Response(null, { status: 307, headers: { location: "/.iterate/sign-out" } });
+    return null;
+  },
 };
 
 /** A write or a WebSocket upgrade from another origin: 403. */

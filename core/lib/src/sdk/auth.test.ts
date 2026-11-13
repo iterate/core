@@ -164,6 +164,25 @@ test("signed out, a guard that names ways says them, in its order, with no error
   ).toMatchObject({ userId: "user_1", method: "cloudflare" });
 });
 
+// What a member's page of the UI kit asks of its app's host: its socket and the shell's three
+// /.auth/ answers, for the mind this host is of. Any other path is the app's.
+test("a member's page gets its socket, the mind's platform, one mind and the platform's sign-out", async () => {
+  const ask = (path: string, headers: Record<string, string> = signedIn) =>
+    auth.memberPage(new Request(`https://dash.example.com${path}`, { headers }));
+  expect(ask("/itx")?.status).toBe(426);
+  expect(ask("/itx", {})?.status).toBe(401);
+  expect(await ask("/.auth/session.json")?.json()).toEqual({
+    issuer: "https://iterate.example.com",
+    defaultIssuer: "https://iterate.example.com",
+  });
+  expect(await ask("/.auth/minds.json")?.json()).toMatchObject({
+    minds: [{ address: "example.com" }],
+    lastUsed: "example.com",
+  });
+  expect(ask("/.auth/logout")?.headers.get("location")).toBe("/.iterate/sign-out");
+  expect(ask("/app.js")).toBeNull();
+});
+
 function workerRequest(method: string, headers: Record<string, string>) {
   return new Request("https://worker.example/x", { method, headers });
 }
