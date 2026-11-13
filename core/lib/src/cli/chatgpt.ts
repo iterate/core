@@ -8,6 +8,8 @@
 //   2. this process listens on 127.0.0.1:1455 and opens OpenAI's consent in the browser
 //   3. OpenAI sends the browser back here with a code and the client it registered
 //   4. the mind trades the code for tokens and keeps them, in one `itx.run` script
+//   5. the browser's request waits for step 4, then goes to the Cloud's `/connected` page, so the
+//      wizard tab sees that the connect ended (or, with no Cloud, it gets a page that says so)
 //
 // The tokens are made inside the mind and never reach this computer. This process holds the
 // PKCE verifier and the code for one sign-in, and sends both to the mind once. The names below
@@ -32,6 +34,11 @@ const SECRET = "/secrets/chatgpt";
 /** The only origins the tokens are ever sent to. */
 const PIN = ["https://api.openai.com", "https://auth.openai.com"];
 const HOST_KEY = "chatgpt/host";
+/** Where the iterate Cloud's statement lands when it enrols the mind: the payload of its
+ *  `deployment-enrolled` names the Cloud's origin (`cloud`). The mind takes that name only with the
+ *  key of the Cloud its config names (auth-worker key-rules.ts), so this is the config's
+ *  `cloud.origin` as the mind sees it. */
+const CLOUD_PATH = "/integrations/cloud";
 const ACCOUNT_KEY = "chatgpt/account";
 /** A sign-in the integration's Connect page has open, which this one ends. */
 const PENDING_KEY = "chatgpt/pending";
@@ -157,14 +164,39 @@ function readCallback(url: URL, state: string): Callback {
   return { kind: "code", code, clientId };
 }
 
+/** How the browser's request to the callback ends, once the terminal step is over: a redirect to
+ *  the Cloud's page, or a page of its own. */
+export type Answer = { kind: "redirect"; to: URL } | { kind: "page"; failed: boolean };
+
+/** The local page the browser sees when there is no Cloud to send it to, or the connect failed. */
+function callbackPage(failed: boolean): string {
+  return failed
+    ? standalonePage({
+        title: "ChatGPT did not connect",
+        head: "",
+        body: "<h1>ChatGPT did not connect</h1><p>The terminal says why. You can close this tab.</p>",
+      })
+    : standalonePage({
+        title: "ChatGPT is connected",
+        head: "",
+        body: "<h1>ChatGPT is connected</h1><p>Your mind uses your ChatGPT plan now. You can close this tab.</p>",
+      });
+}
+
 /** Listen on 127.0.0.1:1455 until OpenAI's callback for `state` comes, or 15 minutes pass.
- *  `onListening` runs once the port is ours, so the browser opens only then. */
+ *  `onListening` runs once the port is ours, so the browser opens only then. A refusal is
+ *  answered at once. A code is handed over with `answer`: the browser's request stays open until
+ *  `answer` runs, so the tab shows what the terminal step did. */
 export function waitForCallback(
   state: string,
   onListening: () => void,
   port = Number(new URL(REDIRECT_URI).port),
-): Promise<{ code: string; clientId: string }> {
-  const { promise, resolve, reject } = Promise.withResolvers<{ code: string; clientId: string }>();
+): Promise<{ code: string; clientId: string; answer: (answer: Answer) => void }> {
+  const { promise, resolve, reject } = Promise.withResolvers<{
+    code: string;
+    clientId: string;
+    answer: (answer: Answer) => void;
+  }>();
   const server = createServer((request, response) => {
     const callback = readCallback(new URL(request.url || "/", REDIRECT_URI), state);
     if (callback.kind === "other") {
@@ -173,19 +205,24 @@ export function waitForCallback(
         .end("This address belongs to another sign-in.\n");
       return;
     }
-    const failed = callback.kind === "error";
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(
-      standalonePage({
-        title: failed ? "ChatGPT did not connect" : "Almost done",
-        head: "",
-        body: failed
-          ? "<h1>ChatGPT did not connect</h1><p>You can close this tab. The terminal says why.</p>"
-          : "<h1>Almost done</h1><p>You can close this tab. The terminal finishes the connection.</p>",
-      }),
-    );
-    close();
-    if (callback.kind === "error") reject(new Error(callback.message));
-    else resolve({ code: callback.code, clientId: callback.clientId });
+    // no other request is taken; the one held here stays open until it is answered
+    clearTimeout(timeout);
+    server.close();
+    const answer = (answer: Answer) => {
+      response.once("finish", () => server.closeAllConnections());
+      if (answer.kind === "redirect")
+        response.writeHead(303, { location: answer.to.href, "cache-control": "no-store" }).end();
+      else
+        response
+          .writeHead(200, { "content-type": "text/html; charset=utf-8" })
+          .end(callbackPage(answer.failed));
+    };
+    if (callback.kind === "error") {
+      answer({ kind: "page", failed: true });
+      reject(new Error(callback.message));
+      return;
+    }
+    resolve({ code: callback.code, clientId: callback.clientId, answer });
   });
   const timeout = setTimeout(() => {
     close();
@@ -210,8 +247,24 @@ export function waitForCallback(
   return promise;
 }
 
-/** The mind's host id, made once, and who is connected now. */
-function hostScript(): string {
+/** The Cloud's page that tells an open wizard tab that a connect for `address` ended. It carries
+ *  no secret. `cloud` is an origin the mind's log names, so it is checked to be one. */
+export function connectedUrl(cloud: string | null, address: string): URL | null {
+  if (!cloud) return null;
+  let origin: URL;
+  try {
+    origin = new URL(cloud);
+  } catch {
+    return null;
+  }
+  if (origin.origin !== cloud || !["https:", "http:"].includes(origin.protocol)) return null;
+  const url = new URL("/connected", origin);
+  url.search = new URLSearchParams({ ai: "chatgpt", domain: address }).toString();
+  return url;
+}
+
+/** The mind's host id, made once, who is connected now, and the Cloud that enrolled the mind. */
+export function hostScript(): string {
   return `async (itx) => {
   let id = await itx.kv.get(${JSON.stringify(HOST_KEY)});
   if (!id) {
@@ -219,10 +272,18 @@ function hostScript(): string {
     await itx.kv.put(${JSON.stringify(HOST_KEY)}, id);
   }
   const account = JSON.parse((await itx.kv.get(${JSON.stringify(ACCOUNT_KEY)})) || "null");
+  // the Cloud that enrolled this mind, if one did: the newest statement's origin
+  const enrolled = await itx.cd(${JSON.stringify(CLOUD_PATH)}).readEvents(0, 500).catch(() => null);
+  // only the Cloud's own statement counts: the mind stamps \`source.signer\` on a statement whose key
+  // the auth Worker verified, and drops a writer's own \`source\` (core/itx caller.ts \`stampCaller\`)
+  const cloud = (enrolled?.events || [])
+    .filter((event) => event.type === "events.iterate.com/cloud/deployment-enrolled" && event.source?.signer?.principal?.actor === "iterate-cloud")
+    .at(-1)?.payload?.cloud;
   return {
     hostId: "urn:uuid:" + id,
     connected: (await itx.secrets.list()).some((secret) => secret.path === ${JSON.stringify(SECRET)}),
     email: account?.email,
+    cloud: typeof cloud === "string" ? cloud : null,
   };
 }`;
 }
@@ -304,10 +365,12 @@ export async function connectChatgpt(input: {
   openBrowser: (url: URL) => void | Promise<void>;
 }): Promise<{ message: string; test?: string }> {
   const { itx, address, print } = input;
+  // `run` answers unknown; the host script above returns this shape
   const mind = (await itx.run(hostScript())) as {
     hostId: string;
     connected: boolean;
     email?: string;
+    cloud: string | null;
   };
   if (mind.connected)
     print(
@@ -322,10 +385,19 @@ export async function connectChatgpt(input: {
     print("Waiting for the browser to come back (15 minutes at most)...");
   });
   print(`Signed in. ${address} now gets its tokens from OpenAI...`);
-  const account = (await itx.run(finishScript({ ...callback, verifier }))) as {
-    email?: string;
-    plan?: string;
-  };
+  let account: { email?: string; plan?: string };
+  try {
+    // `run` answers unknown; the finish script returns this shape
+    account = (await itx.run(finishScript({ ...callback, verifier }))) as typeof account;
+  } catch (error) {
+    callback.answer({ kind: "page", failed: true });
+    throw error;
+  }
+  // only now is the secret stored: the browser goes on to the Cloud's page, or to a page here
+  const cloudPage = connectedUrl(mind.cloud, address);
+  callback.answer(
+    cloudPage ? { kind: "redirect", to: cloudPage } : { kind: "page", failed: false },
+  );
   const message = `Connected ${account.email || "an account"}${account.plan ? ` (${account.plan})` : ""} to ${address}. The mind keeps the tokens in ${SECRET} and refreshes them itself.`;
   if (!input.test) return { message };
   print("Connected. A test request on the plan...");

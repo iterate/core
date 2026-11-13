@@ -1,8 +1,16 @@
 // chatgpt.test.ts — `iterate chatgpt connect` without OpenAI: the consent URL, what the callback
-// listener does with each request, and the finish script's text.
+// listener does with each request, the Cloud's page it sends the browser to, and the finish
+// script's text.
 import { createHash } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { authorizeUrl, finishScript, waitForCallback } from "./chatgpt.ts";
+import {
+  authorizeUrl,
+  connectedUrl,
+  finishScript,
+  hostScript,
+  waitForCallback,
+} from "./chatgpt.ts";
 
 test("the consent URL asks OpenAI for the plan's usage, for this mind's host id, with PKCE", () => {
   const url = authorizeUrl({
@@ -27,25 +35,59 @@ test("the consent URL asks OpenAI for the plan's usage, for this mind's host id,
   });
 });
 
-test("the listener answers another sign-in's callback 400 and stays open, then takes the code", async () => {
+test("the listener answers another sign-in's callback 400, then holds the code's request until the terminal step answers it", async () => {
   const { promise: listening, resolve } = Promise.withResolvers<void>();
   const port = 41455;
   const callback = waitForCallback("s", resolve, port);
   await listening;
   const base = `http://127.0.0.1:${port}/auth/callback`;
   const stray = await fetch(`${base}?state=other&code=c&client_id=x`);
-  const answered = await fetch(`${base}?state=s&code=c&client_id=oaiapp_1`);
+  const answered = fetch(`${base}?state=s&code=c&client_id=oaiapp_1`, { redirect: "manual" });
+  const { answer, ...handed } = await callback;
+  // the browser waits while the mind stores the secret
+  const early = await Promise.race([answered.then(() => "answered"), sleep(50).then(() => "held")]);
+  answer({ kind: "redirect", to: new URL("https://cloud.example.com/connected?ai=chatgpt") });
+  const response = await answered;
   expect({
     stray: stray.status,
-    answered: answered.status,
-    page: (await answered.text()).includes("You can close this tab"),
-    callback: await callback,
+    early,
+    status: response.status,
+    location: response.headers.get("location"),
+    handed,
   }).toEqual({
     stray: 400,
-    answered: 200,
-    page: true,
-    callback: { code: "c", clientId: "oaiapp_1" },
+    early: "held",
+    status: 303,
+    location: "https://cloud.example.com/connected?ai=chatgpt",
+    handed: { code: "c", clientId: "oaiapp_1" },
   });
+});
+
+test("with no Cloud the listener's own page says whether ChatGPT connected", async () => {
+  const pageAfter = async (port: number, failed: boolean) => {
+    const { promise: listening, resolve } = Promise.withResolvers<void>();
+    const callback = waitForCallback("s", resolve, port);
+    await listening;
+    const answered = fetch(`http://127.0.0.1:${port}/auth/callback?state=s&code=c&client_id=x`);
+    (await callback).answer({ kind: "page", failed });
+    const text = await (await answered).text();
+    return text.match(/<h1>(.*?)<\/h1>/)?.[1];
+  };
+  expect([await pageAfter(41457, false), await pageAfter(41458, true)]).toEqual([
+    "ChatGPT is connected",
+    "ChatGPT did not connect",
+  ]);
+});
+
+test("the Cloud's page is on the origin the mind names, and only on an origin", () => {
+  expect(connectedUrl("https://cloud.example.com", "example.com")?.href).toBe(
+    "https://cloud.example.com/connected?ai=chatgpt&domain=example.com",
+  );
+  expect(
+    [null, "", "cloud.example.com", "https://cloud.example.com/x", "javascript:alert(1)"].map(
+      (cloud) => connectedUrl(cloud, "example.com"),
+    ),
+  ).toEqual([null, null, null, null, null]);
 });
 
 test("the listener ends with OpenAI's description when the sign-in was refused", async () => {
@@ -107,4 +149,58 @@ test("the finish script keeps every value inside its JSON string", async () => {
     material: { accessToken: "at", refreshToken: "rt", clientId },
     account: "u1",
   });
+});
+
+test("the host script names the Cloud of the newest enrolment the Cloud signed, and none when no Cloud enrolled the mind", async () => {
+  const module = await import(
+    `data:text/javascript,${encodeURIComponent(`export default ${hostScript()}`)}`
+  );
+  const run = module.default as (itx: unknown) => Promise<{ cloud: string | null }>;
+  const itxWith = (read: () => Promise<unknown>) => ({
+    kv: { get: async () => "1", put: async () => {} },
+    secrets: { list: async () => [] },
+    cd: (path: string) => ({
+      readEvents: path === "/integrations/cloud" ? read : async () => ({ events: [] }),
+    }),
+  });
+  const enrolled = (cloud: unknown, actor = "iterate-cloud") => ({
+    type: "events.iterate.com/cloud/deployment-enrolled",
+    payload: { cloud },
+    source: { signer: { principal: { actor }, key: "k" } },
+  });
+  const unsigned = {
+    type: "events.iterate.com/cloud/deployment-enrolled",
+    payload: { cloud: "https://unsigned.example.com" },
+  };
+  const clouds = await Promise.all(
+    [
+      async () => ({
+        events: [
+          enrolled("https://a.example.com"),
+          { type: "other" },
+          enrolled("https://b.example.com"),
+        ],
+      }),
+      async () => ({ events: [] }),
+      async () => ({ events: [enrolled(42)] }),
+      async () => Promise.reject(new Error("no such context")),
+      // an unsigned statement, or one another key signed, is ignored, even when it is newer
+      async () => ({
+        events: [
+          enrolled("https://a.example.com"),
+          unsigned,
+          enrolled("https://other.example.com", "someone-else"),
+        ],
+      }),
+      async () => ({ events: [unsigned, enrolled("https://other.example.com", "someone-else")] }),
+    ].map(async (read) => (await run(itxWith(read))).cloud),
+  );
+  expect(clouds).toEqual([
+    "https://b.example.com",
+    null,
+    null,
+    null,
+    "https://a.example.com",
+    null,
+  ]);
 });
