@@ -1,6 +1,12 @@
 import { decodeFacts, FACTS_HEADER } from "iterate/facts";
 import { base64url, keyIdOf, signedP256, statementHashOf, statementText } from "iterate/signed";
 import { expect, test } from "vitest";
+// the secrets Worker's own signing, so a statement a mind's secret signs is checked by this intake
+import {
+  generatedSigningMaterial,
+  signedStatement,
+  signingKeyOf,
+} from "../../secrets-worker/src/secret/key-ops.ts";
 import type { Env } from "./env.ts";
 import { personKeyRefusal, verifiedStatement } from "./keys.ts";
 import { statementsResponse } from "./statements.ts";
@@ -33,6 +39,33 @@ test("the intake takes the same statement again, as the same event to store firs
   });
   // the first try's event may not have been stored: the retry is the same event, by the same key
   expect(await sent()).toEqual(first);
+});
+
+test("a statement signed by a key that a mind's secret holds (itx.secrets.signStatement) is taken, under the key's paths alone", async () => {
+  const material = await generatedSigningMaterial();
+  const { publicKey } = await signingKeyOf(material);
+  const { env } = await stackWithCloudKey(publicKey);
+  const sent = async (path: string) => {
+    const answer = await statementsResponse(
+      env,
+      new Request("https://iterate.example.com/statements", {
+        method: "POST",
+        body: JSON.stringify(
+          await signedStatement(material, {
+            mind: DOMAIN,
+            path,
+            type: "events.iterate.com/x/message-received",
+          }),
+        ),
+      }),
+    );
+    return { status: answer.status, body: await answer.json() };
+  };
+  expect(await sent("/integrations/x")).toMatchObject({
+    status: 200,
+    body: { path: "/integrations/x" },
+  });
+  expect(await sent("/agents/one")).toMatchObject({ status: 403 });
 });
 
 test("a person's key adds an event while its address is a member, and none once the member is removed", async () => {
@@ -135,14 +168,15 @@ function database(stack: { key: string; publicKey: string; pkcs8: string }) {
   };
 }
 
-async function stackWithCloudKey() {
+/** `cloudKey`: the Cloud's public key, when a test signs with a key it holds elsewhere. */
+async function stackWithCloudKey(cloudKey?: string) {
   const cloud = await keyPair();
   // two persons' keys: the owner is a member by the config, and the other address is none
   const persons = { "owner@example.net": await keyPair(), "gone@example.net": await keyPair() };
   const keys = [
     {
       actor: "iterate-cloud",
-      publicKey: cloud.publicKey,
+      publicKey: cloudKey || cloud.publicKey,
       label: "Cloud",
       paths: ["/integrations/"],
     },

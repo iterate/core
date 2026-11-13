@@ -36,6 +36,7 @@ export const StoredSecret = z.object({
     placement: z.enum(["header", "url"]).optional(),
     operations: z.custom<SecretOperation[]>(Array.isArray).optional(),
     lendTo: z.array(z.string()).nullish(),
+    statementPaths: z.array(z.string()).optional(),
   }),
   public: z.record(z.string(), z.string()).optional(),
 });
@@ -63,6 +64,7 @@ export type SecretFact =
         placement: "header" | "url";
         operations: SecretOperation[];
         lendTo: string[] | null;
+        statementPaths?: string[];
         by?: { userId: string; email: string };
       };
     }

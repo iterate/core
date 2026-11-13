@@ -14,7 +14,12 @@ type MaterialBinding = {
   refresh: SecretRefresh | null;
   version: number;
   nonce: string;
-  use?: { placement: string; operations: readonly string[]; lendTo?: readonly string[] | null };
+  use?: {
+    placement: string;
+    operations: readonly string[];
+    lendTo?: readonly string[] | null;
+    statementPaths?: readonly string[];
+  };
 };
 
 export async function encryptSecretMaterial(
@@ -97,6 +102,10 @@ function additionalDataOf(binding: MaterialBinding): Uint8Array<ArrayBuffer> {
                 ...(binding.use.lendTo === undefined
                   ? []
                   : [binding.use.lendTo && [...new Set(binding.use.lendTo)].sort()]),
+                // named, and only when bound: a cell sealed without it keeps its bytes
+                ...(binding.use.statementPaths
+                  ? [{ statementPaths: [...new Set(binding.use.statementPaths)].sort() }]
+                  : []),
               ],
             ]
           : []),

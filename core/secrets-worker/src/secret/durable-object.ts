@@ -91,9 +91,14 @@ import {
 import { lendRefusal, operationRefusal, placementRefusal } from "./refusals.ts";
 import { runExchangeCode } from "./exchange-jail.ts";
 import {
+  generatedSigningMaterial,
   SecretKeyAgreement,
   SecretKeyField,
   SecretKeySignature,
+  SecretStatementInput,
+  signedStatement,
+  signingKeyOf,
+  underStatementPaths,
   x25519PublicKey,
   x25519SharedSecret,
   x25519Sign,
@@ -116,6 +121,7 @@ const useOf = (cell: SealedCell): SecretUse => {
     operations,
     // oxlint-disable-next-line iterate/simple-truthiness-check -- absent is a cell sealed before `lendTo`; null is every path, an import's
     lendTo: cell.lendTo !== undefined ? cell.lendTo : imported ? null : [],
+    statementPaths: cell.statementPaths,
   };
 };
 
@@ -317,6 +323,8 @@ export class SecretDurableObject extends DurableObject<Env> {
       deriveSharedSecret: (input) => this.#deriveSharedSecret(path, input),
       publicKeyOf: (input) => this.#publicKeyOf(path, input),
       signWithKey: (input) => this.#signWithKey(path, input),
+      signStatement: (input) => this.#signStatement(path, input),
+      generateSigningKey: (input) => this.#generateSigningKey(path, input),
     };
     if (!Object.hasOwn(verbs, verb))
       throw codedError("INVALID_INPUT", `secrets: ${JSON.stringify(verb)} is no verb of a secret`);
@@ -337,6 +345,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       placement: input.placement,
       operations: input.operations,
       lendTo: input.lendTo,
+      statementPaths: input.statementPaths,
     });
     const publicFields =
       input.public === undefined ? undefined : publicFieldsOf(input.material, input.public);
@@ -522,8 +531,28 @@ export class SecretDurableObject extends DurableObject<Env> {
       public: publicFields,
       imported,
       by,
-    }: { public?: Record<string, string>; imported?: true; by?: PageCaller },
+      empty,
+    }: { public?: Record<string, string>; imported?: true; by?: PageCaller; empty?: true },
   ): Promise<SecretFact> {
+    // A SECRET MADE TO SIGN HOLDS A P-256 KEY AND NOTHING ELSE, and says its public half, however
+    // it was made: a key generated here, collected from a person, set or imported.
+    if (record.operations.includes("signStatement")) {
+      if (record.refresh)
+        throw codedError("INVALID_INPUT", `secrets: ${path} is made to sign, so it has no refresh`);
+      const { publicKey, keyId, material } = await signingKeyOf(record.material).catch(
+        (error: Error) => {
+          throw codedError("INVALID_INPUT", `secrets: ${path}: ${error.message}`);
+        },
+      );
+      // Kept in the material too, so an exported cell's public fields are its material's. These
+      // two are its only public fields: a caller's `public` could name `privateKey`.
+      record = { ...record, material };
+      publicFields = { publicKey, keyId };
+    }
+    // `empty`: no write since the last delete, one still in flight included. Read with the version
+    // below and no await between, so no write can come in after the check.
+    if (empty && this.#version() > (this.ctx.storage.kv.get<number>("deleted-through") ?? 0))
+      throw codedError("INVALID_INPUT", `secrets: ${path} holds a value; delete it first`);
     // reserved before the seal awaits, so two writes in flight never share a version
     const version = this.#version() + 1;
     this.ctx.storage.kv.put("version", version);
@@ -587,6 +616,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         placement: record.placement,
         operations: record.operations,
         lendTo: record.lendTo,
+        statementPaths: record.statementPaths,
         by: by ? { userId: by.userId, email: by.email } : undefined,
       },
     };
@@ -617,6 +647,7 @@ export class SecretDurableObject extends DurableObject<Env> {
           placement: cell.placement,
           operations: cell.operations || [],
           lendTo: cell.lendTo,
+          statementPaths: cell.statementPaths,
         },
       },
       this.#key(),
@@ -656,7 +687,11 @@ export class SecretDurableObject extends DurableObject<Env> {
     // leave with the secret. A signature or a shared secret made from it here would leave in a
     // request of the mind's own, which the rule never sees. To check a signature, and to read a
     // public key, sends nothing as the secret.
-    const signs = verb === "signHmac" || verb === "signWithKey" || verb === "deriveSharedSecret";
+    const signs =
+      verb === "signHmac" ||
+      verb === "signWithKey" ||
+      verb === "deriveSharedSecret" ||
+      verb === "signStatement";
     const refusal = !record.operations.includes(verb)
       ? {
           code: "FORBIDDEN" as const,
@@ -746,6 +781,42 @@ export class SecretDurableObject extends DurableObject<Env> {
     );
   }
 
+  #signStatement(path: string, input: unknown) {
+    const statement = SecretStatementInput.parse(input);
+    const paths = this.#current()?.cell.statementPaths;
+    if (paths && !underStatementPaths(statement.path, paths))
+      throw codedError(
+        "FORBIDDEN",
+        `signStatement: ${path} signs statements under ${paths.join(", ")} alone, not ${statement.path}`,
+      );
+    return this.#operate(path, "signStatement", (material) => signedStatement(material, statement));
+  }
+
+  async #generateSigningKey(
+    path: string,
+    input: unknown,
+  ): Promise<SecretAnswer<{ path: string; publicKey: string; keyId: string }>> {
+    this.#pathOf(path);
+    const options = isRecord(input) ? input : {};
+    const material = await generatedSigningMaterial();
+    const { publicKey, keyId } = await signingKeyOf(material);
+    const record = normalizeSecretRecord(material, {
+      // never sent anywhere (`fetch` refuses a signing secret), and pinned all the same
+      urls: [platformOriginOf(this.env.DOMAIN)],
+      operations: ["signStatement"],
+      statementPaths: options.statementPaths,
+    });
+    // a key that other minds trust is never replaced by a slip: delete it first, on purpose
+    const fact = await this.#write(path, record, { empty: true });
+    // a write that began while this one was sealed is the later word, and its value is what is kept
+    if (this.#current()?.public?.keyId !== keyId)
+      throw codedError(
+        "SECRET_NOT_SET",
+        `generateSigningKey: a later write to ${path} replaced the key before it was kept`,
+      );
+    return { result: { path, publicKey, keyId }, facts: [{ path, events: [fact] }] };
+  }
+
   #privateAt(material: SecretMaterial, field: string): Uint8Array {
     let node: unknown = material;
     for (const part of field.split(".")) node = isRecord(node) ? node[part] : undefined;
@@ -771,11 +842,13 @@ export class SecretDurableObject extends DurableObject<Env> {
     const refusal = this.#rule()
       ? // a secret that waits for approval is spent with one alone
         `secrets: ${path} has an approval rule, so it is lent to no other secret's token request`
-      : lendTo && !lendTo.includes(borrower)
-        ? lendRefusal(path, borrower, lendTo)
-        : !originPinned(origin, current.cell.urls)
-          ? `secrets: the secret ${path} is pinned to ${current.cell.urls.join(", ")}, not ${origin} — so it is never sent there as a client secret`
-          : null;
+      : current.cell.operations?.includes("signStatement")
+        ? `secrets: ${path} is a signing key, so it is lent to no other secret`
+        : lendTo && !lendTo.includes(borrower)
+          ? lendRefusal(path, borrower, lendTo)
+          : !originPinned(origin, current.cell.urls)
+            ? `secrets: the secret ${path} is pinned to ${current.cell.urls.join(", ")}, not ${origin} — so it is never sent there as a client secret`
+            : null;
     const outcome = refusal ? "refused" : "answered";
     console.info({ event: "secret.operated", path, verb: "clientSecretFor", borrower, outcome });
     if (refusal)
@@ -1452,6 +1525,10 @@ export class SecretDurableObject extends DurableObject<Env> {
       if (!originPinned(request.url, current.cell.urls))
         throw pinRefusal(path, request.url, current.cell.urls);
       const record = await this.#open(path, current);
+      if (record.operations.includes("signStatement"))
+        throw new SecretRefused(
+          `itx.fetch: the secret ${path} is a signing key: it signs (signStatement) and is never sent`,
+        );
       // a secret placed in headers alone is never spliced into a URL, where a host may log it,
       // redirect with it or quote it back
       if (record.placement === "header" && secretPathsIn(request.url).length)

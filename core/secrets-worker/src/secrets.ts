@@ -33,19 +33,31 @@ export type SecretUse = {
   placement: "header" | "url";
   operations: SecretOperation[];
   lendTo: string[] | null;
+  /** Absent: a statement it signs may name any path. */
+  statementPaths?: string[];
 };
 
-// A secret made before records said what it may do, or imported: everything, as the earlier
-// platform (core/os, removed) let it.
+// A secret made before records said what it may do, or imported: everything the earlier platform
+// (core/os, removed) let it do, and no operation added since.
 export const UNLIMITED_USE: SecretUse = {
   placement: "url",
-  operations: [...SECRET_OPERATIONS],
+  operations: SECRET_OPERATIONS.filter((operation) => operation !== "signStatement"),
   lendTo: null,
 };
 
 export function secretUseOf(
-  options: { placement?: unknown; operations?: unknown; lendTo?: unknown } | undefined,
+  options:
+    | { placement?: unknown; operations?: unknown; lendTo?: unknown; statementPaths?: unknown }
+    | undefined,
 ): SecretUse {
+  const given = options?.statementPaths;
+  if (
+    given !== undefined &&
+    (!Array.isArray(given) ||
+      !given.every((path) => typeof path === "string" && path.startsWith("/")))
+  )
+    throw new Error("secrets: statementPaths lists paths, each starting with /");
+  const statementPaths = given && { statementPaths: [...new Set<string>(given)] };
   const placement = options?.placement ?? "header";
   if (placement !== "header" && placement !== "url")
     throw new Error('secrets: placement is "header" or "url"');
@@ -58,15 +70,21 @@ export function secretUseOf(
   // answers for a secret that lends to every path, so a secret set again from its description is
   // not narrowed, and it is the one way to lend to secrets whose paths are not known yet. Any
   // other value that is no list of paths ("", 0, false) is refused below.
-  const given = options?.lendTo;
-  if (given === null) return { placement, operations: [...new Set(operations)], lendTo: null };
+  const givenLendTo = options?.lendTo;
+  if (givenLendTo === null)
+    return { placement, operations: [...new Set(operations)], lendTo: null, ...statementPaths };
   // oxlint-disable-next-line iterate/simple-truthiness-check -- as above: only an absent lendTo is the default
-  const lendTo = given === undefined ? [] : given;
+  const lendTo = givenLendTo === undefined ? [] : givenLendTo;
   if (!Array.isArray(lendTo) || !lendTo.every((path) => SECRET_PATH.test(String(path))))
     throw new Error(
       "secrets: lendTo lists secret paths, /secrets/<name>, or is null for every secret of the mind",
     );
-  return { placement, operations: [...new Set(operations)], lendTo: [...new Set<string>(lendTo)] };
+  return {
+    placement,
+    operations: [...new Set(operations)],
+    lendTo: [...new Set<string>(lendTo)],
+    ...statementPaths,
+  };
 }
 
 // Exchange code is sealed in the record beside the material; a login is a few requests, not a bundle.
@@ -102,6 +120,7 @@ export function normalizeSecretRecord(
         placement?: unknown;
         operations?: unknown;
         lendTo?: unknown;
+        statementPaths?: unknown;
       }
     | undefined,
 ): SecretRecord {

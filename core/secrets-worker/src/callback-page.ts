@@ -78,6 +78,7 @@ export function useLines(
     placement: "header" | "url";
     operations: readonly SecretOperation[];
     lendTo: readonly string[] | null;
+    statementPaths?: readonly string[];
   },
   anyoneWithLink: boolean,
 ): string {
@@ -92,6 +93,9 @@ export function useLines(
       : use.lendTo.length
         ? `<p>The refresh of these secrets may borrow it: ${use.lendTo.map(escaped).join(", ")}.</p>`
         : "",
+    use.statementPaths
+      ? `<p>A statement it signs may name these paths alone: ${use.statementPaths.map(escaped).join(", ")}.</p>`
+      : "",
     anyoneWithLink ? "<p>Anyone with this link can use this page, signed in or not.</p>" : "",
   ].join("");
 }

@@ -35,6 +35,7 @@ import type {
 import type { InvokeHandle, ItxExpression, ItxExpressionInput } from "./expression.ts";
 import type { ActRule } from "./acts.ts";
 import type { Principal } from "./principal.ts";
+import type { Envelope } from "./signed.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
 /** One page of a context's durable log (`readEvents`). */
@@ -291,6 +292,7 @@ export const SECRET_OPERATIONS = [
   "deriveSharedSecret",
   "publicKeyOf",
   "signWithKey",
+  "signStatement",
 ] as const;
 export type SecretOperation = (typeof SECRET_OPERATIONS)[number];
 
@@ -308,6 +310,21 @@ export type SecretUses = {
    *  none. `null`: every secret of the mind, for a client secret whose accounts' paths are not
    *  known when it is made; it is what `describe` answers for such a secret. */
   lendTo?: string[] | null;
+  /** For `signStatement`: the paths a statement it signs may name, each with everything under it
+   *  (`["/integrations/"]`). Default: any path. */
+  statementPaths?: string[];
+};
+
+/** What `secrets.signStatement(path, input)` signs: a statement to the mind at `mind` (its domain),
+ *  for the context at `path`, of `type`, ending `expiresInSeconds` from now (default 300, at most a
+ *  day, the most a mind takes). The secrets Worker adds `at` and the nonce. */
+export type SecretStatementSigning = {
+  mind: string;
+  path: string;
+  type: string;
+  payload?: Record<string, unknown>;
+  about?: string[];
+  expiresInSeconds?: number;
 };
 
 /** The input an agent gives `itx.secrets.collectFromUser`: the write-only secret path, the
@@ -1476,6 +1493,22 @@ export interface IterateContextApi {
      *  secrets Worker, for a secret made with it in `operations`. No string at the field answers
      *  false. A replayable token stays replayable: prefer `verifyHmac` wherever the sender signs. */
     verifyEquals(path: string, input: SecretEqualsVerification): Promise<boolean>;
+    /** A P-256 key made in the secrets Worker and kept at `path`, its private half never outside
+     *  it: not in `describe`, not through a placeholder (a signing secret is never sent), not lent.
+     *  The answer and `describe`'s `public` give its public half (`publicKey`, SPKI DER as
+     *  base64url) and `keyId` (`keyIdOf` of iterate/signed), what a mind's `auth.keys` trusts. It
+     *  answers `signStatement`, with `statementPaths` as its limit. To keep a key made elsewhere,
+     *  collect it instead (`collectFromUser` with one field `privateKey`, the private JWK as JSON,
+     *  and `operations: ["signStatement"]`): a secret made to sign takes only such a material. */
+    generateSigningKey(
+      path: string,
+      options?: Pick<SecretUses, "statementPaths">,
+    ): Promise<{ path: string; publicKey: string; keyId: string }>;
+    /** A signed statement under the secret's P-256 key, as a mind's `POST /statements` takes it
+     *  (iterate/signed `Envelope`). Only a secret made with it in `operations` answers, within its
+     *  limit per minute, and only for a `path` under its `statementPaths`; a secret with an
+     *  approval rule signs nothing (`FORBIDDEN`). */
+    signStatement(path: string, input: SecretStatementSigning): Promise<Envelope>;
   };
   /** The mind's fetch routes, on its root `/`: which itx expression, the route's `target`, a
    *  request on its hosts goes to. `set` appends one `itx/fetch-route-configured` fact (`null`

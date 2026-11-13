@@ -166,6 +166,7 @@ export type SecretDescription = {
   operations?: SecretOperation[];
   /** Null is every path, as for an import. */
   lendTo?: string[] | null;
+  statementPaths?: string[];
 };
 
 export type SecretOAuthResult =
@@ -200,6 +201,11 @@ export type SecretVerbs = {
   deriveSharedSecret: { input: unknown; answer: SecretAnswer<string> | SecretRefusal };
   publicKeyOf: { input: unknown; answer: SecretAnswer<string> | SecretRefusal };
   signWithKey: { input: unknown; answer: SecretAnswer<string> | SecretRefusal };
+  signStatement: { input: unknown; answer: SecretAnswer<Envelope> | SecretRefusal };
+  generateSigningKey: {
+    input: unknown;
+    answer: SecretAnswer<{ path: string; publicKey: string; keyId: string }>;
+  };
 };
 
 export type SecretVerb = keyof SecretVerbs;

@@ -421,6 +421,19 @@ Google (Gmail) or X through iterate's own app there. The mind needs no OAuth cli
   `config/github-mirrored` fact on the mind's root. When the two histories have diverged nothing moves, until a member calls
   `pull({ force: true })` (GitHub's wins) or `push({ force: true })` (the mind's wins).
 
+### A key that signs for other minds
+
+A secret can hold a P-256 key that signs statements to other minds, the way the iterate Cloud
+writes into a mind's `/integrations/`. `itx.secrets.generateSigningKey("/secrets/signer",
+{ statementPaths: ["/integrations/"] })` makes the key inside the secrets Worker and answers its
+`publicKey` and `keyId`; `describe` answers them too, so a page can publish them. The other mind
+trusts that public key in its config (`auth.keys`, with the same `paths`).
+`itx.secrets.signStatement("/secrets/signer", { mind, path, type, payload })` answers the
+envelope to `POST` to `https://iterate.<mind>/statements`. The private key never leaves: the
+secret is never sent with a request and is lent to nothing, and it signs only paths under its
+`statementPaths`. To keep a key made elsewhere, collect it with `collectFromUser` (one field
+`privateKey`, the private JWK as JSON, and `operations: ["signStatement"]`).
+
 ## The Integrations page
 
 The Dash's Integrations page (`?page=integrations`) is where a member sees what this mind is
