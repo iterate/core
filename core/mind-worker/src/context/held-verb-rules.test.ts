@@ -13,6 +13,18 @@ test("the verb rules are read once for a few seconds, and a mail's rule is not a
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+// held-verb-rules.ts says why a call never waits on another call's read.
+test("a call while another call's read is in flight makes its own read, and never waits on that one", async () => {
+  const answers: ((answer: { rules: ActRule[] }) => void)[] = [];
+  const rules = heldVerbRules(() => new Promise((answer) => answers.push(answer)));
+  // the first request's read never answers here, as when its request has ended
+  void rules();
+  const second = rules();
+  expect(answers).toHaveLength(2);
+  answers[1]({ rules: [verb] });
+  expect(await second).toEqual([verb]);
+});
+
 test("a vault that cannot be reached stops no call and lifts no rule: the last rules stand", async () => {
   vi.useFakeTimers();
   vi.spyOn(console, "error").mockImplementation(() => {});
