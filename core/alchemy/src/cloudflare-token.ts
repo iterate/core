@@ -15,6 +15,7 @@ import { PERMISSION_GROUPS, resolvePolicies, type Policy } from "@alchemy.run/cl
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import { z } from "zod";
 
 /** A read that the token does not have, and the secret of another product that it would read. */
@@ -297,17 +298,55 @@ export function mindCloudflareTokenProvider(
 const messageOf = (error: unknown) => ErrorWithMessage.safeParse(error).data?.message || "";
 const ErrorWithMessage = z.object({ message: z.string() });
 
+/** `service` with `token` as the Cloudflare credential of every call, at the base URL of the
+ *  deploy's own credential; without `token`, `service` as it is. Cloudflare refuses "Account API
+ *  Tokens Write" to a token that a token made, so a deploy may hold that one permission in a
+ *  second token, made by a person. */
+export function withCloudflareToken(
+  service: TokenService,
+  token: string | undefined,
+): TokenService {
+  if (!token) return service;
+  const withToken = (effect: Effect.Effect<unknown, unknown, unknown>) =>
+    Effect.gen(function* () {
+      const own = yield* Cloudflare.Credentials;
+      const made = Effect.map(own, ({ apiBaseUrl }) => ({
+        type: "apiToken" as const,
+        apiToken: Redacted.make(token),
+        apiBaseUrl,
+      }));
+      return yield* Effect.provideService(effect, Cloudflare.Credentials, made);
+    });
+  const calls = Object.entries(service).map(([key, member]) => [
+    key,
+    typeof member === "function"
+      ? (...args: unknown[]) => {
+          const out = member(...args);
+          return Effect.isEffect(out) ? withToken(out) : out;
+        }
+      : member,
+  ]);
+  // The cast is safe: every key of `service` is kept, and each function answers what it answered,
+  // with one service provided. `Object.fromEntries` loses the member types, so no annotation
+  // can say this.
+  return Object.fromEntries(calls) as TokenService;
+}
+
 /** The provider layer: put it over `Cloudflare.providers()`. `ITERATE_KEEP_CLOUDFLARE_TOKEN=1`
  *  says that this deploy's access may not change API tokens (internal-packages/installer/
- *  container/run.sh sets it). */
+ *  container/run.sh sets it). With `CLOUDFLARE_API_TOKEN_MAKES_TOKENS`, every account API token
+ *  of the stack is made, read and deleted with that token, and the rest with `CLOUDFLARE_API_TOKEN`. */
 export const MindCloudflareTokenProvider = () =>
   Provider.effect(
     Cloudflare.ApiToken.AccountApiToken,
     Effect.gen(function* () {
       const base = yield* Cloudflare.ApiToken.AccountApiToken.Provider;
-      return mindCloudflareTokenProvider(base, {
-        keep: process.env.ITERATE_KEEP_CLOUDFLARE_TOKEN === "1",
-        say: (line) => console.log(line),
-      });
+      return withCloudflareToken(
+        mindCloudflareTokenProvider(base, {
+          keep: process.env.ITERATE_KEEP_CLOUDFLARE_TOKEN === "1",
+          say: (line) => console.log(line),
+        }),
+        process.env.CLOUDFLARE_API_TOKEN_MAKES_TOKENS,
+      );
     }),
   ).pipe(Layer.provide(Cloudflare.ApiToken.AccountApiTokenProvider()));

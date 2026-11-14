@@ -590,6 +590,14 @@ the field (each deletes it), and a deploy of a version that changes what the tok
 token that exists then stays as it is, whatever the version (iterate Cloud sets it for an
 Update without that scope). Any other deploy asks Cloudflare nothing about it.
 
+**A second token can make the tokens.** Cloudflare refuses Account API Tokens Edit to a token
+that another token made ("sub-token is not allowed to have permissions to manage other tokens").
+When the environment has `CLOUDFLARE_API_TOKEN_MAKES_TOKENS`, the deploy makes, reads, changes
+and deletes every account API token of the stack (this one and the two telemetry tokens) with it,
+and everything else with `CLOUDFLARE_API_TOKEN` (`withCloudflareToken`). So the second token,
+made by a person, may hold Account API Tokens Edit alone. Without the variable, the deploy uses
+`CLOUDFLARE_API_TOKEN` for all.
+
 **The mind keeps the token in its vault.** The stack binds the token to the mind Worker, and at
 the root's first wake after a deploy the mind stores it at `/secrets/cloudflare`, pinned to
 `https://api.cloudflare.com` and `https://mcp.cloudflare.com`

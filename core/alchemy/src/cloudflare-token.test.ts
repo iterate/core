@@ -2,9 +2,11 @@
 // of permission groups that Alchemy ships.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { PERMISSION_GROUPS } from "@alchemy.run/cloudflare/ApiToken";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Redacted from "effect/Redacted";
 import {
   CLOUDFLARE_TOKEN_NOT_GRANTED_BY_THE_CLOUD,
   CLOUDFLARE_TOKEN_READS_LEFT_OUT,
@@ -13,6 +15,7 @@ import {
   cloudflareTokenPoliciesOf,
   MIND_CLOUDFLARE_TOKEN,
   mindCloudflareTokenProvider,
+  withCloudflareToken,
   withoutRefusedGroups,
 } from "./cloudflare-token.ts";
 
@@ -233,4 +236,35 @@ void test("with an access that may not change API tokens, the token that exists 
   assert.deepEqual(await Effect.runPromise(keep.diff!(input("TelemetryCatalogToken", existing))), {
     action: "update",
   });
+});
+
+void test("with a token that makes tokens, each call of the provider uses it, at the deploy's base URL", async () => {
+  // a pretend provider whose calls answer with the credential they were given
+  const seen = Effect.gen(function* () {
+    const credential = yield* yield* Cloudflare.Credentials;
+    const token = credential.type === "apiToken" ? Redacted.value(credential.apiToken) : "none";
+    return `${token} ${credential.apiBaseUrl}`;
+  });
+  // The cast: two members of Alchemy's provider service.
+  const service = { stables: ["tokenId"], diff: () => seen, delete: () => seen } as never;
+  const deploy = Effect.succeed({
+    type: "apiToken" as const,
+    apiToken: Redacted.make("deploy"),
+    apiBaseUrl: "https://api.example",
+  });
+  const run = (provider: { diff?: unknown; delete: unknown }, call: "diff" | "delete") =>
+    Effect.runPromise(
+      Effect.provideService(
+        (provider[call] as () => Effect.Effect<string, never, Cloudflare.Credentials>)(),
+        Cloudflare.Credentials,
+        deploy,
+      ),
+    );
+  const wrapped = withCloudflareToken(service, "makes-tokens");
+  assert.deepEqual((wrapped as { stables: unknown }).stables, ["tokenId"]);
+  assert.equal(await run(wrapped, "diff"), "makes-tokens https://api.example");
+  assert.equal(await run(wrapped, "delete"), "makes-tokens https://api.example");
+  // without the token, the provider is as it was
+  assert.equal(withCloudflareToken(service, undefined), service);
+  assert.equal(await run(service, "delete"), "deploy https://api.example");
 });
