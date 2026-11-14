@@ -25,7 +25,8 @@ declare global {
        *  (context/cloudflare-token.ts). */
       CLOUDFLARE_TOKEN?: string;
       CLOUDFLARE_TOKEN_ID?: string;
-      /** Never read: the binding gives the class `ctx.exports.SandboxContainer` its containers. */
+      /** Never read: the binding declares the class `ctx.exports.SandboxContainer` and gives it its
+       *  containers, none on a stack with `mind.sandboxImage: "later"`. */
       SANDBOX_CONTAINER: DurableObjectNamespace<SandboxContainer>;
       BROWSER: BrowserRun;
       IMAGES: ImagesBinding;

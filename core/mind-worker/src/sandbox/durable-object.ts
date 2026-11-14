@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { errorCode } from "iterate/lib";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { IterateContextApi } from "iterate/api";
 import { DurableObjectNameCodec, type ItxEntrypointScope } from "core-itx";
@@ -203,7 +204,8 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     try {
       started = await this.#container.begin(startOptions);
     } catch (error) {
-      if (!snapshotId) throw error;
+      // a stack with no container cannot restore any disk: the refusal says so as it is
+      if (!snapshotId || errorCode(error) === "NO_SANDBOXES_YET") throw error;
       throw new Error(
         `sandbox ${this.#path}: cannot restore snapshot ${snapshotId} (${error instanceof Error ? error.message : String(error)}). A snapshot works only for the image it was taken from, for 30 days after its last restore. start({ image: "${SANDBOX_IMAGE}" }) starts from the image and discards it.`,
       );

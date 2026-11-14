@@ -1,5 +1,6 @@
 // deploy-until-bound.ts — A DEPLOY THAT CLOUDFLARE REFUSED FOR A WHILE IS TRIED AGAIN
-// (scripts/deploy-stack.ts runs it). Two such refusals are known, both of a stack with telemetry.
+// (scripts/deploy-stack.ts runs it), on three refusals that end by themselves: two of a stack with
+// telemetry, and one of the deploy that turns a stack's sandboxes on.
 //
 // A WORKER THAT CLOUDFLARE DID NOT BIND TO THE STACK'S LOG PIPELINES. A stack with telemetry binds
 // its Workers to three pipeline streams (src/stack.ts `telemetryPart`), and Cloudflare can refuse
@@ -16,6 +17,13 @@
 // it at one turn-on in nine. The likely cause, not proven: the catalog does not know the new token
 // everywhere yet. Only the 403 is tried again: another answer to the same check is not known to
 // end by itself.
+//
+// A CONTAINER APPLICATION OF A CLASS THAT HAD NO CONTAINER. A deploy that turns a stack's sandboxes
+// on (`mind.sandboxImage` from "later" to an image, src/stack.ts) gives the class `SandboxContainer`
+// its container application. Alchemy makes the application before it uploads the mind Worker, and only
+// that upload lets the class take containers, so Cloudflare refuses the application: "Durable
+// Object namespace is not Container-enabled". The upload goes on in the same try, so the next try
+// makes the application.
 //
 // What the deploy made before the refusal stays in its state, so one more deploy makes only what
 // did not go. A sink that Cloudflare refused is not made (shown for a token that the catalog does
@@ -40,6 +48,8 @@ export type Refusal = {
 export const NOT_BOUND = "Pipeline binding error";
 /** Cloudflare's words for a new sink whose table it could not read in the stack's data catalog. */
 const TABLE_NOT_READ = "failed to validate Basin Catalog table";
+/** Cloudflare's words for a container application of a class that does not take containers yet. */
+const NOT_CONTAINER_ENABLED = "Durable Object namespace is not Container-enabled";
 
 const REFUSALS: readonly Refusal[] = [
   {
@@ -53,6 +63,12 @@ const REFUSALS: readonly Refusal[] = [
     words: `"${TABLE_NOT_READ}", with 403`,
     refused: "a new sink of the stack's log pipelines",
     when: "It does that at times in the seconds after a deploy made the token that the sink writes with.",
+  },
+  {
+    seen: new RegExp(NOT_CONTAINER_ENABLED),
+    words: `"${NOT_CONTAINER_ENABLED}"`,
+    refused: "the container application of the sandboxes' class",
+    when: "It does that at the deploy that turns a stack's sandboxes on: the upload of the mind Worker in the same try lets the class take containers.",
   },
 ];
 

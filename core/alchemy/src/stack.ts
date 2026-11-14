@@ -215,22 +215,29 @@ export const mindStack = (config: MindConfig) =>
             MIND_SIGNING_KEY: mindSigningKey,
             AI: Cloudflare.Workers.AI(),
             // An imageless Container gives the class its `ctx.container`; the image is a Container of
-            // its own, which `ctx.container.images` holds under its name.
+            // its own, which `ctx.container.images` holds under its name. With `later` the class
+            // stays declared with no container: its storage is kept, and a later deploy with an
+            // image adds the containers to the same class.
             SANDBOX_CONTAINER: Cloudflare.DurableObject("SandboxContainer", {
-              containers: [
-                Cloudflare.Container("SandboxContainer", { schedulingPolicy: "durable_object" }),
-                ...(config.mind?.sandboxImage === "managed"
+              containers:
+                config.mind?.sandboxImage === "later"
                   ? []
                   : [
-                      Cloudflare.Container("iterate-dev-image", {
+                      Cloudflare.Container("SandboxContainer", {
                         schedulingPolicy: "durable_object",
-                        // already in the account's registry (scripts/sandbox-image.ts): no Docker
-                        ...(config.mind?.sandboxImage === "published"
-                          ? { image: publishedSandboxImageIn(config.accountId) }
-                          : { context: core("mind-worker/images/iterate-dev-image") }),
                       }),
-                    ]),
-              ],
+                      ...(config.mind?.sandboxImage === "managed"
+                        ? []
+                        : [
+                            Cloudflare.Container("iterate-dev-image", {
+                              schedulingPolicy: "durable_object",
+                              // already in the account's registry (scripts/sandbox-image.ts): no Docker
+                              ...(config.mind?.sandboxImage === "published"
+                                ? { image: publishedSandboxImageIn(config.accountId) }
+                                : { context: core("mind-worker/images/iterate-dev-image") }),
+                            }),
+                          ]),
+                    ],
             }),
             BROWSER: Cloudflare.Workers.Browser(),
             IMAGES: Cloudflare.Images.Images(),

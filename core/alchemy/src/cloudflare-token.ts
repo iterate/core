@@ -39,6 +39,8 @@ export const CLOUDFLARE_TOKEN_READS_LEFT_OUT = {
 export const CLOUDFLARE_TOKEN_WRITES = [
   // account
   "Workers Scripts Write",
+  // also the registry's push credentials: all that the sandbox image's copy needs
+  // (scripts/sandbox-image.ts)
   "Workers Containers Write",
   "D1 Write",
   "Workers KV Storage Write",

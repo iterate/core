@@ -60,8 +60,10 @@ const MindConfigFields = z.strictObject({
       template: z.string().min(1).optional(),
       // `built` (absent): the deploy builds the full image with the local Docker. `published`: the deploy
       // copies the full image, built once (src/sandbox-image.ts), into the account, with no Docker.
-      // `managed`: no image; sandboxes start Cloudflare's bare managed image.
-      sandboxImage: z.enum(["built", "published", "managed"]).optional(),
+      // `managed`: no image; sandboxes start Cloudflare's bare managed image. `later`: no container
+      // yet, for an account without Workers Paid, which Containers need: every sandbox call is
+      // refused NO_SANDBOXES_YET. A later deploy with an image adds the containers.
+      sandboxImage: z.enum(["built", "published", "managed", "later"]).optional(),
     })
     .refine(
       ({ provided, ...worker }) => !provided || Object.keys(worker).length === 0,

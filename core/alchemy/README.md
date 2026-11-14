@@ -462,6 +462,19 @@ least a deploy needs.
 
   - `"managed"`: the stack declares no image, and a sandbox starts Cloudflare's bare
     `cloudflare/debian-trixie`, with no Node, git tools, Chromium or agent CLIs.
+  - `"later"`: the stack has no container application and no image yet, for an account without
+    Workers Paid: Cloudflare runs Containers on Workers Paid alone. The mind Worker deploys and
+    works, and every sandbox start, command, file or container call is refused at once with the
+    code `NO_SANDBOXES_YET`. The class `SandboxContainer` stays declared, with no container, so its
+    storage is kept. A later deploy with `"published"` (or another image) adds the container
+    application to the same class: no Durable Object class is created or deleted. That deploy
+    takes two tries, which `pnpm run deploy` makes itself: Alchemy makes the application before
+    it uploads the mind Worker, and only that upload lets the class take containers, so
+    Cloudflare refuses the first application ("Durable Object namespace is not
+    Container-enabled", `src/deploy-until-bound.ts`).
+
+    `"later"` takes away the containers alone. The mind Worker also uses Dynamic Workers
+    (`LOADER`), Artifacts and a CPU limit, which Cloudflare also gives on Workers Paid alone.
 
 ## Telemetry
 

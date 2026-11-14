@@ -1,6 +1,7 @@
 // A Durable Object of its own: a class linked to a container gets `ctx.container` only as one, not as
 // a facet (measured). `ctx.container` cannot cross an RPC, so `invoke(steps)` replays a chain here.
 import { DurableObject } from "cloudflare:workers";
+import { codedError } from "iterate/lib";
 import { z } from "zod";
 import filesTool from "../generated/sandbox-files-tool.js";
 import { SANDBOX_BASE_IMAGE, SANDBOX_IMAGE, SANDBOX_MAX_BUSY_MS } from "./contract.ts";
@@ -32,6 +33,9 @@ const INACTIVITY_BACKSTOP_MS = 2 * 60 * 60_000;
 const SANDBOX_INSTANCE = "standard-1";
 /** Well under the shortest idle period a sandbox may be given (one second, contract.ts). */
 const STAMP_EVERY_MS = 500;
+/** The class has no container on a stack deployed with `mind.sandboxImage: "later"` (core/alchemy). */
+const NO_SANDBOXES_YET =
+  'this mind has no sandboxes yet: its stack was deployed with mind.sandboxImage "later", so it has no container. Cloudflare runs Containers on Workers Paid alone: once the mind\'s Cloudflare account has Workers Paid, deploy the stack again with mind.sandboxImage "published"';
 
 /** The hash in the name gives a disk that holds an older tool this one. */
 const toolHash = [...filesTool].reduce(
@@ -204,7 +208,7 @@ export class SandboxContainer extends DurableObject {
   }
 
   get #container(): Container {
-    if (!this.ctx.container) throw new Error("SandboxContainer: this class has no container");
+    if (!this.ctx.container) throw codedError("NO_SANDBOXES_YET", NO_SANDBOXES_YET);
     return this.ctx.container;
   }
 
@@ -231,9 +235,10 @@ export class SandboxContainer extends DurableObject {
     }
   }
 
-  /** A checkpoint is no use: only a start, a command and a file are. */
+  /** A checkpoint is no use: only a start, a command and a file are. Without a container nothing
+   *  runs, so a sandbox started before a deploy took the containers away parks. */
   async usedAt(): Promise<number | null> {
-    if (!this.#container.running) return null;
+    if (!this.ctx.container?.running) return null;
     const since = Date.now() - SANDBOX_MAX_BUSY_MS;
     if ([...this.#calls.values()].some((began) => began > since)) return Date.now();
     return (await this.ctx.storage.get<number>("usedAt")) ?? 0;
@@ -541,9 +546,10 @@ export class SandboxContainer extends DurableObject {
     return this.#container.snapshotContainer(options);
   }
 
+  /** Without a container there is nothing to stop, so a sandbox can still be deleted. */
   async destroy(reason?: string): Promise<void> {
     this.#toolReady = false;
-    if (this.#container.running) await this.#container.destroy(reason);
+    if (this.ctx.container?.running) await this.ctx.container.destroy(reason);
   }
 
   async erase(): Promise<void> {

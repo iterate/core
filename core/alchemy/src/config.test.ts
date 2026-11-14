@@ -108,6 +108,12 @@ void test("a config that asks for the mind's Cloudflare token is one the stack m
   assert.equal((await loadedFromFile({ ...stack, cloudflareToken: true })).cloudflareToken, true);
 });
 
+void test("a mind whose sandboxes come later is one the stack may keep in its state store, and reads back the same", async () => {
+  const loaded = await loadedFromFile({ ...stack, mind: { sandboxImage: "later" } });
+  assert.equal(loaded.mind?.sandboxImage, "later");
+  assert.deepEqual(await loadedFromFile(storedConfigOf(loaded)), loaded);
+});
+
 void test("a config with the sign-in with Cloudflare is one the stack may keep in its state store, and reads back the same", async () => {
   const loaded = await loadedFromFile(withCloudflare);
   assert.deepEqual(loaded.auth.login.methods.cloudflare, cloudflare);

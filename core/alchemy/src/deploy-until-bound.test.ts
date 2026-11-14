@@ -1,5 +1,5 @@
 // How often a deploy is tried when Cloudflare refuses, for a while, a Worker that binds to a log
-// pipeline or a new sink (deploy-until-bound.ts).
+// pipeline, a new sink, or the container application of a class that had none (deploy-until-bound.ts).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deployUntilBound, refusalIn } from "./deploy-until-bound.ts";
@@ -110,6 +110,21 @@ void test("the two refusals share the tries: a sink refused, then a Worker not b
   assert.match(
     deploys.said[2]!,
     /in each of 3 tries, the last time a new sink of the stack's log pipelines .* The deploy failed\./,
+  );
+});
+
+/** The line of a deploy's output for the container application of a class that had none. */
+const NOT_CONTAINER_ENABLED_LINE =
+  'ERROR (#1): BadRequest: {"error":"VALIDATE_INPUT","details":{"durable_objects":"Durable Object namespace is not Container-enabled"}}';
+
+void test("a deploy that turns the sandboxes on, whose container application Cloudflare refused, is tried again", async () => {
+  const deploys = pretendDeploys([{ code: 1, printed: NOT_CONTAINER_ENABLED_LINE }, { code: 0 }]);
+  assert.equal(await deploys.run(), 0);
+  assert.equal(deploys.deploys, 2);
+  assert.deepEqual(deploys.waited, [20]);
+  assert.match(
+    deploys.said[0]!,
+    /^Cloudflare refused the container application of the sandboxes' class \("Durable Object namespace is not Container-enabled"\)\. .* Try 2 of 7 starts in 20 seconds/,
   );
 });
 
