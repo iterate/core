@@ -154,8 +154,13 @@ export const APPROVED = "events.iterate.com/secret/request-approved";
 export const REJECTED = "events.iterate.com/secret/request-rejected";
 export const RULE_CONFIGURED = "events.iterate.com/secret/approval-rule-configured";
 
-// `basedOn`: the version the attempt began on; a write since ends it.
-type PendingAttempt = PendingSecretOAuth & { basedOn: number; authorizationUrl: string };
+// `basedOn`: the version the attempt began on; a write since ends it. `denied`: the provider's
+// `error` when the person declined (`declineOAuth`).
+type PendingAttempt = PendingSecretOAuth & {
+  basedOn: number;
+  authorizationUrl: string;
+  denied?: { error: string; at: number };
+};
 
 type Completed = {
   nonce: string;
@@ -1018,7 +1023,10 @@ export class SecretDurableObject extends DurableObject<Env> {
     this.#pathOf(path);
     const nonce = String(input?.nonce || "");
     const pending = this.ctx.storage.kv.get<PendingAttempt>("pending");
-    if (pending?.nonce === nonce && pending.until > Date.now()) return { status: "pending" };
+    if (pending?.nonce === nonce && pending.until > Date.now())
+      return pending.denied
+        ? { status: "declined", error: pending.denied.error }
+        : { status: "pending" };
     const completed = this.ctx.storage.kv.get<Completed>("completed");
     if (completed?.nonce !== nonce || completed.version !== this.#version())
       return { status: "unavailable" };
@@ -1027,6 +1035,29 @@ export class SecretDurableObject extends DurableObject<Env> {
       scopes: completed.scopes,
       account: completed.account,
     };
+  }
+
+  /** THE PERSON SAID NO AT THE PROVIDER: its callback came with `error=access_denied` (RFC 6749
+   *  §4.1.2.1). The attempt keeps the refusal, so `oauthResult` says `declined` at once rather than
+   *  `pending` until the attempt runs out. The attempt stays: a consent on the same link later still
+   *  completes it. Who may decline is who may complete. */
+  async declineOAuth(
+    path: string,
+    input: { nonce: string; error: string; by: PageCaller },
+  ): Promise<{ next: string | null }> {
+    this.#pathOf(path);
+    const pending = this.ctx.storage.kv.get<PendingAttempt>("pending");
+    if (!pending || pending.nonce !== input.nonce || pending.until <= Date.now())
+      throw new Error("no pending attempt matches this callback — begin again");
+    if (!pending.options.anyoneWithLink && !input.by?.member)
+      throw new Error("only a member of the mind, signed in, may answer this attempt");
+    // the provider's word, from a URL: kept short
+    const error = String(input.error).slice(0, 200);
+    this.ctx.storage.kv.put<PendingAttempt>("pending", {
+      ...pending,
+      denied: { error, at: Date.now() },
+    });
+    return { next: pending.options.next };
   }
 
   // A stale or foreign callback fails without touching the live attempt.

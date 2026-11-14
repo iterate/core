@@ -1442,14 +1442,17 @@ export interface IterateContextApi {
     ): Promise<{ authorizationUrl: string; nonce: string }>;
     /** What became of the attempt `nonce` (`beginOAuth`'s answer), for the page `next` lands on:
      *  `complete` with the scopes the provider granted and, with `account`, the account the tokens
-     *  are for; `pending` while it is in flight; `unavailable` once it expired, a newer attempt
-     *  replaced it, or a write since superseded its tokens. Never a token. */
+     *  are for; `pending` while it is in flight; `declined` with the provider's `error` (for
+     *  example `access_denied`) when the person said no at the provider, until a later consent on
+     *  the same link completes it; `unavailable` once it expired, a newer attempt replaced it, or
+     *  a write since superseded its tokens. Never a token. */
     oauthResult(
       path: string,
       input: { nonce: string },
     ): Promise<
       | { status: "pending" }
       | { status: "complete"; scopes: string[]; account?: { id: string; name: string | null } }
+      | { status: "declined"; error: string }
       | { status: "unavailable" }
     >;
     /** The redirect URI to register at a provider for a client of your own: the platform's one
