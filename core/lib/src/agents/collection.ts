@@ -260,6 +260,8 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       const [requested] = (await context.append({
         type: "events.iterate.com/agent/create-requested",
         payload: {},
+        // core/mind-worker/src/mind/collection.ts `create` says why the request is keyed so
+        idempotencyKey: `agent/create-requested:${path}:${state.creation?.offset ?? 0}`,
       })) as unknown as StreamEvent[];
       requestedAtOffset = requested!.offset;
     }
@@ -330,6 +332,8 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         const [requested] = (await context.append({
           type: "events.iterate.com/agent/delete-requested",
           payload: {},
+          // core/mind-worker/src/mind/collection.ts `delete` says why the request is keyed so
+          idempotencyKey: `agent/delete-requested:${path}`,
         })) as unknown as StreamEvent[];
         requestedAtOffset = requested!.offset;
       }

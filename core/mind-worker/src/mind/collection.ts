@@ -93,6 +93,10 @@ export class EntityCollectionRpcTarget extends RpcTarget {
 
   // A creation already open is waited on, never requested again: the terminal fact is sought after
   // the request that opened it, so a certificate landing between the read and the wait is seen.
+  // Two calls that read the same state append ONE request, keyed by the attempt it follows (the
+  // last failure's offset, or 0): the later call's append answers the earlier request, and its wait
+  // starts there. Unkeyed, a second request that landed after the certificate was a harmless fact,
+  // and its caller waited for a certificate after it until WAIT_TIMEOUT.
   async create(path: string, options: { creator: string }): Promise<{ path: string }> {
     // A mind member at `/` reaches this facet directly, and the creator becomes a link as written.
     const parsed = z.object({ creator: z.string().startsWith("/") }).safeParse(options);
@@ -122,7 +126,13 @@ export class EntityCollectionRpcTarget extends RpcTarget {
         },
         idempotencyKey: `itx@${creator}`,
       };
-      const request = { type: `events.iterate.com/${this.slug}/create-requested`, payload: {} };
+      const request = {
+        type: `events.iterate.com/${this.slug}/create-requested`,
+        payload: {},
+        idempotencyKey: `${this.slug}/create-requested:${path}:${state.creation?.offset ?? 0}`,
+      };
+      // Over the loopback stub the append's answer types as an RPC result; the wire copied the
+      // committed events, which is all this reads.
       const appended = (await context.append(
         ...(creator === path ? [request] : [link, request]),
       )) as unknown as StreamEvent[];
@@ -151,9 +161,11 @@ export class EntityCollectionRpcTarget extends RpcTarget {
       let requestedAtOffset: number;
       if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
       else {
+        // keyed and cast as in `create`; a death has one attempt, as nothing fails it
         const [requested] = (await context.append({
           type: `events.iterate.com/${this.slug}/delete-requested`,
           payload: {},
+          idempotencyKey: `${this.slug}/delete-requested:${path}`,
         })) as unknown as StreamEvent[];
         requestedAtOffset = requested!.offset;
       }
