@@ -1,5 +1,7 @@
 // Material goes in; nothing comes out except a request to a pinned host. A credential never
 // appears in an error message.
+import { createPrivateKey } from "node:crypto";
+import { createAppAuth } from "@octokit/auth-app";
 import {
   SECRET_OPERATIONS,
   type ClientAuth,
@@ -41,7 +43,14 @@ export type SecretUse = {
 // (core/os, removed) let it do, and no operation added since.
 export const UNLIMITED_USE: SecretUse = {
   placement: "url",
-  operations: SECRET_OPERATIONS.filter((operation) => operation !== "signStatement"),
+  operations: [
+    "signHmac",
+    "verifyHmac",
+    "verifyEquals",
+    "deriveSharedSecret",
+    "publicKeyOf",
+    "signWithKey",
+  ],
   lendTo: null,
 };
 
@@ -288,8 +297,8 @@ export async function substituteMindSecrets(
     let last = 0;
     let any = false;
     for (const m of value.matchAll(SECRET_PLACEHOLDER)) {
-      const [, path = "", field] = m;
-      const placeholder = placeholderOf(path, field);
+      const [, path = "", field, appJwt] = m;
+      const placeholder = placeholderOf(path, field, appJwt);
       const stored = await resolve(path);
       // oxlint-disable-next-line iterate/simple-truthiness-check -- null means no secret is stored; a stored empty-string value is a real secret and must be substituted, not refused
       if (stored == null)
@@ -298,7 +307,8 @@ export async function substituteMindSecrets(
           true,
         );
       let secret: string;
-      if (field) secret = secretFieldOf(stored, field, placeholder, where);
+      if (appJwt) secret = await githubAppJwtOf(stored, placeholder, where, request.url);
+      else if (field) secret = secretFieldOf(stored, field, placeholder, where);
       else if (typeof stored === "string") secret = stored;
       else
         throw new SecretRefused(
@@ -338,6 +348,38 @@ export async function substituteMindSecrets(
   return changed ? new Request(base, { headers }) : base;
 }
 
+const GITHUB_API_ORIGIN = "https://api.github.com";
+const GithubAppMaterial = z.object({ appId: z.string(), privateKey: z.string() });
+
+// The JWT goes to GitHub's API alone, in the one header GitHub reads it from; the key never leaves.
+async function githubAppJwtOf(
+  material: SecretMaterial,
+  placeholder: string,
+  where: string,
+  url: string,
+): Promise<string> {
+  if (where !== 'header "authorization"' || new URL(url).origin !== GITHUB_API_ORIGIN)
+    throw new SecretRefused(
+      `itx.fetch: ${placeholder} goes in the Authorization header of a request to ${GITHUB_API_ORIGIN} alone, not in ${where} to ${new URL(url).origin}`,
+    );
+  const app = GithubAppMaterial.safeParse(material);
+  if (!app.success)
+    throw new SecretRefused(
+      `itx.fetch: ${placeholder}: the secret holds no "appId" and "privateKey"`,
+    );
+  return githubAppJwt(app.data.appId, app.data.privateKey).catch(() => {
+    throw new SecretRefused(`itx.fetch: ${placeholder}: "privateKey" is no RSA private key in PEM`);
+  });
+}
+
+/** A GitHub App's JWT (RS256, ten minutes), what GitHub mints an installation token for. */
+export async function githubAppJwt(appId: string, privateKeyPem: string): Promise<string> {
+  // GitHub hands out PKCS#1 keys; @octokit/auth-app signs with WebCrypto here, which takes PKCS#8
+  const privateKey = createPrivateKey(privateKeyPem).export({ type: "pkcs8", format: "pem" });
+  const { token } = await createAppAuth({ appId, privateKey: String(privateKey) })({ type: "app" });
+  return token;
+}
+
 // An object with no field named, a field on a string, or no string at it: no key, nothing verifies.
 export function secretMaterialStringOf(material: SecretMaterial, field?: string): string | null {
   if (!field) return typeof material === "string" ? material : null;
@@ -358,10 +400,13 @@ export async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function hmacSha256Hex(key: string, payload: string | Uint8Array): Promise<string> {
+export async function hmacSha256Hex(
+  key: string | Uint8Array,
+  payload: string | Uint8Array,
+): Promise<string> {
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(key),
+    typeof key === "string" ? new TextEncoder().encode(key) : new Uint8Array(key),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
@@ -371,29 +416,31 @@ export async function hmacSha256Hex(key: string, payload: string | Uint8Array): 
   return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+// `key`: the string at the field, or a derived key (secret/key-ops.ts `hmacKeyOf`); null is none.
 export async function verifySecretHmac(
-  material: SecretMaterial,
+  key: string | Uint8Array | null,
   input: SecretHmacVerification,
 ): Promise<boolean> {
-  const key = secretMaterialStringOf(material, input.field);
   if (!key) return false;
   const signature = input.signature.trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(signature)) return false;
   return secretsEqual(await hmacSha256Hex(key, input.payload), signature);
 }
 
+export const SecretKeyDerivationInput = z.object({ info: z.string().min(1) });
+
 // It arrives untyped.
 export const SecretHmacSigningInput = z.object({
   payload: z.union([z.string(), z.instanceof(Uint8Array)]),
   field: z.string().min(1).optional(),
   encoding: z.enum(["hex", "base64"]).optional(),
+  derive: SecretKeyDerivationInput.optional(),
 });
 
 export async function signSecretHmac(
-  material: SecretMaterial,
+  key: string | Uint8Array | null,
   input: SecretHmacSigning,
 ): Promise<string | null> {
-  const key = secretMaterialStringOf(material, input.field);
   if (!key) return null;
   const hex = await hmacSha256Hex(key, input.payload);
   if (input.encoding !== "base64") return hex;

@@ -29,8 +29,9 @@ export function assertSecretPath(path: string): string {
 
 // ── the placeholder grammar ── for a URL or a header:
 // `getSecret("/secrets/NAME")` is the whole stored value; `getSecret("/secrets/NAME", { field: "a.b" })`
-// is one dotted field of a JSON-valued secret. Double quotes, whitespace free inside the
-// parentheses; `/secrets/NAME` is the PATH `itx.secrets.set("/secrets/NAME", …)` stored. Matched as written in a
+// is one dotted field of a JSON-valued secret; `getSecret("/secrets/NAME", { appJwt: true })` is a
+// GitHub App's JWT made from the secret (api.ts `SecretMaterial`). Double quotes, whitespace free
+// inside the parentheses; `/secrets/NAME` is the PATH `itx.secrets.set("/secrets/NAME", …)` stored. Matched as written in a
 // header, and as the URL parser percent-encodes it in a URL (`"` → %22, a space → %20, `{` → %7B, `}`
 // → %7D) — the path and the query alike; the value is spliced back into the URL as ONE component,
 // `:` kept (Telegram's `bot123:abc` path). A `Basic base64(user:getSecret(…))` credential is peeled:
@@ -41,13 +42,17 @@ const QUOTE = '(?:"|%22)';
 const SPACE = "(?:\\s|%20)*";
 export const SECRET_PLACEHOLDER = new RegExp(
   `getSecret\\(${SPACE}${QUOTE}(/secrets/${SECRET_NAME})${QUOTE}${SPACE}` +
-    `(?:,${SPACE}(?:\\{|%7B)${SPACE}field${SPACE}:${SPACE}${QUOTE}([^"%\\s]+)${QUOTE}${SPACE}(?:\\}|%7D))?${SPACE}\\)`,
+    `(?:,${SPACE}(?:\\{|%7B)${SPACE}(?:field${SPACE}:${SPACE}${QUOTE}([^"%\\s]+)${QUOTE}|(appJwt)${SPACE}:${SPACE}true)${SPACE}(?:\\}|%7D))?${SPACE}\\)`,
   "g",
 );
 
 /** The placeholder as a caller wrote it, for a refusal that names it. */
-export const placeholderOf = (path: string, field: string | undefined): string =>
-  !field ? `getSecret("${path}")` : `getSecret("${path}", { field: "${field}" })`;
+export const placeholderOf = (path: string, field: string | undefined, appJwt?: string): string =>
+  appJwt
+    ? `getSecret("${path}", { appJwt: true })`
+    : !field
+      ? `getSecret("${path}")`
+      : `getSecret("${path}", { field: "${field}" })`;
 
 /** The DISTINCT secret paths a request's URL and headers reference — how egress knows which
  *  secret's context a request belongs to (one request, one secret). */

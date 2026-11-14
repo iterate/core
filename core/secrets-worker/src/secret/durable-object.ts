@@ -1,7 +1,5 @@
 // The authority over one secret. The mind's `/secrets/<name>` context is its record, which the
 // mind's own code can withhold from or forge into, so nothing here reads it.
-import { createPrivateKey } from "node:crypto";
-import { createAppAuth } from "@octokit/auth-app";
 import { DurableObject } from "cloudflare:workers";
 import type { SecretMaterial, SecretOperation, SecretRefresh } from "iterate/api";
 import { codedError, ITERATE_CAUSE_HEADER, leavingTheStack } from "iterate/lib";
@@ -45,6 +43,7 @@ import {
 import { startLinkOf } from "../secret-oauth-start.ts";
 import {
   clientSecretReferenceOf,
+  githubAppJwt,
   hmacSha256Hex,
   isRecord,
   normalizeSecretRecord,
@@ -63,6 +62,7 @@ import {
   sha256Hex,
   substituteMindSecrets,
   SecretHmacSigningInput,
+  SecretKeyDerivationInput,
   signSecretHmac,
   verifySecretEquals,
   verifySecretHmac,
@@ -92,13 +92,18 @@ import { lendRefusal, operationRefusal, placementRefusal } from "./refusals.ts";
 import { runExchangeCode } from "./exchange-jail.ts";
 import {
   generatedSigningMaterial,
+  hmacKeyOf,
   SecretKeyAgreement,
   SecretKeyField,
   SecretKeySignature,
+  SecretSealInput,
   SecretStatementInput,
+  SecretUnsealInput,
+  sealedText,
   signedStatement,
   signingKeyOf,
   underStatementPaths,
+  unsealedText,
   x25519PublicKey,
   x25519SharedSecret,
   x25519Sign,
@@ -223,6 +228,7 @@ const SecretHmacVerificationInput = z.object({
   payload: z.union([z.string(), z.instanceof(Uint8Array)]),
   signature: z.string(),
   field: z.string().min(1).optional(),
+  derive: SecretKeyDerivationInput.optional(),
 });
 
 const deletedWhileStored = (path: string) =>
@@ -325,6 +331,8 @@ export class SecretDurableObject extends DurableObject<Env> {
       signWithKey: (input) => this.#signWithKey(path, input),
       signStatement: (input) => this.#signStatement(path, input),
       generateSigningKey: (input) => this.#generateSigningKey(path, input),
+      seal: (input) => this.#seal(path, input),
+      unseal: (input) => this.#unseal(path, input),
     };
     if (!Object.hasOwn(verbs, verb))
       throw codedError("INVALID_INPUT", `secrets: ${JSON.stringify(verb)} is no verb of a secret`);
@@ -691,7 +699,8 @@ export class SecretDurableObject extends DurableObject<Env> {
       verb === "signHmac" ||
       verb === "signWithKey" ||
       verb === "deriveSharedSecret" ||
-      verb === "signStatement";
+      verb === "signStatement" ||
+      verb === "seal";
     const refusal = !record.operations.includes(verb)
       ? {
           code: "FORBIDDEN" as const,
@@ -734,13 +743,15 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   #verifyHmac(path: string, input: unknown) {
     const parsed = SecretHmacVerificationInput.parse(input);
-    return this.#operate(path, "verifyHmac", (material) => verifySecretHmac(material, parsed));
+    return this.#operate(path, "verifyHmac", async (material) =>
+      verifySecretHmac(await hmacKeyOf(material, parsed), parsed),
+    );
   }
 
   #signHmac(path: string, input: unknown) {
     const parsed = SecretHmacSigningInput.parse(input);
     return this.#operate(path, "signHmac", async (material) => {
-      const signature = await signSecretHmac(material, parsed);
+      const signature = await signSecretHmac(await hmacKeyOf(material, parsed), parsed);
       if (!signature)
         throw codedError("SECRET_NOT_SET", "signHmac: this secret holds no key at that field");
       return signature;
@@ -790,6 +801,16 @@ export class SecretDurableObject extends DurableObject<Env> {
         `signStatement: ${path} signs statements under ${paths.join(", ")} alone, not ${statement.path}`,
       );
     return this.#operate(path, "signStatement", (material) => signedStatement(material, statement));
+  }
+
+  #seal(path: string, input: unknown) {
+    const parsed = SecretSealInput.parse(input);
+    return this.#operate(path, "seal", (material) => sealedText(material, parsed));
+  }
+
+  #unseal(path: string, input: unknown) {
+    const parsed = SecretUnsealInput.parse(input);
+    return this.#operate(path, "unseal", (material) => unsealedText(material, parsed));
   }
 
   async #generateSigningKey(
@@ -1816,14 +1837,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       appId: await clientSecretOf(material.appId, refresh.apiOrigin),
       privateKey: await clientSecretOf(material.privateKey, refresh.apiOrigin),
     };
-    // GitHub hands out PKCS#1 keys; @octokit/auth-app signs with WebCrypto here, which takes PKCS#8
-    const privateKey = createPrivateKey(app.privateKey).export({ type: "pkcs8", format: "pem" });
-    const { token: jwt } = await createAppAuth({
-      appId: app.appId,
-      privateKey: String(privateKey),
-    })({
-      type: "app",
-    });
+    const jwt = await githubAppJwt(app.appId, app.privateKey);
     const response = await pinnedDispatch(
       new Request(
         `${refresh.apiOrigin}/app/installations/${encodeURIComponent(refresh.installationId)}/access_tokens`,

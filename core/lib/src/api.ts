@@ -182,7 +182,10 @@ export type ScheduledAppend = {
  *  object whose string fields `getSecret("/secrets/<name>", { field: "a.b" })` picks — the
  *  multidimensional shape a credential exchange needs (`{ username, password, accessToken }`,
  *  `{ clientId, clientSecret, refreshToken, accessToken }`). A string is always the one value: it has
- *  no fields, whether or not it parses as JSON. */
+ *  no fields, whether or not it parses as JSON. `getSecret("/secrets/<name>", { appJwt: true })`, in
+ *  the Authorization header of a request to https://api.github.com alone, is a GitHub App's JWT
+ *  (RS256, ten minutes) made from the material's `appId` and `privateKey` (PEM): the key itself is
+ *  not sent. */
 export type SecretMaterial = string | Record<string, unknown>;
 
 /** How a token endpoint wants the client credential — the RFC 8414 `token_endpoint_auth_methods_supported`
@@ -293,6 +296,8 @@ export const SECRET_OPERATIONS = [
   "publicKeyOf",
   "signWithKey",
   "signStatement",
+  "seal",
+  "unseal",
 ] as const;
 export type SecretOperation = (typeof SECRET_OPERATIONS)[number];
 
@@ -376,7 +381,22 @@ export type SecretHmacVerification = {
   payload: string | Uint8Array;
   signature: string;
   field?: string;
+  derive?: SecretKeyDerivation;
 };
+
+/** A key derived from the secret's for one purpose, so one secret serves several (`signHmac`,
+ *  `verifyHmac`, `seal`, `unseal`): HKDF-SHA256 with an empty salt and `info`, 32 bytes, from a
+ *  signing secret's private scalar `d` (its P-256 JWK), else from the UTF-8 bytes of the string at
+ *  `field`. The iterate Cloud derives its proof key (`iterate-cloud/proof`) and its seal key
+ *  (`iterate-cloud/seal`) from its P-256 key this way. */
+export type SecretKeyDerivation = { info: string };
+
+/** What `secrets.seal(path, input)` seals: `plaintext` under AES-256-GCM, with the key derived for
+ *  `info` (`SecretKeyDerivation`). The answer is `sealed.<iv>.<ciphertext>`, each base64url. */
+export type SecretSealing = { info: string; plaintext: string; field?: string };
+
+/** What `secrets.unseal(path, input)` opens: a `seal` answer under the same `info`. */
+export type SecretUnsealing = { info: string; sealed: string; field?: string };
 
 /** What `secrets.signHmac(path, input)` signs: the bytes to sign (a string is its UTF-8 bytes),
  *  which field of a JSON material is the key (the whole material when omitted), and how the
@@ -386,6 +406,7 @@ export type SecretHmacSigning = {
   payload: string | Uint8Array;
   field?: string;
   encoding?: "hex" | "base64";
+  derive?: SecretKeyDerivation;
 };
 
 /** What `secrets.verifyEquals(path, input)` checks: the candidate string a request presented (a
@@ -1509,6 +1530,13 @@ export interface IterateContextApi {
      *  limit per minute, and only for a `path` under its `statementPaths`; a secret with an
      *  approval rule signs nothing (`FORBIDDEN`). */
     signStatement(path: string, input: SecretStatementSigning): Promise<Envelope>;
+    /** `plaintext` sealed under a key derived from the secret's (`SecretSealing`), the key never
+     *  outside the secrets Worker; for a secret made with it in `operations`. A secret with an
+     *  approval rule seals nothing (`FORBIDDEN`), as it signs nothing. */
+    seal(path: string, input: SecretSealing): Promise<string>;
+    /** A `seal` answer opened again, for a secret made with it in `operations`. A value that does
+     *  not open under this secret and `info` is refused (`INVALID_INPUT`). */
+    unseal(path: string, input: SecretUnsealing): Promise<string>;
   };
   /** The mind's fetch routes, on its root `/`: which itx expression, the route's `target`, a
    *  request on its hosts goes to. `set` appends one `itx/fetch-route-configured` fact (`null`

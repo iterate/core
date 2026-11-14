@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { generateKeyPairSync, timingSafeEqual } from "node:crypto";
 import {
   envelopeOf,
   type Envelope,
@@ -242,6 +242,166 @@ test("a set that comes in while a made key is sealed is kept, and the key is not
   });
 });
 
+const DERIVING = ["signStatement", "seal", "unseal", "signHmac", "verifyHmac"];
+
+test("a signing key seals and unseals under a key derived for each info, and a value under another info or altered does not open", async () => {
+  const { secret } = vault();
+  const jwk = await privateJwk();
+  await secret.secret(PATH, "set", {
+    material: { privateKey: JSON.stringify(jwk) },
+    urls: ["https://iterate.example.com"],
+    operations: DERIVING,
+  });
+  const info = "iterate-cloud/seal";
+  const { result: sealed } = (await secret.secret(PATH, "seal", {
+    info,
+    plaintext: '{"token":"a refresh token"}',
+  })) as { result: string };
+  expect(sealed).toMatch(/^sealed\.[\w-]{16}\.[\w-]+$/);
+  expect(await secret.secret(PATH, "unseal", { info, sealed })).toMatchObject({
+    result: '{"token":"a refresh token"}',
+  });
+  const refused = (input: unknown) =>
+    secret.secret(PATH, "unseal", input).catch((error: Error) => error.message);
+  expect(await refused({ info: "iterate-cloud/proof", sealed })).toContain("does not open");
+  expect(await refused({ info, sealed: `${sealed.slice(0, -2)}AA` })).toContain("does not open");
+  // HKDF over the JWK's `d`, as WebCrypto computes it here
+  const root = await crypto.subtle.importKey("raw", fromBase64url(jwk.d), "HKDF", false, [
+    "deriveKey",
+  ]);
+  const key = await crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(), info: new TextEncoder().encode(info) },
+    root,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["decrypt"],
+  );
+  const [, iv = "", text = ""] = sealed.split(".");
+  const opened = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromBase64url(iv) },
+    key,
+    fromBase64url(text),
+  );
+  expect(new TextDecoder().decode(opened)).toBe('{"token":"a refresh token"}');
+});
+
+test("an HMAC with derive is under the key derived for its info, from a signing key's d or a string's bytes", async () => {
+  const jwk = await privateJwk();
+  const derivedHex = async (bytes: Uint8Array, info: string, payload: string) => {
+    const root = await crypto.subtle.importKey("raw", new Uint8Array(bytes), "HKDF", false, [
+      "deriveKey",
+    ]);
+    const key = await crypto.subtle.deriveKey(
+      {
+        name: "HKDF",
+        hash: "SHA-256",
+        salt: new Uint8Array(),
+        info: new TextEncoder().encode(info),
+      },
+      root,
+      { name: "HMAC", hash: "SHA-256", length: 256 },
+      false,
+      ["sign"],
+    );
+    const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
+    return Buffer.from(signed).toString("hex");
+  };
+  for (const [material, bytes] of [
+    [{ privateKey: JSON.stringify(jwk) }, fromBase64url(jwk.d)],
+    [
+      "aaaaabbbbbccccc111112222233333aaaaabbbbb",
+      new TextEncoder().encode("aaaaabbbbbccccc111112222233333aaaaabbbbb"),
+    ],
+  ] as const) {
+    const { secret } = vault();
+    await secret.secret(PATH, "set", {
+      material,
+      urls: ["https://iterate.example.com"],
+      operations: typeof material === "string" ? DERIVING.slice(1) : DERIVING,
+    });
+    const derive = { info: "iterate-cloud/proof" };
+    const signed = (await secret.secret(PATH, "signHmac", {
+      payload: "bot-link\nx\n1",
+      derive,
+    })) as {
+      result: string;
+    };
+    expect(signed).toMatchObject({
+      result: await derivedHex(bytes, derive.info, "bot-link\nx\n1"),
+    });
+    const verify = (input: object) =>
+      secret.secret(PATH, "verifyHmac", {
+        payload: "bot-link\nx\n1",
+        signature: signed.result,
+        ...input,
+      });
+    expect(await verify({ derive })).toMatchObject({ result: true });
+    expect(await verify({ derive: { info: "iterate-cloud/seal" } })).toMatchObject({
+      result: false,
+    });
+    expect(await verify({})).toMatchObject({ result: false });
+  }
+});
+
+test("an appJwt placeholder sends a GitHub App JWT to api.github.com's Authorization header alone, and never the key", async () => {
+  const logged = vi.spyOn(console, "info");
+  const sent: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (request: Request) => {
+      sent.push(request.headers.get("authorization") ?? "");
+      return new Response("{}");
+    }),
+  );
+  const GITHUB_APP = "/secrets/github-app";
+  const { secret } = vault(GITHUB_APP);
+  // GitHub hands out PKCS#1 PEM
+  const pair = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const privateKey = pair.privateKey.export({ type: "pkcs1", format: "pem" }).toString();
+  await secret.secret(GITHUB_APP, "set", {
+    material: { appId: "12345", privateKey },
+    urls: ["https://api.github.com", "https://iterate.example.com"],
+  });
+  const use = (url: string, headers: Record<string, string>) =>
+    secret
+      .fetch(new Request(url, { headers: { ...headers, [SECRET_USE_HEADER]: GITHUB_APP } }))
+      .then((answer) => answer.text());
+  const placeholder = `getSecret("${GITHUB_APP}", { appJwt: true })`;
+  await use("https://api.github.com/app/installations", { authorization: `Bearer ${placeholder}` });
+  const refusals = [
+    await use("https://iterate.example.com/x", { authorization: `Bearer ${placeholder}` }),
+    await use("https://api.github.com/app", { "x-token": placeholder }),
+  ];
+  expect(sent).toHaveLength(1);
+  const [header, payload, signature] = sent[0]!.slice("Bearer ".length).split(".");
+  expect(JSON.parse(Buffer.from(header!, "base64url").toString())).toMatchObject({ alg: "RS256" });
+  const claims = JSON.parse(Buffer.from(payload!, "base64url").toString());
+  expect(claims).toMatchObject({ iss: "12345" });
+  expect(claims.exp - claims.iat).toBeLessThanOrEqual(600);
+  const spki = pair.publicKey.export({ type: "spki", format: "der" });
+  const publicKey = await crypto.subtle.importKey(
+    "spki",
+    spki,
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  expect(
+    await crypto.subtle.verify(
+      "RSASSA-PKCS1-v1_5",
+      publicKey,
+      Buffer.from(signature!, "base64url"),
+      new TextEncoder().encode(`${header}.${payload}`),
+    ),
+  ).toBe(true);
+  for (const refusal of refusals)
+    expect(refusal).toContain(
+      "goes in the Authorization header of a request to https://api.github.com alone",
+    );
+  const keyBody = privateKey.split("\n")[1]!;
+  expect(JSON.stringify([refusals, logged.mock.calls, sent])).not.toContain(keyBody);
+});
+
 /** A private JWK made here, as a test makes every key: no key material is in the repository. */
 async function privateJwk() {
   const pair = (await crypto.subtle.generateKey(P256, true, ["sign", "verify"])) as CryptoKeyPair;
@@ -263,11 +423,11 @@ function placeholderRequest() {
 }
 
 /** The secret's object with no approval rule, on a store in memory. */
-function vault() {
+function vault(path = PATH) {
   const hooks: { adding?: () => Promise<unknown> } = {};
   const store = new Map<string, unknown>();
   const state = {
-    id: { name: PATH },
+    id: { name: path },
     exports: {},
     storage: {
       kv: {

@@ -1,8 +1,18 @@
 // Operations on a secret's stored private keys that never return the key: only a shared secret, a
 // public key or a signature leaves, and none of them reveals the private.
 import * as curve25519 from "curve25519-js";
-import { base64url, type Envelope, keyIdOf, signedP256, statementText } from "iterate/signed";
+import type { SecretMaterial } from "iterate/api";
+import { codedError } from "iterate/lib";
+import {
+  base64url,
+  type Envelope,
+  fromBase64url,
+  keyIdOf,
+  signedP256,
+  statementText,
+} from "iterate/signed";
 import { z } from "zod";
+import { SecretKeyDerivationInput, secretMaterialStringOf } from "../secrets.ts";
 
 // RFC 8410: `crypto.subtle` imports a raw X25519 private only wrapped in this PKCS8 DER prefix.
 // allow-high-entropy-next-line: the fixed RFC 8410 PKCS8 DER prefix for X25519, a public constant, not a secret
@@ -75,21 +85,24 @@ const PrivateJwk = z.object({
   d: z.string().min(1),
 });
 
+/** The P-256 JWK at `privateKey` of a signing secret's material, or undefined. */
+function privateJwkOf(material: unknown) {
+  const held = SigningMaterial.safeParse(material);
+  try {
+    return PrivateJwk.safeParse(held.success ? JSON.parse(held.data.privateKey) : undefined).data;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The key at `privateKey` of a signing secret's material, or a refusal that quotes none of it. */
 export async function signingKeyOf(material: unknown) {
-  const held = SigningMaterial.safeParse(material);
-  let parsed: unknown;
-  try {
-    parsed = held.success ? JSON.parse(held.data.privateKey) : undefined;
-  } catch {
-    parsed = undefined;
-  }
-  const jwk = PrivateJwk.safeParse(parsed);
-  if (!jwk.success)
+  const jwk = privateJwkOf(material);
+  if (!jwk)
     throw new Error(
       'key-ops: a signing secret\'s material is { privateKey: "<a P-256 private JWK, as JSON>" }',
     );
-  const { kty, crv, x, y, d } = jwk.data;
+  const { kty, crv, x, y, d } = jwk;
   const privateKey = await crypto.subtle.importKey("jwk", { kty, crv, x, y, d }, P256, false, [
     "sign",
   ]);
@@ -153,4 +166,77 @@ export function underStatementPaths(path: string, paths: readonly string[]): boo
     const root = prefix.replace(/\/+$/, "");
     return path === root || path.startsWith(`${root}/`);
   });
+}
+
+// ── keys derived from a secret's: `derive` of the HMAC operations, `seal` and `unseal`, as core/lib
+// api.ts `SecretKeyDerivation` says ──
+
+/** The 32-byte key HKDF-SHA256 derives for `info`, or null where the material holds no key. */
+async function derivedKey(material: SecretMaterial, field: string | undefined, info: string) {
+  const d = privateJwkOf(material)?.d;
+  const text = secretMaterialStringOf(material, field);
+  const bytes = d ? fromBase64url(d) : text && new TextEncoder().encode(text);
+  if (!bytes) return null;
+  const root = await crypto.subtle.importKey("raw", bytes, "HKDF", false, ["deriveBits"]);
+  const salt = new Uint8Array();
+  const infoBytes = new TextEncoder().encode(info);
+  const bits = { name: "HKDF", hash: "SHA-256", salt, info: infoBytes };
+  return new Uint8Array(await crypto.subtle.deriveBits(bits, root, 256));
+}
+
+/** The HMAC key `signHmac` and `verifyHmac` take: the string at `field`, or the key derived from it. */
+export async function hmacKeyOf(
+  material: SecretMaterial,
+  input: { field?: string; derive?: { info: string } },
+): Promise<string | Uint8Array | null> {
+  return input.derive
+    ? derivedKey(material, input.field, input.derive.info)
+    : secretMaterialStringOf(material, input.field);
+}
+
+export const SecretSealInput = SecretKeyDerivationInput.extend({
+  plaintext: z.string(),
+  field: z.string().min(1).optional(),
+});
+export const SecretUnsealInput = SecretKeyDerivationInput.extend({
+  sealed: z.string(),
+  field: z.string().min(1).optional(),
+});
+
+async function sealKeyOf(material: SecretMaterial, field: string | undefined, info: string) {
+  const bytes = await derivedKey(material, field, info);
+  if (!bytes) throw codedError("SECRET_NOT_SET", "seal: this secret holds no key at that field");
+  return crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+/** `sealed.<iv>.<ciphertext>`, each base64url: AES-256-GCM, a random 12-byte IV, no additional
+ *  data. The iterate Cloud's sealed values have this form. */
+export async function sealedText(
+  material: SecretMaterial,
+  { info, plaintext, field }: z.infer<typeof SecretSealInput>,
+): Promise<string> {
+  const key = await sealKeyOf(material, field, info);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const text = new TextEncoder().encode(plaintext);
+  const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, text);
+  return `sealed.${base64url(iv)}.${base64url(new Uint8Array(sealed))}`;
+}
+
+export async function unsealedText(
+  material: SecretMaterial,
+  { info, sealed, field }: z.infer<typeof SecretUnsealInput>,
+): Promise<string> {
+  const key = await sealKeyOf(material, field, info);
+  const [, iv = "", text = ""] = sealed.split(".");
+  try {
+    const opened = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: fromBase64url(iv) },
+      key,
+      fromBase64url(text),
+    );
+    // ignoreBOM: a plaintext that starts with U+FEFF keeps it
+    return new TextDecoder("utf-8", { fatal: false, ignoreBOM: true }).decode(opened);
+  } catch {
+    throw codedError("INVALID_INPUT", "unseal: the value does not open under this secret and info");
+  }
 }

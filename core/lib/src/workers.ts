@@ -202,6 +202,8 @@ export type SecretVerbs = {
   publicKeyOf: { input: unknown; answer: SecretAnswer<string> | SecretRefusal };
   signWithKey: { input: unknown; answer: SecretAnswer<string> | SecretRefusal };
   signStatement: { input: unknown; answer: SecretAnswer<Envelope> | SecretRefusal };
+  seal: { input: unknown; answer: SecretAnswer<string> | SecretRefusal };
+  unseal: { input: unknown; answer: SecretAnswer<string> | SecretRefusal };
   generateSigningKey: {
     input: unknown;
     answer: SecretAnswer<{ path: string; publicKey: string; keyId: string }>;

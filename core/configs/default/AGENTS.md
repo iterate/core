@@ -452,6 +452,17 @@ secret is never sent with a request and is lent to nothing, and it signs only pa
 `statementPaths`. To keep a key made elsewhere, collect it with `collectFromUser` (one field
 `privateKey`, the private JWK as JSON, and `operations: ["signStatement"]`).
 
+One secret can serve several purposes through keys derived from it (HKDF-SHA256 with an `info`
+string: from a signing key's private scalar, else from the secret's string). `itx.secrets.seal(path,
+{ info, plaintext })` answers `sealed.<iv>.<ciphertext>` (AES-256-GCM) and `unseal(path, { info,
+sealed })` opens it; `signHmac` and `verifyHmac` take `derive: { info }` to sign under the derived
+key. Each needs its name in the secret's `operations`.
+
+A secret `{ appId, privateKey }` (a GitHub App's id and its PEM key) can send the App's JWT without
+the key leaving: `getSecret("/secrets/github-app", { appJwt: true })` in the Authorization header of
+a request to `https://api.github.com` (the secret pinned there) becomes a ten-minute RS256 JWT, for
+example to `POST /app/installations/<id>/access_tokens`. In any other header or host it is refused.
+
 ## The Integrations page
 
 The Dash's Integrations page (`?page=integrations`) is where a member sees what this mind is
