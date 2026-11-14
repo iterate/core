@@ -101,7 +101,7 @@ function applySdkCompatibilityFlags(declared: string[] | undefined, where: strin
 
 // Bump when a change here, in module-resolution.ts, or to sucrase or es-module-lexer, changes what a
 // source produces or which files a resolution reads: memos are kept under this format.
-const LOADED_CODE_FORMAT = 2;
+const LOADED_CODE_FORMAT = 3;
 let platformIdentity: Promise<string> | undefined;
 // Never the deploy: a deploy that changes none of these keeps every loaded identity, so no facet
 // restarts for it.

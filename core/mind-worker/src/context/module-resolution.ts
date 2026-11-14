@@ -249,7 +249,10 @@ export async function resolveModules(
   };
   const platformUsed: string[] = [];
   const npmSpecifiers = new Set<string>();
-  const seen = new Set<string>([entry]);
+  // `read`: every file the resolution read, as code or as text. `queued`: the files loaded as code.
+  // A file can be both: a folder import reads code as text too, and another module imports it.
+  const read = new Set<string>([entry]);
+  const queued = new Set<string>([entry]);
   const queue = [entry];
   const addModule = (name: string, code: string, from: string) => {
     if (Object.hasOwn(out, name) && out[name] !== code)
@@ -257,7 +260,7 @@ export async function resolveModules(
     out[name] = code;
   };
   const loadFile = (file: string): string => {
-    seen.add(file);
+    read.add(file);
     addModule(fileModuleName(file), fileModule(source[file]!), file);
     return fileModuleName(file);
   };
@@ -299,8 +302,9 @@ export async function resolveModules(
         if (specifier.endsWith("/")) {
           target = loadFolder(joined, path, specifier);
         } else if (file) {
-          if (!seen.has(file)) {
-            seen.add(file);
+          if (!queued.has(file)) {
+            queued.add(file);
+            read.add(file);
             queue.push(file);
           }
           target = outputName(file);
@@ -348,8 +352,11 @@ export async function resolveModules(
   }
 
   addPlatformModules(out, platformUsed, platform);
-  const read = ["package.json", main, ...seen].filter((path) => Object.hasOwn(source, path));
-  const files = Object.fromEntries(read.map((path) => [path, source[path]!]));
+  const files = Object.fromEntries(
+    ["package.json", main, ...read]
+      .filter((path) => Object.hasOwn(source, path))
+      .map((path) => [path, source[path]!]),
+  );
   return { mainModule: outputName(entry), modules: out, compatibilityFlags, files };
 }
 
