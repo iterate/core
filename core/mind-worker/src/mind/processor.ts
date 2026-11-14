@@ -241,6 +241,8 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
           lastPublicationFactOffset: event.offset,
         };
       }
+      case "events.iterate.com/mind/sandbox-image-configured":
+        return { ...state, sandboxImage: event.payload.image };
       default:
         return undefined;
     }

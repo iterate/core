@@ -14,7 +14,13 @@ export class MindFacet extends StreamProcessorDurableObject<
   { ITX?: ItxEntrypointService },
   ItxEntrypointScope
 > {
-  static override publicMethods = [...super.publicMethods, "repos", "workspaces", "sandboxes"];
+  static override publicMethods = [
+    ...super.publicMethods,
+    "repos",
+    "workspaces",
+    "sandboxes",
+    "sandboxImage",
+  ];
 
   processor = new MindProcessor(
     () => this.getItx(),
@@ -84,5 +90,11 @@ export class MindFacet extends StreamProcessorDurableObject<
   }
   sandboxes(): EntityCollectionRpcTarget {
     return this.#collection("sandbox");
+  }
+  /** The image that `events.iterate.com/mind/sandbox-image-configured` names, else null. Here and
+   *  not by a path into the snapshot: the state of a root reduced before the field existed has no
+   *  such key, and a path to a missing key fails the call. */
+  async sandboxImage(): Promise<string | null> {
+    return (await this.snapshot()).state.sandboxImage ?? null;
   }
 }

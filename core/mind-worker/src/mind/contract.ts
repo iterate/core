@@ -17,7 +17,7 @@ export const MindContract = defineProcessorContract({
   // The engine reuses a checkpoint reduced under the same version: bump it to re-reduce every root.
   version: "1",
   description:
-    "The mind: where its own creation stands, every context under it (from the announcements each lands on /), the catalog of every repo born under it (from the certificates cross-posted to /), and the publication of its config repo.",
+    "The mind: where its own creation stands, every context under it (from the announcements each lands on /), the catalog of every repo born under it (from the certificates cross-posted to /), the publication of its config repo, and the image its sandboxes start on.",
   stateSchema: z.object({
     creation: z
       .object({
@@ -50,6 +50,7 @@ export const MindContract = defineProcessorContract({
     lastPublicationFactOffset: z.number().int().positive().nullable().default(null),
     // not the tip while the tip's publication is owed or was refused
     publishedCommit: z.string().min(1).nullable().default(null),
+    sandboxImage: z.string().min(1).nullable().default(null),
   }),
   events: {
     "events.iterate.com/mind/create-requested": {
@@ -139,6 +140,11 @@ export const MindContract = defineProcessorContract({
           .optional(),
       }),
     },
+    "events.iterate.com/mind/sandbox-image-configured": {
+      description:
+        "The image a sandbox of the mind starts on when its start names no image and it has no disk to restore: a prepared image of the mind's Cloudflare account by its address (`registry.cloudflare.com/<account>/<repository>@sha256:<digest>`). The latest one wins; `null` gives back the stack's own, `iterate-dev-image`.",
+      payloadSchema: z.object({ image: z.string().min(1).nullable() }),
+    },
     "events.iterate.com/mind/template-not-published": {
       description:
         "The platform's own commit of a template (`template-applied`'s `commitOid`) was refused publication, and `error` says why. The mind still runs the commit published before it, and no later commit publishes until the config repo loads again. Not said for a commit that a newer one replaced before it was published.",
@@ -164,6 +170,7 @@ export const MindContract = defineProcessorContract({
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/mind/worker-updated",
     "events.iterate.com/mind/worker-update-failed",
+    "events.iterate.com/mind/sandbox-image-configured",
   ],
   emits: [
     "events.iterate.com/mind/create-requested",

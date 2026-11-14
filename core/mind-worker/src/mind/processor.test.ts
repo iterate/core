@@ -2,7 +2,8 @@
 // the config repo is compared with the bundled template. The processor runs here with a repo and a
 // publisher that record what they are asked.
 import type { ItxExpression } from "iterate/expression";
-import type { StreamEventInput } from "iterate/stream/processor";
+import { ProcessorEngine, type StreamEventInput } from "iterate/stream/processor";
+import { memoryStorage, memoryStream } from "iterate/stream/test-support";
 import { expect, test, vi } from "vitest";
 import { MindContract, type MindState } from "./contract.ts";
 import { MindProcessor } from "./processor.ts";
@@ -166,6 +167,40 @@ test("a root that stays awake looks again an hour after its last look: a schedul
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("the latest `mind/sandbox-image-configured` on `/` names the image the mind's sandboxes start on, and null gives the stack's own back", async () => {
+  const root = memoryStream("/");
+  const configured = (image: string | null) => ({
+    type: "events.iterate.com/mind/sandbox-image-configured",
+    payload: { image },
+  });
+  // a new engine on new storage reduces the whole log, through the contract's own `consumes`
+  const imageAfter = async (event: StreamEventInput) => {
+    root.stream.append(event);
+    const processor = new MindProcessor(
+      () => {
+        throw new Error("the reduce reaches no context");
+      },
+      () => ({}) as MindPublisher,
+      { template: async () => undefined, keepTemplate: async () => {} },
+      {},
+    );
+    const engine = new ProcessorEngine(processor, {
+      stream: root.stream,
+      storage: memoryStorage(),
+    });
+    return (await engine.snapshot()).state.sandboxImage;
+  };
+  expect({
+    first: await imageAfter(configured("registry.cloudflare.com/account/first@sha256:digest")),
+    latest: await imageAfter(configured("registry.cloudflare.com/account/latest@sha256:digest")),
+    cleared: await imageAfter(configured(null)),
+  }).toEqual({
+    first: "registry.cloudflare.com/account/first@sha256:digest",
+    latest: "registry.cloudflare.com/account/latest@sha256:digest",
+    cleared: null,
+  });
 });
 
 test("a mind that is not created yet gets no schedule", async () => {

@@ -1178,9 +1178,11 @@ export type SandboxContainerApi = InvokeHandle & {
  *  and every call of `files` start the container when none runs, from the disk last saved, on
  *  `standard-1` unless `start({ instance })` says otherwise. Memory and running processes do not
  *  survive a stop; the disk does, for 30 days after its last restore and only on the image it was
- *  saved from (the platform's `iterate-dev-image`: Node 24 on Debian with git, gh, Chromium, ffmpeg,
- *  pnpm, the Claude, Codex and Grok CLIs, the cf CLI, doppler and the iterate CLI; `start({ image:
- *  "cloudflare/debian-trixie" })` is Cloudflare's lean one). NOTHING RUNS FOR NOTHING: a sandbox unused for `idleAfterMs` (five minutes by default; a
+ *  saved from. With no disk and no `image`, a start runs the image the mind names
+ *  (`events.iterate.com/mind/sandbox-image-configured` on `/`), else the platform's
+ *  `iterate-dev-image`: Node 24 on Debian with git, gh, Chromium, ffmpeg, pnpm, the Claude, Codex and
+ *  Grok CLIs, the cf CLI, doppler and the iterate CLI (`start({ image: "cloudflare/debian-trixie" })`
+ *  is Cloudflare's lean one). NOTHING RUNS FOR NOTHING: a sandbox unused for `idleAfterMs` (five minutes by default; a
  *  command, a file call or a stream being read is use; a call left open counts for an hour at most)
  *  is saved and stopped, a sandbox in use has its disk saved every 15 minutes, and Cloudflare stops
  *  the container two hours after it last answered, whatever else fails. THE ONLY WAY OUT IS THE

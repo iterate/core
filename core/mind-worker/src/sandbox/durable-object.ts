@@ -55,6 +55,19 @@ function assertOwnSnapshot(path: string, state: SandboxState, snapshot?: { id: s
     );
 }
 
+/** What a start runs. An image it names wins, and leaves the disk behind. Else a disk: another
+ *  sandbox's (`from`), the snapshot it names, or its own last saved one. Else the image that
+ *  `events.iterate.com/mind/sandbox-image-configured` on `/` names, read only then, or
+ *  SANDBOX_IMAGE. */
+export async function imageOrDisk(
+  named: { image?: string; snapshotId?: string },
+  mindImage: () => Promise<string | null>,
+): Promise<{ image: string; containerSnapshot?: never } | { containerSnapshot: { id: string } }> {
+  if (named.image) return { image: named.image };
+  if (named.snapshotId) return { containerSnapshot: { id: named.snapshotId } };
+  return { image: (await mindImage()) || SANDBOX_IMAGE };
+}
+
 /** The mind host's `itx.secrets` and the library's `itx.sandboxes`, which the kernel's type does not name. */
 type SandboxScope = ItxEntrypointScope & Pick<IterateContextApi, "secrets" | "sandboxes">;
 
@@ -188,17 +201,17 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     if ([image, containerSnapshot, from].filter(Boolean).length > 1)
       throw new Error(`sandbox ${this.#path}: start takes one of image, containerSnapshot or from`);
     const source = from ? await this.#snapshotOf(from) : undefined;
-    const snapshotId = image
-      ? undefined
-      : source?.id || containerSnapshot?.id || state.snapshot?.id;
+    const runs = await imageOrDisk(
+      { image, snapshotId: source?.id || containerSnapshot?.id || state.snapshot?.id },
+      () => this.#mindSandboxImage(),
+    );
+    const snapshotId = runs.containerSnapshot?.id;
     const instance = rest.instance || source?.instance || state.instance || undefined;
     const startOptions: SandboxStartOptions = {
       ...rest,
       // a disk does not run on a smaller size than it was saved on
       instance,
-      ...(snapshotId
-        ? { containerSnapshot: { id: snapshotId } }
-        : { image: image || SANDBOX_IMAGE }),
+      ...runs,
     };
     let started: boolean;
     try {
@@ -245,6 +258,15 @@ export class SandboxFacet extends StreamProcessorDurableObject<
       (await sibling.invoke([["snapshot"], "state", "instance"])) ?? undefined,
     );
     return { id, size, instance };
+  }
+
+  /** The `mind` facet's own answer on `/`, which is null also for a root reduced before the field existed. */
+  async #mindSandboxImage(): Promise<string | null> {
+    using itx = this.getItx();
+    const image = await itx
+      .cd("/")
+      .invoke(["itx", "builtins", "facets", ["get", "mind"], ["sandboxImage"]]);
+    return z.string().min(1).nullish().parse(image) ?? null;
   }
 
   /** Through the head of the log: a snapshot a park recorded a moment ago is the one to restore. */
