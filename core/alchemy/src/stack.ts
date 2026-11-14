@@ -380,6 +380,18 @@ const telemetryPart = (names: ReturnType<typeof resourceNamesOf>) =>
     const bucket = yield* Cloudflare.R2.Bucket("TelemetryBucket", {
       name: names.telemetryBucket,
       forceDestroy: true,
+      // The pipeline's sink leaves multipart uploads open, and a destroy can abort them only
+      // through R2's S3 API, with a secret derived from the token. A token the destroy cannot
+      // read (a secret placeholder, in a sandbox) cannot abort them, so the bucket stays. R2
+      // aborts them itself after a day with this rule; a later destroy then passes. R2 applies a
+      // rule on its own schedule, not at once: a destroy right after a deploy still needs a
+      // readable token.
+      lifecycleRules: [
+        {
+          id: "abort-stale-uploads",
+          abortMultipartUploadsTransition: { condition: { type: "Age", maxAge: 86_400 } },
+        },
+      ],
     });
     // a Basin Catalog sink refuses a token whose Data Catalog Write is the bucket's alone
     const catalogToken = yield* Cloudflare.ApiToken.AccountApiToken("TelemetryCatalogToken", {
