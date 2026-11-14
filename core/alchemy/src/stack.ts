@@ -20,6 +20,7 @@ import {
   resourceNamesOf,
   storedConfigOf,
 } from "./config.ts";
+import { mailEvents, mailOnZone } from "./mail.ts";
 
 /** A path in `core/`, from this file: a deploy from any working directory finds it. */
 import { publishedSandboxImageIn } from "./sandbox-image.ts";
@@ -319,18 +320,7 @@ export const mindStack = (config: MindConfig) =>
     const boundary = yield* declaredBoundary;
 
     const zone = domain ? yield* zonePart(domain) : undefined;
-    if (zone && config.mail) {
-      const routing = yield* Cloudflare.Email.Routing("EmailRouting", { zone: zone.id });
-      yield* Cloudflare.Email.CatchAll("EmailCatchAll", {
-        zone: routing.zoneId,
-        actions: [{ type: "worker", value: [boundary.workerName] }],
-      });
-      // Email Sending on the apex adds the bounce and DKIM records the boundary's `send_email` needs.
-      yield* Cloudflare.Email.SendingSubdomain("EmailSending", {
-        zoneId: zone.id,
-        name: zone.name,
-      });
-    }
+    const sending = zone && config.mail ? yield* mailOnZone(zone, boundary.workerName) : undefined;
     // THE STACK'S ONE QUEUE OF CLOUDFLARE EVENTS, with the boundary as its one consumer
     // (core/boundary-worker/src/cloudflare-events.ts): each event subscription of the stack feeds
     // it, and a table there says what each message becomes on the mind. A stack has it when it
@@ -342,14 +332,11 @@ export const mindStack = (config: MindConfig) =>
       const cloudflareEvents = yield* Cloudflare.Queues.Queue("CloudflareEvents", {
         name: names.cloudflareEvents,
       });
-      // What became of each sent mail. Each failure becomes a fact on the mind's email log
-      // (core/boundary-worker/src/mail-outcomes.ts). Delivered and deferred mail is not asked for.
-      if (zone && config.mail)
-        yield* Cloudflare.Queues.Subscription("MailEventsSubscription", {
-          name: `${names.cloudflareEvents}-mail`,
-          source: { type: "email.sending", zoneId: zone.id, domain: zone.name },
-          events: ["message.bounced", "message.failed", "message.rejected", "message.complained"],
+      if (sending)
+        yield* mailEvents({
+          sending,
           queueId: cloudflareEvents.queueId,
+          name: `${names.cloudflareEvents}-mail`,
         });
       // Bounded: an event the mind does not take (a provided mind that is not connected) is retried
       // a minute apart, ten times, then dropped; the boundary logs each failure.
