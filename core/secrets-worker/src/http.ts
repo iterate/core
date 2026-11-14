@@ -22,7 +22,7 @@ export async function secretsResponse(request: Request, env: Env) {
       (path, input) => secretObject(env, path).completeOAuth(path, input),
       async (path, nonce) =>
         (await secretObject(env, path).oauthStartTarget(path, { nonce }))?.anyoneWithLink === true,
-      (path, input) => secretObject(env, path).declineOAuth(path, input),
+      (path, input) => secretObject(env, path).recordOAuthError(path, input),
     );
   if (pathname === SECRET_COLLECT_PATH)
     return secretCollect(request, (path) => secretObject(env, path));

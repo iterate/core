@@ -1,5 +1,5 @@
-// The provider's callback when the person said no (`error=`): the attempt keeps the refusal, and
-// the tab goes on as after a consent.
+// The provider's callback with `error=`: the attempt keeps it. The person's no goes on as after a
+// consent; any other error is a failure, with a way to try again.
 import { timingSafeEqual } from "node:crypto";
 import { expect, test, vi } from "vitest";
 import { stateOf } from "./secret-oauth.ts";
@@ -18,19 +18,19 @@ test.for([
 ])(
   "a declined consent is kept on the attempt, and the tab goes to next or says so, with no error ($status)",
   async ({ next, status, location }) => {
-    const declineOAuth = vi.fn(async () => ({ next }));
+    const recordOAuthError = vi.fn(async () => ({ status: "declined" as const, next }));
     const completeOAuth = vi.fn();
     const answer = await secretOAuthCallback(
       await callbackFromTheProvider("error=access_denied"),
       completeOAuth,
       async () => true,
-      declineOAuth,
+      recordOAuthError,
     );
     const text = await answer.text();
     expect({
       status: answer.status,
       location: answer.headers.get("location"),
-      declined: declineOAuth.mock.calls,
+      recorded: recordOAuthError.mock.calls,
       completed: completeOAuth.mock.calls.length,
       said: status === 200 && text.includes("You declined. You can close this tab."),
       alert: /<p role="alert" data-type="error">/.test(text),
@@ -39,7 +39,7 @@ test.for([
     }).toEqual({
       status,
       location,
-      declined: [[PATH, { nonce: "n-1", error: "access_denied", by: null }]],
+      recorded: [[PATH, { nonce: "n-1", error: "access_denied", by: null }]],
       completed: 0,
       said: status === 200,
       alert: false,
@@ -48,19 +48,36 @@ test.for([
   },
 );
 
-test("an error that is the provider's, not the person's no, is no decline", async () => {
-  const declineOAuth = vi.fn(async () => ({ next: null }));
+test("an error that is the provider's, not the person's no, is kept as a failure, with a link to try again", async () => {
+  const recordOAuthError = vi.fn(async () => ({
+    status: "failed" as const,
+    next: "https://ada.example/connected",
+  }));
   const answer = await secretOAuthCallback(
     await callbackFromTheProvider("error=server_error"),
     vi.fn(),
     async () => true,
-    declineOAuth,
+    recordOAuthError,
   );
-  expect([answer.status, await answer.text(), declineOAuth.mock.calls.length]).toEqual([
-    400,
-    expect.stringContaining("The provider could not authorize: server_error"),
-    0,
-  ]);
+  const text = await answer.text();
+  const again = /<a href="([^"]+)">Try again<\/a>/.exec(text)?.[1]?.replace(/&(amp|#38);/g, "&");
+  expect({
+    status: answer.status,
+    location: answer.headers.get("location"),
+    recorded: recordOAuthError.mock.calls,
+    said: /<p role="alert" data-type="error">The provider could not connect the account\. It answered: server_error<\/p>/.test(
+      text,
+    ),
+    again: again && new URL(again, PLATFORM).href,
+    cleared: /Max-Age=0/.test(answer.headers.get("set-cookie") || ""),
+  }).toEqual({
+    status: 400,
+    location: null,
+    recorded: [[PATH, { nonce: "n-1", error: "server_error", by: null }]],
+    said: true,
+    again: startLinkOf(PLATFORM, PATH, "n-1"),
+    cleared: false,
+  });
 });
 
 test("a decline that matches no live attempt says so, and is no decline", async () => {

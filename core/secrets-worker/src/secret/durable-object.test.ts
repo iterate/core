@@ -894,40 +894,47 @@ test("a rule cannot be loosened without a signature, and a member's signed state
   expect(await secret.approvals(PATH)).toEqual({ rule: null, held: [] });
 });
 
-test("a consent the person declined at the provider is the attempt's answer at once, not pending until the attempt runs out", async () => {
-  const { secret } = await vault();
-  // the object's verbs answer untyped
-  const { nonce } = z.object({ result: z.object({ nonce: z.string() }) }).parse(
-    await secret.secret(PATH, "beginOAuth", {
-      authorizationEndpoint: "https://provider.example/authorize",
-      tokenEndpoint: "https://provider.example/token",
-      clientId: "client",
-    }),
-  ).result;
-  const result = () => secret.secret(PATH, "oauthResult", { nonce });
-  const member = { userId: "user_aaaa", email: "member@example.com", member: true };
-  const before = await result();
-  const refused = await Promise.all(
-    [
-      secret.declineOAuth(PATH, { nonce: "another", error: "access_denied", by: member }),
-      secret.declineOAuth(PATH, { nonce, error: "access_denied", by: null }),
-    ].map((declined) =>
-      declined.then(
-        () => "declined",
-        (error: Error) => error.message,
+test.for([
+  { error: "access_denied", status: "declined" },
+  { error: "server_error", status: "failed" },
+])(
+  "the provider's $error is the attempt's answer at once ($status), not pending until the attempt runs out",
+  async ({ error, status }) => {
+    const { secret } = await vault();
+    // the object's verbs answer untyped
+    const { nonce } = z.object({ result: z.object({ nonce: z.string() }) }).parse(
+      await secret.secret(PATH, "beginOAuth", {
+        authorizationEndpoint: "https://provider.example/authorize",
+        tokenEndpoint: "https://provider.example/token",
+        clientId: "client",
+      }),
+    ).result;
+    const result = () => secret.secret(PATH, "oauthResult", { nonce });
+    const member = { userId: "user_aaaa", email: "member@example.com", member: true };
+    const before = await result();
+    const refused = await Promise.all(
+      [
+        secret.recordOAuthError(PATH, { nonce: "another", error, by: member }),
+        secret.recordOAuthError(PATH, { nonce, error, by: null }),
+      ].map((recorded) =>
+        recorded.then(
+          () => "recorded",
+          (reason: Error) => reason.message,
+        ),
       ),
-    ),
-  );
-  await secret.declineOAuth(PATH, { nonce, error: "access_denied", by: member });
-  expect({ before, refused, after: await result() }).toEqual({
-    before: { status: "pending" },
-    refused: [
-      "no pending attempt matches this callback — begin again",
-      "only a member of the mind, signed in, may answer this attempt",
-    ],
-    after: { status: "declined", error: "access_denied" },
-  });
-});
+    );
+    const recorded = await secret.recordOAuthError(PATH, { nonce, error, by: member });
+    expect({ before, refused, recorded, after: await result() }).toEqual({
+      before: { status: "pending" },
+      refused: [
+        "no pending attempt matches this callback — begin again",
+        "only a member of the mind, signed in, may answer this attempt",
+      ],
+      recorded: { status, next: null },
+      after: { status, error },
+    });
+  },
+);
 
 /** A vault with one secret and its rule. With `cloud`, the secret is one connected through the
  *  Cloud's client `github`, and the stack signs what it asks of that Cloud. */

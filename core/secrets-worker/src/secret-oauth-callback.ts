@@ -1,24 +1,29 @@
 import { withFacts } from "iterate/facts";
 import { SECRET_PATH } from "iterate/secret-placeholder";
 import type { SecretAnswer } from "iterate/workers";
-import { admitted, callbackPage, type PageCaller } from "./callback-page.ts";
+import { admitted, callbackPage, escaped, plainPage, type PageCaller } from "./callback-page.ts";
 import { parseSecretOAuthState } from "./secret-oauth.ts";
-import { notStartedHere, startedHere, withStartCleared } from "./secret-oauth-start.ts";
+import {
+  notStartedHere,
+  startedHere,
+  startLinkOf,
+  withStartCleared,
+} from "./secret-oauth-start.ts";
 
 type CompleteOAuth = (
   path: string,
   input: { code: string; nonce: string; by: PageCaller; cloudProof: string },
 ) => Promise<SecretAnswer<{ next: string | null; scopes: string[] }>>;
-type DeclineOAuth = (
+type RecordOAuthError = (
   path: string,
   input: { nonce: string; error: string; by: PageCaller },
-) => Promise<{ next: string | null }>;
+) => Promise<{ status: "declined" | "failed"; next: string | null }>;
 
 export async function secretOAuthCallback(
   request: Request,
   completeOAuth: CompleteOAuth,
   anyoneWithLinkOf: (path: string, nonce: string) => Promise<boolean>,
-  declineOAuth: DeclineOAuth,
+  recordOAuthError: RecordOAuthError,
 ): Promise<Response> {
   const url = new URL(request.url);
   const state = parseSecretOAuthState(url.searchParams.get("state"));
@@ -29,27 +34,29 @@ export async function secretOAuthCallback(
     return notStartedHere();
   const admission = admitted(request, await anyoneWithLinkOf(state.path, state.nonce));
   if (admission instanceof Response) return admission;
-  // Only `access_denied` is the person's no (RFC 6749 §4.1.2.1), which `declineOAuth` keeps; any
-  // other error is the provider's or the client's fault, and records nothing.
-  const denied = url.searchParams.get("error");
-  if (denied && denied !== "access_denied")
-    return callbackPage(400, `The provider could not authorize: ${denied}`);
-  if (denied) {
-    let declined: Awaited<ReturnType<DeclineOAuth>>;
+  const providerError = url.searchParams.get("error");
+  if (providerError) {
+    let ended: Awaited<ReturnType<RecordOAuthError>>;
     try {
-      declined = await declineOAuth(state.path, {
+      ended = await recordOAuthError(state.path, {
         nonce: state.nonce,
-        error: denied,
+        error: providerError,
         by: admission.by,
       });
     } catch (error) {
       return callbackPage(400, error instanceof Error ? error.message : String(error));
     }
-    return withStartCleared(
-      declined.next
-        ? seeOther(declined.next)
-        : callbackPage(200, "You declined. You can close this tab."),
-      { start, path: state.path, nonce: state.nonce },
+    if (ended.status === "declined")
+      return withStartCleared(
+        ended.next
+          ? seeOther(ended.next)
+          : callbackPage(200, "You declined. You can close this tab."),
+        { start, path: state.path, nonce: state.nonce },
+      );
+    const again = new URL(startLinkOf(url.origin, state.path, state.nonce));
+    return plainPage(
+      400,
+      `<p role="alert" data-type="error">${escaped(`The provider could not connect the account. It answered: ${providerError}`)}</p><p><a href="${escaped(again.pathname + again.search)}">Try again</a></p>`,
     );
   }
   const code = url.searchParams.get("code");

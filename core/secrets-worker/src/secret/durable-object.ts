@@ -154,12 +154,12 @@ export const APPROVED = "events.iterate.com/secret/request-approved";
 export const REJECTED = "events.iterate.com/secret/request-rejected";
 export const RULE_CONFIGURED = "events.iterate.com/secret/approval-rule-configured";
 
-// `basedOn`: the version the attempt began on; a write since ends it. `denied`: the provider's
-// `error` when the person declined (`declineOAuth`).
+// `basedOn`: the version the attempt began on; a write since ends it. `ended`: the provider's
+// `error` when its callback came with one (`recordOAuthError`).
 type PendingAttempt = PendingSecretOAuth & {
   basedOn: number;
   authorizationUrl: string;
-  denied?: { error: string; at: number };
+  ended?: { status: "declined" | "failed"; error: string; at: number };
 };
 
 type Completed = {
@@ -1024,8 +1024,8 @@ export class SecretDurableObject extends DurableObject<Env> {
     const nonce = String(input?.nonce || "");
     const pending = this.ctx.storage.kv.get<PendingAttempt>("pending");
     if (pending?.nonce === nonce && pending.until > Date.now())
-      return pending.denied
-        ? { status: "declined", error: pending.denied.error }
+      return pending.ended
+        ? { status: pending.ended.status, error: pending.ended.error }
         : { status: "pending" };
     const completed = this.ctx.storage.kv.get<Completed>("completed");
     if (completed?.nonce !== nonce || completed.version !== this.#version())
@@ -1037,14 +1037,15 @@ export class SecretDurableObject extends DurableObject<Env> {
     };
   }
 
-  /** THE PERSON SAID NO AT THE PROVIDER: its callback came with `error=access_denied` (RFC 6749
-   *  §4.1.2.1). The attempt keeps the refusal, so `oauthResult` says `declined` at once rather than
-   *  `pending` until the attempt runs out. The attempt stays: a consent on the same link later still
-   *  completes it. Who may decline is who may complete. */
-  async declineOAuth(
+  /** THE PROVIDER'S CALLBACK CAME WITH `error` (RFC 6749 §4.1.2.1). `access_denied` is the person's
+   *  no: `declined`. Any other error is the provider's or the client's fault: `failed`. The attempt
+   *  keeps it, so `oauthResult` says so at once rather than `pending` until the attempt runs out.
+   *  The attempt stays: a consent on the same link later still completes it. Who may end it so is
+   *  who may complete it. */
+  async recordOAuthError(
     path: string,
     input: { nonce: string; error: string; by: PageCaller },
-  ): Promise<{ next: string | null }> {
+  ): Promise<{ status: "declined" | "failed"; next: string | null }> {
     this.#pathOf(path);
     const pending = this.ctx.storage.kv.get<PendingAttempt>("pending");
     if (!pending || pending.nonce !== input.nonce || pending.until <= Date.now())
@@ -1053,11 +1054,12 @@ export class SecretDurableObject extends DurableObject<Env> {
       throw new Error("only a member of the mind, signed in, may answer this attempt");
     // the provider's word, from a URL: kept short
     const error = String(input.error).slice(0, 200);
+    const status = error === "access_denied" ? "declined" : "failed";
     this.ctx.storage.kv.put<PendingAttempt>("pending", {
       ...pending,
-      denied: { error, at: Date.now() },
+      ended: { status, error, at: Date.now() },
     });
-    return { next: pending.options.next };
+    return { status, next: pending.options.next };
   }
 
   // A stale or foreign callback fails without touching the live attempt.

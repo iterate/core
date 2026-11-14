@@ -172,7 +172,7 @@ export type SecretDescription = {
 export type SecretOAuthResult =
   | { status: "pending" }
   | { status: "complete"; scopes: string[]; account?: { id: string; name: string | null } }
-  | { status: "declined"; error: string }
+  | { status: "declined" | "failed"; error: string }
   | { status: "unavailable" };
 
 /** The secret's object refuses a verb not on the list, and checks each input, which arrives untyped. */

@@ -124,7 +124,7 @@ export const notStartedHere = () =>
     "This sign-in was not started in this browser, or it already finished. Open the link you were given again, in this browser.",
   );
 
-// Only on a completed attempt: a failed one keeps the cookie, so a refreshed tab can retry.
+// Only on a completed or declined attempt: a failed one keeps the cookie, so a refreshed tab can retry.
 export async function withStartCleared(
   response: Response,
   { start, path, nonce }: { start: string; path: string; nonce: string },
