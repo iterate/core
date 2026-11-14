@@ -108,6 +108,47 @@ void test("a config that asks for the mind's Cloudflare token is one the stack m
   assert.equal((await loadedFromFile({ ...stack, cloudflareToken: true })).cloudflareToken, true);
 });
 
+const { domain: _, ...noDomain } = stack;
+
+void test("a stack on a Free account with no domain yet is one the stack may keep in its state store, and reads back the same", async () => {
+  const loaded = await loadedFromFile({
+    ...noDomain,
+    cloudflarePlan: "free",
+    mind: { sandboxImage: "later" },
+    cloudflareToken: true,
+  });
+  assert.equal(loaded.domain, undefined);
+  assert.equal(loaded.cloudflarePlan, "free");
+  assert.deepEqual(await loadedFromFile(storedConfigOf(loaded)), loaded);
+  // the deploy after the card and the domain: the same config with the domain, without the plan,
+  // and with its sandboxes still to come
+  const { cloudflarePlan: _plan, ...paid } = { ...loaded, domain: "mind.example" };
+  assert.equal(MindConfig.parse(paid).mind?.sandboxImage, "later");
+});
+
+void test("a Free account takes no telemetry, no provided mind, and its sandboxes said to come later", () => {
+  const free = { ...noDomain, cloudflarePlan: "free", mind: { sandboxImage: "later" } };
+  for (const refused of [
+    { ...free, telemetry: true },
+    { ...free, domain: "mind.example", mind: { provided: true } },
+    { ...free, mind: { sandboxImage: "published" } },
+    { ...free, mind: { sandboxImage: "managed" } },
+    // no image named: the deploy after the card would build one with Docker
+    { ...free, mind: {} },
+    { ...noDomain, cloudflarePlan: "free" },
+    { ...free, cloudflarePlan: "paid" },
+  ])
+    assert.equal(MindConfig.safeParse(refused).success, false, JSON.stringify(refused));
+  for (const taken of [free, { ...stack, ...free }])
+    assert.equal(MindConfig.safeParse(taken).success, true, JSON.stringify(taken));
+});
+
+void test("a stack with no domain has no mail and no provided mind: both live at the domain", () => {
+  assert.equal(MindConfig.safeParse({ ...noDomain, mail: true }).success, false);
+  assert.equal(MindConfig.safeParse({ ...noDomain, mind: { provided: true } }).success, false);
+  assert.equal(MindConfig.safeParse(noDomain).success, true);
+});
+
 void test("a mind whose sandboxes come later is one the stack may keep in its state store, and reads back the same", async () => {
   const loaded = await loadedFromFile({ ...stack, mind: { sandboxImage: "later" } });
   assert.equal(loaded.mind?.sandboxImage, "later");

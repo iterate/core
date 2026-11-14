@@ -12,10 +12,14 @@ const WRITTEN_BY_EMAIL_SENDING = "v=DMARC1; p=reject;";
 
 /** The stack's domain for the step: the one given with `--domain`, else the config's. `destroy`
  *  gives it, read before Alchemy's destroy: a stack deployed with no config file keeps its config
- *  in its state, and the destroy clears that, so the config cannot be read afterwards. */
-export async function domainFor(argv: readonly string[], configDomain: () => Promise<string>) {
+ *  in its state, and the destroy clears that, so the config cannot be read afterwards. An empty
+ *  `--domain` is a stack with no domain yet. */
+export async function domainFor(
+  argv: readonly string[],
+  configDomain: () => Promise<string | undefined>,
+) {
   const at = argv.indexOf("--domain");
-  return (at >= 0 && argv[at + 1]) || configDomain();
+  return at >= 0 ? argv[at + 1] || undefined : configDomain();
 }
 
 /** Removes `_dmarc.<domain>` when it is as Email Sending wrote it, after a destroy: nothing goes

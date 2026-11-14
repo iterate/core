@@ -58,6 +58,11 @@ export const mindStack = (config: MindConfig) =>
     const names = resourceNamesOf(config.name);
     const domain = config.domain;
     const provided = config.mind?.provided === true;
+    // A Free account refuses these at the upload of a Worker that binds them (src/config.ts
+    // `cloudflarePlan`): the stack leaves them out until the account has Workers Paid and R2.
+    const paid = config.cloudflarePlan !== "free";
+    // No domain yet: no Worker gets one, and nothing routes to the stack.
+    const domainEnv: { DOMAIN: string } | Record<string, never> = domain ? { DOMAIN: domain } : {};
     const stage = yield* Stage;
     if (stage !== config.name)
       return yield* refuse(
@@ -108,7 +113,7 @@ export const mindStack = (config: MindConfig) =>
 
     const authSettings = authSettingsOf(config);
     // Parsed here, so a config auth would refuse fails the deploy, not the first request.
-    authConfigOf(domain, authSettings);
+    if (domain) authConfigOf(domain, authSettings);
     const db = yield* Cloudflare.D1.Database("AuthDb", {
       name: names.authDb,
       migrations: storedPathOf(core("auth-worker/migrations")),
@@ -124,7 +129,7 @@ export const mindStack = (config: MindConfig) =>
       observability,
       workersDev: { enabled: false, previewsEnabled: false },
       env: {
-        DOMAIN: domain,
+        ...domainEnv,
         ...(config.cloud && { CLOUD_ORIGIN: config.cloud.origin }),
         AUTH_SETTINGS: JSON.stringify(authSettings),
         AUTH_SIGNING_KEY: signingKey.text,
@@ -149,12 +154,12 @@ export const mindStack = (config: MindConfig) =>
       codeUpdateStrategy: { mode: "immediate" },
       workersDev: { enabled: false, previewsEnabled: false },
       env: {
-        DOMAIN: domain,
+        ...domainEnv,
         ...(config.cloud && { CLOUD_ORIGIN: config.cloud.origin }),
         SECRETS_AT_REST_KEY: atRestKey,
         AUTH: Cloudflare.WorkerEntrypoint(auth, { entrypoint: "Auth" }),
         SECRET: Cloudflare.DurableObject("SECRET", { className: "SecretDurableObject" }),
-        LOADER: Cloudflare.Workers.WorkerLoader("LOADER"),
+        ...(paid && { LOADER: Cloudflare.Workers.WorkerLoader("LOADER") }),
         APPROVALS: Cloudflare.DurableObject("APPROVALS", { className: "ApprovalsIndex" }),
         ACTS: Cloudflare.DurableObject("ACTS", { className: "ActsGate" }),
       },
@@ -170,14 +175,17 @@ export const mindStack = (config: MindConfig) =>
         const mindKv = yield* Cloudflare.KV.Namespace("MindKv", {
           title: `${names.mind}-kv`,
         });
-        const artifacts = yield* Cloudflare.Artifacts.Namespace("ARTIFACTS", {
-          namespace: names.repos,
-        });
-        // A destroy empties the bucket first: R2 refuses to delete one that holds objects.
-        const bucket = yield* Cloudflare.R2.Bucket("FILES", {
-          name: names.files,
-          forceDestroy: true,
-        });
+        // Artifacts and R2: a Free account has neither.
+        const paidStorage = paid && {
+          ARTIFACTS: yield* Cloudflare.Artifacts.Namespace("ARTIFACTS", {
+            namespace: names.repos,
+          }),
+          // A destroy empties the bucket first: R2 refuses to delete one that holds objects.
+          FILES: yield* Cloudflare.R2.Bucket("FILES", {
+            name: names.files,
+            forceDestroy: true,
+          }),
+        };
         return yield* Cloudflare.Worker("Mind", {
           name: names.mind,
           main: core("mind-worker/src/worker.ts"),
@@ -188,14 +196,14 @@ export const mindStack = (config: MindConfig) =>
             flags: ["nodejs_compat", "allow_irrevocable_stub_storage"],
           },
           // One capnweb session or MCP run is one long invocation, and a cold load is CPU-bound.
-          limits: { subrequests: 1_000_000, cpuMs: 300_000 },
+          ...(paid && { limits: { subrequests: 1_000_000, cpuMs: 300_000 } }),
           observability,
           // Cloudflare defers moving Durable Objects onto new code for up to five minutes, while the
           // Worker in front of them already runs the new.
           codeUpdateStrategy: { mode: "immediate" },
           workersDev: { enabled: false, previewsEnabled: false },
           env: {
-            DOMAIN: domain,
+            ...domainEnv,
             MIND_NAME: config.mind?.name || config.name,
             MIND_TEMPLATE: config.mind?.template || "default",
             DOOR: Effect.map(
@@ -208,16 +216,15 @@ export const mindStack = (config: MindConfig) =>
               className: "IterateContextDurableObject",
             }),
             CF_VERSION_METADATA: Cloudflare.Workers.VersionMetadata(),
-            LOADER: Cloudflare.Workers.WorkerLoader("LOADER"),
+            ...(paid && { LOADER: Cloudflare.Workers.WorkerLoader("LOADER") }),
             MIND_KV: mindKv,
-            ARTIFACTS: artifacts,
-            FILES: bucket,
+            ...paidStorage,
             MIND_SIGNING_KEY: mindSigningKey,
             AI: Cloudflare.Workers.AI(),
             // An imageless Container gives the class its `ctx.container`; the image is a Container of
             // its own, which `ctx.container.images` holds under its name. With `later` the class
             // stays declared with no container: its storage is kept, and a later deploy with an
-            // image adds the containers to the same class.
+            // image adds the containers to the same class. A Free account's stack says `later`.
             SANDBOX_CONTAINER: Cloudflare.DurableObject("SandboxContainer", {
               containers:
                 config.mind?.sandboxImage === "later"
@@ -261,13 +268,15 @@ export const mindStack = (config: MindConfig) =>
         observability,
         codeUpdateStrategy: { mode: "immediate" } satisfies Cloudflare.WorkerCodeUpdateStrategy,
         workersDev: { enabled: false, previewsEnabled: false },
-        routes: [
-          { pattern: `${domain}/*`, zoneName: domain },
-          { pattern: `*.${domain}/*`, zoneName: domain },
-        ],
+        routes: domain
+          ? [
+              { pattern: `${domain}/*`, zoneName: domain },
+              { pattern: `*.${domain}/*`, zoneName: domain },
+            ]
+          : [],
       };
       const bindings = {
-        DOMAIN: domain,
+        ...domainEnv,
         AUTH: Cloudflare.WorkerEntrypoint(auth, { entrypoint: "Auth" }),
         SECRETS: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "Secrets" }),
         SECRET_USE: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "SecretUse" }),
@@ -309,6 +318,55 @@ export const mindStack = (config: MindConfig) =>
     if (declaredMind) yield* declaredMind;
     const boundary = yield* declaredBoundary;
 
+    const zone = domain ? yield* zonePart(domain) : undefined;
+    if (zone && config.mail) {
+      const routing = yield* Cloudflare.Email.Routing("EmailRouting", { zone: zone.id });
+      yield* Cloudflare.Email.CatchAll("EmailCatchAll", {
+        zone: routing.zoneId,
+        actions: [{ type: "worker", value: [boundary.workerName] }],
+      });
+      // Email Sending on the apex adds the bounce and DKIM records the boundary's `send_email` needs.
+      yield* Cloudflare.Email.SendingSubdomain("EmailSending", {
+        zoneId: zone.id,
+        name: zone.name,
+      });
+    }
+    // THE STACK'S ONE QUEUE OF CLOUDFLARE EVENTS, with the boundary as its one consumer
+    // (core/boundary-worker/src/cloudflare-events.ts): each event subscription of the stack feeds
+    // it, and a table there says what each message becomes on the mind. A stack has it when it
+    // has mail or a mind Worker of its own.
+    //
+    // The config repo's subscription is made by ../scripts/artifacts-subscriptions.ts after the
+    // deploy: Alchemy's subscriptions do not know Artifacts as a source.
+    if (config.mail || declaredMind) {
+      const cloudflareEvents = yield* Cloudflare.Queues.Queue("CloudflareEvents", {
+        name: names.cloudflareEvents,
+      });
+      // What became of each sent mail. Each failure becomes a fact on the mind's email log
+      // (core/boundary-worker/src/mail-outcomes.ts). Delivered and deferred mail is not asked for.
+      if (zone && config.mail)
+        yield* Cloudflare.Queues.Subscription("MailEventsSubscription", {
+          name: `${names.cloudflareEvents}-mail`,
+          source: { type: "email.sending", zoneId: zone.id, domain: zone.name },
+          events: ["message.bounced", "message.failed", "message.rejected", "message.complained"],
+          queueId: cloudflareEvents.queueId,
+        });
+      // Bounded: an event the mind does not take (a provided mind that is not connected) is retried
+      // a minute apart, ten times, then dropped; the boundary logs each failure.
+      yield* Cloudflare.Queues.Consumer("CloudflareEventsConsumer", {
+        queueId: cloudflareEvents.queueId,
+        scriptName: boundary.workerName,
+        settings: { maxRetries: 10, retryDelay: 60 },
+      });
+    }
+    // Alchemy keeps the output in the state store once a deploy succeeded: a deploy with no config file
+    // reads the config back from it (./config.ts `storedMindConfig`). No secret: `storedConfigOf`.
+    return { domain, boundary: boundary.workerName, config: storedConfigOf(config) };
+  });
+
+/** The zone of the stack's domain, with the two records that its routes fire on. */
+const zonePart = (domain: string) =>
+  Effect.gen(function* () {
     const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
     // A failed lookup is a defect: the body's error channel is ConfigError, and a rerun retries it.
     const zone = yield* Cloudflare.Zone.findZoneByName({ accountId, name: domain }).pipe(
@@ -326,47 +384,7 @@ export const mindStack = (config: MindConfig) =>
         content: "100::",
         proxied: true,
       });
-
-    if (config.mail) {
-      const routing = yield* Cloudflare.Email.Routing("EmailRouting", { zone: zone.id });
-      yield* Cloudflare.Email.CatchAll("EmailCatchAll", {
-        zone: routing.zoneId,
-        actions: [{ type: "worker", value: [boundary.workerName] }],
-      });
-      // Email Sending on the apex adds the bounce and DKIM records the boundary's `send_email` needs.
-      yield* Cloudflare.Email.SendingSubdomain("EmailSending", { zoneId: zone.id, name: domain });
-    }
-    // THE STACK'S ONE QUEUE OF CLOUDFLARE EVENTS, with the boundary as its one consumer
-    // (core/boundary-worker/src/cloudflare-events.ts): each event subscription of the stack feeds
-    // it, and a table there says what each message becomes on the mind. A stack has it when it
-    // has mail or a mind Worker of its own.
-    //
-    // The config repo's subscription is made by ../scripts/artifacts-subscriptions.ts after the
-    // deploy: Alchemy's subscriptions do not know Artifacts as a source.
-    if (config.mail || declaredMind) {
-      const cloudflareEvents = yield* Cloudflare.Queues.Queue("CloudflareEvents", {
-        name: names.cloudflareEvents,
-      });
-      // What became of each sent mail. Each failure becomes a fact on the mind's email log
-      // (core/boundary-worker/src/mail-outcomes.ts). Delivered and deferred mail is not asked for.
-      if (config.mail)
-        yield* Cloudflare.Queues.Subscription("MailEventsSubscription", {
-          name: `${names.cloudflareEvents}-mail`,
-          source: { type: "email.sending", zoneId: zone.id, domain },
-          events: ["message.bounced", "message.failed", "message.rejected", "message.complained"],
-          queueId: cloudflareEvents.queueId,
-        });
-      // Bounded: an event the mind does not take (a provided mind that is not connected) is retried
-      // a minute apart, ten times, then dropped; the boundary logs each failure.
-      yield* Cloudflare.Queues.Consumer("CloudflareEventsConsumer", {
-        queueId: cloudflareEvents.queueId,
-        scriptName: boundary.workerName,
-        settings: { maxRetries: 10, retryDelay: 60 },
-      });
-    }
-    // Alchemy keeps the output in the state store once a deploy succeeded: a deploy with no config file
-    // reads the config back from it (./config.ts `storedMindConfig`). No secret: `storedConfigOf`.
-    return { domain, boundary: boundary.workerName, config: storedConfigOf(config) };
+    return { id: zone.id, name: domain };
   });
 
 /** The mind's own API token of its account, bound to the mind Worker. Its value stays in the

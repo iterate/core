@@ -33,7 +33,7 @@ if (!stage || !token) {
   process.exit(2);
 }
 const config = await loadMindConfig(stage);
-if (!PROTOTYPES.includes(config.domain)) {
+if (!config.domain || !PROTOTYPES.includes(config.domain)) {
   console.error(
     `Stopped: ${config.domain} is not a prototype this proof may turn (${PROTOTYPES.join(", ")}). Nothing was changed.`,
   );

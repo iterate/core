@@ -109,6 +109,11 @@ void test("a stack with no config file: the domain that destroy read first is us
     await domainFor(["node", "script", "--stage", "one"], async () => "file.example"),
     "file.example",
   );
+  // a stack with no domain yet: destroy gives an empty one, and the cleared state is not read
+  assert.equal(
+    await domainFor(["node", "script", "--domain", "", "--stage", "one"], cleared),
+    undefined,
+  );
 });
 
 void test("`pnpm run destroy` reads the domain before Alchemy's destroy and gives it to the step after", () => {

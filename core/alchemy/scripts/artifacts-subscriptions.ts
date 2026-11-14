@@ -22,8 +22,15 @@ if (!token) {
   );
   process.exit(1);
 }
+const removing = process.argv.includes("--remove");
+if (config.cloudflarePlan === "free" && !removing) {
+  console.log(
+    'The account has no Workers Paid yet (cloudflarePlan "free"), which Artifacts needs: the config repo has no subscription yet.',
+  );
+  process.exit(0);
+}
 const input = { accountId: config.accountId, name: config.name, call: callWithToken(token) };
-const { failed, lines } = process.argv.includes("--remove")
+const { failed, lines } = removing
   ? await removeArtifactsSubscription(input)
   : await ensureArtifactsSubscription(input);
 for (const line of lines) console.log(line);

@@ -43,12 +43,21 @@ const MindConfigFields = z.strictObject({
   // answer as the stack of `example.co.uk` (or of `co.uk` from `iterate.co.uk`) to iterate
   // Cloud and to anything else that reads `https://iterate.<domain>/keys/stack.json`.
   // `iterate.com` is a domain like any other: no domain follows its first label.
+  // Absent: a stack whose domain is not bought yet. It has no routes, DNS records or mail, so
+  // nothing reaches it; a deploy with the domain adds them.
   domain: z
     .string()
     .refine(
       (domain) => !/^iterate\.[^.]+\../i.test(domain),
       "not a domain named iterate.<domain>: that name is the platform's host of <domain>",
-    ),
+    )
+    .optional(),
+  // `free`: the account has no Workers Paid yet, and no R2. The stack then makes what a Free account
+  // takes and leaves out what it refuses: Dynamic Workers (`LOADER`), the mind's CPU and
+  // subrequest limits, Artifacts, the files bucket, Pipelines and Analytics Engine (telemetry), and
+  // the containers (it needs `mind.sandboxImage: "later"`). Its mind cannot run code yet. A deploy
+  // without it, once the account has Workers Paid and R2, adds them to the same stack.
+  cloudflarePlan: z.literal("free").optional(),
   // Every stack takes the apex and every name under it. A stack's stored config may still say
   // so with this key: it is read and not kept.
   hostnames: z.literal("all").optional(),
@@ -125,9 +134,34 @@ export const MindConfig = MindConfigFields.refine(
     path: ["cloudflareToken"],
     error: "a provided mind runs elsewhere: its stack has no mind Worker to hold the token",
   })
+  .refine(({ domain, mail }) => domain || !mail, {
+    path: ["mail"],
+    error: "the stack's mail is the mail of its domain: give the domain, or leave mail out",
+  })
+  .refine(({ domain, mind }) => domain || !mind?.provided, {
+    path: ["domain"],
+    error: "a provided mind dials its stack at iterate.<domain>: give the domain",
+  })
+  .refine(({ cloudflarePlan, telemetry }) => !(cloudflarePlan && telemetry), {
+    path: ["telemetry"],
+    error:
+      'telemetry needs Pipelines and R2, which a Free account does not have: leave it out until the account has Workers Paid (no cloudflarePlan: "free")',
+  })
+  .refine(({ cloudflarePlan, mind }) => !(cloudflarePlan && mind?.provided), {
+    path: ["mind", "provided"],
+    error:
+      "a provided mind's boundary needs the CPU and subrequest limits of Workers Paid for its long /provide session",
+  })
+  // Said, not implied: the deploy after the card drops `cloudflarePlan`, and a config with no
+  // image would then build one with Docker. The image comes later, by its own deploy.
+  .refine(({ cloudflarePlan, mind }) => !cloudflarePlan || mind?.sandboxImage === "later", {
+    path: ["mind", "sandboxImage"],
+    error: 'a Free account has no Containers: its sandboxes come later (mind.sandboxImage "later")',
+  })
   .refine(
     ({ domain, mail }) =>
       !(mail instanceof Object) ||
+      !domain ||
       !`.${mail.forwardTo.split("@")[1]}`.toLowerCase().endsWith(`.${domain.toLowerCase()}`),
     {
       path: ["mail", "forwardTo"],
@@ -151,6 +185,7 @@ const PUBLIC_FIELDS = new Set([
   "name",
   "accountId",
   "domain",
+  "cloudflarePlan",
   "mind.provided",
   "mind.name",
   "mind.template",

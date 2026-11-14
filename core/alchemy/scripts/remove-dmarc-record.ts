@@ -10,7 +10,8 @@ import { domainFor, removeDmarcRecord } from "../src/dmarc-record.ts";
 
 const name = stageOf(process.argv);
 if (process.argv.includes("--print-domain")) {
-  console.log((await loadMindConfig(name)).domain);
+  // nothing for a stack with no domain yet: the step after the destroy then has none to look at
+  console.log((await loadMindConfig(name)).domain ?? "");
   process.exit(0);
 }
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -22,6 +23,10 @@ if (!name || !accountId || !token) {
   process.exit(1);
 }
 const domain = await domainFor(process.argv, async () => (await loadMindConfig(name)).domain);
+if (!domain) {
+  console.log(`The stack ${name} has no domain: it has no zone, so no DMARC record.`);
+  process.exit(0);
+}
 const { failed, lines } = await removeDmarcRecord({
   accountId,
   name,

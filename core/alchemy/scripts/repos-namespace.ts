@@ -8,6 +8,10 @@ async function reposNamespace() {
       "CLOUDFLARE_API_TOKEN is not set: the Artifacts namespace is made with it, as the deploy is",
     );
   if (config.mind?.provided) return console.log("the mind is provided: no Artifacts namespace");
+  if (config.cloudflarePlan === "free")
+    return console.log(
+      'the account has no Workers Paid yet (cloudflarePlan "free"), which Artifacts needs: no Artifacts namespace',
+    );
   const { accountId } = config;
   const namespace = resourceNamesOf(config.name).repos;
   const api = `https://api.cloudflare.com/client/v4/accounts/${accountId}/artifacts/namespaces`;

@@ -474,7 +474,46 @@ least a deploy needs.
     Container-enabled", `src/deploy-until-bound.ts`).
 
     `"later"` takes away the containers alone. The mind Worker also uses Dynamic Workers
-    (`LOADER`), Artifacts and a CPU limit, which Cloudflare also gives on Workers Paid alone.
+    (`LOADER`), Artifacts and a CPU limit, which Cloudflare also gives on Workers Paid alone:
+    `cloudflarePlan: "free"` (below) leaves those out too.
+
+## Before the domain and before Workers Paid
+
+A stack can deploy before its account has Workers Paid and before its domain is bought. The mind
+then exists, but nothing reaches it and it cannot run code. A deploy with the domain and without
+`cloudflarePlan` later adds what waited to the same stack, and replaces nothing. On a dev stack
+that deploy took 38.7 seconds: it made the files bucket and two DNS records, updated the four
+Workers, and kept every id and value from before.
+
+```json
+{
+  "name": "ada",
+  "accountId": "…",
+  "cloudflarePlan": "free",
+  "mind": { "sandboxImage": "later" },
+  "auth": { "login": { … } }
+}
+```
+
+- No `domain`: the stack has no routes, no DNS records and no mail, and its Workers have no
+  `DOMAIN`. Mail, and a provided mind, need the domain: the config refuses them without it.
+- `cloudflarePlan: "free"`: the stack makes what a Free account takes, and leaves out what it
+  refuses at a Worker's upload:
+  - Dynamic Workers (`LOADER`) on the secrets and mind Workers: code 10195;
+  - the mind Worker's CPU and subrequest limits: code 100328;
+  - Artifacts (`ARTIFACTS`, the repos' namespace and the config repo's subscription): code 10403;
+  - the files bucket (`FILES`): R2 is off until a card is on the account (code 10042);
+  - the containers: the config must say `mind.sandboxImage: "later"`, so that the deploy without
+    `cloudflarePlan` keeps them for later, and does not build an image with Docker.
+
+  The config refuses telemetry (Pipelines, R2 and Analytics Engine), a provided mind (its
+  boundary needs the limits) and a sandbox image with it.
+
+What it makes: the state store, the auth Worker's D1 database with its migrations and its KV, the
+mind's KV, the four Workers in their final bundles, every Durable Object class (the sandboxes'
+with no container, so `NO_SANDBOXES_YET` holds), the queue of Cloudflare events and its
+consumer, and the mind's Cloudflare token when the config asks for it. The answers of a Free
+account to each of these are in `tasks/iterate-cloud/designs/phased-deploy.md`.
 
 ## Telemetry
 
