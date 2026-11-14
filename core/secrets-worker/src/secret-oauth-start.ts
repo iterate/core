@@ -36,6 +36,7 @@ type StartTarget = {
   urls: string[];
   use: Parameters<typeof useLines>[0];
   anyoneWithLink: boolean;
+  straightToProvider?: true;
   // For a client of iterate Cloud's: the provider's `state` is this URL as base64url, a dot, then
   // the attempt's own state, which iterate Cloud's callback relies on.
   returnTo?: string;
@@ -64,13 +65,13 @@ export async function secretOAuthStart(
   const start = began ? given : base64url(crypto.getRandomValues(new Uint8Array(16)));
   // as long as an attempt may live: secret-oauth.ts SECRET_OAUTH_TTL_MS
   const bound = `${await startCookieNameOf(start, path, nonce)}=${start}; ${cookieAttributes}; Max-Age=3600`;
-  // ONE PAGE TO CONFIRM ON. A client of iterate Cloud's has it at the Cloud, before the provider,
-  // so this browser is bound to the attempt here and goes straight on. Any other client has it
-  // here. The Cloud's page does not know how the mind will use the secret. So when the mind asked
-  // for more than the usual (the secret in a URL, signing with it, lending it), this page says so
-  // first, and the Cloud's page comes after it.
+  // ONE PAGE TO CONFIRM ON: this one, the Cloud's (`beginAt`) or the provider's
+  // (`straightToProvider`; core/lib/src/api.ts says when). For the other two, this browser is bound
+  // to the attempt here and goes straight on. Neither knows how the mind will use the secret, so an
+  // unusual use is said here first.
   const unusual = useLines(target.use, false);
-  if (!began && (!target.beginAt || unusual)) {
+  const confirmedElsewhere = !!target.beginAt || target.straightToProvider === true;
+  if (!began && (!confirmedElsewhere || unusual)) {
     url.searchParams.set("start", start);
     const page = plainPage(
       200,

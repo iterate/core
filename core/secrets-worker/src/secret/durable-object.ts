@@ -994,19 +994,21 @@ export class SecretDurableObject extends DurableObject<Env> {
     urls: string[];
     use: SecretUse;
     anyoneWithLink: boolean;
+    straightToProvider?: true;
     returnTo?: string;
     beginAt?: string;
   } | null> {
     this.#pathOf(path);
     const pending = this.ctx.storage.kv.get<PendingAttempt>("pending");
     if (!pending || pending.nonce !== input.nonce || pending.until <= Date.now()) return null;
-    const { urls, use, anyoneWithLink, cloud } = pending.options;
+    const { urls, use, anyoneWithLink, straightToProvider, cloud } = pending.options;
     const callback = `${platformOriginOf(this.env.DOMAIN)}${SECRET_OAUTH_CALLBACK_PATH}`;
     return {
       authorizationUrl: pending.authorizationUrl,
       urls,
       use,
       anyoneWithLink,
+      straightToProvider,
       // the Cloud's page says which accounts' installations the mind asks for
       ...(cloud && {
         returnTo: callback,

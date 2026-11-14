@@ -936,6 +936,25 @@ test.for([
   },
 );
 
+test("an attempt begun straightToProvider tells the start link so, and one begun without it does not", async () => {
+  const { secret } = await vault();
+  const startTarget = async (options: object) => {
+    const { nonce } = z.object({ result: z.object({ nonce: z.string() }) }).parse(
+      await secret.secret(PATH, "beginOAuth", {
+        authorizationEndpoint: "https://provider.example/authorize",
+        tokenEndpoint: "https://provider.example/token",
+        clientId: "client",
+        ...options,
+      }),
+    ).result;
+    return await secret.oauthStartTarget(PATH, { nonce });
+  };
+  expect([
+    (await startTarget({ straightToProvider: true }))?.straightToProvider,
+    await startTarget({}),
+  ]).toEqual([true, expect.not.objectContaining({ straightToProvider: expect.anything() })]);
+});
+
 /** A vault with one secret and its rule. With `cloud`, the secret is one connected through the
  *  Cloud's client `github`, and the stack signs what it asks of that Cloud. */
 async function vault(

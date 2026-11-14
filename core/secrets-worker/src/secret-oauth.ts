@@ -36,6 +36,7 @@ export type NormalizedSecretOAuthOptions = {
   account: AccountLookup | null;
   use: SecretUse;
   anyoneWithLink: boolean;
+  straightToProvider?: true;
   // `install`: a GitHub App's install page, which names no redirect URI and takes no PKCE challenge.
   // `beginEndpoint`: the Cloud's page the person confirms on, before the provider's.
   // `accounts`: the accounts whose installations the mind asks to be connected to.
@@ -194,6 +195,7 @@ export function normalizeSecretOAuth(
     account,
     use: secretUseOf(options),
     anyoneWithLink: options.anyoneWithLink === true,
+    ...(options.straightToProvider === true && { straightToProvider: true }),
     ...(cloud && {
       cloud: {
         name: cloud.name,

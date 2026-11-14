@@ -38,6 +38,27 @@ test("a client of the mind's own shows the page to confirm on, and goes to the p
   });
 });
 
+test("a client of the mind's own begun straightToProvider has its one page at the provider: this browser is bound here and goes straight on, unless the use is unusual", async () => {
+  const straight = { ...target, straightToProvider: true as const };
+  const on = await secretOAuthStart(navigation(link), async () => straight);
+  const to = new URL(on.headers.get("location")!);
+  expect([on.status, to.origin + to.pathname]).toEqual([302, "https://provider.example/authorize"]);
+  const state = parseSecretOAuthState(to.searchParams.get("state"))!;
+  expect(state).toMatchObject({ path: "/secrets/github", nonce: "n-1" });
+  const [cookie] = on.headers.get("set-cookie")!.split(";");
+  const callback = (cookies: string) =>
+    startedHere(navigation(`${PLATFORM}/x`, cookies), state.start!, "/secrets/github", "n-1");
+  expect([await callback(cookie!), await callback("")]).toEqual([true, false]);
+  const preview = await secretOAuthStart(new Request(link), async () => straight);
+  expect([preview.status, preview.headers.get("set-cookie")]).toEqual([200, null]);
+  const unusual = { ...straight, use: { ...target.use, placement: "url" as const } };
+  const page = await secretOAuthStart(navigation(link), async () => unusual);
+  expect([page.status, await page.text()]).toEqual([
+    200,
+    expect.stringContaining("It may be placed in a URL"),
+  ]);
+});
+
 test("a client of iterate Cloud's has its one page at the Cloud: this browser is bound here and goes straight on", async () => {
   const cloud = {
     ...target,

@@ -516,6 +516,11 @@ export type SecretOAuthOptions = {
   /** Whoever holds the start link may consent, signed in or not; the page says so. Without it, only
    *  a member of the mind, signed in. */
   anyoneWithLink?: boolean;
+  /** The start link goes straight to the provider, whose consent is then the one page the person
+   *  confirms on. Without it, the platform's page comes first and the person clicks Continue. That
+   *  page still comes first when the secret has an unusual use (`placement: "url"`, `operations`,
+   *  `lendTo`). With `client`, the Cloud's own page already comes in its place. */
+  straightToProvider?: boolean;
 } & SecretUses;
 
 /** An `R2Object` as `itx.r2` answers it: every field the class carries, as data — the key with the
