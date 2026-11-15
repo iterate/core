@@ -2,6 +2,15 @@ import { codedError } from "iterate/lib";
 
 type UserRecord = { id: string; email: string };
 
+/** THE PERSON OF A WAY THAT CHECKS NO ADDRESS (./cloudflare-sign-in.ts), by its subject alone. An
+ *  address joins two ways in one person only when both ways checked it. So this person's row holds
+ *  `<provider>:<subject>` in `email`, which equals no address: a new subject is a new person,
+ *  whatever address it gives, and a later sign-in that proves the address is someone else. A
+ *  subject linked before keeps its person (../migrations/0012). The record's `email` is that key or
+ *  a checked address, so a session takes the address from the way itself. */
+export const linkBySubject = (db: D1Database, input: { provider: string; subject: string }) =>
+  linkIdentity(db, { ...input, email: `${input.provider}:${input.subject}` });
+
 // One batch, so two first sign-ins at once resolve to one person. `unique (provider, user_id)`
 // refuses a second subject of one provider for a person, and a refused link reads back as no one.
 export async function linkIdentity(

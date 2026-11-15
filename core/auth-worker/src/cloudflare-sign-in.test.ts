@@ -2,6 +2,8 @@
 // Worker's own endpoints (the OAuth library included) against a store in memory; Cloudflare is a
 // stubbed `fetch`. The guard is tested in core/lib/src/sdk/auth.test.ts: here, every grant keeps
 // the way it began by.
+import { readdirSync, readFileSync } from "node:fs";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { calculatePKCECodeChallenge, generateRandomCodeVerifier } from "oauth4webapi";
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
@@ -13,7 +15,7 @@ import { authConfigOf } from "./config.ts";
 import { browserSessionsFake } from "./browser-sessions-fake.ts";
 import { cloudflareSessionOf, flowCookie, sessionCookie, sessionOf } from "./cookies.ts";
 import type { Env } from "./env.ts";
-import { standingOf } from "./members.ts";
+import { isMember, memberHoldsPasskey, standingOf } from "./members.ts";
 import {
   hostCallbackOf,
   hostClientOf,
@@ -22,6 +24,7 @@ import {
   tokenIdentity,
 } from "./oauth.ts";
 import { signOutResponse } from "./sign-in.ts";
+import { linkIdentity } from "./users.ts";
 
 const DOMAIN = "example.com";
 const ISSUER = `https://iterate.${DOMAIN}`;
@@ -109,9 +112,13 @@ test("the consent asks Cloudflare for the person's details alone, and the token 
     "REFRESH-SECRET",
   ]);
 
-  // the person is the Cloudflare user, and no token is in what the browser gets
+  // the person is the Cloudflare user, keyed by its id and not by the address (./users.ts
+  // `linkBySubject`), and no token is in what the browser gets
   expect([...people]).toEqual([
-    ["cloudflare:cf-user-1", { id: expect.stringMatching(/^user_/), email: "ada@example.org" }],
+    [
+      "cloudflare:cf-user-1",
+      { id: expect.stringMatching(/^user_/), email: "cloudflare:cf-user-1" },
+    ],
   ]);
   const cookies = answer.headers.getSetCookie().join("\n");
   expect(cookies).not.toMatch(/ACCESS-SECRET|REFRESH-SECRET/);
@@ -533,6 +540,70 @@ test("an app that takes Cloudflare alone, on a stack whose secret is missing, le
   expect(pathOf(await either.ask(await passkeyCookie(env)))).toBe(`${CLOUD}/.iterate/callback`);
 });
 
+test("the address Cloudflare gives links no one: a new Cloudflare user is a person of its own, in either order", async () => {
+  const env = stackWithPeople();
+  // the owner signed in here with a mailed code; then a Cloudflare user gives the owner's address
+  const owner = await mailed(env, OWNER);
+  cloudflareOf({ success: true, result: { id: "cf-someone", email: OWNER } });
+  const someone = await cloudflareSessionAfter(env);
+  expect(someone).toEqual({
+    userId: expect.stringMatching(/^user_/),
+    email: OWNER,
+    method: "cloudflare",
+  });
+  expect(someone).not.toMatchObject({ userId: owner.id });
+  expect(await mailed(env, OWNER)).toEqual(owner);
+
+  // a Cloudflare user first, then a code mailed to the address it gave: two people
+  cloudflareOf({ success: true, result: { id: "cf-ada", email: "ada@example.org" } });
+  const ada = await cloudflareSessionAfter(env);
+  expect(await mailed(env, "ada@example.org")).not.toMatchObject({ id: ada.userId });
+  // and the Cloudflare user is the same person at its next sign-in
+  expect(await cloudflareSessionAfter(env)).toEqual(ada);
+});
+
+test("a Cloudflare user linked before keeps its person; an address that only Cloudflare gave links no one now", async () => {
+  // as a stack kept them before: the owner's mailed code and Cloudflare user, linked by the
+  // address, and Ada, who signed in at Cloudflare alone
+  const env = stackWithPeople((db) =>
+    db.exec(`
+      insert into users (id, email) values ('user_owner', '${OWNER}'), ('user_ada', 'ada@example.org');
+      insert into identities (provider, subject, user_id) values
+        ('email', '${OWNER}', 'user_owner'),
+        ('cloudflare', 'cf-owner', 'user_owner'),
+        ('cloudflare', 'cf-ada', 'user_ada');
+    `),
+  );
+  cloudflareOf({ success: true, result: { id: "cf-owner", email: OWNER } });
+  expect(await cloudflareSessionAfter(env)).toMatchObject({ userId: "user_owner", email: OWNER });
+  cloudflareOf({ success: true, result: { id: "cf-ada", email: "ada@example.org" } });
+  expect(await cloudflareSessionAfter(env)).toMatchObject({
+    userId: "user_ada",
+    email: "ada@example.org",
+  });
+  expect(await mailed(env, OWNER)).toMatchObject({ id: "user_owner" });
+  expect(await mailed(env, "ada@example.org")).not.toMatchObject({ id: "user_ada" });
+});
+
+test("membership does not change: the member keeps the address and the passkey, and a Cloudflare user with that address is no member", async () => {
+  const env = stackWithPeople((db) =>
+    db.exec(`
+      insert into users (id, email) values ('user_owner', '${OWNER}');
+      insert into identities (provider, subject, user_id) values ('email', '${OWNER}', 'user_owner');
+      insert into keys (id, user_id, public_key, format, credential_id, label, added_via, added_by, added_at)
+        values ('key-1', 'user_owner', 'k', 'webauthn', 'c', 'laptop', 'keys-page', 'user_owner', 1);
+    `),
+  );
+  const member = { userId: "user_owner", email: OWNER, method: "passkey" } as const;
+  cloudflareOf({ success: true, result: { id: "cf-someone", email: OWNER } });
+  const someone = await cloudflareSessionAfter(env);
+  expect(await standingOf(env, someone)).toBe("not-member");
+  expect(await standingOf(env, member)).toBe("member");
+  expect(await isMember(env, OWNER)).toBe(true);
+  expect(await memberHoldsPasskey(env, OWNER)).toBe(true);
+  expect(await mailed(env, OWNER)).toMatchObject({ id: "user_owner" });
+});
+
 /** A stack in memory: the OAuth library's store, and the few rows the sign-in reads. `people`
  *  holds each Cloudflare user id this stack linked. */
 function stackOf({
@@ -614,6 +685,59 @@ function stackOf({
     },
   } as unknown as Env;
   return { env, kv, people, sessions };
+}
+
+/** A stack whose people are in SQLite in memory, made by the Worker's own migrations. `before`
+ *  writes rows as a stack kept them before migrations/0012. */
+function stackWithPeople(before?: (db: DatabaseSync) => void): Env {
+  const db = new DatabaseSync(":memory:");
+  const folder = new URL("../migrations/", import.meta.url).pathname;
+  const names = readdirSync(folder).sort();
+  const migrate = (name: string) => db.exec(readFileSync(`${folder}${name}`, "utf8"));
+  names.filter((name) => name < "0012").forEach(migrate);
+  before?.(db);
+  names.filter((name) => name >= "0012").forEach(migrate);
+  const statementOf = (sql: string, bound: SQLInputValue[] = []) => {
+    const execute = () => {
+      const prepared = db.prepare(sql);
+      if (prepared.columns().length) return { results: prepared.all(...bound), meta: {} };
+      return { results: [], meta: { changes: Number(prepared.run(...bound).changes) } };
+    };
+    return {
+      bind: (...values: SQLInputValue[]) => statementOf(sql, values),
+      first: async () => execute().results[0] ?? null,
+      all: async () => execute(),
+      run: async () => execute(),
+      execute,
+    };
+  };
+  const DB = {
+    prepare: (sql: string) => statementOf(sql),
+    // one transaction, as D1's batch is
+    batch: async (statements: ReturnType<typeof statementOf>[]) => {
+      db.exec("begin");
+      try {
+        const results = statements.map((statement) => statement.execute());
+        db.exec("commit");
+        return results;
+      } catch (error) {
+        db.exec("rollback");
+        throw error;
+      }
+    },
+  };
+  // of D1's surface, only what the people's code calls: prepare, bind, first, all, run and batch
+  return { ...stackOf().env, DB } as unknown as Env;
+}
+
+/** The person a code mailed to `email` signs in (./email-sign-in.ts). */
+const mailed = (env: Env, email: string) =>
+  linkIdentity(env.DB, { provider: "email", subject: email, email });
+
+/** The session that one whole sign-in at Cloudflare gives this browser. */
+async function cloudflareSessionAfter(env: Env) {
+  const cookie = cloudflareCookieOf((await signedInAtCloudflare(env)).answer);
+  return (await cloudflareSessionOf(env, new Request(ISSUER, { headers: { cookie } })))!;
 }
 
 function cookiePair(setCookie: string) {

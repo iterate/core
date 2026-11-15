@@ -9,6 +9,8 @@
 // WHAT IT PROVES, AND WHAT IT DOES NOT. Cloudflare says which of its users consented: an id and
 // the address on that Cloudflare account. This Worker does not know that Cloudflare checked the
 // address. So the sign-in never makes a member, and counts only where an app names it:
+//   - the address links no one: the person is the Cloudflare user alone (./users.ts
+//     `linkBySubject`), never the person a mailed code or Google proved that address for;
 //   - it has a cookie of its own (./cookies.ts `cloudflareSessionOf`), which only the
 //     authorization endpoint reads, for an app on a mind hostname that names Cloudflare
 //     (./authorize.ts `sessionFor`); none of the mind's own pages reads it;
@@ -40,7 +42,7 @@ import {
 } from "./env.ts";
 import { errorPage } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
-import { linkIdentity } from "./users.ts";
+import { linkBySubject } from "./users.ts";
 
 const CLOUDFLARE_SIGN_IN_PATH = "/sign-in/cloudflare";
 /** The one redirect URI of this sign-in, registered on the Cloudflare OAuth client. */
@@ -130,19 +132,18 @@ async function finish(
     );
   }
   // The person is the Cloudflare user, by Cloudflare's own id: a changed address is the same person.
-  const user = await linkIdentity(env.DB, {
-    provider: "cloudflare",
-    subject: person.id,
-    email: person.email,
-  }).catch((error: unknown) => {
-    console.warn({ event: "auth.sign-in-link-failed", message: String(error) });
-    return null;
-  });
+  const user = await linkBySubject(env.DB, { provider: "cloudflare", subject: person.id }).catch(
+    (error: unknown) => {
+      console.warn({ event: "auth.sign-in-link-failed", message: String(error) });
+      return null;
+    },
+  );
   if (!user)
     return errorPage(
-      `${person.email} belongs to another Cloudflare account here. Ask the mind's owner.`,
-      403,
+      "The sign-in with Cloudflare could not be finished. Try again.",
+      500,
       cleared,
+      again,
     );
   console.info({ event: "auth.signed-in", method: "cloudflare", userId: user.id });
   const facts = new AccountFacts();
@@ -151,7 +152,10 @@ async function finish(
     payload: { method: "cloudflare", at: Date.now() },
   });
   const headers = new Headers({ location: flow.next, "cache-control": "no-store" });
-  headers.append("set-cookie", await cloudflareSessionCookie(env, user));
+  headers.append(
+    "set-cookie",
+    await cloudflareSessionCookie(env, { id: user.id, email: person.email }),
+  );
   headers.append("set-cookie", clearFlowCookie);
   return facts.on(new Response(null, { status: 303, headers }));
 }
