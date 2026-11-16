@@ -251,6 +251,12 @@ Each component is `@iterate-com/ui/components/<name>` (`context-view/context-vie
 `repo-ide/repo-ide`, `ui/card`, …). The package's README has a fuller page (polling, a React library
 beside it), and its AGENTS.md the rest: https://github.com/iterate/packages/tree/main/packages/ui.
 
+The source of every component is public in that repository, under `packages/ui/src`: read it before
+you guess at a prop, and copy a component into your app when you want to change it. An import of
+`@iterate-com/ui/components/<name>` is `src/components/<name>.tsx` there. `main` is the newest
+build; the README's "The source of a version" says how to read the source of the version a page
+pins.
+
 ## Apps
 
 An app is a folder under `apps/`, and a convention, not a framework. `apps/agents/` is the Agents

@@ -8,7 +8,9 @@
 //   import { Notes } from "./notes.js";
 //   { id: "notes", name: "Notes", icon: NotebookIcon, about: "What we wrote down.", component: Notes },
 // TO REPLACE A KIT PAGE, put your component in its row. Each kit page is one small component in
-// @iterate-com/ui (components/dash/dash-pages.tsx): copy it into this folder and change it there.
+// @iterate-com/ui: copy it into this folder and change it there. Their source, and `Dash`'s:
+//   https://github.com/iterate/packages/tree/main/packages/ui/src/components/dash
+// (AGENTS.md, "the source of every component", for the source of the version index.html pins).
 //
 // The kit's pages load their larger parts when they first open: the overview loads none of them.
 import { html, render } from "@iterate-com/ui/page";
