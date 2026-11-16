@@ -12,6 +12,13 @@ import {
 import { expect, test, vi } from "vitest";
 import { RepoContract } from "./contract.ts";
 import { RepoFacet } from "./durable-object.ts";
+import {
+  buildPack,
+  encodeCommit,
+  hashObject,
+  treeObjectsOf,
+  type GitObjectType,
+} from "./git-wire.ts";
 
 const PATH = "/repos/config";
 const TIP = "a".repeat(40);
@@ -137,6 +144,76 @@ test("a `repo/pushed` whose payload does not parse is ignored by the reduce, whi
     ).toBeUndefined();
 });
 
+// ── whole-tip fetches: a pack with every file of one commit ──
+
+test.for([
+  { name: "a read of the tip and a read of its oid, made at once, make one whole-tip fetch" },
+  {
+    name: "a read of the tip's oid joins the tip read whose whole-tip fetch is in flight",
+    oidReadAfterFetch: true,
+  },
+])("$name", async ({ oidReadAfterFetch }) => {
+  const [newest] = await commitsOf(["one"]);
+  const repo = repoWith([]);
+  const git = serveGit(repo.storage, [newest!], { artifacts: newest!.oid });
+  const release = git.hold();
+  const tipRead = repo.facet.files();
+  if (oidReadAfterFetch) await vi.waitFor(() => expect(git).toMatchObject({ packs: 1 }));
+  const oidRead = repo.facet.files({ commitOid: newest!.oid });
+  await vi.waitFor(() => expect(git).toMatchObject({ lsRefs: 1 }));
+  // outlasts each read's steps from its last answer to a whole-tip fetch of its own
+  await settle(25);
+  release();
+  expect(await Promise.all([tipRead, oidRead])).toEqual([
+    { "notes.md": "one" },
+    { "notes.md": "one" },
+  ]);
+  expect(git).toMatchObject({ packs: 1 });
+});
+
+test("reads of two commits, made at once, never have two whole-tip fetches in flight", async () => {
+  const [newer, older] = await commitsOf(["two", "one"]);
+  const repo = repoWith([]);
+  const git = serveGit(repo.storage, [newer!, older!], { artifacts: newer!.oid });
+  expect(
+    await Promise.all([
+      repo.facet.files({ commitOid: newer!.oid }),
+      repo.facet.files({ commitOid: older!.oid }),
+    ]),
+  ).toEqual([{ "notes.md": "two" }, { "notes.md": "one" }]);
+  expect(git).toMatchObject({ packs: 2, mostPacksInFlight: 1 });
+});
+
+test("a whole-tip fetch that fails does not stop the next: the read queued behind answers", async () => {
+  const [newer, older] = await commitsOf(["two", "one"]);
+  const repo = repoWith([]);
+  const git = serveGit(repo.storage, [newer!, older!], { artifacts: newer!.oid });
+  git.failPacks = 1;
+  expect(
+    await Promise.allSettled([
+      repo.facet.files({ commitOid: newer!.oid }),
+      repo.facet.files({ commitOid: older!.oid }),
+    ]),
+  ).toMatchObject([
+    { status: "rejected", reason: { message: expect.stringContaining("responded 400") } },
+    { status: "fulfilled", value: { "notes.md": "one" } },
+  ]);
+  expect(git).toMatchObject({ packs: 2, mostPacksInFlight: 1 });
+});
+
+test("a pull's merge fetches its two tips one after the other", async () => {
+  const [theirs, ours] = await commitsOf(["two", "one"]);
+  const repo = repoWith([]);
+  const git = serveGit(repo.storage, [theirs!, ours!], {
+    artifacts: ours!.oid,
+    origin: theirs!.oid,
+  });
+  expect(await repo.facet.pull({ remote: "https://origin.example/config.git" }, git.fetch)).toEqual(
+    { status: "updated", commitOid: theirs!.oid, previousOid: ours!.oid },
+  );
+  expect(git).toMatchObject({ packs: 2, mostPacksInFlight: 1 });
+});
+
 /** A created repo at PATH whose main holds `oids`, newest first, and a facet that hosts it. */
 function repoWith(oids: string[]) {
   const own = memoryStream(PATH);
@@ -182,6 +259,7 @@ function repoWith(oids: string[]) {
   own.stream.append({ type: "events.iterate.com/repo/created", payload: { path: PATH } });
   const repo = {
     facet: host(),
+    storage,
     set gitLogError(words: string) {
       state.gitLogError = words;
     },
@@ -243,4 +321,109 @@ function facetStorage() {
     put: async (key: string, value: unknown) => void values.set(key, value),
     delete: async (key: string) => values.delete(key),
   };
+}
+
+type Commit = { oid: string; objects: { payload: Uint8Array; type: GitObjectType }[] };
+
+/** Commits of one file each, newest first, each the child of the next: `notes.md` is its word. */
+async function commitsOf(words: string[]): Promise<Commit[]> {
+  const commits: Commit[] = [];
+  let parent: string | undefined;
+  for (const word of words.toReversed()) {
+    const blob = new TextEncoder().encode(word);
+    const oid = await hashObject("blob", blob);
+    const manifest = new Map([["notes.md", { oid, mode: "100644" }]]);
+    const { rootOid, trees } = await treeObjectsOf(manifest);
+    const probe = { name: "probe", email: "probe@example.com" };
+    const commit = encodeCommit({
+      author: { ...probe, date: new Date(0) },
+      committer: probe,
+      message: word,
+      parents: parent ? [parent] : [],
+      tree: rootOid,
+    });
+    parent = await hashObject("commit", commit);
+    commits.unshift({
+      oid: parent,
+      objects: [
+        { payload: commit, type: "commit" },
+        ...trees.map(({ payload }) => ({ payload, type: "tree" as const })),
+        { payload: blob, type: "blob" },
+      ],
+    });
+  }
+  return commits;
+}
+
+/**
+ * Git's wire protocol v2 for `history` (newest first), as the facet's transport speaks it: the
+ * repo's Artifacts remote is the stubbed global fetch, and `fetch` is an origin's egress. A
+ * whole-tip fetch (`deepen 1`) is counted while it is in flight; `hold` keeps them open.
+ */
+function serveGit(
+  storage: ReturnType<typeof facetStorage>,
+  history: Commit[],
+  tips: { artifacts: string; origin?: string },
+) {
+  const until = Date.now() + 3_600_000;
+  void storage.put("git-remote", "https://artifacts.example/config.git");
+  void storage.put("git-token:read", { token: "read-token", until });
+  void storage.put("git-token:write", { token: "write-token", until });
+  let held = Promise.resolve();
+  const git = {
+    lsRefs: 0,
+    packs: 0,
+    packsInFlight: 0,
+    mostPacksInFlight: 0,
+    failPacks: 0,
+    hold() {
+      let release!: () => void;
+      held = new Promise((resolve) => (release = resolve));
+      return release;
+    },
+    async fetch(request: Request): Promise<Response> {
+      const body = new TextDecoder().decode(await request.arrayBuffer());
+      if (request.url.endsWith("/git-receive-pack"))
+        return gitAnswer([pktLine("unpack ok"), pktLine("ok refs/heads/main")]);
+      const tip = new URL(request.url).hostname === "origin.example" ? tips.origin : tips.artifacts;
+      if (body.includes("command=ls-refs")) {
+        git.lsRefs += 1;
+        return gitAnswer([pktLine(`${tip} refs/heads/main`)]);
+      }
+      const want = history.findIndex(({ oid }) => body.includes(`want ${oid}`));
+      if (body.includes("deepen 1\n")) {
+        git.packs += 1;
+        git.packsInFlight += 1;
+        git.mostPacksInFlight = Math.max(git.mostPacksInFlight, git.packsInFlight);
+        try {
+          await held;
+          // an answer a moment later, so a second fetch made meanwhile is in flight with it
+          await settle(1);
+          if (git.failPacks > 0) {
+            git.failPacks -= 1;
+            return new Response("upload-pack failed", { status: 400 });
+          }
+        } finally {
+          git.packsInFlight -= 1;
+        }
+      }
+      const pack = await buildPack(history.slice(want).flatMap(({ objects }) => objects));
+      return gitAnswer([pktLine("packfile"), pktBytes(Uint8Array.of(1, ...pack))]);
+    },
+  };
+  vi.stubGlobal("fetch", git.fetch);
+  return git;
+}
+
+function gitAnswer(lines: Uint8Array[]): Response {
+  return new Response(new Blob([...lines, new TextEncoder().encode("0000")]));
+}
+
+function pktLine(line: string): Uint8Array {
+  return pktBytes(new TextEncoder().encode(`${line}\n`));
+}
+
+function pktBytes(payload: Uint8Array): Uint8Array {
+  const length = new TextEncoder().encode((payload.length + 4).toString(16).padStart(4, "0"));
+  return Uint8Array.of(...length, ...payload);
 }

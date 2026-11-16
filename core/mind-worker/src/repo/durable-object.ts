@@ -318,12 +318,24 @@ export class RepoFacet extends StreamProcessorDurableObject<
     });
   }
 
+  // One whole-tip fetch at a time: each holds every file of a commit several times over for a
+  // moment (the pack, its objects, then the files), and the isolate has one memory limit for all
+  // of them. The next fetch chains on this one, whether it fails or not.
+  #tipFetches = Promise.resolve();
+
   // git drops wants for missing oids silently, so receipt is verified here: an omitted commit or tree
   // is an outage, not an empty tree.
   async #tipSnapshot(transport: Transport, tip: string): Promise<TipSnapshot> {
-    const objects = new Map<string, RawGitObject>(
-      (await transport.fetchObjects({ wants: [tip], deepen: 1 })).map((o) => [o.oid, o]),
+    const fetched = this.#tipFetches.then(() =>
+      transport.fetchObjects({ wants: [tip], deepen: 1 }),
     );
+    // only that it ended: a tail that kept the answer would hold the commit's objects until the
+    // next fetch
+    this.#tipFetches = fetched.then(
+      () => undefined,
+      () => undefined,
+    );
+    const objects = new Map<string, RawGitObject>((await fetched).map((o) => [o.oid, o]));
     const commit = objects.get(tip);
     if (commit?.type !== "commit")
       throw new Error(`repo: the pack omitted the tip commit ${tip} of ${REF}`);
@@ -335,7 +347,8 @@ export class RepoFacet extends StreamProcessorDurableObject<
 
   // A commit's files never change, so the memo answers a read at its commit without asking the remote.
   #snapshotMemo: Snapshot | null = null;
-  // One read in flight per commitOid and one for the tip (""), dropped when it settles.
+  // One read in flight per commitOid and one for the tip (""), dropped when it settles. A tip read
+  // that fetches is also under its commit's oid once it knows it.
   #snapshotReads = new Map<string, Promise<Snapshot>>();
   async #fresh(commitOid?: string): Promise<Snapshot> {
     if (commitOid && this.#snapshotMemo?.tip === commitOid) return this.#snapshotMemo;
@@ -351,10 +364,28 @@ export class RepoFacet extends StreamProcessorDurableObject<
     const transport = await this.#transport("read");
     const tip = commitOid || (await transport.tipOf(REF)) || null;
     if (this.#snapshotMemo && this.#snapshotMemo.tip === tip) return this.#snapshotMemo;
+    // A read of the tip and a read of its commit by oid share one fetch, whichever came first. A
+    // tip read that joins does not fetch, so it never waits in the queue in front of the read it
+    // joined.
+    if (commitOid || !tip) return this.#readSnapshot(transport, tip);
+    const sameCommit = this.#snapshotReads.get(tip);
+    if (sameCommit) return sameCommit;
+    const read = this.#readSnapshot(transport, tip);
+    this.#snapshotReads.set(tip, read);
+    const drop = () => {
+      if (this.#snapshotReads.get(tip) === read) this.#snapshotReads.delete(tip);
+    };
+    read.then(drop, drop);
+    return read;
+  }
+  async #readSnapshot(transport: Transport, tip: string | null): Promise<Snapshot> {
     const kept = tip ? await this.ctx.storage.get<Snapshot>(KEPT_SNAPSHOT) : undefined;
     if (kept?.tip === tip) return (this.#snapshotMemo = kept);
     const files: Snapshot["files"] = {};
     if (tip) {
+      // the whole-tip fetch in flight may bring this very commit
+      await this.#tipFetches;
+      if (this.#snapshotMemo?.tip === tip) return this.#snapshotMemo;
       const { manifest, objects } = await this.#tipSnapshot(transport, tip);
       for (const [file, entry] of manifest) {
         if (entry.mode === SUBMODULE_MODE) continue;
