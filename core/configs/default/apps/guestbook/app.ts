@@ -3,7 +3,7 @@
 // reaches nothing else of the mind. An entry waits until a member approves it; a member can remove
 // any entry. Other agents write through the app's own MCP server at /mcp, signed in the same way.
 //
-// It is an example to copy: worker.ts mounts it with one line, which is commented out (AGENTS.md,
+// It is an example to copy: worker.ts mounts it with one line, which is commented out (people.md,
 // "The guestbook"). People who are no members can sign in only when the stack's config says so
 // (`login.methods.email.anyone`).
 //

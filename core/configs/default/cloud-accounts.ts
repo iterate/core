@@ -254,7 +254,7 @@ async function keepCloudSection(
 
 /** THE "KEYS AND ACCOUNTS" SECTION, made true from the catalog alone: one card, "Secrets (<count>)",
  *  with a row for each secret that has no Cloud, in path order. The stack's own Cloudflare token
- *  (`/secrets/cloudflare`, AGENTS.md "Cloudflare") is the platform's, and is not here. This
+ *  (`/secrets/cloudflare`, cloudflare.md) is the platform's, and is not here. This
  *  card is the one `keys-` card: any other goes, and its rows with it.
  *
  *  The registry keeps its state under a byte budget, and drops a card or row past it: that one

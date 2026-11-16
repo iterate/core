@@ -11,7 +11,7 @@ import { dashApp } from "./apps/dash/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { voiceApp } from "./apps/voice/app.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
-// Voice is off (AGENTS.md, "Voice"). The Voice app's "Turn voice on" takes the "// " off this
+// Voice is off (apps.md, "Voice"). The Voice app's "Turn voice on" takes the "// " off this
 // line and off `installVoice` in the init case below, in the commit that adds the package.
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
@@ -38,19 +38,19 @@ import {
 } from "./slack.ts";
 
 // The integration packages this mind hosts (a Telegram bot, your own GitHub App, …), one element
-// each: AGENTS.md, and the recipes at https://github.com/jonastemplestein/iterategrations.
+// each: apps.md, and the recipes at https://github.com/jonastemplestein/iterategrations.
 const integrations: Integration[] = [];
 
 // The apps this mind hosts: a folder each under apps/, mounted on its host in `fetch` below
-// (AGENTS.md, "Apps"). Each `app.ts` exports the function that makes one.
+// (apps.md). Each `app.ts` exports the function that makes one.
 const docs = docsApp();
 const dash = dashApp();
 const voice = voiceApp();
-// The guestbook, an example of an app for end users, people who are not members (AGENTS.md, "The
+// The guestbook, an example of an app for end users, people who are not members (people.md, "The
 // guestbook"). To turn it on, uncomment this line, its import above and its case in `fetch`.
 // const guestbook = guestbookApp();
 
-// The kinds of agent this mind runs (AGENTS.md, "Kinds of agent"): one file each, named by its
+// The kinds of agent this mind runs (agent-kinds.md): one file each, named by its
 // import, written exactly `() => import("./path/to/kind.ts")` (`makeAgentKind` reads the path from
 // it). Their `processEvent` runs below beside the integrations', and every publish tells the Dash
 // where each kind's file is.
@@ -91,7 +91,7 @@ export default class extends IterateConfigEntrypoint {
       case "events.iterate.com/email/received": {
         // The platform's record of mail, on `/integrations/email`: a reply goes back to the agent
         // that wrote, and only a member's mail starts a thread's agent. Another mind's agent's mail
-        // is marked as such, and stops at a hop limit (mail-replies.ts, and AGENTS.md says why).
+        // is marked as such, and stops at a hop limit (mail-replies.ts, and mail-replies.md says why).
         const email = EmailContract.events["events.iterate.com/email/received"].payloadSchema.parse(
           event.payload,
         );
@@ -226,7 +226,7 @@ export default class extends IterateConfigEntrypoint {
       case "events.iterate.com/x/message-received": {
         // What an X account a member linked said to iterate's bot, on `/integrations/<client>/<x
         // user id>`. iterate Cloud relays it and signs it: anything else of this type is not the
-        // Cloud's word, and reaches no agent (AGENTS.md says why).
+        // Cloud's word, and reaches no agent (accounts.md, "X", says why).
         if (event.source?.signer?.principal.actor !== "iterate-cloud") break;
         const message = event.payload as {
           kind: "dm" | "mention";
@@ -319,7 +319,7 @@ export default class extends IterateConfigEntrypoint {
       case "events.iterate.com/github/webhook-received":
       case "events.iterate.com/repo/commit-completed": {
         // THIS REPO AND ITS GITHUB REPOSITORY ARE ONE HISTORY, once a member linked them
-        // (AGENTS.md, `linkThroughCloud`). A push to the repository's main is pulled here, which
+        // (accounts.md, `linkThroughCloud`). A push to the repository's main is pulled here, which
         // publishes the mind. A commit here is pushed there. Both move the same commits,
         // fast-forward only, and what one side just received is already on the other, so nothing
         // loops: a pull lands `repo/commit-completed` too, and the push it causes finds GitHub up
@@ -410,7 +410,7 @@ export default class extends IterateConfigEntrypoint {
   // Every host of the mind: one case each, on `x-iterate-routing-slug` (`dash` for dash.<domain>,
   // null on the apex). The guard beside a case says who may come: none for a
   // public site, `this.auth.require` for members, `this.auth.requirePerson` for anyone signed in
-  // (AGENTS.md, "People who are not members"). Before the guard, an app answers anyone for its
+  // (people.md). Before the guard, an app answers anyone for its
   // manifest and its icon (`open`, apps/open-files.ts): the sign-in pages show them. The `?.` is
   // for an app.ts of yours that has no `open`. A package answers the requests on its own slug.
   async fetch(request: Request) {
@@ -451,7 +451,7 @@ export default class extends IterateConfigEntrypoint {
 
   /** `itx.config.cloudflare(tool, args)`: a tool of Cloudflare's own MCP server, called with the
    *  API token of the mind's own account, with which agents debug and configure the account
-   *  (cloudflare.ts; AGENTS.md, "Cloudflare"). */
+   *  (cloudflare.ts; cloudflare.md). */
   async cloudflare(tool: string, args?: Record<string, unknown>) {
     using itx = this.getItx();
     return await cloudflareForAgent(itx, tool, args);

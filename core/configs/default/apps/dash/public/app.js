@@ -10,7 +10,7 @@
 // small component in @iterate-com/ui: copy it into this folder and change it there. Their source:
 //   https://github.com/iterate/packages/tree/main/packages/ui/src/components/dash (the Dash and
 //   most pages) and .../packages/ui/src/agent-kind-view/dash-agents.tsx (Home and Agents)
-// (AGENTS.md, "the source of every component", for the source of the version index.html pins).
+// (apps.md, "UI components in a page", for the source of the version index.html pins).
 //
 // The kit's pages load their larger parts when they first open: the home loads the composer only.
 import { html, render } from "@iterate-com/ui/page";

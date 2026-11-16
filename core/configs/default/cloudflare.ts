@@ -1,4 +1,4 @@
-// cloudflare.ts — THE MIND'S CLOUDFLARE CONNECTION (AGENTS.md, "Cloudflare"): Cloudflare's own MCP
+// cloudflare.ts — THE MIND'S CLOUDFLARE CONNECTION (cloudflare.md): Cloudflare's own MCP
 // server, called with the API token of the mind's own account. A stack whose config says
 // `cloudflareToken: true` keeps that token in the vault at `/secrets/cloudflare`. With it the
 // mind's agents debug, profile and configure what the account runs (core/alchemy README, "The

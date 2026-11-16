@@ -1,4 +1,4 @@
-// turn-on.js — WHAT THE CONFIG REPO HOLDS WITH VOICE ON (AGENTS.md, "Voice"): package.json pins a
+// turn-on.js — WHAT THE CONFIG REPO HOLDS WITH VOICE ON (apps.md, "Voice"): package.json pins a
 // build of the package, voice.ts names the package's service and relay, and worker.ts has its two
 // install lines as code, not as comments. `filesWithVoiceOn` gives those files, and the page
 // (app.js) commits them.

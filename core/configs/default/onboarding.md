@@ -11,8 +11,9 @@ each one when what the owner wants needs it. One step at a time: do your part, s
 must do, and wait for their answer before the next step. Until the owner chooses a voice (step 4):
 short answers, plain words.
 
-- `AGENTS.md` of the config repo says how this mind and the platform work. Read it before you
-  act. Do not invent features: when you cannot find how to do something, say that you do not know.
+- `AGENTS.md` of the config repo says how this mind and the platform work, and names a file to
+  read before each kind of task. Read that file before you act. Do not invent features: when you
+  cannot find how to do something, say that you do not know.
 - `await itx.url()` answers the mind's address, `https://<domain>/`. The platform's own host is
   `iterate.<domain>`. Always write the full hostname in what you tell the owner.
 - The Dash starts this chat itself, with a note that the owner has opened it: speak first, the
@@ -40,7 +41,8 @@ short answers, plain words.
 Greet the owner by the name in their email address. Say in two sentences what this place is: their
 own deployment of iterate, in their own Cloudflare account, and agents that have a website, an email
 address and secrets on their domain. When the handover says what they want from the mind, say that
-back in one sentence. Then ask the first question (step 2) in the same message.
+back in one sentence. Then ask one question in the same message: the question of step 2 when the
+handover holds its block, else the first thing of step 3 that the handover does not answer.
 
 ## 2. The first question: may iterate send this mind messages
 
@@ -62,11 +64,13 @@ answers after onboarding. It is the owner's choice, and the first thing they sig
    invitation is not right, and go to step 3.
 3. **Give the link**, whole, as one link. The owner opens it in the browser where they are signed
    in to this mind. The page is their own mind's page: it says what the key may do, and they sign
-   it with their passkey. Do not say what the page's button is called.
-4. **Check it.** The platform records the key on the mind's root:
-   `await itx.cd("/").waitForEvent({ type: "events.iterate.com/account/key-added", payload: { actor: "iterate-com" }, afterOffset: 0, timeoutMs: 1000 })`.
+   it with their passkey. Do not say what the page's button is called. Ask them to tell you when
+   they have signed, and end your turn: do not check in the turn that gives the link.
+4. **Check it** when the owner says they have signed. The platform records the key on the mind's
+   root, a moment after the page answers:
+   `await itx.cd("/").waitForEvent({ type: "events.iterate.com/account/key-added", payload: { actor: "iterate-com" }, afterOffset: 0, timeoutMs: 15000 })`.
    When it answers the event, say that iterate can now send messages here. When it times out, the
-   owner has not signed yet: say so, and do not claim that it worked.
+   key is not there: say so, do not claim that it worked, and ask whether the page showed an error.
 5. **What iterate then says** arrives as `meld/event-shared` events on
    `/integrations/minds/iterate.com/minds/<domain>`, with the words at `payload.payload.text`. They
    wake no agent. Read that context when the owner asks what iterate said.
@@ -112,8 +116,8 @@ prove the channel now.
   `/integrations/email` (`itx.cd("/integrations/email")`) and tell the owner what their mail said.
   A member's own mail also gets an agent of its own per thread (`/agents/email/t<thread>`), which
   may answer it.
-- **Another channel** needs an integration first. Read what `AGENTS.md` says about `integrations`,
-  and the recipes at https://github.com/jonastemplestein/iterategrations (Telegram is one). Say
+- **Another channel** needs an integration first. Read `apps.md`, "Integration packages", and
+  the recipes at https://github.com/jonastemplestein/iterategrations (Telegram is one). Say
   what the channel needs from the owner, and offer to set it up. When this mind cannot use a
   channel today, say so, and prove mail in the meantime.
 
@@ -127,13 +131,14 @@ and this file. A commit to `main` publishes it, and you can make one yourself wi
 told you and that they see at once:
 
 - the website's homepage at `https://<domain>/`: a page about them, or about what they build.
-  Today it is one line of text in `worker.ts` (the `case null` of `fetch`);
+  Today it is one line of text in `worker.ts` (the `case null` of `fetch`). Change only what that
+  case answers for the page itself: its `/me` answer above stays as it is;
 - the look of every app: the colours and the corners in `apps/theme.css`.
 
 Make the change, give the link, and ask what to change next. Do not change a file under
 `apps/dash/`, `apps/docs/` or `apps/voice/` for this: an app with a file that is the owner's no
-longer follows iterate's updates (`AGENTS.md`, "When the template moves on"). The owner reads the
-code at `https://docs.<domain>`.
+longer follows iterate's updates (`template-updates.md`). The owner reads the code at
+`https://docs.<domain>`.
 
 ## After that: what fits this owner
 
@@ -228,9 +233,10 @@ do with each. Do not offer the whole list unasked.
 Give the owner the `authorizationUrl`. They confirm on the Cloud's page, then approve at the
 service, and the tokens land in the secret. Afterwards check it: `await
 itx.secrets.describe("/secrets/<name>")` must say it is set, then make one request with a
-placeholder, never a token, and tell the owner which account answered. `AGENTS.md`, "Accounts
-through iterate Cloud", has the rest. For a tool that has no app there, look in `AGENTS.md` and
-the recipes (step 5) before you say that the mind can use it.
+placeholder, never a token, and tell the owner which account answered. `accounts.md` has the
+rest: Gmail's and Calendar's events, more scopes, several accounts. For a tool that has no app
+there, look in `apps.md`, "Integration packages", and the recipes (step 5) before you say that the
+mind can use it.
 
 ## 10. Approve a sensitive action with your passkey
 
