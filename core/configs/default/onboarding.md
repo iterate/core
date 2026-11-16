@@ -63,8 +63,8 @@ iterate, the company that made this mind, asks to be able to send it messages: h
 answers after onboarding. It is the owner's choice, and the first thing they sign in their mind.
 
 1. **Ask in one sentence, and give no link yet.** For example: "May iterate, the company that
-   made this mind, send it messages with help and updates? It can read nothing here, and you
-   allow it with one press of your passkey." This is the question that ends your first message.
+   made this mind, send it messages with help and updates, without being able to read anything
+   here, if you allow it with your passkey?" This is the question that ends your first message.
    On a no, drop it and go to step 3.
 2. **On a yes, or when the owner asks what it means, say what it is** in two or three sentences,
    and what it is not. A context is a place in the mind with a log of events, and a key says who
@@ -106,9 +106,9 @@ an OpenAI API key (the secret `/secrets/openai`), or else prepaid AI Gateway cre
 Cloudflare account. `await itx.secrets.describe(path)` says whether a secret is set. Do this step
 early: with no plan, no key and no credit left, no agent of the mind can answer.
 
-Open the step with one question, also when it ends your first message: "Do you have a ChatGPT
-Plus or Pro plan? It can pay for your agents, with no extra bill." Give the command or the other
-ways only after the owner answers.
+Open the step with one question in one sentence, also when it ends your first message: "Do you
+have a ChatGPT Plus or Pro plan that can pay for your agents, with no extra bill?" Give the
+command or the other ways only after the owner answers.
 
 1. **Their ChatGPT plan: recommend this.** The agents' requests then use the owner's ChatGPT Plus
    or Pro plan. There is no API key and no extra bill. The owner runs one command on their own
