@@ -5,6 +5,7 @@ import {
   honouredNext,
   otherKeyLending,
   scopeInWords,
+  scopePlainly,
   allowsExactly,
   enrolPayloadOf,
   serviceKeyRequestOf,
@@ -105,6 +106,21 @@ test("a key's scope reads as what its service can do", () => {
     "lend its functions to this mind as itx.x, and add events under /integrations/x/",
   );
   expect(scopeInWords({ paths: ["/integrations/"] })).toBe("add events under /integrations/");
+});
+
+test("the consent page's first words say what the key's holder can and cannot do, and name nobody", () => {
+  expect(scopePlainly({ paths: ["/integrations/minds/iterate.com/"] }, "example.com")).toBe(
+    "This lets whoever holds this key send messages to one place in example.com. It cannot read anything, approve requests or reach an agent.",
+  );
+  expect(scopePlainly({ paths: ["/integrations/a/", "/integrations/b/"] }, "example.com")).toBe(
+    "This lets whoever holds this key send messages to 2 places in example.com. It cannot read anything, approve requests or reach an agent.",
+  );
+  expect(scopePlainly({ paths: [], provide: "whatsapp" }, "example.com")).toBe(
+    "This lets whoever holds this key offer its functions to the agents of example.com. It cannot approve requests, and it reads nothing but what the agents send it.",
+  );
+  expect(scopePlainly({ paths: ["/integrations/x/"], provide: "x" }, "example.com")).toBe(
+    "This lets whoever holds this key offer its functions to the agents of example.com, and send messages to one place in example.com. It cannot approve requests, and it reads nothing but what the agents send it.",
+  );
 });
 
 test("a name another live key lends is held; the same key, another name and no name are not", () => {

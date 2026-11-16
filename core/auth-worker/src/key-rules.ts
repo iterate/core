@@ -268,6 +268,26 @@ export function otherKeyLending(
   return lending.find((held) => held.provide === provide && held.id !== key) ?? null;
 }
 
+/** THE CONSENT PAGE'S FIRST WORDS, for a person who has never met a key: what its holder can do
+ *  in `domain`, and what it cannot. They name nobody: whose key it is, is the link's word, and
+ *  the statement under them marks it so. */
+export function scopePlainly(
+  { paths, provide }: Pick<ServiceKeyRequest, "paths" | "provide">,
+  domain: string,
+) {
+  const places = paths.length === 1 ? "one place" : `${paths.length} places`;
+  const can = [
+    provide && `offer its functions to the agents of ${domain}`,
+    paths.length > 0 && `send messages to ${places} in ${domain}`,
+  ]
+    .filter(Boolean)
+    .join(", and ");
+  const cannot = provide
+    ? "It cannot approve requests, and it reads nothing but what the agents send it."
+    : "It cannot read anything, approve requests or reach an agent.";
+  return `This lets whoever holds this key ${can}. ${cannot}`;
+}
+
 /** What the key lets its service do, in a person's words: for the consent page and `/keys`. */
 export function scopeInWords({ paths, provide }: Pick<ServiceKeyRequest, "paths" | "provide">) {
   return [

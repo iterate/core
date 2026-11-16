@@ -18,6 +18,7 @@ import {
   type LendingKey,
   otherKeyLending,
   scopeInWords,
+  scopePlainly,
   type ServiceKeyRequest,
   serviceKeyRequestOf,
   statementInParts,
@@ -550,16 +551,13 @@ async function enrolPage(env: Env, url: URL, session: BrowserSession): Promise<R
   const hidden = (name: string, value: string) =>
     `<input type="hidden" name="${name}" value="${text(value)}">`;
   const statement = statementHtml(statementInParts(ask, { domain, key, person: session.email }));
-  const cannot = ask.provide
-    ? "The key cannot approve requests, and it reads nothing but what the agents send it."
-    : "The key cannot read anything, approve requests or reach an agent.";
   const start = text(key.slice(0, 8));
   return page({
     title: "Sign this statement?",
     // The consent page's own look, over the plain page's stylesheet. A part may break across lines,
     // so a long path still fits a phone, and each line of it keeps its tint.
     style: `
-.statement { padding: 0.75rem 0.875rem; border: 1px solid var(--border); border-radius: var(--radius); line-height: 1.75; }
+.statement { padding: 0.75rem 0.875rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.8125rem; line-height: 1.75; }
 .part-checked, .part-link, .part-you { padding: 0.0625rem 0.3125rem; border-radius: calc(var(--radius) - 4px); overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .part-checked { background: color-mix(in oklab, var(--success) 14%, transparent); }
 .part-link { border: 1px dashed color-mix(in oklab, var(--warning) 75%, transparent); background: color-mix(in oklab, var(--warning) 8%, transparent); }
@@ -567,9 +565,10 @@ async function enrolPage(env: Env, url: URL, session: BrowserSession): Promise<R
 .legend { font-size: 0.8125rem; line-height: 1.9; }
 summary { cursor: pointer; }`,
     body: `<h1>Sign this statement?</h1>
+      <p>${text(scopePlainly(ask, domain))}</p>
       <p class="statement">${statement}</p>
       <p class="muted legend"><span class="${PART_CLASS.checked}">checked</span> ${text(domain)} checked this. <span class="${PART_CLASS.link}">from the link</span> The link says this, and nobody checked it. Plain words are the same on every key page.</p>
-      <p>${cannot} Any member can remove it on <a href="${KEYS_PATH}">Your keys</a>.</p>
+      <p>Any member can remove the key on <a href="${KEYS_PATH}">Your keys</a>.</p>
       <details>
         <summary>What is a key?</summary>
         <p class="muted">A key has two halves. Its holder keeps the private half and signs with it; that half never comes to ${text(domain)}. ${text(domain)} keeps the public half and checks each signature with it. ${start} is the start of the public half's fingerprint.</p>
