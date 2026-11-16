@@ -134,14 +134,20 @@ export function serviceKeyRequestOf(
   return provide ? { actor, label, publicKey, paths, provide } : { actor, label, publicKey, paths };
 }
 
-/** WHAT A MEMBER SIGNS TO ALLOW A SERVICE'S KEY: the key and all that it may do, as the consent
- *  page said it. The page signs this, and the answer is taken only for the same. */
+/** WHAT A MEMBER SIGNS TO ALLOW A SERVICE'S KEY: the key and all that it may do, and the label
+ *  that the consent page shows. The page signs this, and the answer is taken only for the same. */
 export function enrolPayloadOf(key: string, ask: ServiceKeyRequest) {
-  return { key, actor: ask.actor, paths: ask.paths, provide: ask.provide || null };
+  return {
+    key,
+    actor: ask.actor,
+    label: ask.label,
+    paths: ask.paths,
+    provide: ask.provide || null,
+  };
 }
 
-/** Whether a signed payload allows exactly this key with exactly this reach: a statement for one
- *  key, or for a smaller reach, allows no other. */
+/** Whether a signed payload allows exactly this key with exactly this reach and label: a
+ *  statement for one key, or for a smaller reach, allows no other. */
 export function allowsExactly(
   payload: Record<string, unknown>,
   key: string,
@@ -151,8 +157,98 @@ export function allowsExactly(
   return (
     payload.key === asked.key &&
     payload.actor === asked.actor &&
+    payload.label === asked.label &&
     JSON.stringify(payload.paths) === JSON.stringify(asked.paths) &&
     (payload.provide || null) === asked.provide
+  );
+}
+
+/** One piece of the consent page's statement: plain words, which are the same on every key page;
+ *  a fact that this mind checked; a word that the link gave and nobody checked; or the member who
+ *  signs. */
+export type StatementPart = { text: string; from?: "checked" | "link" | "you" };
+
+/** THE STATEMENT THAT A MEMBER SIGNS ON `/keys/enrol`, as sentences of parts, so that the page
+ *  can show which words this mind checked and which words only the link gave. `key` is the key's
+ *  id, `person` the member's email. The label and the actor are the link's: the passkey signs
+ *  them (`enrolPayloadOf`), but nobody checked them. */
+export function statementInParts(
+  ask: ServiceKeyRequest,
+  facts: { domain: string; key: string; person: string },
+): StatementPart[][] {
+  const checked = (text: string): StatementPart => ({ text, from: "checked" });
+  const link = (text: string): StatementPart => ({ text, from: "link" });
+  const domain = checked(facts.domain);
+  const lent = ask.provide && checked(`itx.${ask.provide}`);
+  const adds: StatementPart[] = ask.paths.length
+    ? [
+        {
+          text:
+            ask.paths.length === 1 ? "add events to the context " : "add events to the contexts ",
+        },
+        ...listOf(ask.paths.map(checked)),
+        {
+          text:
+            ask.paths.length === 1 ? " and the contexts under it" : " and the contexts under them",
+        },
+      ]
+    : [];
+  const may: StatementPart[] = lent
+    ? [
+        { text: "lend its functions to " },
+        domain,
+        { text: " as " },
+        lent,
+        ...(adds.length ? [{ text: ", and " }, ...adds] : []),
+      ]
+    : [...adds, { text: ", in " }, domain];
+  const sentences: StatementPart[][] = [
+    [
+      { text: "I, " },
+      { text: facts.person, from: "you" },
+      { text: ", let key " },
+      checked(facts.key.slice(0, 8)),
+      { text: " " },
+      ...may,
+      { text: ", until a member removes it." },
+    ],
+  ];
+  if (lent)
+    sentences.push(
+      [
+        { text: "The agents of " },
+        domain,
+        { text: " call them, so the key's holder sees what they send." },
+      ],
+      [
+        { text: "If " },
+        lent,
+        { text: " is lent to " },
+        domain,
+        { text: " now, the key's holder takes it over." },
+      ],
+    );
+  if (adds.length)
+    sentences.push([
+      { text: "Each event that it adds shows the name " },
+      link(ask.actor),
+      { text: " and this key." },
+    ]);
+  // serviceKeyAsked (./keys-pages.ts) has compared the key with the one the stack's Cloud publishes
+  if (ask.actor === CLOUD_ACTOR)
+    sentences.push([domain, { text: " checked that this is the key of its iterate Cloud." }]);
+  sentences.push([
+    { text: "The link says that the key belongs to " },
+    link(`“${ask.label}”`),
+    { text: "." },
+  ]);
+  return sentences;
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function listOf(items: StatementPart[]): StatementPart[] {
+  return items.flatMap((item, index) =>
+    index === 0 ? [item] : [{ text: index === items.length - 1 ? " and " : ", " }, item],
   );
 }
 

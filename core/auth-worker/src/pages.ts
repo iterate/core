@@ -7,10 +7,6 @@ import { clientTile, knownMarkOf, shownLogoOf } from "./client-mark.ts";
 export const text = (value: string) =>
   value.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
 
-// No `form-action`: browsers hold a form's redirects to it too, and Allow redirects to the client,
-// wherever that is.
-const CSP = `default-src 'none'; style-src ${plainPageCssHash}; frame-ancestors 'none'; base-uri 'none'`;
-
 /** One page. `wide` is a page a person reads or works in (the keys, the members);
  *  without it the page is the narrow card of one question and one action. */
 export function page(
@@ -19,6 +15,9 @@ export function page(
     body: string;
     status?: number;
     script?: string;
+    /** A page's own CSS over the plain page's stylesheet. The CSP allows it by the page's nonce,
+     *  as it allows the script, so `plainPageCssHash` stays the hash of the shared stylesheet. */
+    style?: string;
     wide?: boolean;
     /** Who asks for the mind, as their tile (client-mark.ts), for the card's head. */
     asker?: string;
@@ -31,14 +30,19 @@ export function page(
   },
   headers = new Headers(),
 ): Response {
-  const nonce = input.script && crypto.randomUUID();
+  const nonce = (input.script || input.style) && crypto.randomUUID();
   headers.set("content-type", "text/html; charset=utf-8");
   headers.set("cache-control", "no-store");
   headers.set(
     "content-security-policy",
     [
-      CSP,
-      ...(nonce ? [`script-src 'nonce-${nonce}'`, "connect-src 'self'"] : []),
+      // No `form-action`: browsers hold a form's redirects to it too, and Allow redirects to the
+      // client, wherever that is.
+      "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      input.style
+        ? `style-src ${plainPageCssHash} 'nonce-${nonce}'`
+        : `style-src ${plainPageCssHash}`,
+      ...(input.script ? [`script-src 'nonce-${nonce}'`, "connect-src 'self'"] : []),
       ...(input.imageOrigin ? [`img-src ${input.imageOrigin}`] : []),
     ].join("; "),
   );
@@ -46,13 +50,13 @@ export function page(
   // `same-origin`, not `no-referrer`: under `no-referrer` a browser sends `Origin: null` on a
   // form's POST, and the consent and sign-out forms are checked by their Origin.
   headers.set("referrer-policy", "same-origin");
-  const body = nonce
+  const body = input.script
     ? `${input.body}<script nonce="${nonce}">${input.script}</script>`
     : input.body;
   return new Response(
     standalonePage({
       title: input.title,
-      head: "",
+      head: input.style ? `<style nonce="${nonce}">${input.style}</style>` : "",
       body,
       wide: input.wide,
       asker: input.asker,

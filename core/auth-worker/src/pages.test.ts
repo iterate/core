@@ -3,6 +3,7 @@
 // pages are also written there as files, for a look in a browser.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { plainPageCssHash } from "iterate/standalone-page";
 import { expect, test } from "vitest";
 import { emailSignInResponse } from "./email-sign-in.ts";
 import type { Env } from "./env.ts";
@@ -287,6 +288,18 @@ test("the account chooser says who is signed in, goes on as them, or signs out a
   expect(signedOut).toContain(
     `<p class="center">You are signed out of &#60;b&#62;cloud.${DOMAIN}&#60;/b&#62;. You are still signed in to ${DOMAIN} as <strong>guest@example.net</strong>.</p>`,
   );
+});
+
+test("a page's own style is allowed by the page's nonce, beside the shared stylesheet's hash", async () => {
+  const answer = page({ title: "Styled", body: "<p>x</p>", style: ".x { color: red; }" });
+  const policy = answer.headers.get("content-security-policy") || "";
+  const nonce = /style-src \S+ 'nonce-([^']+)'/.exec(policy)?.[1];
+  expect(policy).toContain(`style-src ${plainPageCssHash} 'nonce-${nonce}'`);
+  expect(policy).not.toContain("script-src");
+  expect(await answer.text()).toContain(`<style nonce="${nonce}">.x { color: red; }</style>`);
+  // a page with no style of its own allows the shared stylesheet alone
+  const plain = page({ title: "Plain", body: "" }).headers.get("content-security-policy");
+  expect(plain?.split("; ")).toContain(`style-src ${plainPageCssHash}`);
 });
 
 async function kept(name: string, answer: Response) {

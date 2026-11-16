@@ -8,6 +8,8 @@ import {
   allowsExactly,
   enrolPayloadOf,
   serviceKeyRequestOf,
+  type StatementPart,
+  statementInParts,
   underPaths,
 } from "./key-rules.ts";
 
@@ -142,7 +144,7 @@ test("a statement names a context by its own path, with no segment the mind woul
     expect(canonicalPath(path)).toBe(false);
 });
 
-test("a member's signature allows a service's key only for that key and that reach", () => {
+test("a member's signature allows a service's key only for that key, that reach and that label", () => {
   const ask = {
     actor: "bridge-whatsapp",
     label: "WhatsApp",
@@ -154,6 +156,7 @@ test("a member's signature allows a service's key only for that key and that rea
   expect(signed).toEqual({
     key: "key-1",
     actor: "bridge-whatsapp",
+    label: "WhatsApp",
     paths: ["/integrations/whatsapp/"],
     provide: "whatsapp",
   });
@@ -165,7 +168,78 @@ test("a member's signature allows a service's key only for that key and that rea
     allowsExactly(signed, "key-1", { ...ask, actor: "bridge-other" }),
     allowsExactly(signed, "key-1", { ...ask, paths: ["/integrations/"] }),
     allowsExactly(signed, "key-1", { ...ask, provide: "whatsapp.jonas" }),
+    // the page showed another label than the one the link now gives
+    allowsExactly(signed, "key-1", { ...ask, label: "WhatsApp for Jonas" }),
     // the statement that adds a person's passkey names a key and nothing more
     allowsExactly({ key: "key-1" }, "key-1", ask),
-  ]).toEqual([true, false, false, false, false, false, false]);
+  ]).toEqual([true, false, false, false, false, false, false, false]);
 });
+
+const FACTS = { domain: "example.com", key: "keyaaaaabbbbbccccc", person: "member@example.net" };
+const ASK = { actor: "bridge-github", label: "GitHub", publicKey: "MFkw", paths: [] };
+
+test("the statement for a key that adds events names its one context, and where the link speaks", () => {
+  expect(marked(statementInParts({ ...ASK, paths: ["/integrations/github/"] }, FACTS))).toEqual([
+    "I, {you:member@example.net}, let key {checked:keyaaaaa} add events to the context {checked:/integrations/github/} and the contexts under it, in {checked:example.com}, until a member removes it.",
+    "Each event that it adds shows the name {link:bridge-github} and this key.",
+    "The link says that the key belongs to {link:“GitHub”}.",
+  ]);
+});
+
+test("the statement for a key that adds events to two contexts names both", () => {
+  const ask = { ...ASK, paths: ["/integrations/github/", "/integrations/linear/"] };
+  expect(marked(statementInParts(ask, FACTS))[0]).toBe(
+    "I, {you:member@example.net}, let key {checked:keyaaaaa} add events to the contexts {checked:/integrations/github/} and {checked:/integrations/linear/} and the contexts under them, in {checked:example.com}, until a member removes it.",
+  );
+  const three = { ...ask, paths: [...ask.paths, "/integrations/slack/"] };
+  expect(marked(statementInParts(three, FACTS))[0]).toContain(
+    "{checked:/integrations/github/}, {checked:/integrations/linear/} and {checked:/integrations/slack/} and the contexts under them",
+  );
+});
+
+test("the statement for a key that lends says that its holder sees what the agents send, and takes the name over", () => {
+  expect(marked(statementInParts({ ...ASK, provide: "github" }, FACTS))).toEqual([
+    "I, {you:member@example.net}, let key {checked:keyaaaaa} lend its functions to {checked:example.com} as {checked:itx.github}, until a member removes it.",
+    "The agents of {checked:example.com} call them, so the key's holder sees what they send.",
+    "If {checked:itx.github} is lent to {checked:example.com} now, the key's holder takes it over.",
+    "The link says that the key belongs to {link:“GitHub”}.",
+  ]);
+});
+
+test("the statement for a key that lends and adds events says both in its first sentence", () => {
+  const ask = { ...ASK, paths: ["/integrations/github/"], provide: "github" };
+  expect(marked(statementInParts(ask, FACTS))).toEqual([
+    "I, {you:member@example.net}, let key {checked:keyaaaaa} lend its functions to {checked:example.com} as {checked:itx.github}, and add events to the context {checked:/integrations/github/} and the contexts under it, until a member removes it.",
+    "The agents of {checked:example.com} call them, so the key's holder sees what they send.",
+    "If {checked:itx.github} is lent to {checked:example.com} now, the key's holder takes it over.",
+    "Each event that it adds shows the name {link:bridge-github} and this key.",
+    "The link says that the key belongs to {link:“GitHub”}.",
+  ]);
+});
+
+test("the statement for the iterate Cloud's key says that the mind checked the key", () => {
+  const ask = { ...ASK, actor: "iterate-cloud", label: "iterate Cloud", paths: ["/integrations/"] };
+  expect(marked(statementInParts(ask, FACTS)).slice(-2)).toEqual([
+    "{checked:example.com} checked that this is the key of its iterate Cloud.",
+    "The link says that the key belongs to {link:“iterate Cloud”}.",
+  ]);
+});
+
+test("the label and the actor are the link's words; the key, the contexts, the lent name and the domain are checked", () => {
+  const ask = { ...ASK, paths: ["/integrations/github/"], provide: "github" };
+  const parts = statementInParts(ask, FACTS).flat();
+  const from = (kind: StatementPart["from"]) =>
+    new Set(parts.filter((part) => part.from === kind).map((part) => part.text));
+  expect(from("link")).toEqual(new Set(["bridge-github", "“GitHub”"]));
+  expect(from("checked")).toEqual(
+    new Set(["keyaaaaa", "/integrations/github/", "itx.github", "example.com"]),
+  );
+  expect(from("you")).toEqual(new Set(["member@example.net"]));
+});
+
+/** The statement as text, each part that is not plain words marked `{from:text}`. */
+function marked(sentences: StatementPart[][]) {
+  return sentences.map((sentence) =>
+    sentence.map((part) => (part.from ? `{${part.from}:${part.text}}` : part.text)).join(""),
+  );
+}

@@ -6,7 +6,7 @@
 // ITERATE_PROTOTYPE_TOKEN       the stand-in member token for the mind's API: the mind's side,
 //                               which calls what the bridge lends
 // ITERATE_PROOF_SESSION_COOKIE  a member's session cookie's value on iterate.<domain>: the person,
-//                               who presses Allow and Remove
+//                               who signs on the consent page and presses Remove
 // ITERATE_SMOKE_APPROVER_KEY    the same member's software key of the stack's `auth.keys` (P-256
 //                               PKCS#8, base64url): it signs each press, as the page's passkey does
 // ITERATE_PROOF_HOLD_SECONDS    watch the bridge for this long before the removal (default 0):

@@ -776,9 +776,9 @@ export default () => ({
       ),
     );
     bridgeKey = await keyIdOf(link.searchParams.get("publicKey") || "");
-    // the consent page itself, at the phone's width: Allow is a press of the member's passkey
+    // the consent page itself, at the phone's width: signing is a press of the member's passkey
     await page.goto(String(link));
-    await page.getByRole("button", { name: "Allow with your passkey" }).click();
+    await page.getByRole("button", { name: "Sign with your passkey" }).click();
     await page.getByRole("heading", { name: "Added" }).waitFor({ timeout: 15_000 });
     await until("the lend", 60, async () => said.includes("itx.proofWhatsapp.jonas is live"));
     const free = await send(`free ${marker}`);

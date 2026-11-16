@@ -154,7 +154,7 @@ export async function bridgeToken(input: {
       );
     if (!asked)
       input.wait(
-        `This bridge's key is not allowed on ${input.address} yet. A member of the mind opens this link and presses Allow:\n\n  ${link}\n\nWaiting for that...`,
+        `This bridge's key is not allowed on ${input.address} yet. A member of the mind opens this link and signs with a passkey:\n\n  ${link}\n\nWaiting for that...`,
       );
     if (Date.now() + askEveryMs > waitUntil)
       throw new Error(`Nobody allowed this bridge's key in time. Open ${link} and run this again.`);

@@ -20,6 +20,8 @@ import {
   scopeInWords,
   type ServiceKeyRequest,
   serviceKeyRequestOf,
+  statementInParts,
+  type StatementPart,
 } from "./key-rules.ts";
 import { holdsPasskey } from "./keys.ts";
 import { standingOf } from "./members.ts";
@@ -115,7 +117,7 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
           proven,
           owed,
         );
-  if (get) return enrolPage(env, url);
+  if (get) return enrolPage(env, url, session);
   return serviceKeyAnswered(env, request, session);
 }
 
@@ -132,6 +134,9 @@ type KeyRow = {
   last_used_at: number | null;
   revoked_at: number | null;
 };
+
+/** A row of `/keys`: a key and the address of the member who added it. */
+type ListedKey = KeyRow & { added_by: string; added_by_email: string | null };
 
 const day = (at: number) => new Date(at).toISOString().slice(0, 10);
 
@@ -150,13 +155,20 @@ async function keysPage(
   await env.OAUTH_KV.put(`${CHALLENGE_KEY_PREFIX}${challenge}`, session.userId, {
     expirationTtl: CHALLENGE_SECONDS,
   });
+  // A person's own keys and the services' keys that this person allowed, removed ones too; and
+  // every live key of a service that another member allowed: any member may remove it, and sees
+  // who allowed it.
   const { results } = await env.DB.prepare(
-    `select * from keys where user_id = ?1 or (actor is not null and added_by = ?1) order by added_at`,
+    `select keys.*, adder.email as added_by_email from keys
+     left join users as adder on adder.id = keys.added_by
+     where keys.user_id = ?1
+        or (keys.actor is not null and (keys.added_by = ?1 or keys.revoked_at is null))
+     order by keys.added_at`,
   )
     .bind(session.userId)
-    .all<KeyRow>();
+    .all<ListedKey>();
   const nextField = next ? `<input type="hidden" name="next" value="${text(next)}">` : "";
-  const item = (key: KeyRow) => {
+  const item = (key: ListedKey) => {
     const scope = scopeInWords({
       paths: JSON.parse(key.paths || "[]") as string[],
       provide: key.provide || undefined,
@@ -170,7 +182,11 @@ async function keysPage(
     const used = key.provide
       ? `, ${key.last_used_at ? `last used ${day(key.last_used_at)}` : "never used"}`
       : "";
-    const when = `added ${day(key.added_at)}${used}`;
+    const by =
+      key.actor && key.added_by !== session.userId
+        ? `, allowed by ${text(key.added_by_email || "a member")}`
+        : "";
+    const when = `added ${day(key.added_at)}${by}${used}`;
     // a session that owes a passkey removes nothing, so the ticket's shows the lost keys bare
     const remove = key.revoked_at
       ? `<span class="muted">removed</span>`
@@ -201,7 +217,7 @@ async function keysPage(
     title: `Your keys for ${domain}`,
     wide: true,
     body: `<h1>Your keys for ${text(domain)}</h1>
-      <p>A key lets you sign in to ${text(domain)} and approve things in it: a passkey in your password manager, or a security key such as a YubiKey.</p>
+      <p>A key lets you sign in to ${text(domain)} and approve things in it: a passkey in your password manager, or a security key such as a YubiKey. The list also shows the keys that members allowed for services, and any member can remove one of those.</p>
       ${results.length ? `<ul>${results.map(item).join("")}</ul>` : `<p class="muted">You have no keys here yet.</p>`}
       <form id="add" class="stack" data-challenge="${text(challenge)}" data-user="${text(session.userId)}" data-email="${text(session.email)}" data-rp="${text(new URL(issuer).hostname)}"${owed ? "" : " data-sign"}>
         <input name="label" required maxlength="100" size="28" aria-label="Name" placeholder="Name it, such as YubiKey">
@@ -392,10 +408,12 @@ async function removed(env: Env, request: Request, session: BrowserSession): Pro
     iterateConfigOf(env).trustedClients,
   );
   const at = Date.now();
+  // A person's keys are that person's alone. Any member removes a service's key: a mind's
+  // services are every member's to stop.
   const row = await env.DB.prepare(
     `update keys set revoked_at = ?1
      where id = ?2 and revoked_at is null
-       and (user_id = ?3 or (actor is not null and added_by = ?3))
+       and (user_id = ?3 or actor is not null)
      returning id, actor, label`,
   )
     .bind(at, id, session.userId)
@@ -466,7 +484,7 @@ async function serviceKeyAsked(
   return { refused };
 }
 
-async function enrolPage(env: Env, url: URL): Promise<Response> {
+async function enrolPage(env: Env, url: URL, session: BrowserSession): Promise<Response> {
   const { domain, trustedClients } = iterateConfigOf(env);
   const ask = await serviceKeyAsked(env, url.searchParams);
   if ("refused" in ask) return errorPage(ask.refused, 400);
@@ -475,23 +493,37 @@ async function enrolPage(env: Env, url: URL): Promise<Response> {
   const held = await nameHeldByAnotherKey(env, key, ask);
   if (held) return held;
   const next = honouredNext(url.searchParams.get("next"), issuerOf(env), trustedClients);
-  const label = text(ask.label);
   const hidden = (name: string, value: string) =>
     `<input type="hidden" name="${name}" value="${text(value)}">`;
+  const statement = statementHtml(statementInParts(ask, { domain, key, person: session.email }));
+  const cannot = ask.provide
+    ? "The key cannot approve requests, and it reads nothing but what the agents send it."
+    : "The key cannot read anything, approve requests or reach an agent.";
+  const start = text(key.slice(0, 8));
   return page({
-    title: `Add a key for ${ask.label}?`,
-    body: `<h1>Add a key for ${label}?</h1>
-      <p>${label} asks to add a key to ${text(domain)}. With it, ${label} can ${text(scopeInWords(ask))}. It cannot approve requests or read anything.</p>
-      ${
-        ask.provide
-          ? `<p>The agents of ${text(domain)} call what it lends, so ${label} sees what they send it. If itx.${text(ask.provide)} is lent to ${text(domain)} now, ${label} takes it over. The key has no end date: it works until you remove it on <a href="${KEYS_PATH}">Your keys</a>.</p>`
-          : ""
-      }
-      <p class="muted">Key ${text(key.slice(0, 8))}, for ${text(ask.actor)}.</p>
+    title: "Sign this statement?",
+    // The consent page's own look, over the plain page's stylesheet. A part may break across lines,
+    // so a long path still fits a phone, and each line of it keeps its tint.
+    style: `
+.statement { padding: 0.75rem 0.875rem; border: 1px solid var(--border); border-radius: var(--radius); line-height: 1.75; }
+.part-checked, .part-link, .part-you { padding: 0.0625rem 0.3125rem; border-radius: calc(var(--radius) - 4px); overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.part-checked { background: color-mix(in oklab, var(--success) 14%, transparent); }
+.part-link { border: 1px dashed color-mix(in oklab, var(--warning) 75%, transparent); background: color-mix(in oklab, var(--warning) 8%, transparent); }
+.part-you { background: color-mix(in oklab, var(--foreground) 8%, transparent); }
+.legend { font-size: 0.8125rem; line-height: 1.9; }
+summary { cursor: pointer; }`,
+    body: `<h1>Sign this statement?</h1>
+      <p class="statement">${statement}</p>
+      <p class="muted legend"><span class="${PART_CLASS.checked}">checked</span> ${text(domain)} checked this. <span class="${PART_CLASS.link}">from the link</span> The link says this, and nobody checked it. Plain words are the same on every key page.</p>
+      <p>${cannot} Any member can remove it on <a href="${KEYS_PATH}">Your keys</a>.</p>
+      <details>
+        <summary>What is a key?</summary>
+        <p class="muted">A key has two halves. Its holder keeps the private half and signs with it; that half never comes to ${text(domain)}. ${text(domain)} keeps the public half and checks each signature with it. ${start} is the start of the public half's fingerprint.</p>
+      </details>
       <form method="post" action="${ENROL_PATH}" class="actions" data-enrol="${text(JSON.stringify(enrolPayloadOf(key, ask)))}">
         ${hidden("actor", ask.actor)}${hidden("label", ask.label)}${hidden("publicKey", ask.publicKey)}${hidden("paths", ask.paths.join(","))}${ask.provide ? hidden("provide", ask.provide) : ""}${next ? hidden("next", next) : ""}
         ${hidden("decision", "cancel")}${hidden("signed", "")}
-        <button type="submit" data-allow>Allow with your passkey</button>
+        <button type="submit" data-allow>Sign with your passkey</button>
         <button type="submit" class="link">Cancel</button>
       </form>
       <p id="status" class="muted" role="status"></p>`,
@@ -499,8 +531,27 @@ async function enrolPage(env: Env, url: URL): Promise<Response> {
   });
 }
 
-// Allow is a statement one of the person's passkeys signs, of the key and all it may do as the
-// page says it. Cancel posts the form as it is.
+/** A class for each kind of part of the statement (./key-rules.ts `StatementPart`). */
+const PART_CLASS = { checked: "part-checked", link: "part-link", you: "part-you" } as const;
+
+/** The statement as HTML: each part's text escaped, and a part that is no plain word in a span of
+ *  its kind. The label and the actor come from a link that anyone can write. */
+export function statementHtml(sentences: StatementPart[][]): string {
+  return sentences
+    .map((sentence) =>
+      sentence
+        .map((part) =>
+          part.from
+            ? `<span class="${PART_CLASS[part.from]}">${text(part.text)}</span>`
+            : text(part.text),
+        )
+        .join(""),
+    )
+    .join(" ");
+}
+
+// The press of "Sign with your passkey" is a statement one of the person's passkeys signs: the key,
+// all it may do and its label, as the page says it. Cancel posts the form as it is.
 const ENROL_SCRIPT = `
 const form = document.querySelector("form[data-enrol]");
 const status = document.getElementById("status");
@@ -620,7 +671,7 @@ async function nameHeldByAnotherKey(
   const held = otherKeyLending(results, key, ask.provide);
   if (!held) return null;
   return errorPage(
-    `itx.${ask.provide} is lent to ${iterateConfigOf(env).domain} by another key: ${held.label} (key ${held.id.slice(0, 8)}, added ${day(held.added_at)}). A second key for that name would take it over. If this key is to replace that one, the member who allowed that one removes it on Your keys first.`,
+    `itx.${ask.provide} is lent to ${iterateConfigOf(env).domain} by another key: ${held.label} (key ${held.id.slice(0, 8)}, added ${day(held.added_at)}). A second key for that name would take it over. If this key is to replace that one, a member removes it on Your keys first.`,
     409,
     undefined,
     [{ href: KEYS_PATH, label: "Your keys" }],
