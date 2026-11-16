@@ -1,9 +1,10 @@
 // catalog.test.ts — how the agents catalog on `/agents` folds the contexts that announce themselves
 // below it, death certificates from any context and the copies of each agent's events, as
 // declarative `{ events → state }` rows on the shared harness (iterate/stream/test-support
-// `reduceProcessor`), and which `itx/described` line each copy puts on the agent's own log.
+// `reduceProcessor`), and which `itx/described` line and title each copy puts on the agent's own
+// log.
 
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "../stream/processor.ts";
 import { committedEvent, reduceProcessor } from "../stream/test-support.ts";
 import { AgentCatalogProcessor, type AgentCatalogState } from "./catalog.ts";
@@ -343,6 +344,163 @@ test.for<{
   },
 ])("an agent's line in the mind's catalog: $name", async ({ events, described }) => {
   const { processor, appended } = catalog();
+  await processAll(processor, events);
+  expect(
+    appended.filter(({ event }) => event.idempotencyKey.startsWith("agents/described:")),
+  ).toEqual(
+    described.map(({ path, key, text }) => ({
+      path,
+      event: {
+        type: "events.iterate.com/itx/described",
+        idempotencyKey: key,
+        payload: { description: text },
+      },
+    })),
+  );
+});
+
+test.for<{
+  name: string;
+  events: Fact[];
+  listed?: { path: string; metadata?: Record<string, unknown> }[];
+  titled: { key: string; metadata: Record<string, unknown> }[];
+}>([
+  {
+    name: "a title the agent gave itself: metadata.title, keyed by the copied event",
+    events: [announced(path), title("Fix the build", 10)],
+    titled: [{ key: `agents/titled:${path}@10`, metadata: { title: "Fix the build" } }],
+  },
+  {
+    name: "a title over 80 characters: its first 80",
+    events: [announced(path), title("x".repeat(100), 10)],
+    titled: [{ key: `agents/titled:${path}@10`, metadata: { title: "x".repeat(80) } }],
+  },
+  {
+    name: "a person's first line: no title",
+    events: [announced(path), words("Please fix the build", 10)],
+    titled: [],
+  },
+  {
+    name: "a second, newer title of its own: written once more",
+    events: [announced(path), title("Fix the build", 10), title("Fix the docs", 20)],
+    titled: [
+      { key: `agents/titled:${path}@10`, metadata: { title: "Fix the build" } },
+      { key: `agents/titled:${path}@20`, metadata: { title: "Fix the docs" } },
+    ],
+  },
+  {
+    name: "a description, an activity or the same title again: no title",
+    events: [
+      announced(path),
+      title("Fix the build", 10),
+      copy({ description: "CI is red" }, 11),
+      activity(12),
+      title("Fix the build", 13),
+    ],
+    titled: [{ key: `agents/titled:${path}@10`, metadata: { title: "Fix the build" } }],
+  },
+  {
+    name: "a batch delivered again: nothing more",
+    events: [announced(path), title("Fix the build", 10), title("Fix the build", 10)],
+    titled: [{ key: `agents/titled:${path}@10`, metadata: { title: "Fix the build" } }],
+  },
+  {
+    name: "the context's listed metadata: kept, its title replaced, a child's row not read",
+    events: [announced(path), title("Fix the build", 10)],
+    listed: [
+      { path: `${path}/sub`, metadata: { child: true } },
+      { path, metadata: { pinned: true, title: "A person's title" } },
+    ],
+    titled: [
+      { key: `agents/titled:${path}@10`, metadata: { pinned: true, title: "Fix the build" } },
+    ],
+  },
+])("an agent's title in the mind's catalog: $name", async ({ events, listed, titled }) => {
+  const { processor, appended } = catalog(listed);
+  await processAll(processor, events);
+  expect(appended.filter(({ event }) => event.idempotencyKey.startsWith("agents/titled:"))).toEqual(
+    titled.map(({ key, metadata }) => ({
+      path,
+      event: {
+        type: "events.iterate.com/itx/described",
+        idempotencyKey: key,
+        payload: { metadata },
+      },
+    })),
+  );
+});
+
+test("the listed row is read once for each change of an agent's own title, and never for the same title, a description or an activity", async () => {
+  const { processor, reads } = catalog();
+  await processAll(processor, [
+    announced(path),
+    title("Fix the build", 10),
+    title("Fix the build", 11),
+    copy({ description: "CI is red" }, 12),
+    activity(13),
+    title("Fix the docs", 20),
+  ]);
+  expect(reads).toEqual(["/", "/"]);
+});
+
+test("a context whose metadata would be too long with a title keeps it: no title is written", async () => {
+  const reported = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { processor, appended } = catalog([{ path, metadata: { notes: "x".repeat(3_990) } }]);
+  await processAll(processor, [announced(path), title("Fix the build", 10)]);
+  expect(appended.filter(({ event }) => event.idempotencyKey.startsWith("agents/titled:"))).toEqual(
+    [],
+  );
+  reported.mockRestore();
+});
+
+test("a mind that refuses the read writes no title, and says so once for each agent", async () => {
+  const reported = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { processor, appended } = catalog([], true);
+  await processAll(processor, [
+    announced(path),
+    title("Fix the build", 10),
+    title("Fix the docs", 20),
+  ]);
+  expect(appended.filter(({ event }) => event.idempotencyKey.startsWith("agents/titled:"))).toEqual(
+    [],
+  );
+  expect(
+    reported.mock.calls.filter((call) => JSON.stringify(call).includes("agents.catalog.titled")),
+  ).toHaveLength(1);
+  reported.mockRestore();
+});
+
+/** The catalog's processor, with a root that records each append it is asked for and lists
+ *  `listed` as the mind's catalog of contexts. */
+function catalog(
+  listed: { path: string; metadata?: Record<string, unknown> }[] = [],
+  refuse = false,
+) {
+  const appended: { path: string; event: { idempotencyKey: string; payload: unknown } }[] = [];
+  const reads: string[] = [];
+  const itx = {
+    cd: (at: string) => ({
+      append: async (event: { idempotencyKey: string; payload: unknown }) => {
+        appended.push({ path: at, event });
+        return [];
+      },
+      contexts: {
+        list: async () => {
+          reads.push(at);
+          if (refuse) throw new Error("refused");
+          return at === "/" ? listed : [];
+        },
+      },
+    }),
+    [Symbol.dispose]() {},
+  };
+  // The processor reaches only `cd(path).append` and `cd("/").contexts.list`: the fake has nothing else.
+  const processor = new AgentCatalogProcessor(() => itx as never);
+  return { processor, appended, reads };
+}
+
+/** Each of `events` handed to `processEvent` in turn, its work done before the next. */
+async function processAll(processor: AgentCatalogProcessor, events: Fact[]) {
   for (const [index, fact] of events.entries()) {
     const blockers: (() => Promise<unknown>)[] = [];
     processor.processEvent({
@@ -356,33 +514,6 @@ test.for<{
     });
     for (const work of blockers) await work();
   }
-  expect(appended).toEqual(
-    described.map(({ path, key, text }) => ({
-      path,
-      event: {
-        type: "events.iterate.com/itx/described",
-        idempotencyKey: key,
-        payload: { description: text },
-      },
-    })),
-  );
-});
-
-/** The catalog's processor, with a root that records each append it is asked for. */
-function catalog() {
-  const appended: { path: string; event: unknown }[] = [];
-  const itx = {
-    cd: (at: string) => ({
-      append: async (event: unknown) => {
-        appended.push({ path: at, event });
-        return [];
-      },
-    }),
-    [Symbol.dispose]() {},
-  };
-  // The processor reaches only `cd(path).append`: the fake has nothing else.
-  const processor = new AgentCatalogProcessor(() => itx as never);
-  return { processor, appended };
 }
 
 /** `fact` as the engine hands it over, at `offset` on `/agents`. */

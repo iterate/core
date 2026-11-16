@@ -107,6 +107,8 @@ export class AgentCatalogProcessor extends StreamProcessor<
 > {
   readonly contract = AgentCatalogContract;
   readonly #getItx: () => Pick<IterateContextApi, "cd"> & Disposable;
+  /** The agents whose title could not be written, each reported once. */
+  readonly #titleFaults = new Set<string>();
 
   /** `getItx`: the scope of `/agents`, which reaches each agent's own log (`processEvent`). */
   constructor(getItx: () => Pick<IterateContextApi, "cd"> & Disposable) {
@@ -201,7 +203,17 @@ export class AgentCatalogProcessor extends StreamProcessor<
    *  `itx/*` event. The key is the copied event's, so a batch delivered again appends nothing. An
    *  agent whose line has not changed since this was deployed gets it at its next change. The
    *  newest description stands, so a person's own stands until the agent's line changes again. A
-   *  failed append is reported, and waits for the agent's next change: it never holds the catalog. */
+   *  failed append is reported, and waits for the agent's next change: it never holds the catalog.
+   *
+   *  AND ITS TITLE, as `metadata.title` of an `itx/described` of its own (`agentTitle`), when a
+   *  copy changes the title the agent gave itself: the first words a person sent are no title. The
+   *  append carries `metadata` only, so the description stays the purpose alone. `metadata` is one
+   *  record, replaced whole, so the title is merged into the record the mind's catalog lists for
+   *  the agent's context (`contextMetadata`); that row can be one wake behind the log, so a key a
+   *  person wrote in the same wake can be lost. The newest stands: a title a person wrote in About
+   *  stands until the agent's own title changes again, and then the agent's lands once. The same
+   *  rules as for the description hold: keyed by the copied event, reported when it fails, never
+   *  holding the catalog. */
   override processEvent({
     event,
     state,
@@ -212,21 +224,46 @@ export class AgentCatalogProcessor extends StreamProcessor<
     const from = event.source.copiedFrom;
     if (!from) return;
     const description = agentDescription(state.agents[from.path]);
-    if (!description || description === agentDescription(previousState.agents[from.path])) return;
-    blockProcessorWhile(async () => {
-      using itx = this.#getItx();
-      await itx
-        .cd(from.path)
-        .append({
-          type: "events.iterate.com/itx/described",
-          idempotencyKey: `agents/described:${from.path}@${String(from.offset)}`,
-          payload: { description },
-        })
-        .catch((error: unknown) => {
+    if (description && description !== agentDescription(previousState.agents[from.path]))
+      blockProcessorWhile(async () => {
+        using itx = this.#getItx();
+        await itx
+          .cd(from.path)
+          .append({
+            type: "events.iterate.com/itx/described",
+            idempotencyKey: `agents/described:${from.path}@${String(from.offset)}`,
+            payload: { description },
+          })
+          .catch((error: unknown) => {
+            if (errorCode(error) === "IDEMPOTENCY_CONFLICT") return;
+            reportIssue("agents.catalog.described", error, { path: from.path });
+          });
+      });
+    const title = agentTitle(state.agents[from.path]);
+    if (title && title !== agentTitle(previousState.agents[from.path]))
+      blockProcessorWhile(async () => {
+        using itx = this.#getItx();
+        try {
+          const metadata = { ...(await contextMetadata(itx, from.path)), title };
+          // The mind's catalog keeps a record only while it prints this short
+          // (core/itx/src/context/context-summary.ts): a longer one is dropped whole, so the
+          // title is not written over metadata that would be lost with it.
+          if (JSON.stringify(metadata).length > 4_000)
+            throw new Error("The context's metadata is too long to take a title.");
+          await itx.cd(from.path).append({
+            type: "events.iterate.com/itx/described",
+            idempotencyKey: `agents/titled:${from.path}@${String(from.offset)}`,
+            payload: { metadata },
+          });
+        } catch (error) {
           if (errorCode(error) === "IDEMPOTENCY_CONFLICT") return;
-          reportIssue("agents.catalog.described", error, { path: from.path });
-        });
-    });
+          // once for each context, while this instance lives: a mind that refuses the read or
+          // the write says so, and its issue log is not filled by every agent's every title
+          if (this.#titleFaults.has(from.path)) return;
+          this.#titleFaults.add(from.path);
+          reportIssue("agents.catalog.titled", error, { path: from.path });
+        }
+      });
   }
 }
 
@@ -238,6 +275,22 @@ function agentDescription(
   row: Pick<AgentCatalogState["agents"][string], "title" | "description"> | undefined,
 ): string | undefined {
   return (row?.description || row?.title)?.slice(0, 2_000);
+}
+
+/** An agent's title in the mind's catalog of contexts: only a title the agent gave itself, as the
+ *  first words a person sent are no title, at most 80 characters (what a list shows). */
+function agentTitle(
+  row: Pick<AgentCatalogState["agents"][string], "title" | "titleFromWords"> | undefined,
+): string | undefined {
+  if (!row?.title || row.titleFromWords) return undefined;
+  return row.title.slice(0, 80);
+}
+
+/** The metadata the mind's catalog of contexts lists for `path`, read from the first 50 rows under
+ *  it, the most recently active first: one bounded read. A context with no row there has none. */
+async function contextMetadata(itx: Pick<IterateContextApi, "cd">, path: string) {
+  const listed = await itx.cd("/").contexts.list({ under: path, limit: 50 });
+  return listed.find((context) => context.path === path)?.metadata;
 }
 
 /** The rows with `path` added: its parent the nearest ancestor that is a row, and every row below it
