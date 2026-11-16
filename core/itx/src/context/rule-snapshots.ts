@@ -64,8 +64,20 @@ class RuleSnapshotCache {
         }
         return held;
       }
-      const reading = this.#reading.get(name) || this.#read(name, read, held);
-      const snapshot = await this.#answerInTime(name, reading);
+      const borrowed = this.#reading.get(name);
+      const reading = borrowed || this.#read(name, read, held);
+      const snapshot = await this.#answerInTime(name, reading).catch((error: unknown) => {
+        if (!borrowed) throw error;
+        // Workerd may reject another request's wait without settling the read or its cleanup.
+        if (this.#reading.get(name) === reading) this.#reading.delete(name);
+        console.warn({
+          event: "rule-snapshot.platform-failure-borrowed-read",
+          name: "rulesSnapshot",
+          context: name,
+          message: String(error),
+        });
+        return undefined;
+      });
       if (snapshot && Date.now() < snapshot.expiresAt) return snapshot;
     }
     throw unavailableError(
