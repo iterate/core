@@ -96,7 +96,9 @@ export async function sandboxImageForAgent(
     image = `${REGISTRY}/${account}/${SANDBOX_IMAGE_REPOSITORY}@${PUBLISHED_SANDBOX_IMAGE.digest}`;
     const basic = await pushCredential(itx, account);
     const target = `https://${REGISTRY}/v2/${account}/${SANDBOX_IMAGE_REPOSITORY}`;
-    const token = await sourceToken();
+    const token = await sourceToken((words) =>
+      facts.append({ type: "sandbox-image/asked-again", payload: { step: "source token", words } }),
+    );
     const manifest = await manifestOf(token);
 
     // A blob the registry does not answer for is copied, as a deploy's copy does
@@ -293,10 +295,51 @@ function sourceOf() {
   return { host: host!, repo: path.join("/") };
 }
 
-/** ghcr.io gives an anonymous pull token for a public image. */
-async function sourceToken(): Promise<string> {
+/** ghcr.io gives an anonymous pull token for a public image. When it does not answer (a 5xx, or
+ *  no answer at all: on a new mind it timed out once with 522 and answered a minute later), it is
+ *  asked once more, on the platform's schedule for an upstream's passing fault: UPSTREAM_ONCE of
+ *  iterate/platform-retry, one repeat a second later, jittered down to between half and all of it,
+ *  with that module's log lines. A mind's config cannot load that module, so the one repeat is
+ *  written here. `askedAgain` hears the first failure's words when the second ask is answered, so
+ *  the pass keeps a fact of it. */
+async function sourceToken(askedAgain: (words: string) => Promise<unknown>): Promise<string> {
   const { host, repo } = sourceOf();
-  const answer = await fetch(`https://${host}/token?service=${host}&scope=repository:${repo}:pull`);
+  const ask = async () => {
+    const asked = await fetch(
+      `https://${host}/token?service=${host}&scope=repository:${repo}:pull`,
+    );
+    if (asked.status < 500) return asked;
+    throw new StepFailed("source token", asked.status, await asked.text());
+  };
+  const saidBy = (error: unknown) => (error instanceof Error ? error.message : String(error));
+  // every failure of this ask is ghcr's own, so the platform's kind for it is a lost connection
+  const failure = { kind: "disconnected", name: "source-token" };
+  let answer: Response;
+  try {
+    answer = await ask();
+  } catch (error) {
+    const retryInMs = Math.round(500 + Math.random() * 500);
+    console.warn({
+      event: "sandbox-image.platform-failure-retry",
+      ...failure,
+      message: saidBy(error),
+      attempt: 1,
+      retryInMs,
+    });
+    await new Promise((resolve) => setTimeout(resolve, retryInMs));
+    try {
+      answer = await ask();
+    } catch (again) {
+      console.warn({
+        event: "sandbox-image.platform-failure-gave-up",
+        ...failure,
+        message: saidBy(again),
+        attempts: 2,
+      });
+      throw again;
+    }
+    await askedAgain(saidBy(error));
+  }
   if (!answer.ok) throw new StepFailed("source token", answer.status, await answer.text());
   const body = z
     .object({ token: z.string().optional(), access_token: z.string().optional() })

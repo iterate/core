@@ -207,6 +207,49 @@ test("an upload that throws ends its download and answers failed with the blob's
   expect(hosts).toMatchObject({ contexts: { "/": [{ offset: 1, ...CONFIGURED }] } });
 });
 
+test("ghcr's token is asked a second time when it does not answer, and a second silence answers failed", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  // the pause before the second ask is a timer: it is run here, not waited for
+  const through = async (pass: Promise<unknown>) => {
+    for (let turn = 0; turn < 20; turn++) await vi.advanceTimersByTimeAsync(500);
+    return await pass;
+  };
+  const once = standIns({ tokenTimeouts: 1 });
+
+  expect(await through(sandboxImageForAgent(once.itx))).toMatchObject({
+    state: "ready",
+    copied: 5,
+  });
+  // exact: two asks of the token, the second answered, and the first failure kept as a fact
+  expect(once.requests.filter((request) => request.path === "/token").length).toBe(2);
+  expect(once).toMatchObject({
+    contexts: {
+      "/sandbox-image": [
+        {
+          type: "sandbox-image/asked-again",
+          payload: { step: "source token", words: "source token: 522 error code: 522\n" },
+        },
+        { type: "sandbox-image/configured" },
+        { type: "sandbox-image/pass", payload: { state: "ready" } },
+      ],
+    },
+  });
+
+  const twice = standIns({ tokenTimeouts: 2 });
+
+  expect(await through(sandboxImageForAgent(twice.itx))).toMatchObject({
+    state: "failed",
+    words: "source token: 522 error code: 522\n",
+    copied: 0,
+  });
+  // nothing reached the registry, and nothing was named
+  expect(twice.requests.filter((request) => request.host === "registry.cloudflare.com")).toEqual(
+    [],
+  );
+  expect(Object.keys(twice.contexts)).toEqual(["/sandbox-image"]);
+  vi.useRealTimers();
+});
+
 test("ghcr's storage gets no authorization; the registry gets the Basic credential and never the token's placeholder", async () => {
   const hosts = standIns();
 
@@ -283,6 +326,7 @@ function standIns({
   jumpAtFirstPatch = 0,
   breakDownloads = 0,
   patchThrows = 0,
+  tokenTimeouts = 0,
 }: {
   secretSet?: boolean;
   credentialStatus?: number;
@@ -294,8 +338,10 @@ function standIns({
   breakDownloads?: number;
   /** How many of the registry's PATCH requests throw before they read a byte. */
   patchThrows?: number;
+  /** How many asks of ghcr's token answer 522 before one answers. */
+  tokenTimeouts?: number;
 } = {}) {
-  const left = { breakDownloads, patchThrows };
+  const left = { breakDownloads, patchThrows, tokenTimeouts };
   const contexts: Record<string, { offset: number; type: string; payload: unknown }[]> = {};
   const cloudflare: { method: string; path: string; authorization: string | null }[] = [];
   const requests: { method: string; host: string; path: string; authorization: string | null }[] =
@@ -371,7 +417,10 @@ function standIns({
       authorization: headers.get("authorization"),
     });
     if (url.host === "ghcr.io") {
-      if (url.pathname === "/token") return json({ token: "ghcr-token" });
+      if (url.pathname === "/token")
+        return left.tokenTimeouts-- > 0
+          ? new Response("error code: 522\n", { status: 522 })
+          : json({ token: "ghcr-token" });
       if (
         url.pathname === `/v2/iterate/iterate-dev-image/manifests/${PUBLISHED_SANDBOX_IMAGE.digest}`
       )
