@@ -31,7 +31,7 @@ import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { itxHost } from "../host.ts";
 import { unavailableError } from "../unavailable.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
-import { calledNameOf, heldVerbOf } from "./held-verbs.ts";
+import { calledNameOf, heldVerbOf, rulesWithRowsUnder } from "./held-verbs.ts";
 import { SNAPSHOT_REREADS, type RuleSnapshot } from "./rule-snapshots.ts";
 
 // Apart from the scope on purpose: the core reduce and the DO's `list()` read it, and neither may
@@ -1142,12 +1142,19 @@ export class ItxExpressionResolver {
   // no name `itx.agents`. `readAt` is the context whose table read the name that holds the call,
   // and `read` reads any name as that context does, at `at`.
   async #heldBy(
-    verbRules: readonly ActRule[],
+    memberRules: readonly ActRule[],
     called: ItxExpression,
     extraArgs: readonly unknown[],
     at: string,
     rules: readonly ItxExpressionRewriteRule[],
   ) {
+    // A rule holds the rows under its name too (./held-verbs.ts `rulesWithRowsUnder`): the rows
+    // of this table, and of the root's, where a row may send a call on to here.
+    const rootRows = at === "/" ? [] : await this.#rowsOf("/");
+    const verbRules = rulesWithRowsUnder(
+      memberRules,
+      [...rules, ...rootRows].map((row) => row.match),
+    );
     // A name is read twice, as it is written and as a call with a hole (`verbWithAHole`): the
     // second reading shows a row that fills in the call's arguments (`filledInOrName`).
     const readHere = (verb: ItxExpression) => {
@@ -1201,10 +1208,7 @@ export class ItxExpressionResolver {
     let entered = verb;
     // a row that sends a name back where it came from ends here, as a name that no rule reads
     for (let hops = 0; hops < 8; hops++) {
-      const rules =
-        at === this.#path && this.#rewriteRules
-          ? this.#rewriteRules()
-          : (await this.#reach.snapshotOf(at)).rules;
+      const rules = await this.#rowsOf(at);
       let fixedPoint: ItxExpression;
       try {
         fixedPoint = resolveItxExpression(() => rules, entered, implicitRootsAt(at)).at(-1)!;
@@ -1223,6 +1227,13 @@ export class ItxExpressionResolver {
       entered = ["itx", ...fixedPoint.slice(3)];
     }
     return null;
+  }
+
+  // A context's rows: this context's own table, or another's snapshot.
+  async #rowsOf(path: string): Promise<readonly ItxExpressionRewriteRule[]> {
+    return path === this.#path && this.#rewriteRules
+      ? this.#rewriteRules()
+      : (await this.#reach.snapshotOf(path)).rules;
   }
 
   // Admitted whole, as its caller made it, then resolved through every context its chain crosses

@@ -259,6 +259,45 @@ test("an act that a stored row's run asked for says so, and its late approval ru
   });
 });
 
+test("a rule holds the rows under its name, where no row is at the name itself", async () => {
+  const mind = mindWith([{ verb: "itx.whatsapp.*" }, { verb: "itx.team.*" }]);
+  const rejected = "a member rejected this call";
+
+  // the lend `whatsapp.alice`, by its name and by the stub's own name
+  await expect(mind.at("/").invoke("itx.whatsapp.alice.send", "jo")).rejects.toThrow(rejected);
+  await expect(
+    mind.at("/").invoke(["itx", "rpcStubs", ["get", "itx.whatsapp.alice"], ["send", "jo"]]),
+  ).rejects.toThrow(rejected);
+  // a row of the root's that sends the call on to `/agents`, where it is walked
+  await expect(mind.at("/").invoke("itx.team.agents.delete", "/agents/one")).rejects.toThrow(
+    rejected,
+  );
+
+  expect({ ran: mind.ran, held: mind.held() }).toMatchObject({
+    ran: [],
+    held: [
+      { act: "itx.whatsapp.alice.send", args: ["jo"], at: "/" },
+      { act: "itx.whatsapp.alice.send", args: ["jo"], at: "/" },
+      { act: "itx.team.agents.delete", args: ["/agents/one"], at: "/" },
+    ],
+  });
+  // its late approval, which calls the act's name, runs it
+  await mind.at("/").invokeApproved(mind.asked[0]!.text, "itx.whatsapp.alice.send", ["jo"]);
+  expect(mind).toMatchObject({ ran: ["/: send jo"] });
+});
+
+test("a row under a rule's name that is longer than a written expression may be leaves a call of another name free", async () => {
+  const mind = mindWith([{ verb: "itx.whatsapp.*" }]);
+  mind.rows["/"]!.push({
+    match: ["itx", "whatsapp", ["bob", "x".repeat(4096)]],
+    target: ["itx", "rpcStubs", ["get", "bob"]],
+  });
+
+  await mind.at("/").invoke("itx.agents.list()");
+
+  expect(mind).toMatchObject({ ran: ["/agents: list"] });
+});
+
 test("a subscription does not deliver to a verb that a rule holds across contexts, and delivers to the verb beside it", async () => {
   const mind = mindWith([{ verb: "itx.agents.delete" }]);
 
@@ -292,6 +331,16 @@ const tables: Record<string, ItxExpressionRewriteRule[]> = {
     },
     // a bridge that is lent at the root
     { match: ["itx", "bridge"], target: ["itx", "rpcStubs", ["get", "k"]] },
+    // a lend with a dotted name (`iterate provide whatsapp.alice`): no row is at `itx.whatsapp`
+    {
+      match: ["itx", "whatsapp", "alice"],
+      target: ["itx", "rpcStubs", ["get", "itx.whatsapp.alice"]],
+    },
+    // a name under which a row sends the call on: no row is at `itx.team`
+    {
+      match: ["itx", "team", "agents"],
+      target: ["itx", ["cd", "/agents"], "facets", ["get", "agents", spec]],
+    },
     // a name whose row fills in the call: `itx.say(to)` is the bridge's `send(to)`
     { match: ["itx", "say"], target: ["itx", "rpcStubs", ["get", "k"], ["send", { "@": true }]] },
     // rows that pin part of the call: `itx.shout(to)` is `send("loud", to)`, and `itx.tag(fields)`

@@ -11,6 +11,7 @@ import {
   type ItxExpression,
   itxExpressionStepName,
   normalizedItxExpression,
+  print,
 } from "iterate/expression";
 import { codedError, jsonEqual } from "iterate/lib";
 
@@ -188,6 +189,31 @@ export function refuseMoreArguments(finder: string, more: readonly unknown[]): v
     );
 }
 
+/** A rule as `heldVerbOf` reads it. A row under a rule's name (`rulesWithRowsUnder`) carries its
+ *  own steps: they are never parsed back out of the row's printed name, which can be longer than a
+ *  written expression may be. */
+export type HeldRule = ActRule | { verb: string; steps: ItxExpression };
+
+/** A RULE HOLDS THE ROWS UNDER ITS NAME TOO. A key that lends `whatsapp.alice` makes a row at
+ *  `itx.whatsapp.alice` and none at `itx.whatsapp`: the rule `itx.whatsapp.*` names no row, and
+ *  its name resolves to nothing. A row under a name that resolves may point at another function.
+ *  So each row under a rule's name is a rule of its own: it holds every call of what the row
+ *  names, by any name, as an act under the rule's name. The gate reads a rule's name as text
+ *  (iterate/acts `ruleHolds`), and so does a member. `rows` are the names of the table's rows. */
+export function rulesWithRowsUnder(
+  rules: readonly ActRule[],
+  rows: readonly ItxExpression[],
+): HeldRule[] {
+  return rules.flatMap((rule) => {
+    if (rule.verb === EMAIL_SEND) return [rule];
+    const name = normalizedItxExpression(rule.verb.replace(/\.\*$/, ""));
+    const under = rows
+      .filter((row) => row.length > name.length && name.every((step, index) => step === row[index]))
+      .map((row) => [`${print(row)}.*`, row] as const);
+    return [rule, ...[...new Map(under)].map(([verb, steps]) => ({ verb, steps }))];
+  });
+}
+
 /** The call as an act to hold, why it cannot be held as it is written, or null when no rule names
  *  it. `resolved` is the call after its context's rules; `resolvedVerb` resolves a rule's verb by
  *  the same rules, null when it names nothing there.
@@ -201,7 +227,7 @@ export function refuseMoreArguments(finder: string, more: readonly unknown[]): v
  *  `itx.whatsapp.sendMessage` holds that verb and every verb under it. `itx.whatsapp.*` holds every
  *  call at `itx.whatsapp` or under it. */
 export function heldVerbOf(
-  rules: readonly ActRule[],
+  rules: readonly HeldRule[],
   written: ItxExpression,
   extraArgs: readonly unknown[],
   resolvedVerb: (verb: ItxExpression) => ItxExpression | null,
@@ -216,7 +242,7 @@ export function heldVerbOf(
 }
 
 function heldAs(
-  rules: readonly ActRule[],
+  rules: readonly HeldRule[],
   resolved: ItxExpression,
   unread: number,
   extraArgs: readonly unknown[],
@@ -226,7 +252,7 @@ function heldAs(
     if (rule.verb === EMAIL_SEND) continue;
     const under = rule.verb.endsWith(".*");
     const name = under ? rule.verb.slice(0, -2) : rule.verb;
-    const target = resolvedVerb(normalizedItxExpression(name));
+    const target = resolvedVerb("steps" in rule ? rule.steps : normalizedItxExpression(name));
     if (!target) continue;
     // A door that cannot be read, on the way to the rule's verb or at it: it may call the verb.
     if (
