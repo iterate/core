@@ -11,7 +11,8 @@
 // page. A link that passes it is the link that the host's own page makes.
 //
 // WHAT THE APP SAYS OF ITSELF, in its web app manifest at `/manifest.webmanifest` on its own
-// host: its name, its icon, and whether it is for the mind's members alone:
+// host: its name, its icon, whether it is for the mind's members alone, and the ways to sign in
+// that it takes (below):
 //
 //   { "name": "Dash", "icons": [{ "src": "/icon.svg" }], "iterate": { "for": "members" } }
 //
@@ -24,10 +25,17 @@
 // "For members" changes the page's words and nothing else: who may come is the guard in the
 // app's own code (the mind's worker.ts), which this Worker does not read.
 //
+// THE WAYS THE APP TAKES, `"iterate": { "methods": ["cloudflare"] }`: the ways its guard names
+// (iterate/sdk `auth.requirePerson`). An authorization request for the app's host that names no
+// ways (`acr_values`) takes these (./authorize.ts). That is the request of an MCP client, which
+// knows nothing of `acr_values`: so an app's MCP server gets the app's sign-in. It is routing, as
+// `acr_values` is: the app's guard judges the session that comes back.
+//
 // AN APP IS AN OAUTH CLIENT, as Codex is: the host's client holds the app's name and icon (its
 // `clientName` and `logoUri`), written here whenever the manifest is read and says something
 // else. So the list of a person's sign-ins by client (./oauth.ts `sessionsByClientOf`) names the
 // app as the sign-in pages do, and asks no app for it.
+import { SignInMethod } from "iterate/principal";
 import { z } from "zod";
 import { type Env, issuerOf } from "./env.ts";
 import {
@@ -72,8 +80,12 @@ export async function askingAppOf(env: Env, next: string): Promise<AskingApp | n
 /** What an app said of itself (`saidIn`), and when to ask it again. */
 type Kept = ReturnType<typeof saidIn> & { askAfter: number };
 
-/** A host of this mind as an app: `origin` is one that `mindHostResourceOf` let through. */
-export async function appOf(env: Env, origin: string): Promise<AskingApp> {
+/** A host of this mind as an app: `origin` is one that `mindHostResourceOf` let through. With the
+ *  ways to sign in that it says it takes, in its order: none when it names none. */
+export async function appOf(
+  env: Env,
+  origin: string,
+): Promise<AskingApp & { methods: SignInMethod[] }> {
   const { host } = new URL(origin);
   const key = `iterate-app-said:${host}`;
   let kept = await env.OAUTH_KV.get<Kept>(key, "json");
@@ -101,12 +113,21 @@ export async function appOf(env: Env, origin: string): Promise<AskingApp> {
           name: last.name,
           icon: last.icon,
           members: Boolean(last.members),
+          methods: last.methods || [],
           askAfter: Date.now() + 60_000,
         };
     await env.OAUTH_KV.put(key, JSON.stringify(kept));
     if (heard) await keepOnClient(env, origin, { name: kept.name || host, icon: kept.icon });
   }
-  return { host, origin, name: kept.name || host, icon: kept.icon, members: Boolean(kept.members) };
+  return {
+    host,
+    origin,
+    name: kept.name || host,
+    icon: kept.icon,
+    members: Boolean(kept.members),
+    // a record from before apps named their ways names none
+    methods: kept.methods || [],
+  };
 }
 
 /** The host's own client says what the app says: written when it says something else. */
@@ -120,19 +141,27 @@ async function keepOnClient(env: Env, origin: string, said: { name: string; icon
   await helpers.updateClient(clientId, { clientName: said.name, logoUri: said.icon || undefined });
 }
 
-const NOTHING = { name: null, icon: null, members: false };
+const NOTHING = { name: null, icon: null, members: false, methods: [] };
 
 const Manifest = z.object({
   name: z.string().optional(),
   short_name: z.string().optional(),
   icons: z.array(z.object({ src: z.string() })).optional(),
   // iterate's own member of the manifest; a browser passes over it
-  iterate: z.object({ for: z.string().optional() }).optional().catch(undefined),
+  iterate: z
+    .object({
+      for: z.string().optional(),
+      methods: z.array(z.string()).optional().catch(undefined),
+    })
+    .optional()
+    .catch(undefined),
 });
 
 /** What a web app manifest's text says: a name of at most sixty characters, the first icon that
- *  is on the manifest's own origin, over https, and whether the app is for members
- *  (`"iterate": { "for": "members" }`). Anything else says nothing. */
+ *  is on the manifest's own origin, over https, whether the app is for members
+ *  (`"iterate": { "for": "members" }`), and the ways to sign in that it takes
+ *  (`"iterate": { "methods": ["cloudflare"] }`, the ways iterate knows, in its order). Anything
+ *  else says nothing. */
 export function saidIn(manifestText: string, manifestUrl: string) {
   const nothing = NOTHING;
   if (!manifestText || manifestText.length > 20_000) return nothing;
@@ -151,10 +180,15 @@ export function saidIn(manifestText: string, manifestUrl: string) {
   const icon = (parsed.icons || [])
     .map(({ src }) => (URL.canParse(src, manifestUrl) ? new URL(src, manifestUrl) : null))
     .find((url) => url && url.protocol === "https:" && url.origin === origin && !url.username);
+  const methods = (parsed.iterate?.methods || []).flatMap((value) => {
+    const method = SignInMethod.safeParse(value);
+    return method.success ? [method.data] : [];
+  });
   return {
     name: name || null,
     icon: icon?.href || null,
     members: parsed.iterate?.for === "members",
+    methods: [...new Set(methods)],
   };
 }
 

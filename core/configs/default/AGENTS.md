@@ -320,7 +320,10 @@ apps/<name>/
   mind's sign-in pages read them. Every other file of an app is behind the guard. An app whose
   guard is `this.auth.require` says `"iterate": { "for": "members" }` in its manifest: the
   sign-in page then says "Dash is an app of iterate.<domain>" and "Dash is for people with access to it", and invites no new address. An app
-  for end users (the guestbook) leaves it out.
+  for end users (the guestbook) leaves it out. An app whose guard names its ways
+  (`this.auth.requirePerson(request, { methods: ["cloudflare"] })`) names them in its manifest
+  too, `"iterate": { "methods": ["cloudflare"] }`: an MCP client sends no ways of its own, so its
+  sign-in for the app's `/mcp` then offers the app's ways.
 - **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** The Agents,
   onboarding, docs and guestbook apps serve that one file at `/live-reload.js` (`app.ts`), and
   each page loads it in its head; the Dash and the Voice app do not.

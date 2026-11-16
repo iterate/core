@@ -19,7 +19,8 @@ export function signInHref(env: Env, next: string) {
 
 /** THE WAYS TO SIGN IN THAT AN APP TAKES, as the authorization request `next` (a path of this
  *  issuer) names them: RFC 9470's `acr_values`, which ingress copies there from the app's guard
- *  (iterate/sdk `auth.requirePerson`). Those this stack offers (./env.ts `offersMethod`), in the
+ *  (iterate/sdk `auth.requirePerson`), or the authorization endpoint from the app's manifest when
+ *  the request named none (./authorize.ts, ./asking-app.ts). Those this stack offers (./env.ts `offersMethod`), in the
  *  request's order. Null when it names none, or asks for no mind hostname (the mind's API or MCP
  *  server): the mind's own sign-in. Empty when it names only ways this stack does not offer:
  *  nobody can sign in. It is routing: a browser can change it, and the app's guard judges the

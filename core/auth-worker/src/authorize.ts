@@ -8,7 +8,7 @@ import { mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
 import { SignInMethod } from "iterate/principal";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
-import { askingAppOf } from "./asking-app.ts";
+import { appOf, askingAppOf } from "./asking-app.ts";
 import {
   clearCloudflareSessionCookie,
   clearSessionCookie,
@@ -73,7 +73,14 @@ async function describe(env: Env, request: Request) {
       302,
     );
   const authRequest = { ...parsed, scope };
-  const { prompt, here } = promptOf(new URL(request.url));
+  // a request for an app's host that names no ways takes the ways of the app's manifest
+  // (./asking-app.ts, "THE WAYS THE APP TAKES")
+  const url = new URL(request.url);
+  if (hostResource && !url.searchParams.get("acr_values")) {
+    const { methods } = await appOf(env, hostResource);
+    if (methods.length) url.searchParams.set("acr_values", methods.join(" "));
+  }
+  const { prompt, here } = promptOf(url);
   // The ways to sign in that the app on a mind hostname takes (./sign-in.ts `methodsAskedIn`):
   // whoever has no session made one of those ways is sent to the page of those ways.
   const methods = methodsAskedIn(env, here);

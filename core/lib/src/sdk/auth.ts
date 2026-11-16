@@ -41,7 +41,9 @@ export type PersonOptions = { methods?: readonly SignInMethod[] };
  *  `"cloudflare"`), in the order its sign-in page shows them. A person who signed in another way
  *  is no person to that guard: `requirePerson` answers the challenge with RFC 9470's
  *  `acr_values`, and for a page load ingress signs them in again on this host, by a way the app
- *  names. Without `methods`, every way counts but Cloudflare's: a sign-in with Cloudflare counts
+ *  names. An OAuth client of the app, such as an MCP client, sends no `acr_values`: name the same
+ *  ways in the app's manifest, `"iterate": { "methods": [...] }`, and its sign-in offers them
+ *  (core/auth-worker/src/asking-app.ts). Without `methods`, every way counts but Cloudflare's: a sign-in with Cloudflare counts
  *  only where an app names it, because the stack does not know that Cloudflare checked the
  *  address (core/auth-worker/src/cloudflare-sign-in.ts). A session from before sessions said how
  *  they began counts only where an app names no `methods`. The guard is the rule: what the issuer

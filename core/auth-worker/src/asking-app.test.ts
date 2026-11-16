@@ -32,6 +32,7 @@ test("an app is read from a sign-in's request only when the stack holds all thre
     name: "Guestbook",
     icon: `${ORIGIN}/icon.svg`,
     members: false,
+    methods: [],
   });
   // a path on the host is the host, as the authorization endpoint reads it
   expect(await askingAppOf(stack.env, next({ resource: `${ORIGIN}/mcp` }))).toMatchObject({
@@ -100,16 +101,33 @@ test.for([
     manifest: { name: "Dash", iterate: "members" },
     said: { name: "Dash", icon: null },
   },
+  {
+    name: "the ways it takes: those iterate knows, once each, in its order",
+    manifest: {
+      name: "Cloud",
+      iterate: { methods: ["cloudflare", "carrier-pigeon", "passkey", "cloudflare"] },
+    },
+    said: { name: "Cloud", icon: null, methods: ["cloudflare", "passkey"] },
+  },
+  {
+    name: "ways that are no list are passed over, and 'for members' still counts",
+    manifest: { name: "Dash", iterate: { for: "members", methods: "cloudflare" } },
+    said: { name: "Dash", icon: null, members: true },
+  },
   { name: "no name and no icon", manifest: {}, said: { name: null, icon: null } },
   { name: "not an object", manifest: ["Guestbook"], said: { name: null, icon: null } },
   { name: "a name that is no text", manifest: { name: 7 }, said: { name: null, icon: null } },
 ])("what a manifest says: $name", ({ manifest, said }) => {
-  expect(saidIn(JSON.stringify(manifest), MANIFEST)).toEqual({ members: false, ...said });
+  expect(saidIn(JSON.stringify(manifest), MANIFEST)).toEqual({
+    members: false,
+    methods: [],
+    ...said,
+  });
 });
 
 test("a manifest that is no JSON, is empty or is too long says nothing", () => {
   for (const text of ["", "<!doctype html>", `{"name":"${"x".repeat(20_000)}"}`])
-    expect(saidIn(text, MANIFEST)).toEqual({ name: null, icon: null, members: false });
+    expect(saidIn(text, MANIFEST)).toEqual({ name: null, icon: null, members: false, methods: [] });
 });
 
 test("the manifest is read once in five minutes, with no redirect followed, and the host's own client then holds the app's name and icon", async () => {
@@ -124,6 +142,7 @@ test("the manifest is read once in five minutes, with no redirect followed, and 
     name: "Guestbook",
     icon: `${ORIGIN}/icon.svg`,
     members: false,
+    methods: [],
   });
   expect(await appOf(stack.env, ORIGIN)).toEqual(app);
   expect(web).toMatchObject({ asked: [[MANIFEST, "manual"]] });
@@ -161,7 +180,7 @@ test.for([
       using _web = answers({
         name: "Guestbook",
         icons: [{ src: "/icon.svg" }],
-        iterate: { for: "members" },
+        iterate: { for: "members", methods: ["cloudflare"] },
       });
       await appOf(stack.env, ORIGIN);
     }
@@ -176,6 +195,7 @@ test.for([
       name: "Guestbook",
       icon: `${ORIGIN}/icon.svg`,
       members: true,
+      methods: ["cloudflare"],
     });
     expect(stack.askedAgainIn(HOST, before)).toBe("1 minute");
     // and the client that the list of sign-ins reads still names the app
@@ -201,6 +221,7 @@ test("an app that answers with no manifest any more has said so: it is its host 
     name: HOST,
     icon: null,
     members: false,
+    methods: [],
   });
   expect(await oauthHelpers(stack.env, ORIGIN).lookupClient(client)).toMatchObject({
     clientName: HOST,
@@ -211,7 +232,14 @@ test("an app that says nothing, or whose host does not answer, is its host and i
   const stack = stackWith({});
   using web = answers(null);
   const app = await appOf(stack.env, ORIGIN);
-  expect(app).toEqual({ host: HOST, origin: ORIGIN, name: HOST, icon: null, members: false });
+  expect(app).toEqual({
+    host: HOST,
+    origin: ORIGIN,
+    name: HOST,
+    icon: null,
+    members: false,
+    methods: [],
+  });
   expect(appTile(app)).toBe(`<div class="tile" data-app-mark="initials">GU</div>`);
   await appOf(stack.env, ORIGIN);
   expect(web.asked).toHaveLength(1);

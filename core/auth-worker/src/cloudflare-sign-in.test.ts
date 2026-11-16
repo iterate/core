@@ -479,6 +479,56 @@ test("an MCP client of an app that names Cloudflare, which says the ways on (RFC
   });
 });
 
+test("an MCP client that says no ways gets the ways its app's manifest names: Cloudflare's, through the consent page", async () => {
+  const { env } = stackOf();
+  cloudflareOf(
+    { success: true, result: { id: "cf-owner", email: OWNER } },
+    { name: "Cloud", iterate: { methods: ["cloudflare"] } },
+  );
+  const cloudflare = cloudflareCookieOf((await signedInAtCloudflare(env)).answer);
+  const passkey = await passkeyCookie(env);
+  const clientId = await registeredClientOf(env);
+  // what MCP clients send: no `acr_values`
+  const queryOf = (extra: Record<string, string> = {}) =>
+    calculatePKCECodeChallenge(generateRandomCodeVerifier()).then(
+      (challenge) =>
+        new URLSearchParams({
+          response_type: "code",
+          client_id: clientId,
+          redirect_uri: "http://127.0.0.1:7777/callback",
+          resource: `${CLOUD}/mcp`,
+          scope: "identity",
+          state: "s",
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          ...extra,
+        }),
+    );
+  const query = await queryOf();
+  const ask = (cookie: string, asked = query) =>
+    authResponse(new Request(`${ISSUER}/oauth2/auth?${asked}`, { headers: { cookie } }), env, ctx);
+  // no session, and a member's passkey session: the page of the app's one way, which comes back
+  // to the request with the ways in it
+  for (const cookie of ["", passkey]) {
+    const answer = await ask(cookie);
+    expect(pathOf(answer)).toBe("/sign-in");
+    expect(new URL(answer.headers.get("location")!).searchParams.get("next")).toMatch(
+      /^\/oauth2\/auth\?.*acr_values=cloudflare/,
+    );
+  }
+  // Cloudflare's session gets the consent page, and the code
+  const page = await ask(cloudflare);
+  const html = await page.text();
+  expect([page.status, html]).toEqual([200, expect.stringContaining(OWNER)]);
+  const handle = /name="handle" value="([^"]+)"/.exec(html)![1]!;
+  const consentCookies = page.headers.getSetCookie().map(cookiePair).join("; ");
+  const approved = await decided(env, handle, [cloudflare, consentCookies].join("; "));
+  expect(pathOf(approved)).toBe("http://127.0.0.1:7777/callback");
+  // ways that the request names are its own: routing, which the app's guard judges
+  const named = await ask(passkey, await queryOf({ acr_values: "passkey" }));
+  expect(named).toMatchObject({ status: 200 });
+});
+
 test("a consent begun for Cloudflare's session is not approved by the mind's own session", async () => {
   const { env } = stackOf();
   cloudflareOf();
@@ -748,12 +798,13 @@ function cookiePair(setCookie: string) {
  *  what each was sent. */
 function cloudflareOf(
   user: unknown = { success: true, result: { id: "cf-user-1", email: "Ada@Example.org" } },
+  manifest: unknown = { name: "Cloud" },
 ) {
   const calls: { url: string; body: URLSearchParams; authorization: string | null }[] = [];
   vi.stubGlobal("fetch", async (input: string | URL, init: RequestInit = {}) => {
     const url = String(input);
-    // the app's own word for its name (./asking-app.ts), for the sign-in pages
-    if (url === `${CLOUD}/manifest.webmanifest`) return Response.json({ name: "Cloud" });
+    // the app's own word for its name and its ways (./asking-app.ts)
+    if (url === `${CLOUD}/manifest.webmanifest`) return Response.json(manifest);
     calls.push({
       url,
       body: new URLSearchParams(String(init.body || "")),
