@@ -136,6 +136,10 @@ An agent at `/agents/<name>` reads `<name>.md` before each request, after `AGENT
 case creates it, and the Dash greets the owner in its chat the first time they open it
 (`openers` in `apps/dash/public/app.js`).
 
+Every agent also reads `mind.md`, after `AGENTS.md`, when the repo has one (`agents.ts` names it):
+who this mind is, with its name, its voice, what it is for and how it reaches its people. The
+onboarding agent writes it with the owner. Keep it short: it is in every request.
+
 ## Kinds of agent
 
 Any context under `/agents` is an agent, and its kind is what the catalog lists it as: `iterate` for
