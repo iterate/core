@@ -8,7 +8,7 @@ import {
   sessionCookie,
   sessionOf,
 } from "./cookies.ts";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { dashOriginOf, type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import {
   allowsExactly,
   CLOUD_ACTOR,
@@ -138,6 +138,19 @@ type ListedKey = KeyRow & { added_by: string; added_by_email: string | null };
 
 const day = (at: number) => new Date(at).toISOString().slice(0, 10);
 
+/** The agent where a new owner starts, in the Dash: `?agent=` opens its chat (the default config's
+ *  `onboarding.md`). */
+const ONBOARDING_AGENT_PATH = "/agents/onboarding";
+
+/** Where a session that came to /keys only to add a passkey goes once it has one, when its request
+ *  named no `next`: the owner's ticket to the onboarding agent, any other to the Dash. */
+function onwardOf(env: Env, session: BrowserSession): string {
+  const dash = dashOriginOf(iterateConfigOf(env).domain);
+  return session.method === "first-owner-ticket"
+    ? `${dash}/?agent=${ONBOARDING_AGENT_PATH}`
+    : `${dash}/`;
+}
+
 async function keysPage(
   env: Env,
   session: BrowserSession,
@@ -165,6 +178,9 @@ async function keysPage(
   )
     .bind(session.userId)
     .all<ListedKey>();
+  // A session held here goes on by itself once its passkey is added: no page leaves it with
+  // nothing to press.
+  const onward = held ? next || onwardOf(env, session) : null;
   const nextField = next ? `<input type="hidden" name="next" value="${text(next)}">` : "";
   const item = (key: ListedKey) => {
     const scope = scopeInWords({
@@ -217,7 +233,7 @@ async function keysPage(
     body: `<h1>Your keys for ${text(domain)}</h1>
       <p>A key lets you sign in to ${text(domain)} and approve things in it: a passkey in your password manager, or a security key such as a YubiKey. The list also shows the keys that members allowed for services, and any member can remove one of those.</p>
       ${results.length ? `<ul>${results.map(item).join("")}</ul>` : `<p class="muted">You have no keys here yet.</p>`}
-      <form id="add" class="stack" data-challenge="${text(challenge)}" data-user="${text(session.userId)}" data-email="${text(session.email)}" data-rp="${text(new URL(issuer).hostname)}"${owed ? "" : " data-sign"}>
+      <form id="add" class="stack" data-challenge="${text(challenge)}" data-user="${text(session.userId)}" data-email="${text(session.email)}" data-rp="${text(new URL(issuer).hostname)}"${owed ? "" : " data-sign"}${onward ? ` data-next="${text(onward)}"` : ""}>
         <input name="label" required maxlength="100" size="28" aria-label="Name" placeholder="Name it, such as YubiKey">
         <button type="submit">Add a passkey</button>
         <p id="status" class="muted" role="status"></p>
@@ -272,7 +288,8 @@ form.addEventListener("submit", async (event) => {
     }
     const response = await fetch("${KEYS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(made.body) });
     if (!response.ok) throw new Error((await response.json()).error);
-    location.reload();
+    if (form.dataset.next) location.assign(form.dataset.next);
+    else location.reload();
   } catch (error) {
     status.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.name === "InvalidStateError" ? "This device holds a passkey of yours for this site already. Make the new one on another device or a security key." : error.message || "The passkey was not added.";
   }

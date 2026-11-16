@@ -44,6 +44,7 @@ test("a label that a link wrote as markup is shown as its characters", () => {
 const DOMAIN = "example.com";
 const ISSUER = `https://iterate.${DOMAIN}`;
 const MEMBER = "member@example.org";
+const OWNERS_TICKET = "the-owners-ticket";
 
 // A member's link (./members.ts `memberLink`) adds the member's first passkey alone
 // (./keys-pages.ts): a session that another link opened before that passkey adds no second one.
@@ -63,7 +64,37 @@ test.for(["one after the other", "at once"])(
   },
 );
 
-/** The session cookie that spending a member's link gives a browser (./first-owner.ts). */
+// The page sends a session that came only to add a passkey on, once it has one: to the `next` its
+// request named when that is the mind's own (./key-rules.ts `honouredNext`), else to the Dash.
+const DASH = `https://dash.${DOMAIN}`;
+test.for([
+  { ticket: OWNERS_TICKET, next: `${DASH}/?agent=/agents/a`, onward: `${DASH}/?agent=/agents/a` },
+  { ticket: OWNERS_TICKET, next: "/authorize?client_id=a", onward: "/authorize?client_id=a" },
+  {
+    ticket: OWNERS_TICKET,
+    next: "https://evil.example/",
+    onward: `${DASH}/?agent=/agents/onboarding`,
+  },
+  { ticket: OWNERS_TICKET, next: null, onward: `${DASH}/?agent=/agents/onboarding` },
+  { ticket: "link-one", next: null, onward: `${DASH}/` },
+])(
+  "after the passkey of $ticket, next $next goes on to $onward",
+  async ({ ticket, next, onward }) => {
+    const { env } = await stack();
+    const cookie = await linkSession(env, ticket);
+    const query = next ? `?${new URLSearchParams({ next })}` : "";
+    const page = await keysPagesResponse(
+      env,
+      new Request(`${ISSUER}/keys${query}`, { headers: { cookie } }),
+    );
+    const html = await page!.text();
+    const said = html.match(/data-next="([^"]+)"/)?.[1];
+    expect(said?.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))).toBe(onward);
+  },
+);
+
+/** The session cookie that spending a member's link, or the owner's ticket, gives a browser
+ *  (./first-owner.ts). */
 async function linkSession(env: Env, ticket: string): Promise<string> {
   const answer = await firstOwnerResponse(
     env,
@@ -138,6 +169,11 @@ async function stack() {
   const env = {
     DOMAIN,
     AUTH_SIGNING_KEY: "a-signing-key-for-tests-only",
+    FIRST_OWNER_TICKET: JSON.stringify({
+      email: "owner@example.net",
+      hash: await sha256Hex(OWNERS_TICKET),
+      expires: Date.now() + 3_600_000,
+    }),
     AUTH_SETTINGS: JSON.stringify({
       login: { allow: [{ email: "owner@example.net" }, { email: MEMBER }] },
     }),

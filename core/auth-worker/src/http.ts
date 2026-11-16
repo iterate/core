@@ -20,7 +20,7 @@ import {
   metadataResponse,
 } from "./device/start.ts";
 import { emailSignInResponse } from "./email-sign-in.ts";
-import { type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
+import { dashOriginOf, type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
 import { firstOwnerResponse } from "./first-owner.ts";
 import { googleSignInResponse } from "./google-sign-in.ts";
 import { keyTokenResponse } from "./key-tokens.ts";
@@ -47,9 +47,6 @@ import { sessionsResponse } from "./sessions-page.ts";
 import { methodsAskedIn, SIGN_IN_PATH, signInHref, signOutResponse } from "./sign-in.ts";
 import { statementsResponse } from "./statements.ts";
 import { whoIs } from "./who-is.ts";
-
-/** The Dash, the default config's app on its own host of the mind's domain. */
-const dashOriginOf = (domain: string) => `https://dash.${domain}`;
 
 export async function authResponse(asked: Request, env: Env, ctx: ExecutionContext) {
   const url = new URL(asked.url);

@@ -89,3 +89,6 @@ export function offersMethod(env: Env, method: SignInMethod): boolean {
  *  (iterate/mind-api), where every page and endpoint of this Worker is. Ingress sends it every
  *  request there that is not for the API, the MCP server or the secret pages. */
 export const issuerOf = (env: Env) => platformOriginOf(iterateConfigOf(env).domain);
+
+/** The Dash, the default config's app on its own host of the mind's domain. */
+export const dashOriginOf = (domain: string) => `https://dash.${domain}`;
