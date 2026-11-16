@@ -88,13 +88,16 @@ export const MindContract = defineProcessorContract({
     },
     "events.iterate.com/mind/template-applied": {
       description:
-        "New code compared `/repos/config` with the template it bundles (`template`), once: the files it `added` and `replaced` are one commit of the platform's, `commitOid` (null when it wrote nothing). A file in `leftAlone` was changed or deleted by somebody, so the platform did not write it: `lacks` are the template's lines that file has not, to add by hand (none for a deleted file). For people and for the installer: no processor reads it.",
+        "New code compared `/repos/config` with the template it bundles (`template`), once: the files it `added` and `replaced` are one commit of the platform's, `commitOid` (null when it wrote nothing). A file in `leftAlone` was changed or deleted by somebody, so the platform did not write it: `lacks` are the template's lines that file has not, to add by hand (none for a deleted file). A file in `leftBehind` is one the platform wrote that this template no longer has, and that somebody changed: it stays, and the newer files do not read it. For people and for the installer: no processor reads it.",
       payloadSchema: z.object({
         template: z.string(),
         commitOid: z.string().nullable(),
         added: z.array(z.string()),
         replaced: z.array(z.string()),
         leftAlone: z.array(z.object({ path: z.string(), lacks: z.array(z.string()) })),
+        // files the platform wrote that this template no longer has, and that somebody changed:
+        // they stay, and the newer files do not read them (absent on a fact from before the rule)
+        leftBehind: z.array(z.string()).optional(),
         // a deleted file that one of the platform's own files imports: written again, with one
         // file that imports it (absent on a fact from before the rule)
         putBack: z.array(z.object({ path: z.string(), importedBy: z.string() })).optional(),

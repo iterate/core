@@ -1,13 +1,7 @@
-// app.js — THE DASH'S PAGE: the mind seen from above. This file is the CONTENTS: which pages
-// there are and in what order, their names and icons, the apps and the pages about access it links
-// to. `Dash` from @iterate-com/ui draws them: the sidebar comes from the one list `pages`,
-// the URL says which page is shown (`?page=<id>`; none: the first), and every page shows what
-// waits for a member's yes.
-//
-// TWO IDS MEAN MORE TO THE DASH. The page with id `agents` is the Agents page: the sidebar lists
-// the most recently active agents above the pages, `?agent=<path>` shows any context as an agent
-// there, and ⌘K searches the agents first. The page with id `contexts` is the raw view of any
-// context, which ⌘K opens for a path (type "/").
+// app.js — THE DASH'S PAGE: which pages there are and in what order, their names and icons,
+// and the apps and the pages about access it links to. `Dash` from @iterate-com/ui draws them:
+// how the sidebar, the URL, ⌘K and the two ids `agents` and `contexts` work is in its source,
+// packages/ui/src/components/dash/dash.tsx (links below).
 //
 // A PAGE OF YOUR OWN is a row with a component, which gets `{ itx, mind, principal, page, agents }`:
 //   import { Notes } from "./notes.js";

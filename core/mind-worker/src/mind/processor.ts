@@ -588,6 +588,7 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
       replaced,
       platforms,
       leftAlone,
+      leftBehind,
       putBack,
       appsLeftOld,
       heldBack,
@@ -650,7 +651,8 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
       },
       // a comparison of the same templates again says only what it wrote
       fact:
-        changes.length || ((leftAlone.length || refused.length) && !sameTemplates)
+        changes.length ||
+        ((leftAlone.length || leftBehind.length || refused.length) && !sameTemplates)
           ? {
               type: "events.iterate.com/mind/template-applied" as const,
               idempotencyKey: `mind/template-applied:${hash.slice(0, 16)}:${tip}`,
@@ -660,6 +662,7 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
                 added,
                 replaced,
                 leftAlone,
+                leftBehind,
                 putBack,
                 appsLeftOld,
                 heldBack,

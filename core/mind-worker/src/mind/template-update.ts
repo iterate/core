@@ -4,7 +4,9 @@
 // and replaces one that is still byte for byte what the platform itself wrote there before. A file
 // somebody changed is never written, and a file somebody deleted is not put back: each is named,
 // with the template's lines it lacks. Nothing is deleted, so a module an older template had (and
-// code made from it) stays.
+// code made from it) stays. Such a file that somebody changed is named too (`leftBehind`): the
+// newer files do not read it, so what was changed in it no longer counts until it is carried over
+// by hand.
 //
 // AN APP IS ONE UNIT (`apps/<name>/`). Its files are written all together or not at all: when
 // somebody changed or deleted one of them, the app stays at the version it has (`appsLeftOld`).
@@ -94,6 +96,12 @@ export function templateChanges(input: {
   untouched: ReadonlySet<string>;
 }) {
   const writes: { path: string; content: string; kind: "added" | "replaced" }[] = [];
+  // the files the platform wrote that the newer template no longer has, and that somebody changed
+  const inTemplate = new Set(input.template.map((file) => file.path));
+  const leftBehind = [...input.written].filter(
+    (path) =>
+      !inTemplate.has(path) && Object.hasOwn(input.current, path) && !input.untouched.has(path),
+  );
   const same: string[] = [];
   let leftAlone: { path: string; lacks: string[] }[] = [];
   /** The template's files that the platform wrote and somebody deleted. */
@@ -282,6 +290,7 @@ export function templateChanges(input: {
     replaced,
     platforms,
     leftAlone,
+    leftBehind,
     putBack,
     appsLeftOld,
     heldBack,

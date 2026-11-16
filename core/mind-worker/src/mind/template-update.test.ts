@@ -22,6 +22,7 @@ test("a repo untouched since its seed gets the whole newer template: new files a
     replaced: ["worker.ts", "AGENTS.md"],
     platforms: ["worker.ts", "AGENTS.md", "apps/onboarding/app.ts"],
     leftAlone: [],
+    leftBehind: [],
     putBack: [],
     appsLeftOld: [],
     heldBack: [],
@@ -51,6 +52,28 @@ test("a file somebody changed is never written: it is named, with the template's
       lacks: ["import { onboardingApp } from './apps/onboarding/app.ts';", "new worker"],
     },
   ]);
+});
+
+test("a file the newer template no longer has stays, and is named when somebody changed it: the newer files do not read it", () => {
+  // an older template's agents module and onboarding text, which the newer one has at the root
+  const seed = {
+    "worker.ts": "old worker\n",
+    "AGENTS.md": "old guide\n",
+    "apps/agents/backend.ts": "the classes\n",
+    "apps/onboarding/onboarding.md": "the steps\n",
+  };
+  const current = { ...seed, "apps/agents/backend.ts": "the classes, with my own model\n" };
+  const { changes, replaced, leftAlone, leftBehind } = templateChanges({
+    template: newer(),
+    current,
+    ...platformWrote(seed, current),
+  });
+  // the platform's files are written as ever, and nothing is deleted
+  expect(replaced).toEqual(["worker.ts", "AGENTS.md"]);
+  expect(changes.map((change) => change.path)).not.toContain("apps/agents/backend.ts");
+  expect(leftAlone).toEqual([]);
+  // the untouched onboarding text is still the platform's, so it is not named
+  expect(leftBehind).toEqual(["apps/agents/backend.ts"]);
 });
 
 test("a file left alone once is left alone at the next update too: it is in the repo's tree, and still not the platform's", () => {

@@ -31,10 +31,7 @@ const MODULES = "https://esm.iterate.com";
 const EVENT = "events.iterate.com/voice-agent/";
 
 // ── the member's itx ──
-// As @iterate-com/ui/live's `memberItx` (the Dash's page): one WebSocket to this host's /itx, a
-// capnweb session whose root is the mind's itx, as the member the platform signed in on this
-// host. The platform ends it when the sign-in ends; a reload signs in again. Three closes in a
-// minute stop the reloads.
+// The same session and reload rule as ../../docs/public/app.js, which explains them.
 const socket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
 const itx = newWebSocketRpcSession(socket);
 socket.addEventListener("close", () => {
