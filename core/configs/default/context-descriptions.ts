@@ -241,23 +241,48 @@ export async function contextDescriptionsEvent(
   }
   if (event.type !== "events.iterate.com/mind/worker-updated" || event.path !== "/") return;
   const contexts = await itx.contexts.list({ limit: 1_000 });
+  // Each context by itself: a row of the table that is wrong (a row with no title, say) or an
+  // append that fails skips that one context, and the publish goes on for the others.
+  const faults: { path: string; error: unknown }[] = [];
   // A context that says this already needs no call. One that says something else gets the text
   // once: when a person wrote theirs after it, the key finds the text and adds nothing.
-  const writes = contexts.flatMap((context) => {
-    const line = contextLine(context.path);
-    if (!line) return [];
-    return [
-      ...(context.description !== line.description
-        ? [() => describe(itx, context.path, line.description)]
-        : []),
-      ...(context.metadata?.title !== line.title
-        ? [() => title(itx, context.path, line.title, context.metadata)]
-        : []),
-    ];
+  const writes = contexts.flatMap((context): { path: string; write: () => Promise<void> }[] => {
+    try {
+      const line = contextLine(context.path);
+      if (!line) return [];
+      return [
+        ...(context.description !== line.description
+          ? [{ path: context.path, write: () => describe(itx, context.path, line.description) }]
+          : []),
+        ...(context.metadata?.title !== line.title
+          ? [
+              {
+                path: context.path,
+                write: () => title(itx, context.path, line.title, context.metadata),
+              },
+            ]
+          : []),
+      ];
+    } catch (error) {
+      faults.push({ path: context.path, error });
+      return [];
+    }
   });
   // a few at a time: each append wakes its context, and a publish may find hundreds to write
   for (let start = 0; start < writes.length; start += WRITES_AT_ONCE)
-    await Promise.all(writes.slice(start, start + WRITES_AT_ONCE).map((write) => write()));
+    await Promise.all(
+      writes.slice(start, start + WRITES_AT_ONCE).map(({ path, write }) =>
+        write().catch((error: unknown) => {
+          faults.push({ path, error });
+        }),
+      ),
+    );
+  // once for the publish, with the first fault and how many contexts it left as they were
+  if (faults[0])
+    reportIssue("config.context-descriptions.publish", faults[0].error, {
+      path: faults[0].path,
+      contexts: new Set(faults.map((fault) => fault.path)).size,
+    });
 }
 
 /** How many contexts one publish writes to at the same time. */

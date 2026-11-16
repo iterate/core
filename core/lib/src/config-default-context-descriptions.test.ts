@@ -269,6 +269,39 @@ test("a context whose metadata cannot take a title says so once, not at every pu
   ]);
 });
 
+test("an append that fails skips that one context: the others get theirs, and the publish says so once", async () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  const mind = recordingMind([{ path: "/repos/site" }, { path: "/secrets/openai" }, { path: "/" }]);
+  const append = mind.itx.cd;
+  mind.itx.cd = (path: string) =>
+    path === "/secrets/openai"
+      ? {
+          append: async () => {
+            throw new Error("the mind refused this append");
+          },
+        }
+      : append(path);
+  await contextDescriptionsEvent(mind.itx, {
+    type: "events.iterate.com/mind/worker-updated",
+    path: "/",
+  });
+  const said = errors.mock.calls.filter((call) =>
+    JSON.stringify(call).includes("config.context-descriptions.publish"),
+  );
+  errors.mockRestore();
+  // both writes of the two other contexts landed
+  expect(mind.calls.appended.map(({ path }) => path).toSorted()).toEqual([
+    "/",
+    "/",
+    "/repos/site",
+    "/repos/site",
+  ]);
+  // one report for the publish, with how many contexts were left as they were
+  expect(said).toHaveLength(1);
+  // both writes of the one context failed: it is one context, counted once
+  expect(JSON.stringify(said[0])).toContain('"contexts":1');
+});
+
 type Listed = {
   path: string;
   description?: string;
