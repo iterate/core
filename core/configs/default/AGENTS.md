@@ -79,6 +79,18 @@ Every agent also reads `mind.md`, after `AGENTS.md`, when the repo has one (`age
 who this mind is, with its name, its voice, what it is for and how it reaches its people. The
 onboarding agent writes it with the owner. Keep it short: it is in every request.
 
+## Top of mind
+
+The mind knows what it is busy with now: its catalog has one row for each context, and a context
+that has work is "awake" in it. The calls and what a row holds: [top-of-mind.md](top-of-mind.md).
+
+- Read the catalog before you start a task, before you guess a path, and when someone asks what
+  is going on. If another agent already does the work, join it or tell it.
+- Keep your own row true. Your title says who you are, and you set it once. Your description is
+  your purpose over time. What you do right now goes in your `status` label, nowhere else.
+- A context with no description is a gap: give its kind a row in `context-descriptions.ts`
+  (a title and one line), or describe the one context yourself.
+
 ## The apps of the mind
 
 Each app is a folder under `apps/` ([apps.md](apps.md)).
