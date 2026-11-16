@@ -77,6 +77,12 @@ const CONTEXT_DESCRIPTIONS: { path: string; title: string; description: string }
   },
   { path: "/repos/<name>", title: "Repo <name>", description: "The git repository <name>." },
   {
+    path: "/sandbox-image",
+    title: "Sandbox image",
+    description:
+      "The copy of iterate's sandbox image into this mind's own Cloudflare account: each pass of the copy, and when the mind named the image as its sandboxes' own.",
+  },
+  {
     path: "/secrets",
     title: "Secrets",
     description: "The mind's secrets: each context below /secrets is one secret.",

@@ -19,6 +19,7 @@ that names your task BEFORE the task, not after a failure:
   [accounts.md](accounts.md).
 - Before you use the mind's Cloudflare token (logs, traces, a telemetry query, a change to a
   Worker): [cloudflare.md](cloudflare.md).
+- Before you run a coding agent or need git in a sandbox: [sandbox-image.md](sandbox-image.md).
 - Before you build a page for people who are not members, choose the ways to sign in, or turn the
   guestbook on: [people.md](people.md).
 - Before you edit or comment on a doc as an agent, or take the Docs app out:
