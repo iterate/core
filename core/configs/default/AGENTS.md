@@ -172,7 +172,10 @@ export default {
 Every kind shares two things: the catalog row (kind, status, activity, title), and words sent with
 `itx.agents.get(path).message(…)`, which land on the agent's log as
 `events.iterate.com/agent/message-received`. Everything else is the kind's own: its events, its
-rows and its chat. `worker.ts` runs each kind's `processEvent` beside the integrations, and on every
+rows and its chat. `itx.agents.list()` reads every row and wakes no agent;
+`itx.agents.get(path).recent({ minutes: 5 })` is what one agent did in that window (status labels,
+summaries, words in and out, scripts, and `lastScript`), read from its log in the same event types
+for every kind. `worker.ts` runs each kind's `processEvent` beside the integrations, and on every
 publish writes where each kind's file is to the mind's KV (`agent-kinds`), where the Agents app
 finds it. The app runs `view` in a sandboxed frame with only that agent's log and verbs; there, a
 server-only import is a stand-in that throws if the view touches it. A kind whose agents run

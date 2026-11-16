@@ -43,6 +43,7 @@ export default defineConfig([
       "agents/contract": "src/agents/contract.ts",
       "agents/processor": "src/agents/processor.ts",
       "agents/codemode-format": "src/agents/codemode-format.ts",
+      "agents/mind-now": "src/agents/mind-now.ts",
       "oauth-scopes": "src/oauth-scopes.ts",
       "mind-ingress": "src/mind-ingress.ts",
       "app-config": "src/app-config.ts",

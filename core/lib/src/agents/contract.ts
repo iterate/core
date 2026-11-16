@@ -74,7 +74,7 @@ const Sections = z.record(z.string(), z.string().nullable());
 export const AgentContract = defineProcessorContract({
   slug: "agent",
   // Bumping the version re-reduces every agent's log from offset 0 (stream/processor.ts).
-  version: "18",
+  version: "19",
   description:
     "An agent: a conversation on its own context, driven by a model that acts through one tool, run(script), against itx; each request's input extends the previous one, so the provider's prompt cache holds the conversation.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -182,6 +182,14 @@ export const AgentContract = defineProcessorContract({
           .int()
           .positive()
           .default(25 * 60_000),
+        /** THE MIND NOW: while the agent works, a request whose agent last read the mind this long
+         *  ago or longer first appends one note of what the other agents of the mind are doing
+         *  (mind-now.ts), which that turn reads. An idle agent gets none. 0 turns it off. */
+        mindSnapshotEveryMs: z
+          .number()
+          .int()
+          .nonnegative()
+          .default(10 * 60_000),
       })
       .prefault({}),
     /** Every model-visible item, in offset order — the conversation the next request is built from. */
@@ -208,6 +216,8 @@ export const AgentContract = defineProcessorContract({
           snapshot: z.boolean().optional(),
           /** A request's stamp, at the request's own offset. */
           stamp: z.boolean().optional(),
+          /** The mind now (mind-now.ts), written for the request `llmRequestOffset` names. */
+          mindSnapshot: z.boolean().optional(),
         }),
       )
       .default([]),
@@ -284,6 +294,8 @@ export const AgentContract = defineProcessorContract({
     /** When the state last moved: the `createdAt` of the last event the reduce changed it for —
      *  words in, a request opened or settled, a pause. What the agents app's sidebar orders by. */
     lastActivityAt: z.string().nullable().default(null),
+    /** When the newest mind-now note landed (ms): the next is due `mindSnapshotEveryMs` after it. */
+    mindSnapshotAt: z.number().nullable().default(null),
     /** Set by `agent/paused` (the breakers, or an operator); cleared by `agent/resumed`. */
     paused: z
       .object({ reason: z.string(), atOffset: z.number().int().positive() })
@@ -352,6 +364,7 @@ export const AgentContract = defineProcessorContract({
           idleSummariesMaxChars: z.number().int().positive().optional(),
           keepWarmForMs: z.number().int().nonnegative().optional(),
           keepWarmEveryMs: z.number().int().positive().optional(),
+          mindSnapshotEveryMs: z.number().int().nonnegative().optional(),
           llmRequestRetryPolicy: z
             .object({
               maxAttempts: z.number().int().positive().optional(),
@@ -420,6 +433,9 @@ export const AgentContract = defineProcessorContract({
          *  them; `snapshot` for the head copy. */
         sections: Sections.optional(),
         snapshot: z.boolean().optional(),
+        /** On a user item the loop wrote (actor `agent`): the mind now (mind-now.ts), for the request
+         *  `llmRequestOffset` names. */
+        mindSnapshot: z.literal(true).optional(),
       }),
     },
     "events.iterate.com/agent/preamble-entry-set": {

@@ -21,6 +21,7 @@ import type { AgentHandleApi, AgentsApi } from "./api.ts";
 import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
 import { appendMessage } from "./message.ts";
+import { agentRecent } from "./recent.ts";
 import { AGENTS_MODULE, AGENTS_PATH, agentsFacetSpec } from "./install.ts";
 
 /** The subscription rows every agent gets when it's created. They copy what a list shows about the
@@ -363,6 +364,15 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   }
 }
 
+/** `recent()`'s window: 5 minutes by default, at most a day. */
+const RECENT_MINUTES = { default: 5, max: 1_440 };
+/** `recent()`'s lines: 30 by default, at most 200. */
+const RECENT_LINES = { default: 30, max: 200 };
+/** `recent()` reads from this many offsets before the newest one the catalog copied from the
+ *  agent's log (an ephemeral frame takes an offset too, and is not read), in pages of 1,000
+ *  durable events, at most four of them. */
+const RECENT_LOOKBACK = 3_000;
+
 /** The first of `types` on the agent's log after `afterOffset`, waited for CERTIFICATE_WAIT_MS in
  *  slices of CERTIFICATE_WAIT_SLICE_MS, each a fresh call: core/mind-worker/src/mind/collection.ts
  *  `#terminalFact`'s wait, whose doc says why the wake record rides along. */
@@ -487,5 +497,46 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
     throw new Error(
       `agent ${path}: its context has no \`agent\` processor — itx.agents.create(${JSON.stringify(path)}) binds it again`,
     );
+  }
+
+  /** What the agent did lately (api.ts `AgentRecent`): its catalog row, and a slice of its log
+   *  folded by recent.ts. The log has no read from its end, so the slice starts RECENT_LOOKBACK
+   *  offsets before the newest offset the catalog copied from it (its last status, activity or
+   *  title, near the head for an agent at work) and reads forward to the head, at most four pages
+   *  of 1,000 events. It reads the log, never the facet: no agent wakes, only its context. A
+   *  dead or unlisted agent refuses, as `message` does. */
+  async recent(options: Parameters<AgentHandleApi["recent"]>[0] = {}) {
+    const path = this.path;
+    const catalog = await this.catalog();
+    if (catalog.deleted[path]) throw new Error(`agent ${path}: deleted`);
+    const row = catalog.agents[path];
+    if (!row && path.startsWith(`${AGENTS_PATH}/`))
+      throw codedError("NOT_CREATED", `agent ${path}: not created`, { path });
+    const bounded = (value: number | undefined, { default: fallback, max }: typeof RECENT_LINES) =>
+      Math.min(Math.max(1, Math.floor(value ?? fallback)), max);
+    const minutes = bounded(options.minutes, RECENT_MINUTES);
+    const limit = bounded(options.limit, RECENT_LINES);
+    const newest = Math.max(0, row?.titleAtOffset || 0, ...Object.values(row?.fieldAtOffset || {}));
+    const events: StreamEvent[] = [];
+    let after = Math.max(0, newest - RECENT_LOOKBACK);
+    using itx = this.getItx();
+    for (let page = 0; page < 4; page += 1) {
+      const read = await itx.cd(path).readEvents(after, 1_000);
+      events.push(...read.events);
+      if (read.atHead || read.events.length === 0) break;
+      after = read.scannedThroughOffset;
+    }
+    return {
+      path,
+      title: row?.title || null,
+      status: row?.status || null,
+      activity: row?.activity || null,
+      description: row?.description || null,
+      ...agentRecent(events, {
+        since: new Date(Date.now() - minutes * 60_000).toISOString(),
+        limit,
+        iterate: row?.kind === "iterate",
+      }),
+    };
   }
 }

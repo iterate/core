@@ -31,7 +31,29 @@ export interface AgentHandleApi {
    *  iterate's own, the same event is appended to its context, for its own subscription to
    *  deliver. A deleted agent refuses, and so does one never created (NOT_CREATED). */
   message(input: AgentMessageInput, options?: AgentMessageOptions): Promise<StreamEvent>;
+  /** What the agent did lately, from its own durable log: the last `minutes` (5 by default, at
+   *  most 1,440), at most `limit` lines (30 by default, at most 200), oldest first, beside its
+   *  catalog row. It wakes no agent: it reads the log, which wakes only the agent's context. The
+   *  read starts a few thousand offsets before the newest event the catalog has copied from that
+   *  log and reads at most 4,000 events, so a window older than that is cut short. */
+  recent(options?: { minutes?: number; limit?: number }): Promise<AgentRecent>;
 }
+
+/** What `itx.agents.get(path).recent()` answers. */
+export type AgentRecent = Pick<
+  AgentListing,
+  "path" | "title" | "status" | "activity" | "description"
+> & {
+  /** One line per thing it did in the window, oldest first: `status` its run's status label,
+   *  `summary` what it said about itself (`setSummary`), `message-in` words it received,
+   *  `message-out` words it sent, `script` the first line of a script it ran. Each `text` is one
+   *  line, cut to 300 characters. */
+  did: { at: string; what: AgentDidKind; text: string }[];
+  /** The newest script it ran in the window: its status label, its whole source and, when it
+   *  failed, the error. */
+  lastScript: { at: string; status: string; script: string; error?: string } | null;
+};
+export type AgentDidKind = "status" | "summary" | "message-in" | "message-out" | "script";
 
 /** One row of `itx.agents.list()`. */
 export type AgentListing = {

@@ -38,6 +38,7 @@ const defaultConfig = {
   idleSummariesMaxChars: 40_000,
   keepWarmForMs: 2 * 3_600_000,
   keepWarmEveryMs: 25 * 60_000,
+  mindSnapshotEveryMs: 10 * 60_000,
 };
 const system = {
   type: "events.iterate.com/agent/context-added",
@@ -412,6 +413,7 @@ test.for<{
         idleSummariesMaxChars: 40_000,
         keepWarmForMs: 2 * 3_600_000,
         keepWarmEveryMs: 25 * 60_000,
+        mindSnapshotEveryMs: 10 * 60_000,
       },
     },
   },
@@ -662,6 +664,26 @@ test("a checkpoint written before the stream idle budget existed is reduced agai
     }).snapshot();
     expect(state.config.llm).toMatchObject({ streamIdleTimeoutMs: budget });
   }
+});
+
+test("a checkpoint written before the mind snapshot existed is reduced again: the agent reads the default interval, and has had no note", async () => {
+  const mem = memoryStream("/agents/support");
+  mem.stream.append(...(born as never[]));
+  // the state the contract's version 18 wrote: no interval in its config, no time of a note
+  const { config, mindSnapshotAt: _, ...rest } = reduceProcessor(processor(), born) as AgentState;
+  const { mindSnapshotEveryMs: __, ...oldConfig } = config;
+  const storage = memoryStorage();
+  storage.write(
+    AgentContract.slug,
+    { reducerVersion: "18", reducedThroughOffset: 2 },
+    { ...rest, config: oldConfig },
+    true,
+  );
+  const { state } = await new ProcessorEngine(processor(), {
+    stream: mem.stream,
+    storage,
+  }).snapshot();
+  expect(state).toMatchObject({ config: { mindSnapshotEveryMs: 600_000 }, mindSnapshotAt: null });
 });
 
 test.for([

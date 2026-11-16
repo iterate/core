@@ -9,6 +9,7 @@ import { ProcessorEngine, type StreamEvent, type StreamEventInput } from "../str
 import { memoryStorage, memoryStream } from "../stream/test-support.ts";
 import { type AgentConfigPatch, AgentProcessor } from "./processor.ts";
 import { AI_GATEWAY } from "./responses-keys.ts";
+import type { AgentListing } from "./api.ts";
 
 const PATH = "/agents/a";
 const AT = Date.parse("2026-10-10T12:00:00Z");
@@ -72,6 +73,43 @@ test("an agent's service tier is asked for, and an unset one is not sent", async
     // on the wire an unset tier is no field at all
     expect(JSON.stringify(sent[0]).includes('"service_tier"')).toBe(Boolean(serviceTier));
   }
+});
+
+// ── the mind now ──
+
+test("a working agent reads the mind once per interval: one note, keyed to its request, that the turn reads and that wakes nothing", async () => {
+  const { turn, commit, sent } = agentWithModel({
+    agents: [OTHER, { ...OTHER, path: PATH }],
+    config: { keepWarmForMs: 0 }, // so a settlement arms no schedule on the fake
+  });
+  const first = await turn("Fix the build.");
+  const [note] = notesOf(first);
+  expect(note).toMatchObject({
+    idempotencyKey: expect.stringContaining("mind-now/"),
+    payload: {
+      role: "user",
+      actor: { type: "agent" },
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    },
+  });
+  const content = (note!.payload as { content: string }).content;
+  expect(content).toContain('working  /agents/b  "Fix the smoke check": Reading the deploy log');
+  expect(content).not.toContain(`${PATH} `);
+  expect(JSON.stringify(sent[0]?.input)).toContain("the mind now");
+  for (const row of first) await commit(row);
+  // within the interval: the next turn reads the same note in its history, and appends none
+  expect(notesOf(await turn("And the tests?"))).toEqual([]);
+  // in the same place: the second request's input starts with the first's, so the cache holds
+  const firstInput = sent[0]!.input as unknown[];
+  expect((sent[1]!.input as unknown[]).slice(0, firstInput.length)).toEqual(firstInput);
+});
+
+test("no note when the mind snapshot is turned off, or when nobody else is active", async () => {
+  const off = agentWithModel({ agents: [OTHER], config: { mindSnapshotEveryMs: 0 } });
+  expect(notesOf(await off.turn("hi"))).toEqual([]);
+  const alone = agentWithModel({ agents: [{ ...OTHER, path: PATH }] });
+  expect(notesOf(await alone.turn("hi"))).toEqual([]);
+  expect(alone.state().mindSnapshotAt).toBeNull();
 });
 
 // ── each answer's idle budget, and the key stack's fallback, on a fake clock ──
@@ -789,6 +827,8 @@ function agentWithModel(options: {
   describe?: (path: string) => Promise<{ path: string; set: boolean }>;
   /** What `itx.whoami` says of the mind; by default a slug and an id, as the frozen platform's. */
   mind?: { mindId?: string; mindSlug?: string };
+  /** `itx.agents.list()`: the catalog's rows; by default none. */
+  agents?: AgentListing[];
 }) {
   const sent: Record<string, unknown>[] = [];
   /** the options of each `itx.ai.run`: the gateway and what the request tells it */
@@ -803,6 +843,7 @@ function agentWithModel(options: {
     },
     cd: () => ({ rewriteRules: { list: async () => [] } }),
     secrets: { describe: options.describe || (async (path: string) => ({ path, set: false })) },
+    agents: { list: async () => options.agents || [] },
     ai: {
       run: async (_model: string, body: Record<string, unknown>, runOptions: unknown) => {
         sent.push(body);
@@ -979,3 +1020,22 @@ function bodyRejectedByCancel(frames: unknown[]): Response {
   };
   return { ok: true, status: 200, body } as unknown as Response;
 }
+
+const OTHER: AgentListing = {
+  path: "/agents/b",
+  createdAt: new Date(AT - 3_600_000).toISOString(),
+  parent: null,
+  kind: "iterate",
+  host: null,
+  status: "working",
+  activity: "Reading the deploy log",
+  description: null,
+  title: "Fix the smoke check",
+  lastActivityAt: new Date(AT - 120_000).toISOString(),
+};
+const notesOf = (rows: Row[]) =>
+  rows.filter(
+    (row) =>
+      row.type === "events.iterate.com/agent/context-added" &&
+      (row.payload as { mindSnapshot?: boolean }).mindSnapshot,
+  );

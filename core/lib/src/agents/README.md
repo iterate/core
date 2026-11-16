@@ -39,7 +39,8 @@ agents on their next call, and so does a platform deploy (every loader cache key
 deployment).
 
 Importing `iterate/agents` registers `itx.agents` on iterate/api's `InstalledAppRoots`:
-`itx as IterateContextApiWith<"agents">` types `create`, `get(path).message`, `list` and `delete`.
+`itx as IterateContextApiWith<"agents">` types `create`, `get(path).message`, `get(path).recent`,
+`list` and `delete`.
 
 ## What an agent is
 
@@ -70,6 +71,34 @@ agent gets four subscription rows when it's created (`collection.ts` `CATALOG_RO
 and each model request (`working`, then `idle`). Another kind of agent configures its own rows. An
 agent created before the catalog moved to `/agents` shows only its path.
 
+An iterate agent's `status` label goes onto its log as `agent/summary-updated` `{ activity }`, one
+per script run that has a label, and its copy is the row's `activity`: while the agent works, the
+row's line is what its newest script is doing. The run costs that one event and its copy on
+`/agents`.
+
+`get(path).recent({ minutes, limit })` answers what one agent did lately, from its own log
+(`recent.ts`): its row's title, status, activity and description, one line per status label,
+summary, words in, words out and script in the window, oldest first, and the newest script whole
+(`lastScript`, with its error if it failed). The log has no read from its end, so it reads forward
+from a few thousand offsets before the newest offset the catalog copied, at most 4,000 events. It
+wakes the agent's context, never its facet.
+
+THE MIND NOW: before a request, an iterate agent that last read the mind `mindSnapshotEveryMs` ago
+or longer (10 minutes by default; 0 turns it off, through `agent/configured` or `defaultConfig`)
+reads `itx.agents.list()` once and appends ONE note, keyed to the request, that the turn
+reads: the other agents at work, then those active in the last hour, newest first, at most 12 rows
+of about 160 characters (`mind-now.ts`). Its role is `user` and its actor `agent`: the lines in it
+are other agents' words, read as data; it starts no turn, and the agent chat shows it as a
+background row. An idle agent gets none, and so does one when no other agent was active in the
+last hour. A failed read is logged and the turn goes on.
+
+AT WORK: an iterate agent's row says `idle` from the moment a model answer settles, before the
+script that answer called runs, because the status copy rides the settlement. The rows are
+written once, by `create`, so a new order would reach only new agents. Readers decide instead
+with one rule, `agentAtWork` (`iterate/agents/mind-now`): `working` or `waiting`, or `idle` with
+an activity line from the last ten minutes (a script runs at most that long). The mind-now note
+and the Agents app's rows both use it.
+
 Messaging any agent is appending `agent/context-added` to its context. `get(path).message(input)`
 sends an iterate agent's words through its facet, and appends the same event straight to any other
 agent's context, whose own subscription delivers it to whatever runs it. `delete(path)` of an agent
@@ -77,7 +106,8 @@ iterate does not run records its death on `/agents` and nothing else.
 
 - `contract.ts` — an agent's events and state; `processor.ts` — the reduce and the loop;
   `render.ts` — each request as OpenAI reads it; `processor.test.ts` — the processor's spec.
-- `catalog.ts`, `collection.ts` — `itx.agents`; `durable-object.ts` — one agent.
+- `catalog.ts`, `collection.ts` — `itx.agents`; `recent.ts` — `get(path).recent()`;
+  `mind-now.ts` — the mind-now note; `durable-object.ts` — one agent.
 - `responses-keys.ts` — the model call with a stack of API keys.
 
 ## Warming up

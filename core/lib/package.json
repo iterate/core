@@ -59,6 +59,7 @@
     "./agents/contract": "./src/agents/contract.ts",
     "./agents/processor": "./src/agents/processor.ts",
     "./agents/codemode-format": "./src/agents/codemode-format.ts",
+    "./agents/mind-now": "./src/agents/mind-now.ts",
     "./node": "./src/node.ts",
     "./standalone-page": "./src/standalone-page.ts",
     "./theme.css": "./src/theme/theme.css",
@@ -213,6 +214,10 @@
       "./agents/codemode-format": {
         "types": "./dist/agents/codemode-format.d.mts",
         "import": "./dist/agents/codemode-format.mjs"
+      },
+      "./agents/mind-now": {
+        "types": "./dist/agents/mind-now.d.mts",
+        "import": "./dist/agents/mind-now.mjs"
       },
       "./node": {
         "types": "./dist/node.d.mts",

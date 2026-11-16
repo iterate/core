@@ -38,6 +38,8 @@ import {
 } from "./results-preamble.ts";
 import { type AgentInputGate, isOtherContext, messagePayload } from "./message.ts";
 import { AGENTS_PATH } from "./install.ts";
+import { mindNowNote } from "./mind-now.ts";
+import type { AgentsApi } from "./api.ts";
 import { standingFileSection, standingInstructionFiles } from "./standing-instructions.ts";
 import { AgentContract, type AgentState, type LlmUsage } from "./contract.ts";
 import { AGENT_COMPACTION_PROMPT, DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
@@ -597,6 +599,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               patch.idleSummariesMaxChars ?? state.config.idleSummariesMaxChars,
             keepWarmForMs: patch.keepWarmForMs ?? state.config.keepWarmForMs,
             keepWarmEveryMs: patch.keepWarmEveryMs ?? state.config.keepWarmEveryMs,
+            mindSnapshotEveryMs: patch.mindSnapshotEveryMs ?? state.config.mindSnapshotEveryMs,
             llmRequestRetryPolicy: {
               maxAttempts:
                 patch.llmRequestRetryPolicy?.maxAttempts ??
@@ -669,7 +672,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         // The sender signs nothing, so the label is advisory.
         const { origin } = event.source;
         const sender = origin !== event.path ? origin : payload.from;
-        const { call, providerItems, providerModel, sections, snapshot } = payload;
+        const { call, providerItems, providerModel, sections, snapshot, mindSnapshot } = payload;
         // A standing-instructions item folds into what the model has been shown.
         const shown =
           role === "system" && sections
@@ -712,8 +715,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               providerModel,
               sections,
               snapshot,
+              mindSnapshot,
             },
           ],
+          ...(mindSnapshot && { mindSnapshotAt: Date.parse(event.createdAt) }),
         };
         // A person's or a developer's words raise the trigger — the system prompt and the
         // assistant's own output never do, nor words whose policy says not to.
@@ -1577,7 +1582,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           if (this.#gatesInFlight.has(offset)) continue;
           this.#gatesInFlight.add(offset);
           const recent = state.contextItems
-            .filter((earlier) => earlier.role === "user" && earlier.offset < offset)
+            .filter(
+              (earlier) =>
+                earlier.role === "user" && !earlier.mindSnapshot && earlier.offset < offset,
+            )
             .slice(-3)
             .map((earlier) => (earlier.from ? `[from ${earlier.from}] ` : "") + earlier.content);
           runInBackground(async () => {
@@ -1738,9 +1746,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       void this.#refreshSecretsSet(secretPathsOf(state.config.llm.apiKeys));
       const { path } = await raceAbort(controller.signal, this.#identity());
       // raced, so the expiry frees a request stuck before its stream (a hung read) too
+      const noted = await raceAbort(
+        controller.signal,
+        this.#noteTheMind(state, open.requestedAtOffset, path, append),
+      );
+      const turnState = noted ? { ...state, contextItems: [...state.contextItems, noted] } : state;
       const input = await raceAbort(
         controller.signal,
-        this.#requestInput(state, open.requestedAtOffset, open.model, append),
+        this.#requestInput(turnState, open.requestedAtOffset, open.model, append),
       );
       // THE WINDOWS: the text and thinking the stream adds pile into one buffer; a window closes
       // FRAME_WINDOW_MS after its first delta (or at the size cap) and lands as one ephemeral
@@ -1850,7 +1863,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           answer = await this.#stream({
             ...request,
             input: await this.#requestInput(
-              state,
+              turnState,
               open.requestedAtOffset,
               open.model,
               append,
@@ -1990,6 +2003,64 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     return { offset: requestOffset + 0.5, ...payload };
   }
 
+  /** THE MIND NOW, before a request: when the agent last read the mind `mindSnapshotEveryMs` ago or
+   *  longer (never, for a new agent), ONE note of what the mind's other agents are doing
+   *  (mind-now.ts), keyed to the request, so a revival or a retry appends nothing twice. Its role
+   *  is `user` and its actor `agent`: the titles and lines in it are other agents' words, which
+   *  the model reads as data, never as instructions; it starts no turn, the catalog's first-words
+   *  row takes only a person's words, and the agent chat shows it as a quiet background row. It lands
+   *  after the request's stamp and before its answer, where every later request renders it, so the
+   *  input stays append-only and the cached prefix holds. It is made from one read of the catalog
+   *  on `/agents`, which wakes no agent. Answers the item for the request being built; null when
+   *  none is due, nobody else was active in the last hour (which counts as no note: the next
+   *  request looks again) or the read failed, which is logged and never fails the turn. */
+  async #noteTheMind(
+    state: AgentState,
+    requestOffset: number,
+    path: string,
+    append: AgentArgs["append"],
+  ): Promise<AgentState["contextItems"][number] | null> {
+    const every = state.config.mindSnapshotEveryMs;
+    const now = this.#now();
+    if (every === 0 || (state.mindSnapshotAt !== null && now - state.mindSnapshotAt < every))
+      return null;
+    if (
+      state.contextItems.some(
+        (item) => item.mindSnapshot && item.llmRequestOffset === requestOffset,
+      )
+    )
+      return null;
+    let content: string | null;
+    try {
+      // The scope's type names no installed app, so `agents` is asserted: `create` wrote this
+      // agent's own `itx.agents` rewrite rule (collection.ts) before its first request. If the rule
+      // is missing, the call throws and the catch below logs it.
+      using itx = this.deps.getItx() as IterateContextApi & { agents: AgentsApi } & Disposable;
+      content = mindNowNote(await itx.agents.list(), { self: path, now });
+    } catch (error) {
+      console.warn("[agent] the mind now: the catalog of agents could not be read", {
+        requestOffset,
+        error,
+      });
+      return null;
+    }
+    if (!content) return null;
+    const payload = {
+      role: "user" as const,
+      content,
+      actor: { type: "agent" as const },
+      llmRequestOffset: requestOffset,
+      llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
+      mindSnapshot: true as const,
+    };
+    await appendUnlessLost(append, {
+      type: "events.iterate.com/agent/context-added",
+      idempotencyKey: this.idempotencyKey(`mind-now/${String(requestOffset)}`),
+      payload,
+    });
+    return { offset: requestOffset + 0.25, ...payload };
+  }
+
   /** THE INPUT of the request at `throughOffset`: its conversation (the items up to its stamp,
    *  plus the section item written for it), rendered by render.ts. A turn and the compaction of that
    *  turn build the same input, so the summary request reads it from cache. A summary counts by its
@@ -2009,7 +2080,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         (item) =>
           item.offset <= throughOffset ||
           (item.compaction && item.compaction.replacesHistoryThrough <= throughOffset) ||
-          (item.sections && item.llmRequestOffset === throughOffset),
+          ((item.sections || item.mindSnapshot) && item.llmRequestOffset === throughOffset),
       ),
       ...(update ? [update] : []),
     ];
