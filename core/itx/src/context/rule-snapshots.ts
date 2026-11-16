@@ -67,7 +67,14 @@ class RuleSnapshotCache {
       const borrowed = this.#reading.get(name);
       const reading = borrowed || this.#read(name, read, held);
       const snapshot = await this.#answerInTime(name, reading).catch((error: unknown) => {
-        if (!borrowed) throw error;
+        if (
+          !borrowed ||
+          !(error instanceof Error) ||
+          !error.message.includes(
+            "This promise was created by a request that has since ended, so it can never settle.",
+          )
+        )
+          throw error;
         // Workerd may reject another request's wait without settling the read or its cleanup.
         if (this.#reading.get(name) === reading) this.#reading.delete(name);
         console.warn({

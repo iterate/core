@@ -1,4 +1,5 @@
 // RuleSnapshotCache sharing and lifetimes. Workerd request ownership is simulated at Promise.race.
+import { codedError } from "iterate/lib";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { ruleSnapshots, SNAPSHOT_TTL_MS, type RulesSnapshotAnswer } from "./rule-snapshots.ts";
 
@@ -52,11 +53,11 @@ test("a borrower's own reread failure still throws", async ({ task }) => {
   await owner;
 });
 
-test("a shared rejection still fails its owner while the borrower reads again", async ({
+test("a shared cross-request rejection still fails its owner while the borrower reads again", async ({
   task,
 }) => {
   const pending = Promise.withResolvers<RulesSnapshotAnswer>();
-  const error = new Error("owner read failed");
+  const error = crossRequestError();
   const owner = expect(ruleSnapshots.get(task.name, () => pending.promise)).rejects.toBe(error);
   const read = vi.fn(async () => snapshotAnswer("fresh"));
   const borrower = ruleSnapshots.get(task.name, read);
@@ -66,6 +67,50 @@ test("a shared rejection still fails its owner while the borrower reads again", 
   await expect(borrower).resolves.toMatchObject({ version: "fresh" });
   expect(read).toHaveBeenCalledTimes(1);
 });
+
+test.for([
+  {
+    name: "overload",
+    error: Object.assign(new Error("owner overloaded"), { overloaded: true }),
+    reads: 1,
+    expected: { code: "UNAVAILABLE", data: { kind: "overloaded", retryAfterMs: 10_000 } },
+  },
+  {
+    name: "exhausted transient failure",
+    error: Object.assign(new Error("owner disconnected"), { retryable: true }),
+    reads: 2,
+    expected: { code: "UNAVAILABLE", data: { kind: "disconnected", retryAfterMs: 1_000 } },
+  },
+  {
+    name: "refusal",
+    error: codedError("INVALID_INPUT", "owner refused"),
+    reads: 1,
+    expected: { code: "INVALID_INPUT", message: "owner refused" },
+  },
+  {
+    name: "unclassified failure",
+    error: new Error("owner read failed"),
+    reads: 1,
+    expected: { message: "owner read failed" },
+  },
+])(
+  "a borrowed $name propagates without another read",
+  async ({ error, reads, expected }, { task }) => {
+    const pending = Promise.withResolvers<RulesSnapshotAnswer>();
+    const read = vi.fn(() => pending.promise);
+    const owner = ruleSnapshots.get(task.name, read);
+    const reread = vi.fn(async () => snapshotAnswer());
+    const borrower = ruleSnapshots.get(task.name, reread);
+    pending.reject(error);
+
+    expect(await Promise.allSettled([owner, borrower])).toMatchObject([
+      { status: "rejected", reason: expected },
+      { status: "rejected", reason: expected },
+    ]);
+    expect(read).toHaveBeenCalledTimes(reads);
+    expect(reread).not.toHaveBeenCalled();
+  },
+);
 
 test("two borrowers rejecting the same read preserve the replacement read", async ({ task }) => {
   const pending = Promise.withResolvers<RulesSnapshotAnswer>();
