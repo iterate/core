@@ -16,7 +16,7 @@ import { voiceApp } from "./apps/voice/app.ts";
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
 import { cloudAccountsEvent } from "./cloud-accounts.ts";
-import { cloudHandoverEvent } from "./cloud-handover.ts";
+import { cloudHandoverEvent, iterateKeyAddedEvent } from "./cloud-handover.ts";
 import { cloudflareConnectionEvent, cloudflareForAgent } from "./cloudflare.ts";
 import { contextDescriptionsEvent } from "./context-descriptions.ts";
 import { gmailEvent } from "./gmail.ts";
@@ -271,6 +271,11 @@ export default class extends IterateConfigEntrypoint {
         // once by the Cloud on `/integrations/cloud` and signed by its key: the onboarding agent
         // gets it as their quoted words (cloud-handover.ts).
         await cloudHandoverEvent(itx, event);
+        break;
+      case "events.iterate.com/account/key-added":
+        // The owner signed the key that lets iterate.com send this mind messages: the onboarding
+        // agent is told, so it goes on by itself (cloud-handover.ts, onboarding.md step 2).
+        await iterateKeyAddedEvent(itx, event);
         break;
       case "events.iterate.com/slack/webhook-received": {
         // What happened in a Slack workspace a member linked, on `/integrations/slack/<team>`,

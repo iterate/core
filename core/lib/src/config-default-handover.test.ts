@@ -80,6 +80,57 @@ test.for([
 
 /** A mind's root as the case uses it: its address, the agents it creates, and the events appended
  *  anywhere, with the platform's refusal of a key it has seen. */
+const KEY_ADDED = {
+  type: "events.iterate.com/account/key-added",
+  path: "/",
+  offset: 9,
+  payload: {
+    key: "p256-public-key",
+    label: "iterate.com",
+    format: "p256",
+    at: "2026-11-16T21:23:00.000Z",
+    actor: "iterate-com",
+    paths: ["/integrations/minds/iterate.com/"],
+    addedBy: "user-1",
+  },
+};
+
+test("the owner signed the key for iterate.com: the onboarding agent is told once, with a note that starts its turn", async () => {
+  const root = rootOf("https://example.com/");
+  await run(root, KEY_ADDED);
+  await run(root, KEY_ADDED);
+  expect(root.appended).toHaveLength(1);
+  expect(root.appended[0]).toMatchObject({
+    path: "/agents/onboarding",
+    event: {
+      type: "events.iterate.com/agent/context-added",
+      idempotencyKey: "iterate-key-added:p256-public-key:2026-11-16T21:23:00.000Z",
+      payload: { role: "developer" },
+    },
+  });
+  // it starts a turn: no policy that holds the request back
+  expect(root.appended[0]!.event).not.toHaveProperty("payload.llmRequestPolicy");
+});
+
+test.for([
+  {
+    name: "another actor's key",
+    event: { ...KEY_ADDED, payload: { ...KEY_ADDED.payload, actor: "iterate-cloud" } },
+  },
+  {
+    name: "a passkey, which names no actor",
+    event: { ...KEY_ADDED, payload: { key: "k", at: "t" } },
+  },
+  { name: "the same type on another context", event: { ...KEY_ADDED, path: "/users/user-1" } },
+])(
+  "a key that is not iterate.com's tells the onboarding agent nothing: $name",
+  async ({ event }) => {
+    const root = rootOf("https://example.com/");
+    await run(root, event);
+    expect(root).toMatchObject({ appended: [] });
+  },
+);
+
 function rootOf(url: string) {
   const created: string[] = [];
   const appended: { path: string; event: { idempotencyKey: string } }[] = [];
