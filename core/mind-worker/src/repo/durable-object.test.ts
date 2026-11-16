@@ -65,27 +65,30 @@ test("a push that could not be published is one fact on the repo's log, and the 
   const repo = repoWith([TIP, PARENT]);
   repo.gitLogFailures = Infinity;
   await repo.pushed({ ref: "refs/heads/main", after: TIP });
+  // Publishing runs in the background: wait for the exhausted round's fact before restarting.
+  await expect
+    .poll(() => repo.notPublished())
+    .toEqual([
+      {
+        idempotencyKey: `repo/push-not-published:${PATH}:${TIP}`,
+        payload: { commitOid: TIP, error: "Artifacts did not answer" },
+      },
+    ]);
   expect(repo.factsOn(PATH)).toEqual([]);
-  expect(repo.notPublished()).toEqual([
-    {
-      idempotencyKey: `repo/push-not-published:${PATH}:${TIP}`,
-      payload: { commitOid: TIP, error: "Artifacts did not answer" },
-    },
-  ]);
   // a second failed round, with other words, adds no second fact and reports the push's error
   const reported = vi.spyOn(console, "error").mockImplementation(() => {});
   repo.gitLogError = "Artifacts answered 503";
   await repo.restarted();
+  await expect
+    .poll(() => reported.mock.calls.map(([line]) => line.error?.message))
+    .toContain("Artifacts answered 503");
   expect(repo.notPublished()).toHaveLength(1);
-  expect(reported.mock.calls.map(([line]) => line.error?.message)).toContain(
-    "Artifacts answered 503",
-  );
   expect(JSON.stringify(reported.mock.calls)).not.toMatch(/idempotency/i);
   expect(repo.factsOn(PATH)).toEqual([]);
   // the git log answers again: the next pass publishes the tip
   repo.gitLogFailures = 0;
   await repo.restarted();
-  expect(repo.factsOn(PATH)).toHaveLength(1);
+  await expect.poll(() => repo.factsOn(PATH)).toHaveLength(1);
   expect(repo.notPublished()).toHaveLength(1);
 });
 
