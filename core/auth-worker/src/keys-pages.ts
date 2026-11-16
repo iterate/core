@@ -216,12 +216,35 @@ async function keysPage(
   const passkeys = results.filter(
     (key) => key.user_id && key.format === "webauthn" && !key.revoked_at,
   ).length;
+  const formAttributes = `id="add" class="stack" data-challenge="${text(challenge)}" data-user="${text(session.userId)}" data-email="${text(session.email)}" data-rp="${text(new URL(issuer).hostname)}"${owed ? "" : " data-sign"}${onward ? ` data-next="${text(onward)}"` : ""}`;
+  const script = `${signScript(domain)}${PASSKEY_SCRIPT}`;
+  // THE FIRST SIGN-IN. A person who is held here and has no passkey came for one thing, so the
+  // page is that one thing: why, what the browser asks next, and the button. The list of keys, the
+  // services' keys and a second passkey are for a later visit.
+  if (held && passkeys === 0)
+    return page({
+      // the heading of the page that spends an owner's ticket (./first-owner.ts), which sends the
+      // browser here: the two read as one page
+      title: `Add your passkey to ${domain}`,
+      body: `<h1>Add your passkey to ${text(domain)}</h1>
+      <p>${text(domain)} needs a passkey at your first sign-in. From then on it is how you sign in here, and how you approve what your agents ask for.</p>
+      <p>Press the button, and your browser asks for your fingerprint, your face or a security key.</p>
+      <form ${formAttributes}>
+        <button type="submit">Add a passkey</button>
+        <details><summary>Name it (optional)</summary><input name="label" maxlength="100" size="28" aria-label="Name" placeholder="such as YubiKey"></details>
+        <p id="status" class="muted" role="status"></p>
+      </form>`,
+      script,
+    });
   // No way on for a session that owes a passkey: every other page sends it back here.
   const goesOn = !held;
+  // What the press does, for a person who has never made a passkey: nothing else on the page says
+  // that the browser asks next.
+  const browserAsks = "Your browser asks for your fingerprint, face or security key.";
   const ask = held
-    ? `<p><strong>Add a passkey to go on.</strong> Only a passkey signs you in to ${text(domain)} after this.</p>`
+    ? `<p><strong>Add a passkey to go on.</strong> ${browserAsks} Only a passkey signs you in to ${text(domain)} after this.</p>`
     : owed
-      ? `<p><strong>Add a passkey.</strong> It signs what you change here, such as a new member.</p>`
+      ? `<p><strong>Add a passkey.</strong> ${browserAsks} It signs what you change here, such as a new member.</p>`
       : `${
           passkeys === 1
             ? `<p><strong>Add a second passkey</strong>, on another device or a security key. If you lose your only passkey you are locked out, until the mind's owner removes it, or, for an owner, until a new deploy.</p>`
@@ -233,8 +256,8 @@ async function keysPage(
     body: `<h1>Your keys for ${text(domain)}</h1>
       <p>A key lets you sign in to ${text(domain)} and approve things in it: a passkey in your password manager, or a security key such as a YubiKey. The list also shows the keys that members allowed for services, and any member can remove one of those.</p>
       ${results.length ? `<ul>${results.map(item).join("")}</ul>` : `<p class="muted">You have no keys here yet.</p>`}
-      <form id="add" class="stack" data-challenge="${text(challenge)}" data-user="${text(session.userId)}" data-email="${text(session.email)}" data-rp="${text(new URL(issuer).hostname)}"${owed ? "" : " data-sign"}${onward ? ` data-next="${text(onward)}"` : ""}>
-        <input name="label" required maxlength="100" size="28" aria-label="Name" placeholder="Name it, such as YubiKey">
+      <form ${formAttributes}>
+        <label>Name, optional <input name="label" maxlength="100" size="28" placeholder="such as YubiKey"></label>
         <button type="submit">Add a passkey</button>
         <p id="status" class="muted" role="status"></p>
       </form>
@@ -242,7 +265,7 @@ async function keysPage(
       <p id="removal" class="muted" role="status">${owed ? "" : "Removing a key takes a press of a passkey you have here."}</p>
       ${goesOn ? `<p class="muted">Where you are signed in, and the apps and tools that hold a sign-in as you: <a href="${SESSIONS_PATH}">Sessions</a>.</p>` : ""}
       ${next && goesOn ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
-    script: `${signScript(domain)}${PASSKEY_SCRIPT}`,
+    script,
   });
 }
 
@@ -260,11 +283,16 @@ form.addEventListener("submit", async (event) => {
   try {
     if (!made) {
       status.textContent = "Waiting for your new passkey…";
+      // With no name typed the passkey is named after the device, where the browser says which,
+      // and the day: the press never waits for a name.
+      const day = new Date().toISOString().slice(0, 10);
+      const typed = form.label.value.trim();
+      const device = navigator.userAgentData && navigator.userAgentData.platform ? navigator.userAgentData.platform + " passkey" : "Passkey";
       const credential = await navigator.credentials.create({ publicKey: {
         rp: { id: rp, name: rp },
         // The name is what a password manager lists the passkey under: its name here, this host and
         // the day, so that a person's passkeys are told apart there. The address is the displayName.
-        user: { id: enc.encode(user), name: [form.label.value.trim(), rp, new Date().toISOString().slice(0, 10)].join(" · "), displayName: email },
+        user: { id: enc.encode(user), name: [typed || device, rp, day].join(" · "), displayName: email },
         challenge: unb64u(challenge),
         pubKeyCredParams: [{ type: "public-key", alg: -7 }],
         excludeCredentials: (await passkeys).map((key) => ({ type: "public-key", id: unb64u(key.credentialId) })),
@@ -274,7 +302,7 @@ form.addEventListener("submit", async (event) => {
       const publicKey = credential.response.getPublicKey();
       made = {
         key: b64u(await sha256(publicKey)),
-        body: { label: form.label.value, publicKey: b64u(publicKey), credentialId: credential.id, clientDataJSON: b64u(credential.response.clientDataJSON) },
+        body: { label: typed || device + ", " + day, publicKey: b64u(publicKey), credentialId: credential.id, clientDataJSON: b64u(credential.response.clientDataJSON) },
       };
       if ("sign" in form.dataset) {
         form.querySelector("button").textContent = "Confirm with a passkey you have";
@@ -288,8 +316,11 @@ form.addEventListener("submit", async (event) => {
     }
     const response = await fetch("${KEYS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(made.body) });
     if (!response.ok) throw new Error((await response.json()).error);
-    if (form.dataset.next) location.assign(form.dataset.next);
-    else location.reload();
+    // said before the next page loads: "Waiting for your new passkey…" would stand there meanwhile
+    if (form.dataset.next) {
+      status.textContent = "Your passkey is added. One moment…";
+      location.assign(form.dataset.next);
+    } else location.reload();
   } catch (error) {
     status.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.name === "InvalidStateError" ? "This device holds a passkey of yours for this site already. Make the new one on another device or a security key." : error.message || "The passkey was not added.";
   }
@@ -332,15 +363,22 @@ async function passkeyAdded(
       400,
     );
   }
-  const { label, publicKey, credentialId } = input;
+  const { publicKey, credentialId } = input;
+  // A name is the person's to give or to leave out: with none, the key is named after the day.
+  const label = input.label ?? "";
   if (
     typeof label !== "string" ||
-    !label.trim() ||
     label.length > 100 ||
     typeof publicKey !== "string" ||
     typeof credentialId !== "string"
   )
-    return json({ error: "Name the key, and send its public key and credential id." }, 400);
+    return json(
+      {
+        error:
+          "Send the key's public key and credential id, and a name of at most 100 characters if you name it.",
+      },
+      400,
+    );
   if (clientData.type !== "webauthn.create" || clientData.origin !== issuerOf(env))
     return json({ error: "This is not a passkey made on this page." }, 403);
   const challengeKey = `${CHALLENGE_KEY_PREFIX}${String(clientData.challenge)}`;
@@ -369,6 +407,7 @@ async function passkeyAdded(
       403,
     );
   const at = Date.now();
+  const name = label.trim() || `Passkey, ${new Date(at).toISOString().slice(0, 10)}`;
   const { meta } = await env.DB.prepare(
     `insert into keys (id, user_id, public_key, format, credential_id, label, added_via, added_by, added_at)
      select ?1, ?2, ?3, 'webauthn', ?4, ?5, 'keys-page', ?2, ?6
@@ -376,7 +415,7 @@ async function passkeyAdded(
        (select 1 from keys where user_id = ?2 and format = 'webauthn' and revoked_at is null)
      on conflict do nothing`,
   )
-    .bind(key, session.userId, publicKey, credentialId, label.trim(), at, first ? 1 : 0)
+    .bind(key, session.userId, publicKey, credentialId, name, at, first ? 1 : 0)
     .run();
   if (!meta.changes)
     return json(
@@ -386,7 +425,7 @@ async function passkeyAdded(
   const facts = new AccountFacts();
   facts.add(session.userId, {
     type: "events.iterate.com/account/key-added",
-    payload: { key, label: label.trim(), format: "webauthn", at, ...(change && signerOf(change)) },
+    payload: { key, label: name, format: "webauthn", at, ...(change && signerOf(change)) },
     idempotencyKey: `account/key-added:${key}`,
   });
   // The first passkey, made in this browser, makes the session that passkey's: a new one, and
@@ -402,7 +441,7 @@ async function passkeyAdded(
     });
     headers.set("set-cookie", made.setCookie);
   }
-  return facts.on(Response.json({ key, label: label.trim() }, { headers }));
+  return facts.on(Response.json({ key, label: name }, { headers }));
 }
 
 async function removed(env: Env, request: Request, session: BrowserSession): Promise<Response> {

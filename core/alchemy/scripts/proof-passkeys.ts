@@ -16,7 +16,10 @@ export async function addPasskey(
   touch: { theNew?: () => Promise<unknown>; theOld?: () => Promise<unknown> } = {},
 ): Promise<string> {
   await page.goto(`${issuer}/keys`);
-  await page.getByLabel("Name").fill(label);
+  // a first sign-in's page folds the name away: it is optional there
+  const name = page.getByLabel("Name");
+  if (!(await name.isVisible())) await page.getByText("Name it (optional)").click();
+  await name.fill(label);
   await touch.theNew?.();
   await page.getByRole("button", { name: "Add a passkey" }).click();
   const listed = page.locator("li", { hasText: label });
