@@ -134,6 +134,12 @@ const CONTEXT_DESCRIPTIONS: { path: string; title: string; description: string }
       "The X account <user> that a member linked: its direct messages and the posts that mention iterate's bot.",
   },
   {
+    path: "/onboarding",
+    title: "Onboarding record",
+    description:
+      "Where the owner's onboarding stands: one onboarding/subject-marked event for each subject the onboarding agent covered, was declined or left for later (onboarding.md, part D).",
+  },
+  {
     path: "/approvals",
     title: "Approvals",
     description:
