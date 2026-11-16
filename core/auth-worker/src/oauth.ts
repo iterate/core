@@ -14,7 +14,7 @@ import { AccountFacts } from "./account-facts.ts";
 import { admitted, TOO_MANY } from "./device/limits.ts";
 import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { isBlocked } from "./blocked.ts";
-import { isMember } from "./members.ts";
+import { isMember, standingOf } from "./members.ts";
 import { cloudflareSignInOf, type Env, issuerOf, iterateConfigOf } from "./env.ts";
 
 export const AUTHORIZE_ENDPOINT = "/oauth2/auth";
@@ -122,9 +122,13 @@ export const GrantProps = z.object({
   userId: z.string().startsWith("user_"),
   email: z.string(),
   /** How the person signed in to get the grant, which an app's guard reads (iterate/sdk
-   *  `auth.requirePerson`). Absent on a grant made before grants kept it: no app that names its
-   *  ways takes that one. */
+   *  `auth.requirePerson`), and which says whether its token acts as a member (`grantStandingOf`).
+   *  Absent on a grant made before grants kept it: no app that names its ways takes that one. */
   method: SignInMethod.optional(),
+  /** A grant made since this rule carries it: such a grant acts as a member only while its sign-in
+   *  way gives a member's standing (`grantStandingOf`). A grant without it was made before, and
+   *  keeps the rule it was made under. */
+  standingByMethod: z.literal(true).optional(),
   deadline: z.number().int().positive().optional(),
   letIn: z
     .object({
@@ -220,9 +224,8 @@ export async function tokenIdentity(
   const expiresAt = deadline
     ? Math.min(validated.expiresAt, Math.floor(deadline / 1000))
     : validated.expiresAt;
-  const cloudflare = props.data.method === "cloudflare";
-  if (cloudflare && !cloudflareServes(env, hostResource)) return null;
-  const member = !cloudflare && (await isMember(env, props.data.email));
+  if (props.data.method === "cloudflare" && !cloudflareServes(env, hostResource)) return null;
+  const member = (await grantStandingOf(env, props.data)) === "member";
   if (expiresAt * 1000 <= Date.now() || (!hostResource && !member)) return null;
   // a member is never blocked, so only a mind hostname's token asks
   if (!member && (await isBlocked(env, props.data.email))) return null;
@@ -240,6 +243,22 @@ export async function tokenIdentity(
  *  offers the way. Asked at every use, so a deploy that takes the way away ends its grants. */
 const cloudflareServes = (env: Env, hostResource: string | null) =>
   Boolean(hostResource && cloudflareSignInOf(env));
+
+/** WHAT A GRANT IS TO THIS STACK NOW, asked at every use, as Cloudflare's is. A grant with
+ *  `standingByMethod` has the standing (./members.ts `standingOf`) of a browser's session made the
+ *  way the grant's person signed in, so an address that becomes a member's, or a deploy that stops
+ *  Google signing a member in alone, makes no grant of a lesser sign-in a member's. A grant that
+ *  kept no way proves none. A grant without the mark keeps the rule it was made under: a member's
+ *  address, by any way but Cloudflare's. Its holder may be an agent or a bridge, which cannot
+ *  press a passkey to sign in again. */
+async function grantStandingOf(env: Env, grant: GrantProps) {
+  if (!grant.standingByMethod)
+    return grant.method !== "cloudflare" && (await isMember(env, grant.email))
+      ? "member"
+      : "not-member";
+  if (!grant.method) return "not-member";
+  return standingOf(env, { userId: grant.userId, email: grant.email, method: grant.method });
+}
 
 /** The instant a let-in grant ends. A let-in grant with none ended at its making. */
 const letInDeadlineOf = (grant: GrantProps) => (grant.letIn ? grant.deadline || 1 : undefined);
@@ -271,8 +290,10 @@ async function grantLifetime(
   const hostResource = mindHostResourceOf(env, input.resource);
   if (grant.method === "cloudflare" && !cloudflareServes(env, hostResource))
     throw refused("sign_in_method", "The session is no longer active.");
-  if (!hostResource && !(await isMember(env, grant.email)))
-    throw refused("not_a_member", "The session is no longer active.");
+  const standing = hostResource ? null : await grantStandingOf(env, grant);
+  // the reason is the standing: "not-member", or "passkey-owed" for a member's lesser sign-in
+  if (standing && standing !== "member")
+    throw refused(standing, "The session is no longer active.");
   if (hostResource && (await isBlocked(env, grant.email)))
     throw refused("blocked", "The session is no longer active.");
   const lifetime = grantLifetimeOf(grant, {

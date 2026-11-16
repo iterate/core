@@ -235,6 +235,18 @@ async function notMemberRefusal(
   return notMemberPage({ domain, email: session.email, here });
 }
 
+/** WHAT A NEW GRANT KEEPS OF ITS SIGN-IN: the person, the way they signed in, and the mark that
+ *  its member's standing follows that way at every use (./oauth.ts `grantStandingOf`). Every grant
+ *  starts from this, so no grant made from now on is without the mark. */
+export function newGrantProps(session: Session): GrantProps {
+  return {
+    userId: session.userId,
+    email: session.email,
+    method: session.method,
+    standingByMethod: true,
+  };
+}
+
 /** What a grant keeps of its client: the name and the logo that the client gave. */
 type AskingClient = { clientName?: string; logoUri?: string } | null;
 
@@ -254,9 +266,7 @@ async function complete(
   if (session.method === "cloudflare" && !hostResource)
     throw new Error("A sign-in at Cloudflare serves a mind hostname alone.");
   const props: GrantProps = {
-    userId: session.userId,
-    email: session.email,
-    method: session.method,
+    ...newGrantProps(session),
     ...(letIn && {
       deadline: Date.now() + letIn.seconds * 1000,
       letIn: {
