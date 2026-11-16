@@ -156,6 +156,22 @@ export function allowsExactly(
   );
 }
 
+/** A live key that lends, as the keys table has it. */
+export type LendingKey = { id: string; label: string; provide: string; added_at: number };
+
+/** THE OTHER KEY THAT LENDS A NAME NOW, or null. The mind lets a key take its name from whoever
+ *  lends it at that moment (core/itx `context/lent-names.ts` `nameIsFree`). Two live keys with one
+ *  name would take it from each other at every reconnect, and a link that asks for a name in use
+ *  would give its lend to the link's maker with one press. So a key gets a name only once no other
+ *  key holds it. The same key asking again holds its own name. */
+export function otherKeyLending(
+  lending: readonly LendingKey[],
+  key: string,
+  provide: string | undefined,
+): LendingKey | null {
+  return lending.find((held) => held.provide === provide && held.id !== key) ?? null;
+}
+
 /** What the key lets its service do, in a person's words: for the consent page and `/keys`. */
 export function scopeInWords({ paths, provide }: Pick<ServiceKeyRequest, "paths" | "provide">) {
   return [

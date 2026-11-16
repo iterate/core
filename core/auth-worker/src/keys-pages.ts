@@ -15,6 +15,8 @@ import {
   cloudNameRefusal,
   enrolPayloadOf,
   honouredNext,
+  type LendingKey,
+  otherKeyLending,
   scopeInWords,
   type ServiceKeyRequest,
   serviceKeyRequestOf,
@@ -470,6 +472,8 @@ async function enrolPage(env: Env, url: URL): Promise<Response> {
   if ("refused" in ask) return errorPage(ask.refused, 400);
   const key = await p256KeyIdOf(env, ask.publicKey);
   if (!key) return errorPage("The service's key is not one this mind can use.", 400);
+  const held = await nameHeldByAnotherKey(env, key, ask);
+  if (held) return held;
   const next = honouredNext(url.searchParams.get("next"), issuerOf(env), trustedClients);
   const label = text(ask.label);
   const hidden = (name: string, value: string) =>
@@ -480,7 +484,7 @@ async function enrolPage(env: Env, url: URL): Promise<Response> {
       <p>${label} asks to add a key to ${text(domain)}. With it, ${label} can ${text(scopeInWords(ask))}. It cannot approve requests or read anything.</p>
       ${
         ask.provide
-          ? `<p>The agents of ${text(domain)} call what it lends, so ${label} sees what they send it. The key has no end date: it works until you remove it on <a href="${KEYS_PATH}">Your keys</a>.</p>`
+          ? `<p>The agents of ${text(domain)} call what it lends, so ${label} sees what they send it. If itx.${text(ask.provide)} is lent to ${text(domain)} now, ${label} takes it over. The key has no end date: it works until you remove it on <a href="${KEYS_PATH}">Your keys</a>.</p>`
           : ""
       }
       <p class="muted">Key ${text(key.slice(0, 8))}, for ${text(ask.actor)}.</p>
@@ -533,6 +537,8 @@ async function serviceKeyAnswered(
   if ("refused" in ask) return errorPage(ask.refused, 400);
   const key = await p256KeyIdOf(env, ask.publicKey);
   if (!key) return errorPage("The service's key is not one this mind can use.", 400);
+  const held = await nameHeldByAnotherKey(env, key, ask);
+  if (held) return held;
   // A service's key lets one more thing act, so the member's passkey signs it: a session alone, or
   // a page that posts this form for the member, allows nothing.
   const change = await signedChangeBy(env, form.get("signed"), KEY_ADDED, session.email);
@@ -594,6 +600,30 @@ async function serviceKeyAnswered(
     facts,
     "Added",
     `<p>${text(ask.label)} can now ${text(scopeInWords(ask))}.</p>`,
+  );
+}
+
+/** The refusal for a key that asks to lend a name another live key lends (./key-rules.ts
+ *  `otherKeyLending`), or null. A lend by a member's own session is in no table here, so the
+ *  consent page says of every key that lends what it does to a name in use. */
+async function nameHeldByAnotherKey(
+  env: Env,
+  key: string,
+  ask: ServiceKeyRequest,
+): Promise<Response | null> {
+  if (!ask.provide) return null;
+  const { results } = await env.DB.prepare(
+    `select id, label, provide, added_at from keys
+     where provide is not null and actor is not null and revoked_at is null
+     order by added_at`,
+  ).all<LendingKey>();
+  const held = otherKeyLending(results, key, ask.provide);
+  if (!held) return null;
+  return errorPage(
+    `itx.${ask.provide} is lent to ${iterateConfigOf(env).domain} by another key: ${held.label} (key ${held.id.slice(0, 8)}, added ${day(held.added_at)}). A second key for that name would take it over. If this key is to replace that one, the member who allowed that one removes it on Your keys first.`,
+    409,
+    undefined,
+    [{ href: KEYS_PATH, label: "Your keys" }],
   );
 }
 

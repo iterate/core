@@ -3,6 +3,7 @@ import {
   canonicalPath,
   cloudNameRefusal,
   honouredNext,
+  otherKeyLending,
   scopeInWords,
   allowsExactly,
   enrolPayloadOf,
@@ -102,6 +103,20 @@ test("a key's scope reads as what its service can do", () => {
     "lend its functions to this mind as itx.x, and add events under /integrations/x/",
   );
   expect(scopeInWords({ paths: ["/integrations/"] })).toBe("add events under /integrations/");
+});
+
+test("a name another live key lends is held; the same key, another name and no name are not", () => {
+  const whatsapp = { id: "key-a", label: "WhatsApp on a server", provide: "whatsapp", added_at: 1 };
+  const jonas = { id: "key-b", label: "A phone", provide: "whatsapp.jonas", added_at: 2 };
+  const lending = [whatsapp, jonas];
+  expect(otherKeyLending(lending, "key-c", "whatsapp")).toBe(whatsapp);
+  expect(otherKeyLending(lending, "key-c", "whatsapp.jonas")).toBe(jonas);
+  // the key that holds a name asks again: a member allows it anew after a removal
+  expect(otherKeyLending(lending, "key-a", "whatsapp")).toBeNull();
+  expect(otherKeyLending(lending, "key-c", "whatsapp.leah")).toBeNull();
+  expect(otherKeyLending(lending, "key-c", "herdr")).toBeNull();
+  // a key that only adds events asks for no name
+  expect(otherKeyLending(lending, "key-c", undefined)).toBeNull();
 });
 
 test("the Cloud's name goes to the key the stack's own Cloud publishes, and to no other", () => {
