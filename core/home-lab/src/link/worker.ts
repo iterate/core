@@ -2,7 +2,7 @@ import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { codedError, leavingTheStack } from "iterate/lib";
 import { mindProvideUrlOf } from "iterate/mind-api";
-import { FACTS_HEADER } from "iterate/facts";
+import { withFacts } from "iterate/facts";
 import { secretPathsReferenced } from "iterate/secret-placeholder";
 import type { Door as BoundaryDoor, MindTarget, ProvideSession } from "iterate/workers";
 import { isOwnHost } from "./own-host.ts";
@@ -67,15 +67,8 @@ export class Door extends WorkerEntrypoint<LinkEnv> {
       origin === this.env.REPOS_ORIGIN
         ? await fetch(request)
         : await this.env.INTERNET.fetch(own ? request : leavingTheStack(request));
-    if (answer.webSocket) return answer;
-    const headers = new Headers(answer.headers);
-    // only the vault writes a secret's facts: an upstream's would be forged
-    headers.delete(FACTS_HEADER);
-    return new Response(answer.body, {
-      status: answer.status,
-      statusText: answer.statusText,
-      headers,
-    });
+    // only the vault writes a secret's facts: an upstream's would be forged, a WebSocket's too
+    return withFacts(answer, []);
   }
 
   static {

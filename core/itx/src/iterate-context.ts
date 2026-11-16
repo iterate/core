@@ -488,7 +488,7 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
 // Loaded code may have forged any caller stamp, so every one is stripped. Not in the resolver: the
 // context's fetch channel hands the edge's principal on to the app.
 export async function statelessExpressionFetch(
-  resolver: ItxExpressionResolver,
+  resolver: Pick<ItxExpressionResolver, "invoke">,
   steps: () => ItxExpression,
   request: Request,
   label: string,

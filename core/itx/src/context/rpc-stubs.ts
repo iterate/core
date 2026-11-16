@@ -1,7 +1,7 @@
 import { failureKind } from "iterate/platform-retry";
 import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
-import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
+import { ITX_PERSON_HEADER, ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
 import type { RewriteRuleConfigured } from "iterate/api";
 import {
@@ -405,7 +405,9 @@ export class RpcStubDirectory {
 export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
 
 // Every hop that forwards a Request stamps through here, so a Request's own copy of a header the
-// DO's fetch trusts never survives. `null`: a Request leaving the platform.
+// DO's fetch trusts never survives. `null`: loaded code's own Request, or one leaving the platform.
+// Only `null` drops the edge's `x-itx-person`: no `Caller` carries the person, so a hop with a
+// caller keeps the stamp for the app that reads it (iterate/sdk `auth.person`).
 export function stampCallerHeaders(headers: Headers, caller: Caller | null): void {
   for (const name of [
     ITX_PRINCIPAL_HEADER,
@@ -422,6 +424,7 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
     headers.delete(name);
   if (!caller) {
     headers.delete(ITERATE_ROUTING_SLUG_HEADER);
+    headers.delete(ITX_PERSON_HEADER);
     return;
   }
   if (caller.cause) headers.set(ITERATE_CAUSE_HEADER, causeHeader(caller.cause));
