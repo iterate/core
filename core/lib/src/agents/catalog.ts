@@ -159,8 +159,9 @@ export class AgentCatalogProcessor extends StreamProcessor<
       const titleOffset = row.titleAtOffset || 0;
       // A name the agent gave itself beats a person's words.
       if (fromWords && !row.titleFromWords) title = "";
-      // Earlier words beat later ones.
-      if (fromWords && row.titleFromWords && from.offset >= titleOffset) title = "";
+      // Earlier words beat later ones. A copy of the same words again (a kind's row changed how it
+      // makes a title) replaces them.
+      if (fromWords && row.titleFromWords && from.offset > titleOffset) title = "";
       // A newer name beats an older one.
       if (!fromWords && !row.titleFromWords && from.offset <= titleOffset) title = "";
     }
@@ -231,7 +232,7 @@ export class AgentCatalogProcessor extends StreamProcessor<
           .cd(from.path)
           .append({
             type: "events.iterate.com/itx/described",
-            idempotencyKey: `agents/described:${from.path}@${String(from.offset)}`,
+            idempotencyKey: describedKey(from.path, from.offset, description),
             payload: { description },
           })
           .catch((error: unknown) => {
@@ -265,6 +266,16 @@ export class AgentCatalogProcessor extends StreamProcessor<
         }
       });
   }
+}
+
+/** The key of the `itx/described` that carries the line of the copy at `offset`: the copied event
+ *  and the line's text. The same copy delivered again appends nothing, and the same event copied
+ *  again with another line (a kind's row changed how it makes a title) appends that line once. */
+export function describedKey(path: string, offset: number, text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++)
+    hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+  return `agents/described:${path}@${String(offset)}:${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 /** An agent's line in the mind's catalog of contexts: its description, which is its purpose, at

@@ -7,7 +7,7 @@
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "../stream/processor.ts";
 import { committedEvent, reduceProcessor } from "../stream/test-support.ts";
-import { AgentCatalogProcessor, type AgentCatalogState } from "./catalog.ts";
+import { AgentCatalogProcessor, type AgentCatalogState, describedKey } from "./catalog.ts";
 
 const path = "/agents/support";
 
@@ -101,6 +101,42 @@ test.for<{ name: string; events: Fact[]; state: AgentCatalogState }>([
           titleAtOffset: 10,
           titleFromWords: true,
           lastActivityAt: at(20),
+        },
+      },
+      deleted: {},
+    },
+  },
+  {
+    name: "the same words copied again by a changed row give the title anew",
+    events: [
+      announced(path),
+      words("[From the Agents app] Fix the build. Then the docs", 10),
+      words("Fix the build", 10),
+      words("Second", 20),
+    ],
+    state: {
+      agents: {
+        [path]: {
+          ...born,
+          title: "Fix the build",
+          titleAtOffset: 10,
+          titleFromWords: true,
+          lastActivityAt: at(20),
+        },
+      },
+      deleted: {},
+    },
+  },
+  {
+    name: "a name still beats the same words copied again",
+    events: [announced(path), title("Named", 5), words("Fix the build", 10), words("Fix it", 10)],
+    state: {
+      agents: {
+        [path]: {
+          ...born,
+          title: "Named",
+          titleAtOffset: 5,
+          lastActivityAt: at(10),
         },
       },
       deleted: {},
@@ -308,14 +344,14 @@ test.for<{
   {
     name: "a title the agent gave itself: its line, keyed by the copied event",
     events: [announced(path), title("Fix the build", 10)],
-    described: [{ path, key: `agents/described:${path}@10`, text: "Fix the build" }],
+    described: [{ path, key: describedKey(path, 10, "Fix the build"), text: "Fix the build" }],
   },
   {
     name: "a description after the title: the description alone, as a purpose is not a name",
     events: [announced(path), title("Fix the build", 10), copy({ description: "CI is red" }, 11)],
     described: [
-      { path, key: `agents/described:${path}@10`, text: "Fix the build" },
-      { path, key: `agents/described:${path}@11`, text: "CI is red" },
+      { path, key: describedKey(path, 10, "Fix the build"), text: "Fix the build" },
+      { path, key: describedKey(path, 11, "CI is red"), text: "CI is red" },
     ],
   },
   {
@@ -327,8 +363,25 @@ test.for<{
       title("Fix the build", 30),
     ],
     described: [
-      { path, key: `agents/described:${path}@10`, text: "Please fix the build" },
-      { path, key: `agents/described:${path}@30`, text: "Fix the build" },
+      { path, key: describedKey(path, 10, "Please fix the build"), text: "Please fix the build" },
+      { path, key: describedKey(path, 30, "Fix the build"), text: "Fix the build" },
+    ],
+  },
+  {
+    name: "the same words copied again with another line: that line once more, and once only",
+    events: [
+      announced(path),
+      words("[From the Agents app] Fix the build", 10),
+      words("Fix the build", 10),
+      words("Fix the build", 10),
+    ],
+    described: [
+      {
+        path,
+        key: describedKey(path, 10, "[From the Agents app] Fix the build"),
+        text: "[From the Agents app] Fix the build",
+      },
+      { path, key: describedKey(path, 10, "Fix the build"), text: "Fix the build" },
     ],
   },
   {
@@ -340,7 +393,7 @@ test.for<{
       title("Older", 10),
       { ...title("Forged", 30), source: { origin: "/elsewhere" } },
     ],
-    described: [{ path, key: `agents/described:${path}@20`, text: "Newer" }],
+    described: [{ path, key: describedKey(path, 20, "Newer"), text: "Newer" }],
   },
 ])("an agent's line in the mind's catalog: $name", async ({ events, described }) => {
   const { processor, appended } = catalog();
