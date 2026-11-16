@@ -112,7 +112,7 @@ async function parseEmail(input: {
   const { headers, headersTruncated } = rawHeadersOf(raw);
   const replyTo = addressesOf(email.replyTo)[0];
   const from = addressesOf(email.from && [email.from])[0] ?? input.from;
-  const { authentication, verified, direct } = authenticationOf(email.headers, from);
+  const { authentication, verified, direct } = authenticationOf(email.headers, from, input.from);
   const member = verified && (await input.isMember(from));
   // Another mind's mail says how many hops its thread has gone between minds. Anyone can write the
   // header, so it counts only on a mail whose sender is proven.
@@ -248,15 +248,29 @@ function headerSectionEnd(raw: Uint8Array) {
 
 type Header = { key: string; value: string };
 
-// `verified`: an aligned DMARC pass, DKIM signature or SPF pass in every record. `direct`: an SPF pass
-// in every record, since only SPF says the server that handed it over is the From domain's own.
-function authenticationOf(headers: Header[], from: string) {
+// `verified`: in every record an aligned DKIM or DMARC pass, and one DMARC verdict that is not a
+// fail. An SPF pass proves only the envelope's domain, never the From. `direct`: in every record the
+// one SPF verdict on the envelope sender is a pass and the envelope domain is aligned, since only
+// SPF says the server that handed it over is the From domain's own.
+function authenticationOf(headers: Header[], from: string, envelopeFrom: string) {
   const fromDomain = from.slice(from.lastIndexOf("@") + 1).toLowerCase();
+  const envelopeDomain = envelopeFrom.slice(envelopeFrom.lastIndexOf("@") + 1).toLowerCase();
   const records = headers
     .filter((header) => header.key === "authentication-results")
-    .map((header) => header.value.replace(/\([^()]*\)/g, " ").split(";"))
+    // Each quoted string goes (Cloudflare quotes an IPv6 address), then each comment (RFC 8601 §2.2),
+    // so a `)` in a quoted string ends no comment. One that holds a `;` stays: it would span results.
+    .map((header) =>
+      header.value
+        .replace(/"[^"\\;]*"/g, "")
+        .replace(/\([^();]*\)/g, " ")
+        .split(";"),
+    )
     .filter(([authservId]) => /^\s*mx\.cloudflare\.net(?:\s+\d+)?\s*$/i.test(authservId!))
-    .map(([, ...results]) =>
+    // A quote, escape or parenthesis left over is text that the sender chose (an envelope address, a
+    // HELO name, a DKIM tag) and that is not one whole quoted string or comment. It can end a result
+    // or start one, so the record says nothing.
+    .map(([, ...results]) => (/["\\()]/.test(results.join(";")) ? [] : results))
+    .map((results) =>
       results.flatMap((result) => {
         const [verdict, ...properties] = result.trim().toLowerCase().split(/\s+/);
         const [method, value] = verdict!.split("=");
@@ -271,16 +285,24 @@ function authenticationOf(headers: Header[], from: string) {
     (domain === fromDomain ||
       domain.endsWith(`.${fromDomain}`) ||
       fromDomain.endsWith(`.${domain}`));
-  const alignedSpfPass = ({ method, value, properties }: (typeof records)[number][number]) =>
-    method === "spf" && value === "pass" && aligned(properties["smtp.mailfrom"]?.split("@").pop());
-  const proves = (record: (typeof records)[number]) =>
-    record.some(
+  // A DKIM verdict for each signature; one DMARC verdict, and one SPF verdict on the envelope sender
+  // beside the one on the HELO name. Two where Cloudflare writes one are not its record.
+  const proves = (record: (typeof records)[number]) => {
+    const dmarc = record.filter((result) => result.method === "dmarc");
+    if (dmarc.length > 1 || dmarc[0]?.value === "fail") return false;
+    return record.some(
       (result) =>
-        alignedSpfPass(result) ||
-        (result.value === "pass" &&
-          ((result.method === "dmarc" && aligned(result.properties["header.from"] || fromDomain)) ||
-            (result.method === "dkim" && aligned(result.properties["header.d"])))),
+        result.value === "pass" &&
+        ((result.method === "dmarc" && aligned(result.properties["header.from"] || fromDomain)) ||
+          (result.method === "dkim" && aligned(result.properties["header.d"]))),
     );
+  };
+  const isDirect = (record: (typeof records)[number]) => {
+    const spf = record.filter(
+      (result) => result.method === "spf" && result.properties["smtp.mailfrom"] !== undefined,
+    );
+    return spf.length === 1 && spf[0]!.value === "pass" && aligned(envelopeDomain);
+  };
   const verdictOf = (method: string) => {
     const verdicts = (records[0] ?? []).filter((result) => result.method === method);
     return verdicts.some((result) => result.value === "pass")
@@ -290,7 +312,7 @@ function authenticationOf(headers: Header[], from: string) {
   return {
     authentication: { spf: verdictOf("spf"), dkim: verdictOf("dkim"), dmarc: verdictOf("dmarc") },
     verified: !!fromDomain && records.length > 0 && records.every(proves),
-    direct: !!fromDomain && records.length > 0 && records.every((r) => r.some(alignedSpfPass)),
+    direct: !!fromDomain && records.length > 0 && records.every(isDirect),
   };
 }
 

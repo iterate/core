@@ -89,7 +89,8 @@ export const EmailContract = defineProcessorContract({
         /** Who sent it, as far as the platform can tell (email/sender.ts). */
         sender: z.object({
           /** The From address is proven by Cloudflare's checks as it received the message: an
-           *  aligned DMARC pass, DKIM signature or SPF pass. A forged From is false. */
+           *  aligned DKIM or DMARC pass, and no DMARC fail. An SPF pass alone proves only the
+           *  envelope's domain. A forged From is false. */
           verified: z.boolean(),
           /** The From address is verified and belongs to a member of this mind. */
           member: z.boolean(),

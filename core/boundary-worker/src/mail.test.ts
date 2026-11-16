@@ -93,6 +93,10 @@ test("a mail that the mind did not take is not forwarded: the next delivery does
   expect(mail).toMatchObject({ did: [] });
 });
 
+/** An envelope sender whose quoted local part holds a `)`, `;` and words that read as results. */
+const QUOTED_ENVELOPE =
+  '"x);dkim=pass header.d=sender.example;spf=pass smtp.mailfrom=ada@sender.example;y"@outside.example';
+
 test.for([
   {
     name: "a proven mail with a hop count is another mind's mail, and is still automated",
@@ -119,11 +123,67 @@ test.for([
     headers: [PROVEN],
     expected: { mind: null, automated: false, sender: { verified: true } },
   },
-])("$name", async ({ headers, expected }) => {
-  const mail = delivered({ headers });
+  {
+    name: "a mail from the sender's own mail server, signed, as Cloudflare records it (a Gmail or Workspace sender) is verified and direct",
+    headers: [
+      cloudflareRecord(
+        "dkim=pass header.d=sender.example header.s=s1 header.b=AbCd+eFg",
+        "dmarc=pass header.from=sender.example policy.dmarc=reject",
+        "spf=none (mx.cloudflare.net: no SPF records found for postmaster@mail.sender.example) smtp.helo=mail.sender.example",
+        "spf=pass (mx.cloudflare.net: domain of ada@sender.example designates 2001:db8::1 as permitted sender) smtp.mailfrom=ada@sender.example",
+        'arc=none smtp.remote-ip="2001:db8::1"',
+      ),
+    ],
+    expected: { sender: { verified: true, direct: true }, authentication: { dmarc: "pass" } },
+  },
+  {
+    name: "a mail that a mailing service sent for the sender, with its own signature and envelope too, is verified and not direct",
+    envelopeFrom: "bounces+1@em.service.example",
+    headers: [
+      cloudflareRecord(
+        "dkim=pass header.d=sender.example header.s=s1",
+        "dkim=pass header.d=service.example header.s=s2",
+        "dmarc=pass header.from=sender.example policy.dmarc=reject",
+        "spf=none smtp.helo=o1.service.example",
+        "spf=pass smtp.mailfrom=bounces+1@em.service.example",
+      ),
+    ],
+    expected: { sender: { verified: true, direct: false } },
+  },
+  {
+    name: "a quoted envelope local part is one value: the semicolons and results in it are no results of the record",
+    envelopeFrom: QUOTED_ENVELOPE,
+    headers: [
+      cloudflareRecord(
+        "dmarc=none header.from=sender.example policy.dmarc=none",
+        "spf=none smtp.helo=mail.outside.example",
+        `spf=pass (mx.cloudflare.net: domain of ${QUOTED_ENVELOPE} designates 192.0.2.1 as permitted sender) smtp.mailfrom=${QUOTED_ENVELOPE}`,
+      ),
+    ],
+    expected: { sender: { verified: false, direct: false } },
+  },
+  {
+    name: "an aligned SPF pass does not verify a mail that DMARC fails: only a DKIM or DMARC pass proves the From",
+    envelopeFrom: "ada@mail.sender.example",
+    headers: [
+      cloudflareRecord(
+        "dmarc=fail header.from=sender.example policy.dmarc=reject",
+        "spf=none smtp.helo=mail.sender.example",
+        "spf=pass smtp.mailfrom=ada@mail.sender.example",
+      ),
+    ],
+    expected: { sender: { verified: false } },
+  },
+])("$name", async ({ headers, envelopeFrom, expected }) => {
+  const mail = delivered({ headers, envelopeFrom });
   await receivedMail(mail.message, mail.env(), mail.mind);
   expect(mail).toMatchObject({ received: [expected] });
 });
+
+/** Cloudflare's Authentication-Results field with these results, one folded line each. */
+function cloudflareRecord(...results: string[]) {
+  return `Authentication-Results: mx.cloudflare.net;${results.map((result) => `\r\n\t${result}`).join(";")}`;
+}
 
 /** One mail as Cloudflare hands it to the Worker, with a mind and a forward that say what they did,
  *  or fail with the words given. */
@@ -136,6 +196,8 @@ function delivered(
     append?: string;
     /** Header lines above the mail's own. */
     headers?: string[];
+    /** The envelope sender, if not the From address. */
+    envelopeFrom?: string;
   } = {},
 ) {
   const did: string[] = [];
@@ -162,7 +224,7 @@ function delivered(
     // The cast: of Cloudflare's message, the handler reads the envelope, the headers and the bytes and
     // calls `forward`.
     message: {
-      from: "ada@sender.example",
+      from: fails.envelopeFrom || "ada@sender.example",
       to: "hello@mind.example",
       raw: new Response(raw).body,
       headers,
