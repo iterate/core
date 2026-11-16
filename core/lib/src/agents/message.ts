@@ -10,8 +10,9 @@ import type { FileAttachment } from "./contract.ts";
 /** A message to the agent at `path`: its attachments, each stored first under the agent's path
  *  (`itx.files`, `<path>/<8 of a uuid>-<name>`), then ONE `message-received` naming them, appended to
  *  the context `target` picks from a scope (the agent's own facet appends to its own; the collection
- *  to another kind of agent's, collection.ts). Answers the event, so a caller can wait for what
- *  follows it. */
+ *  to another kind of agent's, collection.ts). The collection's itx is that of `/agents`, which
+ *  reaches the mind's files by the `itx.files` and `itx.r2` rows `installAgents` writes there
+ *  (install.ts). Answers the event, so a caller can wait for what follows it. */
 export async function appendMessage(
   getItx: () => IterateContextApi & Disposable,
   path: string,

@@ -18,6 +18,8 @@ test("installAgents enables the catalog on /agents, points the root's itx.agents
           ],
         },
       ],
+      // the two rows the next test reads
+      ["/agents append", expect.anything(), expect.anything()],
       [
         "append",
         {
@@ -40,11 +42,38 @@ test("installAgents enables the catalog on /agents, points the root's itx.agents
   });
 });
 
+test("installAgents writes the rows on /agents by which the collection stores an attachment in the mind's files", async () => {
+  const root = fakeRoot({ rows: [] });
+  await installAgents(root);
+  expect(root.calls.filter(([call]) => call === "/agents append")).toEqual([
+    [
+      "/agents append",
+      {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: {
+          match: "itx.files",
+          target: ["itx", ["cd", "/"], "files"],
+          description: expect.stringContaining("attachments"),
+        },
+      },
+      {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: {
+          match: "itx.r2",
+          target: ["itx", ["cd", "/"], "r2"],
+          description: expect.stringContaining("files"),
+        },
+      },
+    ],
+  ]);
+});
+
 test("installAgents disables nothing once the root has no catalog of its own", async () => {
   const root = fakeRoot({ rows: [] });
   await installAgents(root);
   expect(root.calls.map(([call]) => call)).toEqual([
     "/agents processors.enable",
+    "/agents append",
     "append",
     "processors.list",
   ]);
@@ -78,6 +107,10 @@ function fakeRoot({ rows }: { rows: string[] }) {
           return { name };
         }),
       },
+      append: vi.fn(async (...events: object[]) => {
+        calls.push([`${path} append`, ...events]);
+        return [];
+      }),
     }),
     append: vi.fn(async (...events: object[]) => {
       calls.push(["append", ...events]);

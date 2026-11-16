@@ -25,17 +25,20 @@ type Processors = Pick<IterateContextApi["processors"], "enable" | "disable"> & 
   list(): readonly { name: string }[] | PromiseLike<readonly { name: string }[]>;
 };
 
-/** Idempotent: enabling the row again appends nothing, the rule is written back if removed, and a
+/** Idempotent: enabling the row again appends nothing, the rules are written back if removed, and a
  *  catalog row on the root is disabled once. */
 export async function installAgents(
   itx: Pick<IterateContextApi, "append"> & {
     processors: Processors;
-    cd(path: string): { processors: Pick<Processors, "enable"> };
+    cd(path: string): Pick<IterateContextApi, "append"> & {
+      processors: Pick<Processors, "enable">;
+    };
   },
   options: { module?: string } = {},
 ) {
   const spec = agentsFacetSpec("AgentCollectionDurableObject", options.module);
-  await itx.cd(AGENTS_PATH).processors.enable("agents", {
+  const agents = itx.cd(AGENTS_PATH);
+  await agents.processors.enable("agents", {
     ...spec,
     consumes: [
       "events.iterate.com/itx/child-created",
@@ -43,6 +46,29 @@ export async function installAgents(
       "events.iterate.com/agent/listing-updated",
     ],
   });
+  // `/agents` has no link to the root. The collection stores the attachments of a message to an
+  // agent of another kind through its own itx (message.ts `appendMessage`), so these two names
+  // reach the root's.
+  await agents.append(
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.files",
+        target: ["itx", ["cd", "/"], "files"],
+        description:
+          "The mind's files: the agents collection stores here the attachments of a message to an agent of another kind",
+      },
+    },
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.r2",
+        target: ["itx", ["cd", "/"], "r2"],
+        description:
+          "The mind's R2: the mind's files are built on it, and call it through this context's rules",
+      },
+    },
+  );
   await itx.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: {

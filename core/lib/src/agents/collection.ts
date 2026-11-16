@@ -450,7 +450,8 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
    *  `/` for every context that reaches the root's collection, which the fold reads as a person
    *  (processor.ts). `options` (`{ trigger: false }`) rides as the facet's third argument, after the
    *  base (message.ts). Any other kind of agent hosts no facet: the same event is appended to its
-   *  context from here (message.ts `appendMessage`), and its own subscription delivers it. NO_FACET
+   *  context from here (message.ts `appendMessage`), and its own subscription delivers it; its
+   *  attachments go to the mind's files by the two rows `installAgents` writes on `/agents`. NO_FACET
    *  on a row of no kind (one created before kinds were copied, or a context that never said what
    *  it is) is such a context too; on an iterate agent, one without its row, which only `create`
    *  binds again: refused. */
