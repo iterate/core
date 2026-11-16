@@ -65,7 +65,12 @@ apps/<name>/
   they may do: check `source.principal` for that. An agent takes a member's words as the owner's,
   from a page too, and the chat shows who said each message.
 - **A backend class** in `apps/<name>/backend.ts` is a facet like any other:
-  `itx.cd(path).facets.get(name, { className, mainModule: "apps/<name>/backend.ts", source: itx.cd("/").config })`.
+  `itx.cd(path).facets.get(name, { className, mainModule: "apps/<name>/backend.ts", source: ["itx", ["cd", "/"], "config"] })`.
+  Write the source as that expression, an array that the platform resolves, in a page, in a
+  script and in an app's own code alike. A live handle in its place (`source: itx.cd("/").config`)
+  fails with "Cannot read properties of undefined (reading 'length')": seen on 16 Nov 2026 from a
+  page, from the CLI's connection and from a script run in the mind. A file map
+  (`source: { "package.json": …, … }`, at most 1,048,576 characters) is the form for a candidate.
 - **A fetch route.** A request
   a fetch route takes never reaches `fetch`: the platform sends it to the route's target first
   (`iterate tunnel <port>` sets a route per tunnel; `itx.fetchRoutes.set` sets one by hand).
