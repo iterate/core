@@ -194,8 +194,8 @@ export class AgentCatalogProcessor extends StreamProcessor<
   }
 
   /** EVERY AGENT SAYS WHAT IT IS FOR in the mind's catalog of contexts (`itx.contexts.list`): when
-   *  a copy changes an agent's line (`agentDescription`: its title, or the first words a person sent
-   *  it, and its description), the line goes onto the agent's own log as
+   *  a copy changes an agent's line (`agentDescription`: its description, or with none its title or
+   *  the first words a person sent it), the line goes onto the agent's own log as
    *  `events.iterate.com/itx/described`. Every kind of agent gets it, iterate's or a bridge's, and
    *  an activity or a status alone appends nothing. A copy row cannot do this: no copy is an
    *  `itx/*` event. The key is the copied event's, so a batch delivered again appends nothing. An
@@ -230,17 +230,14 @@ export class AgentCatalogProcessor extends StreamProcessor<
   }
 }
 
-/** An agent's line in the mind's catalog of contexts: its title, and its description after a
- *  dash when it has both, at most 2,000 characters (the schema of `itx/described`). The title may
- *  be only the first line a person sent (`titleFromWords`): it is still the best line there is. */
+/** An agent's line in the mind's catalog of contexts: its description, which is its purpose, at
+ *  most 2,000 characters (the schema of `itx/described`). An agent with no description has its
+ *  title there, which may be only the first line a person sent (`titleFromWords`): it is the best
+ *  line there is. A title is never added to a description: a context's purpose is not its name. */
 function agentDescription(
   row: Pick<AgentCatalogState["agents"][string], "title" | "description"> | undefined,
 ): string | undefined {
-  const text =
-    row?.title && row.description
-      ? `${row.title} — ${row.description}`
-      : row?.title || row?.description;
-  return text?.slice(0, 2_000);
+  return (row?.description || row?.title)?.slice(0, 2_000);
 }
 
 /** The rows with `path` added: its parent the nearest ancestor that is a row, and every row below it

@@ -310,11 +310,11 @@ test.for<{
     described: [{ path, key: `agents/described:${path}@10`, text: "Fix the build" }],
   },
   {
-    name: "a description after the title: the title, a dash and the description",
+    name: "a description after the title: the description alone, as a purpose is not a name",
     events: [announced(path), title("Fix the build", 10), copy({ description: "CI is red" }, 11)],
     described: [
       { path, key: `agents/described:${path}@10`, text: "Fix the build" },
-      { path, key: `agents/described:${path}@11`, text: "Fix the build — CI is red" },
+      { path, key: `agents/described:${path}@11`, text: "CI is red" },
     ],
   },
   {

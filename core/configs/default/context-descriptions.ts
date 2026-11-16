@@ -3,7 +3,7 @@
 // `events.iterate.com/itx/described` on its own log: the newest one stands, null clears it, and
 // anyone who can append there can write it. worker.ts calls `contextDescriptionsEvent` for every
 // event, and this file writes the line from the table below for each context that the platform and
-// this repo make. An agent writes its own line: its title (iterate/agents, the catalog on /agents).
+// this repo make. An agent writes its own line: its description, or with none its title (iterate/agents, the catalog on /agents).
 //
 // It writes at two moments:
 //
