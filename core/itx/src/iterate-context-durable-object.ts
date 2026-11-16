@@ -781,7 +781,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           `${(error as Error).message} — ${this.#alarmStory(Date.now())}`,
         );
       }),
-    itxEntrypoint: () => this.#itxEntrypoint,
+    itxEntrypoint: (config) => itxEntrypointFor(this.ctx, this.#durableObjectAddress.name, config),
     itx: this.#libraryItx,
     connections: this.#connections,
   });

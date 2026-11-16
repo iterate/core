@@ -7,6 +7,7 @@ import {
   admitRowsOfCall,
   type ItxExpressionRewriteRule,
   ItxExpressionResolver,
+  normalizeRewriteRuleConfigured,
 } from "./itx-expression-rewriting.ts";
 import { stampCallerHeaders } from "./rpc-stubs.ts";
 
@@ -407,14 +408,103 @@ test("a call's { source } that is an itx expression is still walled as a worker'
   expect(() => admitLoadedCodeRow(row({ source: "itx.cd('/').config" }), "/apps/x")).not.toThrow();
 });
 
+// A JAIL THE CONFIG BUILDS (`admitRowsOfCall`): a context whose names reach exactly the config's
+// tools for one deployment, as iterate Cloud's signup agent runs its scripts in.
+const JAIL = "/cloud2/jails/deployments/d1";
+const CONFIG_POINTER = normalizeRewriteRuleConfigured({
+  match: "itx.config",
+  target: ["itx", "builtins", "workers", ["get", { source: "itx.config.modules", cacheKey: "c1" }]],
+}) as ItxExpressionRewriteRule;
+const JAIL_ROWS = [
+  { match: "itx", target: null },
+  // so a script can be started in the jail at all: `itx.cd(jail).run(code)` resolves `run` there
+  { match: "itx.run", target: "itx.builtins.run" },
+  // a loaded worker has flat methods only: one row per tool, the call's arguments at the hole
+  { match: "itx.cloud2.state", target: 'itx.builtins.cd("/").config.cloud2("d1", "state", @)' },
+].map((payload) => ({ type: RULE, payload }));
+const CONFIG: Caller = { principal: null, app: true, config: true };
+const SCRIPT: Caller = { principal: null, app: true };
+const buildsTheJail: ItxExpression = ["itx", ["cd", JAIL], ["append", ...JAIL_ROWS]];
+
+test("the published config writes a jail's rows with built-in targets; a script, and the jail's own code, write none", async () => {
+  const mind = mindWith({ "/": [CONFIG_POINTER], [JAIL]: [] });
+  for (const [at, caller] of [
+    ["/", SCRIPT],
+    [JAIL, SCRIPT],
+    // a call that runs a row is checked, whoever wrote the row
+    ["/", { ...CONFIG, runsRow: true as const }],
+  ] as const)
+    await expect(mind.run(at, buildsTheJail, caller)).rejects.toThrow(
+      "is not a loaded worker's word",
+    );
+  expect(mind).toMatchObject({ written: [] });
+
+  await mind.run("/", buildsTheJail, CONFIG);
+  expect(mind).toMatchObject({ written: JAIL_ROWS.map((row) => ({ at: JAIL, ...row })) });
+  // the config's own call still spells names, never the fixed point
+  await expect(
+    mind.run("/", ["itx", "builtins", ["cd", JAIL], ["append", ...JAIL_ROWS]], CONFIG),
+  ).rejects.toThrow("is not a loaded worker's word");
+});
+
+test("a script in the config's jail reaches the config's tool for its deployment, and nothing else", async () => {
+  const calls: unknown[][] = [];
+  const mind = mindWith(
+    {
+      "/": [CONFIG_POINTER],
+      [JAIL]: JAIL_ROWS.map(({ payload }) =>
+        normalizeRewriteRuleConfigured(payload),
+      ) as ItxExpressionRewriteRule[],
+    },
+    {
+      cloud2: (...args: unknown[]) => {
+        calls.push(args);
+        return { state: "ready" };
+      },
+    },
+  );
+
+  await expect(
+    mind.run(JAIL, ["itx", "cloud2", ["state", { verbose: true }]], SCRIPT),
+  ).resolves.toMatchObject({ value: { state: "ready" } });
+  expect(calls).toEqual([["d1", "state", { verbose: true }]]);
+  // the config's own Worker, as the config pointer names it
+  expect(mind).toMatchObject({ loaded: [{ at: "/", vouched: true }] });
+  // a script is started there by anyone who may reach the jail
+  await expect(
+    mind.run("/", ["itx", ["cd", JAIL], ["run", "code"]], SCRIPT),
+  ).resolves.toMatchObject({ value: { ran: "code", at: JAIL } });
+
+  for (const call of [
+    ["itx", ["cd", "/"], ["append", { type: "x/said" }]],
+    ["itx", "kv", ["get", "k"]],
+    ["itx", "secrets", ["get", "k"]],
+    ["itx", "repos", ["list"]],
+    ["itx", "agents", ["list"]],
+    ["itx", ["fetch", "https://example.net"]],
+    ["itx", ["append", { type: "x/said" }]],
+    ["itx", "config", ["cloud2", "d2", "state"]],
+    ["itx", "config", ["anything"]],
+    ["itx", "cloud2", ["deploy"]],
+    ["itx", "builtins", ["cd", "/"], "config", ["cloud2", "d2", "state"]],
+  ] as ItxExpression[])
+    await expect(mind.run(JAIL, call, SCRIPT), JSON.stringify(call)).rejects.toThrow();
+  expect({ calls: calls.length, written: mind.written }).toEqual({ calls: 1, written: [] });
+});
+
 // the resolver asks the host for the gate of held acts: this mind has none
 defineItxHost({ firstPartyFacets: {} });
 
 /** A mind of contexts with these rows. `append` in each is the kernel's check of a call's rows
  *  and then a list: what was written, and where. */
-function mindWith(tables: Record<string, ItxExpressionRewriteRule[]>) {
+function mindWith(
+  tables: Record<string, ItxExpressionRewriteRule[]>,
+  // what `itx.builtins.workers.get(spec)` loads: here, every spec loads this worker
+  worker: Record<string, unknown> = {},
+) {
   const written: { at: string; type: string; payload?: unknown }[] = [];
   const crossedAs: Caller[] = [];
+  const loaded: { at: string; vouched: boolean }[] = [];
   const at = (path: string, caller: Caller): ItxExpressionResolver =>
     new ItxExpressionResolver({
       path,
@@ -425,6 +515,7 @@ function mindWith(tables: Record<string, ItxExpressionRewriteRule[]>) {
           admitRowsOfCall(caller, events, path);
           written.push(...events.map((event) => ({ at: path, ...event })));
         },
+        run: (script: string) => ({ ran: script, at: path }),
       },
       reach: {
         recordLoopLimit: () => undefined,
@@ -437,12 +528,18 @@ function mindWith(tables: Record<string, ItxExpressionRewriteRule[]>) {
           crossedAs.push(callerThere);
           return at(there, callerThere).invoke(expression, ...args);
         },
-        workersOf: () => ({}),
+        workersOf: (there, _caller, _hops, vouched) => ({
+          get: () => {
+            loaded.push({ at: there, vouched });
+            return worker;
+          },
+        }),
       },
     });
   return {
     written,
     crossedAs,
+    loaded,
     /** As the delivery loop reads a target that is a call: the call runs then. */
     run: (path: string, call: ItxExpression, caller: Caller) => at(path, caller).evaluate(call),
   };

@@ -149,7 +149,8 @@ export interface BuildBuiltInsDeps {
   };
   abortAfterTheAnswer: (message: string) => void;
   claimFacetAlarm: (name: string, at: number | null) => void;
-  itxEntrypoint: () => Fetcher;
+  // `config`: the loopback of the mind's published config (`Caller.config`)
+  itxEntrypoint: (config?: boolean) => Fetcher;
   itx: LibraryItx;
   // absent in the stateless resolver, which sends a call to a root that needs them to the context
   connections?: Connections;
@@ -490,7 +491,7 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
 export function workersRoot(deps: {
   path: string;
   iterateContextName: string;
-  itxEntrypoint: () => Fetcher;
+  itxEntrypoint: (config?: boolean) => Fetcher;
   invoke: (call: ItxExpression) => Promise<unknown>;
   caller: () => Caller;
   delivery: () => string | undefined;
@@ -543,7 +544,9 @@ export function workersRoot(deps: {
         let loaderId: string | undefined;
         const attempt = async () => {
           const prepared = await loader.prepareConfinedWorker({
-            itxEntrypoint: deps.itxEntrypoint(),
+            // The published config's own calls are the config's, whoever asked for its method: one
+            // loader id, so every load of that code gets one `env.ITX`.
+            itxEntrypoint: deps.itxEntrypoint(named?.vouched),
             kind: "worker",
             owner: iterateContextName,
             source: worker.source,

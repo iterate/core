@@ -108,6 +108,8 @@ const itxEntrypointsByCtx = new WeakMap<object, Map<string, Fetcher>>();
 export function itxEntrypointFor(
   ctx: DurableObjectState | ExecutionContext,
   iterateContextName: string,
+  // the loopback of the mind's published config: its calls are `Caller.config`
+  config?: boolean,
 ): Fetcher {
   const mint = (
     ctx.exports as { ItxEntrypoint?: (options: { props: object }) => Fetcher } | undefined
@@ -119,10 +121,11 @@ export function itxEntrypointFor(
     );
   const minted = itxEntrypointsByCtx.get(ctx) ?? new Map<string, Fetcher>();
   itxEntrypointsByCtx.set(ctx, minted);
-  const known = minted.get(iterateContextName);
+  const key = config ? `config\0${iterateContextName}` : iterateContextName;
+  const known = minted.get(key);
   if (known) return known;
-  const stub = mint({ props: { iterateContextName } });
-  minted.set(iterateContextName, stub);
+  const stub = mint({ props: { iterateContextName, ...(config && { config: true }) } });
+  minted.set(key, stub);
   return stub;
 }
 

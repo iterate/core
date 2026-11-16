@@ -538,7 +538,12 @@ export function rowsNamingRpcStub(args: {
 
 // Loaded code's input, or a row's target, is walled as it will resolve: never the fixed point, and
 // a signing secret only at the mind root. A producer is walled at the context the walk reached.
-function admitLoadedCodeExpression(expression: ItxExpression, from: string): void {
+function admitLoadedCodeExpression(
+  expression: ItxExpression,
+  from: string,
+  // the published config's own call: the rows it carries are its own to write (`admitRowsOfCall`)
+  rowsAreTheConfigs = false,
+): void {
   let at = from;
   for (const step of expression) {
     const name = typeof step === "string" ? step : step[0];
@@ -565,7 +570,7 @@ function admitLoadedCodeExpression(expression: ItxExpression, from: string): voi
         // row runs. So the row is checked here, where loaded code names it: in an event, in a
         // list of events, or in a schedule's. A row that is made only when the row runs is
         // checked then (`admitRowsOfCall`).
-        for (const event of rowEventsIn(arg)) admitLoadedCodeRow(event, at);
+        if (!rowsAreTheConfigs) for (const event of rowEventsIn(arg)) admitLoadedCodeRow(event, at);
       }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string")
       at = resolveContextPath(at, step[1]);
@@ -698,13 +703,19 @@ function isOwnLendRow(event: { type: string; payload?: unknown }, target: ItxExp
  *  (`Caller.runsRow`). Loaded code may have written the row that runs, and the check on each row
  *  it writes does not see what two rows make together: a rule with a hole, and a call that fills
  *  it, are a row with a built-in target only when the call runs. No check of spellings closes
- *  that, so the row is checked here, where it is written. */
+ *  that, so the row is checked here, where it is written.
+ *
+ *  THE PUBLISHED CONFIG'S OWN ROWS ARE NOT (`Caller.config`): the config is the mind's own code,
+ *  and a row with a built-in target is how it builds a jail whose names reach exactly what it
+ *  grants, `itx.cloud2.state ⇒ itx.builtins.cd('/').config.cloud2(id, 'state', @)` under a bare
+ *  `itx ⇒ null`. A script it runs, a worker it loads, and the jail's own code are other callers,
+ *  and are checked. A row the config writes when one of its rows runs is checked too. */
 export function admitRowsOfCall(
   caller: Caller,
   events: readonly { type: string; payload?: unknown }[],
   landsAt: string,
 ): void {
-  if (!caller.app && !caller.runsRow) return;
+  if ((!caller.app || caller.config) && !caller.runsRow) return;
   for (const event of events) admitLoadedCodeRow(event, landsAt);
 }
 
@@ -898,7 +909,8 @@ export class ItxExpressionResolver {
     const caller = this.#caller();
     // A trusted cd hop stamps `path` after the whole input passed this check; the rest now holds
     // the owner's rewrites, which are not rejected again at their destination.
-    if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path);
+    if (caller.app && !caller.path)
+      admitLoadedCodeExpression(expression, this.#path, caller.config === true);
   }
 
   resolve(call: ItxExpressionInput): ItxExpression[] {

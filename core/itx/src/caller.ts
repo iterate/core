@@ -16,6 +16,11 @@ export type Caller = {
   // fresh env.ITX calls never inherit it.
   path?: string;
   app?: true;
+  // Loaded code that is the mind's published config itself: the Worker the config pointer names,
+  // never a script or a worker it loads. Its rows may have built-in targets, so it can build a
+  // jail whose names reach exactly what it grants (`admitRowsOfCall`). Set only by
+  // `ItxEntrypoint`, from a prop that only the host mints (host.ts `itxEntrypointFor`).
+  config?: true;
   // Set only by the host's own code, on a fact it vouches for (`refuseNonPlatformWrites`).
   platform?: true;
   // The exact text of an act that a member approved, on the one call that does it. Set only by the

@@ -69,7 +69,7 @@ export function contextReach(args: {
       return workersRoot({
         path,
         iterateContextName: nameOf(path),
-        itxEntrypoint: () => itxEntrypointFor(args.ctx, nameOf(path)),
+        itxEntrypoint: (config) => itxEntrypointFor(args.ctx, nameOf(path), config),
         invoke: (call) => loadedCodeAt(path, cause())(call),
         // The producer runs as the loaded code of the context whose rule names it, not of `path`.
         namedWorker: async (source) => {

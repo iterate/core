@@ -427,7 +427,7 @@ export function nameActiveSpan({ path }: { path: string }): void {
 export type ItxEntrypointScope = ReturnType<Service<ItxEntrypoint>["get"]>;
 export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   Env,
-  { iterateContextName: string; platform?: true }
+  { iterateContextName: string; platform?: true; config?: true }
 > {
   get(cause?: unknown): IterateContextRpcTarget {
     // A loaded isolate's `ctx.exports` are its own module's, so `platform` cannot be forged from one.
@@ -480,7 +480,9 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
     return {
       principal: null,
       cause: cause || newChain("loaded code"),
-      ...(this.ctx.props.platform ? { path: address.path } : { app: true as const }),
+      ...(this.ctx.props.platform
+        ? { path: address.path }
+        : { app: true as const, ...(this.ctx.props.config && { config: true as const }) }),
     };
   }
 }
