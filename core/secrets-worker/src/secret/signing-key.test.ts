@@ -9,7 +9,7 @@ import {
   verifySignature,
 } from "iterate/signed";
 import { SECRET_USE_HEADER } from "iterate/secret-placeholder";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { hmacSha256Hex } from "../secrets.ts";
 import { SecretDurableObject } from "./durable-object.ts";
 
@@ -156,12 +156,16 @@ test("a secret not made with signStatement is refused, and one made with it answ
   ).toContain("holds a value; delete it first");
   await secret.secret(PATH, "delete", undefined);
   await secret.secret(PATH, "generateSigningKey", {});
+  // a fixed clock: the limit's minute cannot end during the calls, however slow the machine is
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
   // no statementPaths: any path
-  const answers = [];
-  for (let at = 0; at < 301; at += 1)
-    answers.push(await secret.secret(PATH, "signStatement", { ...STATEMENT, path: "/agents/x" }));
-  expect(answers.slice(0, 300).every((answer) => "result" in (answer as object))).toBe(true);
-  expect(answers[300]).toMatchObject({
+  const sign = () => secret.secret(PATH, "signStatement", { ...STATEMENT, path: "/agents/x" });
+  // the 300 run together, so the test takes one call's time, not 300 calls'; each is counted
+  // before the call after them is made
+  const answers = await Promise.all(Array.from({ length: 300 }, sign));
+  expect(answers).toMatchObject(Array.from({ length: 300 }, () => ({ result: expect.anything() })));
+  expect(await sign()).toMatchObject({
     refused: { code: "FORBIDDEN", message: expect.stringContaining("limit for this minute") },
   });
 });
@@ -213,15 +217,21 @@ test("a signing key handed out as a sealed cell comes back whole: the same key i
 
 test("a set that lands while a key is being made is the later word: the key does not replace it", async () => {
   const { secret } = vault();
-  const generating = secret
+  const material = { privateKey: JSON.stringify(await privateJwk()) };
+  // The set lands inside the secret's own making of the key (key-ops.ts), so it is there before
+  // the key is kept. Two calls in flight would leave it to the machine which of them is first.
+  const makeKey = crypto.subtle.generateKey.bind(crypto.subtle);
+  vi.spyOn(crypto.subtle, "generateKey").mockImplementationOnce(async (...args) => {
+    await secret.secret(PATH, "set", {
+      material,
+      urls: ["https://iterate.example.com"],
+      operations: ["signStatement"],
+    });
+    return makeKey(...args);
+  });
+  const generated = await secret
     .secret(PATH, "generateSigningKey", {})
     .catch((error: Error) => error.message);
-  const set = secret.secret(PATH, "set", {
-    material: { privateKey: JSON.stringify(await privateJwk()) },
-    urls: ["https://iterate.example.com"],
-    operations: ["signStatement"],
-  });
-  const [generated] = await Promise.all([generating, set]);
   expect(generated).toEqual(expect.stringContaining("holds a value; delete it first"));
 });
 
