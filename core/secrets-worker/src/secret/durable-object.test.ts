@@ -879,6 +879,29 @@ test("a refresh on word of a secret that is no grant of the Cloud's asks nobody"
   expect(cloud).toMatchObject({ asked: [] });
 });
 
+test("the Cloud mints no installation token for a secret pinned beyond the hosts it names for the App, and the token goes to no such host", async () => {
+  const cloud = cloudWithGithubApp();
+  await cloud.set([...GITHUB_HOSTS, ELSEWHERE]);
+  const beyond = await cloud.use(`${ELSEWHERE}/`);
+  const mintedBeyond = cloud.minted;
+  await cloud.set(GITHUB_HOSTS);
+  const within = await cloud.use("https://api.github.com/installation/repositories");
+  expect({
+    beyond: { status: beyond.status, text: await beyond.text(), minted: mintedBeyond },
+    within: within.status,
+    sent: cloud.sent,
+  }).toEqual({
+    beyond: { status: 502, text: expect.stringContaining(`not ${ELSEWHERE}`), minted: 0 },
+    within: 200,
+    sent: [
+      {
+        url: "https://api.github.com/installation/repositories",
+        authorization: "Bearer installation-token-aaaa",
+      },
+    ],
+  });
+});
+
 test("a rule cannot be loosened without a signature, and a member's signed statement removes it", async () => {
   const { secret, decide } = await vault();
   const by = { userId: "user_aaaa", email: "member@example.com" };
@@ -1190,4 +1213,75 @@ function cloudThatAnswers(answer: () => Response) {
     return answer();
   });
   return { asked };
+}
+
+const INSTALLATION = "/secrets/github-installation-1";
+const GITHUB_HOSTS = ["https://api.github.com", "https://github.com"];
+const ELSEWHERE = "https://elsewhere.example";
+
+/** A stack whose Cloud has the GitHub App `github`: the Cloud names GitHub's hosts as the App's
+ *  and mints an installation's token. The Cloud and every other host stand in for `fetch`:
+ *  `minted` counts the tokens the Cloud gave, and `sent` is what reached another host. */
+function cloudWithGithubApp() {
+  const cloud = { minted: 0, sent: [] as { url: string; authorization: string | null }[] };
+  // the Cloud's facts are fetched by their URL alone
+  vi.stubGlobal("fetch", async (input: Request | string) => {
+    const request = new Request(input);
+    const { origin, pathname } = new URL(request.url);
+    if (origin === CLOUD_OF_GRANTS && pathname === "/.well-known/iterate-cloud")
+      return Response.json({
+        clients: {
+          github: {
+            clientId: "Iv1.client",
+            authorizationEndpoint: "https://github.com/login/oauth/authorize",
+            redirectUri: `${CLOUD_OF_GRANTS}/clients/github/callback`,
+            tokenEndpoint: `${CLOUD_OF_GRANTS}/clients/github/token`,
+            urls: GITHUB_HOSTS,
+            installationTokenEndpoint: `${CLOUD_OF_GRANTS}/clients/github/installation-token`,
+          },
+        },
+      });
+    if (origin === CLOUD_OF_GRANTS) {
+      cloud.minted += 1;
+      return Response.json({ token: "installation-token-aaaa" });
+    }
+    cloud.sent.push({ url: request.url, authorization: request.headers.get("authorization") });
+    return new Response("sent");
+  });
+  const env = {
+    DOMAIN: "example.com",
+    CLOUD_ORIGIN: CLOUD_OF_GRANTS,
+    SECRETS_AT_REST_KEY: "at-rest-key-for-tests-only",
+    APPROVALS: { getByName: () => ({ add: async () => {}, remove: async () => {} }) },
+    AUTH: {
+      sign: async (input: object) => ({
+        statement: JSON.stringify(input),
+        signature: { format: "p256", key: "key-stack", sig: "sig" },
+      }),
+    },
+  };
+  // the cast: the object reads only the bindings above
+  const secret = new SecretDurableObject(fakeState(INSTALLATION) as never, env as never);
+  return Object.assign(cloud, {
+    set: (urls: string[]) =>
+      secret.secret(INSTALLATION, "set", {
+        material: {},
+        urls,
+        refresh: {
+          kind: "github-app-installation",
+          apiOrigin: "https://api.github.com",
+          installationId: "1",
+          client: { cloud: "github" },
+        },
+      }),
+    use: (url: string) =>
+      secret.fetch(
+        new Request(url, {
+          headers: {
+            authorization: `Bearer getSecret("${INSTALLATION}", { field: "accessToken" })`,
+            [SECRET_USE_HEADER]: INSTALLATION,
+          },
+        }),
+      ),
+  });
 }

@@ -226,7 +226,8 @@ export type SecretRefresh =
       apiOrigin: string;
       installationId: string;
       /** `cloud`: iterate Cloud's GitHub App of that name, whose key stays at the Cloud. The Cloud
-       *  mints the token, for an installation this deployment connected. */
+       *  mints the token, for an installation this deployment connected. The Cloud mints no token
+       *  for a secret whose `urls` go beyond the hosts the Cloud names for the App. */
       client: { platform: "github" } | { mind: "github" } | { cloud: string };
     }
   /** EXCHANGE CODE: `source` is one ES module exporting `async function exchange(material, fetch)`,

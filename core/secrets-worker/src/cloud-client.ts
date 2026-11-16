@@ -6,6 +6,8 @@
 //   cloudClientOf   the client's public facts, read from the Cloud the stack's config names
 //   brokered        a request to the Cloud's broker, signed by the stack's own key
 //   askOf           whether a mind's request is an ask of the Cloud, about a client it connected
+//   cloudPinRefusal whether a secret that holds a token the Cloud mints is pinned within the
+//                   client's hosts
 //
 // THE CLOUD ADDS THE CLIENT SECRET to a token request it is sent, and answers the provider's
 // tokens: the access token as it came, the refresh token sealed so that only this deployment can
@@ -14,7 +16,7 @@
 // `iterate.<domain>/keys/stack.json`. No token of the Cloud's is held here, and none of ours there.
 import { codedError, leavingTheStack } from "iterate/lib";
 import { z } from "zod";
-import { sha256Hex } from "./secrets.ts";
+import { originsOf, sha256Hex } from "./secrets.ts";
 
 /** The header a brokered request carries: base64url of the signed statement's JSON. */
 const STATEMENT_HEADER = "iterate-statement";
@@ -69,6 +71,16 @@ export async function cloudClientOf(
       `secrets: the Cloud at ${origin} names another host as its own`,
     );
   return { ...client.data, name };
+}
+
+/** A TOKEN THE CLOUD MINTS GOES TO THE CLIENT'S HOSTS ALONE: the secret that holds it is pinned
+ *  within the `urls` the Cloud publishes for the client, as a connect through the Cloud pins its
+ *  grant (secret-oauth.ts). Answers why a pin is refused, or null for a pin within them. */
+export function cloudPinRefusal(urls: readonly string[], client: CloudClient): string | null {
+  const hosts = originsOf(client.urls);
+  const outside = urls.filter((url) => !hosts.includes(url));
+  if (!outside.length) return null;
+  return `secrets: the Cloud's client ${client.name} mints this secret's token, which goes to ${hosts.join(", ")} alone, not ${outside.join(", ")}`;
 }
 
 /** The Cloud at `origin` and the names of the clients it publishes; null for a stack that names

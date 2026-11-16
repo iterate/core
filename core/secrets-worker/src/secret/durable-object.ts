@@ -25,7 +25,7 @@ import type {
 import { z } from "zod";
 import type { Envelope } from "iterate/signed";
 import type { PageCaller } from "../callback-page.ts";
-import { askOf, brokered, cloudClientOf } from "../cloud-client.ts";
+import { askOf, brokered, cloudClientOf, cloudPinRefusal } from "../cloud-client.ts";
 import type { Env } from "../env.ts";
 import {
   decryptLegacySecretMaterial,
@@ -1847,8 +1847,13 @@ export class SecretDurableObject extends DurableObject<Env> {
     // iterate Cloud's App key stays at the Cloud, which mints the token
     if ("cloud" in refresh.client) {
       const { cloud } = refresh.client;
-      const { installationTokenEndpoint } = await cloudClientOf(this.env.CLOUD_ORIGIN, cloud);
+      const client = await cloudClientOf(this.env.CLOUD_ORIGIN, cloud);
+      const { installationTokenEndpoint } = client;
       if (!installationTokenEndpoint) throw new Error(`${refresh.kind}: ${cloud} is no GitHub App`);
+      // here and not at `set`, so it holds for every cell, an imported one too, and asks nothing
+      // of the Cloud before a write takes its version
+      const refusal = cloudPinRefusal(record.urls, client);
+      if (refusal) throw new Error(`${refresh.kind}: ${refusal}`);
       const minted = await this.#brokered(
         cloud,
         "installation-token",
