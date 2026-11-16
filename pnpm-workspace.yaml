@@ -72,9 +72,9 @@ allowBuilds:
   core-js: false
   msw: false
 overrides:
-  # One workerd for every Cloudflare tool: wrangler's and miniflare's exact pin. Alchemy's local dev
-  # runtime takes a caret range, which would otherwise resolve to a second, newer binary.
-  workerd: 1.20261104.1
+  # One pinned workerd for tests and local dev across Miniflare, Wrangler and Alchemy,
+  # whose declared versions otherwise resolve to different binaries.
+  workerd: 1.20261116.1
   ws: "catalog:"
 patchedDependencies:
   "@cloudflare/workers-oauth-provider@1.2.4": patches/@cloudflare__workers-oauth-provider@1.2.4.patch
