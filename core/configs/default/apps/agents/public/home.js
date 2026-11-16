@@ -11,6 +11,7 @@ import { NewAgentPicker } from "@iterate-com/ui/components/new-agent-picker";
 import { Card, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui/components/ui/card";
 import { Textarea } from "@iterate-com/ui/components/ui/textarea";
 import { BotIcon } from "@iterate-com/ui/icons";
+import { agentDoing } from "@iterate-com/ui/lib/agent-summary";
 import { newAgentValues } from "@iterate-com/ui/lib/new-agent";
 import { byRecentActivity, mineFirst, newAgentPath, topLevelAgents } from "./agent-rows.js";
 import { agentHref, linkClick } from "./nav.js";
@@ -165,6 +166,17 @@ export function AgentsHome({
                                 title=${row.path}
                               >
                                 ${row.path}
+                              <//>
+                            `
+                          }
+                          ${
+                            agentDoing(row) &&
+                            html`
+                              <${CardDescription}
+                                className="line-clamp-2 md:line-clamp-1"
+                                data-agent-doing
+                              >
+                                ${agentDoing(row)}
                               <//>
                             `
                           }

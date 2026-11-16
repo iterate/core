@@ -1,7 +1,7 @@
 // nav.js — the sidebar's body (the frame around it is @iterate-com/ui's AppShell): "New agent",
-// then the mind's agents at the top, most recently active first. Each shows its title with its
-// path beneath, an icon for what runs it and a dot for what it is doing. Pinned agents sit in a
-// list of their own, the pins kept per mind in this browser.
+// then the mind's agents at the top, most recently active first. Each shows its title with what
+// it is doing beneath while it works or waits (else its path), an icon for what runs it and a dot
+// for its status. Pinned agents sit in a list of their own, the pins kept per mind in this browser.
 import { html, useCallback, useMemo, useState } from "@iterate-com/ui/page";
 import {
   SidebarGroup,
@@ -18,6 +18,7 @@ import {
   SquarePenIcon,
   SquareTerminalIcon,
 } from "@iterate-com/ui/icons";
+import { agentDoing } from "@iterate-com/ui/lib/agent-summary";
 import { byRecentActivity, mineFirst, personAt, topLevelAgents } from "./agent-rows.js";
 
 /** A link that changes this page's URL: a plain left click stays on the page, and any other click
@@ -103,10 +104,12 @@ export function AgentsNav({ mind, agents, agent, person, onOpen }) {
 /** `other`: the person whose agent this is, when it is another person's. */
 function AgentsNavRow({ row, other, active, pinned, onOpen, onTogglePinned }) {
   const KindIcon = kindIcon(row.kind);
+  const doing = agentDoing(row);
   return html`
     <${SidebarMenuItem} data-agent-path=${row.path}>
       <${SidebarMenuButton}
         size="lg"
+        className="max-md:h-auto max-md:min-h-12"
         isActive=${active}
         tooltip=${row.activity ? `${row.path}: ${row.activity}` : row.path}
         render=${pageLink(agentHref(row.path), () => onOpen(row.path))}
@@ -124,6 +127,18 @@ function AgentsNavRow({ row, other, active, pinned, onOpen, onTogglePinned }) {
             ${row.title || html`<span class="font-mono text-xs" title=${row.path}>${row.path}</span>`}
           </span>
           ${
+            doing &&
+            html`
+              <span
+                class="line-clamp-2 text-2xs text-muted-foreground md:line-clamp-1"
+                data-agent-doing
+              >
+                ${doing}
+              </span>
+            `
+          }
+          ${
+            !doing &&
             row.title &&
             html`
               <span class="truncate font-mono text-2xs text-muted-foreground" title=${row.path}>
