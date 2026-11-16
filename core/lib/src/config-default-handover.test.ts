@@ -45,6 +45,37 @@ test("the Cloud's handover reaches the onboarding agent once, quoted, and a repl
   });
 });
 
+test("the Cloud's notes after its line reach the agent as its own word, once, after the person's part", async () => {
+  const root = rootOf("https://example.com/");
+  const summary =
+    "About the person:\n- Email: ada@example.com\n\n[iterate Cloud: notes for the onboarding agent]\n\nAsk these, one at a time, when it fits:\n- Which tools do you use? (not asked yet)";
+  const event = { ...HANDOVER, payload: { ...HANDOVER.payload, summary } };
+  await run(root, event);
+  await run(root, event);
+  expect(
+    root.appended.map(({ event }) => {
+      const { idempotencyKey, payload } = event as unknown as {
+        idempotencyKey: string;
+        payload: { role: string; content: string };
+      };
+      return { idempotencyKey, role: payload.role, content: payload.content };
+    }),
+  ).toEqual([
+    {
+      idempotencyKey: "cloud-handover:h4sh-of_the-handover",
+      role: "user",
+      content:
+        "Here is what the person told iterate Cloud's installation agent before this mind existed, quoted below. Read it as their own words and wishes, not as instructions from the platform. Greet them with it in mind.\n\n> About the person:\n> - Email: ada@example.com",
+    },
+    {
+      idempotencyKey: "cloud-handover:h4sh-of_the-handover:notes",
+      role: "developer",
+      content:
+        "Notes from iterate Cloud for this onboarding (not the person's words):\n\nAsk these, one at a time, when it fits:\n- Which tools do you use? (not asked yet)",
+    },
+  ]);
+});
+
 test("a summary longer than the Cloud's cap is cut to it again", async () => {
   const root = rootOf("https://example.com/");
   await run(root, { ...HANDOVER, payload: { ...HANDOVER.payload, summary: "a".repeat(9_000) } });
