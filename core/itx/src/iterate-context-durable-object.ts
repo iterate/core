@@ -189,11 +189,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     rpcStubFetch: this.#rpcStubFetch,
     ctx: this.ctx,
     // The DO owns both ends of a lent stub's rule: this sets it, `#unsetWhatNamesRpcStub` un-sets it.
-    appendEvents: (events, { rpcStubKey, redial }) => {
+    appendEvents: (events, { rpcStubKey, redial, onlyFrom }) => {
       const record = `rpc-stub-unset:${rpcStubKey}`;
       appendAtAttach({
         events,
         redial,
+        onlyFrom,
         rows: this.#rowsForRpcStubCensus(),
         record: {
           read: () => this.ctx.storage.kv.get<UnsetByClose | string[]>(record),

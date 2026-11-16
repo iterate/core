@@ -432,13 +432,16 @@ function reduceCoreEvent(
       if (!wall && isImplicitRow && jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
         return existing ? withRule(undefined) : undefined;
       // The same row again moves no version, so no snapshot another context holds is invalidated.
+      // The same lend by another lender is a new row: the stored lender is who holds the name.
+      const lentBy = typeof payload.lentBy === "string" ? { lentBy: payload.lentBy } : {};
       if (
         existing &&
         jsonEqual(existing.target, target) &&
-        existing.description === description.description
+        existing.description === description.description &&
+        existing.lentBy === lentBy.lentBy
       )
         return undefined;
-      return withRule({ match: matchPrefix, target, ...description });
+      return withRule({ match: matchPrefix, target, ...description, ...lentBy });
     }
 
     case "events.iterate.com/itx/subscription-configured": {

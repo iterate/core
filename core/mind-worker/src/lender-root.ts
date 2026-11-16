@@ -15,7 +15,9 @@ const TableRows = z.array(z.object({ match: z.string(), target: z.string().nulla
 
 /** WHAT A KEY'S TOKEN REACHES (core/auth-worker/src/key-tokens.ts): the one lend a member allowed
  *  its key, and nothing of the mind. `iterate provide --key` runs against it: `whoami` proves the
- *  session and keeps it alive, `provide` lends. Every other name of `itx` is absent. */
+ *  session and keeps it alive, `provide` lends. Every other name of `itx` is absent. The key takes
+ *  a lent name only from itself: its lend says so (`onlyFromItself`), and the context refuses the
+ *  attach when another lender holds the name. */
 export class LenderRoot extends RpcTarget {
   readonly #root: Pick<IterateContextRpcTarget, "provide" | "invoke">;
   readonly #lender: Lender;
@@ -62,7 +64,10 @@ export class LenderRoot extends RpcTarget {
         );
       // The cast: `target` came off the wire. The checks above left an object or a function,
       // which is what capnweb hands over for a stub, and the kernel's lend refuses anything else.
-      return this.#root.provide(own, target as ClientRpcStub, description);
+      return this.#root.provide(own, target as ClientRpcStub, {
+        ...description,
+        onlyFromItself: true,
+      });
     });
   }
 

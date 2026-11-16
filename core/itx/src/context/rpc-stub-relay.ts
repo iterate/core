@@ -139,6 +139,9 @@ export async function lendRpcStubOverPager(
   rpcStubKey: string,
   appendEvents: StreamEventInput[],
   waitUntil: (p: Promise<unknown>) => void,
+  // The lender this lend may take the name's lend from, at the first dial (rpc-stubs.ts
+  // `appendAtAttach`). Sent at each redial too, where the context does not check it.
+  onlyFrom?: string,
 ): Promise<{ dispose(): void; lendEnded: Promise<string> }> {
   // dup first: a value that is not a stub fails here, before any socket
   const sessionRpcStub = clientRpcStub.dup();
@@ -149,7 +152,12 @@ export async function lendRpcStubOverPager(
         Upgrade: "websocket",
         // URI-encoded: a header is a ByteString, and a key or an event is not
         [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeURIComponent(
-          JSON.stringify({ rpcStubKey, appendEvents, redial } satisfies RpcStubPagerAttachRequest),
+          JSON.stringify({
+            rpcStubKey,
+            appendEvents,
+            redial,
+            onlyFrom,
+          } satisfies RpcStubPagerAttachRequest),
         ),
       },
     });

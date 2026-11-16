@@ -671,7 +671,8 @@ async function serviceKeyAnswered(
 
 /** The refusal for a key that asks to lend a name another live key lends (./key-rules.ts
  *  `otherKeyLending`), or null. A lend by a member's own session is in no table here, so the
- *  consent page says of every key that lends what it does to a name in use. */
+ *  consent page says of every key that lends what it does to a name in use: it takes the name only
+ *  when that lend ends. */
 async function nameHeldByAnotherKey(
   env: Env,
   key: string,
@@ -686,7 +687,7 @@ async function nameHeldByAnotherKey(
   const held = otherKeyLending(results, key, ask.provide);
   if (!held) return null;
   return errorPage(
-    `itx.${ask.provide} is lent to ${iterateConfigOf(env).domain} by another key: ${held.label} (key ${held.id.slice(0, 8)}, added ${day(held.added_at)}). A second key for that name would take it over. If this key is to replace that one, a member removes it on Your keys first.`,
+    `itx.${ask.provide} is lent to ${iterateConfigOf(env).domain} by another key: ${held.label} (key ${held.id.slice(0, 8)}, added ${day(held.added_at)}). A second key for that name would take it whenever that key's lend ends. If this key is to replace that one, a member removes it on Your keys first.`,
     409,
     undefined,
     [{ href: KEYS_PATH, label: "Your keys" }],

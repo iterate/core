@@ -234,6 +234,9 @@ export class IterateContextRpcTarget extends RpcTarget {
     options: {
       description?: string;
       fetchRoute?: Omit<FetchRouteInput, "target"> & { fetchRouteName: string };
+      /** This lend takes the name only when no other lender holds it (rpc-stubs.ts
+       *  `appendAtAttach`): a live stub's, from a caller with a grant. */
+      onlyFromItself?: true;
     } = {},
   ): Promise<RewriteRuleHandleRpcTarget> {
     // A row from loaded code must go through its context's table, where a jail's wall stands.
@@ -253,6 +256,13 @@ export class IterateContextRpcTarget extends RpcTarget {
       throw codedError(
         "INVALID_INPUT",
         "provide's fetchRoute rides a lent stub on the mind's root \"/\"; set any other route with itx.fetchRoutes.set",
+      );
+    // The attach checks the lender by the grant, and loaded code's rule is appended before its lend,
+    // where no attach checks it: neither such lend can say who it is.
+    if (options.onlyFromItself && (isRow || this.#caller.app || !this.#caller.grant))
+      throw codedError(
+        "INVALID_INPUT",
+        "provide's onlyFromItself is for a live stub lent by a caller with a grant: this lend cannot say who lends it",
       );
     if (isRow) {
       // Appended before this session's lend is recalled, so the DO's un-set on the pager close
@@ -282,6 +292,9 @@ export class IterateContextRpcTarget extends RpcTarget {
         match: matchString,
         target: ["itx", "builtins", "rpcStubs", ["get", matchString]],
         ...description,
+        // Who lends: a lend with `onlyFromItself` takes no name that another lender holds
+        // (rpc-stubs.ts `appendAtAttach`).
+        ...(this.#caller.grant && { lentBy: this.#caller.grant }),
       },
     };
     const fetchRouteEvents = options.fetchRoute
@@ -295,6 +308,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       matchString,
       this.#caller.app ? [] : [ruleEvent, ...fetchRouteEvents],
       this.#waitUntil,
+      options.onlyFromItself && this.#caller.grant,
     );
     // The DO, not this session, un-sets the rule when the key's last pager closes.
     const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);

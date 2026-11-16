@@ -6,8 +6,8 @@ test("a key's session lends a live stub at its own name, with a description and 
   await root.provide("itx.whatsapp.jonas", stub, { description: "WhatsApp" });
   await root.provide(["itx", "whatsapp", "jonas"], stub);
   expect(lent).toEqual([
-    ["itx.whatsapp.jonas", stub, { description: "WhatsApp" }],
-    ["itx.whatsapp.jonas", stub, {}],
+    ["itx.whatsapp.jonas", stub, { description: "WhatsApp", onlyFromItself: true }],
+    ["itx.whatsapp.jonas", stub, { onlyFromItself: true }],
   ]);
   expect(root.whoami()).toEqual({
     path: "/",
@@ -86,7 +86,19 @@ test("a key's own lend from before, and rows of other names, leave its name free
     { match: "itx.secrets", target: "itx.builtins.secrets" },
   ]);
   await root.provide("itx.whatsapp.jonas", stub);
-  expect(lent).toEqual([["itx.whatsapp.jonas", stub, {}]]);
+  expect(lent).toEqual([["itx.whatsapp.jonas", stub, { onlyFromItself: true }]]);
+});
+
+test("a lend of the key's name by another lender leaves the name free here: the context's attach decides", async () => {
+  const { root, lent } = session("whatsapp.jonas", [
+    {
+      match: "itx.whatsapp.jonas",
+      target: "itx.builtins.rpcStubs.get('itx.whatsapp.jonas')",
+      lentBy: "grant:member",
+    },
+  ]);
+  await root.provide("itx.whatsapp.jonas", stub);
+  expect(lent).toEqual([["itx.whatsapp.jonas", stub, { onlyFromItself: true }]]);
 });
 
 test("a table that cannot be read lends nothing", async () => {
@@ -108,7 +120,7 @@ function stub() {}
 /** `rows`: the rows of the mind's root, as `rewriteRules.list()` answers, or why it cannot. */
 function session(
   provide = "whatsapp.jonas",
-  rows: { match: string; target: string | null }[] | Error = [],
+  rows: { match: string; target: string | null; lentBy?: string }[] | Error = [],
 ) {
   const lent: unknown[][] = [];
   const root = new LenderRoot(

@@ -5,6 +5,7 @@ import { expect, test } from "vitest";
 import type { Caller } from "./caller.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import { RPC_STUB_PAGER_WEBSOCKET_HEADER } from "./context/rpc-stubs.ts";
+import { defineItxHost } from "./host.ts";
 import { IterateContextRpcTarget, type IterateContextNamespace } from "./iterate-context.ts";
 import { SessionTeardown } from "./session.ts";
 
@@ -58,22 +59,79 @@ test("any other call on loaded code's cd(path) is still one expression through i
   });
 });
 
-/** Loaded code's itx at `path`: its table records what it walks, and each context refuses a pager. */
-function loadedCodeAt(path: string, landsAt = (cdPath: string) => cdPath) {
+test("a lend that takes the name only from itself sends its lender in the attach, and writes it on the rule", async () => {
+  const key = loadedCodeAt("/", undefined, { principal: { actor: "bridge" }, grant: "key:k1" });
+
+  await expect(
+    key.itx.provide("itx.whatsapp.jonas", liveCallback() as never, { onlyFromItself: true }),
+  ).rejects.toThrow("pager refused in test");
+
+  expect(key).toMatchObject({
+    walked: [],
+    lends: [
+      {
+        at: "/",
+        rpcStubKey: "itx.whatsapp.jonas",
+        onlyFrom: "key:k1",
+        appendEvents: [
+          {
+            type: "events.iterate.com/itx/rewrite-rule-configured",
+            payload: {
+              match: "itx.whatsapp.jonas",
+              target: ["itx", "builtins", "rpcStubs", ["get", "itx.whatsapp.jonas"]],
+              lentBy: "key:k1",
+            },
+          },
+        ],
+      },
+    ],
+  });
+});
+
+test.for([
+  { who: "loaded code", caller: { principal: null, app: true } },
+  { who: "a caller with no grant", caller: { principal: { actor: "bridge" } } },
+] as const)(
+  "a lend that takes the name only from itself is refused from $who, which cannot say who lends",
+  async ({ caller }) => {
+    const mind = loadedCodeAt("/", undefined, caller);
+    await expect(
+      mind.itx.provide("itx.whatsapp.jonas", liveCallback() as never, { onlyFromItself: true }),
+    ).rejects.toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
+    expect(mind).toMatchObject({ walked: [], lends: [] });
+  },
+);
+
+/** Loaded code's itx at `path`: its table records what it walks, and each context refuses a pager.
+ *  `caller`: whose session it is, loaded code's by default. */
+function loadedCodeAt(
+  path: string,
+  landsAt = (cdPath: string) => cdPath,
+  caller: Caller = { principal: null, app: true },
+) {
   const walked: ItxExpression[] = [];
-  const lends: { at: string; rpcStubKey: string; appendEvents: unknown[] }[] = [];
+  const lends: {
+    at: string;
+    rpcStubKey: string;
+    appendEvents: unknown[];
+    onlyFrom?: string;
+  }[] = [];
   const namespace = {
     getByName: (name: string) => ({
       fetch: async (_url: string, init: { headers: Record<string, string> }) => {
         const attach = JSON.parse(
           decodeURIComponent(init.headers[RPC_STUB_PAGER_WEBSOCKET_HEADER]!),
-        ) as { rpcStubKey: string; appendEvents: unknown[] };
-        lends.push({ at: name, rpcStubKey: attach.rpcStubKey, appendEvents: attach.appendEvents });
+        ) as { rpcStubKey: string; appendEvents: unknown[]; onlyFrom?: string };
+        lends.push({
+          at: name,
+          rpcStubKey: attach.rpcStubKey,
+          appendEvents: attach.appendEvents,
+          onlyFrom: attach.onlyFrom,
+        });
         return Response.json({ code: "TEST", message: "pager refused in test" }, { status: 409 });
       },
     }),
   } as unknown as IterateContextNamespace;
-  const caller: Caller = { principal: null, app: true };
   const itx = new IterateContextRpcTarget(
     namespace,
     DurableObjectNameCodec.address(path),
@@ -93,6 +151,9 @@ function loadedCodeAt(path: string, landsAt = (cdPath: string) => cdPath) {
   );
   return { itx, walked, lends };
 }
+
+// `provide` reads the names that are the platform's at the root, which the host defines
+defineItxHost({ firstPartyFacets: {} });
 
 function liveCallback() {
   return Object.assign(() => {}, {

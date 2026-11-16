@@ -32,10 +32,13 @@ import {
 
 export const RPC_STUB_PAGER_WEBSOCKET_HEADER = "x-itx-rpc-stub-pager";
 // `redial`: the lender's session lost its pager and dials again, with the events of its first dial.
+// `onlyFrom`: the lender (a row's `lentBy`) this attach may take the name's lend from, on a lend
+// that takes a lent name only from itself (`appendAtAttach`).
 export type RpcStubPagerAttachRequest = {
   rpcStubKey: string;
   appendEvents: StreamEventInput[];
   redial?: boolean;
+  onlyFrom?: string;
 };
 // URI-encoded (rpc-stub-relay.ts): a header is a ByteString, and a key or an event is not.
 function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequest {
@@ -47,6 +50,8 @@ function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequ
     rpcStubKey: decoded.rpcStubKey,
     appendEvents: decoded.appendEvents,
     redial: decoded.redial === true,
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of JSON.parse output, as above: a present non-string is dropped, never coerced
+    ...(typeof decoded.onlyFrom === "string" && { onlyFrom: decoded.onlyFrom }),
   };
 }
 
@@ -122,16 +127,47 @@ export function eventsOfARedial(
  *  last close un-set) speaks for one attach that lands. It is ended only after the append came
  *  back: an attach that the stream refuses (a paused stream, a 5xx to the lender) changed
  *  nothing, the lender dials again, and that redial must still find the record, or it would take
- *  a row for one that somebody removed and come back without it. */
+ *  a row for one that somebody removed and come back without it.
+ *
+ *  WHO MAY TAKE A LENT NAME. A first dial with `onlyFrom` (a key's lend) is refused where the
+ *  name's own lend (a row at the match with the same target) records another lender: the key
+ *  takes a lent name only from itself. The check is here, in the one turn that reads the rows and
+ *  appends the rule, because a read of the table and a lend after it are two steps, and a lend
+ *  between them would be replaced (the newest pager wins). A row with no lender, the key's own
+ *  row, and no row at all leave the name free. A redial is not checked: it is the lend that held
+ *  the name before the platform dropped its pager, and a refusal there would page as a failed
+ *  redial. The key's program cannot cause a redial: closing its own connection ends the lend. */
 export function appendAtAttach(input: {
   events: StreamEventInput[];
   redial: boolean;
+  /** The lender this first dial may take the name's lend from; with none, it takes it from any. */
+  onlyFrom?: string;
   rows: Parameters<typeof eventsOfARedial>[1];
   record: { read(): UnsetByClose | string[] | undefined; end(): void };
   /** Appends, and throws when the stream refuses. */
   append: (events: StreamEventInput[]) => void;
 }): void {
-  const { events, redial, rows, record } = input;
+  const { events, redial, onlyFrom, rows, record } = input;
+  if (!redial && onlyFrom)
+    for (const event of events) {
+      if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") continue;
+      // the lender's own session wrote the event (WHY THE CASTS ARE SAFE, in `eventsOfARedial`)
+      const { match, target } = normalizeRewriteRuleConfigured(
+        event.payload as RewriteRuleConfigured,
+      );
+      const row = rows.rules.find((rule) => print(rule.match) === print(match));
+      if (
+        row?.target &&
+        target &&
+        print(row.target) === print(target) &&
+        row.lentBy &&
+        row.lentBy !== onlyFrom
+      )
+        throw codedError(
+          "FORBIDDEN",
+          `${print(match)} is lent by another lender, and this lend takes the name only from itself: stop that lend, then lend again`,
+        );
+    }
   const kept = redial ? eventsOfARedial(events, rows, unsetByClose(record.read())) : events;
   if (kept.length > 0) input.append(kept);
   record.end();
@@ -179,7 +215,7 @@ export class RpcStubDirectory {
 
   readonly #appendEvents: (
     events: StreamEventInput[],
-    lend: { rpcStubKey: string; redial: boolean },
+    lend: { rpcStubKey: string; redial: boolean; onlyFrom?: string },
   ) => void;
 
   constructor(deps: {
@@ -188,7 +224,7 @@ export class RpcStubDirectory {
     rpcStubFetch: RpcStubFetchServer;
     appendEvents: (
       events: StreamEventInput[],
-      lend: { rpcStubKey: string; redial: boolean },
+      lend: { rpcStubKey: string; redial: boolean; onlyFrom?: string },
     ) => void;
   }) {
     this.#ctx = deps.ctx;
@@ -259,7 +295,7 @@ export class RpcStubDirectory {
         { status: 400 },
       );
     }
-    const { rpcStubKey, appendEvents, redial } = attachRequest;
+    const { rpcStubKey, appendEvents, redial, onlyFrom } = attachRequest;
     const hadPager = this.#rpcStubPagerFor(rpcStubKey) !== undefined;
     const pair = new WebSocketPair();
     this.#ctx.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
@@ -267,7 +303,7 @@ export class RpcStubDirectory {
     // The set half, with the pager already accepted, so a push the commit fans out finds it.
     try {
       // also with nothing to append: the attach ends the record of what the last close un-set
-      this.#appendEvents(appendEvents, { rpcStubKey, redial: redial === true });
+      this.#appendEvents(appendEvents, { rpcStubKey, redial: redial === true, onlyFrom });
     } catch (error) {
       this.#closedRpcStubPagerSockets.add(pair[1]); // its close must not report a presence it never had
       try {
@@ -275,7 +311,9 @@ export class RpcStubDirectory {
       } catch {
         // already closing
       }
-      // 409 = a coded refusal (STREAM_PAUSED), which the relay re-throws to the caller; 500 = uncoded.
+      // 409 = a coded refusal (STREAM_PAUSED, or FORBIDDEN from `appendAtAttach`), which the relay
+      // re-throws to the caller; 500 = uncoded. The pager that holds the name is not dropped: that
+      // happens only after an append that lands, below.
       const code = errorCode(error);
       return Response.json(
         { code: code || null, message: error instanceof Error ? error.message : String(error) },

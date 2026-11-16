@@ -67,6 +67,10 @@ export type RewriteRuleConfigured = {
   target: ItxExpressionInput | null;
   /** What the name means here, in one line (≤ 500 chars). */
   description?: string;
+  /** On the rule of a lent stub, the grant of the session that lends it: a key's is `key:<id>`, a
+   *  member's is the grant of their sign-in. `provide` sets it, and it rides the row into
+   *  `rewriteRules.list()`. A lend by a caller with no grant has none. */
+  lentBy?: string;
 };
 
 /** One row of `rewriteRules.list()` — the tree a context can spell. `context` is the path the row
@@ -76,6 +80,8 @@ export type RewriteRuleListEntry = {
   match: string;
   target: string | null;
   description?: string;
+  /** Who lent the row's stub (`RewriteRuleConfigured.lentBy`). */
+  lentBy?: string;
   context: string;
 };
 
@@ -1687,6 +1693,8 @@ export interface IterateContextApi {
     options?: {
       description?: string;
       fetchRoute?: Omit<FetchRouteInput, "target"> & { fetchRouteName: string };
+      /** A live stub's lend takes the name only when no other lender (`lentBy`) holds it. */
+      onlyFromItself?: true;
     },
   ): Promise<{ [Symbol.dispose](): void; lendEnded(): Promise<string> }>;
   /** A script — the text of `async (itx) => { … }` — run once against this context, on its log:

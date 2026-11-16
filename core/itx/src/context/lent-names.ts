@@ -33,8 +33,9 @@ export function isLendOf(resolved: ItxExpressionInput, match: ItxExpressionInput
  *  row under the name would be left as an island in what the key lends. The bare row (`itx`
  *  alone) is a context's link or its jail and no name.
  *
- *  A lend of this very name is free whoever lent it: a row does not say who wrote it, and a member
- *  gave the key this name. So a key takes the name from a member's own lend of it. */
+ *  A lend of this very name is free in this table's terms, whoever lent it. Who may take a live
+ *  lend is decided at the context's attach (rpc-stubs.ts `appendAtAttach`), in one turn with the
+ *  row's write: a read of the table here and the lend after it are two steps. */
 export function nameIsFree(
   own: ItxExpressionInput,
   rows: readonly { match: ItxExpressionInput; target: ItxExpressionInput | null }[],

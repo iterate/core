@@ -197,11 +197,11 @@ test("the statement for a key that adds events to two contexts names both", () =
   );
 });
 
-test("the statement for a key that lends says that its holder sees what the agents send, and takes the name over", () => {
+test("the statement for a key that lends says that its holder sees what the agents send, and takes the name when its lend ends", () => {
   expect(marked(statementInParts({ ...ASK, provide: "github" }, FACTS))).toEqual([
     "I, {you:member@example.net}, let key {checked:keyaaaaa} lend its functions to {checked:example.com} as {checked:itx.github}, until a member removes it.",
     "The agents of {checked:example.com} call them, so the key's holder sees what they send.",
-    "If {checked:itx.github} is lent to {checked:example.com} now, the key's holder takes it over.",
+    "If {checked:itx.github} is lent to {checked:example.com} now, the key's holder takes it when that lend ends.",
     "The link says that the key belongs to {link:“GitHub”}.",
   ]);
 });
@@ -211,7 +211,7 @@ test("the statement for a key that lends and adds events says both in its first 
   expect(marked(statementInParts(ask, FACTS))).toEqual([
     "I, {you:member@example.net}, let key {checked:keyaaaaa} lend its functions to {checked:example.com} as {checked:itx.github}, and add events to the context {checked:/integrations/github/} and the contexts under it, until a member removes it.",
     "The agents of {checked:example.com} call them, so the key's holder sees what they send.",
-    "If {checked:itx.github} is lent to {checked:example.com} now, the key's holder takes it over.",
+    "If {checked:itx.github} is lent to {checked:example.com} now, the key's holder takes it when that lend ends.",
     "Each event that it adds shows the name {link:bridge-github} and this key.",
     "The link says that the key belongs to {link:“GitHub”}.",
   ]);

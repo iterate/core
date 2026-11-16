@@ -225,7 +225,7 @@ export function statementInParts(
         lent,
         { text: " is lent to " },
         domain,
-        { text: " now, the key's holder takes it over." },
+        { text: " now, the key's holder takes it when that lend ends." },
       ],
     );
   if (adds.length)
@@ -255,11 +255,11 @@ function listOf(items: StatementPart[]): StatementPart[] {
 /** A live key that lends, as the keys table has it. */
 export type LendingKey = { id: string; label: string; provide: string; added_at: number };
 
-/** THE OTHER KEY THAT LENDS A NAME NOW, or null. The mind lets a key take its name from whoever
- *  lends it at that moment (core/itx `context/lent-names.ts` `nameIsFree`). Two live keys with one
- *  name would take it from each other at every reconnect, and a link that asks for a name in use
- *  would give its lend to the link's maker with one press. So a key gets a name only once no other
- *  key holds it. The same key asking again holds its own name. */
+/** THE OTHER KEY THAT LENDS A NAME NOW, or null. The mind lets a key take its name only when no
+ *  other lender lends it at that moment (core/itx `context/rpc-stubs.ts` `appendAtAttach`). Two live
+ *  keys with one name would each take it whenever the other's lend ended, and a link that asks for
+ *  a name in use would give it to the link's maker at the first gap in that lend. So a key gets a
+ *  name only once no other key holds it. The same key asking again holds its own name. */
 export function otherKeyLending(
   lending: readonly LendingKey[],
   key: string,

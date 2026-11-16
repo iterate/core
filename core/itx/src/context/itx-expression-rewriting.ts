@@ -134,6 +134,8 @@ export type ItxExpressionRewriteRule = {
   match: ItxExpressionPrefix;
   target: ItxExpression | null;
   description?: string;
+  // The grant that lent the row's stub (`RewriteRuleConfigured.lentBy`): a mask has none.
+  lentBy?: string;
 };
 
 // Every context that resolves through the table reads a rule's target in a snapshot.
@@ -391,6 +393,7 @@ export function normalizeRewriteRuleConfigured(
   match: ItxExpression;
   target: ItxExpression | null;
   description?: string;
+  lentBy?: string;
   ifTarget?: ItxExpression | null;
 } {
   const matchPrefix = parseItxExpressionPrefix(payload.match);
@@ -398,7 +401,14 @@ export function normalizeRewriteRuleConfigured(
   // oxlint-disable-next-line iterate/simple-truthiness-check -- wire-fed: a present non-string (a number, an object) must be refused where the event is normalized, not coerced
   if (d && (typeof d !== "string" || d.length > 500))
     throw new Error("a rewrite rule's description is one line: a string of at most 500 chars");
+  const by = payload.lentBy;
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- wire-fed, as the description: a present non-string must be refused where the event is normalized, not coerced
+  if (by && (typeof by !== "string" || by.length > 200))
+    throw new Error(
+      "a rewrite rule's lentBy is the grant that lent it: a string of at most 200 chars",
+    );
   const description = payload.description ? { description: payload.description } : {};
+  const lender = payload.lentBy ? { lentBy: payload.lentBy } : {};
   if (matchPrefix[0] !== "itx")
     throw new Error(
       `a rewrite rule's match must be rooted at "itx" (every call starts there — ${JSON.stringify(print(matchPrefix))} could never match one)`,
@@ -436,7 +446,7 @@ export function normalizeRewriteRuleConfigured(
   // `ifTarget` is normalized as `target` is: the reduce compares it with the stored parsed target,
   // so a string `ifTarget` would never match.
   if (!("ifTarget" in payload))
-    return { match: matchPrefix, target: targetExpression, ...description };
+    return { match: matchPrefix, target: targetExpression, ...description, ...lender };
   // oxlint-disable-next-line iterate/simple-truthiness-check -- a PRESENT key with an undefined value (reachable over capnweb, never JSON) is malformed and refused loudly here; folding it into the null sentinel would silently turn a handle's undo into a mask-lift
   if (payload.ifTarget === undefined)
     throw new Error(
@@ -445,7 +455,7 @@ export function normalizeRewriteRuleConfigured(
   const ifTarget =
     // oxlint-disable-next-line iterate/simple-truthiness-check -- like `target` above: null is the explicit sentinel (compare against a masked, null-target row), distinct from a malformed empty-string ifTarget that normalization must still parse and reject
     payload.ifTarget === null ? null : normalizedItxExpression(payload.ifTarget, { holes: true });
-  return { match: matchPrefix, target: targetExpression, ...description, ifTarget };
+  return { match: matchPrefix, target: targetExpression, ...description, ...lender, ifTarget };
 }
 
 // Yes when it removes or changes a name that already answered here; no when it only adds a new name
@@ -805,6 +815,7 @@ export async function describeRewriteRules(args: {
     match: print(rule.match),
     target: rule.target && print(rule.target, { holes: true }),
     description: rule.description,
+    lentBy: rule.lentBy,
     context: ownPath,
   }));
   const claimed = new Set(own.map((row) => row.match));
