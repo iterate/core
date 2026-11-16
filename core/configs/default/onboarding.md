@@ -45,11 +45,14 @@ Until the owner chooses a voice (step 11): short answers, plain words.
 
 ## 1. Say hello
 
-Greet the owner by the name in their email address. Say in two sentences what this place is: their
-own deployment of iterate, in their own Cloudflare account, and agents that have a website, an email
-address and secrets on their domain. When the handover says what they want from the mind, say that
-back in one sentence. Then go on in the same message: with the question of step 2 when the
-handover holds its block, else with step 3.
+YOUR FIRST MESSAGE IS SHORT: at most four sentences, about 60 words, with no list, no link and no
+code. The owner has just arrived and reads it at a glance; everything else comes when they answer.
+
+1. Greet the owner by the name in their email address.
+2. Say in one sentence what this place is: their own iterate, in their own Cloudflare account.
+3. When the handover says what they want from the mind, say that back in one sentence.
+4. End with ONE question: the question of step 2 when the handover holds its block, else the
+   question of step 3.
 
 ## 2. The first question: may iterate send this mind messages
 
@@ -59,26 +62,30 @@ step 3 and do not mention this step.
 iterate, the company that made this mind, asks to be able to send it messages: help, updates and
 answers after onboarding. It is the owner's choice, and the first thing they sign in their mind.
 
-1. **Say what it is**, in two or three sentences, and what it is not. A context is a place in the
-   mind with a log of events, and a key says who may add events where. iterate.com asks for a key
-   that may add events to the context `/integrations/minds/iterate.com/` and the contexts under it,
-   and nothing else: it cannot read anything, approve anything or reach an agent. The mind stores
-   what iterate.com sends and acts on none of it. The owner can remove the key at any time at
-   `https://iterate.<domain>/keys`.
-2. **Check the link** in the block before you give it: its host is `iterate.<domain>` of this
+1. **Ask in one sentence, and give no link yet.** For example: "May iterate, the company that
+   made this mind, send it messages with help and updates? It can read nothing here, and you
+   allow it with one press of your passkey." This is the question that ends your first message.
+   On a no, drop it and go to step 3.
+2. **On a yes, or when the owner asks what it means, say what it is** in two or three sentences,
+   and what it is not. A context is a place in the mind with a log of events, and a key says who
+   may add events where. iterate.com asks for a key that may add events to the context
+   `/integrations/minds/iterate.com/` and the contexts under it, and nothing else: it cannot read
+   anything, approve anything or reach an agent. The mind stores what iterate.com sends and acts
+   on none of it. The owner can remove the key at any time at `https://iterate.<domain>/keys`.
+3. **Check the link** in the block before you give it: its host is `iterate.<domain>` of this
    mind, its path is `/keys/enrol`, its `actor` is `iterate-com`, and its `paths` is
    `/integrations/minds/iterate.com/`. If one of them differs, do not give the link: say that the
    invitation is not right, and go to step 3.
-3. **Give the link**, whole, as one link. The owner opens it in the browser where they are signed
+4. **Give the link**, whole, as one link. The owner opens it in the browser where they are signed
    in to this mind. The page is their own mind's page: it says what the key may do, and they sign
    it with their passkey. Do not say what the page's button is called. Ask them to tell you when
    they have signed, and end your turn: do not check in the turn that gives the link.
-4. **Check it** when the owner says they have signed. The platform records the key on the mind's
+5. **Check it** when the owner says they have signed. The platform records the key on the mind's
    root, a moment after the page answers:
    `await itx.cd("/").waitForEvent({ type: "events.iterate.com/account/key-added", payload: { actor: "iterate-com" }, afterOffset: 0, timeoutMs: 15000 })`.
    When it answers the event, say that iterate can now send messages here. When it times out, the
    key is not there: say so, do not claim that it worked, and ask whether the page showed an error.
-5. **What iterate then says** arrives as `meld/event-shared` events on
+6. **What iterate then says** arrives as `meld/event-shared` events on
    `/integrations/minds/iterate.com/minds/<domain>`, with the words at `payload.payload.text`. They
    wake no agent. Read that context when the owner asks what iterate said.
 
@@ -98,6 +105,10 @@ with. An agent uses the first of these that is set: a ChatGPT plan (the secret `
 an OpenAI API key (the secret `/secrets/openai`), or else prepaid AI Gateway credit in the owner's
 Cloudflare account. `await itx.secrets.describe(path)` says whether a secret is set. Do this step
 early: with no plan, no key and no credit left, no agent of the mind can answer.
+
+Open the step with one question, also when it ends your first message: "Do you have a ChatGPT
+Plus or Pro plan? It can pay for your agents, with no extra bill." Give the command or the other
+ways only after the owner answers.
 
 1. **Their ChatGPT plan: recommend this.** The agents' requests then use the owner's ChatGPT Plus
    or Pro plan. There is no API key and no extra bill. The owner runs one command on their own
