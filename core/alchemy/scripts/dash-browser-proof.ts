@@ -34,10 +34,9 @@ const HEAVY = [
   "integrations-page",
   "mcp-connect",
 ];
-/** The sidebar, in its order: the agents' "View all", the Dash's pages, then the Apps, then the
- *  Access rows. */
+/** The sidebar, in its order: the Dash's pages, then the Apps, then the Access rows, and last the
+ *  agents' "View all". */
 const SIDEBAR = [
-  "View all",
   "Home",
   "Contexts",
   "Config repo",
@@ -51,6 +50,7 @@ const SIDEBAR = [
   "Keys",
   "Members",
   "Self-test",
+  "View all",
 ];
 
 const domain = process.argv[2];
@@ -222,7 +222,7 @@ try {
   });
 
   await run(
-    "the sidebar lists the agents, then the pages, the Apps and the Access rows; Analytics says Off",
+    "the sidebar lists the pages, the Apps and the Access rows, then the agents; Analytics says Off",
     async () => {
       const sidebar = page.locator('[data-slot="sidebar"]');
       const names = (
