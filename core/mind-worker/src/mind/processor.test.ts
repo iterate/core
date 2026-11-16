@@ -95,6 +95,37 @@ test("a template commit that a newer commit replaced is not said so, and neither
   ]);
 });
 
+test("a publication keeps the entry module's files after its probe passed and before it appends the pointer", async () => {
+  const mind = mindOf({ owes: true, head: "seed", probed: aConfig });
+  mind.deliver(mind.state);
+  await mind.settled();
+  expect({
+    published: mind.published,
+    facts: mind.platformFacts.map((fact) => fact.type),
+  }).toEqual({
+    published: ["files", "identity worker.ts", "probe", "keep worker.ts", "append"],
+    facts: [
+      "events.iterate.com/itx/rewrite-rule-configured",
+      "events.iterate.com/itx/rewrite-rule-configured",
+      "events.iterate.com/mind/worker-updated",
+    ],
+  });
+});
+
+test("a publication whose probe is refused keeps nothing", async () => {
+  const mind = mindOf({
+    owes: true,
+    head: "seed",
+    probed: { ...aConfig, configEntrypoint: false },
+  });
+  mind.deliver(mind.state);
+  await mind.settled();
+  expect(mind).toMatchObject({
+    published: ["files", "identity worker.ts", "probe", "append"],
+    platformFacts: [{ type: "events.iterate.com/mind/worker-update-failed" }],
+  });
+});
+
 /** A created mind on `/`, seeded from an older template and untouched since, and the processor
  *  with everything it reaches recorded. `owes`: its newest commit is not published yet. `head`:
  *  the commit main is at when a publication looks (by default another one: main moved on). */
@@ -214,14 +245,19 @@ function mindOf({
   owes,
   head = "another commit",
   there = {},
+  probed = {},
 }: {
   owes: boolean;
   head?: string;
+  /** What the publication's probe answers: by default nothing of a config, so it is refused. */
+  probed?: unknown;
   /** What the root holds already under the daily refresh's key and name. The schedule is the
    *  mind's own, every six hours; `failed`: its last fire failed, so it is parked. */
   there?: { schedule?: true | "failed"; row?: true };
 }) {
   const asked: string[] = [];
+  /** What the publication asked of its publisher, in order. */
+  const published: string[] = [];
   const committed: unknown[] = [];
   const facts: StreamEventInput[] = [];
   const platformFacts: StreamEventInput[] = [];
@@ -314,12 +350,23 @@ function mindOf({
     // by default main moved on: the publication is refused, which is an outcome like any other.
     // A commit that main is at does not load here: the probe below answers nothing of a config.
     head: async () => head,
-    files: async () => seeded,
-    identityOf: async () => "identity",
-    probe: async () => ({}),
+    files: async () => {
+      published.push("files");
+      return seeded;
+    },
+    identityOf: async (_files, mainModule) => {
+      published.push(`identity ${mainModule}`);
+      return "identity";
+    },
+    probe: async () => {
+      published.push("probe");
+      return probed;
+    },
+    keepModules: async (_files, mainModule) => void published.push(`keep ${mainModule}`),
     // The platform's fact lands on `/` and is delivered to this processor before the publication's
     // own work returns: the order a root's log gives.
     appendAsPlatform: async (...events: StreamEventInput[]) => {
+      published.push("append");
       platformFacts.push(...events);
       asked.push("publication:outcome delivered while it runs");
       deliver({ ...state, unpublishedCommits: [], lastPublicationFactOffset: 6 });
@@ -343,6 +390,7 @@ function mindOf({
   return {
     state,
     asked,
+    published,
     committed,
     facts,
     platformFacts,
@@ -367,3 +415,6 @@ function mindOf({
 }
 
 type ItxScope = ConstructorParameters<typeof MindProcessor>[0];
+
+// what the probe answers of a config whose entry is an IterateConfigEntrypoint that constructs
+const aConfig = { configEntrypoint: true, constructError: null, classes: {} };

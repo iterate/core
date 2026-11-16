@@ -191,13 +191,11 @@ export async function prepareConfinedWorker(
     const producer = normalizedItxExpression(source);
     let producedKey: Promise<string> | undefined;
     sourceKey = () =>
-      (producedKey ||= sha256Hex(
-        JSON.stringify(
-          opts.moduleIdentity
-            ? [LOADED_CODE_FORMAT, named, mainModule]
-            : [opts.owner, named, producer],
-        ),
-      ).then((hash) => `produced-modules-2/${hash}`));
+      (producedKey ||= opts.moduleIdentity
+        ? keptModulesKey(opts.moduleIdentity, mainModule)
+        : sha256Hex(JSON.stringify([opts.owner, named, producer])).then(
+            (hash) => `produced-modules-2/${hash}`,
+          ));
     getModules = async () => {
       const kvKey = await sourceKey();
       const own = kept?.get(kvKey);
@@ -442,6 +440,24 @@ function keepInKv(
   keepsInFlight.add(kvKey);
   const kept = (async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
+    await putKept(opts, kvKey, make, expiresAt);
+  })().finally(() => keepsInFlight.delete(kvKey));
+  // a throw from `waitUntil` (no invocation to hold) must not fail the load
+  try {
+    waitUntil(kept);
+  } catch {
+    void kept;
+  }
+}
+
+// Never throws: a failed write is logged, and a load that finds nothing calls its producer.
+async function putKept(
+  opts: Pick<PrepareConfinedWorkerOptions, "owner" | "where">,
+  kvKey: string,
+  make: () => Promise<string | undefined>,
+  expiresAt: number,
+): Promise<void> {
+  try {
     const value = await make();
     if (!value) return;
     const bytes = new TextEncoder().encode(value).byteLength;
@@ -461,25 +477,23 @@ function keepInKv(
       expiration: expiresAt,
       metadata: { expiresAt } satisfies z.infer<typeof KeptMetadata>,
     });
-  })()
-    .catch((error: unknown) => {
-      // another isolate kept it within the second
-      if (/KV PUT failed: 429\b/.test(error instanceof Error ? error.message : String(error)))
-        console.info({
-          event: "worker-loader.module-cache-kept-elsewhere",
-          name: opts.owner,
-          where: opts.where,
-        });
-      else moduleCacheFailed(opts, "put")(error);
-    })
-    .finally(() => keepsInFlight.delete(kvKey));
-  // a throw from `waitUntil` (no invocation to hold) must not fail the load
-  try {
-    waitUntil(kept);
-  } catch {
-    void kept;
+  } catch (error) {
+    // another isolate kept it within the second
+    if (/KV PUT failed: 429\b/.test(error instanceof Error ? error.message : String(error)))
+      console.info({
+        event: "worker-loader.module-cache-kept-elsewhere",
+        name: opts.owner,
+        where: opts.where,
+      });
+    else moduleCacheFailed(opts, "put")(error);
   }
 }
+
+// Where a load under a module identity keeps the files its graph read, and looks for them first.
+const keptModulesKey = async (moduleIdentity: string, mainModule: string | undefined) =>
+  `produced-modules-2/${await sha256Hex(
+    JSON.stringify([LOADED_CODE_FORMAT, `module:${moduleIdentity}`, mainModule]),
+  )}`;
 
 // a change to `ResolvedMemo` is a new prefix
 async function resolvedMemoKey(source: string, mainModule: string | undefined): Promise<string> {
@@ -556,6 +570,37 @@ export async function moduleIdentityOf(
   where: string,
 ): Promise<string> {
   return identityOfResolved(await resolveModules(files, resolveOptions(where, mainModule)));
+}
+
+// The publisher keeps the graph of `mainModule` where a load under its identity reads it, so the
+// loads that follow a publication find it and do not each call the producer. It is one awaited
+// write in the caller's own call: no other request waits on it. It never throws: a resolve or a
+// write that fails is logged, the publication goes on, and a load calls its producer.
+export async function keepModulesOfIdentity(
+  files: WorkerModules,
+  mainModule: string,
+  where: string,
+): Promise<void> {
+  // owner "/": the mind's root context publishes
+  const publisher = { owner: "/", where };
+  const kept = (async () => {
+    const resolved = await resolveModules(files, resolveOptions(where, mainModule));
+    const kvKey = await keptModulesKey(await identityOfResolved(resolved), mainModule);
+    await putKept(publisher, kvKey, async () => JSON.stringify(resolved.files), aDayFromNow());
+  })().catch(moduleCacheFailed(publisher, "put"));
+  // A publication never waits on the cache for long: after ten seconds it goes on, the write
+  // goes on behind it, and the loads that come first call their producer.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"late">((resolve) => {
+    timer = setTimeout(() => resolve("late"), 10_000);
+  });
+  if ((await Promise.race([kept, late]).finally(() => clearTimeout(timer))) === "late")
+    console.warn({
+      event: "worker-loader.module-cache-keep-deadline",
+      name: "/",
+      where,
+      waitedMs: 10_000,
+    });
 }
 
 function identityOfResolved(resolved: ResolvedWorker): Promise<string> {

@@ -15,6 +15,8 @@ export type MindPublisher = {
   // throws when it does not resolve
   identityOf(files: RepoFiles, mainModule: string): Promise<string>;
   probe(files: RepoFiles, mainModule: string): Promise<unknown>;
+  // keeps the module's files where a load under its identity reads them; a failed write is logged
+  keepModules(files: RepoFiles, mainModule: string): Promise<void>;
   appendAsPlatform(...events: StreamEventInput[]): Promise<unknown>;
 };
 
@@ -22,7 +24,7 @@ export type MindPublisher = {
 // meets it again.
 export async function probedConfig(
   files: RepoFiles,
-  publisher: Pick<MindPublisher, "identityOf" | "probe">,
+  publisher: Pick<MindPublisher, "identityOf" | "probe" | "keepModules">,
 ): Promise<{ mainModule: string; modules: WorkerManifest["modules"] }> {
   const { entry } = readPackage(files, "the config repo");
   if (Object.hasOwn(files, PROBE_MODULE))
@@ -41,6 +43,9 @@ export async function probedConfig(
     throw new Error(
       `${entry}'s default export does not construct: ${answer.constructError} — every delivery and every request constructs it`,
     );
+  // Before the pointer is appended, so the isolates that load the new config read the files from KV
+  // and do not each ask the repo for the commit. A commit the probe refused keeps nothing.
+  await publisher.keepModules(files, entry);
   return {
     mainModule: entry,
     modules: Object.fromEntries(

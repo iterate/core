@@ -1,6 +1,6 @@
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import { contextAt, runningCause, type ItxEntrypointScope } from "core-itx";
-import { moduleIdentityOf } from "../context/worker-loader.ts";
+import { keepModulesOfIdentity, moduleIdentityOf } from "../context/worker-loader.ts";
 import { templates } from "../generated/config-templates.js";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { MindState } from "./contract.ts";
@@ -48,6 +48,8 @@ export class MindFacet extends StreamProcessorDurableObject<
       },
       identityOf: (files, mainModule) =>
         moduleIdentityOf(files, mainModule, `the config repo's ${mainModule}`),
+      keepModules: (files, mainModule) =>
+        keepModulesOfIdentity(files, mainModule, `the config repo's ${mainModule}`),
       probe: async (files, mainModule) => {
         using itx = this.getItx();
         return await itx.invoke([
