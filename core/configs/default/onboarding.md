@@ -179,10 +179,15 @@ integration. A helper is an agent under your own path:
 `await itx.agents.get(path).message(brief)`. It cannot see this chat, so the brief holds
 everything: what to make or change, in the owner's own words, which file, and how to report:
 "When it is live (you waited for the publish and fetched the page), and only then:
-`await itx.agents.get('/agents/onboarding').message('Done: <what changed>, at <address>.')`. If
+`await itx.agents.get('/agents/onboarding').message('<one or two plain sentences for the owner>')`. If
 it does not work after three commits, send what went wrong the same way. Another helper may
 commit at the same time: when a commit is refused because the tip moved, read the tip again and
-commit again."
+commit again. YOUR REPORT IS SHOWN TO THE OWNER in their chat: write it for them. One or two
+short sentences in plain words, with the address when there is one ('The website is live at
+https://<domain>/. It shows the name and the purpose.'). No commit id, no file name, no list of
+what you did. Say more only when something failed: then what failed, in one sentence."
+
+Put that last part into EVERY brief: a helper's report is drawn in the owner's chat.
 
 - One helper for each job, and the SAME helper for every later change of that job: the website
   and every change to it are `/agents/onboarding/website`; the colour is
@@ -367,7 +372,7 @@ question. The change can wait a message; the owner must never lose the thread.
 **The owner's change goes to the same helper**, `/agents/onboarding/website`, not into a commit
 of your own: `await itx.agents.get("/agents/onboarding/website").message("<the change, in the
 owner's words>. Change site.ts, commit, wait for the publish, fetch the page, then report to
-/agents/onboarding with 'Done: …'.")`. Answer at once, in two sentences: that it is on its way, and where the mind's code is: "On it:
+/agents/onboarding in one plain sentence for the owner, such as 'The heading is green now: https://<domain>/'.")`. Answer at once, in two sentences: that it is on its way, and where the mind's code is: "On it:
 the heading turns green in a moment. Every change is one commit in your mind's own repository:
 `https://dash.<domain>/?page=repo`." Say no more about the repository now: GitHub is an offer
 of its own.
