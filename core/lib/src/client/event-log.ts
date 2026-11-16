@@ -72,10 +72,15 @@ export type EventLogConnection = {
   dispose(): void;
 };
 
-/** Subscribe to a context's log and read it — the newest page (`"tail"`) or all of it (`"all"`). */
+/** Subscribe to a context's log and read it — the newest page (`"tail"`) or all of it (`"all"`).
+ *  `since`: the offset of the newest durable event the caller already holds. Within the newest
+ *  page, a `"tail"` read starts there and returns that event again: a caller that gets it back,
+ *  the same event, holds a copy that this read continues. Any other `since` reads the newest
+ *  page, as without it, and returns no such event: the caller's copy is too old, or of another
+ *  log (a context made again under the same path). `"all"` ignores it. */
 export function connectEventLog(
   itx: EventLogItx,
-  opts: { consumes: string[]; history: EventLogHistory },
+  opts: { consumes: string[]; history: EventLogHistory; since?: number },
 ): EventLogConnection {
   let disposed = false;
   let subscription: { [Symbol.dispose](): void } | undefined;
@@ -200,7 +205,17 @@ export function connectEventLog(
       const probe = await itx.readEvents(Number.MAX_SAFE_INTEGER, 1);
       if (disposed) return;
       head = Math.max(head, probe.scannedThroughOffset);
-      floor = Math.max(0, probe.scannedThroughOffset - PAGE);
+      const newestPage = Math.max(0, probe.scannedThroughOffset - PAGE);
+      const { since } = opts;
+      // a `since` at or below the newest page would leave a gap, and one above the head means
+      // the log is shorter than the caller's copy: both read the newest page
+      floor =
+        typeof since === "number" &&
+        Number.isSafeInteger(since) &&
+        since > newestPage &&
+        since <= probe.scannedThroughOffset
+          ? since - 1
+          : newestPage;
     }
     await readThrough(floor, Infinity);
     caughtUp = true;

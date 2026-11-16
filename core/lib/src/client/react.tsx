@@ -257,10 +257,18 @@ const LIVE_STATE_CONNECTING: LiveStateResult = {
  *  head (its `rev` the snapshot's offset). `liveState` OMITTED opens `core` plus every
  *  hosted facet in the processors table the hook holds, following the table as it loads and changes;
  *  `liveState` GIVEN is exactly the names to open, no implicit `core`. Re-connects when `itx`
- *  changes; unmount disposes every server-side subscription. */
+ *  changes; unmount disposes every server-side subscription. `since`, the offset of the newest
+ *  durable event a caller already holds (a copy kept over a reload or a reconnect), is read only
+ *  when the log connects: within the newest page the read starts there and returns that event
+ *  again, which tells the caller that its copy and this log are one (`connectEventLog`). */
 export function useIterateContext(
   itx: IterateContextHandle | undefined,
-  opts: { consumes?: string[]; liveState?: string[]; history?: EventLogHistory } = {},
+  opts: {
+    consumes?: string[];
+    liveState?: string[];
+    history?: EventLogHistory;
+    since?: number;
+  } = {},
 ): {
   events: StreamEvent[];
   caughtUp: boolean;
@@ -275,12 +283,19 @@ export function useIterateContext(
   const [log, setLog] = useState<{ itx: IterateContextHandle; connection: EventLogConnection }>();
   const consumesKey = JSON.stringify(opts.consumes || ["*"]);
   const history = opts.history || "tail";
+  // a caller passes the newest offset it holds, which grows with every event: the connect reads
+  // the newest value, but a changed `since` must never connect the log again
+  const sinceRef = useRef(opts.since);
+  useEffect(() => {
+    sinceRef.current = opts.since;
+  });
   useEffect(() => {
     setLog(undefined);
     if (!itx) return;
     const connection = connectEventLog(itx, {
       consumes: JSON.parse(consumesKey) as string[],
       history,
+      since: sinceRef.current,
     });
     setLog({ itx, connection });
     return () => connection.dispose();
