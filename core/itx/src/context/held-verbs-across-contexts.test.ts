@@ -1,4 +1,5 @@
 import { actOfText, actText, type ActRule, type GateAnswer } from "iterate/acts";
+import type { ItxExpression } from "iterate/expression";
 import { expect, test } from "vitest";
 import type { Caller } from "../caller.ts";
 import { defineItxHost } from "../host.ts";
@@ -115,6 +116,23 @@ test("a call by the stub's own invoke is the same act as a call by the lent name
     ran: ["/: send jo"],
   });
 });
+
+// Why the walk refuses these: ./dispatch.ts `FUNCTION_PROTOTYPE_CALLS`.
+test.for([
+  { name: "call", found: ["get", ["call", null, "k"]] },
+  { name: "apply", found: ["get", ["apply", null, ["k"]]] },
+  { name: "bind", found: ["get", ["bind", null, "k"], [""]] },
+] satisfies { name: string; found: ItxExpression }[])(
+  "a held verb's finder reached through the function's own $name runs nothing",
+  async ({ found }) => {
+    const mind = mindWith([{ verb: "itx.bridge.send" }]);
+
+    await expect(
+      mind.at("/").invoke(["itx", "rpcStubs", ...found, ["send", "jo"]]),
+    ).rejects.toMatchObject({ code: "NOT_A_METHOD" });
+    expect(mind).toMatchObject({ ran: [] });
+  },
+);
 
 test.for([
   { verb: "itx.shout", given: "jo", ran: "/: send loud jo" },

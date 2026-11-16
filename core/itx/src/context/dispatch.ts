@@ -37,10 +37,21 @@ export async function awaitAnswerReleasedIfRejected(answer: unknown): Promise<un
   }
 }
 
+// A local function's own `call`, `apply` and `bind` call it under a name that is not its step, so
+// no approval rule (./held-verbs.ts) or mask reads that call. A stub's or a handle's `call` is a
+// remote name, not one of these, and walks on (iterate/expression `RESERVED_SEGMENT_NAMES`).
+const FUNCTION_PROTOTYPE_CALLS: ReadonlySet<unknown> = new Set([
+  Function.prototype.apply,
+  Function.prototype.bind,
+  Function.prototype.call,
+]);
+
 // `constructor` would hand out the class itself.
 function stepGet(value: object, key: string): unknown {
   if (key === "__proto__" || key === "constructor" || key === "prototype") return undefined;
-  return Reflect.get(value, key);
+  const found = Reflect.get(value, key);
+  if (FUNCTION_PROTOTYPE_CALLS.has(found)) return undefined;
+  return found;
 }
 
 // Call with `Reflect.apply`, never `stub[m].apply(…)`: `.apply` on an RPC stub is a pipelined remote
