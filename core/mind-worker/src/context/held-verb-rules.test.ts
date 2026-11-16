@@ -25,20 +25,33 @@ test("a call while another call's read is in flight makes its own read, and neve
   expect(await second).toEqual([verb]);
 });
 
-test("a vault that cannot be reached stops no call and lifts no rule: the last rules stand", async () => {
+test("a vault that cannot be reached after a read stops no call and lifts no rule: the last rules stand", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const read = vi
+    .fn<() => Promise<{ rules: ActRule[] }>>()
+    .mockResolvedValueOnce({ rules: [verb] })
+    .mockRejectedValue(new Error("the vault is away"));
+  const rules = heldVerbRules(read, 5_000);
+  expect(await rules()).toEqual([verb]);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(await rules()).toEqual([verb]);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(await rules()).toEqual([verb]);
+});
+
+test("a vault that cannot be reached before the first read fails the call, and keeps no empty list: the next call reads again", async () => {
   vi.useFakeTimers();
   vi.spyOn(console, "error").mockImplementation(() => {});
   const read = vi
     .fn<() => Promise<{ rules: ActRule[] }>>()
     .mockRejectedValueOnce(new Error("the vault is away"))
-    .mockResolvedValueOnce({ rules: [verb] })
-    .mockRejectedValue(new Error("the vault is away"));
+    .mockResolvedValueOnce({ rules: [verb] });
   const rules = heldVerbRules(read, 5_000);
-  expect(await rules()).toEqual([]);
-  await vi.advanceTimersByTimeAsync(5_000);
+  await expect(rules()).rejects.toThrow("the vault is away");
+  // no time passes: an empty list kept for 5 s would let every held verb run
   expect(await rules()).toEqual([verb]);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(await rules()).toEqual([verb]);
+  expect(read).toHaveBeenCalledTimes(2);
 });
 
 test("the gate's answers are released when the kernel has read them: a rules read and an ask leave no session of the boundary open", async () => {

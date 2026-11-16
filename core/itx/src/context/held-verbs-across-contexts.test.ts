@@ -250,6 +250,19 @@ test("a subscription does not deliver to a verb that a rule holds across context
   await expect(mind.at("/").refuseHeldVerb(["itx", "agents", "list"])).resolves.toBeUndefined();
 });
 
+test("a gate whose rules cannot be read fails the call and the delivery: no verb runs, and no member is asked", async () => {
+  const mind = mindWith([{ verb: "itx.agents.delete" }]);
+  mind.gate.unread = new Error("the vault is away");
+
+  await expect(mind.at("/").invoke("itx.agents.delete", "/agents/one")).rejects.toThrow(
+    "the vault is away",
+  );
+  await expect(mind.at("/").refuseHeldVerb(["itx", "agents", "delete"])).rejects.toThrow(
+    "the vault is away",
+  );
+  expect({ ran: mind.ran, asks: mind.asked.length }).toEqual({ ran: [], asks: 0 });
+});
+
 // A mind of two contexts. The root's `itx.agents` is a facet of `/agents`, found with a spec: a
 // call of it is sent on to `/agents` and walked there, and the table there has no name `itx.agents`.
 const spec = { className: "AgentCollection" };
@@ -278,7 +291,7 @@ const tables: Record<string, ItxExpressionRewriteRule[]> = {
 };
 
 type Ask = { text: string; from?: string };
-type Gate = { rules: ActRule[]; asked: Ask[]; answer: (ask: Ask) => GateAnswer };
+type Gate = { rules: ActRule[]; unread?: Error; asked: Ask[]; answer: (ask: Ask) => GateAnswer };
 /** What the one host of this file reads: the gate of the test that runs. */
 let now: Gate = { rules: [], asked: [], answer: rejects };
 function rejects(): GateAnswer {
@@ -287,7 +300,10 @@ function rejects(): GateAnswer {
 defineItxHost({
   firstPartyFacets: {},
   acts: {
-    verbRules: async () => now.rules,
+    verbRules: async () => {
+      if (now.unread) throw now.unread;
+      return now.rules;
+    },
     ask: async ({ text, from }) => {
       now.asked.push({ text, from });
       return now.answer({ text, from });

@@ -31,7 +31,8 @@ export interface ItxHost {
   egress?(request: Request, from: { path: string }): Promise<Response>;
   /** THE GATE FOR ACTS (iterate/acts): with it, a call of a verb that an approval rule names
    *  waits until a member approves it (./context/held-verbs.ts). `verbRules` is asked on every
-   *  call a context resolves by its own table, so the host keeps it cheap. */
+   *  call a context resolves by its own table, so the host keeps it cheap. A host that does not
+   *  know the rules rejects, and the call fails: an empty list says that no verb is held. */
   acts?: {
     verbRules(): Promise<readonly ActRule[]>;
     ask(input: { text: string; from?: string; wait?: boolean }): Promise<GateAnswer>;
