@@ -6,3 +6,269 @@ body,
 #root {
   height: 100%;
 }
+
+/* THE FRAME: what index.html draws before the app has loaded, in the places where the app's shell
+   will draw the same parts, so that nothing moves when the app takes over. It is plain CSS on the
+   theme's variables, and holds no word.
+
+   THE NUMBERS ARE THE SHELL'S (@iterate-com/ui: components/ui/sidebar.tsx, components/app-shell.tsx
+   and components/dash): the sidebar is 16rem wide, or 3rem as a rail of icons; under 768px it is
+   out of sight and the page has a header row of 42px; an agent's page has a header row of 45px
+   with a rule under it (53px under 768px); a page's content is a column of 48rem. When a new
+   build of the components changes one, change it here.
+
+   index.html says the shape on the root element before the first paint: data-sidebar is "open"
+   or "collapsed", and data-page is "agent" on an agent's page. */
+.frame {
+  display: flex;
+  width: 100%;
+  height: 100svh;
+  background: var(--background);
+}
+/* each shape is an element with nothing in it */
+.frame :empty {
+  flex: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+}
+
+/* the sidebar: the mind's name and Search, some rows, and Collapse and the account at its foot */
+.frame-sidebar {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  width: 16rem;
+  border-right: 1px solid var(--sidebar-border);
+  background: var(--sidebar);
+}
+.frame-sidebar div {
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  height: 32px;
+}
+.frame-mind {
+  top: 8px;
+}
+.frame-sidebar .frame-mind {
+  height: 48px;
+}
+.frame-search {
+  top: 64px;
+}
+.frame-sidebar .frame-row {
+  right: auto;
+  left: 16px;
+  width: 55%;
+  height: 12px;
+}
+.frame-row:nth-of-type(3) {
+  top: 122px;
+}
+.frame-sidebar .frame-row:nth-of-type(4) {
+  top: 162px;
+  width: 30%;
+}
+.frame-sidebar .frame-row:nth-of-type(5) {
+  top: 194px;
+  width: 42%;
+}
+.frame-row:nth-of-type(6) {
+  top: 226px;
+}
+.frame-sidebar .frame-row:nth-of-type(7) {
+  top: 258px;
+  width: 36%;
+}
+.frame-sidebar .frame-row:nth-of-type(8) {
+  top: 290px;
+  width: 48%;
+}
+.frame-sidebar .frame-row:nth-of-type(9) {
+  top: 322px;
+  width: 40%;
+}
+.frame-sidebar .frame-row:nth-of-type(10) {
+  top: 354px;
+  width: 24%;
+}
+.frame-sidebar .frame-fold {
+  bottom: 70px;
+  height: 28px;
+}
+.frame-sidebar .frame-account {
+  bottom: 8px;
+  height: 54px;
+}
+/* the rail: each part is its icon's square */
+[data-sidebar="collapsed"] .frame-sidebar {
+  width: 3rem;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-mind,
+[data-sidebar="collapsed"] .frame-sidebar .frame-fold,
+[data-sidebar="collapsed"] .frame-sidebar .frame-account {
+  height: 32px;
+}
+[data-sidebar="collapsed"] .frame-search {
+  top: 48px;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-row {
+  width: 16px;
+  height: 16px;
+  margin-top: -10px;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-row:nth-of-type(3) {
+  margin-top: -18px;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-fold {
+  bottom: 48px;
+}
+
+.frame-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* the header row: an agent's page has one at any width, with the agent's path and its two tabs */
+.frame-header {
+  position: relative;
+  display: none;
+  flex: none;
+  box-sizing: border-box;
+  height: 45px;
+}
+.frame-header div {
+  position: absolute;
+  top: 12px;
+  height: 20px;
+}
+.frame-header .frame-button {
+  display: none;
+}
+.frame-path {
+  left: 16px;
+  width: min(14rem, 40%);
+}
+.frame-header .frame-tabs {
+  top: 6px;
+  right: 16px;
+  width: 115px;
+  height: 32px;
+}
+[data-page="agent"] .frame-header {
+  display: block;
+  border-bottom: 1px solid var(--border);
+}
+
+/* the page, in the content's column: the home's composer and its two sections, which the app
+   draws again in the same places until the page's own part has loaded (the components' DashPlaceholder); on an
+   agent's page, one line where the chat's first row will stand */
+.frame-page {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.frame-column {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 4rem 2rem 0;
+}
+.frame-composer {
+  height: 58px;
+}
+.frame-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-sizing: border-box;
+  height: 88px;
+  padding-top: 4px;
+}
+.frame-section div {
+  width: 7rem;
+  height: 12px;
+}
+.frame-section div + div {
+  width: 12rem;
+}
+.frame-section + .frame-section {
+  gap: 16px;
+  height: auto;
+}
+.frame-section .frame-card {
+  width: auto;
+  height: 68px;
+}
+.frame-column .frame-line {
+  display: none;
+  width: 9rem;
+  height: 12px;
+  margin: 4px 0;
+}
+[data-page="agent"] .frame-column {
+  padding: 1rem 1.5rem 0;
+}
+[data-page="agent"] .frame-composer,
+[data-page="agent"] .frame-section {
+  display: none;
+}
+[data-page="agent"] .frame-column .frame-line {
+  display: block;
+}
+
+/* under 768px: no sidebar, and a header row on every page with the sidebar's and Search's buttons */
+@media (max-width: 767px) {
+  .frame-sidebar {
+    display: none;
+  }
+  .frame-header {
+    display: block;
+    height: 42px;
+  }
+  .frame-header .frame-button {
+    top: 14px;
+    left: 16px;
+    display: block;
+    width: 20px;
+    height: 20px;
+  }
+  .frame-header .frame-button:nth-of-type(2) {
+    left: 56px;
+  }
+  .frame-header .frame-path,
+  .frame-header .frame-tabs {
+    display: none;
+  }
+  [data-page="agent"] .frame-header {
+    height: 53px;
+  }
+  [data-page="agent"] .frame-header .frame-button,
+  [data-page="agent"] .frame-header .frame-path {
+    top: 16px;
+  }
+  [data-page="agent"] .frame-header .frame-path {
+    left: 92px;
+    display: block;
+    width: 30%;
+  }
+  [data-page="agent"] .frame-header .frame-tabs {
+    display: block;
+    height: 40px;
+  }
+  .frame-column {
+    padding: 2rem 1rem 0;
+  }
+  .frame-composer {
+    height: 50px;
+  }
+  [data-page="agent"] .frame-column {
+    padding: 1rem 1rem 0;
+  }
+}

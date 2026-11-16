@@ -6,6 +6,9 @@
 // A PAGE OF YOUR OWN is a row with a component, which gets `{ itx, mind, principal, page, agents }`:
 //   import { Notes } from "./notes.js";
 //   { id: "notes", name: "Notes", icon: NotebookIcon, component: Notes },
+// The Dash draws before the mind has said who is signed in: `principal` is undefined until then.
+// A page or a wrapper of your own is mounted anew when the page's connection comes back, unless it
+// says `Notes.staysOverReconnect = true` (apps.md, "The Dash", says when that is right).
 // TO REPLACE A KIT PAGE, put your component in its row, under the same id. Each kit page is one
 // small component in @iterate-com/ui: copy it into this folder and change it there. Their source:
 //   https://github.com/iterate/packages/tree/main/packages/ui/src/components/dash (the Dash and
@@ -43,9 +46,10 @@ import {
   WaypointsIcon,
 } from "@iterate-com/ui/icons";
 
-// The member's itx, from this host's /itx (app.ts answers it), and who they are.
+// The member's itx, from this host's /itx (app.ts answers it): over the socket that index.html
+// dialled in its head, when it is there. Nothing here waits for the mind: the Dash draws at once,
+// in the frame that index.html drew, and asks the mind who is signed in.
 const itx = memberItx();
-const { principal } = await itx.whoami();
 const mind = mindOfHost();
 /** The stack's own pages (keys, members, approvals) are on this host of the mind. */
 const stack = `https://iterate.${mind}`;
@@ -104,7 +108,11 @@ const links = [
   { title: "Access", rows: access },
 ];
 
+// The sidebar for a person who has not toggled it yet: as index.html drew it in its frame (open,
+// or the rail of icons for a first arrival at the onboarding agent). A choice they made wins.
+const sidebarDefaultOpen = document.documentElement.dataset.sidebar !== "collapsed";
+
 render(
-  html`<${Dash} app="Dash" ...${{ itx, mind, principal, pages, links }} />`,
+  html`<${Dash} app="Dash" ...${{ itx, mind, pages, links, sidebarDefaultOpen }} />`,
   document.getElementById("root"),
 );

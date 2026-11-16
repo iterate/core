@@ -87,6 +87,13 @@ first in an agent's empty chat (`openers`). `Dash` and its
 pages are components of `@iterate-com/ui` (`components/dash`); a row can name a component of your
 own instead, and the file's header says how.
 
+**A page of your own, and a wrapper of your own around one of iterate's pages, is mounted anew
+each time the page's connection comes back** (a deploy cuts it several times a day): what it shows
+is drawn again, and a typed draft in it is lost. To keep them, say on the component that it stays,
+`Notes.staysOverReconnect = true`, and then open its contexts with `useHeldContext` and
+`useKeptContext` from `@iterate-com/ui/live`, which open them again by themselves. A wrapper that
+only draws around one of iterate's pages needs the one line alone.
+
 ## UI components in a page
 
 A page `fetch` serves can render iterate's own components (the stream viewer `ContextView`, buttons,

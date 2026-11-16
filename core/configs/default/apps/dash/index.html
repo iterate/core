@@ -1,9 +1,12 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-frame>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Dash</title>
+    <!-- The components' modules and stylesheet come from one other host: the connection to it
+         starts now, while the rest of this head is read. -->
+    <link rel="preconnect" href="https://esm.iterate.com" crossorigin />
     <!-- What the app is called and its icon: the mind's sign-in pages show both. -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
@@ -11,18 +14,47 @@
     <script type="importmap">
       {
         "imports": {
-          "@iterate-com/ui/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T182846Z-df8c3a9/",
-          "react": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T182846Z-df8c3a9/react",
-          "react/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T182846Z-df8c3a9/react/",
-          "react-dom": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T182846Z-df8c3a9/react-dom",
-          "react-dom/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T182846Z-df8c3a9/react-dom/",
+          "@iterate-com/ui/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T223329Z-cbb230e/",
+          "react": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T223329Z-cbb230e/react",
+          "react/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T223329Z-cbb230e/react/",
+          "react-dom": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T223329Z-cbb230e/react-dom",
+          "react-dom/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T223329Z-cbb230e/react-dom/",
           "lucide-react": "https://esm.iterate.com/lucide-react@1.48.0?external=react,react-dom"
         }
       }
     </script>
+    <!-- THE PAGE'S SOCKET, dialled here and not when the app's modules have loaded, which is a
+         second later: `memberItx` (@iterate-com/ui/live, in app.js) takes it for its first
+         session. Without this line the app dials for itself when it runs. It stands before the
+         stylesheets, because a script after a stylesheet waits for it. -->
+    <script>
+      try {
+        window.__itxSocket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
+      } catch {}
+    </script>
+    <!-- THE FRAME'S SHAPE, said before the first paint. The body draws the app's frame from HTML
+         and app.css alone, in the places the shell will draw it, so nothing moves when the app
+         takes over. These lines decide what the shell decides: the sidebar as the person left it
+         (the cookie `sidebar_state`, which the shell writes at each toggle), and whether the
+         page is an agent's, which has a header row. A first arrival at the onboarding agent, with
+         no choice stored, starts with the sidebar as a rail of icons, so the chat has the room:
+         app.js hands the Dash the same choice. `data-frame` on the root element tells the
+         components that the person's wait began with this frame. -->
+    <script>
+      {
+        const agent = new URLSearchParams(location.search).get("agent");
+        const left = /(?:^|; )sidebar_state=(true|false)/.exec(document.cookie)?.[1];
+        const open = left ? left === "true" : agent !== "/agents/onboarding";
+        document.documentElement.dataset.sidebar = open ? "open" : "collapsed";
+        if (agent) document.documentElement.dataset.page = "agent";
+      }
+    </script>
+    <!-- The stylesheet at the address the build serves it from: the shorter one answers with a
+         redirect to this one. `crossorigin`, so it comes over the connection the modules use. -->
     <link
       rel="stylesheet"
-      href="https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T182846Z-df8c3a9/styles.css"
+      crossorigin
+      href="https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T223329Z-cbb230e/dist/styles.css"
     />
     <!-- The look of this mind's apps: apps/theme.css, one file for every app. One line there
          makes them all dark. shadcn's components also ask for the class `dark`, so the script
@@ -40,7 +72,49 @@
     <script type="module" src="/live-reload.js" blocking="render"></script>
   </head>
   <body>
-    <div id="root"><p class="p-4 text-sm text-muted-foreground">Connecting…</p></div>
+    <!-- THE FRAME, until the app has drawn itself in its place: the sidebar, an agent page's header
+         row and the page's first shapes, with no word in it. app.css draws it and says where each
+         number comes from. React puts the app in #root, and so takes the frame out. -->
+    <div id="root">
+      <div class="frame" aria-busy="true" aria-label="Loading">
+        <div class="frame-sidebar" data-frame="sidebar">
+          <div class="frame-mind"></div>
+          <div class="frame-search"></div>
+          <div class="frame-row"></div>
+          <div class="frame-row"></div>
+          <div class="frame-row"></div>
+          <div class="frame-row"></div>
+          <div class="frame-row"></div>
+          <div class="frame-row"></div>
+          <div class="frame-row"></div>
+          <div class="frame-row"></div>
+          <div class="frame-fold"></div>
+          <div class="frame-account"></div>
+        </div>
+        <div class="frame-main">
+          <div class="frame-header" data-frame="header">
+            <div class="frame-button"></div>
+            <div class="frame-button"></div>
+            <div class="frame-path"></div>
+            <div class="frame-tabs"></div>
+          </div>
+          <div class="frame-page" data-frame="page">
+            <div class="frame-column">
+              <div class="frame-line"></div>
+              <div class="frame-composer"></div>
+              <div class="frame-section">
+                <div></div>
+                <div></div>
+              </div>
+              <div class="frame-section">
+                <div></div>
+                <div class="frame-card"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>
