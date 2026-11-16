@@ -1,6 +1,7 @@
 // What a mind's apps stand on (tasks/full-stack-apps.md): a repo holds bytes, a published config
-// imports its files, and the Agents app of the default config answers on agents.<domain>. A check
-// that needs a signed-in person is not here: scripts/apps-browser-proof.ts runs those in a browser.
+// imports its files, and the Dash of the default config, where every agent is, answers on
+// dash.<domain>. A check that needs a signed-in person is not here: scripts/dash-browser-proof.ts
+// runs those in a browser.
 import { randomBytes } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import type { RepoFileChange } from "iterate/api";
@@ -43,7 +44,7 @@ export async function appsChecks(domain: string): Promise<Check[]> {
   if (!token)
     return [
       {
-        check: "apps: bytes in a repo, files in a published config, the Agents app's host",
+        check: "apps: bytes in a repo, files in a published config, the Dash's host",
         pass: true,
         detail: "skipped: ITERATE_PROTOTYPE_TOKEN is not set",
       },
@@ -71,18 +72,14 @@ export async function appsChecks(domain: string): Promise<Check[]> {
     return commitOid;
   };
   const files = await repo().listFiles();
-  const hasAgentsApp = files.paths.includes("apps/agents/app.ts") && mounts("agents");
-  const withoutApp = {
+  const hasDash = files.paths.includes("apps/dash/app.ts") && mounts("dash");
+  const withoutDash = {
     pass: true,
-    detail: "skipped: this mind's config does not mount apps/agents (an older or its own config)",
+    detail: "skipped: this mind's config does not mount apps/dash (an older or its own config)",
   };
-  const app = `https://agents.${domain}`;
-  const hasOnboardingApp = files.paths.includes("apps/onboarding/app.ts") && mounts("onboarding");
-  const withoutOnboardingApp = {
-    pass: true,
-    detail:
-      "skipped: this mind's config does not mount apps/onboarding (an older or its own config)",
-  };
+  const app = `https://dash.${domain}`;
+  // the onboarding agent's instructions, which a config that creates the agent has
+  const hasOnboarding = files.paths.includes("onboarding.md");
 
   return [
     await attempt(
@@ -119,8 +116,8 @@ export async function appsChecks(domain: string): Promise<Check[]> {
         });
       },
     ),
-    await attempt("hostnames: a signed-out page load of the Agents app signs in", async () => {
-      if (!hasAgentsApp) return withoutApp;
+    await attempt("hostnames: a signed-out page load of the Dash signs in", async () => {
+      if (!hasDash) return withoutDash;
       // the stand-in token is no bearer for a mind host: a member's page is the browser proof's
       const page = await ask(`${app}/`, {
         "sec-fetch-mode": "navigate",
@@ -135,9 +132,9 @@ export async function appsChecks(domain: string): Promise<Check[]> {
       };
     }),
     await attempt(
-      "hostnames: a socket to the Agents app's /itx with no session is the challenge",
+      "hostnames: a socket to the Dash's /itx with no session is the challenge",
       async () => {
-        if (!hasAgentsApp) return withoutApp;
+        if (!hasDash) return withoutDash;
         const answer = await handshake(`${app}/itx`, { origin: app });
         return {
           pass: answer.status === 401 && /realm="iterate"/.test(answer.challenge),
@@ -146,26 +143,13 @@ export async function appsChecks(domain: string): Promise<Check[]> {
       },
     ),
     await attempt(
-      "hostnames: a socket to the Agents app's /itx from another origin is refused",
+      "hostnames: a socket to the Dash's /itx from another origin is refused",
       async () => {
-        if (!hasAgentsApp) return withoutApp;
+        if (!hasDash) return withoutDash;
         const answer = await handshake(`${app}/itx`, { origin: `https://${domain}` });
         return { pass: answer.status === 403, detail: String(answer.status) };
       },
     ),
-    await attempt("hostnames: a signed-out page load of the onboarding app signs in", async () => {
-      if (!hasOnboardingApp) return withoutOnboardingApp;
-      const page = await ask(`https://onboarding.${domain}/`, {
-        "sec-fetch-mode": "navigate",
-        "sec-fetch-dest": "document",
-        accept: "text/html",
-      });
-      const toSignIn = page.location.startsWith(`${platformOriginOf(domain)}/oauth2/auth`);
-      return {
-        pass: page.status === 302 && toSignIn,
-        detail: `the page: ${page.status} to the issuer: ${toSignIn}`,
-      };
-    }),
     await attempt("hostnames: a signed-out page load of the docs app signs in", async () => {
       if (!files.paths.includes("apps/docs/app.ts") || !mounts("docs"))
         return {
@@ -184,9 +168,13 @@ export async function appsChecks(domain: string): Promise<Check[]> {
         detail: `the page: ${page.status} to the issuer: ${toSignIn}`,
       };
     }),
-    await attempt("agents: the onboarding app's agent exists", async () => {
-      if (!hasOnboardingApp) return withoutOnboardingApp;
-      // the root's `itx.agents` is the rule the Agents app's install writes, untyped here
+    await attempt("agents: the onboarding agent exists", async () => {
+      if (!hasOnboarding)
+        return {
+          pass: true,
+          detail: "skipped: this mind's config has no onboarding.md (an older or its own config)",
+        };
+      // the root's `itx.agents` is the rule `installAgents` writes, untyped here
       const { agents } = root() as unknown as { agents: { list(): Promise<{ path: string }[]> } };
       const listed = (await agents.list()).some((agent) => agent.path === "/agents/onboarding");
       return { pass: listed, detail: `/agents/onboarding listed: ${listed}` };

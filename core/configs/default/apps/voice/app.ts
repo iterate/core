@@ -18,7 +18,7 @@ export function voiceApp() {
       const url = new URL(request.url);
       // The page's own socket (public/app.js opens it): the member's itx.
       if (url.pathname === "/itx") return host.auth.itx(request);
-      // What @iterate-com/ui's shell asks of its host, as apps/agents/app.ts answers it: which
+      // What @iterate-com/ui's shell asks of its host, as `host.auth.memberPage` answers it: which
       // platform this page talks to, the one mind this app serves, and its "Sign out".
       const mind = url.hostname.split(".").slice(1).join(".");
       if (url.pathname === "/.auth/session.json") {

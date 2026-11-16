@@ -12,8 +12,8 @@ export function honouredNext(
   }
   // resolved first, so `//evil.example` and `/\evil.example` are judged by where they really go
   if (url.origin === issuer) return `${url.pathname}${url.search}${url.hash}`;
-  // A hostname of the mind (its domain, or a label under it) is the owner's own site: the
-  // onboarding app, the Agents app. The issuer is `iterate.<domain>`.
+  // A hostname of the mind (its domain, or a label under it) is the owner's own site: the Dash,
+  // the Docs app. The issuer is `iterate.<domain>`.
   const domain = new URL(issuer).hostname.split(".").slice(1).join(".");
   if (url.protocol === "https:" && (url.hostname === domain || url.hostname.endsWith(`.${domain}`)))
     return url.href;
@@ -85,7 +85,8 @@ const PLATFORM_NAMES = new Set([
   ...["connectToOpenApi", "connectToCapnweb", "connectToMcp", "repos", "workspaces", "sandboxes"],
   ...["files", "kv", "ai", "cfArtifacts", "r2", "secrets", "approvals", "browser", "images"],
   ...["email", "integrations", "url", "webhooks", "telemetry", "platformHook"],
-  // a row of the default config's Agents app, not a root: the mind's table refuses it for a key
+  // a row of the default config's agents (agents.ts), not a root: the mind's table refuses it for a
+  // key
   "agents",
 ]);
 

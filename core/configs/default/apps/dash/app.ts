@@ -7,6 +7,8 @@
 import { serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
 import theme from "../theme.css";
 import { CLOUD_SCOPES } from "../../cloud-scopes.ts";
+// oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
+import liveReload from "../live-reload/";
 import { openFile } from "../open-files.ts";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
@@ -26,8 +28,11 @@ export function dashApp() {
       // its host: which platform this page talks to, the one mind this app serves, its "Sign out".
       const page = host.auth.memberPage(request);
       if (page) return page;
-      // the app's own files, and the one theme file that every app of this mind shares
-      return serveFiles(request, { index, files: { ...files, "theme.css": theme } });
+      // the app's own files, and the two files that every app of this mind shares
+      return serveFiles(request, {
+        index,
+        files: { ...files, ...liveReload, "theme.css": theme },
+      });
     },
   };
 }

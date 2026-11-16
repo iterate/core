@@ -1,5 +1,6 @@
 // The default config's Dash, in a browser, as a signed-in member: each page of it on a deployed
-// stack, drawn by the pinned build of @iterate-com/ui.
+// stack, drawn by the pinned build of @iterate-com/ui. It starts an agent from the home, with one
+// message, and follows it into the agent view, the raw view, the sidebar, the Agents page and ⌘K.
 //
 //   node scripts/dash-browser-proof.ts <domain>
 // ITERATE_PROOF_FIRST_OWNER_TICKET  a first owner's ticket: the member signs in at /keys/first
@@ -22,8 +23,10 @@ import { platformOriginOf } from "iterate/mind-api";
 import { z } from "zod";
 import { addPasskey, authenticator, touched } from "./proof-passkeys.ts";
 
-/** The kit's parts that only their own page loads: the overview loads none of them. */
+/** The kit's parts that only their own page loads: the home loads none of them, and of the
+ *  agent's parts only the composer. */
 const HEAVY = [
+  "components/agent-chat/agent-chat",
   "repo-ide",
   "context-explorer",
   "analytics-page",
@@ -31,17 +34,17 @@ const HEAVY = [
   "integrations-page",
   "mcp-connect",
 ];
-/** The sidebar, in its order: the Dash's pages, then the Apps, then the Access rows. */
+/** The sidebar, in its order: the agents' "View all", the Dash's pages, then the Apps, then the
+ *  Access rows. */
 const SIDEBAR = [
-  "Overview",
+  "View all",
+  "Home",
   "Contexts",
   "Config repo",
   "Secrets",
   "Integrations",
   "Analytics",
   "MCP",
-  "Agents",
-  "Onboarding",
   "Docs",
   "Voice",
   "Approvals",
@@ -108,6 +111,16 @@ page.on("response", (response) => {
   responses.push(response.url());
   if (response.status() >= 400) problems.push(`${response.status()} ${response.url()}`);
 });
+const sockets: { url: string; closed: boolean }[] = [];
+page.on("websocket", (socket) => {
+  const seen = { url: socket.url(), closed: false };
+  sockets.push(seen);
+  socket.on("close", () => (seen.closed = true));
+});
+/** What the run says to its new agent, the agent it started, and the member's address. */
+const said = `Say the word pineapple and nothing else. (${crypto.randomUUID().slice(0, 8)})`;
+let agent = "";
+let member = "";
 
 let step = 0;
 let failed = 0;
@@ -115,6 +128,9 @@ let failed = 0;
  *  body throws, or when the page had an error or a failed request while it ran. */
 async function run(title: string, body: () => Promise<string>) {
   step += 1;
+  // each step starts with no dialog open, so a step that failed with ⌘K open takes no other along
+  for (let tries = 0; tries < 3 && (await page.getByRole("dialog").count()); tries += 1)
+    await page.keyboard.press("Escape");
   const before = problems.length;
   let line: string;
   let pass = false;
@@ -184,49 +200,245 @@ try {
   if (failed) throw new Error("no member's session: the Dash's steps cannot run");
 
   await run(
-    "iterate.<domain>/ leads to the Dash's overview, signed in, with the member's address",
+    "iterate.<domain>/ leads to the Dash's home, signed in: the composer and what waits",
     async () => {
       responses.length = 0;
       await page.goto(`${issuer}/`);
       await page.waitForURL((url) => url.origin === dash, { timeout: 30_000 });
-      await page.getByRole("heading", { name: "The mind" }).waitFor({ timeout: 45_000 });
-      const words = (await page.locator("header p").first().innerText()).replace(/\s+/g, " ");
-      const address = /Signed in as (\S+@\S+?)\./.exec(words)?.[1];
-      must(address, `the overview says: ${words}`);
-      const heading = await page.locator("h1").first().innerText();
-      must(heading === domain, `the overview's heading is ${heading}`);
+      await page.getByPlaceholder("Message a new agent").waitFor({ timeout: 45_000 });
+      await page.getByRole("heading", { name: "Waiting for you" }).waitFor();
       // a marker of this one document: a full load of the page loses it
       await page.evaluate("window.__dashProof = 1");
-      return `${page.url()} says "${words.slice(0, 80)}…"; the heading is ${heading}`;
+      return `${page.url()} shows the composer and "Waiting for you"`;
     },
   );
 
-  await run("the overview loads none of the kit's larger parts", async () => {
+  await run("the home loads none of the kit's larger parts", async () => {
     await page.waitForLoadState("networkidle");
     const heavy = responses.filter((url) => HEAVY.some((part) => url.includes(part)));
     const kit = responses.filter((url) => url.includes("esm.iterate.com")).length;
-    must(heavy.length === 0, `the overview loaded ${heavy.join(", ")}`);
+    must(heavy.length === 0, `the home loaded ${heavy.join(", ")}`);
     return `${kit} modules from esm.iterate.com, none of ${HEAVY.join(", ")}`;
   });
 
   await run(
-    "the sidebar lists the pages, the Apps and the Access rows; Analytics says Off",
+    "the sidebar lists the agents, then the pages, the Apps and the Access rows; Analytics says Off",
     async () => {
+      const sidebar = page.locator('[data-slot="sidebar"]');
       const names = (
-        await page
-          .locator('[data-slot="sidebar"] [data-slot="sidebar-menu-button"]')
-          .allInnerTexts()
+        await sidebar.locator('[data-slot="sidebar-menu-button"]').allInnerTexts()
       ).map((text) => text.trim());
       const listed = names.filter((name) => SIDEBAR.includes(name));
       must(
         JSON.stringify(listed) === JSON.stringify(SIDEBAR),
         `the sidebar lists ${names.join(", ")}`,
       );
-      const analytics = page
-        .locator('[data-slot="sidebar"] [data-slot="sidebar-menu-item"]')
+      // the Agents section is the sidebar's: the Agents page has no row of its own among the pages
+      await sidebar.getByText("Agents", { exact: true }).first().waitFor();
+      must(!names.includes("Agents"), "the Agents page has a row among the pages");
+      const analytics = sidebar
+        .locator('[data-slot="sidebar-menu-item"]')
         .filter({ hasText: "Analytics" });
       await analytics.getByText("Off", { exact: true }).waitFor({ timeout: 10_000 });
       return `${listed.join(", ")}; Analytics: Off`;
+    },
+  );
+
+  await run("the page's socket to /itx opens, stays open, and is the member's", async () => {
+    const socket = sockets.find((seen) => new URL(seen.url).pathname === "/itx");
+    must(socket, "the page opened no /itx socket");
+    must(!socket.closed, `${socket.url} closed`);
+    member = await page.evaluate(async (socketUrl) => {
+      const live = "@iterate-com/ui/live";
+      const { newWebSocketRpcSession } = await import(live);
+      const itx = newWebSocketRpcSession(new WebSocket(socketUrl));
+      try {
+        return String((await itx.whoami()).principal?.email || "");
+      } finally {
+        itx[Symbol.dispose]();
+      }
+    }, `wss://dash.${domain}/itx`);
+    must(member, "whoami named no email");
+    const foot = await page.locator('[data-slot="sidebar"]').innerText();
+    must(foot.includes(member.slice(0, 12)), `the sidebar does not show ${member}`);
+    return `${socket.url} is open; the sidebar shows ${member}`;
+  });
+
+  await run(
+    "a message from the home starts an agent in the member's folder, and its agent view shows",
+    async () => {
+      await page.getByPlaceholder("Message a new agent").fill(said);
+      await page.getByTitle("Send message").click();
+      await page.waitForURL((url) => url.searchParams.has("agent"), { timeout: 60_000 });
+      agent = new URL(page.url()).searchParams.get("agent") || "";
+      must(/^\/agents\/(people\/[^/]+\/)?web\//.test(agent), `the agent is ${agent}`);
+      must(searchOf() === `?agent=${agent}`, `the address is ${searchOf()}: its slashes read`);
+      const main = page.locator("main");
+      await main.getByText(said.slice(0, 30)).first().waitFor({ timeout: 30_000 });
+      // the agent view's own header row, drawn once its module has loaded
+      const pageHeader = page.locator("[data-page-header]");
+      await pageHeader.getByRole("link", { name: "Raw view" }).waitFor({ timeout: 30_000 });
+      const header = await pageHeader.innerText();
+      must(header.includes(agent.slice(0, 20)), `the header says ${header}`);
+      const raw = await pageHeader.getByRole("link", { name: "Raw view" }).getAttribute("href");
+      must(raw === `?page=contexts&context=${agent}`, `Raw view leads to ${raw}`);
+      const answered = await main
+        .getByText(/^pineapple\W*$/i)
+        .first()
+        .waitFor({ timeout: 60_000 })
+        .then(
+          () => "yes",
+          () => "not in 60 s",
+        );
+      return `${agent}; its header and Raw view link; answered: ${answered}`;
+    },
+  );
+
+  await run(
+    "the log says how it came: what the page appends is the member's through dash.<domain>, and the words are on their behalf",
+    async () => {
+      must(agent, "no agent was started");
+      const type = `proof/said-${crypto.randomUUID().slice(0, 8)}`;
+      const events = await page.evaluate(
+        async ([agentPath, eventType, socketUrl]) => {
+          // the page's own modules, through its import map: a second session of the same member
+          const live = "@iterate-com/ui/live";
+          const { newWebSocketRpcSession } = await import(live);
+          const itx = newWebSocketRpcSession(new WebSocket(socketUrl));
+          try {
+            await itx.cd(agentPath).append({ type: eventType, payload: { said: "from the page" } });
+            return JSON.stringify((await itx.cd(agentPath).readEvents(0, 500)).events);
+          } finally {
+            // the session ends first, then its socket: a close of the socket alone leaves capnweb
+            // to send the releases of its stubs on a closed socket, which the console reports
+            itx[Symbol.dispose]();
+          }
+        },
+        [agent, type, `wss://dash.${domain}/itx`] as const,
+      );
+      const log = z
+        .array(
+          z.looseObject({
+            type: z.string(),
+            payload: z.looseObject({ message: z.unknown().optional() }).optional(),
+            source: z.record(z.string(), z.unknown()).optional(),
+          }),
+        )
+        .parse(JSON.parse(events));
+      const Source = z.looseObject({
+        principal: z.looseObject({ email: z.string().optional() }).optional(),
+        via: z.looseObject({ appPage: z.string().optional() }).optional(),
+        call: z.string().optional(),
+        grant: z.unknown().optional(),
+      });
+      const mine = Source.parse(log.find((event) => event.type === type)?.source || {});
+      must(
+        mine.via?.appPage === `dash.${domain}` && mine.principal?.email === member && mine.grant,
+        `the page's event: ${JSON.stringify(mine)}`,
+      );
+      const words = log.find(
+        (event) =>
+          event.type === "events.iterate.com/agent/message-received" &&
+          JSON.stringify(event.payload?.message ?? "").includes(said.slice(0, 30)),
+      );
+      const source = z
+        .looseObject({ onBehalfOf: Source.optional(), principal: z.unknown().optional() })
+        .parse(words?.source || {});
+      const asked = source.onBehalfOf;
+      must(
+        asked?.principal?.email === member &&
+          asked.via?.appPage === `dash.${domain}` &&
+          asked.call === "/agents#agents.get.message" &&
+          !source.principal,
+        `the words' source: ${JSON.stringify(source)}`,
+      );
+      const label = await page.locator("[data-said-by]").first().innerText({ timeout: 15_000 });
+      must(
+        label.includes(member) && label.includes(`via dash.${domain}`),
+        `the label under the message says ${label}`,
+      );
+      return `the page's event and the words name ${member} via dash.${domain}; the chat's label says "${label}"`;
+    },
+  );
+
+  await run(
+    "Raw view opens the agent's log on the Contexts page, and Agent view leads back",
+    async () => {
+      must(agent, "no agent was started");
+      await page.getByRole("link", { name: "Raw view" }).click();
+      must(searchOf() === `?page=contexts&context=${agent}`, `at ${page.url()}`);
+      await page.locator("[data-offset]").first().waitFor({ timeout: 30_000 });
+      await page.getByRole("link", { name: "Agent view" }).click();
+      must(searchOf() === `?agent=${agent}`, `back at ${page.url()}`);
+      await page.getByText(said.slice(0, 30)).first().waitFor();
+      return `${agent}: its log, then its chat again`;
+    },
+  );
+
+  await run(
+    "the sidebar lists the new agent, and View all is the Agents page with it",
+    async () => {
+      must(agent, "no agent was started");
+      const sidebar = page.locator('[data-slot="sidebar"]');
+      await sidebar.locator(`[data-agent-path="${agent}"]`).waitFor({ timeout: 30_000 });
+      await row("View all").click();
+      must(searchOf() === "?page=agents", `at ${page.url()}`);
+      await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+      await page.locator(`main [data-agent-path="${agent}"]`).first().waitFor({ timeout: 30_000 });
+      return `${agent} in the sidebar and on ?page=agents`;
+    },
+  );
+
+  await run(
+    "⌘K opens on the Agents tab, finds the new agent by its path, and opens it",
+    async () => {
+      must(agent, "no agent was started");
+      await page.keyboard.press("Control+k");
+      const palette = page.getByRole("dialog");
+      const selected = await palette
+        .getByRole("tab", { name: "Agents" })
+        .getAttribute("aria-selected");
+      must(selected === "true", `the Agents tab is selected: ${selected}`);
+      await palette.locator("input").fill(agent.split("/").at(-1)!);
+      await palette.getByText(agent).first().waitFor();
+      await page.keyboard.press("Enter");
+      await page.waitForURL((url) => url.searchParams.get("agent") === agent);
+      return `found by ${agent.split("/").at(-1)}; Enter opened ${searchOf()}`;
+    },
+  );
+
+  await run("⌘K's Raw contexts tab finds any context, and Enter opens its raw view", async () => {
+    await page.keyboard.press("Control+k");
+    const palette = page.getByRole("dialog");
+    await palette.getByRole("tab", { name: "Raw contexts" }).click();
+    await palette.locator("input").fill("integrations");
+    await palette.getByRole("option").first().waitFor();
+    await page.keyboard.press("Enter");
+    await page.waitForURL((url) => url.searchParams.get("page") === "contexts");
+    return `Enter opened ${decodeURIComponent(searchOf())}`;
+  });
+
+  await run(
+    "/ in ⌘K completes a path one segment at a time, and Enter opens the raw view",
+    async () => {
+      await page.keyboard.press("Control+k");
+      const palette = page.getByRole("dialog");
+      const input = palette.locator("input");
+      await input.fill("/ag");
+      await palette
+        .getByText(/completes/)
+        .first()
+        .waitFor();
+      await palette.getByRole("option").filter({ hasText: "/agents/" }).first().waitFor();
+      await page.keyboard.press("Tab");
+      const completed = await input.inputValue();
+      must(completed === "/agents/", `Tab made ${completed}`);
+      await palette.getByRole("option").first().waitFor();
+      await page.keyboard.press("Enter");
+      await page.waitForURL(
+        (url) => url.searchParams.get("context")?.startsWith("/agents/") === true,
+      );
+      return `/ag, Tab: ${completed}; Enter opened ${searchOf()}`;
     },
   );
 
@@ -252,15 +464,14 @@ try {
       async ([eventType, socketUrl]) => {
         const live = "@iterate-com/ui/live";
         const { newWebSocketRpcSession } = await import(live);
-        const socket = new WebSocket(socketUrl);
-        const itx = newWebSocketRpcSession(socket);
+        const itx = newWebSocketRpcSession(new WebSocket(socketUrl));
         try {
           await itx.cd("/").append({ type: eventType, payload: { said: "the Dash's proof" } });
           return "appended";
         } catch (error) {
           return `refused: ${String(error).slice(0, 200)}`;
         } finally {
-          socket.close();
+          itx[Symbol.dispose]();
         }
       },
       [type, `wss://dash.${domain}/itx`] as const,
@@ -279,7 +490,7 @@ try {
       const item = (path: string) => page.locator(`[role="treeitem"][data-item-path="${path}"]`);
       await item("agent-kinds/").waitFor({ timeout: 45_000 });
       await item("apps/").waitFor();
-      // a person's click on the file's row, under apps/dash/public (apps/agents/public has one too)
+      // a person's click on the file's row, under apps/dash/public
       const file = "apps/dash/public/app.js";
       await item(file).click();
       await page.waitForURL((url) => url.searchParams.get("view")?.includes(file) === true);
@@ -328,6 +539,10 @@ try {
   });
 
   await run("Back and Forward move between the pages with no full load", async () => {
+    for (const name of ["Integrations", "MCP", "Analytics"]) {
+      await row(name).click();
+      await page.waitForURL((url) => url.searchParams.get("page") === name.toLowerCase());
+    }
     const visited: string[] = [];
     for (const move of ["back", "back", "forward"] as const) {
       await (move === "back" ? page.goBack() : page.goForward());
@@ -355,6 +570,35 @@ try {
       `shown: ${loading ? "Loading the page… " : ""}${reading ? "Reading the mind…" : ""}`,
     );
     return "Integrations, then MCP: neither showed a note on the way";
+  });
+  await run(
+    "a page of another origin cannot open the Dash's /itx with the member's cookie",
+    async () => {
+      const other = await context.newPage();
+      await other.goto(`https://${domain}/`, { waitUntil: "domcontentloaded" });
+      const crossOrigin = await other.evaluate(
+        (url) =>
+          new Promise<string>((resolve) => {
+            const socket = new WebSocket(url);
+            socket.addEventListener("open", () => resolve("opened"));
+            socket.addEventListener("error", () => resolve("refused"));
+            setTimeout(() => resolve("no answer in 10 s"), 10_000);
+          }),
+        `wss://dash.${domain}/itx`,
+      );
+      await other.close();
+      must(crossOrigin === "refused", crossOrigin);
+      return "refused";
+    },
+  );
+
+  await run("a plain request for /itx is no session and carries no serve header", async () => {
+    const plain = await context.request.get(`${dash}/itx`, { maxRedirects: 0 });
+    must(
+      plain.status() === 426 && !("x-iterate-serve" in plain.headers()),
+      `${plain.status()}; header present: ${"x-iterate-serve" in plain.headers()}`,
+    );
+    return "426, no serve header";
   });
 } catch (error) {
   console.log(`stopped: ${error instanceof Error ? error.message : String(error)}`);

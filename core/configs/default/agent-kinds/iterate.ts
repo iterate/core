@@ -1,6 +1,6 @@
 // agent-kinds/iterate.ts — iterate's own agents as a kind (AGENTS.md, "Kinds of agent"). Their
 // server half is the platform's (`installAgents(itx)` in worker.ts), and their chat is iterate's
-// AgentChat, which the Agents app runs in a sandboxed frame with the agent's log.
+// AgentChat, which the Dash's agent view runs in a sandboxed frame with the agent's log.
 import type { AgentKind } from "@iterate-com/ui/agent-kind-view";
 
 export default {

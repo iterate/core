@@ -1,18 +1,24 @@
 // app.js — THE DASH'S PAGE: the mind seen from above. This file is the CONTENTS: which pages
-// there are and in what order, their names, icons and words, the apps and the pages about access
-// it links to, and the overview's words. `Dash` from @iterate-com/ui draws them: the sidebar and
-// the overview's cards come from the one list `pages`, the URL says which page is shown
-// (`?page=<id>`; none: the first), and every page shows what waits for a member's yes.
+// there are and in what order, their names and icons, the apps and the pages about access it links
+// to. `Dash` from @iterate-com/ui draws them: the sidebar comes from the one list `pages`,
+// the URL says which page is shown (`?page=<id>`; none: the first), and every page shows what
+// waits for a member's yes.
 //
-// A PAGE OF YOUR OWN is a row with a component, which gets `{ itx, mind, principal, page }`:
+// TWO IDS MEAN MORE TO THE DASH. The page with id `agents` is the Agents page: the sidebar lists
+// the most recently active agents above the pages, `?agent=<path>` shows any context as an agent
+// there, and ⌘K searches the agents first. The page with id `contexts` is the raw view of any
+// context, which ⌘K opens for a path (type "/").
+//
+// A PAGE OF YOUR OWN is a row with a component, which gets `{ itx, mind, principal, page, agents }`:
 //   import { Notes } from "./notes.js";
-//   { id: "notes", name: "Notes", icon: NotebookIcon, about: "What we wrote down.", component: Notes },
-// TO REPLACE A KIT PAGE, put your component in its row. Each kit page is one small component in
-// @iterate-com/ui: copy it into this folder and change it there. Their source, and `Dash`'s:
-//   https://github.com/iterate/packages/tree/main/packages/ui/src/components/dash
+//   { id: "notes", name: "Notes", icon: NotebookIcon, component: Notes },
+// TO REPLACE A KIT PAGE, put your component in its row, under the same id. Each kit page is one
+// small component in @iterate-com/ui: copy it into this folder and change it there. Their source:
+//   https://github.com/iterate/packages/tree/main/packages/ui/src/components/dash (the Dash and
+//   most pages) and .../packages/ui/src/agent-kind-view/dash-agents.tsx (Home and Agents)
 // (AGENTS.md, "the source of every component", for the source of the version index.html pins).
 //
-// The kit's pages load their larger parts when they first open: the overview loads none of them.
+// The kit's pages load their larger parts when they first open: the home loads the composer only.
 import { html, render } from "@iterate-com/ui/page";
 import {
   Dash,
@@ -20,10 +26,10 @@ import {
   DashContexts,
   DashIntegrations,
   DashMcp,
-  DashOverview,
   DashRepo,
   DashSecrets,
 } from "@iterate-com/ui/components/dash/dash";
+import { DashAgents, DashHome } from "@iterate-com/ui/agent-kind-view/dash-agents";
 import { memberItx, mindOfHost } from "@iterate-com/ui/live";
 import {
   BlocksIcon,
@@ -31,7 +37,6 @@ import {
   BotIcon,
   ChartLineIcon,
   CircleCheckIcon,
-  CompassIcon,
   FolderGit2Icon,
   KeyRoundIcon,
   LayoutDashboardIcon,
@@ -51,79 +56,39 @@ const mind = mindOfHost();
 /** The stack's own pages (keys, members, approvals) are on this host of the mind. */
 const stack = `https://iterate.${mind}`;
 
-/** Who is signed in, and the way to everything else. */
-const Overview = (props) => html`
-  <${DashOverview} ...${props} pagesTitle="The mind">
-    ${principal?.email ? `Signed in as ${principal.email}.` : "Signed in."} This page is apps/dash
-    in the mind's config repo: change it like any file there.
-  <//>
-`;
-
 const pages = [
-  { id: "overview", name: "Overview", icon: LayoutDashboardIcon, component: Overview },
+  { id: "home", name: "Home", icon: LayoutDashboardIcon, component: DashHome },
   {
-    id: "contexts",
-    name: "Contexts",
-    icon: WaypointsIcon,
-    about: "Any context's log, live: agents, integrations, repos, secrets.",
-    component: DashContexts,
+    id: "agents",
+    name: "Agents",
+    icon: BotIcon,
+    component: DashAgents,
+    // what the mind says first in an agent's empty chat, the first time anyone opens it: the
+    // onboarding agent greets a new owner (onboarding.md is what it is told)
+    openers: {
+      "/agents/onboarding":
+        "The owner has just opened the onboarding chat for the first time. Begin with step 1.",
+    },
   },
+  { id: "contexts", name: "Contexts", icon: WaypointsIcon, component: DashContexts },
+  { id: "repo", name: "Config repo", icon: FolderGit2Icon, component: DashRepo },
+  { id: "secrets", name: "Secrets", icon: LockKeyholeIcon, component: DashSecrets },
+  { id: "integrations", name: "Integrations", icon: BlocksIcon, component: DashIntegrations },
+  // not every stack has telemetry: without it, the row says "Off"
   {
-    id: "repo",
-    name: "Config repo",
-    icon: FolderGit2Icon,
-    about: "The mind's own code: read it, change it, commit.",
-    component: DashRepo,
-  },
-  {
-    id: "secrets",
-    name: "Secrets",
-    icon: LockKeyholeIcon,
-    about: "What the mind may send where: set, update, delete.",
-    component: DashSecrets,
-  },
-  {
-    id: "integrations",
-    name: "Integrations",
-    icon: BlocksIcon,
-    about: "What the mind's packages registered, and their connections.",
-    component: DashIntegrations,
-  },
-  {
-    // not every stack has telemetry: without it, the row and the card say "Off"
     id: "analytics",
     name: "Analytics",
     icon: ChartLineIcon,
-    about: "The mind's telemetry: events, lag, storage, a SQL box.",
     serves: "telemetry",
-    offAbout: "Telemetry is off. The page says how to turn it on.",
     component: DashAnalytics,
   },
-  {
-    id: "mcp",
-    name: "MCP",
-    icon: PlugIcon,
-    about: "Connect Claude Code or the Codex CLI to this mind.",
-    component: DashMcp,
-  },
+  { id: "mcp", name: "MCP", icon: PlugIcon, component: DashMcp },
 ];
 
 // The mind's apps, each on its own host: an app you add in worker.ts gets a row here.
 const apps = [
-  {
-    name: "Agents",
-    host: "agents",
-    icon: BotIcon,
-    about: "Every agent of the mind, and a chat with each.",
-  },
-  {
-    name: "Onboarding",
-    host: "onboarding",
-    icon: CompassIcon,
-    about: "A chat that sets the mind up with you.",
-  },
-  { name: "Docs", host: "docs", icon: BookOpenIcon, about: "The config repo, read as pages." },
-  { name: "Voice", host: "voice", icon: PhoneIcon, about: "Call the mind from this browser." },
+  { name: "Docs", host: "docs", icon: BookOpenIcon },
+  { name: "Voice", host: "voice", icon: PhoneIcon },
 ].map((app) => ({ ...app, href: `https://${app.host}.${mind}` }));
 
 // The stack's pages about who may do what. "Approvals" shows how many requests wait for a yes.
@@ -132,28 +97,12 @@ const access = [
     name: "Approvals",
     href: `${stack}/secrets/approvals`,
     icon: ShieldCheckIcon,
-    about: "What waits for your yes, and the rules that make it wait.",
     count: "approvals",
   },
-  {
-    name: "Keys",
-    href: `${stack}/keys`,
-    icon: KeyRoundIcon,
-    about: "Your passkeys, and the keys of your devices and tools.",
-  },
-  {
-    name: "Sessions",
-    href: `${stack}/sessions`,
-    icon: LogOutIcon,
-    about: "Where you are signed in, and the way to end it.",
-  },
-  { name: "Members", href: `${stack}/members`, icon: UsersIcon, about: "Who may use this mind." },
-  {
-    name: "Self-test",
-    href: `${stack}/self-test`,
-    icon: CircleCheckIcon,
-    about: "Check that everything works.",
-  },
+  { name: "Keys", href: `${stack}/keys`, icon: KeyRoundIcon },
+  { name: "Sessions", href: `${stack}/sessions`, icon: LogOutIcon },
+  { name: "Members", href: `${stack}/members`, icon: UsersIcon },
+  { name: "Self-test", href: `${stack}/self-test`, icon: CircleCheckIcon },
 ];
 
 const links = [

@@ -33,7 +33,7 @@ const CONTEXT_DESCRIPTIONS: { path: string; description: string }[] = [
   {
     path: "/agents",
     description:
-      "The list of this mind's agents, which the Agents app shows: each context below /agents is an agent.",
+      "The list of this mind's agents, which the Dash shows: each context below /agents is an agent.",
   },
   {
     path: "/agents/email",

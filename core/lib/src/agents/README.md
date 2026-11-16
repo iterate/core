@@ -7,17 +7,13 @@ deployment's own build and upgrades with it, like `iterate/sdk`.
 
 ## Install
 
-A mind's config repo re-exports the app's two classes from one module and installs the app
-from its init case, naming that module (core/configs/default does both, from
-`apps/agents/backend.ts`; with no `module`, it is `agents.ts`). It lists no dependency:
-`iterate/*` comes from the platform.
+A mind's config repo re-exports the app's two classes from its root `agents.ts` and installs the
+app from its init case (core/configs/default does both). It lists no dependency: `iterate/*` comes
+from the platform.
 
 ```ts
-// apps/agents/backend.ts
-import { AgentCollectionDurableObject, AgentDurableObject } from "iterate/agents";
-
-AgentCollectionDurableObject.module = "apps/agents/backend.ts"; // where it starts each agent from
-export { AgentCollectionDurableObject, AgentDurableObject };
+// agents.ts
+export { AgentCollectionDurableObject, AgentDurableObject } from "iterate/agents";
 ```
 
 ```ts
@@ -25,15 +21,21 @@ import { installAgents } from "iterate/agents/install";
 
 // in processEvent, the init case
 case "events.iterate.com/mind/worker-updated":
-  await installAgents(itx, { module: "apps/agents/backend.ts" });
+  await installAgents(itx);
 ```
+
+A config whose classes are in another module names it twice: `installAgents(itx, { module })`, and
+`AgentCollectionDurableObject.module = "<module>"` beside the export, where the collection starts
+each agent from.
 
 `installAgents` enables the catalog processor on `/agents` and writes the `itx.agents` rewrite rule
 on the root to the collection facet there; it does the same every time, and disables the catalog
 the root held before it moved. Every facet of the app, the collection's and each
 agent's, names its class in that module of the mind's published config
-(`{ className, mainModule: "apps/agents/backend.ts", source: itx.cd('/').config }`,
-`agentsFacetSpec`), so nothing is copied into the mind. A commit that changes what that module
+(`{ className, mainModule: "agents.ts", source: itx.cd('/').config }`, `agentsFacetSpec`), so
+nothing is copied into the mind. An agent's row keeps the module it was created with until
+`create(path)` is called for it again, which enables the row with the collection's module: a
+config that moves the module keeps the old file until its agents have moved. A commit that changes what that module
 bundles restarts the
 agents on their next call, and so does a platform deploy (every loader cache key folds in the
 deployment).
@@ -45,7 +47,7 @@ Importing `iterate/agents` registers `itx.agents` on iterate/api's `InstalledApp
 ## What an agent is
 
 An agent is any context under `/agents`, at any depth. Iterate's own agents live there
-(`/agents/people/<person>/web/<moment>` for one that a member starts in the Agents app,
+(`/agents/people/<person>/web/<moment>` for one that a member starts on the Dash,
 `/agents/email/t<thread>`), and so can anything else that is a
 conversation with a title, a status and a way to message it, such as a coding session a bridge
 appends to (`/agents/claude/<session>`, its subagents beneath it). Every context announces itself to
@@ -97,7 +99,7 @@ script that answer called runs, because the status copy rides the settlement. Th
 written once, by `create`, so a new order would reach only new agents. Readers decide instead
 with one rule, `agentAtWork` (`iterate/agents/mind-now`): `working` or `waiting`, or `idle` with
 an activity line from the last ten minutes (a script runs at most that long). The mind-now note
-and the Agents app's rows both use it.
+and the Dash's agent rows both use it.
 
 Messaging any agent is appending `agent/context-added` to its context. `get(path).message(input)`
 sends an iterate agent's words through its facet, and appends the same event straight to any other
@@ -134,11 +136,11 @@ about 0.4 s with everything warm, 1.1 s on a new socket, and 2 s after the conte
 `llm.apiKeys` is an ordered list of credentials. Each entry is the text after `Bearer `, normally a
 `getSecret(...)` placeholder that egress swaps for the secret's value on the way to api.openai.com,
 or `AI_GATEWAY` (`"ai-gateway"`): the deployment's AI Gateway, billed to the deployment, no key. An
-empty list is the AI Gateway alone. The default config's `apps/agents/backend.ts` ships this order, so a person
+empty list is the AI Gateway alone. The default config's `agents.ts` ships this order, so a person
 who sets any one of the three needs no code change:
 
 ```ts
-// apps/agents/backend.ts
+// agents.ts
 import { AgentDurableObject, AI_GATEWAY } from "iterate/agents";
 
 AgentDurableObject.defaultConfig = {

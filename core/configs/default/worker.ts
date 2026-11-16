@@ -5,11 +5,10 @@ import {
   type Integration,
   type IterateConfigProcessEventArgs,
 } from "iterate/sdk";
+import { installAgents } from "iterate/agents/install";
 import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
-import { agentsApp } from "./apps/agents/app.ts";
 import { dashApp } from "./apps/dash/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
-import { onboardingApp } from "./apps/onboarding/app.ts";
 import { voiceApp } from "./apps/voice/app.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
 // Voice is off (AGENTS.md, "Voice"). The Voice app's "Turn voice on" takes the "// " off this
@@ -44,8 +43,6 @@ const integrations: Integration[] = [];
 
 // The apps this mind hosts: a folder each under apps/, mounted on its host in `fetch` below
 // (AGENTS.md, "Apps"). Each `app.ts` exports the function that makes one.
-const agents = agentsApp();
-const onboarding = onboardingApp();
 const docs = docsApp();
 const dash = dashApp();
 const voice = voiceApp();
@@ -55,8 +52,8 @@ const voice = voiceApp();
 
 // The kinds of agent this mind runs (AGENTS.md, "Kinds of agent"): one file each, named by its
 // import, written exactly `() => import("./path/to/kind.ts")` (`makeAgentKind` reads the path from
-// it). Their `processEvent` runs below beside the integrations', and every publish tells the Agents
-// app where each kind's file is.
+// it). Their `processEvent` runs below beside the integrations', and every publish tells the Dash
+// where each kind's file is.
 const agentKinds = [makeAgentKind(import.meta, () => import("./agent-kinds/iterate.ts"))];
 
 export default class extends IterateConfigEntrypoint {
@@ -67,10 +64,14 @@ export default class extends IterateConfigEntrypoint {
         // This code here is your init hook. The platform appends `mind/worker-updated` on `/`
         // whenever it publishes a commit of this repo, so this case runs again after every commit:
         // keep it idempotent. Only the platform appends this type.
-        await agents.install(itx);
-        // where each kind's file is, for the Agents app's chat (`agentKinds`, above)
+        // The agents (agents.ts): the catalog on /agents and the `itx.agents` rule.
+        await installAgents(itx);
+        // where each kind's file is, for the Dash's agent view (`agentKinds`, above)
         await publishAgentKinds(itx, agentKinds);
-        await onboarding.install(itx);
+        // The onboarding agent, where a new owner starts: the Dash greets them in its chat
+        // (apps/dash/public/app.js, `openers`), and it reads onboarding.md. Creating it starts no
+        // model turn.
+        await itx.agents.create("/agents/onboarding");
         // Voice, when it is on: the service at `itx.voice`, which the Voice app calls.
         // await installVoice(itx);
         // A heartbeat, for a mind that should wake on its own (to check on itself and repair what
@@ -406,8 +407,8 @@ export default class extends IterateConfigEntrypoint {
     if (failed) throw failed.reason;
   }
 
-  // Every host of the mind: one case each, on `x-iterate-routing-slug` (`agents` for
-  // agents.<domain>, null on the apex). The guard beside a case says who may come: none for a
+  // Every host of the mind: one case each, on `x-iterate-routing-slug` (`dash` for dash.<domain>,
+  // null on the apex). The guard beside a case says who may come: none for a
   // public site, `this.auth.require` for members, `this.auth.requirePerson` for anyone signed in
   // (AGENTS.md, "People who are not members"). Before the guard, an app answers anyone for its
   // manifest and its icon (`open`, apps/open-files.ts): the sign-in pages show them. The `?.` is
@@ -417,17 +418,9 @@ export default class extends IterateConfigEntrypoint {
     const integration = integrations.find((candidate) => candidate.routingSlug === routingSlug);
     if (integration?.fetch) return integration.fetch(request, this);
     switch (routingSlug) {
-      case "agents": // the Agents app, for members
-        return agents.open?.(request) || this.auth.require(request) || agents.fetch(request, this);
-      case "onboarding": // the onboarding app, for members: one chat with /agents/onboarding
-        return (
-          onboarding.open?.(request) ||
-          this.auth.require(request) ||
-          onboarding.fetch(request, this)
-        );
       case "docs": // the docs app, for members: the config repo, read in a browser
         return docs.open?.(request) || this.auth.require(request) || docs.fetch(request, this);
-      case "dash": // the Dash, for members: the mind seen from above
+      case "dash": // the Dash, for members: the mind seen from above, and every agent's chat
         return dash.open?.(request) || this.auth.require(request) || dash.fetch(request, this);
       case "voice": // the Voice app, for members: call the mind from a browser
         return voice.open?.(request) || this.auth.require(request) || voice.fetch(request, this);

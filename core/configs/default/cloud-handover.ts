@@ -11,8 +11,8 @@
 // another shape, does nothing and throws nothing.
 //
 // IT ARRIVES AT LEAST ONCE. The handover's id keys the agent's event, so a replay adds nothing.
-// The words raise no turn: the onboarding app's first-open note starts the agent's greeting, with
-// the handover already in its context.
+// The words raise no turn: the Dash's opener (apps/dash/public/app.js, `openers`) starts the
+// agent's greeting when the owner first opens its chat, with the handover already in its context.
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
 

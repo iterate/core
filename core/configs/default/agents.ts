@@ -1,0 +1,21 @@
+// agents.ts — THE MIND'S AGENTS: the two Durable Object classes the platform ships as
+// iterate/agents. The collection runs on /agents and is `itx.agents`; each agent is one context
+// under it. worker.ts installs them (`installAgents`), which finds them in this file by its name.
+// Set an agent's defaults here, on the class (`AgentDurableObject.defaultConfig`).
+//
+// Every agent reads AGENTS.md before each request, and one at /agents/<name> reads <name>.md too:
+// /agents/onboarding reads onboarding.md.
+import { AgentCollectionDurableObject, AgentDurableObject, AI_GATEWAY } from "iterate/agents";
+
+// The agents pay with the first of these that is set: a secret that is not set is passed over.
+AgentDurableObject.defaultConfig = {
+  llm: {
+    apiKeys: [
+      'getSecret("/secrets/chatgpt", { field: "accessToken" })', // a ChatGPT plan
+      'getSecret("/secrets/openai")', // an OpenAI API key
+      AI_GATEWAY, // the deployment's AI Gateway credit
+    ],
+  },
+};
+
+export { AgentCollectionDurableObject, AgentDurableObject };

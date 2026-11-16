@@ -61,7 +61,7 @@ async function serverResults(env: Env, userId: string): Promise<Result[]> {
     await answer.body?.cancel();
     return answer;
   };
-  const agents = `https://agents.${domain}`;
+  const dash = `https://dash.${domain}`;
   return Promise.all([
     attempt("apex", async () => {
       const { status: code } = await status(`https://${domain}/`);
@@ -80,16 +80,16 @@ async function serverResults(env: Env, userId: string): Promise<Result[]> {
         detail: `http://${domain}/ answered ${answer.status}${location ? ` to ${location}` : ""}.`,
       };
     }),
-    attempt("agents-app", async () => {
-      const pageAnswer = await status(`${agents}/`, {
+    attempt("dash", async () => {
+      const pageAnswer = await status(`${dash}/`, {
         headers: {
           "sec-fetch-mode": "navigate",
           "sec-fetch-dest": "document",
           accept: "text/html",
         },
       });
-      const socket = await status(`${agents}/itx`, {
-        headers: { upgrade: "websocket", origin: agents },
+      const socket = await status(`${dash}/itx`, {
+        headers: { upgrade: "websocket", origin: dash },
       });
       const toSignIn = (pageAnswer.headers.get("location") || "").startsWith(
         `${platformOriginOf(domain)}/oauth2/auth`,
@@ -221,9 +221,9 @@ const CHECKS: [id: string, name: string, help: string][] = [
     "Set up AI agents in the wizard: connect an AI provider or buy credit for Cloudflare's AI Gateway.",
   ],
   [
-    "agents-app",
-    "The Agents app answers at agents.<domain>",
-    "Deploy again from the wizard. If the mind's config has no Agents app, this check fails until it has one.",
+    "dash",
+    "The Dash, where every agent is, answers at dash.<domain>",
+    "Deploy again from the wizard. If the mind's config has no Dash, this check fails until it has one.",
   ],
   [
     "cloud",
@@ -376,7 +376,7 @@ async function runAll(token) {
       const doc = await answer.json().catch(() => null);
       return { pass: answer.ok && doc?.issuer === DATA.issuer, detail: "The sign-in document answered " + answer.status + (doc?.issuer ? ", issuer " + doc.issuer : "") + "." };
     }),
-    ...["apex", "host", "https", "agents-app", "passkey", "first-owner"].map((id) => attempt(id, async () => {
+    ...["apex", "host", "https", "dash", "passkey", "first-owner"].map((id) => attempt(id, async () => {
       const facts = await server;
       const found = facts.results?.find((r) => r.id === id);
       if (!found) throw new Error(facts.error || "The stack gave no answer for this check.");

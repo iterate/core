@@ -7,8 +7,8 @@ import type { FacetSpec, IterateContextApi } from "../api.ts";
 export const AGENTS_PATH = "/agents";
 
 /** The module of a mind's published config that exports the app's two classes, unless the
- *  config says another (`apps/agents/backend.ts`): to `installAgents`, and on the collection's
- *  class, which starts each agent from it (catalog.ts `module`). */
+ *  config names another: to `installAgents`, and on the collection's class, which starts each
+ *  agent from it (catalog.ts `module`). */
 export const AGENTS_MODULE = "agents.ts";
 
 /** One of the app's facets: `className` from `module` of the mind's published config. */

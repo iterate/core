@@ -36,7 +36,7 @@ export function docsApp() {
           mainModule: PROCESSORS_MODULE,
           version: await (version ||= versionOf(processors)),
         });
-      // What @iterate-com/ui's shell asks of its host, as apps/agents/app.ts answers it: which
+      // What @iterate-com/ui's shell asks of its host, as `host.auth.memberPage` answers it: which
       // platform this page talks to, the one mind this app serves, and its "Sign out".
       const mind = url.hostname.split(".").slice(1).join(".");
       if (url.pathname === "/.auth/session.json") {

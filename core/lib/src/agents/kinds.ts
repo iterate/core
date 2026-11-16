@@ -1,7 +1,7 @@
 // agents/kinds.ts — KINDS OF AGENT. An agent kind is one file in a mind's config repo
 // (`agent-kinds/<kind>.ts` by convention) whose default export is an `AgentKind`: what its agents
 // are called in the catalog, its server half (the shape of an `Integration`'s `processEvent`), what
-// the Agents app reads of an agent's log, and its chat view. A config repo's worker names its kinds,
+// the Dash reads of an agent's log, and its chat view. A config repo's worker names its kinds,
 //
 //   import { makeAgentKind } from "iterate/agents/kinds";
 //   const agentKinds = [makeAgentKind(import.meta, () => import("./agent-kinds/iterate.ts"))];
@@ -15,7 +15,7 @@ import type { IterateContextApi } from "../api.ts";
 import type { StreamEvent } from "../stream/processor.ts";
 
 export type AgentKind<View = unknown> = {
-  /** The catalog's `kind` for these agents: the Agents app finds this file by it. */
+  /** The catalog's `kind` for these agents: the Dash finds this file by it. */
   kind: string;
   /** The server half: every durable event of the mind, after the mind's own cases. A kind
    *  answers its own: sets up an agent's rows when it starts, hands a `message-received` on one of
@@ -23,10 +23,10 @@ export type AgentKind<View = unknown> = {
    *  than once. A kind whose agents run elsewhere (iterate's, in the platform) has none. */
   processEvent?: (args: { event: StreamEvent; itx: IterateContextApi }) => Promise<void>;
   /** The ephemeral event types its view reads besides the agent's whole durable log (which the
-   *  Agents app always reads: the Events tab shows it), e.g. an answer's streamed frames. A
+   *  Dash always reads: the Events tab shows it), e.g. an answer's streamed frames. A
    *  wildcard never matches an ephemeral event, so each is named. */
   ephemeralEvents?: string[];
-  /** The chat, which only the Agents app's frame calls. */
+  /** The chat, which only the Dash's frame calls. */
   view: View;
 };
 
@@ -49,7 +49,7 @@ export function makeAgentKind(meta: { url?: string }, load: () => Promise<{ defa
   return { path: decodeURIComponent(url.pathname).slice(1), load };
 }
 
-/** Writes `{ <kind>: <path> }` to the mind's KV under `agent-kinds`, where the Agents app reads
+/** Writes `{ <kind>: <path> }` to the mind's KV under `agent-kinds`, where the Dash reads
  *  which file has a kind's chat view. A path the repo doesn't have (`x.js`, as the platform loads
  *  it) is the `.ts` it was written as. */
 export async function publishAgentKinds(

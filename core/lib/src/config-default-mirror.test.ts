@@ -5,18 +5,12 @@
 /// <reference path="../../configs/default/files.d.ts" />
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
-import index from "../../configs/default/apps/agents/index.html";
-// oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
-import files from "../../configs/default/apps/agents/public/";
 import dashIndex from "../../configs/default/apps/dash/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import dashFiles from "../../configs/default/apps/dash/public/";
 import docsIndex from "../../configs/default/apps/docs/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import docsFiles from "../../configs/default/apps/docs/public/";
-import onboardingIndex from "../../configs/default/apps/onboarding/index.html";
-// oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
-import onboardingFiles from "../../configs/default/apps/onboarding/public/";
 import voiceIndex from "../../configs/default/apps/voice/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import voiceFiles from "../../configs/default/apps/voice/public/";
@@ -25,14 +19,9 @@ import Config from "../../configs/default/worker.ts";
 test("the default config's pages and folders load here as the platform's loader makes them", () => {
   // The rule is the loader's (core/mind-worker/src/context/module-resolution.ts). When it changes,
   // this fails here and not at a deploy: a page is its text, a folder is its files by path.
-  expect(index).toMatch(/^<!doctype html>/i);
-  expect(files["app.js"]).toEqual(expect.any(String));
-  expect(Object.keys(files)).toEqual(Object.keys(files).toSorted());
-  expect(onboardingIndex).toMatch(/<title>Welcome to iterate<\/title>/);
-  const own = ["app.css", "app.js", "icon.svg", "manifest.webmanifest"];
-  expect(Object.keys(onboardingFiles)).toEqual(own);
+  expect(docsIndex).toMatch(/^<!doctype html>/i);
   expect(docsIndex).toMatch(/<title>Docs<\/title>/);
-  expect(Object.keys(docsFiles)).toEqual(own);
+  expect(Object.keys(docsFiles)).toEqual(["app.css", "app.js", "icon.svg", "manifest.webmanifest"]);
   expect(dashIndex).toMatch(/<title>Dash<\/title>/);
   // the Dash's page has the marks of iterate Cloud's apps too
   expect(Object.keys(dashFiles)).toEqual([
@@ -59,7 +48,7 @@ test("the default config's pages and folders load here as the platform's loader 
   ]);
 });
 
-test.for(["agents", "onboarding", "docs", "dash", "voice"])(
+test.for(["docs", "dash", "voice"])(
   "the %s app says its name and its icon to anyone, and nothing else before a sign-in",
   async (host) => {
     const refusal = new Response("Sign in\n", { status: 401 });
@@ -87,11 +76,11 @@ test.for(["agents", "onboarding", "docs", "dash", "voice"])(
   },
 );
 
-test("the Dash's overview leads to every other app the default worker mounts", () => {
+test("the Dash leads to every other app the default worker mounts", () => {
   // the hosts the worker's `fetch` answers: one `case "<host>":` each
   const worker = readFileSync(new URL("../../configs/default/worker.ts", import.meta.url), "utf8");
   const mounted = [...worker.matchAll(/^ {6}case "([a-z]+)":/gm)].map(([, host]) => host);
-  expect(mounted).toEqual(["agents", "onboarding", "docs", "dash", "voice"]);
+  expect(mounted).toEqual(["docs", "dash", "voice"]);
   const linked = [...String(dashFiles["app.js"]).matchAll(/\bhost: "([a-z]+)"/g)].map(
     ([, host]) => host,
   );

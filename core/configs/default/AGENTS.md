@@ -15,7 +15,7 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
   mind's root; `itx.cd(event.path)` is the event's own context. Keep no state in the worker:
   read it from the mind.
   - The `events.iterate.com/mind/worker-updated` case is the init hook. It runs after every
-    published commit: it installs the agents app and creates the onboarding agent. It sets no
+    published commit: it installs the agents (`agents.ts`) and creates the onboarding agent. It sets no
     schedule, so an idle mind sleeps; uncommenting the heartbeat there sets one that wakes it
     every five minutes.
   - `context-descriptions.ts` gives each context the platform and this repo make a line that
@@ -25,7 +25,7 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
     and the newest stands. The table's text lands when a context is born and at each publish,
     once per text: a description that a person wrote later stands until the table's text
     changes. Add a row for a kind of context your code makes. An agent's line is its title,
-    written by the Agents app.
+    which the agent writes itself.
   - The `events.iterate.com/email/received` case hands each email a member sends to the mind
     to an agent of its own per thread, `/agents/email/t<thread>`, once the `email` facet has
     folded it into its thread; the agent replies with `itx.email.send({ inReplyToOffset })`. An
@@ -42,7 +42,7 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
     reaches an agent that wrote to its sender in that thread, marked as another mind's agent's
     words, and it starts the thread's own agent only when a person of this mind allowed its sender
     as a PEER: no peer by default. A member allows one, an address or a whole domain, with one
-    append in the Agents app's console or `iterate itx run`:
+    append in the Dash's console or `iterate itx run`:
     `await itx.cd("/integrations/email").append({ type: "events.iterate.com/email/mind-peer-allowed", payload: { domain: "other-mind.example" } })`
     (`{ address }` for one address; `email/mind-peer-removed` the same way takes it back). At 8
     hops in its thread, or the limit a person set
@@ -126,14 +126,20 @@ channel, thread_ts, text })`, and any other method the same way. The token stays
 
 The agents' runtime is `iterate/agents`, which comes from the platform like the rest of
 `iterate/*`: the mind runs the deployment's own build, and a platform deploy upgrades it.
-`apps/agents/backend.ts` re-exports its two classes and sets what a new agent pays with: a ChatGPT
-plan, else an OpenAI API key, else the deployment's AI Gateway credit. Every agent runs from that
-file's own bundle, so a commit that changes only `worker.ts` or the page leaves the agents running.
+`agents.ts` re-exports its two classes and sets what a new agent pays with: a ChatGPT plan, else
+an OpenAI API key, else the deployment's AI Gateway credit. `installAgents(itx)` in the init case
+finds them in that file by its name. Every agent runs from that file's own bundle, so a commit that
+changes only `worker.ts` or a page leaves the agents running.
+
+An agent at `/agents/<name>` reads `<name>.md` before each request, after `AGENTS.md`:
+`onboarding.md` is what `/agents/onboarding` is told, the agent where a new owner starts. The init
+case creates it, and the Dash greets the owner in its chat the first time they open it
+(`openers` in `apps/dash/public/app.js`).
 
 ## Kinds of agent
 
 Any context under `/agents` is an agent, and its kind is what the catalog lists it as: `iterate` for
-the agents app's own, `claude` for a Claude Code session, or one of your own. A kind is one file
+iterate's own, `claude` for a Claude Code session, or one of your own. A kind is one file
 (`agent-kinds/<kind>.ts` by convention) whose default export `satisfies AgentKind`, named in
 `worker.ts`. `iterate/agents/kinds` has `makeAgentKind` and `AgentKind`;
 `@iterate-com/ui/agent-kind-view`'s `AgentKind` is the same with the view typed:
@@ -153,7 +159,7 @@ import { createXai } from "@ai-sdk/xai"; // server only: fine to import, used in
 
 export default {
   kind: "grok",
-  // the Agents app reads the agent's durable log, and these ephemeral types for its view
+  // the Dash reads the agent's durable log, and these ephemeral types for its view
   ephemeralEvents: ["x.ai/grok/token"],
   // its server half, an Integration's processEvent: every event of the mind
   processEvent: async ({ event, itx }) => {
@@ -176,12 +182,12 @@ rows and its chat. `itx.agents.list()` reads every row and wakes no agent;
 `itx.agents.get(path).recent({ minutes: 5 })` is what one agent did in that window (status labels,
 summaries, words in and out, scripts, and `lastScript`), read from its log in the same event types
 for every kind. `worker.ts` runs each kind's `processEvent` beside the integrations, and on every
-publish writes where each kind's file is to the mind's KV (`agent-kinds`), where the Agents app
-finds it. The app runs `view` in a sandboxed frame with only that agent's log and verbs; there, a
+publish writes where each kind's file is to the mind's KV (`agent-kinds`), where the Dash finds
+it. The Dash's agent view runs `view` in a sandboxed frame with only that agent's log and verbs; there, a
 server-only import is a stand-in that throws if the view touches it. A kind whose agents run
 elsewhere (iterate's in the platform) needs no `processEvent`.
 
-An agent that a member starts in the Agents app is born in that person's folder:
+An agent that a member starts on the Dash is born in that person's folder:
 `/agents/people/<person>/web/<moment>` for iterate's own, and
 `/agents/people/<person>/<kind>/<moment>` for a kind's choice that says `byPerson: true` in its
 `newAgent.choices`. `<person>` is the local part of the address the member signs in with, in
@@ -262,22 +268,21 @@ pins.
 
 ## Apps
 
-An app is a folder under `apps/`, and a convention, not a framework. `apps/agents/` is the Agents
-app, on `agents.<domain>` for members: copy the folder to start one of your own.
-`apps/onboarding/` is the onboarding app, on `onboarding.<domain>` for members: one agent thread,
-the chat with the agent at `/agents/onboarding`, where a new owner starts. `apps/onboarding/onboarding.md` is what
-that agent is told: `apps/agents/backend.ts` names it, after `AGENTS.md`, as the agent's standing
-instructions, read fresh before each request.
+An app is a folder under `apps/`, and a convention, not a framework: copy one to start one of your
+own.
 `apps/docs/` is the Docs app, on `docs.<domain>` for members: the files of this mind's repos,
 written together in a browser ("Docs", below).
 `apps/voice/` is the Voice app, on `voice.<domain>` for members: a call to the mind from a browser
 ("Voice", below).
-`apps/dash/` is the Dash, on `dash.<domain>` for members: an overview with the way to every app,
-any context of the mind, live, the config repo as a small IDE, the mind's secrets, its
-integrations, its telemetry (when the stack has it), and how to connect a coding agent over MCP.
-`https://iterate.<domain>/` has no page of its own: it sends everyone to the Dash. `public/app.js`
-is its contents, and it is yours to change: the list of pages (the sidebar and the overview's cards
-come from it), the apps and access pages it links to, and the overview's words. `Dash` and its
+`apps/dash/` is the Dash, on `dash.<domain>` for members: a home with a composer that starts an
+agent, what waits for the member and the agents active last; every agent, and a chat with each
+(`?page=agents`, `?agent=<path>`); any context of the mind, live (`?page=contexts`); the config
+repo as a small IDE, the mind's secrets, its integrations, its telemetry (when the stack has it),
+and how to connect a coding agent over MCP. Its sidebar lists the agents active last, and ⌘K finds
+an agent, any context, or a path (type `/`). `https://iterate.<domain>/` has no page of its own: it
+sends everyone to the Dash. `public/app.js` is its contents, and it is yours to change: the list
+of pages (the sidebar comes from it), the apps and access pages it links to, and what the mind says
+first in an agent's empty chat (`openers`). `Dash` and its
 pages are components of `@iterate-com/ui` (`components/dash`); a row can name a component of your
 own instead, and the file's header says how.
 
@@ -294,10 +299,9 @@ apps/<name>/
 ```
 
 - **Mount it** in `worker.ts`: import the function, call it once, and give it a case in `fetch`:
-  `case "agents": return this.auth.require(request) || agents.fetch(request, this);`. An app
-  with an `install` (the Agents and onboarding apps) also needs it in the init case: a changed
-  `worker.ts` keeps `agents.install(itx)`, `publishAgentKinds(itx, agentKinds)` and
-  `onboarding.install(itx)` there.
+  `case "notes": return this.auth.require(request) || notes.fetch(request, this);`. A changed
+  `worker.ts` keeps `installAgents(itx)`, `publishAgentKinds(itx, agentKinds)` and the onboarding
+  agent's `itx.agents.create` in the init case.
 - **No build.** A module imports a file that is not code and gets its text, or its bytes when it is
   not text (`import index from "./index.html"`). An import that ends in `/` is every file under
   that folder, by path (`import files from "./public/"`). `serveFiles(request, { index, files })`
@@ -324,9 +328,9 @@ apps/<name>/
   (`this.auth.requirePerson(request, { methods: ["cloudflare"] })`) names them in its manifest
   too, `"iterate": { "methods": ["cloudflare"] }`: an MCP client sends no ways of its own, so its
   sign-in for the app's `/mcp` then offers the app's ways.
-- **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** The Agents,
-  onboarding, docs and guestbook apps serve that one file at `/live-reload.js` (`app.ts`), and
-  each page loads it in its head; the Dash and the Voice app do not.
+- **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** The Dash, the docs
+  and the guestbook apps serve that one file at `/live-reload.js` (`app.ts`), and each page loads
+  it in its head; the Voice app does not.
   When a commit is published, a stylesheet that changed is swapped in place. A page whose
   script changed reloads once nobody types in it, and what the person saw stays over the app
   until the app has drawn itself again. A member's page hears of a publication at once; any
@@ -335,7 +339,7 @@ apps/<name>/
 - **The member's `itx` in the page.** `host.auth.itx(request)`, answered from a path of the app's
   choosing, makes that path a WebSocket to the mind's `itx` for the member who is signed in on
   that host: `newWebSocketRpcSession(new WebSocket("/itx"))`, a capnweb session
-  (`apps/agents/public/app.js`). The platform decides who the caller is, never the page. What the
+  (`memberItx()` of `@iterate-com/ui/live`, in `apps/dash/public/app.js`). The platform decides who the caller is, never the page. What the
   page appends shows `source.via.appPage`, and the socket closes when the sign-in ends.
 - **Who asked.** A facet's code appends as its context, not as the person who called it. So when a
   signed-in person calls a facet (`itx.agents.get(path).message(...)` is such a call), what the

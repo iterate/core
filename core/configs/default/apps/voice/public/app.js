@@ -31,9 +31,10 @@ const MODULES = "https://esm.iterate.com";
 const EVENT = "events.iterate.com/voice-agent/";
 
 // ── the member's itx ──
-// As apps/agents/public/app.js: one WebSocket to this host's /itx, a capnweb session whose root is
-// the mind's itx, as the member the platform signed in on this host. The platform ends it when
-// the sign-in ends; a reload signs in again. Three closes in a minute stop the reloads.
+// As @iterate-com/ui/live's `memberItx` (the Dash's page): one WebSocket to this host's /itx, a
+// capnweb session whose root is the mind's itx, as the member the platform signed in on this
+// host. The platform ends it when the sign-in ends; a reload signs in again. Three closes in a
+// minute stop the reloads.
 const socket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
 const itx = newWebSocketRpcSession(socket);
 socket.addEventListener("close", () => {
@@ -439,7 +440,7 @@ function Turns({ turns }) {
   `;
 }
 
-/** Which device this browser is, and the way to its agent's chat in the Agents app. */
+/** Which device this browser is, and the way to its agent's chat on the Dash. */
 function DeviceNote({ agentPath }) {
   return html`
     <div className="voice-note">
@@ -448,7 +449,9 @@ function DeviceNote({ agentPath }) {
         them.
       </p>
       <p className="muted">
-        <a href=${`https://agents.${domain}/?agent=${encodeURIComponent(agentPath)}`}>
+        <a
+          href=${`https://dash.${domain}/?agent=${encodeURIComponent(agentPath).replaceAll("%2F", "/")}`}
+        >
           Open that agent's chat
         </a>
       </p>
@@ -471,7 +474,7 @@ function Nav() {
           <${SidebarMenuItem}>
             <${SidebarMenuButton}
               tooltip="All agents"
-              render=${html`<a href=${`https://agents.${domain}`} />`}
+              render=${html`<a href=${`https://dash.${domain}/?page=agents`} />`}
             >
               <${BotIcon} />
               <span>All agents</span>

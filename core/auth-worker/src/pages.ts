@@ -70,7 +70,7 @@ export function page(
  *  heading names the host the person signs in to, the one name in the address bar they came from.
  *  The card's one mark is the app's own icon, when its manifest names one, or iterate's. `heading`
  *  is the page's `h1`; `about` is what the page says of the app at its end: for an app for
- *  members (the Dash, the Agents app: `app.members`), that it works as the person, as a member's
+ *  members (the Dash, the Docs app: `app.members`), that it works as the person, as a member's
  *  sign-in lets its page act as that member in the whole mind. An app for anyone gets no words
  *  of its own. */
 export function appSignIn(app: AskingApp, { heading = `Sign in to ${app.host}` } = {}) {
