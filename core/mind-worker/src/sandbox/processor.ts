@@ -33,7 +33,17 @@ export class SandboxProcessor extends EntityLifecycleProcessor<SandboxState> {
     effects: ConstructorParameters<typeof EntityLifecycleProcessor>[3],
     check: SandboxCheckDeps,
   ) {
-    super(contract, getItx, path, effects);
+    // The `idle` schedule is the context's and outlives this processor, which `deleted` turns off:
+    // the delete cancels it, whatever this incarnation holds in memory. After the erase, so that a
+    // set still in flight lands first.
+    super(contract, getItx, path, {
+      ...effects,
+      teardown: async (sandboxPath) => {
+        await effects?.teardown?.(sandboxPath);
+        using itx = getItx();
+        await itx.schedules.cancel("idle");
+      },
+    });
     this.#getItx = getItx;
     this.#check = check;
   }
@@ -78,7 +88,7 @@ export class SandboxProcessor extends EntityLifecycleProcessor<SandboxState> {
     const { state, event, delivery, runInBackground } = args;
     if (!delivery.caughtUp) return;
     if (!state.running || state.deletion) {
-      // also cancels one an earlier incarnation set
+      // an idle check also cancels one an earlier incarnation set; a delete cancels in its teardown
       if (this.#period !== null || event?.type === SANDBOX_IDLE_CHECK) {
         this.#period = null;
         runInBackground(() => this.#cancel());
