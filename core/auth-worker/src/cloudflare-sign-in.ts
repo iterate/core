@@ -104,7 +104,7 @@ async function finish(
 ): Promise<Response> {
   const flow = await flowOf(env, request);
   const cleared = new Headers({ "set-cookie": clearFlowCookie });
-  const again = [{ href: signInHref(env, flow?.next || "/"), label: "Try again" }];
+  const again = [{ href: signInHref(flow?.next || "/"), label: "Try again" }];
   const code = url.searchParams.get("code");
   // The state binds Cloudflare's answer to the browser that began, and the mark to a flow that
   // began here, not at Google. A refusal at Cloudflare has no code.

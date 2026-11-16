@@ -22,7 +22,8 @@
 // its initials. An app that DOES NOT ANSWER (no answer in two seconds, or a 5xx) has said nothing
 // new: it is still what it last said, and it is asked again after a minute.
 //
-// "For members" changes the page's words and nothing else: who may come is the guard in the
+// "For members" changes the page's words, and which page a sign-in opens on where anyone may
+// sign in (./sign-in.ts `codeComesFirst`), and nothing else: who may come is the guard in the
 // app's own code (the mind's worker.ts), which this Worker does not read.
 //
 // THE WAYS THE APP TAKES, `"iterate": { "methods": ["cloudflare"] }`: the ways its guard names

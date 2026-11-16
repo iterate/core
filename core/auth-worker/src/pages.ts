@@ -89,18 +89,32 @@ export function appSignIn(app: AskingApp, { heading = `Sign in to ${app.host}` }
   };
 }
 
-/** The sign-in page of a mind that mails no code: the passkey, and Google when the mind offers it.
- *  With `app`, the sign-in is for that app of the mind (`appSignIn`). */
-export function signInPage(domain: string, next: string, google = false, app?: AskingApp | null) {
-  const passkey = passkeySignIn(next, "alone");
-  const asking = app ? appSignIn(app) : null;
+/** THE MIND'S OWN SIGN-IN PAGE: the passkey, which every member signs in with, and nothing to
+ *  type. With `asksAtOpen` its script asks the browser for the passkey when the page opens; the
+ *  button asks again. `mailsCodes`: a link leads to the mailed code's page (./email-sign-in.ts),
+ *  for a member's first sign-in and for a device that holds no passkey. Google's button when the
+ *  mind offers it. With `app`, the sign-in is for that app of the mind (`appSignIn`). */
+export function signInPage(input: {
+  domain: string;
+  next: string;
+  google?: boolean;
+  mailsCodes?: boolean;
+  app?: AskingApp | null;
+  asksAtOpen?: boolean;
+}) {
+  const { domain, next } = input;
+  const passkey = passkeySignIn(next, "alone", "", input.asksAtOpen);
+  const asking = input.app ? appSignIn(input.app) : null;
+  const code = input.mailsCodes
+    ? `<p class="muted note"><a href="/sign-in/email?${text(String(new URLSearchParams({ next })))}">No passkey on this device? Get a code by email</a></p>`
+    : "";
   return page({
     title: asking?.title || `Sign in to ${domain}`,
     mark: asking?.mark,
     centered: true,
     imageOrigin: asking?.imageOrigin,
     body: `${asking?.heading || `<h1>Sign in to ${text(domain)}</h1>`}
-      ${passkey.body}${google ? googleSignIn(next) : ""}${asking?.about || ""}`,
+      ${passkey.body}${code}${input.google ? googleSignIn(next) : ""}${asking?.about || ""}`,
     script: passkey.script,
   });
 }
@@ -185,11 +199,15 @@ export function googleSignIn(next: string) {
 /** The page's half of ./passkey-sign-in.ts. It names no credential, so the browser offers the
  *  passkeys it holds for this site. `alone`: the page offers no other way to sign in. `look` is
  *  the button's class: by default the main action alone, else another way under an "or"; "" is a
- *  main action in a stack of ways, with no "or" (`methodsSignInPage`). */
+ *  main action in a stack of ways, with no "or" (`methodsSignInPage`). `asksAtOpen`: the script
+ *  also asks once when the page opens, with no press. A browser may refuse that (Safari takes one
+ *  such call a page load, and not always), and a person may close the prompt: both say nothing,
+ *  and the button is the way on. */
 export function passkeySignIn(
   next: string,
   alone?: "alone",
   look: string = alone ? "" : "secondary",
+  asksAtOpen = false,
 ) {
   const or = look === "secondary" ? `<p class="or">or</p>` : "";
   return {
@@ -209,12 +227,15 @@ const post = async (path, body) => {
   if (!answer.ok) throw new Error(result.error);
   return result;
 };
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
+// One ask at a time: a press ends the ask before it, whose refusal then says nothing.
+let asking;
+const signIn = async (pressed) => {
+  asking?.abort();
+  const ask = (asking = new AbortController());
   status.textContent = "Waiting for your passkey…";
   try {
     const { statement, challenge } = await post("/sign-in/passkey/challenge", {});
-    const assertion = await navigator.credentials.get({ publicKey: {
+    const assertion = await navigator.credentials.get({ signal: ask.signal, publicKey: {
       challenge: bytes(challenge),
       rpId: location.hostname,
       userVerification: "required",
@@ -230,9 +251,16 @@ form.addEventListener("submit", async (event) => {
     });
     location.assign(next);
   } catch (error) {
-    status.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.message || "The passkey did not sign you in.";
+    if (ask !== asking) return;
+    // the page's own ask, closed by the person or refused by the browser, is no fault of theirs
+    const unused = pressed ? "No passkey was used. Try again." : "";
+    status.textContent = error.name === "NotAllowedError" ? unused : error.message || "The passkey did not sign you in.";
   }
-});`,
+};
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  signIn(true);
+});${asksAtOpen ? "\nsignIn(false);" : ""}`,
   };
 }
 

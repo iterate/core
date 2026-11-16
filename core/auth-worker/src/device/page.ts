@@ -54,7 +54,7 @@ export async function devicePageResponse(env: Env, request: Request) {
   const here = typed
     ? `${VERIFICATION_PATH}?${new URLSearchParams({ user_code: typed })}`
     : VERIFICATION_PATH;
-  if (!session) return seeOther(signInHref(env, here));
+  if (!session) return seeOther(signInHref(here));
   const { domain } = iterateConfigOf(env);
   const standing = await standingOf(env, session);
   if (standing === "not-member") return notMemberPage({ domain, email: session.email });

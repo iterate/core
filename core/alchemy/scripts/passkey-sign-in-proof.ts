@@ -637,22 +637,23 @@ if (env.ITERATE_PROTOTYPE_TOKEN)
     },
   );
 
-await run("signed out, the passkey signs in from the sign-in page", async () => {
-  await context.clearCookies();
-  await page.goto(`${issuer}/keys`);
-  const signIn = new URL(page.url()).pathname;
-  await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-  await page.waitForURL(`${issuer}/keys`);
-  await page.locator("li", { hasText: label }).waitFor();
-  // /sessions lists this browser, opened by the passkey
-  await page.goto(`${issuer}/sessions`);
-  const here = (await page.locator("li[data-current]").innerText()).replace(/\s+/g, " ");
-  must(
-    here.includes("(this browser)") && here.includes("signed in with a passkey"),
-    `/sessions says of this browser: ${here}`,
-  );
-  return `at /keys as the key's member, through ${signIn}; /sessions lists this browser: ${here}`;
-});
+await run(
+  "signed out, the sign-in page asks for the passkey as it opens, with no press",
+  async () => {
+    await context.clearCookies();
+    await page.goto(`${issuer}/keys`);
+    await page.waitForURL(`${issuer}/keys`);
+    await page.locator("li", { hasText: label }).waitFor();
+    // /sessions lists this browser, opened by the passkey
+    await page.goto(`${issuer}/sessions`);
+    const here = (await page.locator("li[data-current]").innerText()).replace(/\s+/g, " ");
+    must(
+      here.includes("(this browser)") && here.includes("signed in with a passkey"),
+      `/sessions says of this browser: ${here}`,
+    );
+    return `at /keys as the key's member, by the page's own ask; /sessions lists this browser: ${here}`;
+  },
+);
 
 await run(
   "ending another browser on /sessions signs that browser out, and this one stays",
@@ -668,7 +669,6 @@ await run(
     for (const credential of credentials)
       await theirCdp.send("WebAuthn.addCredential", { authenticatorId: copy, credential });
     await theirPage.goto(`${issuer}/keys`);
-    await theirPage.getByRole("button", { name: "Sign in with a passkey" }).click();
     await theirPage.waitForURL(`${issuer}/keys`);
     await theirPage.goto(`${issuer}/sessions`);
     const theirSession = await theirPage.locator("li[data-current]").getAttribute("data-session");
@@ -719,16 +719,15 @@ await run("a passkey that did not verify its user signs nobody in", async () => 
 await run("the passkey removed, its session ends and it signs nobody in", async () => {
   await context.clearCookies();
   await page.goto(`${issuer}/keys`);
-  await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   await page.waitForURL(`${issuer}/keys`);
   await page.locator("li", { hasText: label }).getByRole("button", { name: "Remove" }).click();
-  // the session was this passkey's, so it ends with it
+  // the session was this passkey's, so it ends with it; the sign-in page asks as it opens, and a
+  // press asks again
   await page.waitForURL((url) => url.pathname.startsWith("/sign-in"));
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   const refusal =
     (await page.locator("#passkey-status").filter({ hasText: /\./ }).textContent()) || "";
   must(refusal.includes("not one this mind knows"), `the page says ${refusal}`);
-  // `/sign-in` on a stack with two ways to sign in, `/sign-in/email` with the mailed code alone
   must(new URL(page.url()).pathname.startsWith("/sign-in"), `at ${page.url()}`);
   return `its session ends, and ${refusal}`;
 });

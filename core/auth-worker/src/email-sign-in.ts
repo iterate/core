@@ -63,7 +63,7 @@ export async function emailSignInResponse(env: Env, request: Request) {
 
 /** Whether a new address gets a code here. It is the stack's rule, which its config makes
  *  public, and never one address's standing: every address is still answered alike. */
-function anyoneGetsACode(env: Env) {
+export function anyoneGetsACode(env: Env) {
   const { methods, allow } = iterateConfigOf(env).login;
   return Boolean(methods.email?.anyone || allow.some((rule) => "everyone" in rule));
 }

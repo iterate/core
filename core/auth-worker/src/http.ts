@@ -19,7 +19,7 @@ import {
   deviceRegistrationResponse,
   metadataResponse,
 } from "./device/start.ts";
-import { emailSignInResponse } from "./email-sign-in.ts";
+import { EMAIL_SIGN_IN_PATH, emailSignInResponse } from "./email-sign-in.ts";
 import { dashOriginOf, type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
 import { firstOwnerResponse } from "./first-owner.ts";
 import { googleSignInResponse } from "./google-sign-in.ts";
@@ -44,7 +44,13 @@ import {
 import { passkeySignInResponse } from "./passkey-sign-in.ts";
 import { selfTestResponse } from "./self-test.ts";
 import { sessionsResponse } from "./sessions-page.ts";
-import { methodsAskedIn, SIGN_IN_PATH, signInHref, signOutResponse } from "./sign-in.ts";
+import {
+  AFTER_SIGN_OUT,
+  codeComesFirst,
+  methodsAskedIn,
+  SIGN_IN_PATH,
+  signOutResponse,
+} from "./sign-in.ts";
 import { statementsResponse } from "./statements.ts";
 import { whoIs } from "./who-is.ts";
 
@@ -97,9 +103,20 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
     if (methods?.length === 0) return nobodySignsInPage();
     if (methods)
       return methodsSignInPage({ domain, next, methods, app: await askingAppOf(env, next) });
-    return login.methods.email
-      ? Response.redirect(`${issuerOf(env)}${signInHref(env, next)}`, 302)
-      : signInPage(domain, next, offersGoogle(env), await askingAppOf(env, next));
+    const app = await askingAppOf(env, next);
+    if (codeComesFirst(env, app))
+      return Response.redirect(
+        `${issuerOf(env)}${EMAIL_SIGN_IN_PATH}?${new URLSearchParams({ next })}`,
+        302,
+      );
+    return signInPage({
+      domain,
+      next,
+      google: offersGoogle(env),
+      mailsCodes: Boolean(login.methods.email),
+      app,
+      asksAtOpen: !url.searchParams.has(AFTER_SIGN_OUT),
+    });
   }
   const members = await membersResponse(env, request, (token, resource) =>
     whoIs(env, token, resource),

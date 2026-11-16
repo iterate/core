@@ -74,7 +74,7 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
       return json({ error: "use this site's own page" }, 403);
     if (!session) return json({ error: "sign in first" }, 401);
   }
-  const signIn = `${issuer}${signInHref(env, pathname + url.search)}`;
+  const signIn = `${issuer}${signInHref(pathname + url.search)}`;
   if (!session) return Response.redirect(signIn, 302);
   if (standing === "not-member")
     return post

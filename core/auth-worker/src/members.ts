@@ -15,6 +15,7 @@ import {
 import { sha256Hex } from "./device/protocol.ts";
 import { endSessions, type Session, sessionOf } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { EMAIL_SIGN_IN_PATH } from "./email-sign-in.ts";
 import { blockedOf } from "./blocked.ts";
 import { clientsWithAccess, endFields, type Ends, endsOf, logoOriginsOf } from "./access-list.ts";
 import { type ClientWithAccess, endAccess, endGrantsOf, sessionsByClientOf } from "./oauth.ts";
@@ -121,7 +122,7 @@ export async function membersResponse(
   if (!session)
     return new Response(null, {
       status: 303,
-      headers: { location: signInHref(env, MEMBERS_PATH), "cache-control": "no-store" },
+      headers: { location: signInHref(MEMBERS_PATH), "cache-control": "no-store" },
     });
   const standing = await standingOf(env, session);
   if (standing === "not-member")
@@ -466,8 +467,12 @@ async function membersPage(
   env: Env,
   { owner, error, notice }: { owner: boolean; error?: string; notice?: string },
 ) {
-  const { domain } = iterateConfigOf(env);
+  const { domain, login } = iterateConfigOf(env);
   const { config, added } = await membersOf(env);
+  // The address an owner passes on: the mind's sign-in asks for a passkey as it opens, and a new
+  // member holds none yet.
+  const codePage = `${issuerOf(env)}${EMAIL_SIGN_IN_PATH}`;
+  const firstSignIn = login.methods.email ? `, at <a href="${codePage}">${codePage}</a>` : "";
   const fromConfig = config
     .map(
       (rule) =>
@@ -531,7 +536,7 @@ async function membersPage(
         <button type="submit">Add a member</button>
         <p id="status" class="muted" role="status"></p>
       </form>
-      <p class="muted">Your passkey signs the add: a session or a token alone adds no one. A new member signs in once with a code by email, and adds a passkey. After that, only the passkey signs the member in.</p>
+      <p class="muted">Your passkey signs the add: a session or a token alone adds no one. A new member signs in once with a code by email${firstSignIn}, and adds a passkey. After that, only the passkey signs the member in.</p>
       ${
         owner
           ? `<h2 id="access">Apps and devices with access</h2>

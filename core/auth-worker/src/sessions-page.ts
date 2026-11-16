@@ -41,7 +41,7 @@ export async function sessionsResponse(env: Env, request: Request): Promise<Resp
   if (!session)
     return post
       ? errorPage("You are signed out. Sign in and try again.", 401)
-      : seeOther(signInHref(env, SESSIONS_PATH));
+      : seeOther(signInHref(SESSIONS_PATH));
   if ((await standingOf(env, session)) === "passkey-owed")
     return passkeyOwedResponse(SESSIONS_PATH);
   if (!post) return sessionsPage(env, session);

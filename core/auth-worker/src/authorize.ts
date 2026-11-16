@@ -87,7 +87,7 @@ async function describe(env: Env, request: Request) {
   if (methods?.length === 0) return nobodySignsInPage();
   const session = await sessionFor(env, request, methods);
   const cloudflare = session?.method === "cloudflare";
-  const signIn = `${issuerOf(env)}${signInHref(env, here)}`;
+  const signIn = `${issuerOf(env)}${signInHref(here)}`;
   if (!session) return Response.redirect(signIn, 302);
   // OpenID Connect's `prompt`. `login`: sign in again, whoever is signed in. `select_account`: say
   // who is signed in and offer another account. Either comes back here without it. A sign-in at

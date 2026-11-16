@@ -38,10 +38,12 @@ test("the sign-in page is the narrow card: the mark, a named email field, one ac
   expect(html).toContain(`<button type="submit">Send a code</button>`);
   expect(html).toContain(`<p class="or">or</p>`);
   expect(html).toContain(`<button type="submit" class="secondary">Sign in with a passkey</button>`);
+  // a person who came for a code is not asked for a passkey as the page opens
+  expect(html).not.toContain("signIn(false)");
 });
 
 test("a mind that mails no code offers the passkey as the one action", async () => {
-  const html = await kept("sign-in-passkey-alone", signInPage(DOMAIN, "/"));
+  const html = await kept("sign-in-passkey-alone", signInPage({ domain: DOMAIN, next: "/" }));
   expect(html).toContain(`<button type="submit">Sign in with a passkey</button>`);
   expect(html).not.toContain(`class="or"`);
 });
@@ -81,7 +83,9 @@ test("an app that takes Cloudflare alone shows one button in Cloudflare's orange
     /class="cloudflare">[^]*Sign in with Cloudflare<\/button>[^]*<button type="submit">Sign in with a passkey<\/button>[^]*class="outline">[^]*Sign in with Google<\/button>/,
   );
   expect(three).not.toContain(`class="or"`);
+  // the passkey's script waits for the press: an app's page asks for no passkey as it opens
   expect(three).toContain("<script");
+  expect(three).not.toContain("signIn(false)");
   // the app's own icon is the card's one mark
   const icon = await kept(
     "sign-in-app-icon",

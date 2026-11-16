@@ -4,18 +4,25 @@ import { AccountFacts } from "./account-facts.ts";
 import { clearCloudflareSessionCookie, clearSessionCookie, endThisSession } from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf, offersMethod } from "./env.ts";
 import { errorPage } from "./pages.ts";
-import { EMAIL_SIGN_IN_PATH } from "./email-sign-in.ts";
+import type { AskingApp } from "./asking-app.ts";
+import { anyoneGetsACode } from "./email-sign-in.ts";
 import { mindHostResourceOf } from "./oauth.ts";
 
 export const SIGN_IN_PATH = "/sign-in";
 
-/** Where a person signs in: the page of the ways an app takes, when the request names them
- *  (`methodsAskedIn`); else the mailed code's page when the mind mails codes, else the page with
- *  the passkey alone. Each has the passkey's button. */
-export function signInHref(env: Env, next: string) {
-  const mailed = iterateConfigOf(env).login.methods.email && !methodsAskedIn(env, next);
-  return `${mailed ? EMAIL_SIGN_IN_PATH : SIGN_IN_PATH}?${new URLSearchParams({ next })}`;
-}
+/** On the sign-in link of a person who just signed out: the passkey's page waits for a press. */
+export const AFTER_SIGN_OUT = "signed-out";
+
+/** Where a person signs in (./http.ts): the page of the ways an app takes, when the request names
+ *  them (`methodsAskedIn`); else the passkey's page, or the mailed code's (`codeComesFirst`). */
+export const signInHref = (next: string) => `${SIGN_IN_PATH}?${new URLSearchParams({ next })}`;
+
+/** Whether a sign-in opens on the mailed code's page: for an app's own people, on a stack where
+ *  anyone may sign in. They hold no passkey to be asked for. A sign-in for the mind itself, or
+ *  for an app that says it is for members (./asking-app.ts), opens on the passkey's page: every
+ *  member signs in with one. */
+export const codeComesFirst = (env: Env, app: AskingApp | null) =>
+  Boolean(app && !app.members && iterateConfigOf(env).login.methods.email && anyoneGetsACode(env));
 
 /** THE WAYS TO SIGN IN THAT AN APP TAKES, as the authorization request `next` (a path of this
  *  issuer) names them: RFC 9470's `acr_values`, which ingress copies there from the app's guard
@@ -39,16 +46,18 @@ export function methodsAskedIn(env: Env, next: string): SignInMethod[] | null {
   return [...new Set(offered)];
 }
 
-/** Ends this browser's session at the issuer: its row, and its cookie. With `next` (a path of this origin), the sign-in
- *  follows and comes back there: that is how a person changes account, since a browser holds one
- *  session. An app's own session on a mind hostname is the boundary's, and is not ended here. */
+/** Ends this browser's session at the issuer: its row, and its cookie. The sign-in follows, and
+ *  waits for a press (`AFTER_SIGN_OUT`): a person who just signed out is not asked for a passkey.
+ *  It comes back to `next` (a path of this origin; the start page with none): that is how a person
+ *  changes account, since a browser holds one session. An app's own session on a mind hostname is
+ *  the boundary's, and is not ended here. */
 export async function signOutResponse(env: Env, request: Request) {
   if (request.headers.get("origin") !== issuerOf(env))
     return errorPage("Sign out from this site's own page.", 403);
   const form = await request.formData().catch(() => null);
-  const next = String(form?.get("next") || "");
+  const next = sameOriginPath(String(form?.get("next") || "/"), issuerOf(env));
   const headers = new Headers({
-    location: next ? signInHref(env, sameOriginPath(next, issuerOf(env))) : "/",
+    location: `${signInHref(next)}&${AFTER_SIGN_OUT}=1`,
     "cache-control": "no-store",
   });
   // a sign-in at Cloudflare is this browser's too

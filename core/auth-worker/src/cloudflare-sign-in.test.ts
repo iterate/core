@@ -284,8 +284,8 @@ test("an app that names no way gets the mind's own sign-in, where Cloudflare's s
   cloudflareOf({ success: true, result: { id: "cf-owner", email: OWNER } });
   const cloudflare = cloudflareCookieOf((await signedInAtCloudflare(env)).answer);
   const other = await authorizationOf(env, OTHER);
-  // as if signed out: the mind's own sign-in, which mails a code here
-  expect(pathOf(await other.ask(cloudflare))).toBe("/sign-in/email");
+  // as if signed out: the mind's own sign-in, the passkey's page
+  expect(pathOf(await other.ask(cloudflare))).toBe("/sign-in");
   const mailed = cookiePair(
     (
       await sessionCookie(
@@ -327,7 +327,7 @@ test("an app that names no way gets the mind's own sign-in, where Cloudflare's s
     env,
     ctx,
   );
-  expect(pathOf(api)).toBe("/sign-in/email");
+  expect(pathOf(api)).toBe("/sign-in");
 });
 
 test("the mailed code's page of an app that names its ways offers none of the others", async () => {

@@ -135,7 +135,7 @@ test("sign-out clears the cookie when D1 fails: the row is not ended, and the co
     }),
   );
   expect(answer).toMatchObject({ status: 303 });
-  expect(answer.headers.get("location")).toBe("/");
+  expect(answer.headers.get("location")).toBe("/sign-in?next=%2F&signed-out=1");
   expect(answer.headers.getSetCookie()).toContainEqual(
     expect.stringMatching(/^__Host-iterate-auth-session=; .*Max-Age=0/),
   );

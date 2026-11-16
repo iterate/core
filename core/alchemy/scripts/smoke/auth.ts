@@ -487,12 +487,12 @@ async function emailChecks(domain: string): Promise<Check[]> {
   };
   return [
     await attempt("email: the sign-in offers the mailed code", async () => {
+      // the mind's own sign-in is the passkey's page, whose one link leads to the mailed code
       const response = await fetch(`${issuer}/sign-in`, { redirect: "manual" });
-      const body = await response.text();
-      const location = response.headers.get("location") || "";
+      const linked = (await response.text()).includes('<a href="/sign-in/email?');
       return {
-        pass: location.includes("/sign-in/email") || body.includes('action="/sign-in/email"'),
-        detail: `${response.status}${location ? ` to ${new URL(location, issuer).pathname}` : ""}`,
+        pass: response.status === 200 && linked,
+        detail: `${response.status}, ${linked ? "with the link" : "with no link"} to /sign-in/email`,
       };
     }),
     await attempt(

@@ -4,6 +4,7 @@ import { expect, test, vi } from "vitest";
 import { appOf, appTile, askingAppOf, saidIn } from "./asking-app.ts";
 import { emailSignInResponse } from "./email-sign-in.ts";
 import type { Env } from "./env.ts";
+import { authResponse } from "./http.ts";
 import { hostCallbackOf, hostClientOf, oauthHelpers } from "./oauth.ts";
 import { appSignIn, chooserPage, consentPage, signInPage } from "./pages.ts";
 
@@ -290,7 +291,7 @@ test("the four pages of an app's sign-in agree: each shows the app's icon and it
   const pages = {
     address: await mailed(`/sign-in/email?${new URLSearchParams({ next })}`),
     code: await mailed("/sign-in/email/code", { cookie: "__Host-iterate-auth-code=abc" }),
-    passkey: signInPage(DOMAIN, next, false, app),
+    passkey: signInPage({ domain: DOMAIN, next, app }),
     chooser: chooserPage({ domain: DOMAIN, email: "guest@example.net", here: next, app }),
   };
   for (const [name, answer] of Object.entries(pages)) {
@@ -368,7 +369,11 @@ test("the address page of an app for members, as the app's own manifest makes it
 
 test("the passkey's page, the chooser and a consent for the app's host name the host, and a host is text", async () => {
   const app = { host: HOST, origin: ORIGIN, name: "Guestbook", icon: null, members: false };
-  const passkey = await signInPage(DOMAIN, "/", false, { ...app, host: `<b>${HOST}</b>` }).text();
+  const passkey = await signInPage({
+    domain: DOMAIN,
+    next: "/",
+    app: { ...app, host: `<b>${HOST}</b>` },
+  }).text();
   expect(passkey).toContain(`<h1>Sign in to &#60;b&#62;${HOST}&#60;/b&#62;</h1>`);
   expect(passkey).not.toContain(`<b>${HOST}`);
   // an app with no icon has no tile of initials: iterate's mark is the card's one
@@ -408,6 +413,39 @@ test("the passkey's page, the chooser and a consent for the app's host name the 
 
 /** A stack with an in-memory store, which already holds what the named hosts' apps say, as heard
  *  a moment ago. */
+test("on a stack where anyone may sign in, an app's own people start at the mailed code; an app for members starts at the passkey", async () => {
+  const dash = `dash.${DOMAIN}`;
+  const stack = stackWith({
+    [HOST]: { name: "Guestbook", icon: null },
+    [dash]: { name: "Dash", icon: null, members: true },
+  });
+  const signInFor = async (host: string) => {
+    const next = `/oauth2/auth?${new URLSearchParams({ client_id: await hostClientOf(stack.env, host), redirect_uri: hostCallbackOf(`https://${host}`), resource: `https://${host}` })}`;
+    const answer = await authResponse(
+      new Request(`https://iterate.${DOMAIN}/sign-in?${new URLSearchParams({ next })}`),
+      stack.env,
+      {} as ExecutionContext,
+    );
+    return {
+      next,
+      status: answer.status,
+      to: answer.headers.get("location"),
+      html: await answer.text(),
+    };
+  };
+  // a guest of the guestbook holds no passkey: no browser prompt, the address field
+  const guest = await signInFor(HOST);
+  expect(guest).toMatchObject({
+    status: 302,
+    to: `https://iterate.${DOMAIN}/sign-in/email?${new URLSearchParams({ next: guest.next })}`,
+  });
+  // the Dash is for members, and a member holds a passkey
+  const member = await signInFor(dash);
+  expect(member).toMatchObject({ status: 200, to: null });
+  expect(member.html).toContain(`<h1>Sign in to ${dash}</h1>`);
+  expect(member.html).toContain("\nsignIn(false);");
+});
+
 function stackWith(
   said: Record<string, { name: string | null; icon: string | null; members?: boolean }>,
 ) {

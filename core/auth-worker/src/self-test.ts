@@ -24,7 +24,7 @@ export async function selfTestResponse(env: Env, request: Request): Promise<Resp
   if (!session)
     return facts
       ? Response.json({ error: "signed out" }, { status: 401 })
-      : Response.redirect(`${issuerOf(env)}${signInHref(env, SELF_TEST_PATH)}`, 302);
+      : Response.redirect(`${issuerOf(env)}${signInHref(SELF_TEST_PATH)}`, 302);
   const standing = await standingOf(env, session);
   const { domain } = iterateConfigOf(env);
   if (standing === "not-member")

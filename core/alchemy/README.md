@@ -269,8 +269,14 @@ person `allow` names by address, gets a first passkey by a deploy's ticket
 makes on `/members`, with a press of the owner's passkey: it is for a member with no passkey, and
 signs that member in once, within 24 hours, to add one. The owner passes the link on.
 
-A member signs in with a passkey, and with nothing else. Every stack's sign-in page has "Sign in
-with a passkey": one the member added on `https://iterate.<zone>/keys`. It signs in the member
+A member signs in with a passkey, and with nothing else. The mind's own sign-in page,
+`https://iterate.<zone>/sign-in`, asks the browser for the passkey as it opens, and has "Sign in
+with a passkey" for a browser that wants a press first: one the member added on
+`https://iterate.<zone>/keys`. Nothing is typed there. On a stack that mails codes, one link under
+the button leads to the code's page, `/sign-in/email`: for a member's first sign-in (pass that
+address on to a new member) and for a device that holds no passkey. Where anyone may sign in, the
+sign-in of an app that does not say it is for members opens on the code's page, because its people
+hold no passkey. The passkey signs in the member
 whose key it is, while that address is a member and the key is not removed, and the passkey must
 verify its user (a PIN, a fingerprint or a face). Its session on `iterate.<zone>` ends when that
 passkey is removed. The grants that session gave do not: an app or a CLI it signed in stays so
