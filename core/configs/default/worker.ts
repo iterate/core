@@ -1,5 +1,5 @@
 import { EmailContract, type EmailState } from "iterate/email";
-import { errorCode } from "iterate/lib";
+import { errorCode, reportIssue } from "iterate/lib";
 import {
   IterateConfigEntrypoint,
   type Integration,
@@ -64,14 +64,23 @@ export default class extends IterateConfigEntrypoint {
         // This code here is your init hook. The platform appends `mind/worker-updated` on `/`
         // whenever it publishes a commit of this repo, so this case runs again after every commit:
         // keep it idempotent. Only the platform appends this type.
+        // EACH STEP BY ITSELF (`publishStep`, below): a step that throws is reported, and the steps
+        // after it still run, here and in the hooks after the switch. Until 16 Nov 2026 the first
+        // throw ended the whole hook at every publish, and nothing said so.
         // The agents (agents.ts): the catalog on /agents and the `itx.agents` rule.
-        await installAgents(itx);
+        await publishStep("agents", () => installAgents(itx));
         // where each kind's file is, for the Dash's agent view (`agentKinds`, above)
-        await publishAgentKinds(itx, agentKinds);
+        await publishStep("agent-kinds", () => publishAgentKinds(itx, agentKinds));
         // The onboarding agent, where a new owner starts: the Dash greets them in its chat
         // (apps/dash/public/app.js, `openers`), and it reads onboarding.md. Creating it starts no
-        // model turn.
-        await itx.agents.create("/agents/onboarding");
+        // model turn. An owner who deleted it has no onboarding agent, for good: the platform
+        // refuses to make a deleted agent again, and that is no fault of the publish.
+        await publishStep("onboarding-agent", () =>
+          itx.agents.create("/agents/onboarding").catch((error: unknown) => {
+            if (!/\bdeleted\b/.test(error instanceof Error ? error.message : String(error)))
+              throw error;
+          }),
+        );
         // Voice, when it is on: the service at `itx.voice`, which the Voice app calls.
         // await installVoice(itx);
         // A heartbeat, for a mind that should wake on its own (to check on itself and repair what
@@ -502,4 +511,15 @@ async function mindMailSettingEvents(itx: Itx, offset: number) {
     after = page.scannedThroughOffset;
   }
   return settings;
+}
+
+/** One step of the publish hook (the `mind/worker-updated` case). A step that throws is reported
+ *  (`config.publish-hook`, in the Workers' log, with the step's name) and does not stop the steps
+ *  after it: one fault must not keep every later install from running at every publish. */
+async function publishStep(step: string, run: () => Promise<unknown>): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    reportIssue("config.publish-hook", error, { step });
+  }
 }
