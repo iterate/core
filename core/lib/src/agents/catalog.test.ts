@@ -453,6 +453,26 @@ test.for<{
     titled: [{ key: `agents/titled:${path}@10`, metadata: { title: "Fix the build" } }],
   },
   {
+    // About appends `agent/summary-updated` beside `itx/described`; the catalog's own
+    // `itx/described` never comes back (no copy row takes an `itx/*` event), so it goes round once
+    name: "a title set in About, then the same title of the agent's: written once",
+    events: [
+      announced(path),
+      title("Coding chief of staff", 20),
+      title("Coding chief of staff", 30),
+    ],
+    titled: [{ key: `agents/titled:${path}@20`, metadata: { title: "Coding chief of staff" } }],
+  },
+  {
+    name: "the same, landing in the other order: written once",
+    events: [
+      announced(path),
+      title("Coding chief of staff", 30),
+      title("Coding chief of staff", 20),
+    ],
+    titled: [{ key: `agents/titled:${path}@30`, metadata: { title: "Coding chief of staff" } }],
+  },
+  {
     name: "a batch delivered again: nothing more",
     events: [announced(path), title("Fix the build", 10), title("Fix the build", 10)],
     titled: [{ key: `agents/titled:${path}@10`, metadata: { title: "Fix the build" } }],
