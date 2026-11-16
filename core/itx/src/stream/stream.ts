@@ -496,8 +496,7 @@ export class Stream {
     return { events, scannedThroughOffset, atHead };
   }
 
-  // No await between the log scan and the waiter's registration, or a racing commit is lost.
-  waitForEvent(filter: WaitForEventFilter = {}): Promise<StreamEvent> {
+  async waitForEvent(filter: WaitForEventFilter = {}): Promise<StreamEvent> {
     const types = filter.type ? [filter.type].flat() : [];
     const payload = Object.entries(filter.payload || {});
     const matches = (event: StreamEvent) =>
@@ -507,32 +506,79 @@ export class Stream {
       );
     const afterOffset = filter.afterOffset ?? this.highestAssignedOffset();
     const timeoutMs = Math.min(filter.timeoutMs ?? 30_000, 120_000);
-    let cursor = afterOffset;
-    for (;;) {
-      const page = this.read(cursor, 500);
-      for (const event of page.events) if (matches(event)) return Promise.resolve(event);
-      if (page.atHead) break;
-      cursor = page.scannedThroughOffset;
-    }
-    return new Promise<StreamEvent>((resolve, reject) => {
-      const waiter: WaitForEventWaiter = {
+    const started = Date.now();
+    const replayThrough = this.highestDurableOffset();
+    const timedOut = () =>
+      codedError(
+        "WAIT_TIMEOUT",
+        `waitForEvent: no ${types.length === 0 ? "" : `${types.map((type) => `"${type}"`).join(" | ")} `}event after offset ${afterOffset} within ${timeoutMs}ms`,
+      );
+    let ended = false;
+    let liveMatch: StreamEvent | undefined;
+    const finishAtDeadline = () => {
+      if (liveMatch) return liveMatch;
+      throw timedOut();
+    };
+    let pages = 0;
+    let readEvents = 0;
+    let waiter!: WaitForEventWaiter;
+    // Register before the first yield: a live ephemeral cannot be recovered from the durable log.
+    const waiting = new Promise<StreamEvent>((resolve, reject) => {
+      waiter = {
         matches,
         afterOffset,
-        resolve,
+        resolve: (event) => {
+          liveMatch = event;
+          resolve(event);
+        },
         reject,
         timer: setTimeout(() => {
           const at = this.#waitForEventWaiters.indexOf(waiter);
           if (at !== -1) this.#waitForEventWaiters.splice(at, 1);
-          reject(
-            codedError(
-              "WAIT_TIMEOUT",
-              `waitForEvent: no ${types.length === 0 ? "" : `${types.map((type) => `"${type}"`).join(" | ")} `}event after offset ${afterOffset} within ${timeoutMs}ms`,
-            ),
-          );
+          reject(timedOut());
         }, timeoutMs),
       };
       this.#waitForEventWaiters.push(waiter);
     });
+    const history = (async () => {
+      let cursor = afterOffset;
+      while (!ended && cursor < replayThrough) {
+        if (pages > 0 && Date.now() - started >= timeoutMs) return finishAtDeadline();
+        const page = this.read(cursor, 500);
+        pages += 1;
+        readEvents += page.events.length;
+        for (const event of page.events)
+          if (event.offset <= replayThrough && matches(event)) return event;
+        if (Date.now() - started >= timeoutMs) return finishAtDeadline();
+        if (page.atHead) break;
+        cursor = page.scannedThroughOffset;
+        if (cursor < replayThrough) await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      return undefined;
+    })().finally(() => {
+      if (pages > 1)
+        console.info({
+          event: "stream.wait-history-scanned",
+          path: this.#path,
+          afterOffset,
+          replayThrough,
+          pages,
+          readEvents,
+          elapsedMs: Date.now() - started,
+        });
+    });
+    try {
+      // Search older history until the deadline; keep a live match already received by then.
+      return await Promise.race([
+        history.then((found) => found ?? waiting),
+        waiting.then((event) => history.then((found) => found ?? event)),
+      ]);
+    } finally {
+      ended = true;
+      clearTimeout(waiter.timer);
+      const at = this.#waitForEventWaiters.indexOf(waiter);
+      if (at !== -1) this.#waitForEventWaiters.splice(at, 1);
+    }
   }
 
   // An explicit afterOffset ahead of the head must not be satisfied by an earlier fresh event.

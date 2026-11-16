@@ -48,12 +48,14 @@ export interface StreamPage {
 
 /** `waitForEvent`'s filter: an event type (or one of a list), payload fields the event must carry
  *  with exactly these values (each a JSON primitive, compared with `===`), a floor, a timeout. With
- *  an explicit `afterOffset` the log after it is searched first, so a match that already landed
- *  answers at once. */
+ *  an explicit `afterOffset` the log after it is searched first. Large searches yield between
+ *  pages; an older historical match takes precedence if found before the search deadline. */
 export type WaitForEventFilter = {
   type?: string | string[];
   payload?: Record<string, string | number | boolean | null>;
   afterOffset?: number;
+  /** The time budget for the historical search and subsequent wait. A live match received within
+   *  the budget is kept if the historical search reaches its deadline. */
   timeoutMs?: number;
 };
 
