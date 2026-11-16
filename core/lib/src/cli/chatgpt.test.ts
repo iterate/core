@@ -4,8 +4,10 @@
 import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect, onTestFinished, test, vi } from "vitest";
+import type { MindItx } from "../node.ts";
 import {
   authorizeUrl,
+  connectChatgpt,
   connectedUrl,
   finishScript,
   hostScript,
@@ -80,14 +82,27 @@ test("with no Cloud the listener's own page says whether ChatGPT connected", asy
 });
 
 test("the Cloud's page is on the origin the mind names, and only on an origin", () => {
-  expect(connectedUrl("https://cloud.example.com", "example.com")?.href).toBe(
-    "https://cloud.example.com/connected?ai=chatgpt&domain=example.com",
+  expect(connectedUrl("https://cloud.example.com", "example.com", { state: "passed" })?.href).toBe(
+    "https://cloud.example.com/connected?ai=chatgpt&domain=example.com&test=passed",
   );
   expect(
     [null, "", "cloud.example.com", "https://cloud.example.com/x", "javascript:alert(1)"].map(
-      (cloud) => connectedUrl(cloud, "example.com"),
+      (cloud) => connectedUrl(cloud, "example.com", { state: "passed" }),
     ),
   ).toEqual([null, null, null, null, null]);
+});
+
+test("the Cloud's page says the test's outcome: OpenAI's words for a failed one, cut at 300", () => {
+  const failed = connectedUrl("https://cloud.example.com", "example.com", {
+    state: "failed",
+    why: `OpenAI answered 403: ${"x".repeat(400)}`,
+  });
+  expect(failed?.searchParams.get("test")).toBe("failed");
+  expect(failed?.searchParams.get("why")).toHaveLength(300);
+  expect(failed?.searchParams.get("why")).toMatch(/^OpenAI answered 403: x+$/);
+  const skipped = connectedUrl("https://cloud.example.com", "example.com", { state: "skipped" });
+  expect(skipped?.searchParams.get("test")).toBe("skipped");
+  expect(skipped?.searchParams.has("why")).toBe(false);
 });
 
 test("the listener ends with OpenAI's description when the sign-in was refused", async () => {
@@ -203,4 +218,67 @@ test("the host script names the Cloud of the newest enrolment the Cloud signed, 
     "https://a.example.com",
     null,
   ]);
+});
+
+test("the test request runs before the browser moves on, and the Cloud's page says how it went", async () => {
+  const connectWith = async (port: number, answerOfTest: () => string) => {
+    const calls: string[] = [];
+    const itx = {
+      run: async (script: string) => {
+        if (script.includes("Reply with the single word")) {
+          calls.push("test");
+          return answerOfTest();
+        }
+        if (script.includes("authorization_code")) {
+          calls.push("finish");
+          return { email: "ada@example.com", plan: "plus" };
+        }
+        calls.push("host");
+        return { hostId: "urn:uuid:h", connected: false, cloud: "https://cloud.example.com" };
+      },
+    } as unknown as MindItx;
+    let browser: Promise<{ location: string | null; callsThen: string[] }> | undefined;
+    const connected = await connectChatgpt({
+      itx,
+      address: "example.com",
+      test: true,
+      port,
+      print: () => {},
+      openBrowser: (url) => {
+        const state = url.searchParams.get("state");
+        browser = fetch(
+          `http://127.0.0.1:${port}/auth/callback?state=${state}&code=c&client_id=x`,
+          {
+            redirect: "manual",
+          },
+        ).then((response) => ({
+          location: response.headers.get("location"),
+          callsThen: [...calls],
+        }));
+      },
+    }).catch((error: Error) => ({ error: error.message }));
+    return { connected, browser: await browser };
+  };
+  expect(await connectWith(41459, () => "ready")).toMatchObject({
+    connected: { test: "ready" },
+    browser: {
+      callsThen: ["host", "finish", "test"],
+      location: "https://cloud.example.com/connected?ai=chatgpt&domain=example.com&test=passed",
+    },
+  });
+  const failed = await connectWith(41460, () => {
+    throw new Error("OpenAI answered 401: no plan");
+  });
+  const back = new URL(failed.browser?.location || "about:blank");
+  expect({
+    connected: failed.connected,
+    callsThen: failed.browser?.callsThen,
+    test: back.searchParams.get("test"),
+    why: back.searchParams.get("why"),
+  }).toEqual({
+    connected: { error: "OpenAI answered 401: no plan" },
+    callsThen: ["host", "finish", "test"],
+    test: "failed",
+    why: "OpenAI answered 401: no plan",
+  });
 });

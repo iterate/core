@@ -8,8 +8,10 @@
 //   2. this process listens on 127.0.0.1:1455 and opens OpenAI's consent in the browser
 //   3. OpenAI sends the browser back here with a code and the client it registered
 //   4. the mind trades the code for tokens and keeps them, in one `itx.run` script
-//   5. the browser's request waits for step 4, then goes to the Cloud's `/connected` page, so the
-//      wizard tab sees that the connect ended (or, with no Cloud, it gets a page that says so)
+//   5. the mind sends one test request on the plan (not with `--no-test`)
+//   6. the browser's request waits for steps 4 and 5, then goes to the Cloud's `/connected` page
+//      with the test's outcome, so the wizard tab sees that the connect ended and whether the plan
+//      answered (or, with no Cloud, it gets a page that says so)
 //
 // The tokens are made inside the mind and never reach this computer. This process holds the
 // PKCE verifier and the code for one sign-in, and sends both to the mind once. The names below
@@ -249,7 +251,14 @@ export function waitForCallback(
 
 /** The Cloud's page that tells an open wizard tab that a connect for `address` ended. It carries
  *  no secret. `cloud` is an origin the mind's log names, so it is checked to be one. */
-export function connectedUrl(cloud: string | null, address: string): URL | null {
+/** What the test request found, for the Cloud's page: the iterate Cloud's AI step opens only on
+ *  `passed`. `failed` carries OpenAI's words; `skipped` is `--no-test`. */
+export type TestOutcome =
+  | { state: "passed" }
+  | { state: "failed"; why: string }
+  | { state: "skipped" };
+
+export function connectedUrl(cloud: string | null, address: string, test: TestOutcome): URL | null {
   if (!cloud) return null;
   let origin: URL;
   try {
@@ -259,7 +268,9 @@ export function connectedUrl(cloud: string | null, address: string): URL | null 
   }
   if (origin.origin !== cloud || !["https:", "http:"].includes(origin.protocol)) return null;
   const url = new URL("/connected", origin);
-  url.search = new URLSearchParams({ ai: "chatgpt", domain: address }).toString();
+  const search = new URLSearchParams({ ai: "chatgpt", domain: address, test: test.state });
+  if (test.state === "failed") search.set("why", test.why.slice(0, 300));
+  url.search = search.toString();
   return url;
 }
 
@@ -363,6 +374,8 @@ export async function connectChatgpt(input: {
   test: boolean;
   print: (line: string) => void;
   openBrowser: (url: URL) => void | Promise<void>;
+  /** The callback's port; only a test changes it (OpenAI redirects to 1455 alone). */
+  port?: number;
 }): Promise<{ message: string; test?: string }> {
   const { itx, address, print } = input;
   // `run` answers unknown; the host script above returns this shape
@@ -379,11 +392,15 @@ export async function connectChatgpt(input: {
   const state = random();
   const verifier = random();
   const url = authorizeUrl({ hostId: mind.hostId, state, verifier, nonce: random() });
-  const callback = await waitForCallback(state, () => {
-    print("Sign in with a personal ChatGPT Plus or Pro account, and allow iterate.");
-    void input.openBrowser(url);
-    print("Waiting for the browser to come back (15 minutes at most)...");
-  });
+  const callback = await waitForCallback(
+    state,
+    () => {
+      print("Sign in with a personal ChatGPT Plus or Pro account, and allow iterate.");
+      void input.openBrowser(url);
+      print("Waiting for the browser to come back (15 minutes at most)...");
+    },
+    input.port,
+  );
   print(`Signed in. ${address} now gets its tokens from OpenAI...`);
   let account: { email?: string; plan?: string };
   try {
@@ -393,13 +410,29 @@ export async function connectChatgpt(input: {
     callback.answer({ kind: "page", failed: true });
     throw error;
   }
-  // only now is the secret stored: the browser goes on to the Cloud's page, or to a page here
-  const cloudPage = connectedUrl(mind.cloud, address);
+  // only now is the secret stored. The test request goes before the browser moves on, so the
+  // Cloud's page learns whether the plan answered: the Cloud hands a person over to their mind only
+  // once its agent can answer
+  let test: string | undefined;
+  let outcome: TestOutcome = { state: "skipped" };
+  let failure: unknown = null;
+  if (input.test) {
+    print("Connected. A test request on the plan...");
+    try {
+      test = (await itx.run(testScript())) as string;
+      outcome = test
+        ? { state: "passed" }
+        : { state: "failed", why: "OpenAI answered with no text." };
+    } catch (error) {
+      failure = error;
+      outcome = { state: "failed", why: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  const cloudPage = connectedUrl(mind.cloud, address, outcome);
   callback.answer(
     cloudPage ? { kind: "redirect", to: cloudPage } : { kind: "page", failed: false },
   );
   const message = `Connected ${account.email || "an account"}${account.plan ? ` (${account.plan})` : ""} to ${address}. The mind keeps the tokens in ${SECRET} and refreshes them itself.`;
-  if (!input.test) return { message };
-  print("Connected. A test request on the plan...");
-  return { message, test: (await itx.run(testScript())) as string };
+  if (failure) throw failure;
+  return input.test ? { message, test } : { message };
 }
