@@ -7,7 +7,6 @@ import { z } from "zod";
 import { codedError, ITERATE_CAUSE_HEADER, loopLimitOf, resolveContextPath } from "iterate/lib";
 import * as cloudflareWorkers from "cloudflare:workers";
 import {
-  InvokeHandle,
   canonicalItxExpressionPrefix,
   itxExpressionStepName,
   normalizedItxExpression,
@@ -113,6 +112,10 @@ export class IterateContextRpcTarget extends RpcTarget {
   readonly #statelessResolverOf: StatelessReach | undefined;
   // Loaded code that keeps an answer keeps nothing open.
   readonly #detachAnswers: boolean;
+  // Loaded code's `cd`: every call goes through the context it came from, where its wall stands.
+  readonly #reachedThrough:
+    | ((steps: ItxExpression, args: unknown[]) => Promise<unknown>)
+    | undefined;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -122,9 +125,11 @@ export class IterateContextRpcTarget extends RpcTarget {
     caller: Caller,
     statelessResolverOf?: StatelessReach,
     detachAnswers = false,
+    reachedThrough?: (steps: ItxExpression, args: unknown[]) => Promise<unknown>,
   ) {
     super();
     this.#detachAnswers = detachAnswers;
+    this.#reachedThrough = reachedThrough;
     this.#contextNamespace = contextNamespace;
     this.#durableObjectAddress = durableObjectAddress;
     this.#sessionTeardown = sessionTeardown;
@@ -156,17 +161,6 @@ export class IterateContextRpcTarget extends RpcTarget {
   }
 
   cd(path: string): IterateContextRpcTarget {
-    // Loaded code's `cd` is an expression through this context's table, where its wall stands.
-    if (this.#caller.app)
-      return new InvokeHandle((steps) =>
-        this.invoke([
-          "itx",
-          ["cd", path],
-          ...(typeof steps === "string" || steps[0] === "itx"
-            ? normalizedItxExpression(steps as ItxExpressionInput).slice(1)
-            : steps),
-        ]),
-      ) as unknown as IterateContextRpcTarget;
     const durableObjectAddress = DurableObjectNameCodec.address(
       resolveContextPath(this.#durableObjectAddress.path, path),
     );
@@ -178,12 +172,21 @@ export class IterateContextRpcTarget extends RpcTarget {
       this.#caller,
       this.#statelessResolverOf,
       this.#detachAnswers,
+      // Loaded code's `cd` is an expression through this context's table, where its wall stands.
+      // Its `subscribe` and `provide` stay this class's own methods: their rows take that road, and
+      // only the lend goes to the context itself.
+      this.#caller.app
+        ? (steps, args) => this.invoke(["itx", ["cd", path], ...steps], ...args)
+        : undefined,
     );
   }
 
   // A terminal `fetch(request)` rides the DO's fetch channel, the only hop that carries a
   // socket-bearing Response back.
   async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
+    // the context it was reached through has read its answer already
+    if (this.#reachedThrough)
+      return this.#reachedThrough(normalizedItxExpression(call).slice(1), args);
     const answer = await this.#dispatch(call, args);
     if (!(answer instanceof Response)) return answer;
     const refused = await loopLimitOf(answer);
@@ -285,7 +288,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       ? [fetchRouteEventTo(normalizedItxExpression(matchString), options.fetchRoute)]
       : [];
     // Loaded code's row goes through its own table first, so a jail's mask refuses it before a lend.
-    if (this.#caller.app) await this.#append(ruleEvent);
+    if (this.#caller.app) await this.#appendBeforeLend(ruleEvent);
     const pager = await lendRpcStubOverPager(
       () => this.#durableObject,
       target,
@@ -342,7 +345,7 @@ export class IterateContextRpcTarget extends RpcTarget {
           ...delivery,
         },
       };
-      if (this.#caller.app) await this.#append(row);
+      if (this.#caller.app) await this.#appendBeforeLend(row);
       const pager = await lendRpcStubOverPager(
         () => this.#durableObject,
         input.target as ClientRpcStub,
@@ -367,9 +370,21 @@ export class IterateContextRpcTarget extends RpcTarget {
 
   // The platform's is spelled `itx.builtins.append`, so a context's own rows never redirect it.
   #append(event: StreamEventInput): Promise<unknown> {
+    if (this.#reachedThrough) return this.#reachedThrough([["append", event]], []);
     return this.#invokeOnDurableObject(
       this.#caller.app ? ["itx", ["append", event]] : ["itx", "builtins", ["append", event]],
     );
+  }
+
+  // Loaded code's row goes through its own table first, so a jail's mask refuses it before a lend.
+  // A rule may send a `cd` elsewhere: then the row is not here, and nor is the lend.
+  async #appendBeforeLend(row: StreamEventInput): Promise<void> {
+    const [committed] = (await this.#append(row)) as StreamEvent[];
+    if (this.#reachedThrough && committed?.path !== this.#durableObjectAddress.path)
+      throw codedError(
+        "FORBIDDEN",
+        `a rule sent this row to ${JSON.stringify(committed?.path)}, not ${JSON.stringify(this.#durableObjectAddress.path)}: no live stub is lent there`,
+      );
   }
 
   // A compare-and-set delete of the row this handle wrote, never a mask: at a child, a "restore"
