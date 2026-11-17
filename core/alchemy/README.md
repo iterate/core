@@ -60,7 +60,31 @@ const person = this.auth.person(request, { methods: ["cloudflare"] });
   deploy forgets the method, and none takes the secret away. Keep the secret where the deploy's
   other credentials are (Doppler).
 - Register `https://iterate.<domain>/sign-in/cloudflare/callback` as a redirect URI of the client,
-  and the scope `user-details.read`. The sign-in asks that one scope and no `offline_access`.
+  and the scope `user-details.read`. The sign-in asks that one scope and no `offline_access`, and
+  revokes the token at once.
+- `keepAccess: true` beside `clientId` keeps Cloudflare's tokens instead: they become a secret of
+  the mind, one for each person, at `/secrets/cloudflare-sign-in-<user id>` (the `userId` of
+  `auth.person`). The sign-in then also asks `offline_access`, so the secret refreshes itself:
+  give the client the grant type `refresh_token`, or Cloudflare refuses the consent. The scope
+  stays `user-details.read`, so the secret reaches no account. It reads the person's details, and
+  it makes a new Cloudflare account in the person's name (`POST /accounts`). The mind's code names
+  it by a placeholder and reads no token:
+
+  ```js
+  const secret = `/secrets/cloudflare-sign-in-${person.userId}`;
+  const answer = await itx.fetch(
+    new Request("https://api.cloudflare.com/client/v4/user", {
+      headers: {
+        authorization: `Bearer getSecret(${JSON.stringify(secret)}, { field: "accessToken" })`,
+      },
+    }),
+  );
+  ```
+
+  A sign-in sets the secret before the person reaches the app, and a later sign-in of the same
+  person replaces it. A person who signed in before the stack kept the access has no secret until
+  they sign in again.
+
 - The app's guard is the rule. Every grant keeps the way its session began by, the boundary stamps
   it beside the person, and the guard refuses any other way on every request, the page's session
   cookie and an MCP client's bearer alike. A person refused that way is signed in again on that

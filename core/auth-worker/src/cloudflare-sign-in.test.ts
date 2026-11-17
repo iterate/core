@@ -4,6 +4,7 @@
 // the way it began by.
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { SIGN_IN_ACCESS_HEADER, takeSignInAccess } from "iterate/sign-in-access";
 import { calculatePKCECodeChallenge, generateRandomCodeVerifier } from "oauth4webapi";
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
@@ -40,6 +41,11 @@ test("the config names the client alone: which app takes the way is the app's ow
   expect(config({ clientId: "id" })).toMatchObject({
     login: { methods: { cloudflare: { clientId: "id" } } },
   });
+  // a switch, which is on or absent
+  expect(config({ clientId: "id", keepAccess: true })).toMatchObject({
+    login: { methods: { cloudflare: { clientId: "id", keepAccess: true } } },
+  });
+  expect(() => config({ clientId: "id", keepAccess: false })).toThrow();
   // without the method, nothing of it exists
   expect(authConfigOf(DOMAIN, { login: { allow: [{ email: OWNER }] } })).toMatchObject({
     login: { methods: {} },
@@ -131,6 +137,75 @@ test("the consent asks Cloudflare for the person's details alone, and the token 
     email: "ada@example.org",
     method: "cloudflare",
   });
+});
+
+test("with keepAccess, no token is revoked: the answer hands the tokens on to be the person's secret, and the browser gets none", async () => {
+  const { env, people } = stackOf({ keepAccess: true });
+  const calls = cloudflareOf();
+  const { consent, answer } = await signedInAtCloudflare(env);
+  // still nothing of an account: the one scope, and a refresh token
+  expect(consent.searchParams.get("scope")).toBe("user-details.read offline_access");
+  expect(calls.map((call) => call.url)).toEqual([
+    "https://dash.cloudflare.com/oauth2/token",
+    "https://api.cloudflare.com/client/v4/user",
+  ]);
+
+  // what the boundary takes off the answer (iterate/sign-in-access): the secret of this person
+  const { answer: forBrowser, access } = takeSignInAccess(answer);
+  expect(access).toEqual({
+    path: `/secrets/cloudflare-sign-in-${[...people.values()][0]!.id}`,
+    material: {
+      clientId: "the-client-id",
+      clientSecret: "THE-CLIENT-SECRET",
+      accessToken: "ACCESS-SECRET",
+      refreshToken: "REFRESH-SECRET",
+    },
+    // Cloudflare's API, and the endpoint that refreshes the access
+    urls: ["https://api.cloudflare.com", "https://dash.cloudflare.com"],
+    refresh: {
+      kind: "oauth-refresh-token",
+      tokenEndpoint: "https://dash.cloudflare.com/oauth2/token",
+      clientAuth: "client_secret_post",
+    },
+  });
+  // the header holds the tokens encoded, never as they are, and the browser's answer has no header
+  expect([...answer.headers].join("\n")).not.toMatch(/ACCESS-SECRET|REFRESH-SECRET|THE-CLIENT/);
+  expect(forBrowser.headers.has(SIGN_IN_ACCESS_HEADER)).toBe(false);
+  expect([forBrowser.status, forBrowser.headers.get("location")]).toEqual([303, "/after"]);
+  const cookie = cloudflareCookieOf(forBrowser);
+  expect(
+    await cloudflareSessionOf(env, new Request(ISSUER, { headers: { cookie } })),
+  ).toMatchObject({ email: "ada@example.org", method: "cloudflare" });
+});
+
+test("with keepAccess, Cloudflare gave no refresh token: the secret is the access token alone, with nothing to refresh it", async () => {
+  const { env, people } = stackOf({ keepAccess: true });
+  cloudflareOf(undefined, undefined, { access_token: "ACCESS-SECRET" });
+  const { access } = takeSignInAccess((await signedInAtCloudflare(env)).answer);
+  expect(access).toEqual({
+    path: `/secrets/cloudflare-sign-in-${[...people.values()][0]!.id}`,
+    material: { accessToken: "ACCESS-SECRET" },
+    urls: ["https://api.cloudflare.com", "https://dash.cloudflare.com"],
+  });
+});
+
+test("with keepAccess, a sign-in that ends in a refusal keeps nothing: its tokens are revoked", async () => {
+  const revoked = (calls: ReturnType<typeof cloudflareOf>) =>
+    calls.filter((call) => call.url.endsWith("/revoke")).map((call) => call.body.get("token"));
+  // Cloudflare refuses the read of the person
+  const unread = cloudflareOf(null);
+  const noPerson = (await signedInAtCloudflare(stackOf({ keepAccess: true }).env)).answer;
+  expect(noPerson).toMatchObject({ status: 502 });
+  expect(noPerson.headers.has(SIGN_IN_ACCESS_HEADER)).toBe(false);
+  expect(revoked(unread)).toEqual(["ACCESS-SECRET", "REFRESH-SECRET"]);
+  // an owner blocked the person
+  const refused = cloudflareOf();
+  const blocked = (
+    await signedInAtCloudflare(stackOf({ keepAccess: true, blocked: ["ada@example.org"] }).env)
+  ).answer;
+  expect(blocked).toMatchObject({ status: 403 });
+  expect(blocked.headers.has(SIGN_IN_ACCESS_HEADER)).toBe(false);
+  expect(revoked(refused)).toEqual(["ACCESS-SECRET", "REFRESH-SECRET"]);
 });
 
 test("a callback that this browser did not begin here, or that Cloudflare does not stand behind, signs nobody in", async () => {
@@ -658,6 +733,8 @@ test("membership does not change: the member keeps the address and the passkey, 
  *  holds each Cloudflare user id this stack linked. */
 function stackOf({
   method = true,
+  keepAccess = false,
+  blocked = [],
   secret = "THE-CLIENT-SECRET",
   kv = new Map<string, string>(),
   people = new Map<string, { id: string; email: string }>(),
@@ -666,6 +743,10 @@ function stackOf({
 }: {
   /** false: a config with no such method */
   method?: boolean;
+  /** true: the config's method keeps Cloudflare's tokens as a secret */
+  keepAccess?: boolean;
+  /** the addresses an owner blocked (./blocked.ts) */
+  blocked?: string[];
   /** null: a stack whose deploy bound no secret */
   secret?: string | null;
   kv?: Map<string, string>;
@@ -680,10 +761,13 @@ function stackOf({
         statement.bound = values;
         return statement;
       },
-      // the passkey "key-1" is live; nobody is blocked, and nobody was added as a member
+      // the passkey "key-1" is live; only `blocked` is blocked, and nobody was added as a member
       first: async () =>
         sessions.statementOf(sql, statement.bound)?.first() ??
-        (sql.includes("from keys") && statement.bound[0] === "key-1" ? {} : null),
+        ((sql.includes("from keys") && statement.bound[0] === "key-1") ||
+        (sql.includes("from blocked") && blocked.includes(String(statement.bound[0])))
+          ? {}
+          : null),
       all: async () => sessions.statementOf(sql, statement.bound)?.all() ?? { results: [] },
       run: async () =>
         sessions.statementOf(sql, statement.bound)?.run() ?? { meta: { changes: 0 } },
@@ -696,7 +780,12 @@ function stackOf({
     AUTH_SETTINGS: JSON.stringify({
       login: {
         // the mind mails codes too, so its own sign-in is not the page of an app's ways
-        methods: { email: {}, ...(method && { cloudflare: { clientId: "the-client-id" } }) },
+        methods: {
+          email: {},
+          ...(method && {
+            cloudflare: { clientId: "the-client-id", ...(keepAccess && { keepAccess: true }) },
+          }),
+        },
         allow: [{ email: OWNER }],
       },
     }),
@@ -794,11 +883,12 @@ function cookiePair(setCookie: string) {
   return setCookie.split(";")[0]!;
 }
 
-/** Cloudflare, as three addresses: the code's exchange, `/user`, and the revoke. `calls` keeps
- *  what each was sent. */
+/** Cloudflare, as three addresses: the code's exchange (which answers `tokens`), `/user`, and the
+ *  revoke. `calls` keeps what each was sent. */
 function cloudflareOf(
   user: unknown = { success: true, result: { id: "cf-user-1", email: "Ada@Example.org" } },
   manifest: unknown = { name: "Cloud" },
+  tokens: unknown = { access_token: "ACCESS-SECRET", refresh_token: "REFRESH-SECRET" },
 ) {
   const calls: { url: string; body: URLSearchParams; authorization: string | null }[] = [];
   vi.stubGlobal("fetch", async (input: string | URL, init: RequestInit = {}) => {
@@ -812,8 +902,7 @@ function cloudflareOf(
     });
     // never followed: the client's secret and the tokens go to Cloudflare's own hosts alone
     expect(init).toMatchObject({ redirect: "manual" });
-    if (url === "https://dash.cloudflare.com/oauth2/token")
-      return Response.json({ access_token: "ACCESS-SECRET", refresh_token: "REFRESH-SECRET" });
+    if (url === "https://dash.cloudflare.com/oauth2/token") return Response.json(tokens);
     if (url === "https://api.cloudflare.com/client/v4/user")
       return user ? Response.json(user) : new Response("no", { status: 403 });
     if (url === "https://dash.cloudflare.com/oauth2/revoke") return new Response(null);

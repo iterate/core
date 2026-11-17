@@ -20,14 +20,34 @@
 //
 //   GET /sign-in/cloudflare            makes the state and the PKCE pair, keeps them in this
 //                                      browser's cookie, and sends the browser to Cloudflare
-//   GET /sign-in/cloudflare/callback   exchanges the code, asks Cloudflare who the token is
-//                                      (`GET /user`), and REVOKES THE TOKEN before it answers
+//   GET /sign-in/cloudflare/callback   exchanges the code and asks Cloudflare who the token is
+//                                      (`GET /user`). Then it REVOKES THE TOKEN before it answers,
+//                                      or, with `keepAccess`, hands the tokens on to be a secret
 //
-// THE LEAST CLOUDFLARE GIVES. The consent asks one scope, `user-details.read`, and no
-// `offline_access`, so no refresh token comes; one that comes all the same is revoked. The access
-// token reads the person's name and address, is used for one request, and is kept nowhere.
-// Cloudflare's addresses are constants here: nothing a request says moves them.
+// THE LEAST CLOUDFLARE GIVES. The consent asks one scope, `user-details.read`: the person's name
+// and address, and nothing of an account. Cloudflare's addresses are constants here: nothing a
+// request says moves them.
+//
+// WITHOUT `keepAccess` the consent asks no `offline_access`, so no refresh token comes; one that
+// comes all the same is revoked. The access token is used for one request and is kept nowhere.
+//
+// WITH `keepAccess` (./config.ts) THE TOKENS BECOME A SECRET OF THE MIND, one for each person:
+// `/secrets/cloudflare-sign-in-<user id>` (iterate/sign-in-access `cloudflareSignInSecretOf`),
+// pinned to Cloudflare's API and to the token endpoint. The consent also asks `offline_access`,
+// so the secret refreshes itself and outlives the first hour: the OAuth client must have the
+// grant type `refresh_token`, or Cloudflare refuses the consent. The scope stays the one above,
+// so the secret reaches no account. It reads the person's details, and it makes a new Cloudflare
+// account in the person's name (`POST /accounts`, which Cloudflare gives to this scope). The
+// mind's code names the secret by a placeholder and never reads a token. This Worker has no
+// binding to the secrets Worker: the callback's answer carries the tokens to the boundary, which
+// sets the secret (iterate/sign-in-access). A sign-in that ends in a refusal keeps nothing: its
+// tokens are revoked. A later sign-in of the same person replaces the secret.
 import { sameOriginPath } from "iterate/lib";
+import {
+  cloudflareSignInSecretOf,
+  type SignInAccess,
+  withSignInAccess,
+} from "iterate/sign-in-access";
 import { calculatePKCECodeChallenge, generateRandomCodeVerifier } from "oauth4webapi";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
@@ -50,9 +70,17 @@ const CALLBACK_PATH = `${CLOUDFLARE_SIGN_IN_PATH}/callback`;
 
 /** The person's name and address, and nothing of an account. */
 export const CLOUDFLARE_SIGN_IN_SCOPE = "user-details.read";
+/** With `keepAccess`: a refresh token too, so that the secret outlives the first hour. */
+const KEPT_ACCESS_SCOPE = `${CLOUDFLARE_SIGN_IN_SCOPE} offline_access`;
+const TOKEN_ENDPOINT = "https://dash.cloudflare.com/oauth2/token";
+/** Where the kept tokens may go: Cloudflare's API, and the endpoint that refreshes them. */
+const KEPT_ACCESS_URLS = ["https://api.cloudflare.com", "https://dash.cloudflare.com"];
 /** What marks this browser's flow cookie as Cloudflare's: the cookie is the one Google's sign-in
  *  uses, where this field is the id_token's nonce, a random UUID. */
 const FLOW_MARK = "cloudflare";
+
+const keepsAccess = (env: Env) =>
+  iterateConfigOf(env).login.methods.cloudflare?.keepAccess === true;
 
 export async function cloudflareSignInResponse(
   env: Env,
@@ -76,7 +104,7 @@ async function start(env: Env, client: CloudflareSignIn, url: URL): Promise<Resp
     response_type: "code",
     client_id: client.clientId,
     redirect_uri: `${issuer}${CALLBACK_PATH}`,
-    scope: CLOUDFLARE_SIGN_IN_SCOPE,
+    scope: keepsAccess(env) ? KEPT_ACCESS_SCOPE : CLOUDFLARE_SIGN_IN_SCOPE,
     state,
     code_challenge: await calculatePKCECodeChallenge(verifier),
     code_challenge_method: "S256",
@@ -110,11 +138,11 @@ async function finish(
   // began here, not at Google. A refusal at Cloudflare has no code.
   if (!flow || flow.nonce !== FLOW_MARK || url.searchParams.get("state") !== flow.state || !code)
     return errorPage("This sign-in was not finished, or it is too old.", 400, cleared, again);
-  const person = await cloudflarePersonOf(client, {
-    code,
-    verifier: flow.verifier,
-    redirectUri: `${issuerOf(env)}${CALLBACK_PATH}`,
-  });
+  const person = await cloudflarePersonOf(
+    client,
+    { code, verifier: flow.verifier, redirectUri: `${issuerOf(env)}${CALLBACK_PATH}` },
+    keepsAccess(env),
+  );
   if (!person)
     return errorPage(
       "The sign-in with Cloudflare is not available now. Try again.",
@@ -125,6 +153,7 @@ async function finish(
   // someone an owner blocked gets no session here either (./blocked.ts)
   if (await isBlocked(env, person.email)) {
     console.info({ event: "auth.sign-in-refused", method: "cloudflare", reason: "blocked" });
+    if (person.kept) await revoke(client, person.kept);
     return errorPage(
       `${person.email} cannot sign in to ${iterateConfigOf(env).domain}.`,
       403,
@@ -138,14 +167,21 @@ async function finish(
       return null;
     },
   );
-  if (!user)
+  if (!user) {
+    if (person.kept) await revoke(client, person.kept);
     return errorPage(
       "The sign-in with Cloudflare could not be finished. Try again.",
       500,
       cleared,
       again,
     );
-  console.info({ event: "auth.signed-in", method: "cloudflare", userId: user.id });
+  }
+  console.info({
+    event: "auth.signed-in",
+    method: "cloudflare",
+    userId: user.id,
+    keptAccess: Boolean(person.kept),
+  });
   const facts = new AccountFacts();
   facts.add(user.id, {
     type: "events.iterate.com/account/signed-in",
@@ -157,13 +193,16 @@ async function finish(
     await cloudflareSessionCookie(env, { id: user.id, email: person.email }),
   );
   headers.append("set-cookie", clearFlowCookie);
-  return facts.on(new Response(null, { status: 303, headers }));
+  const answer = facts.on(new Response(null, { status: 303, headers }));
+  if (!person.kept) return answer;
+  return withSignInAccess(answer, keptAccessOf(client, user.id, person.kept));
 }
 
 const Tokens = z.object({
   access_token: z.string().min(1),
   refresh_token: z.string().min(1).optional(),
 });
+type Tokens = z.infer<typeof Tokens>;
 const CloudflareUser = z.object({
   success: z.literal(true),
   result: z.object({
@@ -176,26 +215,31 @@ const CloudflareUser = z.object({
   }),
 });
 
-/** WHO CONSENTED AT CLOUDFLARE, or null: the code's exchange, one read of `/user`, and the revoke
- *  of every token that came, whatever the read answered. No token leaves this function. */
+/** A form request to one of Cloudflare's OAuth endpoints, as this client. */
+const formOf = (client: CloudflareSignIn, fields: Record<string, string>): RequestInit => ({
+  method: "POST",
+  // never followed: the client's secret goes to Cloudflare's own host alone
+  redirect: "manual",
+  headers: { "content-type": "application/x-www-form-urlencoded" },
+  body: new URLSearchParams({
+    ...fields,
+    client_id: client.clientId,
+    client_secret: client.clientSecret,
+  }).toString(),
+});
+
+/** WHO CONSENTED AT CLOUDFLARE, or null: the code's exchange and one read of `/user`. With `keep`
+ *  and a read that worked, the tokens come back beside the person, as `kept`. In every other case
+ *  each token that came is revoked here, whatever the read answered, and none leaves this
+ *  function. */
 async function cloudflarePersonOf(
   client: CloudflareSignIn,
   input: { code: string; verifier: string; redirectUri: string },
-): Promise<{ id: string; email: string } | null> {
-  const form = (fields: Record<string, string>): RequestInit => ({
-    method: "POST",
-    // never followed: the client's secret goes to Cloudflare's own host alone
-    redirect: "manual",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      ...fields,
-      client_id: client.clientId,
-      client_secret: client.clientSecret,
-    }).toString(),
-  });
+  keep: boolean,
+): Promise<{ id: string; email: string; kept?: Tokens } | null> {
   const answer = await fetch(
-    "https://dash.cloudflare.com/oauth2/token",
-    form({
+    TOKEN_ENDPOINT,
+    formOf(client, {
       grant_type: "authorization_code",
       code: input.code,
       redirect_uri: input.redirectUri,
@@ -207,29 +251,58 @@ async function cloudflarePersonOf(
     console.warn({ event: "cloudflare-sign-in.exchange-failed", status: answer.status });
     return null;
   }
+  let person: { id: string; email: string } | null = null;
   try {
     const read = await fetch("https://api.cloudflare.com/client/v4/user", {
       redirect: "manual",
       headers: { authorization: `Bearer ${tokens.data.access_token}` },
     });
     const user = CloudflareUser.safeParse(read.ok ? await read.json().catch(() => null) : null);
-    if (!user.success) {
-      console.warn({ event: "cloudflare-sign-in.user-read-failed", status: read.status });
-      return null;
-    }
-    return user.data.result;
+    if (user.success) person = user.data.result;
+    else console.warn({ event: "cloudflare-sign-in.user-read-failed", status: read.status });
   } finally {
-    // The sign-in is over: nothing here uses a Cloudflare token again. A failed revoke is said,
-    // and the token ends by itself within the hour.
-    for (const token of [tokens.data.access_token, tokens.data.refresh_token]) {
-      if (!token) continue;
-      const revoked = await fetch(
-        "https://dash.cloudflare.com/oauth2/revoke",
-        form({ token }),
-      ).catch(() => null);
-      await revoked?.body?.cancel();
-      if (!revoked?.ok)
-        console.warn({ event: "cloudflare-sign-in.revoke-failed", status: revoked?.status || 0 });
-    }
+    // Without `keep` the sign-in is over: nothing here uses a Cloudflare token again.
+    if (!keep || !person) await revoke(client, tokens.data);
   }
+  if (!person) return null;
+  return keep ? { ...person, kept: tokens.data } : person;
+}
+
+/** Asks Cloudflare to revoke each token. A failed revoke is said, and the access token ends by
+ *  itself within the hour. */
+async function revoke(client: CloudflareSignIn, tokens: Tokens): Promise<void> {
+  for (const token of [tokens.access_token, tokens.refresh_token]) {
+    if (!token) continue;
+    const revoked = await fetch(
+      "https://dash.cloudflare.com/oauth2/revoke",
+      formOf(client, { token }),
+    ).catch(() => null);
+    await revoked?.body?.cancel();
+    if (!revoked?.ok)
+      console.warn({ event: "cloudflare-sign-in.revoke-failed", status: revoked?.status || 0 });
+  }
+}
+
+/** The secret the boundary sets for the person `userId` (iterate/sign-in-access). With a refresh
+ *  token, the secret's object refreshes the access itself, as this client: it then holds the
+ *  client's id and secret beside the tokens, sealed like them. */
+function keptAccessOf(client: CloudflareSignIn, userId: string, tokens: Tokens): SignInAccess {
+  const path = cloudflareSignInSecretOf(userId);
+  if (!tokens.refresh_token)
+    return { path, material: { accessToken: tokens.access_token }, urls: KEPT_ACCESS_URLS };
+  return {
+    path,
+    material: {
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+    },
+    urls: KEPT_ACCESS_URLS,
+    refresh: {
+      kind: "oauth-refresh-token",
+      tokenEndpoint: TOKEN_ENDPOINT,
+      clientAuth: "client_secret_post",
+    },
+  };
 }

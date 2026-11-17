@@ -4,8 +4,10 @@
 // (./transport/bound.ts), or through the session a mind at home dials (./transport/provided.ts).
 import { runApprovedActs } from "iterate/acts";
 import { recordFacts as recorded } from "iterate/facts";
+import { reportIssue } from "iterate/lib";
 import { platformRouteOf } from "iterate/mind-api";
-import type { MindTarget } from "iterate/workers";
+import { type SignInAccess, takeSignInAccess } from "iterate/sign-in-access";
+import type { MindTarget, SecretsService } from "iterate/workers";
 import type { DoorEnv } from "./env.ts";
 import { mindHostResponse } from "./host-session.ts";
 import { confinedAnswer, httpsRedirect, stampedRequest } from "./stamp.ts";
@@ -42,7 +44,11 @@ export async function boundaryResponse(
     );
   const { forwarded, answer } = await stampedRequest(request, { auth: env.AUTH, route, domain });
   if (answer) return answer;
-  if (route === "auth") return recordFacts(await env.AUTH.fetch(forwarded), true);
+  if (route === "auth") {
+    const { answer: fromAuth, access } = takeSignInAccess(await env.AUTH.fetch(forwarded));
+    if (access) await keepSignInAccess(access, env.SECRETS, mind, ctx);
+    return recordFacts(fromAuth, true);
+  }
   if (route === "secrets") {
     // an approval of an act whose caller stopped waiting: the mind does the act now
     const { answer: answered, ran } = runApprovedActs(
@@ -56,4 +62,27 @@ export async function boundaryResponse(
     return recordFacts(answered);
   }
   return confinedAnswer(await mind.fetch(forwarded));
+}
+
+/** THE ACCESS A SIGN-IN KEEPS (iterate/sign-in-access): set as the secret the auth Worker names,
+ *  before the browser gets the answer, so that the app the person lands on finds it. The secret's
+ *  own fact goes to the mind's log. A set that fails is reported, and the person is signed in all
+ *  the same: an app that needs the access then asks the person for a consent of its own. */
+async function keepSignInAccess(
+  access: SignInAccess,
+  secrets: SecretsService,
+  mind: MindTransport,
+  ctx: ExecutionContext,
+): Promise<void> {
+  const { path, ...input } = access;
+  try {
+    const { facts } = await secrets.secret(path, "set", input);
+    ctx.waitUntil(
+      Promise.all(facts.map((fact) => mind.append(fact.path, fact.events))).catch(
+        (error: unknown) => reportIssue("boundary.sign-in-access-not-recorded", error, { path }),
+      ),
+    );
+  } catch (error) {
+    reportIssue("boundary.sign-in-access-not-stored", error, { path });
+  }
 }

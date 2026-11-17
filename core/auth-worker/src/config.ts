@@ -70,8 +70,16 @@ export const AuthSettings = z.strictObject({
          *  makes the way exist, and an app of the mind chooses it in its own code (iterate/sdk
          *  `auth.requirePerson(request, { methods: ["cloudflare"] })`): no app gets it otherwise.
          *  The client's secret is never in these settings: the deploy takes it from its environment
-         *  (core/alchemy/src/config.ts) and binds it as CLOUDFLARE_SIGN_IN_CLIENT_SECRET. */
-        cloudflare: z.strictObject({ clientId: z.string().trim().min(1) }).optional(),
+         *  (core/alchemy/src/config.ts) and binds it as CLOUDFLARE_SIGN_IN_CLIENT_SECRET.
+         *  `keepAccess: true`: the sign-in keeps Cloudflare's tokens as a secret of the mind, one
+         *  for each person, and asks for a refresh token too. Without it, the token is revoked at
+         *  once. ./cloudflare-sign-in.ts says what the kept access may do. */
+        cloudflare: z
+          .strictObject({
+            clientId: z.string().trim().min(1),
+            keepAccess: z.literal(true).optional(),
+          })
+          .optional(),
       })
       .default({}),
     /** WHO IS A MEMBER, for now: a person is when one rule matches. Anyone a method vouches for

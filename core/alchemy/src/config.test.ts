@@ -162,6 +162,23 @@ void test("a config with the sign-in with Cloudflare is one the stack may keep i
   assert.deepEqual(await loadedFromFile(storedConfigOf(loaded)), loaded);
 });
 
+void test("a sign-in with Cloudflare that keeps its access is a public switch: the stack stores it, and the auth Worker's settings have it", async () => {
+  const kept = { ...cloudflare, keepAccess: true as const };
+  const loaded = await loadedFromFile({
+    ...stack,
+    auth: { login: { ...stack.auth.login, methods: { cloudflare: kept } } },
+  });
+  assert.deepEqual(storedConfigOf(loaded).auth.login.methods.cloudflare, kept);
+  assert.deepEqual(await loadedFromFile(storedConfigOf(loaded)), loaded);
+  const settings = authSettingsOf(loaded);
+  assert.deepEqual(authConfigOf("mind.example", settings).login.methods.cloudflare, kept);
+  // the deploy's environment turns it on too
+  const byVariable = await loadedFromFile(withCloudflare, {
+    ITERATE_MIND__AUTH__LOGIN__METHODS__CLOUDFLARE__KEEP_ACCESS: "true",
+  });
+  assert.deepEqual(byVariable.auth.login.methods.cloudflare, kept);
+});
+
 void test("the deploy's environment sets a field by its ITERATE_MIND__ variable, on top of the file", async () => {
   const loaded = await loadedFromFile(withCloudflare, {
     [SECRET_VAR]: "proof-secret",

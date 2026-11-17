@@ -32,6 +32,7 @@ export default defineConfig([
       acts: "src/acts.ts",
       signed: "src/signed.ts",
       "secret-placeholder": "src/secret-placeholder.ts",
+      "sign-in-access": "src/sign-in-access.ts",
       "stream/processor": "src/stream/processor.ts",
       "stream/contract": "src/stream/contract.ts",
       "stream/run": "src/stream/run.ts",

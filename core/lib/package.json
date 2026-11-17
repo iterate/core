@@ -40,6 +40,7 @@
     "./acts": "./src/acts.ts",
     "./signed": "./src/signed.ts",
     "./secret-placeholder": "./src/secret-placeholder.ts",
+    "./sign-in-access": "./src/sign-in-access.ts",
     "./stream/processor": "./src/stream/processor.ts",
     "./stream/contract": "./src/stream/contract.ts",
     "./stream/test-support": "./src/stream/test-support.ts",
@@ -135,6 +136,10 @@
       "./secret-placeholder": {
         "types": "./dist/secret-placeholder.d.mts",
         "import": "./dist/secret-placeholder.mjs"
+      },
+      "./sign-in-access": {
+        "types": "./dist/sign-in-access.d.mts",
+        "import": "./dist/sign-in-access.mjs"
       },
       "./stream/processor": {
         "types": "./dist/stream/processor.d.mts",
