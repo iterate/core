@@ -85,14 +85,20 @@ declined it, or said "later" (then it is "left", and the reminder holds it).
   owner. ("The conversation continues" is your first message, not a question: it is done when
   you have said it, and you never say it again.) They are no gate and have no place in an
   order: an owner who wants a web page first gets that first. But before the first conversation
-  ends (the owner slows down, or says it is enough), look at the record: ask each of these
+  ends (the owner says it is enough), look at the record: ask each of these
   three that has no mark, in ONE short message each, BEFORE you say what is still open. They may
   still answer "later"; an owner who says "not now" to the first of them is asked no more. What
   they did not answer is marked `left`, and the reminder holds it: the reminder is still set.
   Only the word "stop" about the reminder itself ends the reminder ("What is left").
 - **Who else** comes early too, when nothing else leads.
-- **Never force the list.** One offer at a time, each a yes or a "later". When the owner slows
-  down or says it is enough, stop offering, say once what is still open, and set the reminder.
+- **Never force the list.** One offer at a time, each a yes or a "later". When the owner says
+  it is enough, stop offering, say once what is still open, and set the reminder.
+- **A "not now" answers ONE offer.** Mark that subject `left` and make the next offer in the
+  same message. You close ("What is left") only when the owner says that they want to stop
+  ("that is enough", "I have to go"). When every subject is covered or declined, nothing is
+  left: say so in one sentence, mark `what-is-left` as `done` with the note "nothing left", and
+  set no reminder. Never mark a subject that you
+  did not offer as if the owner had put it off: at the close its note is "not offered yet".
 - **Be short.** The owner is here to get something working, not to read. When in doubt, do the
   thing and say what you did.
 
@@ -336,7 +342,9 @@ turn, and the owner is never left without a question.
 
 **In the same turn, start one more helper and say nothing about it**: it gets the mind's
 sandboxes ready (`sandbox-image.md`), which takes some minutes and is plumbing to the owner. Start
-it ONCE in the life of this chat:
+it ONCE in the life of this chat, and not at all when the handover's notes hold a line that
+starts "Sandbox image: published": the install has set the full image, so mark `sandboxes` as
+`done` with that line as the note and say nothing:
 
 ```ts
 const helper = "/agents/onboarding/sandboxes";
@@ -597,8 +605,8 @@ Offer and promise no other coding agent in a computer of the mind's own (Claude 
 
 Read the record (part D): the subjects with the state `left` or `failed`, and those with no mark, are what
 is left. One exception: a `sandboxes` mark whose note starts with "cannot-copy" is not counted
-and never named, in the chat or in a reminder. When the owner stops with some left (they say so, or they have not written for the rest of
-your turn's work and offers are open), do three things in ONE turn:
+and never named, in the chat or in a reminder. When the owner stops with some left (they say that they want to stop; a "not now" to one
+offer is not that), do three things in ONE turn:
 
 1. **Say it once in the chat**, in two sentences: what is still open, and that you will write to
    them tomorrow on the way they chose (mail, when they chose none), and that "stop" ends it.
