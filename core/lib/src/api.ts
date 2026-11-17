@@ -206,7 +206,10 @@ export type ClientAuth = "client_secret_basic" | "client_secret_post" | "none";
 /** How the secret's facet re-mints an expired credential, in its own trusted code: the
  *  exchange reads this secret's own material, POSTs to an endpoint within the pin, and writes the
  *  answer back into the material — `accessToken` (and a rotated `refreshToken`). Triggered on a 401
- *  from the pinned host, and on first use when the placeholder's field is not there yet. */
+ *  from the pinned host, and on first use when the placeholder's field is not there yet. An OAuth
+ *  token whose endpoint said when it ends (`expires_in`, kept in the material as
+ *  `accessTokenExpiresAt`) is also refreshed once that time has come, before the request goes:
+ *  not every provider answers an ended token with 401. */
 export type SecretRefresh =
   /** RFC 6749 §6, the refresh_token grant: `refreshToken` + `clientId` (+ `clientSecret` for a
    *  confidential client) from the material → `accessToken` (+ the newest `refreshToken`). Google,

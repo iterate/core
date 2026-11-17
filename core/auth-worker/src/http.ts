@@ -102,7 +102,13 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
     const methods = methodsAskedIn(env, next);
     if (methods?.length === 0) return nobodySignsInPage();
     if (methods)
-      return methodsSignInPage({ domain, next, methods, app: await askingAppOf(env, next) });
+      return methodsSignInPage({
+        domain,
+        next,
+        methods,
+        app: await askingAppOf(env, next),
+        keepsCloudflareAccess: login.methods.cloudflare?.keepAccess,
+      });
     const app = await askingAppOf(env, next);
     if (codeComesFirst(env, app))
       return Response.redirect(

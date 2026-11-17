@@ -505,10 +505,24 @@ export function oauthTokenRequest(input: {
   });
 }
 
+/** The material's field that says when its access token ends, as an ISO time: what the token
+ *  endpoint's `expires_in` gave. The secret's object refreshes a token that has ended before it
+ *  sends a request (./secret/durable-object.ts), because not every provider answers an ended
+ *  token with 401: Cloudflare answers 403. */
+const ACCESS_TOKEN_EXPIRES_AT = "accessTokenExpiresAt";
+
+/** Whether `material` says that its access token has ended, or ends within `marginMs`. Material
+ *  that names no end is never ended here: a 401 is then what starts its refresh. */
+export function accessTokenEnded(material: unknown, now = Date.now(), marginMs = 60_000): boolean {
+  if (!isRecord(material)) return false;
+  const at = material[ACCESS_TOKEN_EXPIRES_AT];
+  return typeof at === "string" && Date.parse(at) - marginMs <= now;
+}
+
 export async function oauthTokensOf(
   response: Response,
   grant: string,
-): Promise<{ accessToken: string; refreshToken?: string }> {
+): Promise<{ accessToken: string; refreshToken?: string; accessTokenExpiresAt?: string }> {
   if (!response.ok) throw new Error(`${grant}: the token endpoint answered ${response.status}`);
   const data = await jsonRecordOf(response);
   if (typeof data.access_token !== "string")
@@ -516,6 +530,10 @@ export async function oauthTokensOf(
   return {
     accessToken: data.access_token,
     ...(typeof data.refresh_token === "string" && { refreshToken: data.refresh_token }),
+    ...(typeof data.expires_in === "number" &&
+      data.expires_in > 0 && {
+        [ACCESS_TOKEN_EXPIRES_AT]: new Date(Date.now() + data.expires_in * 1000).toISOString(),
+      }),
   };
 }
 
@@ -567,6 +585,8 @@ export async function refreshSecretMaterial(
       `${refresh.kind}: the token endpoint answered ${response.status}`,
       response.status === 429 || response.status === 504,
     );
-  // The client secret stays as held: a placeholder, never the value it resolved to.
-  return { ...record, ...(await oauthTokensOf(response, refresh.kind)) };
+  // The client secret stays as held: a placeholder, never the value it resolved to. The end of
+  // the old access token goes: the new answer names the new token's end, or none.
+  const { [ACCESS_TOKEN_EXPIRES_AT]: _ended, ...kept } = record;
+  return { ...kept, ...(await oauthTokensOf(response, refresh.kind)) };
 }

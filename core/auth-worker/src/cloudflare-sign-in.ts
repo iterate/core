@@ -201,6 +201,7 @@ async function finish(
 const Tokens = z.object({
   access_token: z.string().min(1),
   refresh_token: z.string().min(1).optional(),
+  expires_in: z.number().positive().optional(),
 });
 type Tokens = z.infer<typeof Tokens>;
 const CloudflareUser = z.object({
@@ -297,6 +298,12 @@ function keptAccessOf(client: CloudflareSignIn, userId: string, tokens: Tokens):
       clientSecret: client.clientSecret,
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
+      // When the access token ends: the secret's object refreshes it then, before a request goes
+      // (core/secrets-worker/src/secrets.ts `ACCESS_TOKEN_EXPIRES_AT`). Cloudflare answers an
+      // ended token with 403, which starts no refresh.
+      ...(tokens.expires_in && {
+        accessTokenExpiresAt: new Date(Date.now() + tokens.expires_in * 1000).toISOString(),
+      }),
     },
     urls: KEPT_ACCESS_URLS,
     refresh: {

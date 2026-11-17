@@ -72,6 +72,18 @@ test("an app that takes Cloudflare alone shows one button in Cloudflare's orange
   expect(html).toContain(
     `<p class="muted note">Cloudflare shares your name and email. Nothing else.</p>`,
   );
+  // a stack that keeps Cloudflare's tokens says what they let it do
+  const keeps = await methodsSignInPage({
+    domain: DOMAIN,
+    next,
+    methods: ["cloudflare"],
+    app,
+    keepsCloudflareAccess: true,
+  }).text();
+  expect(keeps).toContain(
+    `<p class="muted note">Cloudflare shares your name and email, and lets ${DOMAIN} make a new Cloudflare account for you. It reaches none of your accounts.</p>`,
+  );
+  expect(keeps).not.toContain("Nothing else");
   // one way and no script: nothing sends the person on by itself, and no link goes to the
   // sessions page, which a sign-in at Cloudflare does not open
   expect(html).not.toMatch(/<script|class="or"|\/sessions/);

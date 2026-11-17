@@ -42,6 +42,7 @@ import {
 } from "../secret-oauth.ts";
 import { startLinkOf } from "../secret-oauth-start.ts";
 import {
+  accessTokenEnded,
   clientSecretReferenceOf,
   githubAppJwt,
   hmacSha256Hex,
@@ -1697,9 +1698,18 @@ export class SecretDurableObject extends DurableObject<Env> {
           return cause instanceof Error ? cause : new Error(String(cause));
         }
       };
+      // An access token whose material says that it has ended is refreshed before the request
+      // goes: a provider may answer an ended token with a status that starts no refresh here. A
+      // refresh that fails is in the facts, and the request goes once with what the secret holds:
+      // its answer starts no second refresh.
+      let refreshFailed = false;
+      if (retry && stored && accessTokenEnded(stored.record.material)) {
+        refreshFailed = Boolean(await refreshed());
+        stored = await read();
+      }
       // At most two attempts: a mintable miss or a 401 from the pinned host mints, then one retry.
       for (let attempt = 0; ; attempt += 1) {
-        const last = attempt > 0 || !retry || !stored;
+        const last = attempt > 0 || !retry || !stored || refreshFailed;
         let outbound: Request;
         try {
           outbound = await substituteMindSecrets(attempt ? retry! : request, resolve, substituted);

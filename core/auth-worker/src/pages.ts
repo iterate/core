@@ -128,6 +128,8 @@ export function methodsSignInPage(input: {
   next: string;
   methods: readonly SignInMethod[];
   app: AskingApp | null;
+  /** The stack keeps Cloudflare's tokens (./config.ts `keepAccess`): the page says what they do. */
+  keepsCloudflareAccess?: boolean;
 }) {
   const { domain, next, methods } = input;
   const asking = input.app ? appSignIn(input.app) : null;
@@ -161,8 +163,11 @@ export function methodsSignInPage(input: {
         return "";
     }
   });
+  const cloudflareNote = input.keepsCloudflareAccess
+    ? `Cloudflare shares your name and email, and lets ${text(domain)} make a new Cloudflare account for you. It reaches none of your accounts.`
+    : "Cloudflare shares your name and email. Nothing else.";
   const shares = methods.includes("cloudflare")
-    ? `<p class="muted note">Cloudflare shares your name and email. Nothing else.</p>`
+    ? `<p class="muted note">${cloudflareNote}</p>`
     : "";
   return page({
     title: asking?.title || `Sign in to ${domain}`,
