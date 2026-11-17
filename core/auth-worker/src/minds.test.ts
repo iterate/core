@@ -10,7 +10,7 @@ import {
 } from "iterate/signed";
 import { expect, test, vi } from "vitest";
 import type { Env } from "./env.ts";
-import { signedByStack } from "./stack-key.ts";
+import { signedByStack, signedDeliveryByStack } from "./stack-key.ts";
 import { statementsResponse } from "./statements.ts";
 
 const DOMAIN = "example.com";
@@ -203,6 +203,40 @@ test("signedByStack names this mind as `mind` alone, or with `mind` as the other
   await expect(signedByStack(env, { ...input, mind: DOMAIN })).rejects.toThrow(/another mind/);
 });
 
+test("a delivery is signed as this mind on /minds/<this mind>/integrations/<provider>/<account>, and on no other path", async () => {
+  const { env } = await stack("peer-nine.net");
+  const type = "events.iterate.com/github/webhook-received";
+  const signed = await signedDeliveryByStack(env, {
+    mind: "peer-nine.net",
+    path: "/integrations/github/7",
+    type,
+    about: ["cloud:github:d-1"],
+  });
+  expect(statementOf(signed.statement)).toMatchObject({
+    mind: "peer-nine.net",
+    from: DOMAIN,
+    path: `/minds/${DOMAIN}/integrations/github/7`,
+    type,
+    about: ["cloud:github:d-1"],
+  });
+  for (const path of [
+    "/agents/onboarding",
+    "/integrations/github",
+    "/integrations/github/7/more",
+    "/integrations/../..",
+    "/integrations/./x",
+    "/integrations/../x",
+    "/integrations/github/..",
+    `/minds/${DOMAIN}/integrations/github/7`,
+    "/",
+  ])
+    await expect(signedDeliveryByStack(env, { mind: "peer-nine.net", path, type })).rejects.toThrow(
+      /a delivery's path/,
+    );
+  await expect(
+    signedDeliveryByStack(env, { mind: "", path: "/integrations/github/7", type }),
+  ).rejects.toThrow(/names the mind/);
+});
 async function keyPair() {
   const pair = (await crypto.subtle.generateKey(P256, true, ["sign", "verify"])) as CryptoKeyPair;
   const exported = async (format: "spki" | "pkcs8", key: CryptoKey) =>

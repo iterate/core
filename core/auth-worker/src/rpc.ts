@@ -10,7 +10,7 @@ import { authResponse } from "./http.ts";
 import { verifiedStatement } from "./keys.ts";
 import { isMember, standingOf } from "./members.ts";
 import { hostClientOf } from "./oauth.ts";
-import { signedByStack } from "./stack-key.ts";
+import { signedByStack, signedDeliveryByStack } from "./stack-key.ts";
 import { proposeStatement } from "./statement-drafts.ts";
 import { whoIs } from "./who-is.ts";
 
@@ -61,5 +61,15 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
 
   async proposeStatement(input: Parameters<AuthService["proposeStatement"]>[0]) {
     return proposeStatement(this.env, input);
+  }
+}
+
+/** WHAT A FORWARDING WORKER MAY SIGN AS THIS MIND, over a binding to this entrypoint alone
+ *  (iterate Cloud's Worker binds its own mind's, internal-packages/installer): a provider's
+ *  delivery for another mind (./stack-key.ts `signedDeliveryByStack`). The bound is here and not
+ *  in the caller: this entrypoint has no other method. */
+export class Deliveries extends WorkerEntrypoint<Env> {
+  async sign(input: Parameters<typeof signedDeliveryByStack>[1]) {
+    return signedDeliveryByStack(this.env, input);
   }
 }

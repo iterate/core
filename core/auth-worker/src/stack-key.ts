@@ -13,6 +13,7 @@ import {
 } from "iterate/signed";
 import type { AuthService } from "iterate/workers";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { canonicalPath } from "./key-rules.ts";
 
 export const STACK_KEY_PATH = "/keys/stack.json";
 
@@ -123,4 +124,37 @@ export async function signedByStack(
     expires: at + expiresInSeconds * 1000,
   });
   return signedP256(statement, privateKey, key);
+}
+
+/** `/integrations/<provider>/<account>`, and no segment more or less. A dot segment is refused
+ *  beside it (`canonicalPath`): a mind resolves `..`, so one would name another place. */
+const DELIVERY_PATH = /^\/integrations\/[^/]+\/[^/]+$/;
+
+/** A PROVIDER'S DELIVERY FOR ANOTHER MIND, signed as this mind: on
+ *  `/minds/<this mind>/integrations/<provider>/<account>` and on no other path. `path` is the
+ *  last three segments; this writes the first two itself, so a caller cannot name another place.
+ *  It is all that the `Deliveries` entrypoint signs (./rpc.ts). */
+export async function signedDeliveryByStack(
+  env: Env,
+  input: {
+    mind: string;
+    path: string;
+    type: string;
+    payload?: Record<string, unknown>;
+    about?: string[];
+    expiresInSeconds?: number;
+  },
+): Promise<Envelope> {
+  const { mind, path, type, payload, about, expiresInSeconds } = input;
+  if (!mind) throw codedError("INVALID_INPUT", "a delivery names the mind it is for");
+  if (!DELIVERY_PATH.test(path) || !canonicalPath(path))
+    throw codedError("INVALID_INPUT", "a delivery's path is /integrations/<provider>/<account>");
+  return signedByStack(env, {
+    mind,
+    path: `/minds/${iterateConfigOf(env).domain}${path}`,
+    type,
+    payload,
+    about,
+    expiresInSeconds,
+  });
 }
