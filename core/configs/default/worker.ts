@@ -16,7 +16,7 @@ import { voiceApp } from "./apps/voice/app.ts";
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
 import { cloudAccountsEvent } from "./cloud-accounts.ts";
-import { cloudDeliveryOf } from "./cloud-deliveries.ts";
+import { cloudDeliveryOf, sayMindForm } from "./cloud-deliveries.ts";
 import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
 import { cloudflareConnectionEvent, cloudflareForAgent } from "./cloudflare.ts";
 import { contextDescriptionsEvent } from "./context-descriptions.ts";
@@ -85,6 +85,10 @@ export default class extends IterateConfigEntrypoint {
               throw error;
           }),
         );
+        // Tell iterate Cloud that this mind reads its deliveries in the mind form
+        // (cloud-deliveries.ts, and `processMindEvent` below). Keep both, or the Cloud sends the
+        // key form alone.
+        await publishStep("mind-form", () => sayMindForm(itx));
         // Voice, when it is on: the service at `itx.voice`, which the Voice app calls.
         // await installVoice(itx);
         // A heartbeat, for a mind that should wake on its own (to check on itself and repair what
@@ -355,6 +359,13 @@ type Itx = IterateConfigProcessEventArgs<"agents">["itx"];
  *  context for the account. A function of this module, not a method: every public method of the
  *  entrypoint can be called through `itx.config`. */
 async function cloudDeliveryEvent(itx: Itx, event: IterateConfigProcessEventArgs["event"]) {
+  // This file reads a delivery in both forms, so it tells the Cloud (cloud-deliveries.ts
+  // `sayMindForm`): at a delivery too, for a mind that connected its first account after its publish.
+  // A failure to say it never holds the delivery itself.
+  if (cloudDeliveryOf(event))
+    await sayMindForm(itx).catch((error: unknown) =>
+      console.warn({ event: "config.mind-form-word-failed", error: String(error) }),
+    );
   switch (event.type) {
     case "events.iterate.com/x/message-received": {
       // What an X account a member linked said to iterate's bot, on `/integrations/<client>/<x

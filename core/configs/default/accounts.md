@@ -20,7 +20,9 @@ scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of
   `/minds/iterate.com/integrations/<provider>/<account>`, signed by the mind iterate.com, and reach
   `processMindEvent`, not `processEvent`. `cloudDeliveryOf(event)` (`cloud-deliveries.ts`) knows
   both forms: test a delivery with it, and keep what you make of one on its `context`, the mind's
-  own `/integrations/<provider>/<account>`.
+  own `/integrations/<provider>/<account>`. The mind tells the Cloud that it reads that form
+  (`sayMindForm`), and the Cloud sends it to no other mind: a `worker.ts` of your own must keep
+  `processMindEvent` and the init step `mind-form` for that to stay true.
 - A Gmail mailbox connected this way is watched (`gmail.ts`): each new message arrives as
   `events.iterate.com/google/gmail-message-added` on `/integrations/google/<address>`, with
   `{ id, threadId, labelIds, from, to, cc, subject, date, messageId, snippet, receivedAt }`. Read
