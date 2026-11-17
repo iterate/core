@@ -42,7 +42,7 @@ export type HandoverItx = {
 
 /** The line where the Cloud's notes for the onboarding agent start (iterate-config apps/cloud
  *  app.ts `HANDOVER_NOTES_MARK`). Before it: about the person, and their own words. After it: the
- *  questions still to ask and the meld invite, the Cloud's own word. A summary with no such line
+ *  questions still to ask, the Cloud's own word. A summary with no such line
  *  (a Cloud before 17 Nov) is the person's part alone. */
 const NOTES_MARK = "[iterate Cloud: notes for the onboarding agent]";
 
@@ -72,7 +72,7 @@ type HandoverEvent = {
   type: string;
   path: string;
   payload?: unknown;
-  source?: { signer?: { principal: { actor?: string } } };
+  source?: { signer?: { principal: { actor?: string; email?: string } } };
 };
 
 export async function cloudHandoverEvent(itx: HandoverItx, event: HandoverEvent) {
@@ -110,27 +110,27 @@ export async function cloudHandoverEvent(itx: HandoverItx, event: HandoverEvent)
     });
 }
 
-/** THE OWNER SIGNED THE KEY FOR iterate.com (onboarding.md, step 2): the platform records a key a
- *  member allowed as `account/key-added` on the mind's root. For the key of the actor
- *  `iterate-com` the onboarding agent gets a note that starts its turn, so the owner, whom the
- *  signing page has just brought back to the chat, need not say that they signed. Keyed by the
- *  key and its time: a replay adds nothing. Any other key, path or shape does nothing. */
-export async function iterateKeyAddedEvent(
-  itx: Pick<HandoverItx, "cd">,
-  event: { type: string; path: string; payload?: unknown },
-) {
-  if (event.path !== "/" || event.type !== "events.iterate.com/account/key-added") return;
-  const added = KeyAdded.safeParse(event.payload);
-  if (!added.success || added.data.actor !== "iterate-com") return;
+/** THE OWNER LET iterate.com IN (onboarding.md, "Letting iterate in"): the rule the owner signed
+ *  with their passkey lands as `mind-meld/configured` on `/minds/iterate.com`. When a person signed
+ *  it and it lets iterate.com add events somewhere, the onboarding agent gets a note that starts
+ *  its turn, so the owner, whom the signing page has just brought back to the chat, need not say
+ *  that they signed. Keyed by the event's path and offset: a replay adds nothing. An empty
+ *  `append` (the meld ends), a rule with no person as signer, or another path does nothing. */
+export async function iterateLetInEvent(itx: Pick<HandoverItx, "cd">, event: LetInEvent) {
+  if (event.path !== "/minds/iterate.com") return;
+  if (event.type !== "events.iterate.com/mind-meld/configured") return;
+  if (!event.source?.signer?.principal.email) return;
+  const rule = MeldRule.safeParse(event.payload);
+  if (!rule.success) return;
   await itx
     .cd(ONBOARDING_AGENT)
     .append({
       type: "events.iterate.com/agent/context-added",
-      idempotencyKey: `iterate-key-added:${added.data.key}:${added.data.at}`,
+      idempotencyKey: `iterate-let-in:${event.path}@${event.offset}`,
       payload: {
         role: "developer",
         content:
-          "The owner has signed the key for iterate.com: the platform recorded it on the mind's root just now, and the signing page has brought the owner back to this chat. Say in one sentence that iterate can now send messages here, and go on with the next step in the same message (onboarding.md, step 2, point 5).",
+          'The owner has let iterate.com in: their signed rule landed on /minds/iterate.com just now, and the signing page has brought the owner back to this chat. Say in one sentence that iterate can now send messages here, and go on with the next subject in the same message (onboarding.md, "Letting iterate in", point 4).',
       },
     })
     .catch((error: unknown) => {
@@ -138,8 +138,13 @@ export async function iterateKeyAddedEvent(
     });
 }
 
-const KeyAdded = z.object({
-  key: z.string().min(1).max(400),
-  at: z.union([z.string(), z.number()]),
-  actor: z.string(),
-});
+/** The rule's event, as far as this file reads it. */
+type LetInEvent = HandoverEvent & { offset: number };
+
+/** A rule that lets iterate.com add events somewhere: an empty `append` ends the meld. */
+const MeldRule = z.object({ append: z.array(z.string()).min(1) });
+
+/** FOR A `worker.ts` THAT ITS OWNER CHANGED AND THAT IMPORTS THIS NAME: a template update leaves
+ *  that file alone and replaces this one, so the name must stay. It does nothing.
+ *  @public */
+export async function iterateKeyAddedEvent(): Promise<void> {}

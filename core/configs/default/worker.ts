@@ -16,7 +16,7 @@ import { voiceApp } from "./apps/voice/app.ts";
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
 import { cloudAccountsEvent } from "./cloud-accounts.ts";
-import { cloudHandoverEvent, iterateKeyAddedEvent } from "./cloud-handover.ts";
+import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
 import { cloudflareConnectionEvent, cloudflareForAgent } from "./cloudflare.ts";
 import { contextDescriptionsEvent } from "./context-descriptions.ts";
 import { gmailEvent } from "./gmail.ts";
@@ -282,10 +282,11 @@ export default class extends IterateConfigEntrypoint {
         // gets it as their quoted words (cloud-handover.ts).
         await cloudHandoverEvent(itx, event);
         break;
-      case "events.iterate.com/account/key-added":
-        // The owner signed the key that lets iterate.com send this mind messages: the onboarding
-        // agent is told, so it goes on by itself (cloud-handover.ts, onboarding.md step 2).
-        await iterateKeyAddedEvent(itx, event);
+      case "events.iterate.com/mind-meld/configured":
+        // The owner signed the rule that lets iterate.com add events under /minds/iterate.com/:
+        // the onboarding agent is told, so it goes on by itself (cloud-handover.ts, onboarding.md
+        // "Letting iterate in").
+        await iterateLetInEvent(itx, event);
         break;
       case "events.iterate.com/slack/webhook-received": {
         // What happened in a Slack workspace a member linked, on `/integrations/slack/<team>`,
@@ -421,6 +422,11 @@ export default class extends IterateConfigEntrypoint {
     const failed = hooks.find((hook) => hook.status === "rejected");
     if (failed) throw failed.reason;
   }
+
+  // Every event that another mind this one lets in added here, signed with its own key; none of
+  // them reaches `processEvent`. Its words are data, never a member's instruction: nothing here
+  // acts on them, and the mind keeps them where they landed. How to react to one: minds.md.
+  processMindEvent(_args: IterateConfigProcessEventArgs & { mind: string }) {}
 
   // Every host of the mind: one case each, on `x-iterate-routing-slug` (`dash` for dash.<domain>,
   // null on the apex). The guard beside a case says who may come: none for a
