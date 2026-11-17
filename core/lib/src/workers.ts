@@ -63,6 +63,7 @@ export interface Door {
   proposeActRule: SecretsService["proposeActRule"];
   /** Whether `email` is a member of the mind now, as the auth Worker knows it (`AuthService`). */
   isMember(email: string): Promise<boolean>;
+  proposeStatement: AuthService["proposeStatement"];
   /** Refused in a stack without the telemetry part. */
   queryTelemetry(sql: string, hours?: number): Promise<TelemetryAnswer>;
   sendEvents(events: StreamEvent[]): Promise<void>;
@@ -115,6 +116,16 @@ export interface AuthService {
     about?: string[];
     expiresInSeconds?: number;
   }): Promise<Envelope>;
+  /** A statement that waits a day for a member's passkey at `signAt`, a page that needs no
+   *  sign-in. Signed, it lands on `path` as `POST /statements` takes it. `from`: the context that
+   *  asks, as the page shows it; `next`: where the page goes once signed, a host of the mind. */
+  proposeStatement(input: {
+    path: string;
+    type: string;
+    payload?: Record<string, unknown>;
+    from?: string;
+    next?: string;
+  }): Promise<{ draft: string; signAt: string; expires: number }>;
 }
 
 export type Verified =

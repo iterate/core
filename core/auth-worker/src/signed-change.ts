@@ -71,28 +71,35 @@ export const signerOf = ({ signer, envelope }: SignedChange) => ({
   signed: envelope,
 });
 
-/** A page's half: `signedStatement({ type, payload })` asks one of the person's passkeys here to
- *  sign, and answers the envelope. Its bytes must match iterate/signed `signedBytes`. The keys are
- *  read as the page loads, so the passkey is asked for in the press itself. */
-export const signScript = (domain: string) => `
+/** What every page that signs needs: base64url both ways, SHA-256, and `signedBytes(statement)`,
+ *  which must match iterate/signed `signedBytes`. */
+export const SIGN_HELPERS = `
 const enc = new TextEncoder();
 const b64u = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 const unb64u = (text) => Uint8Array.from(atob(text.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0));
 const sha256 = async (bytes) => new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-const passkeys = fetch("/keys.json").then((answer) => (answer.ok ? answer.json() : { keys: [] })).then((answer) => answer.keys.filter((key) => key.credentialId));
-async function signedStatement(fields) {
-  const keys = await passkeys;
-  if (!keys.length) throw new Error("You have no passkey here to sign with.");
-  const now = Date.now();
-  const statement = JSON.stringify({ mind: ${JSON.stringify(domain)}, path: "/", ...fields, at: now, expires: now + 5 * 60000, nonce: b64u(crypto.getRandomValues(new Uint8Array(16))) });
+function signedBytes(statement) {
   const type = "application/vnd.iterate.statement+json";
   const body = enc.encode(statement);
   const head = enc.encode("DSSEv1 " + enc.encode(type).length + " " + type + " " + body.length + " ");
   const bytes = new Uint8Array(head.length + body.length);
   bytes.set(head);
   bytes.set(body, head.length);
+  return bytes;
+}`;
+
+/** A page's half: `signedStatement({ type, payload })` asks one of the person's passkeys here to
+ *  sign, and answers the envelope. Its bytes must match iterate/signed `signedBytes`. The keys are
+ *  read as the page loads, so the passkey is asked for in the press itself. */
+export const signScript = (domain: string) => `${SIGN_HELPERS}
+const passkeys = fetch("/keys.json").then((answer) => (answer.ok ? answer.json() : { keys: [] })).then((answer) => answer.keys.filter((key) => key.credentialId));
+async function signedStatement(fields) {
+  const keys = await passkeys;
+  if (!keys.length) throw new Error("You have no passkey here to sign with.");
+  const now = Date.now();
+  const statement = JSON.stringify({ mind: ${JSON.stringify(domain)}, path: "/", ...fields, at: now, expires: now + 5 * 60000, nonce: b64u(crypto.getRandomValues(new Uint8Array(16))) });
   const assertion = await navigator.credentials.get({ publicKey: {
-    challenge: await sha256(bytes),
+    challenge: await sha256(signedBytes(statement)),
     rpId: location.hostname,
     userVerification: "required",
     allowCredentials: keys.map((key) => ({ type: "public-key", id: unb64u(key.credentialId) })),

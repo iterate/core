@@ -51,6 +51,7 @@ import {
   SIGN_IN_PATH,
   signOutResponse,
 } from "./sign-in.ts";
+import { statementDraftsResponse } from "./statement-drafts.ts";
 import { statementsResponse } from "./statements.ts";
 import { whoIs } from "./who-is.ts";
 
@@ -147,5 +148,7 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
   if (keys) return keys;
   if (pathname === STATEMENTS_PATH && request.method === "POST")
     return statementsResponse(env, request);
+  const drafts = await statementDraftsResponse(env, request);
+  if (drafts) return drafts;
   return authorizationServer(env).fetch(request, env, ctx);
 }

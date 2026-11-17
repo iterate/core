@@ -22,6 +22,42 @@ test("what the gate answers the mind's own code is released when it has been rea
   expect(gate).toMatchObject({ asked: 3, released: 3, appended: 2 });
 });
 
+test("a proposed statement names the calling context as its asker and answers the page's link", async () => {
+  const asked: unknown[] = [];
+  const egress = {
+    ...pretendGate().egress,
+    proposeStatement: async (input: unknown) => {
+      asked.push(input);
+      return {
+        draft: "d1",
+        signAt: "https://iterate.example.com/statements/sign?draft=d1",
+        expires: 1,
+      };
+    },
+  };
+  const caller = { ...mind(), caller: () => ({ principal: null, path: "/agents/onboarding" }) };
+  const approvals = approvalsRoot(caller as unknown as ItxHostRootContext, egress, "example.com");
+  expect(
+    await approvals.proposeStatement({
+      path: "/minds/example.org",
+      type: "demo/statement-asked",
+      payload: { append: ["/"] },
+    }),
+  ).toEqual({
+    draft: "d1",
+    signAt: "https://iterate.example.com/statements/sign?draft=d1",
+    expires: 1,
+  });
+  expect(asked).toEqual([
+    {
+      path: "/minds/example.org",
+      type: "demo/statement-asked",
+      payload: { append: ["/"] },
+      from: "/agents/onboarding",
+    },
+  ]);
+});
+
 const rule = ActRule.parse({ verb: "itx.whatsapp.sendMessage" });
 
 /** The boundary's calls of the gate, as Workers RPC answers them: each answer holds its call's
@@ -45,6 +81,7 @@ function pretendGate() {
       actRules: async () => held({ locked: false, rules: [rule] }),
       setActRules: async () => held({ rules: [rule], facts }),
       proposeActRule: async () => held({ id: "p1", facts }),
+      proposeStatement: async () => held({ draft: "d0", signAt: "", expires: 0 }),
     },
     open: () => open,
     get asked() {

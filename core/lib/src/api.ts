@@ -1766,6 +1766,15 @@ export interface IterateContextApi {
             freePaths?: string[];
           },
     ): Promise<{ id: string; signAt: string }>;
+    /** One event for a member to sign with a passkey at `signAt`, a page that needs no sign-in,
+     *  for a day. Signed, it lands on `path` with the member as `event.source.signer`. `next`:
+     *  where the page goes then, an https URL on a host of the mind. */
+    proposeStatement(input: {
+      path: string;
+      type: string;
+      payload?: Record<string, unknown>;
+      next?: string;
+    }): Promise<{ draft: string; signAt: string; expires: number }>;
   };
   /** An MCP server over Streamable HTTP, through this context's egress; its events subscribed to
    *  land on this context. */

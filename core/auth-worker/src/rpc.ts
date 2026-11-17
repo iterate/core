@@ -11,6 +11,7 @@ import { verifiedStatement } from "./keys.ts";
 import { isMember, standingOf } from "./members.ts";
 import { hostClientOf } from "./oauth.ts";
 import { signedByStack } from "./stack-key.ts";
+import { proposeStatement } from "./statement-drafts.ts";
 import { whoIs } from "./who-is.ts";
 
 export class Auth extends WorkerEntrypoint<Env> implements AuthService {
@@ -56,5 +57,9 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
   // only a Worker of the stack reaches this, over a binding
   async sign(input: Parameters<AuthService["sign"]>[0]) {
     return signedByStack(this.env, input);
+  }
+
+  async proposeStatement(input: Parameters<AuthService["proposeStatement"]>[0]) {
+    return proposeStatement(this.env, input);
   }
 }

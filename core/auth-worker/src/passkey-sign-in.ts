@@ -73,15 +73,11 @@ async function finish(env: Env, request: Request) {
     .bind(await challengeOf(statement), Date.now())
     .first();
   if (!spent) return json({ error: "This sign-in expired. Try again." }, 403);
-  const key = await env.DB.prepare(
-    "select id from keys where credential_id = ?1 and format = 'webauthn' and revoked_at is null",
-  )
-    .bind(credentialId)
-    .first<{ id: string }>();
+  const key = await passkeyIdOf(env, credentialId);
   const verified = key
     ? await verifiedStatement(env, {
         statement,
-        signature: { format: "webauthn", key: key.id, sig, authenticatorData, clientDataJSON },
+        signature: { format: "webauthn", key, sig, authenticatorData, clientDataJSON },
       })
     : { refused: "the passkey is not one this mind knows" };
   if ("refused" in verified) return refused(verified.refused);
@@ -100,6 +96,16 @@ async function finish(env: Env, request: Request) {
   });
   const headers = new Headers({ "set-cookie": setCookie });
   return facts.on(json({ next: sameOriginPath(next || "/", issuerOf(env)) }, 200, headers));
+}
+
+/** The id of the live passkey that a browser names by its credential id, or null. */
+export async function passkeyIdOf(env: Env, credentialId: string): Promise<string | null> {
+  const key = await env.DB.prepare(
+    "select id from keys where credential_id = ?1 and format = 'webauthn' and revoked_at is null",
+  )
+    .bind(credentialId)
+    .first<{ id: string }>();
+  return key?.id || null;
 }
 
 function refused(reason: string) {
