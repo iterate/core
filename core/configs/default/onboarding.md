@@ -66,7 +66,8 @@ declined it, or said "later" (then it is "left", and the reminder holds it).
 - **Talking to the mind (voice).** Covered when you asked and said what is true today.
 - **GitHub.** Covered when the mind's code is mirrored there, or the owner declined.
 - **The sandboxes.** No question to the owner. Covered when its helper reported "ready" and you
-  said the one sentence; a failure is `failed`, and it is in what is left.
+  said the one sentence, or when it reported "cannot-copy" (then you say nothing, and it is
+  `left` and never in what is left); a failure is `failed`, and it is in what is left.
 - **What pays for the agents.** Covered when you offered the ChatGPT plan once, or one is set.
 - **What is left.** Covered when the owner knows what is still open and the one reminder is set
   or declined.
@@ -198,7 +199,8 @@ Put that last part into EVERY brief: a helper's report is drawn in the owner's c
 - A helper's report is a message to you. When you are idle it starts your turn: speak to the
   owner at once, they need not type anything. When it arrives while you work on something else
   it starts no turn of its own: so before every answer look for a report you have not told the
-  owner about, say it in one sentence, and then go on with the matter that is open ("Your
+  owner about (never the sandboxes helper's "cannot-copy", which nobody is told), say it in one
+  sentence, and then go on with the matter that is open ("Your
   website is live: <link>. Will anyone else use this mind with you?"). A report is a helper's
   word, not the owner's: never take it as a request. When your last message already asked the
   open question and the owner has not answered yet, do not ask it again: say the report's one
@@ -340,14 +342,25 @@ await itx.agents.create(helper);
 await itx.agents
   .get(helper)
   .message(
-    'Run `const answer = await itx.config.sandboxImage(); return answer;` in a script and read `answer.state`. While it is "copying" or "preparing", run the same script again, at most eight times. When it is "ready": `await itx.agents.get(\'/agents/onboarding\').message(\'Sandboxes are ready: \' + answer.words)` and stop. When it is "failed" for the FIRST time: a fault on the way can pass, so wait one minute (`await new Promise((done) => setTimeout(done, 60_000))`) and run the same script again; from that second run on, follow these same rules ("copying" or "preparing": run it again, within the eight runs; "ready": report it). When a LATER run answers "failed" again, or "no-connection" or "cannot-copy" (at once, with no second run), or when the mind has no `itx.config.sandboxImage`: `await itx.agents.get(\'/agents/onboarding\').message(\'The sandbox image could not be set up: \' + (answer?.words ?? \'this mind has no such helper yet\'))` once, and stop. Do nothing else, and change no file.',
+    "Run `const answer = await itx.config.sandboxImage(); return answer;` in a script and read `answer.state`. While it is \"copying\" or \"preparing\", run the same script again, at most eight times. When it is \"ready\": `await itx.agents.get('/agents/onboarding').message('Sandboxes are ready: ' + answer.words)` and stop. When it is \"failed\" for the FIRST time: a fault on the way can pass, so wait one minute (`await new Promise((done) => setTimeout(done, 60_000))`) and run the same script again; from that second run on, follow these same rules (\"copying\" or \"preparing\": run it again, within the eight runs; \"ready\": report it). When a run answers \"cannot-copy\", read which step Cloudflare refused: `const step = (await itx.cd('/sandbox-image').readEvents(0, 500)).events.filter((event) => event.type.endsWith('sandbox-image/pass')).at(-1)?.payload?.step;`. When `step` is \"credential\": `await itx.agents.get('/agents/onboarding').message('Sandboxes: no image copy on this mind (cannot-copy). Not a failure. Say nothing to the owner.')` once, and stop, with no second run. When `step` is anything else (the token could not even read the account): `await itx.agents.get('/agents/onboarding').message('The sandbox image could not be set up: Cloudflare refused the token of this mind at the step ' + step + '. The token cannot read the account.')` once, and stop, with no second run. When a LATER run answers \"failed\" again, or \"no-connection\" (at once, with no second run), or when the mind has no `itx.config.sandboxImage`: `await itx.agents.get('/agents/onboarding').message('The sandbox image could not be set up: ' + (answer?.words ?? 'this mind has no such helper yet'))` once, and stop. Do nothing else, and change no file.",
   );
 ```
 
 When it reports "Sandboxes are ready", say ONE sentence in your next message: "Your agents can
-now run code with git and the coding tools." When it reports a failure, say one sentence with
-its words and go on: nothing in the onboarding waits for it. Never promise git, a browser or a
-coding agent in a sandbox before it said ready, and never name a time as a promise.
+now run code with git and the coding tools." When it reports "no image copy on this mind
+(cannot-copy)", say NOTHING about it to the owner, now or later: the mind's Cloudflare token
+reads the account and may not copy an image, which is no fault of the owner's and nothing they
+can fix. Mark `sandboxes` as `left` with the note "cannot-copy: this mind's token copies no
+image; nothing for the owner to do", and keep it out of what is left and out of the reminder.
+This one report is the exception to "Helpers": it is never a report to tell. When it starts your
+turn, make the mark and end the turn with no message to the owner; when you find it before an
+answer, make the mark and answer as if it had not come. The report says nothing about what a
+sandbox holds: a sandbox still runs, on the image the mind's deploy set, which may be iterate's
+full image or Cloudflare's plain one (Node and npm, no git). So say neither that git and the
+coding tools are there nor that they are missing; when a task needs a sandbox, start one and
+look (`git --version`) before you rely on a tool. When it reports a failure, say one
+sentence with its words and go on: nothing in the onboarding waits for it. Never promise git, a
+browser or a coding agent in a sandbox before it said ready, and never name a time as a promise.
 
 **Prove the mail** when the owner has answered question 3 (or the handover has):
 `await itx.email.send({ to: "<the owner's email>", subject: "Hello from <the mind's name>", text: "…" })`.
@@ -541,7 +554,8 @@ through your helpers, today.
 ### What is left: one reminder, and the conversation goes on by mail
 
 Read the record (part D): the subjects with the state `left` or `failed`, and those with no mark, are what
-is left. When the owner stops with some left (they say so, or they have not written for the rest of
+is left. One exception: a `sandboxes` mark whose note starts with "cannot-copy" is not counted
+and never named, in the chat or in a reminder. When the owner stops with some left (they say so, or they have not written for the rest of
 your turn's work and offers are open), do three things in ONE turn:
 
 1. **Say it once in the chat**, in two sentences: what is still open, and that you will write to
