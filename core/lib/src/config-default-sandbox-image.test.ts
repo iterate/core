@@ -117,20 +117,51 @@ test("a mind with no Cloudflare token answers no-connection and sends nothing to
   expect(Object.keys(hosts.contexts)).toEqual([]);
 });
 
-test("a 403 at the push credential answers failed with the missing permission and sends nothing to the registry", async () => {
+const CANNOT_COPY =
+  "This mind's Cloudflare connection cannot copy the image. The mind's token reads the account and changes nothing in it, so it cannot push to the account's registry. A deploy of the stack copies the image when its config says mind.sandboxImage: \"published\": tell a member. Do not call itx.config.sandboxImage() again.";
+
+test("a 403 at the push credential answers cannot-copy, says not to call again, and makes no further request", async () => {
   const hosts = standIns({ credentialStatus: 403 });
 
   const answer = await sandboxImageForAgent(hosts.itx);
 
-  expect(answer).toMatchObject({ state: "failed", image: IMAGE, copied: 0 });
-  expect(answer.words).toContain(
-    `credential: 403 The mind's Cloudflare token lacks the permission "Workers Containers Write", so it cannot push to the account's registry. Tell a member; do not look for a way round. Cloudflare said: [{"code":10000,"message":"Authentication error"}]`,
-  );
+  expect(answer).toEqual({ state: "cannot-copy", words: CANNOT_COPY });
+  expect(answer.words).toMatch(/^This mind's Cloudflare connection cannot copy the image\. /);
+  expect(answer.words).not.toMatch(/Call itx\.config\.sandboxImage\(\) again/);
+  // the refused credential is the last call: nothing after it, at Cloudflare or any other host
+  expect(hosts.cloudflare.map(({ method, path }) => `${method} ${path}`)).toEqual([
+    "GET /accounts",
+    "POST /accounts/account-1/containers/registries/registry.cloudflare.com/credentials",
+  ]);
   expect(hosts).toMatchObject({
     requests: [],
-    contexts: { "/sandbox-image": [{ type: "sandbox-image/pass", payload: { state: "failed" } }] },
+    contexts: {
+      "/sandbox-image": [
+        { type: "sandbox-image/pass", payload: { state: "cannot-copy", step: "credential" } },
+      ],
+    },
   });
   expect(hosts.contexts["/"]).toBeUndefined();
+});
+
+test("a 403 at the account's own lookup answers the same cannot-copy, with no request after it", async () => {
+  const hosts = standIns({ accountsStatus: 403 });
+
+  expect(await sandboxImageForAgent(hosts.itx)).toEqual({
+    state: "cannot-copy",
+    words: CANNOT_COPY,
+  });
+  expect(hosts.cloudflare.map(({ method, path }) => `${method} ${path}`)).toEqual([
+    "GET /accounts",
+  ]);
+  expect(hosts).toMatchObject({
+    requests: [],
+    contexts: {
+      "/sandbox-image": [
+        { type: "sandbox-image/pass", payload: { state: "cannot-copy", step: "accounts" } },
+      ],
+    },
+  });
 });
 
 test("a preparation that stays pending for the 3 minutes answers preparing and names no image", async () => {
@@ -320,6 +351,7 @@ function manifestText() {
 /** The mind (its secret and contexts) and the three hosts, with what each was sent. */
 function standIns({
   secretSet = true,
+  accountsStatus = 200,
   credentialStatus = 200,
   credentialStatuses = [],
   preparation = "ready",
@@ -329,6 +361,8 @@ function standIns({
   tokenTimeouts = 0,
 }: {
   secretSet?: boolean;
+  /** The status of `GET /accounts`: 200 names one account. */
+  accountsStatus?: number;
   credentialStatus?: number;
   /** One status for each credential call, in order; after them, `credentialStatus`. */
   credentialStatuses?: number[];
@@ -365,7 +399,13 @@ function standIns({
         path,
         authorization: request.headers.get("authorization"),
       });
-      if (path === "/accounts") return json({ success: true, result: [{ id: "account-1" }] });
+      if (path === "/accounts")
+        return accountsStatus === 200
+          ? json({ success: true, result: [{ id: "account-1" }] })
+          : json(
+              { success: false, errors: [{ code: 10000, message: "Authentication error" }] },
+              accountsStatus,
+            );
       if (path.endsWith("/containers/registries/registry.cloudflare.com/credentials")) {
         const status = credentialStatuses.shift() ?? credentialStatus;
         return status === 200

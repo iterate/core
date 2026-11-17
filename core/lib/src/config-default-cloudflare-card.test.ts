@@ -22,6 +22,9 @@ test("right after a publish, a mind with the token shows the connection: what th
     status: { kind: "ok", text: "Connected" },
   });
   expect(card?.description).toMatch(/itx\.config\.cloudflare\(tool, args\)/);
+  // the token reads the account and changes nothing in it: the card says so, and offers no change
+  expect(card?.description).toMatch(/query logs and traces\. The token changes nothing/);
+  expect(card?.description).not.toMatch(/DNS|routes|profile/);
   expect(row).toMatchObject({
     account: "Ada's account",
     status: { kind: "ok" },

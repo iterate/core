@@ -22,7 +22,7 @@ import type {
   SecretVerb,
   SecretVerbs,
 } from "iterate/workers";
-import { keepCloudflareToken } from "./cloudflare-token.ts";
+import { boundCloudflareTokenOf, keepCloudflareToken } from "./cloudflare-token.ts";
 import { hopCaller } from "./hop-caller.ts";
 
 export const SECRETS_ROOT_DESCRIPTION =
@@ -89,12 +89,7 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
     delete: remove,
     describe,
     keepCloudflareToken: () =>
-      keepCloudflareToken(
-        { describe, set, delete: remove },
-        env.CLOUDFLARE_TOKEN && env.CLOUDFLARE_TOKEN_ID
-          ? { token: env.CLOUDFLARE_TOKEN, tokenId: env.CLOUDFLARE_TOKEN_ID }
-          : undefined,
-      ),
+      keepCloudflareToken({ describe, set, delete: remove }, boundCloudflareTokenOf(env)),
     // The secrets that are set, in one call of the vault. The paths that the mind's log names go
     // along as `known`: core/secrets-worker/src/secret-list.ts says what the vault does with them.
     list: async (): Promise<SecretDescription[]> => {

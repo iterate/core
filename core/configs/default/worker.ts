@@ -465,8 +465,8 @@ export default class extends IterateConfigEntrypoint {
   }
 
   /** `itx.config.cloudflare(tool, args)`: a tool of Cloudflare's own MCP server, called with the
-   *  API token of the mind's own account, with which agents debug and configure the account
-   *  (cloudflare.ts; cloudflare.md). */
+   *  API token of the mind's own account, with which agents read the account and query its logs
+   *  and traces (cloudflare.ts; cloudflare.md). */
   async cloudflare(tool: string, args?: Record<string, unknown>) {
     using itx = this.getItx();
     return await cloudflareForAgent(itx, tool, args);
@@ -474,7 +474,8 @@ export default class extends IterateConfigEntrypoint {
 
   /** `itx.config.sandboxImage(options)`: one pass of the copy of iterate's full sandbox image into
    *  the registry of the mind's own account, which the mind then names as its sandboxes' image
-   *  (sandbox-image.ts; sandbox-image.md). Call it again until it answers `ready`. */
+   *  (sandbox-image.ts; sandbox-image.md). Call it again until it answers `ready`, and never after
+   *  `cannot-copy`. */
   async sandboxImage(options?: SandboxImageOptions) {
     using itx = this.getItx();
     return await sandboxImageForAgent(itx, options);

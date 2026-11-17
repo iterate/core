@@ -8,7 +8,9 @@
 // image and names it on `/` with `events.iterate.com/mind/sandbox-image-configured`, once. Every
 // call to Cloudflare goes with the mind's token at `/secrets/cloudflare` as a placeholder through
 // `itx.fetch`; the registry gets a push credential that the token mints, and the blobs stream
-// through the isolate's own `fetch`. The pass keeps its own facts on `/sandbox-image`.
+// through the isolate's own `fetch`. The pass keeps its own facts on `/sandbox-image`. The mind's
+// own token may not mint that credential (it changes nothing in the account), so with it the pass
+// answers `cannot-copy`: a deploy of the stack copies the image instead.
 import { z } from "zod";
 
 /** iterate's published image, the same pin as core/alchemy/src/sandbox-image.ts (a mind's config
@@ -43,7 +45,13 @@ export type SandboxImageOptions = {
   prepareBudgetMs?: number;
 };
 
-export type SandboxImageState = "no-connection" | "copying" | "preparing" | "ready" | "failed";
+export type SandboxImageState =
+  | "no-connection"
+  | "cannot-copy"
+  | "copying"
+  | "preparing"
+  | "ready"
+  | "failed";
 
 export type SandboxImageAnswer = {
   state: SandboxImageState;
@@ -70,6 +78,17 @@ export type SandboxImageItx = {
 class StepFailed extends Error {
   constructor(step: string, status: number, said: string) {
     super(`${step}: ${status}${said ? ` ${said.slice(0, 300)}` : ""}`);
+  }
+}
+
+/** Cloudflare refused (403) a call of the pass to the token. The mind's own token reads the account
+ *  and changes nothing in it: it does not hold "Workers Containers Write", which the registry's
+ *  push credential takes, so no second pass can copy the image with it. */
+class TokenRefused extends Error {
+  readonly step: string;
+  constructor(step: string, said: string) {
+    super(`${step}: 403 ${said.slice(0, 300)}`);
+    this.step = step;
   }
 }
 
@@ -203,6 +222,19 @@ export async function sandboxImageForAgent(
       left: 0,
     };
   } catch (error) {
+    if (error instanceof TokenRefused) {
+      await facts
+        .append({
+          type: "sandbox-image/pass",
+          payload: { state: "cannot-copy", step: error.step, words: error.message },
+        })
+        .catch(() => {});
+      return {
+        state: "cannot-copy",
+        words:
+          "This mind's Cloudflare connection cannot copy the image. The mind's token reads the account and changes nothing in it, so it cannot push to the account's registry. A deploy of the stack copies the image when its config says mind.sandboxImage: \"published\": tell a member. Do not call itx.config.sandboxImage() again.",
+      };
+    }
     const words = error instanceof Error ? error.message : String(error);
     await facts
       .append({ type: "sandbox-image/pass", payload: { state: "failed", copied, words } })
@@ -253,6 +285,7 @@ function jsonOf(text: string): unknown {
 /** The token's one account. */
 async function accountOf(itx: SandboxImageItx): Promise<string> {
   const accounts = await cloudflare(itx, "GET", "/accounts");
+  if (accounts.status === 403) throw new TokenRefused("accounts", accounts.said);
   const ids = z.array(z.object({ id: z.string().min(1) })).safeParse(accounts.result).data;
   if (!accounts.ok || !ids) throw new StepFailed("accounts", accounts.status, accounts.said);
   if (ids.length !== 1)
@@ -278,12 +311,7 @@ async function pushCredential(itx: SandboxImageItx, account: string): Promise<st
     `/accounts/${account}/containers/registries/${REGISTRY}/credentials`,
     { expiration_minutes: 60, permissions: ["pull", "push"] },
   );
-  if (made.status === 403)
-    throw new StepFailed(
-      "credential",
-      403,
-      `The mind's Cloudflare token lacks the permission "Workers Containers Write", so it cannot push to the account's registry. Tell a member; do not look for a way round. Cloudflare said: ${made.said}`,
-    );
+  if (made.status === 403) throw new TokenRefused("credential", made.said);
   const credential = Credential.safeParse(made.result).data;
   const user = credential?.username || credential?.user;
   if (!made.ok || !credential || !user) throw new StepFailed("credential", made.status, made.said);

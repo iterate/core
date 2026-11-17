@@ -12,7 +12,12 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
-import { cloudflareTokenPoliciesOf, MIND_CLOUDFLARE_TOKEN } from "./cloudflare-token.ts";
+import {
+  cloudflareTokenNameOf,
+  cloudflareTokenPoliciesOf,
+  editionOfCloudflareTokenName,
+  MIND_CLOUDFLARE_TOKEN,
+} from "./cloudflare-token.ts";
 import {
   authSettingsOf,
   deployRefusalOf,
@@ -254,6 +259,12 @@ export const mindStack = (config: MindConfig) =>
             ...(cloudflareToken && {
               CLOUDFLARE_TOKEN: cloudflareToken.value,
               CLOUDFLARE_TOKEN_ID: cloudflareToken.tokenId,
+              // which release's list the token holds, as its name at Cloudflare says it: the
+              // mind keeps no token of an older list
+              CLOUDFLARE_TOKEN_EDITION: Output.map(
+                cloudflareToken.name,
+                editionOfCloudflareTokenName,
+              ),
             }),
             ...(config.services && servicesEnvOf(config.services)),
           },
@@ -381,7 +392,7 @@ const cloudflareTokenPart = (names: ReturnType<typeof resourceNamesOf>) =>
   Effect.gen(function* () {
     const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
     return yield* Cloudflare.ApiToken.AccountApiToken(MIND_CLOUDFLARE_TOKEN, {
-      name: names.cloudflareToken,
+      name: cloudflareTokenNameOf(names.cloudflareToken),
       policies: cloudflareTokenPoliciesOf(accountId),
     });
   });

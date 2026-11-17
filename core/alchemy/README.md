@@ -621,17 +621,25 @@ prototypes. The stack smoke gate (`docs/testing.md`) runs it in every run, on th
 ## The mind's Cloudflare token
 
 `cloudflareToken: true` in the config adds one API token of the account,
-`iterate-<name>-cloudflare`, for the mind itself, so that its agents debug, profile and
-configure what the account runs, through Cloudflare's MCP server.
+`iterate-<name>-cloudflare-<edition>`, for the mind itself, so that its agents see what the
+account runs and how it is set up, and query its Workers' logs and traces, through Cloudflare's
+MCP server.
 
-**The rule: the account is the mind's sandbox.** The token reads the account and its zones. It
-writes the Workers platform (scripts, their settings, versions and deployments, Durable Objects,
-containers, D1, KV, R2, queues, AI Gateway, Workers AI, Browser Rendering, observability and
-pipelines) and the zones' DNS records, Workers routes and settings. It reaches nothing beyond the
-account and changes nobody's access: no API token, member, billing, registrar or zone write. A
-few reads of other products' secrets stay out. `src/cloudflare-token.ts` has the lists;
-`src/cloudflare-token.test.ts` holds them against the catalog of permission groups that Alchemy
-ships. **Every member and agent of the mind can use it**, as any secret of the mind.
+**The rule: the token reads the account and deploys nothing.** Every member and agent of the mind
+can use it, as any secret of the mind, so it must not be a way to take the stack over. It reads
+the account and its zones: settings, lists, analytics, logs and traces, and the metadata of D1,
+KV and R2 (names and sizes, not data). Its one write is Workers Observability Write: Cloudflare
+takes the query of logs and traces with no read group, and with this group alone. It holds no write of a Worker's script, settings, secrets, versions, deployments,
+routes or containers: with one it could put its own code in place of the Secrets or Auth Worker
+and read every secret. It holds no read of a Worker's code (Workers Scripts Read also exports a
+Durable Object's database: the vault, the approvals, every context's log), no live tail, and no
+read or write of D1, KV or R2 data (the auth database holds the keys that the stack trusts and
+its private key, the KV the sign-ins and the code that the mind loads). Nor does it hold a queue
+push, a DNS, route or zone-settings write, an AI Gateway, Workers AI, Browser Rendering or
+Pipelines write, account settings, or anything of API tokens, members, billing or the registrar.
+The mind's own code changes by a commit to its config repo; a change of the stack is a deploy.
+`src/cloudflare-token.ts` has the lists; `src/cloudflare-token.test.ts` holds them against the
+catalog of permission groups that Alchemy ships.
 
 **A group that Cloudflare refuses is dropped at that deploy.** A token that a person's OAuth
 sign-in makes (iterate Cloud's run) may hold only the groups the sign-in's scopes cover, and
@@ -641,12 +649,19 @@ four tries, and the deploy's output has one line,
 `[MindCloudflareToken] Cloudflare refused <n> permission groups …: <names>`. The stack keeps
 the list it asked for, so a later deploy does not ask again until a release changes the list.
 
+**The name ends with the edition of the list** (`CLOUDFLARE_TOKEN_EDITION` in
+`src/cloudflare-token.ts`), which goes up with each release that changes the list. A deploy that may change API
+tokens gives an existing token this release's list and name in place: the same token, with the
+same value. **The mind keeps no token of an older list:** when the deploy could not change the
+token, the mind does not put it in its vault and deletes the one that an earlier release stored.
+The mind then has no Cloudflare connection until a deploy that may change API tokens.
+
 Its value stays in the stack's state, as the telemetry tokens' do, and **Account API Tokens Edit
 is needed** by the same deploys: the one that makes the token, a `destroy` or a deploy without
 the field (each deletes it), and a deploy of a version that changes what the token may do.
 `ITERATE_KEEP_CLOUDFLARE_TOKEN=1` says that the deploy's access may not change API tokens: a
-token that exists then stays as it is, whatever the version (iterate Cloud sets it for an
-Update without that scope). Any other deploy asks Cloudflare nothing about it.
+token that exists then stays as it is at Cloudflare, whatever the version (iterate Cloud sets it
+for an Update without that scope). Any other deploy asks Cloudflare nothing about it.
 
 **A second token can make the tokens.** Cloudflare refuses Account API Tokens Edit to a token
 that another token made ("sub-token is not allowed to have permissions to manage other tokens").

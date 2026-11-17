@@ -1510,8 +1510,9 @@ export interface IterateContextApi {
      *  for a stack that names no Cloud; no client when the Cloud gave no list. */
     cloud(): Promise<{ origin: string; clients: string[] } | null>;
     /** The stack's own Cloudflare API token, kept at `/secrets/cloudflare`: written when the
-     *  stack has one that the vault lacks, deleted when the stack has none any more, and a secret
-     *  that somebody else put at the path left as it is
+     *  stack has one of this release's list that the vault lacks, deleted when the stack has none
+     *  any more or only one of an older list, and a secret that somebody else put at the path left
+     *  as it is
      *  (core/mind-worker/src/context/cloudflare-token.ts). The root asks for this once in each of
      *  its incarnations: no agent needs to. */
     keepCloudflareToken(): Promise<{ path: string; outcome: "set" | "deleted" | "unchanged" }>;

@@ -19,6 +19,27 @@ const CLOUDFLARE_TOKEN_URLS = ["https://mcp.cloudflare.com", "https://api.cloudf
 /** The stack's token as the mind Worker is bound to it, when the stack has one. */
 export type BoundCloudflareToken = { token: string; tokenId: string };
 
+/** THE EDITION OF THE TOKEN'S LIST THAT THIS RELEASE GIVES (core/alchemy/src/cloudflare-token.ts
+ *  `CLOUDFLARE_TOKEN_EDITION`; internal-packages/installer/test/scopes.mjs holds the two equal). */
+export const CLOUDFLARE_TOKEN_EDITION = 3;
+
+/** THE MIND HOLDS NO TOKEN OF AN OLDER LIST. The stack's token for the vault, from the mind
+ *  Worker's bindings: none when the stack has none, and none when the token is of another
+ *  edition than this release's. An older list may do more than this release allows (the list of
+ *  13 November 2026 could replace the stack's own Workers), and a deploy whose access may not
+ *  change API tokens leaves such a token as it is. It then stays at Cloudflare, bound to this
+ *  Worker, and reaches no vault: `keepCloudflareToken` deletes the one that an earlier release
+ *  stored. The next deploy that may change API tokens gives the token this release's list. */
+export function boundCloudflareTokenOf(env: {
+  CLOUDFLARE_TOKEN?: string;
+  CLOUDFLARE_TOKEN_ID?: string;
+  CLOUDFLARE_TOKEN_EDITION?: string;
+}): BoundCloudflareToken | undefined {
+  if (!env.CLOUDFLARE_TOKEN || !env.CLOUDFLARE_TOKEN_ID) return undefined;
+  if (env.CLOUDFLARE_TOKEN_EDITION !== String(CLOUDFLARE_TOKEN_EDITION)) return undefined;
+  return { token: env.CLOUDFLARE_TOKEN, tokenId: env.CLOUDFLARE_TOKEN_ID };
+}
+
 export type CloudflareTokenKept = { path: string; outcome: "set" | "deleted" | "unchanged" };
 
 /** The three verbs of the vault that the step uses (context/secrets.ts `secretsRoot`). */

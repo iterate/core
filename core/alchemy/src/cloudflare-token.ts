@@ -1,15 +1,26 @@
 // cloudflare-token.ts — WHAT THE MIND'S OWN CLOUDFLARE API TOKEN MAY DO (stack.ts makes the token
 // when the config says `cloudflareToken: true`).
 //
-// THE RULE. The account is the mind's sandbox, so the token may debug, profile and configure what
-// the account runs: it reads everything of the account and of its zones, and writes the Workers
-// platform (scripts and their settings, versions and deployments, Durable Objects, tails, D1, KV,
-// R2, queues, containers, AI Gateway, Workers AI, Browser Rendering, observability, pipelines),
-// and the zones' DNS records, Workers routes and settings. It reaches nothing beyond the account
-// and changes nobody's access: no API token, member, billing, registrar or zone of its own. A
-// few reads stay out (`CLOUDFLARE_TOKEN_READS_LEFT_OUT`): secrets of other products, which the
-// mind's work does not need. Every member and agent of the mind can use the token: it is the
-// mind's, kept in its vault (core/mind-worker/src/context/cloudflare-token.ts).
+// THE RULE. The token reads the account and deploys nothing. Every member and agent of the mind
+// can use it: it is the mind's, kept in its vault (core/mind-worker/src/context/
+// cloudflare-token.ts). So it must not be a way to become more than the mind is. It holds:
+//
+// - the reads of its account and of the account's zones, except the ones that yield a credential
+//   or the state that the stack trusts (`CLOUDFLARE_TOKEN_READS_LEFT_OUT`);
+// - the writes of `CLOUDFLARE_TOKEN_WRITES`, each with its one use.
+//
+// IT CANNOT TAKE THE STACK OVER. It has no write of a Worker's script, settings, versions,
+// routes or containers: with one it could put its own code in place of the stack's Secrets or
+// Auth Worker, and read every secret. It has no read or write of D1, KV or R2 data: the Auth
+// Worker's database holds the keys that the stack trusts and the stack's own private key, its KV
+// namespace holds the sign-ins, and the mind's KV namespace holds the code that the mind loads.
+// It has no queue push (the stack takes its queue's events as Cloudflare's), no write of DNS, of
+// a zone or of a setting (the sign-in's hostname could be sent elsewhere), no live tail, and
+// nothing of the account's API tokens. It has no write of AI Gateway, Workers AI, Browser
+// Rendering, Pipelines, the R2 Data Catalog or the telemetry intake either: the mind has bindings
+// for the first three, and the stack's telemetry has two narrow tokens of its own. As ever it has
+// no write of account settings, billing, the registrar or a zone, and none that makes a lasting
+// export to any URL (Notifications, Logs).
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import { PERMISSION_GROUPS, resolvePolicies, type Policy } from "@alchemy.run/cloudflare/ApiToken";
 import * as Provider from "alchemy/Provider";
@@ -18,9 +29,18 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import { z } from "zod";
 
-/** A read that the token does not have, and the secret of another product that it would read. */
+/** A read that the token does not have, and what the read would yield. */
 export const CLOUDFLARE_TOKEN_READS_LEFT_OUT = {
   "Account API Tokens Read": "the account's API tokens; Cloudflare lets no token hold this group",
+  "D1 Read":
+    "it runs queries (Cloudflare takes this group for POST …/query): the Auth Worker's database holds the stack's private key and the keys it trusts",
+  "Workers KV Storage Read":
+    "the values of any namespace: the Auth Worker's sign-ins and grants, and those of an iterate Cloud in the same account",
+  "Workers R2 Storage Read": "the objects of any bucket of the account, whatever they hold",
+  "Workers Scripts Read":
+    "the export of a Durable Object's database (the vault's records, the approvals, every context's log), and a Worker's plain-text bindings in clear",
+  "Workers Tail Read": "a live tail of any Worker: its requests, their URLs and headers",
+  "Account Settings Read": "a Turnstile widget's secret, and a secondary DNS TSIG secret",
   "Logs Read": "a Logpush job's destination, with its access keys in clear",
   "Images Read": "the signing keys of Images, in clear",
   "Stream Read": "the webhook's secret and a live input's passphrase, in clear",
@@ -31,36 +51,52 @@ export const CLOUDFLARE_TOKEN_READS_LEFT_OUT = {
   "Turnstile Sites Read": "a Turnstile widget's secret",
 } as const;
 
-/** What the token may change: the account's Workers platform, and its zones' DNS records,
- *  routes and settings. Each is covered by a scope that iterate Cloud's consent asks
- *  (internal-packages/installer/worker/scopes.js). Left out on purpose: Account API Tokens,
- *  Account Settings, Billing and Registrar writes, Zone Write (add or delete a zone), and
- *  Notifications and Logs writes (a webhook or a Logpush job: a lasting export to any URL). */
-export const CLOUDFLARE_TOKEN_WRITES = [
-  // account
-  "Workers Scripts Write",
-  // also the registry's push credentials: all that the sandbox image's copy needs
-  // (scripts/sandbox-image.ts)
-  "Workers Containers Write",
-  "D1 Write",
-  "Workers KV Storage Write",
-  "Workers R2 Storage Write",
-  "Queues Write",
-  "AI Gateway Write",
-  "AI Gateway Run",
-  "Workers AI Write",
-  "Browser Rendering Write",
-  "Workers Observability Write",
-  "Workers Observability Telemetry Write",
-  "Pipelines Write",
-  "Pipelines Send",
-  "Workers R2 Data Catalog Write",
-  // zone, on the policy for every zone of the account
-  "DNS Write",
-  "Workers Routes Write",
-  "Zone Settings Write",
-  "Zone Observability Write",
-] as const;
+/** READING A WORKER'S LOGS AND TRACES. Cloudflare's query of them is a POST that takes no read
+ *  group: "Workers Observability Write" is the one group that answers it, and it answers alone
+ *  (tried on 17 November 2026: with it and without "Workers Observability Telemetry Write" the
+ *  query answers). The same group can make an observability destination (logs and traces sent on
+ *  to a URL): the template's own call refuses a destinations path (core/configs/default/
+ *  cloudflare.ts); the token does not. To take the query away, empty this list.
+ *
+ *  WHO HOLDS THE TOKEN READS EVERY WORKER'S LOGS, SO NO CODE OF THE STACK SENDS A CREDENTIAL WHERE
+ *  THE LOGS SHOW IT. In the query's answers and in a live tail, a request's `cookie` reads
+ *  `REDACTED` and its `authorization` reads `********`; every other header reads in clear, and
+ *  Cloudflare redacts a URL only by the look of a value (tried on 17 November 2026). The headers
+ *  that the boundary stamps (`x-itx-principal`, `x-itx-grant`, `x-itx-secret-use`) are an
+ *  identity, an id and a secret's path, never a credential, and stay so. */
+const OBSERVABILITY_WRITES = ["Workers Observability Write"] as const;
+
+/** THE SANDBOX IMAGE'S COPY, OFF. "Workers Containers Write" gives the registry's push
+ *  credential and changes container applications, which is all that the copy needs
+ *  (core/configs/default/sandbox-image.ts). The token does not hold it, and the copy says so. To
+ *  give it back, name the group here. */
+const CONTAINERS_WRITES: readonly string[] = [];
+
+/** What the token may change, and nothing else. The module's head says what is left out, and
+ *  what each write that is left out would reach. */
+export const CLOUDFLARE_TOKEN_WRITES: readonly string[] = [
+  ...OBSERVABILITY_WRITES,
+  ...CONTAINERS_WRITES,
+];
+
+/** THE EDITION OF THE TOKEN'S LIST. It goes up with each release that changes what the token may
+ *  do. The token's name ends with it (`cloudflareTokenNameOf`), and a deploy that changes the
+ *  token changes its name with its list, in one call. So the name that Cloudflare has for the
+ *  token says which release's list the token holds, also when a deploy could not change it
+ *  (`mindCloudflareTokenProvider` `keep`). The mind keeps only a token of its own release's
+ *  edition (core/mind-worker/src/context/cloudflare-token.ts): a token of an older list, which
+ *  may do more, never reaches the mind's vault. iterate Cloud's cards count the same number
+ *  (internal-packages/installer/worker/scopes.js; its test holds the three equal). */
+export const CLOUDFLARE_TOKEN_EDITION = 3;
+
+/** The token's name at Cloudflare: the stack's name for it (config.ts `resourceNamesOf`), then
+ *  the edition of its list. */
+export const cloudflareTokenNameOf = (name: string) => `${name}-${CLOUDFLARE_TOKEN_EDITION}`;
+
+/** The edition that a token's name says, as text: "1" for a name with none, which is every token
+ *  made before the name said it. */
+export const editionOfCloudflareTokenName = (name: string) =>
+  /-cloudflare-(\d+)$/.exec(name)?.[1] || "1";
 
 /** Groups that iterate Cloud's consent cannot grant. A token that a person's OAuth sign-in makes may
  *  hold only what the sign-in's scopes cover, and Cloudflare refuses the WHOLE token for one group
@@ -159,7 +195,7 @@ const ZONE_SCOPE = "com.cloudflare.api.account.zone";
  *  goes in. The catalog lists a renamed group under both of its names: each id counts once. */
 export function cloudflareTokenGroupsOf() {
   const leftOut: Record<string, string> = CLOUDFLARE_TOKEN_READS_LEFT_OUT;
-  const writes: readonly string[] = CLOUDFLARE_TOKEN_WRITES;
+  const writes = CLOUDFLARE_TOKEN_WRITES;
   // by id: a renamed group is in the catalog under both its names
   const notGranted: readonly string[] = CLOUDFLARE_TOKEN_NOT_GRANTED_BY_THE_CLOUD;
   const refusedIds = new Set(

@@ -1,8 +1,8 @@
 // cloudflare.ts — THE MIND'S CLOUDFLARE CONNECTION (cloudflare.md): Cloudflare's own MCP
 // server, called with the API token of the mind's own account. A stack whose config says
 // `cloudflareToken: true` keeps that token in the vault at `/secrets/cloudflare`. With it the
-// mind's agents debug, profile and configure what the account runs (core/alchemy README, "The
-// mind's Cloudflare token", says what it may do).
+// mind's agents read the account and query its logs and traces, and change nothing in it
+// (core/alchemy README, "The mind's Cloudflare token", says what it may do and why).
 //
 // Two things here: the call an agent makes (`cloudflareForAgent`, `itx.config.cloudflare`), and
 // the connection's card on the Dash's Integrations page (`cloudflareConnectionEvent`, which
@@ -60,7 +60,7 @@ const ROW = "account";
 const CHECK_MS = 20_000;
 
 const DESCRIPTION =
-  "Cloudflare's MCP server, with an API token of this mind's own account: agents read logs and traces, profile Workers, and change Workers, their storage, DNS records, routes and settings. An agent calls itx.config.cloudflare(tool, args).";
+  "Cloudflare's MCP server, with an API token of this mind's own account: agents see what the account runs and how it is set up, and query logs and traces. The token changes nothing in the account. An agent calls itx.config.cloudflare(tool, args).";
 
 /** `whoami` of Cloudflare's MCP server, for an account token: `{ id: "account:<id>", name }`. */
 const WhoAmI = z.object({ id: z.string().min(1), name: z.string().min(1) });
