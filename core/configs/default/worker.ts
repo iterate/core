@@ -7,6 +7,7 @@ import {
 } from "iterate/sdk";
 import { installAgents } from "iterate/agents/install";
 import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
+import { acpSandbox } from "./acp-sandbox/worker.ts";
 import { dashApp } from "./apps/dash/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { voiceApp } from "./apps/voice/app.ts";
@@ -40,7 +41,9 @@ import {
 
 // The integration packages this mind hosts (a Telegram bot, your own GitHub App, …), one element
 // each: apps.md, and the recipes at https://github.com/jonastemplestein/iterategrations.
-const integrations: Integration[] = [];
+// `acpSandbox()` runs a coding agent (Codex, Claude, opencode) in a sandbox of its own for each
+// session, `itx.acp.sandbox.start("codex")`: coding-agents.md says what it needs and what it may do.
+const integrations: Integration[] = [acpSandbox()];
 
 // The apps this mind hosts: a folder each under apps/, mounted on its host in `fetch` below
 // (apps.md). Each `app.ts` exports the function that makes one.
@@ -55,7 +58,11 @@ const voice = voiceApp();
 // import, written exactly `() => import("./path/to/kind.ts")` (`makeAgentKind` reads the path from
 // it). Their `processEvent` runs below beside the integrations', and every publish tells the Dash
 // where each kind's file is.
-const agentKinds = [makeAgentKind(import.meta, () => import("./agent-kinds/iterate.ts"))];
+const agentKinds = [
+  makeAgentKind(import.meta, () => import("./agent-kinds/iterate.ts")),
+  // a coding agent's session in a sandbox (`acpSandbox()`, above)
+  makeAgentKind(import.meta, () => import("./agent-kinds/acp.ts")),
+];
 
 export default class extends IterateConfigEntrypoint {
   // How events arrive and what each case does: AGENTS.md.

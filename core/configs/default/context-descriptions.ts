@@ -41,6 +41,18 @@ const CONTEXT_DESCRIPTIONS: { path: string; title: string; description: string }
       "The list of this mind's agents, which the Dash shows: each context below /agents is an agent.",
   },
   {
+    path: "/agents/acp",
+    title: "Coding agents",
+    description:
+      "The sessions of coding agents (Codex, Claude Code, opencode): one agent for each session, /agents/acp/<id>, run in a sandbox of its own (coding-agents.md).",
+  },
+  {
+    path: "/agents/acp/<id>/box",
+    title: "Sandbox of coding session <id>",
+    description:
+      "The sandbox where the coding agent's session /agents/acp/<id> runs, with this mind's config repo checked out.",
+  },
+  {
     path: "/agents/email",
     title: "Email agents",
     description:
