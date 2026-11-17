@@ -66,7 +66,7 @@ const pages = [
     // onboarding agent greets a new owner (onboarding.md is what it is told)
     openers: {
       "/agents/onboarding":
-        "The owner has just opened the onboarding chat for the first time. Begin with step 1.",
+        "The owner has just opened this chat for the first time and has typed nothing yet. Send your first message now: words only, no script (onboarding.md, 'Your first message').",
     },
   },
   { id: "contexts", name: "Contexts", icon: WaypointsIcon, component: DashContexts },

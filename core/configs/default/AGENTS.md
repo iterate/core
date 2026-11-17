@@ -74,13 +74,35 @@ The agents' runtime is `iterate/agents`, which comes from the platform like the 
 an OpenAI API key, else the deployment's AI Gateway credit ([agent-kinds.md](agent-kinds.md)).
 
 An agent at `/agents/<name>` reads `<name>.md` before each request, after `AGENTS.md`:
-`onboarding.md` is what `/agents/onboarding` is told, the agent where a new owner starts. The init
-case creates it, and the Dash greets the owner in its chat the first time they open it
-(`openers` in `apps/dash/public/app.js`).
+`onboarding.md` is what `/agents/onboarding` is told, the agent where a new owner starts, and
+`onboarding/` holds one file for each job its helpers do. The init case creates it. On a mind
+that came through iterate Cloud the handover writes its first message and starts its first
+helpers (`cloud-handover.ts`); on any other mind the Dash starts its first turn when the owner
+first opens its chat (`openers` in `apps/dash/public/app.js`).
 
 Every agent also reads `mind.md`, after `AGENTS.md`, when the repo has one (`agents.ts` names it):
 who this mind is, with its name, its voice, what it is for and how it reaches its people. The
 onboarding agent writes it with the owner. Keep it short: it is in every request.
+
+## While a person waits
+
+A person who wrote to you looks at an empty space until you answer. Make that short.
+
+- **Answer first, work second.** Write your words beside the script, in the same answer, or make
+  `await sendMessage("…")` the script's first line: "On it: the page turns green in a moment."
+  Never put a result there: the result does not exist yet.
+- **Start things together.** Steps that do not depend on each other run in ONE script with
+  `Promise.all`, never one after the other.
+- **Say each piece of news when it arrives**, as a short message of its own (`sendMessage`
+  between the steps of a script, or your next answer). Three short messages over a minute are
+  better than one long message at the end.
+- **Give anything that is not small to a helper agent**, under your own path, and keep talking:
+  `await itx.agents.create("<your path>/<job>")`, then
+  `await itx.agents.get("<your path>/<job>").message(brief)`. The helper cannot see your
+  conversation, so the brief holds everything, and it says how to report:
+  `await itx.agents.get("<your path>").message("<one or two plain sentences>")`. Use the same
+  helper for a later change of the same job. Your own context stays small: do not read the
+  mind's code into it for a job that a helper can do.
 
 ## Top of mind
 

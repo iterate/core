@@ -9,7 +9,7 @@ import { AgentCollectionDurableObject, AgentDurableObject, AI_GATEWAY } from "it
 
 // Every agent also reads mind.md, after AGENTS.md, when the repo has one: who this mind is (its
 // name, its voice, what it is for, how it reaches its people). The template has no such file: the
-// onboarding agent writes it with the owner (onboarding.md, step 4), so it is the mind's own from
+// onboarding agent writes it with the owner (onboarding.md, "What you remember"), so it is the mind's own from
 // its first line, and AGENTS.md stays a file that follows the template.
 AgentDurableObject.standingFiles = (_path, files) => [
   ...new Set(["AGENTS.md", "mind.md", ...files]),

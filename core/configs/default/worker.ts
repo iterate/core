@@ -72,8 +72,10 @@ export default class extends IterateConfigEntrypoint {
         await publishStep("agents", () => installAgents(itx));
         // where each kind's file is, for the Dash's agent view (`agentKinds`, above)
         await publishStep("agent-kinds", () => publishAgentKinds(itx, agentKinds));
-        // The onboarding agent, where a new owner starts: the Dash greets them in its chat
-        // (apps/dash/public/app.js, `openers`), and it reads onboarding.md. Creating it starts no
+        // The onboarding agent, where a new owner starts. It reads onboarding.md. Its first
+        // message is written by the Cloud's handover (cloud-handover.ts), or, on a mind with no
+        // Cloud, by its first turn, which the Dash starts when the owner opens its chat
+        // (apps/dash/public/app.js, `openers`). Creating it starts no
         // model turn. An owner who deleted it has no onboarding agent, for good: the platform
         // refuses to make a deleted agent again, and that is no fault of the publish.
         await publishStep("onboarding-agent", () =>
@@ -284,8 +286,8 @@ export default class extends IterateConfigEntrypoint {
         break;
       case "events.iterate.com/mind-meld/configured":
         // The owner signed the rule that lets iterate.com add events under /minds/iterate.com/:
-        // the onboarding agent is told, so it goes on by itself (cloud-handover.ts, onboarding.md
-        // "Letting iterate in").
+        // the onboarding agent is told, so it goes on by itself (cloud-handover.ts,
+        // onboarding/let-iterate-in.md).
         await iterateLetInEvent(itx, event);
         break;
       case "events.iterate.com/slack/webhook-received": {

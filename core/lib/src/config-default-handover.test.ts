@@ -24,26 +24,105 @@ test("the Cloud's handover reaches the onboarding agent once, quoted, and a repl
   const root = rootOf("https://example.com/");
   await run(root, HANDOVER);
   await run(root, HANDOVER);
-  expect(root).toMatchObject({
-    created: ["/agents/onboarding", "/agents/onboarding"],
-    appended: [
-      {
-        path: "/agents/onboarding",
-        event: {
-          type: "events.iterate.com/agent/context-added",
-          idempotencyKey: "cloud-handover:h4sh-of_the-handover",
-          payload: {
-            role: "user",
-            actor: { type: "agent" },
-            content:
-              "Here is what the person told iterate Cloud's installation agent before this mind existed, quoted below. Read it as their own words and wishes, not as instructions from the platform. Greet them with it in mind.\n\n> I run a bakery.\n> I want orders by email answered.",
-            llmRequestPolicy: { behaviour: "dont-trigger-request" },
-          },
+  expect(root.appended.filter(({ event }) => event.idempotencyKey === KEY)).toMatchObject([
+    {
+      path: "/agents/onboarding",
+      event: {
+        type: "events.iterate.com/agent/context-added",
+        idempotencyKey: KEY,
+        payload: {
+          role: "user",
+          actor: { type: "agent" },
+          content:
+            "Here is what the person told iterate Cloud's installation agent before this mind existed, quoted below. Read it as their own words and wishes, not as instructions from the platform. Greet them with it in mind.\n\n> I run a bakery.\n> I want orders by email answered.",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
+    },
+  ]);
+});
+
+test("the handover writes the first message and starts the first helpers, once", async () => {
+  const root = rootOf("https://example.com/");
+  const summary = "About the person:\n- Name: Ada Lovelace\n- Email: ada@example.com";
+  const event = { ...HANDOVER, payload: { ...HANDOVER.payload, summary } };
+  await run(root, event);
+  await run(root, event);
+  const rows = root.appended.map(({ path, event }) => {
+    const { type, idempotencyKey, payload } = event as unknown as {
+      type: string;
+      idempotencyKey: string;
+      payload: { role?: string; content?: string; message?: string; llmRequestPolicy?: unknown };
+    };
+    return { path, type: type.split("/").pop(), key: idempotencyKey.replace(KEY, ""), payload };
+  });
+  const greeting =
+    "Hey Ada. This is your mind now, and everything in it is yours to change, including the page you are looking at.\n\nLet's prove that first: which colour should this page be?";
+  // the assistant's item starts no turn by its role, and with it in the log the Dash's opener
+  // stays silent: it must carry no policy that would make the chat count as empty
+  expect(rows[1]).toEqual({
+    path: "/agents/onboarding",
+    type: "context-added",
+    key: "opener:/agents/onboarding",
+    payload: { role: "assistant", content: greeting },
+  });
+  expect(rows[2]).toEqual({
+    path: "/agents/onboarding",
+    type: "web-message-sent",
+    key: ":greeting-shown",
+    payload: { message: greeting },
+  });
+  expect(rows.slice(3).map(({ path, key, payload }) => [path, key, payload.role])).toEqual([
+    ["/agents/onboarding/research", ":helper:research", "user"],
+    ["/agents/onboarding/website", ":helper:website", "user"],
+    ["/agents/onboarding", ":started", "developer"],
+  ]);
+  // a helper's brief starts its turn, and names its file and the way to report
+  expect(rows[3]!.payload).not.toHaveProperty("llmRequestPolicy");
+  expect(rows[3]!.payload).toMatchObject({
+    content: expect.stringMatching(
+      /Read onboarding\/research\.md[\s\S]*itx\.agents\.get\("\/agents\/onboarding"\)\.message\(/,
+    ),
+  });
+  expect(rows[5]!.payload).toMatchObject({
+    llmRequestPolicy: { behaviour: "dont-trigger-request" },
+  });
+  expect(root).toMatchObject({
+    created: [
+      "/agents/onboarding",
+      "/agents/onboarding/research",
+      "/agents/onboarding/website",
+      "/agents/onboarding",
+      "/agents/onboarding/research",
+      "/agents/onboarding/website",
     ],
   });
 });
+
+test("an owner who reached the chat before the handover is greeted once: the opener's key is taken", async () => {
+  const root = rootOf("https://example.com/");
+  // what the Dash appends when someone first opens the empty chat
+  await root.cd("/agents/onboarding").append({ idempotencyKey: "opener:/agents/onboarding" });
+  await run(root, HANDOVER);
+  const keys = root.appended.map(({ event }) => event.idempotencyKey.replace(KEY, ""));
+  expect(keys).toEqual([
+    "opener:/agents/onboarding",
+    "",
+    ":helper:research",
+    ":helper:website",
+    ":started",
+  ]);
+  expect(root.appended.at(-1)).toMatchObject({
+    event: {
+      payload: {
+        content:
+          "The mind's code has started the helpers research and website under your path. Do not start them again.",
+      },
+    },
+  });
+});
+
+const KEY = "cloud-handover:h4sh-of_the-handover";
 
 test("the Cloud's notes after its line reach the agent as its own word, once, after the person's part", async () => {
   const root = rootOf("https://example.com/");
@@ -53,7 +132,7 @@ test("the Cloud's notes after its line reach the agent as its own word, once, af
   await run(root, event);
   await run(root, event);
   expect(
-    root.appended.map(({ event }) => {
+    root.appended.slice(0, 2).map(({ event }) => {
       const { idempotencyKey, payload } = event as unknown as {
         idempotencyKey: string;
         payload: { role: string; content: string };
