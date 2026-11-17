@@ -1,6 +1,6 @@
 import { errorCode } from "iterate/lib";
 import { stampedExpiryOf } from "iterate/principal";
-import { ITERATE_SERVE_HEADER } from "iterate/mind-ingress";
+import { ITERATE_SERVE_CONTEXT_HEADER, ITERATE_SERVE_HEADER } from "iterate/mind-ingress";
 import type { Caller } from "./caller.ts";
 import { FETCH_UPGRADE_RESUMABLE_HEADER, spliceEyeballAnswer } from "./context/fetch-upgrade.ts";
 import { implicitRootsAt, resolveItxExpression } from "./context/itx-expression-rewriting.ts";
@@ -10,6 +10,7 @@ import { contextReach, statelessResolverFor } from "./context/stateless-context.
 import { matchFetchRoute } from "./fetch-routes.ts";
 import { contexts } from "./host.ts";
 import { statelessExpressionFetch } from "./iterate-context.ts";
+import { personItxSession } from "./person-context.ts";
 import { serveSession } from "./session.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
 
@@ -20,7 +21,8 @@ export async function serveHostRequest(args: {
   request: Request;
   caller: Caller;
   unserved?: (reason: "no-ingress" | "no-rule" | "stub-offline") => Response;
-  // The host whose own loaded config worker answers: only its answer may ask for an itx session.
+  // The host whose own loaded config worker answers: only its answer may ask for a session, a
+  // member's itx (`itxSession`) or a person's view of one context (./person-context.ts).
   itxSessions?: true;
 }): Promise<Response> {
   const { ctx, caller, unserved } = args;
@@ -93,9 +95,15 @@ export async function serveHostRequest(args: {
     }
     if (!(answer instanceof Response))
       return new Response(`expression fetch: ${JSON.stringify(answer)}\n`);
-    if (args.itxSessions && answer.headers.get(ITERATE_SERVE_HEADER) === "itx") {
+    const serve = args.itxSessions && answer.headers.get(ITERATE_SERVE_HEADER);
+    if (serve === "itx") {
       await answer.body?.cancel();
       return await itxSession(args);
+    }
+    if (serve === "person-itx") {
+      const path = answer.headers.get(ITERATE_SERVE_CONTEXT_HEADER);
+      await answer.body?.cancel();
+      return await personItxSession({ ctx, request: args.request, path });
     }
     return withoutServeHeader(held)(answer);
   } catch (error) {
@@ -113,13 +121,18 @@ export async function serveHostRequest(args: {
   }
 }
 
-// The header is the platform's to act on: no answer that goes on to a browser keeps it.
+// The headers are the platform's to act on: no answer that goes on to a browser keeps them.
 const withoutServeHeader =
   (next: (answer: Response) => Response) =>
   (answer: Response): Response => {
-    if (!answer.headers.has(ITERATE_SERVE_HEADER)) return next(answer);
+    if (
+      !answer.headers.has(ITERATE_SERVE_HEADER) &&
+      !answer.headers.has(ITERATE_SERVE_CONTEXT_HEADER)
+    )
+      return next(answer);
     const headers = new Headers(answer.headers);
     headers.delete(ITERATE_SERVE_HEADER);
+    headers.delete(ITERATE_SERVE_CONTEXT_HEADER);
     return next(
       new Response(answer.body, {
         status: answer.status,

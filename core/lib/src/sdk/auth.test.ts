@@ -183,6 +183,40 @@ test("a member's page gets its socket, the mind's platform, one mind and the pla
   expect(ask("/app.js")).toBeNull();
 });
 
+// A person's view of one context: the app names the context, the platform serves the socket.
+test("personItx asks the platform to serve a signed-in person's socket, rooted at the path", () => {
+  const answer = auth.personItx(
+    workerRequest("GET", { upgrade: "websocket", ...stampedBy("email") }),
+    "/agents/a",
+  );
+  expect(answer).toMatchObject({ status: 426 });
+  expect(answer.headers.get("x-iterate-serve")).toBe("person-itx");
+  expect(answer.headers.get("x-iterate-serve-context")).toBe("/agents/a");
+});
+
+test.for<{ name: string; headers: Record<string, string>; methods?: "passkey"[]; status: number }>([
+  { name: "signed out", headers: { upgrade: "websocket" }, status: 401 },
+  {
+    name: "a person from another origin",
+    headers: { upgrade: "websocket", origin: "https://evil.example", ...stampedBy("email") },
+    status: 403,
+  },
+  {
+    name: "a person signed in by a way the app does not take",
+    headers: { upgrade: "websocket", ...stampedBy("email") },
+    methods: ["passkey"],
+    status: 401,
+  },
+])(
+  "personItx refuses $name → $status, and asks the platform for nothing",
+  ({ headers, methods, status }) => {
+    const answer = auth.personItx(workerRequest("GET", headers), "/agents/a", { methods });
+    expect(answer).toMatchObject({ status });
+    expect(answer.headers.has("x-iterate-serve")).toBe(false);
+    expect(answer.headers.has("x-iterate-serve-context")).toBe(false);
+  },
+);
+
 function workerRequest(method: string, headers: Record<string, string>) {
   return new Request("https://worker.example/x", { method, headers });
 }

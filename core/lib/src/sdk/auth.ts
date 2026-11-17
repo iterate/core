@@ -7,19 +7,12 @@ import {
   ITX_PERSON_HEADER,
   ITX_PRINCIPAL_HEADER,
   type Person,
-  SignInMethod,
+  type SignInMethod,
+  stampedPersonOf,
 } from "../principal.ts";
-import { ITERATE_SERVE_HEADER } from "../mind-ingress.ts";
+import { ITERATE_SERVE_CONTEXT_HEADER, ITERATE_SERVE_HEADER } from "../mind-ingress.ts";
 
 const Principal = z.object({ actor: z.string().min(1), email: z.string().optional() });
-const PersonStamp = z.object({
-  userId: z.string().min(1),
-  email: z.string(),
-  impersonatedBy: z.object({ actor: z.string().min(1), email: z.string() }).optional(),
-  // a way this SDK does not know is one no app names: the person counts as signed in by an
-  // unknown way
-  method: SignInMethod.optional().catch(undefined),
-});
 
 /** What the person guards take: `methods`, the ways to sign in that the app takes. */
 export type PersonOptions = { methods?: readonly SignInMethod[] };
@@ -97,10 +90,8 @@ export const auth = {
     return signIn(`Bearer ${params.join(", ")}`);
   },
   person(request: Request, { methods }: PersonOptions = {}): Person | null {
-    const stamp = request.headers.get(ITX_PERSON_HEADER);
-    if (!stamp) return null;
-    // Platform-owned stamp; malformed means a defect.
-    const person = PersonStamp.parse(JSON.parse(stamp));
+    const person = stampedPersonOf(request);
+    if (!person) return null;
     const taken = methods
       ? Boolean(person.method && methods.includes(person.method))
       : person.method !== "cloudflare";
@@ -118,6 +109,37 @@ export const auth = {
       new Response("Open this path as a WebSocket: it is the page's itx.\n", {
         status: 426,
         headers: { upgrade: "websocket", [ITERATE_SERVE_HEADER]: "itx" },
+      })
+    );
+  },
+  /** A SIGNED-IN PERSON'S LIVE VIEW OF ONE CONTEXT, for the page they are on: answer this from
+   *  the path the page opens its WebSocket on (a capnweb session). It answers the person guard's
+   *  refusal (`requirePerson`, with the same `options`), or asks the platform to serve the socket
+   *  in this answer's place, rooted at `path`. Your code decides whether this person may have that
+   *  context, before it answers: the platform serves whatever context the answer names. The
+   *  platform decides who the caller is, from the request it holds: the person the boundary
+   *  signed in on this host (a member is a person too), on a WebSocket upgrade from this origin.
+   *
+   *  ```js
+   *  const person = this.auth.person(request);
+   *  if (person && !(await mayChat(person, path))) return new Response("Not yours\n", { status: 403 });
+   *  return this.auth.personItx(request, path);
+   *  ```
+   *
+   *  The socket is no `itx`: it reads that context's log and live state, names the person on the
+   *  words they send its agent and on the stop of an answer, and signs a URL for a file under its
+   *  path. Nothing else (core/configs/default/people.md, "A live view of one context"). The
+   *  session ends when the sign-in does. */
+  personItx(request: Request, path: string, options: PersonOptions = {}): Response {
+    return (
+      auth.requirePerson(request, options) ||
+      new Response("Open this path as a WebSocket: it is the page's view of one context.\n", {
+        status: 426,
+        headers: {
+          upgrade: "websocket",
+          [ITERATE_SERVE_HEADER]: "person-itx",
+          [ITERATE_SERVE_CONTEXT_HEADER]: path,
+        },
       })
     );
   },

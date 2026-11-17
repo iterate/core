@@ -84,6 +84,38 @@ path you build from their input stays under their own context.
 its route, to copy beside `worker.ts`:
 https://github.com/iterate/packages/blob/main/packages/ui/examples/mind-host-page.ts.
 
+## A live view of one context
+
+A page can give a person who is no member a live view of one context, for a chat with its agent.
+Your code decides which person may have which context. Then answer the page's socket path with
+`this.auth.personItx(request, path)`, and the platform serves the socket for that context alone:
+
+```ts
+if (url.pathname === "/chat/socket") {
+  const refused = this.auth.requirePerson(request);
+  if (refused) return refused;
+  return this.auth.personItx(request, `/agents/support/${this.auth.person(request)!.userId}`);
+}
+```
+
+Your code creates the agent there first (`itx.agents.create(path)`).
+
+`personItx` takes `{ methods }` as `requirePerson` does, and refuses the same way. The page opens
+the path as a WebSocket, as a capnweb session, and hands it to `@iterate-com/ui`'s chat as the
+context. The session ends when the person's sign-in ends.
+
+What the page can do, on that one context:
+
+- read its log and follow it live, and read its subscriptions, its lent stubs and a facet's state
+  (`itx.facets.get('<name>').snapshot()` or `….liveSnapshot()`);
+- send its agent words: `agents.get(path).message(input)`. The event names the person as who
+  asked, in `source.onBehalfOf`, with this host in `via.appPage`. It carries no `principal`;
+- stop the agent's answer: the platform appends the stop in its own words;
+- get a download URL for a file under the context's path.
+
+What it cannot do: reach another context, or the mind's `itx`, or append any other event, or run
+any other call. The context's own rewrite rules do not change what the socket reaches.
+
 ## The guestbook
 
 `apps/guestbook` is a whole app for end users, to copy or to turn on. Anyone reads it at

@@ -132,6 +132,8 @@ export async function stampedRequest(
       method: identity.method,
     };
     headers.set(ITX_PERSON_HEADER, JSON.stringify(person));
+    // when the sign-in ends, member or not: a person's socket (sdk/auth.ts `personItx`) ends then
+    headers.set(ITX_EXPIRES_HEADER, String(identity.expiresAt));
     if (caller === "member") stamp(headers, identity);
   }
   const signedIn = identity && caller !== "anonymous" ? identity : null;

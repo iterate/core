@@ -2,7 +2,7 @@
 // (`itx.whoami()`, `source.principal` on an event), the header ingress stamps it in on a Request it
 // forwards to a mind, with the grant beside it, and the `Person` ingress stamps for anyone
 // signed in on a mind's hostname (core/boundary-worker/src/stamp.ts; sdk/auth.ts reads both), and the
-// one reader of the principal's stamp, `stampedCallerOf`. How the platform admits and carries a
+// one reader of each stamp, `stampedCallerOf` and `stampedPersonOf`. How the platform admits and carries a
 // caller, and signs its own tokens, stays in the platform.
 import { z } from "zod";
 import { codedError } from "./lib.ts";
@@ -25,9 +25,10 @@ export const ITX_PRINCIPAL_HEADER = "x-itx-principal";
  *  through, one per connected client. Stripped from every inbound Request. */
 export const ITX_GRANT_HEADER = "x-itx-grant";
 
-/** The header the edge sets beside `ITX_GRANT_HEADER`: when the credential that stamped the
- *  principal ends, in Unix seconds. A session that outlives its request (the API's WebSocket) ends
- *  then. Stripped from every inbound Request. */
+/** The header the edge sets beside `ITX_GRANT_HEADER`, and beside `ITX_PERSON_HEADER` on a mind
+ *  host: when the credential that stamped the principal or the person ends, in Unix seconds. A
+ *  session that outlives its request (the API's WebSocket, a page's socket) ends then. Stripped
+ *  from every inbound Request. */
 export const ITX_EXPIRES_HEADER = "x-itx-expires";
 
 /** A KEY'S TOKEN (core/auth-worker/src/key-tokens.ts): the service the key speaks for, the key as
@@ -76,6 +77,22 @@ export type Person = {
  *  signed in (core/boundary-worker/src/mind-host-sign-in.ts), and strips from every inbound Request. A
  *  member gets `x-itx-principal` beside it. */
 export const ITX_PERSON_HEADER = "x-itx-person";
+
+const StampedPerson = z.object({
+  userId: z.string().min(1),
+  email: z.string(),
+  impersonatedBy: z.object({ actor: z.string().min(1), email: z.string() }).optional(),
+  // a way this SDK does not know is one no app names: the person counts as signed in by an
+  // unknown way
+  method: SignInMethod.optional().catch(undefined),
+});
+
+/** THE PERSON INGRESS STAMPED on `request`, or null when nobody signed in. Trusted as it stands,
+ *  as `stampedCallerOf`: a malformed stamp is a defect, and throws. */
+export function stampedPersonOf(request: Request): Person | null {
+  const person = request.headers.get(ITX_PERSON_HEADER);
+  return person ? StampedPerson.parse(JSON.parse(person)) : null;
+}
 
 const StampedPrincipal = z.object({
   actor: z.string(),

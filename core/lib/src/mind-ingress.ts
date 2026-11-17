@@ -22,11 +22,16 @@
 export const ITERATE_ROUTING_SLUG_HEADER = "x-iterate-routing-slug";
 
 /** WHAT A CONFIG WORKER'S ANSWER ASKS THE PLATFORM TO SERVE IN ITS PLACE, on a mind host:
- *  `itx` is the visitor's own itx over a WebSocket (iterate/sdk `auth.itx`). An answer, never a
- *  call: the platform serves it for the caller the boundary stamped on the request it still holds,
- *  so the config worker names no caller. The platform drops the header from every answer it does
- *  not honour, so it never reaches a browser. */
+ *  `itx` is the member's own itx over a WebSocket (iterate/sdk `auth.itx`), and `person-itx` a
+ *  signed-in person's narrow view of one context (iterate/sdk `auth.personItx`), the context that
+ *  `ITERATE_SERVE_CONTEXT_HEADER` names. An answer, never a call: the platform serves it for the
+ *  caller the boundary stamped on the request it still holds, so the config worker names no
+ *  caller. The platform drops both headers from every answer it does not honour, so they never
+ *  reach a browser. */
 export const ITERATE_SERVE_HEADER = "x-iterate-serve";
+
+/** The context path a `person-itx` answer names: the one context the person's socket reaches. */
+export const ITERATE_SERVE_CONTEXT_HEADER = "x-iterate-serve-context";
 
 /** THE BASE PATH a mind host is served under (`MindAddress.basePath`, under paths
  *  `/minds/<mind>[/<routingSlug>]`): the edge strips it from the URL the config worker sees

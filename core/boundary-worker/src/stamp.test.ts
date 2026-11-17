@@ -41,4 +41,7 @@ test.for<{ name: string; headers: Record<string, string>; identity: TokenIdentit
     method: identity.method,
   });
   expect(stamped).toMatchObject({ caller: "non-member", method: identity.method });
+  // a person who is no member gets when the sign-in ends, and no principal
+  expect(stamped.forwarded.headers.get("x-itx-expires")).toBe("2000000000");
+  expect(stamped.forwarded.headers.get("x-itx-principal")).toBeNull();
 });
