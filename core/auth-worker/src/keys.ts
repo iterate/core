@@ -10,6 +10,7 @@ import type { Verified } from "iterate/workers";
 import type { AuthConfig } from "./config.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import { isMember } from "./members.ts";
+import { mindKeyOf } from "./minds.ts";
 import { stackKeyOf } from "./stack-key.ts";
 
 const MAX_LIFETIME_MS = 24 * 3600 * 1000;
@@ -17,8 +18,8 @@ const MAX_LIFETIME_MS = 24 * 3600 * 1000;
 /** The one refusal a key's service acts on: its key waits for a member's consent (./key-tokens.ts). */
 export const UNKNOWN_KEY = "the key is not one this mind knows";
 
-type KnownKey = {
-  principal: { actor: string; email?: string };
+export type KnownKey = {
+  principal: { actor: string; email?: string; kind?: "mind" };
   publicKey: string;
   label: string;
   format?: Envelope["signature"]["format"]; // none for a root key: it may sign in either
@@ -42,8 +43,10 @@ export async function verifiedStatement(
   // The stack's own key signs for the Cloud to check, never a statement to this stack.
   if (envelope.signature.key === (await stackKeyOf(env)).key)
     return { refused: "the stack's own key signs for others, not for this stack" };
-  const key = await knownKey(env, config, envelope.signature.key);
+  const key =
+    (await knownKey(env, config, envelope.signature.key)) || (await mindKeyOf(env, envelope));
   if (!key) return { refused: UNKNOWN_KEY };
+  if ("refused" in key) return key;
   if (key.format && key.format !== envelope.signature.format)
     return { refused: `this key signs as ${key.format}` };
   const issuer = issuerOf(env);
@@ -55,6 +58,8 @@ export async function verifiedStatement(
   const statement = statementOf(envelope.statement);
   if ("refused" in statement) return statement;
   if (statement.mind !== config.domain) return { refused: "the statement is for another mind" };
+  if (statement.from && key.principal.kind !== "mind")
+    return { refused: "a statement from a mind is signed with that mind's key" };
   const now = Date.now();
   if (statement.expires <= now) return { refused: "the statement has expired" };
   if (statement.expires > now + MAX_LIFETIME_MS)

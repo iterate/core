@@ -511,7 +511,9 @@ export function workersRoot(deps: {
             `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
           );
         const [method, ...callArgs] = call;
-        if (method === "callWithCause" || method === "getItx")
+        // `processMindEvent` is `deliverEvent`'s to call, with the mind the platform read off the
+        // event's signer: a direct call could name any mind.
+        if (method === "callWithCause" || method === "getItx" || method === "processMindEvent")
           throw codedError("NOT_A_METHOD", `workers.get(spec).${method}: no caller reaches it`);
         // A loaded worker's `fetch` reads who is asking off its Request: the call's own caller,
         // stamped here, never what the Request says, which the calling code could write.

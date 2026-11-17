@@ -49,7 +49,7 @@ const CURSOR_READ_BUDGET_CHARS =
 const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 
 const FAN_OUT_CALLS_IN_FLIGHT = 8;
-// For a webhook or Basin Pipelines: 25 attempts are about 44 h, as Svix retries webhooks for about
+// For a webhook, Basin Pipelines or another mind (`itx.minds`): 25 attempts are about 44 h, as Svix retries webhooks for about
 // 42 h (https://docs.svix.com/retries).
 const LONG_LADDER_CAP_MS = 4 * 60 * 60_000;
 // Distinct events: one event failing fifteen times counts once.

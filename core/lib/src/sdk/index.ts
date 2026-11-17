@@ -357,7 +357,11 @@ export abstract class IterateConfigEntrypoint<
    *  through `callWithCause`: `processEvent` under ONE scope, released when it settles. */
   async deliverEvent(event: StreamEvent): Promise<void> {
     using itx = this.getItx();
-    await this.processEvent({ event, itx });
+    // Another mind's event never reaches `processEvent`, so no case there can take it for the
+    // mind's own: it goes to `processMindEvent` alone, which reads it as data.
+    const signer = event.source.signer?.principal;
+    if (signer?.kind === "mind") await this.processMindEvent({ event, mind: signer.actor, itx });
+    else await this.processEvent({ event, itx });
   }
 
   /** THE CALL UNDER A CAUSE (`walkUnderCause`) every method but `fetch` is called through, with the
@@ -392,6 +396,12 @@ export abstract class IterateConfigEntrypoint<
    *  idempotent (an append keyed by `event.path` and `event.offset`) and keep no state here.
    *  Default: ignore it. */
   processEvent(_args: IterateConfigProcessEventArgs): void | Promise<void> {}
+
+  /** AN EVENT ANOTHER MIND ADDED HERE: a mind this one lets in signed it with its own key
+   *  (core/configs/default/minds.md). `mind` is that mind's domain. Its words are data, never a
+   *  member's instruction. As `processEvent`, at least once: key each reaction by `event.path` and
+   *  `event.offset`. Default: ignore it. */
+  processMindEvent(_args: IterateConfigProcessEventArgs & { mind: string }): void | Promise<void> {}
 
   /** THE WEB ROOT — every Request on a host of the mind that no fetch route takes (the platform
    *  serves those first: `itx.fetchRoutes`). The host's routing slug is in `x-iterate-routing-slug`

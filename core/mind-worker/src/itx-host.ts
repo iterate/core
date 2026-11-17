@@ -10,6 +10,7 @@ import { tracedModelCall } from "./agent-spans.ts";
 import { APPROVALS_ROOT_DESCRIPTION, approvalsRoot } from "./context/approvals.ts";
 import { BROWSER_ROOT_DESCRIPTION, cfBrowser } from "./context/browser.ts";
 import { mindScopedArtifacts } from "./context/cf-artifacts.ts";
+import { MINDS_ROOT_DESCRIPTION, mindsRoot } from "./context/minds.ts";
 import { gateOf } from "./context/held-verb-rules.ts";
 import { IMAGES_ROOT_DESCRIPTION, mindImages } from "./context/images.ts";
 import { r2Root } from "./context/r2.ts";
@@ -164,6 +165,11 @@ defineItxHost({
       webhooks: {
         description: WEBHOOKS_ROOT_DESCRIPTION,
         build: (scope) => webhooksRoot(scope, env.DOMAIN),
+        everyContext: true,
+      },
+      minds: {
+        description: MINDS_ROOT_DESCRIPTION,
+        build: (scope) => mindsRoot(scope, { domain: env.DOMAIN, boundary: () => env.DOOR }),
         everyContext: true,
       },
     };

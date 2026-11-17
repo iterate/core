@@ -15,6 +15,10 @@ export type Principal = {
   actor: string;
   email?: string;
   impersonatedBy?: { actor: string; email: string };
+  /** "mind": another mind, which signed with the key it publishes; `actor` is its domain. Only a
+   *  signer's principal has it (`source.signer`, core/auth-worker/src/minds.ts). Absent: a person or
+   *  a service. */
+  kind?: "mind";
 };
 
 /** The header ingress sets on a Request it forwards on a member's behalf, after the bearer or the

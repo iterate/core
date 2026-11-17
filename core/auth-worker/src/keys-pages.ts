@@ -1,4 +1,4 @@
-import { base64url, fromBase64url, keyIdOf } from "iterate/signed";
+import { base64url, fromBase64url, keyIdOf, MIND_DOCUMENT_PATH } from "iterate/signed";
 import { type AccountFact, AccountFacts } from "./account-facts.ts";
 import {
   type BrowserSession,
@@ -37,7 +37,7 @@ import {
   signerOf,
   signScript,
 } from "./signed-change.ts";
-import { STACK_KEY_PATH, stackKeyOf, stackKeyResponse } from "./stack-key.ts";
+import { mindDocumentResponse, STACK_KEY_PATH, stackKeyOf, stackKeyResponse } from "./stack-key.ts";
 
 const KEYS_PATH = "/keys";
 const KEYS_JSON_PATH = "/keys.json";
@@ -54,6 +54,7 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
   const get = request.method === "GET" || request.method === "HEAD";
   const post = request.method === "POST";
   if (pathname === STACK_KEY_PATH && get) return stackKeyResponse(env);
+  if (pathname === MIND_DOCUMENT_PATH && get) return mindDocumentResponse(env);
   const known =
     (pathname === KEYS_PATH && (get || post)) ||
     (pathname === KEYS_JSON_PATH && get) ||

@@ -4,12 +4,15 @@ import {
   base64url,
   type Envelope,
   fromBase64url,
+  isMindDomain,
   keyIdOf,
+  type MindDocument,
   signedP256,
+  STATEMENTS_PATH,
   statementText,
 } from "iterate/signed";
 import type { AuthService } from "iterate/workers";
-import { type Env, iterateConfigOf } from "./env.ts";
+import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 
 export const STACK_KEY_PATH = "/keys/stack.json";
 
@@ -76,11 +79,33 @@ export async function stackKeyResponse(env: Env): Promise<Response> {
   );
 }
 
+/** THE MIND'S PUBLISHED DOCUMENT (iterate/signed `MindDocument`), here and, through the boundary,
+ *  at `https://<domain>/.well-known/iterate`: the stack's key, with which this mind signs as
+ *  itself for another mind (`signedByStack` with `mind`). */
+export async function mindDocumentResponse(env: Env): Promise<Response> {
+  const { key, publicKey } = await stackKeyOf(env);
+  const issuer = issuerOf(env);
+  return Response.json(
+    {
+      mind: iterateConfigOf(env).domain,
+      issuer,
+      statements: `${issuer}${STATEMENTS_PATH}`,
+      keys: [{ key, publicKey, label: "mind" }],
+    } satisfies MindDocument,
+    { headers: { "cache-control": "public, max-age=300" } },
+  );
+}
+
+/** `mind`: the mind the statement is for, which reads this mind as `from`. Without it the
+ *  statement's `mind` is this mind: that names the signer, for the Cloud to read. */
 export async function signedByStack(
   env: Env,
   input: Parameters<AuthService["sign"]>[0],
 ): Promise<Envelope> {
-  const { path, type, payload, about, expiresInSeconds = DEFAULT_SECONDS } = input;
+  const { mind, path, type, payload, about, expiresInSeconds = DEFAULT_SECONDS } = input;
+  const own = iterateConfigOf(env).domain;
+  if (mind && (!isMindDomain(mind) || mind === own))
+    throw codedError("INVALID_INPUT", "a statement for another mind names its domain, lowercase");
   if (!path.startsWith("/"))
     throw codedError("INVALID_INPUT", "a statement's path is a context's path, starting with /");
   if (!type) throw codedError("INVALID_INPUT", "a statement needs a type");
@@ -89,7 +114,7 @@ export async function signedByStack(
   const { key, privateKey } = await stackKeyOf(env);
   const at = Date.now();
   const statement = statementText({
-    mind: iterateConfigOf(env).domain,
+    ...(mind ? { mind, from: own } : { mind: own }),
     path,
     type,
     payload,

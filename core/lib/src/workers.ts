@@ -64,6 +64,11 @@ export interface Door {
   /** Whether `email` is a member of the mind now, as the auth Worker knows it (`AuthService`). */
   isMember(email: string): Promise<boolean>;
   proposeStatement: AuthService["proposeStatement"];
+  /** A statement for another mind, signed with this mind's key (`AuthService.sign` with `mind`):
+   *  never one for the Cloud, which reads a statement with no `from`. */
+  signForMind(
+    input: Parameters<AuthService["sign"]>[0] & { mind: string },
+  ): ReturnType<AuthService["sign"]>;
   /** Refused in a stack without the telemetry part. */
   queryTelemetry(sql: string, hours?: number): Promise<TelemetryAnswer>;
   sendEvents(events: StreamEvent[]): Promise<void>;
@@ -108,8 +113,11 @@ export interface AuthService {
    *  business of whoever acts on it. */
   verify(envelope: Envelope): Promise<Verified>;
   /** `expiresInSeconds`: five minutes by default, a day at most. `verify` never takes the result: it
-   *  is for others, at `GET iterate.<domain>/keys/stack.json`. */
+   *  is for others, at `GET iterate.<domain>/keys/stack.json`. `mind`: the mind the statement is
+   *  for, which then names this mind as `from`. Without it, the statement's `mind` is this mind's
+   *  own domain, as the Cloud reads it. */
   sign(input: {
+    mind?: string;
     path: string;
     type: string;
     payload?: Record<string, unknown>;

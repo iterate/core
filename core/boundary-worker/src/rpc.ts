@@ -167,6 +167,13 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     return this.env.AUTH.proposeStatement(input);
   }
 
+  // Never without `mind`: a statement with none names this mind as its signer, which the Cloud
+  // trusts, and the mind's code must not make one.
+  async signForMind(input: Parameters<DoorService["signForMind"]>[0]) {
+    if (!input?.mind) throw codedError("INVALID_INPUT", "signForMind names the mind it is for");
+    return this.env.AUTH.sign(input);
+  }
+
   async queryTelemetry(...[sql, hours]: Parameters<DoorService["queryTelemetry"]>) {
     return this.#telemetry().query(sql, hours);
   }

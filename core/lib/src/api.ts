@@ -1657,6 +1657,15 @@ export interface IterateContextApi {
       mcpSubscription?: string;
     }): InvokeHandle;
   };
+  /** ANOTHER MIND THAT LETS THIS ONE IN (core/configs/default/minds.md), as a row's target:
+   *  `minds.get("<domain>").deliverEvents` (or `deliverEvent` on a fan-out row) signs each event
+   *  with this mind's key and posts it to that mind, which adds it under
+   *  `/minds/<this mind><the event's path>`. `itx/*` and `mind-meld/*` events are not sent. Any
+   *  answer but a 200 throws, so the row tries again and ends in a dead letter. The delivery
+   *  loop's call alone. */
+  minds: {
+    get(domain: string): InvokeHandle;
+  };
   /** A subscription: a pure itx expression, or a live callback lent to the registry (what live state
    *  uses); `null` removes the row. The handle's dispose removes it too. */
   subscribe(input: {

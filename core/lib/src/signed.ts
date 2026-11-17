@@ -1,10 +1,14 @@
 // The signed statement: JSON text kept exactly as signed. The signature is over DSSE's
 // pre-authentication encoding of that text, so nothing is canonicalized and nothing parses the text
 // before the signature checks. A page's script cannot import this module, so it copies `signedBytes`.
+import { z } from "zod";
 
 export type Statement = {
-  /** The mind's domain. */
+  /** The domain of the mind it is for. */
   mind: string;
+  /** The domain of the mind that signed it, with the key it publishes (`MindDocument`). Absent for
+   *  a person's key or a service's. */
+  from?: string;
   path: string;
   type: string;
   payload?: Record<string, unknown>;
@@ -51,6 +55,79 @@ export const KEY_TOKEN_STATEMENT_TYPE = "events.iterate.com/account/key-token-re
 export const KEY_TOKEN_PATH = "/keys/token";
 /** Where a key adds an event under its paths: the body is the envelope, the answer the event's key. */
 export const STATEMENTS_PATH = "/statements";
+/** THE PLATFORM'S OWN EVENT NAMESPACES, which no key adds through a statement: readers trust
+ *  these types by type alone. The intake refuses them (core/auth-worker/src/statements.ts), and a
+ *  mind's send leaves them out (core/mind-worker/src/context/minds.ts). */
+export const PLATFORM_NAMESPACES = [
+  "itx",
+  "mind",
+  "email",
+  "webhook",
+  "mcp",
+  "account",
+  "secret",
+  "approval",
+];
+
+/** WHAT A MIND PUBLISHES, at `https://<domain>/.well-known/iterate` and at the same path of its
+ *  issuer, `https://iterate.<domain>`: the keys it signs with as itself (a statement with `from`),
+ *  and where a statement for it goes. core/auth-worker answers it. */
+const MindDocument = z.object({
+  mind: z.string(),
+  issuer: z.string(),
+  statements: z.url({ protocol: /^https$/ }),
+  keys: z.array(z.object({ key: z.string(), publicKey: z.string(), label: z.string() })),
+});
+export type MindDocument = z.infer<typeof MindDocument>;
+export const MIND_DOCUMENT_PATH = "/.well-known/iterate";
+
+/** A mind's domain as a meld names it: a lowercase DNS name. */
+export const isMindDomain = (domain: string) =>
+  /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain);
+
+const documents = new Map<
+  string,
+  { until: number; answer: Promise<MindDocument | { why: string }> }
+>();
+
+/** THE DOCUMENT `domain` PUBLISHES, or why there is none: from its own address, else from its
+ *  issuer's. One answer, a failure too, is kept a minute per domain, no redirect is followed, and
+ *  each read waits five seconds at most: a stranger who names a domain must not make the reader
+ *  ask a host often, or wait on one. internal-packages/cloud-clients `stackKeyOf` reads
+ *  `stack.json` the same way. `fetcher` is the reader's way out. */
+export function publishedMindOf(
+  domain: string,
+  fetcher: (request: Request) => Promise<Response>,
+): Promise<MindDocument | { why: string }> {
+  const kept = documents.get(domain);
+  if (kept && kept.until > Date.now()) return kept.answer;
+  const read = (origin: string): Promise<MindDocument | { why: string }> => {
+    const url = `${origin}${MIND_DOCUMENT_PATH}`;
+    const document = async () => {
+      const answer = await fetcher(new Request(url, { redirect: "manual" }));
+      const parsed = MindDocument.safeParse(
+        answer.ok ? await answer.json().catch(() => null) : null,
+      );
+      await answer.body?.cancel().catch(() => {});
+      if (!parsed.success) return { why: `${url} answered ${answer.status} with no document` };
+      return parsed.data.mind === domain ? parsed.data : { why: `${url} names another mind` };
+    };
+    // The wait is a race over the headers and the body, not a signal in the Request: a Request
+    // with one cannot cross to another context, which is how the mind Worker's reader gets out.
+    return Promise.race([
+      document(),
+      new Promise<{ why: string }>((resolve) =>
+        setTimeout(() => resolve({ why: `${url} gave no answer in five seconds` }), 5_000),
+      ),
+    ]).catch((error: unknown) => ({ why: `${url}: ${String(error).slice(0, 200)}` }));
+  };
+  const answer = read(`https://${domain}`).then((own) =>
+    "why" in own ? read(`https://iterate.${domain}`) : own,
+  );
+  if (documents.size > 1_000) documents.clear();
+  documents.set(domain, { until: Date.now() + 60_000, answer });
+  return answer;
+}
 
 export function statementText(fields: Omit<Statement, "nonce">): string {
   return JSON.stringify({
@@ -170,6 +247,7 @@ export function statementOf(text: string): Statement | { refused: string } {
   const string = (value: unknown) => typeof value === "string" && value.length > 0;
   const valid =
     string(s.mind) &&
+    (!("from" in s) || string(s.from)) &&
     string(s.path) &&
     (s.path as string).startsWith("/") &&
     string(s.type) &&

@@ -32,6 +32,8 @@ that names your task BEFORE the task, not after a failure:
   that waits for a member's yes, or call a service of the account: [secrets.md](secrets.md).
 - Before you change who gets the mind's mail, how a reply finds its agent, the peers or the hop
   limit: [mail-replies.md](mail-replies.md).
+- Before you let another mind in, send events to one, or act on what one sent:
+  [minds.md](minds.md).
 
 ## worker.ts
 

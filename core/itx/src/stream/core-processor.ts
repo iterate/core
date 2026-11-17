@@ -165,7 +165,8 @@ export function targetOwnsProgress(state: CoreState, row: Subscription): boolean
 export function targetIsAnotherService(state: CoreState, row: Subscription): boolean {
   const resolved = resolveThroughCommittedState(state, row.target);
   return (
-    resolved?.[1] === "builtins" && (resolved[2] === "webhooks" || resolved[2] === "platformHook")
+    resolved?.[1] === "builtins" &&
+    (resolved[2] === "webhooks" || resolved[2] === "platformHook" || resolved[2] === "minds")
   );
 }
 

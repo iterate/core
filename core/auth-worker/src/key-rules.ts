@@ -84,7 +84,7 @@ const PLATFORM_NAMES = new Set([
   ...["subscriptions", "processors", "workers", "run"],
   ...["connectToOpenApi", "connectToCapnweb", "connectToMcp", "repos", "workspaces", "sandboxes"],
   ...["files", "kv", "ai", "cfArtifacts", "r2", "secrets", "approvals", "browser", "images"],
-  ...["email", "integrations", "url", "webhooks", "telemetry", "platformHook"],
+  ...["email", "integrations", "url", "webhooks", "minds", "telemetry", "platformHook"],
   // a row of the default config's agents (agents.ts), not a root: the mind's table refuses it for a
   // key
   "agents",

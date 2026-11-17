@@ -1,6 +1,7 @@
 import { cookieValueOf, isSameOriginBrowserRequest, sameOriginPath } from "iterate/lib";
 import { authorizationCodeRequest, authorizationServer } from "iterate/oauth";
 import { platformOriginOf } from "iterate/mind-api";
+import { MIND_DOCUMENT_PATH } from "iterate/signed";
 import { standalonePage } from "iterate/standalone-page";
 import { type AuthService, HOST_SESSION_PREFIX } from "iterate/workers";
 import * as oauth from "oauth4webapi";
@@ -46,6 +47,13 @@ export async function mindHostResponse(
 ): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname.startsWith(HOST_SESSION_PREFIX)) return hostSessionPathResponse(request, deps);
+  // The mind's published keys are the platform's word at its own address, never its code's.
+  if (
+    url.hostname === deps.domain &&
+    url.pathname === MIND_DOCUMENT_PATH &&
+    request.method === "GET"
+  )
+    return deps.auth.fetch(new Request(`${platformOriginOf(deps.domain)}${MIND_DOCUMENT_PATH}`));
   const stamp = await stampedRequest(request, {
     auth: deps.auth,
     route: null,

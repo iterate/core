@@ -5,7 +5,7 @@
 // as its signer, or is refused as there.
 import { codedError } from "iterate/lib";
 import { withFacts } from "iterate/facts";
-import { base64url, statementOf } from "iterate/signed";
+import { base64url, PLATFORM_NAMESPACES, statementHashOf, statementOf } from "iterate/signed";
 import type { AuthService } from "iterate/workers";
 import { z } from "zod";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
@@ -13,7 +13,7 @@ import { canonicalPath, honouredNext } from "./key-rules.ts";
 import { page, text } from "./pages.ts";
 import { passkeyIdOf } from "./passkey-sign-in.ts";
 import { SIGN_HELPERS } from "./signed-change.ts";
-import { admittedStatement, PLATFORM_NAMESPACES } from "./statements.ts";
+import { admittedStatement } from "./statements.ts";
 
 const SIGN_STATEMENT_PATH = "/statements/sign";
 
@@ -91,7 +91,7 @@ export async function proposeStatement(
       kind: "overloaded",
       retryAfterMs: 3600 * 1000,
     });
-  console.info({ event: "auth.statement-proposed", draft: id, path, type });
+  console.info({ event: "auth.statement-proposed", draft: await markOf(id), path, type });
   return { draft: id, signAt: `${issuer}${SIGN_STATEMENT_PATH}?draft=${id}`, expires };
 }
 
@@ -198,8 +198,9 @@ async function pressed(env: Env, request: Request): Promise<Response> {
   const press = Press.safeParse(await request.json().catch(() => null));
   if (!press.success) return refused(400, "send the passkey's answer as JSON");
   const { draft: id, statement: statementText, credentialId, ...signature } = press.data;
+  const mark = await markOf(id);
   const draft = await openDraft(env, id);
-  if (!draft) return refused(404, "this link has ended", id);
+  if (!draft) return refused(404, "this link has ended", mark);
   const statement = statementOf(statementText);
   if (
     "refused" in statement ||
@@ -207,25 +208,29 @@ async function pressed(env: Env, request: Request): Promise<Response> {
     statement.type !== draft.type ||
     JSON.stringify(statement.payload || {}) !== JSON.stringify(JSON.parse(draft.payload))
   )
-    return refused(403, "the statement is not the one this link shows", id);
+    return refused(403, "the statement is not the one this link shows", mark);
   const key = await passkeyIdOf(env, credentialId);
-  if (!key) return refused(403, "the passkey is not one this mind knows", id);
+  if (!key) return refused(403, "the passkey is not one this mind knows", mark);
   const admitted = await admittedStatement(env, {
     statement: statementText,
     signature: { format: "webauthn", key, ...signature },
   });
-  if ("refused" in admitted) return refused(403, admitted.refused, id);
+  if ("refused" in admitted) return refused(403, admitted.refused, mark);
   // The draft counts once: of two presses at once, the one that deletes it adds the event.
   const deleted = await env.DB.prepare("delete from statement_drafts where id = ?1 returning id")
     .bind(id)
     .first();
-  if (!deleted) return refused(404, "this link has ended", id);
-  console.info({ event: "auth.statement-signed", draft: id, path: draft.path, type: draft.type });
+  if (!deleted) return refused(404, "this link has ended", mark);
+  console.info({ event: "auth.statement-signed", draft: mark, path: draft.path, type: draft.type });
   return withFacts(
     Response.json({ ...admitted.answer, next: draft.next }, { headers: NO_STORE }),
     admitted.facts,
   );
 }
+
+/** A draft's name in a log line: a short hash. The id is the link's whole secret, and whoever reads
+ *  the logs must not be able to open the page with it. */
+const markOf = async (id: string) => (await statementHashOf(id)).slice(0, 8);
 
 const NO_STORE = { "cache-control": "no-store" };
 

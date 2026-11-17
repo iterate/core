@@ -8,6 +8,7 @@ const event = {
   path: "/child",
   offset: 7,
   createdAt: "2026-09-28T00:00:00.000Z",
+  source: { origin: "test" },
 } as StreamEvent;
 
 test("deliverEvent hands processEvent the event and the root in one round trip, releasing every call the handler made once it settles, even when it throws", async () => {
@@ -38,6 +39,24 @@ test("the defaults: an event is ignored, without opening its context, and every 
   expect(await entrypoint.fetch(new Request("https://mind.example/"))).toMatchObject({
     status: 404,
   });
+});
+
+test("an event another mind signed reaches processMindEvent alone, with that mind's domain", async () => {
+  const seen: string[] = [];
+  const entrypoint = new (class extends IterateConfigEntrypoint {
+    override processEvent({ event }: IterateConfigProcessEventArgs) {
+      seen.push(`processEvent ${event.path}`);
+    }
+    override processMindEvent({ event, mind }: IterateConfigProcessEventArgs & { mind: string }) {
+      seen.push(`processMindEvent ${mind} ${event.path}`);
+    }
+  })({} as never, {} as never);
+  Object.assign(entrypoint, { env: { ITX: { get: () => ({ [Symbol.dispose]: () => {} }) } } });
+  const signedBy = (principal: { actor: string; kind?: "mind" }) =>
+    ({ ...event, source: { origin: "x", signer: { principal, key: "k" } } }) as StreamEvent;
+  await entrypoint.deliverEvent(signedBy({ actor: "peer.net", kind: "mind" }));
+  await entrypoint.deliverEvent(signedBy({ actor: "bridge" }));
+  expect(seen).toEqual(["processMindEvent peer.net /child", "processEvent /child"]);
 });
 
 test("`using itx = this.getItx()` releases the scope and every call made through it as its block ends", async () => {
