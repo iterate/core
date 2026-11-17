@@ -10,7 +10,7 @@ named exactly `<domain>`: the mind lists them, opens a page in the group, and se
 DevTools commands to a tab (read, click, type, screenshot). A tab in use shows a frame and a
 label "<domain> is using this tab" with a Stop button. Not in the Chrome Web Store. The owner:
 
-1. Download the ZIP from https://iterate-spa.iterate.workers.dev/downloads/; unzip it. Chrome 123+.
+1. Download the ZIP from https://chrome.iterate.com/; unzip it. Chrome 123+.
 2. Open `chrome://extensions`, turn on Developer mode, press "Load unpacked", pick that folder.
 3. Pin it from the toolbar's extensions menu, and click it to open its panel.
 4. Enter `<domain>`, press "Sign in with Iterate", allow the host; the mind's sign-in opens.
