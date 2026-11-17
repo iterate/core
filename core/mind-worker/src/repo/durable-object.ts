@@ -51,6 +51,7 @@ import {
   type RepoState,
   PLATFORM_AUTHOR,
 } from "./contract.ts";
+import { blobOf, filePath } from "./remote-commit.ts";
 
 const REF = "refs/heads/main";
 /** The commit whose `repo/commit-completed` landed last (`#commitFact`). */
@@ -95,24 +96,6 @@ type Egress = (request: Request) => Promise<Response>;
 // Owed from the moment its push is sent until both appends have landed, under the key of that one
 // update of main: main can return to a commit published before, and each update is published again.
 type OwedFact = CommitCompleted & { key?: string };
-
-function filePath(path: string): string {
-  const refusal = `repo: not a repo-relative path (${JSON.stringify(path)})`;
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of a wire-fed argument (its static type is a claim, not a guarantee, across the capability boundary)
-  if (typeof path !== "string") throw new Error(refusal);
-  if (path.split("/").some((s) => s === "" || s === "." || s === "..")) throw new Error(refusal);
-  return path;
-}
-
-// A change's blob: its text, or the bytes it names.
-function blobOf(change: Exclude<RepoFileChange, { delete: true }>): Uint8Array {
-  if ("content" in change) return textEncoder.encode(change.content);
-  if (change.bytes instanceof Uint8Array) return change.bytes;
-  if (change.bytes instanceof ArrayBuffer) return new Uint8Array(change.bytes);
-  throw new Error(
-    `repo.commitFiles: ${JSON.stringify(change.path)} needs "content" (text) or "bytes" (a Uint8Array)`,
-  );
-}
 
 export const repoVerbs = [
   "tip",

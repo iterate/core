@@ -1735,6 +1735,22 @@ export interface IterateContextApi {
   images: CfImagesApi;
   /** Cloudflare Artifacts, mind-scoped (`repos` is the friendlier surface). */
   cfArtifacts: CfArtifactsApi;
+  /** ONE COMMIT ON A GIT REMOTE'S `main`, with no repo of this mind: nothing is kept here, no
+   *  context, no copy of the remote's files and no event. The tip is read, `changes` are applied
+   *  to its files (whole files, as `repos.get(path).commitFiles` takes them), and the commit is
+   *  pushed, compare-and-swapped on the tip that was read and never forced: a commit that landed
+   *  meanwhile refuses it, and a second call reads the tip anew. `remote` is a git URL over
+   *  HTTP(S) whose userinfo may hold a secret placeholder, never a token; the requests leave by the
+   *  caller's own `itx.fetch`. A remote whose `main` has no commit is refused: the first commit of
+   *  a repo is its owner's. With no path changed, nothing is pushed and `commitOid` is the tip. */
+  git: {
+    commitFiles(input: {
+      remote: string;
+      message: string;
+      changes: RepoFileChange[];
+      author?: { name: string; email: string };
+    }): Promise<{ commitOid: string; parent: string; changedPaths: string[] }>;
+  };
   /** Files stored in the mind's object store, by path (`r2` underneath). */
   files: {
     get(path: string): InvokeHandle & FileHandle;

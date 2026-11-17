@@ -11,6 +11,7 @@ import type {
 } from "iterate/api";
 import type { Caller, ItxHostRoot, LibraryItx } from "core-itx";
 import { RepoContract } from "./repo/contract.ts";
+import { commitFilesToRemote } from "./repo/remote-commit.ts";
 import type { RepoFacet, repoVerbs } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
 import type { WorkspaceFacet, workspaceVerbs } from "./workspace/durable-object.ts";
@@ -72,6 +73,14 @@ export const libraryRoots = {
       scope,
     ): EntityRoot<EntityHandle<RepoFacet, (typeof repoVerbs)[number], typeof RepoContract>> =>
       entityRoot(scope.itx, scope, "repo", "repos", RepoContract),
+  },
+  git: {
+    description:
+      'one commit on a git remote\'s main, with no repo of this mind: `git.commitFiles({ remote, message, changes })` reads the tip, changes whole files (`{ path, content }` or `{ path, delete: true }`) and pushes, never forced: a commit that landed meanwhile refuses it, so call again. `remote` is an https git URL whose userinfo may hold a secret placeholder (`https://x:getSecret("/secrets/<name>")@host/repo.git`), never a token. Answers `{ commitOid, parent, changedPaths }`. A remote with no commit is refused',
+    build: ({ itx }): IterateContextApi["git"] => ({
+      commitFiles: (input) =>
+        commitFilesToRemote({ ...input, fetch: (request) => itx.fetch(request) }),
+    }),
   },
   workspaces: {
     description: WORKSPACES_ROOT_DESCRIPTION,
