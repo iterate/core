@@ -632,6 +632,12 @@ offer is not that), do three things in ONE turn:
    The key is always `onboarding-reminder`: set again, it replaces the one before, so there is
    never more than one.
 
+   **An owner who just stops writing gets the reminder too.** Nothing wakes you when they go
+   silent, so set this same reminder, saying nothing about it, in your first turn and in every
+   turn that a message of the owner started while something is open: it then is always due 24
+   hours after their last word. That is no close: you go on offering, and you make none of the
+   close's marks.
+
 3. **Mark the record** (part D): one mark for each open subject as `left`, and one for
    `what-is-left` as `done` with the day the reminder is due. The reminder's turn reads it, and so does a later session.
 
@@ -642,9 +648,9 @@ and the address of this chat. Then set the reminder ONE more time, for three day
 after that second message never again: no stream of reminders.
 
 **Cancel it** (`await itx.cd("/agents/onboarding").schedules.cancel("onboarding-reminder")`) when
-the owner says stop, or when nothing is left. A message of the owner that is neither (a
-question, a new wish) does NOT cancel it: answer, go on, and when they stop again with things
-left, set it again (the same key replaces the one before).
+the owner says stop, or when nothing is left. After a "stop", never set it again, in no turn.
+A message of the owner that is neither (a question, a new wish) does NOT cancel it: answer, go
+on, and set it again (the same key replaces the one before).
 
 **The owner's reply by mail reaches you**, as their message in this same conversation: a reply
 in the thread of a mail you sent goes back to you (`mail-replies.md`). Go on from it exactly as
