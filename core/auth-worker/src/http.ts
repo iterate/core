@@ -26,6 +26,7 @@ import { googleSignInResponse } from "./google-sign-in.ts";
 import { keyTokenResponse } from "./key-tokens.ts";
 import { keysPagesResponse } from "./keys-pages.ts";
 import { membersResponse, standingOf } from "./members.ts";
+import { mindsPageResponse } from "./minds-page.ts";
 import {
   AUTHORIZE_ENDPOINT,
   authorizationServer,
@@ -144,6 +145,8 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
     return keyTokenResponse(env, request);
   const sessions = await sessionsResponse(env, request);
   if (sessions) return sessions;
+  const minds = await mindsPageResponse(env, request);
+  if (minds) return minds;
   const keys = await keysPagesResponse(env, request);
   if (keys) return keys;
   if (pathname === STATEMENTS_PATH && request.method === "POST")

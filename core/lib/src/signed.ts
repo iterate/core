@@ -85,6 +85,31 @@ export const MIND_DOCUMENT_PATH = "/.well-known/iterate";
 export const isMindDomain = (domain: string) =>
   /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain);
 
+/** A document is a few hundred bytes for each key: far more is no document. */
+const DOCUMENT_MAX_BYTES = 16 * 1024;
+
+/** A body's text when it is at most `limit` bytes, else null. It stops reading at the limit: the
+ *  host is another party's, and what it sends must not be held whole. */
+async function textWithin(response: Response, limit: number): Promise<string | null> {
+  if (Number(response.headers.get("content-length") || 0) > limit) return null;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of response.body || []) {
+    size += chunk.byteLength;
+    if (size > limit) return null;
+    chunks.push(chunk);
+  }
+  return new TextDecoder().decode(concat(...chunks));
+}
+
+function jsonOf(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 const documents = new Map<
   string,
   { until: number; answer: Promise<MindDocument | { why: string }> }
@@ -105,10 +130,9 @@ export function publishedMindOf(
     const url = `${origin}${MIND_DOCUMENT_PATH}`;
     const document = async () => {
       const answer = await fetcher(new Request(url, { redirect: "manual" }));
-      const parsed = MindDocument.safeParse(
-        answer.ok ? await answer.json().catch(() => null) : null,
-      );
+      const text = answer.ok ? await textWithin(answer, DOCUMENT_MAX_BYTES) : null;
       await answer.body?.cancel().catch(() => {});
+      const parsed = MindDocument.safeParse(text ? jsonOf(text) : null);
       if (!parsed.success) return { why: `${url} answered ${answer.status} with no document` };
       return parsed.data.mind === domain ? parsed.data : { why: `${url} names another mind` };
     };

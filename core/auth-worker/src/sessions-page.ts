@@ -125,7 +125,8 @@ const METHODS: Record<BrowserSignInMethod, string> = {
   "member-link": "an owner's link",
 };
 
-const minute = (at: number) => `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+export const minute = (at: number) =>
+  `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 
 /** A SHORT NAME FOR A BROWSER, from its User-Agent: its browser and its system, such as "Chrome on
  *  macOS". A string it does not know is "A browser". The order matters: Edge and Opera say Chrome

@@ -34,6 +34,7 @@ import {
   BotIcon,
   ChartLineIcon,
   CircleCheckIcon,
+  CompassIcon,
   FolderGit2Icon,
   KeyRoundIcon,
   LayoutDashboardIcon,
@@ -100,6 +101,7 @@ const access = [
   { name: "Keys", href: `${stack}/keys`, icon: KeyRoundIcon },
   { name: "Sessions", href: `${stack}/sessions`, icon: LogOutIcon },
   { name: "Members", href: `${stack}/members`, icon: UsersIcon },
+  { name: "Other Minds", href: `${stack}/minds`, icon: CompassIcon },
   { name: "Self-test", href: `${stack}/self-test`, icon: CircleCheckIcon },
 ];
 

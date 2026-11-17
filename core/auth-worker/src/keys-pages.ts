@@ -27,6 +27,7 @@ import {
 import { holdsPasskey } from "./keys.ts";
 import { standingOf } from "./members.ts";
 import { errorPage, notMemberPage, page, text } from "./pages.ts";
+import { MINDS_PATH } from "./minds-page.ts";
 import { SESSIONS_PATH } from "./sessions-page.ts";
 import { signInHref } from "./sign-in.ts";
 import {
@@ -265,7 +266,7 @@ async function keysPage(
       </form>
       ${ask}
       <p id="removal" class="muted" role="status">${owed ? "" : "Removing a key takes a press of a passkey you have here."}</p>
-      ${goesOn ? `<p class="muted">Where you are signed in, and the apps and tools that hold a sign-in as you: <a href="${SESSIONS_PATH}">Sessions</a>.</p>` : ""}
+      ${goesOn ? `<p class="muted">Where you are signed in, and the apps and tools that hold a sign-in as you: <a href="${SESSIONS_PATH}">Sessions</a>. The minds that this mind lets in: <a href="${MINDS_PATH}">Other minds</a>.</p>` : ""}
       ${next && goesOn ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
     script,
   });
