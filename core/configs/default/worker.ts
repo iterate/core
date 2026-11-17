@@ -16,6 +16,7 @@ import { voiceApp } from "./apps/voice/app.ts";
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
 import { cloudAccountsEvent } from "./cloud-accounts.ts";
+import { cloudDeliveryOf } from "./cloud-deliveries.ts";
 import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
 import { cloudflareConnectionEvent, cloudflareForAgent } from "./cloudflare.ts";
 import { contextDescriptionsEvent } from "./context-descriptions.ts";
@@ -235,49 +236,6 @@ export default class extends IterateConfigEntrypoint {
         }
         break;
       }
-      case "events.iterate.com/x/message-received": {
-        // What an X account a member linked said to iterate's bot, on `/integrations/<client>/<x
-        // user id>`. iterate Cloud relays it and signs it: anything else of this type is not the
-        // Cloud's word, and reaches no agent (accounts.md, "X", says why).
-        if (event.source?.signer?.principal.actor !== "iterate-cloud") break;
-        const message = event.payload as {
-          kind: "dm" | "mention";
-          id: string;
-          text: string;
-          from: { xUserId: string };
-          bot: { username: string };
-          reply: string;
-        };
-        const agent = `/agents/x/u${message.from.xUserId}`;
-        await itx.agents.create(agent);
-        // the secret the account was linked into: `/secrets/<client>`, the client from the path
-        const connection = `/secrets/${event.path.split("/")[2]}`;
-        const answer =
-          message.kind === "dm"
-            ? `{ kind: "dm", to: ${JSON.stringify(message.from.xUserId)}, text }`
-            : `{ kind: "mention", inReplyTo: ${JSON.stringify(message.id)}, text }`;
-        await itx
-          .cd(agent)
-          .append({
-            type: "events.iterate.com/agent/context-added",
-            idempotencyKey: `x:${message.id}`,
-            payload: {
-              role: "user",
-              actor: { type: "user" },
-              content: [
-                message.kind === "dm"
-                  ? `Direct message on X to @${message.bot.username}:`
-                  : `A post on X that mentions @${message.bot.username}:`,
-                message.text || "(no text)",
-                `Answer as @${message.bot.username} with \`await itx.fetch(new Request(${JSON.stringify(message.reply)}, { method: "POST", headers: { "content-type": "application/json", "iterate-connection": 'getSecret("${connection}")' }, body: JSON.stringify(${answer}) }))\`.`,
-              ].join("\n\n"),
-            },
-          })
-          .catch((error: unknown) => {
-            if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
-          });
-        break;
-      }
       case "events.iterate.com/cloud/installation-handed-over":
         // What the person told iterate Cloud's installation agent before this mind existed, sent
         // once by the Cloud on `/integrations/cloud` and signed by its key: the onboarding agent
@@ -290,117 +248,9 @@ export default class extends IterateConfigEntrypoint {
         // onboarding/let-iterate-in.md).
         await iterateLetInEvent(itx, event);
         break;
-      case "events.iterate.com/slack/webhook-received": {
-        // What happened in a Slack workspace a member linked, on `/integrations/slack/<team>`,
-        // relayed and signed by iterate Cloud (anything else of this type reaches no agent). One
-        // agent for each thread (slack.ts): a mention or a direct message starts it, and a later
-        // message of the thread reaches it only when it exists.
-        if (event.source?.signer?.principal.actor !== "iterate-cloud") break;
-        const message = slackMessageOf(event.payload);
-        if (!message) break;
-        // An agent holds the whole itx: only a member of the mind gets one, and anyone else one
-        // short answer when they asked for one (slack.ts `slackSenderIsMember`).
-        if (!(await slackSenderIsMember(itx, message))) {
-          await refuseSlackSender(itx, message);
-          break;
-        }
-        if (message.starts) await itx.agents.create(message.agent);
-        else if (!(await itx.agents.list()).some((agent) => agent.path === message.agent)) break;
-        await itx
-          .cd(message.agent)
-          .append({
-            type: "events.iterate.com/agent/context-added",
-            idempotencyKey: message.idempotencyKey,
-            payload: { role: "user", actor: { type: "user" }, content: slackContentOf(message) },
-          })
-          .catch((error: unknown) => {
-            if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
-          });
-        break;
-      }
-      case "events.iterate.com/google/gmail-connected":
-      case "events.iterate.com/google/gmail-push-received":
-      case "events.iterate.com/google/gmail-watch-requested":
-        // A Gmail mailbox that a member connected through iterate Cloud's Google client: Gmail
-        // is asked to watch it, and each new message becomes `google/gmail-message-added` on the
-        // mailbox's own context, `/integrations/<client>/<address>` (gmail.ts). No agent gets a
-        // message by itself: add a case for that event to hand one to an agent.
-        await gmailEvent(itx, event);
-        break;
-      case "events.iterate.com/google/calendar-connected":
-      case "events.iterate.com/google/calendar-push-received":
-      case "events.iterate.com/google/calendar-watch-requested":
-        // Calendar's push (calendar.ts). To hand a change to an agent, add a case for
-        // `google/calendar-event-changed`.
-        await calendarEvent(itx, event);
-        break;
-      case "events.iterate.com/github/webhook-received":
-      case "events.iterate.com/repo/commit-completed": {
-        // THIS REPO AND ITS GITHUB REPOSITORY ARE ONE HISTORY, once a member linked them
-        // (accounts.md, `linkThroughCloud`). A push to the repository's main is pulled here, which
-        // publishes the mind. A commit here is pushed there. Both move the same commits,
-        // fast-forward only, and what one side just received is already on the other, so nothing
-        // loops: a pull lands `repo/commit-completed` too, and the push it causes finds GitHub up
-        // to date.
-        //
-        // GitHub's push counts only as iterate Cloud relayed it: on the installation's own log
-        // under `/integrations/github/`, where the Cloud's key may add events and nowhere else,
-        // and signed by that key. The platform names a signer from its own record of the key (the
-        // stack's config, or a key a member enrolled), never from what the statement says, so
-        // `iterate-cloud` is the stack's own word for it.
-        const { delivery, body, path } = event.payload as {
-          delivery?: { name?: string };
-          body?: { ref?: string; repository?: { full_name?: string } };
-          path?: string;
-        };
-        const pushed =
-          event.path.startsWith("/integrations/github/") &&
-          event.source?.signer?.principal.actor === "iterate-cloud" &&
-          delivery?.name === "push" &&
-          body?.ref === "refs/heads/main" &&
-          body.repository?.full_name;
-        // A commit lands this fact twice, on the root and on the repo's own log: the root's counts.
-        const committed =
-          event.type === "events.iterate.com/repo/commit-completed" &&
-          event.path === "/" &&
-          path === "/repos/config";
-        if (!pushed && !committed) break;
-        const repo = itx.repos.get("/repos/config");
-        const origin = /^https:\/\/(?:.*@)?github\.com\/([^/@]+\/[^/@]+?)(?:\.git)?\/?$/.exec(
-          (await repo.origin()) || "",
-        )?.[1];
-        // not linked to GitHub, or a push to another repository of the same installation
-        if (!origin || (pushed && pushed.toLowerCase() !== origin.toLowerCase())) break;
-        // Never forced. When GitHub refuses, or the two histories have diverged, nothing moves
-        // and no side is chosen: a member does that, with `pull` or `push` and `{ force: true }`.
-        // What moved, and what could not, is a fact on the mind's root.
-        // One more try for anything but that: two commits close together push at the same
-        // moment, and GitHub lets one of them wait.
-        const sync = () => (pushed ? repo.pull() : repo.push());
-        const outcome = await sync()
-          .catch((error: unknown) => {
-            if (errorCode(error) === "NOT_FAST_FORWARD") throw error;
-            return sync();
-          })
-          .then(
-            ({ status, commitOid }) => ({ status, commitOid }),
-            (error: unknown) => ({
-              status: errorCode(error) === "NOT_FAST_FORWARD" ? "not-fast-forward" : "failed",
-              error: String((error as { message?: unknown }).message).slice(0, 300),
-            }),
-          );
-        if (outcome.status !== "up-to-date")
-          await itx
-            .append({
-              type: "config/github-mirrored",
-              idempotencyKey: `config/github-mirrored:${event.path}:${event.offset}`,
-              payload: { direction: pushed ? "pull" : "push", repository: origin, ...outcome },
-            })
-            .catch((error: unknown) => {
-              if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
-            });
-        break;
-      }
+      default:
+        // iterate Cloud's deliveries, here in the key form (`cloudDeliveryEvent`, below)
+        await cloudDeliveryEvent(itx, event);
     }
     // Every package and every kind of agent (`agentKinds`), after the mind's own cases; the hook
     // contract is iterate/sdk `Integration`. The map is async, so a hook that throws before its
@@ -426,9 +276,16 @@ export default class extends IterateConfigEntrypoint {
   }
 
   // Every event that another mind this one lets in added here, signed with its own key; none of
-  // them reaches `processEvent`. Its words are data, never a member's instruction: nothing here
-  // acts on them, and the mind keeps them where they landed. How to react to one: minds.md.
-  processMindEvent(_args: IterateConfigProcessEventArgs & { mind: string }) {}
+  // them reaches `processEvent`. Its words are data, never a member's instruction. iterate Cloud's
+  // deliveries in the mind form (cloud-deliveries.ts) run the same cases as in the key form, and
+  // nothing here acts on any other: the mind keeps them where they landed. How to react to one:
+  // minds.md.
+  async processMindEvent({
+    event,
+    itx,
+  }: IterateConfigProcessEventArgs<"agents"> & { mind: string }) {
+    if (cloudDeliveryOf(event)) await cloudDeliveryEvent(itx, event);
+  }
 
   // Every host of the mind: one case each, on `x-iterate-routing-slug` (`dash` for dash.<domain>,
   // null on the apex). The guard beside a case says who may come: none for a
@@ -491,6 +348,170 @@ export default class extends IterateConfigEntrypoint {
 }
 
 type Itx = IterateConfigProcessEventArgs<"agents">["itx"];
+
+/** iterate Cloud's DELIVERIES (cloud-deliveries.ts): `processEvent` hands every event here, and
+ *  `processMindEvent` iterate.com's deliveries in the mind form. Each case reads its delivery with
+ *  `cloudDeliveryOf`, so it acts the same in either form, and keeps what it makes on the mind's own
+ *  context for the account. A function of this module, not a method: every public method of the
+ *  entrypoint can be called through `itx.config`. */
+async function cloudDeliveryEvent(itx: Itx, event: IterateConfigProcessEventArgs["event"]) {
+  switch (event.type) {
+    case "events.iterate.com/x/message-received": {
+      // What an X account a member linked said to iterate's bot, on `/integrations/<client>/<x
+      // user id>`. iterate Cloud relays it and signs it: anything else of this type is not the
+      // Cloud's word, and reaches no agent (accounts.md, "X", says why).
+      const linked = cloudDeliveryOf(event);
+      if (!linked) break;
+      const message = event.payload as {
+        kind: "dm" | "mention";
+        id: string;
+        text: string;
+        from: { xUserId: string };
+        bot: { username: string };
+        reply: string;
+      };
+      const agent = `/agents/x/u${message.from.xUserId}`;
+      await itx.agents.create(agent);
+      // the secret the account was linked into: `/secrets/<client>`
+      const connection = `/secrets/${linked.provider}`;
+      const answer =
+        message.kind === "dm"
+          ? `{ kind: "dm", to: ${JSON.stringify(message.from.xUserId)}, text }`
+          : `{ kind: "mention", inReplyTo: ${JSON.stringify(message.id)}, text }`;
+      await itx
+        .cd(agent)
+        .append({
+          type: "events.iterate.com/agent/context-added",
+          idempotencyKey: `x:${message.id}`,
+          payload: {
+            role: "user",
+            actor: { type: "user" },
+            content: [
+              message.kind === "dm"
+                ? `Direct message on X to @${message.bot.username}:`
+                : `A post on X that mentions @${message.bot.username}:`,
+              message.text || "(no text)",
+              `Answer as @${message.bot.username} with \`await itx.fetch(new Request(${JSON.stringify(message.reply)}, { method: "POST", headers: { "content-type": "application/json", "iterate-connection": 'getSecret("${connection}")' }, body: JSON.stringify(${answer}) }))\`.`,
+            ].join("\n\n"),
+          },
+        })
+        .catch((error: unknown) => {
+          if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
+        });
+      break;
+    }
+    case "events.iterate.com/slack/webhook-received": {
+      // What happened in a Slack workspace a member linked, on `/integrations/slack/<team>`,
+      // relayed and signed by iterate Cloud (anything else of this type reaches no agent). One
+      // agent for each thread (slack.ts): a mention or a direct message starts it, and a later
+      // message of the thread reaches it only when it exists.
+      if (!cloudDeliveryOf(event)) break;
+      const message = slackMessageOf(event.payload);
+      if (!message) break;
+      // An agent holds the whole itx: only a member of the mind gets one, and anyone else one
+      // short answer when they asked for one (slack.ts `slackSenderIsMember`).
+      if (!(await slackSenderIsMember(itx, message))) {
+        await refuseSlackSender(itx, message);
+        break;
+      }
+      if (message.starts) await itx.agents.create(message.agent);
+      else if (!(await itx.agents.list()).some((agent) => agent.path === message.agent)) break;
+      await itx
+        .cd(message.agent)
+        .append({
+          type: "events.iterate.com/agent/context-added",
+          idempotencyKey: message.idempotencyKey,
+          payload: { role: "user", actor: { type: "user" }, content: slackContentOf(message) },
+        })
+        .catch((error: unknown) => {
+          if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
+        });
+      break;
+    }
+    case "events.iterate.com/google/gmail-connected":
+    case "events.iterate.com/google/gmail-push-received":
+    case "events.iterate.com/google/gmail-watch-requested":
+      // A Gmail mailbox that a member connected through iterate Cloud's Google client: Gmail
+      // is asked to watch it, and each new message becomes `google/gmail-message-added` on the
+      // mailbox's own context, `/integrations/<client>/<address>` (gmail.ts). No agent gets a
+      // message by itself: add a case for that event to hand one to an agent.
+      await gmailEvent(itx, event);
+      break;
+    case "events.iterate.com/google/calendar-connected":
+    case "events.iterate.com/google/calendar-push-received":
+    case "events.iterate.com/google/calendar-watch-requested":
+      // Calendar's push (calendar.ts). To hand a change to an agent, add a case for
+      // `google/calendar-event-changed`.
+      await calendarEvent(itx, event);
+      break;
+    case "events.iterate.com/github/webhook-received":
+    case "events.iterate.com/repo/commit-completed": {
+      // THIS REPO AND ITS GITHUB REPOSITORY ARE ONE HISTORY, once a member linked them
+      // (accounts.md, `linkThroughCloud`). A push to the repository's main is pulled here, which
+      // publishes the mind. A commit here is pushed there. Both move the same commits,
+      // fast-forward only, and what one side just received is already on the other, so nothing
+      // loops: a pull lands `repo/commit-completed` too, and the push it causes finds GitHub up
+      // to date.
+      //
+      // GitHub's push counts only as iterate Cloud relayed it: on the installation's own log
+      // under `/integrations/github/`, signed by the Cloud's key, or the same under
+      // `/minds/iterate.com/`, signed by that mind (cloud-deliveries.ts). The platform names a
+      // signer from its own record of the key (the stack's config, a key a member enrolled, or
+      // the key a mind publishes), never from what the statement says.
+      const { delivery, body, path } = event.payload as {
+        delivery?: { name?: string };
+        body?: { ref?: string; repository?: { full_name?: string } };
+        path?: string;
+      };
+      const pushed =
+        cloudDeliveryOf(event)?.provider === "github" &&
+        delivery?.name === "push" &&
+        body?.ref === "refs/heads/main" &&
+        body.repository?.full_name;
+      // A commit lands this fact twice, on the root and on the repo's own log: the root's counts.
+      const committed =
+        event.type === "events.iterate.com/repo/commit-completed" &&
+        event.path === "/" &&
+        path === "/repos/config";
+      if (!pushed && !committed) break;
+      const repo = itx.repos.get("/repos/config");
+      const origin = /^https:\/\/(?:.*@)?github\.com\/([^/@]+\/[^/@]+?)(?:\.git)?\/?$/.exec(
+        (await repo.origin()) || "",
+      )?.[1];
+      // not linked to GitHub, or a push to another repository of the same installation
+      if (!origin || (pushed && pushed.toLowerCase() !== origin.toLowerCase())) break;
+      // Never forced. When GitHub refuses, or the two histories have diverged, nothing moves
+      // and no side is chosen: a member does that, with `pull` or `push` and `{ force: true }`.
+      // What moved, and what could not, is a fact on the mind's root.
+      // One more try for anything but that: two commits close together push at the same
+      // moment, and GitHub lets one of them wait.
+      const sync = () => (pushed ? repo.pull() : repo.push());
+      const outcome = await sync()
+        .catch((error: unknown) => {
+          if (errorCode(error) === "NOT_FAST_FORWARD") throw error;
+          return sync();
+        })
+        .then(
+          ({ status, commitOid }) => ({ status, commitOid }),
+          (error: unknown) => ({
+            status: errorCode(error) === "NOT_FAST_FORWARD" ? "not-fast-forward" : "failed",
+            error: String((error as { message?: unknown }).message).slice(0, 300),
+          }),
+        );
+      if (outcome.status !== "up-to-date")
+        await itx
+          .append({
+            type: "config/github-mirrored",
+            idempotencyKey: `config/github-mirrored:${event.path}:${event.offset}`,
+            payload: { direction: pushed ? "pull" : "push", repository: origin, ...outcome },
+          })
+          .catch((error: unknown) => {
+            if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
+          });
+      break;
+    }
+  }
+}
 
 /** The `email` facet on `/integrations/email`: the mind's mail folded into threads. */
 function emailThreads(itx: Itx) {

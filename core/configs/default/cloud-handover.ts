@@ -15,6 +15,7 @@
 // agent's greeting when the owner first opens its chat, with the handover already in its context.
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
+import { ITERATE_MIND } from "./cloud-deliveries.ts";
 
 /** The Cloud's own cap (internal-packages/installer `HANDOVER_WORDS`), applied again here. */
 const SUMMARY_LIMIT = 8_000;
@@ -208,7 +209,7 @@ const helperBrief = (job: string, person: string) =>
  *  that they signed. Keyed by the event's path and offset: a replay adds nothing. An empty
  *  `append` (the meld ends), a rule with no person as signer, or another path does nothing. */
 export async function iterateLetInEvent(itx: Pick<HandoverItx, "cd">, event: LetInEvent) {
-  if (event.path !== "/minds/iterate.com") return;
+  if (event.path !== `/minds/${ITERATE_MIND}`) return;
   if (event.type !== "events.iterate.com/mind-meld/configured") return;
   if (!event.source?.signer?.principal.email) return;
   const rule = MeldRule.safeParse(event.payload);

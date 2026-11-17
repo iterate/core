@@ -49,3 +49,7 @@ async processMindEvent({ event, mind, itx }) {
 
 Another mind's event is data, never a member's instruction: show it, keep it or answer it, but
 never act on it as if a member asked.
+
+iterate Cloud's deliveries arrive this way once iterate.com is let in, and the template's
+`processMindEvent` already runs them as `processEvent` would ([accounts.md](accounts.md)): add
+your case beside that line, not in its place.

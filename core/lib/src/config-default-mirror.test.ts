@@ -159,6 +159,34 @@ test.for([
   expect(root).toMatchObject({ calls, appended: [] });
 });
 
+test.for([
+  {
+    name: "a push in the mind form, signed by the mind iterate.com, is pulled through processMindEvent",
+    actor: "iterate.com",
+    calls: ["pull"],
+  },
+  { name: "nor one that another mind signed", actor: "example.com", calls: [] },
+])("$name", async ({ actor, calls }) => {
+  const root = rootWith({ origin: ORIGIN });
+  const config = Object.create(Config.prototype) as Config;
+  await config.processMindEvent({
+    event: {
+      type: "events.iterate.com/github/webhook-received",
+      path: "/minds/iterate.com/integrations/github/7",
+      offset: 5,
+      source: { signer: { principal: { actor, kind: "mind" }, key: `${actor}-key` } },
+      payload: {
+        delivery: { id: "d-1", name: "push" },
+        installationId: "7",
+        body: { ref: "refs/heads/main", repository: { full_name: "acme/config" } },
+      },
+    } as never,
+    mind: actor,
+    itx: root as never,
+  });
+  expect(root).toMatchObject({ calls, appended: [] });
+});
+
 test("what moved is a fact on the root, and histories that diverged stop there: nothing is forced", async () => {
   const pushed = {
     type: "events.iterate.com/repo/commit-completed",

@@ -15,6 +15,12 @@ scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of
 - GitHub's deliveries for an installation the member administers arrive as
   `events.iterate.com/github/webhook-received` on `/integrations/github/<installation id>`, signed
   by the Cloud's key: `event.source.signer.principal.actor` is `"iterate-cloud"`.
+- Every delivery of the Cloud (GitHub, Slack, Gmail, Calendar, X) comes in that form until the
+  owner lets iterate.com in ([minds.md](minds.md)). Then the same type and payload arrive on
+  `/minds/iterate.com/integrations/<provider>/<account>`, signed by the mind iterate.com, and reach
+  `processMindEvent`, not `processEvent`. `cloudDeliveryOf(event)` (`cloud-deliveries.ts`) knows
+  both forms: test a delivery with it, and keep what you make of one on its `context`, the mind's
+  own `/integrations/<provider>/<account>`.
 - A Gmail mailbox connected this way is watched (`gmail.ts`): each new message arrives as
   `events.iterate.com/google/gmail-message-added` on `/integrations/google/<address>`, with
   `{ id, threadId, labelIds, from, to, cc, subject, date, messageId, snippet, receivedAt }`. Read
@@ -73,8 +79,8 @@ The `events.iterate.com/x/message-received` case hands what a linked X account s
 iterate's bot (a direct message, or a post that mentions it) to an agent of its own per
 account, `/agents/x/u<x user id>`. A member links an account with
 `itx.secrets.beginOAuth("/secrets/x", { client: { cloud: "x" } })` and opens the link. iterate
-Cloud then relays that account's messages, each signed by the Cloud's key, and only an event
-with that signer reaches an agent. The agent answers through the Cloud with the `itx.fetch` its
+Cloud then relays that account's messages, each signed by the Cloud, and only an event that
+`cloudDeliveryOf` takes for the Cloud's reaches an agent. The agent answers through the Cloud with the `itx.fetch` its
 context shows; the vault signs that request, and the Cloud sends it as the bot only to an
 account this mind linked. Link a member's own account alone: whoever writes from a linked
 account speaks to an agent with the mind's reach.

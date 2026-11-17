@@ -14,8 +14,8 @@
 //                                 watched again (Gmail ends a watch after seven days) and its
 //                                 history is read (Gmail says a push may be late or lost).
 //
-// The first two count only as iterate Cloud signed them (worker.ts says how a signer gets that
-// name), and the third only on the mind's root, where the schedule appends it.
+// The first two count only as iterate Cloud's delivery, in either of its forms
+// (cloud-deliveries.ts), and the third only on the mind's root, where the schedule appends it.
 //
 // ONE WATCH PER MAILBOX IS SHARED by every mind that connected the mailbox through the same Google
 // client. So this code never stops a watch (`users.stop`) and names no labels in it: either would
@@ -38,6 +38,7 @@
 // id, and the row's place in the history moves on only after its messages are on the log.
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
+import { cloudDeliveryOf, type CloudDeliveryEvent } from "./cloud-deliveries.ts";
 
 /** What the mind keeps of one watched mailbox: the secret that reads it, the Cloud's topic, the
  *  origin of Gmail's API, and the mailbox's history id up to which its messages are on the log. */
@@ -49,8 +50,7 @@ type GmailEvent = {
   path: string;
   offset: number;
   payload?: unknown;
-  source?: { signer?: { principal: { actor?: string } } };
-};
+} & CloudDeliveryEvent;
 
 /** The mind's root, as far as this file uses it. */
 export type GmailItx = {
@@ -104,11 +104,12 @@ const MESSAGES_PER_EVENT = 50;
 
 /** One of the three events above; any other event, and one that does not count, does nothing. */
 export async function gmailEvent(itx: GmailItx, event: GmailEvent): Promise<void> {
-  const fromCloud = event.source?.signer?.principal.actor === "iterate-cloud";
-  if (event.type === "events.iterate.com/google/gmail-connected" && fromCloud)
-    await connected(itx, event);
-  if (event.type === "events.iterate.com/google/gmail-push-received" && fromCloud)
-    await read(itx, event.path, event);
+  // the mailbox's own context, `/integrations/<client>/<address>`, in either form of the delivery
+  const mailbox = cloudDeliveryOf(event)?.context;
+  if (event.type === "events.iterate.com/google/gmail-connected" && mailbox)
+    await connected(itx, mailbox, event);
+  if (event.type === "events.iterate.com/google/gmail-push-received" && mailbox)
+    await read(itx, mailbox, event);
   if (event.type === WATCH_REQUESTED && event.path === "/") await watchedAgain(itx, event);
 }
 
@@ -116,7 +117,7 @@ export async function gmailEvent(itx: GmailItx, event: GmailEvent): Promise<void
  *  Gmail is asked whose mailbox each Google grant of the mind reads (a secret with an OAuth
  *  refresh, pinned to the API's origin), newest secret first, since a mailbox connected again may
  *  be in another secret. A mailbox watched before keeps its place in the history. */
-async function connected(itx: GmailItx, event: GmailEvent): Promise<void> {
+async function connected(itx: GmailItx, path: string, event: GmailEvent): Promise<void> {
   const said = Connected.safeParse(event.payload);
   if (!said.success) return;
   const { emailAddress, topic, api } = said.data;
@@ -130,9 +131,9 @@ async function connected(itx: GmailItx, event: GmailEvent): Promise<void> {
     if (String(profile.body?.emailAddress || "").toLowerCase() !== emailAddress.toLowerCase())
       continue;
     // a mailbox watched before keeps its place; a new one starts at its profile's history id
-    const before = await mailboxOf(itx, event.path);
+    const before = await mailboxOf(itx, path);
     const historyId = before?.historyId || String(profile.body?.historyId || "");
-    await watch(itx, event.path, { secret, topic, api, historyId }, event);
+    await watch(itx, path, { secret, topic, api, historyId }, event);
     await itx.schedules.set({
       key: "gmail-watch",
       when: { everyMs: 24 * 60 * 60_000 },
@@ -142,7 +143,7 @@ async function connected(itx: GmailItx, event: GmailEvent): Promise<void> {
   }
   // Gmail gave no word on some grant: the platform hands this event over again
   if (unanswered) throw new Error(`Gmail did not answer for the mailbox ${emailAddress}`);
-  await say(itx, event.path, event, "gmail-watch-failed", {
+  await say(itx, path, event, "gmail-watch-failed", {
     reason: `no secret of this mind holds the mailbox ${emailAddress}`,
   });
 }

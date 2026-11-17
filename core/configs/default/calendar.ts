@@ -15,8 +15,8 @@
 //                                    gets a new channel, its old one is stopped, and its changes
 //                                    are read (Google says a push may be lost).
 //
-// The first two count only as iterate Cloud signed them (worker.ts says how a signer gets that
-// name), and the third only on the mind's root, where the schedule appends it.
+// The first two count only as iterate Cloud's delivery, in either of its forms
+// (cloud-deliveries.ts), and the third only on the mind's root, where the schedule appends it.
 //
 // A CHANNEL IS THIS MIND'S OWN, and Google does not renew one: a channel here lives two days, and
 // each day's event makes a new one before it stops the old one, so the two overlap for a moment
@@ -41,6 +41,7 @@
 // every change before it is on the log.
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
+import { cloudDeliveryOf, type CloudDeliveryEvent } from "./cloud-deliveries.ts";
 
 /** What the mind keeps of one watched calendar: the secret that reads it, the origin of Google's
  *  API, the Cloud's address and token for its channels, the sync token up to which its changes
@@ -63,8 +64,7 @@ type CalendarEvent = {
   path: string;
   offset: number;
   payload?: unknown;
-  source?: { signer?: { principal: { actor?: string } } };
-};
+} & CloudDeliveryEvent;
 
 /** The mind's root, as far as this file uses it. */
 export type CalendarItx = {
@@ -120,16 +120,17 @@ const PAGES_PER_LISTING = 40;
 
 /** One of the three events above; any other event, and one that does not count, does nothing. */
 export async function calendarEvent(itx: CalendarItx, event: CalendarEvent): Promise<void> {
-  const fromCloud = event.source?.signer?.principal.actor === "iterate-cloud";
-  if (event.type === "events.iterate.com/google/calendar-connected" && fromCloud)
-    await connected(itx, event);
+  // the calendar's own context, `/integrations/<client>/<address>`, in either form of the delivery
+  const calendar = cloudDeliveryOf(event)?.context;
+  if (event.type === "events.iterate.com/google/calendar-connected" && calendar)
+    await connected(itx, calendar, event);
   // Google's first message on a new channel (`sync`) says only that the channel is live
   if (
     event.type === "events.iterate.com/google/calendar-push-received" &&
-    fromCloud &&
+    calendar &&
     Pushed.safeParse(event.payload).data?.resourceState !== "sync"
   )
-    await read(itx, event.path, event);
+    await read(itx, calendar, event);
   if (event.type === WATCH_REQUESTED && event.path === "/") await watchedAgain(itx, event);
 }
 
@@ -138,7 +139,7 @@ export async function calendarEvent(itx: CalendarItx, event: CalendarEvent): Pro
  *  OAuth refresh, pinned to the API's origin), newest secret first, since a calendar connected
  *  again may be in another secret. A calendar watched before keeps its place in its changes; a
  *  new one starts from now. */
-async function connected(itx: CalendarItx, event: CalendarEvent): Promise<void> {
+async function connected(itx: CalendarItx, path: string, event: CalendarEvent): Promise<void> {
   const said = Connected.safeParse(event.payload);
   if (!said.success) return;
   const { emailAddress, api, address, token } = said.data;
@@ -150,20 +151,20 @@ async function connected(itx: CalendarItx, event: CalendarEvent): Promise<void> 
     const primary = await google(itx, { secret, api }, "calendars/primary");
     unanswered ||= primary.unanswered;
     if (String(primary.body?.id || "").toLowerCase() !== emailAddress.toLowerCase()) continue;
-    const before = await calendarOf(itx, event.path);
+    const before = await calendarOf(itx, path);
     const first = before?.syncToken ? null : await firstSyncToken(itx, { secret, api });
     // Google gave no word on the listing: the platform hands this event over again
     if (first?.unanswered)
       throw new Error(`Google did not answer for the calendar ${emailAddress}`);
     const syncToken = before?.syncToken || first?.token || "";
     if (!syncToken) {
-      await say(itx, event.path, event, "calendar-watch-failed", {
+      await say(itx, path, event, "calendar-watch-failed", {
         reason: `Google gave no sync token for the calendar ${emailAddress}`,
       });
       return;
     }
     const channel = before?.channel || null;
-    await watch(itx, event.path, { secret, api, address, token, syncToken, channel }, event);
+    await watch(itx, path, { secret, api, address, token, syncToken, channel }, event);
     await itx.schedules.set({
       key: "calendar-watch",
       when: { everyMs: 24 * 60 * 60_000 },
@@ -173,7 +174,7 @@ async function connected(itx: CalendarItx, event: CalendarEvent): Promise<void> 
   }
   // Google gave no word on some grant: the platform hands this event over again
   if (unanswered) throw new Error(`Google did not answer for the calendar ${emailAddress}`);
-  await say(itx, event.path, event, "calendar-watch-failed", {
+  await say(itx, path, event, "calendar-watch-failed", {
     reason: `no secret of this mind holds the calendar ${emailAddress}`,
   });
 }

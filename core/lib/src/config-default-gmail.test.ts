@@ -3,6 +3,7 @@
 // no longer has the history, and the day's renewal.
 import { expect, test } from "vitest";
 import { gmailEvent } from "../../configs/default/gmail.ts";
+import Config from "../../configs/default/worker.ts";
 import { codedError } from "./lib.ts";
 
 const API = "https://gmail.test";
@@ -12,151 +13,157 @@ const WORK = "/integrations/google/work@example.com";
 const WATCHED = "events.iterate.com/google/gmail-watched";
 const ADDED = "events.iterate.com/google/gmail-message-added";
 
-test("a connected mailbox is watched with the secret that holds it, on the Cloud's topic, and once a day again", async () => {
-  const mind = gmailMind();
+test.for(bothForms())(
+  "a connected mailbox is watched with the secret that holds it, on the Cloud's topic, and once a day again ($form form)",
+  async ({ deliver }) => {
+    const mind = gmailMind();
 
-  await gmailEvent(mind.itx, connected(ADA, 7));
+    await deliver(mind.itx, connected(ADA, 7));
 
-  // the secret is found by asking Gmail whose mailbox each Google grant of the mind reads: not the
-  // key of another service, nor a grant pinned elsewhere
-  expect(mind.gmail).toMatchObject({
-    watches: [{ secret: "/secrets/google", body: { topicName: TOPIC } }],
-  });
-  expect(mind.asked("/secrets/openai")).toBe(0);
-  expect(mind.asked("/secrets/elsewhere")).toBe(0);
-  expect(mind.rowOf(ADA)).toEqual({
-    secret: "/secrets/google",
-    topic: TOPIC,
-    api: API,
-    historyId: "100",
-  });
-  expect(mind.factsOn(ADA)).toEqual([
-    {
-      type: WATCHED,
-      payload: {
-        secret: "/secrets/google",
-        topic: TOPIC,
-        historyId: "100",
-        expiresAt: "2026-11-19T22:00:00.000Z",
-      },
-    },
-  ]);
-  expect(mind).toMatchObject({
-    schedules: {
-      "gmail-watch": {
-        key: "gmail-watch",
-        when: { everyMs: 24 * 60 * 60_000 },
-        events: [{ type: "events.iterate.com/google/gmail-watch-requested" }],
-      },
-    },
-  });
-
-  // THE SAME EVENT AGAIN (an event arrives at least once): the same watch, no second fact, and
-  // the place in the mailbox's history stays where it was
-  mind.gmail.historyId = 180;
-  await gmailEvent(mind.itx, connected(ADA, 7));
-  expect(mind.factsOn(ADA)).toHaveLength(1);
-  expect(mind.rowOf(ADA)).toMatchObject({ historyId: "100" });
-
-  // only the Cloud's word counts: an event of this type that the Cloud did not sign does nothing
-  const before = mind.gmail.calls.length;
-  await gmailEvent(mind.itx, { ...connected(WORK, 8), source: {} });
-  await gmailEvent(mind.itx, {
-    ...connected(WORK, 9),
-    source: { signer: { principal: { actor: "someone-else" } } },
-  });
-  expect([mind.gmail.calls.length - before, mind.rowOf(WORK)]).toEqual([0, null]);
-
-  // a mailbox that no secret of the mind holds is watched by nobody, and the log says so
-  const nobodys = "/integrations/google/eve@example.com";
-  await gmailEvent(mind.itx, connected(nobodys, 10));
-  expect([mind.rowOf(nobodys), mind.factsOn(nobodys)]).toEqual([
-    null,
-    [
+    // the secret is found by asking Gmail whose mailbox each Google grant of the mind reads: not the
+    // key of another service, nor a grant pinned elsewhere
+    expect(mind.gmail).toMatchObject({
+      watches: [{ secret: "/secrets/google", body: { topicName: TOPIC } }],
+    });
+    expect(mind.asked("/secrets/openai")).toBe(0);
+    expect(mind.asked("/secrets/elsewhere")).toBe(0);
+    expect(mind.rowOf(ADA)).toEqual({
+      secret: "/secrets/google",
+      topic: TOPIC,
+      api: API,
+      historyId: "100",
+    });
+    expect(mind.factsOn(ADA)).toEqual([
       {
-        type: "events.iterate.com/google/gmail-watch-failed",
-        payload: { reason: "no secret of this mind holds the mailbox eve@example.com" },
+        type: WATCHED,
+        payload: {
+          secret: "/secrets/google",
+          topic: TOPIC,
+          historyId: "100",
+          expiresAt: "2026-11-19T22:00:00.000Z",
+        },
       },
-    ],
-  ]);
-});
+    ]);
+    expect(mind).toMatchObject({
+      schedules: {
+        "gmail-watch": {
+          key: "gmail-watch",
+          when: { everyMs: 24 * 60 * 60_000 },
+          events: [{ type: "events.iterate.com/google/gmail-watch-requested" }],
+        },
+      },
+    });
 
-test("a push puts each new message on the mailbox's log once, and a push that comes again puts nothing", async () => {
-  const mind = gmailMind();
-  await gmailEvent(mind.itx, connected(ADA, 7));
-  mind.gmail.arrives("/secrets/google", {
-    id: "m1",
-    threadId: "t1",
-    labelIds: ["INBOX", "UNREAD"],
-    snippet: "Shall we meet on Friday?",
-    internalDate: String(Date.UTC(2026, 10, 12, 22)),
-    payload: {
-      headers: [
-        { name: "From", value: "Grace <grace@example.com>" },
-        { name: "To", value: "ada@example.com" },
-        { name: "Subject", value: "Friday" },
-        { name: "Date", value: "Thu, 12 Nov 2026 22:00:00 +0000" },
-        { name: "Message-ID", value: "<m1@example.com>" },
+    // THE SAME EVENT AGAIN (an event arrives at least once): the same watch, no second fact, and
+    // the place in the mailbox's history stays where it was
+    mind.gmail.historyId = 180;
+    await deliver(mind.itx, connected(ADA, 7));
+    expect(mind.factsOn(ADA)).toHaveLength(1);
+    expect(mind.rowOf(ADA)).toMatchObject({ historyId: "100" });
+
+    // only the Cloud's word counts: an event of this type that the Cloud did not sign does nothing
+    const before = mind.gmail.calls.length;
+    await deliver(mind.itx, { ...connected(WORK, 8), source: {} });
+    await deliver(mind.itx, {
+      ...connected(WORK, 9),
+      source: { signer: { principal: { actor: "someone-else" } } },
+    });
+    expect([mind.gmail.calls.length - before, mind.rowOf(WORK)]).toEqual([0, null]);
+
+    // a mailbox that no secret of the mind holds is watched by nobody, and the log says so
+    const nobodys = "/integrations/google/eve@example.com";
+    await deliver(mind.itx, connected(nobodys, 10));
+    expect([mind.rowOf(nobodys), mind.factsOn(nobodys)]).toEqual([
+      null,
+      [
+        {
+          type: "events.iterate.com/google/gmail-watch-failed",
+          payload: { reason: "no secret of this mind holds the mailbox eve@example.com" },
+        },
       ],
-    },
-  });
-  // a draft is no mail: each save of one is a new message at Gmail
-  mind.gmail.arrives("/secrets/google", { id: "m2", threadId: "t2", labelIds: ["DRAFT"] });
-  mind.gmail.arrives("/secrets/google", { id: "m3", threadId: "t1", labelIds: ["SENT"] });
+    ]);
+  },
+);
 
-  await gmailEvent(mind.itx, pushed(ADA, 20, "103"));
-
-  expect(mind.factsOn(ADA).filter((fact) => fact.type === ADDED)).toEqual([
-    {
-      type: ADDED,
+test.for(bothForms())(
+  "a push puts each new message on the mailbox's log once, and a push that comes again puts nothing ($form form)",
+  async ({ deliver }) => {
+    const mind = gmailMind();
+    await deliver(mind.itx, connected(ADA, 7));
+    mind.gmail.arrives("/secrets/google", {
+      id: "m1",
+      threadId: "t1",
+      labelIds: ["INBOX", "UNREAD"],
+      snippet: "Shall we meet on Friday?",
+      internalDate: String(Date.UTC(2026, 10, 12, 22)),
       payload: {
-        id: "m1",
-        threadId: "t1",
-        labelIds: ["INBOX", "UNREAD"],
-        from: "Grace <grace@example.com>",
-        to: "ada@example.com",
-        cc: null,
-        subject: "Friday",
-        date: "Thu, 12 Nov 2026 22:00:00 +0000",
-        messageId: "<m1@example.com>",
-        snippet: "Shall we meet on Friday?",
-        receivedAt: "2026-11-12T22:00:00.000Z",
+        headers: [
+          { name: "From", value: "Grace <grace@example.com>" },
+          { name: "To", value: "ada@example.com" },
+          { name: "Subject", value: "Friday" },
+          { name: "Date", value: "Thu, 12 Nov 2026 22:00:00 +0000" },
+          { name: "Message-ID", value: "<m1@example.com>" },
+        ],
       },
-    },
-    {
-      type: ADDED,
-      payload: expect.objectContaining({
-        id: "m3",
-        threadId: "t1",
-        labelIds: ["SENT"],
-        from: null,
-      }),
-    },
-  ]);
-  // no body of a mail is asked for
-  expect(mind.gmail.calls.filter((call) => call.includes("/messages/"))).toEqual([
-    expect.stringContaining("/messages/m1?format=metadata"),
-    expect.stringContaining("/messages/m2?format=metadata"),
-    expect.stringContaining("/messages/m3?format=metadata"),
-  ]);
-  expect(mind.rowOf(ADA)).toMatchObject({ historyId: "103" });
+    });
+    // a draft is no mail: each save of one is a new message at Gmail
+    mind.gmail.arrives("/secrets/google", { id: "m2", threadId: "t2", labelIds: ["DRAFT"] });
+    mind.gmail.arrives("/secrets/google", { id: "m3", threadId: "t1", labelIds: ["SENT"] });
 
-  // THE SAME PUSH AGAIN: Gmail has nothing after the place the mind is at
-  await gmailEvent(mind.itx, pushed(ADA, 20, "103"));
-  expect(mind.factsOn(ADA).filter((fact) => fact.type === ADDED)).toHaveLength(2);
-  // and a push that is worked through twice from the same place (the first run ended before it
-  // kept its place) writes no message a second time
-  mind.setRow(ADA, { historyId: "100" });
-  await gmailEvent(mind.itx, pushed(ADA, 21, "103"));
-  expect(mind.factsOn(ADA).filter((fact) => fact.type === ADDED)).toHaveLength(2);
-  expect(mind.rowOf(ADA)).toMatchObject({ historyId: "103" });
+    await deliver(mind.itx, pushed(ADA, 20, "103"));
 
-  // a push the Cloud did not sign, and one for a mailbox this mind does not watch: nothing
-  const before = mind.gmail.calls.length;
-  await gmailEvent(mind.itx, { ...pushed(ADA, 22, "104"), source: {} });
-  await gmailEvent(mind.itx, pushed(WORK, 23, "104"));
-  expect(mind.gmail.calls.length).toBe(before);
-});
+    expect(mind.factsOn(ADA).filter((fact) => fact.type === ADDED)).toEqual([
+      {
+        type: ADDED,
+        payload: {
+          id: "m1",
+          threadId: "t1",
+          labelIds: ["INBOX", "UNREAD"],
+          from: "Grace <grace@example.com>",
+          to: "ada@example.com",
+          cc: null,
+          subject: "Friday",
+          date: "Thu, 12 Nov 2026 22:00:00 +0000",
+          messageId: "<m1@example.com>",
+          snippet: "Shall we meet on Friday?",
+          receivedAt: "2026-11-12T22:00:00.000Z",
+        },
+      },
+      {
+        type: ADDED,
+        payload: expect.objectContaining({
+          id: "m3",
+          threadId: "t1",
+          labelIds: ["SENT"],
+          from: null,
+        }),
+      },
+    ]);
+    // no body of a mail is asked for
+    expect(mind.gmail.calls.filter((call) => call.includes("/messages/"))).toEqual([
+      expect.stringContaining("/messages/m1?format=metadata"),
+      expect.stringContaining("/messages/m2?format=metadata"),
+      expect.stringContaining("/messages/m3?format=metadata"),
+    ]);
+    expect(mind.rowOf(ADA)).toMatchObject({ historyId: "103" });
+
+    // THE SAME PUSH AGAIN: Gmail has nothing after the place the mind is at
+    await deliver(mind.itx, pushed(ADA, 20, "103"));
+    expect(mind.factsOn(ADA).filter((fact) => fact.type === ADDED)).toHaveLength(2);
+    // and a push that is worked through twice from the same place (the first run ended before it
+    // kept its place) writes no message a second time
+    mind.setRow(ADA, { historyId: "100" });
+    await deliver(mind.itx, pushed(ADA, 21, "103"));
+    expect(mind.factsOn(ADA).filter((fact) => fact.type === ADDED)).toHaveLength(2);
+    expect(mind.rowOf(ADA)).toMatchObject({ historyId: "103" });
+
+    // a push the Cloud did not sign, and one for a mailbox this mind does not watch: nothing
+    const before = mind.gmail.calls.length;
+    await deliver(mind.itx, { ...pushed(ADA, 22, "104"), source: {} });
+    await deliver(mind.itx, pushed(WORK, 23, "104"));
+    expect(mind.gmail.calls.length).toBe(before);
+  },
+);
 
 test("a message that Gmail gives no word on keeps the place before it, and the next push reads it", async () => {
   const mind = gmailMind();
@@ -540,5 +547,37 @@ function gmailMind() {
     /** The facts on the context `path`, without their idempotency keys. */
     factsOn: (path: string) =>
       facts.filter((fact) => fact.path === path).map(({ type, payload }) => ({ type, payload })),
+  };
+}
+
+/** THE TWO FORMS OF THE CLOUD'S DELIVERY (cloud-deliveries.ts). The key form reaches gmailEvent as
+ *  `processEvent` hands it on. The mind form goes through worker.ts `processMindEvent`: the same
+ *  event under /minds/iterate.com, and the Cloud key's signature the mind iterate.com's. What the
+ *  mind makes of it is on the same context of its own in both. */
+function bothForms() {
+  return [
+    { form: "key", deliver: (itx: unknown, event: Delivered) => gmailEvent(itx as never, event) },
+    {
+      form: "mind",
+      deliver: (itx: unknown, event: Delivered) =>
+        (Object.create(Config.prototype) as Config).processMindEvent({
+          event: inMindForm(event) as never,
+          mind: "iterate.com",
+          itx: itx as never,
+        }),
+    },
+  ];
+}
+
+/** An event as the reader takes it. */
+type Delivered = Parameters<typeof gmailEvent>[1];
+
+function inMindForm(event: Delivered) {
+  const cloud = event.source?.signer?.principal.actor === "iterate-cloud";
+  const iterateCom = { principal: { actor: "iterate.com", kind: "mind" }, key: "iterate-com-key" };
+  return {
+    ...event,
+    path: `/minds/iterate.com${event.path}`,
+    ...(cloud && { source: { signer: iterateCom } }),
   };
 }

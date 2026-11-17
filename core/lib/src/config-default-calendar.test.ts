@@ -3,6 +3,7 @@
 // what happens when Google no longer has the sync token, and the day's new channel.
 import { expect, test, vi } from "vitest";
 import { calendarEvent } from "../../configs/default/calendar.ts";
+import Config from "../../configs/default/worker.ts";
 import { codedError } from "./lib.ts";
 
 const API = "https://google.test";
@@ -14,114 +15,119 @@ const WATCHED = "events.iterate.com/google/calendar-watched";
 const CHANGED = "events.iterate.com/google/calendar-event-changed";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-test("a connected calendar is watched with the secret that holds it, on a channel with the Cloud's token, and none of its events is read onto the log", async () => {
-  using mind = calendarMind();
-  // a calendar with years of events: its first listing has three pages
-  mind.calendar.pagesOfFirstSync = 3;
+test.for(bothForms())(
+  "a connected calendar is watched with the secret that holds it, on a channel with the Cloud's token, and none of its events is read onto the log ($form form)",
+  async ({ deliver }) => {
+    using mind = calendarMind();
+    // a calendar with years of events: its first listing has three pages
+    mind.calendar.pagesOfFirstSync = 3;
 
-  await calendarEvent(mind.itx, connected(ADA, 7));
+    await deliver(mind.itx, connected(ADA, 7));
 
-  // the secret is found by asking Google whose primary calendar each Google grant of the mind
-  // reaches: not the key of another service, nor a grant pinned elsewhere
-  expect(mind.calendar).toMatchObject({
-    channels: [
+    // the secret is found by asking Google whose primary calendar each Google grant of the mind
+    // reaches: not the key of another service, nor a grant pinned elsewhere
+    expect(mind.calendar).toMatchObject({
+      channels: [
+        {
+          secret: "/secrets/google",
+          body: {
+            id: expect.stringMatching(UUID),
+            type: "web_hook",
+            address: HOOK,
+            token: "token-of-ada@example.com",
+            // a channel lives two days
+            expiration: String(Date.UTC(2026, 10, 14, 22)),
+          },
+        },
+      ],
+      stopped: [],
+    });
+    expect(mind.asked("/secrets/openai")).toBe(0);
+    expect(mind.asked("/secrets/elsewhere")).toBe(0);
+    const first = mind.calendar.channels[0]!.body;
+    expect(mind.rowOf(ADA)).toEqual({
+      secret: "/secrets/google",
+      api: API,
+      address: HOOK,
+      token: "token-of-ada@example.com",
+      syncToken: "sync-0",
+      channel: {
+        id: first.id,
+        resourceId: "resource-of-Ada",
+        expiration: String(Date.UTC(2026, 10, 14, 22)),
+      },
+    });
+    expect(mind.factsOn(ADA)).toEqual([
       {
-        secret: "/secrets/google",
-        body: {
-          id: expect.stringMatching(UUID),
-          type: "web_hook",
-          address: HOOK,
-          token: "token-of-ada@example.com",
-          // a channel lives two days
-          expiration: String(Date.UTC(2026, 10, 14, 22)),
+        type: WATCHED,
+        payload: {
+          secret: "/secrets/google",
+          channelId: first.id,
+          expiresAt: "2026-11-14T22:00:00.000Z",
         },
       },
-    ],
-    stopped: [],
-  });
-  expect(mind.asked("/secrets/openai")).toBe(0);
-  expect(mind.asked("/secrets/elsewhere")).toBe(0);
-  const first = mind.calendar.channels[0]!.body;
-  expect(mind.rowOf(ADA)).toEqual({
-    secret: "/secrets/google",
-    api: API,
-    address: HOOK,
-    token: "token-of-ada@example.com",
-    syncToken: "sync-0",
-    channel: {
-      id: first.id,
-      resourceId: "resource-of-Ada",
-      expiration: String(Date.UTC(2026, 10, 14, 22)),
-    },
-  });
-  expect(mind.factsOn(ADA)).toEqual([
-    {
-      type: WATCHED,
-      payload: {
-        secret: "/secrets/google",
-        channelId: first.id,
-        expiresAt: "2026-11-14T22:00:00.000Z",
+    ]);
+    expect(mind).toMatchObject({
+      schedules: {
+        "calendar-watch": {
+          key: "calendar-watch",
+          when: { everyMs: 24 * 60 * 60_000 },
+          events: [{ type: "events.iterate.com/google/calendar-watch-requested" }],
+        },
       },
-    },
-  ]);
-  expect(mind).toMatchObject({
-    schedules: {
-      "calendar-watch": {
-        key: "calendar-watch",
-        when: { everyMs: 24 * 60 * 60_000 },
-        events: [{ type: "events.iterate.com/google/calendar-watch-requested" }],
-      },
-    },
-  });
-  // THE PLACE TO READ CHANGES FROM came with no event of the calendar: each page of the first
-  // listing asks for the two tokens alone
-  const listings = () => mind.calendar.calls.filter((call) => call.includes("/events?"));
-  expect(listings()).toEqual([
-    "/secrets/google GET /calendars/primary/events?maxResults=2500&fields=nextPageToken%2CnextSyncToken",
-    "/secrets/google GET /calendars/primary/events?maxResults=2500&fields=nextPageToken%2CnextSyncToken&pageToken=first-2",
-    "/secrets/google GET /calendars/primary/events?maxResults=2500&fields=nextPageToken%2CnextSyncToken&pageToken=first-3",
-  ]);
+    });
+    // THE PLACE TO READ CHANGES FROM came with no event of the calendar: each page of the first
+    // listing asks for the two tokens alone
+    const listings = () => mind.calendar.calls.filter((call) => call.includes("/events?"));
+    expect(listings()).toEqual([
+      "/secrets/google GET /calendars/primary/events?maxResults=2500&fields=nextPageToken%2CnextSyncToken",
+      "/secrets/google GET /calendars/primary/events?maxResults=2500&fields=nextPageToken%2CnextSyncToken&pageToken=first-2",
+      "/secrets/google GET /calendars/primary/events?maxResults=2500&fields=nextPageToken%2CnextSyncToken&pageToken=first-3",
+    ]);
 
-  // THE SAME EVENT AGAIN (an event arrives at least once): a new channel, the one before it
-  // stopped, no second fact, and the place in the calendar's changes stays where it was
-  await calendarEvent(mind.itx, connected(ADA, 7));
-  const second = mind.calendar.channels[1]!.body;
-  expect(second).not.toMatchObject({ id: first.id });
-  expect(mind.calendar).toMatchObject({
-    stopped: [{ secret: "/secrets/google", body: { id: first.id, resourceId: "resource-of-Ada" } }],
-  });
-  expect(mind.factsOn(ADA)).toHaveLength(1);
-  expect(mind.rowOf(ADA)).toMatchObject({ syncToken: "sync-0", channel: { id: second.id } });
-  expect(listings()).toHaveLength(3);
+    // THE SAME EVENT AGAIN (an event arrives at least once): a new channel, the one before it
+    // stopped, no second fact, and the place in the calendar's changes stays where it was
+    await deliver(mind.itx, connected(ADA, 7));
+    const second = mind.calendar.channels[1]!.body;
+    expect(second).not.toMatchObject({ id: first.id });
+    expect(mind.calendar).toMatchObject({
+      stopped: [
+        { secret: "/secrets/google", body: { id: first.id, resourceId: "resource-of-Ada" } },
+      ],
+    });
+    expect(mind.factsOn(ADA)).toHaveLength(1);
+    expect(mind.rowOf(ADA)).toMatchObject({ syncToken: "sync-0", channel: { id: second.id } });
+    expect(listings()).toHaveLength(3);
 
-  // only the Cloud's word counts: an event of this type that the Cloud did not sign does nothing
-  const before = mind.calendar.calls.length;
-  await calendarEvent(mind.itx, { ...connected(WORK, 8), source: {} });
-  await calendarEvent(mind.itx, {
-    ...connected(WORK, 9),
-    source: { signer: { principal: { actor: "someone-else" } } },
-  });
-  expect([mind.calendar.calls.length - before, mind.rowOf(WORK)]).toEqual([0, null]);
+    // only the Cloud's word counts: an event of this type that the Cloud did not sign does nothing
+    const before = mind.calendar.calls.length;
+    await deliver(mind.itx, { ...connected(WORK, 8), source: {} });
+    await deliver(mind.itx, {
+      ...connected(WORK, 9),
+      source: { signer: { principal: { actor: "someone-else" } } },
+    });
+    expect([mind.calendar.calls.length - before, mind.rowOf(WORK)]).toEqual([0, null]);
 
-  // a calendar that no secret of the mind holds is watched by nobody, and the log says so
-  const nobodys = "/integrations/google/eve@example.com";
-  await calendarEvent(mind.itx, connected(nobodys, 10));
-  expect([mind.rowOf(nobodys), mind.factsOn(nobodys)]).toEqual([
-    null,
-    [
-      {
-        type: "events.iterate.com/google/calendar-watch-failed",
-        payload: { reason: "no secret of this mind holds the calendar eve@example.com" },
-      },
-    ],
-  ]);
-  // Google gives no word on one grant, and no other grant holds the calendar: the event fails,
-  // and the platform hands it over again
-  mind.calendar.busy.add("/secrets/google");
-  await expect(calendarEvent(mind.itx, connected(ADA, 11))).rejects.toThrow(
-    "Google did not answer for the calendar ada@example.com",
-  );
-});
+    // a calendar that no secret of the mind holds is watched by nobody, and the log says so
+    const nobodys = "/integrations/google/eve@example.com";
+    await deliver(mind.itx, connected(nobodys, 10));
+    expect([mind.rowOf(nobodys), mind.factsOn(nobodys)]).toEqual([
+      null,
+      [
+        {
+          type: "events.iterate.com/google/calendar-watch-failed",
+          payload: { reason: "no secret of this mind holds the calendar eve@example.com" },
+        },
+      ],
+    ]);
+    // Google gives no word on one grant, and no other grant holds the calendar: the event fails,
+    // and the platform hands it over again
+    mind.calendar.busy.add("/secrets/google");
+    await expect(deliver(mind.itx, connected(ADA, 11))).rejects.toThrow(
+      "Google did not answer for the calendar ada@example.com",
+    );
+  },
+);
 
 test("a first listing that Google gives no word on fails the connect, and the platform's next try watches the calendar", async () => {
   using mind = calendarMind();
@@ -135,103 +141,106 @@ test("a first listing that Google gives no word on fails the connect, and the pl
   expect(mind.rowOf(ADA)).toMatchObject({ syncToken: "sync-0" });
 });
 
-test("a push puts each changed event on the calendar's log once, with no description, and a push that comes again puts nothing", async () => {
-  using mind = calendarMind();
-  await calendarEvent(mind.itx, connected(ADA, 7));
-  mind.calendar.changes("/secrets/google", {
-    id: "e1",
-    status: "confirmed",
-    summary: "Lunch with Grace",
-    description: "the words of the invitation, which stay at Google",
-    location: "The Ivy",
-    start: { dateTime: "2026-11-13T12:00:00Z" },
-    end: { dateTime: "2026-11-13T13:00:00Z" },
-    organizer: { email: "grace@example.com", displayName: "Grace" },
-    attendees: [
-      { email: "ada@example.com", responseStatus: "needsAction", self: true },
-      { email: "grace@example.com", responseStatus: "accepted", organizer: true },
-    ],
-    htmlLink: "https://www.google.com/calendar/event?eid=e1",
-    updated: "2026-11-12T22:00:01.000Z",
-    etag: '"1"',
-  });
-  // an event that was deleted: Google sends its id and its status
-  mind.calendar.changes("/secrets/google", { id: "e2", status: "cancelled" });
+test.for(bothForms())(
+  "a push puts each changed event on the calendar's log once, with no description, and a push that comes again puts nothing ($form form)",
+  async ({ deliver }) => {
+    using mind = calendarMind();
+    await deliver(mind.itx, connected(ADA, 7));
+    mind.calendar.changes("/secrets/google", {
+      id: "e1",
+      status: "confirmed",
+      summary: "Lunch with Grace",
+      description: "the words of the invitation, which stay at Google",
+      location: "The Ivy",
+      start: { dateTime: "2026-11-13T12:00:00Z" },
+      end: { dateTime: "2026-11-13T13:00:00Z" },
+      organizer: { email: "grace@example.com", displayName: "Grace" },
+      attendees: [
+        { email: "ada@example.com", responseStatus: "needsAction", self: true },
+        { email: "grace@example.com", responseStatus: "accepted", organizer: true },
+      ],
+      htmlLink: "https://www.google.com/calendar/event?eid=e1",
+      updated: "2026-11-12T22:00:01.000Z",
+      etag: '"1"',
+    });
+    // an event that was deleted: Google sends its id and its status
+    mind.calendar.changes("/secrets/google", { id: "e2", status: "cancelled" });
 
-  await calendarEvent(mind.itx, pushed(ADA, 20));
+    await deliver(mind.itx, pushed(ADA, 20));
 
-  const changed = () => mind.factsOn(ADA).filter((fact) => fact.type === CHANGED);
-  expect(changed()).toEqual([
-    {
-      type: CHANGED,
-      payload: {
-        id: "e1",
-        status: "confirmed",
-        summary: "Lunch with Grace",
-        start: { dateTime: "2026-11-13T12:00:00Z" },
-        end: { dateTime: "2026-11-13T13:00:00Z" },
-        location: "The Ivy",
-        organizer: "grace@example.com",
-        attendees: [
-          { email: "ada@example.com", responseStatus: "needsAction" },
-          { email: "grace@example.com", responseStatus: "accepted" },
-        ],
-        htmlLink: "https://www.google.com/calendar/event?eid=e1",
-        updated: "2026-11-12T22:00:01.000Z",
-        recurringEventId: null,
+    const changed = () => mind.factsOn(ADA).filter((fact) => fact.type === CHANGED);
+    expect(changed()).toEqual([
+      {
+        type: CHANGED,
+        payload: {
+          id: "e1",
+          status: "confirmed",
+          summary: "Lunch with Grace",
+          start: { dateTime: "2026-11-13T12:00:00Z" },
+          end: { dateTime: "2026-11-13T13:00:00Z" },
+          location: "The Ivy",
+          organizer: "grace@example.com",
+          attendees: [
+            { email: "ada@example.com", responseStatus: "needsAction" },
+            { email: "grace@example.com", responseStatus: "accepted" },
+          ],
+          htmlLink: "https://www.google.com/calendar/event?eid=e1",
+          updated: "2026-11-12T22:00:01.000Z",
+          recurringEventId: null,
+        },
       },
-    },
-    {
-      type: CHANGED,
-      payload: {
-        id: "e2",
-        status: "cancelled",
-        summary: null,
-        start: null,
-        end: null,
-        location: null,
-        organizer: null,
-        attendees: null,
-        htmlLink: null,
-        updated: null,
-        recurringEventId: null,
+      {
+        type: CHANGED,
+        payload: {
+          id: "e2",
+          status: "cancelled",
+          summary: null,
+          start: null,
+          end: null,
+          location: null,
+          organizer: null,
+          attendees: null,
+          htmlLink: null,
+          updated: null,
+          recurringEventId: null,
+        },
       },
-    },
-  ]);
-  expect(JSON.stringify(mind.factsOn(ADA))).not.toContain("the words of the invitation");
-  expect(mind.rowOf(ADA)).toMatchObject({ syncToken: "sync-2" });
+    ]);
+    expect(JSON.stringify(mind.factsOn(ADA))).not.toContain("the words of the invitation");
+    expect(mind.rowOf(ADA)).toMatchObject({ syncToken: "sync-2" });
 
-  // THE SAME PUSH AGAIN: Google has nothing after the place the mind is at
-  await calendarEvent(mind.itx, pushed(ADA, 20));
-  expect(changed()).toHaveLength(2);
-  // and a push that is worked through twice from the same place (the first run ended before it
-  // kept its place) writes no event a second time
-  mind.setRow(ADA, { syncToken: "sync-0" });
-  await calendarEvent(mind.itx, pushed(ADA, 21));
-  expect(changed()).toHaveLength(2);
-  expect(mind.rowOf(ADA)).toMatchObject({ syncToken: "sync-2" });
-  // the same event changed again is a new fact; a push on an older channel of the calendar,
-  // which lives on beside the new one for a while, is read all the same
-  mind.calendar.changes("/secrets/google", {
-    id: "e1",
-    status: "confirmed",
-    summary: "Lunch with Grace, moved",
-    updated: "2026-11-12T22:05:00.000Z",
-  });
-  await calendarEvent(mind.itx, pushed(ADA, 22, "exists", "a-channel-of-yesterday"));
-  expect(changed().at(-1)).toMatchObject({
-    payload: { id: "e1", summary: "Lunch with Grace, moved", location: null },
-  });
-  expect(changed()).toHaveLength(3);
+    // THE SAME PUSH AGAIN: Google has nothing after the place the mind is at
+    await deliver(mind.itx, pushed(ADA, 20));
+    expect(changed()).toHaveLength(2);
+    // and a push that is worked through twice from the same place (the first run ended before it
+    // kept its place) writes no event a second time
+    mind.setRow(ADA, { syncToken: "sync-0" });
+    await deliver(mind.itx, pushed(ADA, 21));
+    expect(changed()).toHaveLength(2);
+    expect(mind.rowOf(ADA)).toMatchObject({ syncToken: "sync-2" });
+    // the same event changed again is a new fact; a push on an older channel of the calendar,
+    // which lives on beside the new one for a while, is read all the same
+    mind.calendar.changes("/secrets/google", {
+      id: "e1",
+      status: "confirmed",
+      summary: "Lunch with Grace, moved",
+      updated: "2026-11-12T22:05:00.000Z",
+    });
+    await deliver(mind.itx, pushed(ADA, 22, "exists", "a-channel-of-yesterday"));
+    expect(changed().at(-1)).toMatchObject({
+      payload: { id: "e1", summary: "Lunch with Grace, moved", location: null },
+    });
+    expect(changed()).toHaveLength(3);
 
-  // Google's first message on a new channel says only that the channel is live; a push the Cloud
-  // did not sign, and one for a calendar this mind does not watch: nothing is asked of Google
-  const before = mind.calendar.calls.length;
-  await calendarEvent(mind.itx, pushed(ADA, 23, "sync"));
-  await calendarEvent(mind.itx, { ...pushed(ADA, 24), source: {} });
-  await calendarEvent(mind.itx, pushed(WORK, 25));
-  expect(mind.calendar.calls.length).toBe(before);
-});
+    // Google's first message on a new channel says only that the channel is live; a push the Cloud
+    // did not sign, and one for a calendar this mind does not watch: nothing is asked of Google
+    const before = mind.calendar.calls.length;
+    await deliver(mind.itx, pushed(ADA, 23, "sync"));
+    await deliver(mind.itx, { ...pushed(ADA, 24), source: {} });
+    await deliver(mind.itx, pushed(WORK, 25));
+    expect(mind.calendar.calls.length).toBe(before);
+  },
+);
 
 test("many changes come in pages, and the place moves on only after the last page is on the log", async () => {
   using mind = calendarMind();
@@ -619,5 +628,40 @@ function calendarMind() {
     factsOn: (path: string) =>
       facts.filter((fact) => fact.path === path).map(({ type, payload }) => ({ type, payload })),
     [Symbol.dispose]: () => void vi.useRealTimers(),
+  };
+}
+
+/** THE TWO FORMS OF THE CLOUD'S DELIVERY (cloud-deliveries.ts). The key form reaches calendarEvent as
+ *  `processEvent` hands it on. The mind form goes through worker.ts `processMindEvent`: the same
+ *  event under /minds/iterate.com, and the Cloud key's signature the mind iterate.com's. What the
+ *  mind makes of it is on the same context of its own in both. */
+function bothForms() {
+  return [
+    {
+      form: "key",
+      deliver: (itx: unknown, event: Delivered) => calendarEvent(itx as never, event),
+    },
+    {
+      form: "mind",
+      deliver: (itx: unknown, event: Delivered) =>
+        (Object.create(Config.prototype) as Config).processMindEvent({
+          event: inMindForm(event) as never,
+          mind: "iterate.com",
+          itx: itx as never,
+        }),
+    },
+  ];
+}
+
+/** An event as the reader takes it. */
+type Delivered = Parameters<typeof calendarEvent>[1];
+
+function inMindForm(event: Delivered) {
+  const cloud = event.source?.signer?.principal.actor === "iterate-cloud";
+  const iterateCom = { principal: { actor: "iterate.com", kind: "mind" }, key: "iterate-com-key" };
+  return {
+    ...event,
+    path: `/minds/iterate.com${event.path}`,
+    ...(cloud && { source: { signer: iterateCom } }),
   };
 }
