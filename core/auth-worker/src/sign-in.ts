@@ -17,12 +17,15 @@ export const AFTER_SIGN_OUT = "signed-out";
  *  them (`methodsAskedIn`); else the passkey's page, or the mailed code's (`codeComesFirst`). */
 export const signInHref = (next: string) => `${SIGN_IN_PATH}?${new URLSearchParams({ next })}`;
 
-/** Whether a sign-in opens on the mailed code's page: for an app's own people, on a stack where
- *  anyone may sign in. They hold no passkey to be asked for. A sign-in for the mind itself, or
- *  for an app that says it is for members (./asking-app.ts), opens on the passkey's page: every
- *  member signs in with one. */
-export const codeComesFirst = (env: Env, app: AskingApp | null) =>
-  Boolean(app && !app.members && iterateConfigOf(env).login.methods.email && anyoneGetsACode(env));
+/** Opens on the mailed code's page when the mind mails codes and has no active passkey, or
+ *  for an app's own people on a stack where anyone may sign in. */
+export async function codeComesFirst(env: Env, app: AskingApp | null) {
+  if (!iterateConfigOf(env).login.methods.email) return false;
+  if (app && !app.members && anyoneGetsACode(env)) return true;
+  return !(await env.DB.prepare(
+    "select 1 from keys where format = 'webauthn' and revoked_at is null limit 1",
+  ).first());
+}
 
 /** THE WAYS TO SIGN IN THAT AN APP TAKES, as the authorization request `next` (a path of this
  *  issuer) names them: RFC 9470's `acr_values`, which ingress copies there from the app's guard

@@ -1,14 +1,10 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { expect, test } from "vitest";
 import type { Env } from "./env.ts";
 import { authResponse } from "./http.ts";
 
-const env = {
-  DOMAIN: "example.com",
-  AUTH_SETTINGS: JSON.stringify({
-    login: { methods: { email: {} }, allow: [{ email: "owner@example.net" }] },
-    keys: [],
-  }),
-} as unknown as Env;
+const env = withKeys([{ format: "webauthn", revokedAt: null }]);
 
 test("the platform's host has no start page: `/` leads a signed-out visitor to the Dash", async () => {
   for (const method of ["GET", "HEAD"]) {
@@ -25,7 +21,7 @@ test("the platform's host has no start page: `/` leads a signed-out visitor to t
   }
 });
 
-test("the mind's own sign-in is the passkey's page: one button, an ask as the page opens, and the mailed code behind one link", async () => {
+test("with an active passkey, the mind's own sign-in is the passkey's page: one button, an ask as the page opens, and the mailed code behind one link", async () => {
   const answer = await asked("/sign-in?next=%2Fkeys");
   expect(answer).toMatchObject({ status: 200 });
   const html = await answer.text();
@@ -92,6 +88,65 @@ test.for([
   },
 );
 
+test.for([
+  { name: "no keys and mailed codes", keys: [], mailsCodes: true, status: 302 },
+  {
+    name: "the last passkey was revoked",
+    keys: [{ format: "webauthn", revokedAt: 1 }],
+    mailsCodes: true,
+    status: 302,
+  },
+  {
+    name: "an active service key is no passkey",
+    keys: [{ format: "p256", revokedAt: null }],
+    mailsCodes: true,
+    status: 302,
+  },
+  {
+    name: "a revoked passkey and an active service key",
+    keys: [
+      { format: "webauthn", revokedAt: 1 },
+      { format: "p256", revokedAt: null },
+    ],
+    mailsCodes: true,
+    status: 302,
+  },
+  {
+    name: "an active passkey keeps the passkey page",
+    keys: [{ format: "webauthn", revokedAt: null }],
+    mailsCodes: true,
+    status: 200,
+  },
+  { name: "no keys but no mailed codes", keys: [], mailsCodes: false, status: 200 },
+])("the mind's first sign-in: $name", async ({ keys, mailsCodes, status }) => {
+  const stack = withKeys(keys);
+  const answer = await asked(
+    "/sign-in?next=%2Fkeys",
+    { methods: mailsCodes ? { email: {} } : {}, allow: [{ email: "owner@example.net" }] },
+    { DB: stack.DB },
+  );
+  expect(answer).toMatchObject({ status });
+  expect(answer.headers.get("location")).toBe(
+    status === 302 ? "https://iterate.example.com/sign-in/email?next=%2Fkeys" : null,
+  );
+});
+
+test.for([
+  { name: "an authorization request", next: "/oauth2/auth?client_id=app&state=a+b%26c" },
+  { name: "an outside URL", next: "https://elsewhere.test/return?state=a&next=/keys" },
+  { name: "a protocol-relative URL", next: "//elsewhere.test/return" },
+  { name: "header delimiters", next: "/keys\r\nLocation: https://elsewhere.test/" },
+])("the first-code redirect keeps next as data on its own code page: $name", async ({ next }) => {
+  const answer = await asked(`/sign-in?${new URLSearchParams({ next })}`, undefined, {
+    DB: withKeys([]).DB,
+  });
+  expect(answer).toMatchObject({ status: 302 });
+  // Exact encoding keeps the return address in a query value, even when it names another origin.
+  expect(answer.headers.get("location")).toBe(
+    `https://iterate.example.com/sign-in/email?${new URLSearchParams({ next })}`,
+  );
+});
+
 /** A signed-out GET of the issuer, on a stack with these sign-in rules (by default `env`'s) and
  *  these bindings beside them. */
 function asked(path: string, login?: object, bound: Partial<Env> = {}) {
@@ -102,4 +157,33 @@ function asked(path: string, login?: object, bound: Partial<Env> = {}) {
     { ...env, ...settings, ...bound } as Env,
     {} as ExecutionContext,
   );
+}
+
+/** The sign-in query runs on SQLite with the Worker's schema and these stored keys. */
+function withKeys(keys: { format: string; revokedAt: number | null }[]): Env {
+  const db = new DatabaseSync(":memory:");
+  const folder = new URL("../migrations/", import.meta.url).pathname;
+  for (const name of readdirSync(folder).sort()) db.exec(readFileSync(`${folder}${name}`, "utf8"));
+  db.exec("insert into users (id, email) values ('test-user', 'owner@example.net')");
+  const insert = db.prepare(`
+    insert into keys (id, user_id, actor, paths, public_key, format, label, added_via, added_by, added_at, revoked_at)
+    values (?, ?, ?, '[]', 'test-public-key', ?, 'test key', 'test', 'test-user', 0, ?)
+  `);
+  for (const [index, key] of keys.entries())
+    insert.run(
+      `test-key-${index}`,
+      key.format === "webauthn" ? "test-user" : null,
+      key.format === "webauthn" ? null : "test-service",
+      key.format,
+      key.revokedAt,
+    );
+  // These requests read only prepare().first() of D1; no other bindings are used.
+  return {
+    DOMAIN: "example.com",
+    AUTH_SETTINGS: JSON.stringify({
+      login: { methods: { email: {} }, allow: [{ email: "owner@example.net" }] },
+      keys: [],
+    }),
+    DB: { prepare: (sql: string) => ({ first: async () => db.prepare(sql).get() ?? null }) },
+  } as unknown as Env;
 }

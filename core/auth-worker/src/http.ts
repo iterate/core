@@ -112,7 +112,7 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
         keepsCloudflareAccess: login.methods.cloudflare?.keepAccess,
       });
     const app = await askingAppOf(env, next);
-    if (codeComesFirst(env, app))
+    if (await codeComesFirst(env, app))
       return Response.redirect(
         `${issuerOf(env)}${EMAIL_SIGN_IN_PATH}?${new URLSearchParams({ next })}`,
         302,

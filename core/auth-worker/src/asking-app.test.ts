@@ -474,6 +474,7 @@ function stackWith(
     },
     DB: {
       prepare: (sql: string) => ({
+        first: async () => ({ id: "test-member-passkey" }),
         bind: (...bound: unknown[]) => ({ sql, bound, first: async () => challenge }),
       }),
       // the admission of a new host client: its count admits
