@@ -7,11 +7,20 @@ import { authConfigOf } from "core-auth-worker/config";
 import {
   authSettingsOf,
   deployRefusalOf,
+  imagesAFileLeavesOut,
+  isNoStateStore,
   loadMindConfig,
   MindConfig,
   resourceNamesOf,
   storedConfigOf,
+  withImageOfBefore,
 } from "./config.ts";
+import {
+  digestsOffPin,
+  imageInAccount,
+  ITERATE_DEV_IMAGE,
+  iterateDevImage,
+} from "./sandbox-image.ts";
 
 const stack = {
   name: "proof",
@@ -114,7 +123,7 @@ void test("a stack on a Free account with no domain yet is one the stack may kee
   const loaded = await loadedFromFile({
     ...noDomain,
     cloudflarePlan: "free",
-    mind: { sandboxImage: "later" },
+    mind: { containers: false },
     cloudflareToken: true,
   });
   assert.equal(loaded.domain, undefined);
@@ -123,23 +132,25 @@ void test("a stack on a Free account with no domain yet is one the stack may kee
   // the deploy after the card and the domain: the same config with the domain, without the plan,
   // and with its sandboxes still to come
   const { cloudflarePlan: _plan, ...paid } = { ...loaded, domain: "mind.example" };
-  assert.equal(MindConfig.parse(paid).mind?.sandboxImage, "later");
+  assert.deepEqual(MindConfig.parse(paid).mind, { containers: false });
 });
 
 void test("a Free account takes no telemetry, no provided mind, and its sandboxes said to come later", () => {
-  const free = { ...noDomain, cloudflarePlan: "free", mind: { sandboxImage: "later" } };
+  const free = { ...noDomain, cloudflarePlan: "free", mind: { containers: false } };
   for (const refused of [
     { ...free, telemetry: true },
     { ...free, domain: "mind.example", mind: { provided: true } },
-    { ...free, mind: { sandboxImage: "published" } },
-    { ...free, mind: { sandboxImage: "managed" } },
-    // no image named: the deploy after the card would build one with Docker
+    { ...free, mind: { images: { [ITERATE_DEV_IMAGE]: iterateDevImage.image } } },
+    { ...free, mind: { images: {} } },
+    // no word about the containers: the deploy after the card would make them by that alone
     { ...free, mind: {} },
     { ...noDomain, cloudflarePlan: "free" },
     { ...free, cloudflarePlan: "paid" },
   ])
     assert.equal(MindConfig.safeParse(refused).success, false, JSON.stringify(refused));
-  for (const taken of [free, { ...stack, ...free }])
+  // the older word for the same
+  const before = { ...noDomain, cloudflarePlan: "free", mind: { sandboxImage: "later" } };
+  for (const taken of [free, { ...stack, ...free }, before])
     assert.equal(MindConfig.safeParse(taken).success, true, JSON.stringify(taken));
 });
 
@@ -150,9 +161,195 @@ void test("a stack with no domain has no mail and no provided mind: both live at
 });
 
 void test("a mind whose sandboxes come later is one the stack may keep in its state store, and reads back the same", async () => {
-  const loaded = await loadedFromFile({ ...stack, mind: { sandboxImage: "later" } });
-  assert.equal(loaded.mind?.sandboxImage, "later");
+  const loaded = await loadedFromFile({ ...stack, mind: { containers: false } });
+  assert.deepEqual(loaded.mind, { containers: false });
   assert.deepEqual(await loadedFromFile(storedConfigOf(loaded)), loaded);
+});
+
+const DIGEST = `sha256:${"a".repeat(64)}`;
+const ELSEWHERE = `registry.example/tools/agent@${DIGEST}`;
+const IN_ACCOUNT = `registry.cloudflare.com/${stack.accountId}/tools@${DIGEST}`;
+
+void test("a stack's named images are Cloudflare's: each has one source, a Dockerfile to build or a digest-pinned image", async () => {
+  const images = {
+    tools: { dockerfile: "./container/Dockerfile", buildContext: "." },
+    agent: { image: ELSEWHERE },
+    account: { image: IN_ACCOUNT },
+  };
+  const loaded = await loadedFromFile({ ...stack, mind: { images } });
+  assert.deepEqual(loaded.mind, { images });
+  // the names are the config's own, and the stack may keep every field of an image
+  assert.deepEqual(await loadedFromFile(storedConfigOf(loaded)), loaded);
+  for (const refused of [
+    { both: { dockerfile: "./Dockerfile", image: ELSEWHERE } },
+    { none: {} },
+    // not pinned by digest: Cloudflare starts no such image
+    { tag: { image: "registry.example/tools/agent:latest" } },
+    { short: { image: "node:24" } },
+    // another account's registry: a Container does not start from it
+    { other: { image: `registry.cloudflare.com/${"1".repeat(32)}/tools@${DIGEST}` } },
+    // the name of the class's own container in the deploy's state
+    { SandboxContainer: { image: ELSEWHERE } },
+    { "a.b": { image: ELSEWHERE } },
+  ])
+    assert.equal(
+      MindConfig.safeParse({ ...stack, mind: { images: refused } }).success,
+      false,
+      JSON.stringify(refused),
+    );
+  // with no container application there is nothing to start an image in
+  assert.equal(
+    MindConfig.safeParse({ ...stack, mind: { containers: false, images } }).success,
+    false,
+  );
+});
+
+void test("a config with no word about images has none, and says so: its sandboxes start the Cloudflare-managed image", () => {
+  for (const none of [stack, { ...stack, mind: {} }, { ...stack, mind: { images: {} } }])
+    assert.deepEqual(MindConfig.parse(none).mind, { images: {} }, JSON.stringify(none));
+  assert.deepEqual(MindConfig.parse({ ...stack, mind: { name: "ada" } }).mind, {
+    name: "ada",
+    images: {},
+  });
+  // a provided mind has no Worker here, so no images either
+  assert.deepEqual(MindConfig.parse({ ...stack, mind: { provided: true } }).mind, {
+    provided: true,
+  });
+});
+
+void test("the older `mind.sandboxImage` is read as the images and containers it meant, and is not kept", () => {
+  const meant = (sandboxImage: string) =>
+    MindConfig.parse({ ...stack, mind: { name: "ada", sandboxImage } }).mind;
+  assert.deepEqual(
+    {
+      built: meant("built"),
+      published: meant("published"),
+      managed: meant("managed"),
+      later: meant("later"),
+    },
+    {
+      built: { name: "ada", images: { [ITERATE_DEV_IMAGE]: iterateDevImage.dockerfile } },
+      published: { name: "ada", images: { [ITERATE_DEV_IMAGE]: iterateDevImage.image } },
+      managed: { name: "ada", images: {} },
+      later: { name: "ada", containers: false },
+    },
+  );
+  // one word or the other
+  for (const both of [
+    { sandboxImage: "published", images: {} },
+    { sandboxImage: "managed", containers: false },
+  ])
+    assert.equal(MindConfig.safeParse({ ...stack, mind: both }).success, false);
+});
+
+void test("the older word from the deploy's environment sets a config's images, as a variable sets any field", async () => {
+  const VAR = "ITERATE_MIND__MIND__SANDBOX_IMAGE";
+  const none = await loadedFromFile({ ...stack, mind: { name: "ada" } }, { [VAR]: "published" });
+  assert.deepEqual(none.mind, {
+    name: "ada",
+    images: { [ITERATE_DEV_IMAGE]: iterateDevImage.image },
+  });
+  const named = await loadedFromFile(
+    { ...stack, mind: { images: { tools: { image: ELSEWHERE } } } },
+    { [VAR]: "later" },
+  );
+  assert.deepEqual(named.mind, { containers: false });
+});
+
+void test("a stored config from before images that names no image keeps iterate's built one; a config stored since is read as it is", () => {
+  const before = (mind?: object) => MindConfig.parse(withImageOfBefore({ ...stack, mind })).mind;
+  const built = { images: { [ITERATE_DEV_IMAGE]: iterateDevImage.dockerfile } };
+  assert.deepEqual(
+    {
+      none: before(),
+      named: before({ name: "ada", template: "ada" }),
+      published: before({ sandboxImage: "published" }),
+      provided: before({ provided: true }),
+    },
+    {
+      none: built,
+      named: { name: "ada", template: "ada", ...built },
+      published: { images: { [ITERATE_DEV_IMAGE]: iterateDevImage.image } },
+      provided: { provided: true },
+    },
+  );
+  // what a deploy stores always says its images or its containers, so it is never read as built
+  for (const config of [stack, { ...stack, mind: { sandboxImage: "managed" } }]) {
+    const stored = storedConfigOf(MindConfig.parse(config));
+    assert.deepEqual(withImageOfBefore(stored), stored);
+    assert.deepEqual(MindConfig.parse(withImageOfBefore(stored)).mind, { images: {} });
+  }
+  const later = storedConfigOf(MindConfig.parse({ ...stack, mind: { containers: false } }));
+  assert.deepEqual(MindConfig.parse(withImageOfBefore(later)).mind, { containers: false });
+});
+
+void test("a config file with no word about images, over a stack that has named images, would take them off: the deploy is told which", () => {
+  const has = MindConfig.parse({ ...stack, mind: { sandboxImage: "published" } });
+  const left = (file: object, env: Record<string, string> = {}) =>
+    imagesAFileLeavesOut(file, has, env);
+  assert.deepEqual(
+    {
+      noMind: left(stack),
+      noWord: left({ ...stack, mind: { name: "ada" } }),
+      // on purpose
+      none: left({ ...stack, mind: { images: {} } }),
+      later: left({ ...stack, mind: { containers: false } }),
+      named: left({ ...stack, mind: { images: { tools: { image: ELSEWHERE } } } }),
+      older: left({ ...stack, mind: { sandboxImage: "managed" } }),
+      // the deploy's environment says what the file leaves out, also when it says none
+      environment: left(stack, { ITERATE_MIND__MIND__SANDBOX_IMAGE: "published" }),
+      environmentNone: left(stack, { ITERATE_MIND__MIND__SANDBOX_IMAGE: "managed" }),
+      environmentLater: left(stack, { ITERATE_MIND__MIND__CONTAINERS: "false" }),
+    },
+    {
+      noMind: [ITERATE_DEV_IMAGE],
+      noWord: [ITERATE_DEV_IMAGE],
+      none: [],
+      later: [],
+      named: [],
+      older: [],
+      environment: [],
+      environmentNone: [],
+      environmentLater: [],
+    },
+  );
+  // Alchemy's answer for a store that is not there is a first deploy; another failed read is not
+  assert.equal(
+    isNoStateStore(
+      "error: Cloudflare State Store 'iterate-proof-state' not found. Run 'alchemy state bootstrap --backend cloudflare --name iterate-proof-state --profile <your-ci-profile>' first, or pass --yes.",
+    ),
+    true,
+  );
+  for (const reason of ["Authentication error [code: 10000]", "fetch failed", "no answer"])
+    assert.equal(isNoStateStore(reason), false, reason);
+  // a stack with no named image has none to lose
+  assert.deepEqual(imagesAFileLeavesOut(stack, MindConfig.parse(stack), {}), []);
+});
+
+void test("a stack whose iterate image is at another digest than the checkout's pin is told both; a stack at the pin, or with another image, is not", () => {
+  const pin = iterateDevImage.image.image;
+  const older = `${pin.split("@")[0]}@${DIGEST}`;
+  assert.deepEqual(digestsOffPin({ [ITERATE_DEV_IMAGE]: { image: older } }), {
+    has: DIGEST,
+    pin: pin.split("@")[1],
+  });
+  const atPin: Parameters<typeof digestsOffPin>[0][] = [
+    { [ITERATE_DEV_IMAGE]: { image: pin } },
+    { [ITERATE_DEV_IMAGE]: iterateDevImage.dockerfile },
+    { [ITERATE_DEV_IMAGE]: { image: ELSEWHERE } },
+    { tools: { image: older } },
+    {},
+  ];
+  for (const images of atPin)
+    assert.equal(digestsOffPin(images), undefined, JSON.stringify(images));
+});
+
+void test("an image of another registry starts from where the deploy pushes it in the account; one of the account's registry stays", () => {
+  assert.equal(
+    imageInAccount(stack.accountId, ELSEWHERE),
+    `registry.cloudflare.com/${stack.accountId}/iterate-sandbox@${DIGEST}`,
+  );
+  assert.equal(imageInAccount(stack.accountId, IN_ACCOUNT), IN_ACCOUNT);
 });
 
 void test("a config with the sign-in with Cloudflare is one the stack may keep in its state store, and reads back the same", async () => {

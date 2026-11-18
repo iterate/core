@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Alchemy from "alchemy";
 import * as Output from "alchemy/Output";
@@ -28,10 +28,22 @@ import {
 import { mailEvents, mailOnZone } from "./mail.ts";
 
 /** A path in `core/`, from this file: a deploy from any working directory finds it. */
-import { publishedSandboxImageIn } from "./sandbox-image.ts";
+import { imageInAccount } from "./sandbox-image.ts";
 import { storedPathOf } from "./stored-path.ts";
 
 const core = (path: string) => resolve(import.meta.dirname, "../..", path);
+
+/** A named image's Dockerfile and build context as Alchemy takes them: absolute, since the
+ *  config's paths are from core/alchemy and Alchemy reads a Dockerfile's path from the working
+ *  directory. `Dockerfile` in the context is Alchemy's default: an image built from that file has
+ *  the context alone. */
+function buildOf(source: { dockerfile: string; buildContext?: string }) {
+  const dockerfile = resolve(import.meta.dirname, "..", source.dockerfile);
+  const context = source.buildContext
+    ? resolve(import.meta.dirname, "..", source.buildContext)
+    : dirname(dockerfile);
+  return relative(context, dockerfile) === "Dockerfile" ? { context } : { context, dockerfile };
+}
 /** Without it a Worker's fetch to a hostname of its own zone skips every Worker's route there: a
  *  stack that shares its zone with another Worker (the iterate Cloud, an issuer) must reach it. */
 const STRICTLY_PUBLIC = "global_fetch_strictly_public";
@@ -227,29 +239,28 @@ export const mindStack = (config: MindConfig) =>
             ...paidStorage,
             MIND_SIGNING_KEY: mindSigningKey,
             AI: Cloudflare.Workers.AI(),
-            // An imageless Container gives the class its `ctx.container`; the image is a Container of
-            // its own, which `ctx.container.images` holds under its name. With `later` the class
-            // stays declared with no container: its storage is kept, and a later deploy with an
-            // image adds the containers to the same class. A Free account's stack says `later`.
+            // An imageless Container gives the class its `ctx.container`; each named image is a
+            // Container of its own, which `ctx.container.images` holds under its name. With
+            // `containers: false` the class stays declared with no container: its storage is kept,
+            // and a later deploy without it adds the containers to the same class. A Free account's
+            // stack says `containers: false`.
             SANDBOX_CONTAINER: Cloudflare.DurableObject("SandboxContainer", {
               containers:
-                config.mind?.sandboxImage === "later"
+                config.mind?.containers === false
                   ? []
                   : [
                       Cloudflare.Container("SandboxContainer", {
                         schedulingPolicy: "durable_object",
                       }),
-                      ...(config.mind?.sandboxImage === "managed"
-                        ? []
-                        : [
-                            Cloudflare.Container("iterate-dev-image", {
-                              schedulingPolicy: "durable_object",
-                              // already in the account's registry (scripts/sandbox-image.ts): no Docker
-                              ...(config.mind?.sandboxImage === "published"
-                                ? { image: publishedSandboxImageIn(config.accountId) }
-                                : { context: core("mind-worker/images/iterate-dev-image") }),
-                            }),
-                          ]),
+                      ...Object.entries(config.mind?.images || {}).map(([name, source]) =>
+                        Cloudflare.Container(name, {
+                          schedulingPolicy: "durable_object",
+                          // in the account's registry before this runs (scripts/sandbox-image.ts)
+                          ...("image" in source
+                            ? { image: imageInAccount(config.accountId, source.image) }
+                            : buildOf(source)),
+                        }),
+                      ),
                     ],
             }),
             BROWSER: Cloudflare.Workers.Browser(),

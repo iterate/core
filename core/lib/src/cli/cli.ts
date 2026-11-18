@@ -204,11 +204,11 @@ const launcherProcedures = {
           .describe(
             "With a person at the terminal, after the deploy: the passkey and the first sign-in, a ChatGPT plan or an API key for the model, a check that the onboarding agent answers, and the mind's MCP server in Claude Code and Codex",
           ),
-        sandboxImage: z
-          .enum(["managed", "published"])
+        iterateDevImage: z
+          .boolean()
           .optional()
           .describe(
-            "managed: Cloudflare's small image (the default). published: iterate's full image, copied into the account",
+            "Sandboxes start iterate's image (git, gh, Chromium, the coding CLIs): the deploy pushes it to the account's registry, about 1.6 GB through this computer. Without it they start the Cloudflare-managed image cloudflare/debian-trixie (Node and npm)",
           ),
       }),
     )

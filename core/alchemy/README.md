@@ -481,37 +481,107 @@ least a deploy needs.
   - **Before a rollback.** A release from before `mail.forwardTo` refuses a config that names it.
     After a rollback to such a release, every deploy and update of the stack fails until its
     config says `mail: true` again: change the config first.
-- The sandboxes' image, `images/iterate-dev-image` of `core/mind-worker`, built with the local Docker and
-  pushed. A deploy with no Docker sets `sandboxImage` in the config's `mind`:
-  - `"published"`: `scripts/sandbox-image.ts` copies the same image, built once and published at
-    `ghcr.io/iterate/iterate-dev-image` (the digest is pinned in `src/sandbox-image.ts`), into the
-    account's registry through the registry API, and the stack names it there. A later deploy
-    copies only the layers that the account's registry does not have yet.
+- The sandboxes' containers: one container application of the class `SandboxContainer`, with
+  Cloudflare's `durable_object` scheduling policy. The config's `mind` says which images it has,
+  in the shape of Cloudflare's `containers[].images`
+  ([Image Management](https://developers.cloudflare.com/containers/guides/image-management/)):
+  - **No word (the default):** the stack has no named image, and a sandbox starts the
+    Cloudflare-managed image `cloudflare/debian-trixie`: Node.js 24 and npm on Debian Trixie
+    slim, with no git, no curl and no coding CLI. A mind installs what it needs in a sandbox and
+    saves a snapshot, which other sandboxes start from (`core/lib/src/api.ts`, `SandboxHandle`).
+  - **`images`:** named images, each with exactly one source. The name is the image's key in
+    `ctx.container.images`, and what a sandbox's `start({ image: "<name>" })` takes. A stack with
+    one named image starts its sandboxes from it. On a stack with several, a start names one, or
+    the mind names its own (`events.iterate.com/mind/sandbox-image-configured` on `/`): a start
+    that names none is refused.
 
-    A first deploy takes longer by the copy and the preparation. The image's layers at the pinned
-    digest are about 1.6 GB: from a home connection at about 1 MB/s up, the copy takes about half
-    an hour. On bimplin.com, Cloudflare prepared the image in 1 minute 35 seconds, and the rest of
-    the deploy took about 1 minute.
+    ```json
+    "mind": {
+      "images": {
+        "tools": { "dockerfile": "./container/Dockerfile", "buildContext": "." },
+        "iterate-dev-image": { "image": "ghcr.io/iterate/iterate-dev-image@sha256:<digest>" }
+      }
+    }
+    ```
 
-    From a machine in a data centre, such as the Cloud's deploy run, the copy is limited by that
-    machine's link.
+    - `dockerfile`: the deploy builds the image with the local Docker and pushes it. Both paths
+      are from `core/alchemy`; with no `buildContext`, the build context is the Dockerfile's
+      folder.
+    - `image`: a digest-pinned image, `<registry>/<repository>@sha256:<digest>`. Cloudflare starts
+      a Durable Object's Container only from the Cloudflare managed registry of its own account
+      (`registry.cloudflare.com/<ACCOUNT_ID>/…`), and does not pull from another registry. So the
+      deploy first pushes an image of another registry to the Cloudflare managed registry of the
+      account (`scripts/sandbox-image.ts`, through the registry API, with no Docker), into the
+      repository `iterate-sandbox`, and the stack names it there. A later deploy pushes only the
+      layers that the registry does not have yet. An image of another account's registry is
+      refused: it does not start. The push is proven for `ghcr.io` alone. It takes one image's
+      manifest (the digest of a multi-architecture index is refused), and it has no credentials
+      for a private registry.
+    - To roll out an image update, set `image` to the new digest, or change the Dockerfile, and
+      deploy. A running sandbox keeps the image it started on, and a snapshot restores only on the
+      image it was taken from.
+    - Keep an image's name: it is also the image's resource in the deploy's state, so a new name
+      for the same image replaces it.
 
-  - `"managed"`: the stack declares no image, and a sandbox starts Cloudflare's bare
-    `cloudflare/debian-trixie`, with no Node, git tools, Chromium or agent CLIs.
-  - `"later"`: the stack has no container application and no image yet, for an account without
+    iterate's own image is `images/iterate-dev-image` of `core/mind-worker`: Debian with Node,
+    git, gh, Chromium, ffmpeg, pnpm and the coding CLIs. Its name in a stack is
+    `iterate-dev-image`. `src/sandbox-image.ts` has its two sources for a config in TypeScript:
+    `iterateDevImage.dockerfile` (built here) and `iterateDevImage.image` (the public build at
+    `ghcr.io/iterate/iterate-dev-image`, pinned by digest). `node scripts/iterate-dev-image.ts`
+    prints the pinned reference for a config in JSON.
+
+    A first deploy with the public build takes longer by the push and the preparation. Its
+    layers are about 1.6 GB: from a home connection at about 1 MB/s up, the push takes about
+    half an hour. On bimplin.com, Cloudflare prepared the image in 1 minute 35 seconds, and the
+    rest of the deploy took about 1 minute. From a machine in a data centre, the push is limited
+    by that machine's link.
+
+  - **`containers: false`:** the stack has no container application yet, for an account without
     Workers Paid: Cloudflare runs Containers on Workers Paid alone. The mind Worker deploys and
     works, and every sandbox start, command, file or container call is refused at once with the
     code `NO_SANDBOXES_YET`. The class `SandboxContainer` stays declared, with no container, so its
-    storage is kept. A later deploy with `"published"` (or another image) adds the container
-    application to the same class: no Durable Object class is created or deleted. That deploy
-    takes two tries, which `pnpm run deploy` makes itself: Alchemy makes the application before
-    it uploads the mind Worker, and only that upload lets the class take containers, so
-    Cloudflare refuses the first application ("Durable Object namespace is not
-    Container-enabled", `src/deploy-until-bound.ts`).
+    storage is kept. A later deploy without `containers: false` adds the container application to
+    the same class: no Durable Object class is created or deleted. That deploy takes two tries,
+    which `pnpm run deploy` makes itself: Alchemy makes the application before it uploads the
+    mind Worker, and only that upload lets the class take containers, so Cloudflare refuses the
+    first application ("Durable Object namespace is not Container-enabled",
+    `src/deploy-until-bound.ts`).
 
-    `"later"` takes away the containers alone. The mind Worker also uses Dynamic Workers
-    (`LOADER`), Artifacts and a CPU limit, which Cloudflare also gives on Workers Paid alone:
-    `cloudflarePlan: "free"` (below) leaves those out too.
+    `containers: false` takes away the containers alone. The mind Worker also uses Dynamic
+    Workers (`LOADER`), Artifacts and a CPU limit, which Cloudflare also gives on Workers Paid
+    alone: `cloudflarePlan: "free"` (below) leaves those out too.
+
+  - **`sandboxImage`, the older word.** A stack's stored config and an older caller may still
+    say `mind.sandboxImage`. It is read and not kept: `"built"` is
+    `images: { "iterate-dev-image": { dockerfile } }`, `"published"` is
+    `images: { "iterate-dev-image": { image } }` at the pin, `"managed"` is no image, and
+    `"later"` is `containers: false`. A stored config from before `images` that says none of
+    these meant `"built"`, and deploys so. Every config stored since says `images` or
+    `containers`.
+  - **Before a rollback.** A release from before `mind.images` refuses a config that says
+    `images` or `containers` ("mind: Unrecognized key"), and a deploy with this release stores
+    the config in those words. So after a rollback to such a release, a deploy from the stored
+    config fails before it changes anything. Give that deploy a config file in the older word
+    (`ITERATE_MIND_CONFIG=<file>`, with `mind.sandboxImage`): keep a copy of the stored config
+    from before the first deploy with this release (`pnpm run config --stage <name>`, from the
+    older checkout). With this release that command prints the new words, so with no copy the
+    file is written by hand: the stored config with `mind.sandboxImage` in place of
+    `mind.images` and `mind.containers` (the words above, read backwards).
+  - **A config file with no word about images.** Before `mind.images`, such a file meant
+    iterate's image built with Docker. Now it means no named image. Over a stack that has named
+    images it would take them off, so `pnpm run deploy` stops there before it changes anything
+    (`scripts/sandbox-image.ts`), and `pnpm run plan` shows the delete lines. Say the stack's
+    images in the file, or `"images": {}` to take them off.
+  - **A new pin.** When iterate builds a new image, the pin in `src/sandbox-image.ts` moves in a
+    commit. A stack does not follow it: its stored config holds the digest it was deployed with.
+    Whoever deploys the stack sets the new digest in its config
+    (`node scripts/iterate-dev-image.ts` prints the pinned reference) and deploys. One deploy
+    with `ITERATE_MIND__MIND__SANDBOX_IMAGE=published` in its environment does the same: it sets
+    the pin of the checkout and the stack stores it. A deploy prints a note when the stack's
+    digest is not the checkout's pin. A snapshot restores only on the image it was taken from,
+    so a stack that moves to a new pin loses its sandboxes' snapshots: that is why the stack, and
+    not the code, decides when. A caller that still says `sandboxImage: "published"` gets the pin
+    of the checkout it deploys from.
 
 ## Before the domain and before Workers Paid
 
@@ -526,7 +596,7 @@ Workers, and kept every id and value from before.
   "name": "ada",
   "accountId": "…",
   "cloudflarePlan": "free",
-  "mind": { "sandboxImage": "later" },
+  "mind": { "containers": false },
   "auth": { "login": { … } }
 }
 ```
@@ -539,11 +609,11 @@ Workers, and kept every id and value from before.
   - the mind Worker's CPU and subrequest limits: code 100328;
   - Artifacts (`ARTIFACTS`, the repos' namespace and the config repo's subscription): code 10403;
   - the files bucket (`FILES`): R2 is off until a card is on the account (code 10042);
-  - the containers: the config must say `mind.sandboxImage: "later"`, so that the deploy without
-    `cloudflarePlan` keeps them for later, and does not build an image with Docker.
+  - the containers: the config must say `mind.containers: false`, so that the deploy without
+    `cloudflarePlan` does not make them by that alone.
 
   The config refuses telemetry (Pipelines, R2 and Analytics Engine), a provided mind (its
-  boundary needs the limits) and a sandbox image with it.
+  boundary needs the limits) and a named image with it.
 
 What it makes: the state store, the auth Worker's D1 database with its migrations and its KV, the
 mind's KV, the four Workers in their final bundles, every Durable Object class (the sandboxes'

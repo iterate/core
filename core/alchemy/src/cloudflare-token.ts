@@ -66,10 +66,10 @@ export const CLOUDFLARE_TOKEN_READS_LEFT_OUT = {
  *  identity, an id and a secret's path, never a credential, and stay so. */
 const OBSERVABILITY_WRITES = ["Workers Observability Write"] as const;
 
-/** THE SANDBOX IMAGE'S COPY, OFF. "Workers Containers Write" gives the registry's push
- *  credential and changes container applications, which is all that the copy needs
- *  (core/configs/default/sandbox-image.ts). The token does not hold it, and the copy says so. To
- *  give it back, name the group here. */
+/** A PUSH TO THE ACCOUNT'S REGISTRY, OFF. "Workers Containers Write" gives the registry's push
+ *  credential and changes container applications, which is all that a push of an image needs.
+ *  The token does not hold it: a deploy pushes a stack's images (scripts/sandbox-image.ts), with
+ *  the deployer's access. To give it back, name the group here. */
 const CONTAINERS_WRITES: readonly string[] = [];
 
 /** What the token may change, and nothing else. The module's head says what is left out, and

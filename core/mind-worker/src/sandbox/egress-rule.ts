@@ -5,6 +5,7 @@
 // sandbox sends through `itx.fetch` and may use any secret pinned to where it sends.
 import { z } from "zod";
 import { admitRowsOfCall, type Caller } from "core-itx";
+import { errorCode } from "iterate/lib";
 import type { ItxExpression } from "iterate/expression";
 
 // the facet checks the rest of the options; the rule's own admission checks the target
@@ -46,11 +47,15 @@ export async function ruleThenStart<T>(
     return await start();
   } catch (error) {
     if (error instanceof Error && /is still starting/.test(error.message)) throw error;
-    const keeps = (why: string) =>
-      new Error(
+    // with the start's own code, when it has one: a refusal stays a refusal
+    const code = errorCode(error);
+    const keeps = (why: string) => {
+      const kept = new Error(
         `${error instanceof Error ? error.message : String(error)} (the sandbox keeps the egress this start named: ${why})`,
         { cause: error },
       );
+      return code ? Object.assign(kept, { code }) : kept;
+    };
     if (hadOwnRule)
       throw keeps("its earlier rule cannot be put back without overwriting a later one");
     await append({

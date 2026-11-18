@@ -61,7 +61,7 @@ export type DeployInput = {
   cloud?: boolean;
   setup?: boolean;
   apiTokens?: boolean;
-  sandboxImage?: "managed" | "published";
+  iterateDevImage?: boolean;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -122,7 +122,10 @@ export function candidatesOf(name: string, words = ""): string[] {
 }
 
 /** The stack's config (core/alchemy/src/config.ts): the owner as its only member, mail and the
- *  mailed sign-in code, and iterate Cloud's key when the Cloud is named. */
+ *  mailed sign-in code, and iterate Cloud's key when the Cloud is named. `iterateDevImage` is
+ *  iterate's public image by its digest-pinned reference: the stack's one named image, which the
+ *  deploy pushes to the account's registry. With none, sandboxes start the Cloudflare-managed
+ *  image. */
 export function configOf(mind: {
   name: string;
   accountId: string;
@@ -130,7 +133,7 @@ export function configOf(mind: {
   domain: string;
   cloud?: { origin: string; publicKey: string };
   apiTokens?: boolean;
-  sandboxImage?: "managed" | "published";
+  iterateDevImage?: string;
 }) {
   const { cloud } = mind;
   return {
@@ -138,7 +141,9 @@ export function configOf(mind: {
     accountId: mind.accountId,
     domain: mind.domain,
     mail: true,
-    mind: { sandboxImage: mind.sandboxImage || "managed" },
+    mind: {
+      images: mind.iterateDevImage ? { "iterate-dev-image": { image: mind.iterateDevImage } } : {},
+    },
     auth: {
       login: { methods: { email: {} }, allow: [{ email: mind.owner }] },
       ...(cloud && {
@@ -1244,7 +1249,14 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
           domain,
           cloud,
           apiTokens: input.apiTokens,
-          sandboxImage: input.sandboxImage,
+          // the stack's own source says where iterate's image is, and at which digest
+          iterateDevImage: input.iterateDevImage
+            ? (
+                await exec(process.execPath, ["scripts/iterate-dev-image.ts"], {
+                  cwd: alchemy,
+                })
+              ).stdout.trim()
+            : undefined,
         }),
         null,
         2,

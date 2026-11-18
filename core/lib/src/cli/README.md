@@ -116,9 +116,10 @@ prints the link alone. The first sign-in comes back to this computer's browser: 
 - **No telemetry and no Cloudflare connection for the mind after a sign-in.** Both make API tokens
   of the account, and the sign-in does not ask for the scope that makes them (Cloudflare lists it
   as sensitive). With a token of your own that may make API tokens, `--api-tokens` turns both on.
-- **Sandboxes start on Cloudflare's small image** (Node and npm). `--sandbox-image published`
-  copies iterate's full image into the account during the deploy, about 1.6 GB through this
-  computer.
+- **Sandboxes start the Cloudflare-managed image `cloudflare/debian-trixie`** (Node and npm).
+  The mind installs what it needs in a sandbox and saves a snapshot. `--iterate-dev-image` gives
+  the stack iterate's image instead (git, gh, Chromium, the coding CLIs): the deploy pushes it to
+  the account's registry, about 1.6 GB through this computer.
 - **It is for a new mind.** To update one, deploy from its stored config
   ([core/alchemy](../../../alchemy/README.md#the-stored-config)). A deploy over a mind that this
   command made writes its config again, with the owner as its only member.

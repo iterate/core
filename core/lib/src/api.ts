@@ -1099,7 +1099,7 @@ export type WorkspaceHandle = InvokeHandle & {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
 };
 
-/** Cloudflare's handle to a saved disk, as `itx.sandboxes` records it. Opaque; valid only for the
+/** Cloudflare's handle to a snapshot of the writable root filesystem, as `itx.sandboxes` records it. Opaque; valid only for the
  *  image it was taken from, and for 30 days after its last restore. */
 export type SandboxSnapshot = { id: string; size: number; name?: string };
 
@@ -1122,10 +1122,13 @@ export type SandboxContainerStartOptions = {
   labels?: Record<string, string>;
 };
 
-/** What the sandbox's own `start` takes: the container API's, and `from`, the path of another
- *  sandbox of this mind whose snapshot this one starts from (a golden toolset made once, then
- *  started many times). That snapshot is this sandbox's disk from then on. One of `image`,
- *  `containerSnapshot` and `from` at most. */
+/** What the sandbox's own `start` takes: the container API's, and `from`, which copies a sandbox:
+ *  the path of another sandbox of this mind whose snapshot this one starts from (tools installed
+ *  once, then started many times). That snapshot is this sandbox's own from then on. One of
+ *  `image`, `containerSnapshot` and `from` at most. `image` is `"cloudflare/debian-trixie"` (the
+ *  Cloudflare-managed image), the name of an image of the stack, or a digest-pinned image of the
+ *  account's own registry (`registry.cloudflare.com/<account>/<repository>@sha256:<digest>`);
+ *  anything else fails, since Cloudflare pulls from no other registry. */
 export type SandboxStartOptions = SandboxContainerStartOptions & {
   from?: string;
   /** What answers the sandbox's requests in place of the mind's `itx.fetch`: a rule for `itx.fetch`
@@ -1149,7 +1152,7 @@ export type SandboxFileStat = {
 /** `itx.sandboxes.get(path).files`: the Sandbox SDK's `Files`, over the sandbox's container, with
  *  `iterate fs` (the CLI's file tool) running inside it. A file is read and written as a stream. A
  *  failure carries the errno's name as `code`: `ENOENT`, `EISDIR`, `ENOTDIR`, … Each call starts the
- *  container first, from the disk last saved, as `exec` does. */
+ *  container first, from the snapshot last taken, as `exec` does. */
 export type SandboxFilesApi = {
   /** A file's bytes. A missing file, or a directory, fails the call, never the stream half way. */
   read(path: string): Promise<ReadableStream<Uint8Array>>;
@@ -1196,20 +1199,27 @@ export type SandboxContainerApi = InvokeHandle & {
   invoke(steps: ItxExpression): Promise<any>;
 };
 
-/** `itx.sandboxes.get(path)`: a Linux container with a disk (core/mind-worker/src/sandbox). `exec`
- *  and every call of `files` start the container when none runs, from the disk last saved, on
- *  `standard-1` unless `start({ instance })` says otherwise. Memory and running processes do not
- *  survive a stop; the disk does, for 30 days after its last restore and only on the image it was
- *  saved from. With no disk and no `image`, a start runs the image the mind names
- *  (`events.iterate.com/mind/sandbox-image-configured` on `/`), else the stack's
- *  `iterate-dev-image`: Node 24 on Debian with git, gh, Chromium, ffmpeg, pnpm, the Claude, Codex and
- *  Grok CLIs, the cf CLI, doppler and the iterate CLI. A stack deployed with no image of its own
- *  (`mind.sandboxImage: "managed"`) runs Cloudflare's lean `cloudflare/debian-trixie` there: Node 24
- *  and npm on Debian, with no git, no curl and none of the other tools
- *  (`start({ image: "cloudflare/debian-trixie" })` asks for it on any stack). NOTHING RUNS FOR NOTHING: a sandbox unused for `idleAfterMs` (five minutes by default; a
- *  command, a file call or a stream being read is use; a call left open counts for an hour at most)
- *  is saved and stopped, a sandbox in use has its disk saved every 15 minutes, and Cloudflare stops
- *  the container two hours after it last answered, whatever else fails. THE ONLY WAY OUT IS THE
+/** `itx.sandboxes.get(path)`: a Linux container whose writable root filesystem is kept as a
+ *  snapshot (core/mind-worker/src/sandbox). `exec` and every call of `files` start the container
+ *  when none runs, from the snapshot last taken, on `standard-1` unless `start({ instance })` says
+ *  otherwise. Memory and running processes do not survive a stop; the snapshot does, for 30 days
+ *  after its last restore and only on the image it was taken from. With no snapshot and no
+ *  `image`, a start runs the image the mind names
+ *  (`events.iterate.com/mind/sandbox-image-configured` on `/`), else the stack's named image when
+ *  its config names exactly one (with several, the start must name one), else the
+ *  Cloudflare-managed image `cloudflare/debian-trixie`:
+ *  Node 24 and npm on Debian, with no git, no curl and no coding CLI
+ *  (`start({ image: "cloudflare/debian-trixie" })` asks for it on any stack). iterate's own image,
+ *  named `iterate-dev-image` on a stack that has it, is Node on Debian with git, gh, Chromium,
+ *  ffmpeg, pnpm, the Claude, Codex and Grok CLIs, the cf CLI, doppler and the iterate CLI.
+ *  INSTALL ONCE, THEN COPY THE SANDBOX: install what is missing in one sandbox, take a snapshot
+ *  (`container.snapshotContainer({ name })`), and start every other sandbox with
+ *  `start({ from: "<that sandbox's path>" })`. Do not use the first sandbox after its snapshot: its
+ *  next idle save replaces the snapshot. NOTHING RUNS FOR NOTHING: a sandbox unused for
+ *  `idleAfterMs` (five minutes by default; a command, a file call or a stream being read is use;
+ *  a call left open counts for an hour at most; a background job is not use, and the stop kills
+ *  it) is saved and stopped, a sandbox in use has a snapshot taken every 15 minutes, and
+ *  Cloudflare stops the container two hours after it last answered, whatever else fails. THE ONLY WAY OUT IS THE
  *  MIND'S EGRESS: the container starts with the internet off, and every HTTP and HTTPS request it
  *  makes, to any name or address, WebSocket handshakes included, is answered by the mind's own
  *  `itx.fetch` (its rewrite rules;
@@ -1217,18 +1227,28 @@ export type SandboxContainerApi = InvokeHandle & {
  *  mind's GitHub connection is in every command's environment as placeholders (`GH_TOKEN`, and a
  *  git credential helper that answers with it): with `git` and `gh` installed, cloning, pushing and
  *  opening pull requests need no setup, and no token ever enters the container. A call
- *  that does not answer within a minute fails: run longer work in the background and poll. Where the
- *  sandbox stands is `(await handle.snapshot()).state`. */
+ *  that does not answer within a minute fails: run longer work in the background, as Cloudflare's
+ *  recipe does, and poll its files within the idle period:
+ *  `container.invoke([["exec", ["setsid", "sh", "-c", "<command> > /tmp/job.log 2>&1; echo $? > /tmp/job.exit"], { stdout: "ignore", stderr: "ignore" }], "pid"])`
+ *  answers the process id at once. A plain
+ *  `exec(["bash", "-c", "setsid nohup <command> > /tmp/job.log 2>&1 < /dev/null & echo started"])`
+ *  works too, joined with `;` and never `&&`. Where the sandbox stands is
+ *  `(await handle.snapshot()).state`. */
 export type SandboxHandle = InvokeHandle & {
-  /** `container.start(options)` with the sandbox's disk: make the container run, from the disk last
-   *  saved unless `image` asks for a fresh one (which leaves that disk behind). Running already:
-   *  nothing happens. A disk Cloudflare will not restore (the image was replaced, or 30 days passed)
-   *  FAILS the start rather than start empty; `start({ image: "iterate-dev-image" })` is the way out. */
+  /** `container.start(options)` with the sandbox's snapshot: make the container run, from the
+   *  snapshot last taken unless `image` asks for a fresh start (which leaves that snapshot behind).
+   *  Running already: `start()` does nothing, and so does a start that names what the sandbox
+   *  started on (a start asked again). A start that names another `image`, `containerSnapshot` or
+   *  `from` FAILS, since it would change nothing (`container.destroy()` stops the sandbox first).
+   *  A snapshot Cloudflare will not restore (the image was replaced, or 30 days passed)
+   *  FAILS the start rather than start empty; `start({ image })` is the way out. */
   start(options?: SandboxStartOptions): Promise<void>;
   /** `container.exec(argv, options)` then `process.output()`: run a command and wait for it
    *  (a shell is `["bash", "-c", "…"]`). A nonzero exit is an answer, not a failure. Output over
    *  8 MiB fails (write it to a file, or stream it with `container.exec(argv).stdout`); take secrets
-   *  from `env`, since the log keeps the first 500 characters of the command. */
+   *  from `env`, since the log keeps the first 500 characters of the command. The call fails when
+   *  it has no answer within a minute; `timeoutMs` (ten minutes when absent) is when the command
+   *  itself is stopped. */
   exec(
     command: string[],
     options?: {
@@ -1730,7 +1750,7 @@ export interface IterateContextApi {
    *  request, `deleted` cross-posted to `/`, the row disabled). A relative `path` means the caller's. */
   repos: EntityCollectionApi<RepoHandle>;
   workspaces: EntityCollectionApi<WorkspaceHandle>;
-  /** Linux containers with a disk: `create(path)` once, then `get(path).exec("make test")`. */
+  /** Linux containers whose filesystem is kept as a snapshot: `create(path)` once, then `get(path).exec(["make", "test"])`. */
   sandboxes: EntityCollectionApi<SandboxHandle>;
   /** Workers AI's binding (`ItxAiApi`), under this context's capability rules. */
   ai: ItxAiApi;

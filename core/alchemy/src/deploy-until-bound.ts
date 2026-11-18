@@ -19,8 +19,8 @@
 // end by itself.
 //
 // A CONTAINER APPLICATION OF A CLASS THAT HAD NO CONTAINER. A deploy that turns a stack's sandboxes
-// on (`mind.sandboxImage` from "later" to an image, src/stack.ts) gives the class `SandboxContainer`
-// its container application. Alchemy makes the application before it uploads the mind Worker, and only
+// on (its config no longer says `mind.containers: false`, src/stack.ts) gives the class
+// `SandboxContainer` its container application. Alchemy makes the application before it uploads the mind Worker, and only
 // that upload lets the class take containers, so Cloudflare refuses the application: "Durable
 // Object namespace is not Container-enabled". The upload goes on in the same try, so the next try
 // makes the application.

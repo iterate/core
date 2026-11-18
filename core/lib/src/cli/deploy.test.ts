@@ -52,6 +52,8 @@ test("the names asked about come from the person's name and words: the -erate na
   ]);
 });
 
+const IMAGE = `registry.example/iterate/iterate-dev-image@sha256:${"a".repeat(64)}`;
+
 const mind = {
   name: "ada",
   accountId: "0".repeat(32),
@@ -60,11 +62,11 @@ const mind = {
 };
 
 test("an access that may make API tokens turns on telemetry and the mind's Cloudflare connection", () => {
-  const config = configOf({ ...mind, apiTokens: true, sandboxImage: "published" });
+  const config = configOf({ ...mind, apiTokens: true, iterateDevImage: IMAGE });
   expect(config).toMatchObject({
     cloudflareToken: true,
     telemetry: true,
-    mind: { sandboxImage: "published" },
+    mind: { images: { "iterate-dev-image": { image: IMAGE } } },
   });
   expect(config).not.toHaveProperty("cloud");
 });
@@ -76,7 +78,7 @@ test("the config has mail, the mailed code, the sandboxes and iterate Cloud's ke
     accountId: "0".repeat(32),
     domain: "ada-labs.com",
     mail: true,
-    mind: { sandboxImage: "managed" },
+    mind: { images: {} },
     auth: {
       login: { methods: { email: {} }, allow: [{ email: "ada@example.org" }] },
       keys: [

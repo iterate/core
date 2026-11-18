@@ -1,17 +1,18 @@
 import { z } from "zod";
-import { errorCode } from "iterate/lib";
+import { codedError, errorCode } from "iterate/lib";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { IterateContextApi } from "iterate/api";
 import { DurableObjectNameCodec, type ItxEntrypointScope } from "core-itx";
 import { assertCreated } from "../mind/entity-lifecycle.ts";
 import type { SandboxContainer, SandboxStartOptions } from "./container.ts";
 import {
-  SANDBOX_IMAGE,
+  CLOUDFLARE_MANAGED_IMAGE,
   SANDBOX_MAX_BUSY_MS,
   SandboxConfigured,
   SandboxInstance,
   SandboxContract,
   SandboxSnapshot,
+  type SandboxStarted,
   type SandboxState,
 } from "./contract.ts";
 import { SandboxFiles } from "./files.ts";
@@ -55,17 +56,52 @@ function assertOwnSnapshot(path: string, state: SandboxState, snapshot?: { id: s
     );
 }
 
-/** What a start runs. An image it names wins, and leaves the disk behind. Else a disk: another
- *  sandbox's (`from`), the snapshot it names, or its own last saved one. Else the image that
- *  `events.iterate.com/mind/sandbox-image-configured` on `/` names, read only then, or
- *  SANDBOX_IMAGE. */
-export async function imageOrDisk(
+/** What a start runs. An image it names wins, and leaves the snapshot behind. Else a snapshot:
+ *  another sandbox's (`from`), the one it names, or its own last saved one. Else the image that
+ *  `events.iterate.com/mind/sandbox-image-configured` on `/` names, read only then. Else no image
+ *  is named, and the container starts the stack's default (container.ts `#imageOf`). */
+export async function imageOrSnapshot(
   named: { image?: string; snapshotId?: string },
   mindImage: () => Promise<string | null>,
-): Promise<{ image: string; containerSnapshot?: never } | { containerSnapshot: { id: string } }> {
+): Promise<{ image?: string; containerSnapshot?: never } | { containerSnapshot: { id: string } }> {
   if (named.image) return { image: named.image };
   if (named.snapshotId) return { containerSnapshot: { id: named.snapshotId } };
-  return { image: (await mindImage()) || SANDBOX_IMAGE };
+  return { image: (await mindImage()) || undefined };
+}
+
+/** Why a start cannot take what it names, or undefined when it can. A start that names `image`,
+ *  `containerSnapshot` or `from` says what the sandbox is to run on. A sandbox that runs already,
+ *  or that another call is starting, keeps what it runs on, so that word would be dropped: the
+ *  start fails and says so. Three starts are never refused. One that names none of the three only
+ *  makes the sandbox run. One asked again in the same words, while it goes on, waits for it. And
+ *  one that names what the running sandbox started on has nothing left to do: a caller whose start
+ *  was still going on after 50 seconds is told to try again, and that try finds the sandbox up.
+ *  `image` is the image `options.image` names, as Cloudflare takes it. */
+export function startRefusal(
+  path: string,
+  options: z.infer<typeof StartOptions>,
+  sandbox:
+    | { running: true; started?: SandboxStarted | null; image?: string }
+    | { starting: z.infer<typeof StartOptions> },
+): string | undefined {
+  const names = (["image", "containerSnapshot", "from"] as const).find((key) => options[key]);
+  if (!names) return undefined;
+  if ("running" in sandbox) {
+    const { started, image } = sandbox;
+    const same =
+      !!started &&
+      (options.from
+        ? started.fromSandbox === options.from
+        : options.containerSnapshot
+          ? started.from === "snapshot" &&
+            !started.fromSandbox &&
+            started.snapshotId === options.containerSnapshot.id
+          : started.from === "image" && !!image && started.image === image);
+    if (same) return undefined;
+    return `sandbox ${path} runs already, and not on what start({ ${names} }) names: the start would not change what it runs on. Stop it first with container.destroy() (container.snapshotContainer() before that keeps its disk), then start it.`;
+  }
+  if (JSON.stringify(sandbox.starting) === JSON.stringify(options)) return undefined;
+  return `sandbox ${path} is being started by another call: start({ ${names} }) would not change what that start runs. Wait for it with start(), stop the sandbox with container.destroy(), then start it.`;
 }
 
 /** The mind host's `itx.secrets` and the library's `itx.sandboxes`, which the kernel's type does not name. */
@@ -119,7 +155,7 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     return [...this.#calls.values()].some((began) => began > since);
   }
   #stopping?: Promise<unknown>;
-  #starting?: Promise<void>;
+  #starting?: { options: z.infer<typeof StartOptions>; done: Promise<void> };
 
   async #use<T>(work: (container: DurableObjectStub<SandboxContainer>) => Promise<T>): Promise<T> {
     while (this.#stopping) await this.#stopping;
@@ -177,14 +213,22 @@ export class SandboxFacet extends StreamProcessorDurableObject<
 
   /** A caller waits at most 50 seconds: the platform ends a call at a minute without an answer, and
    *  pulling a new image onto a host can take longer. The start goes on. */
-  async #up(options: z.input<typeof StartOptions>): Promise<void> {
-    this.#starting ??= this.#start(options).finally(() => (this.#starting = undefined));
+  async #up(given: z.input<typeof StartOptions>): Promise<void> {
+    const options = StartOptions.parse(given);
+    if (this.#starting) {
+      const refusal = startRefusal(this.#path, options, { starting: this.#starting.options });
+      if (refusal) throw codedError("INVALID_INPUT", refusal);
+    }
+    this.#starting ??= {
+      options,
+      done: this.#start(options).finally(() => (this.#starting = undefined)),
+    };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const slow = new Promise<"slow">((resolve) => {
       timer = setTimeout(() => resolve("slow"), 50_000);
     });
     try {
-      if ((await Promise.race([this.#starting.then(() => "up" as const), slow])) === "slow")
+      if ((await Promise.race([this.#starting.done.then(() => "up" as const), slow])) === "slow")
         throw new Error(
           `sandbox ${this.#path} is still starting (the first start of an image on a host pulls it): the start goes on, so try again`,
         );
@@ -193,15 +237,15 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     }
   }
 
-  async #start(options: z.input<typeof StartOptions>): Promise<void> {
+  async #start(options: z.infer<typeof StartOptions>): Promise<void> {
     const state = await this.#state();
     assertCreated("sandbox", this.#path, state);
-    const { image, containerSnapshot, from, ...rest } = StartOptions.parse(options);
+    const { image, containerSnapshot, from, ...rest } = options;
     assertOwnSnapshot(this.#path, state, containerSnapshot);
     if ([image, containerSnapshot, from].filter(Boolean).length > 1)
       throw new Error(`sandbox ${this.#path}: start takes one of image, containerSnapshot or from`);
     const source = from ? await this.#snapshotOf(from) : undefined;
-    const runs = await imageOrDisk(
+    const runs = await imageOrSnapshot(
       { image, snapshotId: source?.id || containerSnapshot?.id || state.snapshot?.id },
       () => this.#mindSandboxImage(),
     );
@@ -213,20 +257,30 @@ export class SandboxFacet extends StreamProcessorDurableObject<
       instance,
       ...runs,
     };
-    let started: boolean;
+    let begun: Awaited<ReturnType<SandboxContainer["begin"]>>;
     try {
-      started = await this.#container.begin(startOptions);
+      begun = await this.#container.begin(startOptions);
     } catch (error) {
-      // a stack with no container cannot restore any disk: the refusal says so as it is
+      // a stack with no container cannot restore any snapshot: the refusal says so as it is
       if (!snapshotId || errorCode(error) === "NO_SANDBOXES_YET") throw error;
       throw new Error(
-        `sandbox ${this.#path}: cannot restore snapshot ${snapshotId} (${error instanceof Error ? error.message : String(error)}). A snapshot works only for the image it was taken from, for 30 days after its last restore. start({ image: "${SANDBOX_IMAGE}" }) starts from the image and discards it.`,
+        `sandbox ${this.#path}: cannot restore snapshot ${snapshotId} (${error instanceof Error ? error.message : String(error)}). A snapshot works only for the image it was taken from, for 30 days after its last restore. start({ image }) starts from an image and discards it: "${CLOUDFLARE_MANAGED_IMAGE}", or a named image of the stack.`,
       );
     }
-    if (!started) return;
+    if (!begun) {
+      // a state reduced before `started` was kept has no such key
+      const refusal = startRefusal(this.#path, options, {
+        running: true,
+        started: state.started,
+        image: image && state.started ? await this.#container.imageOf(image) : undefined,
+      });
+      if (refusal) throw codedError("INVALID_INPUT", refusal);
+      return;
+    }
     this.#plantedAt = 0;
     await this.#append("started", {
       from: snapshotId ? "snapshot" : "image",
+      image: begun.image,
       snapshotId,
       fromSandbox: from,
       snapshotSize: source?.size,
@@ -424,6 +478,7 @@ export class SandboxFacet extends StreamProcessorDurableObject<
           );
           await this.#append("started", {
             from: containerSnapshot ? "snapshot" : "image",
+            image: containerSnapshot ? undefined : image,
             snapshotId: containerSnapshot?.id,
             discardedSnapshotId: image ? state.snapshot?.id : undefined,
             instance,

@@ -58,7 +58,7 @@ after it, as on Cloudflare Artifacts.
 With Docker answering, the launcher builds `images/iterate-dev-image` once per change, as
 `iterate-dev-image:<content hash>`. A sandbox's HTTP and HTTPS requests are intercepted, as in the
 cloud, and leave as the mind's own do: through the cloud when one names a secret, else from here. Without Docker, the launcher says so and a sandbox
-refuses ("this class has no container"). No disk snapshots are tested at home.
+refuses ("this class has no container"). No snapshots are tested at home.
 
 For each sandbox, local workerd starts a second container beside it, `<name>-proxy` from
 `cloudflare/proxy-everything`, which carries the sandbox's traffic. When the sandbox ends, workerd

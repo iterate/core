@@ -145,7 +145,7 @@ export const MindContract = defineProcessorContract({
     },
     "events.iterate.com/mind/sandbox-image-configured": {
       description:
-        "The image a sandbox of the mind starts on when its start names no image and it has no disk to restore: a prepared image of the mind's Cloudflare account by its address (`registry.cloudflare.com/<account>/<repository>@sha256:<digest>`). The latest one wins; `null` gives back the stack's own, `iterate-dev-image`.",
+        "The image a sandbox of the mind starts on when its start names no image and it has no snapshot to restore: `cloudflare/debian-trixie`, the name of an image of the stack, or a digest-pinned image of the account's own registry (`registry.cloudflare.com/<account>/<repository>@sha256:<digest>`). The latest one wins; `null` gives back the stack's default: its named image when its config names exactly one, else `cloudflare/debian-trixie`.",
       payloadSchema: z.object({ image: z.string().min(1).nullable() }),
     },
     "events.iterate.com/mind/template-not-published": {

@@ -1,8 +1,12 @@
-// With `mind.sandboxImage: "published"`, copies the published sandbox image (../src/sandbox-image.ts)
-// into the mind's own registry, registry.cloudflare.com/<account>/<SANDBOX_IMAGE_REPOSITORY>, by
-// the registry API alone: no Docker. Every blob and the manifest already there is skipped, so a deploy
-// after the first copies nothing. The push credentials come from the deploy's own token and last an
-// hour.
+// Pushes each named image of the stack's config (`mind.images`) that is in another registry to the
+// Cloudflare managed registry of the account, registry.cloudflare.com/<account>/<SANDBOX_IMAGE_REPOSITORY>,
+// by the registry API alone: no Docker. Cloudflare does not pull a Durable Object's Container from
+// another registry. Every blob and manifest already there is skipped, so a deploy after the first
+// pushes nothing. The push credentials come from the deploy's own token and last an hour.
+//
+// Before that, two checks of the config's images against what the stack has. A config file that
+// says nothing about images, over a stack that has named images, would take them off the stack:
+// the deploy stops. And a stack whose iterate image is not at this checkout's pin is told so.
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -12,8 +16,23 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream } from "node:stream/web";
-import { loadMindConfig, stageOf } from "../src/config.ts";
-import { PUBLISHED_SANDBOX_IMAGE, SANDBOX_IMAGE_REPOSITORY } from "../src/sandbox-image.ts";
+import {
+  imagesAFileLeavesOut,
+  loadMindConfig,
+  type MindConfig,
+  mindConfigFile,
+  SANDBOX_IMAGE_VAR,
+  saysNothingOfImages,
+  stageOf,
+  storedMindConfigIfAny,
+} from "../src/config.ts";
+import {
+  CLOUDFLARE_REGISTRY,
+  digestsOffPin,
+  ITERATE_DEV_IMAGE,
+  partsOfImage,
+  SANDBOX_IMAGE_REPOSITORY,
+} from "../src/sandbox-image.ts";
 
 const MANIFEST_TYPES = [
   "application/vnd.oci.image.manifest.v1+json",
@@ -169,21 +188,58 @@ async function copyBlob(
 const absolute = (registry: Registry, place: string) =>
   new URL(place, `https://${registry.host}`).toString();
 
-async function copySandboxImage() {
+/** Stops a deploy from a config file that says nothing about images when the stack has named
+ *  images. A stack with no stored config yet (a first deploy) has none to lose. A stored config
+ *  that cannot be read stops the deploy too: nothing then says what the stack has. */
+async function refuseImagesLeftOut(config: MindConfig) {
+  const file = await mindConfigFile();
+  if (!file || !saysNothingOfImages(file.config, process.env)) return;
+  let stored: MindConfig | undefined;
+  try {
+    stored = storedMindConfigIfAny(config.name);
+  } catch (error) {
+    throw new Error(
+      `Stopped: the config file ${file.path} says nothing about the mind's images, and the config that the stack ${config.name} keeps could not be read, so nothing says whether this deploy would take images off the stack (${error instanceof Error ? error.message : String(error)}). Nothing was changed. Run the deploy again, or say the images in the file: "images": {} for none.`,
+      { cause: error },
+    );
+  }
+  if (!stored) return;
+  const left = imagesAFileLeavesOut(file.config, stored, process.env);
+  if (left.length > 0)
+    throw new Error(
+      `Stopped: the config file ${file.path} says nothing about the mind's images, and the stack ${config.name} has ${left.join(", ")}. This deploy would take ${left.length > 1 ? "them" : "it"} off the stack, and its sandboxes would then start cloudflare/debian-trixie. Nothing was changed. Say the stack's images in the file ("pnpm run config --stage ${config.name}" prints them, under mind.images), or say "images": {} there to take them off.`,
+    );
+}
+
+async function pushImages() {
   const config = await loadMindConfig(stageOf(process.argv));
-  if (config.mind?.provided || config.mind?.sandboxImage !== "published") return;
+  await refuseImagesLeftOut(config);
+  // a stack keeps the digest of its config: said when iterate's image there is not at the pin
+  const offPin = digestsOffPin(config.mind?.images || {});
+  if (offPin)
+    console.log(
+      `Note: this stack's ${ITERATE_DEV_IMAGE} is at ${offPin.has}, and this checkout's pin is ${offPin.pin}. The stack keeps its image. To move it to the pin, deploy once with ${SANDBOX_IMAGE_VAR}=published: a snapshot taken on the old image does not restore on the new one.`,
+    );
+  const elsewhere = Object.values(config.mind?.images || {}).flatMap((source) =>
+    "image" in source && partsOfImage(source.image).host !== CLOUDFLARE_REGISTRY
+      ? [source.image]
+      : [],
+  );
+  if (elsewhere.length === 0) return;
   const token = process.env.CLOUDFLARE_API_TOKEN;
-  if (!token)
-    throw new Error("CLOUDFLARE_API_TOKEN is not set: the sandbox image is copied with it");
-  const { digest } = PUBLISHED_SANDBOX_IMAGE;
-  const [host, ...path] = PUBLISHED_SANDBOX_IMAGE.source.split("/");
-  const source: Registry = { host: host!, repo: path.join("/") };
+  if (!token) throw new Error("CLOUDFLARE_API_TOKEN is not set: an image is pushed with it");
   const target: Registry = {
-    host: "registry.cloudflare.com",
+    host: CLOUDFLARE_REGISTRY,
     repo: `${config.accountId}/${SANDBOX_IMAGE_REPOSITORY}`,
     basic: await pushCredentials(config.accountId, token),
   };
   const targetToken = (await tokenFor(target, "pull,push")) || "";
+  for (const image of new Set(elsewhere)) await pushImage(image, target, targetToken);
+}
+
+async function pushImage(image: string, target: Registry, targetToken: string) {
+  const { host, repository, digest } = partsOfImage(image);
+  const source: Registry = { host, repo: repository };
   // A GET, not a HEAD: Cloudflare's registry can answer a HEAD with 200 for a manifest whose content
   // and layers it has lost, and a GET with 404.
   const present = await call(
@@ -193,7 +249,7 @@ async function copySandboxImage() {
     targetToken,
   );
   await present.body?.cancel();
-  if (present.ok) return console.log(`the sandbox image ${digest} is in the mind's registry`);
+  if (present.ok) return console.log(`the image ${digest} is in the account's registry`);
   const sourceToken = await tokenFor(source, "pull");
   const read = await call(
     source,
@@ -213,7 +269,7 @@ async function copySandboxImage() {
   for (const blob of [manifest.config, ...manifest.layers]) {
     const copied = await copyBlob(source, sourceToken, target, targetToken, blob.digest, blob.size);
     console.log(
-      `${copied ? "copied" : "present"} ${blob.digest} (${Math.round(blob.size / 1e6)} MB)`,
+      `${copied ? "pushed" : "present"} ${blob.digest} (${Math.round(blob.size / 1e6)} MB)`,
     );
   }
   const put = await call(
@@ -224,11 +280,11 @@ async function copySandboxImage() {
   );
   await put.body?.cancel();
   if (!put.ok) throw new Error(`${target.host} did not take the manifest: ${put.status}`);
-  console.log(`copied the sandbox image ${digest} into the mind's registry`);
+  console.log(`pushed the image ${digest} to the account's registry`);
 }
 
 try {
-  await copySandboxImage();
+  await pushImages();
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;

@@ -4,7 +4,8 @@ import { DurableObject } from "cloudflare:workers";
 import { codedError } from "iterate/lib";
 import { z } from "zod";
 import filesTool from "../generated/sandbox-files-tool.js";
-import { SANDBOX_BASE_IMAGE, SANDBOX_IMAGE, SANDBOX_MAX_BUSY_MS } from "./contract.ts";
+import { SANDBOX_MAX_BUSY_MS } from "./contract.ts";
+import { imageToStart } from "./image.ts";
 
 const INTERCEPT_CA = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 /** A command does not inherit the container's own `env` on Cloudflare (measured:
@@ -33,9 +34,9 @@ const INACTIVITY_BACKSTOP_MS = 2 * 60 * 60_000;
 const SANDBOX_INSTANCE = "standard-1";
 /** Well under the shortest idle period a sandbox may be given (one second, contract.ts). */
 const STAMP_EVERY_MS = 500;
-/** The class has no container on a stack deployed with `mind.sandboxImage: "later"` (core/alchemy). */
+/** The class has no container on a stack deployed with `mind.containers: false` (core/alchemy). */
 const NO_SANDBOXES_YET =
-  'this mind has no sandboxes yet: its stack was deployed with mind.sandboxImage "later", so it has no container. Cloudflare runs Containers on Workers Paid alone: once the mind\'s Cloudflare account has Workers Paid, deploy the stack again with mind.sandboxImage "published"';
+  "this mind has no sandboxes yet: its stack was deployed with mind.containers: false, so it has no container application. Cloudflare runs Containers on Workers Paid alone: once the mind's Cloudflare account has Workers Paid, deploy the stack again without mind.containers: false";
 
 /** The hash in the name gives a disk that holds an older tool this one. */
 const toolHash = [...filesTool].reduce(
@@ -244,24 +245,28 @@ export class SandboxContainer extends DurableObject {
     return (await this.ctx.storage.get<number>("usedAt")) ?? 0;
   }
 
-  #imageNamed(name: string): string {
-    return name === SANDBOX_IMAGE
-      ? this.#container.images[SANDBOX_IMAGE] || SANDBOX_BASE_IMAGE
-      : name;
+  /** The image a start that names `name` runs (./image.ts): the facet compares it with what a
+   *  running sandbox started on. */
+  async imageOf(name?: string): Promise<string> {
+    return imageToStart(this.#container.images, name);
   }
 
-  /** A snapshot that Cloudflare will not restore fails the start: falling back to the image would
-   *  lose the disk without a word. */
-  async begin(options: SandboxStartOptions = {}): Promise<boolean> {
+  /** What it started on; null when the container runs already, and nothing changed. A snapshot
+   *  that Cloudflare will not restore fails the start: falling back to the image would lose the
+   *  disk without a word. */
+  async begin(options: SandboxStartOptions = {}): Promise<{ image?: string } | null> {
     await this.#touch();
     const container = this.#container;
     if (container.running) {
       await container.setInactivityTimeout(INACTIVITY_BACKSTOP_MS);
-      return false;
+      return null;
     }
     this.#toolReady = false;
     const began = Date.now();
     const { image, containerSnapshot, ...rest } = options;
+    const runs = containerSnapshot
+      ? { containerSnapshot }
+      : { image: imageToStart(container.images, image) };
     // the egress is registered first: a name looked up before it is would time out
     await this.#intercept();
     container.start({
@@ -271,9 +276,7 @@ export class SandboxContainer extends DurableObject {
       instance: rest.instance || SANDBOX_INSTANCE,
       env: { ...TRUST_INTERCEPT_CA, ...rest.env },
       enableInternet: false,
-      ...(containerSnapshot
-        ? { containerSnapshot }
-        : { image: this.#imageNamed(image || SANDBOX_IMAGE) }),
+      ...runs,
     });
     try {
       await container.setInactivityTimeout(INACTIVITY_BACKSTOP_MS);
@@ -287,7 +290,7 @@ export class SandboxContainer extends DurableObject {
         { cause: error },
       );
     }
-    return true;
+    return { image: runs.image };
   }
 
   /** A start's failure is otherwise only "the container has not been started". */
@@ -402,7 +405,9 @@ export class SandboxContainer extends DurableObject {
   #plain(value: unknown): unknown {
     const named = (type: string) => value instanceof Object && value.constructor?.name === type;
     if (named("ExecProcess"))
-      throw new Error("exec(…) answers a process: chain .output(), .stdout, .stderr or .exitCode");
+      throw new Error(
+        "exec(…) answers a process: chain .output(), .stdout, .stderr, .exitCode or .pid",
+      );
     if (named("ExecOutput")) {
       // checked by name: the runtime does not export the class
       const { exitCode, stdout, stderr } = value as ExecOutput;

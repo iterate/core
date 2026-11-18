@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import type { ItxExpression } from "iterate/expression";
+import { codedError, errorCode } from "iterate/lib";
 import { egressRuleOfStart, ruleThenStart } from "./egress-rule.ts";
 
 test("a start that names egress gives a rule for itx.fetch, and starts without it", () => {
@@ -86,6 +87,23 @@ test("a refused start takes back its rule by compare-and-set, and never sets one
     /keeps the egress this start named/,
   );
   expect(appended).toEqual([rule]);
+});
+
+test("a start refused with a code keeps the code when the sandbox keeps the rule: a refusal, not a failure", async () => {
+  const append = async () => {};
+  const refusal = codedError("INVALID_INPUT", "sandbox /box runs already");
+  const kept = await ruleThenStart(rule, true, append, () => Promise.reject(refusal)).catch(
+    (error: unknown) => error,
+  );
+  expect({ code: errorCode(kept), message: (kept as Error).message }).toEqual({
+    code: "INVALID_INPUT",
+    message: expect.stringMatching(/^sandbox \/box runs already \(the sandbox keeps the egress/),
+  });
+  // an error with no code gets none
+  const failed = await ruleThenStart(rule, true, append, () => Promise.reject(refused)).catch(
+    (error: unknown) => error,
+  );
+  expect(errorCode(failed)).toBe(undefined);
 });
 
 test("a start still going on when its caller stops waiting keeps its rule", async () => {
