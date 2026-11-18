@@ -1,15 +1,23 @@
 // pricing.ts — what one model request cost, from the usage OpenAI reports: plain input,
 // cached input (read from the prompt cache), cache writes (input written to it, 1.25x for the
 // GPT-6 family) and output (reasoning included). Prices per 1M tokens, standard tier, from
-// https://developers.openai.com/api/docs/pricing (2026-10-03). A request over 272k input tokens is
+// https://developers.openai.com/api/docs/pricing (2026-11-18). A request over 272k input tokens is
 // billed at the long-context rates throughout.
 
 type Price = { input: number; cached: number; write: number; output: number };
 
 const PRICES: Record<string, { short: Price; long?: Price }> = {
+  "gpt-6.2-astra": {
+    short: { input: 8, cached: 0.4, write: 10, output: 40 },
+    long: { input: 16, cached: 0.8, write: 20, output: 60 },
+  },
   "gpt-6-astra": {
     short: { input: 10, cached: 1, write: 12.5, output: 50 },
     long: { input: 20, cached: 2, write: 25, output: 75 },
+  },
+  "gpt-6.2-sol": {
+    short: { input: 2, cached: 0.1, write: 2.5, output: 10 },
+    long: { input: 4, cached: 0.2, write: 5, output: 15 },
   },
   "gpt-6.1-sol": { short: { input: 2, cached: 0.1, write: 2.5, output: 10 } },
   "gpt-6-sol": { short: { input: 2, cached: 0.2, write: 2.5, output: 10 } },
