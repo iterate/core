@@ -324,6 +324,141 @@ const deploying = (cloudflare: ReturnType<typeof pretendCloudflare>) =>
     when: "deploying",
   });
 
+const TURNED_OFF =
+  "Turned off: the data catalog of iterate-one-telemetry, which was on with no bucket of the stack's";
+const turnOffs = (cloudflare: ReturnType<typeof pretendCloudflare>) =>
+  cloudflare.writes.filter((written) => written.includes("/disable")).length;
+
+void test("after a destroy, a catalog that is on with no bucket ends off, and its table goes", async () => {
+  // as a turn-on that failed part-way and a destroy after it leave both: no Worker, no bucket,
+  // the catalog on
+  const cloudflare = pretendCloudflare({
+    catalogs: { "iterate-one-telemetry": { on: true, tables: ["events"] } },
+  });
+
+  const { failed, lines } = await dropTelemetryTables({
+    accountId: ACCOUNT,
+    name: "one",
+    call: cloudflare.call,
+    pause: async () => {},
+  });
+
+  assert.equal(failed, false);
+  assert.deepEqual(lines, [
+    "Dropped: table telemetry.events in the data catalog of iterate-one-telemetry",
+    "Dropped: namespace telemetry in the data catalog of iterate-one-telemetry",
+    TURNED_OFF,
+  ]);
+  assert.deepEqual(cloudflare.catalogs["iterate-one-telemetry"], { on: false, tables: [] });
+  assert.deepEqual(cloudflare.buckets, []);
+  assert.equal(turnOffs(cloudflare), 1);
+});
+
+void test("at a deploy, a catalog that is on with no bucket ends off, and the next run says nothing of it", async () => {
+  // the same leftover under a stack that is deployed with telemetry off
+  const cloudflare = pretendCloudflare({
+    catalogs: { "iterate-one-telemetry": { on: true, tables: [] } },
+    workers: ["iterate-one-boundary", "iterate-one-mind"],
+  });
+
+  assert.deepEqual(await deploying(cloudflare), {
+    failed: false,
+    lines: [
+      "Dropped: namespace telemetry in the data catalog of iterate-one-telemetry",
+      TURNED_OFF,
+    ],
+  });
+  assert.deepEqual(cloudflare.catalogs["iterate-one-telemetry"], { on: false, tables: [] });
+  assert.deepEqual(cloudflare.buckets, []);
+  assert.deepEqual(await deploying(cloudflare), {
+    failed: false,
+    lines: ["the data catalog of iterate-one-telemetry has no table left over"],
+  });
+  assert.equal(cloudflare.catalogs["iterate-one-telemetry"]?.on, false);
+});
+
+void test("a catalog that is on over this step's own bucket from an earlier run ends off, and the bucket goes", async () => {
+  // as a run of this step leaves both when it ended between its bucket and its turn-off
+  const held = {
+    catalogs: { "iterate-one-telemetry": { on: true, tables: [] } },
+    buckets: ["iterate-one-telemetry"],
+    objects: { "iterate-one-telemetry": ["iterate-made-this-bucket-to-drop-its-tables"] },
+  };
+  for (const when of ["destroyed", "deploying"] as const) {
+    const cloudflare = pretendCloudflare(held);
+    const { failed, lines } = await dropTelemetryTables({
+      accountId: ACCOUNT,
+      name: "one",
+      call: cloudflare.call,
+      pause: async () => {},
+      when,
+    });
+    assert.equal(failed, false);
+    assert.equal(lines.at(-1), TURNED_OFF);
+    assert.deepEqual(cloudflare.catalogs["iterate-one-telemetry"], { on: false, tables: [] });
+    assert.deepEqual(cloudflare.buckets, []);
+  }
+});
+
+void test("a catalog that could not be turned off is said, and the step fails", async () => {
+  const cloudflare = pretendCloudflare(
+    { catalogs: { "iterate-one-telemetry": { on: true, tables: [] } } },
+    { refuse: "disable" },
+  );
+
+  const { failed, lines } = await dropTelemetryTables({
+    accountId: ACCOUNT,
+    name: "one",
+    call: cloudflare.call,
+    pause: async () => {},
+  });
+
+  assert.equal(failed, true);
+  assert.deepEqual(lines, [
+    "Dropped: namespace telemetry in the data catalog of iterate-one-telemetry",
+    "The data catalog of iterate-one-telemetry is left on (Cloudflare answered 400)",
+  ]);
+  assert.deepEqual(cloudflare.buckets, []);
+});
+
+void test("a catalog that is on with its bucket there is never turned off", async () => {
+  const MARKED = "iterate-made-this-bucket-to-drop-its-tables";
+  const held = {
+    catalogs: { "iterate-one-telemetry": { on: true, tables: [...ALL] } },
+    buckets: ["iterate-one-telemetry"],
+  };
+  const cases = [
+    // a live stack with telemetry on, at a deploy: its sinks write its tables
+    { when: "deploying" as const, held: { ...held, sinks: SINKS } },
+    // a live stack whose sinks are gone, at a deploy
+    { when: "deploying" as const, held },
+    // a bucket that a deploy took as the stack's own, with this step's mark and rows in it
+    {
+      when: "deploying" as const,
+      held: {
+        ...held,
+        objects: { "iterate-one-telemetry": [MARKED, "__r2_data_catalog/c/t/data/1"] },
+      },
+    },
+    // after a destroy that left the stack's bucket
+    { when: "destroyed" as const, held },
+  ];
+  for (const { when, held } of cases) {
+    const cloudflare = pretendCloudflare(held);
+    const { lines } = await dropTelemetryTables({
+      accountId: ACCOUNT,
+      name: "one",
+      call: cloudflare.call,
+      pause: async () => {},
+      when,
+    });
+    assert.equal(turnOffs(cloudflare), 0);
+    assert.equal(cloudflare.catalogs["iterate-one-telemetry"]?.on, true);
+    assert.deepEqual(cloudflare.buckets, ["iterate-one-telemetry"]);
+    assert.equal(lines.includes(TURNED_OFF), false);
+  }
+});
+
 void test("at a deploy, the tables that a turn-off left go while the stack is deployed, and are named first", async () => {
   // as a deploy with telemetry off leaves a stack that had it: its Workers, no sink, no bucket,
   // the catalog off, the tables kept
@@ -637,7 +772,7 @@ function pretendCloudflare(
     if (!catalog) return answer(404);
     if (rest[1] === "enable" || rest[1] === "disable") {
       const inIt = objects.get(bucket);
-      if (!inIt || (rest[1] === "enable" && refuses("enable"))) return answer(400);
+      if (!inIt || refuses(rest[1])) return answer(400);
       if (rest[1] === "enable" && !refuses("never on"))
         inIt.push("__r2_data_catalog/a", "__r2_data_catalog/b", "__r2_data_catalog/c");
       catalog.on = rest[1] === "enable" && !refuses("never on");

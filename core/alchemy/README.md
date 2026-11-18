@@ -140,9 +140,11 @@ repos, members and secrets. It needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCO
   get no telemetry. The step drops `telemetry.events`, `telemetry.logs` and `telemetry.spans` in
   the catalog of the stack's own bucket, `iterate-<name>-telemetry`, then the namespace when it
   holds nothing else, and prints a line for each. To reach them it makes that bucket for a
-  moment, turns its catalog on, and puts both back. Another stack's tables are in another
-  bucket's catalog. It drops nothing while a Worker of the stack is deployed, so a destroy that
-  you cancel at its question leaves the tables.
+  moment, turns its catalog on, and puts both back. A catalog that it finds on with no bucket of
+  the stack's (a turn-on that failed part-way, then a destroy) ends off; one over the stack's own
+  bucket stays as it is. Another stack's tables are in another bucket's catalog. It drops nothing
+  while a Worker of the stack is deployed, so a destroy that you cancel at its question leaves
+  the tables.
 - A stack with telemetry also needs Account · Account API Tokens Edit on the token: the destroy
   deletes the stack's two API tokens.
 - When the step could not run (no credentials, or Cloudflare refused it), run it by hand before

@@ -17,7 +17,8 @@ const MADE_HERE = "iterate-made-this-bucket-to-drop-its-tables";
 /** Drops the stack's three tables, and their namespace when it then holds nothing, after a
  *  destroy; scripts/drop-telemetry-tables.ts says why then, and why nothing goes while a Worker of
  *  the stack is deployed. A destroy leaves no bucket and the catalog off, so this makes the bucket
- *  for a moment (with a mark in it), turns the catalog on, drops, and puts both back. Every answer
+ *  for a moment (with a mark in it), turns the catalog on, drops, and puts both back. A catalog
+ *  that it finds on with no bucket of the stack's ends off (see `onWithNoBucket`). Every answer
  *  is read: a step that Cloudflare refuses fails the run, with a line that says what may be left.
  *  Answers one line for each thing it did or left. `pause` waits between two reads of a catalog
  *  that is not on yet.
@@ -249,10 +250,21 @@ export async function dropTelemetryTables(input: {
 
   // BACK AS IT WAS: the catalog off when this run turned it on, and the bucket gone when this
   // step made it, now or in an earlier run.
-  if (turnedOn) {
+  // A CATALOG THAT WAS ON WITH NO BUCKET OF THE STACK'S goes off too: the bucket was not there, or
+  // it is this step's own from an earlier run (`madeHere`), which goes below. A turn-on that
+  // failed part-way and a destroy after it can leave that: the bucket is gone and nothing turned
+  // the catalog off. No bucket of the stack's means no sink of the stack writes through it. Left
+  // on, it is never turned off: a deploy with telemetry off ends with the catalog on, and this
+  // step finds it on at every run. A catalog over the stack's own bucket stays as it is.
+  const onWithNoBucket = catalog.on && madeHere;
+  if (turnedOn || onWithNoBucket) {
     const disabled = await call("POST", `${catalogUrl}/disable`);
     if (!ok(disabled.status))
       fail(`The data catalog of ${bucket} is left on (Cloudflare answered ${disabled.status})`);
+    else if (onWithNoBucket)
+      lines.push(
+        `Turned off: the data catalog of ${bucket}, which was on with no bucket of the stack's`,
+      );
   }
   if (madeHere) {
     let emptied = true;
