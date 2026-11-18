@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-frame>
+<html lang="en" data-frame data-addresses="paths">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -14,11 +14,11 @@
     <script type="importmap">
       {
         "imports": {
-          "@iterate-com/ui/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T231516Z-7f79aae/",
-          "react": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T231516Z-7f79aae/react",
-          "react/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T231516Z-7f79aae/react/",
-          "react-dom": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T231516Z-7f79aae/react-dom",
-          "react-dom/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T231516Z-7f79aae/react-dom/",
+          "@iterate-com/ui/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261118T161739Z-ea9cdf0/",
+          "react": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261118T161739Z-ea9cdf0/react",
+          "react/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261118T161739Z-ea9cdf0/react/",
+          "react-dom": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261118T161739Z-ea9cdf0/react-dom",
+          "react-dom/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261118T161739Z-ea9cdf0/react-dom/",
           "lucide-react": "https://esm.iterate.com/lucide-react@1.48.0?external=react,react-dom"
         }
       }
@@ -39,10 +39,16 @@
          page is an agent's, which has a header row. A first arrival at the onboarding agent, with
          no choice stored, starts with the sidebar as a rail of icons, so the chat has the room:
          app.js hands the Dash the same choice. `data-frame` on the root element tells the
-         components that the person's wait began with this frame. -->
+         components that the person's wait began with this frame, and `data-addresses="paths"`
+         that the Dash's addresses are paths (`/secrets`, `/agents/onboarding`): app.ts serves
+         this page for any path that names no file. Without it they are queries (`?page=secrets`). -->
     <script>
       {
-        const agent = new URLSearchParams(location.search).get("agent");
+        // an agent's page is `/agents/<path>`, or an old link's `?agent=<path>`
+        const query = new URLSearchParams(location.search);
+        const agent =
+          query.get("agent") ||
+          (!query.has("page") && /^\/agents\/[^/]/.test(location.pathname) && location.pathname);
         const left = /(?:^|; )sidebar_state=(true|false)/.exec(document.cookie)?.[1];
         const open = left ? left === "true" : agent !== "/agents/onboarding";
         document.documentElement.dataset.sidebar = open ? "open" : "collapsed";
@@ -54,7 +60,7 @@
     <link
       rel="stylesheet"
       crossorigin
-      href="https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261116T231516Z-7f79aae/dist/styles.css"
+      href="https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261118T161739Z-ea9cdf0/dist/styles.css"
     />
     <!-- The look of this mind's apps: apps/theme.css, one file for every app. One line there
          makes them all dark. shadcn's components also ask for the class `dark`, so the script

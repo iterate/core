@@ -158,7 +158,12 @@ const row = (name: string) =>
 /** Whether a page showed this note (`data-spinner`) since the run began to watch for notes. */
 const sawNote = async (note: string) =>
   (await page.evaluate(`window.__notes.includes(${JSON.stringify(note)})`)) === true;
-const searchOf = () => new URL(page.url()).search;
+/** The page's address as the Dash writes it: the path, read as the context path it holds, and
+ *  the query (`/agents/people/ada@example.com/web/x`, `/repo?view=…`). */
+const addressOf = () => {
+  const url = new URL(page.url());
+  return decodeURI(url.pathname) + url.search;
+};
 
 console.log(`proving the Dash on ${dash}; screenshots in ${shots}`);
 
@@ -269,10 +274,10 @@ try {
     async () => {
       await page.getByPlaceholder("Message a new agent").fill(said);
       await page.getByTitle("Send message").click();
-      await page.waitForURL((url) => url.searchParams.has("agent"), { timeout: 60_000 });
-      agent = new URL(page.url()).searchParams.get("agent") || "";
-      must(/^\/agents\/(people\/[^/]+\/)?web\//.test(agent), `the agent is ${agent}`);
-      must(searchOf() === `?agent=${agent}`, `the address is ${searchOf()}: its slashes read`);
+      await page.waitForURL((url) => url.pathname.startsWith("/agents/"), { timeout: 60_000 });
+      // an agent's path is the URL's path, as it is
+      agent = addressOf();
+      must(/^\/agents\/(people\/[^/]+\/)?web\/[^?]+$/.test(agent), `the agent is ${agent}`);
       const main = page.locator("main");
       await main.getByText(said.slice(0, 30)).first().waitFor({ timeout: 30_000 });
       // the agent view's own header row, drawn once its module has loaded
@@ -281,7 +286,7 @@ try {
       const header = await pageHeader.innerText();
       must(header.includes(agent.slice(0, 20)), `the header says ${header}`);
       const raw = await pageHeader.getByRole("link", { name: "Raw view" }).getAttribute("href");
-      must(raw === `?page=contexts&context=${agent}`, `Raw view leads to ${raw}`);
+      must(raw === encodeURI(`/contexts${agent}`), `Raw view leads to ${raw}`);
       const answered = await main
         .getByText(/^pineapple\W*$/i)
         .first()
@@ -366,10 +371,10 @@ try {
     async () => {
       must(agent, "no agent was started");
       await page.getByRole("link", { name: "Raw view" }).click();
-      must(searchOf() === `?page=contexts&context=${agent}`, `at ${page.url()}`);
+      must(addressOf() === `/contexts${agent}`, `at ${page.url()}`);
       await page.locator("[data-offset]").first().waitFor({ timeout: 30_000 });
       await page.getByRole("link", { name: "Agent view" }).click();
-      must(searchOf() === `?agent=${agent}`, `back at ${page.url()}`);
+      must(addressOf() === agent, `back at ${page.url()}`);
       await page.getByText(said.slice(0, 30)).first().waitFor();
       return `${agent}: its log, then its chat again`;
     },
@@ -382,10 +387,10 @@ try {
       const sidebar = page.locator('[data-slot="sidebar"]');
       await sidebar.locator(`[data-agent-path="${agent}"]`).waitFor({ timeout: 30_000 });
       await row("View all").click();
-      must(searchOf() === "?page=agents", `at ${page.url()}`);
+      must(addressOf() === "/agents", `at ${page.url()}`);
       await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
       await page.locator(`main [data-agent-path="${agent}"]`).first().waitFor({ timeout: 30_000 });
-      return `${agent} in the sidebar and on ?page=agents`;
+      return `${agent} in the sidebar and on /agents`;
     },
   );
 
@@ -402,8 +407,8 @@ try {
       await palette.locator("input").fill(agent.split("/").at(-1)!);
       await palette.getByText(agent).first().waitFor();
       await page.keyboard.press("Enter");
-      await page.waitForURL((url) => url.searchParams.get("agent") === agent);
-      return `found by ${agent.split("/").at(-1)}; Enter opened ${searchOf()}`;
+      await page.waitForURL((url) => decodeURI(url.pathname) === agent);
+      return `found by ${agent.split("/").at(-1)}; Enter opened ${addressOf()}`;
     },
   );
 
@@ -414,8 +419,8 @@ try {
     await palette.locator("input").fill("integrations");
     await palette.getByRole("option").first().waitFor();
     await page.keyboard.press("Enter");
-    await page.waitForURL((url) => url.searchParams.get("page") === "contexts");
-    return `Enter opened ${decodeURIComponent(searchOf())}`;
+    await page.waitForURL((url) => url.pathname.startsWith("/contexts/"));
+    return `Enter opened ${addressOf()}`;
   });
 
   await run(
@@ -435,10 +440,8 @@ try {
       must(completed === "/agents/", `Tab made ${completed}`);
       await palette.getByRole("option").first().waitFor();
       await page.keyboard.press("Enter");
-      await page.waitForURL(
-        (url) => url.searchParams.get("context")?.startsWith("/agents/") === true,
-      );
-      return `/ag, Tab: ${completed}; Enter opened ${searchOf()}`;
+      await page.waitForURL((url) => url.pathname.startsWith("/contexts/agents/"));
+      return `/ag, Tab: ${completed}; Enter opened ${addressOf()}`;
     },
   );
 
@@ -454,7 +457,7 @@ try {
 
   await run("Contexts draws the root context's log, and follows it live", async () => {
     await row("Contexts").click();
-    must(searchOf() === "?page=contexts", `at ${page.url()}`);
+    must(addressOf() === "/contexts", `at ${page.url()}`);
     const rows = page.locator("[data-offset]");
     await rows.first().waitFor({ timeout: 30_000 });
     const before = await rows.count();
@@ -485,7 +488,7 @@ try {
     "Config repo lists /repos/config, and opening apps/dash/public/app.js shows its text",
     async () => {
       await row("Config repo").click();
-      must(searchOf() === "?page=repo", `at ${page.url()}`);
+      must(addressOf() === "/repo", `at ${page.url()}`);
       // the tree's rows are its own (pierre's, in a shadow root): one per path, by `data-item-path`
       const item = (path: string) => page.locator(`[role="treeitem"][data-item-path="${path}"]`);
       await item("agent-kinds/").waitFor({ timeout: 45_000 });
@@ -498,7 +501,7 @@ try {
         .locator(".cm-content")
         .getByText("THE DASH'S PAGE", { exact: false })
         .waitFor({ timeout: 30_000 });
-      return `the tree lists agent-kinds/ and apps/; a click on ${file} opens it at ${decodeURIComponent(searchOf())}, and the editor shows "THE DASH'S PAGE"`;
+      return `the tree lists agent-kinds/ and apps/; a click on ${file} opens it at ${decodeURIComponent(addressOf())}, and the editor shows "THE DASH'S PAGE"`;
     },
   );
 
@@ -506,19 +509,19 @@ try {
     "Secrets draws, its New secret sheet opens as a history entry, and Back closes it",
     async () => {
       await row("Secrets").click();
-      must(searchOf() === "?page=secrets", `at ${page.url()}`);
+      must(addressOf() === "/secrets", `at ${page.url()}`);
       await page
         .getByRole("heading", { name: "Secrets", exact: true })
         .waitFor({ timeout: 30_000 });
       await page.getByRole("button", { name: "New secret" }).click();
       const sheet = page.getByRole("dialog");
       await sheet.getByText("New secret", { exact: true }).waitFor();
-      const opened = decodeURIComponent(searchOf());
+      const opened = decodeURIComponent(addressOf());
       must(opened.includes('"new":1'), `the sheet's URL is ${opened}`);
       await page.goBack();
       await sheet.waitFor({ state: "hidden" });
-      must(searchOf() === "?page=secrets", `after Back at ${page.url()}`);
-      return `the sheet opened at ${opened} and Back closed it, at ${searchOf()}`;
+      must(addressOf() === "/secrets", `after Back at ${page.url()}`);
+      return `the sheet opened at ${opened} and Back closed it, at ${addressOf()}`;
     },
   );
 
@@ -541,15 +544,15 @@ try {
   await run("Back and Forward move between the pages with no full load", async () => {
     for (const name of ["Integrations", "MCP", "Analytics"]) {
       await row(name).click();
-      await page.waitForURL((url) => url.searchParams.get("page") === name.toLowerCase());
+      await page.waitForURL((url) => url.pathname === `/${name.toLowerCase()}`);
     }
     const visited: string[] = [];
     for (const move of ["back", "back", "forward"] as const) {
       await (move === "back" ? page.goBack() : page.goForward());
       await page.waitForTimeout(500);
-      visited.push(`${move} ${searchOf()}`);
+      visited.push(`${move} ${addressOf()}`);
     }
-    const expected = ["back ?page=mcp", "back ?page=integrations", "forward ?page=mcp"];
+    const expected = ["back /mcp", "back /integrations", "forward /mcp"];
     must(JSON.stringify(visited) === JSON.stringify(expected), `moved: ${visited.join(", ")}`);
     await page.getByText("claude mcp add", { exact: false }).first().waitFor();
     const marker = await page.evaluate("window.__dashProof");
