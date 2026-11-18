@@ -274,7 +274,14 @@ test("a signing key seals and unseals under a key derived for each info, and a v
   const refused = (input: unknown) =>
     secret.secret(PATH, "unseal", input).catch((error: Error) => error.message);
   expect(await refused({ info: "iterate-cloud/proof", sealed })).toContain("does not open");
-  expect(await refused({ info, sealed: `${sealed.slice(0, -2)}AA` })).toContain("does not open");
+  const [, iv = "", text = ""] = sealed.split(".");
+  // The altered value has one bit of its last byte flipped. Fixed characters over its end ("AA")
+  // are the same bytes for 1 sealed value in 256 (a last byte of zero), and that value opens.
+  const altered = fromBase64url(text);
+  altered.set([altered.at(-1)! ^ 1], altered.length - 1);
+  expect(
+    await refused({ info, sealed: `sealed.${iv}.${Buffer.from(altered).toString("base64url")}` }),
+  ).toContain("does not open");
   // HKDF over the JWK's `d`, as WebCrypto computes it here
   const root = await crypto.subtle.importKey("raw", fromBase64url(jwk.d), "HKDF", false, [
     "deriveKey",
@@ -286,7 +293,6 @@ test("a signing key seals and unseals under a key derived for each info, and a v
     false,
     ["decrypt"],
   );
-  const [, iv = "", text = ""] = sealed.split(".");
   const opened = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: fromBase64url(iv) },
     key,
