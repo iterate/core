@@ -176,6 +176,32 @@ breakpoint are left out, which an API key never needs.
 
 `defaultConfig` is appended to a new agent's log at birth as an `agent/configured` event. An agent
 born before holds what its log holds: append `agent/configured` once to change it.
+
+AN AGENT THAT A MESSAGE CAN INTERRUPT: `llmRequestPolicy: { behaviour: "interrupt-current-request" }`
+in an agent's config makes some messages end the answer the model is writing. The open request
+settles `cancelled` (`interrupted-by-user-input`), what streamed stays in the conversation as a
+record, and the next request reads both messages. Without the setting a message waits for the
+running answer; `after-current-request` sets it back to that.
+
+Which words interrupt is decided by how they arrive, not by who wrote them:
+
+- Words sent with `message()` from the base `/` interrupt. That is the Dash chat, and also any
+  script that calls `itx.cd("/").agents.get(path).message(…)`. A sender label is only advisory.
+- Words sent with `message()` from any other context do not. They carry `from`.
+- Words with `{ trigger: false }` do not. They stay context only.
+- Words that a relay appends as a raw `agent/context-added` do not. Slack, email, mail, X DMs and
+  the Cloud hand-over (`core/configs/default/worker.ts`, `cloud-handover.ts`) all do that, so a
+  person who writes through them does not interrupt.
+
+It ends a model's answer and nothing else: a script that is running goes on.
+
+```ts
+await itx.cd("/agents/support").append({
+  type: "events.iterate.com/agent/configured",
+  payload: { config: { llmRequestPolicy: { behaviour: "interrupt-current-request" } } },
+});
+```
+
 `AgentDurableObject.standingFiles = (path, files) => files` changes the Markdown files an agent reads
 as standing instructions (`files` is the default list for `path`), and `messageGate` gates words
 from other agents.

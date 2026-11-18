@@ -366,6 +366,68 @@ test("the person's next words during the first key's answer end the turn: the ne
   });
 });
 
+test("an agent set to be interrupted: a person's message during an answer ends that request, and the next request reads both messages", async () => {
+  using _clock = fakeClock();
+  const bodies: string[] = [];
+  const { turn, commit } = agentWithModel({
+    config: {
+      llm: { apiKeys: KEYS },
+      llmRequestDebounceMs: 0,
+      llmRequestPolicy: { behaviour: "interrupt-current-request" },
+    },
+    fetch: async (request) => {
+      if (request.headers.get("upgrade") === "websocket")
+        return new Response(null, { status: 426 });
+      bodies.push(await request.text());
+      if (bodies.length === 1)
+        return sse([
+          { type: "response.created" },
+          { type: "response.output_text.delta", delta: "Once upon a" },
+          STALL,
+        ]);
+      return sse([{ type: "response.created" }, ...answered("PONG")]);
+    },
+  });
+  const telling = turn("Tell me a long story about a lighthouse.");
+  await until(() => bodies.length === 1);
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  // the message as `message()` appends it: it names no policy, the agent's config does
+  const [words] = await commit({
+    type: "events.iterate.com/agent/message-received",
+    payload: { message: "Stop the story. Answer with the one word PONG." },
+  });
+  expect(words).toMatchObject({
+    type: "events.iterate.com/agent/context-added",
+    payload: { llmRequestPolicy: { behaviour: "interrupt-current-request" } },
+  });
+  const interrupted = await commit(words!);
+  await telling;
+  expect(settledOf(interrupted)).toMatchObject({
+    result: {
+      status: "cancelled",
+      reason: "interrupted-by-user-input",
+      partialText: "Once upon a",
+    },
+  });
+
+  // The loop goes on by itself. Its two appends land together, what streamed and the
+  // settlement, so only the settlement is at the head of the log: it asks for the next request.
+  const [streamed, settled] = interrupted;
+  await commit(streamed!, { head: false });
+  const asked = (await commit(settled!)).find(
+    (row) => row.type === "events.iterate.com/agent/llm-request-requested",
+  );
+  expect(settledOf(await commit(asked!))).toMatchObject({
+    result: { status: "succeeded", text: "PONG" },
+  });
+  // that request reads the first message, what the model had written, and the second message
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1]).toContain("Tell me a long story about a lighthouse.");
+  expect(bodies[1]).toContain("Once upon a");
+  expect(bodies[1]).toContain("Stop the story. Answer with the one word PONG.");
+});
+
 test("the request's expiry during the first key's silence ends the turn: the next key is never sent", async () => {
   using _clock = fakeClock();
   const model = openAi(
@@ -873,7 +935,9 @@ function agentWithModel(options: {
   });
   const events: StreamEvent[] = [];
   let state = processor.contract.initialState();
-  const commit = async (row: Row): Promise<Row[]> => {
+  /** `head: false`: more events follow this one in the same batch, so the loop takes no step of
+   *  its own after it. */
+  const commit = async (row: Row, { head = true }: { head?: boolean } = {}): Promise<Row[]> => {
     const parsed = processor.contract.payloadSchemaFor(row.type)?.safeParse(row.payload || {});
     if (parsed && !parsed.success) throw parsed.error;
     const event = {
@@ -896,7 +960,7 @@ function agentWithModel(options: {
       append: async (...rows: Row[]) => void appended.push(...rows),
       blockProcessorWhile: (work: () => Promise<unknown>) => void background.push(work),
       runInBackground: (work: () => Promise<unknown>) => void background.push(work),
-      delivery: { caughtUp: true },
+      delivery: { caughtUp: head },
     } as never);
     while (background.length > 0) await background.shift()!();
     return appended;

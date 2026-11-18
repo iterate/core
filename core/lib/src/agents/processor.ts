@@ -600,6 +600,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             keepWarmForMs: patch.keepWarmForMs ?? state.config.keepWarmForMs,
             keepWarmEveryMs: patch.keepWarmEveryMs ?? state.config.keepWarmEveryMs,
             mindSnapshotEveryMs: patch.mindSnapshotEveryMs ?? state.config.mindSnapshotEveryMs,
+            // no default, as `llm.serviceTier`: undefined until an agent sets one (contract.ts)
+            llmRequestPolicy: patch.llmRequestPolicy || state.config.llmRequestPolicy,
             llmRequestRetryPolicy: {
               maxAttempts:
                 patch.llmRequestRetryPolicy?.maxAttempts ??
@@ -1000,7 +1002,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     }
     // WORDS SENT TO ANY KIND OF AGENT (`message()`, message.ts) become this loop's own input: one
     // `context-added`, keyed by the message, its sender carried as `from` (this facet appends it,
-    // so its origin is the agent itself). Everything after reads that, as it always has.
+    // so its origin is the agent itself). Everything after reads that, as it always has. A
+    // person's words also get the policy the agent's config sets for them, if it sets one: with
+    // `interrupt-current-request` they reach THE INTERRUPT below.
     if (event?.type === "events.iterate.com/agent/message-received") {
       const { origin } = event.source;
       const sender = origin !== event.path ? origin : event.payload.from;
@@ -1014,6 +1018,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             files,
             from: sender === "/" ? undefined : sender,
             trigger: trigger !== false,
+            llmRequestPolicy: state.config.llmRequestPolicy,
           }),
         }),
       );

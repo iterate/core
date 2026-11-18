@@ -25,7 +25,9 @@ export interface AgentHandleApi {
   /** A person's words: ONE `events.iterate.com/agent/message-received`, the input every kind of
    *  agent reads, answered so a caller can wait for what follows it. An iterate agent turns it into
    *  its own `context-added`, the trigger of its next turn (or, with `{ trigger: false }`, context
-   *  it reads on that turn). Sent from another agent, the model reads them as
+   *  it reads on that turn). An agent whose config sets `llmRequestPolicy` to
+   *  `interrupt-current-request` ends the answer it is writing when words sent from the base `/`
+   *  arrive (a person's on the Dash, or a script's from `/`), and answers both next (contract.ts). Sent from another agent, the model reads them as
    *  `[from <sender's context>]` — the collection's base, which the sender's own `itx.agents` row
    *  pins (collection.ts); from anywhere else they read as a person's. To an agent that is not
    *  iterate's own, the same event is appended to its context, for its own subscription to

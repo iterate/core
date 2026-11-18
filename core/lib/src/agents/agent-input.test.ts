@@ -7,14 +7,30 @@ import { messagePayload, type AgentInputGate } from "./message.ts";
 import { AgentProcessor } from "./processor.ts";
 
 test("message(text, { trigger: false }) is context only; the default is a trigger", () => {
-  expect(messagePayload({ message: "FYI", files: [], from: CHIEF, trigger: false })).toEqual({
+  expect(
+    messagePayload({
+      message: "FYI",
+      files: [],
+      from: CHIEF,
+      trigger: false,
+      llmRequestPolicy: undefined,
+    }),
+  ).toEqual({
     role: "user",
     content: "FYI",
     actor: { type: "user" },
     from: CHIEF,
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
-  expect(messagePayload({ message: "Alex asks…", files: [], from: CHIEF, trigger: true })).toEqual({
+  expect(
+    messagePayload({
+      message: "Alex asks…",
+      files: [],
+      from: CHIEF,
+      trigger: true,
+      llmRequestPolicy: undefined,
+    }),
+  ).toEqual({
     role: "user",
     content: "Alex asks…",
     actor: { type: "user" },
@@ -34,7 +50,13 @@ test("message-received becomes the loop's own context-added, sender and trigger 
     {
       type: "events.iterate.com/agent/context-added",
       idempotencyKey: expect.stringContaining("message-received"),
-      payload: messagePayload({ message: "FYI parcel", files: [], from: CHIEF, trigger: false }),
+      payload: messagePayload({
+        message: "FYI parcel",
+        files: [],
+        from: CHIEF,
+        trigger: false,
+        llmRequestPolicy: undefined,
+      }),
     },
   ]);
   // a person's words, appended at `/`: no sender
@@ -50,13 +72,102 @@ test("message-received becomes the loop's own context-added, sender and trigger 
   expect(log.state.pendingLlmRequestTrigger).toBeNull();
 });
 
+test("an agent set to be interrupted gives that policy to a person's message, and to no other", async () => {
+  const log = agentLog();
+  await log.born();
+  // an agent that set nothing: a person's words carry no policy
+  const before = await log.commit({
+    type: "events.iterate.com/agent/message-received",
+    payload: { message: "hi" },
+    source: { origin: "/" },
+  });
+  expect(before[0]!.payload).not.toHaveProperty("llmRequestPolicy");
+
+  await log.commit({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llmRequestPolicy: { behaviour: "interrupt-current-request" } } },
+  });
+  // a later patch that names another knob keeps the policy
+  await log.commit({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { maxAutonomousTurns: 9 } },
+  });
+  expect(log.state.config).toMatchObject({
+    maxAutonomousTurns: 9,
+    llmRequestPolicy: { behaviour: "interrupt-current-request" },
+  });
+
+  // a person's words, appended at `/`
+  const person = await log.commit({
+    type: "events.iterate.com/agent/message-received",
+    payload: { message: "Stop, I meant Tuesday." },
+    source: { origin: "/" },
+  });
+  expect(person).toMatchObject([
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: {
+        role: "user",
+        content: "Stop, I meant Tuesday.",
+        llmRequestPolicy: { behaviour: "interrupt-current-request" },
+      },
+    },
+  ]);
+  // context only stays context only
+  const contextOnly = await log.commit({
+    type: "events.iterate.com/agent/message-received",
+    payload: { message: "FYI parcel", trigger: false },
+    source: { origin: "/" },
+  });
+  expect(contextOnly).toMatchObject([
+    { payload: { llmRequestPolicy: { behaviour: "dont-trigger-request" } } },
+  ]);
+  // another agent's report is left as it is: it never cuts an answer short
+  const report = await log.commit({
+    type: "events.iterate.com/agent/message-received",
+    payload: { message: "Done: the flights Alex asked for", from: CHIEF },
+  });
+  expect(report).toMatchObject([{ payload: { from: CHIEF } }]);
+  expect(report[0]!.payload).not.toHaveProperty("llmRequestPolicy");
+
+  // and the agent can set it back
+  await log.commit({
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llmRequestPolicy: { behaviour: "after-current-request" } } },
+  });
+  const after = await log.commit({
+    type: "events.iterate.com/agent/message-received",
+    payload: { message: "No rush." },
+    source: { origin: "/" },
+  });
+  expect(after).toMatchObject([
+    { payload: { llmRequestPolicy: { behaviour: "after-current-request" } } },
+  ]);
+});
+
+test("a config's policy is one of the two that raise a turn: an agent cannot set itself deaf", () => {
+  const log = agentLog();
+  return expect(
+    log.commit({
+      type: "events.iterate.com/agent/configured",
+      payload: { config: { llmRequestPolicy: { behaviour: "dont-trigger-request" } } },
+    }),
+  ).rejects.toThrow();
+});
+
 test("words another agent sent wait for the gate, by message() or by a raw append; a person's never do", async () => {
   const log = agentLog();
   await log.born();
   // by message(): the facet appends, so the origin is the agent and the sender rides as `from`
   await log.commit(
     contextAdded(
-      messagePayload({ message: "FYI parcel", files: [], from: CHIEF, trigger: true }),
+      messagePayload({
+        message: "FYI parcel",
+        files: [],
+        from: CHIEF,
+        trigger: true,
+        llmRequestPolicy: undefined,
+      }),
       FAMILY,
     ),
   );

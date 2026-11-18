@@ -68,6 +68,13 @@ const Compaction = z.object({
 /** The `run` call an answer made: its id (the provider's call_id), its status label and script. */
 const RunCall = z.object({ callId: z.string().min(1), status: z.string(), script: z.string() });
 
+/** THE POLICY AN AGENT'S CONFIG GIVES `message()` WORDS FROM `/`: one of the two that raise a turn.
+ *  `dont-trigger-request` is a message's own word (`message(…, { trigger: false })`), never an
+ *  agent's setting, so it is not among them. */
+const MessageLlmRequestPolicy = z.object({
+  behaviour: z.enum(["after-current-request", "interrupt-current-request"]),
+});
+
 /** Standing-instruction sections an item sets, by name (null: the section is gone). */
 const Sections = z.record(z.string(), z.string().nullable());
 
@@ -190,6 +197,16 @@ export const AgentContract = defineProcessorContract({
           .int()
           .nonnegative()
           .default(10 * 60_000),
+        /** THE POLICY OF `message()` WORDS FROM `/`, when the agent sets one: what words sent with
+         *  `message()` from the base `/` (no `from`) get as their `llmRequestPolicy` (processor.ts,
+         *  the `message-received` case). That is the Dash chat, and any script that calls
+         *  `message()` from `/`. With `interrupt-current-request` those words cut short the answer
+         *  the model is writing, and the next request reads both. Words from any other context,
+         *  words with `trigger: false`, and raw `context-added` from a relay (Slack, email, the
+         *  Cloud hand-over) never get it. It has no default: for an agent that
+         *  never set it the field is undefined, in a state stored before the field existed too,
+         *  and its messages wait for the running answer. */
+        llmRequestPolicy: MessageLlmRequestPolicy.optional(),
       })
       .prefault({}),
     /** Every model-visible item, in offset order — the conversation the next request is built from. */
@@ -365,6 +382,7 @@ export const AgentContract = defineProcessorContract({
           keepWarmForMs: z.number().int().nonnegative().optional(),
           keepWarmEveryMs: z.number().int().positive().optional(),
           mindSnapshotEveryMs: z.number().int().nonnegative().optional(),
+          llmRequestPolicy: MessageLlmRequestPolicy.optional(),
           llmRequestRetryPolicy: z
             .object({
               maxAttempts: z.number().int().positive().optional(),
@@ -405,7 +423,9 @@ export const AgentContract = defineProcessorContract({
         from: z.string().optional(),
         /** The policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
          *  (the default: the next turn), `interrupt-current-request` (cut the running answer short —
-         *  the request settles cancelled with what streamed so far, and these words start the next). */
+         *  the request settles cancelled with what streamed so far, and these words start the next).
+         *  Words from `message()` at `/` get the agent's own `config.llmRequestPolicy` when they
+         *  name none. */
         llmRequestPolicy: z
           .object({
             behaviour: z.enum([

@@ -5,7 +5,7 @@
 import type { IterateContextApi } from "../api.ts";
 import type { StreamEvent } from "../stream/processor.ts";
 import type { AgentMessageInput, AgentMessageOptions } from "./api.ts";
-import type { FileAttachment } from "./contract.ts";
+import type { AgentState, FileAttachment } from "./contract.ts";
 
 /** A message to the agent at `path`: its attachments, each stored first under the agent's path
  *  (`itx.files`, `<path>/<8 of a uuid>-<name>`), then ONE `message-received` naming them, appended to
@@ -53,14 +53,19 @@ export async function appendMessage(
 }
 
 /** The `context-added` iterate's loop appends for a `message-received` (processor.ts): the words,
- *  their files, the sender, and, with `trigger: false`, context only. */
+ *  their files, the sender, and the policy. With `trigger: false` the words are context only,
+ *  whatever the agent is set to. Otherwise words sent from the base `/` (no `from`: the Dash
+ *  chat, or any script at `/`) get `llmRequestPolicy`, the agent's own setting for them
+ *  (its config's, undefined when it set none). Another agent's words never get it, so a helper's
+ *  report cannot cut short the answer a person is reading. */
 export function messagePayload(input: {
   message: string;
   files: FileAttachment[];
   from?: string;
   trigger: boolean;
+  llmRequestPolicy: AgentState["config"]["llmRequestPolicy"];
 }) {
-  const { message, files, from, trigger } = input;
+  const { message, files, from, trigger, llmRequestPolicy } = input;
   return {
     role: "user" as const,
     content: message,
@@ -68,6 +73,7 @@ export function messagePayload(input: {
     ...(files.length > 0 && { files }),
     from,
     ...(!trigger && { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
+    ...(trigger && !from && llmRequestPolicy && { llmRequestPolicy }),
   };
 }
 
