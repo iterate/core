@@ -113,7 +113,9 @@ export type LiveStateItx = {
     name?: string;
     consumes?: string[];
     target: (events: unknown[], range: unknown) => void;
-  }): Promise<{ [Symbol.dispose](): void }>;
+    // `name`: the subscription row's name. Over RPC the handle is a stub, which answers a property
+    // as a promise.
+  }): Promise<{ [Symbol.dispose](): void; name?: string | PromiseLike<string> }>;
 };
 
 /** A connected live-state subscription: the store rendering it, and the dispose that removes the

@@ -4,7 +4,7 @@
 // `scannedThroughOffset` the last row read or, at the head, the durable mark. Offsets have gaps, as
 // a log whose ephemerals took offsets has.
 
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "../stream/processor.ts";
 import { committedEvent } from "../stream/test-support.ts";
 import { connectEventLog, type EventLogItx } from "./event-log.ts";
@@ -239,6 +239,27 @@ test("who acted and the processors table's version follow the events held", asyn
   expect(held).toMatchObject({ tableVersion: 2 });
   expect(held.actors.map((actor) => actor.actor)).toEqual(["user_b", "user_a"]);
   expect(held.actors[1]).toMatchObject({ lastSeenAt: "1970-01-01T00:00:02.000Z" });
+  log.dispose();
+});
+
+test("the log holds the name of its own subscription row, as a handle or an RPC stub answers it", async () => {
+  for (const name of ["sub-1a2b3c4d", Promise.resolve("sub-1a2b3c4d")]) {
+    const context = fakeContext([1, 2]);
+    const log = connectEventLog(
+      {
+        ...context.itx,
+        subscribe: async (input) => ({ ...(await context.itx.subscribe(input)), name }),
+      },
+      { consumes: ["*"], history: "tail" },
+    );
+    await vi.waitFor(() => expect(log.get()).toMatchObject({ subscription: "sub-1a2b3c4d" }));
+    log.dispose();
+  }
+  // a context that names none: the log is read as before
+  const unnamed = fakeContext([1, 2]);
+  const log = connectEventLog(unnamed.itx, { consumes: ["*"], history: "tail" });
+  await vi.waitFor(() => expect(log.get()).toMatchObject({ caughtUp: true }));
+  expect(log.get()).not.toHaveProperty("subscription", expect.anything());
   log.dispose();
 });
 

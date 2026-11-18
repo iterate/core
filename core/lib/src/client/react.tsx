@@ -277,6 +277,8 @@ export function useIterateContext(
   older: { loadOlder(): void; loading: boolean; exhausted: boolean };
   processors: { rows: SubscriptionListEntry[]; loaded: boolean; error?: string };
   presence: { actors: IterateContextPresence[]; rpcStubs: string[] };
+  /** The name of this log's own row among `processors.rows` (`EventLogSnapshot.subscription`). */
+  subscription?: string;
   liveState: Record<string, LiveStateResult>;
 } {
   // ── the log ──
@@ -527,6 +529,7 @@ export function useIterateContext(
       error: itx && failure?.itx === itx ? failure.message : undefined,
     },
     presence: { actors: held.actors, rpcStubs },
+    subscription: held.subscription,
     liveState,
   };
 }

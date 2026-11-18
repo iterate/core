@@ -48,6 +48,9 @@ export type EventLogSnapshot = {
   actors: IterateContextPresence[];
   /** The offset of the newest subscription change held — what the processors table is as of. */
   tableVersion: number;
+  /** The name of this log's own row in the context's subscriptions table, once the context has
+   *  answered it: what a page's own events name to say which open page they are of. */
+  subscription?: string;
 };
 
 export const EMPTY_EVENT_LOG: EventLogSnapshot = {
@@ -84,6 +87,7 @@ export function connectEventLog(
 ): EventLogConnection {
   let disposed = false;
   let subscription: { [Symbol.dispose](): void } | undefined;
+  let subscriptionName: string | undefined;
   const listeners = new Set<() => void>();
   let snapshot = EMPTY_EVENT_LOG;
   // what the next frame publishes
@@ -158,6 +162,7 @@ export function connectEventLog(
       },
       actors,
       tableVersion,
+      subscription: subscriptionName,
     };
     for (const listener of listeners) listener();
   };
@@ -200,6 +205,15 @@ export function connectEventLog(
       return;
     }
     subscription = handle;
+    // beside the first read, never before it: the name is one more answer of the context
+    void Promise.resolve(handle.name).then(
+      (name) => {
+        if (disposed || !name) return;
+        subscriptionName = name;
+        schedule();
+      },
+      () => undefined,
+    );
     if (opts.history === "tail") {
       // the head, from a one-row probe past it: an empty page at the head names the durable mark
       const probe = await itx.readEvents(Number.MAX_SAFE_INTEGER, 1);
