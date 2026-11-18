@@ -54,6 +54,7 @@ export type DeployInput = {
   name?: string;
   owner?: string;
   yes?: boolean;
+  buy?: boolean;
   eraseRecords?: boolean;
   source?: string;
   ref?: string;
@@ -529,9 +530,9 @@ async function offersOf(cf: Cloudflare, account: string, domains: string[]): Pro
   return resultOf(z.object({ domains: z.array(Offer) }), answer)?.domains ?? [];
 }
 
-/** A domain and how the account gets it: `zone` when the account has it; else the person buys
- *  it (`offer`: Cloudflare's registrar sells it) or adds it (it is theirs at another registrar),
- *  each on Cloudflare's own page. */
+/** A domain and how the account gets it: `zone` when the account has it; else the command buys
+ *  it (`offer`: Cloudflare's registrar sells it, and the person said yes to its price), or the
+ *  person adds it on Cloudflare's own page (it is theirs at another registrar). */
 type Pick = { domain: string; zone?: Zone; offer?: Offer };
 
 /** The domain, and how the account gets it: a zone it has, one to buy, or one to add. With no
@@ -607,26 +608,120 @@ async function pickDomain(
     const offer =
       offers.find((candidate) => candidate.name === domain) ||
       (await offersOf(cf, account, [domain])).find((candidate) => candidate.name === domain);
-    // the command spends no money: the person buys on Cloudflare's page, so a pick is no purchase
-    if (offer?.registrable) return { domain, offer };
-    const theirs =
-      input.yes ||
-      (await ask<boolean>(
-        `${domain} is not for sale at Cloudflare; pass --yes when it is yours at another registrar`,
-        () =>
+    if (offer?.registrable) {
+      // THE YES TO SPEND MONEY, asked here, before anything changes. The purchase itself comes
+      // after every other check, when the deploy needs the zone (`zoneOf`).
+      const buy =
+        input.buy ||
+        (await ask<boolean>(`${domain} costs ${priceOf(offer)}; pass --buy to buy it`, () =>
           p.confirm({
-            message: `${domain} is not for sale at Cloudflare. Is it yours at another registrar? You then add it to this account and set its nameservers to Cloudflare's.`,
+            message: `Buy ${domain} at Cloudflare for ${priceOf(offer)}? Cloudflare charges the account's payment method, and a registration is not refunded.`,
           }),
-      ));
-    if (theirs) return { domain };
+        ));
+      if (buy) return { domain, offer };
+    } else {
+      const theirs =
+        input.yes ||
+        (await ask<boolean>(
+          `${domain} is not for sale at Cloudflare; pass --yes when it is yours at another registrar`,
+          () =>
+            p.confirm({
+              message: `${domain} is not for sale at Cloudflare. Is it yours at another registrar? You then add it to this account and set its nameservers to Cloudflare's.`,
+            }),
+        ));
+      if (theirs) return { domain };
+    }
     // a no to a domain that a flag named has no other answer; a person picks again
     if (input.domain) throw new Error(`Run the command again with another domain than ${domain}.`);
   }
 }
 
-/** The zone of the picked domain, active. When the account does not have it yet, the person buys
- *  it or adds it on Cloudflare's own page, and this waits for it: the command holds no right to
- *  buy a domain or to add a zone. A domain bought at Cloudflare becomes a zone of the account by
+/** What Cloudflare says of one registration while it runs, and at its end. */
+const Registration = z.object({
+  state: z.string(),
+  error: z.object({ message: z.string().optional() }).optional(),
+  context: z.object({ action: z.unknown().optional() }).optional(),
+});
+
+/** BUYS THE DOMAIN at Cloudflare's registrar, for the price that the person said yes to
+ *  (`pickDomain`). Cloudflare charges the account's default payment method and registers the
+ *  domain to the account's default contact. Both are set on Cloudflare's own pages alone, and no
+ *  call reads the contact. An account that has registered a domain has one, so a person whose
+ *  account has none is sent to the page first. A purchase that Cloudflare refuses says why and
+ *  opens the page where that is set. Cloudflare takes one registration for a domain, so a second
+ *  try never buys twice. */
+async function buyDomain(cf: Cloudflare, account: string, domain: string, offer: Offer) {
+  const registrations = `/accounts/${account}/registrar/registrations`;
+  const contactPage = `https://dash.cloudflare.com/${account}/domains/registrations`;
+  const earlier = resultOf(z.array(z.unknown()), await cf("GET", `${registrations}?per_page=1`));
+  if (earlier?.length === 0 && interactive()) {
+    page(
+      "Cloudflare has no contact details for this account yet, and a domain is registered to a person. Add yours and accept the registration agreement on this page.",
+      contactPage,
+    );
+    const saved = await ask<boolean>("add your contact details on that page", () =>
+      p.confirm({ message: "Are your contact details saved there?" }),
+    );
+    if (!saved)
+      throw new Error(
+        `Nothing was bought. Add your contact details at ${contactPage}, then run the command again.`,
+      );
+  }
+  for (;;) {
+    const buying = wait(`Buying ${domain} for ${priceOf(offer)}`);
+    let answer = await cf("POST", registrations, { domain_name: domain });
+    let registration = resultOf(Registration, answer);
+    // Cloudflare answers 202 when the registry takes longer than its own wait: ask for five minutes
+    for (
+      let asked = 0;
+      asked < 100 && ["pending", "in_progress", "blocked"].includes(registration?.state || "");
+      asked++
+    ) {
+      await sleep(3000);
+      answer = await cf("GET", `${registrations}/${domain}/registration-status`);
+      registration = resultOf(Registration, answer) || registration;
+    }
+    // the registration itself is the proof, whatever the answers above said
+    if (
+      registration?.state === "succeeded" ||
+      (await cf("GET", `${registrations}/${domain}`)).status === 200
+    ) {
+      buying.done(`Bought ${domain} for ${priceOf(offer)}.`);
+      return;
+    }
+    // Cloudflare took the purchase and has not ended it: nothing here may call it failed, or
+    // buy again. The wait for the domain in the account goes on.
+    if (["pending", "in_progress", "blocked"].includes(registration?.state || "")) {
+      buying.done(`Cloudflare took the purchase of ${domain} and still registers it.`);
+      return;
+    }
+    const why =
+      registration?.error?.message ||
+      (registration?.context?.action
+        ? `it needs an action of yours (${JSON.stringify(registration.context.action)})`
+        : `${answer.status}: ${answer.error}`);
+    buying.fail(`Cloudflare did not sell ${domain}: ${why}`);
+    const fixPage = /payment|billing|card|quote/i.test(why)
+      ? `https://dash.cloudflare.com/${account}/billing/payment-info`
+      : contactPage;
+    if (!interactive())
+      throw new Error(
+        `Cloudflare did not sell ${domain}: ${why}. Nothing was bought. A payment method is set at https://dash.cloudflare.com/${account}/billing/payment-info, and the registrant's contact and the registration agreement at ${contactPage}. Then run the command again.`,
+      );
+    page(
+      "Set what Cloudflare asks for on this page: a payment method, your contact details, or the registration agreement.",
+      fixPage,
+    );
+    const again = await ask<boolean>("run the command again", () =>
+      p.confirm({ message: `Try to buy ${domain} again?` }),
+    );
+    if (!again) throw new Error("Nothing was bought. Run the command again with another domain.");
+  }
+}
+
+/** The zone of the picked domain, active. When the account does not have it yet, the command buys
+ *  it, or the person adds it on Cloudflare's own page (the command holds no right to add a zone),
+ *  and this waits for it. A domain bought at Cloudflare becomes a zone of the account by
  *  itself. */
 async function zoneOf(cf: Cloudflare, account: string, pick: Pick): Promise<Zone> {
   const { domain } = pick;
@@ -634,11 +729,7 @@ async function zoneOf(cf: Cloudflare, account: string, pick: Pick): Promise<Zone
     resultOf(z.array(ZoneRow), await cf("GET", `/zones?name=${domain}&account.id=${account}`))?.[0];
   let zone = pick.zone ?? (await found());
   if (!zone) {
-    if (pick.offer)
-      page(
-        `Buy ${domain} on Cloudflare's page (${priceOf(pick.offer)}): search for it there. Cloudflare asks for a card and your contact details.`,
-        `https://dash.cloudflare.com/${account}/domains/register`,
-      );
+    if (pick.offer) await buyDomain(cf, account, domain, pick.offer);
     else
       page(
         `Add ${domain} to this account on Cloudflare's page, then set its nameservers at your registrar to the two that Cloudflare shows.`,

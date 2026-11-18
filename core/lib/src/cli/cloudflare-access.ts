@@ -23,8 +23,9 @@ const LEAST_LEFT_MS = 20 * 60_000;
 
 /** What a deploy of a mind's stack needs (core/alchemy README, "The API token"), and what this
  *  command's own steps need: the person, their accounts, the plan's checks, the domains and their
- *  prices. Nothing here spends money or adds a zone: a domain is bought or added on Cloudflare's
- *  own page. The scope that makes API tokens (`account_api_tokens:create`, which Cloudflare lists
+ *  prices, and the purchase of a domain (`registrar-domains.admin`), which the command makes only
+ *  after the person's yes to its price. Nothing here adds a zone: a domain from another registrar
+ *  is added on Cloudflare's own page. The scope that makes API tokens (`account_api_tokens:create`, which Cloudflare lists
  *  as sensitive) is not asked for, so a deploy with this access has no telemetry and no Cloudflare
  *  token for the mind. */
 const SCOPES = [
@@ -49,6 +50,7 @@ const SCOPES = [
   "workers-routes.write",
   "dns.write",
   "registrar-domains.read",
+  "registrar-domains.admin",
 ];
 
 export type Access = {
@@ -70,7 +72,9 @@ const OAuthAnswer = z.object({
   error_description: z.string().optional(),
 });
 type OAuthAnswer = z.infer<typeof OAuthAnswer>;
-const Kept = z.object({ token: z.string(), expiresAt: z.number() });
+/** `scopes`: what the sign-in asked for. A token from a sign-in that asked for other scopes is
+ *  not used: it may lack a right that this version of the command needs. */
+const Kept = z.object({ token: z.string(), expiresAt: z.number(), scopes: z.string().optional() });
 
 /** JSON text as `schema`, or undefined for text that is none. */
 function parsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
@@ -97,7 +101,11 @@ async function form(url: string, fields: Record<string, string>): Promise<OAuthA
 function kept(): string | undefined {
   if (!existsSync(KEPT)) return undefined;
   const before = parsed(Kept, readFileSync(KEPT, "utf8"));
-  return before && before.expiresAt - Date.now() > LEAST_LEFT_MS ? before.token : undefined;
+  return before &&
+    before.scopes === SCOPES.join(" ") &&
+    before.expiresAt - Date.now() > LEAST_LEFT_MS
+    ? before.token
+    : undefined;
 }
 
 /** Forgets the kept token, and asks Cloudflare to revoke it. Never throws. */
@@ -153,6 +161,7 @@ export async function cloudflareAccess(
         JSON.stringify({
           token: answer.access_token,
           expiresAt: Date.now() + (answer.expires_in || 3600) * 1000,
+          scopes: SCOPES.join(" "),
         }),
         { mode: 0o600 },
       );

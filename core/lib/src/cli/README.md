@@ -54,7 +54,7 @@ program with no model in it: it asks for the account and the domain, and does th
 
 ```sh
 npx iterate deploy                                   # a person at a terminal: two questions
-npx iterate deploy --new-account --domain ada-labs.com
+npx iterate deploy --new-account --domain ada-labs.com --buy
 CLOUDFLARE_API_TOKEN=… npx iterate deploy --account <id> --domain example.com --owner you@example.org
 ```
 
@@ -76,9 +76,13 @@ What it does, in order:
 4. **The domain.** A domain of the account, a new one that Cloudflare's registrar sells, or one
    from another registrar, whose nameservers you then change. It asks the registrar about up to
    20 names made from your name (the "-erate" names first, as iterate's is) and lists the free
-   ones with their price a year. You can type a domain, or a few words to get more names. The
-   command buys nothing and adds no domain itself: it opens Cloudflare's own page, where you buy
-   the name or add your domain, and waits until the account has it. The mind takes a whole domain that nothing else uses (a new one is
+   ones with their price a year. You can type a domain, or a few words to get more names. It asks
+   before it buys, with the price; `--buy` is the yes. Cloudflare charges the account's payment
+   method and registers the domain to the account's contact. Both are set on Cloudflare's own
+   pages: an account that never registered a domain is sent to the page for its contact details
+   first, and a purchase that Cloudflare refuses says why and opens the page where that is set.
+   A domain from another registrar you add on Cloudflare's own page, and the command waits until
+   the account has it. The mind takes a whole domain that nothing else uses (a new one is
    best; a subdomain works when it is a zone of its own). A domain of the account with a route of
    another Worker, or with an A, AAAA, CNAME or MX record, is in use: the command says what is
    there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS

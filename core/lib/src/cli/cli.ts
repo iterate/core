@@ -161,6 +161,10 @@ const launcherProcedures = {
           .string()
           .optional()
           .describe("The owner's email address (default: the Cloudflare login's)"),
+        buy: z
+          .boolean()
+          .optional()
+          .describe("Buy the domain at Cloudflare's price without a question"),
         yes: z
           .boolean()
           .optional()
