@@ -26,7 +26,7 @@
 //   model, or stored as a `<codemode>` block in its text, is converted to plain items without ids.
 import { z } from "zod";
 import type { RewriteRuleListEntry } from "../api.ts";
-import type { FileAttachment } from "./contract.ts";
+import type { FileAttachment, Speaker } from "./contract.ts";
 import { parseCodemodeResponse } from "./codemode-format.ts";
 
 /** The one tool. Strict, so its arguments always parse; the description is the whole contract,
@@ -64,6 +64,7 @@ export type RenderItem = {
   llmRequestOffset?: number;
   files?: FileAttachment[];
   from?: string;
+  saidBy?: Speaker;
   compaction?: { replacesHistoryThrough: number };
   /** The `run` call this answer made (processor.ts, from the response's function_call). */
   call?: { callId: string; status: string; script: string };
@@ -249,6 +250,58 @@ export function sectionChanges(
 /** Words from another agent: who, and how to answer. */
 function fromLine(from: string): string {
   return `[from ${from} — it cannot see this conversation; answer with \`await itx.agents.get(${JSON.stringify(from)}).message(text)\`]`;
+}
+
+/** A name inside the platform's own label, of a bounded length: no bracket, no control
+ *  character, no Unicode line or paragraph separator and no format character (a direction
+ *  override, a zero-width mark). The name is taken in compatibility form first, so a full-width
+ *  bracket is a bracket here as it is for `beginsLikeSpeakerLabel`. So a name can neither close
+ *  the label, nor start a line of its own, nor be drawn in another order than it is written. */
+const inLabel = (text: string) =>
+  text
+    .normalize("NFKC")
+    .replace(/[[\]\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ")
+    .trim()
+    .slice(0, 120);
+
+/** Words a principal sent: who, as the platform stamped them (contract.ts `Speaker`). Their
+ *  address when they have one, else their id; another mind by its domain. */
+function saidByLine(saidBy: Speaker): string {
+  const who =
+    saidBy.kind === "mind"
+      ? `the mind ${inLabel(saidBy.actor)}`
+      : inLabel(saidBy.email || saidBy.actor);
+  const script = saidBy.script ? ", sent by a script of theirs" : "";
+  const impersonated = saidBy.impersonatedBy
+    ? `, signed in by ${inLabel(saidBy.impersonatedBy.email)} acting as them`
+    : "";
+  return `[from ${who}${script}${impersonated}]`;
+}
+
+/** Before words that name no verified sender and begin like the platform's own label of a
+ *  person: the label is the platform's alone, so words that imitate it are marked. Words that
+ *  begin with a context's path (`[from /agents/…`) are another agent's kind of line, which was
+ *  never a verified one. */
+const NO_VERIFIED_SENDER = "[no verified sender]";
+
+/** Whether words begin like the platform's label of a person, as a reader would see them. It
+ *  reads the words from their start, one character at a time: a format character draws nothing
+ *  and is passed over (a zero-width space, a direction override), however many there are; each
+ *  other character is taken in compatibility form (a full-width bracket is a bracket); a run of
+ *  spaces, line breaks or control characters is one space, and none before the bracket or right
+ *  after it. It stops once it has enough to tell. It catches an imitation at the start of the
+ *  words, which is where the platform's own line is; the model is told that words without the
+ *  line name no verified sender, wherever a name is. */
+function beginsLikeSpeakerLabel(text: string): boolean {
+  let seen = "";
+  for (const char of text) {
+    if (/\p{Cf}/u.test(char)) continue;
+    const space = /[\s\p{Z}\p{Cc}]/u.test(char);
+    if (space && (seen === "" || seen.endsWith(" ") || seen.endsWith("["))) continue;
+    seen += space ? " " : char.normalize("NFKC");
+    if (seen.length >= 12) break;
+  }
+  return /^\[from [^/ ]/i.test(seen);
 }
 
 /** How a non-image (or gone) attachment is named to the model. */
@@ -462,7 +515,12 @@ export function buildResponsesInput(args: BuildInputArgs): InputItem[] {
     }
     // a person's words, third-party data, a compaction summary: user role, never instructions
     const own = item.from === ownPath;
-    const text = item.from && !own ? `${fromLine(item.from)} ${item.content}` : item.content;
+    const sender = item.from && !own ? fromLine(item.from) : item.saidBy && saidByLine(item.saidBy);
+    const text = sender
+      ? `${sender} ${item.content}`
+      : beginsLikeSpeakerLabel(item.content)
+        ? `${NO_VERIFIED_SENDER} ${item.content}`
+        : item.content;
     const parts: InputItem[] = [];
     const hints: string[] = [];
     for (const file of item.files || []) {

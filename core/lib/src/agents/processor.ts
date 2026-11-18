@@ -36,7 +36,7 @@ import {
   RETAINED_SCRIPT_RESULTS,
   wrapScript,
 } from "./results-preamble.ts";
-import { type AgentInputGate, isOtherContext, messagePayload } from "./message.ts";
+import { type AgentInputGate, isOtherContext, messagePayload, speakerOf } from "./message.ts";
 import { AGENTS_PATH } from "./install.ts";
 import { mindNowNote } from "./mind-now.ts";
 import type { AgentsApi } from "./api.ts";
@@ -96,6 +96,13 @@ const KEEP_WARM_PROMPT =
 
 /** A long-lived agent (`/agents/<name>`), which pings to keep its history cached; a task's
  *  subagent or a thread goes cold, with an idle summary when it is worth one. */
+/** How many messages' speakers the state holds while their copies have not landed: the loop
+ *  appends each copy at once, so more than one or two wait only while the processor catches up. */
+const MESSAGE_SPEAKERS_HELD = 16;
+
+/** The mind files a message or an item names, in their order. */
+const filePaths = (files: { path: string }[] | undefined) => (files || []).map((file) => file.path);
+
 export const keepsWarm = (path: string) => /^\/agents\/[^/]+$/.test(path);
 
 /** The conversation after the newest summary, in tokens, estimated from its characters: what an
@@ -617,6 +624,28 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         };
       }
 
+      // WHO SENT A MESSAGE, kept until the loop's copy of it lands (the next case): the platform's
+      // stamp on this event, with its words and the paths of its files. Another agent's message
+      // has a sender, not a speaker.
+      case "events.iterate.com/agent/message-received": {
+        const { origin } = event.source;
+        const sender = origin !== event.path ? origin : event.payload.from;
+        const saidBy = sender && sender !== "/" ? undefined : speakerOf(event.source);
+        if (!saidBy || state.deletion) return undefined;
+        return {
+          ...state,
+          messageSpeakers: [
+            ...(state.messageSpeakers || []).slice(1 - MESSAGE_SPEAKERS_HELD),
+            {
+              offset: event.offset,
+              message: event.payload.message,
+              files: filePaths(event.payload.files),
+              saidBy,
+            },
+          ],
+        };
+      }
+
       case "events.iterate.com/agent/context-added": {
         const { payload } = event;
         const { role, content, actor, llmRequestPolicy, llmRequestOffset, compaction } = payload;
@@ -674,6 +703,32 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         // The sender signs nothing, so the label is advisory.
         const { origin } = event.source;
         const sender = origin !== event.path ? origin : payload.from;
+        const from = sender === "/" ? undefined : sender;
+        // WHO SAID A PERSON'S WORDS: the stamp on this very event when a principal appended it, or
+        // code did for one (message.ts `speakerOf`). The loop's own copy of a `message-received`
+        // carries no stamp: it names the message's offset, and takes the speaker that the fold
+        // kept for that message (the case above), only when its words and its files are the
+        // message's: other words, or another file, under a person's name are nobody's. No payload
+        // names a speaker, so nothing a writer chose does.
+        const held = state.messageSpeakers || [];
+        const paths = filePaths(payload.files).join("\n");
+        const relayed = held.find(
+          (entry) =>
+            entry.offset === payload.messageOffset &&
+            entry.message === content &&
+            entry.files.join("\n") === paths,
+        );
+        // The kept speaker is taken only when a person's words want one and this event's own
+        // stamp names nobody. A copy that takes nothing leaves it for the loop's copy.
+        const stamped = speakerOf(event.source);
+        const taken =
+          role === "user" && (!actor || actor.type === "user") && !from && !stamped
+            ? relayed
+            : undefined;
+        const saidBy =
+          role === "user" && (!actor || actor.type === "user") && !from
+            ? stamped || taken?.saidBy
+            : undefined;
         const { call, providerItems, providerModel, sections, snapshot, mindSnapshot } = payload;
         // A standing-instructions item folds into what the model has been shown.
         const shown =
@@ -696,6 +751,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             : state.awaitingRun;
         const next: AgentState = {
           ...state,
+          // the message's copy has landed: its speaker is on the item now
+          ...(taken && { messageSpeakers: held.filter((entry) => entry !== taken) }),
           sections: shown,
           awaitingRun,
           unnotedRun:
@@ -711,7 +768,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               actor,
               llmRequestOffset,
               files: payload.files,
-              from: sender === "/" ? undefined : sender,
+              from,
+              saidBy,
               call,
               providerItems,
               providerModel,
@@ -1017,6 +1075,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             message,
             files,
             from: sender === "/" ? undefined : sender,
+            messageOffset: event.offset,
             trigger: trigger !== false,
             llmRequestPolicy: state.config.llmRequestPolicy,
           }),

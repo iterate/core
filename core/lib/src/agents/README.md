@@ -106,6 +106,38 @@ sends an iterate agent's words through its facet, and appends the same event str
 agent's context, whose own subscription delivers it to whatever runs it. `delete(path)` of an agent
 iterate does not run records its death on `/agents` and nothing else.
 
+WHO SPOKE. Several people can write to one agent. When the platform knows who sent words, the
+model reads a line before them that the platform wrote: `[from ada@example.com]` for a signed-in
+person (with `, sent by a script of theirs` when their script sent them, and `, signed in by
+<address> acting as them` under an administrator's sign-in), and `[from the mind example.com]`
+for another mind whose key signed them.
+
+- The line comes from the platform's stamp alone (`speakerOf` in `message.ts`): `source.principal`,
+  `source.onBehalfOf`, or a mind's `source.signer`. No payload names a speaker.
+- `message()` appends through the agent's facet, so the loop's copy of the words carries no stamp.
+  The fold keeps who sent each `message-received`; the copy names the message's offset
+  (`messageOffset`) and takes that speaker only when its words are the message's.
+- Words with no such line name no verified sender. A schedule, a row's copy, the platform's own
+  fact, the mind's config code and an agent's own script all append with no principal that said
+  the words, and get none. A relay of mail, Slack or a phone line writes who it believes wrote
+  into the words themselves.
+- Words that begin like the platform's line and carry none are marked `[no verified sender]`,
+  so a script or a relay cannot imitate it. A name in the line is cleaned of brackets and line
+  breaks.
+
+A MESSAGE THAT LANDS ONCE. `get(path).message(input, { key })` gives the message a key of the
+sender's choice. Sent again with the same key and the same words, it lands once, and the call
+answers the event the log holds, also when two sends race. The same key with other words is
+refused (`IDEMPOTENCY_CONFLICT`). A page that cannot know whether its first try arrived sends again
+with the same key.
+
+- A file of a keyed message is never replaced: its path is made from the key, its place in the
+  list and the SHA-256 of its content. The same key and words with other file content is refused,
+  and the first event's file stays as it was. The refused send leaves its own file behind.
+- The key is the context's, not the sender's: one name space per agent. A second sender with the
+  same key and the same words gets the first sender's event, and the log names the first sender
+  alone. So a sender makes keys that nobody else would make.
+
 - `contract.ts` — an agent's events and state; `processor.ts` — the reduce and the loop;
   `render.ts` — each request as OpenAI reads it; `processor.test.ts` — the processor's spec.
 - `catalog.ts`, `collection.ts` — `itx.agents`; `recent.ts` — `get(path).recent()`;

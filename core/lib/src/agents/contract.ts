@@ -30,6 +30,20 @@ const FileAttachment = z.object({
 });
 export type FileAttachment = z.infer<typeof FileAttachment>;
 
+/** THE PRINCIPAL WHOSE WORDS AN ITEM HOLDS, as the platform stamped the event that brought them
+ *  (message.ts `speakerOf`): a person, or another mind whose key signed them (`kind`, as
+ *  `Principal` has it). `script`: their script sent the words, they did not type them.
+ *  `impersonatedBy`: an administrator was signed in as them. The model reads it as
+ *  `[from <address>]` before the words (render.ts). It is never read from a payload. */
+const Speaker = z.object({
+  actor: z.string().min(1),
+  email: z.string().optional(),
+  kind: z.literal("mind").optional(),
+  script: z.literal(true).optional(),
+  impersonatedBy: z.object({ actor: z.string(), email: z.string() }).optional(),
+});
+export type Speaker = z.infer<typeof Speaker>;
+
 /** Where a request's trigger came from: a person (`external`) or the loop's own consequences. */
 const TriggerSource = z.enum(["external", "agent-loop"]);
 
@@ -222,6 +236,9 @@ export const AgentContract = defineProcessorContract({
           /** The context it came from, when another one sent it (processor.ts, the fold): the
            *  model reads it as `[from <context>]`. */
           from: z.string().optional(),
+          /** Who said a person's words, by the platform's stamp (processor.ts, the fold): absent
+           *  for another agent's words and for words whose event names no principal. */
+          saidBy: Speaker.optional(),
           /** A compaction summary: it replaced every non-system item through this offset. */
           compaction: Compaction.optional(),
           /** An answer's `run` call, and the provider's output items for exact replay. */
@@ -313,6 +330,20 @@ export const AgentContract = defineProcessorContract({
     lastActivityAt: z.string().nullable().default(null),
     /** When the newest mind-now note landed (ms): the next is due `mindSnapshotEveryMs` after it. */
     mindSnapshotAt: z.number().nullable().default(null),
+    /** Who sent each `message-received` whose copy the loop has not appended yet, with its words
+     *  and the paths of its files: the copy names the message's offset, and takes the speaker
+     *  from here when its words and its files are the message's. At most a few are held; an entry goes when its copy lands. Optional with no
+     *  default: a stored state from before this field has none. */
+    messageSpeakers: z
+      .array(
+        z.object({
+          offset: z.number().int().positive(),
+          message: z.string(),
+          files: z.array(z.string()),
+          saidBy: Speaker,
+        }),
+      )
+      .optional(),
     /** Set by `agent/paused` (the breakers, or an operator); cleared by `agent/resumed`. */
     paused: z
       .object({ reason: z.string(), atOffset: z.number().int().positive() })
@@ -421,6 +452,12 @@ export const AgentContract = defineProcessorContract({
          *  collection relays it (collection.ts): the agent's own facet appends them, so their
          *  `source.origin` is the agent itself. */
         from: z.string().optional(),
+        /** The `message-received` this item is the loop's copy of, by its offset (processor.ts).
+         *  Who sent that message is in the agent's state, from the platform's stamp on it, and
+         *  this item takes it only when its words and its files are that message's. No payload names a speaker:
+         *  a payload is its writer's word, and a schedule, a copy or an agent's own script writes
+         *  one with no stamp at all. */
+        messageOffset: z.number().int().positive().optional(),
         /** The policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
          *  (the default: the next turn), `interrupt-current-request` (cut the running answer short —
          *  the request settles cancelled with what streamed so far, and these words start the next).

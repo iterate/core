@@ -16,8 +16,14 @@ export type AgentMessageInput =
 
 /** How `message` delivers the words. `trigger: false` makes them context only: the agent reads
  *  them on its next turn but does not wake for them (an FYI that needs nothing now). The default,
- *  `trigger: true`, starts a turn, unless the mind gates words between agents (message.ts). */
-export type AgentMessageOptions = { trigger?: boolean };
+ *  `trigger: true`, starts a turn, unless the mind gates words between agents (message.ts).
+ *  `key` names this one message, by the sender's choice (at most 200 characters): sent again with the
+ *  same key and the same words, it lands once, and the call answers the event the log already
+ *  holds. A sender that cannot know whether its first try arrived (a page after a lost
+ *  connection) sends again with the key it used. The key's name space is the agent's context,
+ *  whoever sends: make keys that nobody else would make. A file of a keyed message is never
+ *  replaced; the same key with other words or other file content is refused (message.ts). */
+export type AgentMessageOptions = { trigger?: boolean; key?: string };
 
 /** `itx.agents.get(path)`: one agent. Anything else on its context is a plain
  *  `itx.cd(path).append(…)`, stamped with where it came from. */
