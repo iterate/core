@@ -77,6 +77,41 @@ test("words to the agent and the stop of an answer go as the person, the stop in
   expect(context.invoke).not.toHaveBeenCalled();
 });
 
+// The page's status names nobody: the stamp says whose it is, so the view rebuilds it from the
+// parsed fields and appends it as the person, with no `call`, as it does the stop.
+test("the page's presence status goes as the person, ephemeral, with exactly the parsed fields", async () => {
+  const { target, asPerson, context } = view();
+  await target.append(presenceStatus({ marks: ["voice"] }));
+  await target.append(presenceStatus({ typing: true }));
+  // equality, not a match: no field beyond the parsed ones, and no second argument (`call`)
+  expect(asPerson).toHaveBeenCalledTimes(2);
+  expect(asPerson).toHaveBeenNthCalledWith(1, [
+    "itx",
+    "builtins",
+    [
+      "append",
+      {
+        type: "presence/status",
+        ephemeral: true,
+        payload: { subscription: "page-1", away: false, typing: false, marks: ["voice"] },
+      },
+    ],
+  ]);
+  expect(asPerson).toHaveBeenNthCalledWith(2, [
+    "itx",
+    "builtins",
+    [
+      "append",
+      {
+        type: "presence/status",
+        ephemeral: true,
+        payload: { subscription: "page-1", away: false, typing: true },
+      },
+    ],
+  ]);
+  expect(context.invoke).not.toHaveBeenCalled();
+});
+
 test.for<{ name: string; act: (target: PersonContextRpcTarget) => unknown; code: string }>([
   { name: "cd to another context", act: (t) => t.cd("/agents/b"), code: "FORBIDDEN" },
   { name: "cd to the parent", act: (t) => t.cd(".."), code: "FORBIDDEN" },
@@ -130,6 +165,61 @@ test.for<{ name: string; act: (target: PersonContextRpcTarget) => unknown; code:
         },
         { type: "events.iterate.com/itx/rewrite-rule-configured", payload: {} },
       ),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of a status that is not ephemeral",
+    act: (t) => t.append({ ...presenceStatus({}), ephemeral: false }),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of a status with no ephemeral",
+    act: (t) => t.append({ type: "presence/status", payload: presenceStatus({}).payload }),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of a status with another payload field",
+    act: (t) => t.append(presenceStatus({ actor: "/members/owner" })),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of a status with an idempotency key",
+    act: (t) => t.append({ ...presenceStatus({}), idempotencyKey: "itx/woken:1" }),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of a status with its own source",
+    act: (t) => t.append({ ...presenceStatus({}), source: { principal: { actor: "/members/a" } } }),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of a status with 9 marks",
+    act: (t) => t.append(presenceStatus({ marks: Array.from({ length: 9 }, (_, i) => `m${i}`) })),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of a status with a 33-character mark",
+    act: (t) => t.append(presenceStatus({ marks: ["m".repeat(33)] })),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of a status that names a 201-character subscription",
+    act: (t) => t.append(presenceStatus({ subscription: "s".repeat(201) })),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of a status that names an empty subscription",
+    act: (t) => t.append(presenceStatus({ subscription: "" })),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of an ephemeral of another type",
+    act: (t) => t.append({ ...presenceStatus({}), type: "presence/typing" }),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "append of two statuses",
+    act: (t) => t.append(presenceStatus({}), presenceStatus({ away: true })),
     code: "FORBIDDEN",
   },
   {
@@ -257,6 +347,16 @@ function view() {
       context as unknown as ConstructorParameters<typeof PersonContextRpcTarget>[1],
       asPerson,
     ),
+  };
+}
+
+/** A page's `presence/status` as a member's page sends it, for its row `page-1`; `payload` adds
+ *  to or replaces the fields. */
+function presenceStatus(payload: Record<string, unknown>) {
+  return {
+    type: "presence/status",
+    ephemeral: true,
+    payload: { subscription: "page-1", away: false, typing: false, ...payload },
   };
 }
 

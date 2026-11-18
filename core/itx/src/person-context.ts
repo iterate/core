@@ -10,10 +10,16 @@
 // itself. Reads go as that caller. A subscription goes as that caller with the person beside it
 // (`onBehalfOf`, no `call` and no `run`): the context stamps the row's event with it, so the
 // subscription names who holds the callback (`heldBy`). Its lease is the session's, and ends with
-// it. The two calls that speak to the context, the words to its agent and the stop of an answer,
-// carry the person beside them, as a member's page does: a token on the call's cause that names
-// them (on-behalf-of.ts), which every append it makes verifies and stamps as `source.onBehalfOf`.
-// Each says who asked or holds, never what they may do.
+// it. The calls that speak to the context carry the person beside them, as a member's page does:
+// a token on the call's cause that names them (on-behalf-of.ts), which every append it makes
+// verifies and stamps as `source.onBehalfOf`. Each says who asked or holds, never what they may do.
+//
+// WHAT THE VIEW APPENDS. Two events alone, each rebuilt from the fields it parsed, so nothing else
+// the page wrote (a key, a `source`, another field) lands: the stop of an answer, in the
+// platform's words, and the page's presence status (@iterate-com/ui `lib/presence.ts`), one
+// ephemeral `presence/status`, which no log stores. The status names nobody and decides nothing:
+// the stamp says whose it is (no `call`, no `run`, `via.appPage`), and a reader counts it only for
+// the row its stamp's person holds, so a status that names another row is nobody's.
 import { RpcTarget } from "capnweb";
 import { type ItxExpression } from "iterate/expression";
 import { codedError, resolveContextPath } from "iterate/lib";
@@ -54,6 +60,18 @@ const StopOfAnAnswer = z.tuple([
     type: z.literal("events.iterate.com/agent/context-added"),
     payload: z.looseObject({
       llmRequestPolicy: z.looseObject({ behaviour: z.literal("interrupt-current-request") }),
+    }),
+  }),
+]);
+const PresenceStatus = z.tuple([
+  z.strictObject({
+    type: z.literal("presence/status"),
+    ephemeral: z.literal(true),
+    payload: z.strictObject({
+      subscription: z.string().min(1).max(200),
+      away: z.boolean(),
+      typing: z.boolean(),
+      marks: z.array(z.string().min(1).max(32)).max(8).optional(),
     }),
   }),
 ]);
@@ -140,12 +158,18 @@ export class PersonContextRpcTarget extends RpcTarget {
     return this.#context.invoke(["itx", "builtins", "facets", ["get", facet], [method]]);
   }
 
-  /** The chat's stop of an answer alone, which the platform appends in its own words. */
+  /** The chat's stop of an answer, which the platform appends in its own words, or the page's
+   *  presence status, rebuilt from its parsed fields (WHAT THE VIEW APPENDS, above). */
   append(...events: unknown[]): Promise<unknown> {
+    const status = PresenceStatus.safeParse(events);
+    if (status.success) {
+      const [{ type, ephemeral, payload }] = status.data;
+      return this.#asPerson(["itx", "builtins", ["append", { type, ephemeral, payload }]]);
+    }
     if (!StopOfAnAnswer.safeParse(events).success)
       throw codedError(
         "FORBIDDEN",
-        "append on a person's view takes the chat's stop of an answer alone: one events.iterate.com/agent/context-added with llmRequestPolicy.behaviour interrupt-current-request",
+        "append on a person's view takes one event alone: the chat's stop of an answer (an events.iterate.com/agent/context-added with llmRequestPolicy.behaviour interrupt-current-request), or the page's presence status (an ephemeral presence/status with { subscription, away, typing, marks? } and no other field)",
       );
     return this.#asPerson([
       "itx",
