@@ -23,6 +23,7 @@ import { EMAIL_SIGN_IN_PATH, emailSignInResponse } from "./email-sign-in.ts";
 import { dashOriginOf, type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
 import { firstOwnerResponse } from "./first-owner.ts";
 import { googleSignInResponse } from "./google-sign-in.ts";
+import { GUEST_SIGN_IN_PATH, guestSignInResponse } from "./guest-sign-in.ts";
 import { keyTokenResponse } from "./key-tokens.ts";
 import { keysPagesResponse } from "./keys-pages.ts";
 import { membersResponse, standingOf } from "./members.ts";
@@ -101,17 +102,26 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
     const next = url.searchParams.get("next") || "/";
     const { domain, login } = iterateConfigOf(env);
     // an app that names the ways it takes gets those ways' buttons (./sign-in.ts `methodsAskedIn`)
-    const methods = methodsAskedIn(env, next);
+    const asked = methodsAskedIn(env, next);
+    const app = await askingAppOf(env, next);
+    // a guest comes to a hostname's own page alone (./guest-sign-in.ts): any other request that
+    // names the way gets the others it names
+    const methods = asked && (app ? asked : asked.filter((method) => method !== "guest"));
     if (methods?.length === 0) return nobodySignsInPage();
+    // an app that takes guests alone has one way: its form
+    if (methods?.length === 1 && methods[0] === "guest")
+      return Response.redirect(
+        `${issuerOf(env)}${GUEST_SIGN_IN_PATH}?${new URLSearchParams({ next })}`,
+        302,
+      );
     if (methods)
       return methodsSignInPage({
         domain,
         next,
         methods,
-        app: await askingAppOf(env, next),
+        app,
         keepsCloudflareAccess: login.methods.cloudflare?.keepAccess,
       });
-    const app = await askingAppOf(env, next);
     if (await codeComesFirst(env, app))
       return Response.redirect(
         `${issuerOf(env)}${EMAIL_SIGN_IN_PATH}?${new URLSearchParams({ next })}`,
@@ -136,6 +146,8 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
   if (googleSignIn) return googleSignIn;
   const cloudflareSignIn = await cloudflareSignInResponse(env, request);
   if (cloudflareSignIn) return cloudflareSignIn;
+  const guestSignIn = await guestSignInResponse(env, request);
+  if (guestSignIn) return guestSignIn;
   const passkeySignIn = await passkeySignInResponse(env, request);
   if (passkeySignIn) return passkeySignIn;
   if (pathname === SIGN_OUT_PATH && request.method === "POST") return signOutResponse(env, request);

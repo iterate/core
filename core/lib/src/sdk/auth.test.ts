@@ -108,9 +108,40 @@ test("person reads the stamp; a person who is no member is not let through requi
 test.for<{
   name: string;
   method?: string;
-  methods?: ("passkey" | "email" | "google" | "cloudflare")[];
+  methods?: ("passkey" | "email" | "google" | "cloudflare" | "guest")[];
   challenge: string | null;
 }>([
+  {
+    name: "a guest, where the app names guests",
+    method: "guest",
+    methods: ["guest"],
+    challenge: null,
+  },
+  {
+    name: "a guest, where the app names guests beside its members' ways",
+    method: "guest",
+    methods: ["guest", "passkey", "email"],
+    challenge: null,
+  },
+  {
+    name: "a guest, where the app names other ways",
+    method: "guest",
+    methods: ["passkey", "email"],
+    challenge:
+      'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication", acr_values="passkey email"',
+  },
+  {
+    name: "a guest, where the app names no way",
+    method: "guest",
+    challenge: 'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication"',
+  },
+  {
+    name: "a mailed code's, where the app names guests alone",
+    method: "email",
+    methods: ["guest"],
+    challenge:
+      'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication", acr_values="guest"',
+  },
   {
     name: "Cloudflare's, where the app names it",
     method: "cloudflare",
@@ -162,6 +193,26 @@ test("signed out, a guard that names ways says them, in its order, with no error
   expect(
     auth.person(workerRequest("GET", stampedBy("cloudflare")), { methods: ["cloudflare"] }),
   ).toMatchObject({ userId: "user_1", method: "cloudflare" });
+});
+
+// A guest is a person where an app names the way, with the name they typed and no address, and
+// never a member: the member guard reads the principal, which a guest never has.
+test("a guest is a person with a name and no address, and no member", () => {
+  const stamp = { userId: "user_1", email: "", name: "Bob", method: "guest" };
+  const request = workerRequest("GET", { "x-itx-person": JSON.stringify(stamp) });
+  expect(auth.person(request, { methods: ["guest"] })).toEqual(stamp);
+  expect(auth.person(request)).toBeNull();
+  expect(auth.require(request)).toMatchObject({ status: 401 });
+  expect(auth.itx(request)).toMatchObject({ status: 401 });
+  expect(auth.personItx(request, "/agents/a")).toMatchObject({ status: 401 });
+  // the one-context view is the platform's to serve only when the app's own guard names guests
+  expect(
+    auth.personItx(
+      workerRequest("GET", { upgrade: "websocket", "x-itx-person": JSON.stringify(stamp) }),
+      "/agents/a",
+      { methods: ["guest"] },
+    ),
+  ).toMatchObject({ status: 426 });
 });
 
 // What a member's page of the UI kit asks of its app's host: its socket and the shell's three

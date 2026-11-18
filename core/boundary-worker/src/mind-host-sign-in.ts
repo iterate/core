@@ -32,11 +32,15 @@ export function mindHostSignInAnswerOf(input: {
   /** How the caller signed in, when they did (./stamp.ts). */
   method?: string;
 }): HostSignIn | "not-a-member" | Response | null {
-  const { answer, request, caller } = input;
+  const { answer, request } = input;
   if (answer.status !== 401) return null;
   const challenge = iterateSignInChallengeOf(answer.headers.get("www-authenticate"));
   if (!challenge) return null;
   const signIn = { methods: challenge.acrValues };
+  // A GUEST IS NOBODY where the app does not name the way: its challenge is answered as a
+  // stranger's is, with the sign-in, never with "you are no member" for someone with no address.
+  const caller =
+    input.method === "guest" && !challenge.acrValues.includes("guest") ? "anonymous" : input.caller;
   // A STEP-UP (RFC 9470): the app takes none of the ways this session began by, so the person
   // signs in again, member or not, by a way it names. With no way named, the sign-in is the
   // mind's own, which changes only a session that began at Cloudflare.

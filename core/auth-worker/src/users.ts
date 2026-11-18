@@ -9,11 +9,24 @@ type UserRecord = { id: string; email: string };
  *  subject linked before keeps its person (../migrations/0012). The record's `email` is that key or
  *  a checked address, so a session takes the address from the way itself. */
 export const linkBySubject = (db: D1Database, input: { provider: string; subject: string }) =>
-  linkIdentity(db, { ...input, email: `${input.provider}:${input.subject}` });
+  link(db, { ...input, email: `${input.provider}:${input.subject}` });
+
+/** THE PERSON OF A WAY THAT CHECKED AN ADDRESS, by that address: a mailed code, Google, a ticket.
+ *  What is no address (it has no "@") is refused: such a key is a person whom no address ever
+ *  reaches (`linkBySubject`: a Cloudflare user, a guest), and no proof of an address may take
+ *  that person's row. */
+export async function linkIdentity(
+  db: D1Database,
+  input: { provider: string; subject: string; email: string },
+): Promise<UserRecord> {
+  if (!input.email.includes("@"))
+    throw codedError("INVALID_INPUT", "A sign-in that checks an address links an address alone.");
+  return link(db, input);
+}
 
 // One batch, so two first sign-ins at once resolve to one person. `unique (provider, user_id)`
 // refuses a second subject of one provider for a person, and a refused link reads back as no one.
-export async function linkIdentity(
+async function link(
   db: D1Database,
   input: { provider: string; subject: string; email: string },
 ): Promise<UserRecord> {

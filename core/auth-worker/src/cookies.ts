@@ -5,7 +5,8 @@ import { jwtVerify, SignJWT } from "jose";
 import { z } from "zod";
 import type { AccountFacts } from "./account-facts.ts";
 import { FIRST_OWNER_TICKET_MS } from "./config.ts";
-import { type Env, issuerOf } from "./env.ts";
+import { isBlocked } from "./blocked.ts";
+import { type Env, issuerOf, offersMethod } from "./env.ts";
 
 // A browser's session at the issuer is a row of `browser_sessions` (../migrations/0011), and its
 // cookie holds the row's id. It ends at expiry, at sign-out, on /sessions (./sessions-page.ts),
@@ -16,6 +17,11 @@ const SESSION_SECONDS = 30 * 24 * 3600;
 // Cloudflare's session is kept apart from the mind's: ./cloudflare-sign-in.ts says why.
 const CLOUDFLARE_SESSION_COOKIE = "__Host-iterate-auth-cloudflare-session";
 const CLOUDFLARE_SESSION_SECONDS = 7 * 24 * 3600;
+// A guest's is kept apart too, and proves nothing: ./guest-sign-in.ts says what reads it. It
+// outlives a guest's 15 minutes on an app's host (./oauth.ts), so that a browser that comes back
+// is the same guest and is asked for no name again.
+const GUEST_SESSION_COOKIE = "__Host-iterate-auth-guest-session";
+const GUEST_SESSION_SECONDS = 30 * 24 * 3600;
 /** `last_seen_at` is written at most this often: a D1 write on every request would cost. */
 const SEEN_EVERY_MS = 10 * 60_000;
 /** An ended or expired row stays this long, then the user's next sign-in deletes it. */
@@ -24,10 +30,13 @@ const FLOW_COOKIE = "__Host-iterate-auth-sign-in";
 const FLOW_SECONDS = 10 * 60;
 
 /** How a session was opened (iterate/principal `SignInMethod`) is kept in its row as `method`.
- *  "cloudflare" is never in a row: `cloudflareSessionOf` alone answers it. */
-const BrowserSignInMethod = SignInMethod.exclude(["cloudflare"]);
+ *  "cloudflare" and "guest" are never in a row: `cloudflareSessionOf` and `guestSessionOf` alone
+ *  answer them. */
+const BrowserSignInMethod = SignInMethod.exclude(["cloudflare", "guest"]);
 
-export type Session = { userId: string; email: string; method: SignInMethod };
+/** `email`: the person's address, or for a guest the key of their row (`guest:<subject>`,
+ *  ./users.ts `linkBySubject`), which is no address. `name`: the name a guest typed. */
+export type Session = { userId: string; email: string; method: SignInMethod; name?: string };
 
 /** A session at the issuer that has its row: every session but Cloudflare's. `id` is the row's. */
 export type BrowserSession = Session & { id: string; method: BrowserSignInMethod };
@@ -238,6 +247,56 @@ export async function cloudflareSessionOf(env: Env, request: Request): Promise<S
 }
 
 export const clearCloudflareSessionCookie = cookie(CLOUDFLARE_SESSION_COOKIE, "", 0);
+
+/** A guest's cookie: the user id, the key of their row and the name they typed. Set again at each
+ *  session it earns on an app's host, so it ends 30 days after the browser last came. */
+export async function guestSessionCookie(
+  env: Env,
+  guest: { id: string; key: string; name: string },
+) {
+  return cookie(
+    GUEST_SESSION_COOKIE,
+    await sign(
+      env,
+      "guest-session",
+      { key: guest.key, name: guest.name },
+      guest.id,
+      GUEST_SESSION_SECONDS,
+    ),
+    GUEST_SESSION_SECONDS,
+  );
+}
+
+/** THE GUEST THIS BROWSER IS, or null; `blocked` when an owner blocked them (./members.ts). Null
+ *  on a stack whose config has no such way, so a deploy that takes the way away ends every guest.
+ *  The token's audience is this cookie's own, as Cloudflare's is: the mind's session cookie under
+ *  this name is no guest, and this one under that name is no session. */
+export async function guestOf(
+  env: Env,
+  request: Request,
+): Promise<(Session & { name: string; blocked: boolean }) | null> {
+  if (!offersMethod(env, "guest")) return null;
+  const claims = await verified(env, request, GUEST_SESSION_COOKIE, "guest-session");
+  const key = z.string().startsWith("guest:").safeParse(claims?.key);
+  const name = z.string().min(1).safeParse(claims?.name);
+  if (!claims?.sub || !key.success || !name.success) return null;
+  return {
+    userId: claims.sub,
+    email: key.data,
+    method: "guest",
+    name: name.data,
+    blocked: await isBlocked(env, key.data),
+  };
+}
+
+/** The guest's session, for the one reader that gives it something (./authorize.ts): a guest who
+ *  is not blocked. */
+export async function guestSessionOf(env: Env, request: Request): Promise<Session | null> {
+  const guest = await guestOf(env, request);
+  return guest && !guest.blocked ? guest : null;
+}
+
+export const clearGuestSessionCookie = cookie(GUEST_SESSION_COOKIE, "", 0);
 
 export async function flowCookie(env: Env, flow: Flow) {
   return cookie(

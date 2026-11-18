@@ -156,6 +156,11 @@ export function methodsSignInPage(input: {
           "/sign-in/email",
           `<button type="submit"${index ? ` class="outline"` : ""}>Sign in with a code by email</button>`,
         );
+      case "guest":
+        return way(
+          "/sign-in/guest",
+          `<button type="submit"${index ? ` class="outline"` : ""}>Continue as a guest</button>`,
+        );
       case "passkey":
         return passkey.body;
       default:

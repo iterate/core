@@ -2,16 +2,21 @@ import type { Env } from "../env.ts";
 
 const WINDOW_MS = 10 * 60_000;
 
-// Per kind, per window: 20 a client, 120 the stack, which bounds what a stranger with many addresses
-// can make it store. One statement, so two at once cannot both pass. ?1 kind, ?2 client, ?3 now.
+// Per kind, per window: 20 a client, 120 the stack (or the stack's own number for its guests),
+// which bounds what a stranger with many addresses can make it store. One statement, so two at
+// once cannot both pass. ?1 kind, ?2 client, ?3 now, ?4 the stack's bound.
 const ADMIT = `insert into admissions (kind, client, created_at)
 select ?1, ?2, ?3
 where (?2 is null or (select count(*) from admissions
                       where kind = ?1 and client = ?2 and created_at > ?3 - ${WINDOW_MS})
                      < 20)
   and (select count(*) from admissions where kind = ?1 and created_at > ?3 - ${WINDOW_MS})
-      < 120
+      < ?4
 returning 1 as admitted`;
+
+/** The window that every bound here counts in, as a number that names it: two refusals in one
+ *  window are one event (./guest-sign-in.ts). */
+export const admissionWindowOf = (now: number) => Math.floor(now / WINDOW_MS);
 
 /** The client a limit counts a request for: the address the edge names, or the mind's own
  *  requests' one address, which the boundary sets (core/boundary-worker `own-request.ts`). A
@@ -21,18 +26,21 @@ export function clientOf(request: Request): string {
   return request.headers.get("cf-connecting-ip") || "no-address";
 }
 
-/** `host-client` alone is asked with no client: the boundary asks for a visitor it does not name,
- *  so the stack's own count holds it. */
+/** `host-client` is asked with no client: the boundary asks for a visitor it does not name, so
+ *  the stack's own count holds it. So is `guest-session`: the guests of one office come from one
+ *  address, and each takes a session every 15 minutes. `stackBound`: the stack's bound for its
+ *  guests, from its config; 120 for every other kind. */
 export async function admitted(
   env: Env,
-  kind: "device" | "registration" | "host-client",
+  kind: "device" | "registration" | "host-client" | "guest" | "guest-session",
   request: Request,
+  stackBound = 120,
 ) {
   const now = Date.now();
-  const client = kind === "host-client" ? null : clientOf(request);
+  const client = kind === "host-client" || kind === "guest-session" ? null : clientOf(request);
   const [, added] = await env.DB.batch([
     env.DB.prepare("delete from admissions where created_at <= ?1").bind(now - WINDOW_MS),
-    env.DB.prepare(ADMIT).bind(kind, client, now),
+    env.DB.prepare(ADMIT).bind(kind, client, now, stackBound),
   ]);
   const allowed = Boolean(added?.results[0]);
   if (!allowed) console.warn({ event: "auth.admission-refused", kind });

@@ -11,13 +11,18 @@ import { AccountFacts } from "./account-facts.ts";
 import { appOf, askingAppOf } from "./asking-app.ts";
 import {
   clearCloudflareSessionCookie,
+  clearGuestSessionCookie,
   clearSessionCookie,
   cloudflareSessionOf,
   endThisSession,
+  guestSessionCookie,
+  guestSessionOf,
   type Session,
   sessionOf,
 } from "./cookies.ts";
+import { admitted } from "./device/limits.ts";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { guestRefusal } from "./guest-sign-in.ts";
 import {
   type GrantProps,
   grantedScopes,
@@ -85,8 +90,12 @@ async function describe(env: Env, request: Request) {
   // whoever has no session made one of those ways is sent to the page of those ways.
   const methods = methodsAskedIn(env, here);
   if (methods?.length === 0) return nobodySignsInPage();
-  const session = await sessionFor(env, request, methods);
+  // A hostname's own sign-in asks for the chooser only after that host's sign-out
+  // (boundary-worker's host-session.ts): the press it needs is the way back into the app.
+  const hostSignIn = hostResource && authRequest.redirectUri === hostCallbackOf(hostResource);
+  const session = await sessionFor(env, request, methods, Boolean(hostSignIn));
   const cloudflare = session?.method === "cloudflare";
+  const guest = session?.method === "guest";
   const signIn = `${issuerOf(env)}${signInHref(here)}`;
   if (!session) return Response.redirect(signIn, 302);
   // OpenID Connect's `prompt`. `login`: sign in again, whoever is signed in. `select_account`: say
@@ -94,8 +103,10 @@ async function describe(env: Env, request: Request) {
   // Cloudflare ends for either, and the person starts again on the page of the app's ways:
   // Cloudflare's own page says who is signed in there, and with no page of ours between,
   // Cloudflare would sign the same person straight back in.
-  if (prompt === "login" || (prompt && cloudflare)) {
-    // the browser's session ends with its cookie; Cloudflare's has no row
+  // A guest's ends for either too: the name form is the page that says who they are, and its
+  // answer is a new guest.
+  if (prompt === "login" || (prompt && (cloudflare || guest))) {
+    // the browser's session ends with its cookie; Cloudflare's and a guest's have no row
     const facts = new AccountFacts();
     await endThisSession(env, session, facts);
     return facts.on(
@@ -103,15 +114,16 @@ async function describe(env: Env, request: Request) {
         status: 302,
         headers: {
           location: signIn,
-          "set-cookie": cloudflare ? clearCloudflareSessionCookie : clearSessionCookie,
+          "set-cookie": cloudflare
+            ? clearCloudflareSessionCookie
+            : guest
+              ? clearGuestSessionCookie
+              : clearSessionCookie,
           "cache-control": "no-store",
         },
       }),
     );
   }
-  // A hostname's own sign-in asks for the chooser only after that host's sign-out
-  // (boundary-worker's host-session.ts): the press it needs is the way back into the app.
-  const hostSignIn = hostResource && authRequest.redirectUri === hostCallbackOf(hostResource);
   if (prompt === "select_account")
     return chooserPage({
       domain: iterateConfigOf(env).domain,
@@ -124,6 +136,27 @@ async function describe(env: Env, request: Request) {
     });
   const refused = await notMemberRefusal(env, session, hostResource, here);
   if (refused) return refused;
+  // A GUEST'S NEXT 15 MINUTES on this host (./guest-sign-in.ts): counted for the whole stack,
+  // since anyone can be a guest. The cookie is set again, so it ends 30 days after the browser
+  // last came.
+  if (hostSignIn && guest) {
+    const { sessionsPerTenMinutes } = iterateConfigOf(env).login.methods.guest!;
+    if (!(await admitted(env, "guest-session", request, sessionsPerTenMinutes)))
+      return guestRefusal("session-rate", new URL(hostResource).host);
+    const { redirectTo } = await complete(env, session, authRequest, hostResource);
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: redirectTo,
+        "set-cookie": await guestSessionCookie(env, {
+          id: session.userId,
+          key: session.email,
+          name: session.name || "",
+        }),
+        "cache-control": "no-store",
+      },
+    });
+  }
   // a hostname's own sign-in: the code goes to ingress on that host alone, and is not a consent
   if (hostSignIn) {
     const { redirectTo } = await complete(env, session, authRequest, hostResource);
@@ -158,16 +191,25 @@ async function describe(env: Env, request: Request) {
 
 /** THE SESSION THAT MAY GET A CODE, or null. With no `methods`, the mind's own session. With the
  *  ways an app takes, the mind's own session when it began one of those ways, else Cloudflare's
- *  when they name Cloudflare. Each is read from its own cookie, so nothing a browser sends turns
- *  one into the other, and Cloudflare's is read for an app that names it alone. */
+ *  when they name Cloudflare, else a guest's when they name guests. Each is read from its own
+ *  cookie, so nothing a browser sends turns one into the other, and Cloudflare's and a guest's
+ *  are read for an app that names them alone. The order keeps who a person is: someone signed in
+ *  is never taken for the guest their browser also was. `hostSignIn`: the request is a hostname's
+ *  own sign-in. A guest's counts there alone, never for a client that asks a consent (an MCP
+ *  client, an outside app): a guest is let onto a page, and lets nothing in. */
 async function sessionFor(
   env: Env,
   request: Request,
   methods: readonly SignInMethod[] | null,
+  hostSignIn: boolean,
 ): Promise<Session | null> {
   const own = await sessionOf(env, request);
   if (!methods || (own?.method && methods.includes(own.method))) return own;
-  return methods.includes("cloudflare") ? cloudflareSessionOf(env, request) : null;
+  const cloudflare = methods.includes("cloudflare")
+    ? await cloudflareSessionOf(env, request)
+    : null;
+  if (cloudflare || !hostSignIn || !methods.includes("guest")) return cloudflare;
+  return guestSessionOf(env, request);
 }
 
 /** The ways the app took, as a consent keeps them: the OAuth library keeps the request it begins
@@ -211,7 +253,8 @@ async function decide(env: Env, request: Request) {
   // the resource and the ways are the ones the consent was begun with, kept by the library: the
   // form names neither
   const kept = ConsentMethods.safeParse(approved.request).data?.methods;
-  const session = await sessionFor(env, request, kept || null);
+  // a consent is never a hostname's own sign-in, so no guest approves one
+  const session = await sessionFor(env, request, kept || null, false);
   if (!session) return signedOut();
   const hostResource = mindHostResourceOf(env, approved.request.resource);
   const refused = await notMemberRefusal(env, session, hostResource, "/");
@@ -243,6 +286,7 @@ export function newGrantProps(session: Session): GrantProps {
     userId: session.userId,
     email: session.email,
     method: session.method,
+    ...(session.method === "guest" && { name: session.name }),
     standingByMethod: true,
   };
 }
@@ -262,9 +306,15 @@ async function complete(
     ? (await deviceStore(env.OAUTH_KV).byKey(authRequest.state))?.letIn
     : undefined;
   // Every code is made here, so this is the last check of the rule the callers follow: a sign-in at
-  // Cloudflare serves a mind hostname alone (./cloudflare-sign-in.ts).
+  // Cloudflare serves a mind hostname alone (./cloudflare-sign-in.ts), and a guest's that
+  // hostname's own page alone (./guest-sign-in.ts).
   if (session.method === "cloudflare" && !hostResource)
     throw new Error("A sign-in at Cloudflare serves a mind hostname alone.");
+  if (
+    session.method === "guest" &&
+    (!hostResource || authRequest.redirectUri !== hostCallbackOf(hostResource))
+  )
+    throw new Error("A guest's sign-in serves a mind hostname's own page alone.");
   const props: GrantProps = {
     ...newGrantProps(session),
     ...(letIn && {

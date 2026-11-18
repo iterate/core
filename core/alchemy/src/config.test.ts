@@ -376,6 +376,27 @@ void test("a sign-in with Cloudflare that keeps its access is a public switch: t
   assert.deepEqual(byVariable.auth.login.methods.cloudflare, kept);
 });
 
+void test("a config that takes guests is one the stack may keep, with its two bounds, and the deploy's environment sets a bound", async () => {
+  const withGuests = {
+    ...stack,
+    auth: { login: { ...stack.auth.login, methods: { guest: {} } } },
+  };
+  const loaded = await loadedFromFile(withGuests);
+  const bounds = { newPerTenMinutes: 120, sessionsPerTenMinutes: 600 };
+  assert.deepEqual(loaded.auth.login.methods.guest, bounds);
+  assert.deepEqual(await loadedFromFile(storedConfigOf(loaded)), loaded);
+  assert.deepEqual(
+    authConfigOf("mind.example", authSettingsOf(loaded)).login.methods.guest,
+    bounds,
+  );
+  const byVariable = await loadedFromFile(withGuests, {
+    ITERATE_MIND__AUTH__LOGIN__METHODS__GUEST__NEW_PER_TEN_MINUTES: "30",
+  });
+  assert.deepEqual(byVariable.auth.login.methods.guest, { ...bounds, newPerTenMinutes: 30 });
+  // no config names guests unless its owner wrote it
+  assert.equal((await loadedFromFile(stack)).auth.login.methods.guest, undefined);
+});
+
 void test("the deploy's environment sets a field by its ITERATE_MIND__ variable, on top of the file", async () => {
   const loaded = await loadedFromFile(withCloudflare, {
     [SECRET_VAR]: "proof-secret",

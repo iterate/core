@@ -80,6 +80,7 @@ export function cloudflareSignInOf(env: Env): CloudflareSignIn | null {
  *  needs beside the config). An app that names only ways this answers false for lets nobody in. */
 export function offersMethod(env: Env, method: SignInMethod): boolean {
   if (method === "cloudflare") return Boolean(cloudflareSignInOf(env));
+  if (method === "guest") return Boolean(iterateConfigOf(env).login.methods.guest);
   if (method === "google") return offersGoogle(env);
   if (method === "email") return Boolean(iterateConfigOf(env).login.methods.email);
   return method === "passkey";

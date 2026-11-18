@@ -135,7 +135,8 @@ export async function stampedRequest(
     const person: Person = {
       userId: identity.principal.actor,
       email: identity.principal.email || "",
-      name: nameInEmail(identity.principal.email || ""),
+      // a guest's is the one they typed, which is all they have
+      name: identity.name || nameInEmail(identity.principal.email || ""),
       method: identity.method,
     };
     headers.set(ITX_PERSON_HEADER, stampJsonOf(person));

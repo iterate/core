@@ -270,7 +270,7 @@ test("the two cookies are two kinds of session: neither is read as the other, an
   expect(await standingOf(env, session)).toBe("not-member");
   expect(await standingOf(env, (await sessionOf(env, at(passkey)))!)).toBe("member");
 
-  // signing out ends both
+  // signing out ends both, and the guest this browser was (./guest-sign-in.ts)
   const out = await signOutResponse(
     env,
     new Request(`${ISSUER}/sign-out`, {
@@ -282,6 +282,7 @@ test("the two cookies are two kinds of session: neither is read as the other, an
   expect(out.headers.getSetCookie()).toEqual([
     expect.stringMatching(/^__Host-iterate-auth-session=; .*Max-Age=0/),
     expect.stringMatching(/^__Host-iterate-auth-cloudflare-session=; .*Max-Age=0/),
+    expect.stringMatching(/^__Host-iterate-auth-guest-session=; .*Max-Age=0/),
   ]);
 });
 

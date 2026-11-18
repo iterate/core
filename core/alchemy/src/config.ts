@@ -285,6 +285,10 @@ const PUBLIC_FIELDS = new Set([
   "auth.login.methods.google.signsInAlone",
   // a Cloudflare OAuth client's id, in every consent URL; its `clientSecret` is no public field
   "auth.login.methods.cloudflare.clientId",
+  // guests, and the two bounds on what strangers make the stack store
+  "auth.login.methods.guest",
+  "auth.login.methods.guest.newPerTenMinutes",
+  "auth.login.methods.guest.sessionsPerTenMinutes",
   // a switch: the sign-in keeps Cloudflare's tokens as a secret of the mind
   "auth.login.methods.cloudflare.keepAccess",
   "auth.login.allow[].email",

@@ -33,16 +33,25 @@ export type PersonOptions = { methods?: readonly SignInMethod[] };
  *
  *  WAYS TO SIGN IN. `auth.person` and `auth.requirePerson` take `{ methods }`: the ways to sign in
  *  that the app takes, of those the stack's config offers (`"passkey"`, `"email"`, `"google"`,
- *  `"cloudflare"`), in the order its sign-in page shows them. A person who signed in another way
+ *  `"cloudflare"`, `"guest"`), in the order its sign-in page shows them. A person who signed in another way
  *  is no person to that guard: `requirePerson` answers the challenge with RFC 9470's
  *  `acr_values`, and for a page load ingress signs them in again on this host, by a way the app
  *  names. An OAuth client of the app, such as an MCP client, sends no `acr_values`: name the same
  *  ways in the app's manifest, `"iterate": { "methods": [...] }`, and its sign-in offers them
- *  (core/auth-worker/src/asking-app.ts). Without `methods`, every way counts but Cloudflare's: a sign-in with Cloudflare counts
- *  only where an app names it, because the stack does not know that Cloudflare checked the
- *  address (core/auth-worker/src/cloudflare-sign-in.ts). A session from before sessions said how
- *  they began counts only where an app names no `methods`. The guard is the rule: what the issuer
- *  shows a person is routing, which a browser can change.
+ *  (core/auth-worker/src/asking-app.ts). Without `methods`, every way counts but Cloudflare's and
+ *  a guest's: a sign-in with Cloudflare counts only where an app names it, because the stack does
+ *  not know that Cloudflare checked the address (core/auth-worker/src/cloudflare-sign-in.ts). A
+ *  session from before sessions said how they began counts only where an app names no `methods`.
+ *  The guard is the rule: what the issuer shows a person is routing, which a browser can change.
+ *
+ *  GUESTS. `"guest"` lets in anyone who types a name (core/auth-worker/src/guest-sign-in.ts): the
+ *  person is `{ userId, email: "", name, method: "guest" }`, and nothing about them is checked. A
+ *  guest is a person to a guard that names `"guest"`, and nobody everywhere else: never a member,
+ *  never a principal. So that name alone must open nothing: check what the visitor holds (a share
+ *  link's secret, say) before you serve, and check it again on every page load. A guest's session
+ *  on your host lasts 15 minutes and is renewed with no question while the browser comes back, so
+ *  that check is what ends a guest's reach when a link ends. Name the members' ways beside it
+ *  (`["guest", "passkey", "email"]`), or someone who is signed in must sign out to come in.
  *
  *  ```js
  *  const refused = this.auth.requirePerson(request, { methods: ["cloudflare"] });
@@ -96,7 +105,7 @@ export const auth = {
     if (!person) return null;
     const taken = methods
       ? Boolean(person.method && methods.includes(person.method))
-      : person.method !== "cloudflare";
+      : person.method !== "cloudflare" && person.method !== "guest";
     return taken ? person : null;
   },
   /** THE MEMBER'S OWN `itx`, FOR THE PAGE THEY ARE ON: answer this from the path the page opens

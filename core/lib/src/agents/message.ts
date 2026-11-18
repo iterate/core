@@ -125,9 +125,10 @@ export function speakerOf(source: StreamEvent["source"]): Speaker | undefined {
   }
   const principal = source.principal || source.onBehalfOf?.principal;
   if (!principal) return undefined;
-  const { actor, email, kind, impersonatedBy } = principal;
+  // `kind` and `name` stay out: only a signer is a mind, and a guest's name is their own claim
+  const { actor, email, impersonatedBy } = principal;
   const script = !source.principal && Boolean(source.onBehalfOf?.run);
-  return { actor, email, kind, script: script || undefined, impersonatedBy };
+  return { actor, email, script: script || undefined, impersonatedBy };
 }
 
 /** The `context-added` iterate's loop appends for a `message-received` (processor.ts): the words,

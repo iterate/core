@@ -15,7 +15,7 @@ import { admitted, TOO_MANY } from "./device/limits.ts";
 import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { isBlocked } from "./blocked.ts";
 import { isMember, standingOf } from "./members.ts";
-import { cloudflareSignInOf, type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { cloudflareSignInOf, type Env, issuerOf, iterateConfigOf, offersMethod } from "./env.ts";
 
 export const AUTHORIZE_ENDPOINT = "/oauth2/auth";
 export const TOKEN_ENDPOINT = "/oauth2/token";
@@ -125,6 +125,9 @@ export const GrantProps = z.object({
    *  `auth.requirePerson`), and which says whether its token acts as a member (`grantStandingOf`).
    *  Absent on a grant made before grants kept it: no app that names its ways takes that one. */
   method: SignInMethod.optional(),
+  /** The name a guest typed (`method` "guest"). A guest's `email` is the key of their row
+   *  (`guest:<subject>`), which is no address: an owner's block names it (./members.ts). */
+  name: z.string().optional(),
   /** A grant made since this rule carries it: such a grant acts as a member only while its sign-in
    *  way gives a member's standing (`grantStandingOf`). A grant without it was made before, and
    *  keeps the rule it was made under. */
@@ -148,6 +151,9 @@ const ACCESS_TOKEN_SECONDS = 3600;
 // The whole of the browser's session on a mind hostname (no refresh token); `whoIs` reads
 // membership afresh on every request.
 const HOST_ACCESS_TOKEN_SECONDS = 24 * 3600;
+// A guest's session on a mind hostname. The browser earns the next one with no question while it
+// comes back (./guest-sign-in.ts), so an app's own check of what the guest holds runs this often.
+const GUEST_HOST_ACCESS_TOKEN_SECONDS = 15 * 60;
 // The library writes a client again at a token exchange past half of this, so twice a grant's idle
 // life keeps every client that still has a grant.
 const CLIENT_REGISTRATION_SECONDS = 2 * SESSION_IDLE_SECONDS;
@@ -224,11 +230,21 @@ export async function tokenIdentity(
   const expiresAt = deadline
     ? Math.min(validated.expiresAt, Math.floor(deadline / 1000))
     : validated.expiresAt;
-  if (props.data.method === "cloudflare" && !cloudflareServes(env, hostResource)) return null;
+  if (!hostOnlyWayServes(env, props.data.method, hostResource)) return null;
   const member = (await grantStandingOf(env, props.data)) === "member";
   if (expiresAt * 1000 <= Date.now() || (!hostResource && !member)) return null;
   // a member is never blocked, so only a mind hostname's token asks
   if (!member && (await isBlocked(env, props.data.email))) return null;
+  // a guest has a name and no address: the key of their row stays here
+  if (props.data.method === "guest")
+    return {
+      principal: { actor: props.data.userId },
+      grant: props.data.grantId,
+      expiresAt,
+      member: false,
+      method: "guest",
+      name: props.data.name,
+    };
   return {
     principal: { actor: props.data.userId, email: props.data.email },
     grant: props.data.grantId,
@@ -238,11 +254,19 @@ export async function tokenIdentity(
   };
 }
 
-/** WHETHER A GRANT FROM A SIGN-IN AT CLOUDFLARE SERVES `hostResource` (./cloudflare-sign-in.ts): a
- *  mind hostname alone, never the mind's API, MCP server or `/provide`, and only while the stack
- *  offers the way. Asked at every use, so a deploy that takes the way away ends its grants. */
-const cloudflareServes = (env: Env, hostResource: string | null) =>
-  Boolean(hostResource && cloudflareSignInOf(env));
+/** WHETHER A GRANT OF A WAY THAT PROVES NO ADDRESS SERVES `hostResource`: a sign-in at Cloudflare
+ *  (./cloudflare-sign-in.ts) and a guest's (./guest-sign-in.ts) serve a mind hostname alone,
+ *  never the mind's API, MCP server or `/provide`, and only while the stack offers the way. Asked
+ *  at every use, so a deploy that takes the way away ends its grants. Every other way: true. */
+function hostOnlyWayServes(
+  env: Env,
+  method: SignInMethod | undefined,
+  hostResource: string | null,
+) {
+  if (method === "cloudflare") return Boolean(hostResource && cloudflareSignInOf(env));
+  if (method === "guest") return Boolean(hostResource && offersMethod(env, "guest"));
+  return true;
+}
 
 /** WHAT A GRANT IS TO THIS STACK NOW, asked at every use, as Cloudflare's is. A grant with
  *  `standingByMethod` has the standing (./members.ts `standingOf`) of a browser's session made the
@@ -253,7 +277,9 @@ const cloudflareServes = (env: Env, hostResource: string | null) =>
  *  press a passkey to sign in again. */
 async function grantStandingOf(env: Env, grant: GrantProps) {
   if (!grant.standingByMethod)
-    return grant.method !== "cloudflare" && (await isMember(env, grant.email))
+    return grant.method !== "cloudflare" &&
+      grant.method !== "guest" &&
+      (await isMember(env, grant.email))
       ? "member"
       : "not-member";
   if (!grant.method) return "not-member";
@@ -288,7 +314,7 @@ async function grantLifetime(
     throw refused("props_invalid", "The session is no longer active.");
   const grant = parsed.data;
   const hostResource = mindHostResourceOf(env, input.resource);
-  if (grant.method === "cloudflare" && !cloudflareServes(env, hostResource))
+  if (!hostOnlyWayServes(env, grant.method, hostResource))
     throw refused("sign_in_method", "The session is no longer active.");
   const standing = hostResource ? null : await grantStandingOf(env, grant);
   // the reason is the standing: "not-member", or "passkey-owed" for a member's lesser sign-in
@@ -313,8 +339,12 @@ export function grantLifetimeOf(
   exchange: { refresh: boolean; host: boolean; now: number },
 ): { accessTokenTTL: number; refreshTokenTTL?: number } | "deadline_passed" | "let_in_no_refresh" {
   const deadline = letInDeadlineOf(grant);
-  if (!deadline)
-    return { accessTokenTTL: exchange.host ? HOST_ACCESS_TOKEN_SECONDS : ACCESS_TOKEN_SECONDS };
+  if (!deadline && exchange.host)
+    return {
+      accessTokenTTL:
+        grant.method === "guest" ? GUEST_HOST_ACCESS_TOKEN_SECONDS : HOST_ACCESS_TOKEN_SECONDS,
+    };
+  if (!deadline) return { accessTokenTTL: ACCESS_TOKEN_SECONDS };
   const remaining = Math.floor((deadline - exchange.now) / 1000);
   // KV's shortest expiry, below which the library refuses a lifetime.
   if (remaining < 60) return "deadline_passed";

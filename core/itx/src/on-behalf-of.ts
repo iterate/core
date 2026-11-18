@@ -20,8 +20,10 @@ export type OnBehalfOf = {
 export const PrincipalStamp = z.object({
   actor: z.string(),
   email: z.string().optional(),
-  // a person's name to show (iterate/principal `Principal.name`): it decides nothing
+  // a person's name to show, and that they are a guest (iterate/principal `Principal.name`,
+  // `kind`): neither decides anything
   name: z.string().optional(),
+  kind: z.literal("guest").optional().catch(undefined),
   impersonatedBy: z.object({ actor: z.string(), email: z.string() }).optional(),
 });
 

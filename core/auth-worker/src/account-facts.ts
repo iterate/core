@@ -13,6 +13,22 @@ const SignedIn = z.union([
   z.object({ method: z.literal("first-owner-ticket"), session, at: z.number() }),
   z.object({ method: z.literal("member-link"), session, at: z.number() }),
 ]);
+/** A new guest (./guest-sign-in.ts): the name they typed, and the host of the app that let them
+ *  come. Once for each guest: the sessions a guest earns later write nothing. */
+const GuestSignedIn = z.object({
+  userId: z.string().min(1),
+  name: z.string().min(1),
+  app: z.string().min(1),
+  at: z.number(),
+});
+/** A guest was not let in. "rate": the stack's bound on new guests is reached; "session-rate":
+ *  its bound on guests' sessions; "blocked": an owner blocked this guest. At most one for each
+ *  reason in ten minutes, however many were refused. */
+const GuestRefused = z.object({
+  reason: z.enum(["rate", "session-rate", "blocked"]),
+  app: z.string().min(1),
+  at: z.number(),
+});
 /** A browser's session ended: at sign-out, on /sessions, or with its person's removal. */
 const SessionEnded = z.object({ session, at: z.number() });
 const ConsentApproved = z.object({
@@ -104,6 +120,11 @@ export type AccountFact = (
     }
   | { type: "events.iterate.com/account/key-added"; payload: z.infer<typeof KeyAdded> }
   | { type: "events.iterate.com/account/key-removed"; payload: z.infer<typeof KeyRemoved> }
+  | {
+      type: "events.iterate.com/account/guest-signed-in";
+      payload: z.infer<typeof GuestSignedIn>;
+    }
+  | { type: "events.iterate.com/account/guest-refused"; payload: z.infer<typeof GuestRefused> }
 ) & { idempotencyKey?: string };
 
 // A record for the mind, never the authority: members and live grants are this Worker's D1 and KV.

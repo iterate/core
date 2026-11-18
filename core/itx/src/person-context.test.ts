@@ -234,6 +234,15 @@ test("the person is named as who asked by their id, their address and their name
   });
 });
 
+// A guest has a name and no address: the mark says that the name is their own claim.
+test("a guest is named as who asked by their id and the name they typed, marked a guest", () => {
+  expect(principalOf({ userId: "user_9", email: "", name: "Bob", method: "guest" })).toEqual({
+    actor: "user_9",
+    name: "Bob",
+    kind: "guest",
+  });
+});
+
 function view() {
   const context = {
     invoke: vi.fn(async (..._args: unknown[]) => "answer"),

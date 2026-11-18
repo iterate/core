@@ -85,6 +85,52 @@ test.for<{
     method: "email",
     answer: "not-a-member",
   },
+  // A guest is nobody where the app does not name the way: a stranger's answer, the sign-in.
+  {
+    name: "a guest, at a members' page",
+    challenge: 'Bearer realm="iterate"',
+    caller: "non-member",
+    method: "guest",
+    answer: { methods: [] },
+  },
+  {
+    name: "a guest's fetch, at a members' page: the 401 itself, as a stranger's",
+    challenge: 'Bearer realm="iterate"',
+    caller: "non-member",
+    method: "guest",
+    navigation: false,
+    answer: null,
+  },
+  {
+    name: "a guest, at an app for people that names no way",
+    challenge: 'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication"',
+    caller: "non-member",
+    method: "guest",
+    answer: { methods: [] },
+  },
+  {
+    name: "a guest, at an app that names other ways",
+    challenge:
+      'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication", acr_values="passkey email"',
+    caller: "non-member",
+    method: "guest",
+    answer: { methods: ["passkey", "email"] },
+  },
+  {
+    name: "a person who signed in with a mailed code, at an app that names guests alone",
+    challenge:
+      'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication", acr_values="guest"',
+    caller: "non-member",
+    method: "email",
+    answer: { methods: ["guest"] },
+  },
+  {
+    name: "a guest, at an app whose own 401 follows its guest guard",
+    challenge: 'Bearer realm="iterate", scope="identity", acr_values="guest"',
+    caller: "non-member",
+    method: "guest",
+    answer: null,
+  },
 ])("$name", ({ challenge, caller, method, navigation, answer }) => {
   const request = new Request("https://app.example.com/", {
     headers:

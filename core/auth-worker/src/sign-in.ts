@@ -1,7 +1,12 @@
 import { sameOriginPath } from "iterate/lib";
 import { SignInMethod } from "iterate/principal";
 import { AccountFacts } from "./account-facts.ts";
-import { clearCloudflareSessionCookie, clearSessionCookie, endThisSession } from "./cookies.ts";
+import {
+  clearCloudflareSessionCookie,
+  clearGuestSessionCookie,
+  clearSessionCookie,
+  endThisSession,
+} from "./cookies.ts";
 import { type Env, issuerOf, iterateConfigOf, offersMethod } from "./env.ts";
 import { errorPage } from "./pages.ts";
 import type { AskingApp } from "./asking-app.ts";
@@ -63,9 +68,10 @@ export async function signOutResponse(env: Env, request: Request) {
     location: `${signInHref(next)}&${AFTER_SIGN_OUT}=1`,
     "cache-control": "no-store",
   });
-  // a sign-in at Cloudflare is this browser's too
+  // a sign-in at Cloudflare is this browser's too, and so is the guest it was
   headers.append("set-cookie", clearSessionCookie);
   headers.append("set-cookie", clearCloudflareSessionCookie);
+  headers.append("set-cookie", clearGuestSessionCookie);
   const facts = new AccountFacts();
   await endThisSession(env, request, facts);
   return facts.on(new Response(null, { status: 303, headers }));

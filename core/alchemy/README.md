@@ -101,6 +101,27 @@ const person = this.auth.person(request, { methods: ["cloudflare"] });
 - A stack whose secret is gone all the same lets nobody in to an app that takes Cloudflare alone,
   and ends the Cloudflare sign-ins it gave before.
 
+**Guests.** `"guest": {}` in `auth.login.methods` makes the way `"guest"` exist: anyone who types
+a name on the control plane's form is a person with that name, never a member (`core/auth-worker/
+src/guest-sign-in.ts`). An app takes guests by naming the way in its own guard, as above. The two
+bounds are numbers of the same object, with their defaults:
+
+```json
+{
+  "auth": {
+    "login": { "methods": { "guest": { "newPerTenMinutes": 120, "sessionsPerTenMinutes": 600 } } }
+  }
+}
+```
+
+`newPerTenMinutes` is the new guests of the whole stack in ten minutes, and
+`sessionsPerTenMinutes` the 15-minute sessions that the stack gives its guests in ten minutes. A
+deploy's variable sets one too: `ITERATE_MIND__AUTH__LOGIN__METHODS__GUEST__NEW_PER_TEN_MINUTES`.
+Past a bound the next guest reads "try again in ten minutes", and the mind gets one
+`account/guest-refused` event for that window. Set the method in a deploy after the one that
+brought this code: an older mind Worker does not know the way. A deploy that takes the method out
+ends every guest's session.
+
 The smoke check needs that token for every check of the mind itself, through its API at
 `iterate.<zone>/api`; without it, those checks pass as skipped and say why. With it, the smoke
 commits to the mind's config repo and takes its changes out again, and first takes out what an

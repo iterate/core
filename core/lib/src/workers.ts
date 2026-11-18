@@ -32,6 +32,9 @@ export type TokenIdentity = {
   /** How the person signed in to get the grant: absent for a key's token, and for a grant made
    *  before grants kept it. */
   method?: SignInMethod;
+  /** The name a guest typed (`method` "guest"), which is all a guest has: their `principal` has no
+   *  email. Absent for everyone else. */
+  name?: string;
   /** A KEY'S TOKEN, never a person's (core/auth-worker/src/key-tokens.ts): the one capability name
    *  it may lend to the mind as `itx.<provide>`. It is live for the API alone, where it reaches
    *  that lend and nothing else of the mind. `principal.actor` is the key's service and `grant`

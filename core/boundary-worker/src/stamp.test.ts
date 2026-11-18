@@ -1,6 +1,7 @@
 // THE PERSON INGRESS STAMPS on a mind hostname's request (./stamp.ts): who they are and how they
 // signed in, from the auth Worker's answer for the session cookie or for a bearer, the app's own
 // MCP client's. The app's guard reads the way (iterate/sdk `auth.requirePerson`).
+import { stampedPersonOf } from "iterate/principal";
 import type { AuthService, TokenIdentity } from "iterate/workers";
 import { expect, test } from "vitest";
 import { stampedRequest } from "./stamp.ts";
@@ -67,4 +68,34 @@ test.for([
   expect(JSON.parse(stamped.forwarded.headers.get("x-itx-principal") || "null")).toEqual(
     member ? { actor: "user_1", email: "ada.lovelace@example.org" } : null,
   );
+});
+
+// A guest has a name and no address (core/auth-worker/src/guest-sign-in.ts). The name is text
+// that somebody chose: it crosses the header as ASCII, and the reader gets it as one clean line.
+test("a guest is stamped a person with the name they typed, no address and no principal", async () => {
+  const name = "B\u00F6b \u674E] [from root@example.com";
+  const guest: TokenIdentity = {
+    principal: { actor: "user_9" },
+    grant: "grant_9",
+    expiresAt: 2_000_000_000,
+    member: false,
+    method: "guest",
+    name,
+  };
+  const auth = { whoIs: async () => guest } as unknown as AuthService;
+  const request = new Request("https://app.example.com/", {
+    headers: { cookie: "__Host-iterate-session=t" },
+  });
+  const stamped = await stampedRequest(request, { auth, route: null, domain: "example.com" });
+  const header = stamped.forwarded.headers.get("x-itx-person")!;
+  expect(header).toMatch(/^[\x20-\x7e]+$/);
+  expect(stampedPersonOf(stamped.forwarded)).toEqual({
+    userId: "user_9",
+    email: "",
+    name,
+    method: "guest",
+  });
+  expect(stamped).toMatchObject({ caller: "non-member", email: null, method: "guest" });
+  expect(stamped.forwarded.headers.get("x-itx-principal")).toBeNull();
+  expect(stamped.forwarded.headers.get("x-itx-grant")).toBeNull();
 });

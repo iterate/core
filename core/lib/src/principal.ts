@@ -21,9 +21,10 @@ export type Principal = {
   name?: string;
   impersonatedBy?: { actor: string; email: string };
   /** "mind": another mind, which signed with the key it publishes; `actor` is its domain. Only a
-   *  signer's principal has it (`source.signer`, core/auth-worker/src/minds.ts). Absent: a person or
-   *  a service. */
-  kind?: "mind";
+   *  signer's principal has it (`source.signer`, core/auth-worker/src/minds.ts). "guest": a person
+   *  who typed a name and proved nothing (`Person.method` "guest"), named as who asked or who
+   *  holds, like `name`: a verified principal is never one. Absent: a person or a service. */
+  kind?: "mind" | "guest";
 };
 
 /** The header ingress sets on a Request it forwards on a member's behalf, after the bearer or the
@@ -59,8 +60,10 @@ export function stampedLenderOf(request: Request): Lender | null {
 
 /** HOW A PERSON SIGNED IN at the mind's issuer (core/auth-worker): what they proved to get the
  *  session that a token or a host's session came from. "passkey", "email" (a mailed code),
- *  "google" and "cloudflare" are ways an app can name (sdk/auth.ts `methods`); "first-owner-ticket"
- *  and "member-link" are a deploy's ticket and an owner's link, which exist to add a passkey. */
+ *  "google", "cloudflare" and "guest" are ways an app can name (sdk/auth.ts `methods`);
+ *  "first-owner-ticket" and "member-link" are a deploy's ticket and an owner's link, which exist
+ *  to add a passkey. "guest" proves nothing: the person typed a name
+ *  (core/auth-worker/src/guest-sign-in.ts). */
 export const SignInMethod = z.enum([
   "passkey",
   "email",
@@ -68,6 +71,7 @@ export const SignInMethod = z.enum([
   "cloudflare",
   "first-owner-ticket",
   "member-link",
+  "guest",
 ]);
 export type SignInMethod = z.infer<typeof SignInMethod>;
 
@@ -75,9 +79,10 @@ export type SignInMethod = z.infer<typeof SignInMethod>;
  *  and their email, and `impersonatedBy` the platform admin signed in as them, as on `Principal`.
  *  An app that hands out something personal refuses, or records, a person an admin is signed in
  *  as. `method` is how they signed in, absent for a session made before sessions said it.
- *  `name` is what to call them on a page: the part of their email before the "@". It is text to
- *  show (`displayNameOf`), never a key and never a reason to let someone in: `userId` is who they
- *  are. */
+ *  `name` is what to call them on a page: the part of their email before the "@", or for a guest
+ *  (`method` "guest") the name they typed. It is text to show (`displayNameOf`), never a key and
+ *  never a reason to let someone in: `userId` is who they are. A guest has no address: `email` is
+ *  "". */
 export type Person = {
   userId: string;
   email: string;
@@ -185,9 +190,12 @@ export const ServiceCaller = z.object({
   grant: z.string().optional(),
   onBehalfOf: z
     .object({
-      // who asked, with the name to show them by (`Principal.name`), which the caller's own
-      // verified `principal` above never has
-      principal: StampedPrincipal.extend({ name: z.string().optional() }),
+      // who asked, with the name to show them by and whether they are a guest (`Principal.name`,
+      // `kind`), which the caller's own verified `principal` above never has
+      principal: StampedPrincipal.extend({
+        name: z.string().optional(),
+        kind: z.enum(["mind", "guest"]).optional().catch(undefined),
+      }),
       grant: z.string().optional(),
       run: z.string().optional(),
       call: z.string().optional(),

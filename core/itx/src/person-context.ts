@@ -351,8 +351,10 @@ function canonicalPathOf(path: string | null): string | null {
 }
 
 /** The person as `onBehalfOf` names who asked: the auth Worker's user id is a principal's actor.
- *  Their name goes with them, as text to show beside what they did. */
+ *  Their name goes with them, as text to show beside what they did. A guest has no address, and
+ *  is marked as one: the name is all that says who they are, and it is their own claim. */
 export function principalOf(person: Person): Principal {
+  if (person.method === "guest") return { actor: person.userId, name: person.name, kind: "guest" };
   return {
     actor: person.userId,
     email: person.email,

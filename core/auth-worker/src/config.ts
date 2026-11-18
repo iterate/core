@@ -80,6 +80,22 @@ export const AuthSettings = z.strictObject({
             keepAccess: z.literal(true).optional(),
           })
           .optional(),
+        /** GUESTS (./guest-sign-in.ts): anyone who types a name is signed in as a person with
+         *  that name and nothing else, never a member. It makes the way exist, and an app of the
+         *  mind chooses it in its own code (iterate/sdk `auth.requirePerson(request, { methods:
+         *  ["guest"] })`): no app gets it otherwise. Anyone on the internet can become a guest,
+         *  so two numbers bound what a stranger makes the stack store in ten minutes:
+         *  `newPerTenMinutes`, the new guests of the whole stack, and `sessionsPerTenMinutes`,
+         *  the sessions the stack gives its guests on its apps' hosts (a guest's lasts 15 minutes,
+         *  so each guest who stays takes one in ten minutes). At a bound the next one reads "try
+         *  again in ten minutes", and the mind gets an `account/guest-refused` event. */
+        guest: z
+          .strictObject({
+            // coerced: a deploy's variable gives a number as text
+            newPerTenMinutes: z.coerce.number().int().positive().default(120),
+            sessionsPerTenMinutes: z.coerce.number().int().positive().default(600),
+          })
+          .optional(),
       })
       .default({}),
     /** WHO IS A MEMBER, for now: a person is when one rule matches. Anyone a method vouches for

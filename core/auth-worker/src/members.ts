@@ -40,6 +40,9 @@ type Added = { email: string; addedBy: string; addedAt: number };
 
 export async function isMember(env: Env, email: string): Promise<boolean> {
   const config = iterateConfigOf(env);
+  // What is no address is nobody's: the key of a person whom no address reaches (./users.ts
+  // `linkBySubject`: a Cloudflare user, a guest) is no member by any rule, `everyone` too.
+  if (!email.includes("@")) return false;
   // An address of the mind's own is no member, by a rule or by a row: `add` refuses one, and this
   // holds for a row from before it did.
   if (atMindsDomain(config.domain, email)) return false;
@@ -57,8 +60,10 @@ export async function standingOf(
   env: Env,
   session: Session,
 ): Promise<"member" | "passkey-owed" | "not-member"> {
-  // A sign-in at Cloudflare is never a member's, whatever its address (./cloudflare-sign-in.ts).
-  if (session.method === "cloudflare" || !(await isMember(env, session.email))) return "not-member";
+  // A sign-in at Cloudflare is never a member's, whatever its address (./cloudflare-sign-in.ts),
+  // and a guest's never, whatever is added later (./guest-sign-in.ts).
+  if (session.method === "cloudflare" || session.method === "guest") return "not-member";
+  if (!(await isMember(env, session.email))) return "not-member";
   if (session.method === "passkey") return "member";
   const { google } = iterateConfigOf(env).login.methods;
   return session.method === "google" && google?.signsInAlone ? "member" : "passkey-owed";
@@ -263,7 +268,11 @@ async function endAccessOf(env: Env, typed: string, ends: Ends | null): Promise<
 async function accessOfMembers(
   env: Env,
 ): Promise<{ email: string; clients: ClientWithAccess[] }[]> {
-  const { results } = await env.DB.prepare("select id, email from users order by email").all<{
+  // a row whose key is no address (a Cloudflare user, a guest) is never a member's, and guests
+  // may be many: they are not read
+  const { results } = await env.DB.prepare(
+    "select id, email from users where email like '%@%' order by email",
+  ).all<{
     id: string;
     email: string;
   }>();
@@ -410,8 +419,9 @@ async function block(
   actor: Actor,
   typed: string,
 ): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
-  const email = typed.trim().toLowerCase();
-  if (!email.includes("@")) return { error: "Type the address to block." };
+  const email = await blockKeyOf(env, typed);
+  if (!email.includes("@") && !email.startsWith(GUEST_KEY_PREFIX))
+    return { error: "Type the address to block, or a guest's id (user_…)." };
   if (await isMember(env, email))
     return { error: `${email} is a member. Remove the member first; a member is never blocked.` };
   await env.DB.prepare(
@@ -432,8 +442,27 @@ async function block(
   console.info({ event: "auth.person-blocked", by: actor.userId, known: Boolean(person) });
   return {
     facts,
-    notice: `${email} is blocked: no sign-in code goes to it, and it is signed out of every app.`,
+    notice: email.startsWith(GUEST_KEY_PREFIX)
+      ? `The guest ${typed.trim()} is blocked, and is signed out of every app. A person who comes back as a new guest is a new guest: end the link they came by.`
+      : `${email} is blocked: no sign-in code goes to it, and it is signed out of every app.`,
   };
+}
+
+/** The key of a guest's row (./users.ts `linkBySubject`), which a guest's sessions and grants
+ *  carry where others carry an address. */
+const GUEST_KEY_PREFIX = "guest:";
+
+/** WHAT A BLOCK OR AN UNBLOCK NAMES in the `blocked` table: the address an owner typed, or, for a
+ *  guest's user id (`user_…`, as the guest's events name them), the key of that guest's row. A
+ *  guest has no address, so the id is how an owner names one. Any other person's id names
+ *  nothing: a person with an address is blocked by it. */
+async function blockKeyOf(env: Env, typed: string): Promise<string> {
+  const named = typed.trim();
+  if (!/^user_[0-9a-f]{32}$/.test(named)) return named.toLowerCase();
+  const person = await env.DB.prepare("select email from users where id = ?1")
+    .bind(named)
+    .first<{ email: string }>();
+  return person?.email.startsWith(GUEST_KEY_PREFIX) ? person.email : "";
 }
 
 async function unblock(
@@ -441,7 +470,7 @@ async function unblock(
   actor: Actor,
   typed: string,
 ): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
-  const email = typed.trim().toLowerCase();
+  const email = (await blockKeyOf(env, typed)) || typed.trim().toLowerCase();
   const removed = await env.DB.prepare("delete from blocked where email = ?1 returning email")
     .bind(email)
     .first();
@@ -561,11 +590,11 @@ async function membersPage(
         <p class="muted" role="status" data-status>Your passkey signs this.</p>
       </form>
       <h2>Block a person who is not a member</h2>
-      <p>For a stack whose sign-in is open to anyone, so that its apps have users of their own. A blocked address gets no sign-in code, and is signed out of every app at once.</p>
+      <p>For a stack whose sign-in is open to anyone, so that its apps have users of their own. A blocked address gets no sign-in code, and is signed out of every app at once. A guest has no address: type the guest's id (user_…), as the mind's events name it.</p>
       <ul>${blockedRows}</ul>
       <form method="post" action="${MEMBERS_PATH}" class="stack">
         <input type="hidden" name="action" value="block">
-        <label>The person's email <input type="email" name="email" autocomplete="off" required></label>
+        <label>The person's email, or a guest's id <input type="text" name="email" autocomplete="off" required></label>
         <button type="submit">Block this person</button>
       </form>`
           : ""
