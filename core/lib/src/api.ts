@@ -1712,7 +1712,9 @@ export interface IterateContextApi {
   /** ANOTHER MIND THAT LETS THIS ONE IN (core/configs/default/minds.md), as a row's target:
    *  `minds.get("<domain>").deliverEvents` (or `deliverEvent` on a fan-out row) signs each event
    *  with this mind's key and posts it to that mind, which adds it under
-   *  `/minds/<this mind><the event's path>`. `itx/*` and `mind-meld/*` events are not sent. Any
+   *  `/minds/<this mind><the event's path>`. `minds.get("<domain>").at("<path>").deliverEvents`
+   *  adds each event at that one context of the other mind instead, when its rule lets this mind
+   *  append there. `itx/*` and `mind-meld/*` events are not sent. Any
    *  answer but a 200 throws, so the row tries again and ends in a dead letter. The delivery
    *  loop's call alone. */
   minds: {

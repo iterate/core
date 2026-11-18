@@ -8,12 +8,26 @@ import { hopCaller } from "./hop-caller.ts";
 import { assertDeliveryCaller } from "./webhooks.ts";
 
 export const MINDS_ROOT_DESCRIPTION =
-  "another mind that lets this one in, as a row's target: `subscribe({ name, target: \"itx.minds.get('<domain>').deliverEvents\" })` signs each event with this mind's key and adds it on that mind under /minds/<this mind><the event's path> (minds.md in the config repo)";
+  "another mind that lets this one in, as a row's target: `subscribe({ name, target: \"itx.minds.get('<domain>').deliverEvents\" })` signs each event with this mind's key and adds it on that mind under /minds/<this mind><the event's path>; `.at('<path>').deliverEvents` adds it at that context of the other mind instead, when its rule lets this mind append there (minds.md in the config repo)";
 
 const NOT_SENT = [...PLATFORM_NAMESPACES, "mind-meld"];
 
+/** A context's own path, as the other mind's intake takes it (core/auth-worker/src/key-rules.ts
+ *  `canonicalPath`): no empty, `.` or `..` segment. */
+const isContextPath = (path: unknown): path is string =>
+  typeof path === "string" &&
+  path.startsWith("/") &&
+  (path === "/" ||
+    path
+      .split("/")
+      .slice(1)
+      .every((segment) => segment && segment !== "." && segment !== ".."));
+
 /** `itx.minds.get(domain)`: a row's target that sends each event to the mind at `domain`, as a
- *  statement signed with this mind's key (core/auth-worker/src/minds.ts checks it there). */
+ *  statement signed with this mind's key (core/auth-worker/src/minds.ts checks it there).
+ *  WHERE IT LANDS: under `/minds/<this mind><the event's path>`, or, with `.at(path)` before the
+ *  delivery, at that one context of the other mind, whatever context here the event is from. The
+ *  other mind's rule decides whether this mind may append there; this side only spells the path. */
 export function mindsRoot(
   context: ItxHostRootContext,
   { domain, boundary }: { domain: string; boundary: () => Pick<Door, "signForMind"> },
@@ -31,12 +45,29 @@ export function mindsRoot(
     get: (peer: string) => {
       if (!isMindDomain(peer) || peer === domain)
         throw codedError("INVALID_INPUT", "minds.get(domain): another mind's domain, lowercase");
-      return new InvokeHandle(async (methodSteps) => {
+      const delivery = (at?: string): InvokeHandle =>
+        // A row's target is evaluated up to its last name, so `.at(path)` alone answers the handle
+        // for that path (the delivery loop then calls `deliverEvents` on it); a walk that reduces
+        // `.at(path).deliverEvents(events)` into one dispatch is taken whole.
+        new InvokeHandle(async (methodSteps) => {
+          const [first, ...rest] = methodSteps;
+          if (!at && Array.isArray(first) && first[0] === "at") {
+            const path = first[1];
+            if (first.length !== 2 || !isContextPath(path))
+              throw codedError(
+                "INVALID_INPUT",
+                "minds.get(domain).at(path): a context's own path, with no empty, . or .. segment",
+              );
+            return rest.length > 0 ? delivery(path).invoke(rest) : delivery(path);
+          }
+          return deliver(methodSteps, at);
+        });
+      const deliver = async (methodSteps: Parameters<InvokeHandle["invoke"]>[0], at?: string) => {
         const [call] = methodSteps;
         const method = Array.isArray(call) ? call[0] : undefined;
         if (methodSteps.length !== 1 || (method !== "deliverEvents" && method !== "deliverEvent"))
           throw new Error(
-            `minds.get(domain).${print(methodSteps)}: a mind answers deliverEvents(events) and deliverEvent(event) alone`,
+            `minds.get(domain).${print(methodSteps)}: a mind answers deliverEvents(events) and deliverEvent(event), each also after at(path)`,
           );
         // `method` is a string only when the step is a call, `[name, ...args]`: its first argument.
         const sent = (call as unknown[])[1];
@@ -59,7 +90,7 @@ export function mindsRoot(
               continue;
             const envelope = await boundary().signForMind({
               mind: peer,
-              path: `/minds/${domain}${event.path === "/" ? "" : event.path}`,
+              path: at || `/minds/${domain}${event.path === "/" ? "" : event.path}`,
               type: event.type,
               payload: event.payload,
               about: [`${event.path}@${event.offset}`],
@@ -84,7 +115,8 @@ export function mindsRoot(
           console.info({ event: "minds.delivery-failed", peer, message: String(error) });
           throw error;
         }
-      });
+      };
+      return delivery();
     },
   };
 }

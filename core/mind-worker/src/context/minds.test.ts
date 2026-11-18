@@ -48,6 +48,55 @@ test("only the delivery loop's own call sends", async () => {
   expect(posted).toEqual([]);
 });
 
+test("at(path) lands every event at that context of the other mind, whatever context it is from", async () => {
+  const { handle, signed } = await peer("peer-four.net", () => new Response("{}"));
+  await handle.invoke([
+    ["at", "/agents/talk/example.com/plans"],
+    ["deliverEvents", [event("events.iterate.com/agent/message-received", 9)], { from: 9, to: 9 }],
+  ]);
+  expect(signed).toEqual([
+    {
+      mind: "peer-four.net",
+      path: "/agents/talk/example.com/plans",
+      type: "events.iterate.com/agent/message-received",
+      payload: { text: "note 9" },
+      about: ["/notes@9"],
+    },
+  ]);
+});
+
+test("at(path) alone answers a handle that delivers there, and only the delivery loop's call sends through it", async () => {
+  const { handle, signed } = await peer("peer-five.net", () => new Response("{}"));
+  const there = (await handle.invoke([["at", "/inbox"]])) as InvokeHandle;
+  await expect(
+    there.invoke([["deliverEvent", event("events.iterate.com/test/note-added", 2)]]),
+  ).rejects.toThrow("the delivery loop's own call");
+  expect(signed).toEqual([]);
+});
+
+test("at refuses a path that is no context's own, a second at, and anything but a delivery after it", async () => {
+  const { handle, posted } = await peer("peer-six.net", () => new Response("{}"));
+  const note = event("events.iterate.com/test/note-added", 1);
+  for (const path of ["notes", "/notes/", "/notes/../secrets", "/a//b", 7])
+    await expect(
+      handle.invoke([
+        ["at", path],
+        ["deliverEvent", note],
+      ]),
+    ).rejects.toThrow("a context's own path");
+  await expect(
+    handle.invoke([
+      ["at", "/a"],
+      ["at", "/b"],
+      ["deliverEvent", note],
+    ]),
+  ).rejects.toThrow("a mind answers deliverEvents(events) and deliverEvent(event)");
+  await expect(handle.invoke([["at", "/a"], ["readEvents"]])).rejects.toThrow(
+    "a mind answers deliverEvents(events) and deliverEvent(event)",
+  );
+  expect(posted).toEqual([]);
+});
+
 test("get refuses this mind's own domain and a name that is no domain", () => {
   const { root } = minds(
     () => new Response("{}"),
@@ -66,7 +115,8 @@ async function peer(domain: string, answer: () => Response, { forged = false } =
   const handle = root.get(domain) as InvokeHandle;
   const invoke = handle.invoke.bind(handle);
   handle.invoke = async (steps) => {
-    const [[, sent]] = steps as [[string, unknown]];
+    // the delivery is the last step: `at(path)` may come before it
+    const [, sent] = (steps as [string, unknown][]).at(-1)!;
     delivery = forged ? "forged" : await sha256Hex(JSON.stringify(sent));
     return invoke(steps);
   };

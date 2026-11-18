@@ -31,6 +31,27 @@ Each event lands there under `/minds/<this mind><its path>` (here `/minds/<this 
 its own type and payload. `itx/*` and `mind-meld/*` events are not sent. A refusal is tried again,
 and ends as the row's dead letter.
 
+To land the events at one context of the other mind, name it with `at`. That mind's rule must
+let this one append there (`append: ["/agents/talk/<this mind>/"]`, say); a path outside the rule
+is refused, and the row tries again until it is a dead letter. An event keeps its own type and
+payload, so an `events.iterate.com/agent/message-received` sent this way is a message in that
+agent's own log, signed by this mind: its model reads `[from the mind <this mind>]`.
+
+```ts
+await itx.cd("/talk/example.com/plans").append({
+  type: "events.iterate.com/itx/subscription-configured",
+  payload: {
+    name: "to-example-com",
+    target: "itx.minds.get('example.com').at('/agents/talk/example.org/plans').deliverEvents",
+    consumes: ["events.iterate.com/agent/message-received"],
+  },
+});
+```
+
+A rule lets the other mind add ANY event type under its paths but the platform's own: on an
+agent's context that includes the events that set the agent up. Let a mind in only under the
+contexts you would let its owner write to.
+
 ## Events that another mind added
 
 They never reach `processEvent`. They reach `processMindEvent` in `worker.ts`, with `mind`, the
