@@ -53,7 +53,6 @@ export type DeployInput = {
   newAccount?: boolean;
   name?: string;
   owner?: string;
-  buy?: boolean;
   yes?: boolean;
   eraseRecords?: boolean;
   source?: string;
@@ -443,18 +442,36 @@ const Offer = z.object({
 });
 type Offer = z.infer<typeof Offer>;
 
-/** The accounts the access reaches. A person's OAuth access lists them as memberships;
- *  `GET /accounts` answers an empty list for it. */
-async function accountsOf(cf: Cloudflare): Promise<Account[]> {
+/** THE PERSON'S ACCOUNTS, AND WHICH OF THEM THIS ACCESS COVERS. A sign-in lists every account
+ *  the person belongs to as a membership, also the ones they did not select on Cloudflare's
+ *  page; a call to one of those answers 403. So each is asked for once: the account's own read
+ *  answers 200 for a covered one and 403 for one that is not. Any other answer stops the run: it
+ *  says nothing about the approval. An API token lists no membership, and `GET /accounts` then
+ *  names exactly what it reaches. The first 50 accounts are read; `--account <id>` reaches one
+ *  beyond them (`pickAccount`). */
+async function accountsOf(cf: Cloudflare): Promise<{ all: Account[]; covered: Account[] }> {
   const memberships =
     resultOf(z.array(Membership), await cf("GET", "/memberships?per_page=50")) ?? [];
-  const mine = memberships.flatMap((membership) =>
+  const all = memberships.flatMap((membership) =>
     membership.account && (membership.status || "accepted") === "accepted"
       ? [membership.account]
       : [],
   );
-  if (mine.length > 0) return mine;
-  return resultOf(z.array(Account), await cf("GET", "/accounts?per_page=50")) ?? [];
+  if (all.length === 0) {
+    const reached = resultOf(z.array(Account), await cf("GET", "/accounts?per_page=50")) ?? [];
+    return { all: reached, covered: reached };
+  }
+  const covered = await Promise.all(
+    all.map(async (account) => {
+      const read = await cf("GET", `/accounts/${account.id}`);
+      if (read.status === 200) return [account];
+      if (read.status === 403 || read.status === 404) return [];
+      throw new Error(
+        `Cloudflare did not say whether this access covers the account ${account.name} (${read.status}: ${read.error}). Run the command again.`,
+      );
+    }),
+  );
+  return { all, covered: covered.flat() };
 }
 
 /** The account's zones (its first 50, or the one named `domain`), each with its stack and with
@@ -512,9 +529,12 @@ async function offersOf(cf: Cloudflare, account: string, domains: string[]): Pro
   return resultOf(z.object({ domains: z.array(Offer) }), answer)?.domains ?? [];
 }
 
-type Pick = { domain: string; zone?: Zone; buy?: Offer; bring?: boolean };
+/** A domain and how the account gets it: `zone` when the account has it; else the person buys
+ *  it (`offer`: Cloudflare's registrar sells it) or adds it (it is theirs at another registrar),
+ *  each on Cloudflare's own page. */
+type Pick = { domain: string; zone?: Zone; offer?: Offer };
 
-/** The domain, and how the account gets it: a zone it has, one to buy, or one to bring. With no
+/** The domain, and how the account gets it: a zone it has, one to buy, or one to add. With no
  *  `--domain`, the person picks from the account's zones and the free names of `candidatesOf`
  *  with their prices, and may type a domain, or a few words for more names: the question comes
  *  again until a domain is picked. `person` is the name the candidates are made from. */
@@ -587,143 +607,79 @@ async function pickDomain(
     const offer =
       offers.find((candidate) => candidate.name === domain) ||
       (await offersOf(cf, account, [domain])).find((candidate) => candidate.name === domain);
-    if (offer?.registrable) {
-      const buy =
-        input.buy ||
-        (await ask<boolean>(`pass --buy to buy ${domain} for ${priceOf(offer)}`, () =>
+    // the command spends no money: the person buys on Cloudflare's page, so a pick is no purchase
+    if (offer?.registrable) return { domain, offer };
+    const theirs =
+      input.yes ||
+      (await ask<boolean>(
+        `${domain} is not for sale at Cloudflare; pass --yes when it is yours at another registrar`,
+        () =>
           p.confirm({
-            message: `Buy ${domain} for ${priceOf(offer)}? Cloudflare charges the card in your account.`,
+            message: `${domain} is not for sale at Cloudflare. Is it yours at another registrar? You then add it to this account and set its nameservers to Cloudflare's.`,
           }),
-        ));
-      if (buy) return { domain, buy: offer };
-    } else {
-      const bring =
-        input.yes ||
-        (await ask<boolean>(
-          `${domain} is not for sale at Cloudflare; pass --yes when it is yours at another registrar`,
-          () =>
-            p.confirm({
-              message: `${domain} is not for sale at Cloudflare. Is it yours at another registrar? You then set its nameservers to Cloudflare's.`,
-            }),
-        ));
-      if (bring) return { domain, bring: true };
-    }
+      ));
+    if (theirs) return { domain };
     // a no to a domain that a flag named has no other answer; a person picks again
     if (input.domain) throw new Error(`Run the command again with another domain than ${domain}.`);
   }
 }
 
-/** The zone of the picked domain, active: bought or added first when the account has none. */
+/** The zone of the picked domain, active. When the account does not have it yet, the person buys
+ *  it or adds it on Cloudflare's own page, and this waits for it: the command holds no right to
+ *  buy a domain or to add a zone. A domain bought at Cloudflare becomes a zone of the account by
+ *  itself. */
 async function zoneOf(cf: Cloudflare, account: string, pick: Pick): Promise<Zone> {
   const { domain } = pick;
   const found = async (): Promise<Zone | undefined> =>
     resultOf(z.array(ZoneRow), await cf("GET", `/zones?name=${domain}&account.id=${account}`))?.[0];
-  const add = () => cf("POST", "/zones", { name: domain, account: { id: account }, type: "full" });
   let zone = pick.zone ?? (await found());
-  if (!zone && pick.buy) {
-    const card = async () =>
-      resultOf(
-        z.object({ has_default_payment_method: z.boolean() }),
-        await cf("GET", `/accounts/${account}/ai-gateway/billing/credit-balance`),
-      )?.has_default_payment_method === true;
-    if (!(await card())) {
-      page(
-        `Add a payment card: Cloudflare charges it for ${domain}.`,
-        `https://dash.cloudflare.com/${account}/billing/subscriptions?paymentMethod=add`,
-      );
-      await until("Waiting for the card", card);
-    }
-    // Cloudflare has the registrant's contact only after a first purchase in its own pages
-    const contact =
-      (await cf("GET", `/accounts/${account}/registrar/domains?per_page=1`)).total > 0;
-    let bought = contact
-      ? await cf("POST", `/accounts/${account}/registrar/registrations`, { domain_name: domain })
-      : undefined;
-    if (bought && bought.status >= 300 && /agreement/i.test(bought.error)) {
-      page(
-        "Accept Cloudflare's Domain Registration Agreement, then come back here.",
-        `https://dash.cloudflare.com/${account}/domains/registrations`,
-      );
-      await ask<boolean>("accept the agreement on that page, then run the command again", () =>
-        p.confirm({ message: "Accepted?" }),
-      );
-      bought = await cf("POST", `/accounts/${account}/registrar/registrations`, {
-        domain_name: domain,
-      });
-    }
-    if (bought && bought.status < 300) p.log.success(`Bought ${domain} for ${priceOf(pick.buy)}.`);
-    else {
-      if (bought)
-        p.log.warn(
-          `Cloudflare did not sell ${domain} by its API (${bought.status}: ${bought.error}).`,
-        );
-      page(
-        `Buy ${domain} in Cloudflare's own pages (a first domain needs your contact details there).`,
-        `https://dash.cloudflare.com/${account}/domains/register/${domain}`,
-      );
-    }
-    zone = await until(`Waiting for ${domain} in the account`, async () => {
-      const there = await found();
-      if (there) return there;
-      // a registration that ended with no zone yet: the zone is made here
-      const status = await cf(
-        "GET",
-        `/accounts/${account}/registrar/registrations/${domain}/registration-status`,
-      );
-      const said = resultOf(z.object({ state: z.string() }), status)?.state ?? "";
-      if (!/succeeded|registered|active/i.test(said)) return undefined;
-      return resultOf(ZoneRow, await add());
-    });
-  }
   if (!zone) {
-    const added = await add();
-    zone = resultOf(ZoneRow, added);
-    if (!zone)
-      throw new Error(
-        `Cloudflare did not add ${domain} to the account (${added.status}): ${added.error}`,
+    if (pick.offer)
+      page(
+        `Buy ${domain} on Cloudflare's page (${priceOf(pick.offer)}): search for it there. Cloudflare asks for a card and your contact details.`,
+        `https://dash.cloudflare.com/${account}/domains/register`,
       );
-    const servers =
-      resultOf(z.object({ name_servers: z.array(z.string()) }), added)?.name_servers ?? [];
-    p.log.step(
-      `At the registrar of ${domain}, replace its nameservers with these two:\n${servers.join("\n")}`,
-    );
+    else
+      page(
+        `Add ${domain} to this account on Cloudflare's page, then set its nameservers at your registrar to the two that Cloudflare shows.`,
+        `https://dash.cloudflare.com/${account}/add-site`,
+      );
+    // a purchase takes minutes; nameservers at another registrar can take a day
+    zone = await until(`Waiting for ${domain} in the account`, found, pick.offer ? 60 : 24 * 60);
   }
   if (zone.status === "active") return zone;
   const { id } = zone;
-  let asked = 0;
   return until(
     `Waiting for Cloudflare to activate ${domain}`,
     async () => {
-      // Cloudflare looks again by itself, slowly: ask it to, once a minute
-      if (Date.now() - asked > 60_000) {
-        asked = Date.now();
-        await cf("PUT", `/zones/${id}/activation_check`);
-      }
       const now = resultOf(ZoneRow, await cf("GET", `/zones/${id}`));
       if (now?.status === "active") return now;
       return undefined;
     },
-    pick.bring ? 24 * 60 : 30,
+    pick.offer ? 30 : 24 * 60,
   );
 }
 
-/** The account, by flag or by question; a new one is made in the person's name. */
+/** The account, by flag or by question; a new one is made in the person's name. `covered`
+ *  says whether this access reaches it: a sign-in's approval does not cover an account that was
+ *  just made, or one of the person's that they did not select on Cloudflare's page, and each
+ *  needs one more approval. */
 async function pickAccount(
   cf: Cloudflare,
   input: DeployInput,
   name: string,
-): Promise<{ account: Account; made: boolean }> {
+): Promise<{ account: Account; covered: boolean }> {
   const NEW = "\0new";
-  const accounts = await accountsOf(cf);
+  const { all, covered } = await accountsOf(cf);
   const fresh = `iterate-${name}`;
   let chosen = input.newAccount ? NEW : input.account;
-  if (!chosen && accounts.length === 0)
-    throw new Error("This access to Cloudflare reaches no account.");
+  if (!chosen && covered.length === 0)
+    throw new Error("This access to Cloudflare covers no account.");
   chosen ||= await ask<string>("pass --account <id or name>, or --new-account", () =>
     p.select({
       message: "Which Cloudflare account does the mind live in?",
       options: [
-        ...accounts.map((account) => ({
+        ...covered.map((account) => ({
           value: account.id,
           label: account.name,
           hint: account.id.slice(0, 8),
@@ -736,22 +692,22 @@ async function pickAccount(
       ],
     }),
   );
+  const isCovered = (account: Account) => covered.some((candidate) => candidate.id === account.id);
   if (chosen !== NEW) {
-    // the list is the access's first 50 accounts: one named by its id is asked for directly
-    const account =
-      accounts.find((candidate) => candidate.id === chosen || candidate.name === chosen) ||
-      (/^[0-9a-f]{32}$/.test(chosen)
-        ? resultOf(Account, await cf("GET", `/accounts/${chosen}`))
-        : undefined);
-    if (!account)
-      throw new Error(
-        `This access to Cloudflare reaches no account ${JSON.stringify(chosen)}. It reaches: ${accounts.map((a) => `${a.name} (${a.id})`).join(", ")}.`,
-      );
-    return { account, made: false };
+    const account = all.find((candidate) => candidate.id === chosen || candidate.name === chosen);
+    if (account) return { account, covered: isCovered(account) };
+    // an account beyond the first 50 is not in the list: its id still names it
+    const byId = /^[0-9a-f]{32}$/.test(chosen)
+      ? resultOf(Account, await cf("GET", `/accounts/${chosen}`))
+      : undefined;
+    if (byId) return { account: byId, covered: true };
+    throw new Error(
+      `You have no Cloudflare account ${JSON.stringify(chosen)}. This access covers: ${covered.map((a) => `${a.name} (${a.id})`).join(", ") || "none"}.`,
+    );
   }
   // an earlier run made it: a second run makes no second account
-  const before = accounts.find((candidate) => candidate.name === fresh);
-  if (before) return { account: before, made: false };
+  const before = all.find((candidate) => candidate.name === fresh);
+  if (before) return { account: before, covered: isCovered(before) };
   const made = await cf("POST", "/accounts", { name: fresh, standalone: true });
   const account = resultOf(Account, made);
   if (!account)
@@ -759,7 +715,9 @@ async function pickAccount(
       `Cloudflare made no new account (${made.status}): ${made.error}. Its rules: the login is at least seven days old, it is Super Administrator of an account, and it has fewer than five extra accounts. Run again with an account you have.`,
     );
   p.log.success(`Made the Cloudflare account ${fresh}.`);
-  return { account, made: true };
+  // a sign-in's approval names the accounts it covers, so not this one; a token for all of the
+  // person's accounts reaches it at once
+  return { account, covered: (await cf("GET", `/accounts/${account.id}`)).status === 200 };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1014,18 +972,23 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       `Signed in to Cloudflare${login ? ` as ${login}` : ""}. The mind's owner is ${owner}.`,
     );
 
-    let { account, made } = await pickAccount(cf, input, name);
-    // an access from before the account was made may not reach it: Cloudflare then asks once more
-    if (made && (await cf("GET", `/accounts/${account.id}/workers/subdomain`)).status === 403) {
+    const { account, covered } = await pickAccount(cf, input, name);
+    // An approval covers the accounts that the person selected on Cloudflare's page: a new
+    // account, or one they did not select, takes one more approval.
+    if (!covered) {
       if (access.from !== "sign-in")
         throw new Error(
-          `The token in CLOUDFLARE_API_TOKEN does not reach the new account ${account.name} (${account.id}).`,
+          `The token in CLOUDFLARE_API_TOKEN does not reach the account ${account.name} (${account.id}).`,
         );
       await endAccess(access);
       p.log.info(
-        `Cloudflare asks once more, for the new account: select ${account.name} on its page.`,
+        `Cloudflare asks once more, for the account ${account.name}: select it on its page.`,
       );
       access = await signIn(true);
+      if ((await cf("GET", `/accounts/${account.id}`)).status !== 200)
+        throw new Error(
+          `The approval does not cover the account ${account.name}. Run the command again and select it on Cloudflare's page.`,
+        );
     }
     const on = async (path: string) =>
       (await cf("GET", `/accounts/${account.id}${path}`)).status === 200;
@@ -1065,15 +1028,17 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
         `A mind named ${name} lives at ${elsewhere.name} already. Pass --name with another name for this one.`,
       );
     const again = pick.zone?.mind === name;
-    // A ZONE IN USE: the person says yes to losing everything on it, here, before anything
-    // changes. The erase itself is the last thing before the deploy (below).
-    const uses = (!again && pick.zone?.uses) || [];
-    const holdings = uses.length > 0 && pick.zone ? await holdingsOf(cf, pick.zone.id) : undefined;
-    if (uses.length > 0 && !holdings)
-      throw new Error(
-        `Cloudflare did not answer with the records of ${domain}. Nothing was changed. Run the command again.`,
-      );
-    if (holdings) {
+    // A ZONE IN USE: the person says yes to losing everything on it before anything changes. The
+    // erase itself is the last thing before the deploy (below). Asked here for a zone that the
+    // account has, and after the wait for a zone that arrives during the run: Cloudflare copies
+    // the records it finds when a domain is added.
+    const holdingsToErase = async (uses: string[], zoneId: string) => {
+      if (uses.length === 0) return undefined;
+      const holdings = await holdingsOf(cf, zoneId);
+      if (!holdings)
+        throw new Error(
+          `Cloudflare did not answer with the records of ${domain}. Nothing was changed. Run the command again.`,
+        );
       const what = `${holdings.records.length} DNS record${holdings.records.length === 1 ? "" : "s"} and ${holdings.routes.length} Workers route${holdings.routes.length === 1 ? "" : "s"}`;
       const some = `${uses.slice(0, 5).join(", ")}${uses.length > 5 ? ", and more" : ""}`;
       const erase =
@@ -1088,7 +1053,10 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
         ));
       if (!erase)
         throw new Error("Nothing was changed. Run the command again with another domain.");
-    }
+      return holdings;
+    };
+    let holdings =
+      pick.zone && !again ? await holdingsToErase(pick.zone.uses || [], pick.zone.id) : undefined;
     if (
       again &&
       !input.yes &&
@@ -1165,6 +1133,14 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     }
     const zone = await zoneOf(cf, account.id, pick);
     p.log.success(`${zone.name} is active in the account.`);
+    if (!pick.zone) {
+      const [arrived] = await zonesOf(cf, account.id, domain);
+      if (!arrived || arrived.unread)
+        throw new Error(
+          `Cloudflare did not answer with the Workers routes and DNS records of ${domain}, so nothing says what lives there. Nothing was changed. Run the command again.`,
+        );
+      holdings = await holdingsToErase(arrived.uses || [], zone.id);
+    }
 
     const config = join(work, "config.json");
     writeFileSync(
@@ -1184,8 +1160,8 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       ),
     );
     access = await renewed();
-    if (holdings && pick.zone) {
-      const erased = await eraseHoldings(cf, pick.zone.id);
+    if (holdings) {
+      const erased = await eraseHoldings(cf, zone.id);
       p.log.success(
         `Erased ${erased.records} DNS records and ${erased.routes} Workers routes of ${domain}.`,
       );

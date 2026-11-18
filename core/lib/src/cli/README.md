@@ -54,7 +54,7 @@ program with no model in it: it asks for the account and the domain, and does th
 
 ```sh
 npx iterate deploy                                   # a person at a terminal: two questions
-npx iterate deploy --new-account --domain ada-labs.com --buy
+npx iterate deploy --new-account --domain ada-labs.com
 CLOUDFLARE_API_TOKEN=… npx iterate deploy --account <id> --domain example.com --owner you@example.org
 ```
 
@@ -69,13 +69,16 @@ What it does, in order:
    renewed. It is kept in the CLI's config folder until a deploy works, then revoked, so a second
    run asks for no second approval. `CLOUDFLARE_API_TOKEN` replaces the sign-in ([the permissions
    it needs](../../../alchemy/README.md#the-api-token)).
-3. **The account.** One you have, or a new one in your name (`--new-account`): Cloudflare allows a
-   login five extra accounts. Cloudflare then asks once more, for the new account.
+3. **The account.** One that you selected on Cloudflare's page, or a new one in your name
+   (`--new-account`): Cloudflare allows a login five extra accounts. An approval covers only the
+   accounts selected on that page, so for a new account, or one you did not select, Cloudflare
+   asks once more.
 4. **The domain.** A domain of the account, a new one that Cloudflare's registrar sells, or one
    from another registrar, whose nameservers you then change. It asks the registrar about up to
    20 names made from your name (the "-erate" names first, as iterate's is) and lists the free
-   ones with their price a year. You can type a domain, or a few words to get more names. It asks
-   before it buys; `--buy` is the yes. The mind takes a whole domain that nothing else uses (a new one is
+   ones with their price a year. You can type a domain, or a few words to get more names. The
+   command buys nothing and adds no domain itself: it opens Cloudflare's own page, where you buy
+   the name or add your domain, and waits until the account has it. The mind takes a whole domain that nothing else uses (a new one is
    best; a subdomain works when it is a zone of its own). A domain of the account with a route of
    another Worker, or with an A, AAAA, CNAME or MX record, is in use: the command says what is
    there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS
@@ -107,8 +110,8 @@ prints the link alone. The first sign-in comes back to this computer's browser: 
   with nobody at the terminal each choice comes from its flag (`iterate deploy --help`), and a
   missing one is named.
 - **No telemetry and no Cloudflare connection for the mind after a sign-in.** Both make API tokens
-  of the account, and Cloudflare's public client offers no such scope. With a token of your own
-  that may make API tokens, `--api-tokens` turns both on.
+  of the account, and the sign-in does not ask for the scope that makes them (Cloudflare lists it
+  as sensitive). With a token of your own that may make API tokens, `--api-tokens` turns both on.
 - **Sandboxes start on Cloudflare's small image** (Node and npm). `--sandbox-image published`
   copies iterate's full image into the account during the deploy, about 1.6 GB through this
   computer.

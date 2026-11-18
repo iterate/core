@@ -22,9 +22,11 @@ const KEPT = join(dirname(CONFIG_PATH), "cloudflare-access.json");
 const LEAST_LEFT_MS = 20 * 60_000;
 
 /** What a deploy of a mind's stack needs (core/alchemy README, "The API token"), and what this
- *  command's own steps need: the person, their accounts, the plan's checks and the domain. The
- *  client offers no scope that makes API tokens, so a deploy with this access has no telemetry
- *  and no Cloudflare token for the mind. */
+ *  command's own steps need: the person, their accounts, the plan's checks, the domains and their
+ *  prices. Nothing here spends money or adds a zone: a domain is bought or added on Cloudflare's
+ *  own page. The scope that makes API tokens (`account_api_tokens:create`, which Cloudflare lists
+ *  as sensitive) is not asked for, so a deploy with this access has no telemetry and no Cloudflare
+ *  token for the mind. */
 const SCOPES = [
   "user-details.read",
   "account-settings.read",
@@ -37,19 +39,16 @@ const SCOPES = [
   "cloudchamber.write",
   "artifacts.write",
   "ai.write",
-  "aig.read",
   "browser-rendering.write",
   "email-sending.write",
   "email-routing-rule.write",
   "queues.write",
   "secrets-store.write",
   "zone.read",
-  "zone.write",
   "zone-settings.write",
   "workers-routes.write",
   "dns.write",
   "registrar-domains.read",
-  "registrar-domains.admin",
 ];
 
 export type Access = {
