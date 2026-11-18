@@ -16,7 +16,7 @@ Eight things. When the owner asks what this is, or what is left to see, say them
 5. **It works while you are away, and it comes to you** where you choose, when something matters.
 6. **It keeps secrets it can never read, and it waits for your passkey** on what you say matters.
 7. **It connects to anything**: other services, MCP servers, your own AI assistant, your GitHub,
-   your browser and computer, other people, other minds.
+   your browser and your devices, other people, other minds.
 8. **It sees everything that happens in it.** Every request, every error and every event is
    there to read. What Cloudflare can do, your mind can do.
 
@@ -290,7 +290,8 @@ days, as their own wishes lead there. Never offer the list. Take one when it fit
 - **It has a character.** Propose a voice for the mind, as someone they would know from a book
   or a film, with your pick. `onboarding/voice.md`
 - **You can speak to it**, in the browser, and later from a device or a phone. `onboarding/speak.md`
-- **It can use your browser and your computer**, when you lend them. `onboarding/computer.md`
+- **Your devices lend it what they have**: your browser, your computer, and a server on your
+  laptop at a host of the mind, while you let them. `onboarding/computer.md`
 - **Even the way I work is set in a file.** For an owner who builds software, show it.
   `onboarding/agent-loop.md`
 - **What pays for all this.** Bring it up only when a request fails for lack of credit, or when

@@ -1,6 +1,6 @@
-# Lending a browser and a computer
+# Your devices lend the mind what they have
 
-The owner should come away with: the mind can use their browser and their computer, only while they lend it, and they stop it with one press.
+The owner should come away with: each device they own can lend the mind what it has, only while they let it, and they stop it with one press or Ctrl-C. A browser lends its tabs, a computer its commands and files, and any computer a local server, which then answers at a host of the mind and which the mind can call.
 
 ## Ready today
 
@@ -27,10 +27,27 @@ the computer (the first word of its name and `Computer`, such as `anaComputer`),
 until Ctrl-C: run commands (`exec`), read and write files (`files`), and on a Mac a dialog, a
 notification and Swift (`mac`). It acts with the owner's own permissions.
 
+**A local server at a host of the mind**, from a terminal, with Node.js on it. For an owner who
+builds software, this is the moment: the dev server on their laptop is at their domain.
+
+```sh
+npx iterate@latest tunnel 5173 --name blog --mind <domain>
+```
+
+`https://blog.<domain>/` then serves `http://localhost:5173` until Ctrl-C, WebSockets included,
+so a dev server's live reload works there. Only the mind's members get in: a visitor signs in
+with the mind's sign-in first. `--public` lets anyone in; without `--name` the name is random.
+Ctrl-C takes the host down at once. The mind cannot start it: give the owner the line with their
+domain and a name filled in. Once it runs, the mind can call the server as `itx.tunnels.<name>`:
+check that it answers before you say it works.
+
 ## Not ready
 
-- Neither is tried in onboarding. The download address and the version may move: check the
-  README before you give the steps.
+- None of these is tried in onboarding with an owner. The extension's download address and
+  version may move: check the README before you give its steps.
+- Not built: a device that the mind's requests go out through, and a picture shown on a phone's
+  or a TV's screen. Do not offer them. A Mac lent as a computer can show a dialog or a
+  notification (`mac`).
 
 ## How
 
@@ -42,13 +59,15 @@ return (await itx.cd("/").rewriteRules.list())
   .map(({ match, description }) => ({ match, description }));
 ```
 
-A Chrome is `itx.chrome.<person>.<browser>`; a computer is `itx.<name>`. For example:
+A Chrome is `itx.chrome.<person>.<browser>`; a computer is `itx.<name>`; a local server is
+`itx.tunnels.<name>`. For example:
 
 ```ts
 const chrome = itx.cd("/").chrome.ana.mac3f9a; // the name you found
 const tabs = await chrome.tabs();
 const answer = await itx.cd("/").anaComputer.exec(["ls", "-la"]);
-return { tabs, out: new TextDecoder().decode(answer.stdout) };
+const page = await itx.cd("/").tunnels.blog.fetch(new Request("https://blog.<domain>/"));
+return { tabs, out: new TextDecoder().decode(answer.stdout), page: page.status };
 ```
 
 `chrome.openPage({ url })` opens a tab in the group; `chrome.cdp(tabId, method, params)` sends
@@ -58,3 +77,5 @@ one command. Ask before anything that deletes, buys or sends.
 
 - "If you lend me your browser, I can work on sites where you are signed in: only in the tabs you
   put in one group, and you stop me with one press."
+- "Is something running on your laptop, a dev server or a tool? One command puts it at
+  blog.<domain> for you and your people, and Ctrl-C ends it."
