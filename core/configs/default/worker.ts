@@ -30,7 +30,6 @@ import {
   mindMailSettingsOf,
   whoGetsTheMail,
 } from "./mail-replies.ts";
-import { sandboxImageForAgent, type SandboxImageOptions } from "./sandbox-image.ts";
 import {
   refuseSlackSender,
   slackContentOf,
@@ -339,15 +338,6 @@ export default class extends IterateConfigEntrypoint {
   async cloudflare(tool: string, args?: Record<string, unknown>) {
     using itx = this.getItx();
     return await cloudflareForAgent(itx, tool, args);
-  }
-
-  /** `itx.config.sandboxImage(options)`: one pass of the copy of iterate's full sandbox image into
-   *  the registry of the mind's own account, which the mind then names as its sandboxes' image
-   *  (sandbox-image.ts; sandbox-image.md). Call it again until it answers `ready`, and never after
-   *  `cannot-copy`. */
-  async sandboxImage(options?: SandboxImageOptions) {
-    using itx = this.getItx();
-    return await sandboxImageForAgent(itx, options);
   }
 }
 

@@ -75,6 +75,7 @@ test("the handover writes the first message and starts the first helpers, once",
   expect(rows.slice(3).map(({ path, key, payload }) => [path, key, payload.role])).toEqual([
     ["/agents/onboarding/research", ":helper:research", "user"],
     ["/agents/onboarding/website", ":helper:website", "user"],
+    ["/agents/onboarding/sandbox", ":helper:sandbox", "user"],
     ["/agents/onboarding", ":started", "developer"],
   ]);
   // a helper's brief starts its turn, and names its file and the way to report
@@ -84,7 +85,7 @@ test("the handover writes the first message and starts the first helpers, once",
       /Read onboarding\/research\.md[\s\S]*itx\.agents\.get\("\/agents\/onboarding"\)\.message\(/,
     ),
   });
-  expect(rows[5]!.payload).toMatchObject({
+  expect(rows[6]!.payload).toMatchObject({
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
   expect(root).toMatchObject({
@@ -92,9 +93,11 @@ test("the handover writes the first message and starts the first helpers, once",
       "/agents/onboarding",
       "/agents/onboarding/research",
       "/agents/onboarding/website",
+      "/agents/onboarding/sandbox",
       "/agents/onboarding",
       "/agents/onboarding/research",
       "/agents/onboarding/website",
+      "/agents/onboarding/sandbox",
     ],
   });
 });
@@ -110,13 +113,14 @@ test("an owner who reached the chat before the handover is greeted once: the ope
     "",
     ":helper:research",
     ":helper:website",
+    ":helper:sandbox",
     ":started",
   ]);
   expect(root.appended.at(-1)).toMatchObject({
     event: {
       payload: {
         content:
-          "The mind's code has started the helpers research and website under your path. Do not start them again.",
+          "The mind's code has started the helpers research, website and sandbox under your path. Do not start them again.",
       },
     },
   });

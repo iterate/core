@@ -114,8 +114,9 @@ export async function cloudHandoverEvent(itx: HandoverItx, event: HandoverEvent)
 
 /** THE FIRST MESSAGE IS WRITTEN HERE, BY CODE, with no model request: a model's first answer
  *  takes seconds, and the owner would look at an empty chat meanwhile. So the handover writes the
- *  greeting and starts the two helpers that need no word of the owner's (onboarding.md, "Your
- *  first message"): the owner arrives to words, and to a research and a website on their way.
+ *  greeting and starts the helpers that need no word of the owner's (onboarding.md, "Your first
+ *  message"): the owner arrives to words, and to a research, a website and a computer for code on
+ *  their way.
  *
  *  The greeting is two events: the assistant's item, which the model reads as its own words and
  *  which starts no turn (an assistant's item never does), and the message the chat draws.
@@ -172,7 +173,7 @@ async function firstMessage(itx: HandoverItx, handover: string, person: string) 
   await add(ONBOARDING_AGENT, CONTEXT_ADDED, keyed("started"), {
     role: "developer",
     actor: { type: "agent" },
-    content: `The mind's code has ${greeted ? "sent your first message (above), and it has " : ""}started the helpers ${FIRST_HELPERS.join(" and ")} under your path. Do not ${greeted ? "greet again and do not " : ""}start them again.${greeted ? " The owner's answer comes next." : ""}`,
+    content: `The mind's code has ${greeted ? "sent your first message (above), and it has " : ""}started the helpers ${FIRST_HELPERS.slice(0, -1).join(", ")} and ${FIRST_HELPERS.at(-1)} under your path. Do not ${greeted ? "greet again and do not " : ""}start them again.${greeted ? " The owner's answer comes next." : ""}`,
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
 }
@@ -184,8 +185,9 @@ const TAKEN = Symbol("taken");
 const roleOf = (answer: unknown) =>
   z.object({ payload: z.object({ role: z.string() }) }).safeParse(answer).data?.payload.role;
 
-/** The helpers that need nothing from the owner: onboarding/research.md, onboarding/website.md. */
-const FIRST_HELPERS = ["research", "website"] as const;
+/** The helpers that need nothing from the owner: onboarding/research.md, onboarding/website.md,
+ *  onboarding/sandbox.md. */
+const FIRST_HELPERS = ["research", "website", "sandbox"] as const;
 
 /** The first words a new owner reads: a welcome, the one idea, and the first question. */
 const greetingOf = (name?: string) =>
