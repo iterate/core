@@ -7,10 +7,13 @@
 //
 // WHO CALLS. The person is no member, so the calls carry no principal: the caller is the kernel's
 // own unnamed one, which the platform vouches for here because this class spells every call
-// itself. Reads and subscriptions go as that caller. The two calls that speak to the context, the
-// words to its agent and the stop of an answer, carry the person beside them, as a member's page
-// does: a token on the call's cause that names them (on-behalf-of.ts), which every append it makes
-// verifies and stamps as `source.onBehalfOf`. It says who asked, never what they may do.
+// itself. Reads go as that caller. A subscription goes as that caller with the person beside it
+// (`onBehalfOf`, no `call` and no `run`): the context stamps the row's event with it, so the
+// subscription names who holds the callback (`heldBy`). Its lease is the session's, and ends with
+// it. The two calls that speak to the context, the words to its agent and the stop of an answer,
+// carry the person beside them, as a member's page does: a token on the call's cause that names
+// them (on-behalf-of.ts), which every append it makes verifies and stamps as `source.onBehalfOf`.
+// Each says who asked or holds, never what they may do.
 import { RpcTarget } from "capnweb";
 import { type ItxExpression } from "iterate/expression";
 import { codedError, resolveContextPath } from "iterate/lib";
@@ -24,7 +27,8 @@ import { IterateContextRpcTarget } from "./iterate-context.ts";
 import { mintOnBehalfOf } from "./on-behalf-of.ts";
 import { SessionTeardown, serveSession } from "./session.ts";
 
-/** What the view reaches of its context as the session's caller, which names nobody. */
+/** What the view reaches of its context: reads as the session's caller, which names nobody, and a
+ *  subscription as that caller with the person beside it (WHO CALLS, above). */
 type ContextReach = Pick<IterateContextRpcTarget, "invoke" | "subscribe">;
 /** One call at the context that names the person as who asked; `call` names a facet call. */
 type CallAsPerson = (expression: ItxExpression, call?: string) => Promise<unknown>;
@@ -314,7 +318,26 @@ export async function personItxSession(args: {
     caller: { principal: null },
     endsAt,
     endReason: "the sign-in for this session ended: sign in again",
-    root: (context) => new PersonContextRpcTarget(path, context.cd(path), asPerson),
+    root: (context, teardown) => {
+      const reads = context.cd(path);
+      // The kernel's own code names the person here, so no signed token is needed, and a redial
+      // hours later stamps the same holder.
+      const holder = new IterateContextRpcTarget(
+        contexts(),
+        DurableObjectNameCodec.address(path),
+        teardown,
+        (promise) => ctx.waitUntil(promise),
+        { principal: null, onBehalfOf },
+      );
+      return new PersonContextRpcTarget(
+        path,
+        {
+          invoke: (call, ...callArgs) => reads.invoke(call, ...callArgs),
+          subscribe: (input) => holder.subscribe(input),
+        },
+        asPerson,
+      );
+    },
   });
 }
 

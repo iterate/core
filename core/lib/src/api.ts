@@ -123,6 +123,11 @@ export type SubscriptionListEntry = {
   cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
   /** Set once delivery exhausted its retries: the offset it stopped after, and why. */
   halted?: { afterOffset: number; attempts: number; error?: string };
+  /** Set on a live-callback row (its target is `itx.builtins.rpcStubs.get("subscription:<name>")`):
+   *  who lent the callback, by the platform's stamp on the row's event: `source.principal`, else
+   *  `source.onBehalfOf.principal` (a person's one-context view, or a script that ran for someone),
+   *  with how they came (`via`). Never read from the payload. */
+  heldBy?: { principal: Principal; via?: { appPage: string } };
 };
 
 /** A `subscribe` target that copies each event onto the log of the context at `path`. `type`

@@ -18,7 +18,12 @@ import type {
   ReduceArgs,
   StreamEventInput,
 } from "iterate/stream/processor";
-import type { EventCopyTarget, FacetSpec, RewriteRuleConfigured } from "iterate/api";
+import type {
+  EventCopyTarget,
+  FacetSpec,
+  RewriteRuleConfigured,
+  SubscriptionListEntry,
+} from "iterate/api";
 import { RunEventCatalog, RunRequested } from "iterate/stream/run";
 import type { Cause } from "../cause.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
@@ -239,6 +244,7 @@ export type Subscription = {
   };
   halted?: { afterOffset: number; attempts: number; error?: string };
   resumed?: { afterOffset?: number; offset?: number; atOffset: number };
+  heldBy?: SubscriptionListEntry["heldBy"];
 };
 
 export type CoreState = {
@@ -468,6 +474,23 @@ function reduceCoreEvent(
         configuredTarget,
         resolveThroughState(state, configuredTarget),
       );
+      // A live callback's row names who lent the callback, by the platform's stamp on its event
+      // (the attach stamps it with the lender: rpc-stubs.ts `lenderStamp`), never by the payload.
+      const lender = event.source.principal ? event.source : event.source.onBehalfOf;
+      const heldBy =
+        lender?.principal &&
+        jsonEqual(configuredTarget, [
+          "itx",
+          "builtins",
+          "rpcStubs",
+          ["get", `subscription:${name}`],
+        ])
+          ? {
+              principal: lender.principal,
+              // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
+              ...(lender.via && { via: lender.via }),
+            }
+          : undefined;
       return withSubscription(name, {
         target,
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
@@ -482,6 +505,8 @@ function reduceCoreEvent(
         ...(filter && { filter }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
         ...(hostedFacet && { hostedFacet }),
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
+        ...(heldBy && { heldBy }),
       });
     }
     case "events.iterate.com/itx/subscription-delivery-halted": {

@@ -33,6 +33,7 @@ import {
   itxExpressionEndingInFetch,
   stampCallerHeaders,
   terminalFetchOf,
+  type LenderStamp,
 } from "./context/rpc-stubs.ts";
 import {
   lendRpcStubOverPager,
@@ -308,6 +309,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       matchString,
       this.#caller.app ? [] : [ruleEvent, ...fetchRouteEvents],
       this.#waitUntil,
+      this.#lenderStamp,
       options.onlyFromItself && this.#caller.grant,
     );
     // The DO, not this session, un-sets the rule when the key's last pager closes.
@@ -366,6 +368,7 @@ export class IterateContextRpcTarget extends RpcTarget {
         rpcStubKey,
         this.#caller.app ? [] : [row],
         this.#waitUntil,
+        this.#lenderStamp,
       );
       const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
       return new SubscriptionHandleRpcTarget(name, () => lease.dispose());
@@ -380,6 +383,13 @@ export class IterateContextRpcTarget extends RpcTarget {
     return new SubscriptionHandleRpcTarget(name, () => {
       if (target) this.#removeSubscriptionInBackground(name, committed.offset);
     });
+  }
+
+  // What the context stamps on the rows a lend appends at its attach: who this caller is, never
+  // what it may do.
+  get #lenderStamp(): LenderStamp {
+    const { principal, grant, via, onBehalfOf } = this.#caller;
+    return { principal, grant, via, onBehalfOf };
   }
 
   // The platform's is spelled `itx.builtins.append`, so a context's own rows never redirect it.

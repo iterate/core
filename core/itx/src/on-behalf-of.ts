@@ -6,7 +6,9 @@ import { z } from "zod";
 import { signClaims, verifyClaims } from "./caller.ts";
 
 // `run` names a script's request (`<path>@<offset>`), `call` a person's own call into a facet
-// (`<path>#<facet>.<method>`): one of the two. `via` is the caller's (caller.ts).
+// (`<path>#<facet>.<method>`): one of the two on a call made for someone. A holder's stamp has
+// neither: it names who holds a lent callback, not a call (person-context.ts). `via` is the
+// caller's (caller.ts).
 export type OnBehalfOf = {
   principal: Principal;
   grant?: string;
@@ -15,19 +17,23 @@ export type OnBehalfOf = {
   call?: string;
 };
 
+export const PrincipalStamp = z.object({
+  actor: z.string(),
+  email: z.string().optional(),
+  impersonatedBy: z.object({ actor: z.string(), email: z.string() }).optional(),
+});
+
+export const OnBehalfOfStamp = z.object({
+  principal: PrincipalStamp,
+  grant: z.string().optional(),
+  via: z.object({ appPage: z.string() }).optional(),
+  run: z.string().optional(),
+  call: z.string().optional(),
+});
+
 const Claims = z.object({
   purpose: z.literal("on-behalf-of"),
-  onBehalfOf: z.object({
-    principal: z.object({
-      actor: z.string(),
-      email: z.string().optional(),
-      impersonatedBy: z.object({ actor: z.string(), email: z.string() }).optional(),
-    }),
-    grant: z.string().optional(),
-    via: z.object({ appPage: z.string() }).optional(),
-    run: z.string().optional(),
-    call: z.string().optional(),
-  }),
+  onBehalfOf: OnBehalfOfStamp,
   expiresAt: z.number(),
 });
 

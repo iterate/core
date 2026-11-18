@@ -15,7 +15,8 @@ export async function serveSession(
     caller: Caller;
     endsAt: number | null;
     endReason: string;
-    root?: (context: IterateContextRpcTarget) => RpcTarget;
+    // `teardown` ends with the session: a lend made through another caller on it ends with it too.
+    root?: (context: IterateContextRpcTarget, teardown: SessionTeardown) => RpcTarget;
   },
 ): Promise<Response> {
   const teardown = new SessionTeardown();
@@ -26,7 +27,7 @@ export async function serveSession(
     (promise) => ctx.waitUntil(promise),
     session.caller,
   );
-  const root = session.root?.(context) ?? context;
+  const root = session.root?.(context, teardown) ?? context;
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
     try {
       return await newWorkersRpcResponse(request, root);

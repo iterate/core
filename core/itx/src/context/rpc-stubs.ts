@@ -11,6 +11,7 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
 } from "iterate/expression";
+import { z } from "zod";
 import { causeHeader } from "../cause.ts";
 import {
   ITX_APP_HEADER,
@@ -19,6 +20,7 @@ import {
   ITX_GRANT_HEADER,
   type Caller,
 } from "../caller.ts";
+import { OnBehalfOfStamp, PrincipalStamp } from "../on-behalf-of.ts";
 import {
   FETCH_UPGRADE_EYEBALL_HEADER,
   FETCH_UPGRADE_SOCKET_HEADER,
@@ -34,24 +36,41 @@ export const RPC_STUB_PAGER_WEBSOCKET_HEADER = "x-itx-rpc-stub-pager";
 // `redial`: the lender's session lost its pager and dials again, with the events of its first dial.
 // `onlyFrom`: the lender (a row's `lentBy`) this attach may take the name's lend from, on a lend
 // that takes a lent name only from itself (`appendAtAttach`).
+// `lenderStamp`: who lends, as the lender's session knows its caller; the attach stamps each event
+// it appends with it, as an append by that caller is stamped (caller.ts `stampCaller`).
 export type RpcStubPagerAttachRequest = {
   rpcStubKey: string;
   appendEvents: StreamEventInput[];
   redial?: boolean;
   onlyFrom?: string;
+  lenderStamp?: LenderStamp;
 };
+/** The part of a `Caller` that names who it is, and nothing that gives it power (`platform`,
+ *  `app`, `config`, `signer`, `approvedAct`, `runsRow`, `path`, `delivery`). */
+export type LenderStamp = Pick<Caller, "principal" | "grant" | "via" | "onBehalfOf">;
+const LenderStampHeader = z.object({
+  principal: PrincipalStamp.nullable(),
+  grant: z.string().optional(),
+  via: z.object({ appPage: z.string() }).optional(),
+  onBehalfOf: OnBehalfOfStamp.optional(),
+});
 // URI-encoded (rpc-stub-relay.ts): a header is a ByteString, and a key or an event is not.
+// Only the kernel's own pager dial sets this header: every hop that forwards a Request strips it
+// (`stampCallerHeaders`), and the boundary strips every `x-itx-*` a caller sends.
 function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequest {
   const decoded = JSON.parse(decodeURIComponent(header)) as Partial<RpcStubPagerAttachRequest>;
   // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of JSON.parse output; the `Partial<...>` cast is a claim, not a guarantee
   if (typeof decoded?.rpcStubKey !== "string" || !Array.isArray(decoded.appendEvents))
     throw new Error("expected { rpcStubKey: string, appendEvents: [] }");
+  const lenderStamp = LenderStampHeader.safeParse(decoded.lenderStamp);
   return {
     rpcStubKey: decoded.rpcStubKey,
     appendEvents: decoded.appendEvents,
     redial: decoded.redial === true,
     // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of JSON.parse output, as above: a present non-string is dropped, never coerced
     ...(typeof decoded.onlyFrom === "string" && { onlyFrom: decoded.onlyFrom }),
+    // a malformed stamp is dropped whole: the attach then stamps nobody, as with none
+    ...(lenderStamp.success && { lenderStamp: lenderStamp.data }),
   };
 }
 
@@ -215,7 +234,7 @@ export class RpcStubDirectory {
 
   readonly #appendEvents: (
     events: StreamEventInput[],
-    lend: { rpcStubKey: string; redial: boolean; onlyFrom?: string },
+    lend: { rpcStubKey: string; redial: boolean; onlyFrom?: string; lenderStamp?: LenderStamp },
   ) => void;
 
   constructor(deps: {
@@ -224,7 +243,12 @@ export class RpcStubDirectory {
     rpcStubFetch: RpcStubFetchServer;
     appendEvents: (
       events: StreamEventInput[],
-      lend: { rpcStubKey: string; redial: boolean; onlyFrom?: string },
+      lend: {
+        rpcStubKey: string;
+        redial: boolean;
+        onlyFrom?: string;
+        lenderStamp?: LenderStamp;
+      },
     ) => void;
   }) {
     this.#ctx = deps.ctx;
@@ -295,7 +319,7 @@ export class RpcStubDirectory {
         { status: 400 },
       );
     }
-    const { rpcStubKey, appendEvents, redial, onlyFrom } = attachRequest;
+    const { rpcStubKey, appendEvents, redial, onlyFrom, lenderStamp } = attachRequest;
     const hadPager = this.#rpcStubPagerFor(rpcStubKey) !== undefined;
     const pair = new WebSocketPair();
     this.#ctx.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
@@ -303,7 +327,12 @@ export class RpcStubDirectory {
     // The set half, with the pager already accepted, so a push the commit fans out finds it.
     try {
       // also with nothing to append: the attach ends the record of what the last close un-set
-      this.#appendEvents(appendEvents, { rpcStubKey, redial: redial === true, onlyFrom });
+      this.#appendEvents(appendEvents, {
+        rpcStubKey,
+        redial: redial === true,
+        onlyFrom,
+        lenderStamp,
+      });
     } catch (error) {
       this.#closedRpcStubPagerSockets.add(pair[1]); // its close must not report a presence it never had
       try {

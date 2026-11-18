@@ -189,7 +189,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     rpcStubFetch: this.#rpcStubFetch,
     ctx: this.ctx,
     // The DO owns both ends of a lent stub's rule: this sets it, `#unsetWhatNamesRpcStub` un-sets it.
-    appendEvents: (events, { rpcStubKey, redial, onlyFrom }) => {
+    appendEvents: (events, { rpcStubKey, redial, onlyFrom, lenderStamp }) => {
       const record = `rpc-stub-unset:${rpcStubKey}`;
       appendAtAttach({
         events,
@@ -203,7 +203,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         append: (kept) =>
           void this.#appendAndRunCommittedEffects(
             kept.map((event) =>
-              stampCaller(event, { principal: null }, this.#durableObjectAddress.path),
+              // as the lender's own append would be: a subscription row then names who holds
+              // its callback (core-processor.ts `heldBy`)
+              stampCaller(
+                event,
+                lenderStamp || { principal: null },
+                this.#durableObjectAddress.path,
+              ),
             ),
           ),
       });
@@ -1097,6 +1103,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- an absent field stays absent on the wire
         ...(s.halted && { halted: s.halted }),
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- an absent field stays absent on the wire
+        ...(s.heldBy && { heldBy: s.heldBy }),
       };
     });
   }

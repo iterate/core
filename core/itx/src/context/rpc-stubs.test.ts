@@ -1,8 +1,15 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { type ItxExpression, parseItxExpressionPrefix } from "iterate/expression";
+import { codedError } from "iterate/lib";
 import type { StreamEventInput } from "iterate/stream/processor";
 import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
-import { appendAtAttach, eventsOfARedial, unsetByClose, type UnsetByClose } from "./rpc-stubs.ts";
+import {
+  appendAtAttach,
+  eventsOfARedial,
+  RpcStubDirectory,
+  unsetByClose,
+  type UnsetByClose,
+} from "./rpc-stubs.ts";
 
 const LEND: ItxExpression = ["itx", "builtins", "rpcStubs", ["get", "itx.bridge"]];
 const ELSEWHERE: ItxExpression = ["itx", "config", "bridge"];
@@ -165,6 +172,73 @@ test("a lend that takes the name from anyone (a member's) takes it from another 
   expect({ record, appended }).toEqual({ record: undefined, appended: [ALL] });
 });
 
+const member = { actor: "user_1", email: "a@example.com" };
+const person = { actor: "user_2", email: "b@example.com" };
+
+test.for([
+  {
+    name: "a member's stamp",
+    lenderStamp: { principal: member, grant: "grant:1", via: { appPage: "chat.example.com" } },
+    attached: { principal: member, grant: "grant:1", via: { appPage: "chat.example.com" } },
+  },
+  {
+    name: "a person's stamp beside the unnamed caller",
+    lenderStamp: { principal: null, onBehalfOf: { principal: person } },
+    attached: { principal: null, onBehalfOf: { principal: person } },
+  },
+  {
+    name: "a stamp with what gives a caller power",
+    lenderStamp: {
+      principal: member,
+      platform: true,
+      app: true,
+      config: true,
+      signer: { principal: member, key: "k1" },
+      approvedAct: "itx.secrets.get('x')",
+      runsRow: true,
+      path: "/",
+      delivery: "aaaaabbbbbccccc111112222233333aaaaabbbbb",
+    },
+    attached: { principal: member },
+  },
+])("an attach hands on $name, and only who it names", ({ lenderStamp, attached }) => {
+  // `toEqual`: a key that gives power must not survive
+  expect(lendOfAttach({ rpcStubKey: "k", appendEvents: [], lenderStamp })).toEqual({
+    rpcStubKey: "k",
+    redial: false,
+    lenderStamp: attached,
+  });
+});
+
+test.for([
+  { name: "no stamp", lenderStamp: undefined },
+  { name: "a stamp that is no object", lenderStamp: "user_1" },
+  { name: "a stamp with no principal field", lenderStamp: { grant: "grant:1" } },
+  { name: "a principal with no actor", lenderStamp: { principal: { email: "a@example.com" } } },
+  { name: "an actor that is no string", lenderStamp: { principal: { actor: 7 } } },
+  { name: "a grant that is no string", lenderStamp: { principal: member, grant: 7 } },
+  { name: "a via with no page", lenderStamp: { principal: member, via: {} } },
+  {
+    name: "an onBehalfOf with no principal",
+    lenderStamp: { principal: null, onBehalfOf: { via: { appPage: "chat.example.com" } } },
+  },
+])("an attach with $name stamps nobody", ({ lenderStamp }) => {
+  // `toEqual`: a key that holds undefined is no stamp
+  expect(lendOfAttach({ rpcStubKey: "k", appendEvents: [], lenderStamp })).toEqual({
+    rpcStubKey: "k",
+    redial: false,
+  });
+});
+
+test("a redial hands on the same stamp as the first dial", () => {
+  const lenderStamp = { principal: member, grant: "grant:1" };
+  expect(lendOfAttach({ rpcStubKey: "k", appendEvents: [], redial: true, lenderStamp })).toEqual({
+    rpcStubKey: "k",
+    redial: true,
+    lenderStamp,
+  });
+});
+
 /** An attach of all three rows by the key `key:k1`, which takes the name only from itself. */
 function attachOnlyFromKeyOne(input: { rows: ReturnType<typeof rows>; redial?: boolean }) {
   let record: UnsetByClose | undefined = UNSET;
@@ -207,4 +281,34 @@ function rows(now: {
     fetchRouteTargets,
     subscriptionTargets,
   };
+}
+
+/** What the context's directory hands its append for one pager dial with `request` in the header.
+ *  The append refuses after it looked, so the attach answers 409: Node's Response has no 101. */
+function lendOfAttach(request: Record<string, unknown>) {
+  vi.stubGlobal(
+    "WebSocketPair",
+    class {
+      0 = {};
+      1 = { serializeAttachment: () => {}, close: () => {} };
+    },
+  );
+  const lends: unknown[] = [];
+  const directory = new RpcStubDirectory({
+    ctx: { acceptWebSocket: () => {}, getWebSockets: () => [] },
+    onPresence: () => {},
+    // only its type is read here: no stub is fetched through
+    rpcStubFetch: {} as ConstructorParameters<typeof RpcStubDirectory>[0]["rpcStubFetch"],
+    appendEvents: (_events, lend) => {
+      lends.push(lend);
+      throw codedError("STREAM_PAUSED", "the test reads the lend alone");
+    },
+  });
+  const answer = directory.acceptRpcStubPagerWebSocket(
+    new Request("https://rpc-stub-pager.internal/", {
+      headers: { "x-itx-rpc-stub-pager": encodeURIComponent(JSON.stringify(request)) },
+    }),
+  );
+  expect(answer).toMatchObject({ status: 409 });
+  return lends[0];
 }

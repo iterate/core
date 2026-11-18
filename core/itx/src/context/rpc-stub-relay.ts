@@ -10,6 +10,7 @@ import { dialRpcStubFetch } from "./fetch-upgrade.ts";
 import { redial } from "./redial.ts";
 import {
   disposeRpcStub,
+  type LenderStamp,
   type RpcStubPagerAttachRequest,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
@@ -139,6 +140,8 @@ export async function lendRpcStubOverPager(
   rpcStubKey: string,
   appendEvents: StreamEventInput[],
   waitUntil: (p: Promise<unknown>) => void,
+  // Who lends: sent at every dial, so a redial sets the rows again with the same stamp.
+  lenderStamp: LenderStamp,
   // The lender this lend may take the name's lend from, at the first dial (rpc-stubs.ts
   // `appendAtAttach`). Sent at each redial too, where the context does not check it.
   onlyFrom?: string,
@@ -157,6 +160,7 @@ export async function lendRpcStubOverPager(
             appendEvents,
             redial,
             onlyFrom,
+            lenderStamp,
           } satisfies RpcStubPagerAttachRequest),
         ),
       },
