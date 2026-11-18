@@ -34,8 +34,10 @@
 //
 // BOUNDS, since anyone can come: a name of 1 to 40 characters (iterate/principal
 // `displayNameOf`); the stack's new guests and its guests' sessions in ten minutes, each a number
-// of the config; 20 new guests an address. At a bound the page says to try again in ten minutes,
-// and the mind gets one `account/guest-refused` for that reason in that window.
+// of the config; 20 new guests an address, and 6 sessions a guest, so that no one cookie uses up
+// the stack's number. At a bound the page says to try again in ten minutes, and the mind gets one
+// `account/guest-refused` for that reason in that window. A guest's grant holds no refresh token:
+// every next 15 minutes are asked for here.
 import { sameOriginPath } from "iterate/lib";
 import { DISPLAY_NAME_MAX_CHARACTERS, displayNameOf } from "iterate/principal";
 import { AccountFacts } from "./account-facts.ts";

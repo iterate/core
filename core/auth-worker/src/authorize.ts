@@ -137,11 +137,12 @@ async function describe(env: Env, request: Request) {
   const refused = await notMemberRefusal(env, session, hostResource, here);
   if (refused) return refused;
   // A GUEST'S NEXT 15 MINUTES on this host (./guest-sign-in.ts): counted for the whole stack,
-  // since anyone can be a guest. The cookie is set again, so it ends 30 days after the browser
-  // last came.
+  // since anyone can be a guest, and for this guest, so that one cookie cannot use up the stack's
+  // number and stop every other guest's renewal. The cookie is set again, so it ends 30 days
+  // after the browser last came.
   if (hostSignIn && guest) {
     const { sessionsPerTenMinutes } = iterateConfigOf(env).login.methods.guest!;
-    if (!(await admitted(env, "guest-session", request, sessionsPerTenMinutes)))
+    if (!(await admitted(env, "guest-session", request, sessionsPerTenMinutes, session.userId)))
       return guestRefusal("session-rate", new URL(hostResource).host);
     const { redirectTo } = await complete(env, session, authRequest, hostResource);
     return new Response(null, {
@@ -193,10 +194,12 @@ async function describe(env: Env, request: Request) {
  *  ways an app takes, the mind's own session when it began one of those ways, else Cloudflare's
  *  when they name Cloudflare, else a guest's when they name guests. Each is read from its own
  *  cookie, so nothing a browser sends turns one into the other, and Cloudflare's and a guest's
- *  are read for an app that names them alone. The order keeps who a person is: someone signed in
- *  is never taken for the guest their browser also was. `hostSignIn`: the request is a hostname's
- *  own sign-in. A guest's counts there alone, never for a client that asks a consent (an MCP
- *  client, an outside app): a guest is let onto a page, and lets nothing in. */
+ *  are read for an app that names them alone. Someone signed in is never taken for the guest
+ *  their browser also was: with a session of the mind's own or of Cloudflare's that the app does
+ *  not take, the guest's cookie is not read, and the sign-in pages say who is signed in
+ *  (./guest-sign-in.ts `heldBefore`). `hostSignIn`: the request is a hostname's own sign-in. A
+ *  guest's counts there alone, never for a client that asks a consent (an MCP client, an outside
+ *  app): a guest is let onto a page, and lets nothing in. */
 async function sessionFor(
   env: Env,
   request: Request,
@@ -208,7 +211,9 @@ async function sessionFor(
   const cloudflare = methods.includes("cloudflare")
     ? await cloudflareSessionOf(env, request)
     : null;
-  if (cloudflare || !hostSignIn || !methods.includes("guest")) return cloudflare;
+  if (cloudflare || own || !hostSignIn || !methods.includes("guest")) return cloudflare;
+  // signed in at Cloudflare, at an app that does not name it: no guest either
+  if (await cloudflareSessionOf(env, request)) return null;
   return guestSessionOf(env, request);
 }
 

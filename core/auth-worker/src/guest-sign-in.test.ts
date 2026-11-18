@@ -15,7 +15,7 @@ import { guestOf, sessionCookie, sessionOf } from "./cookies.ts";
 import type { Env } from "./env.ts";
 import { authResponse } from "./http.ts";
 import { isMember, standingOf } from "./members.ts";
-import { hostCallbackOf, hostClientOf, tokenIdentity } from "./oauth.ts";
+import { grantLifetimeOf, hostCallbackOf, hostClientOf, tokenIdentity } from "./oauth.ts";
 import { linkBySubject, linkIdentity } from "./users.ts";
 import { whoIs } from "./who-is.ts";
 
@@ -387,6 +387,61 @@ test("the browser is asked once: with the cookie, the form goes straight on, and
   );
 });
 
+test("a signed-in person whose browser was a guest before is not that guest at an app that names guests alone", async () => {
+  const { env } = stackOf();
+  const meet = await hostSignInOf(env, MEET, "guest");
+  const bob = await joined(env, meet.next, "Bob");
+  const owner = await ownerCookie(env);
+  // the guest's cookie alone earns the code; beside a session the app does not take, it earns none
+  expect(originAndPath(await meet.ask(bob.cookie))).toBe(`${MEET}/.iterate/callback`);
+  const asked = await meet.ask(`${bob.cookie}; ${owner}`);
+  expect([asked.status, originAndPath(asked)]).toEqual([302, "/sign-in"]);
+  // and the way on says who is signed in, with the sign-out
+  const signIn = await authResponse(new Request(asked.headers.get("location")!), env, ctx);
+  const form = await authResponse(
+    new Request(signIn.headers.get("location")!, {
+      headers: { cookie: `${bob.cookie}; ${owner}` },
+    }),
+    env,
+    ctx,
+  );
+  expect([form.status, await form.text()]).toEqual([403, expect.stringContaining(OWNER)]);
+});
+
+test("a guest's code gives 15 minutes and no refresh token", async () => {
+  const { env } = stackOf();
+  const meet = await hostSignInOf(env, MEET, "guest");
+  const bob = await joined(env, meet.next, "Bob");
+  const tokens = await meet.tokensFor(await meet.ask(bob.cookie));
+  expect(tokens).toMatchObject({ access_token: expect.any(String), expires_in: 900 });
+  expect(tokens).not.toHaveProperty("refresh_token");
+  // the rule itself: nothing renews a guest's grant, and any other host sign-in is as it was
+  const guest = { userId: "user_1", email: "guest:abc", method: "guest" } as const;
+  const at = { host: true, now: Date.now() };
+  expect(grantLifetimeOf(guest, { ...at, refresh: false })).toEqual({
+    accessTokenTTL: 900,
+    refreshTokenTTL: 0,
+  });
+  expect(grantLifetimeOf(guest, { ...at, refresh: true })).toBe("guest_no_refresh");
+  expect(
+    grantLifetimeOf(
+      { ...guest, email: "a@example.org", method: "email" },
+      { ...at, refresh: false },
+    ),
+  ).toEqual({ accessTokenTTL: 24 * 3600 });
+});
+
+test("one guest's cookie cannot use up the stack's sessions: each guest has a bound of their own", async () => {
+  const { env } = stackOf({ guest: { sessionsPerTenMinutes: 100 } });
+  const meet = await hostSignInOf(env, MEET, "guest");
+  const bob = await joined(env, meet.next, "Bob");
+  const eve = await joined(env, meet.next, "Eve");
+  const answers = [];
+  for (let n = 0; n < 8; n += 1) answers.push((await meet.ask(bob.cookie)).status);
+  expect(answers).toEqual([302, 302, 302, 302, 302, 302, 429, 429]);
+  expect(await meet.ask(eve.cookie)).toMatchObject({ status: 302 });
+});
+
 test("the stack's two bounds: past each, the page says ten minutes, and the mind gets one event for the window", async () => {
   const { env, people } = stackOf({ guest: { newPerTenMinutes: 2, sessionsPerTenMinutes: 3 } });
   const meet = await hostSignInOf(env, MEET, "guest");
@@ -605,13 +660,14 @@ async function hostSignInOf(
   });
   if (ways) query.set("acr_values", ways);
   const path = `/oauth2/auth?${query}`;
-  return {
+  const request = {
     path,
     next: encodeURIComponent(path),
     ask: (cookie = "") =>
       authResponse(new Request(ISSUER + path, { headers: { cookie } }), env, ctx),
-    /** The access token for the code in `answer`'s redirect, as the boundary's callback gets it. */
-    tokenFor: async (answer: Response) => {
+    /** The token endpoint's answer for the code in `answer`'s redirect, as the boundary's
+     *  callback gets it. */
+    tokensFor: async (answer: Response) => {
       const exchanged = await authResponse(
         new Request(`${ISSUER}/oauth2/token`, {
           method: "POST",
@@ -628,8 +684,14 @@ async function hostSignInOf(
         env,
         ctx,
       );
-      return z.object({ access_token: z.string() }).parse(await exchanged.json()).access_token;
+      return exchanged.json() as Promise<Record<string, unknown>>;
     },
+  };
+  return {
+    ...request,
+    /** The access token alone. */
+    tokenFor: async (answer: Response) =>
+      z.object({ access_token: z.string() }).parse(await request.tokensFor(answer)).access_token,
   };
 }
 

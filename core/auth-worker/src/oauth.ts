@@ -332,6 +332,8 @@ async function grantLifetime(
     now: Date.now(),
   });
   if (lifetime === "deadline_passed") throw refused(lifetime, "The session has expired.");
+  if (lifetime === "guest_no_refresh")
+    throw refused(lifetime, "A guest's session is not renewed here. Open the page again.");
   if (lifetime === "let_in_no_refresh")
     throw refused(lifetime, "Being let in cannot be renewed. Ask again.");
   return { accessTokenProps: { ...grant, grantId: input.grantId }, ...lifetime };
@@ -341,13 +343,21 @@ async function grantLifetime(
 export function grantLifetimeOf(
   grant: GrantProps,
   exchange: { refresh: boolean; host: boolean; now: number },
-): { accessTokenTTL: number; refreshTokenTTL?: number } | "deadline_passed" | "let_in_no_refresh" {
+):
+  | { accessTokenTTL: number; refreshTokenTTL?: number }
+  | "deadline_passed"
+  | "let_in_no_refresh"
+  | "guest_no_refresh" {
   const deadline = letInDeadlineOf(grant);
-  if (!deadline && exchange.host)
-    return {
-      accessTokenTTL:
-        grant.method === "guest" ? GUEST_HOST_ACCESS_TOKEN_SECONDS : HOST_ACCESS_TOKEN_SECONDS,
-    };
+  // A GUEST'S 15 MINUTES ARE ALL A GRANT GIVES: no refresh token (0 is the library's "none"), and
+  // one a grant got before this rule renews nothing. The next 15 minutes are earned at the
+  // authorization endpoint, where the cookie, the block and the bounds are asked again
+  // (./guest-sign-in.ts). Any other host sign-in keeps the library's refresh token: an MCP client
+  // of an app's host renews by it.
+  if (grant.method === "guest" && exchange.refresh) return "guest_no_refresh";
+  if (grant.method === "guest" && exchange.host)
+    return { accessTokenTTL: GUEST_HOST_ACCESS_TOKEN_SECONDS, refreshTokenTTL: 0 };
+  if (!deadline && exchange.host) return { accessTokenTTL: HOST_ACCESS_TOKEN_SECONDS };
   if (!deadline) return { accessTokenTTL: ACCESS_TOKEN_SECONDS };
   const remaining = Math.floor((deadline - exchange.now) / 1000);
   // KV's shortest expiry, below which the library refuses a lifetime.

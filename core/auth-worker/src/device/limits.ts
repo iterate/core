@@ -2,14 +2,15 @@ import type { Env } from "../env.ts";
 
 const WINDOW_MS = 10 * 60_000;
 
-// Per kind, per window: 20 a client, 120 the stack (or the stack's own number for its guests),
-// which bounds what a stranger with many addresses can make it store. One statement, so two at
-// once cannot both pass. ?1 kind, ?2 client, ?3 now, ?4 the stack's bound.
+// Per kind, per window: 20 a client (6 a guest for a guest's sessions), 120 the stack (or the
+// stack's own number for its guests), which bounds what a stranger with many addresses can make
+// it store. One statement, so two at once cannot both pass. ?1 kind, ?2 client, ?3 now, ?4 the
+// stack's bound, ?5 the client's bound.
 const ADMIT = `insert into admissions (kind, client, created_at)
 select ?1, ?2, ?3
 where (?2 is null or (select count(*) from admissions
                       where kind = ?1 and client = ?2 and created_at > ?3 - ${WINDOW_MS})
-                     < 20)
+                     < ?5)
   and (select count(*) from admissions where kind = ?1 and created_at > ?3 - ${WINDOW_MS})
       < ?4
 returning 1 as admitted`;
@@ -27,20 +28,23 @@ export function clientOf(request: Request): string {
 }
 
 /** `host-client` is asked with no client: the boundary asks for a visitor it does not name, so
- *  the stack's own count holds it. So is `guest-session`: the guests of one office come from one
- *  address, and each takes a session every 15 minutes. `stackBound`: the stack's bound for its
- *  guests, from its config; 120 for every other kind. */
+ *  the stack's own count holds it. `guest-session` is counted for `guest`, the guest's user id,
+ *  and never for an address: the guests of one office come from one address. One guest gets 6 in
+ *  the window: a session lasts 15 minutes, on each host the guest has open. `stackBound`: the
+ *  stack's bound for its guests, from its config; 120 for every other kind. */
 export async function admitted(
   env: Env,
   kind: "device" | "registration" | "host-client" | "guest" | "guest-session",
   request: Request,
   stackBound = 120,
+  guest?: string,
 ) {
   const now = Date.now();
-  const client = kind === "host-client" || kind === "guest-session" ? null : clientOf(request);
+  const client =
+    kind === "guest-session" ? guest || null : kind === "host-client" ? null : clientOf(request);
   const [, added] = await env.DB.batch([
     env.DB.prepare("delete from admissions where created_at <= ?1").bind(now - WINDOW_MS),
-    env.DB.prepare(ADMIT).bind(kind, client, now, stackBound),
+    env.DB.prepare(ADMIT).bind(kind, client, now, stackBound, kind === "guest-session" ? 6 : 20),
   ]);
   const allowed = Boolean(added?.results[0]);
   if (!allowed) console.warn({ event: "auth.admission-refused", kind });
