@@ -98,6 +98,35 @@ test.for([
   expect(people()).toEqual([]);
 });
 
+test("a browser that is shown the form twice answers either page: a second tab does not end the first", async () => {
+  const { env, people } = stackOf();
+  const meet = await hostSignInOf(env, MEET, "guest");
+  const first = await formOf(env, meet.next);
+  const again = await authResponse(
+    new Request(`${FORM}?next=${meet.next}`, { headers: { cookie: first.cookie } }),
+    env,
+    ctx,
+  );
+  const second = {
+    state: /name="state" value="([^"]+)"/.exec(await again.text())?.[1] || "",
+    cookie: (again.headers.get("set-cookie") || "").split(";")[0]!,
+  };
+  expect(second).toMatchObject({ state: first.state });
+  // the first page's form, sent with the cookie the second fetch left
+  expect(await posted(env, { ...first, cookie: second.cookie, name: "Bob" })).toMatchObject({
+    status: 303,
+  });
+  expect(people()).toHaveLength(1);
+  // a form for another request is another form
+  const other = await hostSignInOf(env, MEET, "guest passkey");
+  const others = await authResponse(
+    new Request(`${FORM}?next=${other.next}`, { headers: { cookie: second.cookie } }),
+    env,
+    ctx,
+  );
+  expect(await others.text()).not.toContain(`value="${first.state}"`);
+});
+
 test("two browsers with two names are two people, each with a name, an event and 15 minutes on the app's host", async () => {
   const { env, people } = stackOf();
   const meet = await hostSignInOf(env, MEET, "guest passkey");

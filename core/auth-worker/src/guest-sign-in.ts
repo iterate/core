@@ -88,7 +88,11 @@ async function form(env: Env, request: Request, url: URL): Promise<Response> {
   if (!app) return new Response("Not found", { status: 404 });
   const held = await heldBefore(env, request, app, next);
   if (held) return held;
-  const state = crypto.randomUUID();
+  // A browser that was shown this form already (a second tab, a reload) gets the same state
+  // again, so the answer of either page counts.
+  const shown = await flowOf(env, request);
+  const state =
+    shown?.nonce === FLOW_MARK && shown.next === next ? shown.state : crypto.randomUUID();
   const headers = new Headers({
     "set-cookie": await flowCookie(env, { next, state, nonce: FLOW_MARK, verifier: "" }),
   });
