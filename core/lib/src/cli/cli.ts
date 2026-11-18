@@ -15,6 +15,7 @@ import { addressOf, connectMind, discoverAddress, openForSignIn, signInToMind } 
 import { mindApiUrlOf, mindMcpUrlOf, mindProvideUrlOf } from "../mind-api.ts";
 import { connectChatgpt } from "./chatgpt.ts";
 import { isCodingAgent } from "./coding-agent.ts";
+import { deployMind } from "./deploy.ts";
 import { runFs } from "./fs.ts";
 import { loginFlowFor, unexpectedUser } from "./device-login/flow.ts";
 import { revokeSession } from "./oauth.ts";
@@ -103,11 +104,20 @@ function signInEndsAt(address: string): number | undefined {
 
 /** `iterate login`: sign in to the mind at the typed address, check who that is, and make it the
  *  profile's mind. `chatgpt connect` signs in by this too. */
-const login = async (input: { address: string; device?: boolean; expectUser?: string }) => {
+const login = async (input: {
+  address: string;
+  device?: boolean;
+  expectUser?: string;
+  /** `iterate deploy`'s first sign-in: the browser flow, with its own page in front of the issuer's */
+  openBrowser?: (url: URL) => void;
+}) => {
   const mind = await discoverAddress(input.address);
   const resource = mindApiUrlOf(mind.address);
   const session = await signInToMind(mind, resource, {
-    flow: loginFlowFor({ device: input.device, env: process.env, platform: process.platform }),
+    flow: input.openBrowser
+      ? "browser"
+      : loginFlowFor({ device: input.device, env: process.env, platform: process.platform }),
+    openBrowser: input.openBrowser,
   });
   using connection = await connectMind({ address: mind.address, token: session.token });
   const who = await connection.itx.whoami();
@@ -132,6 +142,90 @@ const mindOption = z
   .describe("The mind's address, e.g. example.com (default: the profile's)");
 
 const launcherProcedures = {
+  deploy: os
+    .input(
+      z.object({
+        domain: z
+          .string()
+          .optional()
+          .describe("The mind's domain: a zone of the account, or one to buy or bring"),
+        account: z.string().optional().describe("The Cloudflare account, by id or name"),
+        newAccount: z.boolean().optional().describe("Make a new Cloudflare account for the mind"),
+        name: z
+          .string()
+          .optional()
+          .describe(
+            "The stack's name in the account, iterate-<name>-… (default: from the owner's address)",
+          ),
+        owner: z
+          .string()
+          .optional()
+          .describe("The owner's email address (default: the Cloudflare login's)"),
+        buy: z
+          .boolean()
+          .optional()
+          .describe("Buy the domain at Cloudflare's price without a question"),
+        yes: z
+          .boolean()
+          .optional()
+          .describe(
+            "Answer yes to the other questions: a domain you bring, a deploy over this mind",
+          ),
+        source: z
+          .string()
+          .optional()
+          .describe(
+            "A checkout of iterate's core to deploy from (default: the one this runs in, else iterate/core's main)",
+          ),
+        ref: z.string().optional().describe("A branch or commit of iterate/core to deploy"),
+        cloud: z
+          .boolean()
+          .default(true)
+          .meta({ negatable: true })
+          .describe(
+            "Name iterate Cloud in the mind's config, for its GitHub, Google and Slack clients",
+          ),
+        apiTokens: z
+          .boolean()
+          .optional()
+          .describe(
+            "The access may make API tokens (a token of your own in CLOUDFLARE_API_TOKEN): turn on telemetry and the mind's Cloudflare connection",
+          ),
+        setup: z
+          .boolean()
+          .default(true)
+          .meta({ negatable: true })
+          .describe(
+            "With a person at the terminal, after the deploy: the passkey and the first sign-in, a ChatGPT plan or an API key for the model, a check that the onboarding agent answers, and the mind's MCP server in Claude Code and Codex",
+          ),
+        sandboxImage: z
+          .enum(["managed", "published"])
+          .optional()
+          .describe(
+            "managed: Cloudflare's small image (the default). published: iterate's full image, copied into the account",
+          ),
+      }),
+    )
+    .meta({
+      description:
+        "Deploy a new mind into your own Cloudflare account, at its own domain: sign in at Cloudflare, choose the account and the domain, and the stack is deployed from this computer",
+    })
+    .handler(async ({ input }) =>
+      deployMind(input, {
+        signIn: async (address, openBrowser) => {
+          console.error((await login({ address, openBrowser })).message);
+          return connect(address);
+        },
+        connectChatgpt: (connection, print) =>
+          connectChatgpt({
+            itx: connection.itx,
+            address: connection.address,
+            test: true,
+            print,
+            openBrowser: (url) => openForSignIn(url, print),
+          }),
+      }),
+    ),
   login: os
     .input(
       z.object({

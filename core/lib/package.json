@@ -249,6 +249,7 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
+    "@clack/prompts": "1.9.0",
     "capnweb": "catalog:",
     "json5": "catalog:",
     "oauth4webapi": "catalog:",
@@ -269,11 +270,11 @@
     "@cloudflare/workers-types": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
+    "@types/ws": "catalog:",
     "react": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:",
-    "@types/ws": "catalog:"
+    "vitest": "catalog:"
   },
   "bin": {
     "iterate": "./bin/iterate.js"

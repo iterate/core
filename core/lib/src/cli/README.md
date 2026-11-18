@@ -7,6 +7,7 @@ and every connection it makes is the Node client's ([`iterate/node`](../node.ts)
 
 ```sh
 npx iterate                               # offline help
+npx iterate deploy                        # a new mind in your own Cloudflare account
 npx iterate login example.com             # sign in, and make it the profile's mind
 npx iterate login example.com --device    # approve from a phone, when the issuer offers it
 npx iterate whoami
@@ -44,6 +45,75 @@ instead, which needs this machine's localhost. Every login prints whom it signed
 In a terminal with colors, the QR code is drawn as `qrencode -t ANSI` draws it; without colors (a
 pipe, `NO_COLOR`, `TERM=dumb`) as half blocks in the text color. `FORCE_COLOR=1` forces the colors.
 The link under the code works everywhere.
+
+## Deploy a mind
+
+`iterate deploy` puts a new mind into your own Cloudflare account, at its own domain. It is one
+program with no model in it: it asks for the account and the domain, and does the rest. Its code is
+[deploy.ts](deploy.ts) and [cloudflare-access.ts](cloudflare-access.ts).
+
+```sh
+npx iterate deploy                                   # a person at a terminal: two questions
+npx iterate deploy --new-account --domain ada-labs.com --buy
+CLOUDFLARE_API_TOKEN=… npx iterate deploy --account <id> --domain example.com --owner you@example.org
+```
+
+What it does, in order:
+
+1. **The stack's source.** It fetches [iterate/core](https://github.com/iterate/core) into
+   `${XDG_CACHE_HOME:-~/.cache}/iterate/core` and installs it with pnpm (through `npx` when pnpm is
+   not installed), while you sign in. In a checkout of the source it deploys that checkout.
+   `--source <folder>` names a checkout, `--ref <branch or commit>` another version. It needs git.
+2. **Cloudflare.** You approve a code on Cloudflare's page (the device flow, with the `cf` CLI's
+   public client: no secret, no server of iterate's). The access lives about an hour and is not
+   renewed. It is kept in the CLI's config folder until a deploy works, then revoked, so a second
+   run asks for no second approval. `CLOUDFLARE_API_TOKEN` replaces the sign-in ([the permissions
+   it needs](../../../alchemy/README.md#the-api-token)).
+3. **The account.** One you have, or a new one in your name (`--new-account`): Cloudflare allows a
+   login five extra accounts. Cloudflare then asks once more, for the new account.
+4. **The domain.** A domain of the account, a new one that Cloudflare's registrar sells, or one
+   from another registrar, whose nameservers you then change. It asks the registrar about up to
+   20 names made from your name (the "-erate" names first, as iterate's is) and lists the free
+   ones with their price a year. You can type a domain, or a few words to get more names. It asks
+   before it buys; `--buy` is the yes. The mind takes the whole domain, and the owner's own address must
+   be elsewhere.
+5. **Workers Paid and R2.** It opens the page for each one that is off and waits until it is on.
+6. **The deploy**: `pnpm run deploy` of [core/alchemy](../../../alchemy/README.md), with a config
+   that names you as the only member. On a dev zone the whole command took 1 min 41 s, and 2 min 10 s when the new state store refused the first try.
+
+After the deploy, with a person at the terminal, it does the mind's first steps:
+
+1. **The passkey and the first sign-in.** It opens one page of your mind, with a link that works
+   once, within 24 hours. You add your passkey there, and the same page then signs this terminal
+   in (`iterate login`). A passkey is made in a browser: the CLI cannot make one.
+2. **What pays for the model:** a ChatGPT Plus or Pro plan ([A ChatGPT plan](#a-chatgpt-plan)), an
+   OpenAI API key that you paste on a page of your own mind, or nothing now.
+3. **The onboarding agent answers.** It says "hi" to `/agents/onboarding` and waits for the
+   model's answer, up to 50 seconds. With none it says why, and step 2 comes again.
+4. **The MCP server.** It offers to add `https://iterate.<domain>/mcp` to Claude Code and Codex,
+   whichever is installed, under the domain's name (`ada-labs-com`) for the whole user, and says how each one signs
+   in.
+
+`--no-setup` leaves these steps out, and so does a run with nobody at the terminal: it then
+prints the link alone. The first sign-in comes back to this computer's browser: over SSH, use
+`--no-setup`, then `iterate login --device`. The config, the log and the name of the stack are in
+`${XDG_CACHE_HOME:-~/.cache}/iterate/deploys/<name>/`.
+
+- **It handles the expected way alone.** A run that stops says why. Run it again: each step reads
+  what the account has, and a deploy keeps what it made. A coding agent can run and supervise it:
+  with nobody at the terminal each choice comes from its flag (`iterate deploy --help`), and a
+  missing one is named.
+- **No telemetry and no Cloudflare connection for the mind after a sign-in.** Both make API tokens
+  of the account, and Cloudflare's public client offers no such scope. With a token of your own
+  that may make API tokens, `--api-tokens` turns both on.
+- **Sandboxes start on Cloudflare's small image** (Node and npm). `--sandbox-image published`
+  copies iterate's full image into the account during the deploy, about 1.6 GB through this
+  computer.
+- **It is for a new mind.** To update one, deploy from its stored config
+  ([core/alchemy](../../../alchemy/README.md#the-stored-config)). A deploy over a mind that this
+  command made writes its config again, with the owner as its only member.
+- `--no-cloud` leaves iterate Cloud out of the mind's config: no GitHub, Google or Slack client of
+  iterate's.
 
 ## Files of this machine
 

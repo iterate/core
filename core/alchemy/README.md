@@ -8,6 +8,10 @@ every resource named `iterate-<name>-<part>` (`src/config.ts` `resourceNamesOf`)
 
 ## Deploy
 
+For a new mind, `npx iterate deploy` does all of this by itself: it signs in at Cloudflare, asks
+for the account and the domain, writes the config and runs the deploy below
+(`core/lib/src/cli/README.md`, "Deploy a mind"). By hand:
+
 1. Copy `mind.config.example.ts` to `mind.config.local.ts` (git ignores it, and
    `mind.config*.local.json`). Fill in the mind's `name`, the Cloudflare `accountId` and a
    zone of that account as `domain`, and under `auth` who is a member (`login.allow`) and whether a
