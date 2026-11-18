@@ -18,7 +18,12 @@ import { calendarEvent } from "./calendar.ts";
 import { cloudAccountsEvent } from "./cloud-accounts.ts";
 import { cloudDeliveryOf, sayMindForm } from "./cloud-deliveries.ts";
 import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
-import { cloudflareConnectionEvent, cloudflareForAgent } from "./cloudflare.ts";
+import {
+  cloudflareBilling,
+  cloudflareBillingToken,
+  cloudflareConnectionEvent,
+  cloudflareForAgent,
+} from "./cloudflare.ts";
 import { contextDescriptionsEvent } from "./context-descriptions.ts";
 import { gmailEvent } from "./gmail.ts";
 import {
@@ -267,7 +272,7 @@ export default class extends IterateConfigEntrypoint {
       // Cloud's apps and accounts, every other key and account, and what a computer lends
       // (cloud-accounts.ts).
       cloudAccountsEvent(itx, event),
-      // The "Cloudflare" card: the mind's connection to Cloudflare's MCP server, checked at each
+      // The "Cloudflare" card: the mind's connection to Cloudflare's API, checked at each
       // publish (cloudflare.ts).
       cloudflareConnectionEvent(itx, event),
       // What each context is for, the line the mind's catalog shows: the table in
@@ -332,12 +337,26 @@ export default class extends IterateConfigEntrypoint {
     return await slackForAgent(itx, method, args);
   }
 
-  /** `itx.config.cloudflare(tool, args)`: a tool of Cloudflare's own MCP server, called with the
-   *  API token of the mind's own account, with which agents read the account and query its logs
-   *  and traces (cloudflare.ts; cloudflare.md). */
+  /** `itx.config.cloudflare(tool, args)`: one request to Cloudflare's REST API (`"execute"`) or
+   *  the accounts it reaches (`"whoami"`), with the credential of the mind's own account, with
+   *  which agents read the account and query its logs and traces (cloudflare.ts; cloudflare.md). */
   async cloudflare(tool: string, args?: Record<string, unknown>) {
     using itx = this.getItx();
     return await cloudflareForAgent(itx, tool, args);
+  }
+
+  /** `itx.config.cloudflareBillingToken()`: whether the mind has its billing token, or the two
+   *  links by which a member makes one and gives it (cloudflare.ts; cloudflare.md). */
+  async cloudflareBillingToken() {
+    using itx = this.getItx();
+    return await cloudflareBillingToken(itx);
+  }
+
+  /** `itx.config.cloudflareBilling(account, path)`: one read of the account's cost with the
+   *  billing token (cloudflare.ts). */
+  async cloudflareBilling(account: string, path: string) {
+    using itx = this.getItx();
+    return await cloudflareBilling(itx, account, path);
   }
 }
 

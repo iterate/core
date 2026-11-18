@@ -1,5 +1,5 @@
 // The default config's "Cloudflare" card (core/configs/default/cloudflare.ts): a mind with the
-// stack's token shows the connection right after a publish, as Cloudflare's MCP server answered;
+// stack's token shows the connection right after a publish, as Cloudflare's API answered;
 // a mind without it says how to get one. The fake registry takes only what the real one takes
 // (the contract's own schemas).
 import { expect, test } from "vitest";
@@ -10,7 +10,7 @@ const CLOUD = "https://cloud.example.com";
 const PUBLISHED = { type: "events.iterate.com/mind/worker-updated", path: "/" };
 const ACCOUNT = "aaaaabbbbbccccc111112222233333aa";
 
-test("right after a publish, a mind with the token shows the connection: what the MCP server named, and when it asked", async () => {
+test("right after a publish, a mind with the token shows the connection: the account that Cloudflare named, and when it was asked", async () => {
   const mind = cloudflareMind({ token: true });
 
   await cloudflareConnectionEvent(mind.itx, PUBLISHED);
@@ -23,26 +23,26 @@ test("right after a publish, a mind with the token shows the connection: what th
   });
   expect(card?.description).toMatch(/itx\.config\.cloudflare\(tool, args\)/);
   // the token reads the account and changes nothing in it: the card says so, and offers no change
-  expect(card?.description).toMatch(/query logs and traces\. The token changes nothing/);
+  expect(card?.description).toMatch(/query logs and traces\. The credential changes nothing/);
   expect(card?.description).not.toMatch(/DNS|routes|profile/);
   expect(row).toMatchObject({
     account: "Ada's account",
     status: { kind: "ok" },
     details: {
       "Account id": ACCOUNT,
-      Server: "https://mcp.cloudflare.com/mcp",
+      API: "https://api.cloudflare.com/client/v4",
+      Credential: "the stack's API token",
       Secret: "/secrets/cloudflare",
     },
   });
-  expect(row?.details?.Checked).toMatch(/^\d{4}-\d\d-\d\dT.*: whoami answered$/);
-  // the server was asked with the secret's placeholder, never the token, and the session closed
+  expect(row?.details).not.toHaveProperty("Also reaches");
+  expect(row?.details?.Checked).toMatch(/^\d{4}-\d\d-\d\dT.*: Cloudflare answered$/);
+  // Cloudflare was asked with the secret's placeholder, never the token
   expect(mind).toMatchObject({
     asked: [
       {
-        url: "https://mcp.cloudflare.com/mcp",
+        url: "https://api.cloudflare.com/client/v4/accounts?per_page=50",
         authorization: 'Bearer getSecret("/secrets/cloudflare", { field: "token" })',
-        tool: "whoami",
-        closed: true,
       },
     ],
   });
@@ -57,14 +57,26 @@ test("right after a publish, a mind with the token shows the connection: what th
   expect(mind.asked.length).toBe(1);
 });
 
-test("a server that refuses the token, or does not answer, makes the card say so", async () => {
-  const mind = cloudflareMind({ token: true, refuses: "401 invalid_token" });
+test("a consent that the vault refreshes is asked by its own field, and a connection that reaches more than one account says so", async () => {
+  const mind = cloudflareMind({ token: true, refresh: "oauth-refresh-token", accounts: 3 });
+  await cloudflareConnectionEvent(mind.itx, PUBLISHED);
+  expect(mind.registry().row?.details).toMatchObject({
+    Credential: "a consent at Cloudflare, which the vault refreshes",
+    "Also reaches": "2 more account(s)",
+  });
+  expect(mind.asked).toMatchObject([
+    { authorization: 'Bearer getSecret("/secrets/cloudflare", { field: "accessToken" })' },
+  ]);
+});
+
+test("a Cloudflare that refuses the credential makes the card say so", async () => {
+  const mind = cloudflareMind({ token: true, refuses: 403 });
   await cloudflareConnectionEvent(mind.itx, PUBLISHED);
   const { card, row } = mind.registry();
   expect(card).toMatchObject({ status: { kind: "error" } });
   expect(row).toMatchObject({
     account: "Cloudflare account",
-    status: { kind: "error", text: "401 invalid_token" },
+    status: { kind: "error", text: "Cloudflare answered 403" },
   });
   expect(row?.details).not.toHaveProperty("Account id");
   expect(row?.details?.Checked).toMatch(/: failed$/);
@@ -117,9 +129,16 @@ test("a mind whose stack names no Cloud is told to deploy with the field, with n
 
 type Row = { details?: Record<string, string> } & Record<string, unknown>;
 
-/** A mind with or without the stack's Cloudflare token, whose MCP server names ACCOUNT or
- *  refuses with `refuses`. */
-function cloudflareMind(given: { token: boolean; cloud?: boolean; refuses?: string }) {
+/** A mind with or without a Cloudflare credential (the stack's token, or with `refresh` a
+ *  consent), whose Cloudflare names ACCOUNT first of `accounts`, or refuses with the status
+ *  `refuses`. */
+function cloudflareMind(given: {
+  token: boolean;
+  cloud?: boolean;
+  refuses?: number;
+  refresh?: string;
+  accounts?: number;
+}) {
   const state = {
     integrations: {} as Record<string, unknown>,
     connections: {} as Record<string, unknown>,
@@ -127,7 +146,7 @@ function cloudflareMind(given: { token: boolean; cloud?: boolean; refuses?: stri
   const events = IntegrationRegistryContract.events;
   const mind = {
     token: given.token,
-    asked: [] as { url: string; authorization?: string; tool: string; closed: boolean }[],
+    asked: [] as { url: string; authorization: string | null }[],
     registry: () =>
       structuredClone({
         card: state.integrations.cloudflare as Record<string, unknown> | undefined,
@@ -135,20 +154,22 @@ function cloudflareMind(given: { token: boolean; cloud?: boolean; refuses?: stri
       }),
     itx: {
       secrets: {
-        describe: async (path: string) => ({ set: path === "/secrets/cloudflare" && mind.token }),
+        describe: async (path: string) => ({
+          set: path === "/secrets/cloudflare" && mind.token,
+          refresh: given.refresh,
+        }),
+        collectFromUser: async () => ({ url: "" }),
         cloud: async () => (given.cloud === false ? null : { origin: CLOUD }),
       },
-      connectToMcp: async (url: string, options: { headers: Record<string, string> }) => {
-        if (given.refuses) throw new Error(given.refuses);
-        const call = { url, authorization: options.headers.authorization, tool: "", closed: false };
-        mind.asked.push(call);
-        return {
-          callTool: async (tool: string) => {
-            call.tool = tool;
-            return { id: `account:${ACCOUNT}`, name: "Ada's account" };
-          },
-          close: async () => void (call.closed = true),
-        };
+      fetch: async (request: Request) => {
+        if (given.refuses) return new Response("no", { status: given.refuses });
+        mind.asked.push({ url: request.url, authorization: request.headers.get("authorization") });
+        return Response.json({
+          result: Array.from({ length: given.accounts ?? 1 }, (_, index) => ({
+            id: index ? `${index}`.repeat(32) : ACCOUNT,
+            name: index ? `Another account ${index}` : "Ada's account",
+          })),
+        });
       },
       cd: (path: string) => ({
         append: async (event: { type: string; payload: Record<string, unknown> }) => {

@@ -20,9 +20,44 @@ rpc_method, http_status`, and for the mind's own Workers (`iterate-<slug>-mind`,
 - A request shows up a few minutes later, usually one to four. Ask again before you say it is not
   there.
 - The Analytics page: `https://dash.<domain>/?page=analytics`.
-- Cloudflare's own logs and traces: `await itx.config.cloudflare("execute", { code })`, with the
-  mind's Cloudflare token (`(await itx.secrets.describe("/secrets/cloudflare")).set`).
-  `cloudflare.md` has the two queries: the newest log lines, and invocations by outcome.
+- Cloudflare's own logs and traces: one request to Cloudflare's REST API,
+  `await itx.config.cloudflare("execute", { method, path, body })`, with the mind's Cloudflare
+  token (`(await itx.secrets.describe("/secrets/cloudflare")).set`). The mind Worker's newest log
+  lines:
+
+  ```ts
+  const { mindSlug } = await itx.whoami();
+  const { accounts } = await itx.config.cloudflare("whoami");
+  const now = Date.now();
+  const answer = await itx.config.cloudflare("execute", {
+    method: "POST",
+    path: `/accounts/${accounts[0].id}/workers/observability/telemetry/query`,
+    body: {
+      queryId: "newest-lines",
+      view: "events",
+      limit: 20,
+      timeframe: { from: now - 3_600_000, to: now },
+      parameters: {
+        datasets: ["cloudflare-workers"],
+        filters: [
+          {
+            key: "$metadata.service",
+            operation: "eq",
+            type: "string",
+            value: `iterate-${mindSlug}-mind`,
+          },
+        ],
+      },
+    },
+  });
+  return answer.body.result.events.events.map((line) => ({
+    at: new Date(line.timestamp).toISOString(),
+    level: line.$metadata.level,
+    said: line.$metadata.message || line.$metadata.type,
+  }));
+  ```
+
+  `cloudflare.md` has that query and a second one: invocations by Worker and outcome.
 
 ## Not ready
 
