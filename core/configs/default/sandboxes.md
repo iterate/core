@@ -86,6 +86,56 @@ if (!events.some((event) => event.type === "events.iterate.com/sandbox/started")
   - With no key, they answer "Not logged in" or 401. The mind's AI Gateway credit does not reach
     them. A key is the owner's choice (`onboarding/pays.md`): never ask for one in a chat.
 
+## Serve a port at a host
+
+A server in a sandbox gets a host of the mind, `https://<name>.<this mind's domain>/`: HTTP,
+streamed answers and WebSockets. Say it once:
+
+```ts
+const box = itx.sandboxes.get("/agents/<your name>/box");
+await box.files.write(
+  "/root/server.mjs",
+  `import { createServer } from "node:http";
+createServer((request, response) => response.end("hello from the sandbox\\n")).listen(8080);
+`,
+);
+return await box.exposePort(8080, { name: "hello", command: ["node", "/root/server.mjs"] });
+// { port: 8080, name: "hello", url: "https://hello.<domain>/", public: false }
+```
+
+- **It starts on demand.** A request that finds the sandbox stopped starts it from its own disk.
+  A request that finds the port closed runs `command` and waits for the port. So the idle stop
+  costs nothing but the first request's wait: 45 seconds at most, then the request gets 503
+  (still starting) or 502 (the port stayed closed). The command's output is in
+  `/var/log/iterate-port-<port>.log` in the sandbox. A command that did not open the port is
+  not run again for 30 seconds: until then a request gets the same 502. Write `command` with
+  absolute paths; with none, a closed port answers 502.
+- **A request is use.** Each request keeps the sandbox from its idle stop, and so does a
+  WebSocket while it is open. The idle stop comes after the last one closes.
+- **Members only**, as a tunnel: anyone else gets the sign-in. `public: true` serves every
+  visitor. **A public port lets any visitor start that one container and keep it running, with no
+  bound on how often.** Use it for a server that strangers must reach, and `unexposePort` it
+  after.
+- **Never put a secret in `command`**: the sandbox's log keeps it. A server needs no secret's
+  value: when it calls an API, it puts the placeholder (`getSecret("/secrets/<name>")`) in that
+  request's header, and the egress fills it in on the way out. A placeholder that the server
+  only reads stays the placeholder's text.
+- **The server sees the visitor's request and nothing of the mind's**: no sign-in cookie, no
+  identity of the member, no `x-itx-*` header. It hears `http:`; the visitor's scheme is in
+  `x-forwarded-proto`.
+- **The name** is a DNS label that no other fetch route takes, and not `iterate`, `auth`, `dash`,
+  `docs` or `voice`. A fetch route is served before this mind's own code (`apps.md`), so a name
+  that one of your own apps serves takes that host from the app until `unexposePort`: pick a free
+  one. Only a context that the sandbox is beneath exposes its port.
+- `await box.getExposedPorts()` lists them. `await box.unexposePort(8080)` frees the host. An
+  idle stop keeps the host, and deleting the sandbox removes it.
+- **From code**, the same request is one call:
+  `await box.container.invoke([["getTcpPort", 8080], ["fetch", request]])` with a `Request`.
+  An app's `fetch` can send a visitor's HTTP request on to a sandbox this way, and the sandbox
+  starts on demand there too. A WebSocket does not pass through an app's `fetch`: it needs the
+  port's own host. Write it as that one call: `box.container.getTcpPort(8080).fetch(request)`
+  fails from a script and from an app.
+
 ## Build or rebuild the snapshot
 
 Rebuild when a start from the snapshot fails ("cannot restore snapshot"): a snapshot lasts 30

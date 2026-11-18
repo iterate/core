@@ -7,6 +7,8 @@ import {
   SANDBOX_CHECKPOINT_AFTER_MS,
   SANDBOX_IDLE_CHECK,
   SandboxConfigured,
+  SandboxPortExposed,
+  SandboxPortUnexposed,
   SandboxSnapshot,
   SandboxStarted,
   type SandboxState,
@@ -78,6 +80,15 @@ export class SandboxProcessor extends EntityLifecycleProcessor<SandboxState> {
       case "events.iterate.com/sandbox/configured": {
         const { idleAfterMs = state.idleAfterMs } = SandboxConfigured.parse(event.payload);
         return { ...state, idleAfterMs };
+      }
+      case "events.iterate.com/sandbox/port-exposed": {
+        const { port, ...exposed } = SandboxPortExposed.parse(event.payload);
+        return { ...state, ports: { ...state.ports, [port]: exposed } };
+      }
+      case "events.iterate.com/sandbox/port-unexposed": {
+        const { port } = SandboxPortUnexposed.parse(event.payload);
+        const { [String(port)]: _unexposed, ...ports } = state.ports;
+        return { ...state, ports };
       }
       default:
         return super.reduce(args);

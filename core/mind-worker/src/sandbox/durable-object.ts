@@ -4,23 +4,33 @@ import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate
 import type { IterateContextApi } from "iterate/api";
 import { DurableObjectNameCodec, type ItxEntrypointScope } from "core-itx";
 import { assertCreated } from "../mind/entity-lifecycle.ts";
-import type { SandboxContainer, SandboxStartOptions } from "./container.ts";
+import type { SandboxContainer, SandboxPortOpening, SandboxStartOptions } from "./container.ts";
 import {
   CLOUDFLARE_MANAGED_IMAGE,
   SANDBOX_MAX_BUSY_MS,
   SandboxConfigured,
   SandboxInstance,
   SandboxContract,
+  SandboxPortExposed,
   SandboxSnapshot,
   type SandboxStarted,
   type SandboxState,
 } from "./contract.ts";
+import { portRoutesOf, type SandboxPortReadiness } from "./ports.ts";
 import { SandboxFiles } from "./files.ts";
 import { outputForLog } from "./exec-record.ts";
 import { SandboxProcessor } from "./processor.ts";
 
-/** `replay` is `container`'s: library.ts calls it. */
-export const sandboxVerbs = ["start", "exec", "configure", "files", "replay"] as const;
+/** `replay` is `container`'s, and `readyPort` a port request's: library.ts calls them. */
+export const sandboxVerbs = ["start", "exec", "configure", "files", "replay", "readyPort"] as const;
+
+/** One bound for a request that finds its port not ready: the start, the command and the port's
+ *  opening. Under the 60 s after which a context restarts a facet whose call has not answered. */
+const PORT_READY_WITHIN_MS = 45_000;
+/** How long a port may take to open after its command ran. */
+const PORT_OPENS_WITHIN_MS = 30_000;
+/** The start failed, or the container's object did not answer: no port was tried. */
+type SandboxNotStarted = { open: false; notStarted: true; error: string };
 
 const StartOptions = z
   .object({
@@ -118,7 +128,13 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     SandboxContract,
     () => this.getItx(),
     () => this.#path,
-    { teardown: () => this.#container.erase() },
+    {
+      // the hosts first: once the container is gone, a host that stayed would serve nothing
+      teardown: async () => {
+        await this.#removePortRoutes();
+        await this.#container.erase();
+      },
+    },
     {
       usedAt: async () => (this.#busy() ? Date.now() : this.#container.usedAt()),
       park: () => this.#park(),
@@ -491,6 +507,87 @@ export class SandboxFacet extends StreamProcessorDurableObject<
     } finally {
       leave();
     }
+  }
+
+  /** MAKES A PORT READY FOR ONE REQUEST, which the library then sends to the container's object by
+   *  `fetch` (./ports.ts). No Request is in this call, so no socket has to cross an RPC. A stopped
+   *  sandbox starts as for `exec`, and an exposed port that is closed gets its command run. The
+   *  answer is the request's own: a sandbox that does not exist is 404, a port that stays closed is
+   *  502, and a start that outlasts PORT_READY_WITHIN_MS is 503 while the start goes on. */
+  async readyPort(port: number): Promise<SandboxPortReadiness> {
+    const which = SandboxPortExposed.shape.port.parse(port);
+    const state = await this.#state();
+    if (state.deletion || state.creation?.status !== "created")
+      return { ready: false, status: 404, reason: `no sandbox at ${this.#path}` };
+    const command = state.ports[which]?.command;
+    // settles by itself: a request that stops waiting does not stop the start
+    const opening = this.#use(async (container): Promise<SandboxPortOpening> =>
+      container.readyPort(which, command, PORT_OPENS_WITHIN_MS),
+    )
+      .catch((error: unknown): SandboxNotStarted => ({
+        open: false,
+        notStarted: true,
+        error: error instanceof Error ? error.message : String(error),
+      }))
+      .then((answer) => this.#recordedPortOpening(which, answer));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const slow = new Promise<"slow">((resolve) => {
+      timer = setTimeout(() => resolve("slow"), PORT_READY_WITHIN_MS);
+    });
+    try {
+      const answer = await Promise.race([opening, slow]);
+      if (answer === "slow")
+        return {
+          ready: false,
+          status: 503,
+          reason: `sandbox ${this.#path} is still starting: try again`,
+        };
+      if (answer.open) return { ready: true };
+      return {
+        ready: false,
+        status: 502,
+        // a failed start's own words can name a snapshot: they are in the sandbox's log alone
+        reason:
+          "notStarted" in answer
+            ? `sandbox ${this.#path} could not make the port ready: its log says why`
+            : `sandbox ${this.#path}: ${answer.error}`,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** A command that was run for a port, and a start that failed, are facts of the sandbox. A fact
+   *  that cannot be written does not fail the request that waits for the port. */
+  async #recordedPortOpening(
+    port: number,
+    opening: SandboxPortOpening | SandboxNotStarted,
+  ): Promise<SandboxPortOpening | SandboxNotStarted> {
+    try {
+      if (!opening.open && ("notStarted" in opening || opening.ran))
+        await this.#append("port-start-failed", { port, error: opening.error });
+      if (opening.open && opening.ran)
+        await this.#append("port-started", { port, waitedMs: opening.waitedMs });
+    } catch (error) {
+      console.warn({
+        event: "sandbox.port-fact-not-recorded",
+        path: this.#path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return opening;
+  }
+
+  /** A deleted sandbox serves no host: each route of its ports goes, while it still names the port.
+   *  The facet's own `itx` is the platform's, so the delete does not depend on who exposed. */
+  async #removePortRoutes(): Promise<void> {
+    const { ports } = await this.#state();
+    if (Object.keys(ports).length === 0) return;
+    using itx = this.getItx();
+    const root = itx.cd("/");
+    const routes = await root.invoke(["itx", "builtins", "fetchRoutes", ["list"]]);
+    for (const fetchRouteName of portRoutesOf(routes, this.#path, ports))
+      await root.invoke(["itx", "builtins", "fetchRoutes", ["set", fetchRouteName, null]]);
   }
 
   async configure(settings: z.input<typeof SandboxConfigured>): Promise<{ idleAfterMs: number }> {

@@ -1261,8 +1261,34 @@ export type SandboxHandle = InvokeHandle & {
   ): Promise<{ exitCode: number; stdout: Uint8Array; stderr: Uint8Array }>;
   /** The Sandbox SDK's `Files`. */
   files: SandboxFilesApi;
-  /** The container API itself. */
+  /** The container API itself. `container.invoke([["getTcpPort", port], ["fetch", request]])` with a
+   *  `Request` is a request to a server in the sandbox: it starts a stopped sandbox and runs the
+   *  command of an exposed port that is closed. From a script or from an app's `fetch` it carries
+   *  HTTP alone: no RPC answer holds a socket. A WebSocket needs the port's own host
+   *  (`exposePort`), where the platform sends the request with no RPC in its way. */
   container: SandboxContainerApi;
+  /** SERVE A PORT OF THE SANDBOX AT A HOST OF THE MIND, `https://<name>.<domain>/`: HTTP, streamed
+   *  bodies and WebSockets. A request that finds the sandbox stopped starts it, as `exec` does,
+   *  and one that finds the port closed runs `command` (detached, its output in
+   *  `/var/log/iterate-port-<port>.log`) and waits for the port, 45 seconds at most in all. Members
+   *  only, unless `public: true`. A PUBLIC PORT LETS ANY VISITOR START THAT ONE CONTAINER AND KEEP IT
+   *  RUNNING, with no bound on how often: each request is a use. NEVER PUT A SECRET IN `command`: the
+   *  sandbox's log keeps it. `name` is a DNS label that no other fetch route takes and is not
+   *  `iterate`, `auth`, `dash`, `docs` or `voice`; a name that an app of the mind's own serves takes
+   *  that host until `unexposePort`, because a fetch route is served before the mind's code. Only a
+   *  context that the sandbox is beneath, and that may set a fetch route on `/`, exposes a port. A
+   *  second call with the same port and name replaces the command and who may reach it. An idle
+   *  stop keeps the host; deleting the sandbox removes it. */
+  exposePort(
+    port: number,
+    options: { name: string; command?: string[]; public?: boolean },
+  ): Promise<{ port: number; name: string; url: string; public: boolean }>;
+  /** Stop serving the port at its host and free the name. `name` is null when it was not exposed. */
+  unexposePort(port: number): Promise<{ port: number; name: string | null }>;
+  /** The ports that a host serves now, read from the fetch routes on `/`. */
+  getExposedPorts(): Promise<
+    { port: number; name: string; url: string; public: boolean; command?: string[] }[]
+  >;
   /** How long the sandbox may sit unused before it is saved and stopped: 1 second to 1 hour, five
    *  minutes by default. */
   configure(settings: { idleAfterMs?: number }): Promise<{ idleAfterMs: number }>;

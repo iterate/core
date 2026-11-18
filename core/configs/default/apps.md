@@ -73,7 +73,8 @@ apps/<name>/
   (`source: { "package.json": …, … }`, at most 1,048,576 characters) is the form for a candidate.
 - **A fetch route.** A request
   a fetch route takes never reaches `fetch`: the platform sends it to the route's target first
-  (`iterate tunnel <port>` sets a route per tunnel; `itx.fetchRoutes.set` sets one by hand).
+  (`iterate tunnel <port>` sets a route per tunnel; a sandbox's `exposePort` sets one per port,
+  `sandboxes.md`; `itx.fetchRoutes.set` sets one by hand).
 - **People who are not members** never get `itx`. Their page talks to your code: answer its
   requests in the app's `fetch`, and check `host.auth.person(request)` there.
 

@@ -1,11 +1,19 @@
 // A Durable Object of its own: a class linked to a container gets `ctx.container` only as one, not as
 // a facet (measured). `ctx.container` cannot cross an RPC, so `invoke(steps)` replays a chain here.
 import { DurableObject } from "cloudflare:workers";
+import { relayedCloseCode, truncateCloseReason } from "core-itx";
 import { codedError } from "iterate/lib";
 import { z } from "zod";
 import filesTool from "../generated/sandbox-files-tool.js";
 import { SANDBOX_MAX_BUSY_MS } from "./contract.ts";
 import { imageToStart } from "./image.ts";
+import {
+  headersFromThePort,
+  heldPortFailure,
+  requestToThePort,
+  SANDBOX_PORT_HEADER,
+  type SandboxPortFailure,
+} from "./ports.ts";
 
 const INTERCEPT_CA = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 /** A command does not inherit the container's own `env` on Cloudflare (measured:
@@ -37,6 +45,20 @@ const STAMP_EVERY_MS = 500;
 /** The class has no container on a stack deployed with `mind.containers: false` (core/alchemy). */
 const NO_SANDBOXES_YET =
   "this mind has no sandboxes yet: its stack was deployed with mind.containers: false, so it has no container application. Cloudflare runs Containers on Workers Paid alone: once the mind's Cloudflare account has Workers Paid, deploy the stack again without mind.containers: false";
+
+/** How long a probe's connection must stay up for its port to count as open. A connection to a
+ *  port that nothing listens on "opens" at once and ends in about 5 ms; one to a listening port
+ *  stays up (measured 2026-11-18). */
+const PORT_PROBE_MS = 250;
+/** `sh -c` runs it with the log file and then the command: detached, so the command outlives the
+ *  call, with nothing of it held open. */
+const RUN_DETACHED = 'log=$1; shift; setsid nohup "$@" >"$log" 2>&1 </dev/null &';
+
+/** Whether a port is open for a request. `ran`: this call ran the port's command. */
+export type SandboxPortOpening =
+  | { open: true; ran: false }
+  | { open: true; ran: true; waitedMs: number }
+  | { open: false; ran: boolean; error: string };
 
 /** The hash in the name gives a disk that holds an older tool this one. */
 const toolHash = [...filesTool].reduce(
@@ -186,6 +208,21 @@ export class SandboxContainer extends DurableObject {
   /** Unset whenever a container starts or stops (a new disk). */
   #toolReady = false;
 
+  /** Which container this object knows things of: one more at each start and stop. A wait that
+   *  began under an earlier number learned of a container that is gone, and records nothing. */
+  #containerNumber = 0;
+
+  /** A container that starts or stops has none of the last one's processes: what this object knew
+   *  of its files tool, its open ports and its port commands, failed or still running, is of the
+   *  last one. */
+  #forgetTheContainer(): void {
+    this.#containerNumber += 1;
+    this.#toolReady = false;
+    this.#portsOpen.clear();
+    this.#portFailures.clear();
+    this.#portsOpening.clear();
+  }
+
   /** A restarted object has no inactivity timeout, and Cloudflare then stops its container shortly
    *  after: so a restart that finds it running sets the timeout again first. */
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
@@ -261,7 +298,7 @@ export class SandboxContainer extends DurableObject {
       await container.setInactivityTimeout(INACTIVITY_BACKSTOP_MS);
       return null;
     }
-    this.#toolReady = false;
+    this.#forgetTheContainer();
     const began = Date.now();
     const { image, containerSnapshot, ...rest } = options;
     const runs = containerSnapshot
@@ -361,7 +398,7 @@ export class SandboxContainer extends DurableObject {
       if (!reachable) throw new Error(`${member} is not part of the container API`);
       const fixed = this.#fixed(index === 0, member, rawArgs);
       source ||= fixed.source;
-      if (index === 0 && (member === "start" || member === "destroy")) this.#toolReady = false;
+      if (index === 0 && (member === "start" || member === "destroy")) this.#forgetTheContainer();
       if (index === 0 && member === "start") await this.#intercept();
       const target = value as Record<string, unknown>;
       const next =
@@ -413,16 +450,208 @@ export class SandboxContainer extends DurableObject {
       const { exitCode, stdout, stderr } = value as ExecOutput;
       return { exitCode, stdout: new Uint8Array(stdout), stderr: new Uint8Array(stderr) };
     }
-    if (value instanceof ReadableStream)
-      return value.pipeThrough(
-        new TransformStream({
-          transform: async (chunk, controller) => {
-            await this.#touchSometimes();
-            controller.enqueue(chunk);
-          },
-        }),
-      );
+    if (value instanceof ReadableStream) return this.#stampedAsRead(value);
     return value;
+  }
+
+  #stampedAsRead(stream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+    return stream.pipeThrough(
+      new TransformStream({
+        transform: async (chunk, controller) => {
+          await this.#touchSometimes();
+          controller.enqueue(chunk);
+        },
+      }),
+    );
+  }
+
+  /** The ports that answered a probe or a request since the container's start. A request to one
+   *  of them is not probed again: a probe of an open port takes PORT_PROBE_MS. A request that then
+   *  fails takes its port out. */
+  #portsOpen = new Set<number>();
+
+  /** Whether something listens on the port. `opened` says nothing: it resolves for a closed port
+   *  too. What tells is that the connection to a closed port ends at once. */
+  async #portOpen(port: number): Promise<boolean> {
+    if (this.#portsOpen.has(port)) return true;
+    // the address is a formality of `connect`: the Fetcher is the port already
+    const socket = this.#container.getTcpPort(port).connect(`10.0.0.1:${port}`);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stayedUp = new Promise<true>((resolve) => {
+      timer = setTimeout(() => resolve(true), PORT_PROBE_MS);
+    });
+    const ended = () => false;
+    const container = this.#containerNumber;
+    try {
+      const open = await Promise.race([socket.closed.then(ended, ended), stayedUp]);
+      if (open && container === this.#containerNumber) this.#portsOpen.add(port);
+      return open;
+    } finally {
+      clearTimeout(timer);
+      void socket.close().catch(() => undefined);
+    }
+  }
+
+  /** The requests that find a port closed share one run of its command. */
+  #portsOpening = new Map<number, Promise<SandboxPortOpening>>();
+
+  /** MAKES A PORT READY FOR A REQUEST: it is open already, or `command` opens it. The wait for the
+   *  port after the command has a bound, `withinMs`. With no command, a closed port stays closed. */
+  readyPort(
+    port: number,
+    command: string[] | undefined,
+    withinMs: number,
+  ): Promise<SandboxPortOpening> {
+    return this.#use(async () => {
+      if (await this.#portOpen(port)) return { open: true, ran: false };
+      if (!command) return { open: false, ran: false, error: `nothing listens on port ${port}` };
+      const shared = this.#portsOpening.get(port);
+      // the request that ran the command records it: one that waited with it says `ran: false`
+      if (shared) return { ...(await shared), ran: false };
+      const held = heldPortFailure(this.#portFailures.get(port), Date.now());
+      if (held) return { open: false, ran: false, error: held };
+      const container = this.#containerNumber;
+      const opening: Promise<SandboxPortOpening> = this.#runPortCommand(port, command, withinMs)
+        .then((answer) => {
+          // a container that started meanwhile has its own command to run
+          if (container !== this.#containerNumber) return answer;
+          if (answer.open) this.#portFailures.delete(port);
+          else this.#portFailures.set(port, { at: Date.now(), error: answer.error });
+          return answer;
+        })
+        .finally(() => {
+          if (this.#portsOpening.get(port) === opening) this.#portsOpening.delete(port);
+        });
+      this.#portsOpening.set(port, opening);
+      return opening;
+    });
+  }
+
+  /** In memory alone: an object that slept runs a failed command once more, which the sleep bounds. */
+  #portFailures = new Map<number, SandboxPortFailure>();
+
+  async #runPortCommand(
+    port: number,
+    command: string[],
+    withinMs: number,
+  ): Promise<SandboxPortOpening> {
+    const began = Date.now();
+    const log = `/var/log/iterate-port-${port}.log`;
+    const run = watched(
+      await this.#container.exec(["sh", "-c", RUN_DETACHED, "sh", log, ...command], {
+        env: this.#envOf(),
+        stdout: "ignore",
+        stderr: "pipe",
+      }),
+    );
+    const [stderr, exitCode] = await Promise.all([new Response(run.stderr!).text(), run.exitCode]);
+    if (exitCode !== 0)
+      return {
+        open: false,
+        ran: true,
+        error: `the command of port ${port} could not be run (exit ${exitCode}): ${stderr.trim().slice(0, 500)}`,
+      };
+    while (Date.now() - began < withinMs) {
+      if (await this.#portOpen(port))
+        return { open: true, ran: true, waitedMs: Date.now() - began };
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return {
+      open: false,
+      ran: true,
+      error: `port ${port} did not open in ${withinMs} ms after its command ran: the command's output is in ${log} in the sandbox`,
+    };
+  }
+
+  /** A REQUEST TO A PORT OF THE CONTAINER (./ports.ts). Only the mind's library reaches this
+   *  `fetch`, after the sandbox's facet made the port ready: the class has no route, and loaded code
+   *  holds no stub of it. A Durable Object's `fetch` carries a WebSocket, which no RPC method does.
+   *  The request is a use of the sandbox, and so is each chunk of a streamed answer that is read. */
+  async fetch(request: Request): Promise<Response> {
+    const port = Number(request.headers.get(SANDBOX_PORT_HEADER));
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      return new Response("a request to a sandbox names its port\n", { status: 400 });
+    // a stop landed between the facet's answer and this request
+    if (!this.ctx.container?.running)
+      return new Response("the sandbox stopped: try again\n", {
+        status: 503,
+        headers: { "retry-after": "1", "cache-control": "no-store" },
+      });
+    let answer: Response;
+    const container = this.#containerNumber;
+    try {
+      answer = await this.#use(() =>
+        this.#container.getTcpPort(port).fetch(requestToThePort(request)),
+      );
+      if (container === this.#containerNumber) this.#portsOpen.add(port);
+    } catch (error) {
+      // the server went away since it last answered: the next request probes the port again
+      this.#portsOpen.delete(port);
+      return new Response(
+        `port ${port} of the sandbox did not answer: ${error instanceof Error ? error.message : String(error)}\n`,
+        { status: 502, headers: { "cache-control": "no-store" } },
+      );
+    }
+    if (answer.webSocket) {
+      // the runtime makes the handshake's own headers; a subprotocol the server chose must be named
+      const protocol = answer.headers.get("sec-websocket-protocol");
+      return new Response(null, {
+        status: 101,
+        webSocket: this.#heldSocket(answer.webSocket),
+        headers: protocol ? { "sec-websocket-protocol": protocol } : {},
+      });
+    }
+    return new Response(answer.body && this.#stampedAsRead(answer.body), {
+      status: answer.status,
+      statusText: answer.statusText,
+      headers: headersFromThePort(answer.headers),
+    });
+  }
+
+  /** THE SOCKET ENDS IN THIS OBJECT, which gives the visitor one end of a pair and passes each frame
+   *  on. So the object sees the frames and the close: an open socket is a call, which keeps the
+   *  sandbox from its idle stop, and each frame makes the call new. A socket with no frame for
+   *  SANDBOX_MAX_BUSY_MS no longer counts, as a call that never ends. The close ends the call and
+   *  stamps the clock, so the idle period starts then. */
+  #heldSocket(port: WebSocket): WebSocket {
+    const { 0: visitor, 1: held } = new WebSocketPair();
+    const call = this.#nextCall++;
+    this.#calls.set(call, Date.now());
+    const closed = () => {
+      if (this.#calls.delete(call)) this.ctx.waitUntil(this.#touch());
+    };
+    const relay = (from: WebSocket, to: WebSocket) => {
+      from.addEventListener("message", (event) => {
+        if (this.#calls.has(call)) this.#calls.set(call, Date.now());
+        this.ctx.waitUntil(this.#touchSometimes());
+        try {
+          to.send(event.data);
+        } catch {
+          // the other end is closing: its close ends the pair
+        }
+      });
+      const end = (code: number, reason: string) => {
+        closed();
+        try {
+          to.close(code, reason);
+        } catch {
+          // closing already
+        }
+      };
+      from.addEventListener("close", (event) =>
+        end(relayedCloseCode(event.code), truncateCloseReason(event.reason || "")),
+      );
+      from.addEventListener("error", () => end(1011, "the socket failed"));
+    };
+    // Before `accept()`: the runtime's default is a Blob, and `send(blob)` writes "[object Blob]".
+    port.binaryType = "arraybuffer";
+    held.binaryType = "arraybuffer";
+    // Listeners before `accept()`: a server that speaks at once would lose its first frame.
+    relay(port, held);
+    relay(held, port);
+    port.accept();
+    held.accept();
+    return visitor;
   }
 
   exec(command: string[], options: SandboxExecOptions = {}): Promise<SandboxExecResult> {
@@ -553,7 +782,7 @@ export class SandboxContainer extends DurableObject {
 
   /** Without a container there is nothing to stop, so a sandbox can still be deleted. */
   async destroy(reason?: string): Promise<void> {
-    this.#toolReady = false;
+    this.#forgetTheContainer();
     if (this.ctx.container?.running) await this.ctx.container.destroy(reason);
   }
 

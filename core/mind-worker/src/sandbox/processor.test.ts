@@ -3,7 +3,7 @@
 // real checkpoint table; the context's schedules are a map. The idle check itself is out of scope.
 import type { ItxEntrypointScope } from "core-itx";
 import { ProcessorEngine } from "iterate/stream/processor";
-import { memoryStorage, memoryStream } from "iterate/stream/test-support";
+import { memoryStorage, memoryStream, reduceProcessor } from "iterate/stream/test-support";
 import { expect, test, vi } from "vitest";
 import { SandboxContract } from "./contract.ts";
 import { SandboxProcessor } from "./processor.ts";
@@ -28,6 +28,37 @@ test("a sandbox deleted by a fresh incarnation leaves no idle schedule on its co
   });
 });
 
+const exposed = {
+  type: "events.iterate.com/sandbox/port-exposed",
+  payload: { port: 8080, name: "web", command: ["node", "/root/server.mjs"] },
+};
+
+test.for([
+  {
+    name: "an exposed port is in the state with its name and command",
+    events: [exposed],
+    expected: { 8080: { name: "web", command: ["node", "/root/server.mjs"] } },
+  },
+  {
+    name: "a second exposure of a port replaces the first",
+    events: [exposed, { ...exposed, payload: { port: 8080, name: "web" } }],
+    expected: { 8080: { name: "web" } },
+  },
+  {
+    name: "an unexposed port leaves the state, and the other ports stay",
+    events: [
+      exposed,
+      { type: "events.iterate.com/sandbox/port-exposed", payload: { port: 9090, name: "api" } },
+      { type: "events.iterate.com/sandbox/port-unexposed", payload: { port: 8080 } },
+    ],
+    expected: { 9090: { name: "api" } },
+  },
+])("$name", ({ events, expected }) => {
+  // exact: a port that stayed in the state would keep its host through the sandbox's delete
+  const { ports } = reduceProcessor(sandboxOf().processor(), events);
+  expect({ ports }).toEqual({ ports: expected });
+});
+
 /** A sandbox's log, its context's schedules, and a new processor incarnation on demand, each on the
  *  same checkpoint table, as an object that wakes again finds its storage. */
 function sandboxOf() {
@@ -45,21 +76,20 @@ function sandboxOf() {
     cd: () => ({ append: async () => [] }),
     [Symbol.dispose]() {},
   } as unknown as ItxEntrypointScope & Disposable;
+  const processor = () =>
+    new SandboxProcessor(
+      SandboxContract,
+      () => itx,
+      () => path,
+      // the container's erase
+      { teardown: async () => {} },
+      { usedAt: async () => null, park: async () => true, checkpoint: async () => {} },
+    );
   return {
     path,
     log,
-    incarnation: () =>
-      new ProcessorEngine(
-        new SandboxProcessor(
-          SandboxContract,
-          () => itx,
-          () => path,
-          // the container's erase
-          { teardown: async () => {} },
-          { usedAt: async () => null, park: async () => true, checkpoint: async () => {} },
-        ),
-        { stream: log.stream, storage },
-      ),
+    processor,
+    incarnation: () => new ProcessorEngine(processor(), { stream: log.stream, storage }),
     get schedules() {
       return [...schedules.keys()];
     },

@@ -1,3 +1,4 @@
+import { env, exports } from "cloudflare:workers";
 import { z } from "zod";
 import { InvokeHandle, print, type ItxExpression } from "iterate/expression";
 import { codedError, resolveContextPath } from "iterate/lib";
@@ -9,7 +10,7 @@ import type {
   IterateContextApi,
   SandboxHandle,
 } from "iterate/api";
-import type { Caller, ItxHostRoot, LibraryItx } from "core-itx";
+import { DurableObjectNameCodec, type Caller, type ItxHostRoot, type LibraryItx } from "core-itx";
 import { RepoContract } from "./repo/contract.ts";
 import { commitFilesToRemote } from "./repo/remote-commit.ts";
 import type { RepoFacet, repoVerbs } from "./repo/durable-object.ts";
@@ -22,7 +23,9 @@ import { connectToCapnweb } from "./library/capnweb.ts";
 import { connectToOpenApi } from "./library/openapi.ts";
 import { WORKSPACES_ROOT_DESCRIPTION } from "./workspace/contract.ts";
 import { SANDBOXES_ROOT_DESCRIPTION } from "./sandbox/contract.ts";
+import type { SandboxContainer } from "./sandbox/container.ts";
 import { egressRuleOfStart, ruleThenStart } from "./sandbox/egress-rule.ts";
+import { runSandboxPortCall, sandboxPortCallOf } from "./sandbox/ports.ts";
 import { connectToMcpAt } from "./integrations/mcp.ts";
 
 /** The one host root the library reads, which the kernel's `LibraryItx` does not name. */
@@ -97,10 +100,10 @@ export const libraryRoots = {
     ): EntityRoot<
       EntityHandle<
         SandboxFacet,
-        Exclude<(typeof sandboxVerbs)[number], "replay">,
+        Exclude<(typeof sandboxVerbs)[number], "replay" | "readyPort">,
         typeof SandboxContract
       > &
-        Pick<SandboxHandle, "container">
+        Pick<SandboxHandle, "container" | "exposePort" | "unexposePort" | "getExposedPorts">
     > => entityRoot(scope.itx, scope, "sandbox", "sandboxes", SandboxContract),
   },
   files: {
@@ -129,6 +132,21 @@ export const libraryRoots = {
 /** `./x` from a child, answered at the root through its link, is the child's `./x`. */
 const originOf = (caller: Caller, ownPath: string): string => caller.path || ownPath;
 
+const isStrictlyBeneath = (origin: string, absolute: string): boolean =>
+  absolute !== origin && absolute.startsWith(origin === "/" ? "/" : `${origin}/`);
+
+/** The object that holds a sandbox's container, which takes a port's Request by `fetch`
+ *  (sandbox/ports.ts). Named as the sandbox's context, as its facet names it. */
+function sandboxContainerAt(sandboxPath: string): DurableObjectStub<SandboxContainer> {
+  // Library code runs with no `ctx`, so it takes the Worker's exports from the runtime module. The
+  // cast is the facet's (sandbox/durable-object.ts): `exports` is typed from the main module, which
+  // imports this file, so that type cannot name the class here.
+  const { SandboxContainer } = exports as unknown as {
+    SandboxContainer: DurableObjectNamespace<SandboxContainer>;
+  };
+  return SandboxContainer.getByName(DurableObjectNameCodec.stringify(sandboxPath));
+}
+
 /** The collection's verbs answer exactly these shapes, so the wire's copy is asserted, not re-validated. */
 function entityRoot<Handle>(
   itx: LibraryItx,
@@ -143,7 +161,7 @@ function entityRoot<Handle>(
   const beneathTheOrigin = (verb: "create" | "delete", path: string) => {
     const origin = originOf(deps.caller(), deps.path);
     const absolute = resolveContextPath(origin, path);
-    if (absolute === origin || !absolute.startsWith(origin === "/" ? "/" : `${origin}/`))
+    if (!isStrictlyBeneath(origin, absolute))
       throw codedError(
         "FORBIDDEN",
         `${collection}.${verb}(${JSON.stringify(path)}) from ${JSON.stringify(origin)}: a context creates and deletes only beneath itself`,
@@ -265,6 +283,30 @@ function entityHandle(
         async (event) => (await itx.cd(entityPath)).invoke([["append", event]]),
         async () => context.invoke(["facets", ["get", name], ...egress.steps]),
       );
+    }
+    // A port of a sandbox: its host (`exposePort`), and a request to it. The request's Response
+    // may hold a WebSocket, so it comes from the container's object by `fetch`, never over the
+    // facet's RPC (sandbox/ports.ts).
+    const portCall = name === "sandbox" ? sandboxPortCallOf(itxExpressionSteps) : null;
+    if (portCall) {
+      const origin = originOf(caller, ownPath);
+      return runSandboxPortCall(portCall, {
+        sandboxPath: entityPath,
+        domain: env.DOMAIN,
+        assertBeneathCaller: (verb) => {
+          if (!isStrictlyBeneath(origin, entityPath))
+            throw codedError(
+              "FORBIDDEN",
+              `sandboxes.get(${JSON.stringify(path)}).${verb} from ${JSON.stringify(origin)}: a context exposes a port only of a sandbox beneath itself`,
+            );
+        },
+        facet: async (steps) => context.invoke(["facets", ["get", name], ...steps]),
+        routes: async () => (await itx.builtins.cd("/")).invoke(["fetchRoutes", ["list"]]),
+        setRoute: async (fetchRouteName, route) =>
+          (await itx.cd("/")).invoke(["fetchRoutes", ["set", fetchRouteName, route]]),
+        append: async (event) => (await itx.cd(entityPath)).invoke([["append", event]]),
+        container: () => sandboxContainerAt(entityPath),
+      });
     }
     // a sandbox's `container` is replayed by the facet, where the container's objects live
     if (name === "sandbox" && first === "container")
