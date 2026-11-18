@@ -1793,11 +1793,13 @@ export interface IterateContextApi {
     ): Promise<{ id: string; signAt: string }>;
     /** One event for a member to sign with a passkey at `signAt`, a page that needs no sign-in,
      *  for a day. Signed, it lands on `path` with the member as `event.source.signer`. `next`:
-     *  where the page goes then, an https URL on a host of the mind. */
+     *  where the page goes then, an https URL on a host of the mind. `signerEmail`: the one person
+     *  who signs; a non-member signs at `/people/<address>` alone. */
     proposeStatement(input: {
       path: string;
       type: string;
       payload?: Record<string, unknown>;
+      signerEmail?: string;
       next?: string;
     }): Promise<{ draft: string; signAt: string; expires: number }>;
   };

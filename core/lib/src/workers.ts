@@ -126,12 +126,14 @@ export interface AuthService {
   }): Promise<Envelope>;
   /** A statement that waits a day for a member's passkey at `signAt`, a page that needs no
    *  sign-in. Signed, it lands on `path` as `POST /statements` takes it. `from`: the context that
-   *  asks, as the page shows it; `next`: where the page goes once signed, a host of the mind. */
+   *  asks, as the page shows it; `next`: where the page goes once signed, a host of the mind.
+   *  `signerEmail`: the one person who signs; a non-member signs at `/people/<address>` alone. */
   proposeStatement(input: {
     path: string;
     type: string;
     payload?: Record<string, unknown>;
     from?: string;
+    signerEmail?: string;
     next?: string;
   }): Promise<{ draft: string; signAt: string; expires: number }>;
 }

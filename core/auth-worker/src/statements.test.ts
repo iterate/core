@@ -88,7 +88,10 @@ test("a person's key adds an event while its address is a member, and none once 
   // removal takes the members row and leaves the key: the key is live, and its address no member
   expect(await sent("gone@example.net")).toEqual({
     status: 403,
-    body: { refused: "gone@example.net is not a member here, so its key signs nothing" },
+    body: {
+      refused:
+        "gone@example.net is not a member here, so its key signs only at its own context, /people/gone@example.net",
+    },
   });
 });
 
@@ -105,7 +108,7 @@ test.for([
     "a removed member's key",
     { actor: "u1", email: "jo@example.net" },
     { member: false, userVerified: true },
-    "jo@example.net is not a member here, so its key signs nothing",
+    "jo@example.net is not a member here, so its key signs only at its own context, /people/jo@example.net",
   ],
   [
     "a member's passkey that checked nobody",

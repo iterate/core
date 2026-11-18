@@ -38,11 +38,12 @@ export async function admittedStatement(
   const verified = await verifiedStatement(env, envelope, { once: false });
   if ("refused" in verified) return refused(verified.refused);
   const { signer, statement, paths } = verified;
-  // a person's key has no paths, so it adds at any path: only a member's does
-  const notThisPerson = personKeyRefusal(signer);
+  // a person's key has no paths, so it adds at any path: only a member's does, and anyone else's
+  // at their own context alone
+  const notThisPerson = personKeyRefusal(signer, statement.path);
   if (notThisPerson) return { refused: notThisPerson };
   // A rule that lets a mind in is a member's alone: a melded mind must never widen its own rule.
-  if (statement.type.startsWith("events.iterate.com/mind-meld/") && !signer.principal.email)
+  if (statement.type.startsWith("events.iterate.com/mind-meld/") && !signer.member)
     return refused("only a member's passkey sets a mind meld");
   if (statement.type === "events.iterate.com/mind-meld/configured") {
     // the row first: the event is the record, the row its copy for the check of a mind's statement

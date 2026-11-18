@@ -3,6 +3,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { base64url } from "iterate/signed";
 import { expect, test } from "vitest";
 import { FIRST_OWNER_PATH } from "./config.ts";
+import { sessionCookie } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import type { Env } from "./env.ts";
 import { firstOwnerResponse } from "./first-owner.ts";
@@ -113,7 +114,7 @@ test.for([
   }).toEqual({
     heading: "Add your passkey to example.com",
     lines: [
-      "example.com needs a passkey at your first sign-in. From then on it is how you sign in here, and how you approve what your agents ask for.",
+      "example.com needs a passkey at your first sign-in. From then on it is how you sign in here, and how you sign what you approve.",
       "Press the button, and your browser asks for your fingerprint, your face or a security key.",
     ],
     buttons: ["Add a passkey"],
@@ -163,6 +164,36 @@ test.for([
     answered: said.label ? [said.label] : [],
   }).toEqual({ status, kept, answered: kept });
 });
+
+// ./keys-pages.ts: someone who is no member adds a first passkey, to sign about themselves alone
+test("someone who is no member, signed in by a code, adds one passkey and sees no key", async () => {
+  const { env } = await stack();
+  const visit = async (cookie: string) => {
+    const page = await keysPagesResponse(
+      env,
+      new Request(`${ISSUER}/keys`, { headers: { cookie } }),
+    );
+    return { status: page!.status, heading: (await page!.text()).match(/<h1>([^<]*)<\/h1>/)?.[1] };
+  };
+  const cookie = await codeSession(env, "stranger@example.net");
+  expect(await visit(cookie)).toEqual({ status: 200, heading: "Add your passkey to example.com" });
+  const made = await posted(env, cookie, await challengeOf(env, cookie));
+  expect(made).toMatchObject({ status: 200 });
+  // with a passkey, neither its own session nor a new code's sees /keys
+  const refused = { status: 403, heading: "You can't continue" };
+  expect(await visit(made.headers.get("set-cookie")!.split(";")[0]!)).toEqual(refused);
+  expect(await visit(await codeSession(env, "stranger@example.net"))).toEqual(refused);
+});
+
+/** The session cookie a mailed code gives `email`'s browser (./email-sign-in.ts). */
+async function codeSession(env: Env, email: string): Promise<string> {
+  const user = { id: `user-${email}`, email };
+  await env.DB.prepare("insert or ignore into users (id, email) values (?1, ?2)")
+    .bind(user.id, email)
+    .run();
+  const { setCookie } = await sessionCookie(env, new Request(ISSUER), user, "email");
+  return setCookie.split(";")[0]!;
+}
 
 /** The session cookie that spending a member's link, or the owner's ticket, gives a browser
  *  (./first-owner.ts). */

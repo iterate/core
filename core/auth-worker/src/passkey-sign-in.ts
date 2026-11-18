@@ -99,7 +99,7 @@ async function finish(env: Env, request: Request) {
 }
 
 /** The id of the live passkey that a browser names by its credential id, or null. */
-export async function passkeyIdOf(env: Env, credentialId: string): Promise<string | null> {
+async function passkeyIdOf(env: Env, credentialId: string): Promise<string | null> {
   const key = await env.DB.prepare(
     "select id from keys where credential_id = ?1 and format = 'webauthn' and revoked_at is null",
   )

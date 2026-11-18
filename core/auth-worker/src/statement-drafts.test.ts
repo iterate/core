@@ -79,9 +79,72 @@ test("a non-member's passkey adds nothing, and the draft waits on", async () => 
   const answer = await pressed(env, draft, passkeys[STRANGER]);
   expect({ status: answer.status, body: await answer.json() }).toEqual({
     status: 403,
-    body: { refused: `${STRANGER} is not a member here, so its key signs nothing` },
+    body: {
+      refused: `${STRANGER} is not a member here, so its key signs only at its own context, /people/${STRANGER}`,
+    },
   });
   expect(await pressed(env, draft, passkeys[MEMBER])).toMatchObject({ status: 200 });
+});
+
+// ./keys.ts `personKeyRefusal`: someone who is no member signs a statement about themselves alone.
+test("someone who is no member signs at their own context, and at another person's is refused", async () => {
+  const { env, passkeys } = await stack();
+  const at = async (path: string) => {
+    const { draft } = await proposed(env, { path });
+    const answer = await pressed(env, draft, passkeys[STRANGER], { path });
+    return { status: answer.status, facts: decodeFacts(answer.headers.get(FACTS_HEADER) || "") };
+  };
+  expect(await at(`/people/${STRANGER}`)).toMatchObject({
+    status: 200,
+    facts: [
+      {
+        path: `/people/${STRANGER}`,
+        events: [{ type: TYPE, source: { signer: { principal: { email: STRANGER } } } }],
+      },
+    ],
+  });
+  expect(await at(`/people/${MEMBER}`)).toEqual({ status: 403, facts: [] });
+  expect(await at(`/people/${STRANGER}/inbox`)).toEqual({ status: 403, facts: [] });
+});
+
+test("a member signs at someone else's own context too", async () => {
+  const { env, passkeys } = await stack();
+  const path = `/people/${STRANGER}`;
+  const { draft } = await proposed(env, { path });
+  expect(await pressed(env, draft, passkeys[MEMBER], { path })).toMatchObject({ status: 200 });
+});
+
+test("a mind meld is a member's alone, at a non-member's own context too", async () => {
+  const { env, passkeys } = await stack();
+  const changed = { path: `/people/${STRANGER}`, type: "events.iterate.com/mind-meld/configured" };
+  const { draft } = await proposed(env, changed);
+  const answer = await pressed(env, draft, passkeys[STRANGER], changed);
+  expect({ status: answer.status, body: await answer.json() }).toEqual({
+    status: 403,
+    body: { refused: "only a member's passkey sets a mind meld" },
+  });
+});
+
+test("a draft that names its signer shows them, and takes their passkey alone", async () => {
+  const { env, passkeys } = await stack();
+  const path = `/people/${STRANGER}`;
+  // the agent may write the address as the mail did: the draft keeps the one path that signs
+  const { draft, signAt } = await proposed(env, {
+    path: `/people/${STRANGER.toUpperCase()}`,
+    signerEmail: ` ${STRANGER.toUpperCase()}`,
+  });
+  const html = await (await statementDraftsResponse(env, new Request(signAt)))!.text();
+  expect(html).toContain(`Only <code>${STRANGER}</code> can sign it.`);
+  // a person with no passkey yet goes to /keys, and through the sign-in page if signed out
+  expect(html).toContain(
+    `<a href="/keys?next=%2Fstatements%2Fsign%3Fdraft%3D${draft}">Sign in and add one</a>`,
+  );
+  const byMember = await pressed(env, draft, passkeys[MEMBER], { path });
+  expect({ status: byMember.status, body: await byMember.json() }).toEqual({
+    status: 403,
+    body: { refused: `only ${STRANGER} signs this statement` },
+  });
+  expect(await pressed(env, draft, passkeys[STRANGER], { path })).toMatchObject({ status: 200 });
 });
 
 test("an expired draft has ended", async () => {
@@ -118,12 +181,13 @@ function proposed(env: Env, input: Partial<Parameters<typeof proposeStatement>[1
 }
 
 /** The page's press, as its script sends it: a statement of the draft's values, which `changed`
- *  may spoil, signed by `passkey` as an authenticator that checked the person. */
+ *  may spoil or must match when the draft has its own, signed by `passkey` as an authenticator
+ *  that checked the person. */
 async function pressed(
   env: Env,
   draft: string,
   passkey: Passkey,
-  changed: { payload?: Record<string, unknown> } = {},
+  changed: { payload?: Record<string, unknown>; path?: string; type?: string } = {},
 ): Promise<Response> {
   const now = Date.now();
   const statement = statementText({

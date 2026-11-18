@@ -1,7 +1,7 @@
-// statement-drafts.ts — A STATEMENT THAT AN AGENT ASKS A MEMBER TO SIGN. The agent proposes it
+// statement-drafts.ts — A STATEMENT THAT AN AGENT ASKS A PERSON TO SIGN. The agent proposes it
 // (`AuthService.proposeStatement`) and gets a link that carries only a random id. The page at the
 // link needs no sign-in: it shows the exact statement, and a passkey press signs it. The signed
-// statement goes through the intake of `POST /statements`, so it lands as an event with the member
+// statement goes through the intake of `POST /statements`, so it lands as an event with the person
 // as its signer, or is refused as there.
 import { codedError } from "iterate/lib";
 import { withFacts } from "iterate/facts";
@@ -10,8 +10,8 @@ import type { AuthService } from "iterate/workers";
 import { z } from "zod";
 import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
 import { canonicalPath, honouredNext } from "./key-rules.ts";
+import { KEYS_PATH } from "./keys-pages.ts";
 import { page, text } from "./pages.ts";
-import { passkeyIdOf } from "./passkey-sign-in.ts";
 import { SIGN_HELPERS } from "./signed-change.ts";
 import { admittedStatement } from "./statements.ts";
 
@@ -27,6 +27,7 @@ type Draft = {
   type: string;
   payload: string;
   asked_from: string | null;
+  signer_email: string | null;
   next: string | null;
 };
 
@@ -50,6 +51,7 @@ const Proposal = z.object({
       "a payload is at most 64 KiB of JSON",
     ),
   from: z.string().optional(),
+  signerEmail: z.string().trim().toLowerCase().min(1).optional(),
   next: z.string().optional(),
 });
 
@@ -59,7 +61,10 @@ export async function proposeStatement(
 ): ReturnType<AuthService["proposeStatement"]> {
   const proposal = Proposal.safeParse(input);
   if (!proposal.success) throw codedError("INVALID_INPUT", proposal.error.issues[0]!.message);
-  const { path, type, payload, from, next } = proposal.data;
+  const { type, payload, from, signerEmail, next } = proposal.data;
+  // the named person's own context, in any letter case, is the one path the intake takes for them
+  const own = signerEmail && `/people/${signerEmail}`;
+  const path = own && proposal.data.path.toLowerCase() === own ? own : proposal.data.path;
   const issuer = issuerOf(env);
   // the rule of /keys/enrol's own `next` (./key-rules.ts `honouredNext`), as a whole https URL
   if (next && (!/^https:\/\//.test(next) || !honouredNext(next, issuer)))
@@ -71,8 +76,8 @@ export async function proposeStatement(
   const [, inserted] = await env.DB.batch([
     env.DB.prepare("delete from statement_drafts where expires <= ?1").bind(now),
     env.DB.prepare(
-      `insert into statement_drafts (id, path, type, payload, asked_from, next, at, expires)
-       select ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+      `insert into statement_drafts (id, path, type, payload, asked_from, next, at, expires, signer_email)
+       select ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
        where (select count(*) from statement_drafts) < ${MOST_OPEN}
        returning id`,
     ).bind(
@@ -84,6 +89,7 @@ export async function proposeStatement(
       next ? new URL(next).href : null,
       now,
       expires,
+      signerEmail || null,
     ),
   ]);
   if (!inserted?.results.length)
@@ -110,7 +116,7 @@ export async function statementDraftsResponse(
 async function openDraft(env: Env, id: unknown): Promise<Draft | null> {
   if (typeof id !== "string" || !id) return null;
   return env.DB.prepare(
-    "select id, path, type, payload, asked_from, next from statement_drafts where id = ?1 and expires > ?2",
+    "select id, path, type, payload, asked_from, signer_email, next from statement_drafts where id = ?1 and expires > ?2",
   )
     .bind(id, Date.now())
     .first<Draft>();
@@ -135,19 +141,25 @@ function draftPage(env: Env, draft: Draft | null): Response {
   const asker = draft.asked_from
     ? `<p>Asked by <code>${text(draft.asked_from)}</code> <span class="muted">(what the asker says of itself)</span></p>`
     : "";
+  const signer = draft.signer_email
+    ? `<p>Only <code>${text(draft.signer_email)}</code> can sign it.</p>`
+    : "";
+  // signed out, /keys sends a person to the sign-in page first
+  const addPasskey = `${KEYS_PATH}?${new URLSearchParams({ next: `${SIGN_STATEMENT_PATH}?draft=${draft.id}` })}`;
   return page({
     title: "Sign this statement?",
     wide: true,
     body: `<h1>Sign this statement?</h1>
       <p>Your passkey's signature adds this event to ${text(domain)}, with you as its signer.</p>
-      ${asker}
+      ${asker}${signer}
       <p>Context <code>${text(draft.path)}</code></p>
       <p>Event type <code>${text(draft.type)}</code></p>
       <pre>${text(shown)}</pre>
       <form class="actions" data-draft="${text(values)}">
         <button type="submit">Sign with your passkey</button>
       </form>
-      <p id="status" class="muted" role="status"></p>`,
+      <p id="status" class="muted" role="status"></p>
+      <p class="muted">No passkey for ${text(domain)} yet? <a href="${text(addPasskey)}">Sign in and add one</a>, and it brings you back here.</p>`,
     script: `${SIGN_HELPERS}${PRESS_SCRIPT}`,
   });
 }
@@ -209,11 +221,19 @@ async function pressed(env: Env, request: Request): Promise<Response> {
     JSON.stringify(statement.payload || {}) !== JSON.stringify(JSON.parse(draft.payload))
   )
     return refused(403, "the statement is not the one this link shows", mark);
-  const key = await passkeyIdOf(env, credentialId);
+  const key = await env.DB.prepare(
+    `select k.id, u.email from keys k left join users u on u.id = k.user_id
+     where k.credential_id = ?1 and k.format = 'webauthn' and k.revoked_at is null`,
+  )
+    .bind(credentialId)
+    .first<{ id: string; email: string | null }>();
   if (!key) return refused(403, "the passkey is not one this mind knows", mark);
+  // before the intake, which may write (a meld's row): the draft names the one person who signs it
+  if (draft.signer_email && key.email !== draft.signer_email)
+    return refused(403, `only ${draft.signer_email} signs this statement`, mark);
   const admitted = await admittedStatement(env, {
     statement: statementText,
-    signature: { format: "webauthn", key, ...signature },
+    signature: { format: "webauthn", key: key.id, ...signature },
   });
   if ("refused" in admitted) return refused(403, admitted.refused, mark);
   // The draft counts once: of two presses at once, the one that deletes it adds the event.

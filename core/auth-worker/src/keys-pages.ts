@@ -40,7 +40,7 @@ import {
 } from "./signed-change.ts";
 import { mindDocumentResponse, STACK_KEY_PATH, stackKeyOf, stackKeyResponse } from "./stack-key.ts";
 
-const KEYS_PATH = "/keys";
+export const KEYS_PATH = "/keys";
 const KEYS_JSON_PATH = "/keys.json";
 const REMOVE_PATH = "/keys/remove";
 const ENROL_PATH = "/keys/enrol";
@@ -79,11 +79,19 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
   }
   const signIn = `${issuer}${signInHref(pathname + url.search)}`;
   if (!session) return Response.redirect(signIn, 302);
-  if (standing === "not-member")
+  // Someone who is no member and proved an address adds a first passkey on /keys, no more: it signs
+  // about themselves alone (./keys.ts `personKeyRefusal`). The first sign-in's page lists no key.
+  const outsider = standing === "not-member";
+  if (
+    outsider &&
+    (pathname !== KEYS_PATH ||
+      (session.method !== "email" && session.method !== "google") ||
+      (await holdsPasskey(env, session.userId)))
+  )
     return post
       ? json({ error: "not a member" }, 403)
       : notMemberPage({ domain, email: session.email });
-  const owed = standing === "passkey-owed";
+  const owed = standing === "passkey-owed" || outsider;
   // Such a session adds a passkey, on /keys, and no more. An address proven by a code, or a
   // member's link, adds the first one alone: with a passkey held, the session is from before it,
   // and its holder signs in again. The owner's ticket adds one beside those the owner lost.
@@ -230,7 +238,7 @@ async function keysPage(
       // browser here: the two read as one page
       title: `Add your passkey to ${domain}`,
       body: `<h1>Add your passkey to ${text(domain)}</h1>
-      <p>${text(domain)} needs a passkey at your first sign-in. From then on it is how you sign in here, and how you approve what your agents ask for.</p>
+      <p>${text(domain)} needs a passkey at your first sign-in. From then on it is how you sign in here, and how you sign what you approve.</p>
       <p>Press the button, and your browser asks for your fingerprint, your face or a security key.</p>
       <form ${formAttributes}>
         <button type="submit">Add a passkey</button>

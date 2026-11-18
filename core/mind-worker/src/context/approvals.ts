@@ -6,7 +6,7 @@ import type { Door } from "iterate/workers";
 import { hopCaller } from "./hop-caller.ts";
 
 export const APPROVALS_ROOT_DESCRIPTION =
-  "what waits for a member's signed yes before it is done: `approvals.rules()` → { locked, rules } · `approvals.setRules([{ verb, to? }])` replaces the rules while they are open (not locked) · `approvals.propose({ verb, to? })` → { id, signAt } asks a member to sign one rule at `signAt`; with `{ secret, methods, hosts, jsonStrings?, freePaths? }`, where `secret` is a secret's path, it proposes a rule for a request with that secret; a proposal holds nothing, and only a member puts a rule for a secret in force, so this is the one way for code or an agent to get one. A rule's `verb` is `email.send` (with `to: [\"*@example.com\"]` for mail to some recipients alone), one verb such as `itx.whatsapp.sendMessage`, or every verb under a name, `itx.whatsapp.*`. A held call waits five minutes for the member, then throws; the act can be approved for a day, and is done then · `approvals.proposeStatement({ path, type, payload, next? })` → { draft, signAt, expires } asks a member to sign one event at `signAt`, a page with no sign-in, for a day; signed, it lands on `path` with the member as `event.source.signer`, the one field to trust (never the payload)";
+  "what waits for a member's signed yes before it is done: `approvals.rules()` → { locked, rules } · `approvals.setRules([{ verb, to? }])` replaces the rules while they are open (not locked) · `approvals.propose({ verb, to? })` → { id, signAt } asks a member to sign one rule at `signAt`; with `{ secret, methods, hosts, jsonStrings?, freePaths? }`, where `secret` is a secret's path, it proposes a rule for a request with that secret; a proposal holds nothing, and only a member puts a rule for a secret in force, so this is the one way for code or an agent to get one. A rule's `verb` is `email.send` (with `to: [\"*@example.com\"]` for mail to some recipients alone), one verb such as `itx.whatsapp.sendMessage`, or every verb under a name, `itx.whatsapp.*`. A held call waits five minutes for the member, then throws; the act can be approved for a day, and is done then · `approvals.proposeStatement({ path, type, payload, signerEmail?, next? })` → { draft, signAt, expires } asks a person to sign one event at `signAt`, a page with no sign-in, for a day; signed, it lands on `path` with the person as `event.source.signer`, the one field to trust (never the payload). A member signs at any path; anyone else at their own context alone, `/people/<address>`. `signerEmail`: the one person whose passkey the page takes";
 
 /** A rule for a request with a secret, as the mind's code proposes it: the vault checks it, and a
  *  member signs it as that secret's rule. */
@@ -58,12 +58,13 @@ export function approvalsRoot(
       await record(proposed.facts);
       return { id: proposed.id, signAt: `${platformOriginOf(domain)}/secrets/approvals#proposed` };
     },
-    // A statement for a member's passkey: the auth Worker keeps its exact text, and `signAt` is
-    // its page, which carries no word of it. Signed, it lands on `path` as the member's event.
+    // A statement for a person's passkey: the auth Worker keeps its exact text, and `signAt` is
+    // its page, which carries no word of it. Signed, it lands on `path` as the person's event.
     proposeStatement: async (input: {
       path: string;
       type: string;
       payload?: Record<string, unknown>;
+      signerEmail?: string;
       next?: string;
     }) => {
       const { draft, signAt, expires } = await releasedAnswer(
@@ -71,6 +72,7 @@ export function approvalsRoot(
           path: input.path,
           type: input.type,
           payload: input.payload,
+          signerEmail: input.signerEmail,
           next: input.next,
           from: from().path || context.path,
         }),
