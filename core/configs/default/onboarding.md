@@ -288,6 +288,10 @@ days, as their own wishes lead there. Never offer the list. Take one when it fit
   changed. `onboarding/other-minds.md`
 - **It makes apps, not only pages.** Open to everyone, for the mind's people, or for customers
   with a sign-in of their own. `onboarding/apps.md`
+- **It runs software from the open-source world.** A game for them and their friends, a wiki, a
+  tool they would host themselves: the mind installs it on its own computer and serves it at a
+  host of the mind. It starts when someone opens it. The job is `sandbox`.
+  `onboarding/sandbox.md`
 - **It has a character.** Propose a voice for the mind, as someone they would know from a book
   or a film, with your pick. `onboarding/voice.md`
 - **You can speak to it**, in the browser, and later from a device or a phone. `onboarding/speak.md`
