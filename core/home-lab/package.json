@@ -3,7 +3,7 @@
   "type": "module",
   "description": "A mind that runs on a home machine: the real mind Worker in local workerd, dialled into its stack",
   "engines": {
-    "node": ">=24"
+    "node": ">=26"
   },
   "scripts": {
     "start": "node src/main.ts",

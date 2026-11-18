@@ -7,7 +7,7 @@
 # Everything a sandbox reaches goes out through its mind's egress, which signs with a CA that is
 # known only when the container starts: the sandbox's entrypoint trusts it (system store and the
 # Chromium NSS database) then, never this build.
-FROM node:24.20.0-trixie-slim
+FROM node:26.13.1-trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive CI=1
 
@@ -33,7 +33,9 @@ RUN install -d -m 755 /etc/apt/keyrings \
 
 # Pinned, so an image is the same every time it is built; a version moves in a commit. pnpm 12
 # fetches its native binary on its first run, so the build runs it once to keep that in the image.
-RUN corepack enable && corepack prepare pnpm@12.18.0 --activate && pnpm --version
+# Node 25 and later ship no corepack, so npm installs it.
+RUN npm install -g --no-fund --no-audit corepack@0.36.0 \
+  && corepack enable && corepack prepare pnpm@12.18.0 --activate && pnpm --version
 RUN npm install -g --no-fund --no-audit \
     @anthropic-ai/claude-code@2.1.292 \
     @openai/codex@0.160.1 \

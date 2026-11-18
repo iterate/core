@@ -47,7 +47,7 @@ export async function importProvidedFile(file: string): Promise<ProvidedFile> {
     }
     if (code === "ERR_UNKNOWN_FILE_EXTENSION")
       throw new Error(
-        `${message}. Node ${process.version} cannot load ${extname(path)} files: Node 22.18 or later strips a TypeScript file's types itself.`,
+        `${message}. Node ${process.version} cannot load ${extname(path)} files: Node 26 or later strips a TypeScript file's types itself.`,
       );
     throw error;
   }

@@ -2,7 +2,7 @@
 
 The `iterate` command: each call talks to one mind, addressed by its domain (`iterate/mind-api`),
 and a machine keeps a [profile](#profiles) for each mind it uses.
-Requires Node >=22.18; no Bun runtime. It is part of the SDK's package, [`iterate`](../../README.md),
+Requires Node >=26; no Bun runtime. It is part of the SDK's package, [`iterate`](../../README.md),
 and every connection it makes is the Node client's ([`iterate/node`](../node.ts)).
 
 ```sh

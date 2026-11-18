@@ -6,7 +6,7 @@ secrets vault stay in the cloud. Deploy the stack with `mind: { provided: true }
 (`core/alchemy/README.md`, "A provided mind").
 
 ```sh
-node src/main.ts <zone>   # in core/home-lab, Node 24+; --port 8789 --git-port 8790 --name --template default --bundle <js> --telemetry
+node src/main.ts <zone>   # in core/home-lab, Node 26+; --port 8789 --git-port 8790 --name --template default --bundle <js> --telemetry
 ```
 
 The first run signs you in for `https://iterate.<zone>/provide` (the CLI's session store, as
