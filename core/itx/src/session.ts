@@ -1,6 +1,8 @@
 import { newWebSocketRpcSession, newWorkersRpcResponse, type RpcTarget } from "capnweb";
 import type { Caller } from "./caller.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
+import { disposeRpcStub } from "./context/rpc-stubs.ts";
+import { endWhenSilent } from "./end-when-silent.ts";
 import { contexts } from "./host.ts";
 import { IterateContextRpcTarget } from "./iterate-context.ts";
 
@@ -37,18 +39,53 @@ export async function serveSession(
   const pair = new WebSocketPair();
   const [client, server] = [pair[0], pair[1]];
   server.accept();
-  newWebSocketRpcSession(server, root);
+  // The peer's main: a stub here only to probe (`silence` below). The cast: capnweb types an
+  // untyped peer's main with no members, and the probe calls one that no peer need have.
+  const peer = newWebSocketRpcSession(server, root) as unknown as {
+    itxLivenessProbe(): Promise<unknown>;
+  };
   const { endsAt, endReason } = session;
+  let ended = false;
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    if (timer) clearTimeout(timer);
+    silence.stop();
+    teardown.disposeAll();
+  };
+  // A socket this side closes may be half open, and then its `close` event never comes: the
+  // session ends here, and the later event finds it ended.
+  const closeAndEnd = (code: number, reason: string) => {
+    end();
+    server.close(code, reason);
+  };
   const timer =
     endsAt &&
     setTimeout(
-      () => server.close(1008, endReason),
+      () => closeAndEnd(1008, endReason),
       Math.max(0, Math.min(endsAt - Date.now(), MAX_TIMER_MS)),
     );
-  const end = () => {
-    if (timer) clearTimeout(timer);
-    teardown.disposeAll();
-  };
+  const silence = endWhenSilent({
+    // Any answer is a frame from the peer, a rejection too: a capnweb peer answers a member it
+    // has not got, or a call on a main it never gave, with an error. Each answer is heard below.
+    probe: () =>
+      void Promise.resolve()
+        .then(() => peer.itxLivenessProbe())
+        .then(disposeRpcStub, () => {}),
+    end: (silentMs) => {
+      console.info({
+        event: "session-silent-ended",
+        namespace: "session",
+        message: "a session's peer sent nothing and answered no probe; the session ended",
+        silentMs,
+      });
+      // Not 1008, which a page reads as the end of its sign-in: a page that is still there dials
+      // again.
+      closeAndEnd(4000, "the peer went silent: dial again");
+    },
+  });
+  // capnweb has its own listener: this one only marks the time
+  server.addEventListener("message", () => silence.heard());
   server.addEventListener("close", end, { once: true });
   server.addEventListener("error", end, { once: true });
   return new Response(null, { status: 101, webSocket: client });
