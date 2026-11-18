@@ -187,6 +187,11 @@ test.for([
     attached: { principal: null, onBehalfOf: { principal: person } },
   },
   {
+    name: "a person's stamp with the name to show",
+    lenderStamp: { principal: null, onBehalfOf: { principal: { ...person, name: "Bob" } } },
+    attached: { principal: null, onBehalfOf: { principal: { ...person, name: "Bob" } } },
+  },
+  {
     name: "a stamp with what gives a caller power",
     lenderStamp: {
       principal: member,

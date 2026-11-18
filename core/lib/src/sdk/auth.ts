@@ -26,8 +26,10 @@ export type PersonOptions = { methods?: readonly SignInMethod[] };
  *  ARRIVES". The guards:
  *    - `auth.require` asks for a member, and `auth.requirePerson` for anyone signed in. Both answer
  *      null when the request may go on, else the answer to send.
- *    - `auth.person` reads the person, or null: `{ userId, email, method }`. `userId` is stable:
- *      key what the app keeps per person by it.
+ *    - `auth.person` reads the person, or null: `{ userId, email, name, method }`. `userId` is
+ *      stable: key what the app keeps per person by it. `name` is what to call them on a page,
+ *      the part of their address before the "@": escape it where you show it, and decide nothing
+ *      by it.
  *
  *  WAYS TO SIGN IN. `auth.person` and `auth.requirePerson` take `{ methods }`: the ways to sign in
  *  that the app takes, of those the stack's config offers (`"passkey"`, `"email"`, `"google"`,

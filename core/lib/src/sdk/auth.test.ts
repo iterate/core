@@ -94,12 +94,12 @@ test("person reads the platform admin signed in as the person, when the stamp na
   const impersonatedBy = { actor: "user_2", email: "admin@example.com" };
   const stamp = { userId: "user_1", email: "a@example.com", impersonatedBy };
   const request = workerRequest("GET", { "x-itx-person": JSON.stringify(stamp) });
-  expect(auth.person(request)).toEqual(stamp);
+  expect(auth.person(request)).toEqual({ ...stamp, name: "a" });
 });
 
 test("person reads the stamp; a person who is no member is not let through require", () => {
   const request = workerRequest("GET", person);
-  expect(auth.person(request)).toEqual({ userId: "user_1", email: "a@example.com" });
+  expect(auth.person(request)).toEqual({ userId: "user_1", email: "a@example.com", name: "a" });
   expect(auth.person(workerRequest("GET", signedIn))).toBeNull();
   expect(auth.require(request)?.status).toBe(401);
 });

@@ -3,7 +3,7 @@
 // exact expression the view would send.
 import { errorCode } from "iterate/lib";
 import { expect, test, vi } from "vitest";
-import { PersonContextRpcTarget, personItxSession } from "./person-context.ts";
+import { PersonContextRpcTarget, personItxSession, principalOf } from "./person-context.ts";
 
 const PATH = "/agents/a";
 
@@ -222,6 +222,16 @@ test.for<{ name: string; headers: Record<string, string>; path: string | null; s
     path,
   });
   expect(answer).toMatchObject({ status });
+});
+
+// Who asked, as every event of theirs then names them (`source.onBehalfOf.principal`).
+test("the person is named as who asked by their id, their address and their name", () => {
+  expect(principalOf({ userId: "user_1", email: "a@example.com", name: "a" })).toEqual({
+    actor: "user_1",
+    email: "a@example.com",
+    name: "a",
+    impersonatedBy: undefined,
+  });
 });
 
 function view() {

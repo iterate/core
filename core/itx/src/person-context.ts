@@ -350,11 +350,13 @@ function canonicalPathOf(path: string | null): string | null {
   }
 }
 
-/** The person as `onBehalfOf` names who asked: the auth Worker's user id is a principal's actor. */
-function principalOf(person: Person): Principal {
+/** The person as `onBehalfOf` names who asked: the auth Worker's user id is a principal's actor.
+ *  Their name goes with them, as text to show beside what they did. */
+export function principalOf(person: Person): Principal {
   return {
     actor: person.userId,
     email: person.email,
+    name: person.name,
     impersonatedBy: person.impersonatedBy,
   };
 }

@@ -5,8 +5,10 @@ import {
   ITX_PERSON_HEADER,
   ITX_PRINCIPAL_HEADER,
   type Lender,
+  nameInEmail,
   type Person,
   type SignInMethod,
+  stampJsonOf,
 } from "iterate/principal";
 import {
   type PlatformRoute,
@@ -92,8 +94,12 @@ export async function stampedRequest(
     const session =
       !write || ownOrigin ? await auth.browserSession(request.headers.get("cookie")) : null;
     if (session) {
-      const person: Person = { userId: session.userId, email: session.email };
-      headers.set(ITX_PERSON_HEADER, JSON.stringify(person));
+      const person: Person = {
+        userId: session.userId,
+        email: session.email,
+        name: nameInEmail(session.email),
+      };
+      headers.set(ITX_PERSON_HEADER, stampJsonOf(person));
       if (session.member)
         headers.set(
           ITX_PRINCIPAL_HEADER,
@@ -129,9 +135,10 @@ export async function stampedRequest(
     const person: Person = {
       userId: identity.principal.actor,
       email: identity.principal.email || "",
+      name: nameInEmail(identity.principal.email || ""),
       method: identity.method,
     };
-    headers.set(ITX_PERSON_HEADER, JSON.stringify(person));
+    headers.set(ITX_PERSON_HEADER, stampJsonOf(person));
     // when the sign-in ends, member or not: a person's socket (sdk/auth.ts `personItx`) ends then
     headers.set(ITX_EXPIRES_HEADER, String(identity.expiresAt));
     if (caller === "member") stamp(headers, identity);

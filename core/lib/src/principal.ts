@@ -14,6 +14,11 @@ import { codedError } from "./lib.ts";
 export type Principal = {
   actor: string;
   email?: string;
+  /** A person's `Person.name`, where a person who may be no member is named as who asked or who
+   *  holds (`source.onBehalfOf`, a subscription's `heldBy`: core/itx/src/person-context.ts). Text
+   *  to show, which the person may have chosen: it proves nothing and decides nothing. A verified
+   *  principal (`x-itx-principal`, `source.principal`) never has it. */
+  name?: string;
   impersonatedBy?: { actor: string; email: string };
   /** "mind": another mind, which signed with the key it publishes; `actor` is its domain. Only a
    *  signer's principal has it (`source.signer`, core/auth-worker/src/minds.ts). Absent: a person or
@@ -69,10 +74,14 @@ export type SignInMethod = z.infer<typeof SignInMethod>;
 /** A signed-in person as a mind's host knows them, member or not: the auth Worker's user id
  *  and their email, and `impersonatedBy` the platform admin signed in as them, as on `Principal`.
  *  An app that hands out something personal refuses, or records, a person an admin is signed in
- *  as. `method` is how they signed in, absent for a session made before sessions said it. */
+ *  as. `method` is how they signed in, absent for a session made before sessions said it.
+ *  `name` is what to call them on a page: the part of their email before the "@". It is text to
+ *  show (`displayNameOf`), never a key and never a reason to let someone in: `userId` is who they
+ *  are. */
 export type Person = {
   userId: string;
   email: string;
+  name: string;
   impersonatedBy?: { actor: string; email: string };
   method?: SignInMethod;
 };
@@ -82,9 +91,39 @@ export type Person = {
  *  member gets `x-itx-principal` beside it. */
 export const ITX_PERSON_HEADER = "x-itx-person";
 
+/** The longest name a person is shown by. */
+export const DISPLAY_NAME_MAX_CHARACTERS = 40;
+
+/** TEXT AS A PERSON'S NAME ON A PAGE: one line of at most `DISPLAY_NAME_MAX_CHARACTERS`, with no
+ *  control character, no Unicode line or paragraph separator and no format character (a direction
+ *  override, a zero-width mark), in compatibility form. So a name starts no line of its own and
+ *  is drawn in the order it is written. It may still hold any letters, an address or a bracket:
+ *  whoever puts it in HTML or in a label escapes it there. Empty when nothing is left. */
+export const displayNameOf = (text: string) =>
+  [
+    ...text
+      .normalize("NFKC")
+      .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\s]+/gu, " ")
+      .trim(),
+  ]
+    .slice(0, DISPLAY_NAME_MAX_CHARACTERS)
+    .join("")
+    .trim();
+
+/** A STAMP'S JSON AS A HEADER'S VALUE. A header holds bytes, and a name may hold any letter: so
+ *  every character past ASCII is written as its JSON escape, which any reader of the stamp parses
+ *  back to the same text. */
+export const stampJsonOf = (stamp: unknown) =>
+  JSON.stringify(stamp).replace(
+    /[^\x20-\x7e]/g,
+    (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+
 const StampedPerson = z.object({
   userId: z.string().min(1),
   email: z.string(),
+  // a stamp may hold none: the reader then takes it from the address (`stampedPersonOf`)
+  name: z.string().optional(),
   impersonatedBy: z.object({ actor: z.string().min(1), email: z.string() }).optional(),
   // a way this SDK does not know is one no app names: the person counts as signed in by an
   // unknown way
@@ -94,9 +133,15 @@ const StampedPerson = z.object({
 /** THE PERSON INGRESS STAMPED on `request`, or null when nobody signed in. Trusted as it stands,
  *  as `stampedCallerOf`: a malformed stamp is a defect, and throws. */
 export function stampedPersonOf(request: Request): Person | null {
-  const person = request.headers.get(ITX_PERSON_HEADER);
-  return person ? StampedPerson.parse(JSON.parse(person)) : null;
+  const stamped = request.headers.get(ITX_PERSON_HEADER);
+  if (!stamped) return null;
+  const person = StampedPerson.parse(JSON.parse(stamped));
+  // cleaned here too, so that no app shows a name as some other stamp wrote it
+  return { ...person, name: displayNameOf(person.name || nameInEmail(person.email)) };
 }
+
+/** What a person with an address is called for now: the part of it before the "@". */
+export const nameInEmail = (email: string) => displayNameOf(email.split("@")[0] || "");
 
 const StampedPrincipal = z.object({
   actor: z.string(),
@@ -140,7 +185,9 @@ export const ServiceCaller = z.object({
   grant: z.string().optional(),
   onBehalfOf: z
     .object({
-      principal: StampedPrincipal,
+      // who asked, with the name to show them by (`Principal.name`), which the caller's own
+      // verified `principal` above never has
+      principal: StampedPrincipal.extend({ name: z.string().optional() }),
       grant: z.string().optional(),
       run: z.string().optional(),
       call: z.string().optional(),
