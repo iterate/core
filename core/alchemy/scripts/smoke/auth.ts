@@ -108,16 +108,16 @@ export async function authChecks(domain: string): Promise<Check[]> {
         const first = await fetch(authorization, { redirect: "manual" });
         const signIn = first.headers.get("location") || "";
         const to = new URL(signIn || "about:blank");
-        // the stack's own page on every stack: it is where a passkey signs in
-        const listed = to.origin === issuer ? await fetch(signIn, { redirect: "manual" }) : null;
-        const body = (await listed?.text()) || "";
+        // the stack's own page on every stack: it is where a passkey signs in, also when the
+        // sign-in opens on the mailed code's page
+        const page = to.origin === issuer ? await signInPageAt(issuer, signIn) : null;
         return {
           pass:
             first.status === 302 &&
             /^\/sign-in(\/email)?$/.test(to.pathname) &&
-            listed?.status === 200 &&
-            body.includes("Sign in with a passkey"),
-          detail: `${first.status} to ${to.origin}${to.pathname}, which answers ${listed?.status}`,
+            page?.status === 200 &&
+            page.body.includes("Sign in with a passkey"),
+          detail: `${first.status} to ${to.origin}${to.pathname}, which ${page?.opensOn === "code" ? "opens on /sign-in/email, which answers" : "answers"} ${page?.status}`,
         };
       },
     ),
@@ -452,6 +452,29 @@ async function registeredClient(metadata: Record<string, unknown> | null, redire
   return z.object({ client_id: z.string() }).parse(await response.json()).client_id;
 }
 
+/** THE PAGE THAT A SIGN-IN ADDRESS OPENS ON, with no session. A mind with an active passkey
+ *  answers `/sign-in` with the passkey's page. A mind that mails codes and has none, as every new
+ *  mind, answers 302 to the mailed code's page with the same `next` (core/auth-worker/src/sign-in.ts
+ *  `codeComesFirst`). That one redirect is followed, and no other: any other answer is given as
+ *  it came, so a check of the page fails on it. */
+async function signInPageAt(issuer: string, signIn: string) {
+  const first = await fetch(signIn, { redirect: "manual" });
+  const from = new URL(signIn);
+  const to = new URL(first.headers.get("location") || "about:blank");
+  const next = from.searchParams.get("next") || "/";
+  const toCode =
+    first.status === 302 &&
+    from.pathname === "/sign-in" &&
+    to.origin === issuer &&
+    to.pathname === "/sign-in/email" &&
+    to.search === `?${new URLSearchParams({ next })}`;
+  if (!toCode)
+    return { opensOn: "passkey" as const, status: first.status, body: await first.text() };
+  await first.body?.cancel();
+  const page = await fetch(to, { redirect: "manual" });
+  return { opensOn: "code" as const, status: page.status, body: await page.text() };
+}
+
 async function emailChecks(domain: string): Promise<Check[]> {
   const issuer = platformOriginOf(domain);
   const offered = await fetch(`${issuer}/sign-in/email`);
@@ -487,12 +510,20 @@ async function emailChecks(domain: string): Promise<Check[]> {
   };
   return [
     await attempt("email: the sign-in offers the mailed code", async () => {
-      // the mind's own sign-in is the passkey's page, whose one link leads to the mailed code
-      const response = await fetch(`${issuer}/sign-in`, { redirect: "manual" });
-      const linked = (await response.text()).includes('<a href="/sign-in/email?');
+      // The mind's own sign-in: the passkey's page, whose one link leads to the mailed code; or,
+      // on a mind with no passkey, the mailed code's page itself, with the form for an address.
+      const page = await signInPageAt(issuer, `${issuer}/sign-in`);
+      const shown = page.body.includes(
+        page.opensOn === "code"
+          ? '<form method="post" action="/sign-in/email"'
+          : '<a href="/sign-in/email?',
+      );
       return {
-        pass: response.status === 200 && linked,
-        detail: `${response.status}, ${linked ? "with the link" : "with no link"} to /sign-in/email`,
+        pass: page.status === 200 && shown,
+        detail:
+          page.opensOn === "code"
+            ? `it opens on /sign-in/email, which answers ${page.status} ${shown ? "with" : "without"} the form for an address`
+            : `${page.status}, ${shown ? "with the link" : "with no link"} to /sign-in/email`,
       };
     }),
     await attempt(
