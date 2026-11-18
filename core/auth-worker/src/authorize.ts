@@ -288,6 +288,7 @@ export function newGrantProps(session: Session): GrantProps {
     method: session.method,
     ...(session.method === "guest" && { name: session.name }),
     standingByMethod: true,
+    ...(session.outsider && { outsider: true as const }),
   };
 }
 

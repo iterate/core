@@ -282,6 +282,18 @@ test("a grant made now carries the mark, so the way of its sign-in decides what 
   });
 });
 
+// ../migrations/0016: a passkey added while its owner was no member opens a session that is marked,
+// and the grant keeps the mark. The address is a member's here, as after an owner added it.
+test("the grant of a session that an outsider's passkey opened is no member's once its address is a member", async () => {
+  const stack = stackOf();
+  const props = newGrantProps({ ...owner, method: "passkey", outsider: true });
+  expect(await standingIn(stack, await granted(stack, props, "app"))).toEqual({
+    host: expect.objectContaining({ member: false }),
+    api: null,
+    refreshed: null,
+  });
+});
+
 test("a grant without `standingByMethod` acts as no member once its address is no member's", async () => {
   const kv = new Map<string, string>();
   const before = stackOf({}, kv);

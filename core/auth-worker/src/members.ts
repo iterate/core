@@ -61,8 +61,11 @@ export async function standingOf(
   session: Session,
 ): Promise<"member" | "passkey-owed" | "not-member"> {
   // A sign-in at Cloudflare is never a member's, whatever its address (./cloudflare-sign-in.ts),
-  // and a guest's never, whatever is added later (./guest-sign-in.ts).
-  if (session.method === "cloudflare" || session.method === "guest") return "not-member";
+  // and a guest's never, whatever is added later (./guest-sign-in.ts). Nor is the session of a
+  // passkey that was added while its owner was no member, or a grant of such a session
+  // (../migrations/0016).
+  if (session.method === "cloudflare" || session.method === "guest" || session.outsider)
+    return "not-member";
   if (!(await isMember(env, session.email))) return "not-member";
   if (session.method === "passkey") return "member";
   const { google } = iterateConfigOf(env).login.methods;
@@ -79,10 +82,11 @@ export const passkeyOwedResponse = (here: string) =>
     },
   });
 
-/** Whether the member with this address holds a passkey that is not removed. */
+/** Whether the member with this address holds a passkey that is not removed. A passkey from before
+ *  the address was a member is none (./keys.ts `holdsPasskey`). */
 export async function memberHoldsPasskey(env: Env, email: string): Promise<boolean> {
   const held = await env.DB.prepare(
-    `select 1 from keys where format = 'webauthn' and revoked_at is null
+    `select 1 from keys where format = 'webauthn' and revoked_at is null and outsider = 0
        and user_id = (select id from users where email = ?1) limit 1`,
   )
     .bind(email.trim().toLowerCase())

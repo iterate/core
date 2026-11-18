@@ -22,13 +22,13 @@ export const AFTER_SIGN_OUT = "signed-out";
  *  them (`methodsAskedIn`); else the passkey's page, or the mailed code's (`codeComesFirst`). */
 export const signInHref = (next: string) => `${SIGN_IN_PATH}?${new URLSearchParams({ next })}`;
 
-/** Opens on the mailed code's page when the mind mails codes and has no active passkey, or
- *  for an app's own people on a stack where anyone may sign in. */
+/** Opens on the mailed code's page when the mind mails codes and no member has an active passkey,
+ *  or for an app's own people on a stack where anyone may sign in. */
 export async function codeComesFirst(env: Env, app: AskingApp | null) {
   if (!iterateConfigOf(env).login.methods.email) return false;
   if (app && !app.members && anyoneGetsACode(env)) return true;
   return !(await env.DB.prepare(
-    "select 1 from keys where format = 'webauthn' and revoked_at is null limit 1",
+    "select 1 from keys where format = 'webauthn' and revoked_at is null and outsider = 0 limit 1",
   ).first());
 }
 

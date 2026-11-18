@@ -609,10 +609,14 @@ if (env.ITERATE_PROTOTYPE_TOKEN)
         await first.theirPage.setViewportSize({ width, height: 900 });
         await first.theirPage.screenshot({ path: join(shots, `sessions-${width}.png`) });
       }
-      // /keys stays a member's page.
+      // /keys gives a stranger who came by a code one thing: a first passkey, which signs about
+      // them alone. It lists no key.
       await first.theirPage.goto(`${issuer}/keys`);
       const keys = (await first.theirPage.locator("main").innerText()).replace(/\s+/g, " ");
-      must(keys.includes("not a member"), `/keys says to a stranger: ${keys.slice(0, 200)}`);
+      must(
+        keys.includes("Add your passkey") && !/Your keys for/.test(keys),
+        `/keys says to a stranger: ${keys.slice(0, 200)}`,
+      );
       // The second stranger names the first one's sign-in, as the page's own form would: it
       // ends nothing of another person's.
       await first.lists(1);

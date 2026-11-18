@@ -132,6 +132,9 @@ export const GrantProps = z.object({
    *  way gives a member's standing (`grantStandingOf`). A grant without it was made before, and
    *  keeps the rule it was made under. */
   standingByMethod: z.literal(true).optional(),
+  /** The grant of a session that a passkey opened which was added while its owner was no member
+   *  (./cookies.ts `Session.outsider`): never a member's, whatever its address becomes. */
+  outsider: z.literal(true).optional(),
   deadline: z.number().int().positive().optional(),
   letIn: z
     .object({
@@ -276,6 +279,7 @@ function hostOnlyWayServes(
  *  address, by any way but Cloudflare's. Its holder may be an agent or a bridge, which cannot
  *  press a passkey to sign in again. */
 async function grantStandingOf(env: Env, grant: GrantProps) {
+  if (grant.outsider) return "not-member";
   if (!grant.standingByMethod)
     return grant.method !== "cloudflare" &&
       grant.method !== "guest" &&

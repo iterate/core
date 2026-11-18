@@ -7,6 +7,7 @@ import type { AccountFacts } from "./account-facts.ts";
 import { FIRST_OWNER_TICKET_MS } from "./config.ts";
 import { isBlocked } from "./blocked.ts";
 import { type Env, issuerOf, offersMethod } from "./env.ts";
+import { isMember } from "./members.ts";
 
 // A browser's session at the issuer is a row of `browser_sessions` (../migrations/0011), and its
 // cookie holds the row's id. It ends at expiry, at sign-out, on /sessions (./sessions-page.ts),
@@ -35,8 +36,16 @@ const FLOW_SECONDS = 10 * 60;
 const BrowserSignInMethod = SignInMethod.exclude(["cloudflare", "guest"]);
 
 /** `email`: the person's address, or for a guest the key of their row (`guest:<subject>`,
- *  ./users.ts `linkBySubject`), which is no address. `name`: the name a guest typed. */
-export type Session = { userId: string; email: string; method: SignInMethod; name?: string };
+ *  ./users.ts `linkBySubject`), which is no address. `name`: the name a guest typed. `outsider`:
+ *  opened by a passkey that was added while its owner was no member, so it is never a member's
+ *  (../migrations/0016, ./members.ts `standingOf`). */
+export type Session = {
+  userId: string;
+  email: string;
+  method: SignInMethod;
+  name?: string;
+  outsider?: true;
+};
 
 /** A session at the issuer that has its row: every session but Cloudflare's. `id` is the row's. */
 export type BrowserSession = Session & { id: string; method: BrowserSignInMethod };
@@ -99,7 +108,9 @@ export async function sessionCookie(
 
 /** THE BROWSER'S SESSION: its cookie, and a row that is not ended, not expired and, for a passkey's
  *  session, whose passkey is not removed (a lost device holds a passkey and its session: to remove
- *  the one must end the other). One read. */
+ *  the one must end the other). One read. The session of a passkey that was added while its owner
+ *  was no member is nobody's once the address is a member: its holder signs in again, as a new
+ *  member does (one more read, for such a session alone). */
 export async function sessionOf(env: Env, request: Request): Promise<BrowserSession | null> {
   const claims = await verified(env, request, SESSION_COOKIE, "session");
   const email = z.string().safeParse(claims?.email);
@@ -107,17 +118,26 @@ export async function sessionOf(env: Env, request: Request): Promise<BrowserSess
   if (!claims?.sub || !email.success || !id.success) return null;
   const now = Date.now();
   const row = await env.DB.prepare(
-    `select s.method, s.last_seen_at from browser_sessions s
+    `select s.method, s.last_seen_at,
+       (select k.outsider from keys k where k.id = s.key_id) as outsider
+     from browser_sessions s
      where s.id = ?1 and s.user_id = ?2 and s.ended_at is null and s.expires_at > ?3
        and (s.key_id is null or exists (select 1 from keys k
          where k.id = s.key_id and k.user_id = s.user_id and k.revoked_at is null))`,
   )
     .bind(id.data, claims.sub, now)
-    .first<{ method: string; last_seen_at: number }>();
+    .first<{ method: string; last_seen_at: number; outsider: number | null }>();
   const method = BrowserSignInMethod.safeParse(row?.method);
   if (!row || !method.success) return null;
+  if (row.outsider && (await isMember(env, email.data))) return null;
   if (row.last_seen_at < now - SEEN_EVERY_MS) waitUntil(seen(env, id.data, now));
-  return { id: id.data, userId: claims.sub, email: email.data, method: method.data };
+  return {
+    id: id.data,
+    userId: claims.sub,
+    email: email.data,
+    method: method.data,
+    ...(Boolean(row.outsider) && { outsider: true as const }),
+  };
 }
 
 /** The conditional write: of two requests at once, one writes. */

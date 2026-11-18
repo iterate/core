@@ -13,13 +13,12 @@ import { canonicalPath, honouredNext } from "./key-rules.ts";
 import { KEYS_PATH } from "./keys-pages.ts";
 import { page, text } from "./pages.ts";
 import { SIGN_HELPERS } from "./signed-change.ts";
-import { admittedStatement } from "./statements.ts";
+import { admittedStatement, MOST_PAYLOAD_BYTES } from "./statements.ts";
 
 const SIGN_STATEMENT_PATH = "/statements/sign";
 
 const LIFETIME_MS = 24 * 3600 * 1000;
 const MOST_OPEN = 100;
-const MOST_PAYLOAD_BYTES = 64 * 1024;
 
 type Draft = {
   id: string;
@@ -235,7 +234,7 @@ async function pressed(env: Env, request: Request): Promise<Response> {
     statement: statementText,
     signature: { format: "webauthn", key: key.id, ...signature },
   });
-  if ("refused" in admitted) return refused(403, admitted.refused, mark);
+  if ("refused" in admitted) return refused(admitted.status || 403, admitted.refused, mark);
   // The draft counts once: of two presses at once, the one that deletes it adds the event.
   const deleted = await env.DB.prepare("delete from statement_drafts where id = ?1 returning id")
     .bind(id)

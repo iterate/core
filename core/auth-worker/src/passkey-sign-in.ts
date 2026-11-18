@@ -82,6 +82,11 @@ async function finish(env: Env, request: Request) {
     : { refused: "the passkey is not one this mind knows" };
   if ("refused" in verified) return refused(verified.refused);
   const { principal, member, userVerified } = verified.signer;
+  // such a passkey signs nobody in, whatever its address is now (../migrations/0016)
+  if (verified.outsider)
+    return refused(
+      "it was added before its address was a member here. Sign in with a code by email or a member's link, and add a new passkey",
+    );
   if (!principal.email || !member) return refused("its address is not a member here");
   if (!userVerified)
     return refused("it did not check that it is you, by a PIN, a fingerprint or a face");

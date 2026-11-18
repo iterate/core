@@ -25,6 +25,7 @@ export type KnownKey = {
   format?: Envelope["signature"]["format"]; // none for a root key: it may sign in either
   paths?: string[]; // none: any path
   provide?: string; // the capability a service's key may lend (./key-tokens.ts)
+  outsider?: boolean; // a passkey added while its owner was no member (../migrations/0016)
 };
 
 /** `once: false` takes a statement again. Only the intake asks for it (./statements.ts): the log
@@ -34,7 +35,11 @@ export async function verifiedStatement(
   value: unknown,
   { once = true } = {},
 ): Promise<
-  | (Exclude<Verified, { refused: string }> & { paths?: string[]; provide?: string })
+  | (Exclude<Verified, { refused: string }> & {
+      paths?: string[];
+      provide?: string;
+      outsider?: boolean;
+    })
   | { refused: string }
 > {
   const envelope = envelopeOf(value);
@@ -79,25 +84,30 @@ export async function verifiedStatement(
       principal: key.principal,
       key: envelope.signature.key,
       label: key.label,
-      // a service has no email, so it is never a member
-      member: key.principal.email ? await isMember(env, key.principal.email) : false,
+      // A service has no email, so it is never a member. A key added while its owner was no
+      // member is never a member's, whatever its address is now (../migrations/0016).
+      member:
+        key.principal.email && !key.outsider ? await isMember(env, key.principal.email) : false,
       userVerified: checked.userVerified,
     },
     statement,
     paths: key.paths,
     provide: key.provide,
+    outsider: key.outsider,
   };
 }
 
 /** A person's own context, named by the address they signed in with. */
 const personContextOf = (email: string) => `/people/${email.toLowerCase()}`;
 
-/** WHY A PERSON'S KEY DOES NOT SIGN THIS, or null. A person's key signs while its address is a
- *  member: removal of a member takes the members row and leaves the keys, since a session removes
- *  no key (./signed-change.ts), so the row is what ends them. And a passkey that checked nobody is
- *  anyone's who holds the device, as at a sign-in. A service's key has no address: its `paths` and
- *  `provide` say what it may do. Anyone else's key signs at the intake's `path` only when that is
- *  their own context: the event says who signed what, and lets them reach nothing. */
+/** WHY A PERSON'S KEY DOES NOT SIGN THIS, or null. A person's key signs as a member's while its
+ *  address is a member and the key was added by a member (`signer.member`, `verifiedStatement`).
+ *  Removal of a member takes the members row and leaves the keys, since a session removes no key
+ *  (./signed-change.ts), so the row is what ends them. Every other person's key signs at the
+ *  intake's `path` only when that is their own context: a removed member's key, on every mind, and
+ *  the key of someone who signed in where anyone may. The event says who signed what, and lets
+ *  them reach nothing. A passkey that checked nobody is anyone's who holds the device, as at a
+ *  sign-in. A service's key has no address: its `paths` and `provide` say what it may do. */
 export function personKeyRefusal(
   signer: Exclude<Verified, { refused: string }>["signer"],
   path?: string,
@@ -113,7 +123,9 @@ export function personKeyRefusal(
 
 /** After a mailed code or a sign-in at Google proved `user`'s address, which is all it proves. A member
  *  who holds a passkey is refused: mail is no way round a passkey. A member who holds none goes to
- *  /keys to add the first. Anyone else goes on, since a session gives a non-member nothing. */
+ *  /keys to add the first: a passkey from before the address was a member is none (`holdsPasskey`),
+ *  or whoever added it would lock the member out. Anyone else goes on, since a session gives a
+ *  non-member nothing. */
 export async function addressProven(
   env: Env,
   user: { id: string; email: string },
@@ -129,11 +141,14 @@ export async function addressProven(
   };
 }
 
-export async function holdsPasskey(env: Env, userId: string): Promise<boolean> {
+/** Whether the person holds a live passkey that counts for a member: one that was not added while
+ *  they were no member (../migrations/0016). `any`: one of either kind. */
+export async function holdsPasskey(env: Env, userId: string, any = false): Promise<boolean> {
   const held = await env.DB.prepare(
-    "select 1 from keys where user_id = ?1 and format = 'webauthn' and revoked_at is null limit 1",
+    `select 1 from keys where user_id = ?1 and format = 'webauthn' and revoked_at is null
+       and outsider <= ?2 limit 1`,
   )
-    .bind(userId)
+    .bind(userId, any ? 1 : 0)
     .first();
   return Boolean(held);
 }
@@ -142,7 +157,8 @@ async function knownKey(env: Env, config: AuthConfig, id: string): Promise<Known
   const root = (await rootKeysOf(config)).get(id);
   if (root) return root;
   const row = await env.DB.prepare(
-    `select k.public_key, k.format, k.label, k.actor, k.paths, k.provide, u.id as user_id, u.email
+    `select k.public_key, k.format, k.label, k.actor, k.paths, k.provide, k.outsider,
+       u.id as user_id, u.email
      from keys k left join users u on u.id = k.user_id
      where k.id = ?1 and k.revoked_at is null`,
   )
@@ -154,6 +170,7 @@ async function knownKey(env: Env, config: AuthConfig, id: string): Promise<Known
       actor: string | null;
       paths: string | null;
       provide: string | null;
+      outsider: number;
       user_id: string | null;
       email: string | null;
     }>();
@@ -164,7 +181,11 @@ async function knownKey(env: Env, config: AuthConfig, id: string): Promise<Known
     format: row.format as KnownKey["format"],
   };
   if (row.user_id && row.email)
-    return { ...common, principal: { actor: row.user_id, email: row.email } };
+    return {
+      ...common,
+      principal: { actor: row.user_id, email: row.email },
+      outsider: Boolean(row.outsider),
+    };
   if (row.actor && row.paths)
     return {
       ...common,

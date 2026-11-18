@@ -1816,10 +1816,11 @@ export interface IterateContextApi {
             freePaths?: string[];
           },
     ): Promise<{ id: string; signAt: string }>;
-    /** One event for a member to sign with a passkey at `signAt`, a page that needs no sign-in,
-     *  for a day. Signed, it lands on `path` with the member as `event.source.signer`. `next`:
-     *  where the page goes then, an https URL on a host of the mind. `signerEmail`: the one person
-     *  who signs; a non-member signs at `/people/<address>` alone. */
+    /** One event for a person to sign with a passkey at `signAt`, a page that needs no sign-in,
+     *  for a day. Signed, it lands on `path` with the person as `event.source.signer`, whose
+     *  `member` says whether a member signed. `next`: where the page goes then, an https URL on a
+     *  host of the mind. `signerEmail`: the one person who signs; a non-member signs at
+     *  `/people/<address>` alone. */
     proposeStatement(input: {
       path: string;
       type: string;

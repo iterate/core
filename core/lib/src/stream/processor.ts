@@ -857,8 +857,12 @@ export type StreamEventInput = {
     platform?: true;
     /** THE KEY THAT SIGNED IT: the event is a signed statement (`signed`) whose signature the auth
      *  Worker verified, naming who holds the key and the key's id. Stamped only where the auth
-     *  Worker's own answer is appended (caller.ts `Caller.signer`); a writer's own is dropped. */
-    signer?: { principal: Principal; key: string };
+     *  Worker's own answer is appended (caller.ts `Caller.signer`); a writer's own is dropped.
+     *  `member`: whether the signer was a member of this mind when they signed. A person who is no
+     *  member signs too, at their own context `/people/<address>`, and so does a service's or
+     *  another mind's key: code that wants a member's word checks `member === true`. An event
+     *  that was stored without the field has none, and says nothing of its signer's standing. */
+    signer?: { principal: Principal; key: string; member?: boolean };
   };
   /** A SIGNED STATEMENT this event carries out (iterate/signed): the exact text and its
    *  signature, kept as they came so anyone can check them again. */

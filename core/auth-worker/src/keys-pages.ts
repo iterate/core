@@ -80,13 +80,15 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
   const signIn = `${issuer}${signInHref(pathname + url.search)}`;
   if (!session) return Response.redirect(signIn, 302);
   // Someone who is no member and proved an address adds a first passkey on /keys, no more: it signs
-  // about themselves alone (./keys.ts `personKeyRefusal`). The first sign-in's page lists no key.
+  // about themselves alone (./keys.ts `personKeyRefusal`), and it is marked as an outsider's, which
+  // it stays (../migrations/0016). The first sign-in's page lists no key. With any passkey held, a
+  // removed member's too, there is nothing to add.
   const outsider = standing === "not-member";
   if (
     outsider &&
     (pathname !== KEYS_PATH ||
       (session.method !== "email" && session.method !== "google") ||
-      (await holdsPasskey(env, session.userId)))
+      (await holdsPasskey(env, session.userId, true)))
   )
     return post
       ? json({ error: "not a member" }, 403)
@@ -118,7 +120,7 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
   if (pathname === REMOVE_PATH) return removed(env, request, session);
   if (pathname === KEYS_PATH)
     return post
-      ? passkeyAdded(env, request, session, { owed: proven, first })
+      ? passkeyAdded(env, request, session, { owed: proven, first, outsider })
       : keysPage(
           env,
           session,
@@ -179,11 +181,12 @@ async function keysPage(
   });
   // A person's own keys and the services' keys that this person allowed, removed ones too; and
   // every live key of a service that another member allowed: any member may remove it, and sees
-  // who allowed it.
+  // who allowed it. A passkey from before the person was a member is not theirs as a member: it
+  // is left out, and the member's first passkey revokes it (`passkeyAdded`).
   const { results } = await env.DB.prepare(
     `select keys.*, adder.email as added_by_email from keys
      left join users as adder on adder.id = keys.added_by
-     where keys.user_id = ?1
+     where (keys.user_id = ?1 and keys.outsider = 0)
         or (keys.actor is not null and (keys.added_by = ?1 or keys.revoked_at is null))
      order by keys.added_at`,
   )
@@ -355,7 +358,8 @@ async function passkeyAdded(
   env: Env,
   request: Request,
   session: BrowserSession,
-  { owed, first }: { owed: boolean; first: boolean },
+  /** `outsider`: the person is no member, so the key is marked as an outsider's for good. */
+  { owed, first, outsider }: { owed: boolean; first: boolean; outsider: boolean },
 ): Promise<Response> {
   let input: {
     label?: unknown;
@@ -419,14 +423,18 @@ async function passkeyAdded(
     );
   const at = Date.now();
   const name = label.trim() || `Passkey, ${new Date(at).toISOString().slice(0, 10)}`;
+  // A first passkey is the first of its kind: a member's first beside no other member's passkey,
+  // an outsider's beside no passkey at all. `outsider <= ?8` is every live passkey for an
+  // outsider's key (1), and the member's own alone for a member's (0).
   const { meta } = await env.DB.prepare(
-    `insert into keys (id, user_id, public_key, format, credential_id, label, added_via, added_by, added_at)
-     select ?1, ?2, ?3, 'webauthn', ?4, ?5, 'keys-page', ?2, ?6
+    `insert into keys (id, user_id, public_key, format, credential_id, label, added_via, added_by, added_at, outsider)
+     select ?1, ?2, ?3, 'webauthn', ?4, ?5, 'keys-page', ?2, ?6, ?8
      where ?7 = 0 or not exists
-       (select 1 from keys where user_id = ?2 and format = 'webauthn' and revoked_at is null)
+       (select 1 from keys where user_id = ?2 and format = 'webauthn' and revoked_at is null
+          and outsider <= ?8)
      on conflict do nothing`,
   )
-    .bind(key, session.userId, publicKey, credentialId, name, at, first ? 1 : 0)
+    .bind(key, session.userId, publicKey, credentialId, name, at, first ? 1 : 0, outsider ? 1 : 0)
     .run();
   if (!meta.changes)
     return json(
@@ -434,6 +442,23 @@ async function passkeyAdded(
       409,
     );
   const facts = new AccountFacts();
+  // The member's own passkey ends the ones from before the address was a member: whoever added
+  // one then holds nothing of this person's now, and the sessions it opened end with it.
+  if (!outsider) {
+    const { results } = await env.DB.prepare(
+      `update keys set revoked_at = ?1
+       where user_id = ?2 and outsider = 1 and revoked_at is null
+       returning id, label`,
+    )
+      .bind(at, session.userId)
+      .all<{ id: string; label: string }>();
+    for (const old of results)
+      facts.add(session.userId, {
+        type: "events.iterate.com/account/key-removed",
+        payload: { key: old.id, label: old.label, at, removedBy: session.userId },
+        idempotencyKey: `account/key-removed:${old.id}:${at}`,
+      });
+  }
   facts.add(session.userId, {
     type: "events.iterate.com/account/key-added",
     payload: { key, label: name, format: "webauthn", at, ...(change && signerOf(change)) },
@@ -507,7 +532,7 @@ async function removed(env: Env, request: Request, session: BrowserSession): Pro
 async function keysJson(env: Env, session: BrowserSession): Promise<Response> {
   const { results } = await env.DB.prepare(
     `select id, credential_id, label, format from keys
-     where user_id = ?1 and revoked_at is null order by added_at`,
+     where user_id = ?1 and revoked_at is null and outsider = 0 order by added_at`,
   )
     .bind(session.userId)
     .all<{ id: string; credential_id: string | null; label: string; format: string }>();

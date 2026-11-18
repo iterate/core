@@ -2,13 +2,17 @@ import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { base64url } from "iterate/signed";
 import { expect, test } from "vitest";
+import { newGrantProps } from "./authorize.ts";
 import { FIRST_OWNER_PATH } from "./config.ts";
-import { sessionCookie } from "./cookies.ts";
+import { sessionCookie, sessionOf } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import type { Env } from "./env.ts";
 import { firstOwnerResponse } from "./first-owner.ts";
 import { statementInParts } from "./key-rules.ts";
+import { addressProven } from "./keys.ts";
 import { keysPagesResponse, statementHtml } from "./keys-pages.ts";
+import { memberHoldsPasskey } from "./members.ts";
+import { passkeySignInResponse } from "./passkey-sign-in.ts";
 
 const facts = { domain: "example.com", key: "key-a-of-a-service", person: "ada@example.com" };
 
@@ -185,6 +189,86 @@ test("someone who is no member, signed in by a code, adds one passkey and sees n
   expect(await visit(await codeSession(env, "stranger@example.net"))).toEqual(refused);
 });
 
+// ../migrations/0016, the rule: a credential made while its owner was no member never becomes a
+// member's. Mallory reads carol's mail for a day on a mind where anyone signs in, and adds a
+// passkey. Weeks later an owner adds carol as a member.
+test("a passkey that someone added as no member, its session and its grant are no member's once the address is a member, and the passkey signs nobody in", async () => {
+  const { env, db } = await stack();
+  const CAROL = "carol@example.net";
+  const mailed = await codeSession(env, CAROL);
+  const pair = await newPair();
+  const made = await posted(env, mailed, await challengeOf(env, mailed), {}, pair);
+  const sleeper = made.headers.get("set-cookie")!.split(";")[0]!;
+  const at = (cookie: string) => new Request(`${ISSUER}/keys`, { headers: { cookie } });
+  const held = await sessionOf(env, at(sleeper));
+  // the mark is on the key, on the session it opened, and on a grant of that session
+  expect({
+    key: db.prepare("select outsider from keys where user_id = ?").all(`user-${CAROL}`),
+    session: held,
+    grant: newGrantProps(held!),
+  }).toMatchObject({
+    key: [{ outsider: 1 }],
+    session: { method: "passkey", outsider: true },
+    grant: { outsider: true },
+  });
+  db.prepare("insert into members (email, added_by, added_at) values (?, ?, ?)").run(
+    CAROL,
+    "owner@example.net",
+    Date.now(),
+  );
+  // the session is nobody's now: /keys sends its browser to the sign-in
+  const page = await keysPagesResponse(env, at(sleeper));
+  expect({
+    session: await sessionOf(env, at(sleeper)),
+    keys: [page!.status, new URL(page!.headers.get("location")!).pathname],
+  }).toEqual({ session: null, keys: [302, "/sign-in"] });
+  expect(await signedIn(env, pair)).toEqual({
+    status: 403,
+    body: {
+      error:
+        "The passkey did not sign you in: it was added before its address was a member here. Sign in with a code by email or a member's link, and add a new passkey.",
+    },
+  });
+});
+
+// The other half of the rule: the outsider's passkey must not lock the real person out.
+test("the member whose address held an outsider's passkey adds their own by a code, and that ends the outsider's", async () => {
+  const { env, db } = await stack();
+  const CAROL = "carol@example.net";
+  const mallory = await codeSession(env, CAROL);
+  await posted(env, mallory, await challengeOf(env, mallory));
+  db.prepare("insert into members (email, added_by, added_at) values (?, ?, ?)").run(
+    CAROL,
+    "owner@example.net",
+    Date.now(),
+  );
+  // carol's mailed code is taken, and an owner's link for her would be made
+  expect({
+    code: await addressProven(env, { id: `user-${CAROL}`, email: CAROL }, "/"),
+    holdsPasskey: await memberHoldsPasskey(env, CAROL),
+  }).toEqual({ code: { location: "/keys?next=%2F" }, holdsPasskey: false });
+  const carol = await codeSession(env, CAROL);
+  const page = await keysPagesResponse(
+    env,
+    new Request(`${ISSUER}/keys`, { headers: { cookie: carol } }),
+  );
+  expect((await page!.text()).match(/<h1>([^<]*)<\/h1>/)?.[1]).toBe(
+    "Add your passkey to example.com",
+  );
+  expect(await added(env, carol, await challengeOf(env, carol))).toBe(200);
+  expect(
+    db
+      .prepare(
+        "select outsider, revoked_at is null as live from keys where user_id = ? order by added_at",
+      )
+      .all(`user-${CAROL}`),
+  ).toEqual([
+    { outsider: 1, live: 0 },
+    { outsider: 0, live: 1 },
+  ]);
+  expect(await memberHoldsPasskey(env, CAROL)).toBe(true);
+});
+
 /** The session cookie a mailed code gives `email`'s browser (./email-sign-in.ts). */
 async function codeSession(env: Env, email: string): Promise<string> {
   const user = { id: `user-${email}`, email };
@@ -226,21 +310,88 @@ async function added(
   return (await posted(env, cookie, challenge, named)).status;
 }
 
+type Pair = { keys: CryptoKeyPair; spki: Uint8Array; credentialId: string };
+
+/** A passkey as an authenticator holds it: a P-256 pair and the credential's id. */
+async function newPair(): Promise<Pair> {
+  const keys = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
+  return {
+    keys,
+    spki: new Uint8Array((await crypto.subtle.exportKey("spki", keys.publicKey)) as ArrayBuffer),
+    credentialId: base64url(crypto.getRandomValues(new Uint8Array(16))),
+  };
+}
+
+/** The answer of the passkey's sign-in (./passkey-sign-in.ts) to `pair`, an authenticator that
+ *  checked the person: the challenge, then its signature. */
+async function signedIn(env: Env, pair: Pair) {
+  const post = (path: string, body: unknown) =>
+    passkeySignInResponse(
+      env,
+      new Request(`${ISSUER}${path}`, {
+        method: "POST",
+        headers: { origin: ISSUER, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+  const asked = (await (await post("/sign-in/passkey/challenge", {}))!.json()) as {
+    statement: string;
+    challenge: string;
+  };
+  const encoder = new TextEncoder();
+  const clientDataJSON = encoder.encode(
+    JSON.stringify({ type: "webauthn.get", challenge: asked.challenge, origin: ISSUER }),
+  );
+  const digest = async (bytes: Uint8Array) =>
+    new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  // user present and user verified
+  const authenticatorData = new Uint8Array([
+    ...(await digest(encoder.encode(new URL(ISSUER).hostname))),
+    0x05,
+    0,
+    0,
+    0,
+    1,
+  ]);
+  const raw = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      pair.keys.privateKey,
+      new Uint8Array([...authenticatorData, ...(await digest(clientDataJSON))]),
+    ),
+  );
+  const integer = (half: Uint8Array) => {
+    let at = 0;
+    while (at < half.length - 1 && half[at] === 0) at++;
+    const bytes = half.subarray(at);
+    const positive = bytes[0]! & 0x80 ? [0, ...bytes] : [...bytes];
+    return [0x02, positive.length, ...positive];
+  };
+  const der = [...integer(raw.subarray(0, 32)), ...integer(raw.subarray(32))];
+  const answer = await post("/sign-in/passkey", {
+    statement: asked.statement,
+    credentialId: pair.credentialId,
+    sig: base64url(new Uint8Array([0x30, der.length, ...der])),
+    authenticatorData: base64url(authenticatorData),
+    clientDataJSON: base64url(clientDataJSON),
+  });
+  return { status: answer!.status, body: await answer!.json() };
+}
+
 /** The answer to a POST to /keys with a new P-256 key, as the page's script sends it. `named`: the
- *  name it sends, which a test may leave out or make anything. */
+ *  name it sends, which a test may leave out or make anything. `pair`: the passkey, when the test
+ *  signs with it afterwards. */
 async function posted(
   env: Env,
   cookie: string,
   challenge: string,
   named: { label?: unknown } = { label: "laptop" },
+  pair?: Pair,
 ): Promise<Response> {
-  const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
-    "sign",
-    "verify",
-  ])) as CryptoKeyPair;
-  const spki = new Uint8Array(
-    (await crypto.subtle.exportKey("spki", pair.publicKey)) as ArrayBuffer,
-  );
+  const { spki, credentialId } = pair || (await newPair());
   const clientData = { type: "webauthn.create", origin: ISSUER, challenge };
   const answer = await keysPagesResponse(
     env,
@@ -250,7 +401,7 @@ async function posted(
       body: JSON.stringify({
         ...named,
         publicKey: base64url(spki),
-        credentialId: base64url(crypto.getRandomValues(new Uint8Array(16))),
+        credentialId,
         clientDataJSON: base64url(new TextEncoder().encode(JSON.stringify(clientData))),
       }),
     }),
@@ -322,5 +473,5 @@ async function stack() {
       )
       .all(MEMBER)
       .map((row) => row.label);
-  return { env, passkeys, labels };
+  return { env, db, passkeys, labels };
 }

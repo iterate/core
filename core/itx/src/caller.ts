@@ -29,8 +29,8 @@ export type Caller = {
   approvedAct?: string;
   // The key that signed what this call appends, as the auth Worker verified it. Set only where the
   // auth Worker's own answer is appended (the mind Worker's `Mind.append`): an event never names its
-  // own signer.
-  signer?: { principal: Principal; key: string };
+  // own signer. `member`: whether the signer was a member of the mind at the signing.
+  signer?: { principal: Principal; key: string; member?: boolean };
   // The SHA-256 of what a delivery delivers: a target answers only what it names, so nothing it
   // reaches can hand a subscriber an event its log never held.
   delivery?: string;

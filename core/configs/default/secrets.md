@@ -49,8 +49,10 @@ A rule makes an act wait until a member approves it with a passkey, on
 - To have a member vouch for one event, call
   `itx.approvals.proposeStatement({ path, type, payload })` and give the member the `signAt` link
   it answers. The page needs no sign-in and shows the exact event; one passkey press signs it,
-  within a day. The event then lands on `path` with `event.source.signer` naming the member. Code
-  that trusts such an event reads `event.source.signer`, never a field of the payload.
+  within a day. The event then lands on `path` with `event.source.signer` naming who signed. Code
+  that trusts such an event reads `event.source.signer`, never a field of the payload, and checks
+  `event.source.signer.member === true` when it wants a member's word: someone who is no member
+  signs too, at their own context `/people/<address>`, and their stamp has `member: false`.
 - What a rule does not promise: a mail is held whatever sends it, but a verb is held only when the
   mind's agents or loaded code call it, not from a mind Worker changed to skip the rule.
 
