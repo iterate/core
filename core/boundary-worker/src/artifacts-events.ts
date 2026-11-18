@@ -69,52 +69,54 @@ export function repoPathOf(repoName: string): string | null {
 }
 
 /** The rows of the table (./cloudflare-events.ts) for the Artifacts events of one repo: each
- *  becomes a fact on the repo's own context, for a repo of the stack's own namespace alone. The
- *  fact's idempotency key is made from the message alone, so a redelivery lands nothing new. A
- *  clone or a fetch with no event time has nothing that tells two of them apart: it makes nothing. */
-export function artifactsRows(input: { namespace: string }): Record<string, CloudflareEventRow> {
-  const row: CloudflareEventRow = (body) => {
-    const parsed = RepoEvent.safeParse(body);
-    if (!parsed.success) return null;
-    const { type, source, payload, metadata } = parsed.data;
-    if (source.namespace !== input.namespace) return null;
-    // A write token is a right to publish the mind with a push. A read token's making is no fact:
-    // the mind's own reads make several a minute.
-    if (type === "cf.artifacts.repo.token.created" && payload.scope !== "write") return null;
-    const path = repoPathOf(source.repoName);
-    if (!path) return null;
-    const at = metadata.eventTimestamp;
-    const { ref, before, after, tokenId } = payload;
-    const fact = {
-      "cf.artifacts.repo.pushed": {
-        name: "repo/pushed",
-        unique: at ? `${at}:${ref}:${after}` : after && `${ref}:${before}:${after}`,
-        payload: pushedPayload(payload),
-      },
-      "cf.artifacts.repo.cloned": { name: "repo/cloned", unique: at, payload: {} },
-      "cf.artifacts.repo.fetched": { name: "repo/fetched", unique: at, payload: {} },
-      "cf.artifacts.repo.token.created": {
-        name: "repo/token-created",
-        unique: at || tokenId,
-        payload: { tokenId, scope: payload.scope, expiresAt: payload.expiresAt },
-      },
-      "cf.artifacts.repo.token.revoked": {
-        name: "repo/token-revoked",
-        unique: at || tokenId,
-        payload: { tokenId },
-      },
-    }[type];
-    if (!fact.unique) return null;
-    return {
-      path,
-      event: {
-        type: `events.iterate.com/${fact.name}`,
-        idempotencyKey: `${fact.name}:${source.namespace}/${source.repoName}:${fact.unique}`,
-        payload: fact.payload,
-      },
-    };
+ *  becomes a fact on the repo's own context. The stack's queue gets the events of its own
+ *  subscriptions alone, and each names a repo of the stack's own namespace, so no row asks which
+ *  namespace an event is from. The fact's idempotency key is made from the message alone, so a
+ *  redelivery lands nothing new. A clone or a fetch with no event time has nothing that tells two
+ *  of them apart: it makes nothing. */
+export const artifactsRows: Record<string, CloudflareEventRow> = Object.fromEntries(
+  RepoEvent.shape.type.options.map((type) => [type, artifactsRow]),
+);
+
+function artifactsRow(body: unknown): ReturnType<CloudflareEventRow> {
+  const parsed = RepoEvent.safeParse(body);
+  if (!parsed.success) return null;
+  const { type, source, payload, metadata } = parsed.data;
+  // A write token is a right to publish the mind with a push. A read token's making is no fact:
+  // the mind's own reads make several a minute.
+  if (type === "cf.artifacts.repo.token.created" && payload.scope !== "write") return null;
+  const path = repoPathOf(source.repoName);
+  if (!path) return null;
+  const at = metadata.eventTimestamp;
+  const { ref, before, after, tokenId } = payload;
+  const fact = {
+    "cf.artifacts.repo.pushed": {
+      name: "repo/pushed",
+      unique: at ? `${at}:${ref}:${after}` : after && `${ref}:${before}:${after}`,
+      payload: pushedPayload(payload),
+    },
+    "cf.artifacts.repo.cloned": { name: "repo/cloned", unique: at, payload: {} },
+    "cf.artifacts.repo.fetched": { name: "repo/fetched", unique: at, payload: {} },
+    "cf.artifacts.repo.token.created": {
+      name: "repo/token-created",
+      unique: at || tokenId,
+      payload: { tokenId, scope: payload.scope, expiresAt: payload.expiresAt },
+    },
+    "cf.artifacts.repo.token.revoked": {
+      name: "repo/token-revoked",
+      unique: at || tokenId,
+      payload: { tokenId },
+    },
+  }[type];
+  if (!fact.unique) return null;
+  return {
+    path,
+    event: {
+      type: `events.iterate.com/${fact.name}`,
+      idempotencyKey: `${fact.name}:${source.namespace}/${source.repoName}:${fact.unique}`,
+      payload: fact.payload,
+    },
   };
-  return Object.fromEntries(RepoEvent.shape.type.options.map((type) => [type, row]));
 }
 
 function pushedPayload(payload: z.infer<typeof RepoEvent>["payload"]) {

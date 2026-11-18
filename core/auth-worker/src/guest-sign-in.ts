@@ -1,67 +1,70 @@
-// guest-sign-in.ts — A GUEST: a person who types a name, for the apps of the mind that take
-// guests. Off unless the config has the method (./config.ts `login.methods.guest`).
+// guest-sign-in.ts — A GUEST: a person who types a name, for an app of the mind that names the
+// sign-in method "guest" (iterate/app-description `AppDescription.signIn`).
 //
-// WHAT IT IS FOR. An app on a mind hostname whose guard names `"guest"` (iterate/sdk
-// `auth.requirePerson`): a page that someone opens by a link, with no account. The app decides
-// what the link opens; here the person only says what to call them.
+// WHAT IT IS FOR. A page that someone opens by a link, with no account. The app decides what the
+// link opens; here the person only says what to call them.
 //
 // WHAT IT PROVES: NOTHING. Anyone on the internet can be a guest, with any name. So a guest is a
-// person and never a member, and counts only where an app names the way:
-//   - the person is a row with no address (./users.ts `linkBySubject`, key `guest:<subject>`),
-//     which no proof of an address ever reaches, and no rule makes a member (./members.ts);
+// person and never a member, and counts only at an app that names the method:
+//   - the person is a row whose key is `guest:<subject>` (./cookies.ts `GUEST_KEY_PREFIX`), which
+//     is no address: no proof of an address reaches it, and no member is ever such a key
+//     (./members.ts `isMember`);
 //   - it has a cookie of its own (./cookies.ts `guestOf`), which only the authorization endpoint
-//     reads, for a hostname's own sign-in that names guests (./authorize.ts `sessionFor`); none
+//     reads, for a hostname's own sign-in whose app names guests (./authorize.ts `guestAt`); none
 //     of the mind's own pages reads it, and no consent takes it;
 //   - a code or a token from it is for a mind hostname alone, never the mind's API, MCP server or
-//     `/provide`, and says `member: false` (./oauth.ts `tokenIdentity`);
-//   - an app's guard that names no ways does not take it (iterate/sdk).
+//     the right to hand in a mind, and says `member: false` (./oauth.ts `tokenIdentity`).
 // The cookie gives no reach by itself: it earns a session on the host of an app that names
 // guests, and what that app then shows is its own code's decision.
 //
-//   GET  /sign-in/guest?next=…   the form, for a hostname's own sign-in that names guests. It
-//                                makes nothing: a browser that fetches the page is no guest
+//   GET  /sign-in/guest?next=…   the form, for a hostname's own sign-in whose app names guests.
+//                                It makes nothing: a browser that fetches the page is no guest
 //   POST /sign-in/guest          makes the guest, and goes on to `next`
 //
 // ONCE A BROWSER. The cookie lasts 30 days from the browser's last visit, so the name is asked
 // once. A guest's session on an app's host lasts 15 minutes (./oauth.ts), and the next one comes
 // with no question: the host sends the browser here, and the cookie answers. That is when an app
 // checks again what the guest holds. A renewal stops when the app no longer names guests, an
-// owner blocks the guest, the config drops the way, or the stack's bound is reached.
+// owner blocks the guest, or the stack's bound is reached.
 //
-// SOMEONE ALREADY SIGNED IN IS NEVER MADE A GUEST. A browser with a session of the mind's own, or
-// of Cloudflare's, gets no form: an app that takes guests and also names their way has let them in
-// as themselves already (./authorize.ts), and one that names guests alone says so here.
+// SOMEONE ALREADY SIGNED IN IS NEVER MADE A GUEST. A browser with a session of the mind's own gets
+// no form: an app that takes guests and also names that person's method has let them in as
+// themselves already (./authorize.ts), and one that does not says so here.
 //
 // BOUNDS, since anyone can come: a name of 1 to 40 characters (iterate/principal
-// `displayNameOf`); the stack's new guests and its guests' sessions in ten minutes, each a number
-// of the config; 20 new guests an address, and 6 sessions a guest, so that no one cookie uses up
-// the stack's number. At a bound the page says to try again in ten minutes, and the mind gets one
-// `account/guest-refused` for that reason in that window. A guest's grant holds no refresh token:
-// every next 15 minutes are asked for here.
+// `displayNameOf`); 120 new guests and 600 guests' sessions for the stack in ten minutes; 20 new
+// guests an address, and 6 sessions a guest, so that no one cookie uses up the stack's number
+// (./device/limits.ts). At a bound the page says to try again in ten minutes, and the mind gets
+// one `account/guest-refused` for that reason in that window. A guest's grant holds no refresh
+// token: every next 15 minutes are asked for here.
 import { sameOriginPath } from "iterate/lib";
 import { DISPLAY_NAME_MAX_CHARACTERS, displayNameOf } from "iterate/principal";
 import { AccountFacts } from "./account-facts.ts";
 import { type AskingApp, askingAppOf } from "./asking-app.ts";
 import {
-  clearFlowCookie,
-  cloudflareSessionOf,
-  flowCookie,
-  flowOf,
+  clearGuestFormCookie,
+  GUEST_KEY_PREFIX,
+  guestCookie,
+  guestFormCookie,
+  guestFormOf,
   guestOf,
-  guestSessionCookie,
-  sessionOf,
+  personSessionOf,
 } from "./cookies.ts";
 import { admissionWindowOf, admitted } from "./device/limits.ts";
-import { type Env, issuerOf, iterateConfigOf, offersMethod } from "./env.ts";
+import { configOf, type Env, issuerOf } from "./env.ts";
 import { appSignIn, errorPage, otherAccountForm, page, text } from "./pages.ts";
-import { methodsAskedIn } from "./sign-in.ts";
-import { linkBySubject } from "./users.ts";
+import { userOf } from "./users.ts";
 
-export const GUEST_SIGN_IN_PATH = "/sign-in/guest";
+const GUEST_SIGN_IN_PATH = "/sign-in/guest";
 
-/** What marks this browser's flow cookie as the name form's: the cookie is the one Google's
- *  sign-in uses, where this field is the id_token's nonce, a random UUID. */
-const FLOW_MARK = "guest";
+/** The name form for the sign-in that `next` goes on to, as a whole address of the issuer. */
+export const guestFormHref = (env: Env, next: string) =>
+  `${issuerOf(env)}${GUEST_SIGN_IN_PATH}?${new URLSearchParams({ next })}`;
+
+/** New guests that the stack takes in ten minutes, from every address together. */
+const GUESTS_PER_TEN_MINUTES = 120;
+/** Guests' sessions on the apps' hosts that the stack gives in ten minutes (./authorize.ts). */
+export const GUEST_SESSIONS_PER_TEN_MINUTES = 600;
 
 /** The form's own answer is small: a state and a name. */
 const FORM_MAX_BYTES = 4096;
@@ -69,7 +72,6 @@ const FORM_MAX_BYTES = 4096;
 export async function guestSignInResponse(env: Env, request: Request): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname !== GUEST_SIGN_IN_PATH) return null;
-  if (!offersMethod(env, "guest")) return new Response("Not found", { status: 404 });
   if (request.method === "GET" || request.method === "HEAD") return form(env, request, url);
   if (request.method === "POST") return made(env, request);
   return new Response("Method not allowed", { status: 405, headers: { allow: "GET, POST" } });
@@ -77,11 +79,11 @@ export async function guestSignInResponse(env: Env, request: Request): Promise<R
 
 /** THE APP THAT TAKES A GUEST, for the request `next` goes on to (a path of this origin), or null.
  *  It is a hostname's own sign-in that this stack holds (./asking-app.ts: its resource, its
- *  redirect and its client agree), and it names guests. So the form exists only on the way to an
- *  app's own page, and after it the browser goes there and nowhere else. */
+ *  redirect and its client agree), and its app names guests. So the form exists only on the way
+ *  to an app's own page, and after it the browser goes there and nowhere else. */
 async function guestAppOf(env: Env, next: string): Promise<AskingApp | null> {
   const app = await askingAppOf(env, next);
-  return app && methodsAskedIn(env, next)?.includes("guest") ? app : null;
+  return app?.signIn.includes("guest") ? app : null;
 }
 
 async function form(env: Env, request: Request, url: URL): Promise<Response> {
@@ -92,12 +94,9 @@ async function form(env: Env, request: Request, url: URL): Promise<Response> {
   if (held) return held;
   // A browser that was shown this form already (a second tab, a reload) gets the same state
   // again, so the answer of either page counts.
-  const shown = await flowOf(env, request);
-  const state =
-    shown?.nonce === FLOW_MARK && shown.next === next ? shown.state : crypto.randomUUID();
-  const headers = new Headers({
-    "set-cookie": await flowCookie(env, { next, state, nonce: FLOW_MARK, verifier: "" }),
-  });
+  const shown = await guestFormOf(env, request);
+  const state = shown?.next === next ? shown.state : crypto.randomUUID();
+  const headers = new Headers({ "set-cookie": await guestFormCookie(env, { next, state }) });
   return formPage(app, state, headers);
 }
 
@@ -108,23 +107,24 @@ async function made(env: Env, request: Request): Promise<Response> {
     return errorPage("Send this from its own page.", 403);
   if (Number(request.headers.get("content-length")) > FORM_MAX_BYTES)
     return errorPage("This form is too long.", 413);
-  const flow = await flowOf(env, request);
+  const shown = await guestFormOf(env, request);
   const sent = await request.formData().catch(() => null);
-  const cleared = new Headers({ "set-cookie": clearFlowCookie });
-  if (!flow || flow.nonce !== FLOW_MARK || sent?.get("state") !== flow.state)
+  const cleared = new Headers({ "set-cookie": clearGuestFormCookie });
+  if (!shown || sent?.get("state") !== shown.state)
     return errorPage("This form is too old. Open the link you came by again.", 400, cleared, []);
-  const app = await guestAppOf(env, flow.next);
+  const app = await guestAppOf(env, shown.next);
   if (!app) return new Response("Not found", { status: 404 });
-  const held = await heldBefore(env, request, app, flow.next);
+  const held = await heldBefore(env, request, app, shown.next);
   if (held) return held;
   const name = displayNameOf(String(sent.get("name") || ""));
-  if (!name) return formPage(app, flow.state, new Headers(), "Type a name.");
-  const { newPerTenMinutes } = iterateConfigOf(env).login.methods.guest!;
-  if (!(await admitted(env, "guest", request, newPerTenMinutes)))
+  if (!name) return formPage(app, shown.state, new Headers(), "Type a name.");
+  if (!(await admitted(env, "guest", request, GUESTS_PER_TEN_MINUTES)))
     return guestRefusal("rate", app.host);
   // A new person at each form: the subject is this guest's alone, and its key reaches no address.
-  const subject = crypto.randomUUID().replaceAll("-", "");
-  const user = await linkBySubject(env.DB, { provider: "guest", subject });
+  const user = await userOf(
+    env.DB,
+    `${GUEST_KEY_PREFIX}${crypto.randomUUID().replaceAll("-", "")}`,
+  );
   console.info({ event: "auth.signed-in", method: "guest", userId: user.id });
   const facts = new AccountFacts();
   facts.add(user.id, {
@@ -132,12 +132,9 @@ async function made(env: Env, request: Request): Promise<Response> {
     payload: { userId: user.id, name, app: app.host, at: Date.now() },
     idempotencyKey: `account/guest-signed-in/${user.id}`,
   });
-  const headers = new Headers({ location: flow.next, "cache-control": "no-store" });
-  headers.append(
-    "set-cookie",
-    await guestSessionCookie(env, { id: user.id, key: user.email, name }),
-  );
-  headers.append("set-cookie", clearFlowCookie);
+  const headers = new Headers({ location: shown.next, "cache-control": "no-store" });
+  headers.append("set-cookie", await guestCookie(env, { id: user.id, key: user.email, name }));
+  headers.append("set-cookie", clearGuestFormCookie);
   return facts.on(new Response(null, { status: 303, headers }));
 }
 
@@ -150,14 +147,14 @@ async function heldBefore(
   app: AskingApp,
   next: string,
 ): Promise<Response | null> {
-  const signedIn = (await sessionOf(env, request)) || (await cloudflareSessionOf(env, request));
+  const signedIn = await personSessionOf(env, request);
   if (signedIn)
     return page(
       {
         ...appPage(app),
         status: 403,
         body: `<h1>You are signed in</h1>
-      <p class="center">You are signed in to ${text(iterateConfigOf(env).domain)} as <strong>${text(signedIn.email)}</strong>. ${text(app.name)} takes a guest here, and takes no sign-in of yours.</p>
+      <p class="center">You are signed in to ${text(configOf(env).controlPlaneHostname)} as <strong>${text(signedIn.email)}</strong>. ${text(app.name)} takes a guest here, and takes no sign-in of yours.</p>
       <div class="center">${otherAccountForm(next, "Sign out, and come in as a guest")}</div>`,
       },
       unlisted(),

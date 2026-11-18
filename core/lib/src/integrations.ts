@@ -7,14 +7,11 @@
 //   integration/connection-configured  one connection's row under a card: its account, status, buttons
 // A card may name another card as its `section`: that card is then a heading, and the cards that
 // name it stand under it.
-// A button's target is where the Dash sends the person: an absolute http(s) URL, or a place in the
-// mind (`routingSlug` and `path`) whose URL the Dash composes (iterate/mind-ingress
-// `mindPublicUrlOf`), so a package needs no origin when it registers, and the link follows a
-// rename or a primary hostname. An icon is an https URL or such a place: a file its package serves. The Dash renders what the mind's own code wrote, so every string
-// is capped and the fold keeps the state within INTEGRATION_STATE_MAX_BYTES, half the checkpoint
-// limit on a facet's state.
+// A button's target is where the Dash sends the person, and an icon is a file: each an absolute
+// URL. A page of the mind's own is `await itx.url({ hostname, path })`. The Dash renders what the
+// mind's own code wrote, so every string is capped and the fold keeps the state within
+// INTEGRATION_STATE_MAX_BYTES, half the checkpoint limit on a facet's state.
 import { z } from "zod";
-import { ROUTING_SLUG } from "./mind-ingress.ts";
 // the contract's module alone: stream/processor.ts reaches node:async_hooks through the cause, which
 // no browser has, and the Dash imports this module
 import { defineProcessorContract, type ProcessorState } from "./stream/contract.ts";
@@ -23,29 +20,20 @@ import { defineProcessorContract, type ProcessorState } from "./stream/contract.
  *  folds: `itx.cd(INTEGRATIONS_PATH).append(…)`. */
 export const INTEGRATIONS_PATH = "/integrations";
 
-/** An integration's name — a routing slug's shape, within a DNS label's length — is its card's key
- *  and the first half of each of its connections' keys (`<integration>/<connection>`). */
-const Slug = z.string().regex(ROUTING_SLUG).max(63);
+/** An integration's name — a DNS label that starts with a letter — is its card's key and the
+ *  first half of each of its connections' keys (`<integration>/<connection>`). */
+const Slug = z
+  .string()
+  .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/)
+  .max(63);
 
 /** The most UTF-8 bytes the state serializes to: a card or row that would take it past the budget
  *  is left out, so mind code cannot grow the facet's state past the checkpoint limit
  *  (iterate/stream/processor REDUCE_CHECKPOINT_TOO_LARGE, which would lock the facet) — half of it. */
 export const INTEGRATION_STATE_MAX_BYTES = 1024 * 1024;
 
-/** WHERE A BUTTON LEADS: an absolute http(s) URL, or a place in this mind, which the Dash turns
- *  into the URL of `routingSlug` (the apex when absent) at `path` on the mind's primary hostname,
- *  else under the deployment's ingress. */
-const IntegrationUrl = z.strictObject({ url: z.url({ protocol: /^https?$/ }).max(2048) });
-/** A place in the mind: `routingSlug`'s host (the apex when absent) at `path`. */
-const IntegrationPlace = z.strictObject({
-  routingSlug: Slug.optional(),
-  // one leading slash: `//host` would read as an authority when the URL is composed
-  path: z
-    .string()
-    .regex(/^\/(?!\/)/, "a path starts with a single /")
-    .max(512),
-});
-export const IntegrationTarget = z.union([IntegrationUrl, IntegrationPlace]);
+/** WHERE A BUTTON LEADS: an absolute http(s) URL. */
+export const IntegrationTarget = z.strictObject({ url: z.url({ protocol: /^https?$/ }).max(2048) });
 export type IntegrationTarget = z.infer<typeof IntegrationTarget>;
 
 /** How an integration or a connection is doing, in the package's own words. */
@@ -55,17 +43,15 @@ export const IntegrationStatus = z.strictObject({
 });
 export type IntegrationStatus = z.infer<typeof IntegrationStatus>;
 
-/** A button: its label and where it leads — a strict object either way, so a key the Dash would not
- *  render is refused like any other. */
-const Label = z.string().min(1).max(40);
-const IntegrationAction = z.union([
-  z.strictObject({ label: Label, ...IntegrationUrl.shape }),
-  z.strictObject({ label: Label, ...IntegrationPlace.shape }),
-]);
+/** A button: its label and where it leads. A strict object, so a key the Dash would not render is
+ *  refused like any other. */
+const IntegrationAction = z.strictObject({
+  label: z.string().min(1).max(40),
+  ...IntegrationTarget.shape,
+});
 
-/** A square image the Dash shows beside a title (the service's own mark): an https URL, or a
- *  place in this mind, a file that the package serves on its own host. */
-const IntegrationIcon = z.union([z.url({ protocol: /^https$/ }).max(2048), IntegrationPlace]);
+/** A square image the Dash shows beside a title (the service's own mark): an https URL. */
+const IntegrationIcon = z.url({ protocol: /^https$/ }).max(2048);
 export type IntegrationIcon = z.infer<typeof IntegrationIcon>;
 
 /** THE CARD a package registers: what the Dash shows for the integration, connected or not. */

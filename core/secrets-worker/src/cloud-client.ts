@@ -3,7 +3,9 @@
 // App's key stay at the Cloud (internal-packages/cloud-clients on `main`). The tokens are this deployment's
 // and stay here, in the secret. This file is everything the vault knows of the Cloud:
 //
-//   cloudClientOf   the client's public facts, read from the Cloud the stack's config names
+//   cloudOriginOf   a Cloud's address as a caller named it: an exact `https:` origin, or refused
+//                   (./secrets.ts, beside the pin's own parser)
+//   cloudClientOf   the client's public facts, read from the Cloud at that origin
 //   brokered        a request to the Cloud's broker, signed by the stack's own key
 //   askOf           whether a mind's request is an ask of the Cloud, about a client it connected
 //   cloudPinRefusal whether a secret that holds a token the Cloud mints is pinned within the
@@ -13,7 +15,14 @@
 // tokens: the access token as it came, the refresh token sealed so that only this deployment can
 // spend it, there. It knows which deployment asks by the statement on the request, signed by the
 // key the auth Worker keeps (`AuthService.sign`), whose public half the Cloud reads at
-// `iterate.<domain>/keys/stack.json`. No token of the Cloud's is held here, and none of ours there.
+// `https://<controlPlaneHostname>/keys/stack.json`. No token of the Cloud's is held here, and none of ours there.
+//
+// WHICH CLOUD, THE SECRET SAYS. No config of the stack names one. The code that makes a secret
+// names the Cloud's origin (`client: { cloud, origin }`, iterate/api `CloudClientName`), and the
+// secret's record keeps it: every request of that secret through a Cloud goes to that origin
+// alone (./secret/durable-object.ts). So a refresh token that one Cloud sealed is never sent to
+// another address, whatever a later call names. Another origin is another secret.
+import type { CloudClientName } from "iterate/api";
 import { codedError, leavingTheStack } from "iterate/lib";
 import { z } from "zod";
 import { originsOf, sha256Hex } from "./secrets.ts";
@@ -42,17 +51,9 @@ const CloudClient = z.object({
 export type CloudClient = z.infer<typeof CloudClient> & { name: string };
 
 /** The Cloud's client `name`, as the Cloud at `origin` publishes it. Every address the Cloud names
- *  for itself must be on `origin`: the config named that Cloud, and no other host gets a code or a
+ *  for itself must be on `origin`: the secret names that Cloud, and no other host gets a code or a
  *  sealed token. */
-export async function cloudClientOf(
-  origin: string | undefined,
-  name: string,
-): Promise<CloudClient> {
-  if (!origin)
-    throw codedError(
-      "INVALID_INPUT",
-      "secrets: this stack names no iterate Cloud (the config's cloud.origin), so it has no Cloud client",
-    );
+export async function cloudClientOf(origin: string, name: string): Promise<CloudClient> {
   // a redirect is no answer, and is refused below: workerd follows one or hands it back
   const answer = await fetch(`${origin}/.well-known/iterate-cloud`, { redirect: "manual" });
   const facts: unknown = answer.ok ? await answer.json().catch(() => null) : null;
@@ -83,12 +84,9 @@ export function cloudPinRefusal(urls: readonly string[], client: CloudClient): s
   return `secrets: the Cloud's client ${client.name} mints this secret's token, which goes to ${hosts.join(", ")} alone, not ${outside.join(", ")}`;
 }
 
-/** The Cloud at `origin` and the names of the clients it publishes; null for a stack that names
- *  no Cloud, and no client when the Cloud gave no list. */
-export async function cloudOffered(
-  origin: string | undefined,
-): Promise<{ origin: string; clients: string[] } | null> {
-  if (!origin) return null;
+/** The Cloud at `origin` and the names of the clients it publishes: none when the Cloud gave no
+ *  list. */
+export async function cloudOffered(origin: string): Promise<{ origin: string; clients: string[] }> {
   const answer = await fetch(`${origin}/.well-known/iterate-cloud`, { redirect: "manual" }).catch(
     () => null,
   );
@@ -107,18 +105,18 @@ export type StatementSigner = (input: {
 }) => Promise<{ statement: string; signature: unknown }>;
 
 /** A FETCH TOWARD THE CLOUD'S BROKER for the client `name`: the request must be for `origin`, the
- *  Cloud the config names, and goes with a statement over this very request (the client and the
+ *  Cloud the secret names, and goes with a statement over this very request (the client and the
  *  hash of the body), good for five minutes. `type` says what is asked: the event type the Cloud
  *  expects on that route. */
 export function brokered(
   sign: StatementSigner,
-  origin: string | undefined,
+  origin: string,
   name: string,
   type: string,
 ): (request: Request) => Promise<Response> {
   return async (request) => {
-    if (!origin || new URL(request.url).origin !== origin)
-      throw new Error(`the broker ${new URL(request.url).origin} is not this stack's Cloud`);
+    if (new URL(request.url).origin !== origin)
+      throw new Error(`the broker ${new URL(request.url).origin} is not this secret's Cloud`);
     const body = await request.clone().text();
     const signed = await sign({
       path: "/",
@@ -140,14 +138,17 @@ export function brokered(
 }
 
 /** AN ASK OF THE CLOUD: a request from the mind to `<cloud>/clients/<name>/ask/…`, naming a
- *  secret that was connected through that client (an answer to a message the Cloud's bot relayed,
+ *  secret that was connected through that client of that Cloud (`client`, as the secret keeps
+ *  it) (an answer to a message the Cloud's bot relayed,
  *  say). It uses no token: the placeholder only says which connection asks, so the request leaves
  *  with no header that names the secret, signed by the stack's key. The Cloud's other routes, where
  *  a code is exchanged and a token is minted, are the vault's own to call, never the mind's.
- *  Answers the client's name, or null for any other request. */
-export function askOf(request: Request, origin: string | undefined, name: string | undefined) {
+ *  Answers the client, or null for any other request: one to another Cloud's address too. */
+export function askOf(request: Request, client: CloudClientName | undefined) {
   const url = new URL(request.url);
-  return origin && name && url.origin === origin && url.pathname.startsWith(`/clients/${name}/ask/`)
-    ? name
+  return client &&
+    url.origin === client.origin &&
+    url.pathname.startsWith(`/clients/${client.cloud}/ask/`)
+    ? client
     : null;
 }

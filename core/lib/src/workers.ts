@@ -1,14 +1,30 @@
 // Types, and the few names two Workers must share: no Worker imports another Worker's code.
 import type { ActRule, GateAnswer } from "./acts.ts";
-import type { SecretOperation, SecretRefresh } from "./api.ts";
+import type {
+  ControlPlaneSessionApi,
+  SecretOperation,
+  SecretRefresh,
+  StackClientName,
+} from "./api.ts";
 import type { Facts } from "./facts.ts";
-import type { Principal, SignInMethod } from "./principal.ts";
+import type { Lender, Principal, SignInMethod } from "./principal.ts";
 import type { Envelope, Statement } from "./signed.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
+
+/** WHO A SESSION OF THE CONTROL PLANE'S API IS, as the boundary learned it at `authenticate`
+ *  (./api.ts `ControlPlaneApi`). The mind gets this and never the credential: a mind that held a
+ *  member's token could use it again. A member comes with a principal, and with the grant that
+ *  the token acts through (a browser's session cookie has none). A key comes as its `Lender`. */
+export type ApiCaller = { principal: Principal; grant?: string } | { lender: Lender };
 
 export interface MindTarget {
   /** The mind trusts the boundary's stamp because only the boundary can reach it. */
   fetch(request: Request): Promise<Response>;
+  /** THE MIND'S OWN API FOR ONE SESSION OF `who`, which the boundary hands to its client as
+   *  `session.mind`: for a member the mind's root context, `/` (./api.ts `IterateContextApi`), and
+   *  for a key the one lend that it may make. The answer is a capability, held as a Workers RPC
+   *  stub: letting go of it ends what the session lent. */
+  api(who: ApiCaller): unknown;
   /** Idempotent by each event's `idempotencyKey`. `fromAuth`: the events are the auth Worker's own
    *  answer, so the `source.signer` one names is the key the auth Worker verified. In any other
    *  call an event's signer is dropped. */
@@ -26,11 +42,12 @@ export type TokenIdentity = {
   grant: string;
   /** Unix seconds. */
   expiresAt: number;
-  /** Always true for the API, the MCP server and `/provide`; a mind hostname's token answers for
-   *  anyone signed in. False for a key's token. */
+  /** Always true for the API, the MCP server and the right to hand in the mind
+   *  (./mind-api.ts `mindProvideConnectResourceOf`); a mind hostname's token answers for anyone
+   *  signed in. False for a key's token. */
   member: boolean;
-  /** How the person signed in to get the grant: absent for a key's token, and for a grant made
-   *  before grants kept it. */
+  /** How the person signed in, whose session got the token's grant. A key's token has none: it is
+   *  no person's. */
   method?: SignInMethod;
   /** The name a guest typed (`method` "guest"), which is all a guest has: their `principal` has no
    *  email. Absent for everyone else. */
@@ -43,12 +60,13 @@ export type TokenIdentity = {
 };
 
 export interface Door {
-  /** A request for a hostname of the mind's own domain is answered in the boundary: the global
-   *  `fetch` fails inside the zone. */
+  /** A request for a hostname of one of the mind's own zones is answered in the boundary: the
+   *  global `fetch` fails inside a zone. */
   fetch(request: Request): Promise<Response>;
   secret: SecretCall;
   listSecrets: SecretsService["listSecrets"];
   cloud: SecretsService["cloud"];
+  hasStackClient: SecretsService["hasStackClient"];
   refreshGrants: SecretsService["refreshGrants"];
   /** A mail that an approval rule names waits in the vault's gate (./acts.ts). The first call
    *  answers `gate.state: "held"` at once; a call with `wait` waits for the member's answer.
@@ -72,7 +90,7 @@ export interface Door {
   signForMind(
     input: Parameters<AuthService["sign"]>[0] & { mind: string },
   ): ReturnType<AuthService["sign"]>;
-  /** Refused in a stack without the telemetry part. */
+  /** The mind's telemetry, through the telemetry Worker (`TelemetryService`). */
   queryTelemetry(sql: string, hours?: number): Promise<TelemetryAnswer>;
   sendEvents(events: StreamEvent[]): Promise<void>;
   writeMetrics(points: MetricPoint[]): Promise<void>;
@@ -92,12 +110,29 @@ export interface TelemetryService {
   writeMetrics(points: MetricPoint[]): Promise<void>;
 }
 
-/** One connection carries both directions, and it ends when the token does. */
-export interface ProvideSession {
-  /** Disposing of the handle ends the lend; `lendEnded` settles, with why, when the other side ends it. */
-  provide(mind: MindTarget): Promise<{ [Symbol.dispose](): void; lendEnded(): Promise<string> }>;
-  door: Door;
+/** ONE AUTHENTICATED SESSION OF THE CONTROL PLANE'S API, whole (./api.ts `ControlPlaneSessionApi`
+ *  is what a client of a mind reads of it). What it offers follows from what its credential is
+ *  for (./api.ts `ControlPlaneApi.authenticate`):
+ *
+ *      a member's token, or a member's cookie    `mind`, as that member
+ *      a key's token                             `mind`, the key's one lend
+ *      the token of the right to hand in a mind  `provideExternalMind`, and nothing else
+ */
+export interface ControlPlaneSession extends ControlPlaneSessionApi {
+  /** THE MIND RUNS ELSEWHERE AND HANDS IN HOW TO REACH IT. Only a token of that right calls it
+   *  (./mind-api.ts `mindProvideConnectResourceOf`), on a session whose dial said so
+   *  (./mind-api.ts `MIND_PROVIDE_EXTERNAL_MIND_HEADER`). The boundary calls `connect(door)`
+   *  once and sends every request, mail, act and session of the mind to the `MindTarget` that it
+   *  answers, until the session ends, which it does when the token does. A newer session's call
+   *  takes the mind over. `door` is the function's for its call alone: `door.dup()` keeps it. */
+  provideExternalMind(connect: (door: Door) => MindTarget): void;
 }
+
+/** THE CLOSE CODE OF A SESSION WHOSE MIND ANOTHER SESSION TOOK OVER (`provideExternalMind`
+ *  of a newer one), from the range that RFC 6455 section 7.4.2 leaves for private use. The
+ *  process that gets it does not dial again: two that did would end each other's link, and every
+ *  visitor's socket with it, about once a second. */
+export const MIND_TAKEN_OVER_CLOSE_CODE = 4001;
 
 export interface AuthService {
   fetch(request: Request): Promise<Response>;
@@ -105,20 +140,41 @@ export interface AuthService {
    *  resource but a hostname, when its person is no member now. */
   whoIs(token: string, resource: string): Promise<TokenIdentity | null>;
   /** A public client whose one redirect is `https://<host>${HOST_SESSION_PREFIX}callback`. Refused
-   *  for a host outside the mind's domain, or the platform's. */
+   *  for a host outside the mind's zones, and for the control-plane hostname. */
   hostClient(host: string): Promise<string>;
   isMember(email: string): Promise<boolean>;
-  /** `cookie` is the request's `Cookie` header on the issuer's origin; null when signed out. */
-  browserSession(
-    cookie: string | null,
-  ): Promise<{ userId: string; email: string; member: boolean } | null>;
+  /** `cookie` is the request's `Cookie` header on the issuer's origin; null when signed out.
+   *  `expiresAt`: when the browser's session ends, in Unix seconds, as a token's. */
+  browserSession(cookie: string | null): Promise<{
+    userId: string;
+    email: string;
+    member: boolean;
+    method: SignInMethod;
+    expiresAt: number;
+  } | null>;
+  /** The mind's identity log as `GET /.well-known/iterate` answers it on `hostname`
+   *  (./mind-identity-log.ts `PublishedLog`), for the boundary, which answers that path itself on
+   *  a hostname of the mind's own code: 404 unless the log's last record lists `hostname`.
+   *  `after`: the hash of the record that the answer starts after, or null for the whole log. */
+  identityLog(hostname: string, after: string | null): Promise<Response>;
+  /** THE IDENTITY FACTS THAT `/` DOES NOT HOLD YET, as the auth Worker's rows say: the accepted
+   *  records of every mind id, each id's in the order of its log, then the refusals. A few at
+   *  a time. FOR THE BOUNDARY ALONE, as is the call below: it appends each fact's event on `/`
+   *  and then says so. Nothing in the auth Worker waits for that: a record is accepted, and
+   *  the stack may sign, by the rows alone. No Door method reaches either call, so no mind's own Worker, and no mind
+   *  that runs elsewhere, can say what is stored. */
+  identityFactsToDeliver(): Promise<IdentityFact[]>;
+  /** The events of these facts are stored on `/`: the boundary's append of them has resolved. */
+  identityFactsDelivered(ids: string[]): Promise<void>;
   /** A statement counts once: a second `verify` of it is refused. Its `path` and `type` are the
    *  business of whoever acts on it. */
   verify(envelope: Envelope): Promise<Verified>;
-  /** `expiresInSeconds`: five minutes by default, a day at most. `verify` never takes the result: it
-   *  is for others, at `GET iterate.<domain>/keys/stack.json`. `mind`: the mind the statement is
-   *  for, which then names this mind as `from`. Without it, the statement's `mind` is this mind's
-   *  own domain, as the Cloud reads it. */
+  /** Signed with the stack's ML-DSA-65 working key, and refused until the mind's identity lists
+   *  it. `expiresInSeconds`: five minutes by default, a day at most. `verify` never takes the
+   *  result: it is for others, who read the key at
+   *  `GET https://<controlPlaneHostname>/keys/stack.json`. `mind`: the
+   *  mind the statement is for, which then names this mind as `from`. Without it, the statement's
+   *  `mind` is this mind's own control-plane hostname, as the Cloud reads it. */
   sign(input: {
     mind?: string;
     path: string;
@@ -140,6 +196,13 @@ export interface AuthService {
     next?: string;
   }): Promise<{ draft: string; signAt: string; expires: number }>;
 }
+
+/** One fact of the mind's identity on its way to `/`: the event to append there as the platform,
+ *  and the id by which the auth Worker is told that it is stored. `mind`: an accepted record's
+ *  mind id. The facts of one mind id come in the order of its log, and `/` folds a record only
+ *  after the one before it, so none of them is appended after one that could not be. A
+ *  refusal has no place in an order, and no `mind`. */
+export type IdentityFact = { id: string; mind?: string; event: StreamEventInput };
 
 export type Verified =
   | {
@@ -183,8 +246,10 @@ export type SecretDescription = {
   set: boolean;
   urls?: string[];
   refresh?: SecretRefresh["kind"];
-  /** The iterate Cloud's client that brokers the secret's refresh, by the Cloud's name for it. */
+  /** The iterate Cloud's client that brokers the secret's refresh, by the Cloud's name for it,
+   *  and that Cloud's origin, which the secret has kept since it was made. */
   cloud?: string;
+  cloudOrigin?: string;
   public?: Record<string, string>;
   placement?: "header" | "url";
   operations?: SecretOperation[];
@@ -248,20 +313,23 @@ export interface SecretsService {
   fetch(request: Request): Promise<Response>;
   secret: SecretCall;
   /** THE SECRETS THAT ARE SET, IN ONE CALL: the vault keeps their paths, so it asks about no
-   *  secret that was deleted. `known` is the mind's own list of the paths it ever had: a vault
-   *  that held secrets before it kept its list asks about those once, and never reads it after. */
-  listSecrets(known?: string[]): Promise<SecretDescription[]>;
-  /** THE STACK'S ITERATE CLOUD, as its config names it, and the clients that Cloud publishes, by
-   *  name: what `beginOAuth(path, { client: { cloud } })` can go through. Null for a stack that
-   *  names no Cloud. No client when the Cloud gave no list. */
-  cloud(): Promise<{ origin: string; clients: string[] } | null>;
+   *  secret that was deleted. */
+  listSecrets(): Promise<SecretDescription[]>;
+  /** THE ITERATE CLOUD AT `origin` (an exact `https:` origin, no path), and the clients that
+   *  Cloud publishes, by name: what `beginOAuth(path, { client: { cloud, origin } })` can go
+   *  through. The caller names the Cloud: no config of the stack does. No client when the Cloud
+   *  gave no list. */
+  cloud(origin: string): Promise<{ origin: string; clients: string[] }>;
+  /** WHETHER THE STACK HAS ITS OWN OAUTH CLIENT AT CLOUDFLARE (./api.ts `StackClientName`): what
+   *  `beginOAuth(path, { client: { stack: "cloudflare" } })` goes through. Never its id or its
+   *  secret, which stay in the secrets Worker's config. */
+  hasStackClient(name: StackClientName["stack"]): Promise<boolean>;
   /** THE PERSONS' GRANTS THAT THE ITERATE CLOUD BROKERS, REFRESHED ON WORD, whichever client of
    *  the Cloud a grant is of: one row for each, and the facts for the mind's log.
-   *  core/secrets-worker/src/grant-refresh.ts says why these grants need a refresh on word.
-   *  `known` is as for `listSecrets`. One call refreshes twenty grants at most, by path, and
-   *  answers `next` when there are more: the caller calls again with it as `after`, so every
-   *  grant is reached. */
-  refreshGrants(known?: string[], after?: string): Promise<SecretAnswer<GrantsRefreshed>>;
+   *  core/secrets-worker/src/grant-refresh.ts says why these grants need a refresh on word. One
+   *  call refreshes twenty grants at most, by path, and answers `next` when there are more: the
+   *  caller calls again with it as `after`, so every grant is reached. */
+  refreshGrants(after?: string): Promise<SecretAnswer<GrantsRefreshed>>;
   /** THE GATE FOR ACTS (./acts.ts): what it says of a mail or of a verb's call, by its exact
    *  text. `from` is the caller's claim of where the act began. With `wait`, a held act's answer
    *  comes when a member decided, or after five minutes. */
@@ -278,7 +346,7 @@ export interface SecretsService {
   actRules(): Promise<{ locked: boolean; rules: ActRule[] }>;
 }
 
-/** `from` must be an address on the mind's domain. */
+/** `from` must be one address at a zone of the mind. */
 export type OutboundEmail = {
   from: { email: string; name: string };
   to: string[];

@@ -1,10 +1,10 @@
 // The authority over one secret. The mind's `/secrets/<name>` context is its record, which the
 // mind's own code can withhold from or forge into, so nothing here reads it.
 import { DurableObject } from "cloudflare:workers";
-import type { SecretMaterial, SecretOperation, SecretRefresh } from "iterate/api";
+import type { CloudClientName, SecretMaterial, SecretOperation, SecretRefresh } from "iterate/api";
 import { codedError, ITERATE_CAUSE_HEADER, leavingTheStack } from "iterate/lib";
 import { type Facts, withFacts } from "iterate/facts";
-import { platformOriginOf } from "iterate/mind-api";
+import { controlPlaneOriginOf, zoneOf } from "iterate/mind-config";
 import {
   assertSecretPath,
   SECRET_OAUTH_CALLBACK_PATH,
@@ -26,12 +26,8 @@ import { z } from "zod";
 import type { Envelope } from "iterate/signed";
 import type { PageCaller } from "../callback-page.ts";
 import { askOf, brokered, cloudClientOf, cloudPinRefusal } from "../cloud-client.ts";
-import type { Env } from "../env.ts";
-import {
-  decryptLegacySecretMaterial,
-  decryptSecretMaterial,
-  encryptSecretMaterial,
-} from "../secret-at-rest.ts";
+import { configOf, type Env } from "../env.ts";
+import { decryptSecretMaterial, encryptSecretMaterial } from "../secret-at-rest.ts";
 import {
   accountOf,
   beginSecretOAuth,
@@ -42,8 +38,16 @@ import {
 } from "../secret-oauth.ts";
 import { startLinkOf } from "../secret-oauth-start.ts";
 import {
+  isStackTokenEndpoint,
+  stackClientFor,
+  stackClientSecretOf,
+  stackGrantRefusal,
+} from "../stack-client.ts";
+import {
   accessTokenEnded,
   clientSecretReferenceOf,
+  type ClientSecretOf,
+  cloudOriginOf,
   githubAppJwt,
   hmacSha256Hex,
   isRecord,
@@ -53,9 +57,10 @@ import {
   pinRefusal,
   publicFieldsOf,
   secretUseOf,
-  UNLIMITED_USE,
   type SecretUse,
   SecretRefused,
+  REFRESH_READS,
+  refreshOnlyFieldRefusal,
   refreshSecretMaterial,
   RefreshUnanswered,
   secretMaterialStringOf,
@@ -82,13 +87,7 @@ import {
   ruleNames,
 } from "../approval.ts";
 import { INDEX, SET } from "../approvals-index.ts";
-import {
-  LegacySealedCell,
-  type SealedCell,
-  type SecretFact,
-  type Signer,
-  StoredSecret,
-} from "./contract.ts";
+import { type SealedCell, type SecretFact, type Signer, StoredSecret } from "./contract.ts";
 import { lendRefusal, operationRefusal, placementRefusal } from "./refusals.ts";
 import { runExchangeCode } from "./exchange-jail.ts";
 import {
@@ -116,20 +115,12 @@ type Current = StoredSecret;
 const OPERATIONS_PER_MINUTE = 300;
 const FALSE_VERIFICATIONS_PER_MINUTE = 20;
 
-// A cell sealed before records named `lendTo` lends to every path when it answers every operation,
-// as an import does, and else to none.
-const useOf = (cell: SealedCell): SecretUse => {
-  if (!cell.placement) return UNLIMITED_USE;
-  const operations = cell.operations || [];
-  const imported = operations.length === UNLIMITED_USE.operations.length;
-  return {
-    placement: cell.placement,
-    operations,
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- absent is a cell sealed before `lendTo`; null is every path, an import's
-    lendTo: cell.lendTo !== undefined ? cell.lendTo : imported ? null : [],
-    statementPaths: cell.statementPaths,
-  };
-};
+const useOf = ({ placement, operations, lendTo, statementPaths }: SealedCell): SecretUse => ({
+  placement,
+  operations,
+  lendTo,
+  statementPaths,
+});
 
 // `from` is the kernel's claim, never checked.
 export type HeldRow = {
@@ -312,7 +303,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   #key(): string {
-    return this.env.SECRETS_AT_REST_KEY;
+    return configOf(this.env).atRestKey.exposeSecret();
   }
 
   // The pages' own calls and another secret's `clientSecretFor` are this Worker's alone: no door
@@ -397,15 +388,17 @@ export class SecretDurableObject extends DurableObject<Env> {
     const current = this.#current();
     if (!current) return { path, set: false };
     const { cell } = current;
-    // whose client refreshes it: iterate Cloud's, by the Cloud's name for the client
+    // whose client refreshes it: an iterate Cloud's, by the Cloud's name for the client, and the
+    // Cloud's origin as the secret keeps it
     const client = cell.refresh && "client" in cell.refresh ? cell.refresh.client : undefined;
-    const cloud = client && "cloud" in client ? client.cloud : undefined;
+    const cloud = client && "cloud" in client ? client : undefined;
     return {
       path,
       set: true,
       urls: cell.urls,
       ...(cell.refresh && { refresh: cell.refresh.kind }),
-      cloud,
+      cloud: cloud?.cloud,
+      cloudOrigin: cloud?.origin,
       public: current.public,
       ...useOf(cell),
     };
@@ -415,7 +408,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   // The import writes over any value held: the old mind may have rotated a refresh token since.
   /** A SEALED CELL, TAKEN IN: one that this vault handed out (`exportSealed`), which opens under
    *  this stack's own key with its own binding and comes back with the use and the public fields
-   *  it had; or one of the frozen platform, which gets every use. */
+   *  it had. */
   async #importSealed(
     path: string,
     // the JSON text the proof was made over: its bytes, not its keys' order, crossed every hop
@@ -423,8 +416,8 @@ export class SecretDurableObject extends DurableObject<Env> {
     proof: string,
   ): Promise<SecretAnswer<{ path: string }>> {
     this.#pathOf(path);
-    const sealed = z.union([StoredSecret, LegacySealedCell]).parse(JSON.parse(cell));
-    const nonce = "cell" in sealed ? sealed.cell.nonce : sealed.nonce;
+    const sealed = StoredSecret.parse(JSON.parse(cell));
+    const { nonce } = sealed.cell;
     // The proof first: a call that proves nothing keeps nothing. Were the cell's nonce kept before
     // this check, a caller with no key could name a cell and shut its own import out for good, and
     // fill this object with nonces.
@@ -449,24 +442,12 @@ export class SecretDurableObject extends DurableObject<Env> {
       let record: SecretRecord;
       let publicFields: Record<string, string> | undefined;
       try {
-        record =
-          "cell" in sealed
-            ? await this.#recordOf(path, sealed.cell)
-            : {
-                material: await decryptLegacySecretMaterial(
-                  sealed.material,
-                  { context: sealed.context, urls: sealed.urls, nonce: sealed.nonce },
-                  this.#key(),
-                ),
-                urls: sealed.urls,
-                refresh: sealed.refresh,
-                ...UNLIMITED_USE,
-              };
+        record = await this.#recordOf(path, sealed.cell);
         // `PUBLIC` IS BESIDE THE CELL AND OUTSIDE ITS SEAL, so whoever changes a backup can write
         // another. Each field is taken only when the material has it with that very value. A
         // changed copy can then neither say another value, nor name a secret field to make it
         // public: it would have to know that field's value.
-        if ("cell" in sealed && sealed.public) {
+        if (sealed.public) {
           const given = Object.entries(sealed.public);
           publicFields = publicFieldsOf(
             record.material,
@@ -657,12 +638,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         refresh: cell.refresh,
         version: cell.version,
         nonce: cell.nonce,
-        use: cell.placement && {
-          placement: cell.placement,
-          operations: cell.operations || [],
-          lendTo: cell.lendTo,
-          statementPaths: cell.statementPaths,
-        },
+        use: useOf(cell),
       },
       this.#key(),
     );
@@ -829,7 +805,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     const { publicKey, keyId } = await signingKeyOf(material);
     const record = normalizeSecretRecord(material, {
       // never sent anywhere (`fetch` refuses a signing secret), and pinned all the same
-      urls: [platformOriginOf(this.env.DOMAIN)],
+      urls: [controlPlaneOriginOf(configOf(this.env))],
       operations: ["signStatement"],
       statementPaths: options.statementPaths,
     });
@@ -866,16 +842,19 @@ export class SecretDurableObject extends DurableObject<Env> {
         `secrets: ${path} holds no secret — collect the client secret there first (itx.secrets.collectFromUser)`,
       );
     const { lendTo } = useOf(current.cell);
-    const refusal = this.#rule()
-      ? // a secret that waits for approval is spent with one alone
-        `secrets: ${path} has an approval rule, so it is lent to no other secret's token request`
-      : current.cell.operations?.includes("signStatement")
-        ? `secrets: ${path} is a signing key, so it is lent to no other secret`
-        : lendTo && !lendTo.includes(borrower)
-          ? lendRefusal(path, borrower, lendTo)
-          : !originPinned(origin, current.cell.urls)
-            ? `secrets: the secret ${path} is pinned to ${current.cell.urls.join(", ")}, not ${origin} — so it is never sent there as a client secret`
-            : null;
+    const refreshOnly = refreshOnlyFieldRefusal(current.cell.refresh, path, input.field);
+    const refusal = refreshOnly
+      ? `secrets: ${refreshOnly}`
+      : this.#rule()
+        ? // a secret that waits for approval is spent with one alone
+          `secrets: ${path} has an approval rule, so it is lent to no other secret's token request`
+        : current.cell.operations?.includes("signStatement")
+          ? `secrets: ${path} is a signing key, so it is lent to no other secret`
+          : lendTo && !lendTo.includes(borrower)
+            ? lendRefusal(path, borrower, lendTo)
+            : !originPinned(origin, current.cell.urls)
+              ? `secrets: the secret ${path} is pinned to ${current.cell.urls.join(", ")}, not ${origin} — so it is never sent there as a client secret`
+              : null;
     const outcome = refusal ? "refused" : "answered";
     console.info({ event: "secret.operated", path, verb: "clientSecretFor", borrower, outcome });
     if (refusal)
@@ -912,11 +891,14 @@ export class SecretDurableObject extends DurableObject<Env> {
     );
   }
 
-  #brokered(name: string, asks: "token" | "installation-token" | "ask") {
+  /** A fetch toward the broker of the secret's own Cloud: `client` is what the secret (or the
+   *  attempt that makes it) keeps, never what a call names. A request for any other origin
+   *  throws before anything is signed or sent (../cloud-client.ts `brokered`). */
+  #brokered(client: CloudClientName, asks: "token" | "installation-token" | "ask") {
     return brokered(
       (input) => this.env.AUTH.sign(input),
-      this.env.CLOUD_ORIGIN,
-      name,
+      client.origin,
+      client.cloud,
       `events.iterate.com/integration/${asks}-requested`,
     );
   }
@@ -940,27 +922,45 @@ export class SecretDurableObject extends DurableObject<Env> {
     };
   }
 
+  /** The secret of the stack's own client at Cloudflare, out of this Worker's config, whatever a
+   *  record holds in its place (../stack-client.ts). */
+  #stackClientSecretOf(): ClientSecretOf {
+    return async () => stackClientSecretOf(configOf(this.env).cloudflareClient);
+  }
+
   async #beginOAuth(
     path: string,
     options: unknown,
   ): Promise<SecretAnswer<{ authorizationUrl: string; nonce: string }> | SecretRefusal> {
     this.#pathOf(path);
-    const domain = this.env.DOMAIN;
-    const platformOrigin = platformOriginOf(domain);
+    const config = configOf(this.env);
+    const controlPlaneOrigin = controlPlaneOriginOf(config);
+    // `next` may be on the control-plane hostname, or on any hostname of any zone of the mind
     const next = isRecord(options) && typeof options.next === "string" ? options.next : null;
     const nextOrigin = next && URL.canParse(next) ? new URL(next) : null;
     const mindOrigin =
-      nextOrigin?.protocol === "https:" &&
-      (nextOrigin.hostname === domain || nextOrigin.hostname.endsWith(`.${domain}`))
+      nextOrigin?.protocol === "https:" && zoneOf(config, nextOrigin.hostname)
         ? nextOrigin.origin
         : null;
-    const client = isRecord(options) && isRecord(options.client) ? options.client.cloud : null;
-    const cloud =
-      typeof client === "string" ? await cloudClientOf(this.env.CLOUD_ORIGIN, client) : null;
+    // a client of an iterate Cloud's: the caller names the Cloud, by its origin
+    const client = isRecord(options) && isRecord(options.client) ? options.client : null;
+    const origin =
+      typeof client?.cloud === "string"
+        ? cloudOriginOf(client.origin, "secrets.beginOAuth: client.origin")
+        : null;
+    const cloud = origin
+      ? { ...(await cloudClientOf(origin, String(client?.cloud))), origin }
+      : null;
+    // the stack's own client at Cloudflare: this Worker's config holds it, and names its scopes
+    const stack =
+      client && "stack" in client
+        ? stackClientFor(config.cloudflareClient, client, isRecord(options) ? options : {})
+        : null;
     const normalized = normalizeSecretOAuth(
       options,
-      [platformOrigin, ...(mindOrigin ? [mindOrigin] : [])],
+      [controlPlaneOrigin, ...(mindOrigin ? [mindOrigin] : [])],
       cloud,
+      stack,
     );
     const nonce = crypto.randomUUID();
     // a placeholder that cannot resolve is refused now, before a human is sent to consent
@@ -972,7 +972,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
     const { pending, authorizationUrl } = await beginSecretOAuth(normalized, {
       // a Cloud client's one redirect URI is the Cloud's callback, which sends the code on here
-      redirectUri: cloud?.redirectUri || `${platformOrigin}${SECRET_OAUTH_CALLBACK_PATH}`,
+      redirectUri: cloud?.redirectUri || `${controlPlaneOrigin}${SECRET_OAUTH_CALLBACK_PATH}`,
       state: stateOf({ path, nonce }),
       nonce,
     });
@@ -982,7 +982,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       authorizationUrl,
     });
     return {
-      result: { authorizationUrl: startLinkOf(platformOrigin, path, nonce), nonce },
+      result: { authorizationUrl: startLinkOf(controlPlaneOrigin, path, nonce), nonce },
       facts: [],
     };
   }
@@ -1003,7 +1003,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     const pending = this.ctx.storage.kv.get<PendingAttempt>("pending");
     if (!pending || pending.nonce !== input.nonce || pending.until <= Date.now()) return null;
     const { urls, use, anyoneWithLink, straightToProvider, cloud } = pending.options;
-    const callback = `${platformOriginOf(this.env.DOMAIN)}${SECRET_OAUTH_CALLBACK_PATH}`;
+    const callback = `${controlPlaneOriginOf(configOf(this.env))}${SECRET_OAUTH_CALLBACK_PATH}`;
     return {
       authorizationUrl: pending.authorizationUrl,
       urls,
@@ -1087,27 +1087,59 @@ export class SecretDurableObject extends DurableObject<Env> {
       throw new Error("the secret was changed since this attempt began — begin again");
     }
     let scopes: string[] = [];
+    let granted: string | undefined;
     const record = await completeSecretOAuth(
       pending,
       input.code,
       async (exchange) => {
-        const { cloud } = pending.options;
-        if (!cloud && !originPinned(exchange.url, pending.options.urls))
+        const { cloud, stack } = pending.options;
+        // a Cloud's broker checks its own origin; the stack's client has one token endpoint
+        const allowed =
+          !!cloud ||
+          (stack
+            ? isStackTokenEndpoint(exchange.url)
+            : originPinned(exchange.url, pending.options.urls));
+        if (!allowed)
           throw new Error(`the token endpoint ${new URL(exchange.url).origin} is outside the pin`);
-        const response = await (cloud ? this.#brokered(cloud.name, "token") : dispatch)(exchange);
+        const response = await (
+          cloud ? this.#brokered({ cloud: cloud.name, origin: cloud.origin }, "token") : dispatch
+        )(exchange);
         const answer: unknown = await response
           .clone()
           .json()
           .catch(() => null);
-        scopes =
-          isRecord(answer) && typeof answer.scope === "string"
-            ? answer.scope.split(/[\s,]+/).filter(Boolean)
-            : (pending.options.scope || "").split(/\s+/).filter(Boolean);
+        granted = isRecord(answer) && typeof answer.scope === "string" ? answer.scope : undefined;
+        scopes = granted
+          ? granted.split(/[\s,]+/).filter(Boolean)
+          : (pending.options.scope || "").split(/\s+/).filter(Boolean);
         return response;
       },
-      this.#clientSecretOf(path),
+      pending.options.stack ? this.#stackClientSecretOf() : this.#clientSecretOf(path),
       input.cloudProof,
     );
+    // a grant through the stack's own client is checked here, and nothing is kept unless it
+    // passes: only the list's scopes, and the one account that the stack runs in
+    if (pending.options.stack) {
+      const accessToken = secretMaterialStringOf(record.material, "accessToken");
+      const refusal = await stackGrantRefusal(
+        granted,
+        configOf(this.env).cloudflareAccountId,
+        (at) =>
+          dispatch(
+            new Request(`https://api.cloudflare.com/client/v4${at}`, {
+              headers: { authorization: `Bearer ${accessToken}` },
+              redirect: "manual",
+            }),
+          ),
+      );
+      if (refusal) {
+        this.ctx.storage.kv.put<PendingAttempt>("pending", {
+          ...pending,
+          ended: { status: "failed", error: refusal, at: Date.now() },
+        });
+        throw new Error(refusal);
+      }
+    }
     let account: { id: string; name: string | null } | undefined;
     const lookup = pending.options.account;
     if (lookup) {
@@ -1169,7 +1201,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       ...(collected.redirectUrl && { redirectUrl: new URL(collected.redirectUrl).href }),
       until: Date.now() + COLLECT_TTL_MS,
     });
-    const url = new URL("/secrets/collect", platformOriginOf(this.env.DOMAIN));
+    const url = new URL("/secrets/collect", controlPlaneOriginOf(configOf(this.env)));
     url.searchParams.set("path", path);
     url.searchParams.set("nonce", nonce);
     return { path, url: url.href };
@@ -1565,9 +1597,8 @@ export class SecretDurableObject extends DurableObject<Env> {
       const connected = this.#current()?.cell.refresh;
       return askOf(
         sent,
-        this.env.CLOUD_ORIGIN,
         connected?.kind === "oauth-refresh-token" && connected.client && "cloud" in connected.client
-          ? connected.client.cloud
+          ? connected.client
           : undefined,
       );
     };
@@ -1677,11 +1708,13 @@ export class SecretDurableObject extends DurableObject<Env> {
         return answered(response);
       }
       // Refused here too, not only at egress: this object is the boundary that holds the bytes.
-      const resolve = (named: string) => {
+      const resolve = (named: string, field: string | undefined) => {
         if (named !== path)
           throw new SecretRefused(
             `itx.fetch: getSecret(${JSON.stringify(named)}) does not belong to the secret ${path}`,
           );
+        const refreshOnly = stored && refreshOnlyFieldRefusal(stored.record.refresh, path, field);
+        if (refreshOnly) throw new SecretRefused(`itx.fetch: ${refreshOnly}`);
         return stored?.record.material || null;
       };
       // The cast: workers-types' Request<Cf> against the bare Request the pure half takes.
@@ -1804,12 +1837,32 @@ export class SecretDurableObject extends DurableObject<Env> {
           source: refresh.source,
           material: record.material,
         });
+      else if (refresh.client && "stack" in refresh.client)
+        // The stack's own client at Cloudflare: its token endpoint is outside the pin, so the
+        // request goes to that one address or nowhere, with the secret out of the config.
+        next = await refreshSecretMaterial(
+          refresh,
+          record.material,
+          (exchange) => {
+            if (!isStackTokenEndpoint(exchange.url))
+              throw new Error(
+                `the exchange endpoint ${new URL(exchange.url).origin} is not the stack's client's`,
+              );
+            console.info({
+              event: "secret.refresh-request",
+              path,
+              url: new URL(exchange.url).origin,
+            });
+            return dispatch(exchange);
+          },
+          this.#stackClientSecretOf(),
+        );
       else
         next = await refreshSecretMaterial(
           refresh,
           record.material,
           refresh.client && "cloud" in refresh.client
-            ? this.#brokered(refresh.client.cloud, "token")
+            ? this.#brokered(refresh.client, "token")
             : pinnedDispatch,
           this.#clientSecretOf(path),
         );
@@ -1856,8 +1909,8 @@ export class SecretDurableObject extends DurableObject<Env> {
   ): Promise<string> {
     // iterate Cloud's App key stays at the Cloud, which mints the token
     if ("cloud" in refresh.client) {
-      const { cloud } = refresh.client;
-      const client = await cloudClientOf(this.env.CLOUD_ORIGIN, cloud);
+      const { cloud, origin } = refresh.client;
+      const client = await cloudClientOf(origin, cloud);
       const { installationTokenEndpoint } = client;
       if (!installationTokenEndpoint) throw new Error(`${refresh.kind}: ${cloud} is no GitHub App`);
       // here and not at `set`, so it holds for every cell, an imported one too, and asks nothing
@@ -1865,7 +1918,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       const refusal = cloudPinRefusal(record.urls, client);
       if (refusal) throw new Error(`${refresh.kind}: ${refusal}`);
       const minted = await this.#brokered(
-        cloud,
+        refresh.client,
         "installation-token",
       )(
         new Request(installationTokenEndpoint, {
@@ -1879,13 +1932,13 @@ export class SecretDurableObject extends DurableObject<Env> {
         throw new Error(`${refresh.kind}: the Cloud answered ${minted.status} with no token`);
       return answer.token;
     }
-    const material = isRecord(record.material) ? record.material : {};
-    if (typeof material.appId !== "string" || typeof material.privateKey !== "string")
+    const material = REFRESH_READS[refresh.kind].safeParse(record.material);
+    if (!material.success)
       throw new Error(`${refresh.kind}: the secret's material holds no "appId" and "privateKey"`);
     const clientSecretOf = this.#clientSecretOf(path);
     const app = {
-      appId: await clientSecretOf(material.appId, refresh.apiOrigin),
-      privateKey: await clientSecretOf(material.privateKey, refresh.apiOrigin),
+      appId: await clientSecretOf(material.data.appId, refresh.apiOrigin),
+      privateKey: await clientSecretOf(material.data.privateKey, refresh.apiOrigin),
     };
     const jwt = await githubAppJwt(app.appId, app.privateKey);
     const response = await pinnedDispatch(

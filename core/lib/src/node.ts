@@ -1,6 +1,7 @@
-// node.ts — ONE NODE CLIENT FOR A MIND, addressed by its domain (iterate/mind-api): what the
-// `iterate` CLI and scripts use, and the token a home lab dials with (`mindToken`).
-// `connectMind` answers the mind's root `itx` over capnweb at `iterate.<address>/api`. A
+// node.ts — ONE NODE CLIENT FOR A MIND, addressed by its control-plane hostname (iterate/mind-api): what
+// the `iterate` CLI and scripts use, and the token a home lab dials with (`mindToken`).
+// `connectMind` answers the mind's root `itx` over capnweb at `https://<address>/api`: the `mind`
+// of the session that the root answers to `authenticate(token)` (iterate/api `ControlPlaneApi`). A
 // sign-in finds the mind's issuer by discovery (iterate/oauth `discoverMind`), runs once (the
 // loopback code flow with PKCE, or the device flow when the issuer offers it and there is no browser
 // here), keeps the session per resource in the CLI's config directory (cli/config.ts, mode 600) and
@@ -9,9 +10,10 @@
 import { hostname } from "node:os";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { ResponseBodyError } from "oauth4webapi";
-import WebSocket from "ws";
-import type { IterateContextApi } from "./api.ts";
-import { type DiscoveredMind, resolveMind } from "./client/oauth.ts";
+import WebSocket, { type ClientOptions } from "ws";
+import type { ControlPlaneApi, IterateContextApi } from "./api.ts";
+import { connectedMind } from "./client/connected-mind.ts";
+import { type DiscoveredMind, discoverMind } from "./client/oauth.ts";
 import { startHeartbeat } from "./client/heartbeat.ts";
 import { isCodingAgent } from "./cli/coding-agent.ts";
 import { readSession, removeSession, writeSession, type StoredSession } from "./cli/config.ts";
@@ -32,18 +34,20 @@ import {
 const printToStderr = (line: string) => console.error(line);
 
 /** A TYPED ADDRESS AS A MIND'S (iterate/mind-api `mindAddressOf`: lowercased, a scheme, a
- *  path and a trailing dot dropped), or an error that says why it is none. Every command and the
- *  home lab resolve an address here, so a session is stored and found under one spelling. */
+ *  path and a trailing dot dropped, `example.com` read as `iterate.example.com`), or an error
+ *  that says why it is none. A command, a script and the home lab read what a person typed
+ *  here, ONCE. Every other function of this file takes the address that this answers, as it is:
+ *  a session is stored and found under it, and a bearer is sent to it and to no other host. */
 export function addressOf(typed: string): string {
   const parsed = mindAddressOf(typed);
   if ("error" in parsed) throw new Error(parsed.error);
   return parsed.address;
 }
 
-/** THE MIND AT A TYPED ADDRESS, `example.com` or `iterate.example.com` alike, as discovery
- *  finds it (iterate/oauth `resolveMind`). */
-export async function discoverAddress(typed: string): Promise<DiscoveredMind> {
-  const found = await resolveMind(addressOf(typed));
+/** THE MIND AT `address`, as discovery finds it (iterate/oauth `discoverMind`), or an error that
+ *  says why it found none. The address is taken as it is: `addressOf` reads what a person typed. */
+export async function discoveredMind(address: string): Promise<DiscoveredMind> {
+  const found = await discoverMind(address);
   if ("error" in found) throw new Error(found.error);
   return found;
 }
@@ -98,7 +102,8 @@ export async function openForSignIn(url: URL, print: (line: string) => void) {
   });
 }
 
-/** A LIVE BEARER FOR `resource` of the mind at `address`: `token`, else ITERATE_MIND_TOKEN,
+/** A LIVE BEARER FOR `resource` of the mind at `address` (as it is: `addressOf` reads what a
+ *  person typed): `token`, else ITERATE_MIND_TOKEN,
  *  else the stored session, refreshed when it ends within the minute. With none, or one the issuer
  *  refuses to refresh, a sign-in when `signIn` allows it; else an error that says how to sign in. */
 export async function mindToken(input: {
@@ -131,7 +136,7 @@ export async function mindToken(input: {
   }
   if (input.signIn === false)
     throw new Error(`Not signed in to ${input.address}. Run \`iterate login ${input.address}\`.`);
-  const mind = await discoverAddress(input.address);
+  const mind = await discoveredMind(input.address);
   return (await signInToMind(mind, resource, input.signIn)).token;
 }
 
@@ -153,11 +158,12 @@ export type MindConnection = Disposable & {
   closed: Promise<{ code: number; reason: string }>;
 };
 
-/** CONNECT TO THE MIND AT `address`: a bearer for its API (`mindToken`), a WebSocket to
- *  `iterate.<address>/api` with the bearer on the upgrade request, where ingress checks it and
- *  stamps the caller, and the session's root, the mind's `itx` as that caller. A refused bearer
- *  is a 401 on the upgrade, before any socket. A heartbeat ends a connection whose peer stopped
- *  answering. */
+/** CONNECT TO THE MIND AT `address`, its control-plane hostname as it is (`addressOf` reads what a
+ *  person typed, before this): a bearer for its API (`mindToken`), a WebSocket to
+ *  `https://<address>/api`, and on its root `authenticate(token).mind`, the mind's `itx` as the
+ *  token's member. The token goes in that call and in no header: the boundary ends the session
+ *  and checks it there. A refused token fails the first call, before this answers. A heartbeat
+ *  ends a connection whose peer stopped answering. */
 // Explicit return type keeps declaration emit from expanding capnweb's recursive mapped types.
 export async function connectMind(input: {
   address: string;
@@ -165,19 +171,19 @@ export async function connectMind(input: {
   signIn?: SignInOptions | false;
   /** the heartbeat's timing — a test's, client/heartbeat.ts `HEARTBEAT` otherwise */
   heartbeat?: { intervalMs: number; deadAfterMs: number };
+  /** how the socket is opened — a test's, which sees where the socket goes; `ws` otherwise */
+  openSocket?: (url: string, options: ClientOptions) => WebSocket;
 }): Promise<MindConnection> {
-  const address = addressOf(input.address);
+  const { address } = input;
   const resource = mindApiUrlOf(address);
-  // In a sandbox of this mind, with no token named, no bearer goes: the sandbox's egress serves the
+  // In a sandbox of this mind, with no token named, no token goes: the sandbox's egress serves the
   // API as the sandbox's own context (iterate/mind-api `ownSandboxOf`). No sign-in is tried there.
   const sandbox = input.token ? null : ownSandboxOf(process.env, address);
   const token = sandbox
-    ? null
+    ? undefined
     : await mindToken({ address, resource, token: input.token, signIn: input.signIn });
-  const socket = new WebSocket(resource.replace(/^http/, "ws"), {
-    handshakeTimeout: 15_000,
-    ...(token && { headers: { authorization: `Bearer ${token}` } }),
-  });
+  const openSocket = input.openSocket || ((url, options) => new WebSocket(url, options));
+  const socket = openSocket(resource.replace(/^http/, "ws"), { handshakeTimeout: 15_000 });
   // A sandbox's refused upgrade says why: its 401 is no call to sign in.
   let refused = "";
   if (sandbox)
@@ -191,7 +197,8 @@ export async function connectMind(input: {
       socket.terminate();
     });
   // ws implements the DOM event/send/close interface consumed by capnweb.
-  const itx = newWebSocketRpcSession<IterateContextApi>(socket as unknown as globalThis.WebSocket);
+  const api = newWebSocketRpcSession<ControlPlaneApi>(socket as unknown as globalThis.WebSocket);
+  const itx = connectedMind(api, token);
   let dead = "";
   const closed = new Promise<{ code: number; reason: string }>((resolve) => {
     socket.once("close", (code, reason) => resolve({ code, reason: dead || reason.toString() }));
@@ -199,7 +206,7 @@ export async function connectMind(input: {
   // The transport surfaces failures through RPC and `closed`; ws also emits an EventEmitter error.
   socket.on("error", () => {});
   try {
-    // the first call proves the socket and the bearer
+    // the first call proves the socket and the token: it goes with `authenticate`, in one round trip
     await withTimeout(Promise.resolve(itx.whoami()), 20_000, `Connecting to ${address}`);
     const heartbeat = startHeartbeat({
       beat: () => itx.whoami(),
@@ -217,6 +224,7 @@ export async function connectMind(input: {
       [Symbol.dispose]() {
         try {
           itx[Symbol.dispose]();
+          api[Symbol.dispose]();
         } finally {
           socket.close();
         }
@@ -225,6 +233,7 @@ export async function connectMind(input: {
   } catch (error) {
     try {
       itx[Symbol.dispose]();
+      api[Symbol.dispose]();
     } finally {
       socket.terminate();
     }

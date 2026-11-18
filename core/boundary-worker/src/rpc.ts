@@ -17,7 +17,10 @@ import {
   reportIssue,
 } from "iterate/lib";
 import { SECRET_USE_HEADER, secretPathsReferenced } from "iterate/secret-placeholder";
+import { type MindConfig, zoneOf, zoneOfMailAddress } from "iterate/mind-config";
 import type { Door as DoorService, SecretVerb, SecretVerbs } from "iterate/workers";
+import { z } from "zod";
+import { boundaryConfigOf } from "./config.ts";
 import type { DoorEnv } from "./env.ts";
 import { ownRequestHeaders } from "./own-request.ts";
 
@@ -37,16 +40,23 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
       headers.set(SECRET_USE_HEADER, paths[0]);
       return this.env.SECRET_USE.fetch(new Request(outbound, { headers }));
     }
-    const domain = this.env.DOMAIN;
-    const { hostname } = new URL(outbound.url);
-    const ownDomain = hostname === domain || hostname.endsWith(`.${domain}`);
-    // The global `fetch` fails inside the zone: the boundary's own handler answers, and strips the
-    // mind's stamps. No answer keeps a facts header: the mind would append what it says.
+    // A hostname of one of the mind's zones is the mind's own. No answer keeps a facts header: the
+    // mind would append what it says.
+    const url = new URL(outbound.url);
+    const ownZone = zoneOf(boundaryConfigOf(this.env), url.hostname);
+    if (!ownZone) return withFacts(await fetch(leavingTheStack(outbound)), []);
+    // The boundary's handler refuses a hostname that ends with a dot (421): the mind's own
+    // request goes in as the same DNS name without it.
+    url.hostname = url.hostname.replace(/\.$/, "");
+    // The global `fetch` fails inside a zone of the stack: the boundary's own handler answers, and
+    // strips the mind's stamps. The cast: the boundary declares no `GlobalProps`, so `ctx.exports`
+    // has no typed member, and the default export of a Worker's main module is its fetch handler.
     const inbound = (this.ctx.exports as unknown as { default: Fetcher }).default;
-    if (!ownDomain) return withFacts(await fetch(leavingTheStack(outbound)), []);
     // The mind's own request to one of its hosts is nobody's (./own-request.ts).
     return withFacts(
-      await inbound.fetch(new Request(outbound, { headers: ownRequestHeaders(outbound.headers) })),
+      await inbound.fetch(
+        new Request(url, new Request(outbound, { headers: ownRequestHeaders(outbound.headers) })),
+      ),
       [],
     );
   }
@@ -71,16 +81,20 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     return this.env.SECRETS.actRules();
   }
 
-  async listSecrets(known?: Parameters<DoorService["listSecrets"]>[0]) {
-    return this.env.SECRETS.listSecrets(known);
+  async listSecrets() {
+    return this.env.SECRETS.listSecrets();
   }
 
-  async cloud() {
-    return this.env.SECRETS.cloud();
+  async cloud(origin: Parameters<DoorService["cloud"]>[0]) {
+    return this.env.SECRETS.cloud(origin);
   }
 
-  async refreshGrants(...[known, after]: Parameters<DoorService["refreshGrants"]>) {
-    return this.env.SECRETS.refreshGrants(known, after);
+  async hasStackClient(name: Parameters<DoorService["hasStackClient"]>[0]) {
+    return this.env.SECRETS.hasStackClient(name);
+  }
+
+  async refreshGrants(after?: string) {
+    return this.env.SECRETS.refreshGrants(after);
   }
 
   async setActRules(input: Parameters<DoorService["setActRules"]>[0]) {
@@ -92,9 +106,8 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
   }
 
   async sendEmail(...[message, options]: Parameters<DoorService["sendEmail"]>) {
-    const domain = this.env.DOMAIN;
-    if (!message.from.email.toLowerCase().endsWith(`@${domain}`))
-      return { sent: false as const, error: `mail leaves from an address @${domain} alone` };
+    const refused = senderRefusal(message.from.email, boundaryConfigOf(this.env));
+    if (refused) return { sent: false as const, error: refused };
     const odd = recipientsRefusal([...message.to, ...message.cc]);
     if (odd) return { sent: false as const, error: odd };
     // THE GATE FIRST (iterate/acts): the mail as its approver reads it is made here, from what is
@@ -175,23 +188,21 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
   }
 
   async queryTelemetry(...[sql, hours]: Parameters<DoorService["queryTelemetry"]>) {
-    return this.#telemetry().query(sql, hours);
+    return this.env.TELEMETRY.query(sql, hours);
   }
 
   async sendEvents(events: Parameters<DoorService["sendEvents"]>[0]) {
-    return this.#telemetry().sendEvents(events);
+    return this.env.TELEMETRY.sendEvents(events);
   }
 
   async writeMetrics(points: Parameters<DoorService["writeMetrics"]>[0]) {
-    return this.#telemetry().writeMetrics(points);
+    return this.env.TELEMETRY.writeMetrics(points);
   }
+}
 
-  #telemetry() {
-    if (!this.env.TELEMETRY)
-      throw codedError(
-        "UNAVAILABLE",
-        'telemetry: this stack has no telemetry part (core/alchemy README, "Telemetry")',
-      );
-    return this.env.TELEMETRY;
-  }
+/** WHY A MAIL MAY NOT LEAVE FROM `from`, or null. The sender is ONE mailbox at a zone of the
+ *  mind: a text with two `@` or a display name is none, whatever its last part says. */
+export function senderRefusal(from: string, config: Pick<MindConfig, "zones">): string | null {
+  if (z.email().safeParse(from).success && zoneOfMailAddress(config, from)) return null;
+  return `mail leaves from one address at a zone of the mind alone: ${config.zones.join(", ")}`;
 }

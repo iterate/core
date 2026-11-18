@@ -1,12 +1,12 @@
-// The door of a provide session (provided-door.ts) over a real capnweb session: what the home lab
-// reads, and what happens to the answer that the boundary's own call got.
+// The door of a mind that runs elsewhere (provided-door.ts) over a real capnweb session: what the
+// home lab reads, and what happens to the answer that the boundary's own call got.
 import { newMessagePortRpcSession, RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { ProvidedDoor } from "./provided-door.ts";
 
 test("an answer that the home lab has read is released, so the vault's session behind it ends", async () => {
   const door = pretendDoor();
-  using session = sessionWith(new ProvidedDoor(door));
+  using session = sessionWith(new ProvidedDoor(door, () => true));
 
   expect(await session.secret("/secrets/a", "describe")).toEqual({ path: "/secrets/a", set: true });
   expect(door.open()).toBe(0);
@@ -21,8 +21,25 @@ test("an answer that the home lab has read is released, so the vault's session b
 });
 
 test("a refusal reaches the home lab as the door threw it", async () => {
-  using session = sessionWith(new ProvidedDoor(pretendDoor()));
+  using session = sessionWith(new ProvidedDoor(pretendDoor(), () => true));
   await expect(session.act({ text: "no act" })).rejects.toThrow("the gate refuses this");
+});
+
+test("a call after the session's end is refused, and the boundary's Door is not asked", async () => {
+  const door = pretendDoor();
+  let open = true;
+  using session = sessionWith(new ProvidedDoor(door, () => open));
+  expect(await session.isMember("ada@example.com")).toBe(true);
+
+  open = false;
+  await expect(session.isMember("ada@example.com")).rejects.toMatchObject({
+    code: "FORBIDDEN",
+    message: "the session that was given this door has ended",
+  });
+  await expect(session.secret("/secrets/a", "describe")).rejects.toMatchObject({
+    code: "FORBIDDEN",
+  });
+  expect(door).toMatchObject({ asked: 0 });
 });
 
 test("capnweb alone never releases such an answer: it stays open as long as the session", async () => {
@@ -47,7 +64,7 @@ type Calls = {
   act(input: { text: string }): Promise<unknown>;
 };
 
-/** A capnweb session whose far end serves `main`, as the provide session serves its door. */
+/** A capnweb session whose far end serves `main`, as the link's session serves its door. */
 function sessionWith(main: RpcTarget) {
   const { port1, port2 } = new MessageChannel();
   newMessagePortRpcSession(port1, main);

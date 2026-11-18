@@ -1,17 +1,24 @@
 // The app of the mind that a sign-in is for: which requests name one, what an app says of itself,
 // and what the sign-in pages then show.
+import type { SignInMethod } from "iterate/principal";
 import { expect, test, vi } from "vitest";
-import { appOf, appTile, askingAppOf, saidIn } from "./asking-app.ts";
+import { appOf, appTile, askingAppOf, saidIn, signInOf } from "./asking-app.ts";
 import { emailSignInResponse } from "./email-sign-in.ts";
 import type { Env } from "./env.ts";
-import { authResponse } from "./http.ts";
 import { hostCallbackOf, hostClientOf, oauthHelpers } from "./oauth.ts";
 import { appSignIn, chooserPage, consentPage, signInPage } from "./pages.ts";
+import { configVars } from "./test-support.ts";
 
+const MIND = "iterate.example.com";
+// the mind's one zone, where its apps' hosts are
 const DOMAIN = "example.com";
 const HOST = `guestbook.${DOMAIN}`;
 const ORIGIN = `https://${HOST}`;
-const MANIFEST = `${ORIGIN}/manifest.webmanifest`;
+const DESCRIPTION = `${ORIGIN}/.well-known/iterate-app`;
+// how the people of an app sign in when the app names no method: for anyone, and for members. A
+// member signs in with a passkey and nothing else, at an app for members as at the control plane.
+const FOR_ANYONE = ["email", "passkey"];
+const FOR_MEMBERS = ["passkey"];
 
 test("an app is read from a sign-in's request only when the stack holds all three of its parts", async () => {
   const stack = stackWith({ [HOST]: { name: "Guestbook", icon: `${ORIGIN}/icon.svg` } });
@@ -33,7 +40,7 @@ test("an app is read from a sign-in's request only when the stack holds all thre
     name: "Guestbook",
     icon: `${ORIGIN}/icon.svg`,
     members: false,
-    methods: [],
+    signIn: FOR_ANYONE,
   });
   // a path on the host is the host, as the authorization endpoint reads it
   expect(await askingAppOf(stack.env, next({ resource: `${ORIGIN}/mcp` }))).toMatchObject({
@@ -45,7 +52,7 @@ test("an app is read from a sign-in's request only when the stack holds all thre
     next({ redirect_uri: "https://elsewhere.test/callback" }),
     next({ redirect_uri: `https://docs.${DOMAIN}/.iterate/callback` }),
     next({ resource: "https://guestbook.elsewhere.test" }),
-    next({ resource: `https://iterate.${DOMAIN}` }),
+    next({ resource: `https://${MIND}` }),
     // a host of the mind that never asked for a sign-in has no client
     next({
       resource: `https://docs.${DOMAIN}`,
@@ -58,83 +65,94 @@ test("an app is read from a sign-in's request only when the stack holds all thre
     expect(await askingAppOf(stack.env, forged)).toBeNull();
 });
 
+const NOTHING = { name: null, icon: null, members: false, signIn: FOR_ANYONE };
+
 test.for([
   {
-    name: "its name, and an icon beside the manifest",
-    manifest: { name: "Guestbook", icons: [{ src: "/icon.svg", sizes: "any" }] },
+    name: "its name, and its icon as a path on its own origin",
+    description: { name: "Guestbook", icon: "/icon.svg" },
     said: { name: "Guestbook", icon: `${ORIGIN}/icon.svg` },
   },
   {
-    name: "a short name when it has no other, and a relative icon",
-    manifest: { short_name: "Book", icons: [{ src: "icons/a.png" }] },
-    said: { name: "Book", icon: `${ORIGIN}/icons/a.png` },
+    name: "a path that names another host is no icon, and the name still counts",
+    description: { name: "Guestbook", icon: "//elsewhere.test/logo.png" },
+    said: { name: "Guestbook" },
   },
   {
-    name: "an icon elsewhere does not count: the next one of its own origin does",
-    manifest: {
-      name: "Guestbook",
-      icons: [
-        { src: "https://elsewhere.test/logo.png" },
-        { src: `http://${HOST}/plain.png` },
-        { src: `https://docs.${DOMAIN}/icon.svg` },
-        { src: `${ORIGIN}/own.svg` },
-      ],
-    },
-    said: { name: "Guestbook", icon: `${ORIGIN}/own.svg` },
+    name: "a backslash names another host as a slash does",
+    description: { name: "Guestbook", icon: "/\\elsewhere.test/logo.png" },
+    said: { name: "Guestbook" },
   },
   {
     name: "a name is one line of sixty characters",
-    manifest: { name: `  Guest\nbook ${"x".repeat(80)}` },
-    said: { name: `Guest book ${"x".repeat(49)}`, icon: null },
+    description: { name: `  Guest\nbook ${"x".repeat(80)}` },
+    said: { name: `Guest book ${"x".repeat(49)}` },
   },
   {
-    name: "an app for the mind's members says so",
-    manifest: { name: "Dash", iterate: { for: "members" } },
-    said: { name: "Dash", icon: null, members: true },
+    name: "an app for the mind's members says so, and its people sign in by a passkey alone",
+    description: { name: "Dash", for: "members" },
+    said: { name: "Dash", members: true, signIn: FOR_MEMBERS },
   },
   {
-    name: "any other word is not 'for members'",
-    manifest: { name: "Dash", iterate: { for: "everyone" } },
-    said: { name: "Dash", icon: null },
+    name: "an app names its sign-in methods, in its order",
+    description: { name: "Guestbook", signIn: ["passkey", "email"] },
+    said: { name: "Guestbook", signIn: ["passkey", "email"] },
   },
   {
-    name: "another shape of iterate's member is passed over, and the name still counts",
-    manifest: { name: "Dash", iterate: "members" },
-    said: { name: "Dash", icon: null },
+    name: "an app that names the passkey alone",
+    description: { name: "Guestbook", signIn: ["passkey"] },
+    said: { name: "Guestbook", signIn: ["passkey"] },
   },
   {
-    name: "the ways it takes: those iterate knows, once each, in its order",
-    manifest: {
-      name: "Cloud",
-      iterate: { methods: ["cloudflare", "carrier-pigeon", "passkey", "cloudflare"] },
-    },
-    said: { name: "Cloud", icon: null, methods: ["cloudflare", "passkey"] },
+    // taken as it is written: the app's own code decides
+    name: "an app for members that names the mailed code first",
+    description: { name: "Dash", for: "members", signIn: ["email", "passkey"] },
+    said: { name: "Dash", members: true, signIn: ["email", "passkey"] },
   },
   {
-    name: "ways that are no list are passed over, and 'for members' still counts",
-    manifest: { name: "Dash", iterate: { for: "members", methods: "cloudflare" } },
-    said: { name: "Dash", icon: null, members: true },
+    name: "a method named twice is named once",
+    description: { name: "Guestbook", signIn: ["email", "email"] },
+    said: { name: "Guestbook", signIn: ["email"] },
   },
-  { name: "no name and no icon", manifest: {}, said: { name: null, icon: null } },
-  { name: "not an object", manifest: ["Guestbook"], said: { name: null, icon: null } },
-  { name: "a name that is no text", manifest: { name: 7 }, said: { name: null, icon: null } },
-])("what a manifest says: $name", ({ manifest, said }) => {
-  expect(saidIn(JSON.stringify(manifest), MANIFEST)).toEqual({
-    members: false,
-    methods: [],
-    ...said,
-  });
+  {
+    name: "what a browser's manifest would say is passed over",
+    description: { name: "Guestbook", short_name: "Book", icons: [{ src: "/other.svg" }] },
+    said: { name: "Guestbook" },
+  },
+  // a text that is no description says nothing at all: the app is its host, for anyone
+  {
+    name: "a method that this issuer does not know",
+    description: { name: "G", signIn: ["email", "google"] },
+    said: {},
+  },
+  { name: "an empty list of methods", description: { name: "G", signIn: [] }, said: {} },
+  { name: "methods that are no list", description: { name: "G", signIn: "email" }, said: {} },
+  {
+    name: "any other word than 'members'",
+    description: { name: "Dash", for: "everyone" },
+    said: {},
+  },
+  {
+    name: "an icon that is no path",
+    description: { name: "G", icon: "https://elsewhere.test/logo.png" },
+    said: {},
+  },
+  { name: "no name", description: { icon: "/icon.svg", signIn: ["passkey"] }, said: {} },
+  { name: "a name that is no text", description: { name: 7 }, said: {} },
+  { name: "not an object", description: ["Guestbook"], said: {} },
+])("what an app's description says: $name", ({ description, said }) => {
+  expect(saidIn(JSON.stringify(description), DESCRIPTION)).toEqual({ ...NOTHING, ...said });
 });
 
-test("a manifest that is no JSON, is empty or is too long says nothing", () => {
+test("a description that is no JSON, is empty or is too long says nothing", () => {
   for (const text of ["", "<!doctype html>", `{"name":"${"x".repeat(20_000)}"}`])
-    expect(saidIn(text, MANIFEST)).toEqual({ name: null, icon: null, members: false, methods: [] });
+    expect(saidIn(text, DESCRIPTION)).toEqual(NOTHING);
 });
 
-test("the manifest is read once in five minutes, with no redirect followed, and the host's own client then holds the app's name and icon", async () => {
+test("the description is read at its well-known path once in five minutes, with no redirect followed, and the host's own client then holds the app's name and icon", async () => {
   const stack = stackWith({});
   const client = await hostClientOf(stack.env, HOST);
-  using web = answers({ name: "Guestbook", icons: [{ src: "/icon.svg" }] });
+  using web = answers({ name: "Guestbook", icon: "/icon.svg", signIn: ["passkey"] });
   const before = Date.now();
   const app = await appOf(stack.env, ORIGIN);
   expect(app).toEqual({
@@ -143,10 +161,11 @@ test("the manifest is read once in five minutes, with no redirect followed, and 
     name: "Guestbook",
     icon: `${ORIGIN}/icon.svg`,
     members: false,
-    methods: [],
+    signIn: ["passkey"],
   });
   expect(await appOf(stack.env, ORIGIN)).toEqual(app);
-  expect(web).toMatchObject({ asked: [[MANIFEST, "manual"]] });
+  // the one address that is asked: no web app manifest is read
+  expect(web).toMatchObject({ asked: [[DESCRIPTION, "manual"]] });
   expect(stack.askedAgainIn(HOST, before)).toBe("5 minutes");
   // five minutes later it is asked again, and no sooner
   stack.due(HOST);
@@ -178,11 +197,7 @@ test.for([
     const stack = stackWith({});
     const client = await hostClientOf(stack.env, HOST);
     {
-      using _web = answers({
-        name: "Guestbook",
-        icons: [{ src: "/icon.svg" }],
-        iterate: { for: "members", methods: ["cloudflare"] },
-      });
+      using _web = answers({ name: "Guestbook", icon: "/icon.svg", for: "members" });
       await appOf(stack.env, ORIGIN);
     }
     // five minutes later the app is asked again, and it is down
@@ -196,7 +211,7 @@ test.for([
       name: "Guestbook",
       icon: `${ORIGIN}/icon.svg`,
       members: true,
-      methods: ["cloudflare"],
+      signIn: FOR_MEMBERS,
     });
     expect(stack.askedAgainIn(HOST, before)).toBe("1 minute");
     // and the client that the list of sign-ins reads still names the app
@@ -207,11 +222,11 @@ test.for([
   },
 );
 
-test("an app that answers with no manifest any more has said so: it is its host again", async () => {
+test("an app that answers with no description any more has said so: it is its host again, for anyone", async () => {
   const stack = stackWith({});
   const client = await hostClientOf(stack.env, HOST);
   {
-    using _web = answers({ name: "Guestbook", icons: [{ src: "/icon.svg" }] });
+    using _web = answers({ name: "Guestbook", icon: "/icon.svg", signIn: ["passkey"] });
     await appOf(stack.env, ORIGIN);
   }
   stack.due(HOST);
@@ -222,7 +237,7 @@ test("an app that answers with no manifest any more has said so: it is its host 
     name: HOST,
     icon: null,
     members: false,
-    methods: [],
+    signIn: FOR_ANYONE,
   });
   expect(await oauthHelpers(stack.env, ORIGIN).lookupClient(client)).toMatchObject({
     clientName: HOST,
@@ -232,18 +247,55 @@ test("an app that answers with no manifest any more has said so: it is its host 
 test("an app that says nothing, or whose host does not answer, is its host and its initials, and that is kept too", async () => {
   const stack = stackWith({});
   using web = answers(null);
-  const app = await appOf(stack.env, ORIGIN);
+  const app = (await appOf(stack.env, ORIGIN))!;
   expect(app).toEqual({
     host: HOST,
     origin: ORIGIN,
     name: HOST,
     icon: null,
     members: false,
-    methods: [],
+    signIn: FOR_ANYONE,
   });
   expect(appTile(app)).toBe(`<div class="tile" data-app-mark="initials">GU</div>`);
   await appOf(stack.env, ORIGIN);
   expect(web.asked).toHaveLength(1);
+});
+
+test("a hostname that the stack holds nothing of is counted before it is asked: past the count it is not asked, and nothing is kept", async () => {
+  const stack = stackWith({});
+  using web = answers({ name: "Guestbook" });
+  stack.admits(false);
+  expect(await appOf(stack.env, ORIGIN)).toBeNull();
+  expect(await signInOf(stack.env, `/oauth2/auth?resource=${ORIGIN}`)).toBeNull();
+  expect(web).toMatchObject({ asked: [] });
+  // a host with a client of its own is an app that the stack knows: it is asked whatever the count
+  stack.admits(true);
+  await hostClientOf(stack.env, HOST);
+  stack.admits(false);
+  expect(await appOf(stack.env, ORIGIN)).toMatchObject({ name: "Guestbook" });
+});
+
+test("the methods of a sign-in are those of the app that its authorization is for, whichever client asks; the app is named for its own sign-in alone", async () => {
+  const stack = stackWith({
+    [HOST]: { name: "Guestbook", icon: null, signIn: ["passkey"] },
+  });
+  const client = await hostClientOf(stack.env, HOST);
+  const own = `/oauth2/auth?${new URLSearchParams({ client_id: client, redirect_uri: hostCallbackOf(ORIGIN), resource: ORIGIN })}`;
+  expect(await signInOf(stack.env, own)).toMatchObject({
+    app: { name: "Guestbook" },
+    methods: ["passkey"],
+  });
+  // an MCP client that signs a person in to the app: its own client and callback, the app's server
+  const mcp = `/oauth2/auth?${new URLSearchParams({ client_id: "an-mcp-client", redirect_uri: "http://127.0.0.1:4100/callback", resource: `${ORIGIN}/mcp` })}`;
+  expect(await signInOf(stack.env, mcp)).toEqual({ app: null, methods: ["passkey"] });
+  // the control plane's own sign-in, and one for the mind's API or its MCP server
+  for (const next of [
+    "/",
+    "/keys",
+    `/oauth2/auth?resource=https://${MIND}/mcp`,
+    "https://elsewhere.test/",
+  ])
+    expect(await signInOf(stack.env, next), next).toEqual({ app: null, methods: FOR_MEMBERS });
 });
 
 test("the mailed code's page for an app's sign-in names the host it signs in to, under the app's own icon", async () => {
@@ -252,26 +304,29 @@ test("the mailed code's page for an app's sign-in names the host it signs in to,
   const next = `/oauth2/auth?${new URLSearchParams({ client_id: client, redirect_uri: hostCallbackOf(ORIGIN), resource: ORIGIN })}`;
   const answer = await emailSignInResponse(
     stack.env,
-    new Request(`https://iterate.${DOMAIN}/sign-in/email?${new URLSearchParams({ next })}`),
+    new Request(`https://${MIND}/sign-in/email?${new URLSearchParams({ next })}`),
   );
   const html = await answer!.text();
-  expect(html).toContain(`<title>Sign in to ${HOST}</title>`);
-  // the app's icon is the card's one mark: no pair, and no mark of iterate's beside it
+  expect(html).toContain(`<title>Sign in to Guestbook</title>`);
+  // the app's icon is the card's one mark: no pair, and no mark of iterate's beside it. The
+  // heading is the app's own name, and the line under it the host, which no app chooses.
   expect(html).toContain(
-    `<main class="centered"><div class="tile" data-app-mark="icon"><img src="${ORIGIN}/icon.svg" alt="" referrerpolicy="no-referrer"></div><h1>Sign in to ${HOST}</h1>`,
+    `<main class="centered"><div class="tile" data-app-mark="icon"><img src="${ORIGIN}/icon.svg" alt="" referrerpolicy="no-referrer"></div><h1>Sign in to Guestbook</h1><p class="muted center">${HOST}</p>`,
   );
   expect(html).not.toMatch(/class="asks"|class="mark"|class="about"|is an app of/);
   // the mind's own line of who gets a code is not on an app's page
   expect(html).not.toContain("Anyone can sign in");
   // the one image the page may load is on the app's own origin
   expect(answer!.headers.get("content-security-policy")).toContain(`img-src ${ORIGIN}`);
-  // a sign-in for the mind itself is the mind's page, with no image at all
+  // a sign-in for the mind itself has no mailed code: its address page leads to its sign-in page
   const plain = await emailSignInResponse(
     stack.env,
-    new Request(`https://iterate.${DOMAIN}/sign-in/email?next=%2Fkeys`),
+    new Request(`https://${MIND}/sign-in/email?next=%2Fkeys`),
   );
-  expect(await plain!.text()).toContain(`<h1>Sign in to ${DOMAIN}</h1>`);
-  expect(plain!.headers.get("content-security-policy")).not.toContain("img-src");
+  expect({ status: plain!.status, location: plain!.headers.get("location") }).toEqual({
+    status: 303,
+    location: "/sign-in?next=%2Fkeys",
+  });
 });
 
 test("the four pages of an app's sign-in agree: each shows the app's icon and its host, and none says the mind's own line", async () => {
@@ -284,15 +339,23 @@ test("the four pages of an app's sign-in agree: each shows the app's icon and it
     name: "Guestbook",
     icon: `${ORIGIN}/icon.svg`,
     members: false,
+    signIn: ["email", "passkey"] as SignInMethod[],
   };
   stack.challenge.next = next;
   const mailed = (path: string, headers?: HeadersInit) =>
-    emailSignInResponse(stack.env, new Request(`https://iterate.${DOMAIN}${path}`, { headers }));
+    emailSignInResponse(stack.env, new Request(`https://${MIND}${path}`, { headers }));
   const pages = {
     address: await mailed(`/sign-in/email?${new URLSearchParams({ next })}`),
     code: await mailed("/sign-in/email/code", { cookie: "__Host-iterate-auth-code=abc" }),
-    passkey: signInPage({ domain: DOMAIN, next, app }),
-    chooser: chooserPage({ domain: DOMAIN, email: "guest@example.net", here: next, app }),
+    passkey: signInPage({
+      mind: MIND,
+      next,
+      app,
+      offersEmail: true,
+      offersGuest: false,
+      asksAtOpen: false,
+    }),
+    chooser: chooserPage({ mind: MIND, email: "guest@example.net", here: next, app }),
   };
   for (const [name, answer] of Object.entries(pages)) {
     const html = await answer!.text();
@@ -301,12 +364,14 @@ test("the four pages of an app's sign-in agree: each shows the app's icon and it
       `<div class="tile" data-app-mark="icon"><img src="${ORIGIN}/icon.svg"`,
     );
     expect(html, page).toContain(
-      name === "code" ? "<h1>Enter your code</h1>" : `<h1>Sign in to ${HOST}</h1>`,
+      name === "code"
+        ? "<h1>Enter your code</h1>"
+        : `<h1>Sign in to Guestbook</h1><p class="muted center">${HOST}</p>`,
     );
-    expect(html, page).not.toMatch(/class="about"|is an app of|Guestbook/);
+    expect(html, page).not.toMatch(/class="about"|is an app of/);
     // the mind's own words for its own sign-in are not on an app's page
-    expect(html, page).not.toContain(`Sign in to ${DOMAIN}`);
-    expect(html, page).not.toContain(`Anyone can sign in to ${DOMAIN}`);
+    expect(html, page).not.toContain(`Sign in to ${MIND}`);
+    expect(html, page).not.toContain("Anyone can sign in");
     expect(answer!.headers.get("content-security-policy"), page).toContain(`img-src ${ORIGIN}`);
   }
   // the code's page: one sentence over the field, which names the host; what to do when no code
@@ -323,13 +388,14 @@ test("the four pages of an app's sign-in agree: each shows the app's icon and it
   expect(code).toContain(
     '<input class="code" name="code" inputmode="numeric" autocomplete="one-time-code" autofocus required>',
   );
-  // the mind's own code page is as it was
-  stack.challenge.next = "/keys";
+  // an outside client's sign-in to the app is no page of the app's: the code's page is the mind's
+  // own, with the mind's line of what a code gives
+  stack.challenge.next = `/oauth2/auth?${new URLSearchParams({ client_id: "an-mcp-client", redirect_uri: "http://127.0.0.1:4100/callback", resource: `${ORIGIN}/mcp` })}`;
   const own = await (await mailed("/sign-in/email/code", {
     cookie: "__Host-iterate-auth-code=abc",
   }))!.text();
   expect(own).toContain(
-    `<p class="muted">Anyone can sign in to ${DOMAIN}. A new address gets an account of its own, with no access to the mind itself.</p>`,
+    `<p class="muted">A code gives an account for the apps of ${MIND}, with no access to the mind itself. A member signs in with a passkey.</p>`,
   );
   expect(own).toContain("may sign in here, a code is on its way.");
   expect(own).not.toContain(`class="about"`);
@@ -342,46 +408,65 @@ test("an app for members says in one quiet line that it works as the person; an 
     name: "Dash",
     icon: null,
     members: true,
+    signIn: ["passkey"] as SignInMethod[],
   };
   expect(appSignIn(dash)).toMatchObject({
-    heading: `<h1>Sign in to dash.${DOMAIN}</h1>`,
+    heading: `<h1>Sign in to Dash</h1><p class="muted center">dash.${DOMAIN}</p>`,
     about: `<p class="muted" data-for-members>It works as you: it can read and change everything that you can.</p>`,
   });
   expect(appSignIn({ ...dash, members: false })).toMatchObject({ about: "" });
 });
 
-test("the address page of an app for members, as the app's own manifest makes it", async () => {
+test("the address page of an app for members that names the mailed code, as the app's own description makes it", async () => {
   const origin = `https://dash.${DOMAIN}`;
   const stack = stackWith({
-    [`dash.${DOMAIN}`]: { name: "Dash", icon: `${origin}/icon.svg`, members: true },
+    [`dash.${DOMAIN}`]: {
+      name: "Dash",
+      icon: `${origin}/icon.svg`,
+      members: true,
+      signIn: ["passkey", "email"],
+    },
   });
   const client = await hostClientOf(stack.env, `dash.${DOMAIN}`);
   const next = `/oauth2/auth?${new URLSearchParams({ client_id: client, redirect_uri: hostCallbackOf(origin), resource: origin })}`;
   const answer = await emailSignInResponse(
     stack.env,
-    new Request(`https://iterate.${DOMAIN}/sign-in/email?${new URLSearchParams({ next })}`),
+    new Request(`https://${MIND}/sign-in/email?${new URLSearchParams({ next })}`),
   );
   const html = await answer!.text();
-  expect(html).toContain(`<h1>Sign in to dash.${DOMAIN}</h1>`);
+  expect(html).toContain(`<h1>Sign in to Dash</h1><p class="muted center">dash.${DOMAIN}</p>`);
   expect(html).toContain("It works as you: it can read and change everything that you can.");
   expect(html).not.toContain("Anyone can sign in");
 });
 
 test("the passkey's page, the chooser and a consent for the app's host name the host, and a host is text", async () => {
-  const app = { host: HOST, origin: ORIGIN, name: "Guestbook", icon: null, members: false };
+  const app = {
+    host: HOST,
+    origin: ORIGIN,
+    name: HOST,
+    icon: null,
+    members: false,
+    signIn: ["email", "passkey"] as SignInMethod[],
+  };
   const passkey = await signInPage({
-    domain: DOMAIN,
+    mind: MIND,
     next: "/",
-    app: { ...app, host: `<b>${HOST}</b>` },
+    app: { ...app, name: "<b>Guestbook</b>", host: `<b>${HOST}</b>` },
+    offersEmail: true,
+    offersGuest: false,
+    asksAtOpen: false,
   }).text();
-  expect(passkey).toContain(`<h1>Sign in to &#60;b&#62;${HOST}&#60;/b&#62;</h1>`);
-  expect(passkey).not.toContain(`<b>${HOST}`);
+  // an app's name and its host are text
+  expect(passkey).toContain(
+    `<h1>Sign in to &#60;b&#62;Guestbook&#60;/b&#62;</h1><p class="muted center">&#60;b&#62;${HOST}&#60;/b&#62;</p>`,
+  );
+  expect(passkey).not.toMatch(/<b>/);
   // an app with no icon has no tile of initials: iterate's mark is the card's one
   expect(passkey).toContain(`<main class="centered"><div class="mark"`);
   expect(passkey).not.toContain("data-app-mark");
   const guestbook = app;
   const chooser = await chooserPage({
-    domain: DOMAIN,
+    mind: MIND,
     email: "guest@example.net",
     here: "/oauth2/auth?client_id=c",
     app: guestbook,
@@ -389,7 +474,7 @@ test("the passkey's page, the chooser and a consent for the app's host name the 
   expect(chooser).toContain(`<h1>Sign in to ${HOST}</h1>`);
   expect(chooser).toContain(`<button type="submit">Continue as guest@example.net</button>`);
   // without an app, the chooser is the mind's own, as a member sees it
-  const own = await chooserPage({ domain: DOMAIN, email: "m@example.net", here: "/x" }).text();
+  const own = await chooserPage({ mind: MIND, email: "m@example.net", here: "/x" }).text();
   expect(own).toContain(`<button type="submit">Continue as m@example.net</button>`);
   expect(own).not.toContain(`class="about"`);
   const consent = await consentPage({
@@ -401,7 +486,7 @@ test("the passkey's page, the chooser and a consent for the app's host name the 
     } as never,
     handle: "handle",
     email: "guest@example.net",
-    domain: DOMAIN,
+    mind: MIND,
     resource: "its API",
     host: HOST,
     here: "/oauth2/auth?client_id=c",
@@ -413,58 +498,31 @@ test("the passkey's page, the chooser and a consent for the app's host name the 
 
 /** A stack with an in-memory store, which already holds what the named hosts' apps say, as heard
  *  a moment ago. */
-test("on a stack where anyone may sign in, an app's own people start at the mailed code; an app for members starts at the passkey", async () => {
-  const dash = `dash.${DOMAIN}`;
-  const stack = stackWith({
-    [HOST]: { name: "Guestbook", icon: null },
-    [dash]: { name: "Dash", icon: null, members: true },
-  });
-  const signInFor = async (host: string) => {
-    const next = `/oauth2/auth?${new URLSearchParams({ client_id: await hostClientOf(stack.env, host), redirect_uri: hostCallbackOf(`https://${host}`), resource: `https://${host}` })}`;
-    const answer = await authResponse(
-      new Request(`https://iterate.${DOMAIN}/sign-in?${new URLSearchParams({ next })}`),
-      stack.env,
-      {} as ExecutionContext,
-    );
-    return {
-      next,
-      status: answer.status,
-      to: answer.headers.get("location"),
-      html: await answer.text(),
-    };
-  };
-  // a guest of the guestbook holds no passkey: no browser prompt, the address field
-  const guest = await signInFor(HOST);
-  expect(guest).toMatchObject({
-    status: 302,
-    to: `https://iterate.${DOMAIN}/sign-in/email?${new URLSearchParams({ next: guest.next })}`,
-  });
-  // the Dash is for members, and a member holds a passkey
-  const member = await signInFor(dash);
-  expect(member).toMatchObject({ status: 200, to: null });
-  expect(member.html).toContain(`<h1>Sign in to ${dash}</h1>`);
-  expect(member.html).toContain("\nsignIn(false);");
-});
-
 function stackWith(
-  said: Record<string, { name: string | null; icon: string | null; members?: boolean }>,
+  said: Record<
+    string,
+    { name: string | null; icon: string | null; members?: boolean; signIn?: SignInMethod[] }
+  >,
 ) {
-  const keyOf = (host: string) => `iterate-app-said:${host}`;
+  const keyOf = (host: string) => `iterate-app-description:${host}`;
   const kv = new Map<string, string>(
     Object.entries(said).map(([host, value]) => [
       keyOf(host),
-      JSON.stringify({ members: false, ...value, askAfter: Date.now() + 5 * 60_000 }),
+      JSON.stringify({
+        members: false,
+        signIn: FOR_ANYONE,
+        ...value,
+        askAfter: Date.now() + 5 * 60_000,
+      }),
     ]),
   );
+  // whether the count of new hostnames admits one more (./device/limits.ts `admitted`)
+  let admits = true;
   const keptOf = (host: string) => JSON.parse(kv.get(keyOf(host))!) as { askAfter: number };
   // the one mailed code that waits, as the code's page reads it
   const challenge = { email: "guest@example.net", next: "/" };
   const env = {
-    DOMAIN,
-    AUTH_SETTINGS: JSON.stringify({
-      login: { methods: { email: { anyone: true } }, allow: [{ email: "owner@example.net" }] },
-      keys: [],
-    }),
+    ...configVars(),
     OAUTH_KV: {
       get: async (key: string, type?: unknown) => {
         const kept = kv.get(key);
@@ -477,13 +535,14 @@ function stackWith(
         first: async () => ({ id: "test-member-passkey" }),
         bind: (...bound: unknown[]) => ({ sql, bound, first: async () => challenge }),
       }),
-      // the admission of a new host client: its count admits
-      batch: async () => [{}, { results: [{ admitted: 1 }] }],
+      // the admission of a new host client, or of a hostname that is asked about first
+      batch: async () => [{}, { results: admits ? [{ admitted: 1 }] : [] }],
     },
   } as unknown as Env;
   return {
     env,
     challenge,
+    admits: (more: boolean) => void (admits = more),
     /** The time has come to ask `host`'s app again. */
     due: (host: string) => kv.set(keyOf(host), JSON.stringify({ ...keptOf(host), askAfter: 0 })),
     /** How long after `since` the app is asked again, in whole minutes. */
@@ -494,12 +553,13 @@ function stackWith(
   };
 }
 
-/** The web for one test: every fetch answers `manifest` as JSON (null: a 404), and is recorded. */
-function answers(manifest: object | null) {
+/** The web for one test: every fetch answers `description` as JSON (null: a 404), and is
+ *  recorded. */
+function answers(description: object | null) {
   const asked: [string, string | undefined][] = [];
   const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     asked.push([String(input), init?.redirect]);
-    return manifest ? Response.json(manifest) : new Response("Not found\n", { status: 404 });
+    return description ? Response.json(description) : new Response("Not found\n", { status: 404 });
   });
   return { asked, [Symbol.dispose]: () => spy.mockRestore() };
 }

@@ -1,15 +1,15 @@
 // config.ts — WHAT THE CLI KEEPS ON DISK, in its config directory (`$XDG_CONFIG_HOME/iterate`, else
 // `~/.config/iterate`): `config.json`, the profiles, each naming one mind by its address
 // (iterate/mind-api), the default profile and the folders mapped to one; and `sessions.json`,
-// the sign-ins, one per OAuth resource a token is for (a mind's API, its `/provide`). Both are
-// written mode 600 in a folder of mode 700. The Node client (../node.ts) reads and refreshes the
-// sessions.
+// the sign-ins, one per OAuth resource a token is for (a mind's API, the right to hand in a mind
+// that runs elsewhere). Both are written mode 600 in a folder of mode 700. The Node client
+// (../node.ts) reads and refreshes the sessions.
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 
-const CONFIG_DIR = join(
+export const CONFIG_DIR = join(
   process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
   "iterate",
 );

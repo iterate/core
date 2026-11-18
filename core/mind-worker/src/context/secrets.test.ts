@@ -5,7 +5,7 @@ import { secretsRoot } from "./secrets.ts";
 
 test("the vault's answer is released when the mind has read it, so its session does not stay open", async () => {
   const vault = pretendVault();
-  const secrets = secretsRoot(mindWith([]), vault.egress);
+  const secrets = secretsRoot(mindOf(), vault.egress);
 
   expect(await secrets.describe("/secrets/a")).toEqual({ path: "/secrets/a", set: true });
   expect(vault.open()).toBe(0);
@@ -20,50 +20,31 @@ test("the vault's answer is released when the mind has read it, so its session d
   expect(vault).toMatchObject({ asked: 3, released: 3 });
 });
 
-test("list() is one call of the vault, with the paths that the mind's log names, and its answer is released", async () => {
-  // a mind keeps the path of every secret it ever had: ten of these were deleted since
-  const paths = Array.from({ length: 50 }, (_, at) => `/secrets/s${String(at).padStart(2, "0")}`);
-  const vault = pretendVault(new Set(paths.slice(40)), { keepsItsList: true });
-  const secrets = secretsRoot(mindWith(paths), vault.egress);
+test("list() is one call of the vault, which keeps the paths of its own secrets, and its answer is released", async () => {
+  const vault = pretendVault();
+  const secrets = secretsRoot(mindOf(), vault.egress);
 
-  const listed = await secrets.list();
-
-  expect(listed.map((secret) => secret.path)).toEqual(paths.slice(0, 40));
-  // one call, which took the mind's paths, and no call for any one path
-  expect(vault).toMatchObject({ lists: [paths], asked: 0, released: 1 });
+  expect((await secrets.list()).map((secret) => secret.path)).toEqual([
+    "/secrets/github-jo",
+    "/secrets/github-sam",
+  ]);
+  // one call, and no call for any one path
+  expect(vault).toMatchObject({ lists: 1, asked: 0, released: 1 });
   expect(vault.open()).toBe(0);
 });
 
-test("the refused call of a boundary from before the vault kept its list is released too: list() then asks path by path and leaves no session open", async () => {
-  const paths = ["/secrets/a", "/secrets/b", "/secrets/c"];
-  const vault = pretendVault(new Set(["/secrets/c"]), { refusesTheList: true });
-  const secrets = secretsRoot(mindWith(paths), vault.egress);
+test("a vault that has no such verb is an error of the stack, which list() and cloud() throw: nothing stands in for the answer", async () => {
+  const vault = pretendVault({ hasNoListOrCloud: true });
+  const secrets = secretsRoot(mindOf(), vault.egress);
 
-  expect((await secrets.list()).map((secret) => secret.path)).toEqual(["/secrets/a", "/secrets/b"]);
-
-  // four calls: the list that was refused, and one for each path; each is let go
-  expect(vault).toMatchObject({ asked: 4, released: 4 });
-  expect(vault.open()).toBe(0);
-});
-
-test("with a boundary from before the vault kept its list, list() asks path by path, a few at a time, and leaves no session of the vault open", async () => {
-  // a mind keeps the path of every secret it ever had: ten of these were deleted since
-  const paths = Array.from({ length: 50 }, (_, at) => `/secrets/s${String(at).padStart(2, "0")}`);
-  const vault = pretendVault(new Set(paths.slice(40)));
-  const secrets = secretsRoot(mindWith(paths), vault.egress);
-
-  const listed = await secrets.list();
-
-  expect(listed.map((secret) => secret.path)).toEqual(paths.slice(0, 40));
-  expect(vault).toMatchObject({ asked: 50, released: 50 });
-  expect(vault.mostOpenAtOnce()).toBeLessThanOrEqual(16);
+  await expect(secrets.list()).rejects.toThrow("does not implement");
+  await expect(secrets.cloud("https://cloud.example.com")).rejects.toThrow("does not implement");
   expect(vault.open()).toBe(0);
 });
 
 test("refreshGrants() goes on where the vault stopped until every grant is reached: the rows of all are the answer, each one's fact lands on its secret's log, and each answer is released", async () => {
-  const vault = pretendVault(new Set(), { keepsItsList: true });
-  const known = ["/secrets/github-jo", "/secrets/github-sam", "/secrets/other"];
-  const mind = mindWith(known);
+  const vault = pretendVault();
+  const mind = mindOf();
   const secrets = secretsRoot(mind, vault.egress);
 
   expect(await secrets.refreshGrants()).toEqual([
@@ -71,7 +52,7 @@ test("refreshGrants() goes on where the vault stopped until every grant is reach
     { path: "/secrets/github-sam", outcome: "refreshed" },
   ]);
   expect({ vault, appended: appends.get(mind) }).toMatchObject({
-    vault: { lists: [known, known], asked: 2, released: 2 },
+    vault: { asked: 2, released: 2 },
     appended: [
       { path: "/secrets/github-jo", types: ["proof/refreshed"] },
       { path: "/secrets/github-sam", types: ["proof/refreshed"] },
@@ -82,14 +63,9 @@ test("refreshGrants() goes on where the vault stopped until every grant is reach
 
 /** The boundary's `secret`, as Workers RPC answers it: an object that holds its call's session
  *  open until its disposer runs. It counts the sessions that are open. */
-function pretendVault(
-  unset = new Set<string>(),
-  { keepsItsList = false, refusesTheList = false } = {},
-) {
+function pretendVault({ hasNoListOrCloud = false } = {}) {
   let open = 0;
-  let most = 0;
-  const counts = { asked: 0, released: 0 };
-  const lists: (string[] | undefined)[] = [];
+  const counts = { asked: 0, released: 0, lists: 0 };
   const held = <T extends object>(answer: T): T =>
     Object.defineProperty(answer, Symbol.dispose, {
       value: () => {
@@ -100,39 +76,29 @@ function pretendVault(
   const secret = async (path: string, verb: string) => {
     counts.asked += 1;
     open += 1;
-    most = Math.max(most, open);
-    // the answer comes a moment later, as it does across Workers: calls made together overlap
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    if (verb === "describe") return held({ path, set: !unset.has(path) });
+    if (verb === "describe") return held({ path, set: true });
     if (path === "/secrets/refused")
       return held({ refused: { code: "FORBIDDEN", message: "not this one" }, facts: [] });
     return held({ result: path, facts: [{ path, events: [{ type: "proof/fact" }] }] });
   };
-  // The vault's own list: it answers the set secrets alone, whatever paths the mind names.
-  const listSecrets = async (known?: string[]) => {
-    lists.push(known);
+  const grants = ["/secrets/github-jo", "/secrets/github-sam"];
+  // The vault's own list: the secrets that are set.
+  const listSecrets = async () => {
+    counts.lists += 1;
+    open += 1;
+    return held(grants.map((path) => ({ path, set: true })));
+  };
+  // As Workers RPC answers a verb that the receiver has not: the call's promise rejects, and the
+  // promise itself holds the call's session.
+  const noSuchVerb = (verb: string) => () => {
     open += 1;
     return held(
-      (known || []).filter((path) => !unset.has(path)).map((path) => ({ path, set: true })),
+      Promise.reject(new TypeError(`The RPC receiver does not implement the method "${verb}".`)),
     );
   };
-  // A boundary from before the vault kept its list, as Workers RPC answers a verb that it has
-  // not: the call's promise rejects, and the promise itself holds the call's session.
-  const noSuchVerb = () => {
-    counts.asked += 1;
-    open += 1;
-    return held(
-      Promise.reject(
-        new TypeError('The RPC receiver does not implement the method "listSecrets".'),
-      ),
-    );
-  };
-  // The vault's refresh of the persons' grants: one row and one fact for each grant it holds.
   // The vault's refresh of the persons' grants, one grant in a call: it says where it stopped
   // until the last one.
-  const grants = ["/secrets/github-jo", "/secrets/github-sam"];
-  const refreshGrants = async (known?: string[], after?: string) => {
-    lists.push(known);
+  const refreshGrants = async (after?: string) => {
     counts.asked += 1;
     open += 1;
     const path = grants.find((grant) => grant > (after || ""))!;
@@ -145,14 +111,13 @@ function pretendVault(
     });
   };
   return {
-    lists,
-    egress: (keepsItsList
-      ? { secret, listSecrets, refreshGrants }
-      : refusesTheList
-        ? { secret, listSecrets: noSuchVerb }
-        : { secret }) as unknown as Door,
+    egress: (hasNoListOrCloud
+      ? { secret, listSecrets: noSuchVerb("listSecrets"), cloud: noSuchVerb("cloud") }
+      : { secret, listSecrets, refreshGrants }) as unknown as Door,
     open: () => open,
-    mostOpenAtOnce: () => most,
+    get lists() {
+      return counts.lists;
+    },
     get asked() {
       return counts.asked;
     },
@@ -162,18 +127,12 @@ function pretendVault(
   };
 }
 
-/** A mind whose `/secrets` log names these paths, one `child-created` fact each. */
-function mindWith(paths: string[]): ItxHostRootContext {
-  const events = paths.map((childPath, offset) => ({
-    offset: offset + 1,
-    type: "events.iterate.com/itx/child-created",
-    payload: { childPath },
-  }));
+/** A mind that records what is appended to its contexts. */
+function mindOf(): ItxHostRootContext {
   const mind = {
     path: "/",
     caller: () => ({ principal: null }),
     context: (path: string) => ({
-      read: async () => ({ events, atHead: true, scannedThroughOffset: events.length }),
       append: async (...appended: { type: string }[]) => {
         appends.get(mind)!.push({ path, types: appended.map((event) => event.type) });
         return [];

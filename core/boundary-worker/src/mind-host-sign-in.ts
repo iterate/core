@@ -19,39 +19,21 @@ export function mindHostCallerOf(input: {
   return authorization.reachesMind ? "member" : "non-member";
 }
 
-/** A sign-in on this host: by one of the ways the app takes, in its order (RFC 9470's
- *  `acr_values`), or by the mind's own sign-in when it names none. */
-export type HostSignIn = { methods: string[] };
-
-// Only `Bearer realm="iterate"` is the platform's challenge. A 401 for a session the app takes
-// passes, a member's too: a sign-in would bring the same session back.
+// Only `Bearer realm="iterate"` is the platform's challenge. A 401 for a signed-in person at a
+// page that asks for anyone signed in passes, and a member's too: a sign-in would bring the same
+// session back. `sign-in`: the mind's own sign-in, on this host.
 export function mindHostSignInAnswerOf(input: {
   answer: Pick<Response, "status" | "headers">;
   request: RequestShape;
   caller: MindHostCaller;
-  /** How the caller signed in, when they did (./stamp.ts). */
-  method?: string;
-}): HostSignIn | "not-a-member" | Response | null {
-  const { answer, request } = input;
+}): "sign-in" | "not-a-member" | Response | null {
+  const { answer, request, caller } = input;
   if (answer.status !== 401) return null;
   const challenge = iterateSignInChallengeOf(answer.headers.get("www-authenticate"));
   if (!challenge) return null;
-  const signIn = { methods: challenge.acrValues };
-  // A GUEST IS NOBODY where the app does not name the way: its challenge is answered as a
-  // stranger's is, with the sign-in, never with "you are no member" for someone with no address.
-  const caller =
-    input.method === "guest" && !challenge.acrValues.includes("guest") ? "anonymous" : input.caller;
-  // A STEP-UP (RFC 9470): the app takes none of the ways this session began by, so the person
-  // signs in again, member or not, by a way it names. With no way named, the sign-in is the
-  // mind's own, which changes only a session that began at Cloudflare.
-  const methodRefused = challenge.acrValues.length
-    ? !challenge.acrValues.includes(input.method || "")
-    : challenge.error === "insufficient_user_authentication" && input.method === "cloudflare";
-  if (caller !== "anonymous" && methodRefused) return isDocumentNavigation(request) ? signIn : null;
   if (caller === "member") return null;
-  const identity = challenge.scope === "identity";
-  if (identity && caller === "non-member") return null;
-  if (isDocumentNavigation(request)) return caller === "non-member" ? "not-a-member" : signIn;
+  if (challenge.scope === "identity" && caller === "non-member") return null;
+  if (isDocumentNavigation(request)) return caller === "non-member" ? "not-a-member" : "sign-in";
   // 403, not 401: a 401 would send an OAuth client to authorize again, for the same token.
   if (caller === "non-member")
     return new Response("This session cannot access this mind\n", { status: 403 });
@@ -64,18 +46,15 @@ const AUTH_PARAM = new RegExp(
 );
 const AUTH_SCHEME = new RegExp(`^(${TOKEN})(?:[ \\t]+[A-Za-z0-9._~+/-]+=*[ \\t]*(?=,|$))?`);
 
-type Challenge = { scope: string; error: string; acrValues: string[] };
+type Challenge = { scope: string };
 
 // RFC 9110 §11.6.1's challenge list. Past where a value stops parsing it holds no challenge of ours.
 function iterateSignInChallengeOf(header: string | null): Challenge | null {
   let rest = header || "";
   let scheme: string | null = null;
   let realm = false;
-  let params = { scope: "", error: "", acrValues: "" };
-  const ours = (): Challenge | null =>
-    scheme === "bearer" && realm
-      ? { ...params, acrValues: params.acrValues.split(" ").filter(Boolean) }
-      : null;
+  let scope = "";
+  const ours = (): Challenge | null => (scheme === "bearer" && realm ? { scope } : null);
   for (;;) {
     rest = rest.replace(/^[\s,]+/, "");
     if (!rest) return ours();
@@ -86,9 +65,7 @@ function iterateSignInChallengeOf(header: string | null): Challenge | null {
         ? param[2]!.slice(1, -1).replace(/\\(.)/g, "$1")
         : param[2]!;
       if (name === "realm" && value === "iterate") realm = true;
-      if (name === "scope") params.scope = value;
-      if (name === "error") params.error = value;
-      if (name === "acr_values") params.acrValues = value;
+      if (name === "scope") scope = value;
       rest = rest.slice(param[0].length);
       continue;
     }
@@ -97,7 +74,7 @@ function iterateSignInChallengeOf(header: string | null): Challenge | null {
     if (found || !challenge) return found;
     scheme = challenge[1]!.toLowerCase();
     realm = false;
-    params = { scope: "", error: "", acrValues: "" };
+    scope = "";
     rest = rest.slice(challenge[0].length);
   }
 }

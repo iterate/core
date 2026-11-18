@@ -209,6 +209,83 @@ export type SecretMaterial = string | Record<string, unknown>;
  *  PKCE stands in for the secret). RFC 6749 §2.3.1 forbids sending two forms at once. */
 export type ClientAuth = "client_secret_basic" | "client_secret_post" | "none";
 
+/** ONE OF AN iterate Cloud's CLIENTS, as a secret names it: `cloud` is the Cloud's name for the
+ *  client (`github`, `google`, `slack`, `x`), and `origin` is that Cloud's address, an exact
+ *  `https:` origin with no path (`https://cloud.iterate.com`). No config of the stack names a
+ *  Cloud: the code that makes the secret does, and the secret keeps the origin from then on.
+ *  Everything that the secret later asks of a Cloud (the code's exchange, a refresh, an
+ *  installation's token, an ask) goes to that origin and to no other. Another origin is another
+ *  secret. */
+export type CloudClientName = { cloud: string; origin: string };
+
+/** THE STACK'S OWN CLIENT AT CLOUDFLARE, as a secret names it: one private OAuth client that the
+ *  mind's deploy made inside the mind's own Cloudflare account (core/alchemy
+ *  src/cloudflare-oauth-client.ts). Its id and its secret are config of the secrets Worker alone:
+ *  no code of the mind sees them. The secrets Worker fills in the client, Cloudflare's two
+ *  endpoints (`CLOUDFLARE_OAUTH`) and the pin, and takes no scope outside
+ *  `CLOUDFLARE_READ_SCOPES`. `itx.secrets.hasStackClient("cloudflare")` says whether the stack
+ *  has it: a deploy whose credential may not make OAuth clients makes none. */
+export type StackClientName = { stack: "cloudflare" };
+
+/** WHERE A CONSENT AT CLOUDFLARE IS ASKED FOR AND EXCHANGED, and where its token may go: the REST
+ *  API and Cloudflare's own MCP server. The two endpoints are Cloudflare's OAuth 2 server, which
+ *  serves an account's own clients too: a consent and a refresh through a private client went
+ *  through them on 18 Nov 2026. */
+export const CLOUDFLARE_OAUTH = {
+  authorizationEndpoint: "https://dash.cloudflare.com/oauth2/auth",
+  tokenEndpoint: "https://dash.cloudflare.com/oauth2/token",
+  urls: ["https://api.cloudflare.com", "https://mcp.cloudflare.com"],
+} as const;
+
+/** WHAT A MIND'S CLOUDFLARE CONNECTION MAY READ: the OAuth scopes that the stack's client is
+ *  registered with, that a connect asks for, and outside which the secrets Worker refuses a
+ *  connect through that client and a grant. THE PROMISE to the owner: the mind can read its own
+ *  Cloudflare account (logs, errors, what is deployed) and can change nothing there. So each
+ *  scope is what debugging the mind's own stack needs, and no more: no write, no read of data
+ *  (a Worker's code, a database's rows, a key's value, an object), no read of a credential, no
+ *  read that runs a query or a model or sends anything. Left out by name, among others:
+ *    `workers-scripts.read`, `.content_read`, `workers-tail.read`  a Worker's code, live requests
+ *    `d1.read`, `r2-catalog-sql.read`, `account-analytics.read`   run SQL
+ *    `account-settings.read`        shows a Turnstile widget's secret and TSIG secrets
+ *    `workers-kv-storage.read`, `workers-r2.read`                  values and objects
+ *    `ai.read`                      invokes models, which bill
+ *    `bot-management.read`, `bot-management-feedback.read`        submit feedback
+ *    `notifications.read`           gives an unsubscribe token
+ *    `snippets.read`                reads snippets' source
+ *    `aig.read`                     may show a custom provider's headers
+ *    `access-app.read`              an application's answer has its SCIM password or token
+ *    `argotunnel.read`              reads a tunnel's token
+ *    `queues.read`                  may pull and peek at messages
+ *  core/lib/src/cloudflare-read-scopes.test.ts holds the list to the rule. Each scope is one of
+ *  Cloudflare's own (`GET /oauth/scopes` of its API lists them). `offline_access`, which brings
+ *  the refresh token, is no part of the list: Cloudflare adds it to a client that has the refresh
+ *  grant, and a connect asks for it too. */
+export const CLOUDFLARE_READ_SCOPES = [
+  // who consented: `GET /user`, which Cloudflare's MCP server asks of an OAuth token
+  "user-details.read",
+  // the Workers: names, settings, deployments and versions, without their source
+  "workers-scripts.metadata_read",
+  // the Workers' logs, traces and request counts (the telemetry query)
+  "workers-observability.read",
+  // the routes and custom domains that send a zone's requests to a Worker
+  "workers-routes.read",
+  // the names, sizes and settings of the stack's data: D1 databases (no SQL), KV namespaces (no
+  // value), R2 buckets (no object), queues (no message)
+  "d1.metadata_read",
+  "workers-kv-storage.metadata_read",
+  "workers-r2.metadata_read",
+  "queues.metadata_read",
+  // telemetry's pipelines, streams and sinks: their settings (a sink's credentials are not in
+  // Cloudflare's answer)
+  "pipelines.read",
+  // the zones, their DNS records and their settings (SSL mode, Email Routing's switch)
+  "zone.read",
+  "dns.read",
+  "zone-settings.read",
+  // mail in: each zone's Email Routing rules
+  "email-routing-rule.read",
+] as const;
+
 /** How the secret's facet re-mints an expired credential, in its own trusted code: the
  *  exchange reads this secret's own material, POSTs to an endpoint within the pin, and writes the
  *  answer back into the material — `accessToken` (and a rotated `refreshToken`). Triggered on a 401
@@ -226,14 +303,15 @@ export type SecretRefresh =
       kind: "oauth-refresh-token";
       tokenEndpoint: string;
       clientAuth?: ClientAuth;
-      /** `cloud`: the client is iterate Cloud's of that name, and `tokenEndpoint` is the Cloud's
-       *  broker, which adds the client secret. The refresh token in the material is sealed for
-       *  this deployment and means nothing anywhere else. */
-      client?: { platform: IntegrationProvider } | { cloud: string };
+      /** `cloud`: the client is that of the iterate Cloud at `origin`, and `tokenEndpoint` is that
+       *  Cloud's broker, which adds the client secret. The refresh token in the material is sealed
+       *  for this deployment and means nothing anywhere else. `stack`: the client is the stack's
+       *  own at Cloudflare, and the secrets Worker adds its secret from its own config. */
+      client?: { platform: IntegrationProvider } | CloudClientName | StackClientName;
     }
   /** A GitHub App installation's token (`POST <apiOrigin>/app/installations/<id>/access_tokens`
    *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is iterate Cloud's
-   *  (`{ cloud }`) or one whose `appId` and `privateKey` the material holds (`{ mind: "github" }`,
+   *  (`{ cloud, origin }`) or one whose `appId` and `privateKey` the material holds (`{ mind: "github" }`,
    *  and `{ platform: "github" }` the same way); either of those two fields may be a
    *  `getSecret("/secrets/<name>", { field })` placeholder naming another of the owner's secrets
    *  pinned to `apiOrigin`, so one secret holding the App's key serves every installation's
@@ -242,10 +320,11 @@ export type SecretRefresh =
       kind: "github-app-installation";
       apiOrigin: string;
       installationId: string;
-      /** `cloud`: iterate Cloud's GitHub App of that name, whose key stays at the Cloud. The Cloud
-       *  mints the token, for an installation this deployment connected. The Cloud mints no token
-       *  for a secret whose `urls` go beyond the hosts the Cloud names for the App. */
-      client: { platform: "github" } | { mind: "github" } | { cloud: string };
+      /** `cloud`: the GitHub App of that name of the iterate Cloud at `origin`, whose key stays
+       *  at the Cloud. The Cloud mints the token, for an installation this deployment connected.
+       *  The Cloud mints no token for a secret whose `urls` go beyond the hosts the Cloud names
+       *  for the App. */
+      client: { platform: "github" } | { mind: "github" } | CloudClientName;
     }
   /** EXCHANGE CODE: `source` is one ES module exporting `async function exchange(material, fetch)`,
    *  which logs in (any vendor's shape: a CSRF form and its cookie, a GraphQL mutation) and returns
@@ -255,29 +334,6 @@ export type SecretRefresh =
    *  request anywhere else fails the refresh — and `console` is silenced. Only the returned object
    *  is kept. The source is part of the record, so changing it is a `set` like the material's. */
   | { kind: "worker"; source: string };
-
-/** A SEALED CELL OF THE FROZEN PLATFORM: a secret's record with its material sealed under that
- *  deployment's secrets key and bound to the one secret and write. There every fact that wrote
- *  material carried one, and the secret facet's `snapshot()` answered the current one as
- *  `state.material.sealed`.
- *
- *  ON A MIND'S OWN STACK NO FACT CARRIES A CELL: the secret's object keeps its cell in its own
- *  storage alone (`StoredSecret`, core/secrets-worker/src/secret/contract.ts), so a copy of the
- *  logs holds no value. `secrets.exportSealed` hands that stored cell out, to a caller that proves
- *  the at-rest key. This shape stays for a move in: `secrets.importSealed(path, cell, proof)`
- *  takes one such cell once, with a proof under the stack's at-rest key, and seals its material
- *  again as the stack's own. packages/mind-backup reads and opens these cells. */
-export type SealedSecretCell = {
-  /** The secret's context name (its Durable Object's), the first part of the cell's binding. */
-  context: string;
-  urls: string[];
-  refresh: SecretRefresh | null;
-  /** The workspace whose iterate's-Slack-app token this is, kept with the record. */
-  routedAccount?: { provider: "slack"; externalId: string };
-  /** Minted for this write: the last part of the binding. */
-  nonce: string;
-  material: { algorithm: "AES-256-GCM+SECRET-V1"; iv: string; ciphertext: string };
-};
 
 /** A secret's catalog entry — `secrets.list()` — its path, the pin, the strategy's KIND, when it
  *  was first set and its public fields; never a secret value (the owner root's fold of the
@@ -289,6 +345,8 @@ export type SecretCatalogEntry = {
   /** The iterate Cloud's client that brokers the secret's refresh (`refresh.client.cloud`): an
    *  account that a member connected through iterate's own app at a provider. */
   cloud?: string;
+  /** That Cloud's origin (`refresh.client.origin`), which the secret has kept since it was made. */
+  cloudOrigin?: string;
   /** For exchange code (`refresh.kind` "worker"): the SHA-256 of its source, hex — which code it is. */
   refreshSourceSha256?: string;
   createdAt: string;
@@ -450,22 +508,17 @@ export const INTEGRATION_PROVIDER_NAMES = {
   x: "X",
 } as const satisfies Record<IntegrationProvider, string>;
 
-/** The providers an integration connects through OAuth (`/api/integrations/<provider>/callback`):
- *  GitHub's connect is its App's install instead. */
-export type OAuthIntegrationProvider = Exclude<IntegrationProvider, "github">;
-
 /** The providers a person signs in with, each through iterate's app there. */
 export type SignInProvider = Exclude<IntegrationProvider, "slack" | "x">;
 
 /** Whose OAuth app a secret's `beginOAuth` goes through when it is not a client passed in the
- *  clear: the deployment's own at that provider (an integration connected through it), or one of
- *  iterate Cloud's by its name there (`github`, `google`, `x`), the app every deployment shares.
- *  The Cloud keeps that app's secret and adds it to the exchange and to each refresh; the tokens
- *  stay in this secret. */
+ *  clear: one of an iterate Cloud's by its name there (`github`, `google`, `x`) and that Cloud's
+ *  `origin` (`CloudClientName`), the app every deployment shares. The Cloud keeps that app's secret and
+ *  adds it to the exchange and to each refresh; the tokens stay in this secret. Or the stack's
+ *  own client at Cloudflare (`StackClientName`), whose secret the secrets Worker holds. */
 export type SecretOAuthClient =
-  | { platform: OAuthIntegrationProvider }
-  | {
-      cloud: string;
+  | StackClientName
+  | (CloudClientName & {
       /** For a GitHub App of the Cloud's: the accounts (a person's or an organization's login)
        *  whose installations this mind asks to be connected to. The member's consent reaches
        *  every account they administer; the mind gets the events and the installation tokens
@@ -473,14 +526,16 @@ export type SecretOAuthClient =
        *  named it gets no installation, unless `install: true` sends the member to the App's
        *  install page, where the one they choose is connected. */
       accounts?: string[];
-    };
+    });
 
 /** What `secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the OAuth client
  *  (the mind's own in the clear, or an integration's `client`), the scope, the pin, and any extra
  *  authorize parameters the provider needs (Google: `access_type=offline`, `prompt=consent`). */
 export type SecretOAuthOptions = {
   /** The provider's two endpoints. Absent with a Cloud client, which names them, the client's id
-   *  and the pin itself. */
+   *  and the pin itself, and with the stack's own client (`client: { stack: "cloudflare" }`), for
+   *  which the secrets Worker fills them in. With that client `scope` may name only scopes of
+   *  `CLOUDFLARE_READ_SCOPES`, and is all of them when absent. */
   authorizationEndpoint?: string;
   tokenEndpoint?: string;
   /** Exactly one of `clientId` and `client`. */
@@ -498,14 +553,12 @@ export type SecretOAuthOptions = {
    *  installation they choose there is connected. */
   install?: boolean;
   /** Where the platform's callback sends the human once the tokens are stored: an absolute URL on
-   *  the platform's origin or the Dash's, or a page of this mind's, `{ routingSlug?, path }`:
-   *  `routingSlug`'s host (the apex when absent) at `path` (a query is fine), composed by the
-   *  deployment's static rules alone — on the hostname its config pins to the mind when it has
-   *  one, else under its ingress — so it is the mind's own by construction. That page reads what
-   *  the consent granted with `oauthResult`. Every attempt comes back to the platform's callback
-   *  first (`oauthCallbackUrl`, the redirect URI to register for a client of your own), which
-   *  completes it only in the browser that opened the start link. */
-  next?: string | { routingSlug?: string; path: string };
+   *  a hostname of the mind's zones (a page of the mind's own is
+   *  `await itx.url({ hostname, path })`). That page reads what the consent granted with
+   *  `oauthResult`. Every attempt comes back to the platform's callback first
+   *  (`oauthCallbackUrl`, the redirect URI to register for a client of your own), which completes
+   *  it only in the browser that opened the start link. */
+  next?: string;
   /** The one person who may complete the attempt, by their user id (`user_…`), when they need not
    *  reach this secret's owner: a customer of the mind's own app connecting their own account,
    *  whom the mind knows from a sign-in with this platform. The platform's callback then
@@ -928,15 +981,14 @@ export type FileHandle = {
   }): Promise<{ url: string; expiresAt: string }>;
 };
 
-/** `itx.email.send`: one message from the mind's own address. `inReplyToOffset` names a
+/** `itx.email.send`: one message from an address of the mind's. `inReplyToOffset` names a
  *  message on the mind's `/integrations/email` and answers it in its thread: its recipients,
  *  `Re:` subject and threading headers are the defaults. Each attachment is a mind file
  *  (`itx.files`). */
 export type EmailSendInput = {
-  /** The mind's own address by default (a reply's: the address the answered message reached);
-   *  the mind that owns the deployment's mind wildcard domain may name any address there
-   *  (`hello@iterate.com`). Any other address is refused. */
-  from?: string;
+  /** The sender: any address at one of the mind's zones (`agent@example.com`). There is no
+   *  default: a send that names none is refused, and so is any other address. */
+  from: string;
   to?: string | string[];
   cc?: string | string[];
   subject?: string;
@@ -948,14 +1000,9 @@ export type EmailSendInput = {
 
 /** WHICH requests a fetch route takes — every field given must hold. A fetch route matches an HTTP
  *  request: `url` is a standard `URLPattern` over the real URL (hostname and path; its init's
- *  fields, each a pattern string), `headers` exact values. `routingSlug` is a convenience, the one
- *  address component both ingress modes can express: paths routing shares one host, so it is the
- *  `/minds/<mind>/<routingSlug>` segment; subdomains make it `<routingSlug>--<mind>` or
- *  `<routingSlug>.<custom hostname>`. Without paths routing it could go, and a route would match
- *  its hostname directly (`url: { hostname: "here.tunnels.templestein.com" }`). `{}` takes every
- *  request. */
+ *  fields, each a pattern string: `url: { hostname: "here.tunnels.example.com" }`), `headers`
+ *  exact values. It names at least one url field or header: `{}` is refused. */
 export type FetchRouteRequestMatcher = {
-  routingSlug?: string;
   url?: {
     protocol?: string;
     username?: string;
@@ -1363,6 +1410,37 @@ export type TelemetryRows = { rows: Record<string, unknown>[]; sql: string };
 export type IterateContextApiWith<App extends keyof InstalledAppRoots> = IterateContextApi &
   Pick<InstalledAppRoots, App>;
 
+/** THE ROOT OF EVERY SESSION AT `https://<controlPlaneHostname>/api`, the control plane's API: a
+ *  capnweb session over a WebSocket, which the boundary ends (core/boundary-worker
+ *  `ControlPlaneRpcTarget`). The root is small, after capnweb's own pattern of a root whose main
+ *  method answers the real API (https://github.com/cloudflare/capnweb#more-complicated-example).
+ *  Call `authenticate` at once and do not await it: capnweb sends the calls that are made on its
+ *  answer in the same round trip (`root.authenticate(token).mind.whoami()`). */
+export interface ControlPlaneApi {
+  /** What anyone may know of this stack, asked with no credential. `stackKey` is the document
+   *  that the stack publishes at `/keys/stack.json`. */
+  about(): Promise<{
+    controlPlaneHostname: string;
+    topology: "full-cloudflare" | "external-mind-connects-into-cloudflare-boundary";
+    stackKey: unknown;
+  }>;
+  /** ONE WAY IN FOR EVERY KIND OF CLIENT. With `token`: a token of this mind's issuer. With
+   *  nothing: what the WebSocket's own request carried, its `Authorization` bearer, else (from a
+   *  page of the control plane's own origin alone) the browser's session cookie. What the session
+   *  offers follows from what the credential is for. The socket closes when the credential ends. */
+  authenticate(token?: string): ControlPlaneSessionApi;
+}
+
+/** WHAT ONE AUTHENTICATED SESSION OF THE CONTROL PLANE'S API OFFERS A CLIENT. The whole session is
+ *  iterate/workers `ControlPlaneSession`: its other method is for a mind that runs elsewhere, and
+ *  its types are the stack's own, which a client does not load. */
+export interface ControlPlaneSessionApi {
+  /** A member's credential: the mind's root context, `/`, as that member. A key's token: the one
+   *  lend that the key may make, `whoami` and `provide`, and nothing else of the mind. Any other
+   *  credential: reading it is refused. */
+  readonly mind: IterateContextApi;
+}
+
 /** A context (a mind, a user, an organization): every `itx` root, reached through `invoke`. */
 export interface IterateContextApi {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
@@ -1381,8 +1459,9 @@ export interface IterateContextApi {
     get(key: ScheduleKey): ScheduledAppend | null;
   };
   /** `principal` is who is calling, when the call has one: a person through the mind's API. Code
-   *  the mind loaded calls as itself and gets none. A mind names itself by `mindSlug`. A mind on
-   *  its own stack has no `mindId`: only the frozen platform, which holds many minds, answers one. */
+   *  the mind loaded calls as itself and gets none. `mindId` is the mind's id, the hash of its
+   *  signed genesis (./mind-identity.ts), which stays when its hostname changes; `mindSlug` is
+   *  its control-plane hostname, the name that people read. */
   whoami():
     | {
         mindId?: string;
@@ -1401,10 +1480,12 @@ export interface IterateContextApi {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   /** `append`, answered with each event's offset alone: the events do not travel back. */
   appendOffsets(...events: StreamEventInput[]): Promise<number[]>;
-  /** This mind's public URL over HTTP: the apex, or a routing slug's host (`blog--<mind>`, or
-   *  `blog.<primary hostname>` once the mind has a primary hostname),
-   *  at `path`. Only from a session, which carries the origin to compose it with. */
-  url(target?: { routingSlug?: string; path?: string }): Promise<string>;
+  /** A public URL of this mind's own code over HTTP: `https://<hostname><path>`. `hostname` is a
+   *  hostname of one of the mind's zones (the first zone when absent), and never the control-plane
+   *  hostname, which the platform answers. `path` is "/" when absent. `await itx.url()` is how
+   *  code learns a zone of the mind: an app at the label `blog` is at
+   *  `blog.<new URL(await itx.url()).hostname>`. */
+  url(target?: { hostname?: string; path?: string }): Promise<string>;
   /** RESET this context (Cloudflare's `ctx.abort`): its Durable Object drops everything it holds in
    *  memory and the next call starts a fresh incarnation from durable storage. Resolves with the
    *  `events.iterate.com/itx/aborted { reason?, callerPath?, app? }` event it recorded — durable
@@ -1543,8 +1624,8 @@ export interface IterateContextApi {
      *  says that it left. */
     exportSealed(path: string, proof: string, until: number): Promise<{ sealed: string }>;
     /** A sealed cell, taken in once: one that `exportSealed` handed out on a stack with the same
-     *  at-rest key, which comes back as it was, or one of the frozen platform
-     *  (`SealedSecretCell`). `proof`: the HMAC-SHA256 of `[path, cell]` as JSON under that key.
+     *  at-rest key, which comes back as it was. `proof`: the HMAC-SHA256 of `[path, cell]` as JSON
+     *  under that key.
      *  AN OLDER CELL IS TAKEN OVER A NEWER VALUE, once: that is what a restore is for. A cell of
      *  a grant whose refresh token works once holds a token that is spent by then. */
     importSealed(path: string, cell: string, proof: string): Promise<{ path: string }>;
@@ -1560,17 +1641,16 @@ export interface IterateContextApi {
         | { path: string; outcome: "failed"; error: string; answerLost?: true }
       )[]
     >;
-    /** The stack's iterate Cloud, as its config names it (`cloud.origin`), and the names of the
-     *  clients that Cloud publishes: each is a `client: { cloud: <name> }` of `beginOAuth`. Null
-     *  for a stack that names no Cloud; no client when the Cloud gave no list. */
-    cloud(): Promise<{ origin: string; clients: string[] } | null>;
-    /** The stack's own Cloudflare API token, kept at `/secrets/cloudflare`: written when the
-     *  stack has one of this release's list that the vault lacks, deleted when the stack has none
-     *  any more or only one of an older list, and a secret that somebody else put at the path left
-     *  as it is
-     *  (core/mind-worker/src/context/cloudflare-token.ts). The root asks for this once in each of
-     *  its incarnations: no agent needs to. */
-    keepCloudflareToken(): Promise<{ path: string; outcome: "set" | "deleted" | "unchanged" }>;
+    /** The iterate Cloud at `origin` (an exact `https:` origin, no path: iterate's own is
+     *  `https://cloud.iterate.com`), and the names of the clients that Cloud publishes: each is a
+     *  `client: { cloud: <name>, origin }` of `beginOAuth`. No client when the Cloud gave no
+     *  list. */
+    cloud(origin: string): Promise<{ origin: string; clients: string[] }>;
+    /** Whether the stack has its own OAuth client at Cloudflare, which
+     *  `beginOAuth(path, { client: { stack: "cloudflare" } })` goes through. False when the
+     *  deploy's credential may not make OAuth clients: a member then makes one by hand, and a
+     *  connect names it as `clientId` and `clientSecret`. Never the client's id or its secret. */
+    hasStackClient(name: StackClientName["stack"]): Promise<boolean>;
     /** The link to a form on the platform's own hostname where a person enters a value an agent
      *  must never see in chat. The form shows the secret's path, its pin, what it may be used for
      *  (`SecretUses`) and `description` as the requester's words, and answers a signed-in member

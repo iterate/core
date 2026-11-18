@@ -29,29 +29,13 @@ export type SecretRecord = {
   refresh: SecretRefresh | null;
 } & SecretUse;
 
-// `lendTo` null is every path: an import's (`UNLIMITED_USE`), and a new secret's only when its
-// maker says `lendTo: null` outright.
+// `lendTo` null is every path: a secret's only when its maker says `lendTo: null` outright.
 export type SecretUse = {
   placement: "header" | "url";
   operations: SecretOperation[];
   lendTo: string[] | null;
   /** Absent: a statement it signs may name any path. */
   statementPaths?: string[];
-};
-
-// A secret made before records said what it may do, or imported: everything the earlier platform
-// (core/os, removed) let it do, and no operation added since.
-export const UNLIMITED_USE: SecretUse = {
-  placement: "url",
-  operations: [
-    "signHmac",
-    "verifyHmac",
-    "verifyEquals",
-    "deriveSharedSecret",
-    "publicKeyOf",
-    "signWithKey",
-  ],
-  lendTo: null,
 };
 
 export function secretUseOf(
@@ -115,6 +99,19 @@ export function clientAuthOf(value: unknown): ClientAuth {
   return known;
 }
 
+/** A CLOUD'S ADDRESS, AS A CALLER NAMED IT: an exact `https:` origin, as `new URL(…).origin`
+ *  spells it, with no path, query or trailing slash. Anything else is refused, in words that
+ *  name `what` was asked. */
+export function cloudOriginOf(origin: unknown, what: string): string {
+  const url = typeof origin === "string" ? URL.parse(origin) : null;
+  if (!url || url.protocol !== "https:" || url.origin !== origin)
+    throw codedError(
+      "INVALID_INPUT",
+      `${what}: a Cloud is named by its origin, an https address with no path (https://cloud.iterate.com), got ${JSON.stringify(origin)}`,
+    );
+  return url.origin;
+}
+
 export function originsOf(urls: unknown): string[] {
   if (!Array.isArray(urls)) throw new Error("secrets: urls is a list of URLs");
   return [...new Set(urls.map((url) => new URL(String(url)).origin))];
@@ -167,8 +164,9 @@ export function normalizeSecretRecord(
     }
     const endpointKey = kind === "oauth-refresh-token" ? "tokenEndpoint" : "apiOrigin";
     const endpoint = new URL(String(strategy[endpointKey]));
-    if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")
-      throw new Error(`secrets: refresh.${endpointKey} must be an http(s) URL`);
+    // a refresh sends a refresh token, a client secret or an App's signature there
+    if (endpoint.protocol !== "https:")
+      throw new Error(`secrets: refresh.${endpointKey} must be an https URL`);
     if (!urls.includes(endpoint.origin))
       throw new Error(
         `secrets: refresh.${endpointKey} ${endpoint.origin} is outside the pin ${urls.join(", ")} — a refresh only ever sends the material toward a pinned host`,
@@ -189,17 +187,19 @@ export function normalizeSecretRecord(
       // it lands in a URL path: GitHub's ids are digits, a fake's a slug
       if (!/^[a-zA-Z0-9_-]+$/.test(installationId))
         throw new Error("secrets: refresh.installationId is GitHub's id ([a-zA-Z0-9_-]+)");
-      // iterate Cloud's App key stays at the Cloud
+      // iterate Cloud's App key stays at the Cloud, whose origin the secret keeps from here on
       const cloud = typeof client?.cloud === "string" ? client.cloud : "";
       if (!cloud && client?.mind !== "github")
         throw new Error(
-          'secrets: refresh.client is { mind: "github" }, or { cloud: "<name>" } for iterate Cloud\'s App',
+          'secrets: refresh.client is { mind: "github" }, or { cloud: "<name>", origin: "<the Cloud\'s origin>" } for iterate Cloud\'s App',
         );
       refresh = {
         kind,
         apiOrigin: endpoint.origin,
         installationId,
-        client: cloud ? { cloud } : { mind: "github" },
+        client: cloud
+          ? { cloud, origin: cloudOriginOf(client?.origin, "secrets: refresh.client.origin") }
+          : { mind: "github" },
       };
     }
   }
@@ -262,6 +262,37 @@ export class SecretRefused extends Error {
   }
 }
 
+/** WHAT EACH KIND OF REFRESH READS OF ITS SECRET'S MATERIAL to make a new access token, as the
+ *  schema that the refresh itself reads the material with. Those fields are the refresh's alone:
+ *  of a secret that has the refresh, no placeholder and no lend gives one out
+ *  (`refreshOnlyFieldRefusal`). So a refresh token, one that iterate Cloud sealed too, goes to
+ *  its token endpoint and nowhere else, and a client secret or an App's key goes only where the
+ *  refresh sends it. A new kind has the rule once it has its entry, which the type requires.
+ *  `worker`: the exchange code is the secret's maker's own and is handed the material whole. The
+ *  platform reads no field for it, so it can name none. */
+export const REFRESH_READS = {
+  "oauth-refresh-token": z.object({
+    refreshToken: z.string().min(1),
+    clientId: z.string().min(1),
+    clientSecret: z.string().optional(),
+  }),
+  "github-app-installation": z.object({ appId: z.string(), privateKey: z.string() }),
+  worker: z.object({}),
+} satisfies Record<SecretRefresh["kind"], z.ZodObject>;
+
+/** Why `field` of the secret at `path` is given to its refresh alone, or null: a field that the
+ *  secret's kind of refresh reads (`REFRESH_READS`), or one under it. Asked before a placeholder
+ *  is put into a request and before a secret is lent, so nothing is sent. */
+export function refreshOnlyFieldRefusal(
+  refresh: SecretRefresh | null,
+  path: string,
+  field: string | undefined,
+): string | null {
+  const name = field?.split(".")[0];
+  if (!refresh || !name || !Object.hasOwn(REFRESH_READS[refresh.kind].shape, name)) return null;
+  return `${JSON.stringify(name)} of ${path} is what the secret's ${refresh.kind} refresh reads to make a new access token: it is given to that refresh alone`;
+}
+
 function secretFieldOf(
   material: SecretMaterial,
   field: string,
@@ -286,7 +317,11 @@ function secretFieldOf(
 // value is one component, so it can never add a query or a fragment. The body is not scanned.
 export async function substituteMindSecrets(
   request: Request,
-  resolve: (path: string) => Promise<SecretMaterial | null> | SecretMaterial | null,
+  // `field`: the one the placeholder names. A resolver refuses a field that is not given out.
+  resolve: (
+    path: string,
+    field: string | undefined,
+  ) => Promise<SecretMaterial | null> | SecretMaterial | null,
   // every spelling of each value put in: what an answer must not carry back
   substitutedValues?: Set<string>,
 ): Promise<Request> {
@@ -299,7 +334,7 @@ export async function substituteMindSecrets(
     for (const m of value.matchAll(SECRET_PLACEHOLDER)) {
       const [, path = "", field, appJwt] = m;
       const placeholder = placeholderOf(path, field, appJwt);
-      const stored = await resolve(path);
+      const stored = await resolve(path, field);
       // oxlint-disable-next-line iterate/simple-truthiness-check -- null means no secret is stored; a stored empty-string value is a real secret and must be substituted, not refused
       if (stored == null)
         throw new SecretRefused(
@@ -349,7 +384,6 @@ export async function substituteMindSecrets(
 }
 
 const GITHUB_API_ORIGIN = "https://api.github.com";
-const GithubAppMaterial = z.object({ appId: z.string(), privateKey: z.string() });
 
 // The JWT goes to GitHub's API alone, in the one header GitHub reads it from; the key never leaves.
 async function githubAppJwtOf(
@@ -362,7 +396,7 @@ async function githubAppJwtOf(
     throw new SecretRefused(
       `itx.fetch: ${placeholder} goes in the Authorization header of a request to ${GITHUB_API_ORIGIN} alone, not in ${where} to ${new URL(url).origin}`,
     );
-  const app = GithubAppMaterial.safeParse(material);
+  const app = REFRESH_READS["github-app-installation"].safeParse(material);
   if (!app.success)
     throw new SecretRefused(
       `itx.fetch: ${placeholder}: the secret holds no "appId" and "privateKey"`,
@@ -468,13 +502,6 @@ export function pinRefusal(path: string, url: string, urls: string[]): SecretRef
   );
 }
 
-function stringField(record: Record<string, unknown>, field: string, kind: string): string {
-  const value = record[field];
-  if (typeof value !== "string" || value === "")
-    throw new Error(`${kind}: the secret's material has no "${field}"`);
-  return value;
-}
-
 async function jsonRecordOf(response: Response): Promise<Record<string, unknown>> {
   const body: unknown = await response.json().catch(() => null);
   return isRecord(body) ? body : {};
@@ -565,9 +592,12 @@ export async function refreshSecretMaterial(
   clientSecretOf: ClientSecretOf,
 ): Promise<Record<string, unknown>> {
   const record = typeof material === "object" && material ? material : {};
-  const refreshToken = stringField(record, "refreshToken", refresh.kind);
-  const clientId = stringField(record, "clientId", refresh.kind);
-  const clientSecret = typeof record.clientSecret === "string" ? record.clientSecret : "";
+  const reads = REFRESH_READS[refresh.kind].safeParse(record);
+  if (!reads.success)
+    throw new Error(
+      `${refresh.kind}: the secret's material has no "${String(reads.error.issues[0]?.path[0])}"`,
+    );
+  const { refreshToken, clientId, clientSecret = "" } = reads.data;
   const request = oauthTokenRequest({
     tokenEndpoint: refresh.tokenEndpoint,
     clientId,

@@ -376,7 +376,7 @@ export async function personItxSession(args: {
       caller,
     ).invoke(expression);
   };
-  return serveSession(request, ctx, {
+  return serveSession(ctx, {
     caller: { principal: null },
     endsAt,
     endReason: "the sign-in for this session ended: sign in again",

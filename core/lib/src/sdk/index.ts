@@ -46,6 +46,8 @@ import { DirectAppendHolder, type DirectAppend } from "./direct-append.ts";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
 export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
 export { serveFiles, type FileContent } from "./files.ts";
+// What an app says of itself to the mind's issuer: the typed object, and the answer that serves it.
+export { serveAppDescription, type AppDescription } from "../app-description.ts";
 // ── StreamProcessorDurableObject ── THE SDK HOST: the `DurableObject` shell that hosts ONE
 // `StreamProcessor` as a facet of its context. An author writes the pure processor and its host,
 // one line long:
@@ -304,12 +306,11 @@ export type IterateConfigProcessEventArgs<App extends keyof InstalledAppRoots = 
  *  appends nothing new. A package keeps nothing across calls: not the host, not a scope, not a
  *  handle. */
 export type Integration = {
-  /** The host it answers (`telegram` for `telegram--<mind>`): the worker hands it the requests
-   *  on that routing slug and no other, so a package never sees another's requests, and an error
-   *  in one page breaks no other host. */
-  routingSlug?: string;
-  /** A request on `routingSlug`. `host` is the worker: `using itx = host.getItx()` for the
-   *  mind's scope, and for a members-only page the gate every private page needs:
+  /** A request on the package's own hostname, handed over by the worker in a case of its `fetch`
+   *  (`case "telegram": return telegram.fetch(request, this)`), so a package never sees another's
+   *  requests, and an error in one page breaks no other host. `host` is the worker:
+   *  `using itx = host.getItx()` for the mind's scope, and for a members-only page the gate every
+   *  private page needs:
    *  `const denied = host.auth.require(request); if (denied) return denied;`. A webhook needs no
    *  gate: it proves itself with a signature (`itx.secrets.verifyHmac`). A sender that can only
    *  present a secret as it is (`itx.secrets.verifyEquals`) can be shut out by anyone for a minute
@@ -403,11 +404,10 @@ export abstract class IterateConfigEntrypoint<
    *  `event.offset`. Default: ignore it. */
   processMindEvent(_args: IterateConfigProcessEventArgs & { mind: string }): void | Promise<void> {}
 
-  /** THE WEB ROOT — every Request on a host of the mind that no fetch route takes (the platform
-   *  serves those first: `itx.fetchRoutes`). The host's routing slug is in `x-iterate-routing-slug`
-   *  (`notes` for `notes--<mind>.<hostname>`; absent on the apex), written only by the platform:
-   *  route on it in plain code, answering here (reaching the mind through `this.getItx()`) or
-   *  forwarding the Request. Default: not found. */
+  /** THE WEB ROOT — every Request on a hostname of the mind's zones, but its control-plane hostname, that no
+   *  fetch route takes (the platform serves those first: `itx.fetchRoutes`). Route on
+   *  `new URL(request.url).hostname` in plain code, answering here (reaching the mind through
+   *  `this.getItx()`) or forwarding the Request. Default: not found. */
   override fetch(_request: Request): Response | Promise<Response> {
     return new Response("Not found\n", { status: 404 });
   }

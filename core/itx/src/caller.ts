@@ -1,6 +1,6 @@
 import { itxExpressionStepName, type ItxExpressionPrefix } from "iterate/expression";
 import { codedError } from "iterate/lib";
-import type { Principal } from "iterate/principal";
+import type { Person, Principal } from "iterate/principal";
 import type { EventCopiedFrom, StreamEventInput } from "iterate/stream/processor";
 import { storedCause, type Cause } from "./cause.ts";
 import type { OnBehalfOf } from "./on-behalf-of.ts";
@@ -10,6 +10,11 @@ import type { OnBehalfOf } from "./on-behalf-of.ts";
 export type Caller = {
   principal: Principal | null;
   grant?: string;
+  // The signed-in person of a visitor, member or not, as the boundary stamped them on the request
+  // that this call serves (iterate/principal `stampedCallerOf`). Read there alone: a Request that
+  // the kernel hands to loaded code names the person from here (./context/rpc-stubs.ts
+  // `stampCallerHeaders`), never from its own headers.
+  person?: Person;
   // A member's session held by a page of the mind's own host (serve-host.ts `itxSession`).
   via?: { appPage: string };
   // Set by the first `cd` hop. Its presence means the input expression was already admitted;
@@ -74,28 +79,58 @@ export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   return stamped;
 }
 
-// A key taken first would answer or refuse the platform's own fact.
+/** THE PLATFORM'S OWN IDEMPOTENCY KEYS: a key that starts with one of the platform's namespaces.
+ *  The platform appends its facts under such keys (`mind/identity-record:<hash>`,
+ *  `mind/stack-deployed:<version>`), and a key that somebody took first would answer the
+ *  platform's append with the other event, or refuse it for good.
+ *
+ *  THE KEYS OF THE MIND'S IDENTITY (`mind/identity-record:` and `mind/identity-record-refused:`)
+ *  are the platform's alone: every caller without the explicit platform flag is refused them.
+ *  That includes a call that runs a stored row's target, which has no principal and is no
+ *  loaded code, and whose row a member or loaded code may have written: an ordinary event under
+ *  a record's key would keep that record out of the mind's log for good.
+ *
+ *  THE OTHER KEYS are refused to every caller from outside the platform's code: loaded code, a
+ *  person or a key (`principal`), and a signed statement that the platform carries in. The
+ *  kernel's first-party code keeps them: it calls with no principal and is no loaded code, and
+ *  a facet of the mind's own Worker appends `mind/created` and its like so.
+ *
+ *  An event that a schedule will append is held to the same rules when the schedule is set: it
+ *  fires under its maker's stamp. */
 export function refusePlatformIdempotencyKeys(
-  events: readonly { idempotencyKey?: string }[],
+  events: readonly StreamEventInput[],
   caller: Caller,
 ): void {
-  const platformKey = caller.app && /^(?:itx|mind|repo|workspace|sandbox|secret)[/@]/;
-  if (!platformKey) return;
-  for (const { idempotencyKey } of events)
-    if (idempotencyKey && platformKey.test(idempotencyKey))
-      throw codedError(
-        "FORBIDDEN",
-        `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
+  if (caller.platform && !caller.signer) return;
+  const fromOutside = caller.app || caller.principal || caller.signer;
+  for (const event of events) {
+    if (event.type === "events.iterate.com/itx/schedule-set")
+      // the cast: a schedule's payload holds the events that it will append
+      refusePlatformIdempotencyKeys(
+        (event.payload as { events?: StreamEventInput[] }).events || [],
+        caller,
       );
+    const key = event.idempotencyKey;
+    if (!key) continue;
+    if (
+      /^mind\/identity-record(?:-refused)?:/.test(key) ||
+      (fromOutside && /^(?:itx|mind|repo|workspace|sandbox|secret)[/@]/.test(key))
+    )
+      throw codedError("FORBIDDEN", `idempotency key ${JSON.stringify(key)} is the platform's`);
+  }
 }
 
 // Readers trust these by type alone, so the append boundary refuses anyone else's.
 const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/mind/worker-updated",
   "events.iterate.com/mind/worker-update-failed",
+  // the record of a deploy: the mind's processor keeps the latest as the stack's config
+  "events.iterate.com/mind/stack-deployed",
+  // the mind's identity: a signed record that the auth Worker checked, accepted or refused
+  "events.iterate.com/mind/identity-record-accepted",
+  "events.iterate.com/mind/identity-record-refused",
   "events.iterate.com/email/received",
   "events.iterate.com/email/sent",
-  "events.iterate.com/email/forward-failed",
   "events.iterate.com/email/send-failed",
   "events.iterate.com/email/delivery-failed",
   "events.iterate.com/webhook/received",
@@ -128,6 +163,7 @@ export const isConfigPointerMatch = (match: ItxExpressionPrefix) =>
 // A signed statement the platform carries in is held to this like anyone's.
 export function refuseNonPlatformWrites(events: readonly StreamEventInput[], caller: Caller): void {
   if (!caller.platform || caller.signer) refuseThePlatformsOwn(events);
+  refusePlatformIdempotencyKeys(events, caller);
 }
 
 function refuseThePlatformsOwn(events: readonly StreamEventInput[]): void {

@@ -14,10 +14,10 @@ type MaterialBinding = {
   refresh: SecretRefresh | null;
   version: number;
   nonce: string;
-  use?: {
+  use: {
     placement: string;
     operations: readonly string[];
-    lendTo?: readonly string[] | null;
+    lendTo: readonly string[] | null;
     statementPaths?: readonly string[];
   };
 };
@@ -40,32 +40,13 @@ export async function encryptSecretMaterial(
   };
 }
 
-export function decryptLegacySecretMaterial(
-  encrypted: EncryptedMaterial,
-  // `context` is the Durable Object name in the earlier platform (core/os, removed),
-  // `<mindId>.iterate/secrets/<name>`
-  binding: { context: string; urls: string[]; nonce: string },
-  key: string,
-): Promise<SecretMaterial> {
-  // the bytes that platform sealed with: its `additionalDataOf`, version 2
-  const urls = [...new Set(binding.urls)].sort();
-  const additionalData = Uint8Array.from(
-    new TextEncoder().encode(
-      JSON.stringify(["iterate-secret", 2, binding.context, urls, binding.nonce]),
-    ),
-  );
-  return decryptSecretMaterial(encrypted, additionalData, key);
-}
-
-/** `bound`: the cell's binding, or the exact bytes an older cell was sealed with. */
 export async function decryptSecretMaterial(
   encrypted: EncryptedMaterial,
-  bound: MaterialBinding | Uint8Array<ArrayBuffer>,
+  binding: MaterialBinding,
   key: string,
 ): Promise<SecretMaterial> {
-  const additionalData = bound instanceof Uint8Array ? bound : additionalDataOf(bound);
   const plain = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: bytesOf(encrypted.iv), additionalData },
+    { name: "AES-GCM", iv: bytesOf(encrypted.iv), additionalData: additionalDataOf(binding) },
     await aesKeyOf(key),
     bytesOf(encrypted.ciphertext),
   );
@@ -92,23 +73,15 @@ function additionalDataOf(binding: MaterialBinding): Uint8Array<ArrayBuffer> {
         refresh,
         binding.version,
         binding.nonce,
-        // last, and only when bound: a cell sealed without it keeps its bytes
-        ...(binding.use
-          ? [
-              [
-                binding.use.placement,
-                [...new Set(binding.use.operations)].sort(),
-                // oxlint-disable-next-line iterate/simple-truthiness-check -- absent is a cell sealed before `lendTo` was bound; null (every path) is bound
-                ...(binding.use.lendTo === undefined
-                  ? []
-                  : [binding.use.lendTo && [...new Set(binding.use.lendTo)].sort()]),
-                // named, and only when bound: a cell sealed without it keeps its bytes
-                ...(binding.use.statementPaths
-                  ? [{ statementPaths: [...new Set(binding.use.statementPaths)].sort() }]
-                  : []),
-              ],
-            ]
-          : []),
+        [
+          binding.use.placement,
+          [...new Set(binding.use.operations)].sort(),
+          binding.use.lendTo && [...new Set(binding.use.lendTo)].sort(),
+          // named, and only when the secret has them: absent is any path
+          ...(binding.use.statementPaths
+            ? [{ statementPaths: [...new Set(binding.use.statementPaths)].sort() }]
+            : []),
+        ],
       ]),
     ),
   );

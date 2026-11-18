@@ -39,7 +39,7 @@ import { SNAPSHOT_REREADS, type RuleSnapshot } from "./rule-snapshots.ts";
 const BUILT_IN_ROOT_DESCRIPTIONS = {
   whoami: "who this context is: `itx.whoami()` → { path }",
   fetchRoutes:
-    "which itx expression a request on this mind's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the platform serves a match from `route.target`, before the config worker's fetch",
+    "which itx expression a request on this mind's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the platform serves a match from `route.target`, before the config worker's fetch",
   append: "write events to this log: `itx.append({ type, payload })`",
   appendOffsets:
     "write events to this log and answer their offsets only, not the events: `itx.appendOffsets({ type, payload })` → [offset]",

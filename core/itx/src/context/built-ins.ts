@@ -9,7 +9,6 @@ import {
   InvokeHandle,
 } from "iterate/expression";
 import type { FacetSpec, IterateContextApi } from "iterate/api";
-import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import type { Cause } from "../cause.ts";
 import { refusePlatformIdempotencyKeys, sha256Hex, stampCaller, type Caller } from "../caller.ts";
@@ -44,6 +43,7 @@ import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dis
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   encodeFetchExpression,
+  requestForLoadedCode,
   stampCallerHeaders,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
@@ -66,6 +66,7 @@ export interface BuiltInScope {
   builtins: Omit<BuiltInScope, "builtins">;
   whoami(): Promise<{
     path: string;
+    mindId?: string;
     mindSlug?: string;
     principal?: { actor: string; email?: string };
   }>;
@@ -428,10 +429,12 @@ export function buildIdentityRoots(
   const { path } = deps;
   return {
     whoami: async () => {
-      const { mindSlug } = itxHost();
+      const { mindSlug, mindId } = itxHost();
       const principal = deps.caller().principal;
       return {
         path,
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- the wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
+        ...(mindId && { mindId }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(mindSlug && { mindSlug }),
         ...(principal && {
@@ -520,7 +523,7 @@ export function workersRoot(deps: {
         const cause = deps.cause();
         const callerPath = deps.caller().path || path;
         const args =
-          method === "fetch" ? [callerStampedRequest(callArgs, deps.caller(), cause)] : callArgs;
+          method === "fetch" ? [requestForLoadedCode(callArgs, deps.caller(), cause)] : callArgs;
         // one-event hooks are the delivery loop's to call, as a subscriber's `deliverEvent` is
         if (method === "deliverEvent" || method === "processEvent")
           await assertDeliveryCaller(
@@ -612,19 +615,6 @@ export function workersRoot(deps: {
       });
     },
   };
-}
-
-// For loaded code, no routing slug: the host a request arrived on is the edge's word.
-function callerStampedRequest(
-  [input, init]: unknown[],
-  caller: Caller,
-  cause: Cause | undefined,
-): Request {
-  const request = new Request(input as RequestInfo, init as RequestInit | undefined);
-  const headers = new Headers(request.headers);
-  stampCallerHeaders(headers, { principal: caller.principal, grant: caller.grant, cause });
-  if (caller.app) headers.delete(ITERATE_ROUTING_SLUG_HEADER);
-  return new Request(request, { headers });
 }
 
 // Delivery authority is read per call, never the one `caller` carried: the delivery loop evaluates

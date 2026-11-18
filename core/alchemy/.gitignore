@@ -1,2 +1,2 @@
-# Configs with real accounts and domains, as JSON (the .ts ones are in the root .gitignore).
+# A config with a real account and real zones (README.md, "Deploy").
 mind.config*.local.json

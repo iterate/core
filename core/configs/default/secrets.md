@@ -1,8 +1,7 @@
-# Secrets beyond tokens, approvals and services
+# Secrets beyond tokens, and approvals
 
 What `itx.secrets` does besides holding a token (a key that signs for other minds, derived keys, a
-GitHub App's JWT), the rules that make an act wait for a member's yes (`itx.approvals`), and the
-services of the account (`itx.services`).
+GitHub App's JWT), and the rules that make an act wait for a member's yes (`itx.approvals`).
 
 ## A key that signs for other minds
 
@@ -31,7 +30,7 @@ example to `POST /app/installations/<id>/access_tokens`. In any other header or 
 ## What waits for a member's yes
 
 A rule makes an act wait until a member approves it with a passkey, on
-`https://iterate.<domain>/secrets/approvals`. A mind has no rule until someone sets one.
+`https://<control-plane hostname>/secrets/approvals`. A mind has no rule until someone sets one.
 
 - A rule on a secret names methods and hosts: an `itx.fetch` with that secret that matches waits.
   A member sets it on the page. After five minutes the call answers 403 and says it still waits;
@@ -55,15 +54,3 @@ A rule makes an act wait until a member approves it with a passkey, on
   signs too, at their own context `/people/<address>`, and their stamp has `member: false`.
 - What a rule does not promise: a mail is held whatever sends it, but a verb is held only when the
   mind's agents or loaded code call it, not from a mind Worker changed to skip the rule.
-
-## Services of the account
-
-When the stack's config names `services` (core/alchemy/README.md), `itx.services.<name>` is a
-Worker of the mind's own Cloudflare account, and `itx.services.<name>.<method>(...args)` calls
-that Worker's method with the platform's word of who calls first: the mind, the calling
-context's path and the person behind the call. `(await itx.rewriteRules.list())` at `/` shows
-the root with each service's line. Every context that reaches the root reaches every method. A
-jailed context reaches one method alone by a rule there that a member writes (loaded code names no
-`itx.builtins` in a row):
-`{ match: "itx.install", target: 'itx.builtins.cd("/").services.cloud.installBegin' }`, as the
-payload of an `events.iterate.com/itx/rewrite-rule-configured` event on that context.

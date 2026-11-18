@@ -46,6 +46,40 @@ export type RpcStubFetchTransport = {
   fetch(upgradeId: string, itxExpressionSteps: ItxExpression, request: Request): Promise<unknown>;
 };
 
+/** Beside `FETCH_UPGRADE_SOCKET_HEADER` on a leg that is dialled from outside the mind's Worker:
+ *  the name of the context's Durable Object that serves the upgrade. */
+export const FETCH_UPGRADE_CONTEXT_HEADER = "x-itx-fetch-upgrade-context";
+
+/** A LENT STUB'S `fetch`, MADE WHERE THE LENDER'S OWN SESSION ENDS. A session of the API ends in
+ *  the boundary, and the mind holds a lent stub as a Workers RPC stub of the boundary's. A
+ *  `Response` that holds a WebSocket cannot be returned over Workers RPC ("Could not serialize
+ *  object of type "WebSocket"", workerd 1.20261116.1), so the mind cannot call such a stub's
+ *  `fetch` itself. It calls the holder, which is in the invocation that holds the lender's
+ *  socket: the holder makes the fetch there (`dialRpcStubFetch`), and dials the leg for a socket
+ *  into the mind through the mind's own `fetch` (`fetchUpgradeLegRequest`).
+ *
+ *  `context`: the name of the context's Durable Object, for that leg. The answer is what
+ *  `dialRpcStubFetch` answers: a `Response` with no socket, or its marker of an upgrade. */
+export type LentFetchHolder = {
+  dup(): LentFetchHolder;
+  fetch(
+    upgradeId: string,
+    itxExpressionSteps: ItxExpression,
+    request: Request,
+    context: string,
+  ): Promise<unknown>;
+};
+
+/** THE LEG'S DIAL, AS A REQUEST FOR THE MIND'S `fetch`: a socket crosses a Worker's boundary
+ *  through a method named `fetch`, and through no other. `leg` is the dial as the splice makes
+ *  it (`dialRpcStubFetch`), with the upgrade's id on it. Only the boundary sends one: it removes
+ *  every `x-itx-*` header from a request that comes from outside. */
+export function fetchUpgradeLegRequest(context: string, url: string, leg?: RequestInit): Request {
+  const headers = new Headers(leg?.headers);
+  headers.set(FETCH_UPGRADE_CONTEXT_HEADER, context);
+  return new Request(url, { ...leg, headers });
+}
+
 type ClientWebSocket = {
   accept?(): void;
   send(data: string | ArrayBuffer): void;

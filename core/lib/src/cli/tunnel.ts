@@ -1,5 +1,5 @@
 // tunnel.ts — `iterate tunnel <port>`: a local port served on one of the mind's hostnames,
-// `<name>.<address>`, through a stub lent to the mind with the fetch route that reaches it.
+// `<name>.<the mind's first zone>`, through a stub lent to the mind with the fetch route that reaches it.
 import { randomBytes } from "node:crypto";
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import WebSocket from "ws";
@@ -170,8 +170,8 @@ function causeOf(error: unknown): string {
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fill(30_000)];
 
 /** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the mind as `itx.tunnels.<name>` with
- *  the fetch route `tunnel-<name>` taking the `<name>` routing slug's host to it (or, given a
- *  `hostname`, that hostname's requests alone), print the URL on stdout, and on Ctrl-C delete the
+ *  the fetch route `tunnel-<name>` taking one hostname's requests to it (`hostname`, or
+ *  `<name>.<the mind's first zone>`), print the URL on stdout, and on Ctrl-C delete the
  *  route, then end the lend. The route rides the lend (`provide`'s `fetchRoute`):
  *  the platform sets it again whenever it re-attaches the lend and removes it when the lend ends —
  *  a tunnel killed outright, or asleep, leaves no route behind. A connection that closes (its
@@ -183,7 +183,8 @@ export async function runTunnel(input: {
   reconnect: () => Promise<MindConnection>;
   port: number;
   tunnelName?: string;
-  /** the one hostname the route matches (`url: { hostname }`) instead of the name's routing slug */
+  /** the one hostname the route matches (`url: { hostname }`): `<name>.<the mind's first zone>`
+   *  when absent */
   hostname?: string;
   public?: boolean;
   /** the reconnect schedule — a test's, `RECONNECT_DELAYS_MS` otherwise */
@@ -192,13 +193,11 @@ export async function runTunnel(input: {
   const tunnelName = input.tunnelName || `t${randomBytes(4).toString("hex")}`;
   const fetchRouteName = `tunnel-${tunnelName}`;
   const target = `itx.tunnels.${tunnelName}`;
-  const { hostname } = input;
   // The platform takes any URLPattern hostname (`*` included); a tunnel's is one literal host.
-  if (hostname && !/^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]+$/.test(hostname))
+  if (input.hostname && !/^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]+$/.test(input.hostname))
     throw new Error(
-      `--hostname ${JSON.stringify(hostname)} is not one lowercase hostname, e.g. hello.tunnels.example.com`,
+      `--hostname ${JSON.stringify(input.hostname)} is not one lowercase hostname, e.g. hello.tunnels.example.com`,
     );
-  const requestMatcher = hostname ? { url: { hostname } } : { routingSlug: tunnelName };
   // Listening before the route is set: until a listener is installed the OS's default action ends
   // the process at once, which would leave the route standing.
   let stop = () => {};
@@ -209,30 +208,33 @@ export async function runTunnel(input: {
    *  the lend ends — why, as a line. */
   const serve = async (connection: MindConnection, first: boolean): Promise<"stopped" | string> => {
     const mind = connection.itx;
+    // THE MIND SAYS WHETHER THE HOSTNAME IS ONE ITS OWN CODE ANSWERS, before any route is set:
+    // `itx.url` refuses a hostname outside the mind's zones, and the control-plane hostname, where no
+    // route is ever asked (`--name iterate` on the first zone names it). `itx.url()` is the apex
+    // of the first zone, and the tunnel's own hostname is a label under it.
+    const url = await mind.url({
+      hostname: input.hostname || `${tunnelName}.${new URL(await mind.url()).hostname}`,
+    });
+    const { hostname } = new URL(url);
     // A route of this name or on this host is someone else's unless it is this tunnel's own (a
     // restart, another terminal, this tunnel before it reconnected), which is taken over.
     const conflict = (await mind.fetchRoutes.list()).find(
       (route) =>
         (route.fetchRouteName === fetchRouteName ||
-          (hostname
-            ? route.requestMatcher.url?.hostname === hostname
-            : route.requestMatcher.routingSlug === tunnelName)) &&
+          route.requestMatcher.url?.hostname === hostname) &&
         !(route.fetchRouteName === fetchRouteName && route.target.join(".") === target),
     );
     if (conflict)
       throw new Error(
-        `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another ${hostname ? "--name or --hostname" : "--name"}.`,
+        `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another ${input.hostname ? "--name or --hostname" : "--name"}.`,
       );
-    // a routing slug is its label under the mind's domain (core/mind-worker http.ts
-    // `serveMindHost`)
-    const url = `https://${hostname || `${tunnelName}.${connection.address}`}/`;
     using lend = await mind.provide(
       target,
       new LocalPortRpcTarget(input.port, (line) => console.error(line)),
       {
         fetchRoute: {
           fetchRouteName,
-          requestMatcher,
+          requestMatcher: { url: { hostname } },
           authRequirement: input.public ? null : { visitors: "mind-members" },
         },
       },

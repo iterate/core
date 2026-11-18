@@ -6,15 +6,17 @@ import { z } from "zod";
 import { codedError } from "iterate/lib";
 import type { TelemetryService } from "iterate/workers";
 import { readBounded, ROW_MAX_BYTES, sends, sized } from "./bounds.ts";
+import { telemetryWorkerConfigOf } from "./config.ts";
 import type { Env } from "./env.ts";
 import { type EventsRow, eventsRow } from "./events-row.ts";
 import { scoped } from "./query.ts";
 
 export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService {
   async query(...[sql, hours]: Parameters<TelemetryService["query"]>) {
+    const config = telemetryWorkerConfigOf(this.env);
     const run = scoped(
       sql,
-      { own: this.env.OWN_WORKERS.split(","), metricsDataset: this.env.METRICS_DATASET },
+      { own: config.workerNamesThatQueriesReadWhole, metricsDataset: config.metricsDatasetName },
       hours,
     );
     const started = Date.now();
@@ -35,7 +37,7 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
   /** A failed send throws and the whole batch comes again, so a row may land twice (dedupe on path
    *  and offset). A row over ROW_MAX_BYTES would hold every later event back: it is dropped. */
   async sendEvents(events: Parameters<TelemetryService["sendEvents"]>[0]) {
-    const worker = this.env.MIND_WORKER;
+    const worker = telemetryWorkerConfigOf(this.env).eventsWriterName;
     const rows: { row: EventsRow; bytes: number }[] = [];
     let dropped = 0;
     for (const event of events) {
@@ -57,14 +59,13 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
   }
 
   async #rows(run: ReturnType<typeof scoped>): Promise<Record<string, unknown>[]> {
-    const account = this.env.ACCOUNT_ID;
-    const bucket = this.env.TELEMETRY_BUCKET;
+    const config = telemetryWorkerConfigOf(this.env);
     if (run.engine === "metrics") {
       const response = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${account}/analytics_engine/sql`,
+        `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/analytics_engine/sql`,
         {
           method: "POST",
-          headers: { authorization: `Bearer ${this.env.TELEMETRY_ANALYTICS_TOKEN}` },
+          headers: { authorization: `Bearer ${config.analyticsToken.exposeSecret()}` },
           body: run.sql,
           signal: AbortSignal.timeout(30_000),
         },
@@ -79,10 +80,10 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
         : new Error(why);
     }
     const response = await fetch(
-      `https://api.sql.cloudflarestorage.com/api/v1/accounts/${account}/basin-sql/query/${bucket}`,
+      `https://api.sql.cloudflarestorage.com/api/v1/accounts/${config.accountId}/basin-sql/query/${config.telemetryBucketName}`,
       {
         method: "POST",
-        headers: { authorization: `Bearer ${this.env.TELEMETRY_CATALOG_TOKEN}` },
+        headers: { authorization: `Bearer ${config.catalogToken.exposeSecret()}` },
         body: JSON.stringify({ query: run.sql }),
         signal: AbortSignal.timeout(30_000),
       },

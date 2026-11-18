@@ -7,6 +7,7 @@ import { errorCode } from "iterate/lib";
 import { mindApiUrlOf } from "iterate/mind-api";
 import { Webhook } from "standardwebhooks";
 import { z } from "zod";
+import { mindWorkerConfigOf } from "../config.ts";
 import { connectToMcp } from "../library/mcp.ts";
 import { bodyWithin } from "./webhooks.ts";
 
@@ -15,20 +16,18 @@ export const MCP_WEBHOOK_PATH = "/api/mcp-webhook";
 export const connectToMcpAt =
   (itx: LibraryItx, path: string) =>
   (url: string, options: McpConnectOptions = {}) =>
-    connectToMcp(itx, url, options, () =>
-      mcpWebhookOf({ domain: env.DOMAIN, signingKey: env.MIND_SIGNING_KEY }, path, url),
-    );
+    connectToMcp(itx, url, options, () => mcpWebhookOf(mindWorkerConfigOf(env), path, url));
 
 const MCPWebhookTarget = z.object({ path: z.string().min(1), server: z.string().min(1) });
 
 async function mcpWebhookOf(
-  { domain, signingKey }: { domain: string; signingKey: string },
+  { controlPlaneHostname, signingKey }: ReturnType<typeof mindWorkerConfigOf>,
   path: string,
   server: string,
 ) {
   const target = { path, server };
-  const url = `${mindApiUrlOf(domain)}/mcp-webhook?${new URLSearchParams(target)}`;
-  return { url, secret: await webhookSecretOf(signingKey, target) };
+  const url = `${mindApiUrlOf(controlPlaneHostname)}/mcp-webhook?${new URLSearchParams(target)}`;
+  return { url, secret: await webhookSecretOf(signingKey.exposeSecret(), target) };
 }
 
 /** Standard Webhooks takes the base64 of the 64 hex digits as the secret's 64 bytes. */

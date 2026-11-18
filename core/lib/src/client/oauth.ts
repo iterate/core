@@ -1,6 +1,6 @@
 import * as oauth from "oauth4webapi";
 import { OAuthScopes } from "../oauth-scopes.ts";
-import { platformOriginOf, mindAddressCandidatesOf, mindApiUrlOf } from "../mind-api.ts";
+import { mindApiUrlOf } from "../mind-api.ts";
 
 /** The platform's issuer as oauth4webapi's authorization server: its endpoints under `/oauth2`, and
  *  the `iss` it adds to every authorization response (RFC 9207), which `validateAuthResponse` then
@@ -76,10 +76,10 @@ export function authorizationServerOf(mind: DiscoveredMind): oauth.Authorization
 }
 
 /** FIND A MIND'S ISSUER from its address, by standards alone:
- *   1. the API's protected-resource metadata (RFC 9728) for `https://iterate.<address>/api`, whose
+ *   1. the API's protected-resource metadata (RFC 9728) for `https://<address>/api`, whose
  *      `resource` must be that URL exactly, and whose first `authorization_servers` entry is the
- *      issuer. A default mind's issuer is `https://iterate.<address>`: that is its convention, and
- *      no rule here. A mind names the issuer it chose, on any https host;
+ *      issuer. A default mind's issuer is `https://<address>`: that is its convention, and no
+ *      rule here. A mind names the issuer it chose, on any https host;
  *   2. that issuer's authorization-server metadata (RFC 8414), whose `issuer` must be the issuer
  *      exactly, and whose endpoints are the ones the sign-in uses.
  *  Every URL is https, except an issuer or endpoint on a local origin when `local` (an app in local
@@ -162,24 +162,4 @@ export async function discoverMind(
     },
     issParameter: as.authorization_response_iss_parameter_supported === true,
   };
-}
-
-/** THE MIND A TYPED HOST NAMES: each of its candidates (iterate/mind-api
- *  `mindAddressCandidatesOf`) asked in turn, so `example.com` and `iterate.example.com` find one
- *  mind, kept under the address that answered. */
-export async function resolveMind(
-  host: string,
-  discover: (address: string) => Promise<DiscoveredMind | { error: string }> = (address) =>
-    discoverMind(address),
-): Promise<DiscoveredMind | { error: string }> {
-  const candidates = mindAddressCandidatesOf(host);
-  const refusals: { error: string }[] = [];
-  for (const address of candidates) {
-    const found = await discover(address);
-    if (!("error" in found)) return found;
-    refusals.push(found);
-  }
-  const [a, b] = candidates.map((address) => new URL(platformOriginOf(address)).host);
-  if (!b) return refusals[0] || { error: `${a} does not answer as an iterate mind.` };
-  return { error: `Neither ${a} nor ${b} answers as an iterate mind. Check the address.` };
 }

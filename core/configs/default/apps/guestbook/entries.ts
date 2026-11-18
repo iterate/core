@@ -23,7 +23,8 @@ export type Entry = {
   text: string;
   /** The entry this one answers. */
   replyTo?: number;
-  by: Person;
+  /** Who wrote it, as its event keeps them: how they signed in that day is no part of an entry. */
+  by: Pick<Person, "userId" | "email">;
   at: string;
   status: "waiting" | "approved" | "removed";
 };
@@ -39,7 +40,7 @@ export function entriesOf(events: readonly LogEvent[]): Map<number, Entry> {
         id: event.offset,
         text: String(payload.text),
         ...(typeof payload.replyTo === "number" && { replyTo: payload.replyTo }),
-        by: payload.by as Person,
+        by: payload.by as Entry["by"],
         at: event.createdAt,
         status: "waiting",
       });

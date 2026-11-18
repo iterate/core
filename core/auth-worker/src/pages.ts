@@ -1,5 +1,4 @@
 import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
-import type { SignInMethod } from "iterate/principal";
 import { plainPageCssHash, standalonePage } from "iterate/standalone-page";
 import { type AskingApp, appTile } from "./asking-app.ts";
 import { clientTile, knownMarkOf, shownLogoOf } from "./client-mark.ts";
@@ -71,159 +70,89 @@ export function page(
 }
 
 /** A SIGN-IN THAT AN APP OF THIS MIND STARTED (./asking-app.ts), as each page of it says so: the
- *  heading names the host the person signs in to, the one name in the address bar they came from.
- *  The card's one mark is the app's own icon, when its manifest names one, or iterate's. `heading`
- *  is the page's `h1`; `about` is what the page says of the app at its end: for an app for
- *  members (the Dash, the Docs app: `app.members`), that it works as the person, as a member's
- *  sign-in lets its page act as that member in the whole mind. An app for anyone gets no words
- *  of its own. */
-export function appSignIn(app: AskingApp, { heading = `Sign in to ${app.host}` } = {}) {
+ *  heading names the app as the app names itself, and the line under it the host the person
+ *  signs in to: the one name in the address bar they came from, which no app chooses. An app
+ *  that says no name is its host, and has the heading alone. The card's one mark is the app's
+ *  own icon, when the app names one, or iterate's. `heading` is another `h1` for a page that
+ *  names the host in its own words; `about` is what the page says of the app at its end: for an
+ *  app for members (the Dash, the Docs app: `app.members`), that it works as the person, as a
+ *  member's sign-in lets its page act as that member in the whole mind. An app for anyone gets
+ *  no words of its own. */
+export function appSignIn(app: AskingApp, { heading }: { heading?: string } = {}) {
+  const host = app.name === app.host ? "" : `<p class="muted center">${text(app.host)}</p>`;
   return {
-    title: `Sign in to ${app.host}`,
+    title: `Sign in to ${app.name}`,
     mark: app.icon ? appTile(app) : undefined,
     imageOrigin: app.icon ? app.origin : undefined,
-    heading: `<h1>${text(heading)}</h1>`,
+    heading: heading ? `<h1>${text(heading)}</h1>` : `<h1>Sign in to ${text(app.name)}</h1>${host}`,
     about: app.members
       ? `<p class="muted" data-for-members>It works as you: it can read and change everything that you can.</p>`
       : "",
   };
 }
 
-/** THE MIND'S OWN SIGN-IN PAGE: the passkey, which every member signs in with, and nothing to
- *  type. With `asksAtOpen` its script asks the browser for the passkey when the page opens; the
- *  button asks again. `mailsCodes`: a link leads to the mailed code's page (./email-sign-in.ts),
- *  for a member's first sign-in and for a device that holds no passkey. Google's button when the
- *  mind offers it. With `app`, the sign-in is for that app of the mind (`appSignIn`). */
+/** THE SIGN-IN PAGE THAT OPENS ON THE PASSKEY: the control plane's own, and that of an app whose
+ *  first sign-in method is the passkey. Nothing to type. With `asksAtOpen` its script asks the
+ *  browser for the passkey when the page opens; the button asks again. With `offersEmail`, a
+ *  button below leads to the mailed code's page (./email-sign-in.ts): for an app that names
+ *  "email" after the passkey, and never for the control plane's own sign-in, since a mailed code
+ *  signs in no member. `offersGuest` adds the guest's name form (./guest-sign-in.ts) the same
+ *  way. With `app`, the sign-in is for that app of the mind (`appSignIn`). `mind`
+ *  is the mind's name, its control-plane hostname, on this page and on each page below. A sign-in
+ *  whose first method is the mailed code opens on that page instead (./http.ts). A sign-in that
+ *  names no app also has an owner's link to Cloudflare Access, the one proof of an address that
+ *  the mind takes for an owner with no passkey yet (./access-sign-in.ts); an app's own sign-in
+ *  has not: Access is for owners alone. */
 export function signInPage(input: {
-  domain: string;
+  mind: string;
   next: string;
-  google?: boolean;
-  mailsCodes?: boolean;
-  app?: AskingApp | null;
-  asksAtOpen?: boolean;
+  app: AskingApp | null;
+  offersEmail: boolean;
+  /** For an app's own sign-in whose app names "guest": a button to its name form. */
+  offersGuest: boolean;
+  asksAtOpen: boolean;
 }) {
-  const { domain, next } = input;
-  const passkey = passkeySignIn(next, "alone", "", input.asksAtOpen);
+  const { mind, next } = input;
+  const passkey = passkeySignIn(next, { alone: true, asksAtOpen: input.asksAtOpen });
   const asking = input.app ? appSignIn(input.app) : null;
-  const code = input.mailsCodes
-    ? `<p class="muted note"><a href="/sign-in/email?${text(String(new URLSearchParams({ next })))}">No passkey on this device? Get a code by email</a></p>`
-    : "";
+  const way = (
+    action: string,
+    label: string,
+  ) => `<form method="get" action="${action}" class="stack">
+        <input type="hidden" name="next" value="${text(next)}">
+        <button type="submit" class="secondary">${label}</button>
+      </form>`;
+  const email =
+    (input.offersEmail ? way("/sign-in/email", "Sign in with your email address") : "") +
+    (input.offersGuest ? way("/sign-in/guest", "Come in as a guest") : "");
+  const ownerProof = input.app
+    ? ""
+    : `<p class="muted">An owner with no passkey yet: <a href="${text(`/sign-in/access?${new URLSearchParams({ next })}`)}">prove your email address with Cloudflare</a>, and then add one.</p>`;
   return page({
-    title: asking?.title || `Sign in to ${domain}`,
+    title: asking?.title || `Sign in to ${mind}`,
     mark: asking?.mark,
     centered: true,
     imageOrigin: asking?.imageOrigin,
-    body: `${asking?.heading || `<h1>Sign in to ${text(domain)}</h1>`}
-      ${passkey.body}${code}${input.google ? googleSignIn(next) : ""}${asking?.about || ""}`,
+    body: `${asking?.heading || `<h1>Sign in to ${text(mind)}</h1>`}
+      ${passkey.body}
+      ${email}${ownerProof}${asking?.about || ""}`,
     script: passkey.script,
   });
 }
 
-/** THE PAGE OF THE WAYS AN APP TAKES (./sign-in.ts `methodsAskedIn`): a button for each way, in
- *  the app's order, one stack of buttons of one height, and no other way. With `app`, the sign-in
- *  is for that app of the mind (`appSignIn`). The page never sends a person on by itself, so they
- *  see where they are before they leave for Cloudflare. */
-export function methodsSignInPage(input: {
-  domain: string;
-  next: string;
-  methods: readonly SignInMethod[];
-  app: AskingApp | null;
-  /** The stack keeps Cloudflare's tokens (./config.ts `keepAccess`): the page says what they do. */
-  keepsCloudflareAccess?: boolean;
-}) {
-  const { domain, next, methods } = input;
-  const asking = input.app ? appSignIn(input.app) : null;
-  const passkey = passkeySignIn(next, methods[0] === "passkey" ? "alone" : undefined, "");
-  const ways = methods.map((method, index) => {
-    const way = (action: string, button: string) => `
-      <form method="get" action="${action}" class="stack">
-        <input type="hidden" name="next" value="${text(next)}">
-        ${button}
-      </form>`;
-    switch (method) {
-      case "cloudflare":
-        return way(
-          "/sign-in/cloudflare",
-          `<button type="submit" class="cloudflare">${CLOUDFLARE_MARK}Sign in with Cloudflare</button>`,
-        );
-      case "google":
-        return way(
-          "/sign-in/google",
-          `<button type="submit" class="outline">${GOOGLE_MARK}Sign in with Google</button>`,
-        );
-      case "email":
-        return way(
-          "/sign-in/email",
-          `<button type="submit"${index ? ` class="outline"` : ""}>Sign in with a code by email</button>`,
-        );
-      case "guest":
-        return way(
-          "/sign-in/guest",
-          `<button type="submit"${index ? ` class="outline"` : ""}>Continue as a guest</button>`,
-        );
-      case "passkey":
-        return passkey.body;
-      default:
-        // a deploy's ticket and an owner's link are no way an app can name (./env.ts `offersMethod`)
-        return "";
-    }
-  });
-  const cloudflareNote = input.keepsCloudflareAccess
-    ? `Cloudflare shares your name and email, and lets ${text(domain)} make a new Cloudflare account for you. It reaches none of your accounts.`
-    : "Cloudflare shares your name and email. Nothing else.";
-  const shares = methods.includes("cloudflare")
-    ? `<p class="muted note">${cloudflareNote}</p>`
-    : "";
-  return page({
-    title: asking?.title || `Sign in to ${domain}`,
-    mark: asking?.mark,
-    centered: true,
-    imageOrigin: asking?.imageOrigin,
-    body: `${asking?.heading || `<h1>Sign in to ${text(domain)}</h1>`}
-      <div class="ways">${ways.join("")}</div>${shares}${asking?.about || ""}`,
-    script: methods.includes("passkey") ? passkey.script : undefined,
-  });
-}
-
-/** An app names only ways to sign in that this stack does not offer (./env.ts `offersMethod`). */
-export const nobodySignsInPage = () =>
-  errorPage("This app takes a way to sign in that is not set up here, so nobody can sign in.", 503);
-
-/** A cloud, drawn here for "Sign in with Cloudflare" (not Cloudflare's logo): three arcs on a flat
- *  base, in the button's text colour. */
-const CLOUDFLARE_MARK = `<svg width="21" height="16" viewBox="1.25 3 22 16.5" aria-hidden="true"><path fill="currentColor" d="M6.5 19h11a4.5 4.5 0 0 0 .6-8.96 6 6 0 0 0-11.5-1.02A5 5 0 0 0 6.5 19z"/></svg>`;
-
-/** Google's mark, as Google draws it: four colours, 18 pixels. */
-const GOOGLE_MARK = `<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/></svg>`;
-
-/** "Sign in with Google", below a page's other ways to sign in (./google-sign-in.ts): a plain
- *  link in a form, so it works with no script. */
-export function googleSignIn(next: string) {
-  return `<p class="or">or</p>
-      <form method="get" action="/sign-in/google" class="stack">
-        <input type="hidden" name="next" value="${text(next)}">
-        <button type="submit" class="outline">${GOOGLE_MARK}Sign in with Google</button>
-      </form>`;
-}
-
 /** The page's half of ./passkey-sign-in.ts. It names no credential, so the browser offers the
- *  passkeys it holds for this site. `alone`: the page offers no other way to sign in. `look` is
- *  the button's class: by default the main action alone, else another way under an "or"; "" is a
- *  main action in a stack of ways, with no "or" (`methodsSignInPage`). `asksAtOpen`: the script
- *  also asks once when the page opens, with no press. A browser may refuse that (Safari takes one
- *  such call a page load, and not always), and a person may close the prompt: both say nothing,
- *  and the button is the way on. */
+ *  passkeys it holds for this site. `alone`: the passkey is the page's main action; else it is
+ *  another way, under an "or". `asksAtOpen`: the script also asks once when the page opens, with
+ *  no press. A browser may refuse that (Safari takes one such call a page load, and not always),
+ *  and a person may close the prompt: both say nothing, and the button is the way on. */
 export function passkeySignIn(
   next: string,
-  alone?: "alone",
-  look: string = alone ? "" : "secondary",
-  asksAtOpen = false,
+  { alone, asksAtOpen }: { alone: boolean; asksAtOpen: boolean },
 ) {
-  const or = look === "secondary" ? `<p class="or">or</p>` : "";
   return {
-    body: `${alone ? `<p class="muted">Use a passkey you added here.</p>` : or}
+    body: `${alone ? `<p class="muted">Use a passkey you added here.</p>` : `<p class="or">or</p>`}
       <form id="passkey" class="stack" data-next="${text(next)}">
-        <button type="submit"${look ? ` class="${look}"` : ""}>Sign in with a passkey</button>
+        <button type="submit"${alone ? "" : ` class="secondary"`}>Sign in with a passkey</button>
         <p id="passkey-status" class="muted" role="status"></p>
       </form>`,
     script: `
@@ -310,7 +239,7 @@ export function otherAccountForm(next: string, label = "Use another account") {
  *  is the authorization request without its `prompt`, a path of this origin. With `app`, the
  *  request is that app's own sign-in, and the page says so (`appSignIn`). */
 export function chooserPage(input: {
-  domain: string;
+  mind: string;
   email: string;
   here: string;
   app?: AskingApp | null;
@@ -324,14 +253,14 @@ export function chooserPage(input: {
     .join("");
   const asking = input.app ? appSignIn(input.app) : null;
   return page({
-    title: asking?.title || `Sign in to ${input.domain}`,
+    title: asking?.title || `Sign in to ${input.mind}`,
     mark: asking?.mark,
     centered: true,
     imageOrigin: asking?.imageOrigin,
-    body: `${asking?.heading || `<h1>Sign in to ${text(input.domain)}</h1>`}
+    body: `${asking?.heading || `<h1>Sign in to ${text(input.mind)}</h1>`}
       <p class="center">${
         input.signedOutOf
-          ? `You are signed out of ${text(input.signedOutOf)}. You are still signed in to ${text(input.domain)} as`
+          ? `You are signed out of ${text(input.signedOutOf)}. You are still signed in to ${text(input.mind)} as`
           : "You are signed in as"
       } <strong>${text(input.email)}</strong>.</p>
       <form method="get" action="${text(url.pathname)}" class="stack">
@@ -342,12 +271,12 @@ export function chooserPage(input: {
   });
 }
 
-export function notMemberPage(input: { domain: string; email: string; here?: string }) {
+export function notMemberPage(input: { mind: string; email: string; here?: string }) {
   return page({
     title: "You can't continue",
     status: 403,
     body: `<h1>You can't continue</h1>
-      <p>You are signed in as <strong>${text(input.email)}</strong>, and that address is not a member of ${text(input.domain)}. Ask the mind's owner to add it.</p>
+      <p>You are signed in as <strong>${text(input.email)}</strong>, and that address is not a member of ${text(input.mind)}. Ask the mind's owner to add it.</p>
       <div>${otherAccountForm(input.here || "/")}</div>`,
   });
 }
@@ -356,7 +285,7 @@ export function consentPage(input: {
   details: ConsentDescription;
   handle: string;
   email: string;
-  domain: string;
+  mind: string;
   resource: string;
   /** A host of the mind that the client asks to use: the page names it by that hostname. */
   host?: string;
@@ -367,7 +296,7 @@ export function consentPage(input: {
   const { details } = input;
   const client = { ...details, name: details.clientName };
   const name = text(details.clientName);
-  const domain = text(input.domain);
+  const mind = text(input.mind);
   const origin = details.clientDomain
     ? `<p class="muted">${name} is published at ${text(details.clientDomain)}, and access goes to ${text(details.redirectHost)}.</p>`
     : `<p class="muted">This app registered itself, so its name is not verified. Access goes to ${text(details.redirectHost)}.</p>`;
@@ -385,9 +314,9 @@ export function consentPage(input: {
       body: `${
         input.host
           ? `<h1>${name} wants to use ${text(input.host)} as you</h1>
-        <p>${name} will learn that you are <strong>${text(input.email)}</strong>, and can use ${text(input.host)} as you. It gets nothing else in ${domain}.</p>`
-          : `<h1>${name} wants to access ${domain}</h1>
-        <p>${name} will use ${domain} through ${text(input.resource)}, as <strong>${text(input.email)}</strong>. It can read and change everything in this mind.</p>`
+        <p>${name} will learn that you are <strong>${text(input.email)}</strong>, and can use ${text(input.host)} as you. It gets nothing else in ${mind}.</p>`
+          : `<h1>${name} wants to access ${mind}</h1>
+        <p>${name} will use ${mind} through ${text(input.resource)}, as <strong>${text(input.email)}</strong>. It can read and change everything in this mind.</p>`
       }
         ${origin}
         ${loopback}

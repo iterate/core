@@ -1,13 +1,16 @@
 // /minds and /minds/published: a member's page of the minds this mind lets in. The two presses,
 // "End" and "Let it in", are a browser's passkey and are proven on a deployed mind, not here.
+import { identityHashOf } from "iterate/mind-identity";
 import { expect, test, vi } from "vitest";
+import { newIdentityLog, newRootKey } from "../../lib/src/test-support/identity-log.ts";
 import { browserSessionsFake } from "./browser-sessions-fake.ts";
 import { sessionCookie } from "./cookies.ts";
 import type { Env } from "./env.ts";
+import { configVars } from "./test-support.ts";
 import { mindsPageResponse } from "./minds-page.ts";
 
-const DOMAIN = "example.com";
-const ISSUER = `https://iterate.${DOMAIN}`;
+const MIND = "iterate.example.com";
+const ISSUER = `https://${MIND}`;
 const OWNER = { id: "user_owner", email: "owner@example.net" };
 const ADA = { id: "user_ada", email: "ada@example.org" };
 const AT = Date.UTC(2026, 10, 17, 9, 30);
@@ -16,7 +19,7 @@ test("signed out leads to the sign-in and back, and a person who is no member is
   const { env } = stackOf([]);
   const signedOut = (await mindsPageResponse(env, new Request(`${ISSUER}/minds`)))!;
   expect(signedOut.headers.get("location")).toBe("/sign-in?next=%2Fminds");
-  const ada = await signedIn(env, ADA, "email");
+  const ada = await signedIn(env, ADA);
   const refused = (await mindsPageResponse(env, get("/minds", ada)))!;
   expect(refused).toMatchObject({ status: 403 });
   expect(await refused.text()).toContain("is not a member of");
@@ -25,7 +28,7 @@ test("signed out leads to the sign-in and back, and a person who is no member is
 
 test("an empty list says what a meld is", async () => {
   const { env } = stackOf([]);
-  const owner = await signedIn(env, OWNER, "passkey");
+  const owner = await signedIn(env, OWNER);
   const body = await (await mindsPageResponse(env, get("/minds", owner)))!.text();
   expect(body).toContain("No mind is let in. A meld lets another mind add events to this one");
   expect(body).not.toContain("Melds that ended");
@@ -50,7 +53,7 @@ test("a meld is listed with its paths, its key and who let it in; an ended meld 
     },
     { domain: "peer-old.net", append: "[]", key: null, configured_at: AT, email: OWNER.email },
   ]);
-  const owner = await signedIn(env, OWNER, "passkey");
+  const owner = await signedIn(env, OWNER);
   const body = await (await mindsPageResponse(env, get("/minds", owner)))!.text();
   expect(body).toContain("<code>/minds/peer-one.net/</code>, <code>/notes/&#60;b&#62;/</code>");
   expect(body).toContain("signed with its published keys");
@@ -62,33 +65,43 @@ test("a meld is listed with its paths, its key and who let it in; an ended meld 
   expect(body).not.toContain(`data-end="peer-old.net"`);
 });
 
-test("/minds/published answers a member the keys a mind publishes, and anyone else nothing", async () => {
+test("/minds/published answers a member the id and the working keys that a mind's identity log lists, and anyone else nothing", async () => {
   const { env } = stackOf([]);
+  const log = await newIdentityLog(["peer-three.net"]);
+  const workingKey = await newRootKey("stack");
+  // a key of another purpose signs no statement, so the page does not show it
+  const otherKey = await newRootKey("for another use");
+  const second = await log.next(log.genesis, {
+    workingKeys: [
+      { ...otherKey.entry, purpose: "nostr" },
+      { ...workingKey.entry, purpose: "statements" },
+    ],
+  });
   const fetched: string[] = [];
   vi.stubGlobal("fetch", async (request: Request) => {
     fetched.push(request.url);
     return Response.json({
-      mind: "peer-three.net",
-      issuer: "https://iterate.peer-three.net",
-      statements: "https://iterate.peer-three.net/statements",
-      keys: [{ key: "publishedkey-of-a-test", publicKey: "not-read-here", label: "mind" }],
+      version: 1,
+      mind: log.mind,
+      head: await identityHashOf(second.record),
+      records: [log.genesis, second],
     });
   });
-  const owner = await signedIn(env, OWNER, "passkey");
+  const owner = await signedIn(env, OWNER);
   const answer = (await mindsPageResponse(
     env,
     get("/minds/published?domain=peer-three.net", owner),
   ))!;
   expect(await answer.json()).toEqual({
-    mind: "peer-three.net",
-    keys: [{ key: "publishedkey-of-a-test", label: "mind" }],
+    mind: log.mind,
+    keys: [{ key: workingKey.id, label: "stack" }],
   });
   expect(fetched).toEqual(["https://peer-three.net/.well-known/iterate"]);
 
-  const own = await mindsPageResponse(env, get(`/minds/published?domain=${DOMAIN}`, owner));
+  const own = await mindsPageResponse(env, get(`/minds/published?domain=${MIND}`, owner));
   expect(own).toMatchObject({ status: 400 });
 
-  const ada = await signedIn(env, ADA, "email");
+  const ada = await signedIn(env, ADA);
   expect(
     await mindsPageResponse(env, get("/minds/published?domain=peer-three.net", ada)),
   ).toMatchObject({ status: 403 });
@@ -101,18 +114,8 @@ test("/minds/published answers a member the keys a mind publishes, and anyone el
 const get = (path: string, cookie: string) =>
   new Request(`${ISSUER}${path}`, { headers: { cookie } });
 
-async function signedIn(
-  env: Env,
-  user: { id: string; email: string },
-  method: "passkey" | "email",
-) {
-  const { setCookie } = await sessionCookie(
-    env,
-    new Request(ISSUER),
-    user,
-    method,
-    method === "passkey" ? "key-1" : undefined,
-  );
+async function signedIn(env: Env, user: { id: string; email: string }) {
+  const { setCookie } = await sessionCookie(env, new Request(ISSUER), user, "key-1");
   return setCookie.split(";")[0]!;
 }
 
@@ -136,9 +139,7 @@ function stackOf(melds: unknown[]) {
     results: () => sessions.statementOf(sql, bound)!.results(),
   });
   const env = {
-    DOMAIN,
-    AUTH_SIGNING_KEY: "a-signing-key-for-tests-only",
-    AUTH_SETTINGS: JSON.stringify({ login: { allow: [{ email: OWNER.email }] } }),
+    ...configVars({ ownerEmails: [OWNER.email] }),
     DB: {
       prepare,
       batch: async (statements: ReturnType<typeof prepare>[]) =>

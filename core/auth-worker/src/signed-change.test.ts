@@ -2,6 +2,7 @@ import { base64url, keyIdOf, signedP256, statementText } from "iterate/signed";
 import { expect, test } from "vitest";
 import type { Env } from "./env.ts";
 import { KEY_ADDED, KEY_REMOVED, signedChangeBy } from "./signed-change.ts";
+import { configVars, keyRows, stackKeyPair } from "./test-support.ts";
 
 test("a form's signed field counts as the press of the person whose session posts it, once", async () => {
   const { env, owner } = await stack();
@@ -40,7 +41,6 @@ test("another member's statement, and a statement of another kind, are no press 
   ]);
 });
 
-const DOMAIN = "example.com";
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 
 async function keyPair() {
@@ -56,16 +56,23 @@ async function keyPair() {
   };
 }
 
-/** A stack with two members, each with a root key of the config. Of D1, the stack's own key and
- *  the table that counts a statement once. */
+/** A stack with two members, the owner and one whom the owner added, each with a key. Of D1, the
+ *  keys, the added member, the stack's own key and the table that counts a statement once. */
 async function stack() {
-  const [ownerKey, otherKey, stackKey] = [await keyPair(), await keyPair(), await keyPair()];
+  const [ownerKey, otherKey, stackKey] = [await keyPair(), await keyPair(), await stackKeyPair()];
   const seen = new Set<unknown>();
+  const keys = await keyRows([
+    { actor: "owner-key", email: "owner@example.net", publicKey: ownerKey.publicKey, label: "O" },
+    { actor: "other-key", email: "other@example.net", publicKey: otherKey.publicKey, label: "X" },
+  ]);
   const prepare = (sql: string, bound: unknown[] = []) => ({
     bind: (...values: unknown[]) => prepare(sql, values),
     first: async () => {
+      if (sql.includes("from keys k left join users u")) return keys(bound[0]);
+      if (sql.includes("from members where email"))
+        return bound[0] === "other@example.net" ? { 1: 1 } : null;
       if (!sql.includes("from stack_key")) throw new Error(`not expected: ${sql}`);
-      return { key: stackKey.key, public_key: stackKey.publicKey, private_key: stackKey.pkcs8 };
+      return stackKey.row;
     },
     counted: () => {
       if (sql.startsWith("delete from statements")) return { meta: { changes: 0 } };
@@ -76,24 +83,7 @@ async function stack() {
     },
   });
   const env = {
-    DOMAIN,
-    AUTH_SETTINGS: JSON.stringify({
-      login: { allow: [{ email: "owner@example.net" }, { email: "other@example.net" }] },
-      keys: [
-        {
-          actor: "owner-key",
-          email: "owner@example.net",
-          publicKey: ownerKey.publicKey,
-          label: "Owner",
-        },
-        {
-          actor: "other-key",
-          email: "other@example.net",
-          publicKey: otherKey.publicKey,
-          label: "Other",
-        },
-      ],
-    }),
+    ...configVars(),
     DB: {
       prepare,
       batch: async (statements: ReturnType<typeof prepare>[]) =>
@@ -105,7 +95,7 @@ async function stack() {
     signed: (type: string, payload: Record<string, unknown>) => {
       const now = Date.now();
       const statement = statementText({
-        mind: DOMAIN,
+        mind: "iterate.example.com",
         path: "/",
         type,
         payload,

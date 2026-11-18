@@ -1,49 +1,45 @@
 // A GUEST (./guest-sign-in.ts says the rule). The tests go through the Worker's own endpoints
 // (the OAuth library included) against SQLite in memory, made by the Worker's own migrations, so
-// the rows, the bounds and a block are the real statements. An app's manifest is a stubbed
-// `fetch`. The guard is tested in core/lib/src/sdk/auth.test.ts, and the stamp in
-// core/boundary-worker/src/stamp.test.ts.
-import { readdirSync, readFileSync } from "node:fs";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+// the rows, the bounds and a block are the real statements. What an app says of itself
+// (./asking-app.ts) is its kept description, written here as the issuer keeps one. The guard is
+// tested in core/lib/src/sdk/auth.test.ts, and the stamp in core/boundary-worker/src/stamp.test.ts.
 import { decodeFacts, FACTS_HEADER } from "iterate/facts";
-import { mindApiUrlOf, mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
+import { mindApiUrlOf, mindMcpUrlOf } from "iterate/mind-api";
+import type { SignInMethod } from "iterate/principal";
 import { calculatePKCECodeChallenge, generateRandomCodeVerifier } from "oauth4webapi";
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
-import { authConfigOf } from "./config.ts";
 import { guestOf, sessionCookie, sessionOf } from "./cookies.ts";
 import type { Env } from "./env.ts";
 import { authResponse } from "./http.ts";
-import { isMember, standingOf } from "./members.ts";
+import { isMember } from "./members.ts";
 import { grantLifetimeOf, hostCallbackOf, hostClientOf, tokenIdentity } from "./oauth.ts";
-import { linkBySubject, linkIdentity } from "./users.ts";
+import { sqliteStack } from "./test-support.ts";
+import { userOf } from "./users.ts";
 import { whoIs } from "./who-is.ts";
 
 const DOMAIN = "example.com";
-const ISSUER = `https://iterate.${DOMAIN}`;
+const MIND = `iterate.${DOMAIN}`;
+const ISSUER = `https://${MIND}`;
 const MEET = `https://meet.${DOMAIN}`;
 const OTHER = `https://guestbook.${DOMAIN}`;
-const OWNER = "owner@elsewhere.test";
+// the one owner of test-support.ts' mind
+const OWNER = "owner@example.net";
 const FORM = `${ISSUER}/sign-in/guest`;
 const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
 
-test("the config makes the way exist, with two bounds; without it nothing of a guest exists", async () => {
-  const methods = (guest: unknown) =>
-    authConfigOf(DOMAIN, { login: { methods: { guest }, allow: [{ email: OWNER }] } }).login
-      .methods;
-  expect(methods({})).toEqual({ guest: { newPerTenMinutes: 120, sessionsPerTenMinutes: 600 } });
-  expect(methods({ newPerTenMinutes: 5 })).toMatchObject({ guest: { newPerTenMinutes: 5 } });
-  for (const wrong of [{ newPerTenMinutes: 0 }, { sessionsPerTenMinutes: 1.5 }, { hosts: ["x"] }])
-    expect(() => methods(wrong)).toThrow();
-
-  const { env, people } = stackOf({ guest: false });
-  const meet = await hostSignInOf(env, MEET, "guest");
-  for (const method of ["GET", "POST"])
-    expect(
-      await authResponse(new Request(`${FORM}?next=${meet.next}`, { method }), env, ctx),
-    ).toMatchObject({ status: 404 });
-  // and an app that names guests alone lets nobody in there
-  expect(await meet.ask()).toMatchObject({ status: 503 });
+test("an app that names no guests has no form, and its sign-in shows no guest's way", async () => {
+  const { env, people } = stackOf();
+  for (const ways of ["email", "passkey email", ""]) {
+    const app = await hostSignInOf(env, OTHER, ways);
+    for (const method of ["GET", "POST"])
+      expect(
+        await authResponse(new Request(`${FORM}?next=${app.next}`, { method }), env, ctx),
+        ways,
+      ).toMatchObject({ status: method === "GET" ? 404 : 403 });
+    const signIn = await authResponse(new Request(`${ISSUER}/sign-in?next=${app.next}`), env, ctx);
+    expect(await signIn.text()).not.toContain("as a guest");
+  }
   expect(people()).toEqual([]);
 });
 
@@ -183,19 +179,13 @@ test("two browsers with two names are two people, each with a name, an event and
   expect(eves).toMatchObject({ name: "Eve] [from root@example.com", method: "guest" });
 });
 
-test("a guest's token is for that app's host alone: never another host, the API, the MCP server or /provide", async () => {
+test("a guest's token is for that app's host alone: never another host, the API or the MCP server", async () => {
   const { env } = stackOf();
   const meet = await hostSignInOf(env, MEET, "guest");
   const bob = await joined(env, meet.next, "Bob");
   const token = await meet.tokenFor(await meet.ask(bob.cookie));
   expect(await whoIs(env, token, MEET)).toMatchObject({ member: false, method: "guest" });
-  for (const resource of [
-    OTHER,
-    ISSUER,
-    mindApiUrlOf(DOMAIN),
-    mindMcpUrlOf(DOMAIN),
-    mindProvideUrlOf(DOMAIN),
-  ])
+  for (const resource of [OTHER, ISSUER, mindApiUrlOf(MIND), mindMcpUrlOf(MIND)])
     expect(await whoIs(env, token, resource)).toBeNull();
 });
 
@@ -254,53 +244,31 @@ test("the guest's cookie is nobody to every page of the mind's own, and to an ap
   });
   const asked = await client.ask(bob.cookie);
   expect([asked.status, originAndPath(asked)]).toEqual([302, "/sign-in"]);
-  expect(await authResponse(new Request(asked.headers.get("location")!), env, ctx)).toMatchObject({
-    status: 503,
-  });
+  // and its sign-in page is the member's passkey alone
+  const page = await authResponse(new Request(asked.headers.get("location")!), env, ctx);
+  expect([page.status, await page.text()]).toEqual([200, expect.not.stringContaining("guest")]);
   expect(people()).toHaveLength(1);
 });
 
-test("a guest never becomes a member: not by the rule `everyone`, a members row, or a proof of an address", async () => {
+test("a guest never becomes a member: not by a members row, nor by the address of a member", async () => {
   const stack = stackOf();
   const meet = await hostSignInOf(stack.env, MEET, "guest");
   const bob = await joined(stack.env, meet.next, "Bob");
   const token = await meet.tokenFor(await meet.ask(bob.cookie));
   const key = stack.people()[0]!.email;
-  // a later deploy admits everyone, and some path writes the guest's key as a member
-  const everyone = stackOf({ allow: [{ everyone: {} }], from: stack }).env;
+  // some path writes the guest's key as a member
   stack.db
     .prepare("insert into members (email, added_by, added_at) values (?, ?, ?)")
     .run(key, OWNER, 1);
-  for (const env of [stack.env, everyone]) {
-    expect(await isMember(env, key)).toBe(false);
-    expect(await standingOf(env, { userId: bob.userId, email: key, method: "guest" })).toBe(
-      "not-member",
-    );
-    expect(await tokenIdentity(env, token, MEET)).toMatchObject({ member: false });
-    expect(await whoIs(env, token, mindApiUrlOf(DOMAIN))).toBeNull();
-  }
-  // the way alone decides, before any address is read: a guest's session that named a member's
-  // address would be no member's
-  expect(await standingOf(everyone, { userId: bob.userId, email: OWNER, method: "guest" })).toBe(
-    "not-member",
-  );
-  // the same holds for every person whom no address reaches, a Cloudflare user too
-  expect(await isMember(everyone, "cloudflare:abc")).toBe(false);
-  expect(await isMember(everyone, "ada@example.org")).toBe(true);
-
-  // no proof of an address takes the guest's row: the key is no address, and an address is a
-  // row of its own
-  await expect(
-    linkIdentity(stack.env.DB, { provider: "email", subject: key, email: key }),
-  ).rejects.toThrow(/links an address alone/);
-  const ada = await linkIdentity(stack.env.DB, {
-    provider: "email",
-    subject: "ada@example.org",
-    email: "ada@example.org",
-  });
-  // a subject is a row of its own too: a second guest never lands on the first
-  const second = await linkBySubject(stack.env.DB, { provider: "guest", subject: "other" });
-  expect(new Set([bob.userId, ada.id, second.id])).toHaveProperty("size", 3);
+  expect(await isMember(stack.env, key)).toBe(false);
+  expect(await tokenIdentity(stack.env, token, MEET)).toMatchObject({ member: false });
+  expect(await whoIs(stack.env, token, mindApiUrlOf(MIND))).toBeNull();
+  // every key that is no address is nobody's, a Cloudflare user's too
+  expect(await isMember(stack.env, "cloudflare:abc")).toBe(false);
+  expect(await isMember(stack.env, OWNER)).toBe(true);
+  // a guest's row is a row of its own: an address is another row
+  const ada = await userOf(stack.env.DB, "ada@example.org");
+  expect(new Set([bob.userId, ada.id])).toHaveProperty("size", 2);
 });
 
 test("someone signed in is never made a guest, and keeps who they are where the app names their way", async () => {
@@ -362,10 +330,10 @@ test("the browser is asked once: with the cookie, the form goes straight on, and
     expect([again.status, again.headers.get("location")]).toEqual([303, meet.path]);
   }
   expect(people()).toHaveLength(1);
-  // an app with more ways shows a button for each
-  const more = await hostSignInOf(env, MEET, "guest email");
+  // an app with more ways shows a button for each, in its order
+  const more = await hostSignInOf(env, MEET, "passkey email guest");
   const ways = await authResponse(new Request(`${ISSUER}/sign-in?next=${more.next}`), env, ctx);
-  expect(await ways.text()).toMatch(/Continue as a guest[\s\S]*code by email/);
+  expect(await ways.text()).toMatch(/your email address[\s\S]*Come in as a guest/);
 
   // the host's sign-out asks the chooser: the guest's cookie ends, and the form is the next page
   const chooser = await (
@@ -387,25 +355,21 @@ test("the browser is asked once: with the cookie, the form goes straight on, and
   );
 });
 
-test("a signed-in person whose browser was a guest before is not that guest at an app that names guests alone", async () => {
+test("a member whose browser was a guest before is the member, never that guest, at an app that names guests alone", async () => {
   const { env } = stackOf();
   const meet = await hostSignInOf(env, MEET, "guest");
   const bob = await joined(env, meet.next, "Bob");
   const owner = await ownerCookie(env);
-  // the guest's cookie alone earns the code; beside a session the app does not take, it earns none
   expect(originAndPath(await meet.ask(bob.cookie))).toBe(`${MEET}/.iterate/callback`);
+  // a passkey's session counts at every app (./asking-app.ts `appTakes`), so the guest's cookie
+  // beside it is not read
   const asked = await meet.ask(`${bob.cookie}; ${owner}`);
-  expect([asked.status, originAndPath(asked)]).toEqual([302, "/sign-in"]);
-  // and the way on says who is signed in, with the sign-out
-  const signIn = await authResponse(new Request(asked.headers.get("location")!), env, ctx);
-  const form = await authResponse(
-    new Request(signIn.headers.get("location")!, {
-      headers: { cookie: `${bob.cookie}; ${owner}` },
-    }),
-    env,
-    ctx,
-  );
-  expect([form.status, await form.text()]).toEqual([403, expect.stringContaining(OWNER)]);
+  expect(originAndPath(asked)).toBe(`${MEET}/.iterate/callback`);
+  expect(await tokenIdentity(env, await meet.tokenFor(asked), MEET)).toMatchObject({
+    principal: { email: OWNER },
+    member: true,
+    method: "passkey",
+  });
 });
 
 test("a guest's code gives 15 minutes and no refresh token", async () => {
@@ -432,7 +396,7 @@ test("a guest's code gives 15 minutes and no refresh token", async () => {
 });
 
 test("one guest's cookie cannot use up the stack's sessions: each guest has a bound of their own", async () => {
-  const { env } = stackOf({ guest: { sessionsPerTenMinutes: 100 } });
+  const { env } = stackOf();
   const meet = await hostSignInOf(env, MEET, "guest");
   const bob = await joined(env, meet.next, "Bob");
   const eve = await joined(env, meet.next, "Eve");
@@ -443,9 +407,11 @@ test("one guest's cookie cannot use up the stack's sessions: each guest has a bo
 });
 
 test("the stack's two bounds: past each, the page says ten minutes, and the mind gets one event for the window", async () => {
-  const { env, people } = stackOf({ guest: { newPerTenMinutes: 2, sessionsPerTenMinutes: 3 } });
+  const { env, db, people } = stackOf();
   const meet = await hostSignInOf(env, MEET, "guest");
   const guests = [await joined(env, meet.next, "One"), await joined(env, meet.next, "Two")];
+  // the rest of the stack's 120 new guests came from other addresses
+  admissionsOf(db, "guest", 118);
   const refusals = [];
   for (const name of ["Three", "Four"]) {
     const refused = await posted(env, { ...(await formOf(env, meet.next)), name });
@@ -471,7 +437,8 @@ test("the stack's two bounds: past each, the page says ten minutes, and the mind
     { events: [{ idempotencyKey: refusals[0]![0]!.events[0]!.idempotencyKey }] },
   ]);
 
-  // three sessions for the stack's guests, then none: a renewal is counted like a first one
+  // the stack's 600 sessions for its guests, then none: a renewal is counted like a first one
+  admissionsOf(db, "guest-session", 597);
   for (const guest of [guests[0]!, guests[1]!, guests[0]!])
     expect(await meet.ask(guest.cookie)).toMatchObject({ status: 302 });
   const refused = await meet.ask(guests[1]!.cookie);
@@ -481,164 +448,98 @@ test("the stack's two bounds: past each, the page says ten minutes, and the mind
   ]);
 });
 
-test.for([
-  { name: "a stack that names its members", allow: [{ email: OWNER }] },
-  { name: "a stack that admits everyone", allow: [{ email: OWNER }, { everyone: {} }] },
-])(
-  "an owner blocks a guest by id, on $name: the token and the cookie end at once",
-  async ({ allow }) => {
-    const { env } = stackOf({ allow });
-    const meet = await hostSignInOf(env, MEET, "guest");
-    const bob = await joined(env, meet.next, "Bob");
-    const eve = await joined(env, meet.next, "Eve");
-    const token = await meet.tokenFor(await meet.ask(bob.cookie));
-    const evesToken = await meet.tokenFor(await meet.ask(eve.cookie));
-    const owner = await ownerCookie(env);
-    const members = (action: string, email: string) =>
-      authResponse(
-        new Request(`${ISSUER}/members`, {
-          method: "POST",
-          headers: { origin: ISSUER, cookie: owner },
-          body: new URLSearchParams({ action, email }),
-        }),
-        env,
-        ctx,
-      );
-    // an id that is no guest's names nobody
-    const ownerId = z
-      .object({ id: z.string() })
-      .parse(await env.DB.prepare("select id from users where email = ?1").bind(OWNER).first()).id;
-    expect(await (await members("block", ownerId)).text()).toContain("Type the address to block");
-
-    const blocked = await members("block", bob.userId);
-    expect(await blocked.text()).toContain(`The guest ${bob.userId} is blocked`);
-    expect(factsOf(blocked).flatMap((fact) => fact.events.map((event) => event.type))).toEqual([
-      "events.iterate.com/account/grant-ended",
-      "events.iterate.com/account/person-blocked",
-    ]);
-    expect(await tokenIdentity(env, token, MEET)).toBeNull();
-    expect(await tokenIdentity(env, evesToken, MEET)).toMatchObject({ name: "Eve" });
-    // the cookie earns nothing more, and the form says so with one event on the guest's context
-    const asked = await meet.ask(bob.cookie);
-    expect([asked.status, originAndPath(asked)]).toEqual([302, "/sign-in"]);
-    const signIn = await authResponse(new Request(asked.headers.get("location")!), env, ctx);
-    expect(originAndPath(signIn)).toBe("/sign-in/guest");
-    const refused = await authResponse(
-      new Request(signIn.headers.get("location")!, { headers: { cookie: bob.cookie } }),
+test("an owner blocks a guest by id: the token and the cookie end at once", async () => {
+  const { env } = stackOf();
+  const meet = await hostSignInOf(env, MEET, "guest");
+  const bob = await joined(env, meet.next, "Bob");
+  const eve = await joined(env, meet.next, "Eve");
+  const token = await meet.tokenFor(await meet.ask(bob.cookie));
+  const evesToken = await meet.tokenFor(await meet.ask(eve.cookie));
+  const owner = await ownerCookie(env);
+  const members = (action: string, email: string) =>
+    authResponse(
+      new Request(`${ISSUER}/members`, {
+        method: "POST",
+        headers: { origin: ISSUER, cookie: owner },
+        body: new URLSearchParams({ action, email }),
+      }),
       env,
       ctx,
     );
-    expect(refused).toMatchObject({ status: 403 });
-    expect(factsOf(refused)).toMatchObject([
-      { path: `/users/${bob.userId}`, events: [{ payload: { reason: "blocked" } }] },
-    ]);
+  // an id that is no guest's names nobody
+  const ownerId = z
+    .object({ id: z.string() })
+    .parse(await env.DB.prepare("select id from users where email = ?1").bind(OWNER).first()).id;
+  expect(await (await members("block", ownerId)).text()).toContain("Type the address to block");
 
-    expect(await (await members("unblock", bob.userId)).text()).toContain("is no longer blocked");
-    expect(originAndPath(await meet.ask(bob.cookie))).toBe(`${MEET}/.iterate/callback`);
-  },
-);
+  const blocked = await members("block", bob.userId);
+  expect(await blocked.text()).toContain(`The guest ${bob.userId} is blocked`);
+  expect(factsOf(blocked).flatMap((fact) => fact.events.map((event) => event.type))).toEqual([
+    "events.iterate.com/account/grant-ended",
+    "events.iterate.com/account/person-blocked",
+  ]);
+  expect(await tokenIdentity(env, token, MEET)).toBeNull();
+  expect(await tokenIdentity(env, evesToken, MEET)).toMatchObject({ name: "Eve" });
+  // the cookie earns nothing more, and the form says so with one event on the guest's context
+  const asked = await meet.ask(bob.cookie);
+  expect([asked.status, originAndPath(asked)]).toEqual([302, "/sign-in"]);
+  const signIn = await authResponse(new Request(asked.headers.get("location")!), env, ctx);
+  expect(originAndPath(signIn)).toBe("/sign-in/guest");
+  const refused = await authResponse(
+    new Request(signIn.headers.get("location")!, { headers: { cookie: bob.cookie } }),
+    env,
+    ctx,
+  );
+  expect(refused).toMatchObject({ status: 403 });
+  expect(factsOf(refused)).toMatchObject([
+    { path: `/users/${bob.userId}`, events: [{ payload: { reason: "blocked" } }] },
+  ]);
 
-test("a deploy that takes the way away ends every guest: the token and the cookie", async () => {
-  const stack = stackOf();
-  const meet = await hostSignInOf(stack.env, MEET, "guest passkey");
-  const bob = await joined(stack.env, meet.next, "Bob");
-  const token = await meet.tokenFor(await meet.ask(bob.cookie));
-  const without = stackOf({ guest: false, from: stack }).env;
-  expect(await tokenIdentity(without, token, MEET)).toBeNull();
-  expect(
-    await guestOf(without, new Request(ISSUER, { headers: { cookie: bob.cookie } })),
-  ).toBeNull();
-  expect(await tokenIdentity(stack.env, token, MEET)).toMatchObject({ method: "guest" });
+  expect(await (await members("unblock", bob.userId)).text()).toContain("is no longer blocked");
+  expect(originAndPath(await meet.ask(bob.cookie))).toBe(`${MEET}/.iterate/callback`);
 });
 
-/** A stack whose people, sessions and bounds are in SQLite in memory, made by the Worker's own
- *  migrations. `guest`: the config's method, or false for a config with none. `from`: another
- *  stack whose store this one shares, as the next deploy of the same stack does. */
-function stackOf({
-  guest = {},
-  allow = [{ email: OWNER }],
-  from,
-}: {
-  guest?: object | false;
-  allow?: object[];
-  from?: { db: DatabaseSync; kv: Map<string, string> };
-} = {}) {
-  const db = from?.db || new DatabaseSync(":memory:");
-  if (!from) {
-    const folder = new URL("../migrations/", import.meta.url).pathname;
-    for (const name of readdirSync(folder).sort())
-      db.exec(readFileSync(`${folder}${name}`, "utf8"));
-  }
-  const kv = from?.kv || new Map<string, string>();
-  const statementOf = (sql: string, bound: SQLInputValue[] = []) => {
-    const execute = () => {
-      const prepared = db.prepare(sql);
-      if (prepared.columns().length) return { results: prepared.all(...bound), meta: {} };
-      return { results: [], meta: { changes: Number(prepared.run(...bound).changes) } };
-    };
-    return {
-      bind: (...values: SQLInputValue[]) => statementOf(sql, values),
-      first: async () => execute().results[0] ?? null,
-      all: async () => execute(),
-      run: async () => execute(),
-      execute,
-    };
-  };
-  // an app says nothing of itself: its name is its host
+test("an app that stops naming guests ends every guest at once: the token and the cookie", async () => {
+  const { env } = stackOf();
+  const meet = await hostSignInOf(env, MEET, "guest passkey");
+  const bob = await joined(env, meet.next, "Bob");
+  const token = await meet.tokenFor(await meet.ask(bob.cookie));
+  expect(await tokenIdentity(env, token, MEET)).toMatchObject({ method: "guest" });
+  const changed = await hostSignInOf(env, MEET, "passkey");
+  // the token that the guest holds is nobody's from the next request
+  expect(await tokenIdentity(env, token, MEET)).toBeNull();
+  const asked = await changed.ask(bob.cookie);
+  expect([asked.status, originAndPath(asked)]).toEqual([302, "/sign-in"]);
+  expect(await authResponse(new Request(`${FORM}?next=${changed.next}`), env, ctx)).toMatchObject({
+    status: 404,
+  });
+});
+
+/** The mind of ./test-support.ts on SQLite in memory, with its guests' rows. No app is asked for
+ *  its description over the network: `hostSignInOf` writes the one the issuer keeps. */
+function stackOf() {
+  const stack = sqliteStack();
   vi.stubGlobal("fetch", async () => new Response("Not found", { status: 404 }));
-  const env = {
-    DOMAIN,
-    AUTH_SIGNING_KEY: "a-signing-key-for-tests-only",
-    AUTH_SETTINGS: JSON.stringify({
-      // `guest: false` is a config with no such method: JSON leaves the key out
-      login: { methods: { email: {}, guest: guest || undefined }, allow },
-    }),
-    OAUTH_KV: {
-      get: async (name: string, options?: unknown) => {
-        const value = kv.get(name) ?? null;
-        const json = options === "json" || (options as { type?: string })?.type === "json";
-        return value && json ? JSON.parse(value) : value;
-      },
-      put: async (name: string, value: string) => void kv.set(name, value),
-      delete: async (name: string) => void kv.delete(name),
-      list: async ({ prefix = "" }: { prefix?: string } = {}) => ({
-        keys: [...kv.keys()].filter((name) => name.startsWith(prefix)).map((name) => ({ name })),
-        list_complete: true,
-      }),
-    },
-    // of D1's surface, only what the Worker calls: prepare, bind, first, all, run and batch
-    DB: {
-      prepare: (sql: string) => statementOf(sql),
-      // one transaction, as D1's batch is
-      batch: async (statements: ReturnType<typeof statementOf>[]) => {
-        db.exec("begin");
-        try {
-          const results = statements.map((statement) => statement.execute());
-          db.exec("commit");
-          return results;
-        } catch (error) {
-          db.exec("rollback");
-          throw error;
-        }
-      },
-    },
-  } as unknown as Env;
   return {
-    env,
-    db,
-    kv,
+    ...stack,
     /** The guests' rows alone, oldest first. */
     people: () =>
-      db.prepare("select id, email from users where email like 'guest:%' order by rowid").all() as {
-        id: string;
-        email: string;
-      }[],
+      stack.db
+        .prepare("select id, email from users where email like 'guest:%' order by rowid")
+        .all() as { id: string; email: string }[],
   };
 }
 
-/** The authorization request of `resource`'s own host client, as the boundary sends a visitor
- *  whose app's guard names `ways` (RFC 9470's `acr_values`). `next` is that request as the sign-in
- *  pages carry it, a path of the issuer. `change`: a parameter that another client would send. */
+/** `count` admissions of `kind` that others made in this window (./device/limits.ts). */
+function admissionsOf(db: ReturnType<typeof sqliteStack>["db"], kind: string, count: number) {
+  const insert = db.prepare("insert into admissions (kind, client, created_at) values (?, ?, ?)");
+  for (let n = 0; n < count; n += 1) insert.run(kind, `other-${n}`, Date.now());
+}
+
+/** The authorization request of `resource`'s own host client, as the boundary sends a visitor,
+ *  for an app whose description names the sign-in methods `ways` (none: the default). `next` is
+ *  that request as the sign-in pages carry it, a path of the issuer. `change`: a parameter that
+ *  another client would send. */
 async function hostSignInOf(
   env: Env,
   resource: string,
@@ -646,7 +547,19 @@ async function hostSignInOf(
   change: Record<string, string> = {},
 ) {
   const verifier = generateRandomCodeVerifier();
-  const clientId = await hostClientOf(env, new URL(resource).host);
+  const { host } = new URL(resource);
+  const clientId = await hostClientOf(env, host);
+  const signIn = (ways ? ways.split(" ") : ["email", "passkey"]) as SignInMethod[];
+  await env.OAUTH_KV.put(
+    `iterate-app-description:${host}`,
+    JSON.stringify({
+      name: null,
+      icon: null,
+      members: false,
+      signIn,
+      askAfter: Date.now() + 60_000,
+    }),
+  );
   const query = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
@@ -658,7 +571,6 @@ async function hostSignInOf(
     code_challenge_method: "S256",
     ...change,
   });
-  if (ways) query.set("acr_values", ways);
   const path = `/oauth2/auth?${query}`;
   const request = {
     path,
@@ -745,7 +657,7 @@ function originAndPath(answer: Response) {
 
 /** The owner, signed in with a live passkey: a member's session. */
 async function ownerCookie(env: Env) {
-  const owner = await linkIdentity(env.DB, { provider: "email", subject: OWNER, email: OWNER });
+  const owner = await userOf(env.DB, OWNER);
   await env.DB.prepare(
     `insert into keys (id, user_id, public_key, format, label, added_via, added_by, added_at)
      values ('key-1', ?1, 'a-public-key', 'webauthn', 'a passkey', 'keys-page', ?1, 1)
@@ -753,7 +665,7 @@ async function ownerCookie(env: Env) {
   )
     .bind(owner.id)
     .run();
-  const { setCookie } = await sessionCookie(env, new Request(ISSUER), owner, "passkey", "key-1");
+  const { setCookie } = await sessionCookie(env, new Request(ISSUER), owner, "key-1");
   return setCookie.split(";")[0]!;
 }
 

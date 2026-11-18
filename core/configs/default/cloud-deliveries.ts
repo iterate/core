@@ -5,17 +5,26 @@
 //   the key form    on `/integrations/<provider>/<account>`, signed by the Cloud's key: the
 //                   signer's actor is `iterate-cloud`, the stack's own name for that key. It
 //                   reaches `processEvent`.
-//   the mind form   on `/minds/iterate.com/integrations/<provider>/<account>`, signed by the mind
-//                   iterate.com with the key it publishes. A mind gets this form once its owner
-//                   let iterate.com in (minds.md), AND the mind said that it reads it
-//                   (`sayMindForm`). It reaches `processMindEvent`.
+//   the mind form   on `/minds/iterate.iterate.com/integrations/<provider>/<account>`, signed by
+//                   the mind iterate.iterate.com with the key it publishes. A mind gets this form
+//                   once its owner let iterate.iterate.com in (minds.md), AND the mind said
+//                   that it reads it (`sayMindForm`). It reaches `processMindEvent`.
 //
 // Every reader of a delivery asks `cloudDeliveryOf`, and nothing else in this repo tests the
 // Cloud's signer for one. What this mind makes of a delivery (a message, a watch, a sync) stays on
 // the mind's own context for the account, `context`, whichever form the delivery came in.
 
-/** The mind that is iterate Cloud, when it signs as a mind. */
-export const ITERATE_MIND = "iterate.com";
+/** WHERE iterate Cloud IS: its origin, an `https:` address with no path. This constant is the one
+ *  place in the mind that names it. No config of the stack does: the code that makes a secret
+ *  names the Cloud (`client: { cloud: "google", origin: ITERATE_CLOUD }`), and the secret keeps
+ *  that origin for every later request (accounts.md). Every file of this template that names the
+ *  Cloud imports it from here. */
+export const ITERATE_CLOUD = "https://cloud.iterate.com";
+
+/** The mind that is iterate Cloud, when it signs as a mind: named, as every mind, by its control-plane
+ *  hostname, where the auth Worker publishes its keys. No other hostname of its zones is its
+ *  name: a statement signed as `iterate.com` is another signer's, and no delivery. */
+export const ITERATE_MIND = "iterate.iterate.com";
 
 /** An event as `processEvent` and `processMindEvent` hand it, as far as this file reads it. */
 export type CloudDeliveryEvent = {
@@ -47,8 +56,8 @@ export function cloudDeliveryOf(
 export type MindFormItx = {
   fetch(request: Request): Promise<Response>;
   secrets: {
-    list(): Promise<{ path: string; cloud?: string }[]>;
-    cloud(): Promise<{ origin: string; clients: string[] } | null>;
+    list(): Promise<{ path: string; cloud?: string; cloudOrigin?: string }[]>;
+    cloud(origin: string): Promise<{ origin: string; clients: string[] }>;
   };
   kv: {
     get(key: string): Promise<string | null>;
@@ -62,29 +71,33 @@ const MIND_FORM_KEY = "cloud-deliveries:mind-form";
 const TRY_AGAIN_MS = 60 * 60_000;
 
 /** THE MIND TELLS THE CLOUD THAT IT READS THE MIND FORM. Call it only from the file that reads
- *  that form (`worker.ts`: its init step, and `cloudDeliveryEvent` at each delivery): a
+ *  that form (`worker.ts`: its init step, `mindFormEvent` when a secret is set, and
+ *  `cloudDeliveryEvent` at each delivery): a
  *  `worker.ts` without `processMindEvent` must never say it, or its deliveries would be taken
  *  and read by nothing. The Cloud sends the mind form to no mind that has not said so.
  *
  *  The word is an ask of the Cloud (core/secrets-worker cloud-client.ts `askOf`), in the name of
- *  an account a member connected through the Cloud: each such account is tried in turn until
- *  the Cloud takes the word, since not every kind of connection can ask. With no Cloud or no
- *  account it does nothing: such a mind gets no delivery either. Said once; after a try that
- *  was not taken, the next one waits an hour. */
+ *  an account a member connected through the Cloud at `ITERATE_CLOUD`: each such account is
+ *  tried in turn until the Cloud takes the word, since not every kind of connection can ask. A
+ *  secret asks its own Cloud alone, so an account of another Cloud is not tried. With no such
+ *  account it does nothing: such a mind gets no delivery either. Said once; after a try that was
+ *  not taken, the next one waits an hour. */
 export async function sayMindForm(itx: MindFormItx): Promise<void> {
   const kept = await itx.kv.get(MIND_FORM_KEY);
   if (kept === "said" || Number(kept) > Date.now() - TRY_AGAIN_MS) return;
-  const cloud = await itx.secrets.cloud();
-  if (!cloud) return;
-  const accounts = (await itx.secrets.list()).filter(
-    (secret) => secret.cloud && cloud.clients.includes(secret.cloud),
+  // the catalog first: a mind with no account of the Cloud's asks the Cloud nothing
+  const connected = (await itx.secrets.list()).filter(
+    (secret) => secret.cloud && secret.cloudOrigin === ITERATE_CLOUD,
   );
+  if (connected.length === 0) return;
+  const cloud = await itx.secrets.cloud(ITERATE_CLOUD);
+  const accounts = connected.filter((secret) => cloud.clients.includes(secret.cloud!));
   if (accounts.length === 0) return;
   const answers: (string | number)[] = [];
   for (const account of accounts) {
     const answer = await itx
       .fetch(
-        new Request(`${cloud.origin}/clients/${account.cloud}/ask/mind-form`, {
+        new Request(`${ITERATE_CLOUD}/clients/${account.cloud}/ask/mind-form`, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -108,4 +121,22 @@ export async function sayMindForm(itx: MindFormItx): Promise<void> {
   }
   await itx.kv.put(MIND_FORM_KEY, String(Date.now()));
   console.warn({ event: "config.mind-form-word-not-taken", accounts: accounts.length, answers });
+}
+
+/** A SECRET WAS SET (its fact is on the secret's own log, `/secrets/<name>`): the mind says the
+ *  word now, when the secret is an account of iterate Cloud's (`sayMindForm` reads the catalog,
+ *  and does nothing once the word is said). A publish says the word for the accounts that exist
+ *  then. A mind trusts no key of the Cloud's, so the key form does not land on it, and the Cloud
+ *  sends the mind form only after the word: without this, an account that a member connects
+ *  after the last publish gets no delivery until the next one. `worker.ts` hands every event
+ *  here. A word that could not be said is logged, and never fails the secret's event. */
+export async function mindFormEvent(
+  itx: MindFormItx,
+  event: { type: string; path: string },
+): Promise<void> {
+  if (event.type !== "events.iterate.com/secret/set" || !/^\/secrets\/[^/]+$/.test(event.path))
+    return;
+  await sayMindForm(itx).catch((error: unknown) =>
+    console.warn({ event: "config.mind-form-word-failed", error: String(error) }),
+  );
 }

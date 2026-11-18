@@ -1,7 +1,6 @@
 import { expect, test } from "vitest";
 import {
   canonicalPath,
-  cloudNameRefusal,
   honouredNext,
   otherKeyLending,
   scopeInWords,
@@ -14,30 +13,43 @@ import {
   underPaths,
 } from "./key-rules.ts";
 
-const ISSUER = "https://iterate.example.com";
-const TRUSTED = ["https://cloud.example.net"];
+const CONFIG = {
+  controlPlaneHostname: "iterate.example.com",
+  zones: ["example.com", "second.example"],
+};
 
 test.each([
-  ["/keys?x=1", "/keys?x=1"],
-  [`${ISSUER}/keys/enrol?actor=cloud`, "/keys/enrol?actor=cloud"],
+  // the answer is the whole address that was checked, never a path cut out of it
+  ["/keys?x=1", "https://iterate.example.com/keys?x=1"],
   [
-    "https://cloud.example.net/connected?d=example.com",
-    "https://cloud.example.net/connected?d=example.com",
+    "https://iterate.example.com/keys/enrol?actor=cloud",
+    "https://iterate.example.com/keys/enrol?actor=cloud",
   ],
+  ["https://iterate.example.com//evil.example/", "https://iterate.example.com//evil.example/"],
+  // a network-path reference is the host it names
+  ["//shop.second.example/a", "https://shop.second.example/a"],
+  ["blob:https://iterate.example.com/a-page", null],
+  ["https://user@example.com/", null],
+  ["https://example.com:8443/", null],
   ["https://onboarding.example.com/", "https://onboarding.example.com/"],
   ["https://example.com/welcome", "https://example.com/welcome"],
+  // every zone of the mind is the owner's own site
+  ["https://second.example/welcome", "https://second.example/welcome"],
+  ["https://shop.second.example/?a=1", "https://shop.second.example/?a=1"],
   ["http://onboarding.example.com/", null],
+  ["http://second.example/", null],
   ["https://onboarding.example.com.evil.example/", null],
   ["https://evilexample.com/", null],
+  ["https://notsecond.example/", null],
+  ["https://cloud.example.net/connected", null],
   ["https://evil.example/", null],
   ["//evil.example/", null],
   ["/\\evil.example/", null],
   ["javascript:alert(1)", null],
-  ["http://cloud.example.net/", null],
   ["", null],
   [null, null],
 ])("next %s is honoured as %s", (next, honoured) => {
-  expect(honouredNext(next, ISSUER, TRUSTED)).toBe(honoured);
+  expect(honouredNext(next, CONFIG)).toBe(honoured);
 });
 
 test("a key confined to paths reaches only under them; an unconfined key reaches every path", () => {
@@ -137,12 +149,16 @@ test("a name another live key lends is held; the same key, another name and no n
   expect(otherKeyLending(lending, "key-c", undefined)).toBeNull();
 });
 
-test("the Cloud's name goes to the key the stack's own Cloud publishes, and to no other", () => {
-  const cloud = { origin: "https://cloud.example.net", publicKey: "cloud-key" };
-  expect(cloudNameRefusal("cloud-key", cloud)).toBeNull();
-  expect(cloudNameRefusal("a-stranger's-key", cloud)).toMatch(/not the key of https:\/\/cloud/);
-  expect(cloudNameRefusal("cloud-key", { ...cloud, publicKey: null })).toMatch(/gave no key/);
-  expect(cloudNameRefusal("cloud-key", null)).toMatch(/names none/);
+test("no service gets the name that the mind trusts a signer by", () => {
+  const ask = new URLSearchParams({
+    actor: "iterate-cloud",
+    label: "iterate Cloud",
+    publicKey: "abc_-1",
+    paths: "/integrations/",
+  });
+  expect(serviceKeyRequestOf(ask)).toEqual({
+    refused: expect.stringContaining("iterate-cloud"),
+  });
 });
 
 test("a statement names a context by its own path, with no segment the mind would resolve", () => {
@@ -191,7 +207,7 @@ test("a member's signature allows a service's key only for that key, that reach 
   ]).toEqual([true, false, false, false, false, false, false, false]);
 });
 
-const FACTS = { domain: "example.com", key: "keyaaaaabbbbbccccc", person: "member@example.net" };
+const FACTS = { mind: "example.com", key: "keyaaaaabbbbbccccc", person: "member@example.net" };
 const ASK = { actor: "bridge-github", label: "GitHub", publicKey: "MFkw", paths: [] };
 
 test("the statement for a key that adds events names its one context, and where the link speaks", () => {
@@ -233,15 +249,7 @@ test("the statement for a key that lends and adds events says both in its first 
   ]);
 });
 
-test("the statement for the iterate Cloud's key says that the mind checked the key", () => {
-  const ask = { ...ASK, actor: "iterate-cloud", label: "iterate Cloud", paths: ["/integrations/"] };
-  expect(marked(statementInParts(ask, FACTS)).slice(-2)).toEqual([
-    "{checked:example.com} checked that this is the key of its iterate Cloud.",
-    "The link says that the key belongs to {link:“iterate Cloud”}.",
-  ]);
-});
-
-test("the label and the actor are the link's words; the key, the contexts, the lent name and the domain are checked", () => {
+test("the label and the actor are the link's words; the key, the contexts, the lent name and the mind are checked", () => {
   const ask = { ...ASK, paths: ["/integrations/github/"], provide: "github" };
   const parts = statementInParts(ask, FACTS).flat();
   const from = (kind: StatementPart["from"]) =>

@@ -7,7 +7,8 @@ import { expect, test } from "vitest";
 import { guestbookApp } from "../../configs/default/apps/guestbook/app.ts";
 import { auth } from "./sdk/auth.ts";
 
-const ORIGIN = "https://guestbook.example.com";
+// The app is on a second zone of the mind, whose control-plane hostname is iterate.example.com.
+const ORIGIN = "https://guestbook.example.org";
 
 test("an entry waits until a member approves it, and each person sees what is theirs to see", async () => {
   const book = guestbook();
@@ -102,6 +103,19 @@ test("a reply answers an approved entry, and waits for approval like any entry",
   ]);
 });
 
+test("the app says what it is to anyone, where the mind's sign-in reads it: its people sign in by a mailed code first", async () => {
+  const book = guestbook();
+  const described = await book.fetch(nobody, "/.well-known/iterate-app");
+  expect(described).toMatchObject({ status: 200 });
+  expect(await described.json()).toEqual({
+    name: "Guestbook",
+    icon: "/icon.svg",
+    signIn: ["email", "passkey"],
+  });
+  // the icon that it names is a file of the app, which answers anyone too
+  expect(await book.fetch(nobody, "/icon.svg")).toMatchObject({ status: 200 });
+});
+
 test("the app's MCP server sends a client with no token to the mind's sign-in, for this host alone", async () => {
   const book = guestbook();
   const answer = await book.fetch(nobody, "/mcp", { method: "POST", body: "{}" });
@@ -170,15 +184,20 @@ test("an agent signed in as a person lists, writes and answers through the MCP t
 });
 
 // ── who asks: the stamps the boundary sets on a request to a mind's host ──
-const person = (name: string) => ({
-  "x-itx-person": JSON.stringify({ userId: `user_${name}`, email: `${name}@example.net` }),
+const person = (name: string, method = "email") => ({
+  "x-itx-person": JSON.stringify({
+    userId: `user_${name}`,
+    email: `${name}@example.net`,
+    name,
+    method,
+  }),
 });
 const nobody = {};
 const ada = person("ada");
 const bob = person("bob");
 // a member is a person the boundary also stamps as a principal
 const member = {
-  ...person("owner"),
+  ...person("owner", "passkey"),
   "x-itx-principal": JSON.stringify({ actor: "user_owner", email: "owner@example.net" }),
 };
 
@@ -204,7 +223,12 @@ function guestbook() {
     app.fetch(
       new Request(`${ORIGIN}${path}`, {
         ...init,
-        headers: { "content-type": "application/json", ...who },
+        headers: {
+          "content-type": "application/json",
+          // the boundary's stamp on every request for the mind's own code
+          "x-iterate-control-plane-hostname": "iterate.example.com",
+          ...who,
+        },
       }),
       host,
     );

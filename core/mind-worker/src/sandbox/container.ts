@@ -5,6 +5,7 @@ import { DurableObjectNameCodec, relayedCloseCode, truncateCloseReason } from "c
 import { codedError } from "iterate/lib";
 import { sandboxVariablesOf } from "iterate/mind-api";
 import { z } from "zod";
+import { mindWorkerConfigOf } from "../config.ts";
 import filesTool from "../generated/sandbox-files-tool.js";
 import { SANDBOX_MAX_BUSY_MS } from "./contract.ts";
 import { imageToStart } from "./image.ts";
@@ -250,7 +251,12 @@ export class SandboxContainer extends DurableObject {
    *  `iterate` CLI there finds the mind with no profile and no sign-in. */
   #told(): Record<string, string> {
     const { name } = this.ctx.id;
-    return name ? sandboxVariablesOf(this.env.DOMAIN, DurableObjectNameCodec.parse(name).path) : {};
+    return name
+      ? sandboxVariablesOf(
+          mindWorkerConfigOf(this.env).controlPlaneHostname,
+          DurableObjectNameCodec.parse(name).path,
+        )
+      : {};
   }
 
   /** A session that code in the sandbox holds is use (./own-session.ts): its frames stamp the

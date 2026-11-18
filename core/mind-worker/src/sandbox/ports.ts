@@ -1,7 +1,8 @@
 // ports.ts — A PORT OF A SANDBOX AT A HOST OF THE MIND. `exposePort(port, { name })` serves the port
-// at `https://<name>.<domain>/`: HTTP, streamed bodies and WebSockets. Two records, each in one
-// place. The fetch route `sandbox-<name>` on `/` is what is served: the name, the sandbox and the
-// port (its target), and who may reach it. The sandbox's own log keeps the command that is run when
+// at `https://<name>.<domain>/`, where `<domain>` is the zone of the mind's control-plane hostname:
+// HTTP, streamed bodies and WebSockets. Two records, each in one place. The fetch route
+// `sandbox-<name>` on `/`, which matches that hostname, is what is served: the name, the sandbox
+// and the port (its target), and who may reach it. The sandbox's own log keeps the command that is run when
 // a request finds the port closed.
 //
 // The route's target is `itx.sandboxes.get(path).container.getTcpPort(port).fetch`, a call anyone
@@ -12,7 +13,6 @@ import { z } from "zod";
 import type { FetchRouteInput } from "iterate/api";
 import { itxExpressionStepName, type ItxExpression } from "iterate/expression";
 import { codedError, jsonEqual } from "iterate/lib";
-import { ROUTING_SLUG } from "iterate/mind-ingress";
 import { EntityCreationAndDeletionState } from "../mind/entity-lifecycle.ts";
 import { SandboxPortExposed } from "./contract.ts";
 
@@ -118,10 +118,9 @@ const PortTarget = z.tuple([
 const FetchRoutes = z.array(
   z.looseObject({
     fetchRouteName: z.string(),
-    requestMatcher: z.looseObject({
-      routingSlug: z.string().optional(),
-      url: z.looseObject({ hostname: z.string().optional() }).optional(),
-    }),
+    requestMatcher: z
+      .looseObject({ url: z.looseObject({ hostname: z.string().optional() }).optional() })
+      .nullable(),
     target: z.unknown(),
     authRequirement: z.unknown().nullable(),
   }),
@@ -134,6 +133,8 @@ type FetchRoutes = z.infer<typeof FetchRoutes>;
 const RESERVED_NAMES: ReadonlySet<string> = new Set(["iterate", "auth", "dash", "docs", "voice"]);
 /** With `sandbox-` before it, a route's name is a DNS label of at most 63 characters. */
 const NAME_MAX_LENGTH = 55;
+/** A port's name is one DNS label: lowercase letters, digits and single hyphens, from a letter. */
+const PORT_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /** Why a port is not served under `name`, or null when it may be. A route that already takes the
  *  host is another's, unless it is this port's own route, which a second `exposePort` replaces. */
@@ -143,15 +144,14 @@ export function portNameRefusal(
   target: ItxExpression,
   domain: string,
 ): string | null {
-  if (!ROUTING_SLUG.test(name) || name.length > NAME_MAX_LENGTH)
+  if (!PORT_NAME.test(name) || name.length > NAME_MAX_LENGTH)
     return `a name is a DNS label that starts with a letter: lowercase letters, digits and single hyphens, at most ${NAME_MAX_LENGTH} characters`;
   if (RESERVED_NAMES.has(name))
     return `${name}.${domain} is the platform's or an app's host: pick another name`;
   const taken = routes.find(
     (route) =>
       (route.fetchRouteName === routeNameOf(name) ||
-        route.requestMatcher.routingSlug === name ||
-        route.requestMatcher.url?.hostname === `${name}.${domain}`) &&
+        route.requestMatcher?.url?.hostname === `${name}.${domain}`) &&
       !(route.fetchRouteName === routeNameOf(name) && jsonEqual(route.target, target)),
   );
   return taken
@@ -182,7 +182,7 @@ const SandboxPortsState = EntityCreationAndDeletionState.extend({
 
 export type SandboxPortDeps = {
   sandboxPath: string;
-  /** The mind's domain: a port's host is `<name>.<domain>`. */
+  /** The zone of the mind's control-plane hostname: a port's host is `<name>.<domain>`. */
   domain: string;
   /** Throws unless the sandbox is strictly beneath the caller: who exposes is who creates. */
   assertBeneathCaller(verb: string): void;
@@ -227,7 +227,8 @@ export async function runSandboxPortCall(
     const [state, routes] = [await stateOf(), FetchRoutes.parse(await deps.routes())];
     return routes.flatMap((route) => {
       const target = PortTarget.safeParse(route.target);
-      const name = route.requestMatcher.routingSlug;
+      const hostname = route.requestMatcher?.url?.hostname;
+      const name = hostname?.endsWith(`.${domain}`) ? hostname.slice(0, -domain.length - 1) : null;
       if (!target.success || target.data[2][1] !== sandboxPath || !name) return [];
       const port = target.data[4][1];
       return [
@@ -274,7 +275,7 @@ export async function runSandboxPortCall(
     );
   // The route first: it is the claim of the name, and the one write that a caller may be refused.
   await deps.setRoute(routeNameOf(name), {
-    requestMatcher: { routingSlug: name },
+    requestMatcher: { url: { hostname: `${name}.${domain}` } },
     target,
     authRequirement: call.options.public ? null : { visitors: "mind-members" },
   });

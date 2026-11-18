@@ -4,7 +4,7 @@ The owner should come away with: the mind works while they are away, and it has 
 
 ## Ready today
 
-- Mail, with no setup: from any address at `<domain>` (`onboarding/mail.md`). Prove it: send
+- Mail, with no setup: from any address at `<zone>` (`onboarding/mail.md`). Prove it: send
   one, and ask them to say that it arrived. Their word is the proof; a mail they never saw is
   none. When nothing came, after a look in spam, say plainly that mail does not reach them yet,
   and offer no other way as ready.

@@ -4,11 +4,11 @@ The owner should come away with: every link you give opens the right thing, and 
 
 ## Ready today
 
-- This chat is `https://dash.<domain>/?agent=/agents/onboarding`. It goes into every MAIL to the
+- This chat is `https://dash.<zone>/?agent=/agents/onboarding`. It goes into every MAIL to the
   owner, and you give it when they say they are lost. Never a link to this chat inside this chat.
 - Always write the full hostname. The owner need not learn the Dash: the next step is always to
   tell you, or another agent, what they want.
-- `/keys` and `/keys/enrol` on `https://iterate.<domain>` take `next=`, a way back: after they
+- `/keys` and `/keys/enrol` on `https://<control-plane hostname>` take `next=`, a way back: after they
   sign, the page brings them back by itself.
 - The chat opens a link whose `next=` points to the Dash in the SAME tab. So add `next=` only to a
   page that reads it. `/members` and `/secrets/approvals` do not (their code reads no `next=`):
@@ -18,15 +18,15 @@ The owner should come away with: every link you give opens the right thing, and 
 ## Not ready
 
 - The two links to one file below are read from the apps' code, and not tried in onboarding. When
-  one does not open the file, give `https://dash.<domain>/?page=repo` and the file's name.
+  one does not open the file, give `https://dash.<zone>/?page=repo` and the file's name.
 
 ## How
 
 The way back:
 
 ```ts
-const back = encodeURIComponent("https://dash.<domain>/?agent=/agents/onboarding");
-return `https://iterate.<domain>/keys?next=${back}`;
+const back = encodeURIComponent("https://dash.<zone>/?agent=/agents/onboarding");
+return `https://<control-plane hostname>/keys?next=${back}`;
 ```
 
 One file of the mind's code, by its path in the repo, with no leading slash:
@@ -34,21 +34,21 @@ One file of the mind's code, by its path in the repo, with no leading slash:
 ```ts
 const file = "apps/theme.css";
 return {
-  dash: "https://dash.<domain>/?page=repo&view=" + encodeURIComponent(JSON.stringify({ file })),
-  docs: "https://docs.<domain>/?doc=" + encodeURIComponent(file),
+  dash: "https://dash.<zone>/?page=repo&view=" + encodeURIComponent(JSON.stringify({ file })),
+  docs: "https://docs.<zone>/?doc=" + encodeURIComponent(file),
 };
 ```
 
 The places:
 
-- `https://dash.<domain>`, the Dash: `?page=agents` every agent and a chat with each;
+- `https://dash.<zone>`, the Dash: `?page=agents` every agent and a chat with each;
   `?page=contexts` everything that happens, live; `?page=repo` the mind's code as a small editor;
-  `?page=secrets`; `?page=integrations`; `?page=analytics` (with telemetry); `?page=mcp`.
-- `https://iterate.<domain>/` leads to the Dash. Beside it: `/secrets/approvals`, `/keys`,
+  `?page=secrets`; `?page=integrations`; `?page=analytics`; `?page=mcp`.
+- `https://<control-plane hostname>/` leads to the Dash. Beside it: `/secrets/approvals`, `/keys`,
   `/sessions` (every browser and app signed in as them, each one to end), `/members`, and
   `/self-test`, which checks the whole installation: ask them to open it and say what failed.
-- `https://docs.<domain>`: the mind's code and notes, with each file's history.
-- `https://voice.<domain>`: a call to the mind (`onboarding/speak.md`).
+- `https://docs.<zone>`: the mind's code and notes, with each file's history.
+- `https://voice.<zone>`: a call to the mind (`onboarding/speak.md`).
 
 ## Say
 

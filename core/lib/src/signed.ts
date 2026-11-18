@@ -1,13 +1,12 @@
 // The signed statement: JSON text kept exactly as signed. The signature is over DSSE's
 // pre-authentication encoding of that text, so nothing is canonicalized and nothing parses the text
 // before the signature checks. A page's script cannot import this module, so it copies `signedBytes`.
-import { z } from "zod";
 
 export type Statement = {
-  /** The domain of the mind it is for. */
+  /** The mind it is for, by its control-plane hostname. */
   mind: string;
-  /** The domain of the mind that signed it, with the key it publishes (`MindDocument`). Absent for
-   *  a person's key or a service's. */
+  /** The mind that signed it, by its control-plane hostname, with a working key that its identity
+   *  log lists (./mind-identity-log.ts). Absent for a person's key or a service's. */
   from?: string;
   path: string;
   type: string;
@@ -20,9 +19,13 @@ export type Statement = {
 };
 
 /** `key` is the key's id. A `p256` sig is r‖s; a `webauthn` sig is DER over
- *  `authenticatorData ‖ SHA-256(clientDataJSON)`, and its challenge is `challengeOf(statement)`. */
+ *  `authenticatorData ‖ SHA-256(clientDataJSON)`, and its challenge is `challengeOf(statement)`.
+ *  An `ML-DSA-65` sig is pure ML-DSA-65 (FIPS 204) with the empty context: a mind's working key,
+ *  which its identity log lists (./mind-identity.ts). The format names the check, and a key is
+ *  checked only under its own format. */
 export type Signature =
   | { format: "p256"; key: string; sig: string }
+  | { format: "ML-DSA-65"; key: string; sig: string }
   | {
       format: "webauthn";
       key: string;
@@ -33,17 +36,22 @@ export type Signature =
 
 export type Envelope = { statement: string; signature: Signature };
 
-const STATEMENT_PAYLOAD_TYPE = "application/vnd.iterate.statement+json";
-
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 const ECDSA_SHA256 = { name: "ECDSA", hash: "SHA-256" } as const;
+/** Node 24.7 and workerd with the flag `webcrypto_modern_algorithms` have it. */
+const ML_DSA_65 = { name: "ML-DSA-65" } as const;
 const encoder = new TextEncoder();
 
-/** `"DSSEv1" SP len(type) SP type SP len(body) SP body`, lengths in bytes. */
-export function signedBytes(statement: string): Uint8Array<ArrayBuffer> {
+/** `"DSSEv1" SP len(type) SP type SP len(body) SP body`, lengths in bytes. The type is part of
+ *  what is signed, so a signature over one type of text never passes as one over another: a
+ *  mind's identity record has its own (./mind-identity.ts). */
+export function signedBytes(
+  statement: string,
+  payloadType = "application/vnd.iterate.statement+json",
+): Uint8Array<ArrayBuffer> {
   const body = encoder.encode(statement);
   const head = encoder.encode(
-    `DSSEv1 ${encoder.encode(STATEMENT_PAYLOAD_TYPE).length} ${STATEMENT_PAYLOAD_TYPE} ${body.length} `,
+    `DSSEv1 ${encoder.encode(payloadType).length} ${payloadType} ${body.length} `,
   );
   return concat(head, body);
 }
@@ -69,89 +77,26 @@ export const PLATFORM_NAMESPACES = [
   "approval",
 ];
 
-/** WHAT A MIND PUBLISHES, at `https://<domain>/.well-known/iterate` and at the same path of its
- *  issuer, `https://iterate.<domain>`: the keys it signs with as itself (a statement with `from`),
- *  and where a statement for it goes. core/auth-worker answers it. */
-const MindDocument = z.object({
-  mind: z.string(),
-  issuer: z.string(),
-  statements: z.url({ protocol: /^https$/ }),
-  keys: z.array(z.object({ key: z.string(), publicKey: z.string(), label: z.string() })),
-});
-export type MindDocument = z.infer<typeof MindDocument>;
-export const MIND_DOCUMENT_PATH = "/.well-known/iterate";
+/** Where a mind publishes its stack's key, at its control-plane hostname: who gets a statement that the
+ *  stack signed, iterate Cloud for one, reads the key there. core/auth-worker answers it. */
+export const STACK_KEY_PATH = "/keys/stack.json";
 
-/** A mind's domain as a meld names it: a lowercase DNS name. */
-export const isMindDomain = (domain: string) =>
-  /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain);
+/** What `STACK_KEY_PATH` answers. `publicKey` is the raw ML-DSA-65 public key, base64url, and
+ *  `key` its id (iterate/mind-identity `identityKeyIdOf`). `listed`: whether the last accepted
+ *  record of the mind's identity lists it as its working key for statements. Until then the key
+ *  is a candidate: the stack signs nothing with it, and the owner's command lists it with a root
+ *  key. */
+export type StackKeyDocument = {
+  mind: string;
+  key: string;
+  publicKey: string;
+  algorithm: "ML-DSA-65";
+  listed: boolean;
+};
 
-/** A document is a few hundred bytes for each key: far more is no document. */
-const DOCUMENT_MAX_BYTES = 16 * 1024;
-
-/** A body's text when it is at most `limit` bytes, else null. It stops reading at the limit: the
- *  host is another party's, and what it sends must not be held whole. */
-async function textWithin(response: Response, limit: number): Promise<string | null> {
-  if (Number(response.headers.get("content-length") || 0) > limit) return null;
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for await (const chunk of response.body || []) {
-    size += chunk.byteLength;
-    if (size > limit) return null;
-    chunks.push(chunk);
-  }
-  return new TextDecoder().decode(concat(...chunks));
-}
-
-function jsonOf(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-const documents = new Map<
-  string,
-  { until: number; answer: Promise<MindDocument | { why: string }> }
->();
-
-/** THE DOCUMENT `domain` PUBLISHES, or why there is none: from its own address, else from its
- *  issuer's. One answer, a failure too, is kept a minute per domain, no redirect is followed, and
- *  each read waits five seconds at most: a stranger who names a domain must not make the reader
- *  ask a host often, or wait on one. internal-packages/cloud-clients `stackKeyOf` reads
- *  `stack.json` the same way. `fetcher` is the reader's way out. */
-export function publishedMindOf(
-  domain: string,
-  fetcher: (request: Request) => Promise<Response>,
-): Promise<MindDocument | { why: string }> {
-  const kept = documents.get(domain);
-  if (kept && kept.until > Date.now()) return kept.answer;
-  const read = (origin: string): Promise<MindDocument | { why: string }> => {
-    const url = `${origin}${MIND_DOCUMENT_PATH}`;
-    const document = async () => {
-      const answer = await fetcher(new Request(url, { redirect: "manual" }));
-      const text = answer.ok ? await textWithin(answer, DOCUMENT_MAX_BYTES) : null;
-      await answer.body?.cancel().catch(() => {});
-      const parsed = MindDocument.safeParse(text ? jsonOf(text) : null);
-      if (!parsed.success) return { why: `${url} answered ${answer.status} with no document` };
-      return parsed.data.mind === domain ? parsed.data : { why: `${url} names another mind` };
-    };
-    // The wait is a race over the headers and the body, not a signal in the Request: a Request
-    // with one cannot cross to another context, which is how the mind Worker's reader gets out.
-    return Promise.race([
-      document(),
-      new Promise<{ why: string }>((resolve) =>
-        setTimeout(() => resolve({ why: `${url} gave no answer in five seconds` }), 5_000),
-      ),
-    ]).catch((error: unknown) => ({ why: `${url}: ${String(error).slice(0, 200)}` }));
-  };
-  const answer = read(`https://${domain}`).then((own) =>
-    "why" in own ? read(`https://iterate.${domain}`) : own,
-  );
-  if (documents.size > 1_000) documents.clear();
-  documents.set(domain, { until: Date.now() + 60_000, answer });
-  return answer;
-}
+/** A mind's name as another mind writes it: its control-plane hostname, a lowercase DNS name. */
+export const isMindControlPlaneHostname = (hostname: string) =>
+  /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(hostname);
 
 export function statementText(fields: Omit<Statement, "nonce">): string {
   return JSON.stringify({
@@ -167,6 +112,19 @@ export async function signedP256(
 ): Promise<Envelope> {
   const sig = await crypto.subtle.sign(ECDSA_SHA256, privateKey, signedBytes(statement));
   return { statement, signature: { format: "p256", key, sig: base64url(new Uint8Array(sig)) } };
+}
+
+/** `privateKey` is an ML-DSA-65 key. */
+export async function signedMlDsa65(
+  statement: string,
+  privateKey: Parameters<typeof crypto.subtle.sign>[1],
+  key: string,
+): Promise<Envelope> {
+  const sig = await crypto.subtle.sign(ML_DSA_65, privateKey, signedBytes(statement));
+  return {
+    statement,
+    signature: { format: "ML-DSA-65", key, sig: base64url(new Uint8Array(sig)) },
+  };
 }
 
 export async function challengeOf(statement: string): Promise<string> {
@@ -185,13 +143,35 @@ export async function statementHashOf(statement: string): Promise<string> {
 /** Where a WebAuthn assertion must have been made. */
 type Site = { origin: string; rpId: string };
 
-/** `userVerified` is reported, never required: a security key with no PIN cannot say it. */
+/** `publicKey` is in the format's own form: for `p256` and `webauthn` SubjectPublicKeyInfo DER,
+ *  for `ML-DSA-65` the raw public key, both base64url. A key of another algorithm does not import
+ *  and is refused. `userVerified` is reported, never required: a security key with no PIN cannot
+ *  say it. */
 export async function verifySignature(
   envelope: Envelope,
   publicKey: string,
   site: Site,
 ): Promise<{ userVerified?: boolean } | { refused: string }> {
   try {
+    if (envelope.signature.format === "ML-DSA-65") {
+      const key = await crypto.subtle.importKey(
+        // The format of an ML-DSA public key is `raw-public`, which Node and workerd take and
+        // which TypeScript's DOM library does not list yet: the cast names a format that the
+        // library knows, and the runtime gets the string as written.
+        "raw-public" as "raw",
+        fromBase64url(publicKey),
+        ML_DSA_65,
+        false,
+        ["verify"],
+      );
+      const valid = await crypto.subtle.verify(
+        ML_DSA_65,
+        key,
+        fromBase64url(envelope.signature.sig),
+        signedBytes(envelope.statement),
+      );
+      return valid ? {} : { refused: "the signature is not this key's" };
+    }
     const key = await crypto.subtle.importKey("spki", fromBase64url(publicKey), P256, false, [
       "verify",
     ]);
@@ -247,7 +227,8 @@ export function envelopeOf(value: unknown): Envelope | null {
   const { format, key, sig, authenticatorData, clientDataJSON } = fields(signature);
   if (typeof statement !== "string" || typeof key !== "string" || typeof sig !== "string")
     return null;
-  if (format === "p256") return { statement, signature: { format, key, sig } };
+  if (format === "p256" || format === "ML-DSA-65")
+    return { statement, signature: { format, key, sig } };
   if (
     format === "webauthn" &&
     typeof authenticatorData === "string" &&

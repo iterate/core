@@ -3,7 +3,9 @@ import {
   base64url,
   challengeOf,
   type Envelope,
+  envelopeOf,
   keyIdOf,
+  signedMlDsa65,
   signedP256,
   statementOf,
   statementText,
@@ -24,6 +26,38 @@ test("a p256 statement verifies under its key, and a changed byte fails", async 
   expect(await verifySignature(envelope, (await newKey()).publicKey, SITE)).toHaveProperty(
     "refused",
   );
+});
+
+test("an ML-DSA-65 statement verifies under its raw public key, and a changed byte, another ML-DSA-65 key, a P-256 key and another format fail", async () => {
+  const [pair, another] = await Promise.all([mlDsaKey(), mlDsaKey()]);
+  const raw = pair.raw;
+  const envelope = await signedMlDsa65(statement(), pair.privateKey, "stack-key");
+  expect(envelope.signature).toMatchObject({ format: "ML-DSA-65", key: "stack-key" });
+  // FIPS 204: 3309 bytes
+  expect(envelope.signature.sig).toHaveLength(4412);
+  expect(await verifySignature(envelope, raw, SITE)).toEqual({});
+  expect(envelopeOf(JSON.parse(JSON.stringify(envelope)))).toEqual(envelope);
+  const changed = { ...envelope, statement: envelope.statement.replace("opened", "closed") };
+  expect(await verifySignature(changed, raw, SITE)).toEqual({
+    refused: "the signature is not this key's",
+  });
+  expect(await verifySignature(envelope, another.raw, SITE)).toEqual({
+    refused: "the signature is not this key's",
+  });
+  const p256 = await newKey();
+  expect(await verifySignature(envelope, p256.publicKey, SITE)).toEqual({
+    refused: "malformed key or signature",
+  });
+  // a P-256 signature that calls itself ML-DSA-65 is checked as ML-DSA-65, and fails
+  const p256Signed = await signedP256(statement(), p256.privateKey, p256.id);
+  const relabelled: Envelope = {
+    ...p256Signed,
+    signature: { ...p256Signed.signature, format: "ML-DSA-65" },
+  };
+  expect(await verifySignature(relabelled, raw, SITE)).toHaveProperty("refused");
+  // and an ML-DSA-65 signature that calls itself p256 is checked as P-256 under a P-256 key
+  const asP256: Envelope = { ...envelope, signature: { ...envelope.signature, format: "p256" } };
+  expect(await verifySignature(asP256, p256.publicKey, SITE)).toHaveProperty("refused");
 });
 
 test("a WebAuthn assertion verifies, and says whether the person was verified", async () => {
@@ -139,4 +173,19 @@ function derOf(raw: Uint8Array): Uint8Array {
   };
   const body = [...integer(raw.subarray(0, 32)), ...integer(raw.subarray(32))];
   return new Uint8Array([0x30, body.length, ...body]);
+}
+
+/** An ML-DSA-65 pair, and its public half raw as base64url, as a stack publishes its key. */
+async function mlDsaKey() {
+  // the casts: TypeScript's library knows neither the algorithm by name nor the raw format
+  const pair = (await crypto.subtle.generateKey({ name: "ML-DSA-65" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
+  const raw = base64url(
+    new Uint8Array(
+      (await crypto.subtle.exportKey("raw-public" as "raw", pair.publicKey)) as ArrayBuffer,
+    ),
+  );
+  return { privateKey: pair.privateKey, raw };
 }

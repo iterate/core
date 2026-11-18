@@ -23,7 +23,7 @@
 // only when the sender is proven. Its text is marked as another mind's agent's (`from: "mind"`). It
 // reaches an agent of this mind that wrote to its sender, in that thread. It starts the thread's own
 // agent only when a person of this mind allowed its sender as a peer (`email/mind-peer-allowed`,
-// an address or a whole domain): a mind sends from any address of its own domain, so a member's
+// an address or a whole domain): a mind sends from any address at its own zones, so a member's
 // address proves nothing for it. No peer is allowed by default. At the hop limit (8 by default,
 // `email/mind-hop-limit-configured`) it reaches no agent, and the worker records
 // `email/mind-mail-held`. So two minds' agents that answer each other in one thread stop there.
@@ -72,7 +72,7 @@ export function whoGetsTheMail(mail: {
   const wroteTo = (origin: string, to: string[]) =>
     origin.startsWith("/agents/") && to.some((address) => bareAddress(address) === from);
   if (mail.mind) {
-    // A mind sends from any address of its own domain, so a member's address proves nothing
+    // A mind sends from any address at its own zones, so a member's address proves nothing
     // here: its mail reaches an agent that wrote to it, or starts one when a person of this mind
     // allowed its sender as a peer.
     const wrote = mail.sent.findLast(({ origin, to }) => wroteTo(origin, to));

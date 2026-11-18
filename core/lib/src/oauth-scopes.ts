@@ -11,7 +11,8 @@ import { z } from "zod";
  *   - `organizations:write` — the person's organizations: list every one they belong to, create new ones
  *   - `admin`               — operate the platform: every mind and person
  *  A mind's auth Worker grants one scope for each resource, whatever set a client asks for:
- *  `iterate` for the mind's API, MCP server and `/provide`, `identity` for a mind hostname
+ *  `iterate` for the mind's API, its MCP server and the right to hand in a mind that runs
+ *  elsewhere, `identity` for a mind hostname
  *  (core/auth-worker/src/oauth.ts `grantedScopes`). Its consent page asks one question and has no
  *  optional scopes. `account`, `organizations:write` and `admin` are listed because the metadata
  *  names them; no Worker of a mind's stack grants them. */

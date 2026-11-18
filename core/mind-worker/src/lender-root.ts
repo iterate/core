@@ -2,6 +2,7 @@ import { RpcTarget } from "capnweb";
 import {
   type ClientRpcStub,
   type IterateContextRpcTarget,
+  type LentFetchHolder,
   lendRefusal,
   nameIsFree,
 } from "core-itx";
@@ -9,6 +10,11 @@ import { canonicalItxExpressionPrefix, type ItxExpressionInput } from "iterate/e
 import { codedError } from "iterate/lib";
 import type { Lender } from "iterate/principal";
 import { z } from "zod";
+
+/** The mind's root context of the key's session (core-itx `sessionContext`), as far as this root
+ *  calls it. */
+type LentRoot = Pick<IterateContextRpcTarget, "provide" | "invoke"> &
+  Partial<Disposable> & { sessionLives(): true };
 
 /** What `rewriteRules.list()` answers, as far as the lend reads it. */
 const TableRows = z.array(z.object({ match: z.string(), target: z.string().nullable() }));
@@ -19,16 +25,12 @@ const TableRows = z.array(z.object({ match: z.string(), target: z.string().nulla
  *  a lent name only from itself: its lend says so (`onlyFromItself`), and the context refuses the
  *  attach when another lender holds the name. */
 export class LenderRoot extends RpcTarget {
-  readonly #root: Pick<IterateContextRpcTarget, "provide" | "invoke">;
+  readonly #root: LentRoot;
   readonly #lender: Lender;
   readonly #platformNames: ReadonlySet<string>;
 
   /** `platformNames`: the names that are the platform's at the mind's root, which no key lends. */
-  constructor(
-    root: Pick<IterateContextRpcTarget, "provide" | "invoke">,
-    lender: Lender,
-    platformNames: ReadonlySet<string>,
-  ) {
+  constructor(root: LentRoot, lender: Lender, platformNames: ReadonlySet<string>) {
     super();
     this.#root = root;
     this.#lender = lender;
@@ -42,7 +44,13 @@ export class LenderRoot extends RpcTarget {
 
   /** A live stub at the key's own name, with a description. A row would name something of the
    *  mind's as the key's own, and a fetch route would open the mind's hostname to the key. */
-  provide(match: ItxExpressionInput, target: unknown, options: { description?: unknown } = {}) {
+  provide(
+    match: ItxExpressionInput,
+    target: unknown,
+    options: { description?: unknown } = {},
+    /** The boundary's, as on the root's own `provide`: where this lend's `fetch` is made. */
+    lentFetch?: LentFetchHolder,
+  ) {
     const own = `itx.${this.#lender.provide}`;
     if (canonicalItxExpressionPrefix(match) !== canonicalItxExpressionPrefix(own))
       throw codedError("FORBIDDEN", `this key lends ${own} and nothing else`);
@@ -64,11 +72,23 @@ export class LenderRoot extends RpcTarget {
         );
       // The cast: `target` came off the wire. The checks above left an object or a function,
       // which is what capnweb hands over for a stub, and the kernel's lend refuses anything else.
-      return this.#root.provide(own, target as ClientRpcStub, {
-        ...description,
-        onlyFromItself: true,
-      });
+      return this.#root.provide(
+        own,
+        target as ClientRpcStub,
+        { ...description, onlyFromItself: true },
+        lentFetch,
+      );
     });
+  }
+
+  /** The boundary's watch of this session's part in the mind, as the root's own answers it. */
+  sessionLives() {
+    return this.#root.sessionLives();
+  }
+
+  /** The session's end: the root's context is this session's own, and ends what it lent. */
+  [Symbol.dispose]() {
+    this.#root[Symbol.dispose]?.();
   }
 
   /** Whether the name is the key's to take, by the rows of the mind's root (core-itx

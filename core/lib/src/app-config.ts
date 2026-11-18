@@ -33,15 +33,22 @@ export function parseAppConfigVars<Schema extends z.ZodTypeAny>(
 }
 
 /** The config's object as `env` gives it, before the schema: `<prefix>` with every `<prefix>__*`
- *  override merged on top, the deeper path last. Pure. What `parseAppConfigVars` parses. */
+ *  override merged on top, the deeper path last. `<prefix>` is the object as JSON text (a plain
+ *  variable) or the object itself (a Workers JSON binding). Pure. What `parseAppConfigVars`
+ *  parses. */
 export function appConfigInputOf(env: object, { prefix }: ConfigPrefix): Record<string, unknown> {
   const configEnv: Record<string, string> = {};
+  let boundObject: PlainObject | undefined;
   for (const [key, value] of Object.entries(env)) {
     if (!(key === prefix || key.startsWith(`${prefix}__`))) continue;
+    if (key === prefix && isPlainObject(value)) boundObject = value;
     if (typeof value !== "string" || !value.trim()) continue;
     configEnv[key] = value;
   }
-  return deepMerge(objectOf(configEnv[prefix], prefix), overridesOf(configEnv, prefix));
+  return deepMerge(
+    boundObject || objectOf(configEnv[prefix], prefix),
+    overridesOf(configEnv, prefix),
+  );
 }
 
 /** Parse `schema` out of the config's object, `raw` (`appConfigInputOf`'s, or a config file's).
@@ -219,4 +226,30 @@ export function deepMerge(base: PlainObject, overrides: PlainObject): PlainObjec
       : value;
   }
   return merged;
+}
+
+/** A secret config value: `exposeSecret()` hands it over. Printing, logging or serialising it
+ *  shows only "REDACTED", so a dump of a config never leaks it. */
+export class Redacted<T> {
+  #value: T;
+  constructor(value: T) {
+    this.#value = value;
+  }
+  exposeSecret(): T {
+    return this.#value;
+  }
+  toString(): string {
+    return "REDACTED";
+  }
+  toJSON(): string {
+    return "REDACTED";
+  }
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    return "REDACTED";
+  }
+}
+
+/** `schema`'s value as a `Redacted`: how a config's schema marks a secret field. */
+export function redacted<Schema extends z.ZodTypeAny>(schema: Schema) {
+  return schema.transform((value): Redacted<z.output<Schema>> => new Redacted(value));
 }

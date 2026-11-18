@@ -17,21 +17,21 @@ approves once. Every request uses a placeholder, never a token.
 ## How
 
 1. **Connect.** Ask which GitHub account holds the repository: theirs, or an organization.
-   `const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/github", { client: { cloud: "github", accounts: ["<account>"] } })`.
+   `const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/github", { client: { cloud: "github", origin: "https://cloud.iterate.com", accounts: ["<account>"] } })`.
    They confirm on iterate Cloud's page and approve at GitHub. Where iterate's App is not installed
-   on that account yet, add `install: true` beside `client`. Refused because the stack names no
-   Cloud: say so, and go to "If the owner declines".
+   on that account yet, add `install: true` beside `client`. Refused because the Cloud has no
+   such client: say so, and go to "If the owner declines".
 2. **Check.** `(await itx.secrets.describe("/secrets/github")).set`, then tell them who answered:
    `itx.fetch(new Request("https://api.github.com/user", { headers: { authorization: 'Bearer getSecret("/secrets/github", { field: "accessToken" })', accept: "application/vnd.github+json", "user-agent": "iterate" } }))`.
-3. **The repository.** A new private `<domain>-config`, or one they name that is EMPTY: no README,
+3. **The repository.** A new private `<zone>-config`, or one they name that is EMPTY: no README,
    no licence, no `.gitignore`. For a new one, the same headers and the body
-   `{ "name": "<domain>-config", "private": true }` to `POST https://api.github.com/user/repos`
+   `{ "name": "<zone>-config", "private": true }` to `POST https://api.github.com/user/repos`
    (their own account) or `POST https://api.github.com/orgs/<org>/repos`. On 403 or 404, ask them to
    make an empty private one at `https://github.com/new`, give iterate's App access, and name it.
 4. **Link it** (what `linkThroughCloud` of `@iterate-com/github-sync` does, as three calls):
    - `GET https://api.github.com/user/installations?per_page=100`, same headers: the `id` of the
      installation whose `account.login` is the account.
-   - `await itx.secrets.set("/secrets/github-installation-<id>", {}, { urls: ["https://api.github.com", "https://github.com"], refresh: { kind: "github-app-installation", apiOrigin: "https://api.github.com", installationId: "<id>", client: { cloud: "github" } } })`.
+   - `await itx.secrets.set("/secrets/github-installation-<id>", {}, { urls: ["https://api.github.com", "https://github.com"], refresh: { kind: "github-app-installation", apiOrigin: "https://api.github.com", installationId: "<id>", client: { cloud: "github", origin: "https://cloud.iterate.com" } } })`.
    - `await itx.repos.get("/repos/config").setOrigin('https://x-access-token:getSecret("/secrets/github-installation-<id>", { field: "accessToken" })@github.com/<account>/<name>.git')`.
 5. **Push.** `await itx.repos.get("/repos/config").push()` answers `updated`. Not fast-forward: the
    repository was not empty; ask for an empty one. 403 or 404: the App has no access to it; they
@@ -40,7 +40,7 @@ approves once. Every request uses a placeholder, never a token.
    there is pulled here and published; a commit here is pushed there. Make one commit on GitHub:
    `PUT https://api.github.com/repos/<account>/<name>/contents/README.md` with the installation's
    placeholder (`getSecret("/secrets/github-installation-<id>", { field: "accessToken" })`) and
-   `{ "message": "Say what this repository is", "content": "<base64 of two sentences: the code of the mind at <domain>; AGENTS.md is the guide>" }`.
+   `{ "message": "Say what this repository is", "content": "<base64 of two sentences: the code of the mind at <zone>; AGENTS.md is the guide>" }`.
    GitHub answers 201 with `commit.sha`. Each move is a `config/github-mirrored` fact on the root:
    ```ts
    await itx.cd("/").waitForEvent({
@@ -55,7 +55,7 @@ approves once. Every request uses a placeholder, never a token.
 7. **Send the link**, `https://github.com/<account>/<name>`: `worker.ts` is the whole mind in one
    file, `onboarding.md` what you were told. A push to `main` is live seconds later.
 
-When the owner declines, do not press twice. Send them to `https://docs.<domain>`: the same code
+When the owner declines, do not press twice. Send them to `https://docs.<zone>`: the same code
 in a browser, with each file's history, `AGENTS.md` first. They can ask you for GitHub later.
 
 ## Say

@@ -10,10 +10,19 @@
 // link alone, because a link would be a forced login: it could bind a browser to a mind of the
 // linker's choosing, and the app would then show that mind's world as the person's. A link may
 // only sign the browser in again to a mind it is already connected to (`/.auth/login`).
+import { newWebSocketRpcSession } from "capnweb";
+import type { ControlPlaneApi } from "./api.ts";
 import type { BrowserSession } from "./app-session.ts";
-import { type DiscoveredMind, discoverMind, resolveMind } from "./client/oauth.ts";
-import { cookieValueOf, isLocalOrigin, isSameOriginBrowserRequest, sameOriginPath } from "./lib.ts";
-import { mindAddressCandidatesOf, mindAddressOf, mindApiUrlOf } from "./mind-api.ts";
+import { type DiscoveredMind, discoverMind } from "./client/oauth.ts";
+import {
+  cookieValueOf,
+  errorCode,
+  isLocalOrigin,
+  isSameOriginBrowserRequest,
+  sameOriginPath,
+  withTimeout,
+} from "./lib.ts";
+import { mindAddressAsTyped, mindAddressGiven, mindAddressOf, mindApiUrlOf } from "./mind-api.ts";
 
 /** The app's page where a person types a mind's address (packages/ui `ConnectMind`). The
  *  gate sends a browser there for a mind it is not connected to. */
@@ -32,17 +41,19 @@ function cookieIdOf(request: Request): string | null {
   return id && COOKIE_ID.test(id) ? id : null;
 }
 
-/** The address a query parameter names, as typed or linked: null when it names none, else the
- *  host and whether it is spelled exactly so. */
+/** THE ADDRESS THAT A QUERY PARAMETER NAMES: null when it names none, else the address and
+ *  whether it is spelled exactly so. A parameter is written by a page or a link, never typed
+ *  into the connect page's field, so it is the mind's address as it is (iterate/mind-api
+ *  `mindAddressGiven`): `example.com` names the mind whose control plane is `example.com`, and
+ *  never `iterate.example.com`. */
 function addressParamOf(url: URL, name = "mind"): { address: string; exact: boolean } | null {
   const value = url.searchParams.get(name);
-  if (!value) return null;
-  const parsed = mindAddressOf(value);
-  return "address" in parsed ? { address: parsed.address, exact: parsed.address === value } : null;
+  const address = value && mindAddressGiven(value);
+  return address ? { address, exact: address === value } : null;
 }
 
-/** `next` with a `/minds/<segment>` that names `address` another way spelled as `address`, so
- *  a mind has one URL in the app. */
+/** `next` with a `/minds/<segment>` that spells `address` in other letter case spelled as
+ *  `address`, so a mind has one URL in the app. */
 function nextFor(next: string, address: string) {
   const match = /^\/minds\/([^/?#]+)(.*)$/s.exec(next);
   if (!match) return next;
@@ -52,10 +63,34 @@ function nextFor(next: string, address: string) {
   } catch {
     return next;
   }
-  const parsed = mindAddressOf(segment);
-  return "address" in parsed && mindAddressCandidatesOf(parsed.address).includes(address)
-    ? `/minds/${address}${match[2]}`
-    : next;
+  return mindAddressGiven(segment) === address ? `/minds/${address}${match[2]}` : next;
+}
+
+/** WHETHER THE MIND AT `address` REFUSES `bearer` NOW: one session of its API (./api.ts
+ *  `ControlPlaneApi`), where the mind checks a credential, opened for the one question and
+ *  closed. True for the mind's own refusal alone, UNAUTHENTICATED. A mind that cannot be reached,
+ *  answers no socket, answers late or fails in another way has refused nothing: an outage never
+ *  signs a browser out. */
+async function mindRefuses(address: string, bearer: string): Promise<boolean> {
+  const answer = await fetch(mindApiUrlOf(address), { headers: { upgrade: "websocket" } }).catch(
+    () => null,
+  );
+  const socket = answer?.webSocket;
+  if (!socket) return false;
+  socket.accept();
+  using api = newWebSocketRpcSession<ControlPlaneApi>(socket);
+  try {
+    using _session = await withTimeout(
+      Promise.resolve(api.authenticate(bearer)),
+      5_000,
+      `Asking ${address} about a session`,
+    );
+    return false;
+  } catch (error) {
+    return errorCode(error) === "UNAUTHENTICATED";
+  } finally {
+    socket.close(1000, "asked");
+  }
 }
 
 const noStore = { "Cache-Control": "no-store" };
@@ -97,8 +132,19 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     // a sign-in here, so somebody planted it, and tokens stored under it would be theirs to use.
     const cookieId = id && (await record(id).known()) ? id : crypto.randomUUID();
     const setCookie = `${sessionCookieName(url)}=${cookieId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
-    if (id === cookieId && (await sessionOf(id, address).bearer()))
-      return { location: next, setCookie };
+    // "SIGNED IN ALREADY" IS THE MIND'S TO SAY, NOT THE STORED BEARER'S. A page comes here with a
+    // live session when the mind refused the session's bearer in its API (iterate/app `adopt`):
+    // a grant that ended elsewhere. Sent back on the stored bearer's word, the page would be
+    // refused again and come here again, for as long as the token lives. So the gate asks the
+    // mind, and forgets a session whose bearer the mind itself refuses (`mindRefuses`). Nothing
+    // in the request can make it forget one: a page of another origin that sends a browser here
+    // makes the gate ask, and a session that the mind takes stays.
+    const session = id === cookieId ? sessionOf(id, address) : null;
+    const bearer = session && (await session.bearer());
+    if (session && bearer) {
+      if (!(await mindRefuses(address, bearer))) return { location: next, setCookie };
+      await session.discard();
+    }
     const mind = discovered || (await discover(address));
     if ("error" in mind) return mind;
     const { url: location, state } = await sessionOf(cookieId, address).begin(
@@ -108,8 +154,10 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     await record(cookieId).expect(state, address);
     return { location, setCookie };
   };
+  // the page puts `mind` in its field, where a person's shorthand is read: so it is spelled as
+  // that reading takes it
   const connectPage = (address: string, next: string) =>
-    `${CONNECT_PAGE_PATH}?${new URLSearchParams({ mind: address, next })}`;
+    `${CONNECT_PAGE_PATH}?${new URLSearchParams({ mind: mindAddressAsTyped(address), next })}`;
 
   if (url.pathname === "/.auth/client.json")
     return Response.json(
@@ -145,7 +193,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     const form = await request.formData();
     const typed = mindAddressOf(String(form.get("mind") ?? ""));
     if ("error" in typed) return Response.json(typed, { status: 400, headers: noStore });
-    const mind = await resolveMind(typed.address, discover);
+    const mind = await discover(typed.address);
     if ("error" in mind) return Response.json(mind, { status: 400, headers: noStore });
     const { address } = mind;
     const next = nextFor(
@@ -167,12 +215,9 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     const linked = sameOriginPath(url.searchParams.get("next") || "/", url.origin);
     const typed = addressParamOf(url);
     if (!typed) return redirect(CONNECT_PAGE_PATH);
-    // a mind this browser is connected to under any name the link may mean
+    const { address } = typed;
     const connected = id ? (await record(id).minds()).minds.map((p) => p.address) : [];
-    const address = mindAddressCandidatesOf(typed.address).find((candidate) =>
-      connected.includes(candidate),
-    );
-    if (!address) return redirect(connectPage(typed.address, linked));
+    if (!connected.includes(address)) return redirect(connectPage(address, linked));
     const next = nextFor(linked, address);
     const started = await signIn(address, next);
     // discovery failed: the connect page posts the same address and shows why
@@ -223,8 +268,9 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
   }
 
   if (url.pathname === "/api") {
-    // The page's capnweb connection to one mind, a WebSocket or an HTTP batch, with the bearer
-    // of this browser's session there. THE COOKIE'S AUTHORITY IS SAME-ORIGIN ONLY (CSRF): a request
+    // The page's capnweb connection to one mind, a WebSocket, with the bearer of this browser's
+    // session there on its request: the mind's API reads it at the page's `authenticate()`
+    // (iterate/api `ControlPlaneApi`). THE COOKIE'S AUTHORITY IS SAME-ORIGIN ONLY (CSRF): a request
     // from another origin, or with no Origin at all, gets the 401 a browser with no session gets.
     const named = addressParamOf(url);
     if (!named) return new Response("Name the mind: /api?mind=<address>", { status: 400 });
@@ -238,10 +284,15 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     const bearer = session ? await session.bearer() : null;
     if (!id || !session || !bearer)
       return new Response(`Sign in to ${address}`, { status: 401, headers: noStore });
+    // THE PAGE'S PROBE (iterate/app `createIterateClient`): any request that is no upgrade. The
+    // gate answers it: this browser has a session for the mind. The mind's API has no other
+    // transport than the socket, and checks the bearer there.
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
+      return new Response(null, { status: 204, headers: noStore });
     const headers = new Headers(request.headers);
     headers.delete("cookie");
     // The same-origin gate above already ran. Provider CORS reconstruction loses 101.
-    if (request.headers.get("upgrade")?.toLowerCase() === "websocket") headers.delete("origin");
+    headers.delete("origin");
     headers.set("authorization", `Bearer ${bearer}`);
     // where the credential goes is the mind's API, by the address its session is named for
     const [response] = await Promise.all([
@@ -251,7 +302,6 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         .touch(address)
         .catch(() => {}),
     ]);
-    if (response.status === 401) await session.discard();
     // THE MIND'S ANSWER SETS NOTHING IN THIS BROWSER. A mind is not this app: its `Set-Cookie`
     // would be a cookie of the app's origin, so a hostile mind could plant the session cookie's id
     // and hold the id under which the person next signs in to a mind of their own. Its

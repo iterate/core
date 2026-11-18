@@ -194,15 +194,15 @@ test.for([
 
 const LET_IN = {
   type: "events.iterate.com/mind-meld/configured",
-  path: "/minds/iterate.com",
+  path: "/minds/iterate.iterate.com",
   offset: 4,
   source: {
     signer: { principal: { actor: "user-1", email: "owner@example.com" }, key: "passkey-1" },
   },
-  payload: { append: ["/minds/iterate.com/"] },
+  payload: { append: ["/minds/iterate.iterate.com/"] },
 };
 
-test("the owner let iterate.com in: the onboarding agent is told once, with a note that starts its turn", async () => {
+test("the owner let iterate.iterate.com in: the onboarding agent is told once, with a note that starts its turn", async () => {
   const root = rootOf("https://example.com/");
   await run(root, LET_IN);
   await run(root, LET_IN);
@@ -211,7 +211,7 @@ test("the owner let iterate.com in: the onboarding agent is told once, with a no
     path: "/agents/onboarding",
     event: {
       type: "events.iterate.com/agent/context-added",
-      idempotencyKey: "iterate-let-in:/minds/iterate.com@4",
+      idempotencyKey: "iterate-let-in:/minds/iterate.iterate.com@4",
       payload: { role: "developer" },
     },
   });
@@ -228,7 +228,7 @@ test.for([
   { name: "an unsigned rule", event: { ...LET_IN, source: {} } },
   { name: "a rule for another mind", event: { ...LET_IN, path: "/minds/example.org" } },
 ])(
-  "a rule that does not let iterate.com in tells the onboarding agent nothing: $name",
+  "a rule that does not let iterate.iterate.com in tells the onboarding agent nothing: $name",
   async ({ event }) => {
     const root = rootOf("https://example.com/");
     await run(root, event);

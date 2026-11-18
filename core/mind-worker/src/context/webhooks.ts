@@ -17,7 +17,8 @@ const WebhookSpec = z.strictObject({
 /** Under the delivery watchdog (20 s), so the request is cancelled before the watchdog gives up. */
 const WEBHOOK_TIMEOUT_MS = 15_000;
 
-export function webhooksRoot(context: ItxHostRootContext, domain: string) {
+/** `mind`: the mind's own name, its control-plane hostname, which starts each event's id. */
+export function webhooksRoot(context: ItxHostRootContext, mind: string) {
   const ownContext = () => context.context(context.path);
   return {
     // An InvokeHandle, so across a `cd` hop the delivery's call reaches it whole, its authority carried.
@@ -38,7 +39,7 @@ export function webhooksRoot(context: ItxHostRootContext, domain: string) {
         );
         const headers = new Headers({
           "content-type": "application/json",
-          "iterate-event-id": `${domain}${event.path}@${event.offset}`,
+          "iterate-event-id": `${mind}${event.path}@${event.offset}`,
         });
         if (signingSecret) {
           const timestamp = String(Math.floor(Date.now() / 1000));

@@ -109,11 +109,24 @@ test("a table that cannot be read lends nothing", async () => {
 
 test("a key's session has no other name of itx", () => {
   const names = Object.getOwnPropertyNames(LenderRoot.prototype).toSorted();
-  expect(names).toEqual(["constructor", "provide", "whoami"]);
+  // `sessionLives` is the boundary's own question, which its wrapper hands to no client
+  expect(names).toEqual(["constructor", "provide", "sessionLives", "whoami"]);
 });
 
 // the options come off the wire, so a caller can send any
 type Call = { match: string; target: unknown; options: Record<string, unknown> };
+
+test("the boundary's holder of the lend's fetch goes on to the root with the lend", async () => {
+  const { root, lent } = session();
+  const holder = { dup: () => holder, fetch: async () => null };
+  await root.provide("itx.whatsapp.jonas", stub, {}, holder);
+  expect(lent).toEqual([["itx.whatsapp.jonas", stub, { onlyFromItself: true }, holder]]);
+});
+
+test("the boundary's question whether the session lives goes to the root's own context", () => {
+  const { root } = session();
+  expect(root.sessionLives()).toBe(true);
+});
 
 function stub() {}
 
@@ -125,7 +138,10 @@ function session(
   const lent: unknown[][] = [];
   const root = new LenderRoot(
     {
-      provide: async (...call: unknown[]) => void lent.push(call),
+      // a lend with no holder is recorded without one
+      provide: async (...call: unknown[]) =>
+        void lent.push(call[3] === undefined ? call.slice(0, 3) : call),
+      sessionLives: () => true,
       invoke: async () => {
         if (rows instanceof Error) throw rows;
         return rows.map((row) => ({ ...row, context: "/" }));

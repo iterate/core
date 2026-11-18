@@ -15,13 +15,14 @@ import voiceIndex from "../../configs/default/apps/voice/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import voiceFiles from "../../configs/default/apps/voice/public/";
 import Config from "../../configs/default/worker.ts";
+import { APP_DESCRIPTION_PATH, AppDescription } from "./app-description.ts";
 
 test("the default config's pages and folders load here as the platform's loader makes them", () => {
   // The rule is the loader's (core/mind-worker/src/context/module-resolution.ts). When it changes,
   // this fails here and not at a deploy: a page is its text, a folder is its files by path.
   expect(docsIndex).toMatch(/^<!doctype html>/i);
   expect(docsIndex).toMatch(/<title>Docs<\/title>/);
-  expect(Object.keys(docsFiles)).toEqual(["app.css", "app.js", "icon.svg", "manifest.webmanifest"]);
+  expect(Object.keys(docsFiles)).toEqual(["app.css", "app.js", "icon.svg"]);
   expect(dashIndex).toMatch(/<title>Dash<\/title>/);
   // the Dash's page has the marks of iterate Cloud's apps too
   expect(Object.keys(dashFiles)).toEqual([
@@ -33,7 +34,6 @@ test("the default config's pages and folders load here as the platform's loader 
     "brands/slack.svg",
     "brands/x.svg",
     "icon.svg",
-    "manifest.webmanifest",
   ]);
   expect(voiceIndex).toMatch(/<title>Voice<\/title>/);
   expect(Object.keys(voiceFiles)).toEqual([
@@ -42,36 +42,70 @@ test("the default config's pages and folders load here as the platform's loader 
     "audio.js",
     "capture-worklet.js",
     "icon.svg",
-    "manifest.webmanifest",
     "playback-worklet.js",
     "turn-on.js",
   ]);
 });
 
+test("the homepage answers GET and HEAD of / alone: anything else that no case takes is not found, so a webhook nothing serves is not acknowledged", async () => {
+  // a bare instance, with a mind that says its name
+  const config = Object.create(Config.prototype, {
+    getItx: {
+      value: () => ({
+        whoami: async () => ({ path: "/", mindSlug: "iterate.example.com" }),
+        [Symbol.dispose]() {},
+      }),
+    },
+  }) as { fetch(request: Request): Promise<Response> };
+  const status = async (url: string, method = "GET") =>
+    (await config.fetch(new Request(url, { method }))).status;
+  expect({
+    apex: await status("https://example.com/"),
+    head: await status("https://example.com/", "HEAD"),
+    anyOtherHostname: await status("https://nothing.example.org/"),
+    webhook: await status("https://telegram.example.com/webhook", "POST"),
+    postToTheHomepage: await status("https://example.com/", "POST"),
+    anotherPath: await status("https://example.com/wp-login.php"),
+  }).toEqual({
+    apex: 200,
+    head: 200,
+    anyOtherHostname: 200,
+    webhook: 404,
+    postToTheHomepage: 404,
+    anotherPath: 404,
+  });
+});
+
 test.for(["docs", "dash", "voice"])(
-  "the %s app says its name and its icon to anyone, and nothing else before a sign-in",
+  "the %s app says what it is and shows its icon to anyone, and nothing else before a sign-in",
   async (host) => {
     const refusal = new Response("Sign in\n", { status: 401 });
     // a bare instance, with a guard that lets nobody in
     const config = Object.create(Config.prototype, {
       auth: { value: { require: () => refusal } },
     }) as { fetch(request: Request): Promise<Response> };
-    const ask = (path: string) =>
-      config.fetch(
-        new Request(`https://${host}.example.com${path}`, {
-          headers: { "x-iterate-routing-slug": host },
-        }),
-      );
-    const manifest = await ask("/manifest.webmanifest");
-    expect(manifest.headers.get("content-type")).toBe("application/manifest+json");
-    const said = (await manifest.json()) as { name: string; icons: { src: string }[] };
-    expect(said.name).toMatch(/^[A-Z][a-z]+$/);
-    expect(said.icons.map((icon) => icon.src)).toEqual(["/icon.svg"]);
+    const ask = (path: string) => config.fetch(new Request(`https://${host}.example.com${path}`));
+    // the typed object of the app's app.ts, as the SDK answers it where the mind's issuer reads it
+    const described = await ask(APP_DESCRIPTION_PATH);
+    expect(described.headers.get("content-type")).toBe("application/json");
+    expect(AppDescription.parse(await described.json())).toEqual({
+      name: host[0]!.toUpperCase() + host.slice(1),
+      icon: "/icon.svg",
+      for: "members",
+    });
     const icon = await ask("/icon.svg");
     expect(icon.headers.get("content-type")).toBe("image/svg+xml");
     expect(await icon.text()).toMatch(/^<svg /);
     // the page, its script and every other path are the guard's
-    for (const path of ["/", "/app.js", "/itx", "/manifest.webmanifest/x", "/icon.svg.map"])
+    // a web app manifest is no part of what the platform reads: it is the guard's like any file
+    for (const path of [
+      "/",
+      "/app.js",
+      "/itx",
+      "/manifest.webmanifest",
+      `${APP_DESCRIPTION_PATH}/x`,
+      "/icon.svg.map",
+    ])
       expect(await ask(path)).toBe(refusal);
   },
 );
@@ -161,8 +195,8 @@ test.for([
 
 test.for([
   {
-    name: "a push in the mind form, signed by the mind iterate.com, is pulled through processMindEvent",
-    actor: "iterate.com",
+    name: "a push in the mind form, signed by the mind iterate.iterate.com, is pulled through processMindEvent",
+    actor: "iterate.iterate.com",
     calls: ["pull"],
   },
   { name: "nor one that another mind signed", actor: "example.com", calls: [] },
@@ -172,7 +206,7 @@ test.for([
   await config.processMindEvent({
     event: {
       type: "events.iterate.com/github/webhook-received",
-      path: "/minds/iterate.com/integrations/github/7",
+      path: "/minds/iterate.iterate.com/integrations/github/7",
       offset: 5,
       source: { signer: { principal: { actor, kind: "mind" }, key: `${actor}-key` } },
       payload: {

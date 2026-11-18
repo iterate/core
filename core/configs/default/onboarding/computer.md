@@ -6,20 +6,20 @@ The owner should come away with: each device they own can lend the mind what it 
 
 **Their Chrome, through iterate's extension** (`packages/browser-extension/README.md` in
 https://github.com/iterate/packages). It lends one Chrome, and only the tabs in one tab group
-named exactly `<domain>`: the mind lists them, opens a page in the group, and sends Chrome
+named exactly `<zone>`: the mind lists them, opens a page in the group, and sends Chrome
 DevTools commands to a tab (read, click, type, screenshot). A tab in use shows a frame and a
-label "<domain> is using this tab" with a Stop button. Not in the Chrome Web Store. The owner:
+label "<zone> is using this tab" with a Stop button. Not in the Chrome Web Store. The owner:
 
 1. Download the ZIP from https://chrome.iterate.com/; unzip it. Chrome 123+.
 2. Open `chrome://extensions`, turn on Developer mode, press "Load unpacked", pick that folder.
 3. Pin it from the toolbar's extensions menu, and click it to open its panel.
-4. Enter `<domain>`, press "Sign in with Iterate", allow the host; the mind's sign-in opens.
+4. Enter `<zone>`, press "Sign in with Iterate", allow the host; the mind's sign-in opens.
 5. Press "Share this browser". "Turn sharing off", "Sign out" or a restart of Chrome ends it.
 
 **Their computer, from a terminal**, with Node.js on it:
 
 ```sh
-npx iterate@latest use-my-computer --mind <domain>
+npx iterate@latest use-my-computer --mind <zone>
 ```
 
 The first time, it signs them in to the mind in their browser. It asks what agents should call

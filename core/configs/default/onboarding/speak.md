@@ -5,7 +5,7 @@ The owner should come away with: they can talk to their mind in a browser today,
 ## Ready today
 
 - In the browser, after one step. Voice is off in a new mind. The owner opens
-  `https://voice.<domain>` and presses "Turn voice on". That makes one commit in their name: it
+  `https://voice.<zone>` and presses "Turn voice on". That makes one commit in their name: it
   pins the package `@iterate-com/voice` in `package.json`, adds `voice.ts`, and turns
   `installVoice` on in `worker.ts` (`apps.md` at the top of the mind's code, "Voice").
 - The page then asks once for an OpenAI API key, if the mind has none (`/secrets/openai`). OpenAI
@@ -40,5 +40,5 @@ return {
 ## Say
 
 - "Do you want to talk to your mind?"
-- "Open https://voice.<domain> and press 'Turn voice on'. It asks once for an OpenAI key, and
+- "Open https://voice.<zone> and press 'Turn voice on'. It asks once for an OpenAI key, and
   OpenAI bills you for the calls; your ChatGPT plan does not cover them."

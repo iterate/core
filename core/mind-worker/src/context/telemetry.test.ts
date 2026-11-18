@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
-import { platformWakeEvents } from "./telemetry.ts";
+import { PLATFORM_WAKE_EVENTS } from "./telemetry.ts";
 
-test("with telemetry on, every context is owed the row that sends its events to the platform, under one key", () => {
-  expect(platformWakeEvents(true)).toEqual([
+test("every context is owed the row that sends its events to the platform, under one key", () => {
+  expect(PLATFORM_WAKE_EVENTS).toEqual([
     {
       type: "events.iterate.com/itx/subscription-configured",
       idempotencyKey: "itx/platform-subscription",
@@ -13,8 +13,4 @@ test("with telemetry on, every context is owed the row that sends its events to 
       },
     },
   ]);
-});
-
-test("with telemetry off, no context is owed anything", () => {
-  expect(platformWakeEvents(false)).toEqual([]);
 });

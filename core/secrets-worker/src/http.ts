@@ -4,7 +4,7 @@
 import { SECRET_OAUTH_CALLBACK_PATH, SECRET_PATH } from "iterate/secret-placeholder";
 import { INDEX } from "./approvals-index.ts";
 import { isApprovalsPath, secretApprovals } from "./approvals-page.ts";
-import type { Env } from "./env.ts";
+import { configOf, type Env } from "./env.ts";
 import { actsGate, secretObject } from "./objects.ts";
 import { SECRET_COLLECT_PATH, secretCollect } from "./secret-collect.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
@@ -28,12 +28,12 @@ export async function secretsResponse(request: Request, env: Env) {
     return secretCollect(request, (path) => secretObject(env, path));
   if (isApprovalsPath(pathname))
     return secretApprovals(request, {
-      mind: env.DOMAIN,
+      mind: configOf(env).controlPlaneHostname,
       index: env.APPROVALS.getByName(INDEX),
       secretOf: (path) => secretObject(env, path),
       gate: actsGate(env),
     });
   if (pathname === "/secrets" || pathname === "/secrets/")
-    return new Response(`secrets: the vault of ${env.DOMAIN}`);
+    return new Response(`secrets: the vault of ${configOf(env).controlPlaneHostname}`);
   return new Response("Not found", { status: 404 });
 }

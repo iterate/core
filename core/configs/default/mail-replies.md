@@ -6,8 +6,8 @@ Who gets the mail that reaches the mind, and how a reply finds its agent: the
 
 The `events.iterate.com/email/received` case hands each email a member sends to the mind
 to an agent of its own per thread, `/agents/email/t<thread>`, once the `email` facet has
-folded it into its thread; the agent replies with `itx.email.send({ inReplyToOffset })`. An
-agent acts with the mind root's full reach: every context, secret-backed call, repository
+folded it into its thread; the agent replies with
+`itx.email.send({ from, inReplyToOffset })`. An agent acts with the mind root's full reach: every context, secret-backed call, repository
 and the website. So only the platform's own record of a member's mail sent straight from their
 domain starts one; a forward, a list's copy, a re-sent old message, an auto-reply or a bounce
 starts none.

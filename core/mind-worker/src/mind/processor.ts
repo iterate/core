@@ -1,6 +1,7 @@
 import type { ScheduledAppend } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
 import { errorCode, jsonEqual } from "iterate/lib";
+import { identitiesAfterAccepted, identitiesAfterRefused } from "iterate/mind-identity-log";
 import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import {
   type ConsumedEvent,
@@ -61,10 +62,6 @@ const LogAnswer = z.array(
 );
 const FilesAnswer = z.record(z.string(), z.union([z.string(), z.object({ base64: z.string() })]));
 const CommitAnswer = z.object({ commitOid: z.string().nullable() });
-const CloudflareTokenKept = z.object({
-  path: z.string(),
-  outcome: z.enum(["set", "deleted", "unchanged"]),
-});
 
 /** The config templates this build bundles (the generated config-templates.js, which the facet
  *  hands over): each folder of core/configs by its name, with its files. */
@@ -118,11 +115,11 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
   #creating = false;
   #retriedFailedCreation = false;
   #templateFollowed = false;
+  /** Whether this incarnation made the root's own subscription row match the contract, or is
+   *  about to; false again after a try that failed. */
+  #ownRowMatched = false;
   /** When this root last looked for the grants' daily refresh; 0 before the first look. */
   #grantRefreshLookedAt = 0;
-  /** Whether this incarnation asked the vault to keep the stack's Cloudflare token
-   *  (`#keepCloudflareToken`). */
-  #cloudflareTokenAsked = false;
   // The template commit this incarnation made: known here before the record of it is kept.
   #templateCommit: { commitOid: string; template: string } | undefined;
   // One publication runs at a time and drains, oldest first: a commit that lands while one is in
@@ -143,24 +140,35 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
           ? undefined
           : {
               ...state,
-              creation: {
-                status: "requested",
-                offset: event.offset,
-                configRepoTemplate: event.payload.configRepoTemplate,
-              },
+              creation: { status: "requested", offset: event.offset },
             };
       case "events.iterate.com/mind/created":
         return { ...state, creation: { status: "created", offset: event.offset } };
+      case "events.iterate.com/mind/stack-deployed":
+        return { ...state, stack: event.payload };
+      // The two identity events count only with the platform's stamp, which the append boundary
+      // writes and nobody else can (core/itx caller.ts `stampCaller`). The boundary refuses these
+      // types from anyone else today; the stamp also holds for an event that an older build of
+      // this Worker, which did not know the types, let somebody write. Each folds into the log
+      // of the mind id that it names: no deploy chooses a log, and none is emptied.
+      case "events.iterate.com/mind/identity-record-accepted": {
+        if (!event.source.platform) return undefined;
+        const identities = identitiesAfterAccepted(state.identities, event.payload);
+        if (!identities) return undefined;
+        return { ...state, identities };
+      }
+      case "events.iterate.com/mind/identity-record-refused": {
+        if (!event.source.platform) return undefined;
+        const identities = identitiesAfterRefused(state.identities, event.payload, event.offset);
+        if (!identities) return undefined;
+        return { ...state, identities };
+      }
       case "events.iterate.com/mind/create-failed":
         return state.creation?.status === "created"
           ? undefined
           : {
               ...state,
-              creation: {
-                status: "failed",
-                offset: event.offset,
-                configRepoTemplate: state.creation?.configRepoTemplate,
-              },
+              creation: { status: "failed", offset: event.offset },
             };
       case "events.iterate.com/repo/created":
         if (state.repos[event.payload.path]) return undefined;
@@ -296,23 +304,20 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     // at the end of the publication above. A deploy restarts the root, whose next wake is
     // delivered here.
     if (this.#templateMayFollow()) runInBackground(() => this.#followTemplateOnce(append));
+    // The root's own row takes the contract's event types, once per incarnation (`#matchOwnRow`).
+    if (!this.#ownRowMatched) {
+      this.#ownRowMatched = true;
+      runInBackground(() => this.#matchOwnRow());
+    }
     // The persons' grants are refreshed once a day: the root gets what does that, and looks
     // again at most once an hour (`#armGrantRefresh`).
     if (state.creation?.status === "created") runInBackground(() => this.#armGrantRefresh());
-    if (state.creation?.status === "created" && !this.#cloudflareTokenAsked) {
-      this.#cloudflareTokenAsked = true;
-      runInBackground(() => this.#keepCloudflareToken());
-    }
     // A failed creation is asked for again, once per incarnation: only the root's birth writes the
     // request, so a failure that stood would leave the mind with no site for good.
     if (state.creation?.status === "failed" && !this.#retriedFailedCreation) {
       this.#retriedFailedCreation = true;
-      const configRepoTemplate = state.creation.configRepoTemplate;
       runInBackground(() =>
-        append({
-          type: "events.iterate.com/mind/create-requested",
-          payload: { configRepoTemplate },
-        }),
+        append({ type: "events.iterate.com/mind/create-requested", payload: {} }),
       );
       return;
     }
@@ -323,7 +328,7 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     runInBackground(async () => {
       try {
         if (!state.configRepoTip) {
-          await this.#seed(state, publisher);
+          await this.#seed(publisher);
           return;
         }
         // The publication's batch already pointed the ingress: this repeat only waits out its fence.
@@ -344,18 +349,17 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     });
   }
 
-  async #seed(state: MindState, publisher: MindPublisher): Promise<void> {
+  async #seed(publisher: MindPublisher): Promise<void> {
     // one stub a call: the template's download outlasts any one of them
     const call = async (expression: ItxExpression) => {
       using itx = this.getItx();
       return await itx.invoke(expression);
     };
     const repo = call(["itx", "builtins", "repos", ["create", "/repos/config"]]);
-    const reference = state.creation?.configRepoTemplate;
     // The loader refuses a ref that moves (`…@main`), so the seed pins them; one that cannot be
     // pinned fails the creation.
     const files = (async () => {
-      const changes = await pinDependencies(this.#templateFilesOf(reference || "minimal"));
+      const changes = await pinDependencies(this.#templateFilesOf("default"));
       readPackage(filesOf(changes), "The config template");
       return changes;
     })();
@@ -372,7 +376,7 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
       const changes = filesMade.value;
       const seeded = (await call(
         configRepoCall("commitFiles", {
-          message: `seed: core/configs/${reference || "minimal"}`,
+          message: "seed: core/configs/default",
           changes,
           parent: null,
         }),
@@ -398,6 +402,26 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
       });
     }
     if (!commitOid) throw new Error("the config repo's seed left main unborn");
+  }
+
+  /** THE ROOT'S OWN SUBSCRIPTION ROW names the event types that reach this processor, and a
+   *  root keeps the row of its birth. A root born before a type existed, such as the two events
+   *  of the mind's identity, would never be handed one: `processors.enable("mind")` writes the
+   *  row again when its types are not the contract's, and nothing when they are. Never throws:
+   *  a try that failed is made again at the next pass. */
+  async #matchOwnRow(): Promise<void> {
+    try {
+      using itx = this.getItx();
+      await itx.invoke(["itx", "builtins", "processors", ["enable", "mind"]]);
+    } catch (error) {
+      this.#ownRowMatched = false;
+      console.info({
+        event: "mind.own-row-not-matched",
+        namespace: "mind",
+        message: "the root's own subscription row was not compared with the contract's event types",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   // Created, nothing owed, no publication running, and not compared yet in this incarnation.
@@ -482,32 +506,6 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     }
   }
 
-  /** THE STACK'S OWN CLOUDFLARE TOKEN IS KEPT IN THE VAULT (context/cloudflare-token.ts), asked
-   *  once per incarnation: a deploy, which brings the token or takes it away, restarts the root.
-   *  Never throws: the next incarnation asks again. */
-  async #keepCloudflareToken(): Promise<void> {
-    try {
-      using itx = this.getItx();
-      const kept = CloudflareTokenKept.parse(
-        await itx.invoke(["itx", "builtins", "secrets", ["keepCloudflareToken"]]),
-      );
-      if (kept.outcome !== "unchanged")
-        console.info({
-          event: "mind.cloudflare-token-kept",
-          namespace: "mind",
-          message: `the stack's Cloudflare token in the vault: ${kept.outcome}`,
-          path: kept.path,
-        });
-    } catch (error) {
-      console.info({
-        event: "mind.cloudflare-token-not-kept",
-        namespace: "mind",
-        message: "the vault was not asked to keep the stack's Cloudflare token",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
   // A config repo is seeded once, and this code bundles the template it was built with: a mind
   // seeded from an older one gets what that adds (template-update.ts). Never throws.
   async #followTemplateOnce(
@@ -563,7 +561,8 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
             .map(async ([path, content]) => [path, await sha256Hex(content)] as const),
         ),
       );
-    // the platform's record of what it wrote; a mind older than the record starts from its seed
+    // The platform's record of what it wrote. The seed commit writes no record, so a mind's first
+    // comparison starts from its seed: every file of that commit is the platform's.
     const seed = kept?.written ? undefined : seedOf(log, PLATFORM_AUTHOR.email);
     const seeded = seed && (seed.oid === tip ? current : await filesAt(seed.oid));
     const written = kept?.written || (seeded ? await hashesOf(seeded) : {});

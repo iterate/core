@@ -6,7 +6,7 @@ import { approvalsRoot } from "./approvals.ts";
 test("what the gate answers the mind's own code is released when it has been read: rules, a set and a proposal", async () => {
   const gate = pretendGate();
   appended = gate.mindAppended;
-  const approvals = approvalsRoot(mind(), gate.egress, "example.com");
+  const approvals = approvalsRoot(mind(), gate.egress, "https://iterate.example.com");
 
   expect(await approvals.rules()).toEqual({ locked: false, rules: [rule] });
   expect(gate.open()).toBe(0);
@@ -36,7 +36,11 @@ test("a proposed statement names the calling context as its asker and answers th
     },
   };
   const caller = { ...mind(), caller: () => ({ principal: null, path: "/agents/onboarding" }) };
-  const approvals = approvalsRoot(caller as unknown as ItxHostRootContext, egress, "example.com");
+  const approvals = approvalsRoot(
+    caller as unknown as ItxHostRootContext,
+    egress,
+    "https://iterate.example.com",
+  );
   expect(
     await approvals.proposeStatement({
       path: "/minds/example.org",

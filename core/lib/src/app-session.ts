@@ -255,7 +255,9 @@ export class BrowserSession extends DurableObject {
     return this.#serial(() => this.#bearer());
   }
 
-  /** A verified 401 means this local credential no longer grants access. */
+  /** Forget a session whose bearer the mind itself refused (./app-server.ts `mindRefuses`): this
+   *  credential no longer grants access, and a sign-in replaces it. Nothing is revoked at the
+   *  issuer, which ended the grant already. */
   discard() {
     return this.#serial(() => this.#clear());
   }

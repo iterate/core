@@ -1,66 +1,88 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { expect, test } from "vitest";
 import type { Env } from "./env.ts";
 import { authResponse } from "./http.ts";
+import { sqliteStack } from "./test-support.ts";
 
-const env = withKeys([{ format: "webauthn", revokedAt: null }]);
+const ISSUER = "https://iterate.example.com";
 
-test("the platform's host has no start page: `/` leads a signed-out visitor to the Dash", async () => {
+test("the control-plane hostname has no start page: `/` leads a signed-out visitor to the mind's own front page", async () => {
   for (const method of ["GET", "HEAD"]) {
-    const answer = await authResponse(
-      new Request("https://iterate.example.com/", { method }),
-      env,
-      {} as ExecutionContext,
-    );
+    const answer = await asked("/", { method });
     expect(answer).toMatchObject({ status: 302 });
     expect(Object.fromEntries(answer.headers)).toMatchObject({
-      location: "https://dash.example.com/",
+      location: "https://example.com/",
       "cache-control": "no-store",
     });
   }
 });
 
-test("with an active passkey, the mind's own sign-in is the passkey's page: one button, an ask as the page opens, and the mailed code behind one link", async () => {
-  const answer = await asked("/sign-in?next=%2Fkeys");
-  expect(answer).toMatchObject({ status: 200 });
-  const html = await answer.text();
-  expect(html).toContain(`<h1>Sign in to example.com</h1>`);
-  expect(html).toContain(`<button type="submit">Sign in with a passkey</button>`);
-  expect(html).toContain("\nsignIn(false);");
-  expect(html).toContain(
-    `<a href="/sign-in/email?next=%2Fkeys">No passkey on this device? Get a code by email</a>`,
-  );
-  // nothing to type and no rule on sign-ups: those are on the code's page
-  expect(html).not.toMatch(/type="email"|sign-ups|class="or"/);
+test("a control plane at its zone's apex is the front page's own address: `/` leads to the sessions page, never back to itself", async () => {
+  const { env } = sqliteStack({ controlPlaneHostname: "example.com" });
+  const answer = await authResponse(new Request("https://example.com/"), env, {
+    waitUntil: () => {},
+  } as unknown as ExecutionContext);
+  expect({ status: answer.status, location: answer.headers.get("location") }).toEqual({
+    status: 302,
+    location: "/sessions",
+  });
 });
 
-test("a mind that mails no code and offers Google has no link to a code, and Google's button under the passkey's", async () => {
-  const login = { methods: { google: {} }, allow: [{ email: "owner@example.net" }] };
-  const html = await (
-    await asked("/sign-in?next=%2Fkeys", login, { CLOUD_ORIGIN: "https://cloud.example.org" })
-  ).text();
-  expect(html).toContain("\nsignIn(false);");
-  expect(html).toMatch(
-    /<button type="submit">Sign in with a passkey<\/button>[^]*<p class="or">or<\/p>[^]*<form method="get" action="\/sign-in\/google"[^]*Sign in with Google<\/button>/,
+test("a request for any other hostname is not this Worker's", async () => {
+  const answer = await authResponse(
+    new Request("https://example.com/sign-in"),
+    sqliteStack().env,
+    {} as ExecutionContext,
   );
-  expect(html).not.toContain("code by email");
+  expect(answer).toMatchObject({ status: 404 });
 });
+
+// The page is the same on a mind where nobody has a passkey yet: its first owner follows the
+// link below the passkey's button, to Cloudflare Access. A mailed code signs in no member, so
+// the control plane's own sign-in offers none.
+test.for([
+  { name: "a mind where nobody has a passkey yet", passkey: false },
+  { name: "a mind whose owner has a passkey", passkey: true },
+])(
+  "/sign-in on $name is the passkey's page, which asks as it opens, with the owner's link to Cloudflare Access below and no email address",
+  async ({ passkey }) => {
+    const { env, db } = sqliteStack();
+    if (passkey) {
+      db.exec("insert into users (id, email) values ('user_owner', 'owner@example.net')");
+      db.exec(
+        `insert into keys (id, user_id, public_key, format, label, added_via, added_by, added_at)
+         values ('a-passkey', 'user_owner', 'a-public-key', 'webauthn', 'A phone', 'keys-page', 'user_owner', 0)`,
+      );
+    }
+    const answer = await asked("/sign-in?next=%2Fkeys", {}, env);
+    expect(answer).toMatchObject({ status: 200 });
+    const html = await answer.text();
+    expect(html).toContain(`<h1>Sign in to iterate.example.com</h1>`);
+    expect(html).toContain("\nsignIn(false);");
+    expect(html).toMatch(
+      /<button type="submit">Sign in with a passkey<\/button>[^]*<p class="muted">An owner with no passkey yet: <a href="\/sign-in\/access\?next=%2Fkeys">prove your email address with Cloudflare<\/a>, and then add one.<\/p>/,
+    );
+    // nothing to type, and no way to a mailed code
+    expect(html).not.toMatch(
+      /type="email"|sign-in\/email|Sign in with your email address|class="or"/,
+    );
+    expect(html.match(/<form/g)).toHaveLength(1);
+  },
+);
 
 test("a person who signed out is not asked for a passkey as the page opens: the sign-out's link says so, with a way back and with none", async () => {
   const signedOut = async (form: Record<string, string>) => {
-    const out = await authResponse(
-      new Request("https://iterate.example.com/sign-out", {
-        method: "POST",
-        headers: { origin: "https://iterate.example.com" },
-        body: new URLSearchParams(form),
-      }),
-      env,
-      {} as ExecutionContext,
-    );
+    const out = await asked("/sign-out", {
+      method: "POST",
+      headers: { origin: ISSUER },
+      body: new URLSearchParams(form),
+    });
     return out.headers.get("location");
   };
-  expect(await signedOut({ next: "/sessions" })).toBe("/sign-in?next=%2Fsessions&signed-out=1");
+  // the way back is the whole address that was checked
+  expect(await signedOut({ next: "/sessions" })).toBe(
+    `/sign-in?next=${encodeURIComponent(`${ISSUER}/sessions`)}&signed-out=1`,
+  );
+  expect(await signedOut({ next: "//evil.example/" })).toBe("/sign-in?next=%2F&signed-out=1");
   // the button on /sessions names no way back: the sign-in for the start page, which waits too
   expect(await signedOut({})).toBe("/sign-in?next=%2F&signed-out=1");
   const html = await (await asked("/sign-in?next=%2Fsessions&signed-out=1")).text();
@@ -69,121 +91,24 @@ test("a person who signed out is not asked for a passkey as the page opens: the 
 });
 
 test.for([
-  {
-    open: "its mailed code goes to anyone",
-    login: { methods: { email: { anyone: true } }, allow: [{ email: "owner@example.net" }] },
-  },
-  {
-    open: "its rule admits everyone",
-    login: { methods: { email: {} }, allow: [{ everyone: {} }] },
-  },
-])(
-  "a stack where anyone may sign in ($open) asks for the passkey too at the mind's own sign-in: a member comes there",
-  async ({ login }) => {
-    const answer = await asked("/sign-in?next=%2Fkeys", login);
-    expect(answer).toMatchObject({ status: 200 });
-    const html = await answer.text();
-    expect(html).toContain("\nsignIn(false);");
-    expect(html).toContain(`<a href="/sign-in/email?next=%2Fkeys">`);
-  },
-);
-
-test.for([
-  { name: "no keys and mailed codes", keys: [], mailsCodes: true, status: 302 },
-  {
-    name: "the last passkey was revoked",
-    keys: [{ format: "webauthn", revokedAt: 1 }],
-    mailsCodes: true,
-    status: 302,
-  },
-  {
-    name: "an active service key is no passkey",
-    keys: [{ format: "p256", revokedAt: null }],
-    mailsCodes: true,
-    status: 302,
-  },
-  {
-    name: "a revoked passkey and an active service key",
-    keys: [
-      { format: "webauthn", revokedAt: 1 },
-      { format: "p256", revokedAt: null },
-    ],
-    mailsCodes: true,
-    status: 302,
-  },
-  {
-    name: "an active passkey keeps the passkey page",
-    keys: [{ format: "webauthn", revokedAt: null }],
-    mailsCodes: true,
-    status: 200,
-  },
-  { name: "no keys but no mailed codes", keys: [], mailsCodes: false, status: 200 },
-])("the mind's first sign-in: $name", async ({ keys, mailsCodes, status }) => {
-  const stack = withKeys(keys);
-  const answer = await asked(
-    "/sign-in?next=%2Fkeys",
-    { methods: mailsCodes ? { email: {} } : {}, allow: [{ email: "owner@example.net" }] },
-    { DB: stack.DB },
-  );
-  expect(answer).toMatchObject({ status });
-  expect(answer.headers.get("location")).toBe(
-    status === 302 ? "https://iterate.example.com/sign-in/email?next=%2Fkeys" : null,
-  );
-});
-
-test.for([
   { name: "an authorization request", next: "/oauth2/auth?client_id=app&state=a+b%26c" },
   { name: "an outside URL", next: "https://elsewhere.test/return?state=a&next=/keys" },
   { name: "a protocol-relative URL", next: "//elsewhere.test/return" },
   { name: "header delimiters", next: "/keys\r\nLocation: https://elsewhere.test/" },
-])("the first-code redirect keeps next as data on its own code page: $name", async ({ next }) => {
-  const answer = await asked(`/sign-in?${new URLSearchParams({ next })}`, undefined, {
-    DB: withKeys([]).DB,
-  });
-  expect(answer).toMatchObject({ status: 302 });
-  // Exact encoding keeps the return address in a query value, even when it names another origin.
-  expect(answer.headers.get("location")).toBe(
-    `https://iterate.example.com/sign-in/email?${new URLSearchParams({ next })}`,
-  );
-});
+])(
+  "the sign-in page keeps next as data, in its form and in its link to Cloudflare Access: $name",
+  async ({ next }) => {
+    const answer = await asked(`/sign-in?${new URLSearchParams({ next })}`);
+    expect(answer).toMatchObject({ status: 200 });
+    expect(answer.headers.get("location")).toBeNull();
+    const html = await answer.text();
+    const written = next.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
+    expect(html).toContain(`data-next="${written}"`);
+    expect(html).toContain(`<a href="/sign-in/access?${new URLSearchParams({ next })}">`);
+  },
+);
 
-/** A signed-out GET of the issuer, on a stack with these sign-in rules (by default `env`'s) and
- *  these bindings beside them. */
-function asked(path: string, login?: object, bound: Partial<Env> = {}) {
-  const settings = login ? { AUTH_SETTINGS: JSON.stringify({ login, keys: [] }) } : {};
-  return authResponse(
-    new Request(`https://iterate.example.com${path}`),
-    // the bindings a sign-in page reads, not a whole stack's
-    { ...env, ...settings, ...bound } as Env,
-    {} as ExecutionContext,
-  );
-}
-
-/** The sign-in query runs on SQLite with the Worker's schema and these stored keys. */
-function withKeys(keys: { format: string; revokedAt: number | null }[]): Env {
-  const db = new DatabaseSync(":memory:");
-  const folder = new URL("../migrations/", import.meta.url).pathname;
-  for (const name of readdirSync(folder).sort()) db.exec(readFileSync(`${folder}${name}`, "utf8"));
-  db.exec("insert into users (id, email) values ('test-user', 'owner@example.net')");
-  const insert = db.prepare(`
-    insert into keys (id, user_id, actor, paths, public_key, format, label, added_via, added_by, added_at, revoked_at)
-    values (?, ?, ?, '[]', 'test-public-key', ?, 'test key', 'test', 'test-user', 0, ?)
-  `);
-  for (const [index, key] of keys.entries())
-    insert.run(
-      `test-key-${index}`,
-      key.format === "webauthn" ? "test-user" : null,
-      key.format === "webauthn" ? null : "test-service",
-      key.format,
-      key.revokedAt,
-    );
-  // These requests read only prepare().first() of D1; no other bindings are used.
-  return {
-    DOMAIN: "example.com",
-    AUTH_SETTINGS: JSON.stringify({
-      login: { methods: { email: {} }, allow: [{ email: "owner@example.net" }] },
-      keys: [],
-    }),
-    DB: { prepare: (sql: string) => ({ first: async () => db.prepare(sql).get() ?? null }) },
-  } as unknown as Env;
+/** A signed-out request to the issuer, on a new stack or on `env`. */
+function asked(path: string, init: RequestInit = {}, env: Env = sqliteStack().env) {
+  return authResponse(new Request(`${ISSUER}${path}`, init), env, {} as ExecutionContext);
 }

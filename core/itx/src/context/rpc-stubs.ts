@@ -1,7 +1,11 @@
 import { failureKind } from "iterate/platform-retry";
 import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
-import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
-import { ITX_PERSON_HEADER, ITX_PRINCIPAL_HEADER } from "iterate/principal";
+import {
+  ITX_EXPIRES_HEADER,
+  ITX_PERSON_HEADER,
+  ITX_PRINCIPAL_HEADER,
+  stampJsonOf,
+} from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
 import type { RewriteRuleConfigured } from "iterate/api";
 import {
@@ -13,7 +17,7 @@ import {
   type ItxExpressionInput,
 } from "iterate/expression";
 import { z } from "zod";
-import { causeHeader } from "../cause.ts";
+import { causeHeader, type Cause } from "../cause.ts";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
@@ -21,8 +25,10 @@ import {
   ITX_GRANT_HEADER,
   type Caller,
 } from "../caller.ts";
+import { itxHost } from "../host.ts";
 import { OnBehalfOfStamp, PrincipalStamp } from "../on-behalf-of.ts";
 import {
+  FETCH_UPGRADE_CONTEXT_HEADER,
   FETCH_UPGRADE_EYEBALL_HEADER,
   FETCH_UPGRADE_SOCKET_HEADER,
   type RpcStubFetchServer,
@@ -332,7 +338,9 @@ export class RpcStubDirectory {
     }
   }
 
-  async invokeRpcStub(rpcStubKey: string, itxExpressionSteps: ItxExpression): Promise<unknown> {
+  // `caller`: who the lender's `fetch` is told is asking (`fetchStepsForLoadedCode`).
+  async invokeRpcStub(rpcStubKey: string, steps: ItxExpression, caller: Caller): Promise<unknown> {
+    const itxExpressionSteps = fetchStepsForLoadedCode(steps, caller);
     let borrowed = this.#borrowedRpcStubs.get(rpcStubKey);
     if (!borrowed && this.#rpcStubPagerFor(rpcStubKey))
       borrowed = await this.#pageRpcStub(rpcStubKey);
@@ -534,35 +542,76 @@ export class RpcStubDirectory {
 
 export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
 
-// Every hop that forwards a Request stamps through here, so a Request's own copy of a header the
-// DO's fetch trusts never survives. `null`: loaded code's own Request, or one leaving the platform.
-// Only `null` drops the edge's `x-itx-person`: no `Caller` carries the person, so a hop with a
-// caller keeps the stamp for the app that reads it (iterate/sdk `auth.person`).
+// WHO IS ASKING IS THE CALL'S OWN STATE, NEVER WHAT A REQUEST SAYS. Every hop that forwards a
+// Request stamps through here: each header that names a caller is dropped from what came in, and
+// set again from the `Caller` of this call. `null`: a Request that names nobody (loaded code's own,
+// or one that leaves the platform). The lender and the expiry are the boundary's word to the host
+// alone (iterate/principal), which reads them where the request arrives: no hop carries them on.
 export function stampCallerHeaders(headers: Headers, caller: Caller | null): void {
   for (const name of [
     ITX_PRINCIPAL_HEADER,
     ITX_GRANT_HEADER,
+    ITX_PERSON_HEADER,
+    ITX_EXPIRES_HEADER,
     ITX_CALLER_PATH_HEADER,
     ITX_APP_HEADER,
     ITX_RUNS_ROW_HEADER,
     RPC_STUB_PAGER_WEBSOCKET_HEADER,
     FETCH_UPGRADE_SOCKET_HEADER,
+    FETCH_UPGRADE_CONTEXT_HEADER,
     FETCH_UPGRADE_EYEBALL_HEADER,
     ITERATE_CAUSE_HEADER,
     ITX_EXPRESSION_FETCH_HEADER,
   ])
     headers.delete(name);
-  if (!caller) {
-    headers.delete(ITERATE_ROUTING_SLUG_HEADER);
-    headers.delete(ITX_PERSON_HEADER);
-    return;
-  }
+  if (!caller) return;
   if (caller.cause) headers.set(ITERATE_CAUSE_HEADER, causeHeader(caller.cause));
   if (caller.principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(caller.principal));
   if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
+  // a name may hold any letter, and a header holds bytes (iterate/principal `stampJsonOf`)
+  if (caller.person) headers.set(ITX_PERSON_HEADER, stampJsonOf(caller.person));
   if (caller.path) headers.set(ITX_CALLER_PATH_HEADER, caller.path);
   if (caller.app) headers.set(ITX_APP_HEADER, "1");
   if (caller.runsRow) headers.set(ITX_RUNS_ROW_HEADER, "1");
+}
+
+/** THE REQUEST THAT LOADED CODE GETS, from the arguments of a `fetch` (those of `new Request`: a
+ *  Request, or a URL and its init). It says who asks as the call's `Caller` does (the member, the
+ *  grant, the signed-in person) and what the host says on every such request
+ *  (../host.ts `loadedCodeRequestHeaders`), over whatever the arguments carried. A loaded worker,
+ *  a facet of loaded code and a lent stub each get their Request from here, so the SDK's guards
+ *  (iterate/sdk `auth`) read the platform's word on any of them. */
+export function requestForLoadedCode(
+  [input, init]: unknown[],
+  caller: Caller,
+  cause: Cause | undefined,
+): Request {
+  // The casts: the arguments are the calling code's data, and `new Request` throws a TypeError
+  // for what is neither a Request nor a URL, or no init.
+  const request = new Request(input as RequestInfo, init as RequestInit | undefined);
+  const headers = new Headers(request.headers);
+  stampCallerHeaders(headers, {
+    principal: caller.principal,
+    grant: caller.grant,
+    person: caller.person,
+    cause,
+  });
+  for (const [name, value] of Object.entries(itxHost().loadedCodeRequestHeaders?.() || {}))
+    headers.set(name, value);
+  return new Request(request, { headers });
+}
+
+/** The steps of a call on a facet of loaded code or on a lent stub, with each `fetch` given the
+ *  one Request that `requestForLoadedCode` makes of its arguments. Every form of the call goes
+ *  through here (`fetch(request)`, `fetch(url, init)`, a `fetch` of a member), so none hands on a
+ *  Request as the calling code built it. The cause is not stamped: a facet's call sets its own
+ *  (./facet-host.ts), and a lender is told none. */
+export function fetchStepsForLoadedCode(steps: ItxExpression, caller: Caller): ItxExpression {
+  return steps.map((step) =>
+    Array.isArray(step) && step[0] === "fetch"
+      ? ["fetch", requestForLoadedCode(step.slice(1), caller, undefined)]
+      : step,
+  );
 }
 
 // Untrusted: shape-checked by the resolver and walled before anything runs.

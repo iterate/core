@@ -1,10 +1,10 @@
-import { sameOriginPath } from "iterate/lib";
 import { challengeOf, statementText } from "iterate/signed";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
 import { sessionCookie } from "./cookies.ts";
 import { clientOf, TOO_MANY } from "./device/limits.ts";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { configOf, type Env, homeOf, issuerOf } from "./env.ts";
+import { honouredNext } from "./key-rules.ts";
 import { verifiedStatement } from "./keys.ts";
 
 const PASSKEY_SIGN_IN_PATH = "/sign-in/passkey";
@@ -43,7 +43,7 @@ export async function passkeySignInResponse(env: Env, request: Request): Promise
 async function challenge(env: Env, request: Request) {
   const now = Date.now();
   const statement = statementText({
-    mind: iterateConfigOf(env).domain,
+    mind: configOf(env).controlPlaneHostname,
     path: "/",
     type: SIGNED_IN,
     at: now,
@@ -85,7 +85,7 @@ async function finish(env: Env, request: Request) {
   // such a passkey signs nobody in, whatever its address is now (../migrations/0016)
   if (verified.outsider)
     return refused(
-      "it was added before its address was a member here. Sign in with a code by email or a member's link, and add a new passkey",
+      "it was added before its address was a member here. Get in by an owner's sign-in link (an owner: by Cloudflare Access), and add a new passkey",
     );
   if (!principal.email || !member) return refused("its address is not a member here");
   if (!userVerified)
@@ -93,14 +93,17 @@ async function finish(env: Env, request: Request) {
   const user = { id: principal.actor, email: principal.email };
   console.info({ event: "auth.signed-in", method: "passkey", userId: user.id });
   const signer = verified.signer.key;
-  const { setCookie, session } = await sessionCookie(env, request, user, "passkey", signer);
+  const { setCookie, session } = await sessionCookie(env, request, user, signer);
   const facts = new AccountFacts();
   facts.add(user.id, {
     type: SIGNED_IN,
     payload: { method: "passkey", key: signer, session, at: Date.now() },
   });
   const headers = new Headers({ "set-cookie": setCookie });
-  return facts.on(json({ next: sameOriginPath(next || "/", issuerOf(env)) }, 200, headers));
+  // where the browser goes on: the whole address that was checked, else the mind's front page
+  return facts.on(
+    json({ next: honouredNext(next || null, configOf(env)) || homeOf(env) }, 200, headers),
+  );
 }
 
 /** The id of the live passkey that a browser names by its credential id, or null. */

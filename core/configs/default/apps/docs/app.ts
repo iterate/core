@@ -1,7 +1,7 @@
 // app.ts — THE DOCS APP, as worker.ts mounts it: public/app.js says what the page does. This file
 // serves the page and answers which version of the processors (processors/classes.ts) this
 // commit holds.
-import { serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
+import { type AppDescription, serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
 import theme from "../theme.css";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import liveReload from "../live-reload/";
@@ -15,6 +15,10 @@ import files from "./public/";
 /** The module that exports the processors' classes, as a path in this repo. */
 const PROCESSORS_MODULE = "apps/docs/processors/classes.ts";
 
+/** WHAT THE DOCS APP SAYS OF ITSELF: the mind's sign-in pages show its name and its icon, and
+ *  open on the passkey, since it is for members (../open-files.ts answers it to anyone). */
+const DOCS: AppDescription = { name: "Docs", icon: "/icon.svg", for: "members" };
+
 export function docsApp() {
   // The processors' source as TEXT (a folder import hands files over, it does not load them), for
   // one thing: a name for this version of it. The page starts a doc's processor from this repo's
@@ -22,34 +26,21 @@ export function docsApp() {
   // that changes anything else (every autosave is one) leaves them running.
   let version: Promise<string> | undefined;
   return {
-    /** The app's manifest and icon, for anyone: worker.ts asks this before its guard
+    /** The app's description and icon, for anyone: worker.ts asks this before its guard
      *  (../open-files.ts). */
-    open: (request: Request) => openFile(request, files),
+    open: (request: Request) => openFile(request, DOCS, files),
     /** Every request on the app's host. worker.ts guards it, so a member alone gets here. */
     async fetch(request: Request, host: Pick<IterateConfigEntrypoint, "auth">) {
-      const url = new URL(request.url);
-      // The page's own socket (public/app.js opens it): the member's itx.
-      if (url.pathname === "/itx") return host.auth.itx(request);
       // Where the processors' classes are and which version of them this commit holds.
-      if (url.pathname === "/processors.json")
+      if (new URL(request.url).pathname === "/processors.json")
         return Response.json({
           mainModule: PROCESSORS_MODULE,
           version: await (version ||= versionOf(processors)),
         });
-      // What @iterate-com/ui's shell asks of its host, as `host.auth.memberPage` answers it: which
-      // platform this page talks to, the one mind this app serves, and its "Sign out".
-      const mind = url.hostname.split(".").slice(1).join(".");
-      if (url.pathname === "/.auth/session.json") {
-        const platform = `https://iterate.${mind}`;
-        return Response.json({ issuer: platform, defaultIssuer: platform });
-      }
-      if (url.pathname === "/.auth/minds.json")
-        return Response.json({
-          minds: [{ address: mind, lastUsedAt: Date.now() }],
-          lastUsed: mind,
-        });
-      if (url.pathname === "/.auth/logout")
-        return new Response(null, { status: 307, headers: { location: "/.iterate/sign-out" } });
+      // The page's own socket (public/app.js opens it), and what @iterate-com/ui's shell asks of
+      // its host: the mind's issuer, the one mind this app serves, and its "Sign out".
+      const page = host.auth.memberPage(request);
+      if (page) return page;
       // the app's own files, and the one theme file that every app of this mind shares
       return serveFiles(request, {
         index,

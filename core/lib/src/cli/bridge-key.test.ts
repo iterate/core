@@ -10,7 +10,7 @@ import {
 } from "../signed.ts";
 import { bridgeAppend, bridgeKeyOf, bridgeToken, enrolUrlOf } from "./bridge-key.ts";
 
-const MIND = "example.com";
+const MIND = "iterate.example.com";
 const timing = { waitMs: 1_000, askEveryMs: 1 };
 
 test("the first run makes the key in a file only its owner reads, and every later run uses it", async () => {
@@ -71,7 +71,7 @@ test("the first run prints the link once and asks until a member has allowed the
 test("a later connection does not wait: a key that was removed is refused, with the link", async () => {
   answers([refusal("invalid_client")]);
   await expect(bridgeToken({ address: MIND, name: "whatsapp", key: await key() })).rejects.toThrow(
-    /not allowed on example.com: .*keys\/enrol\?/,
+    /not allowed on iterate.example.com: .*keys\/enrol\?/,
   );
 });
 

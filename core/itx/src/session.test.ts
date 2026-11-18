@@ -1,48 +1,37 @@
-// A SESSION'S ROOT AND ITS WATCHER (./session.ts): the context that a session with a `path` is
-// rooted at, and the frames that end one.
+import { expect, test, vi } from "vitest";
+import { SILENCE } from "./end-when-silent.ts";
+import { endedByFrames, serveSession, SessionTeardown } from "./session.ts";
+
+test("a lend that registers after the session's end is closed as it registers, and its lease closes nothing twice", () => {
+  const teardown = new SessionTeardown();
+  const closed: string[] = [];
+  const pager = (name: string) => ({ dispose: () => void closed.push(name) });
+  teardown.add("early", pager("early"));
+  teardown.disposeAll();
+  expect(closed).toEqual(["early"]);
+
+  // a lend whose attach was still on its way at the end
+  const lease = teardown.add("late", pager("late"));
+  expect(closed).toEqual(["early", "late"]);
+  lease.dispose();
+  teardown.disposeAll();
+  expect(closed).toEqual(["early", "late"]);
+});
+
+test("before the session's end, adding a key again closes the lend before it, and a stale lease closes nothing", () => {
+  const teardown = new SessionTeardown();
+  const closed: string[] = [];
+  const first = teardown.add("key", { dispose: () => void closed.push("first") });
+  teardown.add("key", { dispose: () => void closed.push("second") });
+  expect(closed).toEqual(["first"]);
+  first.dispose();
+  expect(closed).toEqual(["first"]);
+});
+
+// A SESSION'S WATCHER (./session.ts): the frames that end one.
 // The end of a WebSocket session whose peer went silent: the socket closes with 4000 and the
 // teardown runs here, once. A Node test with a socket pair that never answers, the way a socket
 // stays half open: what workerd does with a close frame nobody receives is out of scope.
-import { env } from "cloudflare:workers";
-import { newHttpBatchRpcSession } from "capnweb";
-import { expect, test, vi } from "vitest";
-import type { Caller } from "./caller.ts";
-import { DurableObjectNameCodec } from "./context/paths.ts";
-import { SILENCE } from "./end-when-silent.ts";
-import { endedByFrames, serveSession } from "./session.ts";
-
-const BOX = "/agents/ada/box";
-
-test.for<{ name: string; path: string | undefined; rootedAt: string }>([
-  { name: "no path", path: undefined, rootedAt: "/" },
-  { name: "a sandbox's context", path: BOX, rootedAt: BOX },
-])("a session with $name is rooted at $rootedAt, as its caller", async ({ path, rootedAt }) => {
-  using contexts = contextsThatAnswerTheirPath();
-  const caller: Caller = { principal: null, app: true };
-  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
-    serveSession(new Request(input, init), { waitUntil() {} } as unknown as ExecutionContext, {
-      caller,
-      endsAt: null,
-      endReason: "",
-      path,
-    }),
-  );
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one call, and a test has no WebSocketPair to serve a socket with
-  const session = newHttpBatchRpcSession<{ whoami(): Promise<{ path: string }> }>(
-    "https://iterate.example.com/api",
-  );
-  expect(await session.whoami()).toEqual({ path: rootedAt });
-  expect(contexts).toMatchObject({
-    calls: [
-      {
-        name: DurableObjectNameCodec.address(rootedAt).name,
-        expression: ["itx", ["whoami"]],
-        caller,
-      },
-    ],
-  });
-});
-
 test("a watcher's reason ends the session with 1008, and no reason lets it go on", async () => {
   const socket = fakeSocket();
   const answers: (string | undefined)[] = [undefined, "this sandbox's session ended: a rule"];
@@ -93,8 +82,7 @@ test("a close that throws, on a socket that is closing already, is nobody's unha
 test("a silent peer's session is torn down once with a 4000 close, and a later close event ends nothing", async () => {
   using pair = silentSocketPair();
   let disposals = 0;
-  await serveSession(
-    new Request("https://mind.example/itx", { headers: { upgrade: "websocket" } }),
+  serveSession(
     // only `waitUntil` is read
     { waitUntil: () => {} } as unknown as ExecutionContext,
     {
@@ -162,24 +150,6 @@ function silentSocketPair() {
 }
 
 const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-/** The host's contexts for one test: each answers a call with its own path, and records it. */
-function contextsThatAnswerTheirPath() {
-  const host = env as { CONTEXTS?: unknown };
-  const calls: { name: string; expression: unknown; caller: Caller }[] = [];
-  host.CONTEXTS = {
-    getByName: (name: string) => ({
-      invokeSafe: async (expression: unknown, _args: unknown[], caller: Caller) => {
-        calls.push({ name, expression, caller });
-        return { ok: true, data: { path: DurableObjectNameCodec.parse(name).path } };
-      },
-    }),
-  };
-  return {
-    calls,
-    [Symbol.dispose]: () => void delete host.CONTEXTS,
-  };
-}
 
 function fakeSocket() {
   const listeners: (() => void)[] = [];

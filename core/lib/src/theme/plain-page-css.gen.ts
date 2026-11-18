@@ -157,12 +157,7 @@ width: 2rem;
 height: 2rem;
 font-size: 0.75rem;
 }
-.ways {
-display: flex;
-flex-direction: column;
-gap: 0.625rem;
-}
-main.centered :is(.ways, .stack) > button:not(.link) {
+main.centered .stack > button:not(.link) {
 min-height: 2.875rem;
 font-size: 0.9375rem;
 }
@@ -171,12 +166,6 @@ text-wrap: pretty;
 }
 main.centered > .center {
 text-align: center;
-}
-main.centered > .note {
-margin-top: -0.5rem;
-font-size: 0.8125rem;
-text-align: center;
-text-wrap: balance;
 }
 .mark rect {
 fill: var(--foreground);
@@ -369,14 +358,6 @@ color: var(--foreground);
 button.outline:hover {
 background: var(--accent);
 }
-button.cloudflare {
-background: var(--cloudflare-button);
-color: var(--cloudflare-button-foreground);
-font-weight: 600;
-}
-button.cloudflare:hover {
-background: var(--cloudflare-button-hover);
-}
 button:has(> svg) {
 display: inline-flex;
 align-items: center;
@@ -493,4 +474,4 @@ grid-column: 2;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-fQ0xPDdwewssumsdWSH2GRZqatRTx/NsQVv30rrn/u0='";
+export const plainPageCssHash = "'sha256-soIhy0Td4CCy8Oq3NEnXcos5myEzFMB37rfEh9XXN6U='";

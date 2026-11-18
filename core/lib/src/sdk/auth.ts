@@ -4,18 +4,18 @@
 import { z } from "zod";
 import { isSameOriginBrowserRequest } from "../lib.ts";
 import {
-  ITX_PERSON_HEADER,
+  type AddressedPerson,
   ITX_PRINCIPAL_HEADER,
   type Person,
-  type SignInMethod,
   stampedPersonOf,
 } from "../principal.ts";
-import { ITERATE_SERVE_CONTEXT_HEADER, ITERATE_SERVE_HEADER } from "../mind-ingress.ts";
+import {
+  ITERATE_CONTROL_PLANE_HOSTNAME_HEADER,
+  ITERATE_SERVE_CONTEXT_HEADER,
+  ITERATE_SERVE_HEADER,
+} from "../mind-ingress.ts";
 
 const Principal = z.object({ actor: z.string().min(1), email: z.string().optional() });
-
-/** What the person guards take: `methods`, the ways to sign in that the app takes. */
-export type PersonOptions = { methods?: readonly SignInMethod[] };
 
 /** GUARDS FOR A MIND'S CONFIG WORKER, before it serves a page. Every hostname of the mind's
  *  domain but `iterate.<domain>` is the mind's own, and on each one ingress holds the browser
@@ -24,39 +24,37 @@ export type PersonOptions = { methods?: readonly SignInMethod[] };
  *  is; whether they are a member is the mind's members list. So an app may serve people who
  *  are not members: its end users. Who arrives is core/boundary-worker/src/mind-host-sign-in.ts, "WHO
  *  ARRIVES". The guards:
- *    - `auth.require` asks for a member, and `auth.requirePerson` for anyone signed in. Both answer
- *      null when the request may go on, else the answer to send.
+ *    - `auth.require` asks for a member, and `auth.requirePerson` for anyone signed in who proved
+ *      an address. Both answer null when the request may go on, else the answer to send.
  *    - `auth.person` reads the person, or null: `{ userId, email, name, method }`. `userId` is
  *      stable: key what the app keeps per person by it. `name` is what to call them on a page,
  *      the part of their address before the "@": escape it where you show it, and decide nothing
- *      by it.
+ *      by it. `method` is how they signed in: "passkey" or "email". The app names which it takes
+ *      (`AppDescription.signIn`, ../app-description.ts) and the mind's issuer holds every sign-in
+ *      to that list, so the guards take no list of methods.
  *
- *  WAYS TO SIGN IN. `auth.person` and `auth.requirePerson` take `{ methods }`: the ways to sign in
- *  that the app takes, of those the stack's config offers (`"passkey"`, `"email"`, `"google"`,
- *  `"cloudflare"`, `"guest"`), in the order its sign-in page shows them. A person who signed in another way
- *  is no person to that guard: `requirePerson` answers the challenge with RFC 9470's
- *  `acr_values`, and for a page load ingress signs them in again on this host, by a way the app
- *  names. An OAuth client of the app, such as an MCP client, sends no `acr_values`: name the same
- *  ways in the app's manifest, `"iterate": { "methods": [...] }`, and its sign-in offers them
- *  (core/auth-worker/src/asking-app.ts). Without `methods`, every way counts but Cloudflare's and
- *  a guest's: a sign-in with Cloudflare counts only where an app names it, because the stack does
- *  not know that Cloudflare checked the address (core/auth-worker/src/cloudflare-sign-in.ts). A
- *  session from before sessions said how they began counts only where an app names no `methods`.
- *  The guard is the rule: what the issuer shows a person is routing, which a browser can change.
- *
- *  GUESTS. `"guest"` lets in anyone who types a name (core/auth-worker/src/guest-sign-in.ts): the
- *  person is `{ userId, email: "", name, method: "guest" }`, and nothing about them is checked. A
- *  guest is a person to a guard that names `"guest"`, and nobody everywhere else: never a member,
- *  never a principal. So that name alone must open nothing: check what the visitor holds (a share
- *  link's secret, say) before you serve, and check it again on every page load. A guest's session
- *  on your host lasts 15 minutes and is renewed with no question while the browser comes back, so
- *  that check is what ends a guest's reach when a link ends. Name the members' ways beside it
- *  (`["guest", "passkey", "email"]`), or someone who is signed in must sign out to come in.
+ *  GUESTS. An app that names `"guest"` in its `signIn` lets in anyone who types a name
+ *  (core/auth-worker/src/guest-sign-in.ts). EVERY GUARD REFUSES A GUEST unless its call says
+ *  `{ guests: true }`: so a route takes guests only where its code says so, and a guest is never
+ *  taken for a person who proved an address. With it, `auth.person` may answer a guest, `{
+ *  userId, email: "", name, method: "guest" }` (iterate/principal `Guest`), whose `name` is the
+ *  one they typed, and nothing about whom is checked. A guest is never a member and never a
+ *  principal. So that name alone must open nothing: check what the visitor holds (a share link's
+ *  secret, say) before you serve, and check it again on every page load. A guest's session on
+ *  your host lasts 15 minutes and is renewed with no question while the browser comes back, and
+ *  only while your app's description still names "guest"; your check is what ends a guest's
+ *  reach when a link ends. A member's passkey counts at every app: a member who is signed in
+ *  comes in as the member, never as a guest. Name the other ways beside "guest" in `signIn`
+ *  (`["guest", "passkey"]`) for a sign-in page that offers them.
  *
  *  ```js
- *  const refused = this.auth.requirePerson(request, { methods: ["cloudflare"] });
+ *  const refused = this.auth.requirePerson(request); // a person who proved an address
  *  if (refused) return refused;
- *  const person = this.auth.person(request, { methods: ["cloudflare"] }); // method: "cloudflare"
+ *  const person = this.auth.person(request);
+ *
+ *  const refused = this.auth.requirePerson(request, { guests: true }); // a guest too
+ *  if (refused) return refused;
+ *  const visitor = this.auth.person(request, { guests: true }); // visitor.method === "guest"?
  *  ```
  *
  *  Signed out, `auth.require` answers `401` with `WWW-Authenticate: Bearer realm="iterate"`, and
@@ -89,25 +87,16 @@ export const auth = {
     }
     return signIn('Bearer realm="iterate"');
   },
-  requirePerson(request: Request, options: PersonOptions = {}): Response | null {
+  requirePerson(request: Request, options: GuestOption = {}): Response | null {
     const refused = crossSiteRefusal(request);
     if (refused) return refused;
-    if (auth.person(request, options)) return null;
-    // RFC 9470's step-up challenge: the person here signed in by a way this app does not take
-    const params = ['realm="iterate"', 'scope="identity"'];
-    if (request.headers.has(ITX_PERSON_HEADER))
-      params.push('error="insufficient_user_authentication"');
-    if (options.methods) params.push(`acr_values="${options.methods.join(" ")}"`);
-    return signIn(`Bearer ${params.join(", ")}`);
-  },
-  person(request: Request, { methods }: PersonOptions = {}): Person | null {
     const person = stampedPersonOf(request);
-    if (!person) return null;
-    const taken = methods
-      ? Boolean(person.method && methods.includes(person.method))
-      : person.method !== "cloudflare" && person.method !== "guest";
-    return taken ? person : null;
+    if (person && (person.method !== "guest" || options.guests)) return null;
+    // a guest here: a sign-in would bring the same guest back
+    if (person) return guestRefusal();
+    return signIn('Bearer realm="iterate", scope="identity"');
   },
+  person: personOf,
   /** THE MEMBER'S OWN `itx`, FOR THE PAGE THEY ARE ON: answer this from the path the page opens
    *  its WebSocket on (`new WebSocket("/itx")`, a capnweb session). It answers the member guard's
    *  refusal, or asks the platform to serve the socket in this answer's place. The platform
@@ -125,7 +114,8 @@ export const auth = {
   },
   /** A SIGNED-IN PERSON'S LIVE VIEW OF ONE CONTEXT, for the page they are on: answer this from
    *  the path the page opens its WebSocket on (a capnweb session). It answers the person guard's
-   *  refusal (`requirePerson`, with the same `options`), or asks the platform to serve the socket
+   *  refusal (`requirePerson`, with the same `{ guests: true }` for a page that takes guests), or
+   *  asks the platform to serve the socket
    *  in this answer's place, rooted at `path`. Your code decides whether this person may have that
    *  context, before it answers: the platform serves whatever context the answer names. The
    *  platform decides who the caller is, from the request it holds: the person the boundary
@@ -141,7 +131,7 @@ export const auth = {
    *  words they send its agent and on the stop of an answer, and signs a URL for a file under its
    *  path. Nothing else (core/configs/default/people.md, "A live view of one context"). The
    *  session ends when the sign-in does. */
-  personItx(request: Request, path: string, options: PersonOptions = {}): Response {
+  personItx(request: Request, path: string, options: GuestOption = {}): Response {
     return (
       auth.requirePerson(request, options) ||
       new Response("Open this path as a WebSocket: it is the page's view of one context.\n", {
@@ -154,28 +144,63 @@ export const auth = {
       })
     );
   },
+  /** THE MIND'S CONTROL-PLANE HOSTNAME, as the mind Worker says it on every request that it hands to
+   *  the mind's code, in any context (iterate/mind-ingress): where the mind's sign-in, its keys,
+   *  its members and its approvals pages are, and the mind's address. An app takes it from here
+   *  and never from the hostname it is served on, which may be in any zone of the mind. Throws
+   *  for a request that the platform did not hand over, such as one the code built itself:
+   *  nothing else says it. */
+  controlPlaneHostname(request: Request): string {
+    const controlPlaneHostname = request.headers.get(ITERATE_CONTROL_PLANE_HOSTNAME_HEADER);
+    if (!controlPlaneHostname)
+      throw new Error(
+        `This request has no ${ITERATE_CONTROL_PLANE_HOSTNAME_HEADER}: the platform did not hand it to this code.`,
+      );
+    return controlPlaneHostname;
+  },
   /** WHAT A MEMBER'S PAGE OF @iterate-com/ui ASKS OF ITS APP'S HOST, or null for any other path:
    *  `/itx`, its socket (`auth.itx`), and the three answers its shell's sidebar asks under
    *  `/.auth/`, written for an app with a sign-in gate of its own. Here the platform signs people
-   *  in, so they say: the platform is the mind's own (`session.json`), this app serves one mind
-   *  (`minds.json`), and "Sign out" is the platform's (`logout`). Call it behind the member guard. */
+   *  in, so they say: the issuer is the mind's own, at its control-plane hostname (`session.json`), this
+   *  app serves one mind (`minds.json`), and "Sign out" is the platform's (`logout`). Call it
+   *  behind the member guard. */
   memberPage(request: Request): Response | null {
     const url = new URL(request.url);
-    // the mind's address: this host, one label shorter
-    const mind = url.hostname.split(".").slice(1).join(".");
     if (url.pathname === "/itx") return auth.itx(request);
     if (url.pathname === "/.auth/session.json") {
-      const platform = `https://iterate.${mind}`;
-      return Response.json({ issuer: platform, defaultIssuer: platform });
+      const issuer = `https://${auth.controlPlaneHostname(request)}`;
+      return Response.json({ issuer, defaultIssuer: issuer });
     }
-    if (url.pathname === "/.auth/minds.json")
+    if (url.pathname === "/.auth/minds.json") {
+      const mind = auth.controlPlaneHostname(request);
       return Response.json({ minds: [{ address: mind, lastUsedAt: Date.now() }], lastUsed: mind });
+    }
     // the platform's own sign-out takes the POST
     if (url.pathname === "/.auth/logout")
       return new Response(null, { status: 307, headers: { location: "/.iterate/sign-out" } });
     return null;
   },
 };
+
+/** `{ guests: true }`: this route takes a guest too (see GUESTS above). */
+type GuestOption = { guests?: boolean };
+
+/** WHO IS SIGNED IN, or null: a person who proved an address, and with `{ guests: true }` a
+ *  guest too. Signed out, and a guest without the option: null. */
+function personOf(request: Request, options?: { guests?: false }): AddressedPerson | null;
+function personOf(request: Request, options: { guests: true }): Person | null;
+function personOf(request: Request, options: GuestOption = {}): Person | null {
+  const person = stampedPersonOf(request);
+  return person && (person.method !== "guest" || options.guests) ? person : null;
+}
+
+/** A guest at a route that takes none: 403, and no sign-in, which would bring the same guest
+ *  back. */
+const guestRefusal = () =>
+  new Response("This page takes no guests. Sign out, and sign in with your address.\n", {
+    status: 403,
+    headers: { "Cache-Control": "no-store" },
+  });
 
 /** A write or a WebSocket upgrade from another origin: 403. */
 function crossSiteRefusal(request: Request): Response | null {

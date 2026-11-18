@@ -1,7 +1,7 @@
 import { type Envelope, envelopeOf, PLATFORM_NAMESPACES, statementHashOf } from "iterate/signed";
 import { type Facts, withFacts } from "iterate/facts";
 import { isBlocked } from "./blocked.ts";
-import { type Env, iterateConfigOf } from "./env.ts";
+import { configOf, type Env } from "./env.ts";
 import { canonicalPath, underPaths } from "./key-rules.ts";
 import { personKeyRefusal, verifiedStatement } from "./keys.ts";
 import { configuredMeld } from "./minds.ts";
@@ -85,7 +85,7 @@ export async function admittedStatement(
       payload: statement.payload,
       at: statement.at,
       by: signer.principal.actor,
-      own: iterateConfigOf(env).domain,
+      own: configOf(env).controlPlaneHostname,
     });
     if ("refused" in meld) return refused(meld.refused);
   }

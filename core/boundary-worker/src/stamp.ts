@@ -1,24 +1,22 @@
 import {
   ITX_EXPIRES_HEADER,
   ITX_GRANT_HEADER,
-  ITX_LENDER_HEADER,
   ITX_PERSON_HEADER,
   ITX_PRINCIPAL_HEADER,
-  type Lender,
   nameInEmail,
   type Person,
   type SignInMethod,
   stampJsonOf,
 } from "iterate/principal";
 import {
-  type PlatformRoute,
-  platformOriginOf,
+  type ControlPlaneRoute,
   mindApiUrlOf,
   mindMcpNameOf,
   mindMcpUrlOf,
   protectedResourceMetadataUrlOf,
   type MindResourceMetadata,
 } from "iterate/mind-api";
+import { type MindConfig, controlPlaneOriginOf } from "iterate/mind-config";
 import type { AuthService, TokenIdentity } from "iterate/workers";
 import { type MindHostCaller, mindHostCallerOf } from "./mind-host-sign-in.ts";
 import { appCookiesOf, sessionTokenOf } from "./session-cookies.ts";
@@ -27,48 +25,51 @@ export type Stamped = {
   forwarded: Request;
   caller: MindHostCaller;
   email: string | null;
-  /** How the caller on a mind hostname signed in, when they did: the app's guard names the ways
-   *  it takes (./mind-host-sign-in.ts). */
-  method?: SignInMethod;
   answer?: Response;
 };
 
+/** `route`: the part of the control plane the request is for, or null on a hostname of the mind's
+ *  own (./http.ts `isControlPlaneRequest`). */
 export async function stampedRequest(
   request: Request,
-  { auth, route, domain }: { auth: AuthService; route: PlatformRoute | null; domain: string },
+  {
+    auth,
+    route,
+    config,
+  }: {
+    auth: AuthService;
+    route: ControlPlaneRoute | null;
+    config: Pick<MindConfig, "controlPlaneHostname">;
+  },
 ): Promise<Stamped> {
   // Only the boundary stamps `x-itx-*`, and what it forwards to trusts the stamp: drop whatever a
   // caller sent. Iterated header names are lowercase.
   const headers = new Headers([...request.headers].filter(([name]) => !name.startsWith("x-itx-")));
   const url = new URL(request.url);
-  const bearer = request.headers.get("authorization")?.match(/^Bearer (.+)$/)?.[1];
+  const bearer = bearerOf(request.headers);
   if (route === "api" || route === "mcp") {
-    const resource = route === "api" ? mindApiUrlOf(domain) : mindMcpUrlOf(domain);
+    const resource =
+      route === "api"
+        ? mindApiUrlOf(config.controlPlaneHostname)
+        : mindMcpUrlOf(config.controlPlaneHostname);
     const metadataUrl = protectedResourceMetadataUrlOf(resource);
     if (url.href.split("?")[0] === metadataUrl) {
       const answer =
         request.method === "GET"
-          ? protectedResourceDocument(resource, platformOriginOf(domain))
+          ? protectedResourceDocument(resource, controlPlaneOriginOf(config))
           : new Response("Method not allowed\n", { status: 405 });
       return { forwarded: request, caller: "anonymous", email: null, answer };
     }
-    const identity = bearer ? await auth.whoIs(bearer, resource) : null;
-    // The platform's hostname is not the mind's: the mind gets no cookie and no credential.
+    // The control-plane hostname is not the mind's: the mind gets no cookie and no credential.
     headers.delete("cookie");
     headers.delete("authorization");
     // A key's token is no member's: it gets no principal, so nothing that asks for one takes it.
-    if (identity?.provide) {
-      const lender: Lender = {
-        actor: identity.principal.actor,
-        key: identity.grant,
-        provide: identity.provide,
-      };
-      headers.set(ITX_LENDER_HEADER, JSON.stringify(lender));
-      headers.set(ITX_EXPIRES_HEADER, String(identity.expiresAt));
-    } else if (identity) stamp(headers, identity);
+    const identity = bearer ? await auth.whoIs(bearer, resource) : null;
+    if (identity && !identity.provide) stamp(headers, identity);
     // The boundary answers the RFC 9728 documents and this 401 itself, so a hostile mind cannot
-    // send a client to another issuer. Under `/api/` the rest is the mind's (signed URLs, webhooks).
-    const needsCaller = route === "mcp" || url.pathname === "/api";
+    // send a client to another issuer. The API's own address is a session that the boundary ends
+    // (./http.ts), and under `/api/` the rest is the mind's (signed URLs, webhooks).
+    const needsCaller = route === "mcp";
     // Read before `forwarded` is made: a new Request takes this one's body.
     const probe = route === "mcp" && !identity && (await isDiscoverProbe(request));
     return {
@@ -80,25 +81,26 @@ export async function stampedRequest(
           answer: bearerChallenge(
             metadataUrl,
             Boolean(bearer),
-            route === "mcp" ? mcpHelp(request, domain) : null,
+            route === "mcp" ? mcpHelp(request, config) : null,
             probe ? 400 : 401,
           ),
         }),
     };
   }
   if (route === "secrets") {
-    // A write counts a cookie only from the platform's own origin: a mind hostname is same-site,
-    // so the issuer's cookie rides its form posts too.
+    // A write counts a cookie only from the control-plane hostname's own origin: a mind hostname is
+    // same-site, so the issuer's cookie rides its form posts too.
     const write = request.method !== "GET" && request.method !== "HEAD";
-    const ownOrigin = request.headers.get("origin") === platformOriginOf(domain);
+    const ownOrigin = request.headers.get("origin") === controlPlaneOriginOf(config);
     const session =
       !write || ownOrigin ? await auth.browserSession(request.headers.get("cookie")) : null;
     if (session) {
-      const person: Person = {
-        userId: session.userId,
-        email: session.email,
-        name: nameInEmail(session.email),
-      };
+      const person = personOf(
+        session.userId,
+        session.email,
+        nameInEmail(session.email),
+        session.method,
+      );
       headers.set(ITX_PERSON_HEADER, stampJsonOf(person));
       if (session.member)
         headers.set(
@@ -118,7 +120,13 @@ export async function stampedRequest(
   // An app's own script may send a bearer of its own beside the session cookie.
   const session = sessionTokenOf(request);
   const byBearer = bearer ? await auth.whoIs(bearer, url.origin) : null;
-  const identity = byBearer || (session ? await auth.whoIs(session, url.origin) : null);
+  const tokenIdentity = byBearer || (session ? await auth.whoIs(session, url.origin) : null);
+  // A PERSON'S TOKEN SAYS HOW THE PERSON SIGNED IN (iterate/workers `TokenIdentity.method`), and
+  // the stamp carries it to the app (iterate/sdk `auth.person`). A token that says none is no
+  // person's, and stamps nobody.
+  const identity = tokenIdentity?.method
+    ? { ...tokenIdentity, method: tokenIdentity.method }
+    : null;
   const caller = mindHostCallerOf({
     authorization: identity && {
       via: byBearer ? "bearer" : "cookie",
@@ -132,13 +140,13 @@ export async function stampedRequest(
   // a bearer of ours never reaches the app; one that did not verify may be the app's own
   if (byBearer) headers.delete("authorization");
   if (identity && caller !== "anonymous") {
-    const person: Person = {
-      userId: identity.principal.actor,
-      email: identity.principal.email || "",
+    const person = personOf(
+      identity.principal.actor,
+      identity.principal.email || "",
       // a guest's is the one they typed, which is all they have
-      name: identity.name || nameInEmail(identity.principal.email || ""),
-      method: identity.method,
-    };
+      identity.name || nameInEmail(identity.principal.email || ""),
+      identity.method,
+    );
     headers.set(ITX_PERSON_HEADER, stampJsonOf(person));
     // when the sign-in ends, member or not: a person's socket (sdk/auth.ts `personItx`) ends then
     headers.set(ITX_EXPIRES_HEADER, String(identity.expiresAt));
@@ -149,9 +157,19 @@ export async function stampedRequest(
     forwarded: new Request(request, { headers }),
     caller,
     email: signedIn?.principal.email || null,
-    method: signedIn?.method,
   };
 }
+
+/** THE STAMP OF A PERSON: a guest's has no address, whatever else the token says, so no reader
+ *  of the stamp takes a guest for a person with one (iterate/principal `Guest`). */
+const personOf = (userId: string, email: string, name: string, method: SignInMethod): Person =>
+  method === "guest" ? { userId, email: "", name, method } : { userId, email, name, method };
+
+/** THE BEARER TOKEN OF A REQUEST'S `Authorization` HEADER, or undefined when the header is absent
+ *  or of another scheme. The scheme's name is matched in any case (RFC 9110 section 11.1): a
+ *  client that writes `bearer` sent the same credential. */
+export const bearerOf = (headers: Headers) =>
+  headers.get("authorization")?.match(/^Bearer +(.+)$/i)?.[1];
 
 function stamp(headers: Headers, identity: TokenIdentity) {
   headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(identity.principal));
@@ -196,10 +214,10 @@ async function isDiscoverProbe(request: Request) {
 
 // A standard client reads only the header. A person who opens the address gets a page, and an
 // agent whose client does not sign in reads the body, so each says how to connect.
-function mcpHelp(request: Request, domain: string) {
-  const origin = platformOriginOf(domain);
-  const mcp = mindMcpUrlOf(domain);
-  const add = `claude mcp add --transport http ${mindMcpNameOf(domain)} ${mcp}`;
+function mcpHelp(request: Request, config: Pick<MindConfig, "controlPlaneHostname">) {
+  const origin = controlPlaneOriginOf(config);
+  const mcp = mindMcpUrlOf(config.controlPlaneHostname);
+  const add = `claude mcp add --transport http ${mindMcpNameOf(config.controlPlaneHostname)} ${mcp}`;
   if (request.method === "GET" && request.headers.get("accept")?.includes("text/html"))
     return {
       type: "text/html; charset=utf-8",
@@ -232,7 +250,7 @@ An iterate agent, whose itx.connectToMcp does not sign in, connects in five step
 const MIND_ANSWER_CSP =
   "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 
-// The platform's hostname is the issuer's and the secret form's origin, and the mind may be
+// The control-plane hostname is the issuer's and the secret form's origin, and the mind may be
 // hostile: no cookie, a sandbox, and never a page (a page could copy the secret form), so an attachment.
 export function httpsRedirect(request: Request): Response | undefined {
   const url = new URL(request.url);

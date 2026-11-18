@@ -69,8 +69,8 @@ import {
  *  property of the code, not of a deployment. */
 const AI_GATEWAY_ID = "default";
 
-/** What `whoami` says of an agent's context. A mind on its own stack names itself by `mindSlug`
- *  and has no `mindId`; the frozen platform answers both. */
+/** What `whoami` says of an agent's context: the mind's id, and `mindSlug`, the hostname that
+ *  people read. */
 type AgentIdentity = { mindId?: string; mindSlug?: string; path: string };
 /** How long a new message waits for this loop's own running script before a turn starts anyway:
  *  the call's result then comes back before the message is read, so the call is followed by its

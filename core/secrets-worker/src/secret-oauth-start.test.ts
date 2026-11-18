@@ -140,6 +140,7 @@ test("a client of iterate Cloud's whose secret is lent to every secret says so h
 test("a connect through a Cloud client names the accounts whose installations the mind asks for", () => {
   const cloud = {
     name: "github",
+    origin: "https://cloud.example",
     clientId: "Iv1.client",
     authorizationEndpoint: "https://provider.example/login/oauth/authorize",
     beginEndpoint: "https://cloud.example/clients/github/begin",
@@ -148,9 +149,15 @@ test("a connect through a Cloud client names the accounts whose installations th
     urls: ["https://api.provider.example"],
   };
   const begun = (client: Record<string, unknown>) =>
-    normalizeSecretOAuth({ client: { cloud: "github", ...client } }, [], cloud).cloud;
+    normalizeSecretOAuth(
+      { client: { cloud: "github", origin: cloud.origin, ...client } },
+      [],
+      cloud,
+    ).cloud;
   expect(begun({ accounts: ["Ada", "acme-inc"] })).toMatchObject({
     name: "github",
+    // the Cloud that the caller named is kept with the attempt, and then with the secret
+    origin: "https://cloud.example",
     beginEndpoint: cloud.beginEndpoint,
     accounts: ["Ada", "acme-inc"],
   });

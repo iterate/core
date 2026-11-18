@@ -9,6 +9,7 @@ import {
   logPlatformFailure,
 } from "iterate/platform-retry";
 import { readBounded, ROW_MAX_BYTES, sends, sized } from "./bounds.ts";
+import { telemetryWorkerConfigOf } from "./config.ts";
 import type { Env } from "./env.ts";
 import { logRows, OtlpLogs, OtlpTraces, spanRows } from "./otlp.ts";
 
@@ -20,7 +21,8 @@ export async function otlpResponse(request: Request, env: Env) {
       { status: pathname === "/" ? 200 : 404 },
     );
   // 503, not 401: the destination sends the batch again, so rotating the secret loses nothing
-  if (!bearerMatches(request.headers.get("authorization"), env.TELEMETRY_OTLP_SECRET)) {
+  const { otlpSecret } = telemetryWorkerConfigOf(env);
+  if (!bearerMatches(request.headers.get("authorization"), otlpSecret.exposeSecret())) {
     console.warn({ event: "telemetry.secret-refused", pathname });
     return new Response(null, { status: 503 });
   }
@@ -119,8 +121,7 @@ async function land<Row extends PipelineRecord>(
 
 /** In constant time. A loop: tsconfig.app.json's DOM lib types `crypto.subtle.timingSafeEqual`
  *  away. */
-function bearerMatches(authorization: string | null, secret: string | undefined) {
-  if (!secret) return false;
+function bearerMatches(authorization: string | null, secret: string) {
   const encoder = new TextEncoder();
   const [a, b] = [encoder.encode(authorization || ""), encoder.encode(`Bearer ${secret}`)];
   let difference = a.byteLength ^ b.byteLength;

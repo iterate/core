@@ -10,8 +10,9 @@ import {
 import type { Env } from "./env.ts";
 import { personKeyRefusal, verifiedStatement } from "./keys.ts";
 import { statementsResponse } from "./statements.ts";
+import { configVars, keyRows, stackKeyPair } from "./test-support.ts";
 
-const DOMAIN = "example.com";
+const MIND = "iterate.example.com";
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 
 test("the intake takes the same statement again, as the same event to store first", async () => {
@@ -52,7 +53,7 @@ test("a statement signed by a key that a mind's secret holds (itx.secrets.signSt
         method: "POST",
         body: JSON.stringify(
           await signedStatement(material, {
-            mind: DOMAIN,
+            mind: MIND,
             path,
             type: "events.iterate.com/x/message-received",
           }),
@@ -145,16 +146,21 @@ async function keyPair() {
   };
 }
 
-/** The two tables a statement's check reads and writes, and nothing else of D1. */
-function database(stack: { key: string; publicKey: string; pkcs8: string }) {
+/** The tables a statement's check reads and writes, and nothing else of D1. `keys`: the rows of
+ *  the keys this stack knows (./test-support.ts `keyRows`). */
+function database(
+  stack: { row: Awaited<ReturnType<typeof stackKeyPair>>["row"] },
+  keys: Awaited<ReturnType<typeof keyRows>>,
+) {
   const seen = new Set<unknown>();
   const prepare = (sql: string, bound: unknown[] = []) => ({
     bind: (...values: unknown[]) => prepare(sql, values),
     first: async () => {
-      // nobody was added by hand: the members are the config's
+      if (sql.includes("from keys k left join users u")) return keys(bound[0]);
+      // nobody was added by hand: the members are the owners
       if (sql.includes("from members")) return null;
       if (!sql.includes("from stack_key")) throw new Error(`not expected: ${sql}`);
-      return { key: stack.key, public_key: stack.publicKey, private_key: stack.pkcs8 };
+      return stack.row;
     },
     counted: () => {
       if (sql.startsWith("delete from statements")) return { meta: { changes: 0 } };
@@ -191,16 +197,12 @@ async function stackWithCloudKey(cloudKey?: string) {
     })),
   ];
   const env = {
-    DOMAIN,
-    AUTH_SETTINGS: JSON.stringify({
-      login: { methods: { email: {} }, allow: [{ email: "owner@example.net" }] },
-      keys,
-    }),
-    DB: database(await keyPair()),
+    ...configVars(),
+    DB: database(await stackKeyPair(), await keyRows(keys)),
   } as unknown as Env;
   const now = Date.now();
   const statement = statementText({
-    mind: DOMAIN,
+    mind: MIND,
     path: "/integrations/x",
     type: "events.iterate.com/x/message-received",
     payload: { text: "hello" },
@@ -212,7 +214,7 @@ async function stackWithCloudKey(cloudKey?: string) {
     const { privateKey, key } = persons[email as keyof typeof persons];
     return signedP256(
       statementText({
-        mind: DOMAIN,
+        mind: MIND,
         path: "/agents/one",
         type: "events.iterate.com/x/message-received",
         payload: { text: "hello" },

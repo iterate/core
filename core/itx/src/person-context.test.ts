@@ -227,7 +227,7 @@ test("a live state's delta that names what a person does not read comes with no 
 });
 
 test("a member who opens the view reads what a member reads; anyone else reads as a person", () => {
-  const person = { userId: EVE.actor, email: EVE.email, name: EVE.name };
+  const person = { userId: EVE.actor, email: EVE.email, name: EVE.name, method: "email" as const };
   const request = (headers: Record<string, string>) =>
     new Request("https://meet.example.com/itx", { headers });
   const asMember = readsOf(request({ "x-itx-principal": JSON.stringify(EVE) }), person);
@@ -496,7 +496,12 @@ test.for<{ name: string; act: (target: PersonContextRpcTarget) => unknown; code:
 // The socket is the platform's to open: for the person the boundary stamped, on an upgrade from the
 // host's own page, for a context the app named by its canonical path.
 const person = {
-  "x-itx-person": JSON.stringify({ userId: "user_1", email: "a@example.com" }),
+  "x-itx-person": JSON.stringify({
+    userId: "user_1",
+    email: "a@example.com",
+    name: "a",
+    method: "email",
+  }),
   "x-itx-expires": "2000000000",
 };
 const upgrade = { upgrade: "websocket", origin: "https://chat.example.com" };
@@ -539,7 +544,9 @@ test.for<{ name: string; headers: Record<string, string>; path: string | null; s
 
 // Who asked, as every event of theirs then names them (`source.onBehalfOf.principal`).
 test("the person is named as who asked by their id, their address and their name", () => {
-  expect(principalOf({ userId: "user_1", email: "a@example.com", name: "a" })).toEqual({
+  expect(
+    principalOf({ userId: "user_1", email: "a@example.com", name: "a", method: "email" }),
+  ).toEqual({
     actor: "user_1",
     email: "a@example.com",
     name: "a",

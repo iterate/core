@@ -15,6 +15,7 @@ import {
   stampCallerHeaders,
 } from "core-itx";
 import { SANDBOX_SESSION_REFUSED_HEADER } from "iterate/mind-api";
+import { mindWorkerConfigOf } from "../config.ts";
 import type { Env } from "../env.ts";
 import type { SandboxContainer } from "./container.ts";
 import {
@@ -22,6 +23,7 @@ import {
   asksForOwnSession,
   egressFilterOf,
   ownSessionOf,
+  ownSessionRoot,
   sessionWatch,
 } from "./own-session.ts";
 
@@ -29,9 +31,10 @@ import {
 export class SandboxEgress extends WorkerEntrypoint<Env, { iterateContextName: string }> {
   override async fetch(request: Request): Promise<Response> {
     const { path } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
-    if (!asksForOwnSession(request, this.env.DOMAIN)) return this.#send(request, path);
+    const { controlPlaneHostname } = mindWorkerConfigOf(this.env);
+    if (!asksForOwnSession(request, controlPlaneHostname)) return this.#send(request, path);
     const filter = await this.#filter(path);
-    if (!filter) return this.#session(request, path);
+    if (!filter) return this.#session(path);
     // The rule's own target may add a bearer, so the request still goes. With none, the boundary's
     // 401 says why the sandbox got no session of its own. So does a request that cannot go at all
     // (a masked `itx.fetch`): a dropped connection would say nothing.
@@ -70,10 +73,8 @@ export class SandboxEgress extends WorkerEntrypoint<Env, { iterateContextName: s
   }
 
   /** The mind's API as the code of the sandbox's own context, for as long as the socket lives. No
-   *  credential ends it: a rule that lands later does (`sessionWatch`). The API's HTTP batch form
-   *  is one request's session: each batch is checked against the rules, stamps the clock once, and
-   *  leaves one `session-opened` in the log. */
-  async #session(request: Request, path: string): Promise<Response> {
+   *  credential ends it: a rule that lands later does (`sessionWatch`). */
+  async #session(path: string): Promise<Response> {
     // `ctx.exports` holds what the Worker's main module exports, and is typed from that module.
     // The module exports this class, so this file cannot name its type: the cast names the one
     // class that is used here (./container.ts, exported by ../worker.ts), which is safe because
@@ -101,8 +102,9 @@ export class SandboxEgress extends WorkerEntrypoint<Env, { iterateContextName: s
     };
     this.ctx.waitUntil(used());
     record("opened", {});
-    return serveSession(request, this.ctx, {
+    return serveSession(this.ctx, {
       ...ownSessionOf(path),
+      root: ownSessionRoot,
       endsAt: null,
       endReason: "",
       onFrame: sessionWatch({

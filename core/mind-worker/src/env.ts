@@ -6,9 +6,10 @@ import type { SandboxContainer } from "./sandbox/container.ts";
 declare global {
   namespace Cloudflare {
     interface Env {
-      DOMAIN: string;
-      MIND_NAME: string;
-      MIND_TEMPLATE: string;
+      /** The config that every Worker of the mind gets, as JSON, and this Worker's own key beside
+       *  it (./config.ts reads both). The key is never returned or logged. */
+      ITERATE: string;
+      ITERATE__SIGNING_KEY: string;
       DOOR: Door;
       CONTEXTS: DurableObjectNamespace<IterateContextDurableObject>;
       CF_VERSION_METADATA: WorkerVersionMetadata;
@@ -17,24 +18,13 @@ declare global {
       AI: Ai;
       ARTIFACTS: ArtifactsNamespace;
       FILES: R2Bucket;
-      /** Never returned or logged. */
-      MIND_SIGNING_KEY: string;
-      TELEMETRY_METRICS?: AnalyticsEngineDataset;
-      /** The stack's own API token of its Cloudflare account, when it has one, and the token's id
-       *  at Cloudflare. The value is never returned or logged: the vault keeps it
-       *  (context/cloudflare-token.ts). */
-      CLOUDFLARE_TOKEN?: string;
-      CLOUDFLARE_TOKEN_ID?: string;
-      CLOUDFLARE_TOKEN_EDITION?: string;
+      /** The dataset of the mind's metrics: the kernel writes each context's to it. */
+      TELEMETRY_METRICS: AnalyticsEngineDataset;
       /** Never read: the binding declares the class `ctx.exports.SandboxContainer` and gives it its
-       *  containers, none on a stack with `mind.containers: false`. */
+       *  containers. */
       SANDBOX_CONTAINER: DurableObjectNamespace<SandboxContainer>;
       BROWSER: BrowserRun;
       IMAGES: ImagesBinding;
-      /** The JSON of the services the stack binds (context/services.ts `ServiceListing`), each
-       *  as `SERVICE_<name>`, when its config names any. */
-      SERVICES?: string;
-      [service: `SERVICE_${string}`]: Service | undefined;
     }
     // Types `ctx.exports`.
     interface GlobalProps {

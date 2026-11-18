@@ -1,6 +1,8 @@
 import { CimdFetchError } from "@cloudflare/workers-oauth-provider";
 import { calculatePKCECodeChallenge, generateRandomCodeVerifier } from "oauth4webapi";
-import { type Env, issuerOf, iterateConfigOf } from "../env.ts";
+import type { Verified } from "iterate/workers";
+import { tokenAudiencesOf } from "../config.ts";
+import { configOf, type Env, issuerOf } from "../env.ts";
 import { personKeyRefusal, verifiedStatement } from "../keys.ts";
 import { authorizationServer, oauthHelpers } from "../oauth.ts";
 import {
@@ -94,8 +96,11 @@ export async function deviceAuthorizationResponse(env: Env, request: Request) {
   const { client_id: clientId, resource, access_seconds: seconds, reason, signed } = form.data;
   if (form.data.scope.split(" ").some((scope) => scope && scope !== "iterate"))
     return refused("invalid_scope", "The device sign-in grants the iterate scope alone.");
-  if (!iterateConfigOf(env).resources.includes(resource))
-    return refused("invalid_target", "The device sign-in is for the mind's API, MCP or /provide.");
+  if (!tokenAudiencesOf(configOf(env)).includes(resource))
+    return refused(
+      "invalid_target",
+      "The device sign-in is for the mind's API, its MCP server, or the right to hand in the mind.",
+    );
   const callback = `${issuerOf(env)}${CALLBACK_PATH}`;
   const client = await oauthHelpers(env)
     .lookupClient(clientId)
@@ -190,8 +195,20 @@ async function signerOf(
   // the page says "the key this mind trusts": a removed member's key is not one
   const notThisPerson = personKeyRefusal(verified.signer);
   if (notThisPerson) return { refused: notThisPerson };
-  const { principal, label, key } = verified.signer;
-  return { actor: principal.actor, label, key };
+  return requesterOf(verified.signer);
+}
+
+/** WHO ASKS, as the approval page names it (./page.ts): a person's or a service's key by its
+ *  label, which a member gave it when the key was added; ANOTHER MIND BY ITS HOSTNAME, which its
+ *  identity log proves (../minds.ts). A mind's working key carries a label that the mind wrote
+ *  itself, so that label never names who asks. */
+export function requesterOf(signer: Exclude<Verified, { refused: string }>["signer"]) {
+  const { principal, label, key } = signer;
+  return {
+    actor: principal.actor,
+    label: principal.kind === "mind" ? principal.actor : label,
+    key,
+  };
 }
 
 export function refused(error: string, description: string, status = 400) {

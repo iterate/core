@@ -13,7 +13,7 @@ The platform behind [iterate](https://iterate.com). A **mind** is one deployment
 | `core/telemetry-worker` | Optional: events, logs and traces in the owner's account.                                                                                                               |
 | `core/itx`              | The kernel the Workers share: a context, its log, and `itx`, the handle code uses to reach a mind.                                                                      |
 | `core/lib`              | npm `iterate`: the SDK a mind's code builds on, the agents, and the `iterate` CLI.                                                                                      |
-| `core/alchemy`          | The one program that deploys a stack, with its smoke check.                                                                                                             |
+| `core/alchemy`          | The one Alchemy script that deploys a stack.                                                                                                                            |
 | `core/home-lab`         | Runs the mind Worker on your own machine, behind a deployed boundary.                                                                                                   |
 | `core/configs`          | The templates a new mind's config repo starts from. `default/` has its apps (agents, onboarding, and a guestbook as an example of an app for end users).                |
 

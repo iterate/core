@@ -1,7 +1,7 @@
 import { cookieValueOf, isSameOriginBrowserRequest, sameOriginPath } from "iterate/lib";
 import { authorizationCodeRequest, authorizationServer } from "iterate/oauth";
-import { platformOriginOf } from "iterate/mind-api";
-import { MIND_DOCUMENT_PATH } from "iterate/signed";
+import { type MindConfig, controlPlaneOriginOf } from "iterate/mind-config";
+import { MIND_IDENTITY_PATH, reservedPathOf } from "iterate/mind-identity-log";
 import { standalonePage } from "iterate/standalone-page";
 import { type AuthService, HOST_SESSION_PREFIX } from "iterate/workers";
 import * as oauth from "oauth4webapi";
@@ -34,12 +34,13 @@ const Flow = z.object({
 
 type HostDeps = {
   auth: AuthService;
-  domain: string;
+  config: MindConfig;
   recordFacts: (response: Response) => Response | Promise<Response>;
 };
 
-// Every hostname but the platform's is the mind's, whose code may be hostile: the session cookie
-// never reaches it, and the boundary answers `/.iterate/` itself.
+// Every hostname but the control-plane hostname is the mind's, whose code may be hostile: the session cookie
+// never reaches it, and the boundary answers `/.iterate/`, the identity log's path and the stack
+// key's path itself.
 export async function mindHostResponse(
   request: Request,
   deps: HostDeps,
@@ -47,36 +48,40 @@ export async function mindHostResponse(
 ): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname.startsWith(HOST_SESSION_PREFIX)) return hostSessionPathResponse(request, deps);
-  // The mind's published keys are the platform's word at its own address, never its code's.
-  if (
-    url.hostname === deps.domain &&
-    url.pathname === MIND_DOCUMENT_PATH &&
-    request.method === "GET"
-  )
-    return deps.auth.fetch(new Request(`${platformOriginOf(deps.domain)}${MIND_DOCUMENT_PATH}`));
+  // A MIND'S CODE PUBLISHES NO IDENTITY AND NO KEY. A mind's identity log and its stack's key are
+  // read at a hostname, by another mind (iterate/mind-identity-log `publishedMindOf`) and by
+  // iterate Cloud: code that answered one of these paths could publish a log or a key as a mind
+  // at any hostname of its zones. So the mind never gets these two paths, in any spelling that
+  // `reservedPathOf` takes for one of them.
+  // THE IDENTITY LOG is the auth Worker's answer, on every hostname that the log's last record
+  // lists, so that a reader finds the mind at each name a root key gave it; on any other
+  // hostname the auth Worker answers 404. A record is posted at the control-plane hostname alone.
+  const reserved = reservedPathOf(url.pathname);
+  if (reserved) {
+    const readsTheLog =
+      reserved.exact &&
+      reserved.path === MIND_IDENTITY_PATH &&
+      (request.method === "GET" || request.method === "HEAD");
+    if (!readsTheLog) return new Response("Not found\n", { status: 404 });
+    return deps.auth.identityLog(url.hostname, url.searchParams.get("after"));
+  }
   const stamp = await stampedRequest(request, {
     auth: deps.auth,
     route: null,
-    domain: deps.domain,
+    config: deps.config,
   });
   const answer = withoutSessionCookies(await forward(stamp.forwarded));
-  const decision = mindHostSignInAnswerOf({
-    answer,
-    request,
-    caller: stamp.caller,
-    method: stamp.method,
-  });
+  const decision = mindHostSignInAnswerOf({ answer, request, caller: stamp.caller });
   if (!decision) return answer;
   await answer.body?.cancel();
-  if (decision === "not-a-member") return notMemberPage(deps.domain, stamp.email || "");
+  if (decision === "not-a-member")
+    return notMemberPage(deps.config.controlPlaneHostname, stamp.email || "");
   if (decision instanceof Response) return decision;
-  return signInResponse(request, deps, decision.methods);
+  return signInResponse(request, deps);
 }
 
-// The one path that may make the host's client. `methods`: the ways the app takes, which the
-// issuer's sign-in offers (`acr_values`). The browser carries them and may change them: the
-// app's guard judges the session that comes back.
-async function signInResponse(request: Request, { auth, domain }: HostDeps, methods: string[]) {
+// The one path that may make the host's client.
+async function signInResponse(request: Request, { auth, config }: HostDeps) {
   const url = new URL(request.url);
   const clientId = await auth.hostClient(url.host);
   const {
@@ -84,7 +89,7 @@ async function signInResponse(request: Request, { auth, domain }: HostDeps, meth
     state,
     verifier,
   } = await authorizationCodeRequest({
-    issuer: platformOriginOf(domain),
+    issuer: controlPlaneOriginOf(config),
     clientId,
     redirectUri: `${url.origin}${CALLBACK_PATH}`,
     resources: [url.origin],
@@ -93,7 +98,6 @@ async function signInResponse(request: Request, { auth, domain }: HostDeps, meth
   // OpenID Connect's `prompt`: the issuer says who is signed in there, and offers another account
   if (cookieValueOf(request.headers.get("cookie"), SIGNED_OUT_COOKIE) === "1")
     location.searchParams.set("prompt", "select_account");
-  if (methods.length) location.searchParams.set("acr_values", methods.join(" "));
   const flow = {
     state,
     verifier,
@@ -124,10 +128,19 @@ async function hostSessionPathResponse(request: Request, deps: HostDeps) {
 async function callbackResponse(request: Request, deps: HostDeps) {
   const url = new URL(request.url);
   const flow = Flow.safeParse(flowCookieOf(request));
+  // Each failure ends this flow, and its link starts a new one: the page the sign-in began at asks
+  // for a sign-in again (an authorization code of the stack from before the move is one of these).
+  const again = flow.success ? flow.data.next : "/";
   const failed = (message: string) =>
-    plainPage("You can't continue", message, 400, cookie(FLOW_COOKIE, "", 0));
+    plainPage(
+      "You can't continue",
+      message,
+      400,
+      cookie(FLOW_COOKIE, "", 0),
+      `<p><a href="${htmlEscaped(again)}">Sign in again</a></p>`,
+    );
   if (!flow.success)
-    return failed("This sign-in expired or began in another browser. Reload the page.");
+    return failed("This sign-in expired or began in another browser. Sign in again.");
   const { as, options } = exchangeSetup(deps);
   const client = { client_id: flow.data.clientId };
   let callback: URLSearchParams;
@@ -135,8 +148,8 @@ async function callbackResponse(request: Request, deps: HostDeps) {
     callback = oauth.validateAuthResponse(as, client, url.searchParams, flow.data.state);
   } catch (error) {
     if (error instanceof oauth.AuthorizationResponseError)
-      return failed("The sign-in was declined. Reload the page to try again.");
-    return failed("This sign-in expired or began in another browser. Reload the page.");
+      return failed("The sign-in was declined. Sign in again.");
+    return failed("This sign-in expired or began in another browser. Sign in again.");
   }
   const tokens = await oauth
     .authorizationCodeGrantRequest(
@@ -157,7 +170,7 @@ async function callbackResponse(request: Request, deps: HostDeps) {
       });
       return null;
     });
-  if (!tokens) return failed("The sign-in could not complete. Reload the page to try again.");
+  if (!tokens) return failed("The sign-in could not complete. Sign in again.");
   const headers = new Headers({
     location: flow.data.next,
     "cache-control": "no-store",
@@ -216,8 +229,8 @@ function signedOutPage(request: Request) {
 
 // The token endpoint is reached through the auth Worker's binding: a Worker's fetch to a route of
 // its own zone fails.
-function exchangeSetup({ auth, domain, recordFacts }: HostDeps) {
-  const as = { ...authorizationServer(platformOriginOf(domain)) };
+function exchangeSetup({ auth, config, recordFacts }: HostDeps) {
+  const as = { ...authorizationServer(controlPlaneOriginOf(config)) };
   // the library serves revocation at its token endpoint (RFC 7009)
   as.revocation_endpoint = as.token_endpoint;
   const options = {
@@ -246,10 +259,10 @@ function withoutSessionCookies(answer: Response): Response {
 
 // The person's way out is this host's own sign-out: the sign-in that follows asks the issuer who
 // they are, and offers another account.
-function notMemberPage(domain: string, email: string) {
+function notMemberPage(mind: string, email: string) {
   return plainPage(
     "You can't continue",
-    `You are signed in as ${email}, and that address is not a member of ${domain}. Ask the mind's owner to add it.`,
+    `You are signed in as ${email}, and that address is not a member of ${mind}. Ask the mind's owner to add it.`,
     403,
     undefined,
     `<form method="post" action="${SIGN_OUT_PATH}"><button type="submit">Use another account</button></form>`,
@@ -257,8 +270,11 @@ function notMemberPage(domain: string, email: string) {
 }
 
 /** `after`: HTML of ours, after the message. */
+const htmlEscaped = (text: string) =>
+  text.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
+
 function plainPage(title: string, message: string, status: number, setCookie?: string, after = "") {
-  const escaped = message.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
+  const escaped = htmlEscaped(message);
   const headers = new Headers({
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",

@@ -4,12 +4,18 @@
 // any entry. Other agents write through the app's own MCP server at /mcp, signed in the same way.
 //
 // It is an example to copy: worker.ts mounts it with one line, which is commented out (people.md,
-// "The guestbook"). People who are no members can sign in only when the stack's config says so
-// (`login.methods.email.anyone`).
+// "The guestbook"). A person who is no member signs in with a code that the mind mails to their
+// address: the app names "email" first (`GUESTBOOK`), so the sign-in page opens on the address
+// form, and the mail comes from this hostname's zone under the app's name.
 //
 // The entries are events on one context of the mind (entries.ts). A user never holds `itx`: this
 // code alone acts for them, and it builds no path from what they send.
-import { serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
+import {
+  type AppDescription,
+  serveAppDescription,
+  serveFiles,
+  type IterateConfigEntrypoint,
+} from "iterate/sdk";
 import type { Person } from "iterate/principal";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import liveReload from "../live-reload/";
@@ -27,6 +33,16 @@ import { mcpResponse, protectedResourceResponse } from "./mcp.ts";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import files from "./public/";
 
+/** WHAT THE GUESTBOOK SAYS OF ITSELF, to the mind's sign-in pages: its name, its icon, and how
+ *  its people sign in. The list is the default of an app that is not for members, written out:
+ *  the mailed code first, and a member's passkey below it. Name "passkey" alone and only members
+ *  sign in here. */
+const GUESTBOOK: AppDescription = {
+  name: "Guestbook",
+  icon: "/icon.svg",
+  signIn: ["email", "passkey"],
+};
+
 type Host = Pick<IterateConfigEntrypoint, "auth" | "getItx">;
 type Viewer = { person: Person | null; member: boolean };
 
@@ -35,6 +51,8 @@ export function guestbookApp() {
     /** Every request on the app's host. worker.ts puts no guard before it: the page is public, and
      *  each route below asks for who it needs. */
     async fetch(request: Request, host: Host): Promise<Response> {
+      const described = serveAppDescription(request, GUESTBOOK);
+      if (described) return described;
       const url = new URL(request.url);
       const person = host.auth.person(request);
       // `require` answers null for a member alone
@@ -72,7 +90,9 @@ export function guestbookApp() {
       }
       // The MCP server, for other agents: a client finds the mind's sign-in through the document
       // below, signs its person in there, and calls with a token that is good for this host alone.
-      const metadata = protectedResourceResponse(request);
+      const metadata = protectedResourceResponse(request, () =>
+        host.auth.controlPlaneHostname(request),
+      );
       if (metadata) return metadata;
       if (url.pathname === "/mcp") return mcpResponse(request, { person, viewer, book });
       // the app's own files, and the one script that every app of this mind shares

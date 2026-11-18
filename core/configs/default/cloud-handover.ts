@@ -204,9 +204,9 @@ const helperBrief = (job: string, person: string) =>
     .filter(Boolean)
     .join("\n\n");
 
-/** THE OWNER LET iterate.com IN (onboarding/let-iterate-in.md): the rule the owner signed
- *  with their passkey lands as `mind-meld/configured` on `/minds/iterate.com`. When a person signed
- *  it and it lets iterate.com add events somewhere, the onboarding agent gets a note that starts
+/** THE OWNER LET iterate.iterate.com IN (onboarding/let-iterate-in.md): the rule the owner signed
+ *  with their passkey lands as `mind-meld/configured` on `/minds/iterate.iterate.com`. When a person signed
+ *  it and it lets iterate.iterate.com add events somewhere, the onboarding agent gets a note that starts
  *  its turn, so the owner, whom the signing page has just brought back to the chat, need not say
  *  that they signed. Keyed by the event's path and offset: a replay adds nothing. An empty
  *  `append` (the meld ends), a rule with no person as signer, or another path does nothing. */
@@ -224,7 +224,7 @@ export async function iterateLetInEvent(itx: Pick<HandoverItx, "cd">, event: Let
       payload: {
         role: "developer",
         content:
-          "The owner has let iterate.com in: their signed rule landed on /minds/iterate.com just now, and the signing page has brought the owner back to this chat. Say in one sentence that iterate can now send messages here, and go on with the next subject in the same message (onboarding/let-iterate-in.md, point 4).",
+          "The owner has let iterate.iterate.com in: their signed rule landed on /minds/iterate.iterate.com just now, and the signing page has brought the owner back to this chat. Say in one sentence that iterate can now send messages here, and go on with the next subject in the same message (onboarding/let-iterate-in.md, point 4).",
       },
     })
     .catch((error: unknown) => {
@@ -235,7 +235,7 @@ export async function iterateLetInEvent(itx: Pick<HandoverItx, "cd">, event: Let
 /** The rule's event, as far as this file reads it. */
 type LetInEvent = HandoverEvent & { offset: number };
 
-/** A rule that lets iterate.com add events somewhere: an empty `append` ends the meld. */
+/** A rule that lets iterate.iterate.com add events somewhere: an empty `append` ends the meld. */
 const MeldRule = z.object({ append: z.array(z.string()).min(1) });
 
 /** FOR A `worker.ts` THAT ITS OWNER CHANGED AND THAT IMPORTS THIS NAME: a template update leaves

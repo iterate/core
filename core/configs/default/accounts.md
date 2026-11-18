@@ -1,23 +1,25 @@
 # Accounts through iterate Cloud
 
-What comes after the connect that `AGENTS.md` shows: GitHub's deliveries, Gmail and Calendar, more
+iterate Cloud is at `https://cloud.iterate.com`: every `client` below names it as `origin`, and
+a secret keeps the origin it was made with (`ITERATE_CLOUD` in `cloud-deliveries.ts` is the
+template's one constant for it). What comes after the connect that `AGENTS.md` shows: GitHub's deliveries, Gmail and Calendar, more
 scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of this repo:
 `gmail.ts`, `calendar.ts`, `cloud-scopes.ts`, `cloud-accounts.ts` and their cases in `worker.ts`.
 
 - For GitHub, name the
-  accounts whose repositories the mind works with, `client: { cloud: "github", accounts:
-["acme"] }`: the mind gets the events and the installation tokens of those alone, where the
+  accounts whose repositories the mind works with,
+  `client: { cloud: "github", origin: "https://cloud.iterate.com", accounts: ["acme"] }`: the mind gets the events and the installation tokens of those alone, where the
   member administers them, and none when it names none. `install: true` sends the member to the
   App's install page first, and connects the installation they choose there.
 - Several accounts of one provider:
-  `itx.secrets.beginOAuth("/secrets/google-personal", { client: { cloud: "google" }, extra: { login_hint: "ada@gmail.com" } })`
+  `itx.secrets.beginOAuth("/secrets/google-personal", { client: { cloud: "google", origin: "https://cloud.iterate.com" }, extra: { login_hint: "ada@gmail.com" } })`
   beside `/secrets/google`: `login_hint` asks Google for that account.
 - GitHub's deliveries for an installation the member administers arrive as
   `events.iterate.com/github/webhook-received` on `/integrations/github/<installation id>`, signed
   by the Cloud's key: `event.source.signer.principal.actor` is `"iterate-cloud"`.
 - Every delivery of the Cloud (GitHub, Slack, Gmail, Calendar, X) comes in that form until the
-  owner lets iterate.com in ([minds.md](minds.md)). Then the same type and payload arrive on
-  `/minds/iterate.com/integrations/<provider>/<account>`, signed by the mind iterate.com, and reach
+  owner lets iterate.iterate.com in ([minds.md](minds.md)). Then the same type and payload arrive on
+  `/minds/iterate.iterate.com/integrations/<provider>/<account>`, signed by the mind iterate.iterate.com, and reach
   `processMindEvent`, not `processEvent`. `cloudDeliveryOf(event)` (`cloud-deliveries.ts`) knows
   both forms: test a delivery with it, and keep what you make of one on its `context`, the mind's
   own `/integrations/<provider>/<account>`. The mind tells the Cloud that it reads that form
@@ -42,7 +44,7 @@ scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of
   calendar scope. The Cloud's default scopes have one; a grant made before they did is connected
   again ("More scopes", below). A connect that names its own `scope`
   gets those scopes alone, so it names a calendar scope too:
-  `itx.secrets.beginOAuth("/secrets/google", { client: { cloud: "google" }, scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar" })`.
+  `itx.secrets.beginOAuth("/secrets/google", { client: { cloud: "google", origin: "https://cloud.iterate.com" }, scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar" })`.
   Each change of an event of the account's primary calendar arrives as
   `events.iterate.com/google/calendar-event-changed` on `/integrations/google/<address>`, with
   `{ id, status, summary, start, end, location, organizer, attendees, htmlLink, updated, recurringEventId }`.
@@ -80,7 +82,7 @@ scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of
 The `events.iterate.com/x/message-received` case hands what a linked X account says to
 iterate's bot (a direct message, or a post that mentions it) to an agent of its own per
 account, `/agents/x/u<x user id>`. A member links an account with
-`itx.secrets.beginOAuth("/secrets/x", { client: { cloud: "x" } })` and opens the link. iterate
+`itx.secrets.beginOAuth("/secrets/x", { client: { cloud: "x", origin: "https://cloud.iterate.com" } })` and opens the link. iterate
 Cloud then relays that account's messages, each signed by the Cloud, and only an event that
 `cloudDeliveryOf` takes for the Cloud's reaches an agent. The agent answers through the Cloud with the `itx.fetch` its
 context shows; the vault signs that request, and the Cloud sends it as the bot only to an
@@ -97,8 +99,9 @@ connected to. To connect a service, a member asks an agent; then it shows there.
   account, with its secret. A row appears when the secret is set and goes when it is deleted,
   with nothing for you to register. To disconnect an account, delete its secret. The apps'
   marks are the Dash's own files, `apps/dash/public/brands/`.
-- `await itx.secrets.cloud()` answers the stack's Cloud and the names of the apps it offers,
-  `{ origin, clients: ["github", "google", …] }`, or null for a stack with no Cloud.
+- `await itx.secrets.cloud("https://cloud.iterate.com")` answers that Cloud and the names of the
+  apps it offers, `{ origin, clients: ["github", "google", …] }`; `clients` is empty when the
+  Cloud gave no list.
 - Three sections appear by themselves (`cloud-accounts.ts`), and you register nothing for them:
   - "iterate Cloud" (above).
   - "Keys and accounts": one list, with a row for each other secret in `itx.secrets`, a key or
@@ -123,13 +126,13 @@ connected to. To connect a service, a member asks an agent; then it shows there.
   });
   await itx.integrations.setConnection("stripe-webhook", "acme", {
     account: "acme (live mode)",
-    actions: [{ label: "Log", routingSlug: "dash", path: "/?page=contexts" }],
+    actions: [{ label: "Log", url: "https://dash.<zone>/?page=contexts" }],
   });
   ```
 
   A card or a row is set again whole whenever it changes, and `null` removes it (a card's
-  `null` removes its rows). A button leads to an absolute `url`, or to a place in the mind,
-  `{ routingSlug, path }`. `section` names another card, which is then drawn as their heading.
+  `null` removes its rows). A button leads to an absolute `url`; a page of the mind's own is
+  `await itx.url({ hostname, path })`. `section` names another card, which is then drawn as their heading.
 
 - An MCP server: `itx.connectToMcp(url, { headers })` gives a live handle and keeps no record of
   the server. Only the secret that its header names stays. So keep the server's credential in a

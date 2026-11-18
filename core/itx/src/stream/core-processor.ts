@@ -284,8 +284,12 @@ function parseSubscriptionName(name: string): string {
 
 export const CoreContract = {
   slug: "core",
-  // A bump re-reduces the log from offset 0 in the DO constructor.
-  version: "17.0.0",
+  // A bump re-reduces the log from offset 0 in the DO constructor. Bump it whenever a reducer
+  // reads an event otherwise: a table that the old reducer kept is not this one's. 18: a fetch
+  // route's matcher has no `routingSlug`, which the earlier stack's 17 kept and read as "every
+  // request" here. Measured on 18 Nov 2026 with a local copy of the reduce: iterate.com's root
+  // (94,420 events, 284 MiB) re-reduces in 0.7 s of CPU, its largest context (2.7 GiB) in 6 s.
+  version: "18.0.0",
   events: { ...CoreEventCatalog.events, ...RunEventCatalog.events },
   initialState: (): CoreState => ({
     paused: null,

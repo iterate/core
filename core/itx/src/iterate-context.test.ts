@@ -114,7 +114,10 @@ test("every event that a provide and a subscribe send at their attach is a row o
   const { kernel, dials } = kernelAs({ principal: member, grant: "grant:1", via });
   using _lend = await kernel.provide("itx.bridge", liveStub(), {
     description: "a bridge",
-    fetchRoute: { fetchRouteName: "bridge", requestMatcher: { routingSlug: "bridge" } },
+    fetchRoute: {
+      fetchRouteName: "bridge",
+      requestMatcher: { url: { hostname: "bridge.example.com" } },
+    },
   });
   using _subscription = await kernel.subscribe({ target: liveCallback(), consumes: ["*"] });
   expect(dials.map(({ request }) => request.appendEvents.map(({ type }) => type))).toEqual([

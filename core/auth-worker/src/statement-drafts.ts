@@ -8,9 +8,8 @@ import { withFacts } from "iterate/facts";
 import { base64url, PLATFORM_NAMESPACES, statementHashOf, statementOf } from "iterate/signed";
 import type { AuthService } from "iterate/workers";
 import { z } from "zod";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { configOf, type Env, issuerOf } from "./env.ts";
 import { canonicalPath, honouredNext } from "./key-rules.ts";
-import { KEYS_PATH } from "./keys-pages.ts";
 import { page, text } from "./pages.ts";
 import { SIGN_HELPERS } from "./signed-change.ts";
 import { admittedStatement, MOST_PAYLOAD_BYTES } from "./statements.ts";
@@ -66,7 +65,7 @@ export async function proposeStatement(
   const path = own && proposal.data.path.toLowerCase() === own ? own : proposal.data.path;
   const issuer = issuerOf(env);
   // the rule of /keys/enrol's own `next` (./key-rules.ts `honouredNext`), as a whole https URL
-  if (next && (!/^https:\/\//.test(next) || !honouredNext(next, issuer)))
+  if (next && (!/^https:\/\//.test(next) || !honouredNext(next, configOf(env))))
     throw codedError("INVALID_INPUT", "`next` is an https URL on a host of this mind");
   const payloadText = JSON.stringify(payload);
   const id = base64url(crypto.getRandomValues(new Uint8Array(16)));
@@ -128,11 +127,11 @@ function draftPage(env: Env, draft: Draft | null): Response {
       status: 404,
       body: `<h1>This link has ended</h1><p>The statement was signed already, or its day is over. Ask for a new link.</p>`,
     });
-  const { domain } = iterateConfigOf(env);
+  const mind = configOf(env).controlPlaneHostname;
   const shown = JSON.stringify(JSON.parse(draft.payload), null, 2);
   const values = JSON.stringify({
     id: draft.id,
-    mind: domain,
+    mind,
     path: draft.path,
     type: draft.type,
     payload: draft.payload,
@@ -143,13 +142,11 @@ function draftPage(env: Env, draft: Draft | null): Response {
   const signer = draft.signer_email
     ? `<p>Only <code>${text(draft.signer_email)}</code> can sign it.</p>`
     : "";
-  // signed out, /keys sends a person to the sign-in page first
-  const addPasskey = `${KEYS_PATH}?${new URLSearchParams({ next: `${SIGN_STATEMENT_PATH}?draft=${draft.id}` })}`;
   return page({
     title: "Sign this statement?",
     wide: true,
     body: `<h1>Sign this statement?</h1>
-      <p>Your passkey's signature adds this event to ${text(domain)}, with you as its signer.</p>
+      <p>Your passkey's signature adds this event to ${text(mind)}, with you as its signer.</p>
       ${asker}${signer}
       <p>Context <code>${text(draft.path)}</code></p>
       <p>Event type <code>${text(draft.type)}</code></p>
@@ -157,8 +154,7 @@ function draftPage(env: Env, draft: Draft | null): Response {
       <form class="actions" data-draft="${text(values)}">
         <button type="submit">Sign with your passkey</button>
       </form>
-      <p id="status" class="muted" role="status"></p>
-      <p class="muted">No passkey for ${text(domain)} yet? <a href="${text(addPasskey)}">Sign in and add one</a>, and it brings you back here.</p>`,
+      <p id="status" class="muted" role="status"></p>`,
     script: `${SIGN_HELPERS}${PRESS_SCRIPT}`,
   });
 }

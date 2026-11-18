@@ -3,7 +3,7 @@ import { artifactsRows, repoPathOf } from "./artifacts-events.ts";
 import { cloudflareEvents } from "./cloudflare-events.ts";
 
 const NAMESPACE = "iterate-one-repos";
-const rows = artifactsRows({ namespace: NAMESPACE });
+const rows = artifactsRows;
 const BEFORE = "b".repeat(40);
 const AFTER = "a".repeat(40);
 
@@ -140,12 +140,6 @@ test("with no event time, a push is keyed by its ref and oids and a token event 
   );
   expect(made(withoutTimestamp(message("cf.artifacts.repo.cloned", {})))).toBeNull();
   expect(made(withoutTimestamp(message("cf.artifacts.repo.fetched", {})))).toBeNull();
-});
-
-test("a repo of another namespace is not this mind's: it makes nothing", () => {
-  const body = pushedToMain();
-  body.source.namespace = "iterate-other-repos";
-  expect(made(body)).toBeNull();
 });
 
 test.for([

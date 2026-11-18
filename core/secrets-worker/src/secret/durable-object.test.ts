@@ -18,6 +18,23 @@ Object.assign(crypto.subtle, { timingSafeEqual });
 const PATH = "/secrets/gmail";
 const MEMBER = "key-member";
 const UNCHECKED = "key-member-unchecked";
+const GMAIL = ["https://gmail.googleapis.com"];
+
+/** A sealed cell in this code's shape that another vault's key sealed: its value opens nowhere
+ *  here. */
+const cellOfAnotherVault = {
+  cell: {
+    context: PATH,
+    urls: GMAIL,
+    refresh: null,
+    version: 1,
+    nonce: "nonce-of-the-other-vault",
+    material: { algorithm: "AES-256-GCM+SECRET-V1", iv: "AAAA", ciphertext: "AAAA" },
+    placement: "header",
+    operations: [],
+    lendTo: [],
+  },
+};
 
 test("a matching request is held at once with its fact, and the wait call sends it once with the real value", async () => {
   const { secret, sent, approve } = await vault();
@@ -362,14 +379,8 @@ test("a delete that a set overtook while the vault's list was written gives no f
 
 test("an import with no proof keeps nothing of the cell: the cell with its proof still gets as far as its value after it", async () => {
   const { secret } = await vault();
-  // a cell of an old mind: its value does not open here, which the proof does not depend on
-  const cell = JSON.stringify({
-    context: "old-mind:/secrets/gmail",
-    urls: ["https://gmail.googleapis.com"],
-    refresh: null,
-    nonce: "nonce-of-the-old-cell",
-    material: { algorithm: "AES-256-GCM+SECRET-V1", iv: "AAAA", ciphertext: "AAAA" },
-  });
+  // a cell of another vault: its value does not open here, which the proof does not depend on
+  const cell = JSON.stringify(cellOfAnotherVault);
   const proof = await hmacSha256Hex("at-rest-key-for-tests-only", JSON.stringify([PATH, cell]));
   const importing = (given: string) => secret.secret(PATH, "importSealed", { cell, proof: given });
 
@@ -729,6 +740,65 @@ test("a person's grant that the Cloud brokers is refreshed on word: the Cloud is
   });
 });
 
+test.for<{ secret: string; own: boolean }>([
+  { secret: "a grant connected through the Cloud", own: false },
+  { secret: "a grant with a client of the mind's own", own: true },
+])(
+  "of $secret, a request that names the refresh token, the client's id or its secret is refused before anything is sent, and the access token still goes",
+  async ({ own }) => {
+    const material = { ...GRANT, clientSecret: "the-client-secret" };
+    // the provider's host is the pin, and no rule holds a GET
+    const { secret, upstream, sent } = await vault(
+      own ? { material } : { cloud: CLOUD_OF_GRANTS, material },
+    );
+    if (own)
+      await secret.secret(PATH, "set", {
+        material,
+        urls: GMAIL,
+        refresh: { kind: "oauth-refresh-token", tokenEndpoint: `${GMAIL[0]}/token` },
+      });
+    const named = (field: string) =>
+      secret.fetch(
+        new Request(`${GMAIL[0]}/gmail/v1/users/me/profile`, {
+          headers: {
+            [SECRET_USE_HEADER]: PATH,
+            authorization: `Bearer getSecret("${PATH}", { field: "accessToken" })`,
+            "x-extra": `getSecret("${PATH}", { field: "${field}" })`,
+          },
+        }),
+      );
+    for (const field of ["refreshToken", "clientId", "clientSecret"]) {
+      const answer = await named(field);
+      expect({
+        status: answer.status,
+        kind: answer.headers.get(VAULT_ANSWER_HEADER),
+        text: await answer.text(),
+      }).toEqual({
+        status: 403,
+        kind: "refused",
+        text: `itx.fetch: "${field}" of ${PATH} is what the secret's oauth-refresh-token refresh reads to make a new access token: it is given to that refresh alone\n`,
+      });
+    }
+    expect(upstream).not.toHaveBeenCalled();
+    // the token that the refresh makes is the one a request carries
+    expect(await named("accessToken")).toMatchObject({ status: 200 });
+    expect(sent).toEqual([{ authorization: "Bearer old-access", body: "", extra: "old-access" }]);
+
+    // and no other secret's refresh borrows such a field
+    const lent = await secret.clientSecretFor(PATH, {
+      borrower: "/secrets/another",
+      origin: GMAIL[0]!,
+      field: "refreshToken",
+    });
+    expect(lent).toMatchObject({
+      refused: {
+        code: "FORBIDDEN",
+        message: expect.stringContaining('"refreshToken" of /secrets/gmail is what the secret'),
+      },
+    });
+  },
+);
+
 test("a refresh on word that the provider refuses says so, and the secret is as it was", async () => {
   const { secret } = await vault({ cloud: CLOUD_OF_GRANTS, material: GRANT });
   const cloud = cloudThatAnswers(() => new Response("bad_refresh_token", { status: 401 }));
@@ -902,6 +972,109 @@ test("the Cloud mints no installation token for a secret pinned beyond the hosts
   });
 });
 
+test("a secret made with one Cloud sends nothing to another, whatever a later call names: an ask, a new connect and a refresh", async () => {
+  const OTHER = "https://other-cloud.example";
+  const { secret } = await vault({ cloud: CLOUD_OF_GRANTS, material: GRANT });
+  const seen: { url: string; method: string; statement: boolean; body: string }[] = [];
+  vi.stubGlobal("fetch", async (input: Request | string, init?: RequestInit) => {
+    const request = new Request(input, init);
+    const { origin, pathname } = new URL(request.url);
+    seen.push({
+      url: request.url,
+      method: request.method,
+      statement: request.headers.has("iterate-statement"),
+      body: await request.text(),
+    });
+    // the other Cloud publishes a client of the same name, with every address on its own origin
+    if (pathname === "/.well-known/iterate-cloud")
+      return Response.json({
+        clients: {
+          github: {
+            clientId: "Iv1.other",
+            authorizationEndpoint: "https://provider.example/authorize",
+            redirectUri: `${origin}/clients/github/callback`,
+            tokenEndpoint: `${origin}/clients/github/token`,
+            urls: GMAIL,
+          },
+        },
+      });
+    return Response.json({ access_token: "new-access", refresh_token: "new-refresh" });
+  });
+  // 1. an ask that names the other Cloud's address is no ask: it is a request with the secret
+  //    for a host outside its pin, and it is refused
+  const asked = await secret.fetch(
+    useRequest(`${OTHER}/clients/github/ask/reply`, { method: "POST", body: "{}" }),
+  );
+  // 2. a new connect on the same path that names the other Cloud begins a new secret: the
+  //    other Cloud's public document is read, and nothing of the secret that stands goes there
+  const begun = await secret.secret(PATH, "beginOAuth", {
+    client: { cloud: "github", origin: OTHER },
+  });
+  // 3. the refresh of the secret that stands goes to its own Cloud
+  const refreshed = await secret.refreshGrant(PATH);
+  const to = (origin: string) => seen.filter(({ url }) => new URL(url).origin === origin);
+  expect({
+    asked: asked.status,
+    begun: z.object({ result: z.object({ nonce: z.string() }) }).safeParse(begun).success,
+    refreshed: refreshed.result,
+    other: to(OTHER),
+    own: to(CLOUD_OF_GRANTS).map(({ url, statement, body }) => ({
+      url,
+      statement,
+      refreshToken: new URLSearchParams(body).get("refresh_token"),
+    })),
+  }).toEqual({
+    asked: 403,
+    begun: true,
+    refreshed: { outcome: "refreshed" },
+    other: [
+      { url: `${OTHER}/.well-known/iterate-cloud`, method: "GET", statement: false, body: "" },
+    ],
+    own: [
+      {
+        url: `${CLOUD_OF_GRANTS}/clients/github/token`,
+        statement: true,
+        refreshToken: "old-refresh",
+      },
+    ],
+  });
+});
+
+test("a cell whose broker is not at its own Cloud's origin refreshes nowhere: nothing is signed or sent", async () => {
+  const { secret } = await vault({
+    cloud: CLOUD_OF_GRANTS,
+    broker: "https://other-cloud.example",
+    material: GRANT,
+  });
+  const cloud = cloudThatAnswers(() => Response.json({ access_token: "new-access" }));
+  expect((await secret.refreshGrant(PATH)).result).toMatchObject({
+    outcome: "failed",
+    error: expect.stringContaining("is not this secret's Cloud"),
+  });
+  expect(cloud).toMatchObject({ asked: [] });
+});
+
+test.for([
+  "http://cloud.example.com",
+  "https://cloud.example.com/",
+  "https://cloud.example.com/clients",
+  "cloud.example.com",
+  undefined,
+])(
+  "a Cloud named as %s is refused, at a connect and at an installation's secret, and nobody is asked",
+  async (origin) => {
+    const { secret } = await vault();
+    const cloud = cloudThatAnswers(() => Response.json({}));
+    await expect(
+      secret.secret(PATH, "beginOAuth", { client: { cloud: "github", origin } }),
+    ).rejects.toThrow("a Cloud is named by its origin");
+    await expect(
+      cloudWithGithubApp().set(GITHUB_HOSTS, { cloud: "github", origin }),
+    ).rejects.toThrow("a Cloud is named by its origin");
+    expect(cloud).toMatchObject({ asked: [] });
+  },
+);
+
 test("a rule cannot be loosened without a signature, and a member's signed statement removes it", async () => {
   const { secret, decide } = await vault();
   const by = { userId: "user_aaaa", email: "member@example.com" };
@@ -978,11 +1151,123 @@ test("an attempt begun straightToProvider tells the start link so, and one begun
   ]).toEqual([true, expect.not.objectContaining({ straightToProvider: expect.anything() })]);
 });
 
+test("an attempt may come back to any hostname of any zone of the mind, or to the control-plane hostname, and nowhere else", async () => {
+  const { secret } = await vault();
+  const begun = (next: string) =>
+    secret.secret(PATH, "beginOAuth", {
+      authorizationEndpoint: "https://provider.example/authorize",
+      tokenEndpoint: "https://provider.example/token",
+      clientId: "client",
+      next,
+    });
+  for (const next of [
+    "https://iterate.example.com/keys",
+    "https://dash.example.com/",
+    "https://second.example/done",
+    "https://shop.second.example/done",
+  ])
+    expect(await begun(next)).toMatchObject({
+      result: { authorizationUrl: expect.stringContaining("https://iterate.example.com/") },
+    });
+  for (const next of [
+    "https://elsewhere.test/",
+    "https://notsecond.example/",
+    "http://dash.example.com/",
+  ])
+    await expect(begun(next)).rejects.toThrow("next is an absolute URL on");
+});
+
+test.for([
+  ["a field that this code does not write", { ...cellOfAnotherVault.cell, client: "github" }],
+  [
+    "a refresh through a client that this code does not know",
+    {
+      ...cellOfAnotherVault.cell,
+      refresh: {
+        kind: "oauth-refresh-token",
+        tokenEndpoint: "https://provider.example/token",
+        clientAuth: "none",
+        client: { broker: "github" },
+      },
+    },
+  ],
+  [
+    "a refresh over http",
+    {
+      ...cellOfAnotherVault.cell,
+      refresh: {
+        kind: "oauth-refresh-token",
+        tokenEndpoint: "http://provider.example/token",
+        clientAuth: "none",
+      },
+    },
+  ],
+  ["no word of what it may be used for", { ...cellOfAnotherVault.cell, placement: undefined }],
+] as const)("a sealed cell with %s is no cell: the import refuses its shape", async ([, cell]) => {
+  const { secret } = await vault();
+  const text = JSON.stringify({ cell });
+  const proof = await hmacSha256Hex("at-rest-key-for-tests-only", JSON.stringify([PATH, text]));
+  await expect(secret.secret(PATH, "importSealed", { cell: text, proof })).rejects.toThrow(
+    z.ZodError,
+  );
+  // the proof was not asked: nothing of the cell was kept
+  expect(await secret.secret(PATH, "describe", {})).toMatchObject({ set: true, urls: GMAIL });
+});
+
+test.for([
+  ["a token endpoint over http", { tokenEndpoint: "http://provider.example/token" }],
+  ["an authorization endpoint over http", { authorizationEndpoint: "http://provider.example/a" }],
+  [
+    "an account lookup over http",
+    { account: { url: "http://provider.example/me", id: "id" }, urls: ["http://provider.example"] },
+  ],
+] as const)("an attempt with %s is refused, and no attempt waits", async ([, options]) => {
+  const { secret, state } = await vault();
+  await expect(
+    secret.secret(PATH, "beginOAuth", {
+      authorizationEndpoint: "https://provider.example/authorize",
+      tokenEndpoint: "https://provider.example/token",
+      clientId: "client",
+      ...options,
+    }),
+  ).rejects.toThrow(/https/);
+  expect(state.storage.kv.get("pending")).toBeUndefined();
+});
+
+test("a refresh endpoint over http is refused when a secret is set", async () => {
+  const { secret } = await vault();
+  await expect(
+    secret.secret(PATH, "set", {
+      material: { refreshToken: "r", clientId: "c" },
+      urls: ["http://provider.example"],
+      refresh: { kind: "oauth-refresh-token", tokenEndpoint: "http://provider.example/token" },
+    }),
+  ).rejects.toThrow("must be an https URL");
+});
+
+/** The Worker's variables: the config of a mind at `iterate.example.com`, and an at-rest key. */
+const VARS = {
+  ITERATE: JSON.stringify({
+    mindId: "a".repeat(64),
+    controlPlaneHostname: "iterate.example.com",
+    zones: ["example.com", "second.example"],
+    ownerEmails: ["owner@example.net"],
+    topology: "full-cloudflare",
+  }),
+  ITERATE__AT_REST_KEY: "at-rest-key-for-tests-only",
+  // a stack whose deploy made no OAuth client at Cloudflare (../stack-client.test.ts has one)
+  ITERATE__CLOUDFLARE_CLIENT: JSON.stringify({ refusal: "Authentication error" }),
+  ITERATE__CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
+};
+
 /** A vault with one secret and its rule. With `cloud`, the secret is one connected through the
- *  Cloud's client `github`, and the stack signs what it asks of that Cloud. */
+ *  client `github` of the Cloud at that origin, which the secret's record keeps, and the stack
+ *  signs what it asks of that Cloud. No variable of the Worker names a Cloud. */
 async function vault(
   options: {
     cloud?: string;
+    /** A cell that no connect writes: its token endpoint is at this origin, not at `cloud`. */
+    broker?: string;
     rule?: { methods: string[]; hosts: string[] };
     /** What the secret holds, when a plain token is not enough: a grant's tokens. */
     material?: Record<string, string>;
@@ -1001,9 +1286,7 @@ async function vault(
   const sets = new Map<string, Set<string>>();
   const list: { calls: number; wait?: (call: number) => Promise<void> } = { calls: 0 };
   const env = {
-    DOMAIN: "example.com",
-    CLOUD_ORIGIN: options.cloud,
-    SECRETS_AT_REST_KEY: "at-rest-key-for-tests-only",
+    ...VARS,
     // the vault's sets of paths, by name: "index" (a rule or a held request) and "set"
     APPROVALS: {
       getByName: (name: string) => {
@@ -1055,7 +1338,8 @@ async function vault(
   });
   if (options.cloud) {
     // Only a connect through the Cloud's own page makes such a secret (`set` refuses a client):
-    // the stored cell is given what that connect writes, the client's name and its broker.
+    // the stored cell is given what that connect writes: the client's name, its Cloud's origin
+    // and its broker.
     // The value is sealed again with it: a cell opens only as the thing it was sealed as.
     // the cast: the stored cell, as the object's own seal wrote it a moment ago
     const current = state.storage.kv.get("current") as {
@@ -1068,7 +1352,7 @@ async function vault(
         refresh: unknown;
         placement: string;
         operations: string[];
-        lendTo?: string[] | null;
+        lendTo: string[] | null;
       };
     };
     const {
@@ -1082,13 +1366,13 @@ async function vault(
     } = current.cell;
     const refresh = {
       kind: "oauth-refresh-token" as const,
-      tokenEndpoint: `${options.cloud}/clients/github/token`,
-      client: { cloud: "github" },
+      tokenEndpoint: `${options.broker || options.cloud}/clients/github/token`,
+      client: { cloud: "github", origin: options.cloud },
     };
     const material = await encryptSecretMaterial(
       options.material || "real-token-aaaa",
       { context, urls, refresh, version, nonce, use },
-      env.SECRETS_AT_REST_KEY,
+      env.ITERATE__AT_REST_KEY,
     );
     state.storage.kv.put("current", { ...current, cell: { ...current.cell, refresh, material } });
   }
@@ -1102,7 +1386,7 @@ async function vault(
   ) =>
     secret.decide(PATH, {
       statement: JSON.stringify({
-        mind: "example.com",
+        mind: "iterate.example.com",
         path: PATH,
         at: 0,
         expires: 1,
@@ -1219,7 +1503,7 @@ const INSTALLATION = "/secrets/github-installation-1";
 const GITHUB_HOSTS = ["https://api.github.com", "https://github.com"];
 const ELSEWHERE = "https://elsewhere.example";
 
-/** A stack whose Cloud has the GitHub App `github`: the Cloud names GitHub's hosts as the App's
+/** A Cloud at `CLOUD_OF_GRANTS` that has the GitHub App `github`, and an installation's secret that names it: the Cloud names GitHub's hosts as the App's
  *  and mints an installation's token. The Cloud and every other host stand in for `fetch`:
  *  `minted` counts the tokens the Cloud gave, and `sent` is what reached another host. */
 function cloudWithGithubApp() {
@@ -1249,9 +1533,7 @@ function cloudWithGithubApp() {
     return new Response("sent");
   });
   const env = {
-    DOMAIN: "example.com",
-    CLOUD_ORIGIN: CLOUD_OF_GRANTS,
-    SECRETS_AT_REST_KEY: "at-rest-key-for-tests-only",
+    ...VARS,
     APPROVALS: { getByName: () => ({ add: async () => {}, remove: async () => {} }) },
     AUTH: {
       sign: async (input: object) => ({
@@ -1263,7 +1545,7 @@ function cloudWithGithubApp() {
   // the cast: the object reads only the bindings above
   const secret = new SecretDurableObject(fakeState(INSTALLATION) as never, env as never);
   return Object.assign(cloud, {
-    set: (urls: string[]) =>
+    set: (urls: string[], client: object = { cloud: "github", origin: CLOUD_OF_GRANTS }) =>
       secret.secret(INSTALLATION, "set", {
         material: {},
         urls,
@@ -1271,7 +1553,7 @@ function cloudWithGithubApp() {
           kind: "github-app-installation",
           apiOrigin: "https://api.github.com",
           installationId: "1",
-          client: { cloud: "github" },
+          client,
         },
       }),
     use: (url: string) =>

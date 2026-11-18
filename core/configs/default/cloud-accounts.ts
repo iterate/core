@@ -26,9 +26,11 @@
 //   itx/rewrite-rule-configured  on the root: a lend began or ended, its card
 //
 // WHICH SECRET IS AN ACCOUNT OF WHICH APP, the catalog says (`itx.secrets.list()`): `cloud` is the
-// Cloud's name for the app that refreshes the secret. A secret with none is a key or a grant of
-// the mind's own, and stands under "Keys and accounts", unless a package of the mind shows its
-// account already (`keepKeysSection`).
+// Cloud's name for the app that refreshes the secret, and `cloudOrigin` is that Cloud's address,
+// which the secret has kept since it was made. A secret of iterate Cloud's (`ITERATE_CLOUD`)
+// stands under its app. Any other secret is a key or a grant of the mind's own, and stands under
+// "Keys and accounts", unless a package of the mind shows its account already
+// (`keepKeysSection`).
 //
 // WHAT IS LENT, the root's rewrite rules say (`itx.rewriteRules.list()`): a lend is a rule whose
 // target is the lent stub, `itx.builtins.rpcStubs.get('<match>')`. The platform's own names
@@ -39,14 +41,16 @@
 // finds a secret with no row. A service that refuses the token says so on the row; one that gives
 // no answer leaves the row as it was. A person's grant always has "Connect again".
 //
-// WHICH CLOUD, AND WHICH APPS, the vault says (`itx.secrets.cloud()`): the Cloud that the stack's
-// config names, and the clients it publishes. A mind whose stack names no Cloud has no "iterate
-// Cloud" section. A section with no card has no heading either.
+// WHICH CLOUD, this template says: `ITERATE_CLOUD` (./cloud-deliveries.ts), the one place that
+// names it. WHICH APPS, the vault says for that Cloud (`itx.secrets.cloud(ITERATE_CLOUD)`): the
+// clients it publishes. A Cloud that gave no list leaves the section as it stands. A section with
+// no card has no heading either.
 //
 // THE NAMES `iterate-cloud`, `keys` AND `lent` (the headings), and every name that starts with one
 // of them and a dash, are this file's: it replaces or removes any other card registered there.
 import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
+import { ITERATE_CLOUD } from "./cloud-deliveries.ts";
 
 /** The heading's name in the registry: the cards under it name it as their `section`, and their
  *  own names start with it. */
@@ -127,14 +131,24 @@ const Registry = z.object({
   connections: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
 });
 
-type Secret = { path: string; urls: string[]; refresh?: string; cloud?: string };
+type Secret = {
+  path: string;
+  urls: string[];
+  refresh?: string;
+  cloud?: string;
+  cloudOrigin?: string;
+};
+
+/** Whether a secret is an account that a member connected through iterate Cloud's own app. */
+const ofIterateCloud = (secret: Secret) => !!secret.cloud && secret.cloudOrigin === ITERATE_CLOUD;
 
 /** The part of `itx` this file uses. */
 export type CloudAccountsItx = {
   fetch(request: Request): Promise<Response>;
+  url(): Promise<string>;
   secrets: {
     list(): Promise<Secret[]>;
-    cloud(): Promise<{ origin: string; clients: string[] } | null>;
+    cloud(origin: string): Promise<{ origin: string; clients: string[] }>;
   };
   rewriteRules: {
     list(): Promise<{ match: string; target: string | null; description?: string }[]>;
@@ -182,8 +196,11 @@ export async function cloudAccountsEvent(
   // a lend's event needs no secret, and a secret's event no rule
   if (!lendChanged) {
     const secrets = await itx.secrets.list();
-    await keepCloudSection(itx, registry, secrets, changed);
-    await keepKeysSection(registry, secrets);
+    // The Dash on the mind's first zone (`itx.url()` is that zone's apex): it serves each card's
+    // mark, and each button of these cards leads to a page of it.
+    const dash = `https://dash.${new URL(await itx.url()).hostname}`;
+    await keepCloudSection(itx, registry, secrets, changed, dash);
+    await keepKeysSection(registry, secrets, dash);
   }
   if (!secretChanged) await keepLentSection(registry, await itx.rewriteRules.list());
 }
@@ -196,6 +213,7 @@ async function keepCloudSection(
   registry: Registry,
   secrets: Secret[],
   changedSecret: string | undefined,
+  dash: string,
 ): Promise<void> {
   const cloud = await cloudOf(itx);
   // no Cloud, or one that did not answer: a section that stands is left as it is
@@ -214,7 +232,7 @@ async function keepCloudSection(
     const integration = `${SECTION}-${name}`;
     const rows: Record<string, Json> = {};
     for (const secret of secrets) {
-      if (secret.cloud !== name) continue;
+      if (!ofIterateCloud(secret) || secret.cloud !== name) continue;
       const key = secret.path.split("/").at(-1)!;
       const before = registry.connections[`${integration}/${key}`];
       // a row that stands keeps what the service said (no service is asked), and takes today's
@@ -222,26 +240,20 @@ async function keepCloudSection(
       const row =
         before && secret.path !== changedSecret
           ? before
-          : await rowOf(itx, name, app, secret, before);
-      if (row) rows[key] = { ...row, actions: rowActionsOf(name, secret) };
+          : await rowOf(itx, name, app, secret, before, dash);
+      if (row) rows[key] = { ...row, actions: rowActionsOf(name, secret, dash) };
     }
     const connected = Object.keys(rows).length;
     // the card before its rows: a row stands under a card that exists
     await keepCard(registry, integration, {
       title: app.title,
       description: app.about,
-      icon: { routingSlug: "dash", path: `/brands/${name}.svg` },
+      icon: `${dash}/brands/${name}.svg`,
       section: SECTION,
       ...(connected > 0 && {
         status: { kind: "ok", text: connected === 1 ? "Connected" : `${connected} accounts` },
       }),
-      actions: [
-        {
-          label: connected ? "Add account" : "Connect",
-          routingSlug: "dash",
-          path: `/connect/${name}`,
-        },
-      ],
+      actions: [{ label: connected ? "Add account" : "Connect", url: `${dash}/connect/${name}` }],
     });
     await keepRows(registry, integration, rows);
   }
@@ -253,8 +265,8 @@ async function keepCloudSection(
 }
 
 /** THE "KEYS AND ACCOUNTS" SECTION, made true from the catalog alone: one card, "Secrets (<count>)",
- *  with a row for each secret that has no Cloud, in path order. The stack's own Cloudflare token
- *  (`/secrets/cloudflare`, cloudflare.md) is the platform's, and is not here. This
+ *  with a row for each secret that is no account of iterate Cloud's, in path order. The consent at Cloudflare
+ *  (`/secrets/cloudflare`, cloudflare.md) has a card of its own, and is not here. This
  *  card is the one `keys-` card: any other goes, and its rows with it.
  *
  *  The registry keeps its state under a byte budget, and drops a card or row past it: that one
@@ -266,14 +278,14 @@ async function keepCloudSection(
  *  `<integration>/<connection>`, and by the contract's convention its secret at
  *  `/secrets/<integration>-<connection>`, sometimes with a prefix (`own-google-042a1be3` for the
  *  row `google/042a1be3`). Such a secret is that row's, and is not here again. */
-async function keepKeysSection(registry: Registry, secrets: Secret[]): Promise<void> {
+async function keepKeysSection(registry: Registry, secrets: Secret[], dash: string): Promise<void> {
   const list = `${KEYS}-secrets`;
   const ours = [`${SECTION}-`, `${KEYS}-`, `${LENT}-`];
   const packaged = Object.keys(registry.connections)
     .filter((key) => !ours.some((prefix) => key.startsWith(prefix)))
     .map((key) => key.replace("/", "-"));
   const shown = secrets
-    .filter((secret) => !secret.cloud && secret.path !== "/secrets/cloudflare")
+    .filter((secret) => !ofIterateCloud(secret) && secret.path !== "/secrets/cloudflare")
     .filter((secret) => {
       const name = secret.path.split("/").at(-1)!;
       return !packaged.some((account) => name === account || name.endsWith(`-${account}`));
@@ -306,7 +318,7 @@ async function keepKeysSection(registry: Registry, secrets: Secret[]): Promise<v
         ...(installation && { Kind: "App installation" }),
         ...(hosts.length > 0 && { Hosts: hosts.join(", ").slice(0, 200) }),
       },
-      actions: [{ label: "Manage", routingSlug: "dash", path: "/?page=secrets" }],
+      actions: [{ label: "Manage", url: `${dash}/?page=secrets` }],
     };
   }
 
@@ -351,7 +363,7 @@ async function keepLentSection(
   for (const { match, description = "" } of shown) {
     const name = match.replace(/^itx\./, "").toLowerCase();
     const integration = `${LENT}-${name.replaceAll(".", "-")}`;
-    // a card's name is a routing slug (core/lib/src/mind-ingress.ts `ROUTING_SLUG`): parts of
+    // a card's name is a DNS label that starts with a letter (iterate/integrations): parts of
     // letters and digits joined by single dashes, at most 63 characters. A match with a call step
     // or other signs (`itx.ai.run('gpt-5')`, `itx.a_b`) makes none, and gets no card
     if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(name) || integration.length > 63) continue;
@@ -412,16 +424,16 @@ async function keepRows(registry: Registry, integration: string, rows: Record<st
     });
 }
 
-/** This mind's Cloud: its origin, and the apps that it offers and this file knows, in the Cloud's
- *  order. Null when the stack names no Cloud, or the Cloud gave no list. */
+/** iterate Cloud (`ITERATE_CLOUD`): its origin, and the apps that it offers and this file knows,
+ *  in the Cloud's order. Null when the Cloud gave no list. */
 async function cloudOf(
   itx: CloudAccountsItx,
 ): Promise<{ origin: string; apps: [string, CloudApp][] } | null> {
-  const cloud = await itx.secrets.cloud();
-  const apps = (cloud?.clients || []).flatMap((name): [string, CloudApp][] =>
+  const cloud = await itx.secrets.cloud(ITERATE_CLOUD);
+  const apps = cloud.clients.flatMap((name): [string, CloudApp][] =>
     Object.hasOwn(APPS, name) ? [[name, APPS[name]!]] : [],
   );
-  return cloud && apps.length ? { origin: cloud.origin, apps } : null;
+  return apps.length ? { origin: cloud.origin, apps } : null;
 }
 
 /** One account's row: the service asked whose account the secret is for. `before` stands when
@@ -432,6 +444,7 @@ async function rowOf(
   app: CloudApp,
   secret: Secret,
   before: Json | undefined,
+  dash: string,
 ): Promise<Json | undefined> {
   const installation = secret.refresh === "github-app-installation";
   const ask = (installation && app.installation) || app.whoami;
@@ -455,7 +468,7 @@ async function rowOf(
       ? { kind: "ok" }
       : { kind: "attention", text: `${app.title} refused the token. Connect the account again.` },
     details: { ...(installation && { Kind: "App installation" }), Secret: secret.path },
-    actions: rowActionsOf(client, secret),
+    actions: rowActionsOf(client, secret, dash),
   };
 }
 
@@ -464,17 +477,16 @@ async function rowOf(
  *  always be connected again: after a refusal, and to bring the scopes that cloud-scopes.ts names
  *  now into a secret made before. An installation's token is the App's own to mint: there is
  *  nothing to connect again. */
-function rowActionsOf(client: string, secret: Secret): Json[] {
+function rowActionsOf(client: string, secret: Secret, dash: string): Json[] {
   return [
     ...(secret.refresh === "github-app-installation"
       ? []
       : [
           {
             label: "Connect again",
-            routingSlug: "dash",
-            path: `/connect/${client}?secret=${secret.path.split("/").at(-1)}`,
+            url: `${dash}/connect/${client}?secret=${secret.path.split("/").at(-1)}`,
           },
         ]),
-    { label: "Manage", routingSlug: "dash", path: "/?page=secrets" },
+    { label: "Manage", url: `${dash}/?page=secrets` },
   ];
 }

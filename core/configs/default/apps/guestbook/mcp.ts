@@ -2,8 +2,8 @@
 // MCP's streamable HTTP with no session: each POST is one JSON-RPC message, answered as JSON.
 //
 // How an agent signs in: its first call has no token, and gets a 401 that names the document at
-// /.well-known/oauth-protected-resource/mcp (RFC 9728). That names the mind's sign-in
-// (https://iterate.<domain>) as the authorization server. The client registers there, its person
+// /.well-known/oauth-protected-resource/mcp (RFC 9728). That names the mind's sign-in, at its
+// control-plane hostname, as the authorization server. The client registers there, its person
 // signs in and consents, and the token it gets is good for this host alone. The platform checks
 // the token on the way in and hands this code the person (`host.auth.person`), never the token.
 import type { Person } from "iterate/principal";
@@ -12,14 +12,17 @@ import type { Guestbook } from "./app.ts";
 const METADATA_PATH = "/.well-known/oauth-protected-resource";
 
 /** RFC 9728's document, for `/mcp` and for the host. The resource is the host's origin: a token is
- *  for a whole host. */
-export function protectedResourceResponse(request: Request): Response | null {
+ *  for a whole host. `controlPlaneHostname`: the mind's, as the boundary stamped it
+ *  (`host.auth.controlPlaneHostname`). */
+export function protectedResourceResponse(
+  request: Request,
+  controlPlaneHostname: () => string,
+): Response | null {
   const url = new URL(request.url);
   if (url.pathname !== METADATA_PATH && url.pathname !== `${METADATA_PATH}/mcp`) return null;
-  const mind = url.hostname.split(".").slice(1).join(".");
   return Response.json({
     resource: url.origin,
-    authorization_servers: [`https://iterate.${mind}`],
+    authorization_servers: [`https://${controlPlaneHostname()}`],
     scopes_supported: ["identity"],
     bearer_methods_supported: ["header"],
   });

@@ -5,14 +5,46 @@
 // through the mind's own `itx.fetch`: a sandbox whose requests the mind filters (a rule for
 // `itx.fetch` on its context or above it, a jail's among them) gets none, and a session that is
 // open when such a rule lands ends.
+import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import { mindApiUrlOf } from "iterate/mind-api";
-import type { Caller } from "core-itx";
+import type { Caller, IterateContextRpcTarget } from "core-itx";
 
 /** Whether a container's request asks for the sandbox's own session: the mind's API itself, and no
  *  bearer. A request that names a token is that token's owner's, and goes on as any other. */
-export function asksForOwnSession(request: Request, domain: string): boolean {
-  return request.url === mindApiUrlOf(domain) && !request.headers.has("authorization");
+export function asksForOwnSession(request: Request, controlPlaneHostname: string): boolean {
+  return (
+    request.url === mindApiUrlOf(controlPlaneHostname) && !request.headers.has("authorization")
+  );
+}
+
+/** THE ROOT THAT A CLIENT OF THE API TALKS TO (iterate/api `ControlPlaneApi`), served here in the
+ *  boundary's place: `authenticate()` answers the sandbox's own session, whatever it is given,
+ *  and that session's `mind` is the sandbox's context. The CLI asks no more of it
+ *  (iterate/lib client `connectedMind`). */
+export const ownSessionRoot = (context: IterateContextRpcTarget) =>
+  new OwnSessionRoot(new OwnSession(context));
+
+class OwnSessionRoot extends RpcTarget {
+  readonly #session: OwnSession;
+  constructor(session: OwnSession) {
+    super();
+    this.#session = session;
+  }
+  authenticate() {
+    return this.#session;
+  }
+}
+
+class OwnSession extends RpcTarget {
+  readonly #context: IterateContextRpcTarget;
+  constructor(context: IterateContextRpcTarget) {
+    super();
+    this.#context = context;
+  }
+  get mind() {
+    return this.#context;
+  }
 }
 
 /** The session's root and its caller, from the name the container's interception was made with. */

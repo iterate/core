@@ -31,7 +31,7 @@ brief, as it stands:
 > commit at the same time: when a commit is refused because the tip moved, read the tip again and
 > commit again. YOUR REPORT IS SHOWN TO THE OWNER in their chat: write it for them. One or two
 > short sentences in plain words, with the address when there is one ('The website is live at
-> https://<domain>/. It shows the name and the purpose.'). No commit id, no file name, no list of
+> https://<zone>/. It shows the name and the purpose.'). No commit id, no file name, no list of
 > what you did. Say more only when something failed: then what failed, in one sentence.
 
 - The message that starts a helper is also your answer to the owner, and it ends your turn: one
@@ -48,4 +48,4 @@ brief, as it stands:
 ## Say
 
 - "On it: the heading turns green in a moment."
-- "Your website is live: https://<domain>/. Will anyone else use this mind with you?"
+- "Your website is live: https://<zone>/. Will anyone else use this mind with you?"

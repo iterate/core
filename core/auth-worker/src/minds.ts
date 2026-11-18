@@ -1,26 +1,70 @@
 // minds.ts — ANOTHER MIND AS A SIGNER: a mind that this mind lets in adds events here with a
-// statement that names it as `from`, signed with a key it publishes at its own domain
-// (iterate/signed `publishedMindOf`). The rule that lets it in is a member's
-// `events.iterate.com/mind-meld/configured` on `/minds/<domain>` (./statements.ts), and the
-// `mind_melds` row is its copy. No key is exchanged: the rule names the domain, the domain names
-// the key.
-import { type Envelope, isMindDomain, keyIdOf, publishedMindOf, statementOf } from "iterate/signed";
+// statement that names it as `from`, signed with the ML-DSA-65 working key that its identity log
+// lists, read at its own domain (iterate/mind-identity-log `publishedMindOf`). The rule that lets
+// it in is a member's `events.iterate.com/mind-meld/configured` on `/minds/<domain>`
+// (./statements.ts), and the `mind_melds` row is its copy. No key is exchanged: the rule names the domain, the domain's
+// log names the key.
+import { identityKeyIdOf } from "iterate/mind-identity";
+import { publishedMindOf } from "iterate/mind-identity-log";
+import { type Envelope, isMindControlPlaneHostname, statementOf } from "iterate/signed";
 import { z } from "zod";
 import type { Env } from "./env.ts";
 import { canonicalPath } from "./key-rules.ts";
 import type { KnownKey } from "./keys.ts";
+import { stackKeyIsListed } from "./stack-key.ts";
+
+/** THE MIND THAT A STATEMENT NAMES AS ITS SIGNER, as its own log proves the mind: null when the
+ *  statement names no mind as `from`; else the mind id that the log at `from` proves
+ *  (iterate/mind-identity-log `publishedMindOf`), that hostname, and the working key for
+ *  statements that the log lists under the signature's key id, as a key this Worker checks a
+ *  statement with.
+ *
+ *  IT CHECKS NO SIGNATURE, AND NO RULE. Its answer is only whose key the statement CLAIMS: a
+ *  forger who copies a listed key id gets the real mind id and hostname back. A CALLER MUST
+ *  VERIFY THE SIGNATURE WITH THE ANSWERED KEY (and its format) BEFORE IT TRUSTS `mind` OR
+ *  `hostname`, as ./keys.ts `verifiedStatement` does, and decide itself what the mind may do
+ *  here. It fetches, so a caller asks it only for a mind it has a reason to read. No mind's
+ *  statement is taken before this mind's own identity lists its stack's key (./stack-key.ts):
+ *  a mind that cannot sign as itself yet is in no exchange with another. */
+export async function mindSignerOf(
+  env: Env,
+  envelope: Envelope,
+): Promise<{ mind: string; hostname: string; key: KnownKey } | { refused: string } | null> {
+  const from = fromOf(envelope);
+  if (!from) return null;
+  if (!(await stackKeyIsListed(env))) return NOT_LISTED;
+  const published = await publishedMindOf(from, (request) => fetch(request));
+  if ("why" in published) return { refused: `${from} gave no keys: ${published.why}` };
+  // A key's id is the hash of its public key, computed here: the log lists no id of its own.
+  for (const key of published.current.workingKeys) {
+    if (key.purpose !== "statements") continue;
+    if ((await identityKeyIdOf(key.publicKey)) !== envelope.signature.key) continue;
+    return {
+      mind: published.expected,
+      hostname: from,
+      key: {
+        principal: { actor: from, kind: "mind" },
+        publicKey: key.publicKey,
+        label: key.label,
+        // the schema of a working key lists this algorithm alone (iterate/mind-identity)
+        format: key.algorithm,
+      },
+    };
+  }
+  return { refused: `${from} lists no such working key` };
+}
 
 /** The key of the mind a statement names as `from`, with the rule's `append` as its paths; null
- *  when the statement names no mind; or why it does not sign here. Nothing is fetched for a mind
- *  that is not let in: a stranger must not make this Worker ask a host. */
+ *  when the statement names no mind; or why it does not sign here. The rule is read first, so
+ *  nothing is fetched for a mind that is not let in: a stranger must not make this Worker ask a
+ *  host. */
 export async function mindKeyOf(
   env: Env,
   envelope: Envelope,
 ): Promise<KnownKey | { refused: string } | null> {
-  // read before the signature checks, only to know whose published keys to check it with
-  const statement = statementOf(envelope.statement);
-  const from = "refused" in statement ? undefined : statement.from;
+  const from = fromOf(envelope);
   if (!from) return null;
+  if (!(await stackKeyIsListed(env))) return NOT_LISTED;
   const rule = await env.DB.prepare(
     `select append, key from mind_melds where domain = ?1 and append != '[]'`,
   )
@@ -29,21 +73,21 @@ export async function mindKeyOf(
   if (!rule) return { refused: `${from} is not let in here` };
   if (rule.key && rule.key !== envelope.signature.key)
     return { refused: "the rule names another key" };
-  const published = await publishedMindOf(from, (request) => fetch(request));
-  if ("why" in published) return { refused: `${from} gave no keys: ${published.why}` };
-  const key = published.keys.find(({ key }) => key === envelope.signature.key);
-  if (!key) return { refused: `${from} publishes no such key` };
-  // A key's id is the hash of its public key. Without this check a document could publish another
-  // public key under the id that a rule pins.
-  if ((await keyIdOf(key.publicKey)) !== key.key)
-    return { refused: `${from} publishes a key under an id that is not its own` };
-  return {
-    principal: { actor: from, kind: "mind" },
-    publicKey: key.publicKey,
-    label: key.label,
-    format: "p256",
-    paths: z.array(z.string()).parse(JSON.parse(rule.append)),
-  };
+  const signer = await mindSignerOf(env, envelope);
+  if (!signer || "refused" in signer) return signer;
+  return { ...signer.key, paths: z.array(z.string()).parse(JSON.parse(rule.append)) };
+}
+
+const NOT_LISTED = {
+  refused:
+    "this mind's identity lists no working key of its stack yet, so it takes no statement from another mind",
+};
+
+/** The mind a statement names as `from`, read before the signature checks, only to know whose
+ *  published keys to check it with. */
+function fromOf(envelope: Envelope) {
+  const statement = statementOf(envelope.statement);
+  return "refused" in statement ? undefined : statement.from;
 }
 
 /** A rule's payload: at most 20 context paths, each by its own canonical path; `/` is every
@@ -70,7 +114,11 @@ export async function configuredMeld(
   rule: { path: string; payload: unknown; at: number; by: string; own: string },
 ): Promise<{ domain: string; append: string[] } | { refused: string }> {
   const domain = rule.path.slice("/minds/".length);
-  if (!rule.path.startsWith("/minds/") || !isMindDomain(domain) || domain === rule.own)
+  if (
+    !rule.path.startsWith("/minds/") ||
+    !isMindControlPlaneHostname(domain) ||
+    domain === rule.own
+  )
     return { refused: "a mind meld is set on /minds/<domain>, for another mind's domain" };
   const payload = MeldRule.safeParse(rule.payload);
   if (!payload.success)

@@ -1,4 +1,3 @@
-import { mindApiUrlOf, mindMcpUrlOf } from "iterate/mind-api";
 import {
   base64url,
   KEY_TOKEN_STATEMENT_TYPE,
@@ -8,10 +7,11 @@ import {
 } from "iterate/signed";
 import { expect, test } from "vitest";
 import type { Env } from "./env.ts";
+import { configVars, stackKeyPair } from "./test-support.ts";
 import { keyTokenIdentity, keyTokenResponse } from "./key-tokens.ts";
 
-const DOMAIN = "example.com";
-const API = mindApiUrlOf(DOMAIN);
+const MIND = "iterate.example.com";
+const API = `https://${MIND}/api`;
 
 test("a key a member allowed to lend gets a token for the API, for an hour, as no member", async () => {
   const { env, bridge, rows } = await stack();
@@ -29,9 +29,9 @@ test("a key a member allowed to lend gets a token for the API, for an hour, as n
     member: false,
     provide: "whatsapp.jonas",
   });
-  // for the API alone: the MCP server, a hostname and `/provide` never take it
-  expect(await keyTokenIdentity(env, token, mindMcpUrlOf(DOMAIN))).toBeNull();
-  expect(await keyTokenIdentity(env, token, `https://${DOMAIN}`)).toBeNull();
+  // for the API alone: the MCP server, a hostname and the right to hand in a mind never take it
+  expect(await keyTokenIdentity(env, token, `https://${MIND}/mcp`)).toBeNull();
+  expect(await keyTokenIdentity(env, token, "https://example.com")).toBeNull();
 });
 
 test("a removed key gets no token, and its live token is nobody's from then on", async () => {
@@ -125,7 +125,7 @@ async function keyPair() {
       const at = Date.now();
       return signedP256(
         statementText({
-          mind: change.mind || DOMAIN,
+          mind: change.mind || MIND,
           path: change.path || "/",
           type: change.type || KEY_TOKEN_STATEMENT_TYPE,
           payload: change.payload,
@@ -142,7 +142,7 @@ async function keyPair() {
 /** A stack with two keys a member allowed: one lends `itx.whatsapp.jonas`, one only adds events. */
 async function stack() {
   const [own, bridge, events, stranger] = await Promise.all([
-    keyPair(),
+    stackKeyPair(),
     keyPair(),
     keyPair(),
     keyPair(),
@@ -180,8 +180,7 @@ async function stack() {
   const prepare = (sql: string, bound: unknown[] = []) => ({
     bind: (...values: unknown[]) => prepare(sql, values),
     first: async () => {
-      if (sql.includes("from stack_key"))
-        return { key: own.key, public_key: own.publicKey, private_key: own.pkcs8 };
+      if (sql.includes("from stack_key")) return own.row;
       const kept = rows.get(String(bound[0]));
       const live = kept && !kept.revoked_at ? kept : null;
       if (sql.includes("from keys k left join users")) return live;
@@ -202,11 +201,7 @@ async function stack() {
     },
   });
   const env = {
-    DOMAIN,
-    AUTH_SETTINGS: JSON.stringify({
-      login: { methods: { email: {} }, allow: [{ email: "owner@example.net" }] },
-    }),
-    AUTH_SIGNING_KEY: "a signing key for a test, never a real one",
+    ...configVars(),
     DB: {
       prepare,
       batch: async (statements: ReturnType<typeof prepare>[]) =>

@@ -45,7 +45,7 @@ the second, set none: write again only with news.
 
 ```ts
 await itx.email.send({
-  from: "onboarding@<domain>",
+  from: "onboarding@<zone>",
   to: "<the owner's email>",
   subject: "<the news, in a few words>",
   text,
@@ -64,7 +64,7 @@ A mail:
 
 > Subject: Your website has your opening hours now
 >
-> I added them from your note this morning: https://<domain>/. Next: shall I take orders by mail
+> I added them from your note this morning: https://<zone>/. Next: shall I take orders by mail
 > too? Just reply.
 >
-> Our chat: https://dash.<domain>/?agent=/agents/onboarding
+> Our chat: https://dash.<zone>/?agent=/agents/onboarding

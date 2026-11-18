@@ -4,25 +4,19 @@ import {
   authorizationErrorRedirect,
   CimdFetchError,
 } from "@cloudflare/workers-oauth-provider";
-import { mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
-import { SignInMethod } from "iterate/principal";
-import { z } from "zod";
+import { mindMcpUrlOf, mindProvideConnectResourceOf } from "iterate/mind-api";
 import { AccountFacts } from "./account-facts.ts";
-import { appOf, askingAppOf } from "./asking-app.ts";
+import { appOf, appTakes, askingAppOf } from "./asking-app.ts";
 import {
-  clearCloudflareSessionCookie,
-  clearGuestSessionCookie,
+  clearGuestCookie,
   clearSessionCookie,
-  cloudflareSessionOf,
   endThisSession,
-  guestSessionCookie,
-  guestSessionOf,
-  type Session,
-  sessionOf,
+  guestCookie,
+  guestOf,
+  type PersonSession,
+  personSessionOf,
 } from "./cookies.ts";
-import { admitted } from "./device/limits.ts";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
-import { guestRefusal } from "./guest-sign-in.ts";
+import { configOf, type Env, issuerOf } from "./env.ts";
 import {
   type GrantProps,
   grantedScopes,
@@ -31,9 +25,11 @@ import {
   type SignInMetadata,
   mindHostResourceOf,
 } from "./oauth.ts";
-import { passkeyOwedResponse, standingOf } from "./members.ts";
-import { chooserPage, consentPage, errorPage, nobodySignsInPage, notMemberPage } from "./pages.ts";
-import { methodsAskedIn, signInHref } from "./sign-in.ts";
+import { isMemberSession } from "./members.ts";
+import { chooserPage, consentPage, errorPage, notMemberPage } from "./pages.ts";
+import { signInHref } from "./sign-in.ts";
+import { admitted, TOO_MANY } from "./device/limits.ts";
+import { GUEST_SESSIONS_PER_TEN_MINUTES, guestRefusal } from "./guest-sign-in.ts";
 import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { deviceStore } from "./device/store.ts";
 
@@ -55,7 +51,11 @@ export async function authorizeResponse(env: Env, request: Request) {
 }
 
 async function describe(env: Env, request: Request) {
-  const hostResource = mindHostResourceOf(env, new URL(request.url).searchParams.get("resource"));
+  const config = configOf(env);
+  const hostResource = mindHostResourceOf(
+    config,
+    new URL(request.url).searchParams.get("resource"),
+  );
   const helpers = oauthHelpers(env, hostResource);
   const parsed = await helpers.parseAuthRequest(request);
   // PKCE with S256 for every client: the library requires it of a public client, and a client
@@ -78,47 +78,37 @@ async function describe(env: Env, request: Request) {
       302,
     );
   const authRequest = { ...parsed, scope };
-  // a request for an app's host that names no ways takes the ways of the app's manifest
-  // (./asking-app.ts, "THE WAYS THE APP TAKES")
-  const url = new URL(request.url);
-  if (hostResource && !url.searchParams.get("acr_values")) {
-    const { methods } = await appOf(env, hostResource);
-    if (methods.length) url.searchParams.set("acr_values", methods.join(" "));
-  }
-  const { prompt, here } = promptOf(url);
-  // The ways to sign in that the app on a mind hostname takes (./sign-in.ts `methodsAskedIn`):
-  // whoever has no session made one of those ways is sent to the page of those ways.
-  const methods = methodsAskedIn(env, here);
-  if (methods?.length === 0) return nobodySignsInPage();
-  // A hostname's own sign-in asks for the chooser only after that host's sign-out
-  // (boundary-worker's host-session.ts): the press it needs is the way back into the app.
+  const { prompt, here } = promptOf(new URL(request.url));
+  // a hostname's own sign-in: the code goes to ingress on that host alone, and is not a consent
   const hostSignIn = hostResource && authRequest.redirectUri === hostCallbackOf(hostResource);
-  const session = await sessionFor(env, request, methods, Boolean(hostSignIn));
-  const cloudflare = session?.method === "cloudflare";
+  // Anyone signed in: a mind hostname takes a person who is no member (`grantRefusal`). A guest's
+  // cookie counts only where nobody is signed in, for a host's own sign-in whose app names guests
+  // (`guestAt`).
+  const session: SignedIn | null =
+    (await personSessionOf(env, request)) ||
+    (hostSignIn ? await guestAt(env, hostResource, request) : null);
   const guest = session?.method === "guest";
   const signIn = `${issuerOf(env)}${signInHref(here)}`;
   if (!session) return Response.redirect(signIn, 302);
+  // AN APP NAMES HOW ITS PEOPLE SIGN IN, and this endpoint holds every code for the app's host to
+  // it, whichever client asks. A session that the app does not take is no session here: the
+  // person goes to the sign-in for this request, which offers the app's methods alone.
+  const taken = hostResource ? await hostTakes(env, hostResource, session) : true;
+  if (taken === null) return errorPage(TOO_MANY, 429);
+  if (!taken) return Response.redirect(signIn, 302);
   // OpenID Connect's `prompt`. `login`: sign in again, whoever is signed in. `select_account`: say
-  // who is signed in and offer another account. Either comes back here without it. A sign-in at
-  // Cloudflare ends for either, and the person starts again on the page of the app's ways:
-  // Cloudflare's own page says who is signed in there, and with no page of ours between,
-  // Cloudflare would sign the same person straight back in.
-  // A guest's ends for either too: the name form is the page that says who they are, and its
-  // answer is a new guest.
-  if (prompt === "login" || (prompt && (cloudflare || guest))) {
-    // the browser's session ends with its cookie; Cloudflare's and a guest's have no row
+  // who is signed in and offer another account. Either comes back here without it. A guest's
+  // cookie ends for either: the name form is the page that says who they are, and its answer is
+  // a new guest.
+  if (prompt === "login" || (prompt && guest)) {
     const facts = new AccountFacts();
-    await endThisSession(env, session, facts);
+    if (!guest) await endThisSession(env, request, facts);
     return facts.on(
       new Response(null, {
         status: 302,
         headers: {
           location: signIn,
-          "set-cookie": cloudflare
-            ? clearCloudflareSessionCookie
-            : guest
-              ? clearGuestSessionCookie
-              : clearSessionCookie,
+          "set-cookie": guest ? clearGuestCookie : clearSessionCookie,
           "cache-control": "no-store",
         },
       }),
@@ -126,30 +116,37 @@ async function describe(env: Env, request: Request) {
   }
   if (prompt === "select_account")
     return chooserPage({
-      domain: iterateConfigOf(env).domain,
+      mind: config.controlPlaneHostname,
       email: session.email,
       here,
       // an app's own sign-in says which app, to a person who is no member: a member's page is
       // the mind's own
-      app: (await standingOf(env, session)) === "member" ? null : await askingAppOf(env, here),
+      app: (await isMemberSession(env, session)) ? null : await askingAppOf(env, here),
       signedOutOf: hostSignIn ? new URL(hostResource).host : undefined,
     });
-  const refused = await notMemberRefusal(env, session, hostResource, here);
+  const refused = await grantRefusal(env, session, hostResource, here);
   if (refused) return refused;
   // A GUEST'S NEXT 15 MINUTES on this host (./guest-sign-in.ts): counted for the whole stack,
   // since anyone can be a guest, and for this guest, so that one cookie cannot use up the stack's
   // number and stop every other guest's renewal. The cookie is set again, so it ends 30 days
   // after the browser last came.
   if (hostSignIn && guest) {
-    const { sessionsPerTenMinutes } = iterateConfigOf(env).login.methods.guest!;
-    if (!(await admitted(env, "guest-session", request, sessionsPerTenMinutes, session.userId)))
+    if (
+      !(await admitted(
+        env,
+        "guest-session",
+        request,
+        GUEST_SESSIONS_PER_TEN_MINUTES,
+        session.userId,
+      ))
+    )
       return guestRefusal("session-rate", new URL(hostResource).host);
     const { redirectTo } = await complete(env, session, authRequest, hostResource);
     return new Response(null, {
       status: 302,
       headers: {
         location: redirectTo,
-        "set-cookie": await guestSessionCookie(env, {
+        "set-cookie": await guestCookie(env, {
           id: session.userId,
           key: session.email,
           name: session.name || "",
@@ -163,63 +160,20 @@ async function describe(env: Env, request: Request) {
     const { redirectTo } = await complete(env, session, authRequest, hostResource);
     return Response.redirect(redirectTo, 302);
   }
-  // A device code can be sent by someone else, so a device always gets the page; so does `/provide`:
-  // a trusted app is trusted to use the mind, not to run it.
-  if (
-    !isDeviceRequest(env, authRequest) &&
-    authRequest.resource !== mindProvideUrlOf(iterateConfigOf(env).domain) &&
-    isTrustedClient(env, authRequest)
-  ) {
-    const client = await helpers.lookupClient(authRequest.clientId);
-    return approve(env, session, authRequest, client, new Headers());
-  }
   // describe first: a failed lookup leaves nothing in KV
   const details = await helpers.describeConsent(authRequest);
-  // the ways ride the consent to its approval (`ConsentMethods`)
-  const withMethods: AuthRequest & z.input<typeof ConsentMethods> = { ...authRequest, methods };
-  const consent = await helpers.beginConsent(withMethods);
+  const consent = await helpers.beginConsent(authRequest);
   return consentPage({
     details,
     handle: consent.handle,
     email: session.email,
-    domain: iterateConfigOf(env).domain,
+    mind: config.controlPlaneHostname,
     resource: resourceInWords(env, authRequest.resource),
     host: hostResource ? new URL(hostResource).host : undefined,
     here,
     headers: consent.headers,
   });
 }
-
-/** THE SESSION THAT MAY GET A CODE, or null. With no `methods`, the mind's own session. With the
- *  ways an app takes, the mind's own session when it began one of those ways, else Cloudflare's
- *  when they name Cloudflare, else a guest's when they name guests. Each is read from its own
- *  cookie, so nothing a browser sends turns one into the other, and Cloudflare's and a guest's
- *  are read for an app that names them alone. Someone signed in is never taken for the guest
- *  their browser also was: with a session of the mind's own or of Cloudflare's that the app does
- *  not take, the guest's cookie is not read, and the sign-in pages say who is signed in
- *  (./guest-sign-in.ts `heldBefore`). `hostSignIn`: the request is a hostname's own sign-in. A
- *  guest's counts there alone, never for a client that asks a consent (an MCP client, an outside
- *  app): a guest is let onto a page, and lets nothing in. */
-async function sessionFor(
-  env: Env,
-  request: Request,
-  methods: readonly SignInMethod[] | null,
-  hostSignIn: boolean,
-): Promise<Session | null> {
-  const own = await sessionOf(env, request);
-  if (!methods || (own?.method && methods.includes(own.method))) return own;
-  const cloudflare = methods.includes("cloudflare")
-    ? await cloudflareSessionOf(env, request)
-    : null;
-  if (cloudflare || own || !hostSignIn || !methods.includes("guest")) return cloudflare;
-  // signed in at Cloudflare, at an app that does not name it: no guest either
-  if (await cloudflareSessionOf(env, request)) return null;
-  return guestSessionOf(env, request);
-}
-
-/** The ways the app took, as a consent keeps them: the OAuth library keeps the request it begins
- *  a consent with whole, and answers it at the approval. */
-const ConsentMethods = z.object({ methods: z.array(SignInMethod).nullish() });
 
 /** An authorization request's `prompt` (a space-separated list; `login` wins), and the request
  *  without it, as a path of the issuer: where a sign-in or the chooser goes on. */
@@ -244,10 +198,8 @@ async function decide(env: Env, request: Request) {
   const form = await request.formData().catch(() => null);
   const handle = form?.get("handle");
   if (typeof handle !== "string") return errorPage("This form is incomplete. Start again.", 400);
-  const signedOut = () => errorPage("You are signed out. Go back to the app and start again.", 401);
-  // which session decides is known once the handle says what the consent is for
-  if (!(await sessionOf(env, request)) && !(await cloudflareSessionOf(env, request)))
-    return signedOut();
+  const session = await personSessionOf(env, request);
+  if (!session) return errorPage("You are signed out. Go back to the app and start again.", 401);
   const helpers = oauthHelpers(env);
   if (form?.get("decision") !== "allow") {
     const denied = await helpers.denyConsent(request, handle);
@@ -255,46 +207,54 @@ async function decide(env: Env, request: Request) {
     return new Response(null, { status: 302, headers: denied.headers });
   }
   const approved = await helpers.approveConsent(request, handle);
-  // the resource and the ways are the ones the consent was begun with, kept by the library: the
-  // form names neither
-  const kept = ConsentMethods.safeParse(approved.request).data?.methods;
-  // a consent is never a hostname's own sign-in, so no guest approves one
-  const session = await sessionFor(env, request, kept || null, false);
-  if (!session) return signedOut();
-  const hostResource = mindHostResourceOf(env, approved.request.resource);
-  const refused = await notMemberRefusal(env, session, hostResource, "/");
+  // the resource is the one the consent was begun with, kept by the library: the form names none
+  const hostResource = mindHostResourceOf(configOf(env), approved.request.resource);
+  const refused = await grantRefusal(env, session, hostResource, "/");
   if (refused) return refused;
+  // the session may be another than the one that the consent page was shown to
+  if (hostResource && !(await hostTakes(env, hostResource, session)))
+    return errorPage("This app does not take the way you signed in. Start again from the app.");
   const client = await helpers.lookupClient(approved.request.clientId);
   return approve(env, session, approved.request, client, approved.headers);
 }
 
-// A mind hostname takes anyone's identity, and gives a member's the mind: so a member's
-// session must act as a member there too.
-async function notMemberRefusal(
+/** WHO A GRANT IS FOR: a person's session at the issuer, or a guest, who has no session row
+ *  (./guest-sign-in.ts). `name`: the name a guest typed, which the grant keeps. */
+type SignedIn = Pick<PersonSession, "userId" | "email" | "method"> & { name?: string };
+
+/** THE GUEST THIS BROWSER IS, for the own sign-in of the host at `hostResource`, or null: the
+ *  host's app names guests, and no owner blocked this guest. Read here alone, so the cookie gives
+ *  no reach by itself. */
+async function guestAt(env: Env, hostResource: string, request: Request): Promise<SignedIn | null> {
+  const app = await appOf(env, hostResource);
+  if (!app?.signIn.includes("guest")) return null;
+  const guest = await guestOf(env, request);
+  return guest && !guest.blocked
+    ? { userId: guest.userId, email: guest.email, method: "guest", name: guest.name }
+    : null;
+}
+
+/** Whether the app at `hostResource` takes `session` (./asking-app.ts `appTakes`). Null: the
+ *  app could not be asked, since too many new hostnames were asked about just now. */
+async function hostTakes(env: Env, hostResource: string, session: SignedIn) {
+  const app = await appOf(env, hostResource);
+  return app && appTakes(app, session.method);
+}
+
+/** WHY A SESSION GETS NO GRANT, or null. A mind hostname takes the identity of anyone signed in,
+ *  a person who is no member too: an app there has users of its own, and says how they sign in
+ *  (`hostTakes`). The mind's API, its MCP server and the right to hand in a mind that runs
+ *  elsewhere take a member's session alone, which is a passkey's (./members.ts
+ *  `isMemberSession`). A grant keeps how its session's person signed in (./oauth.ts
+ *  `GrantProps`). */
+async function grantRefusal(
   env: Env,
-  session: Session,
+  session: SignedIn,
   hostResource: string | null,
   here: string,
 ) {
-  const standing = await standingOf(env, session);
-  if (standing === "passkey-owed") return passkeyOwedResponse(here);
-  if (standing === "member" || hostResource) return null;
-  const { domain } = iterateConfigOf(env);
-  return notMemberPage({ domain, email: session.email, here });
-}
-
-/** WHAT A NEW GRANT KEEPS OF ITS SIGN-IN: the person, the way they signed in, and the mark that
- *  its member's standing follows that way at every use (./oauth.ts `grantStandingOf`). Every grant
- *  starts from this, so no grant made from now on is without the mark. */
-export function newGrantProps(session: Session): GrantProps {
-  return {
-    userId: session.userId,
-    email: session.email,
-    method: session.method,
-    ...(session.method === "guest" && { name: session.name }),
-    standingByMethod: true,
-    ...(session.outsider && { outsider: true as const }),
-  };
+  if (hostResource || (await isMemberSession(env, session))) return null;
+  return notMemberPage({ mind: configOf(env).controlPlaneHostname, email: session.email, here });
 }
 
 /** What a grant keeps of its client: the name and the logo that the client gave. */
@@ -302,27 +262,24 @@ type AskingClient = { clientName?: string; logoUri?: string } | null;
 
 async function complete(
   env: Env,
-  session: Session,
+  session: SignedIn,
   authRequest: AuthRequest,
   hostResource: string | null,
   client?: AskingClient,
 ) {
   const clientName = client?.clientName;
-  const letIn = isDeviceRequest(env, authRequest)
-    ? (await deviceStore(env.OAUTH_KV).byKey(authRequest.state))?.letIn
-    : undefined;
-  // Every code is made here, so this is the last check of the rule the callers follow: a sign-in at
-  // Cloudflare serves a mind hostname alone (./cloudflare-sign-in.ts), and a guest's that
-  // hostname's own page alone (./guest-sign-in.ts).
-  if (session.method === "cloudflare" && !hostResource)
-    throw new Error("A sign-in at Cloudflare serves a mind hostname alone.");
-  if (
-    session.method === "guest" &&
-    (!hostResource || authRequest.redirectUri !== hostCallbackOf(hostResource))
-  )
-    throw new Error("A guest's sign-in serves a mind hostname's own page alone.");
+  // a device's request: its code goes to this stack's own device callback
+  const letIn =
+    authRequest.redirectUri === `${issuerOf(env)}${DEVICE_CALLBACK_PATH}`
+      ? (await deviceStore(env.OAUTH_KV).byKey(authRequest.state))?.letIn
+      : undefined;
   const props: GrantProps = {
-    ...newGrantProps(session),
+    userId: session.userId,
+    email: session.email,
+    method: session.method,
+    name: session.name,
+    // a rule to remove, with its unmarked case (./oauth.ts `GrantProps.standingByMethod`)
+    standingByMethod: true,
     ...(letIn && {
       deadline: Date.now() + letIn.seconds * 1000,
       letIn: {
@@ -338,6 +295,7 @@ async function complete(
     // what /keys shows of this sign-in (./oauth.ts `signInsOf`)
     metadata: {
       clientName: clientName || authRequest.clientId,
+      method: session.method,
       resource: authRequest.resource,
       logoUri: client?.logoUri,
       until: props.deadline,
@@ -351,13 +309,13 @@ async function complete(
 
 async function approve(
   env: Env,
-  session: Session,
+  session: PersonSession,
   authRequest: AuthRequest,
   client: AskingClient,
   headers: Headers,
 ) {
   const clientName = client?.clientName;
-  const hostResource = mindHostResourceOf(env, authRequest.resource);
+  const hostResource = mindHostResourceOf(configOf(env), authRequest.resource);
   const { redirectTo, grantId, props } = await complete(
     env,
     session,
@@ -394,30 +352,11 @@ async function approve(
   return facts.on(new Response(null, { status: 302, headers }));
 }
 
-const isDeviceRequest = (env: Env, authRequest: AuthRequest) =>
-  authRequest.redirectUri === `${issuerOf(env)}${DEVICE_CALLBACK_PATH}`;
-
-// The id is a metadata document's https URL, which the library fetched to resolve the client, and
-// the redirect is on that same origin, so the code goes nowhere else.
-function isTrustedClient(env: Env, authRequest: AuthRequest) {
-  const trusted = iterateConfigOf(env).trustedClients || [];
-  if (!URL.canParse(authRequest.clientId) || !URL.canParse(authRequest.redirectUri)) return false;
-  const client = new URL(authRequest.clientId);
-  return (
-    client.protocol === "https:" &&
-    // Never iterate Cloud's MCP relay, whatever the config lists: its one client stands for every
-    // app behind it (internal-packages/installer worker/mcp-relay.js), so a member is always asked.
-    client.pathname !== "/oauth2/client.json" &&
-    trusted.includes(client.origin) &&
-    new URL(authRequest.redirectUri).origin === client.origin
-  );
-}
-
 function resourceInWords(env: Env, resource: string | undefined) {
-  const { domain } = iterateConfigOf(env);
-  if (resource === mindProvideUrlOf(domain))
-    return "its /provide link, as the computer that runs the mind: it receives every request and all mail";
-  return resource === mindMcpUrlOf(domain) ? "its MCP server" : "its API";
+  const config = configOf(env);
+  if (resource === mindProvideConnectResourceOf(config.controlPlaneHostname))
+    return "the right to hand in the mind, as the computer that runs it: it receives every request and all mail";
+  return resource === mindMcpUrlOf(config.controlPlaneHostname) ? "its MCP server" : "its API";
 }
 
 // The library's codes are `<userId>:<grantId>:<secret>`.

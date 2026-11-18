@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <!-- The Voice app's mark: Lucide's "phone" (https://lucide.dev, ISC license), white on a
-       square. manifest.webmanifest names it, and the mind's sign-in pages show it. -->
+       square. The app's description names it (app.ts), and the mind's sign-in pages show it. -->
   <rect width="64" height="64" fill="#18181b" />
   <g
     transform="translate(14 14) scale(1.5)"

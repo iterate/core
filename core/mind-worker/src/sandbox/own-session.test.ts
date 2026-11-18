@@ -2,7 +2,7 @@
 import { expect, test } from "vitest";
 import { asksForOwnSession, egressFilterOf, ownSessionOf, sessionWatch } from "./own-session.ts";
 
-const DOMAIN = "example.com";
+const CONTROL_PLANE_HOSTNAME = "iterate.example.com";
 const API = "https://iterate.example.com/api";
 const BOX = "/agents/ada/box";
 
@@ -38,7 +38,7 @@ test.for<{ name: string; request: Request; asks: boolean }>([
   },
   { name: "plain http", request: new Request("http://iterate.example.com/api"), asks: false },
 ])("a request asks for the sandbox's own session: $name → $asks", ({ request, asks }) => {
-  expect(asksForOwnSession(request, DOMAIN)).toBe(asks);
+  expect(asksForOwnSession(request, CONTROL_PLANE_HOSTNAME)).toBe(asks);
 });
 
 test("a sandbox that sends through the mind's own fetch gets a session", () => {
@@ -92,7 +92,7 @@ test("who the session is comes from the sandbox's name alone, as the code of its
     },
   });
   // such a request still asks, and still gets the session of the sandbox it came from
-  expect(asksForOwnSession(forged, DOMAIN)).toBe(true);
+  expect(asksForOwnSession(forged, CONTROL_PLANE_HOSTNAME)).toBe(true);
 });
 
 test("a rule that lands while a session lives ends it on the next frame that checks", async () => {

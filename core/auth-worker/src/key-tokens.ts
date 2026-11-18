@@ -15,7 +15,7 @@ import { KEY_TOKEN_STATEMENT_TYPE } from "iterate/signed";
 import type { TokenIdentity } from "iterate/workers";
 import { jwtVerify, SignJWT } from "jose";
 import { z } from "zod";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { configOf, type Env, issuerOf } from "./env.ts";
 import { UNKNOWN_KEY, verifiedStatement } from "./keys.ts";
 
 const TOKEN_SECONDS = 3600;
@@ -23,7 +23,7 @@ const FRESH_MS = 5 * 60_000;
 
 // The Worker's one signing key (./cookies.ts). A cookie's audience is a word and a key token's is
 // the API's URL, so neither is ever taken for the other.
-const signingKey = (env: Env) => new TextEncoder().encode(env.AUTH_SIGNING_KEY);
+const signingKey = (env: Env) => new TextEncoder().encode(configOf(env).signingKey.exposeSecret());
 
 const Claims = z.object({
   kind: z.literal("key-token"),
@@ -61,7 +61,7 @@ export async function keyTokenResponse(env: Env, request: Request): Promise<Resp
   const token = await new SignJWT({ kind: "key-token", key: signer.key, provide })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuer(issuerOf(env))
-    .setAudience(mindApiUrlOf(iterateConfigOf(env).domain))
+    .setAudience(mindApiUrlOf(configOf(env).controlPlaneHostname))
     .setSubject(signer.principal.actor)
     .setIssuedAt()
     .setExpirationTime(`${seconds}s`)
@@ -83,7 +83,10 @@ export async function keyTokenIdentity(
   token: string,
   resource: string,
 ): Promise<TokenIdentity | null> {
-  if (token.split(".").length !== 3 || resource !== mindApiUrlOf(iterateConfigOf(env).domain))
+  if (
+    token.split(".").length !== 3 ||
+    resource !== mindApiUrlOf(configOf(env).controlPlaneHostname)
+  )
     return null;
   const claims = await jwtVerify(token, signingKey(env), {
     issuer: issuerOf(env),

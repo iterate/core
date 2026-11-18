@@ -1,34 +1,24 @@
 {
   "name": "core-alchemy",
   "type": "module",
-  "description": "The Alchemy program that deploys one mind as a stack of Workers",
+  "description": "The Alchemy script that deploys one mind as a stack of Workers",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test 'scripts/**/*.test.ts' 'src/**/*.test.ts'",
-    "deploy": "f() { node --env-file-if-exists=.secrets scripts/refuse-older-stack.ts \"$@\" && pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets scripts/repos-namespace.ts \"$@\" && node --env-file-if-exists=.secrets scripts/sandbox-image.ts \"$@\" && node --env-file-if-exists=.secrets scripts/deploy-stack.ts \"$@\" && node --env-file-if-exists=.secrets scripts/artifacts-subscriptions.ts \"$@\"; }; f",
-    "plan": "pnpm --filter core-mind-worker build && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js plan",
-    "destroy": "f() { domain=$(node --env-file-if-exists=.secrets scripts/remove-dmarc-record.ts --print-domain \"$@\") || return 1; node --env-file-if-exists=.secrets scripts/artifacts-subscriptions.ts --remove \"$@\" && node --env-file-if-exists=.secrets node_modules/alchemy/bin/cli.js destroy \"$@\" && node --env-file-if-exists=.secrets scripts/drop-telemetry-tables.ts \"$@\" && node --env-file-if-exists=.secrets scripts/remove-dmarc-record.ts --domain \"$domain\" \"$@\"; }; f",
-    "destroy:state": "node --env-file-if-exists=.secrets scripts/remove-state-store.ts",
-    "config": "node --env-file-if-exists=.secrets scripts/config.ts",
-    "smoke": "node --env-file-if-exists=.secrets scripts/smoke.ts",
-    "proof:telemetry-toggle": "node --env-file-if-exists=.secrets scripts/telemetry-toggle-proof.ts",
-    "import-secrets": "node --env-file-if-exists=.secrets scripts/import-secrets.ts",
-    "itx": "node --env-file-if-exists=.secrets scripts/itx.ts"
+    "test": "node --test 'src/**/*.test.ts'",
+    "deploy": "pnpm --filter core-mind-worker build && alchemy deploy alchemy.run.ts",
+    "destroy": "alchemy destroy alchemy.run.ts"
   },
   "dependencies": {
     "@alchemy.run/cloudflare": "catalog:",
+    "@distilled.cloud/cloudflare": "catalog:",
     "@effect/platform-node": "catalog:",
     "alchemy": "catalog:",
-    "capnweb": "catalog:",
-    "core-auth-worker": "workspace:*",
     "effect": "catalog:",
     "iterate": "workspace:*",
-    "trpc-cli": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "playwright": "1.63.0",
     "typescript": "catalog:"
   }
 }

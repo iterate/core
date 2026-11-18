@@ -8,14 +8,17 @@ import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import process from "node:process";
 import repl from "node:repl";
+import { setTimeout as sleep } from "node:timers/promises";
 import { RpcTarget } from "capnweb";
 import { createCli, os, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
-import { addressOf, connectMind, discoverAddress, openForSignIn, signInToMind } from "../node.ts";
-import { mindApiUrlOf, mindMcpUrlOf, mindProvideUrlOf } from "../mind-api.ts";
+import { addressOf, connectMind, discoveredMind, openForSignIn, signInToMind } from "../node.ts";
+import { mindApiUrlOf, mindMcpUrlOf, mindProvideConnectResourceOf } from "../mind-api.ts";
 import { connectChatgpt } from "./chatgpt.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import { deployMind } from "./deploy.ts";
+import { IDENTITIES, type IdentityIo, postIdentity, shownIdentity } from "./identity.ts";
+import { recoverOwner } from "./recover.ts";
 import { runFs } from "./fs.ts";
 import { loginFlowFor, unexpectedUser } from "./device-login/flow.ts";
 import { revokeSession } from "./oauth.ts";
@@ -78,10 +81,12 @@ const resolveConfigName = (workspacePath: string): string => {
   return names.length === 1 ? names[0]! : DEFAULT_CONFIG_NAME;
 };
 
-/** The mind a command talks to: `--mind` in either spelling, as discovery keeps it (as
- *  `login` stores the profile's), else the profile's. */
+/** THE MIND A COMMAND TALKS TO, AS ITS ADDRESS: `--mind` as a person typed it, read here once
+ *  (node.ts `addressOf`) and as discovery keeps it; else the profile's, which `login` stored.
+ *  What this answers is handed on as it is: a second reading would put `iterate.` before a
+ *  control plane at a zone's apex. */
 const resolveMind = async (given?: string): Promise<string> => {
-  if (given) return (await discoverAddress(given)).address;
+  if (given) return (await discoveredMind(addressOf(given))).address;
   // In a sandbox the platform names the mind (iterate/mind-api `sandboxVariablesOf`): no profile
   // is needed there. `--config` still picks a profile.
   const told = process.env.ITERATE_SANDBOX?.trim() && process.env.ITERATE_MIND?.trim();
@@ -96,7 +101,8 @@ const resolveMind = async (given?: string): Promise<string> => {
   return config.mind;
 };
 
-const connect = async (mind?: string) => connectMind({ address: await resolveMind(mind) });
+/** A connection to the mind at `address`, as `resolveMind` answered it. */
+const connect = (address: string) => connectMind({ address });
 
 /** When the stored sign-in to the mind at `address` ends, as epoch ms: what a lend hands over
  *  before (provide.ts, THE HANDOVER). A token given in the environment has no end known here. */
@@ -106,22 +112,24 @@ function signInEndsAt(address: string): number | undefined {
   return Number.isFinite(ends) ? ends : undefined;
 }
 
-/** `iterate login`: sign in to the mind at the typed address, check who that is, and make it the
- *  profile's mind. `chatgpt connect` signs in by this too. */
+/** `iterate login`: sign in to the mind at `address` (as `addressOf` read it from what a person
+ *  typed), check who that is, and make it the profile's mind. `chatgpt connect` signs in by this
+ *  too. */
 const login = async (input: {
   address: string;
   device?: boolean;
   expectUser?: string;
-  /** `iterate deploy`'s first sign-in: the browser flow, with its own page in front of the issuer's */
+  /** `iterate deploy`'s first sign-in: how it shows the browser flow's page, and where the
+   *  sign-in's lines go. The flow is the one for this process, as for `iterate login`. */
   openBrowser?: (url: URL) => void;
+  print?: (line: string) => void;
 }) => {
-  const mind = await discoverAddress(input.address);
+  const mind = await discoveredMind(input.address);
   const resource = mindApiUrlOf(mind.address);
   const session = await signInToMind(mind, resource, {
-    flow: input.openBrowser
-      ? "browser"
-      : loginFlowFor({ device: input.device, env: process.env, platform: process.platform }),
+    flow: loginFlowFor({ device: input.device, env: process.env, platform: process.platform }),
     openBrowser: input.openBrowser,
+    print: input.print,
   });
   using connection = await connectMind({ address: mind.address, token: session.token });
   const who = await connection.itx.whoami();
@@ -145,6 +153,21 @@ const mindOption = z
   .optional()
   .describe("The mind's address, e.g. example.com (default: the profile's)");
 
+/** The same, as a command's one argument. */
+const mindArgument = mindOption.meta({ positional: true });
+
+/** THE ADDRESS THAT THE TWO `identity` COMMANDS ASK: `--mind` as a person typed it, read here
+ *  alone, with no discovery (no other host is asked first), else the profile's. */
+const identityAddressOf = async (given?: string) => (given ? addressOf(given) : resolveMind());
+
+/** How the two `identity` commands talk with the mind (identity.ts). */
+const identityIo: IdentityIo = {
+  dir: IDENTITIES,
+  fetcher: (request) => fetch(request),
+  pause: (ms) => sleep(ms),
+  say: (line) => console.error(line),
+};
+
 const launcherProcedures = {
   deploy: os
     .input(
@@ -155,16 +178,18 @@ const launcherProcedures = {
           .describe("The mind's domain: a zone of the account, or one to buy or bring"),
         account: z.string().optional().describe("The Cloudflare account, by id or name"),
         newAccount: z.boolean().optional().describe("Make a new Cloudflare account for the mind"),
-        name: z
-          .string()
-          .optional()
-          .describe(
-            "The stack's name in the account, iterate-<name>-… (default: from the owner's address)",
-          ),
         owner: z
           .string()
           .optional()
-          .describe("The owner's email address (default: the Cloudflare login's)"),
+          .describe(
+            "The owner's email address (default: the Cloudflare login's; for a mind that is there already: the owners it has)",
+          ),
+        controlPlaneHostname: z
+          .string()
+          .optional()
+          .describe(
+            "Where the mind's sign-in, API and MCP server answer: the domain itself, or one label under it (default: iterate.<domain>; for a mind that is there already: the one it has)",
+          ),
         buy: z
           .boolean()
           .optional()
@@ -173,7 +198,7 @@ const launcherProcedures = {
           .boolean()
           .optional()
           .describe(
-            "Answer yes to the other questions: a domain you bring, a deploy over this mind",
+            "Answer yes to the other questions: a domain you bring, a deploy over a mind that is there already",
           ),
         eraseRecords: z
           .boolean()
@@ -188,42 +213,26 @@ const launcherProcedures = {
             "A checkout of iterate's core to deploy from (default: the one this runs in, else iterate/core's main)",
           ),
         ref: z.string().optional().describe("A branch or commit of iterate/core to deploy"),
-        cloud: z
-          .boolean()
-          .default(true)
-          .meta({ negatable: true })
-          .describe(
-            "Name iterate Cloud in the mind's config, for its GitHub, Google and Slack clients",
-          ),
-        apiTokens: z
-          .boolean()
-          .optional()
-          .describe(
-            "The access may make API tokens (a token of your own in CLOUDFLARE_API_TOKEN): turn on telemetry and the mind's Cloudflare connection",
-          ),
         setup: z
           .boolean()
           .default(true)
           .meta({ negatable: true })
           .describe(
-            "With a person at the terminal, after the deploy: the passkey and the first sign-in, a ChatGPT plan or an API key for the model, a check that the onboarding agent answers, and the mind's MCP server in Claude Code and Codex",
-          ),
-        iterateDevImage: z
-          .boolean()
-          .optional()
-          .describe(
-            "Sandboxes start iterate's image (git, gh, Chromium, the coding CLIs): the deploy pushes it to the account's registry, about 1.6 GB through this computer. Without it they start the Cloudflare-managed image cloudflare/debian-trixie (Node and npm)",
+            "With a person at the terminal, after the deploy: the first sign-in and the passkey, a ChatGPT plan or an API key for the model, a check that the onboarding agent answers, and the mind's MCP server in Claude Code and Codex",
           ),
       }),
     )
     .meta({
       description:
-        "Deploy a new mind into your own Cloudflare account, at its own domain: sign in at Cloudflare, choose the account and the domain, and the stack is deployed from this computer",
+        "Deploy a mind into your own Cloudflare account, at its own domain: sign in at Cloudflare, choose the account and the domain, and the stack is deployed from this computer. A mind that is there already is deployed over, with its own config",
     })
     .handler(async ({ input }) =>
       deployMind(input, {
+        // the command hands on the mind's control-plane hostname, which is taken as it is
         signIn: async (address, openBrowser) => {
-          console.error((await login({ address, openBrowser })).message);
+          // the sign-in's lines, the device flow's page and code among them, beside the command's own
+          const print = (line: string) => console.log(line.replaceAll(/^/gm, "│  "));
+          print((await login({ address, openBrowser, print })).message);
           return connect(address);
         },
         connectChatgpt: (connection, print) =>
@@ -236,6 +245,60 @@ const launcherProcedures = {
           }),
       }),
     ),
+  recover: os
+    .input(
+      z.object({
+        domain: z.string().describe("A domain of the mind"),
+        owner: z.string().describe("The email address of the owner who has no passkey left"),
+        yes: z.boolean().optional().describe("Revoke and make the link without a question"),
+      }),
+    )
+    .meta({
+      description:
+        "For an owner with no passkey left, run by whoever holds the mind's Cloudflare account: sign in at Cloudflare, revoke that owner's passkeys, and print a link that signs the owner in once to add a new one",
+    })
+    .handler(async ({ input }) => recoverOwner(input)),
+  identity: {
+    show: os
+      .input(z.object({ mind: mindArgument }))
+      .meta({
+        description:
+          "The mind's id, the hostnames of its last identity record, how many records are on this computer and how many of them the mind publishes, and where its identity key is",
+      })
+      .handler(async ({ input }) => shownIdentity(await identityAddressOf(input.mind), identityIo)),
+    post: os
+      .input(z.object({ mind: mindArgument }))
+      .meta({
+        description:
+          "Post the identity records on this computer that the mind does not publish yet, and the last one again, which makes the mind's stack deliver what it still owes its own log. Then, with the identity key on this computer, sign and post the record that lists the stack's key, when no record lists it yet: until then the mind signs nothing as itself. `iterate deploy` does this itself; this is for a post that failed",
+      })
+      .handler(async ({ input }) => {
+        const address = await identityAddressOf(input.mind);
+        const done = await postIdentity({ controlPlaneHostname: address }, identityIo);
+        if (!done)
+          return {
+            message: `This computer holds no identity records of the mind at ${address}: the computer that first deployed it does.`,
+          };
+        const { mindId: mind, taken, here, published } = done;
+        if (published === undefined)
+          return {
+            mind,
+            message:
+              "The mind publishes a record that is not on this computer, so nothing here continues its log. Nothing was posted.",
+          };
+        return {
+          mind,
+          message: [
+            taken
+              ? `The mind took ${taken} of the ${here} records on this computer.`
+              : `The mind had the ${here} records on this computer, and took the last one again.`,
+            published === here
+              ? "Its published log shows them all."
+              : `Its published log shows ${published} of them.`,
+          ].join(" "),
+        };
+      }),
+  },
   login: os
     .input(
       z.object({
@@ -256,17 +319,17 @@ const launcherProcedures = {
       }),
     )
     .meta({ description: "Sign in to a mind and make it the profile's mind" })
-    .handler(async ({ input }) => login(input)),
+    .handler(async ({ input }) => login({ ...input, address: addressOf(input.address) })),
   logout: os
     .input(z.object({ mind: mindOption }))
     .meta({
       description:
-        "End this machine's sign-ins to the mind (its API and /provide) at its issuer, and forget them",
+        "End this machine's sign-ins to the mind (for its API, and to hand in a mind that runs here) at its issuer, and forget them",
     })
     .handler(async ({ input }) => {
       const address = await resolveMind(input.mind);
       const ended: string[] = [];
-      for (const resource of [mindApiUrlOf(address), mindProvideUrlOf(address)]) {
+      for (const resource of [mindApiUrlOf(address), mindProvideConnectResourceOf(address)]) {
         const session = readSession(resource);
         if (!session) continue;
         await revokeSession(session).catch((error: unknown) => {
@@ -283,7 +346,7 @@ const launcherProcedures = {
     .input(z.object({ mind: mindOption }))
     .meta({ description: "Who the mind says you are, and where" })
     .handler(async ({ input }) => {
-      using connection = await connect(input.mind);
+      using connection = await connect(await resolveMind(input.mind));
       return { mind: connection.address, ...(await connection.itx.whoami()) };
     }),
   repl: os
@@ -295,7 +358,7 @@ const launcherProcedures = {
     )
     .meta({ description: "Open a local Node REPL with itx and RpcTarget in scope" })
     .handler(async ({ input }) => {
-      using connection = await connect(input.mind);
+      using connection = await connect(await resolveMind(input.mind));
       using context = await connection.itx.cd(input.context);
       console.error(
         `Connected to ${connection.address}, context ${input.context}. Use .exit to quit.`,
@@ -352,7 +415,7 @@ const launcherProcedures = {
           for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
           script = Buffer.concat(chunks).toString("utf8");
         } else if (input.file) script = await readFile(input.file, "utf8");
-        using connection = await connect(input.mind);
+        using connection = await connect(await resolveMind(input.mind));
         using context = await connection.itx.cd(input.context);
         return await context.run(`async (itx) => {\n${script}\n}`);
       }),
@@ -458,7 +521,7 @@ const launcherProcedures = {
           .string()
           .optional()
           .describe(
-            "The tunnel's name and routing slug: the tunnel is <name>.<address> (default: a random one)",
+            "The tunnel's name: the tunnel is at <name>.<the mind's first zone> (default: a random one)",
           ),
         hostname: z
           .string()

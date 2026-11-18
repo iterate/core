@@ -1,26 +1,29 @@
-// worker.ts — THE BOUNDARY, for a stack whose mind is a Worker: the one Worker with routes. It
-// composes the request policy (./http.ts), the mail handlers (./mail.ts, ./mail-outcomes.ts), the
-// repos' events (./artifacts-events.ts) and the mind's service binding (./transport/bound.ts).
-// ./worker.provided.ts is the build for a mind that runs elsewhere.
+// worker.ts — THE BOUNDARY: the one Worker with routes, one build for every topology. It composes
+// the request policy (./http.ts), the mail handlers (./mail.ts, ./mail-outcomes.ts), the repos'
+// events (./artifacts-events.ts) and the way to the mind that the config's topology names
+// (./mind-transport.ts): the mind Worker, or a mind that runs elsewhere and handed itself in
+// (./provided-mind.ts).
 import type { Env } from "./env.ts";
 import { boundaryResponse } from "./http.ts";
 import { receivedMail } from "./mail.ts";
 import { artifactsRows } from "./artifacts-events.ts";
 import { cloudflareEvents } from "./cloudflare-events.ts";
 import { mailRows } from "./mail-outcomes.ts";
-import { boundMind } from "./transport/bound.ts";
+import { mindTransportOf } from "./mind-transport.ts";
 
+// A Durable Object binding names a class that the Worker's main module exports.
+export { ProvidedMind } from "./provided-mind.ts";
 export { Door } from "./rpc.ts";
 
 export default {
-  fetch: (request, env, ctx) => boundaryResponse(request, env, ctx, boundMind(env)),
-  // A failure throws, so Cloudflare delivers the mail again; the fact's idempotency key keeps a retry
-  // after a committed append from landing twice.
-  email: (message, env) => receivedMail(message, env, boundMind(env)),
-  // The stack's one queue of Cloudflare events (./cloudflare-events.ts): a row for each kind.
+  fetch: (request, env, ctx) => boundaryResponse(request, env, ctx, mindTransportOf(env)),
+  // A failure throws, so Cloudflare delivers the mail again: a mind that runs elsewhere and is not
+  // connected is such a failure. The fact's idempotency key keeps a retry after a committed append
+  // from landing twice.
+  email: (message, env) => receivedMail(message, env, mindTransportOf(env)),
+  // The stack's one queue of Cloudflare events (./cloudflare-events.ts): a row for each kind. An
+  // event for a mind that is not connected is retried until it is, or the consumer's retries run
+  // out. A mind that runs elsewhere keeps its repos where it runs, so no event of a repo comes.
   queue: (batch, env) =>
-    cloudflareEvents(batch, boundMind(env), {
-      ...mailRows,
-      ...artifactsRows({ namespace: env.REPOS_NAMESPACE }),
-    }),
+    cloudflareEvents(batch, mindTransportOf(env), { ...mailRows, ...artifactsRows }),
 } satisfies ExportedHandler<Env>;

@@ -16,13 +16,16 @@ import { voiceApp } from "./apps/voice/app.ts";
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
 import { cloudAccountsEvent } from "./cloud-accounts.ts";
-import { cloudDeliveryOf, sayMindForm } from "./cloud-deliveries.ts";
+import { cloudDeliveryOf, mindFormEvent, sayMindForm } from "./cloud-deliveries.ts";
 import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
 import {
   cloudflareBilling,
   cloudflareBillingToken,
+  cloudflareConnect,
   cloudflareConnectionEvent,
   cloudflareForAgent,
+  cloudflareLastHour,
+  cloudflareMcpForAgent,
 } from "./cloudflare.ts";
 import { contextDescriptionsEvent } from "./context-descriptions.ts";
 import { gmailEvent } from "./gmail.ts";
@@ -44,7 +47,8 @@ import {
 } from "./slack.ts";
 
 // The integration packages this mind hosts (a Telegram bot, your own GitHub App, …), one element
-// each: apps.md, and the recipes at https://github.com/jonastemplestein/iterategrations.
+// each: apps.md, and the recipes at https://github.com/jonastemplestein/iterategrations. A
+// package that serves pages gets a case of its own in `fetch` below.
 const integrations: Integration[] = [];
 
 // The apps this mind hosts: a folder each under apps/, mounted on its host in `fetch` below
@@ -196,7 +200,7 @@ export default class extends IterateConfigEntrypoint {
                 email.text || "(no text body)",
                 caution,
                 ...email.attachments.map((file) => `Attached: ${file.filename} at ${file.path}`),
-                `Reply in the thread with \`await itx.email.send({ inReplyToOffset: ${event.offset}, text })\`.`,
+                `Reply in the thread with \`await itx.email.send({ from: ${JSON.stringify(email.envelope.to.toLowerCase())}, inReplyToOffset: ${event.offset}, text })\`.`,
               ].join("\n\n"),
             },
           })
@@ -251,7 +255,8 @@ export default class extends IterateConfigEntrypoint {
         await cloudHandoverEvent(itx, event);
         break;
       case "events.iterate.com/mind-meld/configured":
-        // The owner signed the rule that lets iterate.com add events under /minds/iterate.com/:
+        // The owner signed the rule that lets iterate.iterate.com add events under
+        // /minds/iterate.iterate.com/:
         // the onboarding agent is told, so it goes on by itself (cloud-handover.ts,
         // onboarding/let-iterate-in.md).
         await iterateLetInEvent(itx, event);
@@ -272,8 +277,12 @@ export default class extends IterateConfigEntrypoint {
       // Cloud's apps and accounts, every other key and account, and what a computer lends
       // (cloud-accounts.ts).
       cloudAccountsEvent(itx, event),
-      // The "Cloudflare" card: the mind's connection to Cloudflare's API, checked at each
-      // publish (cloudflare.ts).
+      // An account that a member connected through iterate Cloud since the last publish: the
+      // mind tells the Cloud at once that it reads the mind form (cloud-deliveries.ts). Keep it
+      // with `processMindEvent` below, as the init step's word.
+      mindFormEvent(itx, event),
+      // The mind's connection to its own Cloudflare account: a new consent is checked against
+      // that account, and the "Cloudflare" card is made true at each publish (cloudflare.ts).
       cloudflareConnectionEvent(itx, event),
       // What each context is for, the line the mind's catalog shows: the table in
       // context-descriptions.ts, written at a context's birth and at each publish.
@@ -295,17 +304,17 @@ export default class extends IterateConfigEntrypoint {
     if (cloudDeliveryOf(event)) await cloudDeliveryEvent(itx, event);
   }
 
-  // Every host of the mind: one case each, on `x-iterate-routing-slug` (`dash` for dash.<domain>,
-  // null on the apex). The guard beside a case says who may come: none for a
-  // public site, `this.auth.require` for members, `this.auth.requirePerson` for anyone signed in
-  // (people.md). Before the guard, an app answers anyone for its
-  // manifest and its icon (`open`, apps/open-files.ts): the sign-in pages show them. The `?.` is
-  // for an app.ts of yours that has no `open`. A package answers the requests on its own slug.
+  // Every hostname of the mind's zones but its control-plane hostname, where the platform answers. An app's
+  // hostname is `<label>.<zone>` on each zone (`dash.example.com`), so there is one case for each
+  // first label, and any other hostname, a zone's apex too, is the homepage's: GET and HEAD of
+  // `/`, and nothing else. To serve one hostname alone, compare `hostname` itself. The guard beside a case says who may come: none
+  // for a public site, `this.auth.require` for members, `this.auth.requirePerson` for anyone
+  // signed in (people.md). Before the guard, an app answers anyone for its description and its
+  // icon (`open`, apps/open-files.ts): the sign-in pages show them. The `?.` is for an app.ts of
+  // yours that has no `open`.
   async fetch(request: Request) {
-    const routingSlug = request.headers.get("x-iterate-routing-slug");
-    const integration = integrations.find((candidate) => candidate.routingSlug === routingSlug);
-    if (integration?.fetch) return integration.fetch(request, this);
-    switch (routingSlug) {
+    const { hostname, pathname } = new URL(request.url);
+    switch (hostname.split(".")[0]) {
       case "docs": // the docs app, for members: the config repo, read in a browser
         return docs.open?.(request) || this.auth.require(request) || docs.fetch(request, this);
       case "dash": // the Dash, for members: the mind seen from above, and every agent's chat
@@ -314,11 +323,17 @@ export default class extends IterateConfigEntrypoint {
         return voice.open?.(request) || this.auth.require(request) || voice.fetch(request, this);
       // case "guestbook": // the guestbook, for everyone: no guard here, its routes ask for who they need
       //   return guestbook.fetch(request, this);
-      case null: {
+      // case "telegram": // an integration package's own pages and webhook, one of `integrations`
+      //   return telegram.fetch(request, this);
+      default: {
         // Who the visitor is, for anyone signed in, member or not: the smallest page with end
         // users. Signed out, the platform turns the answer into a sign-in and comes back here.
-        if (new URL(request.url).pathname === "/me")
+        if (pathname === "/me")
           return this.auth.requirePerson(request) || Response.json(this.auth.person(request));
+        // Anything else that no case takes is not found: a webhook to a hostname that nothing
+        // serves must not be answered as taken.
+        if (pathname !== "/" || !["GET", "HEAD"].includes(request.method))
+          return new Response("Not found\n", { status: 404 });
         using itx = this.getItx();
         const { mindSlug } = await itx.whoami();
         return new Response("Homepage of mind " + mindSlug + "\n", {
@@ -326,7 +341,6 @@ export default class extends IterateConfigEntrypoint {
         });
       }
     }
-    return new Response("Not found\n", { status: 404 });
   }
 
   /** `itx.config.slack(method, args)`: any method of Slack's Web API, as the workspace's bot
@@ -337,12 +351,34 @@ export default class extends IterateConfigEntrypoint {
     return await slackForAgent(itx, method, args);
   }
 
-  /** `itx.config.cloudflare(tool, args)`: one request to Cloudflare's REST API (`"execute"`) or
-   *  the accounts it reaches (`"whoami"`), with the credential of the mind's own account, with
-   *  which agents read the account and query its logs and traces (cloudflare.ts; cloudflare.md). */
+  /** `itx.config.cloudflareConnect({ tell? })`: the one link that a member opens to connect the
+   *  mind to its own Cloudflare account, and which of the two ways it is (cloudflare.ts;
+   *  cloudflare.md). `tell`: the agent that asks, which is told when the consent has landed. */
+  async cloudflareConnect(options?: { tell?: string }) {
+    using itx = this.getItx();
+    return await cloudflareConnect(itx, options);
+  }
+
+  /** `itx.config.cloudflare(tool, args)`: one request to Cloudflare's REST API (`"execute"`), or
+   *  who the mind is connected as (`"whoami"`), with the member's consent: agents read the
+   *  account and query its logs and traces (cloudflare.ts; cloudflare.md). */
   async cloudflare(tool: string, args?: Record<string, unknown>) {
     using itx = this.getItx();
     return await cloudflareForAgent(itx, tool, args);
+  }
+
+  /** `itx.config.cloudflareMcp(tool, args)`: one tool of Cloudflare's own MCP server, with the
+   *  same consent: `"search"` finds the API call for a task, `"execute"` runs it (cloudflare.ts). */
+  async cloudflareMcp(tool: string, args?: Record<string, unknown>) {
+    using itx = this.getItx();
+    return await cloudflareMcpForAgent(itx, tool, args);
+  }
+
+  /** `itx.config.cloudflareLastHour()`: who the mind is connected as, and its own Workers'
+   *  requests and errors of the last hour (cloudflare.ts). */
+  async cloudflareLastHour() {
+    using itx = this.getItx();
+    return await cloudflareLastHour(itx);
   }
 
   /** `itx.config.cloudflareBillingToken()`: whether the mind has its billing token, or the two
@@ -363,9 +399,9 @@ export default class extends IterateConfigEntrypoint {
 type Itx = IterateConfigProcessEventArgs<"agents">["itx"];
 
 /** iterate Cloud's DELIVERIES (cloud-deliveries.ts): `processEvent` hands every event here, and
- *  `processMindEvent` iterate.com's deliveries in the mind form. Each case reads its delivery with
- *  `cloudDeliveryOf`, so it acts the same in either form, and keeps what it makes on the mind's own
- *  context for the account. A function of this module, not a method: every public method of the
+ *  `processMindEvent` iterate.iterate.com's deliveries in the mind form. Each case reads its
+ *  delivery with `cloudDeliveryOf`, so it acts the same in either form, and keeps what it makes on
+ *  the mind's own context for the account. A function of this module, not a method: every public method of the
  *  entrypoint can be called through `itx.config`. */
 async function cloudDeliveryEvent(itx: Itx, event: IterateConfigProcessEventArgs["event"]) {
   // This file reads a delivery in both forms, so it tells the Cloud (cloud-deliveries.ts
@@ -476,7 +512,7 @@ async function cloudDeliveryEvent(itx: Itx, event: IterateConfigProcessEventArgs
       //
       // GitHub's push counts only as iterate Cloud relayed it: on the installation's own log
       // under `/integrations/github/`, signed by the Cloud's key, or the same under
-      // `/minds/iterate.com/`, signed by that mind (cloud-deliveries.ts). The platform names a
+      // `/minds/iterate.iterate.com/`, signed by that mind (cloud-deliveries.ts). The platform names a
       // signer from its own record of the key (the stack's config, a key a member enrolled, or
       // the key a mind publishes), never from what the statement says.
       const { delivery, body, path } = event.payload as {

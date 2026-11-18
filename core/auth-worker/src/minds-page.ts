@@ -4,11 +4,13 @@
 // rule (./signed-change.ts `signScript`), and the page posts it to `/statements` (./statements.ts),
 // as any signed statement. To end a meld is the rule `{ append: [] }`. To let a mind in is the one
 // default rule, `{ append: ["/minds/<domain>/"] }`: a wider rule is an agent's proposal.
-import { isMindDomain, publishedMindOf, STATEMENTS_PATH } from "iterate/signed";
+import { identityKeyIdOf } from "iterate/mind-identity";
+import { publishedMindOf } from "iterate/mind-identity-log";
+import { isMindControlPlaneHostname, STATEMENTS_PATH } from "iterate/signed";
 import { z } from "zod";
 import { sessionOf } from "./cookies.ts";
-import { type Env, iterateConfigOf } from "./env.ts";
-import { passkeyOwedResponse, standingOf } from "./members.ts";
+import { configOf, type Env } from "./env.ts";
+import { isMember } from "./members.ts";
 import { notMemberPage, page, text } from "./pages.ts";
 import { minute } from "./sessions-page.ts";
 import { signInHref } from "./sign-in.ts";
@@ -32,9 +34,9 @@ export async function mindsPageResponse(env: Env, request: Request): Promise<Res
     return new Response("Method not allowed", { status: 405 });
   const published = url.pathname === PUBLISHED_PATH;
   const session = await sessionOf(env, request);
-  const standing = session ? await standingOf(env, session) : "not-member";
+  const member = session ? await isMember(env, session.email) : false;
   if (published) {
-    if (standing !== "member") return Response.json({ why: "a member's session" }, { status: 403 });
+    if (!member) return Response.json({ why: "a member's session" }, { status: 403 });
     return publishedResponse(env, url.searchParams.get("domain") || "");
   }
   if (!session)
@@ -42,26 +44,31 @@ export async function mindsPageResponse(env: Env, request: Request): Promise<Res
       status: 303,
       headers: { location: signInHref(MINDS_PATH), "cache-control": "no-store" },
     });
-  const { domain } = iterateConfigOf(env);
-  if (standing === "not-member") return notMemberPage({ domain, email: session.email });
-  if (standing === "passkey-owed") return passkeyOwedResponse(MINDS_PATH);
-  return mindsPage(env, domain);
+  const mind = configOf(env).controlPlaneHostname;
+  if (!member) return notMemberPage({ mind, email: session.email });
+  return mindsPage(env, mind);
 }
 
-/** What the mind at `domain` publishes, for the page to show before the press: its keys' ids and
- *  labels, never more, or why there are none. */
+/** What the identity log of the mind at `domain` lists, for the page to show before the press:
+ *  the mind's id, and the ids and labels of the working keys that sign statements, never more,
+ *  or why there are none. A key of another purpose signs no statement, so the page does not
+ *  show it as one that a meld would follow. */
 async function publishedResponse(env: Env, domain: string): Promise<Response> {
-  if (!isMindDomain(domain) || domain === iterateConfigOf(env).domain)
+  if (!isMindControlPlaneHostname(domain) || domain === configOf(env).controlPlaneHostname)
     return Response.json({ why: "name another mind by its domain" }, { status: 400 });
-  const document = await publishedMindOf(domain, (request) => fetch(request));
-  if ("why" in document) return Response.json(document, { status: 502 });
+  const published = await publishedMindOf(domain, (request) => fetch(request));
+  if ("why" in published) return Response.json(published, { status: 502 });
   return Response.json({
-    mind: document.mind,
-    keys: document.keys.map(({ key, label }) => ({ key, label })),
+    mind: published.expected,
+    keys: await Promise.all(
+      published.current.workingKeys
+        .filter(({ purpose }) => purpose === "statements")
+        .map(async ({ publicKey, label }) => ({ key: await identityKeyIdOf(publicKey), label })),
+    ),
   });
 }
 
-async function mindsPage(env: Env, domain: string): Promise<Response> {
+async function mindsPage(env: Env, mind: string): Promise<Response> {
   const { results } = await env.DB.prepare(
     `select m.domain, m.append, m.key, m.configured_at, u.email
        from mind_melds m left join users u on u.id = m.configured_by order by m.domain`,
@@ -77,9 +84,9 @@ async function mindsPage(env: Env, domain: string): Promise<Response> {
       </li>`;
   };
   return page({
-    title: `Minds that ${domain} lets in`,
+    title: `Minds that ${mind} lets in`,
     wide: true,
-    body: `<h1>Minds that ${text(domain)} lets in</h1>
+    body: `<h1>Minds that ${text(mind)} lets in</h1>
       ${
         melds.length
           ? `<ul>${melds.map(meldItem).join("")}</ul>`
@@ -102,7 +109,7 @@ async function mindsPage(env: Env, domain: string): Promise<Response> {
         <button type="button">Let it in</button>
       </div>
       <p id="status" class="muted" role="status">Your passkey signs each change.</p>`,
-    script: `${signScript(domain)}${MINDS_SCRIPT}`,
+    script: `${signScript(mind)}${MINDS_SCRIPT}`,
   });
 }
 
@@ -135,7 +142,7 @@ form.addEventListener("submit", async (event) => {
     if (domain !== typed) return;
     if (answer.why) throw new Error(answer.why);
     found.querySelector("[data-domain]").textContent = domain;
-    found.querySelector("[data-keys]").textContent = answer.keys.map((key) => key.key.slice(0, 8)).join(", ");
+    found.querySelector("[data-keys]").textContent = answer.keys.length ? answer.keys.map((key) => key.key.slice(0, 8)).join(", ") : "none that sign statements yet";
     found.querySelector("[data-rule]").textContent = domain + " may add events under /minds/" + domain + "/ of this mind, and nothing else.";
     found.hidden = false;
     status.textContent = "Your passkey signs this.";

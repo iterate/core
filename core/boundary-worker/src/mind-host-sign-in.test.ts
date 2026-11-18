@@ -1,137 +1,58 @@
-// WHEN INGRESS SIGNS A PERSON IN on a mind hostname (./mind-host-sign-in.ts), from the app's 401:
-// a page load by someone signed out, and RFC 9470's step-up, where the app takes none of the ways
-// the session began by. The ways ride the challenge's `acr_values`, and a sign-in that would bring
-// the same session back is never started.
+// WHEN THE BOUNDARY SIGNS A PERSON IN on a mind hostname (./mind-host-sign-in.ts), from the app's
+// 401: a page load by someone signed out. A sign-in that would bring the same session back is
+// never started.
 import { expect, test } from "vitest";
 import { type MindHostCaller, mindHostSignInAnswerOf } from "./mind-host-sign-in.ts";
 
-const CLOUDFLARE_ONLY = 'Bearer realm="iterate", scope="identity", acr_values="cloudflare"';
-const STEP_UP =
-  'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication", acr_values="cloudflare"';
+const MEMBERS = 'Bearer realm="iterate"';
+const ANYONE_SIGNED_IN = 'Bearer realm="iterate", scope="identity"';
 
 test.for<{
   name: string;
   challenge: string;
   caller: MindHostCaller;
-  method?: string;
   navigation?: false;
   answer: unknown;
 }>([
   {
-    name: "signed out, at an app that names Cloudflare",
-    challenge: CLOUDFLARE_ONLY,
+    name: "signed out, at a members' page",
+    challenge: MEMBERS,
     caller: "anonymous",
-    answer: { methods: ["cloudflare"] },
+    answer: "sign-in",
   },
   {
-    name: "a person who signed in with a mailed code",
-    challenge: STEP_UP,
-    caller: "non-member",
-    method: "email",
-    answer: { methods: ["cloudflare"] },
-  },
-  {
-    name: "a member, whose passkey this app does not take",
-    challenge: STEP_UP,
-    caller: "member",
-    method: "passkey",
-    answer: { methods: ["cloudflare"] },
-  },
-  {
-    name: "a session from before sessions said how they began",
-    challenge: CLOUDFLARE_ONLY,
-    caller: "non-member",
-    answer: { methods: ["cloudflare"] },
-  },
-  {
-    name: "a session the app takes, refused for another reason",
-    challenge: STEP_UP,
-    caller: "non-member",
-    method: "cloudflare",
-    answer: null,
-  },
-  {
-    name: "Cloudflare's session at an app that names no way",
-    challenge: 'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication"',
-    caller: "non-member",
-    method: "cloudflare",
-    answer: { methods: [] },
-  },
-  {
-    name: "a mind's own session at an app that names no way",
-    challenge: 'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication"',
-    caller: "non-member",
-    method: "email",
-    answer: null,
-  },
-  {
-    name: "a fetch by a person the app does not take",
-    challenge: STEP_UP,
-    caller: "non-member",
-    method: "email",
-    navigation: false,
-    answer: null,
-  },
-  {
-    name: "signed out, at an app that names no way",
-    challenge: 'Bearer realm="iterate", scope="identity"',
+    name: "signed out, at a page for anyone signed in",
+    challenge: ANYONE_SIGNED_IN,
     caller: "anonymous",
-    answer: { methods: [] },
+    answer: "sign-in",
   },
   {
     name: "someone who is no member, at a members' page",
-    challenge: 'Bearer realm="iterate"',
+    challenge: MEMBERS,
     caller: "non-member",
-    method: "email",
     answer: "not-a-member",
   },
-  // A guest is nobody where the app does not name the way: a stranger's answer, the sign-in.
   {
-    name: "a guest, at a members' page",
-    challenge: 'Bearer realm="iterate"',
+    name: "a signed-in person whom a page for anyone signed in refuses for another reason",
+    challenge: ANYONE_SIGNED_IN,
     caller: "non-member",
-    method: "guest",
-    answer: { methods: [] },
+    answer: null,
   },
+  { name: "a member whom the app refuses", challenge: MEMBERS, caller: "member", answer: null },
   {
-    name: "a guest's fetch, at a members' page: the 401 itself, as a stranger's",
-    challenge: 'Bearer realm="iterate"',
-    caller: "non-member",
-    method: "guest",
+    name: "a fetch by someone signed out",
+    challenge: MEMBERS,
+    caller: "anonymous",
     navigation: false,
     answer: null,
   },
   {
-    name: "a guest, at an app for people that names no way",
-    challenge: 'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication"',
-    caller: "non-member",
-    method: "guest",
-    answer: { methods: [] },
-  },
-  {
-    name: "a guest, at an app that names other ways",
-    challenge:
-      'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication", acr_values="passkey email"',
-    caller: "non-member",
-    method: "guest",
-    answer: { methods: ["passkey", "email"] },
-  },
-  {
-    name: "a person who signed in with a mailed code, at an app that names guests alone",
-    challenge:
-      'Bearer realm="iterate", scope="identity", error="insufficient_user_authentication", acr_values="guest"',
-    caller: "non-member",
-    method: "email",
-    answer: { methods: ["guest"] },
-  },
-  {
-    name: "a guest, at an app whose own 401 follows its guest guard",
-    challenge: 'Bearer realm="iterate", scope="identity", acr_values="guest"',
-    caller: "non-member",
-    method: "guest",
+    name: "a challenge that is not the platform's",
+    challenge: 'Bearer realm="another"',
+    caller: "anonymous",
     answer: null,
   },
-])("$name", ({ challenge, caller, method, navigation, answer }) => {
+])("$name", ({ challenge, caller, navigation, answer }) => {
   const request = new Request("https://app.example.com/", {
     headers:
       navigation === false
@@ -142,5 +63,14 @@ test.for<{
     status: 401,
     headers: { "www-authenticate": challenge },
   });
-  expect(mindHostSignInAnswerOf({ answer: unauthorized, request, caller, method })).toEqual(answer);
+  expect(mindHostSignInAnswerOf({ answer: unauthorized, request, caller })).toEqual(answer);
+});
+
+test("a fetch by someone who is no member gets a 403, never a 401 that would start OAuth again", () => {
+  const answer = mindHostSignInAnswerOf({
+    answer: new Response(null, { status: 401, headers: { "www-authenticate": MEMBERS } }),
+    request: new Request("https://app.example.com/", { headers: { accept: "application/json" } }),
+    caller: "non-member",
+  });
+  expect(answer).toMatchObject({ status: 403 });
 });

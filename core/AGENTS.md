@@ -4,8 +4,8 @@ What goes public as `iterate/core`: a mind's stack.
 
 - A mind is a stack of Workers, each in a folder named `<part>-worker`: `mind-worker/` (it hosts
   the mind's contexts), `boundary-worker/`, `secrets-worker/`, `auth-worker/` and
-  `telemetry-worker/`. One more Worker hosts a context: the boundary of a stack whose mind runs
-  elsewhere (`boundary-worker/src/worker.provided.ts`), for the session that mind dials.
+  `telemetry-worker/`. The boundary is one build for every topology: a mind that runs elsewhere
+  hands itself in at the API's address (`boundary-worker/src/provided-mind.ts`).
 - `itx/` is the kernel library they share, and `alchemy/` deploys a stack.
 - `home-lab/` runs the mind Worker on your own machine.
 - `lib/` is npm `iterate`: the SDK, the agents app (`iterate/agents`) and the `iterate` CLI.

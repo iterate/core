@@ -11,7 +11,7 @@ The owner should come away with: some acts wait for their passkey, and they watc
 - A rule for a request with a secret: `{ secret: "/secrets/<name>", methods, hosts }`, and
   `jsonStrings`, `freePaths`. Code never sets one: it proposes it.
 - A held call waits five minutes for the owner, then throws ("this mail waits for a member's
-  approval, at https://iterate.<domain>/secrets/approvals?digest=…"). The owner can still approve
+  approval, at https://<control-plane hostname>/secrets/approvals?digest=…"). The owner can still approve
   it for a day; it is done then, once. Never send it again.
 - The rules for mail and calls start OPEN: until the owner presses "Lock these rules" there and
   signs, the mind's code can change them unsigned. Say so when they want a rule that binds you too.
@@ -36,11 +36,11 @@ await itx.agents.create("/agents/onboarding/held");
 await itx.agents
   .get("/agents/onboarding/held")
   .message(
-    "Run `await itx.email.send({ from: 'onboarding@<domain>', to: 'nobody@example.com', subject: 'A mail that waits', text: 'This mail waits for your passkey.' })`. It waits up to five minutes, then throws. Report to /agents/onboarding in one plain sentence for the owner: sent, rejected, or still waiting.",
+    "Run `await itx.email.send({ from: 'onboarding@<zone>', to: 'nobody@example.com', subject: 'A mail that waits', text: 'This mail waits for your passkey.' })`. It waits up to five minutes, then throws. Report to /agents/onboarding in one plain sentence for the owner: sent, rejected, or still waiting.",
   );
 ```
 
-Send the owner `https://iterate.<domain>/secrets/approvals`, where the mail waits. Ask them to
+Send the owner `https://<control-plane hostname>/secrets/approvals`, where the mail waits. Ask them to
 reject it (example.com is nobody), and offer to take the rule away. Your turn never waits on it.
 
 The GitHub demo, once `/secrets/github` is set (`onboarding/github.md`). Propose

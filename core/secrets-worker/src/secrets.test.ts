@@ -1,6 +1,60 @@
 import { expect, test } from "vitest";
 import { useLines } from "./callback-page.ts";
-import { accessTokenEnded, oauthTokensOf, refreshSecretMaterial, secretUseOf } from "./secrets.ts";
+import {
+  accessTokenEnded,
+  oauthTokensOf,
+  REFRESH_READS,
+  refreshOnlyFieldRefusal,
+  refreshSecretMaterial,
+  secretUseOf,
+} from "./secrets.ts";
+
+test("the fields that a kind of refresh reads are the refresh's alone, each kind's by the schema it reads the material with, and any other field is given out", () => {
+  const refused = (refresh: Parameters<typeof refreshOnlyFieldRefusal>[0], fields: string[]) =>
+    fields.filter((field) => refreshOnlyFieldRefusal(refresh, "/secrets/a", field) !== null);
+  const fields = ["accessToken", "refreshToken", "refreshToken.part", "clientId", "clientSecret"];
+  const app = ["accessToken", "appId", "privateKey", "refreshToken"];
+  expect({
+    oauth: refused(
+      { kind: "oauth-refresh-token", tokenEndpoint: "https://provider.example/token" },
+      fields,
+    ),
+    app: refused(
+      {
+        kind: "github-app-installation",
+        apiOrigin: "https://api.github.com",
+        installationId: "1",
+        client: { mind: "github" },
+      },
+      app,
+    ),
+    // exchange code of the maker's own gets the material whole: the platform names no field
+    worker: refused({ kind: "worker", source: "export async function exchange() {}" }, fields),
+    noRefresh: refused(null, fields),
+    // a kind's fields are its schema's: what the refresh parses is what is kept from a request
+    readByKind: Object.fromEntries(
+      Object.entries(REFRESH_READS).map(([kind, reads]) => [kind, Object.keys(reads.shape)]),
+    ),
+  }).toEqual({
+    oauth: ["refreshToken", "refreshToken.part", "clientId", "clientSecret"],
+    app: ["appId", "privateKey"],
+    worker: [],
+    noRefresh: [],
+    readByKind: {
+      "oauth-refresh-token": ["refreshToken", "clientId", "clientSecret"],
+      "github-app-installation": ["appId", "privateKey"],
+      worker: [],
+    },
+  });
+  // with no field named, nothing of an object is given out anyway
+  expect(
+    refreshOnlyFieldRefusal(
+      { kind: "oauth-refresh-token", tokenEndpoint: "https://provider.example/token" },
+      "/secrets/a",
+      undefined,
+    ),
+  ).toBeNull();
+});
 
 test("a token answer's expires_in is kept as the time the access token ends, and a token past that time has ended", async () => {
   const before = Date.now();

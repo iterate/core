@@ -3,19 +3,17 @@ import type { TokenIdentity } from "iterate/workers";
 import { z } from "zod";
 import { base64url } from "iterate/signed";
 import { AccountFacts } from "./account-facts.ts";
-import {
-  atMindsDomain,
-  emailAllowed,
-  type EmailRule,
-  FIRST_OWNER_PATH,
-  FIRST_OWNER_TICKET_MS,
-  isOwner,
-  memberByConfig,
-} from "./config.ts";
+import { atMindsZone, isOwner } from "./config.ts";
 import { sha256Hex } from "./device/protocol.ts";
-import { endSessions, type Session, sessionOf } from "./cookies.ts";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
-import { EMAIL_SIGN_IN_PATH } from "./email-sign-in.ts";
+import {
+  endSessions,
+  GUEST_KEY_PREFIX,
+  type PersonSession,
+  type Session,
+  sessionOf,
+} from "./cookies.ts";
+import { ENROLMENT_MS, FIRST_PASSKEY_PATH } from "./enrolment.ts";
+import { configOf, type Env, issuerOf } from "./env.ts";
 import { blockedOf } from "./blocked.ts";
 import { clientsWithAccess, endFields, type Ends, endsOf, logoOriginsOf } from "./access-list.ts";
 import { type ClientWithAccess, endAccess, endGrantsOf, sessionsByClientOf } from "./oauth.ts";
@@ -38,53 +36,29 @@ const MEMBERS_PATH = "/members";
 
 type Added = { email: string; addedBy: string; addedAt: number };
 
+/** WHO IS A MEMBER: an owner, whom the config names, and whoever an owner or a member added on
+ *  `/members`, whose row is in D1. */
 export async function isMember(env: Env, email: string): Promise<boolean> {
-  const config = iterateConfigOf(env);
-  // What is no address is nobody's: the key of a person whom no address reaches (./users.ts
-  // `linkBySubject`: a Cloudflare user, a guest) is no member by any rule, `everyone` too.
+  // a key that is no address (a guest's row, ./cookies.ts `GUEST_KEY_PREFIX`) is nobody's
   if (!email.includes("@")) return false;
-  // An address of the mind's own is no member, by a rule or by a row: `add` refuses one, and this
-  // holds for a row from before it did.
-  if (atMindsDomain(config.domain, email)) return false;
-  return memberByConfig(config, email) || (await isAdded(env, email));
+  const config = configOf(env);
+  // An address at a zone of the mind is no member: `add` refuses one, and a deploy that gives the
+  // mind another zone ends the members whose address is there.
+  if (atMindsZone(config, email)) return false;
+  return isOwner(config, email) || (await isAdded(env, email));
 }
+
+/** WHETHER A SESSION ACTS AS A MEMBER: a passkey opened it, and its address is a member's now. A
+ *  session that a mailed code opened for a person who was no member is never a member's, whatever
+ *  its address becomes: mail must not open the mind. */
+export const isMemberSession = async (env: Env, session: Pick<PersonSession, "method" | "email">) =>
+  session.method === "passkey" && (await isMember(env, session.email));
 
 /** Who changes the members: a session's person, or a member's token's. */
 type Actor = Pick<Session, "userId" | "email">;
 
-/** What a session is to this stack. Only a live passkey's session acts as a "member". A mailed code
- *  and a sign-in at Google prove an address and no more, and the owner's ticket is a deploy's
- *  word: a member's session from one of them is "passkey-owed", and opens /keys alone, to add a
- *  passkey. The config's `google.signsInAlone` makes Google's session a member's too. */
-export async function standingOf(
-  env: Env,
-  session: Session,
-): Promise<"member" | "passkey-owed" | "not-member"> {
-  // A sign-in at Cloudflare is never a member's, whatever its address (./cloudflare-sign-in.ts),
-  // and a guest's never, whatever is added later (./guest-sign-in.ts). Nor is the session of a
-  // passkey that was added while its owner was no member, or a grant of such a session
-  // (../migrations/0016).
-  if (session.method === "cloudflare" || session.method === "guest" || session.outsider)
-    return "not-member";
-  if (!(await isMember(env, session.email))) return "not-member";
-  if (session.method === "passkey") return "member";
-  const { google } = iterateConfigOf(env).login.methods;
-  return session.method === "google" && google?.signsInAlone ? "member" : "passkey-owed";
-}
-
-/** Where a "passkey-owed" session is sent from `here`, a path of this origin. */
-export const passkeyOwedResponse = (here: string) =>
-  new Response(null, {
-    status: 303,
-    headers: {
-      location: `/keys?${new URLSearchParams({ next: here })}`,
-      "cache-control": "no-store",
-    },
-  });
-
-/** Whether the member with this address holds a passkey that is not removed. A passkey from before
- *  the address was a member is none (./keys.ts `holdsPasskey`). */
-export async function memberHoldsPasskey(env: Env, email: string): Promise<boolean> {
+/** Whether the member with this address holds a passkey that is not removed. */
+async function memberHoldsPasskey(env: Env, email: string): Promise<boolean> {
   const held = await env.DB.prepare(
     `select 1 from keys where format = 'webauthn' and revoked_at is null and outsider = 0
        and user_id = (select id from users where email = ?1) limit 1`,
@@ -94,7 +68,7 @@ export async function memberHoldsPasskey(env: Env, email: string): Promise<boole
   return Boolean(held);
 }
 
-export async function isAdded(env: Env, email: string): Promise<boolean> {
+async function isAdded(env: Env, email: string): Promise<boolean> {
   const row = await env.DB.prepare("select 1 from members where email = ?1")
     .bind(email.trim().toLowerCase())
     .first();
@@ -112,20 +86,18 @@ export async function membersResponse(
   if (new URL(request.url).pathname !== MEMBERS_PATH) return null;
   const bearer = request.headers.get("authorization")?.match(/^Bearer (.+)$/)?.[1];
   const sentJson = request.headers.get("content-type")?.startsWith("application/json");
-  if (request.method === "OPTIONS" || bearer || (request.method === "POST" && sentJson)) {
-    const cors = corsHeaders(env, request);
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+  if (bearer || (request.method === "POST" && sentJson)) {
     // the statement is the credential: its signer needs no token and no session
-    if (request.method === "POST") return addedBySignature(env, request, cors);
-    const identity = bearer ? await whoIs(bearer, mindApiUrlOf(iterateConfigOf(env).domain)) : null;
+    if (request.method === "POST") return addedBySignature(env, request);
+    const identity = bearer
+      ? await whoIs(bearer, mindApiUrlOf(configOf(env).controlPlaneHostname))
+      : null;
     if (!identity?.member || !identity.principal.email)
-      return json({ error: "A member's token for the mind's API is needed." }, 401, cors);
-    return jsonResponse(
-      env,
-      request,
-      { userId: identity.principal.actor, email: identity.principal.email },
-      cors,
-    );
+      return json({ error: "A member's token for the mind's API is needed." }, 401);
+    return jsonResponse(env, request, {
+      userId: identity.principal.actor,
+      email: identity.principal.email,
+    });
   }
   const session = await sessionOf(env, request);
   if (!session)
@@ -133,11 +105,9 @@ export async function membersResponse(
       status: 303,
       headers: { location: signInHref(MEMBERS_PATH), "cache-control": "no-store" },
     });
-  const standing = await standingOf(env, session);
-  if (standing === "not-member")
-    return notMemberPage({ domain: iterateConfigOf(env).domain, email: session.email });
-  if (standing === "passkey-owed") return passkeyOwedResponse(MEMBERS_PATH);
-  const owner = isOwner(iterateConfigOf(env).login, session.email);
+  if (!(await isMember(env, session.email)))
+    return notMemberPage({ mind: configOf(env).controlPlaneHostname, email: session.email });
+  const owner = isOwner(configOf(env), session.email);
   if (request.method === "GET") return membersPage(env, { owner });
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
   // the session's cookie changes the members, so the form must come from this origin's own page
@@ -153,7 +123,7 @@ export async function membersResponse(
         : ([MEMBER_KEYS_REMOVED, removeKeys] as const);
     const press = owner
       ? await ownerPress(env, session, form?.get("signed"), type, email)
-      : { error: "Only an owner, a member the stack's config names, does this." };
+      : { error: "Only an owner does this." };
     const outcome = "error" in press ? press : await act(env, session, email, press);
     if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
     return outcome.facts.on(await membersPage(env, { owner, notice: outcome.notice }));
@@ -161,16 +131,14 @@ export async function membersResponse(
   if (action === "block" || action === "unblock") {
     const outcome = owner
       ? await (action === "block" ? block(env, session, email) : unblock(env, session, email))
-      : { error: "Only an owner, a member the stack's config names, blocks a person." };
+      : { error: "Only an owner blocks a person." };
     if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
     return outcome.facts.on(await membersPage(env, { owner, notice: outcome.notice }));
   }
   if (action === "end-access") {
     const outcome = owner
       ? await endAccessOf(env, email, endsOf(form))
-      : {
-          error: "Only an owner, a member the stack's config names, ends another member's access.",
-        };
+      : { error: "Only an owner ends another member's access." };
     if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
     return outcome.facts.on(
       new Response(null, {
@@ -194,17 +162,17 @@ export async function membersResponse(
   );
 }
 
-async function jsonResponse(env: Env, request: Request, actor: Actor, cors: Headers) {
-  if (request.method === "GET") return json(await membersOf(env), 200, cors);
-  if (request.method !== "DELETE") return json({ error: "GET, POST or DELETE" }, 405, cors);
+async function jsonResponse(env: Env, request: Request, actor: Actor) {
+  if (request.method === "GET") return json(await membersOf(env), 200);
+  if (request.method !== "DELETE") return json({ error: "GET, POST or DELETE" }, 405);
   const body = z.object({ email: z.string() }).safeParse(await request.json().catch(() => null));
-  if (!body.success) return json({ error: 'Send { "email": "…" }.' }, 400, cors);
+  if (!body.success) return json({ error: 'Send { "email": "…" }.' }, 400);
   const outcome = await remove(env, actor, body.data.email);
-  if ("error" in outcome) return json({ error: outcome.error }, outcome.status, cors);
-  return outcome.facts.on(json(await membersOf(env), 200, cors));
+  if ("error" in outcome) return json({ error: outcome.error }, outcome.status);
+  return outcome.facts.on(json(await membersOf(env), 200));
 }
 
-async function addedBySignature(env: Env, request: Request, cors: Headers) {
+async function addedBySignature(env: Env, request: Request) {
   const change = await signedChange(env, await request.json().catch(() => null), MEMBER_ADDED);
   if ("refused" in change)
     return json(
@@ -212,18 +180,18 @@ async function addedBySignature(env: Env, request: Request, cors: Headers) {
         error: `No member was added: ${change.refused}. Send { statement, signature }: a statement of ${MEMBER_ADDED} at / with the payload { "email": "…" }, signed by a member's key. A token or a session adds no one.`,
       },
       403,
-      cors,
     );
   const outcome = await add(env, change);
-  if ("error" in outcome) return json({ error: outcome.error }, outcome.status, cors);
-  return outcome.facts.on(json(await membersOf(env), 200, cors));
+  if ("error" in outcome) return json({ error: outcome.error }, outcome.status);
+  return outcome.facts.on(json(await membersOf(env), 200));
 }
 
-async function membersOf(env: Env): Promise<{ config: EmailRule[]; added: Added[] }> {
+/** The members: the owners, whom the config names, and those added here. */
+async function membersOf(env: Env): Promise<{ owners: string[]; added: Added[] }> {
   const { results } = await env.DB.prepare(
     "select email, added_by as addedBy, added_at as addedAt from members order by added_at",
   ).all<Added>();
-  return { config: iterateConfigOf(env).login.allow, added: results };
+  return { owners: configOf(env).ownerEmails, added: results };
 }
 
 type Outcome = { facts: AccountFacts } | { error: string; status: number };
@@ -234,21 +202,41 @@ async function add(env: Env, change: SignedChange): Promise<Outcome> {
     .trim()
     .toLowerCase();
   if (!z.email().safeParse(email).success) return { error: "Enter an email address.", status: 400 };
-  const { domain, login } = iterateConfigOf(env);
-  if (atMindsDomain(domain, email))
+  const config = configOf(env);
+  if (atMindsZone(config, email))
     return {
-      error: `An address at ${domain} cannot be a member: the mind receives its mail, so the mind could sign in as that member.`,
+      error: `An address at ${config.zones.join(" or ")} cannot be a member: the mind receives its mail, so the mind could sign in as that member.`,
       status: 400,
     };
-  if (emailAllowed(login.allow, email))
-    return { error: `${email} is a member already, through the stack's config.`, status: 400 };
-  const added = await env.DB.prepare(
-    "insert into members (email, added_by, added_at) values (?1, ?2, ?3) on conflict (email) do nothing returning email",
-  )
-    .bind(email, principal.email, Date.now())
-    .first();
+  if (isOwner(config, email))
+    return { error: `${email} is a member already: an owner.`, status: 400 };
+  // One batch, which D1 runs as one transaction: a member is never blocked, so the address's
+  // block goes as the address becomes a member's. A row left behind would refuse the member's
+  // sign-in on every hostname of the mind (./oauth.ts `grantLifetime`).
+  // A PASSKEY THAT THE ADDRESS HELD BEFORE IT WAS A MEMBER'S never becomes a member's
+  // (../migrations/0016): whoever added it was no member then, and a key from before that column
+  // reads 0 there. So the address's keys are marked as it becomes a member's, and the member gets
+  // a passkey of their own by the owner's link (./enrolment.ts), which revokes them.
+  const now = Date.now();
+  const [added, unblocked] = await env.DB.batch([
+    env.DB.prepare(
+      "insert into members (email, added_by, added_at) values (?1, ?2, ?3) on conflict (email) do nothing returning email",
+    ).bind(email, principal.email, now),
+    env.DB.prepare("delete from blocked where email = ?1 returning email").bind(email),
+    env.DB.prepare(
+      `update keys set outsider = 1
+       where format = 'webauthn' and revoked_at is null and outsider = 0
+         and user_id = (select id from users where email = ?1)
+         and exists (select 1 from members where email = ?1 and added_at = ?2)`,
+    ).bind(email, now),
+  ]);
   const facts = new AccountFacts();
-  if (added)
+  if (unblocked?.results[0])
+    facts.add(principal.actor, {
+      type: "events.iterate.com/account/person-unblocked",
+      payload: { email },
+    });
+  if (added?.results[0])
     facts.add(principal.actor, { type: MEMBER_ADDED, payload: { email, ...signerOf(change) } });
   return { facts };
 }
@@ -261,7 +249,7 @@ async function endAccessOf(env: Env, typed: string, ends: Ends | null): Promise<
     .bind(typed.trim().toLowerCase())
     .first<{ id: string }>();
   const facts = new AccountFacts();
-  if (!person || !ends || !(await endAccess(env, person.id, ends, facts)))
+  if (!person || !ends || !(await endAccess(env, person.id, "all", ends, facts)))
     return { error: "That access is not there any more.", status: 404 };
   console.info({ event: "auth.member-access-ended", of: person.id });
   return { facts };
@@ -283,7 +271,9 @@ async function accessOfMembers(
   const members: { email: string; clients: ClientWithAccess[] }[] = [];
   for (const person of results) {
     if (!(await isMember(env, person.email))) continue;
-    const clients = (await sessionsByClientOf(env, person.id)).filter((client) => !client.host);
+    const clients = (await sessionsByClientOf(env, person.id, "all")).filter(
+      (client) => !client.host,
+    );
     if (clients.length) members.push({ email: person.email, clients });
   }
   return members;
@@ -296,8 +286,8 @@ async function remove(env: Env, actor: Actor, typed: string): Promise<Outcome> {
     .first();
   if (!removed)
     return {
-      error: emailAllowed(iterateConfigOf(env).login.allow, email)
-        ? `${email} is a member through the stack's config, which only a deploy changes.`
+      error: isOwner(configOf(env), email)
+        ? `${email} is an owner, which only a deploy changes.`
         : `${email} is not an added member.`,
       status: 404,
     };
@@ -316,10 +306,11 @@ async function remove(env: Env, actor: Actor, typed: string): Promise<Outcome> {
   return { facts };
 }
 
-// A lost passkey's way back in. A mailed code signs in a member who holds no passkey, so this is
-// an owner's alone, and never for an owner's keys: an owner's way back in is a deploy's ticket.
+// A lost passkey's way back in, with the link below: an owner removes the member's keys, and
+// makes the member a sign-in link. Never for an owner's keys: no owner takes another owner's keys
+// away, and an owner with no passkey left comes back by the recovery command (./enrolment.ts).
 /** AN OWNER'S ACT ON ANOTHER MEMBER'S WAY IN TAKES THE OWNER'S PASSKEY. A link for a member lets a
- *  new key act as that member, and with the member's keys removed a mailed code does the same. So
+ *  new key act as that member, and the removal of a member's keys is the step before one. So
  *  each is a statement of `type` that names the member, signed by a passkey of the owner whose
  *  session posts it. A session alone, which can be stolen, does neither. */
 async function ownerPress(
@@ -346,9 +337,9 @@ async function removeKeys(
   press: SignedChange,
 ): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
   const email = typed.trim().toLowerCase();
-  if (isOwner(iterateConfigOf(env).login, email))
+  if (isOwner(configOf(env), email))
     return {
-      error: `${email} is an owner. An owner removes their own keys, or gets in again with a deploy.`,
+      error: `${email} is an owner. Nobody but an owner removes that owner's keys. An owner who lost every passkey gets back in by the recovery command, which whoever holds this mind's Cloudflare account runs.`,
     };
   const at = Date.now();
   const { results } = await env.DB.prepare(
@@ -360,8 +351,7 @@ async function removeKeys(
     .all<{ id: string; label: string; userId: string }>();
   if (!results.length) return { error: `${email} has no keys here.` };
   const facts = new AccountFacts();
-  // what the lost device was given outlives its passkey: the apps, the CLI, a hostname's cookie,
-  // a browser's session opened by a mailed code
+  // what the lost device was given outlives its passkey: the apps, the CLI, a hostname's cookie
   await endAllOf(env, results[0]!.userId, facts);
   for (const key of results)
     facts.add(key.userId, {
@@ -372,14 +362,15 @@ async function removeKeys(
   console.info({ event: "auth.member-keys-removed", by: actor.userId, keys: results.length });
   return {
     facts,
-    notice: `${email} has no keys now, and is signed out of every app and device. A code by email signs this member in once, to add a new passkey.`,
+    notice: `${email} has no keys now, and is signed out of every app and device. Make a sign-in link for this member below: it lets them add a new passkey. A code by email does not.`,
   };
 }
 
-// A member's way to a first passkey where no code can be mailed, and a way back in for a member
-// who lost every passkey: the page the first owner's ticket opens (./first-owner.ts), for one use
-// within a day. The link is shown once, to the owner, who passes it on; the stack keeps its hash.
-// Never for an owner: an owner's way in is a deploy's ticket.
+// An added member's one way to a first passkey, and the way back in for a member whose keys an
+// owner removed: a page (./enrolment.ts) for one use within a day. The link is shown
+// once, to the owner, who passes it on; the stack keeps its hash. Never for an owner: no owner
+// makes a way in as another owner, and the link's own page refuses a person who is an owner by
+// the time it is opened.
 async function memberLink(
   env: Env,
   actor: Actor,
@@ -387,8 +378,10 @@ async function memberLink(
   press: SignedChange,
 ): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
   const email = typed.trim().toLowerCase();
-  if (isOwner(iterateConfigOf(env).login, email))
-    return { error: `${email} is an owner. An owner gets in with a deploy's link.` };
+  if (isOwner(configOf(env), email))
+    return {
+      error: `${email} is an owner. An owner signs in with their own passkey: the first one is added after Cloudflare proved the address, on the sign-in page, and after the loss of every passkey the recovery command is the way back.`,
+    };
   if (!(await isMember(env, email)))
     return { error: `${email} is not a member. Add the member first.` };
   // The link is for a member with no passkey. Beside a passkey that the member holds, it would
@@ -398,7 +391,7 @@ async function memberLink(
       error: `${email} has a passkey here. If it is lost, remove this member's keys first: then the link lets them add a new one.`,
     };
   const ticket = base64url(crypto.getRandomValues(new Uint8Array(32)));
-  const expires = Date.now() + FIRST_OWNER_TICKET_MS;
+  const expires = Date.now() + ENROLMENT_MS;
   await env.DB.prepare(
     "insert into member_tickets (hash, email, made_by, expires_at) values (?1, ?2, ?3, ?4)",
   )
@@ -412,12 +405,12 @@ async function memberLink(
   console.info({ event: "auth.member-link-made", by: actor.userId });
   return {
     facts,
-    notice: `Give this link to ${email}, and to nobody else. It works once, within 24 hours, and is not shown again: ${issuerOf(env)}${FIRST_OWNER_PATH}#${ticket}`,
+    notice: `Give this link to ${email}, and to nobody else. It works once, within 24 hours, and is not shown again: ${issuerOf(env)}${FIRST_PASSKEY_PATH}#${ticket}`,
   };
 }
 
-// For a person who is no member: an app's end user, on a stack whose sign-in is open to anyone. A
-// member is removed, not blocked, since a member's standing comes from the members' list.
+// For a person who is no member: an app's end user, who signs in with a code by email. A member
+// is removed, not blocked, since a member's standing comes from the members' list.
 async function block(
   env: Env,
   actor: Actor,
@@ -452,10 +445,6 @@ async function block(
   };
 }
 
-/** The key of a guest's row (./users.ts `linkBySubject`), which a guest's sessions and grants
- *  carry where others carry an address. */
-const GUEST_KEY_PREFIX = "guest:";
-
 /** WHAT A BLOCK OR AN UNBLOCK NAMES in the `blocked` table: the address an owner typed, or, for a
  *  guest's user id (`user_…`, as the guest's events name them), the key of that guest's row. A
  *  guest has no address, so the id is how an owner names one. Any other person's id names
@@ -487,34 +476,15 @@ async function unblock(
   return { facts, notice: `${email} is no longer blocked.` };
 }
 
-function ruleInWords(rule: EmailRule) {
-  if ("everyone" in rule) return "Everyone who signs in";
-  if ("emailDomain" in rule) return `Anyone at ${rule.emailDomain}`;
-  return rule.subaddresses ? `${rule.email}, and its +tags` : rule.email;
-}
-
-/** A rule that admits addresses nobody named: each is a member with no passkey until it adds one. */
-const isWide = (rule: EmailRule) => !("email" in rule) || rule.subaddresses === true;
-
 async function membersPage(
   env: Env,
   { owner, error, notice }: { owner: boolean; error?: string; notice?: string },
 ) {
-  const { domain, login } = iterateConfigOf(env);
-  const { config, added } = await membersOf(env);
-  // The address an owner passes on: the mind's sign-in asks for a passkey as it opens, and a new
-  // member holds none yet.
-  const codePage = `${issuerOf(env)}${EMAIL_SIGN_IN_PATH}`;
-  const firstSignIn = login.methods.email ? `, at <a href="${codePage}">${codePage}</a>` : "";
-  const fromConfig = config
-    .map(
-      (rule) =>
-        `<li>${text(ruleInWords(rule))} <span class="muted">(the stack's config${isWide(rule) ? ", wide" : ""})</span></li>`,
-    )
+  const mind = configOf(env).controlPlaneHostname;
+  const { owners, added } = await membersOf(env);
+  const ownerRows = owners
+    .map((email) => `<li>${text(email)} <span class="muted">(an owner)</span></li>`)
     .join("");
-  const wide = config.some(isWide)
-    ? `<p><strong>A wide rule admits addresses nobody named.</strong> Whoever reads the mail of one of them that has no passkey yet signs in by a code, adds a passkey, and can then approve requests and add members. A stack that approves things names each member by the exact address.</p>`
-    : "";
   const addedRows = added
     .map(
       (row) => `<li>${text(row.email)} <span class="muted">(added by ${text(row.addedBy)})</span>
@@ -556,27 +526,30 @@ async function membersPage(
         .join("")
     : "";
   return page({
-    title: `Members of ${domain}`,
+    title: `Members of ${mind}`,
     wide: true,
     status: error ? 400 : 200,
-    body: `<h1>Members of ${text(domain)}</h1>
+    body: `<h1>Members of ${text(mind)}</h1>
       <p>A member may use the mind's API, its MCP server and its apps, and add or remove other members.</p>
       ${error || notice ? `<p><strong>${text(error || notice || "")}</strong></p>` : ""}
-      <ul>${fromConfig}${addedRows}</ul>
-      ${wide}
+      <ul>${ownerRows}${addedRows}</ul>
       <form id="add" class="stack">
         <label>Email <input type="email" name="email" autocomplete="off" required></label>
         <button type="submit">Add a member</button>
         <p id="status" class="muted" role="status"></p>
       </form>
-      <p class="muted">Your passkey signs the add: a session or a token alone adds no one. A new member signs in once with a code by email${firstSignIn}, and adds a passkey. After that, only the passkey signs the member in.</p>
+      <p class="muted">Your passkey signs the add: a session or a token alone adds no one. ${
+        owner
+          ? `A new member gets in by a sign-in link that you make <a href="#link">below</a>`
+          : "A new member gets in by a sign-in link that an owner makes on this page"
+      }: it signs the member in once, to add a passkey. After that, only a passkey signs the member in.</p>
       ${
         owner
           ? `<h2 id="access">Apps and devices with access</h2>
       <p>Each app, CLI, device or agent that a member let in, and what it reaches as that member. Revoke one, and it and every token it holds stop working at once. The member can let it in again. A member sees and revokes their own on the keys page.</p>
       ${accessRows ? `<ul class="access-list">${accessRows}</ul>` : `<p class="muted">No app or device has access.</p>`}
       <h2>A member lost a passkey</h2>
-      <p>Remove the member's keys. This signs the member out of every app and device. A code by email then signs the member in once, to add a new passkey.</p>
+      <p>Remove the member's keys. This signs the member out of every app and device. Then make the member a sign-in link, below: nothing else signs in a member with no passkey.</p>
       <form method="post" action="${MEMBERS_PATH}" class="stack" data-signed="${MEMBER_KEYS_REMOVED}">
         <input type="hidden" name="action" value="remove-keys">
         <input type="hidden" name="signed">
@@ -584,8 +557,8 @@ async function membersPage(
         <button type="submit">Remove this member's keys</button>
         <p class="muted" role="status" data-status>Your passkey signs this.</p>
       </form>
-      <h2>A sign-in link for a member</h2>
-      <p>For a member who has no passkey here and cannot get a code by email. The link signs the member in once, to add a passkey. Whoever holds the link is that member, so pass it on yourself.</p>
+      <h2 id="link">A sign-in link for a member</h2>
+      <p>For a new member, and for a member whose keys you removed. The link signs the member in once, within 24 hours, to add a passkey. Whoever holds the link is that member, so pass it on yourself.</p>
       <form method="post" action="${MEMBERS_PATH}" class="stack" data-signed="${MEMBER_LINK_MADE}">
         <input type="hidden" name="action" value="link">
         <input type="hidden" name="signed">
@@ -594,7 +567,7 @@ async function membersPage(
         <p class="muted" role="status" data-status>Your passkey signs this.</p>
       </form>
       <h2>Block a person who is not a member</h2>
-      <p>For a stack whose sign-in is open to anyone, so that its apps have users of their own. A blocked address gets no sign-in code, and is signed out of every app at once. A guest has no address: type the guest's id (user_…), as the mind's events name it.</p>
+      <p>Anyone can sign in to this mind's apps with a code by email, so that the apps have users of their own. A blocked address gets no sign-in code, and is signed out of every app at once.</p>
       <ul>${blockedRows}</ul>
       <form method="post" action="${MEMBERS_PATH}" class="stack">
         <input type="hidden" name="action" value="block">
@@ -603,7 +576,7 @@ async function membersPage(
       </form>`
           : ""
       }`,
-    script: `${signScript(domain)}${ADD_SCRIPT}`,
+    script: `${signScript(mind)}${ADD_SCRIPT}`,
     imageOrigin: logoOriginsOf(access.flatMap(({ clients }) => clients)),
   });
 }
@@ -638,29 +611,12 @@ for (const act of document.querySelectorAll("form[data-signed]"))
     }
   });`;
 
-// The bearer is the credential here, never a cookie.
-function corsHeaders(env: Env, request: Request) {
-  const headers = new Headers({ vary: "Origin" });
-  const origin = request.headers.get("origin");
-  if (origin && (iterateConfigOf(env).trustedClients || []).includes(origin)) {
-    headers.set("access-control-allow-origin", origin);
-    headers.set("access-control-allow-methods", "GET, POST, DELETE");
-    headers.set("access-control-allow-headers", "authorization, content-type");
-    headers.set("access-control-max-age", "600");
-  }
-  return headers;
-}
-
-function json(value: unknown, status: number, cors: Headers) {
-  const headers = new Headers(cors);
-  headers.set("content-type", "application/json");
-  headers.set("cache-control", "no-store");
-  return new Response(JSON.stringify(value), { status, headers });
-}
+const json = (value: unknown, status: number) =>
+  Response.json(value, { status, headers: { "cache-control": "no-store" } });
 
 /** EVERYTHING A PERSON HOLDS HERE ENDS: every grant (./oauth.ts `endGrantsOf`) and every
  *  browser's session at the issuer (./cookies.ts `endSessions`). */
 async function endAllOf(env: Env, userId: string, facts: AccountFacts) {
   await endGrantsOf(env, userId, facts);
-  await endSessions(env, userId, "all", facts);
+  await endSessions(env, userId, "all", "all", facts);
 }

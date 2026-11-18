@@ -46,6 +46,7 @@ import {
   normalizeRewriteRuleConfigured,
   type ItxExpressionResolver,
 } from "./context/itx-expression-rewriting.ts";
+import type { LentFetchHolder } from "./context/fetch-upgrade.ts";
 import { lendRefusal } from "./context/lent-names.ts";
 import { FetchRouteConfiguredPayload } from "./fetch-routes.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
@@ -239,6 +240,11 @@ export class IterateContextRpcTarget extends RpcTarget {
        *  `appendAtAttach`): a live stub's, from a caller with a grant. */
       onlyFromItself?: true;
     } = {},
+    /** Given by the Worker that ends the lender's session, and by no client: where this lend's
+     *  `fetch` is made (./context/fetch-upgrade.ts `LentFetchHolder`). A caller that gives one of
+     *  its own gets the fetches of its own lend as calls, and reaches nothing by it: a leg into a
+     *  context is dialled by the boundary alone. */
+    lentFetch?: LentFetchHolder,
   ): Promise<RewriteRuleHandleRpcTarget> {
     // A row from loaded code must go through its context's table, where a jail's wall stands.
     if (this.#caller.app && (!target || typeof target === "string" || Array.isArray(target)))
@@ -311,6 +317,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       this.#waitUntil,
       this.#lenderStamp,
       options.onlyFromItself && this.#caller.grant,
+      lentFetch && { holder: lentFetch, context: this.#durableObjectAddress.name },
     );
     // The DO, not this session, un-sets the rule when the key's last pager closes.
     const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
@@ -440,6 +447,53 @@ export class IterateContextRpcTarget extends RpcTarget {
 }
 
 installPrototypeInvokeFallback(IterateContextRpcTarget, ["itx"]);
+
+/** THE MIND'S ROOT CONTEXT FOR ONE SESSION THAT ENDS IN ANOTHER WORKER: the boundary ends every
+ *  session of the API and holds what this answers as a Workers RPC stub (the mind Worker's
+ *  `Mind.api`). The invocation that makes it lives for as long as that stub does.
+ *
+ *  WHAT ENDS ITS LENDS, in the order that they act:
+ *    1. the disposer below, when the holder lets go of its stub. workerd runs it while this
+ *       invocation has I/O open, and a lend's pager is an open WebSocket;
+ *    2. the end of this invocation, which workerd cancels when the holder's own invocation is gone
+ *       (measured 2026-11-18 in local workerd: within about 70 ms). Its pagers close with it, and
+ *       the context un-sets a lend's rows at its pager's close (./context/rpc-stubs.ts);
+ *    3. the error of the next call on a lent stub whose invocation is gone, which the context
+ *       reads as a stub that went offline.
+ *  A Workers RPC stub has no `onRpcBroken`, so nothing here waits for one. The other way round,
+ *  the holder hears that this invocation is gone by asking `sessionLives`. */
+export function sessionContext(
+  waitUntil: (promise: Promise<unknown>) => void,
+  caller: Caller,
+): IterateContextRpcTarget & Disposable & { sessionLives(): true } {
+  return new SessionRootContext(
+    contexts(),
+    DurableObjectNameCodec.address("/"),
+    new SessionTeardown(),
+    waitUntil,
+    caller,
+  );
+}
+
+class SessionRootContext extends IterateContextRpcTarget {
+  readonly #teardown: SessionTeardown;
+  constructor(...args: ConstructorParameters<typeof IterateContextRpcTarget>) {
+    super(...args);
+    this.#teardown = args[2];
+  }
+  /** WHETHER THIS PART OF THE SESSION LIVES: true, at once. The Worker that ends the session asks
+   *  every few seconds, and a question that fails tells it that this invocation is gone, or the
+   *  way to it: it then ends the client's session (core/boundary-worker `#watchedMind`). An answer
+   *  at once, and never a call that stays open: a call in flight would keep this invocation, and
+   *  what the session lent, after its holder let go of it. No client reaches this name: the
+   *  boundary's wrapper does not forward it. */
+  sessionLives(): true {
+    return true;
+  }
+  [Symbol.dispose](): void {
+    this.#teardown.disposeAll();
+  }
+}
 
 // The runtime exports these classes, but the workers-types .d.ts does not declare them.
 const {

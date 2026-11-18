@@ -22,6 +22,7 @@ import {
   verifyOnBehalfOf,
 } from "core-itx";
 import { env } from "cloudflare:workers";
+import { mindWorkerConfigOf } from "../config.ts";
 import { assertCreated, EntityLifecycleProcessor } from "../mind/entity-lifecycle.ts";
 import {
   ZERO_OID,
@@ -592,7 +593,11 @@ export class RepoFacet extends StreamProcessorDurableObject<
   // A commit names the run it was made for. A person's own call into this facet names none.
   async #onBehalfOfIn(cause: Cause | undefined) {
     if (!cause?.onBehalfOf) return undefined;
-    const onBehalfOf = await verifyOnBehalfOf(cause.onBehalfOf, env.MIND_SIGNING_KEY, Date.now());
+    const onBehalfOf = await verifyOnBehalfOf(
+      cause.onBehalfOf,
+      mindWorkerConfigOf(env).signingKey.exposeSecret(),
+      Date.now(),
+    );
     return onBehalfOf?.run ? { ...onBehalfOf, run: onBehalfOf.run } : undefined;
   }
   async #commitFiles(input: {

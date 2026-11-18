@@ -43,10 +43,108 @@ test("a signed statement is held to the rule that guards the platform's facts", 
   expect(() => refuseNonPlatformWrites(mail, { principal: null })).toThrow(/platform's own/);
 });
 
-test("only the platform says that a forward of a mail failed: a member reads it as what Cloudflare said", () => {
-  const failed = [{ type: "events.iterate.com/email/forward-failed" }];
-  expect(() => refuseNonPlatformWrites(failed, platform)).not.toThrow();
-  expect(() => refuseNonPlatformWrites(failed, { principal: null })).toThrow(/platform's own/);
+test("only the platform says that a deploy reached the mind: loaded code cannot replace the stack's record, with a key or with none", () => {
+  const deployed = {
+    type: "events.iterate.com/mind/stack-deployed",
+    payload: { config: { ownerEmails: ["mallory@elsewhere.example"] }, versionId: "forged" },
+  };
+  const loadedCode: Caller = { principal: null, app: true, path: "/" };
+  expect(() => refuseNonPlatformWrites([deployed], platform)).not.toThrow();
+  expect(() => refuseNonPlatformWrites([deployed], loadedCode)).toThrow(/platform's own/);
+  expect(() =>
+    refuseNonPlatformWrites([{ ...deployed, idempotencyKey: "any-key" }], loadedCode),
+  ).toThrow(/platform's own/);
+  // nor by a schedule, which fires under its maker's stamp
+  const scheduled = {
+    type: "events.iterate.com/itx/schedule-set",
+    payload: { events: [deployed] },
+  };
+  expect(() => refuseNonPlatformWrites([scheduled], loadedCode)).toThrow(/platform's own/);
+});
+
+test.for([
+  "events.iterate.com/mind/identity-record-accepted",
+  "events.iterate.com/mind/identity-record-refused",
+])(
+  "only the platform says that a record of the mind's identity was checked: %s is refused from a member, from loaded code and from a signed statement",
+  (type) => {
+    const checked = [{ type, payload: { mind: "forged" } }];
+    expect(() => refuseNonPlatformWrites(checked, platform)).not.toThrow();
+    for (const caller of [
+      { principal: null },
+      { principal: null, app: true as const, path: "/" },
+      { ...platform, signer },
+    ])
+      expect(() => refuseNonPlatformWrites(checked, caller)).toThrow(/platform's own/);
+  },
+);
+
+test("a key of the platform's is nobody else's to take: a member, loaded code, a schedule and a signed statement are refused, whatever the event's type", () => {
+  // an ordinary event under the key that the mind's genesis is appended with
+  const squat = [{ type: "notes/note-added", idempotencyKey: "mind/identity-record:the-mind-id" }];
+  const member: Caller = { principal: { actor: "user_ada", email: "ada@example.org" } };
+  const loadedCode: Caller = { principal: null, app: true, path: "/" };
+  const scheduled = (events: typeof squat) => [
+    { type: "events.iterate.com/itx/schedule-set", payload: { key: "x", events } },
+  ];
+  for (const caller of [
+    member,
+    loadedCode,
+    { ...member, grant: "a-grant" },
+    { ...platform, signer },
+  ]) {
+    expect(() => refuseNonPlatformWrites(squat, caller)).toThrow(
+      'idempotency key "mind/identity-record:the-mind-id" is the platform\'s',
+    );
+    // a schedule fires under its maker's stamp, so its events are held to the rule when it is set
+    expect(() => refuseNonPlatformWrites(scheduled(squat), caller)).toThrow(/is the platform's/);
+    for (const idempotencyKey of ["itx/child-created:/x", "repo/pushed:1", "itx@/agents/a"])
+      expect(() => refuseNonPlatformWrites([{ ...squat[0]!, idempotencyKey }], caller)).toThrow(
+        /is the platform's/,
+      );
+    // a key of the caller's own, and a key that only looks alike
+    for (const idempotencyKey of ["notes:1", "mind:example.com:/notes@4", "minds/1", undefined])
+      expect(() =>
+        refuseNonPlatformWrites(
+          [{ ...squat[0]!, idempotencyKey }, ...scheduled([{ ...squat[0]!, idempotencyKey: "n" }])],
+          caller,
+        ),
+      ).not.toThrow();
+  }
+  // The platform's own appends keep every key.
+  for (const caller of [platform, { ...platform, ...member }]) {
+    expect(() => refuseNonPlatformWrites(squat, caller)).not.toThrow();
+    expect(() => refuseNonPlatformWrites(scheduled(squat), caller)).not.toThrow();
+  }
+});
+
+test("the keys of the mind's identity need the explicit platform flag: the target of a stored row, which a member may have written, cannot take a record's key", () => {
+  // as the kernel calls a subscription's target (iterate-context-durable-object.ts `runAsDelivery`)
+  const runsRow: Caller = { principal: null, runsRow: true };
+  const firstParty: Caller = { principal: null, path: "/" };
+  for (const idempotencyKey of [
+    "mind/identity-record:the-mind-id",
+    "mind/identity-record-refused:a-record's-hash",
+  ]) {
+    const ordinary = [{ type: "notes/note-added", idempotencyKey }];
+    for (const caller of [runsRow, firstParty, { principal: null }])
+      for (const events of [
+        ordinary,
+        [{ type: "events.iterate.com/itx/schedule-set", payload: { key: "x", events: ordinary } }],
+      ])
+        expect(() => refuseNonPlatformWrites(events, caller)).toThrow(
+          `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
+        );
+    expect(() => refuseNonPlatformWrites(ordinary, platform)).not.toThrow();
+  }
+  // The other keys of the platform stay with the kernel's own code, which calls with no
+  // principal and is no loaded code: a facet of the mind's Worker, a context that announces
+  // itself to its parent.
+  for (const idempotencyKey of ["mind/created", "itx/child-created:/x", "itx@/agents/a"])
+    for (const caller of [runsRow, firstParty, { principal: null }])
+      expect(() =>
+        refuseNonPlatformWrites([{ type: "notes/note-added", idempotencyKey }], caller),
+      ).not.toThrow();
 });
 
 test("only the platform says that the mail provider refused a mail: a member reads it as the provider's words", () => {

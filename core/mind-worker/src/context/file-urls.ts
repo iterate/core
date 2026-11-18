@@ -15,13 +15,13 @@ const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export async function signedFileUrl(input: {
   secret: string;
-  domain: string;
+  controlPlaneHostname: string;
   key: string;
   method: "GET" | "PUT";
   expiresInSeconds?: number;
 }): Promise<{ url: string; expiresAt: string }> {
   const url = new URL(
-    `${mindApiUrlOf(input.domain)}/files/${input.key.split("/").map(encodeURIComponent).join("/")}`,
+    `${mindApiUrlOf(input.controlPlaneHostname)}/files/${input.key.split("/").map(encodeURIComponent).join("/")}`,
   );
   const exp = Math.floor(
     Date.now() / 1000 + (input.expiresInSeconds ?? DEFAULT_FILE_URL_TTL_SECONDS),

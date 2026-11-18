@@ -37,20 +37,17 @@ export const telemetryRoots = (egress: () => Pick<Door, "queryTelemetry" | "send
     },
   }) satisfies Record<string, ItxHostRoot>;
 
-/** THE ROW THAT SENDS A CONTEXT'S EVENTS TO THE PLATFORM, named while telemetry is on, as a wake
- *  event (core-itx `ItxHost.wakeEvents`; its stream/wake-events.ts says when one lands). An
- *  ordered row: what fails the hook is its destination, which fails every event alike. */
-export const platformWakeEvents = (telemetryOn: boolean) =>
-  telemetryOn
-    ? [
-        {
-          type: "events.iterate.com/itx/subscription-configured",
-          idempotencyKey: "itx/platform-subscription",
-          payload: {
-            name: "platform",
-            target: "itx.builtins.platformHook.deliverEvents",
-            afterOffset: 0,
-          },
-        } as const,
-      ]
-    : [];
+/** THE ROW THAT SENDS A CONTEXT'S EVENTS TO THE PLATFORM, owed by every context as a wake event
+ *  (core-itx `ItxHost.wakeEvents`; its stream/wake-events.ts says when one lands). An ordered
+ *  row: what fails the hook is its destination, which fails every event alike. */
+export const PLATFORM_WAKE_EVENTS = [
+  {
+    type: "events.iterate.com/itx/subscription-configured",
+    idempotencyKey: "itx/platform-subscription",
+    payload: {
+      name: "platform",
+      target: "itx.builtins.platformHook.deliverEvents",
+      afterOffset: 0,
+    },
+  },
+] as const;

@@ -61,8 +61,10 @@ const me = principal?.email || principal?.actor || "someone";
 const user = { name: me, email: me, color: cursorColor(me) };
 const author = principal ? commitAuthorOf(principal) : undefined;
 
-// The mind is its domain, and this host is one label under it.
-const domain = location.hostname.split(".").slice(1).join(".") || location.hostname;
+// The mind's address is its control-plane hostname, where its sign-in is: this host says it
+// (`/.auth/session.json`, ../app.ts). The page never works it out from its own hostname, which
+// may be in any zone of the mind.
+const mind = new URL((await (await fetch("/.auth/session.json")).json()).issuer).hostname;
 
 // ── where the editor's processors are ──
 // The page starts a doc's processors (../processors/classes.ts says why from here) under a name
@@ -182,7 +184,7 @@ function App() {
   return html`
     <${AppShell}
       app="Docs"
-      mind=${domain}
+      mind=${mind}
       mindHref=${() => "./"}
       nav=${html`<${Files} repo=${repo} list=${list} path=${path} open=${open} />`}
       account=${principal}

@@ -2,6 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { z } from "zod";
 import { InvokeHandle, print, type ItxExpression } from "iterate/expression";
 import { codedError, resolveContextPath } from "iterate/lib";
+import { zoneOf } from "iterate/mind-config";
 import type { EventInput, ProcessorContract, StreamEvent } from "iterate/stream/processor";
 import type {
   EntityCollectionApi,
@@ -26,6 +27,7 @@ import { SANDBOXES_ROOT_DESCRIPTION } from "./sandbox/contract.ts";
 import type { SandboxContainer } from "./sandbox/container.ts";
 import { egressRuleOfStart, ruleThenStart } from "./sandbox/egress-rule.ts";
 import { runSandboxPortCall, sandboxPortCallOf } from "./sandbox/ports.ts";
+import { mindWorkerConfigOf } from "./config.ts";
 import { connectToMcpAt } from "./integrations/mcp.ts";
 
 /** The one host root the library reads, which the kernel's `LibraryItx` does not name. */
@@ -39,6 +41,16 @@ type EntityHandle<Facet, Verbs extends keyof Facet, Contract> = Pick<Facet, Verb
 
 /** A connector answers nothing where no `connections` are kept (the stateless resolver), so a call
  *  to one is sent to the context, which keeps its connection open. */
+
+/** Where the sandboxes' ports are served (./sandbox/ports.ts): the zone of the control-plane
+ *  hostname, which the config holds to be in one of its zones. */
+function portDomainOf(): string {
+  const config = mindWorkerConfigOf(env);
+  const zone = zoneOf(config, config.controlPlaneHostname);
+  if (!zone) throw new Error("the control-plane hostname is in none of the mind's zones");
+  return zone;
+}
+
 export const libraryRoots = {
   connectToOpenApi: {
     description:
@@ -292,7 +304,7 @@ function entityHandle(
       const origin = originOf(caller, ownPath);
       return runSandboxPortCall(portCall, {
         sandboxPath: entityPath,
-        domain: env.DOMAIN,
+        domain: portDomainOf(),
         assertBeneathCaller: (verb) => {
           if (!isStrictlyBeneath(origin, entityPath))
             throw codedError(

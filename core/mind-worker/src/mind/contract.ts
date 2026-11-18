@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { CoreEventCatalog, WorkerManifest } from "core-itx";
+import { MindConfig } from "iterate/mind-config";
+import {
+  IdentityRecordAccepted,
+  IdentityRecordRefused,
+  ReducedIdentities,
+} from "iterate/mind-identity-log";
 import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
 import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
@@ -12,21 +18,30 @@ const EventCause = z.object({
   parent: z.string().optional(),
 });
 
+/** The shared fields are typed; the Worker's own fields (its key, as "REDACTED") are kept as they
+ *  come. */
+const StackDeployed = z.object({ config: MindConfig.loose(), versionId: z.string().min(1) });
+
 export const MindContract = defineProcessorContract({
   slug: "mind",
   // The engine reuses a checkpoint reduced under the same version: bump it to re-reduce every root.
-  version: "1",
+  version: "3",
   description:
-    "The mind: where its own creation stands, every context under it (from the announcements each lands on /), the catalog of every repo born under it (from the certificates cross-posted to /), the publication of its config repo, and the image its sandboxes start on.",
+    "The mind: where its own creation stands, the identity logs that it was given (the signed records accepted for each mind id, side by side), every context under it (from the announcements each lands on /), the catalog of every repo born under it (from the certificates cross-posted to /), the publication of its config repo, and the image its sandboxes start on.",
   stateSchema: z.object({
     creation: z
       .object({
         status: z.enum(["requested", "created", "failed"]),
         offset: z.number().int().positive(),
-        configRepoTemplate: z.string().optional(),
       })
       .nullable()
       .default(null),
+    // the latest deploy; null on a root that no deploy of this code has woken
+    stack: StackDeployed.nullable().default(null),
+    // Every identity log that the root was given, each under its mind id, never emptied. The
+    // mind's own identity is the log under its config's `mindId` (iterate/mind-identity-log
+    // `identityOfMind`). A projection of the auth Worker's rows: nothing is decided by it.
+    identities: ReducedIdentities.default({}),
     repos: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     workspaces: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     sandboxes: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
@@ -55,8 +70,8 @@ export const MindContract = defineProcessorContract({
   events: {
     "events.iterate.com/mind/create-requested": {
       description:
-        "The mind was born and asked for its config repo (the root's birth events, core/mind-worker's itx-host.ts), seeded from the template `configRepoTemplate` names, a folder of core/configs the build bundled. The processor lands created or create-failed; a request after the certificate is a harmless fact.",
-      payloadSchema: z.object({ configRepoTemplate: z.string().optional() }),
+        "The mind was born and asked for its config repo (the root's birth events, core/mind-worker's itx-host.ts), seeded from the template core/configs/default, which the build bundled. The processor lands created or create-failed; a request after the certificate is a harmless fact.",
+      payloadSchema: z.object({}),
     },
     "events.iterate.com/mind/created": {
       description:
@@ -66,6 +81,21 @@ export const MindContract = defineProcessorContract({
     "events.iterate.com/mind/create-failed": {
       description: "What provisioning reported. Terminal until a new request.",
       payloadSchema: z.object({ error: z.string() }),
+    },
+    "events.iterate.com/mind/stack-deployed": {
+      description:
+        "A deploy of the stack reached the mind: the root woke on the mind Worker's version `versionId` for the first time (its wake events, core/mind-worker's itx-host.ts). `config` is that Worker's config as JSON: the mind's id, its control-plane hostname, its zones, its owners and where its mind Worker runs, and each secret as the string REDACTED. One deploy lands one event, and the state keeps the latest.",
+      payloadSchema: StackDeployed,
+    },
+    "events.iterate.com/mind/identity-record-accepted": {
+      description:
+        "A signed record of the identity of the mind `mind` was checked and accepted as the next of its log (iterate/mind-identity `nextIdentity`): `record` is the exact text that was signed, `hash` its SHA-256, `signatures` came with it, and `signedBy` names the root keys whose signatures verified. The first record of a log is the genesis, whose hash is the mind id; every later record holds the whole identity and the hash of the record before it. The state keeps a log for each mind id: it folds a record into the log of the mind id that the event names when the record continues that log, and passes over any other. The auth Worker's own rows decide what is accepted; this event is their copy on the mind's log, appended at least once under the one key `mind/identity-record:<hash>`. Only the platform appends it: the auth Worker, which checks each record that is posted to `/.well-known/iterate`.",
+      payloadSchema: IdentityRecordAccepted,
+    },
+    "events.iterate.com/mind/identity-record-refused": {
+      description:
+        "A record that a current root key of the mind `mind` validly signed was refused as the next of its log, and `reason` with `message` says why (iterate/mind-identity `nextIdentity`). At most one for each record's hash. A record that no current root key signed gets an HTTP error and no event. Only the platform appends it.",
+      payloadSchema: IdentityRecordRefused,
     },
     "events.iterate.com/mind/worker-updated": {
       description:
@@ -163,6 +193,9 @@ export const MindContract = defineProcessorContract({
     "events.iterate.com/mind/create-requested",
     "events.iterate.com/mind/created",
     "events.iterate.com/mind/create-failed",
+    "events.iterate.com/mind/stack-deployed",
+    "events.iterate.com/mind/identity-record-accepted",
+    "events.iterate.com/mind/identity-record-refused",
     "events.iterate.com/itx/child-created",
     "events.iterate.com/repo/created",
     "events.iterate.com/repo/deleted",

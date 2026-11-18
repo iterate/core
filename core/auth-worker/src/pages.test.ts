@@ -5,35 +5,28 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { plainPageCssHash } from "iterate/standalone-page";
 import { expect, test } from "vitest";
-import { emailSignInResponse } from "./email-sign-in.ts";
+import { emailAddressPage } from "./email-sign-in.ts";
 import type { Env } from "./env.ts";
 import { deviceTile } from "./device/page.ts";
-import {
-  chooserPage,
-  consentPage,
-  errorPage,
-  methodsSignInPage,
-  page,
-  signInPage,
-} from "./pages.ts";
+import { chooserPage, consentPage, errorPage, page, signInPage } from "./pages.ts";
+import { configVars } from "./test-support.ts";
 
-const DOMAIN = "example.com";
-const env = {
-  DOMAIN,
-  AUTH_SETTINGS: JSON.stringify({
-    login: { methods: { email: {} }, allow: [{ email: "owner@example.net" }] },
-    keys: [],
-  }),
-} as unknown as Env;
+const MIND = "iterate.example.com";
+// the cast: these pages read the mind's config and no binding
+const env = configVars() as unknown as Env;
 
-test("the sign-in page is the narrow card: the mark, a named email field, one action, and the passkey as another way", async () => {
-  const answer = await emailSignInResponse(
-    env,
-    new Request(`https://iterate.${DOMAIN}/sign-in/email?next=%2Fkeys`),
+test("the mailed code's address page is the narrow card: the mark, a named email field, one action, and the passkey as another way", async () => {
+  // an outside client's sign-in to an app that names "email": the page is headed with the mind
+  const html = await kept(
+    "sign-in",
+    emailAddressPage(env, "/oauth2/auth?client_id=c", { app: null, methods: ["email", "passkey"] }),
   );
-  const html = await kept("sign-in", answer!);
   expect(html).toContain(`<main class="centered"><div class="mark"`);
-  expect(html).toContain(`<h1>Sign in to ${DOMAIN}</h1>`);
+  expect(html).toContain(`<h1>Sign in to ${MIND}</h1>`);
+  // the mind's own line says what a code gives, and that it signs in no member
+  expect(html).toContain(
+    `<p class="muted">A code gives an account for the apps of ${MIND}, with no access to the mind itself. A member signs in with a passkey.</p>`,
+  );
   expect(html).toMatch(/<label>Email <input type="email" name="email"/);
   expect(html).toContain(`<button type="submit">Send a code</button>`);
   expect(html).toContain(`<p class="or">or</p>`);
@@ -42,75 +35,67 @@ test("the sign-in page is the narrow card: the mark, a named email field, one ac
   expect(html).not.toContain("signIn(false)");
 });
 
-test("a mind that mails no code offers the passkey as the one action", async () => {
-  const html = await kept("sign-in-passkey-alone", signInPage({ domain: DOMAIN, next: "/" }));
-  expect(html).toContain(`<button type="submit">Sign in with a passkey</button>`);
-  expect(html).not.toContain(`class="or"`);
-});
-
-test("an app that takes Cloudflare alone shows one button in Cloudflare's orange, and what Cloudflare shares; with other ways, each is a button in the app's order", async () => {
-  const app = {
-    host: `cloud.${DOMAIN}`,
-    origin: `https://cloud.${DOMAIN}`,
-    name: "iterate",
-    icon: null,
-    members: false,
-  };
-  const next = "/oauth2/auth?client_id=c&acr_values=cloudflare";
+test("the mind's sign-in offers the passkey as its main action, and below it an owner's link to Cloudflare Access and no email address; for an app, it names the app and its host under the app's own icon", async () => {
   const html = await kept(
-    "sign-in-cloudflare",
-    methodsSignInPage({ domain: DOMAIN, next, methods: ["cloudflare"], app }),
-  );
-  // the heading is the host the person signs in to, under the one mark: iterate's, for an app
-  // with no icon of its own
-  expect(html).toContain(`<main class="centered"><div class="mark"`);
-  expect(html).toContain(`<h1>Sign in to cloud.${DOMAIN}</h1>`);
-  expect(html).not.toMatch(/data-app-mark|class="asks"|is an app of|class="about"/);
-  expect(html).toMatch(
-    /<form method="get" action="\/sign-in\/cloudflare" class="stack">\s*<input type="hidden" name="next" value="\/oauth2\/auth\?client_id=c&#38;acr_values=cloudflare">\s*<button type="submit" class="cloudflare"><svg [^]*<\/svg>Sign in with Cloudflare<\/button>/,
-  );
-  expect(html).toContain(
-    `<p class="muted note">Cloudflare shares your name and email. Nothing else.</p>`,
-  );
-  // a stack that keeps Cloudflare's tokens says what they let it do
-  const keeps = await methodsSignInPage({
-    domain: DOMAIN,
-    next,
-    methods: ["cloudflare"],
-    app,
-    keepsCloudflareAccess: true,
-  }).text();
-  expect(keeps).toContain(
-    `<p class="muted note">Cloudflare shares your name and email, and lets ${DOMAIN} make a new Cloudflare account for you. It reaches none of your accounts.</p>`,
-  );
-  expect(keeps).not.toContain("Nothing else");
-  // one way and no script: nothing sends the person on by itself, and no link goes to the
-  // sessions page, which a sign-in at Cloudflare does not open
-  expect(html).not.toMatch(/<script|class="or"|\/sessions/);
-  const three = await kept(
-    "sign-in-cloudflare-passkey-google",
-    methodsSignInPage({ domain: DOMAIN, next, methods: ["cloudflare", "passkey", "google"], app }),
-  );
-  expect(three).toMatch(
-    /class="cloudflare">[^]*Sign in with Cloudflare<\/button>[^]*<button type="submit">Sign in with a passkey<\/button>[^]*class="outline">[^]*Sign in with Google<\/button>/,
-  );
-  expect(three).not.toContain(`class="or"`);
-  // the passkey's script waits for the press: an app's page asks for no passkey as it opens
-  expect(three).toContain("<script");
-  expect(three).not.toContain("signIn(false)");
-  // the app's own icon is the card's one mark
-  const icon = await kept(
-    "sign-in-app-icon",
-    methodsSignInPage({
-      domain: DOMAIN,
-      next,
-      methods: ["cloudflare"],
-      app: { ...app, icon: `https://cloud.${DOMAIN}/icon.svg` },
+    "sign-in-passkey",
+    signInPage({
+      mind: MIND,
+      next: "/",
+      app: null,
+      offersEmail: false,
+      offersGuest: false,
+      asksAtOpen: true,
     }),
   );
-  expect(icon).toContain(
-    `<main class="centered"><div class="tile" data-app-mark="icon"><img src="https://cloud.${DOMAIN}/icon.svg"`,
+  expect(html).toContain(`<h1>Sign in to ${MIND}</h1>`);
+  expect(html).toMatch(
+    /<button type="submit">Sign in with a passkey<\/button>[^]*<p class="muted">An owner with no passkey yet: <a href="\/sign-in\/access\?next=%2F">prove your email address with Cloudflare<\/a>, and then add one.<\/p>/,
   );
+  expect(html).not.toMatch(/class="or"|sign-in\/email|Sign in with your email address/);
+  const app = {
+    host: "guestbook.example.com",
+    origin: "https://guestbook.example.com",
+    name: "Guestbook",
+    icon: "https://guestbook.example.com/icon.svg",
+    members: false,
+    signIn: ["passkey" as const],
+  };
+  // an app that names "email" after the passkey has the button to the mailed code's page below,
+  // and no link to Cloudflare Access, which is for owners alone
+  const withEmail = await signInPage({
+    mind: MIND,
+    next: "/oauth2/auth?client_id=c",
+    app: { ...app, signIn: ["passkey", "email"] },
+    offersEmail: true,
+    offersGuest: false,
+    asksAtOpen: false,
+  }).text();
+  expect(withEmail).toMatch(
+    /<button type="submit">Sign in with a passkey<\/button>[^]*<form method="get" action="\/sign-in\/email" class="stack">\s*<input type="hidden" name="next" value="\/oauth2\/auth\?client_id=c">\s*<button type="submit" class="secondary">Sign in with your email address<\/button>/,
+  );
+  expect(withEmail).not.toContain("/sign-in/access");
+  const forApp = await kept(
+    "sign-in-app-icon",
+    signInPage({
+      mind: MIND,
+      next: "/oauth2/auth?client_id=c",
+      app,
+      offersEmail: false,
+      offersGuest: false,
+      asksAtOpen: false,
+    }),
+  );
+  expect(forApp).toContain(
+    `<h1>Sign in to Guestbook</h1><p class="muted center">guestbook.example.com</p>`,
+  );
+  // an app that names the passkey alone offers no mailed code
+  expect(forApp).toContain(`<button type="submit">Sign in with a passkey</button>`);
+  expect(forApp).not.toMatch(/sign-in\/email|Sign in with your email address/);
+  expect(forApp).toContain(
+    `<main class="centered"><div class="tile" data-app-mark="icon"><img src="https://guestbook.example.com/icon.svg"`,
+  );
+  // an app's page asks for no passkey as it opens
+  expect(forApp).not.toContain("signIn(false)");
 });
 
 test("the consent page asks one question, with Deny and Allow as a pair", async () => {
@@ -125,8 +110,8 @@ test("the consent page asks one question, with Deny and Allow as a pair", async 
       } as never,
       handle: "handle",
       email: "owner@example.net",
-      domain: DOMAIN,
-      resource: `https://iterate.${DOMAIN}/mcp`,
+      mind: MIND,
+      resource: "its MCP server",
       here: "/oauth2/auth?client_id=c&state=s",
       headers: new Headers(),
     }),
@@ -142,14 +127,14 @@ test("the consent page asks one question, with Deny and Allow as a pair", async 
   );
   expect(html).toContain(`<span class="joins" aria-hidden="true"></span><div class="tile"`);
   expect(html).toContain(`data-client-mark="known"`);
-  expect(html).toContain(`<h1>Claude Code wants to access ${DOMAIN}</h1>`);
+  expect(html).toContain(`<h1>Claude Code wants to access ${MIND}</h1>`);
   expect(html).toMatch(
     /<button type="submit" name="decision" value="deny" class="secondary">Deny<\/button>\s*<button type="submit" name="decision" value="allow">Allow<\/button>/,
   );
 });
 
 test("a page to work in is the wide card, and a refusal the narrow one", async () => {
-  const wide = await kept("wide", page({ title: DOMAIN, body: `<h1>${DOMAIN}</h1>`, wide: true }));
+  const wide = await kept("wide", page({ title: MIND, body: `<h1>${MIND}</h1>`, wide: true }));
   expect(wide).toContain(`<main class="wide"><div class="mark"`);
   const refusal = await kept("refusal", errorPage("That link has ended."));
   expect(refusal).toContain(`<main><div class="mark"`);
@@ -167,8 +152,8 @@ test("a client's own logo is shown only for a verified domain, from that domain,
       } as never,
       handle: "handle",
       email: "owner@example.net",
-      domain: DOMAIN,
-      resource: `https://iterate.${DOMAIN}/mcp`,
+      mind: MIND,
+      resource: "its MCP server",
       here: "/oauth2/auth?client_id=c&state=s",
       headers: new Headers(),
     });
@@ -203,8 +188,8 @@ test("a known client's mark goes by where its access goes, or by its name", asyn
       details: { redirectIsLoopback: false, ...details } as never,
       handle: "handle",
       email: "owner@example.net",
-      domain: DOMAIN,
-      resource: `https://iterate.${DOMAIN}/mcp`,
+      mind: MIND,
+      resource: "its MCP server",
       here: "/oauth2/auth?client_id=c&state=s",
       headers: new Headers(),
     }).text();
@@ -264,7 +249,7 @@ test("the account chooser says who is signed in, goes on as them, or signs out a
   const html = await kept(
     "chooser",
     chooserPage({
-      domain: DOMAIN,
+      mind: MIND,
       email: "owner@example.net",
       here: "/oauth2/auth?client_id=c&state=s",
     }),
@@ -279,30 +264,33 @@ test("the account chooser says who is signed in, goes on as them, or signs out a
   expect(html).toContain(`name="next" value="/oauth2/auth?client_id=c&#38;state=s"`);
   expect(html).toContain("Use another account");
   const app = {
-    host: `cloud.${DOMAIN}`,
-    origin: `https://cloud.${DOMAIN}`,
-    name: "iterate",
+    host: "guestbook.example.com",
+    origin: "https://guestbook.example.com",
+    name: "Guestbook",
     icon: null,
     members: false,
+    signIn: ["email" as const, "passkey" as const],
   };
   const forApp = await kept(
     "chooser-app",
-    chooserPage({ domain: DOMAIN, email: "guest@example.net", here: "/oauth2/auth?x=1", app }),
+    chooserPage({ mind: MIND, email: "guest@example.net", here: "/oauth2/auth?x=1", app }),
   );
-  expect(forApp).toContain(`<h1>Sign in to cloud.${DOMAIN}</h1>`);
+  expect(forApp).toContain(
+    `<h1>Sign in to Guestbook</h1><p class="muted center">guestbook.example.com</p>`,
+  );
   expect(forApp).toContain(`<button type="submit">Continue as guest@example.net</button>`);
   const signedOut = await kept(
     "chooser-signed-out",
     chooserPage({
-      domain: DOMAIN,
+      mind: MIND,
       email: "guest@example.net",
       here: "/oauth2/auth?x=1",
       app,
-      signedOutOf: `<b>cloud.${DOMAIN}</b>`,
+      signedOutOf: "<b>guestbook.example.com</b>",
     }),
   );
   expect(signedOut).toContain(
-    `<p class="center">You are signed out of &#60;b&#62;cloud.${DOMAIN}&#60;/b&#62;. You are still signed in to ${DOMAIN} as <strong>guest@example.net</strong>.</p>`,
+    `<p class="center">You are signed out of &#60;b&#62;guestbook.example.com&#60;/b&#62;. You are still signed in to ${MIND} as <strong>guest@example.net</strong>.</p>`,
   );
 });
 

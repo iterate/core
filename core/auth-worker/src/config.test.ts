@@ -1,121 +1,94 @@
+import { inspect } from "node:util";
 import { expect, test } from "vitest";
-import {
-  AuthSettings,
-  FIRST_OWNER_TICKET_MS,
-  firstOwnerTicketOf,
-  isOwner,
-  memberByConfig,
-} from "./config.ts";
+import { atMindsZone, authConfigOf, isOwner, tokenAudiencesOf } from "./config.ts";
+import { configVars } from "./test-support.ts";
 
-const NOW = 1_000_000;
-const SETTINGS = {
-  login: { methods: { email: {} }, allow: [{ email: "owner@example.com" }, { everyone: {} }] },
-};
-test("a first owner's ticket for an address the allow list names, ending in 24 hours, is taken", () => {
-  expect(firstOwnerTicketOf(ticket(), SETTINGS, NOW)).toEqual(JSON.parse(ticket()));
-  expect(firstOwnerTicketOf(ticket({ email: " Owner@Example.com" }), SETTINGS, NOW)).toMatchObject({
-    email: "owner@example.com",
+test("the config is the shared one and the Worker's own signing key", () => {
+  const config = authConfigOf(configVars());
+  expect(config).toMatchObject({
+    controlPlaneHostname: "iterate.example.com",
+    zones: ["example.com"],
+    ownerEmails: ["owner@example.net"],
+    topology: "full-cloudflare",
   });
+  expect(config.signingKey.exposeSecret()).toBe("a signing key for a test, never a real one");
 });
 
-test.each([
-  ["no JSON", "", "not JSON"],
-  ["a ticket's text in place of its hash", ticket({ hash: "the ticket itself" }), "not {"],
-  ["an address only `everyone` admits", ticket({ email: "other@example.com" }), "does not name"],
-  ["an end past 24 hours", ticket({ expires: NOW + FIRST_OWNER_TICKET_MS + 1 }), "24 hours"],
-])("a first owner's ticket with %s is refused", (_what, text, why) => {
-  expect(firstOwnerTicketOf(text, SETTINGS, NOW)).toEqual({
-    refused: expect.stringContaining(why),
-  });
+test("a config with no signing key is refused, and the refusal names the variable", () => {
+  const { ITERATE } = configVars();
+  expect(() => authConfigOf({ ITERATE })).toThrow("ITERATE__SIGNING_KEY");
 });
 
-test("a mind may have no way to sign in beside a passkey, and may mail codes", () => {
-  const allow = [{ email: "owner@example.com" }];
-  // no `methods` at all, and an empty one: the owner's ticket and an owner's hand are the ways in
-  expect(AuthSettings.parse({ login: { allow } }).login).toMatchObject({ methods: {} });
-  expect(AuthSettings.parse({ login: { methods: {}, allow } }).login).toMatchObject({
-    methods: {},
+test("the config names the team and the application of Cloudflare Access, and one without them is refused", () => {
+  const vars = configVars();
+  expect(authConfigOf(vars)).toMatchObject({
+    cloudflareAccessTeamDomain: "team.cloudflareaccess.com",
+    cloudflareAccessAudienceTag: "the-audience-tag-of-the-owners-application",
   });
-  expect(AuthSettings.parse({ login: { methods: { email: {} }, allow } }).login).toMatchObject({
-    methods: { email: {} },
-  });
+  const { cloudflareAccessTeamDomain: _, ...withoutTeam } = JSON.parse(vars.ITERATE);
+  expect(() => authConfigOf({ ...vars, ITERATE: JSON.stringify(withoutTeam) })).toThrow(
+    "ITERATE__CLOUDFLARE_ACCESS_TEAM_DOMAIN",
+  );
+  const { cloudflareAccessAudienceTag: __, ...withoutTag } = JSON.parse(vars.ITERATE);
+  expect(() => authConfigOf({ ...vars, ITERATE: JSON.stringify(withoutTag) })).toThrow(
+    "ITERATE__CLOUDFLARE_ACCESS_AUDIENCE_TAG",
+  );
 });
 
-test("the sign-in with Google proves an address, and one switch makes it a full sign-in", () => {
-  const allow = [{ email: "owner@example.com" }];
-  expect(AuthSettings.parse({ login: { methods: { google: {} }, allow } }).login).toMatchObject({
-    methods: { google: {} },
-  });
+test("a dump of the config prints REDACTED where the signing key is", () => {
+  const config = authConfigOf(configVars());
+  for (const dump of [JSON.stringify(config), inspect(config), `${config.signingKey}`]) {
+    expect(dump).not.toContain("a signing key for a test");
+    expect(dump).toMatch(/redacted/i);
+  }
+});
+
+test.for([
+  ["at a zone", "owner@example.com"],
+  ["under a zone", "owner@mail.example.com"],
+  ["at the second zone", "owner@second.example"],
+])("an owner's address %s of the mind is refused: the mind receives its mail", ([, email]) => {
+  const vars = configVars({ zones: ["example.com", "second.example"], ownerEmails: [email!] });
+  expect(() => authConfigOf(vars)).toThrow(/ITERATE__OWNER_EMAILS.*is at a zone of the mind/);
+});
+
+test("an address is the mind's own at any of its zones, and nowhere else", () => {
+  const config = { zones: ["example.com", "second.example"] };
   expect(
-    AuthSettings.parse({ login: { methods: { google: { signsInAlone: true } }, allow } }).login,
-  ).toMatchObject({ methods: { google: { signsInAlone: true } } });
-  // the switch is on or absent: `false` would read as a choice that the default already makes
-  expect(
-    AuthSettings.safeParse({ login: { methods: { google: { signsInAlone: false } }, allow } }),
-  ).toMatchObject({ success: false });
+    [
+      "agent@example.com",
+      "Agent@Sub.Second.Example ",
+      // another domain that only ends with the same letters
+      "jo@notexample.com",
+      "jo@example.net",
+    ].map((email) => atMindsZone(config, email)),
+  ).toEqual([true, true, false, false]);
 });
 
-test("the sign-in through another iterate deployment is gone: a config that names it is refused", () => {
-  const settings = {
-    login: {
-      methods: { iterate: { issuer: "https://iterate.example.com" } },
-      allow: [{ email: "owner@example.com" }],
-    },
-  };
-  expect(AuthSettings.safeParse(settings)).toMatchObject({ success: false });
-});
-
-test("a root key is a person's, with an email, or a service's, with paths: one with both is refused", () => {
-  const key = { actor: "a", publicKey: "MFkw", label: "A key" };
-  const settings = (extra: object) => ({
-    login: { allow: [{ email: "owner@example.com" }] },
-    keys: [{ ...key, ...extra }],
-  });
+test("an owner is an address the config names, and no other", () => {
+  const config = { ownerEmails: ["owner@example.net"] };
   expect([
-    AuthSettings.safeParse(settings({ email: "owner@example.com" })).success,
-    AuthSettings.safeParse(settings({ paths: ["/integrations/"] })).success,
-    AuthSettings.safeParse(settings({})).success,
-  ]).toEqual([true, true, true]);
-  // paths would read as a limit on the person's key, which approves and adds members all the same
+    isOwner(config, "owner@example.net"),
+    isOwner(config, " Owner@Example.net"),
+    isOwner(config, "owner+tag@example.net"),
+    isOwner(config, "other@example.net"),
+  ]).toEqual([true, true, false, false]);
+});
+
+test("the token audiences are the API and the MCP server, and the external mind's address when it runs outside the stack", () => {
+  const controlPlaneHostname = "iterate.example.com";
+  expect(tokenAudiencesOf({ controlPlaneHostname, topology: "full-cloudflare" })).toEqual([
+    "https://iterate.example.com/api",
+    "https://iterate.example.com/mcp",
+  ]);
   expect(
-    AuthSettings.safeParse(settings({ email: "owner@example.com", paths: ["/integrations/"] })),
-  ).toMatchObject({
-    success: false,
-    error: {
-      issues: [{ path: ["keys", 0, "paths"], message: expect.stringContaining("no paths") }],
-    },
-  });
+    tokenAudiencesOf({
+      controlPlaneHostname,
+      topology: "external-mind-connects-into-cloudflare-boundary",
+    }),
+  ).toEqual([
+    "https://iterate.example.com/api",
+    "https://iterate.example.com/mcp",
+    "https://iterate.example.com/api/provide-connect",
+  ]);
 });
-
-test("`everyone` makes no member of an address at the mind's own domain, whose mail the mind receives", () => {
-  const config = { domain: "mind.example", login: { allow: [{ everyone: {} }] } };
-  expect([
-    memberByConfig(config, "anyone@example.com"),
-    memberByConfig(config, "agent@mind.example"),
-    memberByConfig(config, "Agent@Sub.Mind.Example "),
-    // another domain that only ends with the same letters
-    memberByConfig(config, "jo@notmind.example"),
-  ]).toEqual([true, false, false, true]);
-});
-
-test("an owner is named by an email rule, by the exact address", () => {
-  const login = {
-    allow: [
-      { email: "owner@example.com", subaddresses: true as const },
-      { emailDomain: "example.com" },
-    ],
-  };
-  expect(isOwner(login, "owner@example.com")).toBe(true);
-  // a member by a +tag or by the domain rule, whose keys an owner removes
-  expect(isOwner(login, "owner+tag@example.com")).toBe(false);
-  expect(isOwner(login, "other@example.com")).toBe(false);
-});
-
-function ticket(fields: Record<string, unknown> = {}) {
-  return JSON.stringify({
-    email: "owner@example.com",
-    hash: "a".repeat(64),
-    expires: NOW + FIRST_OWNER_TICKET_MS,
-    ...fields,
-  });
-}

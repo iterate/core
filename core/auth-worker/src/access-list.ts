@@ -6,10 +6,10 @@
 //
 // A CLIENT SAYS ITS OWN NAME AND LOGO (./client-mark.ts). So a client also says where the access
 // went: that is the one thing here a client cannot claim for another.
-import { mindMcpUrlOf, mindProvideUrlOf } from "iterate/mind-api";
+import { mindMcpUrlOf, mindProvideConnectResourceOf } from "iterate/mind-api";
 import { appTile } from "./asking-app.ts";
 import { clientTile, shownLogoOf } from "./client-mark.ts";
-import { type Env, iterateConfigOf } from "./env.ts";
+import { configOf, type Env } from "./env.ts";
 import { type ClientWithAccess, mindHostResourceOf, type SignIn } from "./oauth.ts";
 
 const text = (value: string) =>
@@ -58,13 +58,13 @@ function clientInWords(client: ClientWithAccess): string {
 
 /** What a sign-in reaches, in words: the resource its tokens are for. */
 function reachOf(env: Env, signIn: SignIn): string {
-  const { domain } = iterateConfigOf(env);
+  const config = configOf(env);
   const { resource } = signIn;
   if (!resource) return "the mind or one of its pages";
-  if (resource === mindMcpUrlOf(domain)) return "the mind's MCP server";
-  if (resource === mindProvideUrlOf(domain))
-    return "the mind's /provide link, as the computer that runs the mind";
-  const host = mindHostResourceOf(env, resource);
+  if (resource === mindMcpUrlOf(config.controlPlaneHostname)) return "the mind's MCP server";
+  if (resource === mindProvideConnectResourceOf(config.controlPlaneHostname))
+    return "the right to hand in the mind, as the computer that runs it";
+  const host = mindHostResourceOf(config, resource);
   if (!host) return `the mind, through ${new URL(resource).pathname}`;
   const { pathname } = new URL(resource);
   return pathname.length > 1 ? `${new URL(host).host}${pathname}` : new URL(host).host;

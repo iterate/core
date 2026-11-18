@@ -4,11 +4,12 @@ import { decodeFacts, FACTS_HEADER } from "iterate/facts";
 import { base64url, challengeOf, keyIdOf, statementText } from "iterate/signed";
 import { expect, test } from "vitest";
 import type { Env } from "./env.ts";
+import { configVars } from "./test-support.ts";
 import { proposeStatement, statementDraftsResponse } from "./statement-drafts.ts";
 import { OUTSIDER_STATEMENTS_AN_HOUR, statementsResponse } from "./statements.ts";
 
-const DOMAIN = "example.com";
-const ISSUER = `https://iterate.${DOMAIN}`;
+const MIND = "iterate.example.com";
+const ISSUER = `https://${MIND}`;
 const MEMBER = "owner@example.net";
 const STRANGER = "stranger@example.net";
 const TYPE = "demo/statement-asked";
@@ -30,13 +31,13 @@ test("a proposed draft is shown on its page, every value as text", async () => {
 
 test("a member's press lands the event with the member as its signer, and the draft is gone", async () => {
   const { env, passkeys } = await stack();
-  const { draft } = await proposed(env, { next: `https://dash.${DOMAIN}/` });
+  const { draft } = await proposed(env, { next: "https://dash.example.com/" });
   const answer = await pressed(env, draft, passkeys[MEMBER]);
   expect(answer).toMatchObject({ status: 200 });
   expect(await answer.json()).toMatchObject({
     path: "/minds/example.com",
     type: TYPE,
-    next: `https://dash.${DOMAIN}/`,
+    next: "https://dash.example.com/",
   });
   expect(decodeFacts(answer.headers.get(FACTS_HEADER) || "")).toMatchObject([
     {
@@ -226,10 +227,8 @@ test("a draft that names its signer shows them, and takes their passkey alone", 
   });
   const html = await (await statementDraftsResponse(env, new Request(signAt)))!.text();
   expect(html).toContain(`Only <code>${STRANGER}</code> can sign it.`);
-  // a person with no passkey yet goes to /keys, and through the sign-in page if signed out
-  expect(html).toContain(
-    `<a href="/keys?next=%2Fstatements%2Fsign%3Fdraft%3D${draft}">Sign in and add one</a>`,
-  );
+  // no page lets a person who is no member add a first passkey (./enrolment.ts is for members), so the draft links to none
+  expect(html).not.toContain("add one");
   const byMember = await pressed(env, draft, passkeys[MEMBER], { path });
   expect({ status: byMember.status, body: await byMember.json() }).toEqual({
     status: 403,
@@ -256,7 +255,7 @@ test.for([
   ["a path with a dot segment", { path: "/integrations/../secrets" }],
   ["a payload that is a list", { payload: [] as unknown as Record<string, unknown> }],
   ["a next on another host", { next: "https://evil.example/" }],
-  ["a next that is no https URL", { next: `http://dash.${DOMAIN}/` }],
+  ["a next that is no https URL", { next: "http://dash.example.com/" }],
 ] as const)("a draft with %s is refused", async ([, input]) => {
   const { env } = await stack();
   await expect(proposed(env, input)).rejects.toMatchObject({ code: "INVALID_INPUT" });
@@ -321,7 +320,7 @@ type Changed = { payload?: Record<string, unknown>; path?: string; type?: string
 async function signedBy(passkey: Passkey, changed: Changed) {
   const now = Date.now();
   const statement = statementText({
-    mind: DOMAIN,
+    mind: MIND,
     path: "/minds/example.com",
     type: TYPE,
     payload: PAYLOAD,
@@ -423,8 +422,7 @@ async function stack() {
     };
   };
   const env = {
-    DOMAIN,
-    AUTH_SETTINGS: JSON.stringify({ login: { allow: [{ email: MEMBER }] } }),
+    ...configVars({ ownerEmails: [MEMBER] }),
     DB: {
       prepare: (sql: string) => statementOf(sql),
       batch: async (statements: ReturnType<typeof statementOf>[]) =>

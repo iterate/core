@@ -1,22 +1,22 @@
-// deploy.ts — `iterate deploy`: A NEW MIND IN A PERSON'S OWN CLOUDFLARE ACCOUNT, by one program
-// that asks as little as it can and waits for nothing it does not need. It does what iterate
-// Cloud's installation chat does, with no model and no server of iterate's in between:
+// deploy.ts — `iterate deploy`: A MIND IN A PERSON'S OWN CLOUDFLARE ACCOUNT, by one program that
+// asks as little as it can and waits for nothing it does not need. No model and no server of
+// iterate's is in between:
 //
-//   1. the stack's source (core/alchemy and the Workers), fetched and installed in the background
-//      while the person signs in;
-//   2. access to Cloudflare (./cloudflare-access.ts), and the account: one the person has, or a new one;
-//   3. the domain: a zone of the account, a new one that Cloudflare's registrar sells, or one the
+//   1. access to Cloudflare (./cloudflare-access.ts), and the account: one the person has, or a
+//      new one;
+//   2. the domain: a zone of the account, a new one that Cloudflare's registrar sells, or one the
 //      person brings;
-//   4. what the account must have: a workers.dev name, Workers Paid and R2;
-//   5. the stack's own deploy, `pnpm run deploy` of core/alchemy, with a config written here;
-//   6. with a person there, the mind's first steps (`firstSteps` below): the passkey and the
-//      first sign-in, a way to pay for the model, the onboarding agent's answer, and the mind's
-//      MCP server in the coding agents of this computer.
-//
-// ONE DEPLOY, at the domain. A stack can also deploy before its domain, while the person turns on
-// Workers Paid (core/alchemy README, "Before the domain and before Workers Paid"). That shortens
-// the deploy at the domain by about a sixth (1 min 23 s against 1 min 38 s): too little for a
-// second deploy and its code.
+//   3. what the account must have: a workers.dev name, Workers Paid and R2;
+//   4. the script's one input (core/alchemy/src/config.ts), written here: for a new mind from the
+//      answers, for a mind that is there already from that mind's own config (`deployedMind`);
+//      and for a new mind its identity (./identity.ts): one root key and the genesis that it
+//      signed, in two files on this computer, before anything is deployed;
+//   5. the stack's source (core/alchemy and the Workers), fetched and installed in the background
+//      while the person signs in, and the stack's own deploy, `pnpm run deploy` of core/alchemy;
+//   6. the post of the mind's identity records to the mind, when this computer holds them;
+//   7. with a person there, the mind's first steps (`firstSteps` below): the first sign-in, a way
+//      to pay for the model, the onboarding agent's answer, and the mind's MCP server in the
+//      coding agents of this computer.
 //
 // It handles the expected way alone. A run that stops says why, changes nothing more, and can be
 // run again: every step reads the account's state first, and a deploy keeps what it made. Each
@@ -29,53 +29,154 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
-import { mindMcpNameOf, mindMcpUrlOf } from "../mind-api.ts";
+import { mindAddressAsTyped, mindMcpNameOf, mindMcpUrlOf } from "../mind-api.ts";
+import {
+  Hostname,
+  MindConfig,
+  zoneCoversControlPlaneHostname,
+  zoneOfMailAddress,
+} from "../mind-config.ts";
 import type { MindConnection, MindItx } from "../node.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import {
   type Cloudflare,
+  apiTokenPage,
   cloudflare,
   cloudflareAccess,
-  resultOf,
+  DEPLOY_SCOPES,
   endAccess,
+  MAKES_API_TOKENS,
+  parsed,
+  resultOf,
 } from "./cloudflare-access.ts";
+import { type LoginFlow, loginFlowFor } from "./device-login/flow.ts";
+import {
+  IDENTITIES,
+  identityMadeFor,
+  keyFileOf,
+  mlDsaRequired,
+  newIdentity,
+  postIdentity,
+} from "./identity.ts";
 import { openPageCommand } from "./open-page.ts";
 
 const exec = promisify(execFile);
-const CLOUD = "https://cloud.iterate.com";
 const CACHE = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "iterate");
-const DOMAIN = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
-const NAME = /^[a-z][a-z0-9-]{1,29}$/;
 
 export type DeployInput = {
   domain?: string;
   account?: string;
   newAccount?: boolean;
-  name?: string;
   owner?: string;
+  controlPlaneHostname?: string;
   yes?: boolean;
   buy?: boolean;
   eraseRecords?: boolean;
   source?: string;
   ref?: string;
-  cloud?: boolean;
   setup?: boolean;
-  apiTokens?: boolean;
-  iterateDevImage?: boolean;
 };
 
 // ---------------------------------------------------------------------------------------------
 // What the program decides with no question. Pure, so that a test holds them.
 
-/** The stack's name from the owner's address: every resource in the account is `iterate-<name>-…`. */
-export function nameOf(email: string) {
-  const slug = (email.toLowerCase().split("@")[0] ?? "").split("+")[0]!.replace(/[^a-z0-9]+/g, "-");
-  const name = slug
-    .replace(/^[^a-z]+|-+$/g, "")
-    .slice(0, 30)
-    .replace(/-+$/, "");
-  return NAME.test(name) ? name : "mind";
+/** THE STAGE OF A MIND, which is the middle of every name the stack gives a resource
+ *  (`iterate-<stage>-auth`): inferred from the mind's first zone and never asked. The zone with
+ *  `-` for each dot, cut to the 32 characters that the script takes (core/alchemy/src/config.ts),
+ *  and with `z` first for a zone that starts with a digit, since a stage starts with a letter. */
+export function stageNameOf(zone: string) {
+  const name = zone.replaceAll(".", "-");
+  return (/^[a-z]/.test(name) ? name : `z${name}`).slice(0, 32).replace(/-+$/, "");
 }
+
+/** A deployed mind's config as its Workers hold it. `mindId` may be absent: the Workers of a
+ *  mind that was deployed before a mind had an id hold none. Every other rule of `MindConfig`
+ *  holds, the control-plane hostname under one of the zones among them: `iterate recover`
+ *  prints a sign-in link at that hostname, so a config that names a hostname outside the mind
+ *  is no config of a mind. */
+const DeployedConfig = z
+  .object({ ...MindConfig.shape, mindId: MindConfig.shape.mindId.optional() })
+  .refine(zoneCoversControlPlaneHostname, {
+    path: ["controlPlaneHostname"],
+    message:
+      "the apex of one of zones, or one label under one: a zone's certificate covers no deeper name",
+  });
+
+/** A mind that is deployed: its stage, and its own config. */
+type DeployedMind = z.infer<typeof DeployedConfig> & { stageName: string };
+
+/** THE SCRIPT'S ONE INPUT (core/alchemy/src/config.ts `MindConfig`) BUT FOR A NEW MIND'S ID, or
+ *  an error that says which answer it refuses. A new mind takes the zone `domain` whole, has
+ *  `owner` as its one owner, and answers at `iterate.<domain>` unless `controlPlaneHostname`
+ *  names the zone itself or another name one label under it. A mind that is `deployed` keeps its
+ *  zones, its topology, its owners and its hostname: `owner` and `controlPlaneHostname` are then
+ *  what a flag said, and each replaces what the mind has.
+ *
+ *  `mindId` is the deployed mind's own, and nothing here ever gives a mind that has an id
+ *  another. A mind with none gets the hash of the genesis that the command signs right before
+ *  the deploy (./identity.ts `newIdentity`), which names the hostname that this answers. */
+export function deployConfigOf(answers: {
+  accountId: string;
+  domain: string;
+  owner?: string;
+  controlPlaneHostname?: string;
+  deployed?: DeployedMind;
+}) {
+  const { deployed } = answers;
+  const zones = deployed?.zones || [answers.domain];
+  const controlPlaneHostname = (
+    answers.controlPlaneHostname ||
+    deployed?.controlPlaneHostname ||
+    `iterate.${answers.domain}`
+  ).toLowerCase();
+  if (
+    !Hostname.safeParse(controlPlaneHostname).success ||
+    !zoneCoversControlPlaneHostname({ controlPlaneHostname, zones })
+  )
+    throw new Error(
+      `The control plane cannot answer at ${controlPlaneHostname}: its hostname is ${zones.join(" or ")}, or one label under it. Cloudflare's certificate for a zone covers no deeper name.`,
+    );
+  const ownerEmails = answers.owner ? [answers.owner.toLowerCase()] : deployed?.ownerEmails || [];
+  const atTheMind = ownerEmails.find((email) => zoneOfMailAddress({ zones }, email));
+  if (atTheMind)
+    throw new Error(
+      `The owner's address ${atTheMind} is at a domain of the mind, and the mind takes that domain's mail. Pass --owner with an address elsewhere, or choose another domain.`,
+    );
+  if (!z.array(z.email()).min(1).safeParse(ownerEmails).success)
+    throw new Error(
+      `The owner is an email address, and ${ownerEmails.join(", ") || "none"} is not.`,
+    );
+  return {
+    mindId: deployed?.mindId,
+    controlPlaneHostname,
+    ownerEmails,
+    topology: deployed?.topology || ("full-cloudflare" as const),
+    alchemy: { stageName: deployed?.stageName || stageNameOf(answers.domain) },
+    cloudflare: { accountId: answers.accountId, zones },
+  };
+}
+
+/** What Cloudflare answers for a Worker's settings: its bindings, a plain-text one with its text
+ *  (https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/script_and_version_settings/methods/get/). */
+const WorkerSettings = z.object({
+  bindings: z.array(z.object({ type: z.string(), name: z.string(), text: z.string().optional() })),
+});
+
+/** A DEPLOYED MIND'S CONFIG OUT OF ITS BOUNDARY WORKER'S SETTINGS: the stack gives every Worker
+ *  the same config as the plain-text variable `ITERATE` (iterate/mind-config), and Cloudflare
+ *  lists a Worker's plain-text variables with their text. Undefined for settings that hold none. */
+export function mindConfigIn(settings: unknown) {
+  const variable = WorkerSettings.safeParse(settings).data?.bindings.find(
+    (binding) => binding.type === "plain_text" && binding.name === "ITERATE",
+  );
+  return variable?.text ? parsed(DeployedConfig, variable.text) : undefined;
+}
+
+/** Whether a line of a deploy's output says that the stack's state store refused a request. A
+ *  store that the same run made does so in its first seconds, and nothing is made without state:
+ *  the one failure after which the command deploys again by itself. */
+export const saysTheStateStoreRefused = (line: string) =>
+  /State store .*failed|StateStoreError/.test(line);
 
 /** A word made to end in "erate", as "iterate" does: one final a, e, i, o, u or y goes first,
  *  when more than that letter is there (misha gives misherate, jonas gives jonaserate). */
@@ -121,53 +222,17 @@ export function candidatesOf(name: string, words = ""): string[] {
   ].slice(0, 20);
 }
 
-/** The stack's config (core/alchemy/src/config.ts): the owner as its only member, mail and the
- *  mailed sign-in code, and iterate Cloud's key when the Cloud is named. `iterateDevImage` is
- *  iterate's public image by its digest-pinned reference: the stack's one named image, which the
- *  deploy pushes to the account's registry. With none, sandboxes start the Cloudflare-managed
- *  image. */
-export function configOf(mind: {
-  name: string;
-  accountId: string;
-  owner: string;
-  domain: string;
-  cloud?: { origin: string; publicKey: string };
-  apiTokens?: boolean;
-  iterateDevImage?: string;
-}) {
-  const { cloud } = mind;
-  return {
-    name: mind.name,
-    accountId: mind.accountId,
-    domain: mind.domain,
-    mail: true,
-    mind: {
-      images: mind.iterateDevImage ? { "iterate-dev-image": { image: mind.iterateDevImage } } : {},
-    },
-    auth: {
-      login: { methods: { email: {} }, allow: [{ email: mind.owner }] },
-      ...(cloud && {
-        keys: [
-          {
-            actor: "iterate-cloud",
-            publicKey: cloud.publicKey,
-            label: "iterate Cloud",
-            paths: ["/integrations/"],
-          },
-        ],
-      }),
-    },
-    // both make API tokens of the account, which only some access may
-    ...(mind.apiTokens && { cloudflareToken: true, telemetry: true }),
-    ...(cloud && { cloud: { origin: cloud.origin } }),
-  };
-}
-
 // ---------------------------------------------------------------------------------------------
 // The terminal.
 
 const interactive = () =>
   Boolean(process.stdin.isTTY && process.stdout.isTTY) && !isCodingAgent(process.env);
+
+/** How the CLI's own sign-in reaches the person from this process (device-login/flow.ts).
+ *  "device" says that the person's browser may be on another computer than this terminal (over
+ *  SSH, on Linux with no display): no page is opened here then, and a step whose page comes back
+ *  to this computer's own loopback address says where to run it instead. */
+const signInFlow = () => loginFlowFor({ env: process.env, platform: process.platform });
 
 /** A question for the person. With nobody there to answer, `flag` says what to pass instead. */
 async function ask<T extends string | boolean | string[]>(
@@ -241,6 +306,8 @@ async function until<T>(
 function page(text: string, url: string) {
   p.log.step(`${text}\n${url}`);
   if (!interactive() || process.env.ITERATE_SKIP_BROWSER_OPEN === "1") return;
+  // a browser here is not the one the person looks at
+  if (signInFlow() === "device") return;
   const { command, args } = openPageCommand(new URL(url), process.platform);
   execFile(command, args, () => {});
 }
@@ -264,7 +331,8 @@ function findUp(relative: string, from: string): string | undefined {
 }
 
 /** A checkout that holds core/alchemy, with its dependencies installed: `--source`, else the
- *  checkout this command runs in, else iterate/core at `ref` in the cache folder. */
+ *  checkout this command runs in, else iterate/core at `ref` in the cache folder. A source whose
+ *  core/alchemy is not the one script that this command writes the input of is refused. */
 async function sourceOf(input: DeployInput): Promise<Source> {
   const marker = "core/alchemy/alchemy.run.ts";
   const own = input.source
@@ -289,6 +357,15 @@ async function sourceOf(input: DeployInput): Promise<Source> {
     await git("fetch", "-q", "--depth", "1", "origin", input.ref || "main");
     await git("checkout", "-q", "--detach", "--force", "FETCH_HEAD");
   }
+  // the script whose input this command writes names the control plane's hostname in its config
+  const scriptConfig = join(dir, "core/alchemy/src/config.ts");
+  if (
+    !existsSync(scriptConfig) ||
+    !readFileSync(scriptConfig, "utf8").includes("controlPlaneHostname")
+  )
+    throw new Error(
+      `The source at ${dir} is a version of iterate before the one Alchemy script (its core/alchemy/src/config.ts names no controlPlaneHostname), and this command writes that script's input alone. Nothing was changed. Pass --source with a checkout that holds it.`,
+    );
   // without pnpm on this computer, npx runs the version that the source names
   const manager = z
     .object({ packageManager: z.string().default("pnpm@12") })
@@ -312,9 +389,10 @@ async function sourceOf(input: DeployInput): Promise<Source> {
 
 type Run = {
   source: Source;
-  name: string;
+  stageName: string;
+  /** the file that holds the script's one input */
+  config: string;
   token: string;
-  env: Record<string, string>;
   log: string;
   children: Set<ChildProcess>;
   say?: (line: string) => void;
@@ -326,22 +404,18 @@ function deployOnce(run: Run): Promise<{ code: number; storeRefused: boolean }> 
   return new Promise((done, failed) => {
     const file = createWriteStream(run.log, { flags: "a" });
     const { command, first } = run.source.pnpm;
-    const child = spawn(
-      command,
-      [...first, "run", "deploy", "--stage", run.name, "--yes", "--adopt"],
-      {
-        cwd: join(run.source.dir, "core/alchemy"),
-        env: {
-          ...process.env,
-          CI: "1",
-          NO_COLOR: "1",
-          FORCE_COLOR: "0",
-          CLOUDFLARE_API_TOKEN: run.token,
-          ...run.env,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
+    const child = spawn(command, [...first, "run", "deploy", "--stage", run.stageName, "--yes"], {
+      cwd: join(run.source.dir, "core/alchemy"),
+      env: {
+        ...process.env,
+        CI: "1",
+        NO_COLOR: "1",
+        FORCE_COLOR: "0",
+        CLOUDFLARE_API_TOKEN: run.token,
+        ITERATE_MIND_CONFIG: run.config,
       },
-    );
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     run.children.add(child);
     let storeRefused = false;
     let rest = "";
@@ -351,7 +425,7 @@ function deployOnce(run: Run): Promise<{ code: number; storeRefused: boolean }> 
       for (const raw of lines) {
         const line = raw.replaceAll(run.token, "[token]").trimEnd();
         file.write(`${line}\n`);
-        if (/State store .*failed|StateStoreError/.test(line)) storeRefused = true;
+        if (saysTheStateStoreRefused(line)) storeRefused = true;
         if (line.trim()) run.say?.(line.trim());
       }
     };
@@ -366,8 +440,7 @@ function deployOnce(run: Run): Promise<{ code: number; storeRefused: boolean }> 
   });
 }
 
-/** The deploy. A new state store can refuse writes for its first seconds: the deploy is then
- *  tried once more. */
+/** The deploy. When the state store refused it (`saysTheStateStoreRefused`), it runs once more. */
 async function deployStack(run: Run): Promise<number> {
   const first = await deployOnce(run);
   if (first.code === 0 || !first.storeRefused) return first.code;
@@ -383,9 +456,9 @@ const Account = z.object({ id: z.string(), name: z.string() });
 type Account = z.infer<typeof Account>;
 const Membership = z.object({ status: z.string().optional(), account: Account.optional() });
 const ZoneRow = z.object({ id: z.string(), name: z.string(), status: z.string() });
-/** A zone, and the stack whose boundary Worker serves it, when one does. */
+/** A zone, and the stage of the mind whose boundary Worker its routes name, when one does. */
 type Zone = z.infer<typeof ZoneRow> & {
-  mind?: string;
+  stageName?: string;
   /** Its routes or records could not be read, so nothing says what lives there. */
   unread?: boolean;
   /** What else uses the zone: a Worker's route, or a record that names a host or takes mail. */
@@ -502,8 +575,7 @@ async function zonesOf(cf: Cloudflare, account: string, domain?: string): Promis
         ),
       ]);
       if (!routes || !records) return { id, name, status, unread: true };
-      const stack = /^iterate-.+-(boundary|ingress)$/;
-      const script = routes.map((route) => route.script || "").find((worker) => stack.test(worker));
+      const stack = /^iterate-(.+)-boundary$/;
       const uses = [
         ...routes
           .filter((route) => !stack.test(route.script || ""))
@@ -519,7 +591,7 @@ async function zonesOf(cf: Cloudflare, account: string, domain?: string): Promis
         id,
         name,
         status,
-        mind: script?.replace(/^iterate-|-(boundary|ingress)$/g, ""),
+        stageName: routes.map((route) => stack.exec(route.script || "")?.[1]).find(Boolean),
         uses,
       };
     }),
@@ -548,7 +620,6 @@ async function pickDomain(
   cf: Cloudflare,
   account: string,
   input: DeployInput,
-  name: string,
   zones: Zone[],
   person: string,
 ): Promise<Pick> {
@@ -566,12 +637,12 @@ async function pickDomain(
           maxItems: 14,
           options: [
             ...zones
-              .filter((zone) => !zone.unread && (!zone.mind || zone.mind === name))
+              .filter((zone) => !zone.unread)
               .map((zone) => ({
                 value: zone.name,
                 label: zone.name,
-                hint: zone.mind
-                  ? "this mind is here already"
+                hint: zone.stageName
+                  ? "a mind is here already: deploy over it"
                   : zone.uses?.length
                     ? "in this account, in use: its records would be erased"
                     : "in this account, unused",
@@ -596,7 +667,7 @@ async function pickDomain(
       )
         .trim()
         .toLowerCase();
-      if (!DOMAIN.test(typed)) {
+      if (!Hostname.safeParse(typed).success) {
         const more = await free(typed);
         if (more.length === 0) p.log.warn(`No name from "${typed}" is free at Cloudflare.`);
         // the new names first, then the ones from before
@@ -605,7 +676,8 @@ async function pickDomain(
       }
       domain = typed;
     }
-    if (!DOMAIN.test(domain)) throw new Error(`${JSON.stringify(domain)} is no domain.`);
+    if (!Hostname.safeParse(domain).success)
+      throw new Error(`${JSON.stringify(domain)} is no domain.`);
     const zone =
       zones.find((candidate) => candidate.name === domain) ||
       (await zonesOf(cf, account, domain))[0];
@@ -756,18 +828,17 @@ async function zoneOf(cf: Cloudflare, account: string, pick: Pick): Promise<Zone
   );
 }
 
-/** The account, by flag or by question; a new one is made in the person's name. `covered`
- *  says whether this access reaches it: a sign-in's approval does not cover an account that was
- *  just made, or one of the person's that they did not select on Cloudflare's page, and each
- *  needs one more approval. */
+/** The account, by flag or by question. A new one is named after the owner's mailbox, which
+ *  `owner` answers. `covered` says whether this access reaches the account: a sign-in's approval
+ *  does not cover an account that was just made, or one of the person's that they did not select
+ *  on Cloudflare's page, and each needs one more approval. */
 async function pickAccount(
   cf: Cloudflare,
   input: DeployInput,
-  name: string,
+  owner: () => Promise<string>,
 ): Promise<{ account: Account; covered: boolean }> {
   const NEW = "\0new";
   const { all, covered } = await accountsOf(cf);
-  const fresh = `iterate-${name}`;
   let chosen = input.newAccount ? NEW : input.account;
   if (!chosen && covered.length === 0)
     throw new Error("This access to Cloudflare covers no account.");
@@ -802,6 +873,7 @@ async function pickAccount(
     );
   }
   // an earlier run made it: a second run makes no second account
+  const fresh = `iterate-${(await owner()).split("@")[0]!.replace(/[^a-z0-9]+/g, "-")}`;
   const before = all.find((candidate) => candidate.name === fresh);
   if (before) return { account: before, covered: isCovered(before) };
   const made = await cf("POST", "/accounts", { name: fresh, standalone: true });
@@ -816,29 +888,33 @@ async function pickAccount(
   return { account, covered: (await cf("GET", `/accounts/${account.id}`)).status === 200 };
 }
 
+/** THE MIND THAT IS DEPLOYED AS THE STAGE `stageName` OF THE ACCOUNT, with its own config, or
+ *  undefined when the account has no such mind. The config is read from the boundary Worker's
+ *  settings (`mindConfigIn`): a mind's account holds what the mind is, so no file of an earlier
+ *  deploy is needed. `iterate recover` finds a mind the same way. */
+export async function deployedMind(cf: Cloudflare, account: string, stageName: string) {
+  const boundary = `iterate-${stageName}-boundary`;
+  const settings = await cf("GET", `/accounts/${account}/workers/scripts/${boundary}/settings`);
+  if (settings.status === 404) return undefined;
+  const config = mindConfigIn(settings.result);
+  if (!config)
+    throw new Error(
+      `Cloudflare did not answer with the config of the mind whose boundary Worker is ${boundary} (${settings.status}: ${settings.error || "settings with no variable ITERATE"}). Nothing was changed.`,
+    );
+  return { ...config, stageName };
+}
+
 // ---------------------------------------------------------------------------------------------
 // The mind's first steps.
 
 /** What the command needs of the rest of the CLI once the mind answers: cli.ts gives both. */
 export type MindSteps = {
-  /** `iterate login` by the browser, then a connection to the mind. `openBrowser` gets the
-   *  authorization page in place of the CLI's own opener. */
+  /** `iterate login` by the browser, then a connection to the mind at `address`, taken as it is.
+   *  `openBrowser` gets the authorization page in place of the CLI's own opener. */
   signIn: (address: string, openBrowser: (url: URL) => void) => Promise<MindConnection>;
   /** `iterate chatgpt connect` on that connection. */
   connectChatgpt: (connection: MindConnection, print: (line: string) => void) => Promise<unknown>;
 };
-
-/** The page that does the first owner's two things in one go: `/keys/first` spends the ticket
- *  and has the owner add a passkey, and its `next` then leads on to `authorize`, the CLI's own
- *  sign-in page (core/auth-worker first-owner.ts honours a `next` at the issuer's origin). The
- *  ticket is in the fragment, which no server sees. */
-export function firstSignInPage(domain: string, ticket: string, authorize: URL): URL {
-  const page = new URL(`https://iterate.${domain}/keys/first`);
-  if (authorize.origin === page.origin)
-    page.searchParams.set("next", `${authorize.pathname}${authorize.search}`);
-  page.hash = ticket;
-  return page;
-}
 
 /** ONE TURN OF THE ONBOARDING AGENT, as a script that runs in the mind: it says "hi" to
  *  `/agents/onboarding` (what a new owner writes there first, so the chat has its greeting when
@@ -896,10 +972,11 @@ async function onboardingSilence(itx: MindItx): Promise<string | null> {
 
 /** How the mind's MCP server is added to each coding agent this command knows, by that agent's
  *  own CLI, for the whole user and not one folder; `then` is what signs the agent in. The server
- *  is named after the domain (`mindMcpNameOf`), so two minds sit side by side. */
-export function mcpInstalls(domain: string) {
-  const name = mindMcpNameOf(domain);
-  const url = mindMcpUrlOf(domain);
+ *  is named after the mind's control-plane hostname (`mindMcpNameOf`), so two minds sit side by
+ *  side. */
+export function mcpInstalls(controlPlaneHostname: string) {
+  const name = mindMcpNameOf(controlPlaneHostname);
+  const url = mindMcpUrlOf(controlPlaneHostname);
   return [
     {
       command: "claude",
@@ -916,34 +993,76 @@ export function mcpInstalls(domain: string) {
   ];
 }
 
-/** THE MIND'S FIRST STEPS, for a person at the terminal, in this order:
- *  1. the passkey and the first sign-in, in one browser page (`firstSignInPage`);
- *  2. a way to pay for the model: a ChatGPT plan, an OpenAI API key, or none;
- *  3. the onboarding agent's answer; with none, step 2 comes again, until it answers or the
- *     person chooses none;
- *  4. the offer to add the mind's MCP server to the coding agents installed here. */
-async function firstSteps(domain: string, ticket: string, steps: MindSteps) {
-  using connection = await steps.signIn(domain, (authorize) =>
-    page(
-      "Open your mind and make your passkey. The same page then signs this terminal in. The link works once, within 24 hours:",
-      firstSignInPage(domain, ticket, authorize).href,
-    ),
+/** THE FIRST SIGN-IN, which is the owner's first passkey too. The command starts the CLI's own
+ *  sign-in (`iterate login`) and opens its authorization page. The mind has no session for this
+ *  browser, so it shows its sign-in page, and from there the owner goes the one way that a new
+ *  mind has: Cloudflare Access proves the address (core/auth-worker access-sign-in.ts), the mind
+ *  asks for a first passkey (enrolment.ts), and then goes on to the authorization that the page
+ *  began with, which signs this terminal in. Each of those pages hands the next the address to go
+ *  on to, as `next`. In the device flow the page that it began with is the mind's device page,
+ *  which shows the terminal's code and takes a press of the new passkey, and then the same
+ *  consent page as in the browser flow. */
+async function firstSignIn(controlPlaneHostname: string, owners: string[], steps: MindSteps) {
+  p.log.message(firstSignInWords(signInFlow(), owners).join("\n"));
+  const connection = await steps.signIn(controlPlaneHostname, (authorize) =>
+    page("Sign in to your mind:", authorize.href),
   );
-  const { itx } = connection;
-  p.log.success(`This terminal is signed in to ${domain}.`);
+  p.log.success(`This terminal is signed in to ${controlPlaneHostname}.`);
+  return connection;
+}
 
+/** WHAT THE PERSON WILL MEET AT THE FIRST SIGN-IN, said before its page: the same pages in both
+ *  flows, and in the device flow one more, which shows the code that the terminal shows. */
+export const firstSignInWords = (flow: LoginFlow, owners: string[]) => [
+  flow === "device"
+    ? "Open the page below in your browser, on any computer. It is your mind's sign-in page."
+    : "Your mind's sign-in page opens now.",
+  `Your browser asks for a passkey there: you have none yet, so close that, and choose "prove your email address with Cloudflare".`,
+  `Cloudflare mails a code to ${owners.join(" or ")}. Enter it and add your passkey.`,
+  flow === "device"
+    ? "Then a page shows the same code as this terminal and asks to sign this device in: continue with your new passkey, and allow it on the page after."
+    : "The same page then signs this terminal in.",
+];
+
+/** THE CHATGPT PLAN AS A WAY TO PAY, by where the person's browser is. OpenAI's sign-in ends at
+ *  `http://127.0.0.1:1455` on the computer that the BROWSER runs on (./chatgpt.ts), where this
+ *  process must listen. With the browser elsewhere it cannot: the option says so, and `runThere`
+ *  is what the person runs on that computer, which signs it in to the mind first. */
+export const chatgptPlanWay = (flow: LoginFlow, address: string) =>
+  flow === "device"
+    ? {
+        hint: "connected from the computer with your browser",
+        runThere: [
+          "OpenAI's sign-in comes back to the computer that your browser is on, so it cannot start from this terminal.",
+          "On the computer with your browser, run this. It signs that computer in to your mind with your passkey, then opens OpenAI's page:",
+          `  npx iterate@latest chatgpt connect ${mindAddressAsTyped(address)}`,
+        ].join("\n"),
+      }
+    : { hint: "recommended", runThere: undefined };
+
+/** A way to pay for the model (a ChatGPT plan, an OpenAI API key, or none), and then the
+ *  onboarding agent's answer. With no answer the question comes again, until the agent answers
+ *  or the person chooses none. */
+async function aModelThatAnswers(connection: MindConnection, steps: MindSteps) {
+  const { itx } = connection;
+  const chatgpt = chatgptPlanWay(signInFlow(), connection.address);
   for (;;) {
     const way = await ask<string>("", () =>
       p.select({
         message: "What pays for your mind's model?",
         options: [
-          { value: "chatgpt", label: "A ChatGPT Plus or Pro plan", hint: "recommended" },
+          { value: "chatgpt", label: "A ChatGPT Plus or Pro plan", hint: chatgpt.hint },
           { value: "openai", label: "An OpenAI API key" },
           { value: "none", label: "Nothing now", hint: "it has a model already, or later" },
         ],
       }),
     );
-    if (way === "chatgpt") await steps.connectChatgpt(connection, (line) => p.log.message(line));
+    if (way === "chatgpt" && chatgpt.runThere) {
+      p.log.step(chatgpt.runThere);
+      // the check below says whether a model answers, whatever the person says here
+      await ask<boolean>("", () => p.confirm({ message: "Is the plan connected?" }));
+    } else if (way === "chatgpt")
+      await steps.connectChatgpt(connection, (line) => p.log.message(line));
     if (way === "openai") {
       const form = z.object({ url: z.string() }).parse(
         await itx.run(`async (itx) => itx.secrets.collectFromUser({
@@ -957,19 +1076,19 @@ async function firstSteps(domain: string, ticket: string, steps: MindSteps) {
     }
     const asking = wait("Saying hi to your onboarding agent");
     const silence = await onboardingSilence(itx);
-    if (!silence) {
-      asking.done("Your onboarding agent answers.");
-      break;
-    }
-    asking.fail(`Your onboarding agent gave no answer: ${silence}`);
-    if (way === "none") break;
+    if (silence) asking.fail(`Your onboarding agent gave no answer: ${silence}`);
+    else asking.done("Your onboarding agent answers.");
+    if (!silence || way === "none") return;
   }
+}
 
-  const installs = mcpInstalls(domain).filter(
+/** The offer to add the mind's MCP server to the coding agents installed on this computer. */
+async function mcpServerInCodingAgents(connection: MindConnection) {
+  const installs = mcpInstalls(connection.address).filter(
     (install) => spawnSync(install.command, ["--version"], { stdio: "ignore" }).status === 0,
   );
   if (installs.length === 0) {
-    p.log.info(`Your mind's MCP server, for a coding agent: ${mindMcpUrlOf(domain)}`);
+    p.log.info(`Your mind's MCP server, for a coding agent: ${mindMcpUrlOf(connection.address)}`);
     return;
   }
   const chosen = await ask<string[]>("", () =>
@@ -989,10 +1108,78 @@ async function firstSteps(domain: string, ticket: string, steps: MindSteps) {
         `${install.label} did not add it: ${(added.stderr || added.stdout || "").trim().slice(-300)}`,
       );
   }
+  // an agent's own sign-in to the server comes back to the computer that the agent runs on
+  if (signInFlow() === "device")
+    p.log.info(
+      `These coding agents are on this computer. For the ones on the computer with your browser, run there:\n${mcpInstalls(
+        connection.address,
+      )
+        .map((install) => `  ${[install.command, ...install.args].join(" ")}`)
+        .join("\n")}`,
+    );
 }
 
-// ---------------------------------------------------------------------------------------------
-// The command.
+/** THE LINE THAT NAMES THE MIND'S IDENTITY KEY, for a first deploy, or undefined. It is printed
+ *  only when the key file is on this computer, and only when this run gave the mind its id, or
+ *  the mind took a record now, or its log had no record before: so a first deploy whose
+ *  summary was lost prints it at the next run. */
+export function identityKeyLineOf(
+  keyFile: string,
+  run: { gaveTheId: boolean; posted?: { taken: number; emptyBefore: boolean } },
+) {
+  if (!existsSync(keyFile)) return undefined;
+  if (!run.gaveTheId && !run.posted?.taken && !run.posted?.emptyBefore) return undefined;
+  return `Its identity key: ${keyFile.replace(homedir(), "~")}  (keep a copy: it proves that the mind is yours)`;
+}
+
+/** THE IDENTITY OF A MIND THAT HAS NONE (./identity.ts): the one that an earlier run on this
+ *  computer made for this control-plane hostname, when a first deploy stopped half way, so that
+ *  the mind goes on with that id; else a new one. Its key is on this computer when this answers. */
+async function identityOfNewMind(controlPlaneHostname: string) {
+  const earlier = await identityMadeFor(controlPlaneHostname, IDENTITIES);
+  if (!earlier) return (await newIdentity([controlPlaneHostname], IDENTITIES)).mindId;
+  p.log.info(
+    `Using the identity made on ${earlier.madeAt.toISOString().slice(0, 16).replace("T", " ")} UTC for ${controlPlaneHostname}.`,
+  );
+  return earlier.mindId;
+}
+
+/** THE MIND'S IDENTITY IS PUBLISHED, when this computer holds its records (./identity.ts): a new
+ *  mind's genesis, or what an earlier run did not post, and at every deploy the last record
+ *  again, which makes the stack deliver what it still owes the mind's own log. With no records
+ *  here it asks nothing and says nothing: another computer has the mind's key. Nothing else
+ *  waits for the identity, so a post that fails is a line with the command that posts again,
+ *  never a failed deploy. Answers what the post did, or undefined. */
+async function identityPublished(mind: { mindId: string; controlPlaneHostname: string }) {
+  try {
+    const done = await postIdentity(mind, {
+      dir: IDENTITIES,
+      fetcher: (request) => fetch(request),
+      pause: (ms) => sleep(ms),
+      say: (line) => p.log.step(line),
+    });
+    if (done?.taken)
+      p.log.success(
+        done.published === done.here
+          ? "The mind took its identity record and publishes it."
+          : "The mind took its identity record. Its published log does not show it yet.",
+      );
+    return done;
+  } catch (error) {
+    p.log.warn(
+      `The mind's identity is not published: ${error instanceof Error ? error.message : String(error)}. Nothing else waits for it. To post it again: npx iterate@latest identity post ${mindAddressAsTyped(mind.controlPlaneHostname)}`,
+    );
+    return undefined;
+  }
+}
+
+/** THE MIND'S FIRST STEPS AFTER THE FIRST SIGN-IN, for a person at the terminal, in this order.
+ *  Each is a function of the signed-in connection: one more step is one more entry. */
+const firstSteps: ((connection: MindConnection, steps: MindSteps) => Promise<void>)[] = [
+  aModelThatAnswers,
+  mcpServerInCodingAgents,
+];
+
 // ---------------------------------------------------------------------------------------------
 // The command.
 
@@ -1005,21 +1192,21 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
   try {
     if (process.platform === "win32")
       throw new Error("iterate deploy runs on macOS and Linux (on Windows: in WSL).");
-    if (input.name && !NAME.test(input.name))
-      throw new Error(
-        "--name: lower case letters, digits and -, 2 to 30 characters, a letter first.",
-      );
     // the source comes while the person signs in and chooses
     const sourceBegan = Date.now();
     const source = sourceOf(input);
     source.catch(() => {});
     const signIn = (fresh = false) =>
-      cloudflareAccess(({ url, code, minutes }) => {
-        page(
-          `Sign in at Cloudflare and approve the access. Check that the page shows the code ${code}. Select the account for the mind. The code works for ${minutes} minutes.`,
-          url.href,
-        );
-      }, fresh);
+      cloudflareAccess(
+        DEPLOY_SCOPES,
+        ({ url, code, minutes }) => {
+          page(
+            `Sign in at Cloudflare and approve the access. Tick "Account API Token Provisioning" on its page, which Cloudflare leaves unticked: the deploy makes two API tokens with which the mind reads its own logs, and they read nothing else and deploy nothing. Check that the page shows the code ${code}. Select the account for the mind. The code works for ${minutes} minutes.`,
+            url.href,
+          );
+        },
+        fresh,
+      );
     let access = await signIn();
     // THE ACCESS ENDS WITHIN THE HOUR, and a wait for a card or a domain can be longer. So each
     // call takes the access anew: the kept one, or a new sign-in once it has too little left
@@ -1035,6 +1222,41 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       });
       return cloudflare(access.token)(method, path, body);
     };
+
+    // A SIGN-IN THAT LACKS A SCOPE CANNOT DEPLOY, and the command knows it from what the sign-in
+    // granted, before it changes anything. The other way is an API token that the person makes
+    // on Cloudflare's own page and pastes here: the deploy alone runs with it, and it is never
+    // shown and never written to a file. The command's own steps keep the sign-in.
+    let pasted: string | undefined;
+    if (access.lacks.length > 0) {
+      const why = `The sign-in at Cloudflare did not grant ${access.lacks.join(", ")}${access.lacks.includes(MAKES_API_TOKENS) ? ` ("Account API Token Provisioning" was not ticked)` : ""}, and a deploy needs it.`;
+      const tokenPage = apiTokenPage().href;
+      if (!interactive()) {
+        await endAccess(access);
+        throw new Error(
+          `${why} Nothing was changed. Run the command again and tick it. Or make an API token of the account with the deploy's permissions at ${tokenPage} and run the command with it as CLOUDFLARE_API_TOKEN.`,
+        );
+      }
+      p.log.warn(why);
+      page(
+        "The other way: make an API token yourself on this page of Cloudflare's, which has the deploy's permissions filled in. Choose the mind's account and press Create. If the page says that it does not know a permission, stop and run the command again with the box ticked.",
+        tokenPage,
+      );
+      pasted = (
+        await ask<string>("", () =>
+          p.password({
+            message: "Paste the API token here (it is not shown), or press Enter to stop",
+          }),
+        )
+      )?.trim();
+      if (!pasted) {
+        await endAccess(access);
+        throw new Error(
+          'Nothing was changed. Run the command again and tick "Account API Token Provisioning".',
+        );
+      }
+    }
+
     const user = await cf("GET", "/user");
     const said = resultOf(
       z.object({
@@ -1044,7 +1266,7 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       }),
       user,
     );
-    const login = said?.email;
+    const login = said?.email.toLowerCase();
     // an account's own API token reads no user: the owner then comes by the flag
     if (user.status !== 200 && access.from === "sign-in") {
       await endAccess(access);
@@ -1052,23 +1274,24 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
         `Cloudflare refused the kept access (${user.status}). Run the command again to sign in.`,
       );
     }
-    const owner = (
-      input.owner ||
+    p.log.info(`Signed in to Cloudflare${login ? ` as ${login}` : ""}.`);
+    // THE OWNER OF A NEW MIND: `--owner`, else the Cloudflare login, else a question. Asked for
+    // only where it is needed: a mind that is there already has its owners.
+    let asked: string | undefined;
+    const newOwner = async () =>
+      input.owner?.toLowerCase() ||
       login ||
-      (await ask<string>("pass --owner <email>", () =>
-        p.text({
-          message: "The owner's email address",
-          validate: (value) =>
-            /^\S+@\S+\.\S+$/.test(value || "") ? undefined : "An email address",
-        }),
-      ))
-    ).toLowerCase();
-    const name = input.name || nameOf(owner);
-    p.log.info(
-      `Signed in to Cloudflare${login ? ` as ${login}` : ""}. The mind's owner is ${owner}.`,
-    );
+      (asked ||= (
+        await ask<string>("pass --owner <email>", () =>
+          p.text({
+            message: "The owner's email address",
+            validate: (value) =>
+              /^\S+@\S+\.\S+$/.test(value || "") ? undefined : "An email address",
+          }),
+        )
+      ).toLowerCase());
 
-    const { account, covered } = await pickAccount(cf, input, name);
+    const { account, covered } = await pickAccount(cf, input, newOwner);
     // An approval covers the accounts that the person selected on Cloudflare's page: a new
     // account, or one they did not select, takes one more approval.
     if (!covered) {
@@ -1086,6 +1309,15 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
           `The approval does not cover the account ${account.name}. Run the command again and select it on Cloudflare's page.`,
         );
     }
+    // a token of the account answers its own check; one of the person's answers the person's
+    if (
+      pasted &&
+      (await cloudflare(pasted)("GET", `/accounts/${account.id}/tokens/verify`)).status !== 200 &&
+      (await cloudflare(pasted)("GET", "/user/tokens/verify")).status !== 200
+    )
+      throw new Error(
+        `Cloudflare does not know the pasted text as an API token of the account ${account.name}. Nothing was changed. Run the command again.`,
+      );
     const on = async (path: string) =>
       (await cf("GET", `/accounts/${account.id}${path}`)).status === 200;
     const paidPath = "/containers/applications";
@@ -1101,29 +1333,67 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     );
 
     // the names offered come from the person's name at Cloudflare, else from the owner's address
-    const person =
-      [said?.first_name, said?.last_name].filter(Boolean).join(" ") ||
-      (owner.split("@")[0] || "").split("+")[0]!.replace(/[^a-z0-9]+/g, " ");
-    const pick = await pickDomain(cf, account.id, input, name, zones, person);
+    const person = input.domain
+      ? ""
+      : [said?.first_name, said?.last_name].filter(Boolean).join(" ") ||
+        (await newOwner())
+          .split("@")[0]!
+          .split("+")[0]!
+          .replace(/[^a-z0-9]+/g, " ");
+    const pick = await pickDomain(cf, account.id, input, zones, person);
     const { domain } = pick;
-    if (owner.endsWith(`@${domain}`) || owner.endsWith(`.${domain}`))
-      throw new Error(
-        `The owner's address ${owner} is at ${domain}, and the mind takes that domain's mail. Pass --owner with an address elsewhere, or choose another domain.`,
-      );
     if (pick.zone?.unread)
       throw new Error(
         `Cloudflare did not answer with the Workers routes and DNS records of ${domain}, so nothing says what lives there already. Nothing was changed. Run the command again.`,
       );
-    if (pick.zone?.mind && pick.zone.mind !== name)
+    // A MIND THAT IS THERE ALREADY: the zone's routes name its boundary Worker, and that Worker's
+    // settings hold the mind's own config. The command deploys over it with what the mind has,
+    // but for what a flag names.
+    const stageName = pick.zone?.stageName || stageNameOf(domain);
+    const deployed = await deployedMind(cf, account.id, stageName);
+    if (deployed && !deployed.zones.includes(domain))
       throw new Error(
-        `Another mind lives at ${domain} already (its stack is ${pick.zone.mind}). Choose another domain.`,
+        `The account has a mind at ${deployed.controlPlaneHostname} whose stack is named ${stageName}, the name that a mind at ${domain} gets, and ${domain} is none of its domains (${deployed.zones.join(", ")}). Choose another domain.`,
       );
-    const elsewhere = zones.find((zone) => zone.mind === name && zone.name !== domain);
-    if (elsewhere)
-      throw new Error(
-        `A mind named ${name} lives at ${elsewhere.name} already. Pass --name with another name for this one.`,
+    const config = deployConfigOf({
+      accountId: account.id,
+      domain,
+      owner: deployed ? input.owner : await newOwner(),
+      controlPlaneHostname: input.controlPlaneHostname,
+      deployed,
+    });
+    const { controlPlaneHostname } = config;
+    // a mind with no id gets one, which this run makes or checks: asked before anything changes
+    if (!config.mindId) await mlDsaRequired();
+    if (deployed) {
+      p.log.info(
+        [
+          `A mind is at ${domain} already. Its own config, from Cloudflare:`,
+          `  control plane   ${deployed.controlPlaneHostname}`,
+          `  owners          ${deployed.ownerEmails.join(", ")}`,
+          `  domains         ${deployed.zones.join(", ")}`,
+          `  the mind runs   ${deployed.topology === "full-cloudflare" ? "in Cloudflare" : "elsewhere, and connects in"}`,
+        ].join("\n"),
       );
-    const again = pick.zone?.mind === name;
+      const changes = [
+        ...(controlPlaneHostname === deployed.controlPlaneHostname
+          ? []
+          : [`its control plane at ${controlPlaneHostname}`]),
+        ...(config.ownerEmails.join() === deployed.ownerEmails.join()
+          ? []
+          : [`${config.ownerEmails.join(", ")} as its only owner`]),
+      ];
+      const how =
+        changes.length > 0 ? `with ${changes.join(" and ")}` : "with the same owners and hostname";
+      if (
+        !input.yes &&
+        !(await ask<boolean>(`a mind is at ${domain} already; pass --yes to deploy over it`, () =>
+          p.confirm({ message: `Deploy over it, ${how}?` }),
+        ))
+      )
+        throw new Error("Nothing was changed.");
+      p.log.info(`Deploying over it, ${how}.`);
+    } else p.log.info(`The mind's owner is ${config.ownerEmails.join(", ")}.`);
     // A ZONE IN USE: the person says yes to losing everything on it before anything changes. The
     // erase itself is the last thing before the deploy (below). Asked here for a zone that the
     // account has, and after the wait for a zone that arrives during the run: Cloudflare copies
@@ -1152,24 +1422,16 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       return holdings;
     };
     let holdings =
-      pick.zone && !again ? await holdingsToErase(pick.zone.uses || [], pick.zone.id) : undefined;
-    if (
-      again &&
-      !input.yes &&
-      !(await ask<boolean>(`this mind is at ${domain} already; pass --yes to deploy over it`, () =>
-        p.confirm({
-          message: `This mind is at ${domain} already. Deploy over it? Its config is written again, with ${owner} as its only member.`,
-        }),
-      ))
-    )
-      throw new Error("Nothing was changed.");
+      pick.zone && !deployed
+        ? await holdingsToErase(pick.zone.uses || [], pick.zone.id)
+        : undefined;
 
     // the account's workers.dev name: a new account has none, and a Worker needs one
     if (!resultOf(z.object({ subdomain: z.string().min(1) }), subdomain)) {
       let refusal = "";
       for (const candidate of [
-        `iterate-${name}`,
-        `iterate-${name}-${Math.random().toString(36).slice(2, 6)}`,
+        `iterate-${stageName}`,
+        `iterate-${stageName}-${Math.random().toString(36).slice(2, 6)}`,
       ]) {
         const put = await cf("PUT", `/accounts/${account.id}/workers/subdomain`, {
           subdomain: candidate,
@@ -1189,30 +1451,10 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       throw error;
     });
     waiting.done(`iterate's source is ready (${seconds(sourceBegan)}): ${ready.dir}`);
-    const alchemy = join(ready.dir, "core/alchemy");
-    const work = join(CACHE, "deploys", name);
+    const work = join(CACHE, "deploys", stageName);
     mkdirSync(work, { recursive: true, mode: 0o700 });
     const log = join(work, "deploy.log");
     writeFileSync(log, "");
-    const ticket = z
-      .object({ ticket: z.string(), variable: z.string() })
-      .parse(
-        JSON.parse(
-          (await exec(process.execPath, ["scripts/first-owner-ticket.ts", owner], { cwd: alchemy }))
-            .stdout,
-        ),
-      );
-    const cloud =
-      input.cloud === false
-        ? undefined
-        : await fetch(`${CLOUD}/.well-known/iterate-cloud`)
-            .then(async (answer) => ({
-              origin: CLOUD,
-              publicKey: z.object({ publicKey: z.string() }).parse(await answer.json()).publicKey,
-            }))
-            .catch(() => undefined);
-    if (input.cloud !== false && !cloud)
-      p.log.warn(`${CLOUD} did not answer: the mind is deployed without iterate Cloud's clients.`);
     if (!paid) {
       page(
         "Turn on Workers Paid: 5 dollars a month. Cloudflare asks for a card there.",
@@ -1238,30 +1480,13 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       holdings = await holdingsToErase(arrived.uses || [], zone.id);
     }
 
-    const config = join(work, "config.json");
-    writeFileSync(
-      config,
-      JSON.stringify(
-        configOf({
-          name,
-          accountId: account.id,
-          owner,
-          domain,
-          cloud,
-          apiTokens: input.apiTokens,
-          // the stack's own source says where iterate's image is, and at which digest
-          iterateDevImage: input.iterateDevImage
-            ? (
-                await exec(process.execPath, ["scripts/iterate-dev-image.ts"], {
-                  cwd: alchemy,
-                })
-              ).stdout.trim()
-            : undefined,
-        }),
-        null,
-        2,
-      ),
-    );
+    // A NEW MIND'S IDENTITY (./identity.ts), made after the person's last answer: its key and
+    // its signed genesis are on this computer before the script gets the id. A mind that has an
+    // id keeps it, and this run signs nothing. That holds for an id that is no genesis's hash
+    // too: such a mind accepts no identity record, and the command does not mend it.
+    const mindId = config.mindId || (await identityOfNewMind(controlPlaneHostname));
+    const configFile = join(work, "config.json");
+    writeFileSync(configFile, `${JSON.stringify({ ...config, mindId }, null, 2)}\n`);
     access = await renewed();
     if (holdings) {
       const erased = await eraseHoldings(cf, zone.id);
@@ -1270,19 +1495,15 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       );
     }
     const deployBegan = Date.now();
-    const deploying = wait(`Deploying the mind at ${domain}`);
+    const deploying = wait(`Deploying the mind at ${controlPlaneHostname}`);
     const code = await deployStack({
       source: ready,
-      name,
-      token: access.token,
+      stageName,
+      config: configFile,
+      token: pasted || access.token,
       log,
       children,
       say: deploying.say,
-      env: {
-        CLOUDFLARE_ACCOUNT_ID: account.id,
-        ITERATE_MIND_CONFIG: config,
-        ITERATE_FIRST_OWNER_TICKET: ticket.variable,
-      },
     });
     if (code !== 0) {
       deploying.fail(`The deploy failed (exit ${code}).`);
@@ -1293,40 +1514,61 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     }
     deploying.done(`Deployed (${seconds(deployBegan)}).`);
 
-    const link = `https://iterate.${domain}/keys/first#${ticket.ticket}`;
+    // A NEW ROUTE REACHES CLOUDFLARE'S EDGE WITHIN A MINUTE OR TWO, and until then some answers
+    // are 522, 500 or 404. So the mind answers when both of its addresses did, five times in a
+    // row: the sign-in page, and the apex of its first zone, where the mind's own code answers
+    // (that request is also the one at which a new mind is born).
+    const answersBegan = Date.now();
+    let good = 0;
     await until(
-      `Waiting for iterate.${domain} to answer`,
+      `Waiting for ${controlPlaneHostname} to answer steadily`,
       async () => {
-        const answer = await fetch(
-          `https://iterate.${domain}/.well-known/oauth-authorization-server`,
-          { signal: AbortSignal.timeout(10_000) },
+        const before = good;
+        good = 0;
+        const [signInPage, apex] = await Promise.all(
+          [`https://${controlPlaneHostname}/sign-in`, `https://${config.cloudflare.zones[0]}/`].map(
+            (address) =>
+              fetch(address, { signal: AbortSignal.timeout(10_000), redirect: "manual" }),
+          ),
         );
-        const issuer = z.object({ issuer: z.string() }).safeParse(await answer.json()).data;
-        return answer.ok && issuer?.issuer === `https://iterate.${domain}`;
+        if (signInPage?.status === 200 && apex && apex.status < 400) good = before + 1;
+        return good >= 5;
       },
       10,
     );
+    p.log.success(`The mind answers (${seconds(answersBegan)}).`);
     await endAccess(access);
-    // the mind is born at its first request: this one, so that it is ready when the person is
-    void fetch(`https://${domain}/`).catch(() => {});
+    const posted = await identityPublished({ mindId, controlPlaneHostname });
     // The mind is deployed: a fault in its first steps is a line, never a failed deploy. With
-    // nobody at the terminal, the link is all there is to do here.
+    // nobody at the terminal, the sign-in page is all there is to do here.
+    const signInPage = `https://${controlPlaneHostname}/sign-in`;
+    const firstSignInWords = `Open your mind's sign-in page. As an owner with no passkey yet (${config.ownerEmails.join(", ")}), choose "prove your email address with Cloudflare", enter the code that Cloudflare mails you, and add your passkey:`;
     if (input.setup !== false && interactive())
-      await firstSteps(domain, ticket.ticket, steps).catch((error: unknown) =>
+      await (async () => {
+        using connection = await firstSignIn(controlPlaneHostname, config.ownerEmails, steps);
+        for (const step of firstSteps) await step(connection, steps);
+      })().catch((error: unknown) =>
         p.log.warn(
-          `The first steps did not end: ${error instanceof Error ? error.message : String(error)}. If your passkey is not made yet: ${link}`,
+          `The first steps did not end: ${error instanceof Error ? error.message : String(error)}. Your mind's sign-in page: ${signInPage}`,
         ),
       );
-    else page("Open your mind and make your passkey. This link works once, within 24 hours:", link);
+    else page(firstSignInWords, signInPage);
     p.note(
       [
-        `Talk to your mind:   https://dash.${domain}/?agent=/agents/onboarding`,
-        `Give it a model:     npx iterate@latest chatgpt connect ${domain}`,
-        `Its MCP server:      ${mindMcpUrlOf(domain)}`,
-        `The deploy's log:    ${log}`,
+        `Talk to your mind:   https://dash.${config.cloudflare.zones[0]}/?agent=/agents/onboarding`,
+        `Sign in from here:   npx iterate@latest login ${mindAddressAsTyped(controlPlaneHostname)}`,
+        `Give it a model:     npx iterate@latest chatgpt connect ${mindAddressAsTyped(controlPlaneHostname)}`,
+        `Its MCP server:      ${mindMcpUrlOf(controlPlaneHostname)}`,
       ].join("\n"),
-      `Your mind is at ${domain}`,
+      `Your mind is at ${controlPlaneHostname}`,
     );
+    // outside the box above, whose lines wrap: a path stays whole
+    const keyLine = identityKeyLineOf(keyFileOf(IDENTITIES, mindId), {
+      gaveTheId: !config.mindId,
+      posted,
+    });
+    if (keyLine) p.log.info(keyLine);
+    p.log.info(`The deploy's config and its log: ${work}`);
     p.outro(`Done in ${seconds(began)}.`);
   } catch (error) {
     // a stop is an expected end: its one line, with no stack, and a failed exit code

@@ -1,18 +1,10 @@
-import { base64url, fromBase64url, keyIdOf, MIND_DOCUMENT_PATH } from "iterate/signed";
+import { base64url, fromBase64url, keyIdOf, STACK_KEY_PATH } from "iterate/signed";
 import { type AccountFact, AccountFacts } from "./account-facts.ts";
-import {
-  type BrowserSession,
-  clearSessionCookie,
-  endSessions,
-  endThisSession,
-  sessionCookie,
-  sessionOf,
-} from "./cookies.ts";
-import { dashOriginOf, type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { isOwner } from "./config.ts";
+import { type Session, sessionOf } from "./cookies.ts";
+import { configOf, type Env, issuerOf } from "./env.ts";
 import {
   allowsExactly,
-  CLOUD_ACTOR,
-  cloudNameRefusal,
   enrolPayloadOf,
   honouredNext,
   type LendingKey,
@@ -24,8 +16,7 @@ import {
   statementInParts,
   type StatementPart,
 } from "./key-rules.ts";
-import { holdsPasskey } from "./keys.ts";
-import { standingOf } from "./members.ts";
+import { isMember } from "./members.ts";
 import { errorPage, notMemberPage, page, text } from "./pages.ts";
 import { MINDS_PATH } from "./minds-page.ts";
 import { SESSIONS_PATH } from "./sessions-page.ts";
@@ -38,9 +29,9 @@ import {
   signerOf,
   signScript,
 } from "./signed-change.ts";
-import { mindDocumentResponse, STACK_KEY_PATH, stackKeyOf, stackKeyResponse } from "./stack-key.ts";
+import { stackKeyOf, stackKeyResponse } from "./stack-key.ts";
 
-export const KEYS_PATH = "/keys";
+const KEYS_PATH = "/keys";
 const KEYS_JSON_PATH = "/keys.json";
 const REMOVE_PATH = "/keys/remove";
 const ENROL_PATH = "/keys/enrol";
@@ -55,7 +46,6 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
   const get = request.method === "GET" || request.method === "HEAD";
   const post = request.method === "POST";
   if (pathname === STACK_KEY_PATH && get) return stackKeyResponse(env);
-  if (pathname === MIND_DOCUMENT_PATH && get) return mindDocumentResponse(env);
   const known =
     (pathname === KEYS_PATH && (get || post)) ||
     (pathname === KEYS_JSON_PATH && get) ||
@@ -63,12 +53,12 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
     (pathname === ENROL_PATH && (get || post));
   if (!known) return null;
   const issuer = issuerOf(env);
-  const { domain, trustedClients } = iterateConfigOf(env);
+  const config = configOf(env);
   const session = await sessionOf(env, request);
-  const standing = session ? await standingOf(env, session) : "not-member";
+  const member = session ? await isMember(env, session.email) : false;
   if (pathname === KEYS_JSON_PATH) {
     if (!session) return json({ error: "signed out" }, 401);
-    if (standing === "not-member") return json({ error: "not a member" }, 403);
+    if (!member) return json({ error: "not a member" }, 403);
     return keysJson(env, session);
   }
   if (post) {
@@ -77,57 +67,16 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
       return json({ error: "use this site's own page" }, 403);
     if (!session) return json({ error: "sign in first" }, 401);
   }
-  const signIn = `${issuer}${signInHref(pathname + url.search)}`;
-  if (!session) return Response.redirect(signIn, 302);
-  // Someone who is no member and proved an address adds a first passkey on /keys, no more: it signs
-  // about themselves alone (./keys.ts `personKeyRefusal`), and it is marked as an outsider's, which
-  // it stays (../migrations/0016). The first sign-in's page lists no key. With any passkey held, a
-  // removed member's too, there is nothing to add.
-  const outsider = standing === "not-member";
-  if (
-    outsider &&
-    (pathname !== KEYS_PATH ||
-      (session.method !== "email" && session.method !== "google") ||
-      (await holdsPasskey(env, session.userId, true)))
-  )
+  if (!session) return Response.redirect(`${issuer}${signInHref(pathname + url.search)}`, 302);
+  if (!member)
     return post
       ? json({ error: "not a member" }, 403)
-      : notMemberPage({ domain, email: session.email });
-  const owed = standing === "passkey-owed" || outsider;
-  // Such a session adds a passkey, on /keys, and no more. An address proven by a code, or a
-  // member's link, adds the first one alone: with a passkey held, the session is from before it,
-  // and its holder signs in again. The owner's ticket adds one beside those the owner lost.
-  // A full sign-in by Google (`google.signsInAlone`) holds no key to sign with: its person's first
-  // passkey is added as a proven address adds one.
-  const proven =
-    owed || (session.method === "google" && !(await holdsPasskey(env, session.userId)));
-  const first = proven && session.method !== "first-owner-ticket";
-  if (owed && (pathname !== KEYS_PATH || (first && (await holdsPasskey(env, session.userId))))) {
-    if (post) return json({ error: "Sign in with your passkey first." }, 403);
-    const facts = new AccountFacts();
-    await endThisSession(env, session, facts);
-    return facts.on(
-      new Response(null, {
-        status: 302,
-        headers: {
-          location: signIn,
-          "set-cookie": clearSessionCookie,
-          "cache-control": "no-store",
-        },
-      }),
-    );
-  }
+      : notMemberPage({ mind: config.controlPlaneHostname, email: session.email });
   if (pathname === REMOVE_PATH) return removed(env, request, session);
   if (pathname === KEYS_PATH)
     return post
-      ? passkeyAdded(env, request, session, { owed: proven, first, outsider })
-      : keysPage(
-          env,
-          session,
-          honouredNext(url.searchParams.get("next"), issuer, trustedClients),
-          proven,
-          owed,
-        );
+      ? passkeyAdded(env, request, session)
+      : keysPage(env, session, honouredNext(url.searchParams.get("next"), config));
   if (get) return enrolPage(env, url, session);
   return serviceKeyAnswered(env, request, session);
 }
@@ -151,30 +100,9 @@ type ListedKey = KeyRow & { added_by: string; added_by_email: string | null };
 
 const day = (at: number) => new Date(at).toISOString().slice(0, 10);
 
-/** The agent where a new owner starts, in the Dash: `?agent=` opens its chat (the default config's
- *  `onboarding.md`). */
-const ONBOARDING_AGENT_PATH = "/agents/onboarding";
-
-/** Where a session that came to /keys only to add a passkey goes once it has one, when its request
- *  named no `next`: the owner's ticket to the onboarding agent, any other to the Dash. */
-function onwardOf(env: Env, session: BrowserSession): string {
-  const dash = dashOriginOf(iterateConfigOf(env).domain);
-  return session.method === "first-owner-ticket"
-    ? `${dash}/?agent=${ONBOARDING_AGENT_PATH}`
-    : `${dash}/`;
-}
-
-async function keysPage(
-  env: Env,
-  session: BrowserSession,
-  next: string | null,
-  /** The session adds a passkey with no signature: it holds no key to sign with. */
-  owed: boolean,
-  /** The session opens /keys alone, so the page offers no way on. */
-  held = owed,
-): Promise<Response> {
+async function keysPage(env: Env, session: Session, next: string | null): Promise<Response> {
   const issuer = issuerOf(env);
-  const { domain } = iterateConfigOf(env);
+  const mind = configOf(env).controlPlaneHostname;
   const challenge = base64url(crypto.getRandomValues(new Uint8Array(32)));
   await env.OAUTH_KV.put(`${CHALLENGE_KEY_PREFIX}${challenge}`, session.userId, {
     expirationTtl: CHALLENGE_SECONDS,
@@ -192,9 +120,9 @@ async function keysPage(
   )
     .bind(session.userId)
     .all<ListedKey>();
-  // A session held here goes on by itself once its passkey is added: no page leaves it with
-  // nothing to press.
-  const onward = held ? next || onwardOf(env, session) : null;
+  const passkeys = results.filter(
+    (key) => key.user_id && key.format === "webauthn" && !key.revoked_at,
+  ).length;
   const nextField = next ? `<input type="hidden" name="next" value="${text(next)}">` : "";
   const item = (key: ListedKey) => {
     const scope = scopeInWords({
@@ -215,11 +143,12 @@ async function keysPage(
         ? `, allowed by ${text(key.added_by_email || "a member")}`
         : "";
     const when = `added ${day(key.added_at)}${by}${used}`;
-    // a session that owes a passkey removes nothing, so the ticket's shows the lost keys bare
+    // nobody removes their own last passkey (`removed`): the one that is left has no button
+    const last = Boolean(key.user_id) && key.format === "webauthn" && passkeys === 1;
     const remove = key.revoked_at
       ? `<span class="muted">removed</span>`
-      : owed
-        ? ""
+      : last
+        ? `<span class="muted">your only passkey: add another before you remove this one</span>`
         : `<form method="post" action="${REMOVE_PATH}" class="inline" data-remove>
           <input type="hidden" name="key" value="${text(key.id)}">${nextField}
           <input type="hidden" name="signed">
@@ -227,64 +156,36 @@ async function keysPage(
         </form>`;
     return `<li>${text(key.label)} <span class="muted">(${what}, ${when})</span> ${remove}</li>`;
   };
-  const passkeys = results.filter(
-    (key) => key.user_id && key.format === "webauthn" && !key.revoked_at,
-  ).length;
-  const formAttributes = `id="add" class="stack" data-challenge="${text(challenge)}" data-user="${text(session.userId)}" data-email="${text(session.email)}" data-rp="${text(new URL(issuer).hostname)}"${owed ? "" : " data-sign"}${onward ? ` data-next="${text(onward)}"` : ""}`;
-  const script = `${signScript(domain)}${PASSKEY_SCRIPT}`;
-  // THE FIRST SIGN-IN. A person who is held here and has no passkey came for one thing, so the
-  // page is that one thing: why, what the browser asks next, and the button. The list of keys, the
-  // services' keys and a second passkey are for a later visit.
-  if (held && passkeys === 0)
-    return page({
-      // the heading of the page that spends an owner's ticket (./first-owner.ts), which sends the
-      // browser here: the two read as one page
-      title: `Add your passkey to ${domain}`,
-      body: `<h1>Add your passkey to ${text(domain)}</h1>
-      <p>${text(domain)} needs a passkey at your first sign-in. From then on it is how you sign in here, and how you sign what you approve.</p>
-      <p>Press the button, and your browser asks for your fingerprint, your face or a security key.</p>
-      <form ${formAttributes}>
-        <button type="submit">Add a passkey</button>
-        <details><summary>Name it (optional)</summary><input name="label" maxlength="100" size="28" aria-label="Name" placeholder="such as YubiKey"></details>
-        <p id="status" class="muted" role="status"></p>
-      </form>`,
-      script,
-    });
-  // No way on for a session that owes a passkey: every other page sends it back here.
-  const goesOn = !held;
-  // What the press does, for a person who has never made a passkey: nothing else on the page says
-  // that the browser asks next.
-  const browserAsks = "Your browser asks for your fingerprint, face or security key.";
-  const ask = held
-    ? `<p><strong>Add a passkey to go on.</strong> ${browserAsks} Only a passkey signs you in to ${text(domain)} after this.</p>`
-    : owed
-      ? `<p><strong>Add a passkey.</strong> ${browserAsks} It signs what you change here, such as a new member.</p>`
-      : `${
-          passkeys === 1
-            ? `<p><strong>Add a second passkey</strong>, on another device or a security key. If you lose your only passkey you are locked out, until the mind's owner removes it, or, for an owner, until a new deploy.</p>`
-            : ""
-        }<p class="muted">A passkey you already have here signs each new one, so you use both: first the new one, then the one you have.</p>`;
+  const formAttributes = `id="add" class="stack" data-challenge="${text(challenge)}" data-user="${text(session.userId)}" data-email="${text(session.email)}" data-rp="${text(new URL(issuer).hostname)}"`;
+  // what the loss of the only passkey means, and who then lets the person in again
+  const locked = isOwner(configOf(env), session.email)
+    ? "until whoever holds this mind's Cloudflare account runs the recovery command"
+    : "until an owner of the mind gives you a sign-in link";
+  const second =
+    passkeys === 1
+      ? `<p><strong>Add a second passkey</strong>, on another device or a security key. If you lose your only passkey you are locked out, ${locked}.</p>`
+      : "";
   return page({
-    title: `Your keys for ${domain}`,
+    title: `Your keys for ${mind}`,
     wide: true,
-    body: `<h1>Your keys for ${text(domain)}</h1>
-      <p>A key lets you sign in to ${text(domain)} and approve things in it: a passkey in your password manager, or a security key such as a YubiKey. The list also shows the keys that members allowed for services, and any member can remove one of those.</p>
+    body: `<h1>Your keys for ${text(mind)}</h1>
+      <p>A key lets you sign in to ${text(mind)} and approve things in it: a passkey in your password manager, or a security key such as a YubiKey. The list also shows the keys that members allowed for services, and any member can remove one of those.</p>
       ${results.length ? `<ul>${results.map(item).join("")}</ul>` : `<p class="muted">You have no keys here yet.</p>`}
       <form ${formAttributes}>
         <label>Name, optional <input name="label" maxlength="100" size="28" placeholder="such as YubiKey"></label>
         <button type="submit">Add a passkey</button>
         <p id="status" class="muted" role="status"></p>
       </form>
-      ${ask}
-      <p id="removal" class="muted" role="status">${owed ? "" : "Removing a key takes a press of a passkey you have here."}</p>
-      ${goesOn ? `<p class="muted">Where you are signed in, and the apps and tools that hold a sign-in as you: <a href="${SESSIONS_PATH}">Sessions</a>. The minds that this mind lets in: <a href="${MINDS_PATH}">Other minds</a>.</p>` : ""}
-      ${next && goesOn ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
-    script,
+      ${second}<p class="muted">A passkey you already have here signs each new one, so you use both: first the new one, then the one you have.</p>
+      <p id="removal" class="muted" role="status">Removing a key takes a press of a passkey you have here.</p>
+      <p class="muted">Where you are signed in, and the apps and tools that hold a sign-in as you: <a href="${SESSIONS_PATH}">Sessions</a>. The minds that this mind lets in: <a href="${MINDS_PATH}">Other minds</a>.</p>
+      ${next ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
+    script: `${signScript(mind)}${PASSKEY_SCRIPT}`,
   });
 }
 
-// With `data-sign` the add takes two presses, since a browser asks for one passkey in one press:
-// the first makes the new passkey, the second has a passkey the person holds sign its id.
+// The add takes two presses, since a browser asks for one passkey in one press: the first makes
+// the new passkey, the second has a passkey the person holds sign its id.
 // `excludeCredentials`: a device makes no second passkey for a person it holds one for. Without
 // it a security key writes the new one over the old one, and the old one could then sign nothing.
 const PASSKEY_SCRIPT = `
@@ -318,23 +219,15 @@ form.addEventListener("submit", async (event) => {
         key: b64u(await sha256(publicKey)),
         body: { label: typed || device + ", " + day, publicKey: b64u(publicKey), credentialId: credential.id, clientDataJSON: b64u(credential.response.clientDataJSON) },
       };
-      if ("sign" in form.dataset) {
-        form.querySelector("button").textContent = "Confirm with a passkey you have";
-        status.textContent = "The new passkey is made. Now confirm it with a passkey you already have here.";
-        return;
-      }
+      form.querySelector("button").textContent = "Confirm with a passkey you have";
+      status.textContent = "The new passkey is made. Now confirm it with a passkey you already have here.";
+      return;
     }
-    if ("sign" in form.dataset) {
-      status.textContent = "Waiting for a passkey you already have…";
-      made.body.signed = await signedStatement({ type: "${KEY_ADDED}", payload: { key: made.key } });
-    }
+    status.textContent = "Waiting for a passkey you already have…";
+    made.body.signed = await signedStatement({ type: "${KEY_ADDED}", payload: { key: made.key } });
     const response = await fetch("${KEYS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(made.body) });
     if (!response.ok) throw new Error((await response.json()).error);
-    // said before the next page loads: "Waiting for your new passkey…" would stand there meanwhile
-    if (form.dataset.next) {
-      status.textContent = "Your passkey is added. One moment…";
-      location.assign(form.dataset.next);
-    } else location.reload();
+    location.reload();
   } catch (error) {
     status.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.name === "InvalidStateError" ? "This device holds a passkey of yours for this site already. Make the new one on another device or a security key." : error.message || "The passkey was not added.";
   }
@@ -354,13 +247,9 @@ for (const remove of document.querySelectorAll("form[data-remove]"))
     }
   });`;
 
-async function passkeyAdded(
-  env: Env,
-  request: Request,
-  session: BrowserSession,
-  /** `outsider`: the person is no member, so the key is marked as an outsider's for good. */
-  { owed, first, outsider }: { owed: boolean; first: boolean; outsider: boolean },
-): Promise<Response> {
+/** A FURTHER PASSKEY of a member who signed in with one. A person's first passkey is
+ *  ./enrolment.ts's. */
+async function passkeyAdded(env: Env, request: Request, session: Session): Promise<Response> {
   let input: {
     label?: unknown;
     publicKey?: unknown;
@@ -403,17 +292,17 @@ async function passkeyAdded(
   const key = await p256KeyIdOf(env, publicKey);
   if (!key) return json({ error: "This passkey's key is not a P-256 key." }, 400);
   // A further passkey lets one more key act as this person, so a key the person holds signs its
-  // id. The two ways in sign nothing: a first passkey, and the one the owner's ticket adds.
-  const change = owed ? null : await signedChange(env, input.signed, KEY_ADDED);
-  if (change && "refused" in change)
+  // id.
+  const change = await signedChange(env, input.signed, KEY_ADDED);
+  if ("refused" in change)
     return json(
       {
         error: `The passkey was not added: ${change.refused}. A passkey you already have here signs each new one.`,
       },
       403,
     );
-  const own = change && change.signer.principal.email.toLowerCase() === session.email.toLowerCase();
-  if (change && (change.payload.key !== key || !own))
+  const own = change.signer.principal.email.toLowerCase() === session.email.toLowerCase();
+  if (change.payload.key !== key || !own)
     return json(
       {
         error:
@@ -423,64 +312,58 @@ async function passkeyAdded(
     );
   const at = Date.now();
   const name = label.trim() || `Passkey, ${new Date(at).toISOString().slice(0, 10)}`;
-  // A first passkey is the first of its kind: a member's first beside no other member's passkey,
-  // an outsider's beside no passkey at all. `outsider <= ?8` is every live passkey for an
-  // outsider's key (1), and the member's own alone for a member's (0).
-  const { meta } = await env.DB.prepare(
-    `insert into keys (id, user_id, public_key, format, credential_id, label, added_via, added_by, added_at, outsider)
-     select ?1, ?2, ?3, 'webauthn', ?4, ?5, 'keys-page', ?2, ?6, ?8
-     where ?7 = 0 or not exists
-       (select 1 from keys where user_id = ?2 and format = 'webauthn' and revoked_at is null
-          and outsider <= ?8)
-     on conflict do nothing`,
-  )
-    .bind(key, session.userId, publicKey, credentialId, name, at, first ? 1 : 0, outsider ? 1 : 0)
-    .run();
-  if (!meta.changes)
-    return json(
-      { error: `This key was added before${first ? ", or you have a passkey now" : ""}.` },
-      409,
-    );
+  // one transaction: the new passkey, and the end of the ones from before the address was a
+  // member's, which no failure between two writes leaves live
+  const [inserted, revoked] = await env.DB.batch<{ id: string; label: string }>([
+    env.DB.prepare(
+      `insert into keys (id, user_id, public_key, format, credential_id, label, added_via, added_by, added_at)
+       values (?1, ?2, ?3, 'webauthn', ?4, ?5, 'keys-page', ?2, ?6)
+       on conflict do nothing`,
+    ).bind(key, session.userId, publicKey, credentialId, name, at),
+    outsiderKeysRevoked(env, session.userId, key, at),
+  ]);
+  if (!inserted?.meta.changes) return json({ error: "This key was added before." }, 409);
   const facts = new AccountFacts();
-  // The member's own passkey ends the ones from before the address was a member: whoever added
-  // one then holds nothing of this person's now, and the sessions it opened end with it.
-  if (!outsider) {
-    const { results } = await env.DB.prepare(
-      `update keys set revoked_at = ?1
-       where user_id = ?2 and outsider = 1 and revoked_at is null
-       returning id, label`,
-    )
-      .bind(at, session.userId)
-      .all<{ id: string; label: string }>();
-    for (const old of results)
-      facts.add(session.userId, {
-        type: "events.iterate.com/account/key-removed",
-        payload: { key: old.id, label: old.label, at, removedBy: session.userId },
-        idempotencyKey: `account/key-removed:${old.id}:${at}`,
-      });
-  }
+  outsiderKeysRevokedFacts(facts, session.userId, at, revoked?.results || []);
   facts.add(session.userId, {
     type: "events.iterate.com/account/key-added",
-    payload: { key, label: name, format: "webauthn", at, ...(change && signerOf(change)) },
+    payload: { key, label: name, format: "webauthn", at, ...signerOf(change) },
     idempotencyKey: `account/key-added:${key}`,
   });
-  // The first passkey, made in this browser, makes the session that passkey's: a new one, and
-  // the one it replaces ends.
-  const headers = new Headers({ "cache-control": "no-store" });
-  if (owed) {
-    const user = { id: session.userId, email: session.email };
-    const made = await sessionCookie(env, request, user, "passkey", key);
-    await endSessions(env, session.userId, { session: session.id }, facts);
-    facts.add(session.userId, {
-      type: "events.iterate.com/account/signed-in",
-      payload: { method: "passkey", key, session: made.session, at: Date.now() },
-    });
-    headers.set("set-cookie", made.setCookie);
-  }
-  return facts.on(Response.json({ key, label: name }, { headers }));
+  return facts.on(
+    Response.json({ key, label: name }, { headers: { "cache-control": "no-store" } }),
+  );
 }
 
-async function removed(env: Env, request: Request, session: BrowserSession): Promise<Response> {
+/** A MEMBER'S OWN PASSKEY ENDS THE ONES FROM BEFORE THE ADDRESS WAS A MEMBER (../migrations/0016):
+ *  whoever added one then holds nothing of this person's now. The statement goes in the same batch
+ *  as the new passkey's insert, and ends them only when that insert made the passkey `key` at
+ *  `at`. ./enrolment.ts uses it for the first passkey, and `passkeyAdded` for each further one;
+ *  `outsiderKeysRevokedFacts` writes a fact for each key it ended. */
+export const outsiderKeysRevoked = (env: Env, userId: string, key: string, at: number) =>
+  env.DB.prepare(
+    `update keys set revoked_at = ?1
+     where user_id = ?2 and outsider = 1 and revoked_at is null
+       and exists (select 1 from keys new where new.id = ?3 and new.user_id = ?2
+         and new.added_at = ?1)
+     returning id, label`,
+  ).bind(at, userId, key);
+
+export function outsiderKeysRevokedFacts(
+  facts: AccountFacts,
+  userId: string,
+  at: number,
+  results: { id: string; label: string }[],
+) {
+  for (const old of results)
+    facts.add(userId, {
+      type: "events.iterate.com/account/key-removed",
+      payload: { key: old.id, label: old.label, at, removedBy: userId },
+      idempotencyKey: `account/key-removed:${old.id}:${at}`,
+    });
+}
+
+async function removed(env: Env, request: Request, session: Session): Promise<Response> {
   const form = await request.formData();
   const id = String(form.get("key") || "");
   // A session alone removes no key: whoever stole one could take a member's passkeys away.
@@ -492,22 +375,37 @@ async function removed(env: Env, request: Request, session: BrowserSession): Pro
     );
   if (change.payload.key !== id)
     return errorPage("The key was not removed: the signed statement is for another key.", 403);
-  const next = honouredNext(
-    String(form.get("next") || ""),
-    issuerOf(env),
-    iterateConfigOf(env).trustedClients,
-  );
+  const next = honouredNext(String(form.get("next") || ""), configOf(env));
   const at = Date.now();
   // A person's keys are that person's alone. Any member removes a service's key: a mind's
-  // services are every member's to stop.
+  // services are every member's to stop. NOBODY REMOVES THEIR OWN LAST PASSKEY: with none,
+  // nothing of the person's own signs them in again. The way back would be the recovery command
+  // for an owner, and an owner's link for an added member (./enrolment.ts). The statement holds
+  // it, so of two removals at once one passkey stays.
   const row = await env.DB.prepare(
     `update keys set revoked_at = ?1
      where id = ?2 and revoked_at is null
-       and (user_id = ?3 or actor is not null)
+       and (actor is not null or (user_id = ?3 and exists (select 1 from keys other
+         where other.user_id = ?3 and other.format = 'webauthn' and other.revoked_at is null
+           and other.outsider = 0 and other.id != ?2)))
      returning id, actor, label`,
   )
     .bind(at, id, session.userId)
     .first<{ id: string; actor: string | null; label: string }>();
+  if (!row) {
+    const own = await env.DB.prepare(
+      "select 1 from keys where id = ?1 and user_id = ?2 and revoked_at is null",
+    )
+      .bind(id, session.userId)
+      .first();
+    if (own)
+      return errorPage(
+        "This is your only passkey, so it was not removed. Add another passkey first, then remove this one.",
+        409,
+        undefined,
+        [{ href: KEYS_PATH, label: "Your keys" }],
+      );
+  }
   const facts = new AccountFacts();
   if (row) {
     const fact: AccountFact = {
@@ -529,7 +427,7 @@ async function removed(env: Env, request: Request, session: BrowserSession): Pro
   return facts.on(seeOther(back));
 }
 
-async function keysJson(env: Env, session: BrowserSession): Promise<Response> {
+async function keysJson(env: Env, session: Session): Promise<Response> {
   const { results } = await env.DB.prepare(
     `select id, credential_id, label, format from keys
      where user_id = ?1 and revoked_at is null and outsider = 0 order by added_at`,
@@ -548,44 +446,19 @@ async function keysJson(env: Env, session: BrowserSession): Promise<Response> {
   });
 }
 
-// The name a service asks for is its own choice, and a reader trusts the Cloud's by the name alone.
-async function serviceKeyAsked(
-  env: Env,
-  fields: URLSearchParams | FormData,
-): Promise<ServiceKeyRequest | { refused: string }> {
-  const ask = serviceKeyRequestOf(fields);
-  if ("refused" in ask || ask.actor !== CLOUD_ACTOR) return ask;
-  const origin = env.CLOUD_ORIGIN;
-  // a redirect is no answer: the key must be the one this origin itself gives
-  const answer = origin
-    ? await fetch(`${origin}/.well-known/iterate-cloud`, { redirect: "manual" }).catch(() => null)
-    : null;
-  const facts: unknown = answer?.ok ? await answer.json().catch(() => null) : null;
-  const published =
-    typeof facts === "object" &&
-    facts &&
-    "publicKey" in facts &&
-    typeof facts.publicKey === "string"
-      ? facts.publicKey
-      : null;
-  const refused = cloudNameRefusal(ask.publicKey, origin ? { origin, publicKey: published } : null);
-  if (!refused) return ask;
-  console.info({ event: "auth.cloud-name-refused", cloud: origin || null });
-  return { refused };
-}
-
-async function enrolPage(env: Env, url: URL, session: BrowserSession): Promise<Response> {
-  const { domain, trustedClients } = iterateConfigOf(env);
-  const ask = await serviceKeyAsked(env, url.searchParams);
+async function enrolPage(env: Env, url: URL, session: Session): Promise<Response> {
+  const config = configOf(env);
+  const mind = config.controlPlaneHostname;
+  const ask = serviceKeyRequestOf(url.searchParams);
   if ("refused" in ask) return errorPage(ask.refused, 400);
   const key = await p256KeyIdOf(env, ask.publicKey);
   if (!key) return errorPage("The service's key is not one this mind can use.", 400);
   const held = await nameHeldByAnotherKey(env, key, ask);
   if (held) return held;
-  const next = honouredNext(url.searchParams.get("next"), issuerOf(env), trustedClients);
+  const next = honouredNext(url.searchParams.get("next"), config);
   const hidden = (name: string, value: string) =>
     `<input type="hidden" name="${name}" value="${text(value)}">`;
-  const statement = statementHtml(statementInParts(ask, { domain, key, person: session.email }));
+  const statement = statementHtml(statementInParts(ask, { mind, key, person: session.email }));
   const start = text(key.slice(0, 8));
   return page({
     title: "Sign this statement?",
@@ -600,13 +473,13 @@ async function enrolPage(env: Env, url: URL, session: BrowserSession): Promise<R
 .legend { font-size: 0.8125rem; line-height: 1.9; }
 summary { cursor: pointer; }`,
     body: `<h1>Sign this statement?</h1>
-      <p>${text(scopePlainly(ask, domain))}</p>
+      <p>${text(scopePlainly(ask, mind))}</p>
       <p class="statement">${statement}</p>
-      <p class="muted legend"><span class="${PART_CLASS.checked}">checked</span> ${text(domain)} checked this. <span class="${PART_CLASS.link}">from the link</span> The link says this, and nobody checked it. Plain words are the same on every key page.</p>
+      <p class="muted legend"><span class="${PART_CLASS.checked}">checked</span> ${text(mind)} checked this. <span class="${PART_CLASS.link}">from the link</span> The link says this, and nobody checked it. Plain words are the same on every key page.</p>
       <p>Any member can remove the key on <a href="${KEYS_PATH}">Your keys</a>.</p>
       <details>
         <summary>What is a key?</summary>
-        <p class="muted">A key has two halves. Its holder keeps the private half and signs with it; that half never comes to ${text(domain)}. ${text(domain)} keeps the public half and checks each signature with it. ${start} is the start of the public half's fingerprint.</p>
+        <p class="muted">A key has two halves. Its holder keeps the private half and signs with it; that half never comes to ${text(mind)}. ${text(mind)} keeps the public half and checks each signature with it. ${start} is the start of the public half's fingerprint.</p>
       </details>
       <form method="post" action="${ENROL_PATH}" class="actions" data-enrol="${text(JSON.stringify(enrolPayloadOf(key, ask)))}">
         ${hidden("actor", ask.actor)}${hidden("label", ask.label)}${hidden("publicKey", ask.publicKey)}${hidden("paths", ask.paths.join(","))}${ask.provide ? hidden("provide", ask.provide) : ""}${next ? hidden("next", next) : ""}
@@ -615,7 +488,7 @@ summary { cursor: pointer; }`,
         <button type="submit" class="link">Cancel</button>
       </form>
       <p id="status" class="muted" role="status"></p>`,
-    script: `${signScript(domain)}${ENROL_SCRIPT}`,
+    script: `${signScript(mind)}${ENROL_SCRIPT}`,
   });
 }
 
@@ -657,22 +530,18 @@ form.addEventListener("submit", async (event) => {
 });`;
 
 // A service's key a member removed is added again by a member's new consent; a person's key never is.
-async function serviceKeyAnswered(
-  env: Env,
-  request: Request,
-  session: BrowserSession,
-): Promise<Response> {
-  const { domain, trustedClients } = iterateConfigOf(env);
+async function serviceKeyAnswered(env: Env, request: Request, session: Session): Promise<Response> {
+  const config = configOf(env);
   const form = await request.formData();
-  const next = honouredNext(String(form.get("next") || ""), issuerOf(env), trustedClients);
+  const next = honouredNext(String(form.get("next") || ""), config);
   if (form.get("decision") !== "allow")
     return onward(
       next,
       new AccountFacts(),
       "Nothing was added",
-      `<p>No key was added to ${text(domain)}.</p>`,
+      `<p>No key was added to ${text(config.controlPlaneHostname)}.</p>`,
     );
-  const ask = await serviceKeyAsked(env, form);
+  const ask = serviceKeyRequestOf(form);
   if ("refused" in ask) return errorPage(ask.refused, 400);
   const key = await p256KeyIdOf(env, ask.publicKey);
   if (!key) return errorPage("The service's key is not one this mind can use.", 400);
@@ -760,7 +629,7 @@ async function nameHeldByAnotherKey(
   const held = otherKeyLending(results, key, ask.provide);
   if (!held) return null;
   return errorPage(
-    `itx.${ask.provide} is lent to ${iterateConfigOf(env).domain} by another key: ${held.label} (key ${held.id.slice(0, 8)}, added ${day(held.added_at)}). A second key for that name would take it whenever that key's lend ends. If this key is to replace that one, a member removes it on Your keys first.`,
+    `itx.${ask.provide} is lent to ${configOf(env).controlPlaneHostname} by another key: ${held.label} (key ${held.id.slice(0, 8)}, added ${day(held.added_at)}). A second key for that name would take it whenever that key's lend ends. If this key is to replace that one, a member removes it on Your keys first.`,
     409,
     undefined,
     [{ href: KEYS_PATH, label: "Your keys" }],

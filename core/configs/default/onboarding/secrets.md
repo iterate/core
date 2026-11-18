@@ -5,7 +5,7 @@ The owner should come away with: the mind keeps a key it cannot read, and sends 
 ## Ready today
 
 - `itx.secrets.collectFromUser({ path, egress: { urls }, description })` answers `{ path, url }`:
-  a form on `iterate.<domain>` that shows the secret's path, the addresses it may go to (its pin),
+  a form on `<control-plane hostname>` that shows the secret's path, the addresses it may go to (its pin),
   what it may be used for, and your description. Only a signed-in member can fill it.
 - In a request, `getSecret("/secrets/<name>")` in a header is a placeholder: the vault puts the
   value in on the way out, toward the pinned origins alone. Toward any other origin it is refused,
@@ -17,7 +17,7 @@ The owner should come away with: the mind keeps a key it cannot read, and sends 
 
 ## Not ready
 
-- Never pin a secret to an address of the mind's own domain, nor to a service that echoes a
+- Never pin a secret to an address in one of the mind's own zones, nor to a service that echoes a
   request back (httpbin and the like): the value would come back where you can read it.
 - A secret that goes in a URL (a Telegram bot token) needs `placement: "url"` when it is
   collected. Its uses are fixed then; they cannot be widened later.

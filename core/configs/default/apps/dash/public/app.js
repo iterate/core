@@ -27,7 +27,7 @@ import {
   DashSecrets,
 } from "@iterate-com/ui/components/dash/dash";
 import { DashAgents, DashHome } from "@iterate-com/ui/agent-kind-view/dash-agents";
-import { memberItx, mindOfHost } from "@iterate-com/ui/live";
+import { memberItx } from "@iterate-com/ui/live";
 import {
   BlocksIcon,
   BookOpenIcon,
@@ -51,9 +51,13 @@ import {
 // dialled in its head, when it is there. Nothing here waits for the mind: the Dash draws at once,
 // in the frame that index.html drew, and asks the mind who is signed in.
 const itx = memberItx();
-const mind = mindOfHost();
-/** The stack's own pages (keys, members, approvals) are on this host of the mind. */
-const stack = `https://iterate.${mind}`;
+// The mind's address is its control-plane hostname, where the stack's own pages are (keys, members,
+// approvals): this host says it (`/.auth/session.json`, ../app.ts). The page never works it out
+// from its own hostname, which may be in any zone of the mind.
+const stack = (await (await fetch("/.auth/session.json")).json()).issuer;
+const mind = new URL(stack).hostname;
+/** The zone this page is on: an app's hostname is one label under its zone. */
+const zone = location.hostname.split(".").slice(1).join(".");
 
 const pages = [
   { id: "home", name: "Home", icon: LayoutDashboardIcon, component: DashHome },
@@ -84,11 +88,12 @@ const pages = [
   { id: "mcp", name: "MCP", icon: PlugIcon, component: DashMcp },
 ];
 
-// The mind's apps, each on its own host: an app you add in worker.ts gets a row here.
+// The mind's apps, each on its own hostname of this page's zone: an app you add in worker.ts
+// gets a row here.
 const apps = [
   { name: "Docs", host: "docs", icon: BookOpenIcon },
   { name: "Voice", host: "voice", icon: PhoneIcon },
-].map((app) => ({ ...app, href: `https://${app.host}.${mind}` }));
+].map((app) => ({ ...app, href: `https://${app.host}.${zone}` }));
 
 // The stack's pages about who may do what. "Approvals" shows how many requests wait for a yes.
 const access = [

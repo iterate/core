@@ -1,28 +1,30 @@
 // sessions-page.ts — /sessions: WHERE A PERSON IS SIGNED IN, AND THE WAY TO END IT. For anyone
 // signed in here, member or not. Two lists, of this person alone:
 //
+// A session that a mailed code opened for a person who was no member lists and ends its own kind
+// alone (./cookies.ts `reachOf`); a passkey's lists and ends everything of its person.
+//
 // - the browsers that hold a session at the issuer (./cookies.ts `liveSessionsOf`), this one
 //   marked; each ends by its own button, and "End all other browsers" ends the rest. To end this
 //   browser's is to sign out (./sign-in.ts `signOutResponse`).
 // - the apps and tools that hold a sign-in as the person, by OAuth client (./oauth.ts
 //   `sessionsByClientOf`, drawn by ./access-list.ts), each ended by `endAccess`.
 //
-// It stays on the platform's host, the trusted origin, because a person opens it when they
+// It stays on the control-plane hostname, the trusted origin, because a person opens it when they
 // suspect a break-in: a mind's own code draws none of it, so a hostile or broken mind hides no
 // row. A session's cookie ends access and never adds it (./signed-change.ts), so a form here posts
 // with the cookie alone, from this origin's own page.
 import { AccountFacts } from "./account-facts.ts";
 import { clientsWithAccess, endFields, endsOf, logoOriginsOf } from "./access-list.ts";
 import {
-  type BrowserSession,
-  type BrowserSignInMethod,
   endSessions,
   liveSessionsOf,
+  type PersonSession,
+  personSessionOf,
+  reachOf,
   type SessionRow,
-  sessionOf,
 } from "./cookies.ts";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
-import { passkeyOwedResponse, standingOf } from "./members.ts";
+import { configOf, type Env, issuerOf } from "./env.ts";
 import { endAccess, sessionsByClientOf } from "./oauth.ts";
 import { errorPage, page, SIGN_OUT_PATH, text } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
@@ -37,13 +39,12 @@ export async function sessionsResponse(env: Env, request: Request): Promise<Resp
   const post = request.method === "POST";
   if (!post && request.method !== "GET" && request.method !== "HEAD")
     return new Response("Method not allowed", { status: 405 });
-  const session = await sessionOf(env, request);
+  // anyone signed in sees and ends their own: a person who is no member too
+  const session = await personSessionOf(env, request);
   if (!session)
     return post
       ? errorPage("You are signed out. Sign in and try again.", 401)
       : seeOther(signInHref(SESSIONS_PATH));
-  if ((await standingOf(env, session)) === "passkey-owed")
-    return passkeyOwedResponse(SESSIONS_PATH);
   if (!post) return sessionsPage(env, session);
   // the session's cookie ends a session or a sign-in, so the form must come from this origin's
   // own page
@@ -54,19 +55,20 @@ export async function sessionsResponse(env: Env, request: Request): Promise<Resp
   const ended = form?.get("session");
   const ends = endsOf(form);
   // this browser's own is ended by the sign-out, whose form is on its row
+  const reach = reachOf(session);
   if (typeof ended === "string" && ended && ended !== session.id)
-    await endSessions(env, session.userId, { session: ended }, facts);
+    await endSessions(env, session.userId, reach, { session: ended }, facts);
   else if (form?.get("others"))
-    await endSessions(env, session.userId, { allBut: session.id }, facts);
-  else if (ends) await endAccess(env, session.userId, ends, facts);
+    await endSessions(env, session.userId, reach, { allBut: session.id }, facts);
+  else if (ends) await endAccess(env, session.userId, reach, ends, facts);
   return facts.on(seeOther(SESSIONS_PATH));
 }
 
-async function sessionsPage(env: Env, session: BrowserSession): Promise<Response> {
-  const { domain } = iterateConfigOf(env);
+async function sessionsPage(env: Env, session: PersonSession): Promise<Response> {
+  const mind = configOf(env).controlPlaneHostname;
   const [browsers, access] = await Promise.all([
-    liveSessionsOf(env, session.userId),
-    sessionsByClientOf(env, session.userId),
+    liveSessionsOf(env, session.userId, reachOf(session)),
+    sessionsByClientOf(env, session.userId, reachOf(session)),
   ]);
   const others = browsers.filter((browser) => browser.id !== session.id).length;
   const apps = clientsWithAccess(
@@ -78,11 +80,11 @@ async function sessionsPage(env: Env, session: BrowserSession): Promise<Response
         </form>`,
   );
   return page({
-    title: `Sessions at ${domain}`,
+    title: `Sessions at ${mind}`,
     wide: true,
     imageOrigin: logoOriginsOf(access),
     body: `<h1>Where you are signed in</h1>
-      <p>You are signed in to ${text(domain)} as <strong>${text(session.email)}</strong>. End anything here that you do not know: it must sign in again.</p>
+      <p>You are signed in to ${text(mind)} as <strong>${text(session.email)}</strong>. End anything here that you do not know: it must sign in again.</p>
       <h2>This browser and your other browsers</h2>
       <p class="muted">Each browser that signed in here, at ${text(new URL(issuerOf(env)).host)}, holds a session. It signs you in to the mind's apps without a new sign-in.</p>
       <ul class="browser-sessions">${browsers.map((browser) => browserItem(browser, session.id)).join("")}</ul>
@@ -112,18 +114,10 @@ function browserItem(browser: SessionRow, current: string): string {
         </form>`;
   return `<li data-session="${text(browser.id)}"${here ? " data-current" : ""}>
         <strong>${text(browserNameOf(browser.userAgent))}</strong>${here ? " <span>(this browser)</span>" : ""}
-        <span class="muted">signed in with ${METHODS[browser.method]} at ${minute(browser.createdAt)}, last seen ${minute(browser.lastSeenAt)}.</span>
+        <span class="muted">signed in with ${browser.method === "passkey" ? "a passkey" : "a code by email"} at ${minute(browser.createdAt)}, last seen ${minute(browser.lastSeenAt)}.</span>
         ${end}
       </li>`;
 }
-
-const METHODS: Record<BrowserSignInMethod, string> = {
-  passkey: "a passkey",
-  google: "Google",
-  email: "a mailed code",
-  "first-owner-ticket": "the deploy's ticket",
-  "member-link": "an owner's link",
-};
 
 export const minute = (at: number) =>
   `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC`;

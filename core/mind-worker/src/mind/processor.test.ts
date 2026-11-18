@@ -1,10 +1,14 @@
 // The mind's processor and the template's update (template-update.ts): WHEN in an incarnation
 // the config repo is compared with the bundled template. The processor runs here with a repo and a
 // publisher that record what they are asked.
+import { Redacted } from "iterate/app-config";
 import type { ItxExpression } from "iterate/expression";
-import { ProcessorEngine, type StreamEventInput } from "iterate/stream/processor";
+import { identityHashOf, type SignedRecord } from "iterate/mind-identity";
+import { ProcessorEngine, type StreamEvent, type StreamEventInput } from "iterate/stream/processor";
 import { memoryStorage, memoryStream } from "iterate/stream/test-support";
 import { expect, test, vi } from "vitest";
+import { newIdentityLog } from "../../../lib/src/test-support/identity-log.ts";
+import { rootWakeEvents } from "./context-birth-events.ts";
 import { MindContract, type MindState } from "./contract.ts";
 import { MindProcessor } from "./processor.ts";
 import type { MindPublisher } from "./publication.ts";
@@ -145,14 +149,6 @@ test("the first wake of an incarnation gives the root what refreshes the persons
   });
 });
 
-test("the first wake of an incarnation asks the vault to keep the stack's Cloudflare token, and a second pass does not again", async () => {
-  const mind = mindOf({ owes: false });
-  mind.deliver(mind.state);
-  mind.deliver(mind.state);
-  await mind.settled();
-  expect(mind).toMatchObject({ vault: ["keepCloudflareToken"] });
-});
-
 test.for([
   ["a schedule of the mind's own under the key is left as it is", { schedule: true }, "row"],
   ["a row that is there is not written again", { row: true }, "schedule"],
@@ -200,6 +196,256 @@ test("a root that stays awake looks again an hour after its last look: a schedul
   }
 });
 
+test("each deploy lands one `mind/stack-deployed` on `/`, with the config's secrets redacted, and the state keeps the latest", async () => {
+  const config = {
+    mindId: "a".repeat(64),
+    controlPlaneHostname: "iterate.example.com",
+    zones: ["example.com", "example.org"],
+    ownerEmails: ["ada@elsewhere.example"],
+    topology: "full-cloudflare",
+    signingKey: new Redacted("the-signing-key"),
+  };
+  const [first] = rootWakeEvents(config, "version-1");
+  expect(first).toEqual({
+    type: "events.iterate.com/mind/stack-deployed",
+    idempotencyKey: "mind/stack-deployed:version-1",
+    payload: { config: { ...config, signingKey: "REDACTED" }, versionId: "version-1" },
+  });
+  expect(JSON.stringify(first)).not.toContain("the-signing-key");
+  // a new engine on new storage reduces the whole log, through the contract's own `consumes`
+  const root = memoryStream("/");
+  const stackAfter = async (events: StreamEventInput[]) => {
+    root.stream.append(...events);
+    const processor = new MindProcessor(
+      () => {
+        throw new Error("the reduce reaches no context");
+      },
+      () => ({}) as MindPublisher,
+      { template: async () => undefined, keepTemplate: async () => {} },
+      {},
+    );
+    const engine = new ProcessorEngine(processor, {
+      stream: root.stream,
+      storage: memoryStorage(),
+    });
+    return (await engine.snapshot()).state.stack;
+  };
+  expect(await stackAfter([])).toBeNull();
+  expect(await stackAfter(rootWakeEvents(config, "version-1"))).toMatchObject({
+    versionId: "version-1",
+    config: { zones: ["example.com", "example.org"], signingKey: "REDACTED" },
+  });
+  const moved = { ...config, zones: ["example.com"] };
+  expect(await stackAfter(rootWakeEvents(moved, "version-2"))).toEqual({
+    versionId: "version-2",
+    config: { ...moved, signingKey: "REDACTED" },
+  });
+});
+
+test("the root keeps a log for each mind id and never empties one: after one id's genesis, another id's genesis and a further record of the first, it holds both logs, whatever the deploys named", async () => {
+  const [first, other] = [await newIdentityLog(), await newIdentityLog()];
+  const second = await first.next(first.genesis, { alsoKnownAs: ["did:example:ada"] });
+  const third = await first.next(second, { alsoKnownAs: [] });
+  const deployed = (mindId: string, versionId: string) =>
+    rootWakeEvents(
+      {
+        mindId,
+        controlPlaneHostname: "iterate.example.com",
+        zones: ["example.com"],
+        ownerEmails: ["ada@elsewhere.example"],
+        topology: "full-cloudflare",
+      },
+      versionId,
+    );
+  const accepted = async (signed: SignedRecord, mind: string) => ({
+    type: "events.iterate.com/mind/identity-record-accepted",
+    // as the append boundary stamps the platform's own append
+    source: { platform: true as const },
+    payload: {
+      mind,
+      hash: await identityHashOf(signed.record),
+      record: signed.record,
+      signatures: signed.signatures,
+      signedBy: [],
+    },
+  });
+  const root = memoryStream("/");
+  // a new engine on new storage reduces the whole log, through the contract's own `consumes`
+  const identitiesAfter = async (...events: StreamEventInput[]) => {
+    root.stream.append(...events);
+    const processor = new MindProcessor(
+      () => {
+        throw new Error("the reduce reaches no context");
+      },
+      () => ({}) as MindPublisher,
+      { template: async () => undefined, keepTemplate: async () => {} },
+      {},
+    );
+    const engine = new ProcessorEngine(processor, {
+      stream: root.stream,
+      storage: memoryStorage(),
+    });
+    return (await engine.snapshot()).state.identities;
+  };
+  const born = {
+    head: first.mind,
+    position: 1,
+    current: JSON.parse(first.genesis.record),
+    refused: null,
+  };
+  // a record folds into the log of its own mind id, with no deploy before it
+  expect(await identitiesAfter(await accepted(first.genesis, first.mind))).toEqual({
+    [first.mind]: born,
+  });
+  // A deploy names the first id, then the other id, then the first again by the Worker's first
+  // version, whose record the log holds already. None of that touches a log.
+  const otherBorn = {
+    head: other.mind,
+    position: 1,
+    current: JSON.parse(other.genesis.record),
+    refused: null,
+  };
+  expect(
+    await identitiesAfter(
+      ...deployed(first.mind, "version-1"),
+      ...deployed(other.mind, "version-2"),
+      await accepted(other.genesis, other.mind),
+      ...deployed(first.mind, "version-1"),
+    ),
+  ).toEqual({ [first.mind]: born, [other.mind]: otherBorn });
+  // the third record before the second is not the next: it stays in the log, and is not folded
+  expect(await identitiesAfter(await accepted(third, first.mind))).toMatchObject({
+    [first.mind]: { position: 1 },
+  });
+  const grown = {
+    head: await identityHashOf(second.record),
+    position: 2,
+    current: JSON.parse(second.record),
+    refused: null,
+  };
+  expect(await identitiesAfter(await accepted(second, first.mind))).toEqual({
+    [first.mind]: grown,
+    [other.mind]: otherBorn,
+  });
+  // an event of either type that the platform did not write is passed over
+  const { source: _stamp, ...unstamped } = await accepted(third, first.mind);
+  expect(
+    await identitiesAfter(unstamped, {
+      type: "events.iterate.com/mind/identity-record-refused",
+      payload: { mind: first.mind, reason: "forged", message: "a sentence" },
+    }),
+  ).toEqual({ [first.mind]: grown, [other.mind]: otherBorn });
+  const [refusedEvent] = await root.stream.append({
+    type: "events.iterate.com/mind/identity-record-refused",
+    source: { platform: true },
+    payload: { mind: first.mind, reason: "not-next", message: "a sentence" },
+  });
+  expect(await identitiesAfter()).toEqual({
+    [first.mind]: { ...grown, refused: { offset: refusedEvent!.offset, reason: "not-next" } },
+    [other.mind]: otherBorn,
+  });
+  // the same record again, as an append that was not said to be stored: nothing changes
+  expect(await identitiesAfter(await accepted(second, first.mind))).toMatchObject({
+    [first.mind]: { position: 2 },
+  });
+});
+
+test("a root born before the identity events gets them: at its first wake its own row takes the contract's types, so an identity event is in the batch that its span of the log is delivered as", async () => {
+  const log = await newIdentityLog();
+  const deployed = rootWakeEvents(
+    {
+      mindId: log.mind,
+      controlPlaneHostname: "iterate.example.com",
+      zones: ["example.com"],
+      ownerEmails: ["ada@elsewhere.example"],
+      topology: "full-cloudflare",
+    },
+    "version-2",
+  );
+  // THE ROOT AS A BUILD BEFORE THE IDENTITY EVENTS LEFT IT: its own row with the event types of
+  // its birth, and a checkpoint of contract version 1, whose state has no `identities`.
+  const { root, storage, row, pushed } = rootWithRow([
+    ...MindContract.consumes.filter(
+      (type) =>
+        type !== "events.iterate.com/mind/identity-record-accepted" &&
+        type !== "events.iterate.com/mind/identity-record-refused",
+    ),
+    "events.iterate.com/itx/woken",
+  ]);
+  const before = (await root.stream.append({
+    type: "events.iterate.com/mind/sandbox-image-configured",
+    payload: { image: null },
+  })) as StreamEvent[];
+  const { identities: _absent, ...stateOfVersion1 } = MindContract.stateSchema.parse({});
+  storage.write(
+    "mind",
+    { reducerVersion: "1", reducedThroughOffset: before.at(-1)!.offset },
+    stateOfVersion1,
+    true,
+  );
+  let incarnation = incarnationOf({ root, storage, row });
+
+  // THE DEPLOY OF THIS CODE: the root wakes, and its row is written once
+  await pushed(incarnation, [{ type: "events.iterate.com/itx/woken", payload: {} }, ...deployed]);
+  await incarnation.settled();
+  expect(row).toMatchObject({
+    did: ["processors.enable mind"],
+    written: 1,
+    consumes: [...MindContract.consumes, "events.iterate.com/itx/woken"],
+  });
+
+  // THE GENESIS, THEN AN ORDINARY EVENT, in one span of the log, as a row delivers them. With
+  // the row of the root's birth the genesis would not be in the batch, and the checkpoint
+  // would pass it.
+  await pushed(incarnation, [
+    {
+      type: "events.iterate.com/mind/identity-record-accepted",
+      source: { platform: true },
+      payload: {
+        mind: log.mind,
+        hash: log.mind,
+        record: log.genesis.record,
+        signatures: log.genesis.signatures,
+        signedBy: [],
+      },
+    },
+    { type: "events.iterate.com/mind/sandbox-image-configured", payload: { image: null } },
+  ]);
+  expect((await incarnation.engine.snapshot()).state.identities).toMatchObject({
+    [log.mind]: { head: log.mind, position: 1 },
+  });
+  // a restart: the checkpoint holds it, and the row is right, so it is not written again
+  incarnation = incarnationOf({ root, storage, row });
+  await pushed(incarnation, [{ type: "events.iterate.com/itx/woken", payload: {} }]);
+  await incarnation.settled();
+  expect((await incarnation.engine.snapshot()).state.identities).toMatchObject({
+    [log.mind]: { head: log.mind, position: 1 },
+  });
+  expect(row).toMatchObject({ did: Array(2).fill("processors.enable mind"), written: 1 });
+});
+
+test("a root that could not look at its own row looks again at its next pass, and then no more in that incarnation", async () => {
+  const { root, storage, row, pushed } = rootWithRow([
+    ...MindContract.consumes,
+    "events.iterate.com/itx/woken",
+  ]);
+  row.down = true;
+  const incarnation = incarnationOf({ root, storage, row });
+  const pass = {
+    type: "events.iterate.com/mind/sandbox-image-configured",
+    payload: { image: null },
+  };
+  await pushed(incarnation, [pass]);
+  await incarnation.settled();
+  expect(row).toMatchObject({ did: [] });
+  row.down = false;
+  await pushed(incarnation, [pass]);
+  await incarnation.settled();
+  await pushed(incarnation, [pass]);
+  await incarnation.settled();
+  expect(row).toMatchObject({ did: ["processors.enable mind"], written: 0 });
+});
+
 test("the latest `mind/sandbox-image-configured` on `/` names the image the mind's sandboxes start on, and null gives the stack's own back", async () => {
   const root = memoryStream("/");
   const configured = (image: string | null) => ({
@@ -241,6 +487,69 @@ test("a mind that is not created yet gets no schedule", async () => {
   expect(mind).toMatchObject({ root: { did: [] } });
 });
 
+/** A ROOT WITH ITS OWN SUBSCRIPTION ROW, as the kernel delivers through one: a span of the log
+ *  goes to the processor as the events of the span whose types the row names, with the span's
+ *  whole range, so the processor's cursor passes an event that the row left out. `row.did` is
+ *  what was asked of the row, and `row.written` how often it was written; `row.down`: the root
+ *  cannot be asked. */
+function rootWithRow(consumes: string[]) {
+  const row = { consumes, did: [] as string[], written: 0, down: false };
+  const root = memoryStream("/");
+  const storage = memoryStorage();
+  /** Appends `events` as one span and delivers it through the row. */
+  const pushed = async (
+    { engine }: Pick<Incarnation, "engine">,
+    events: StreamEventInput[],
+  ): Promise<void> => {
+    const committed = (await root.stream.append(...events)) as StreamEvent[];
+    await engine.processEventBatch(
+      committed.filter(({ type }) => row.consumes.includes(type)),
+      { after: committed[0]!.offset - 1, through: committed.at(-1)!.offset },
+    );
+  };
+  return { root, storage, row, pushed };
+}
+
+type Incarnation = { engine: ProcessorEngine<MindState>; settled: () => Promise<void> };
+
+/** ONE INCARNATION OF THE ROOT'S MIND PROCESSOR on the root's log and checkpoint: a new
+ *  processor and a new engine, as after a restart. `settled` waits for the work it started in
+ *  the background. */
+function incarnationOf({
+  root,
+  storage,
+  row,
+}: Pick<ReturnType<typeof rootWithRow>, "root" | "storage" | "row">): Incarnation {
+  const invoke = async (expression: ItxExpression) => {
+    const [registry, last] = [expression[2], expression.at(-1)];
+    const [verb, name] = Array.isArray(last) ? last : [];
+    if (registry !== "processors" || verb !== "enable" || name !== "mind")
+      throw new Error(`the test's root has no ${JSON.stringify(expression)}`);
+    if (row.down) throw new Error("the root was not reached");
+    row.did.push("processors.enable mind");
+    // as the kernel's `processors.enable` does: the row is written when its types are not the
+    // contract's (core/itx src/context/built-ins.ts)
+    const consumes = [...MindContract.consumes, "events.iterate.com/itx/woken"];
+    if (JSON.stringify(row.consumes) === JSON.stringify(consumes)) return { name };
+    row.consumes = consumes;
+    row.written += 1;
+    return { name };
+  };
+  return {
+    engine: new ProcessorEngine(
+      new MindProcessor(
+        () => ({ invoke, [Symbol.dispose]() {} }) as unknown as ReturnType<ItxScope>,
+        () => ({}) as MindPublisher,
+        { template: async () => undefined, keepTemplate: async () => {} },
+        {},
+      ),
+      { stream: root.stream, storage, fedByPushes: true },
+    ),
+    // the engine's own background work
+    settled: () => new Promise((resolve) => setTimeout(resolve, 20)),
+  };
+}
+
 function mindOf({
   owes,
   head = "another commit",
@@ -274,15 +583,11 @@ function mindOf({
   // The root's own schedules and rows, as the daily refresh of the grants asks for them: what it
   // read and what it wrote, in order.
   const root = { schedule: there.schedule, row: there.row, did: [] as string[] };
-  /** What the root asked of the vault, in order. */
-  const vault: string[] = [];
   const ofTheRoot = (expression: ItxExpression): { answer: unknown } | undefined => {
     const [registry, last] = [expression[2], expression.at(-1)];
     const [verb, argument] = Array.isArray(last) ? last : [];
-    if (registry === "secrets") {
-      vault.push(String(verb));
-      return { answer: { path: "/secrets/cloudflare", outcome: "unchanged" } };
-    }
+    // the root's own row, which every incarnation compares with the contract once
+    if (registry === "processors" && verb === "enable") return { answer: { name: argument } };
     if (registry === "subscriptions" && verb === "get") return { answer: root.row ? {} : null };
     if (registry === "schedules" && verb === "get")
       return {
@@ -395,7 +700,6 @@ function mindOf({
     facts,
     platformFacts,
     root,
-    vault,
     deliver,
     /** The state once the fact of commit `commitOid` arrived at `offset`: its publication is owed. */
     owing: (commitOid: string, offset: number): MindState => ({

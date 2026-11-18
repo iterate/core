@@ -4,8 +4,6 @@ The owner should come away with: the mind sees every request, error and event of
 
 ## Ready today
 
-- Only on a mind whose stack has telemetry. Check first:
-  `Boolean((await itx.rewriteRules.get("itx.telemetry"))?.target)`.
 - `await itx.telemetry.query(sql, { hours })` runs one `SELECT` over `events`, `logs` or `spans`
   (or `metrics` alone), cut to this mind's rows of the last `hours` (24 by default, 720 at most),
   1,000 rows at most. It answers `{ rows, sql }`.
@@ -19,50 +17,14 @@ rpc_method, http_status`, and for the mind's own Workers (`iterate-<slug>-mind`,
   The host is no column.
 - A request shows up a few minutes later, usually one to four. Ask again before you say it is not
   there.
-- The Analytics page: `https://dash.<domain>/?page=analytics`.
-- Cloudflare's own logs and traces: one request to Cloudflare's REST API,
-  `await itx.config.cloudflare("execute", { method, path, body })`, with the mind's Cloudflare
-  token (`(await itx.secrets.describe("/secrets/cloudflare")).set`). The mind Worker's newest log
-  lines:
-
-  ```ts
-  const { mindSlug } = await itx.whoami();
-  const { accounts } = await itx.config.cloudflare("whoami");
-  const now = Date.now();
-  const answer = await itx.config.cloudflare("execute", {
-    method: "POST",
-    path: `/accounts/${accounts[0].id}/workers/observability/telemetry/query`,
-    body: {
-      queryId: "newest-lines",
-      view: "events",
-      limit: 20,
-      timeframe: { from: now - 3_600_000, to: now },
-      parameters: {
-        datasets: ["cloudflare-workers"],
-        filters: [
-          {
-            key: "$metadata.service",
-            operation: "eq",
-            type: "string",
-            value: `iterate-${mindSlug}-mind`,
-          },
-        ],
-      },
-    },
-  });
-  return answer.body.result.events.events.map((line) => ({
-    at: new Date(line.timestamp).toISOString(),
-    level: line.$metadata.level,
-    said: line.$metadata.message || line.$metadata.type,
-  }));
-  ```
-
-  `cloudflare.md` has that query and a second one: invocations by Worker and outcome.
+- The Analytics page: `https://dash.<zone>/?page=analytics`.
+- Cloudflare's own logs and traces, when a member has connected the mind to its Cloudflare
+  account (`(await itx.secrets.describe("/secrets/cloudflare")).set`; `onboarding/connect.md`):
+  `await itx.config.cloudflareLastHour()` answers the mind's own Workers' requests and errors
+  of the last hour. `cloudflare.md` has the two queries behind it.
 
 ## Not ready
 
-- On a mind without telemetry, `itx.telemetry` does not exist: the call throws, and the
-  Analytics page says it is off. Leave the whole subject out, and say nothing about it.
 - Telling the owner's visit apart is NOT PROVEN. The helper's check, the screenshot, a crawler
   and the Dash's own page load are requests to `/` too, and one request can show as two spans
   (the boundary's and the mind's) with one `trace_id`. Name a visit only when its minute matches
@@ -93,5 +55,5 @@ return (
 ## Say
 
 - "That was you, at 14:02, opening your website. Your mind keeps every request like that:
-  https://dash.<domain>/?page=analytics."
+  https://dash.<zone>/?page=analytics."
 - "When something breaks, I can read exactly what happened."

@@ -455,8 +455,16 @@ function vault(path = PATH) {
     },
   };
   const env = {
-    DOMAIN: "example.com",
-    SECRETS_AT_REST_KEY: AT_REST_KEY,
+    ITERATE: JSON.stringify({
+      mindId: "a".repeat(64),
+      controlPlaneHostname: "iterate.example.com",
+      zones: ["example.com"],
+      ownerEmails: ["owner@example.net"],
+      topology: "full-cloudflare",
+    }),
+    ITERATE__AT_REST_KEY: AT_REST_KEY,
+    ITERATE__CLOUDFLARE_CLIENT: JSON.stringify({ refusal: "Authentication error" }),
+    ITERATE__CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
     // `adding`: run inside the next write's call of the vault's list, after it took its version
     APPROVALS: {
       getByName: () => ({

@@ -13,6 +13,9 @@ import type { ReachableContext } from "./stream/stream.ts";
 
 export interface ItxHost {
   mindSlug?: string;
+  /** The mind's id, which stays when its hostname changes: what `itx.whoami()` answers as
+   *  `mindId`. */
+  mindId?: string;
   /** Appended in the same batch as the birth and first wake records. */
   birthEvents?(path: string): readonly StreamEventInput[];
   /** Asked at every wake of a context, its birth too. Each has an idempotency key and lands once
@@ -27,6 +30,12 @@ export interface ItxHost {
   /** A host with a loader exports `ItxEntrypoint`. */
   loader?: ItxLoader;
   metrics?: Pick<AnalyticsEngineDataset, "writeDataPoint">;
+  /** WHAT THE HOST SAYS ON EVERY REQUEST THAT LOADED CODE GETS: headers by name, set over
+   *  whatever the request carried, each time the kernel hands one to a loaded worker, a facet of
+   *  loaded code or a lent stub (./context/rpc-stubs.ts `requestForLoadedCode`). A request that
+   *  leaves through the egress keeps none of them. The mind Worker says where the control plane
+   *  is. */
+  loadedCodeRequestHeaders?(): Record<string, string>;
   /** Every outbound `itx.fetch`, after the kernel stripped its headers and stamped the cause. */
   egress?(request: Request, from: { path: string }): Promise<Response>;
   /** THE GATE FOR ACTS (iterate/acts): with it, a call of a verb that an approval rule names

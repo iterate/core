@@ -1,9 +1,9 @@
 # Docs
 
-The Docs app on `docs.<domain>`: where its code is, how an agent edits and comments on a doc, and
+The Docs app on `docs.<zone>`: where its code is, how an agent edits and comments on a doc, and
 how to take the app out: `apps/docs/`.
 
-`docs.<domain>` shows a repo's files as a tree and one file in a live editor. Several members type
+`docs.<zone>` shows a repo's files as a tree and one file in a live editor. Several members type
 in a markdown file at once and see each other; they comment on a piece of its text; what they type
 is saved as commits to the repo, a minute after the first unsaved edit, or at once when the last
 tab closes. The first person who typed is the commit's author, the others are `Co-authored-by`.

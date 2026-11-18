@@ -21,7 +21,7 @@ import {
   InvokeHandle,
   normalizedItxExpression,
 } from "iterate/expression";
-import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
+import { ITX_PRINCIPAL_HEADER, stampedPersonOf, type Principal } from "iterate/principal";
 import type {
   ContextListing,
   ContextListOptions,
@@ -29,7 +29,6 @@ import type {
   StreamPage,
   SubscriptionListEntry,
 } from "iterate/api";
-import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/mind-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
 import { causeOfDelivery, deepestCause, newChain, parseCause, type Cause } from "./cause.ts";
@@ -737,7 +736,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         return new RpcStubHandle((itxExpressionSteps) => {
           this.#residency.pinCallStarted();
           return this.#rpcStubs
-            .invokeRpcStub(rpcStubKey, itxExpressionSteps)
+            .invokeRpcStub(rpcStubKey, itxExpressionSteps, this.#caller)
             .finally(() => this.#residency.pinCallEnded());
         });
       },
@@ -950,6 +949,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     loadedFacetMaterialized: () => this.#residency.armUnclaimedFacetSweep(),
     deliveriesQueuedFor: (name) => this.#subscriptionDelivery.deliveriesQueuedFor(name),
     cause: () => this.#caller.cause,
+    caller: () => this.#caller,
     causeOfCall: (call) => this.#causeNamingCaller(call),
   });
 
@@ -1424,14 +1424,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
         headers.delete(ITX_APP_HEADER);
-        // The routing slug is the edge's alone, so loaded code can never forge one.
-        headers.delete(ITERATE_ROUTING_SLUG_HEADER);
         // Trusted, so asserted rather than parsed: the edge sets it after admission, and every other
         // source of it is stripped (ItxEntrypoint strips a loaded worker's).
         const principal = JSON.parse(
           headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
         ) as Principal | null;
         const grant = headers.get(ITX_GRANT_HEADER) || undefined;
+        // as the principal: the hop that sent this request stamped it from its own caller
+        const person = stampedPersonOf(request) || undefined;
         const callerPath = headers.get(ITX_CALLER_PATH_HEADER) || undefined;
         headers.delete(ITX_CALLER_PATH_HEADER);
         const runsRow = headers.get(ITX_RUNS_ROW_HEADER) !== null;
@@ -1445,6 +1445,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const caller = {
           principal,
           grant,
+          person,
           path: callerPath,
           cause,
           ...(app && { app: true as const }),

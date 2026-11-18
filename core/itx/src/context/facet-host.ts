@@ -20,6 +20,7 @@ import {
 import type { FacetProps, StreamProcessorDurableObject } from "iterate/sdk";
 import type { FacetSpec, WorkerSource } from "iterate/api";
 import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
+import type { Caller } from "../caller.ts";
 import { deepestCause, requestCausedBy, type Cause } from "../cause.ts";
 import {
   CoreContract,
@@ -51,6 +52,7 @@ import {
   type WorkerModules,
 } from "./worker-loader.ts";
 import { namesAWorker } from "./itx-expression-rewriting.ts";
+import { fetchStepsForLoadedCode } from "./rpc-stubs.ts";
 import { criticalSectionDeadline } from "./critical-section-deadline.ts";
 
 // Workaround for a platform defect (https://github.com/iterate/alarm-loader-facet-repro): on prd, a
@@ -111,6 +113,8 @@ type FacetHostDeps = {
   loadedFacetMaterialized: () => void;
   deliveriesQueuedFor: (name: string) => Promise<unknown>;
   cause: () => Cause | undefined;
+  // Who makes the call that is running: what a loaded facet's `fetch` is told of who asks.
+  caller: () => Caller;
   // The cause of a caller's own call to `<facet>.<method>`: a promise only when it must be signed.
   causeOfCall: (call: string) => Cause | undefined | Promise<Cause | undefined>;
 };
@@ -550,7 +554,12 @@ export class FacetHost {
   }
 
   handle(name: string, spec?: FacetSpec): FacetHandle {
-    const facetHandle = new FacetHandle((itxExpressionSteps) => {
+    const facetHandle = new FacetHandle((called) => {
+      // A first-party facet is the Worker's own code. Loaded code's `fetch` is told who asks by
+      // the call's caller, never by the Request that the calling code built.
+      const itxExpressionSteps = firstPartyFacetClassOf(name)
+        ? called
+        : fetchStepsForLoadedCode(called, this.#deps.caller());
       // A facet never answers a WebSocket: a socket a facet held would die with it, unseen by the
       // parent (1006). Refused before the memo, so an upgrade materializes nothing.
       const [first] = itxExpressionSteps;

@@ -6,7 +6,7 @@ import { codedError } from "iterate/lib";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { type ItxExpression, walkStepsOnRpcStub } from "iterate/expression";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
-import { dialRpcStubFetch } from "./fetch-upgrade.ts";
+import { dialRpcStubFetch, type LentFetchHolder } from "./fetch-upgrade.ts";
 import { redial } from "./redial.ts";
 import {
   disposeRpcStub,
@@ -33,17 +33,21 @@ class LentRpcStub extends WorkersRpcTarget {
   #lendEnded: { reason: string | null };
   // minted per dial: a stub that saw a reset replays it
   #durableObjectStub: () => IterateContextDurableObjectStub;
+  // Set for a lend whose lender's session ends in another Worker: that Worker makes the fetch.
+  #throughHolder: ThroughHolder | undefined;
   constructor(
     clientRpcStub: ClientRpcStub,
     rpcStubKey: string,
     lendEnded: { reason: string | null },
     durableObjectStub: () => IterateContextDurableObjectStub,
+    throughHolder: ThroughHolder | undefined,
   ) {
     super();
     this.#clientRpcStub = clientRpcStub;
     this.#rpcStubKey = rpcStubKey;
     this.#lendEnded = lendEnded;
     this.#durableObjectStub = durableObjectStub;
+    this.#throughHolder = throughHolder;
   }
 
   // capnweb throws a raw, uncoded error when the lend ended mid-call: re-coded here, where the break
@@ -61,6 +65,14 @@ class LentRpcStub extends WorkersRpcTarget {
   ): Promise<unknown> {
     try {
       return await whileClientAnswers(this.#clientRpcStub, this.#rpcStubKey, async () => {
+        const through = this.#throughHolder;
+        if (through)
+          return await through.holder.fetch(
+            upgradeId,
+            itxExpressionSteps,
+            request,
+            through.context,
+          );
         // the steps stop short of the terminal `fetch`: the receiver is what serves it
         const receiver = (await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps)) as {
           fetch(r: Request): Promise<unknown>;
@@ -131,6 +143,11 @@ async function whileClientAnswers(
   return await call;
 }
 
+/** Where a lent stub's `fetch` is made when the lender's session ends in another Worker
+ *  (./fetch-upgrade.ts `LentFetchHolder`), and the context that the lend is at, by the name of
+ *  its Durable Object. */
+type ThroughHolder = { holder: LentFetchHolder; context: string };
+
 // The lend is the session's, not the socket's: a pager that closes with neither side having ended
 // the lend is re-dialed, and the DO's attach re-appends `appendEvents` as a reconnect.
 export async function lendRpcStubOverPager(
@@ -145,9 +162,12 @@ export async function lendRpcStubOverPager(
   // The lender this lend may take the name's lend from, at the first dial (rpc-stubs.ts
   // `appendAtAttach`). Sent at each redial too, where the context does not check it.
   onlyFrom?: string,
+  // The holder is its caller's for the call alone, as the stub is: the lend keeps a dup of each.
+  through?: ThroughHolder,
 ): Promise<{ dispose(): void; lendEnded: Promise<string> }> {
   // dup first: a value that is not a stub fails here, before any socket
   const sessionRpcStub = clientRpcStub.dup();
+  const throughHolder = through && { ...through, holder: through.holder.dup() };
   const lendEnded: { reason: string | null } = { reason: null };
   const dialPager = (redial = false) =>
     durableObjectStub().fetch("https://rpc-stub-pager.internal/", {
@@ -170,10 +190,12 @@ export async function lendRpcStubOverPager(
     response = await dialPager();
   } catch (error) {
     disposeRpcStub(sessionRpcStub);
+    disposeRpcStub(throughHolder?.holder);
     throw error;
   }
   if (response.status !== 101 || !response.webSocket) {
     disposeRpcStub(sessionRpcStub);
+    disposeRpcStub(throughHolder?.holder);
     const refusal = (await response.json().catch(() => null)) as {
       code?: string | null;
       message?: string;
@@ -192,6 +214,7 @@ export async function lendRpcStubOverPager(
   const disposeSessionRpcStub = (reason: string) => {
     lendEnded.reason ||= reason;
     disposeRpcStub(sessionRpcStub);
+    disposeRpcStub(throughHolder?.holder);
     resolveLendEnded(lendEnded.reason);
   };
   // A relay's connection to the DO can drop under a burst of lends, failing every lend in flight:
@@ -203,7 +226,13 @@ export async function lendRpcStubOverPager(
           if (lendEnded.reason) return;
           await durableObjectStub().lendRpcStub({
             rpcStubKey,
-            stub: new LentRpcStub(sessionRpcStub, rpcStubKey, lendEnded, durableObjectStub),
+            stub: new LentRpcStub(
+              sessionRpcStub,
+              rpcStubKey,
+              lendEnded,
+              durableObjectStub,
+              throughHolder,
+            ),
           });
         },
         {

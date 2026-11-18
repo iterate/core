@@ -23,7 +23,7 @@ import {
   MAIL_HOPS_HEADER,
   reportIssue,
 } from "iterate/lib";
-import { platformOriginOf } from "iterate/mind-api";
+import { type MindConfig, controlPlaneOriginOf, zoneOfMailAddress } from "iterate/mind-config";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import type { Door, ReceivedEmail } from "iterate/workers";
 import { z } from "zod";
@@ -77,8 +77,7 @@ export function emailRoot(
   scope: {
     files: R2Bucket;
     egress: () => Pick<Door, "sendEmail">;
-    name: string;
-    domain: string;
+    config: Pick<MindConfig, "controlPlaneHostname" | "zones">;
   },
 ) {
   return {
@@ -86,7 +85,6 @@ export function emailRoot(
       sendEmail(
         {
           ...scope,
-          address: `${scope.name}@${scope.domain}`.toLowerCase(),
           emailContext: context.context(EMAIL_PATH),
           contextOf: (path) => context.context(path),
           caller: hopCaller(context),
@@ -96,13 +94,31 @@ export function emailRoot(
   };
 }
 
+/** THE ADDRESS A MAIL LEAVES FROM: the one that `from` names, at one of the mind's zones. A mind
+ *  has no default sender, so a call that names none is refused, an answer to a mail too. */
+export function senderOf(from: string | undefined, config: Pick<MindConfig, "zones">): string {
+  const zones = config.zones.join(", ");
+  const address = from?.trim().toLowerCase();
+  if (!address)
+    throw codedError(
+      "INVALID_INPUT",
+      `itx.email.send: give the sender, \`from\`: an address at one of this mind's zones (${zones}), like agent@${config.zones[0]}`,
+    );
+  // one valid mailbox, as the boundary's door takes it: a sender that it would refuse is refused
+  // here, before anything is reserved
+  if (!z.email().safeParse(address).success || !zoneOfMailAddress(config, address))
+    throw codedError(
+      "FORBIDDEN",
+      `itx.email.send: this mind sends from an address at one of its zones (${zones}), not ${address}`,
+    );
+  return address;
+}
+
 async function sendEmail(
   scope: {
     files: R2Bucket;
     egress: () => Pick<Door, "sendEmail">;
-    address: string;
-    name: string;
-    domain: string;
+    config: Pick<MindConfig, "controlPlaneHostname" | "zones">;
     emailContext: ReachableContext;
     contextOf: (path: string) => ReachableContext;
     caller: Caller;
@@ -123,17 +139,9 @@ async function sendEmail(
   const to = request.to ? [request.to].flat() : answered?.to || [];
   const cc = request.cc ? [request.cc].flat() : answered?.cc || [];
   const subject = request.subject || answered?.subject || "";
-  const mayUse = (address: string) =>
-    /^[^@\s<>]+@[^@\s<>]+$/.test(address) && address.endsWith(`@${scope.domain}`);
-  const answeredAt = answered?.receivedAt.toLowerCase();
-  const from =
-    request.from?.trim().toLowerCase() ||
-    (answeredAt && mayUse(answeredAt) ? answeredAt : scope.address);
-  if (!mayUse(from))
-    throw codedError(
-      "FORBIDDEN",
-      `itx.email.send: this mind sends from any address @${scope.domain}, not ${from}`,
-    );
+  const from = senderOf(request.from, scope.config);
+  // A mind has no name of its own: the name a mail shows is the sender's own, before the `@`.
+  const fromName = from.slice(0, from.indexOf("@"));
   if (to.length + cc.length === 0 || !(request.text || request.html))
     throw codedError(
       "INVALID_INPUT",
@@ -144,7 +152,7 @@ async function sendEmail(
     recipientsRefusal([...to, ...cc]) ||
     mailHeaderRefusal({
       subject,
-      fromName: scope.name,
+      fromName,
       replyTo: null,
       inReplyTo: null,
       references: null,
@@ -168,7 +176,7 @@ async function sendEmail(
   const writeKey = scope.caller.cause?.writeKey;
   const key =
     writeKey &&
-    `${writeKey}:email.send:${(await sha256Hex(JSON.stringify([to, cc, subject, request.text, request.html]))).slice(0, 16)}`;
+    `${writeKey}:email.send:${(await sha256Hex(JSON.stringify([from, to, cc, subject, request.text, request.html]))).slice(0, 16)}`;
   let reserved = false;
   if (key) {
     const reservation = await scope.emailContext.reserveSend(key);
@@ -187,7 +195,7 @@ async function sendEmail(
   };
   const references = answered?.references || [];
   const message = {
-    from: { email: from, name: scope.name },
+    from: { email: from, name: fromName },
     to,
     cc,
     subject,
@@ -241,7 +249,7 @@ async function sendEmail(
       throw codedError("UNAVAILABLE", `itx.email.send: the boundary refused it: ${outcome.error}`);
     }
     await recordGateFacts(scope.contextOf, scope.caller, outcome.gate.facts);
-    const at = `${platformOriginOf(scope.domain)}/secrets/approvals?digest=${outcome.gate.digest}`;
+    const at = `${controlPlaneOriginOf(scope.config)}/secrets/approvals?digest=${outcome.gate.digest}`;
     throw codedError(
       "FORBIDDEN",
       outcome.gate.state === "waiting" || outcome.gate.state === "held"
@@ -394,7 +402,6 @@ async function answeredMessageOf(emailContext: ReachableContext, offset: number,
   return {
     to: received ? [received.replyTo || received.from] : message.to,
     cc: received ? [] : message.cc,
-    receivedAt: received ? received.envelope.to : message.from,
     // A mail may arrive with a subject of two lines, and a header that goes is one line
     // (iterate/acts `mailHeaderRefusal`): the answer's subject is that subject on one line.
     subject: (/^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}`).replace(

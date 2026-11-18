@@ -6,7 +6,8 @@ import { parseArgs } from "node:util";
 import { build } from "esbuild";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { addressOf, mindToken } from "iterate/node";
-import { mindProvideUrlOf } from "iterate/mind-api";
+import { mindApiUrlOf, mindProvideConnectResourceOf } from "iterate/mind-api";
+import { MindConfig } from "iterate/mind-config";
 import { Log, LogLevel, Miniflare, Response } from "miniflare";
 import { serveRepos } from "./repos/server.ts";
 import { sweepSidecars } from "./sandbox-sidecars.ts";
@@ -17,16 +18,29 @@ const { values, positionals } = parseArgs({
     port: { type: "string", default: "8789" },
     // a repo keeps its remote URL for its life
     "git-port": { type: "string", default: "8790" },
-    name: { type: "string" },
-    template: { type: "string", default: "default" },
+    "mind-id": { type: "string" },
+    zone: { type: "string", multiple: true },
+    owner: { type: "string", multiple: true },
     bundle: { type: "string" },
-    telemetry: { type: "boolean", default: false },
   },
 });
-if (!positionals[0]) throw new Error("Name the mind's domain: node src/main.ts <domain>");
-// the spelling `iterate login` stores its session under
-const domain = addressOf(positionals[0]);
-const dir = path.resolve(import.meta.dirname, "../.home-lab", domain);
+if (!positionals[0])
+  throw new Error(
+    "Name the mind: node src/main.ts <control-plane hostname> --mind-id <id> --zone <zone> --owner <email>",
+  );
+// THE CONFIG THAT EVERY WORKER OF THE MIND GETS (iterate/mind-config), as the stack's deploy gives
+// it to the boundary: the same mind id, control-plane hostname, zones and owners. The control-plane hostname is in the
+// spelling `iterate login` stores its session under.
+const config = MindConfig.parse({
+  mindId: values["mind-id"],
+  controlPlaneHostname: addressOf(positionals[0]),
+  zones: values.zone,
+  ownerEmails: values.owner,
+  topology: "external-mind-connects-into-cloudflare-boundary",
+});
+const { controlPlaneHostname } = config;
+const ITERATE = { type: "text", value: JSON.stringify(config) } as const;
+const dir = path.resolve(import.meta.dirname, "../.home-lab", controlPlaneHostname);
 mkdirSync(dir, { recursive: true, mode: 0o700 });
 const mindDir = path.resolve(import.meta.dirname, "../../mind-worker");
 const repos = await serveRepos({
@@ -50,7 +64,7 @@ const mf = new Miniflare({
         compatibilityFlags: ["nodejs_compat"],
         manifest: moduleOf(await bundle(`${import.meta.dirname}/link/worker.ts`)),
         env: {
-          DOMAIN: { type: "text", value: domain },
+          ITERATE,
           REPOS_ORIGIN: { type: "text", value: repos.origin },
           // the mind's requests that name no secret, and the mind Worker's own fetches, leave
           // through this: public addresses alone
@@ -66,7 +80,10 @@ const mf = new Miniflare({
             type: "fetcher",
             handler: async () =>
               new Response(
-                await mindToken({ address: domain, resource: mindProvideUrlOf(domain) }),
+                await mindToken({
+                  address: controlPlaneHostname,
+                  resource: mindProvideConnectResourceOf(controlPlaneHostname),
+                }),
               ),
           },
         },
@@ -80,8 +97,12 @@ const mf = new Miniflare({
       config: {
         name: "mind",
         compatibilityDate: COMPATIBILITY_DATE,
-        // must match core/alchemy/src/stack.ts
-        compatibilityFlags: ["nodejs_compat", "allow_irrevocable_stub_storage"],
+        // must match the mind Worker's flags in the stack (core/alchemy)
+        compatibilityFlags: [
+          "nodejs_compat",
+          "allow_irrevocable_stub_storage",
+          "webcrypto_modern_algorithms",
+        ],
         manifest: moduleOf(
           values.bundle ? readFileSync(values.bundle, "utf8") : await mindBundle(),
         ),
@@ -114,16 +135,15 @@ const link = (await (await mf.dispatchFetch("http://link.home-lab.invalid/")).js
   error: string | null;
 };
 console.log(`
-The mind ${domain} runs on this machine, in local workerd.
-  ${local.href}                the apex, as https://${domain}/
-  http://<label>.localhost:${values.port}/   https://<label>.${domain}/
-  http://iterate.localhost:${values.port}/api   the mind's API, nobody stamped as the caller
+The mind ${controlPlaneHostname} runs on this machine, in local workerd.
+  ${local.href}                the apex of its first zone, as https://${config.zones[0]}/
+  http://<label>.localhost:${values.port}/   https://<label>.${config.zones[0]}/
   state                          ${dir}
-  ${link.connected ? `connected to https://iterate.${domain}/provide: the stack forwards to it` : `not connected to https://iterate.${domain}/provide (${link.error}); the link dials again`}
+  ${link.connected ? `handed in at ${mindApiUrlOf(controlPlaneHostname)}: the stack forwards to it` : `not handed in at ${mindApiUrlOf(controlPlaneHostname)} (${link.error}); the link dials again`}
   repos                          ${dir}/repos, served at ${repos.origin}/<name>.git
                                  (git clone with any user and the password in ${dir}/repos-token)
+  telemetry                      metrics and events to the stack's telemetry Worker; no traces or Workers Logs
   sandboxes                      ${"image" in sandboxes ? `on: ${sandboxes.image} on ${sandboxes.socket}` : `off: ${sandboxes.off}`}
-  telemetry                      ${values.telemetry ? "metrics and events to the stack's telemetry Worker; no traces or Workers Logs" : "off (--telemetry with a stack that has the part)"}
   not at home                    Workers AI, Browser Run, Images: see README.md
 `);
 
@@ -151,9 +171,8 @@ function mindBindings() {
   const standIn = (binding: string, why: string) =>
     ({ type: "worker", worker: "link", exportName: "StandIn", props: { binding, why } }) as const;
   return {
-    DOMAIN: { type: "text", value: domain },
-    MIND_NAME: { type: "text", value: values.name || domain.split(".")[0] },
-    MIND_TEMPLATE: { type: "text", value: values.template },
+    ITERATE,
+    ITERATE__SIGNING_KEY: { type: "text", value: kept("mind-signing-key") },
     DOOR: { type: "worker", worker: "link", exportName: "Door" },
     CONTEXTS: {
       type: "durable-object",
@@ -164,7 +183,6 @@ function mindBindings() {
     LOADER: { type: "worker-loader" },
     MIND_KV: { type: "kv" },
     FILES: { type: "r2" },
-    MIND_SIGNING_KEY: { type: "text", value: kept("mind-signing-key") },
     AI: standIn(
       "AI",
       "Workers AI has no local simulator. Give the agents a model key as a secret instead; it leaves through the door.",
@@ -182,14 +200,12 @@ function mindBindings() {
     },
     BROWSER: standIn("BROWSER", "Browser Run has no local simulator."),
     IMAGES: standIn("IMAGES", "Cloudflare Images is not simulated at home."),
-    // its presence also gives the mind `itx.telemetry` (core/mind-worker src/context/telemetry.ts)
-    ...(values.telemetry && {
-      TELEMETRY_METRICS: { type: "worker", worker: "link", exportName: "HomeMetrics" } as const,
-    }),
+    // the mind's metrics go to the stack's telemetry Worker, through the link
+    TELEMETRY_METRICS: { type: "worker", worker: "link", exportName: "HomeMetrics" },
   } as const;
 }
 
-/** A random key made once and kept in `.home-lab/<domain>/<name>`, mode 600. */
+/** A random key made once and kept in `.home-lab/<control-plane hostname>/<name>`, mode 600. */
 function kept(name: string) {
   const file = `${dir}/${name}`;
   if (!existsSync(file))

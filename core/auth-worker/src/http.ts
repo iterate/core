@@ -1,11 +1,11 @@
-// http.ts — THE AUTH WORKER'S ANSWER TO A REQUEST: every page and endpoint of the platform's host,
-// `iterate.<domain>`. Each path is tried in turn; what no path here takes is the OAuth provider's.
+// http.ts — THE AUTH WORKER'S ANSWER TO A REQUEST: every page and endpoint of the mind's control-plane
+// hostname. Each path is tried in turn; what no path here takes is the OAuth provider's.
+import { MIND_IDENTITY_PATH } from "iterate/mind-identity-log";
 import { KEY_TOKEN_PATH, STATEMENTS_PATH } from "iterate/signed";
-import { askingAppOf } from "./asking-app.ts";
+import { accessSignInResponse } from "./access-sign-in.ts";
+import { signInOf } from "./asking-app.ts";
 import { authorizeResponse } from "./authorize.ts";
-import { FIRST_OWNER_PATH } from "./config.ts";
-import { sessionOf } from "./cookies.ts";
-import { cloudflareSignInResponse } from "./cloudflare-sign-in.ts";
+import { personSessionOf } from "./cookies.ts";
 import { deviceCallbackResponse } from "./device/callback.ts";
 import { devicePageResponse } from "./device/page.ts";
 import { devicePollResponse } from "./device/poll.ts";
@@ -19,14 +19,15 @@ import {
   deviceRegistrationResponse,
   metadataResponse,
 } from "./device/start.ts";
-import { EMAIL_SIGN_IN_PATH, emailSignInResponse } from "./email-sign-in.ts";
-import { dashOriginOf, type Env, issuerOf, iterateConfigOf, offersGoogle } from "./env.ts";
-import { firstOwnerResponse } from "./first-owner.ts";
-import { googleSignInResponse } from "./google-sign-in.ts";
-import { GUEST_SIGN_IN_PATH, guestSignInResponse } from "./guest-sign-in.ts";
+import { TOO_MANY } from "./device/limits.ts";
+import { emailAddressPage, emailSignInResponse } from "./email-sign-in.ts";
+import { guestFormHref, guestSignInResponse } from "./guest-sign-in.ts";
+import { firstPasskeyResponse } from "./enrolment.ts";
+import { configOf, type Env, homeOf, issuerOf } from "./env.ts";
+import { identityIntakeResponse, identityLogResponse } from "./identity.ts";
 import { keyTokenResponse } from "./key-tokens.ts";
 import { keysPagesResponse } from "./keys-pages.ts";
-import { membersResponse, standingOf } from "./members.ts";
+import { isMemberSession, membersResponse } from "./members.ts";
 import { mindsPageResponse } from "./minds-page.ts";
 import {
   AUTHORIZE_ENDPOINT,
@@ -36,23 +37,11 @@ import {
   tokenEndpointResponse,
   TOKEN_ENDPOINT,
 } from "./oauth.ts";
-import {
-  methodsSignInPage,
-  nobodySignsInPage,
-  notMemberPage,
-  signInPage,
-  SIGN_OUT_PATH,
-} from "./pages.ts";
+import { errorPage, notMemberPage, signInPage, SIGN_OUT_PATH } from "./pages.ts";
 import { passkeySignInResponse } from "./passkey-sign-in.ts";
 import { selfTestResponse } from "./self-test.ts";
-import { sessionsResponse } from "./sessions-page.ts";
-import {
-  AFTER_SIGN_OUT,
-  codeComesFirst,
-  methodsAskedIn,
-  SIGN_IN_PATH,
-  signOutResponse,
-} from "./sign-in.ts";
+import { SESSIONS_PATH, sessionsResponse } from "./sessions-page.ts";
+import { AFTER_SIGN_OUT, SIGN_IN_PATH, signOutResponse } from "./sign-in.ts";
 import { statementDraftsResponse } from "./statement-drafts.ts";
 import { statementsResponse } from "./statements.ts";
 import { whoIs } from "./who-is.ts";
@@ -83,56 +72,52 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
   if (pathname === VERIFICATION_PATH && (get || request.method === "POST"))
     return devicePageResponse(env, request);
   if (pathname === DEVICE_CALLBACK_PATH && get) return deviceCallbackResponse(env, request);
-  // The platform's host has no start page: `/` leads to the Dash, whose own sign-in decides the
-  // rest. A signed-in person who is no member would only be refused there: that person reads it
-  // here.
+  // THE MIND'S IDENTITY (./identity.ts): its log of signed records to read, and the next record
+  // to post. Neither asks who sends: a record proves itself.
+  if (pathname === MIND_IDENTITY_PATH && get)
+    return identityLogResponse(env, {
+      hostname: url.hostname,
+      after: url.searchParams.get("after"),
+    });
+  if (pathname === MIND_IDENTITY_PATH && request.method === "POST")
+    return identityIntakeResponse(env, request);
+  // The control-plane hostname has no start page: `/` leads to the mind's own front page, whose own
+  // sign-in decides the rest. A signed-in person who is no member would only be refused there:
+  // that person reads it here.
   if (pathname === "/" && get) {
-    const { domain } = iterateConfigOf(env);
-    const session = await sessionOf(env, request);
-    if (session && (await standingOf(env, session)) === "not-member")
-      return notMemberPage({ domain, email: session.email });
+    const session = await personSessionOf(env, request);
+    if (session && !(await isMemberSession(env, session)))
+      return notMemberPage({ mind: configOf(env).controlPlaneHostname, email: session.email });
+    // A control plane at its zone's apex is the front page's own address: a redirect there would
+    // come back here for ever, so this address shows where the person is signed in.
+    const home = homeOf(env);
     return new Response(null, {
       status: 302,
-      headers: { location: `${dashOriginOf(domain)}/`, "cache-control": "no-store" },
+      headers: {
+        location: home === `${issuerOf(env)}/` ? SESSIONS_PATH : home,
+        "cache-control": "no-store",
+      },
     });
   }
   const selfTest = await selfTestResponse(env, request);
   if (selfTest) return selfTest;
+  // THE SIGN-IN PAGE OPENS ON THE FIRST METHOD of the sign-in that `next` goes on to
+  // (./asking-app.ts `signInOf`): the mailed code's address form for an app whose people sign in
+  // by mail first, else the passkey's prompt, as on the control plane's own sign-in.
   if (pathname === SIGN_IN_PATH && get) {
     const next = url.searchParams.get("next") || "/";
-    const { domain, login } = iterateConfigOf(env);
-    // an app that names the ways it takes gets those ways' buttons (./sign-in.ts `methodsAskedIn`)
-    const asked = methodsAskedIn(env, next);
-    const app = await askingAppOf(env, next);
-    // a guest comes to a hostname's own page alone (./guest-sign-in.ts): any other request that
-    // names the way gets the others it names
-    const methods = asked && (app ? asked : asked.filter((method) => method !== "guest"));
-    if (methods?.length === 0) return nobodySignsInPage();
-    // an app that takes guests alone has one way: its form
-    if (methods?.length === 1 && methods[0] === "guest")
-      return Response.redirect(
-        `${issuerOf(env)}${GUEST_SIGN_IN_PATH}?${new URLSearchParams({ next })}`,
-        302,
-      );
-    if (methods)
-      return methodsSignInPage({
-        domain,
-        next,
-        methods,
-        app,
-        keepsCloudflareAccess: login.methods.cloudflare?.keepAccess,
-      });
-    if (await codeComesFirst(env, app))
-      return Response.redirect(
-        `${issuerOf(env)}${EMAIL_SIGN_IN_PATH}?${new URLSearchParams({ next })}`,
-        302,
-      );
+    const signIn = await signInOf(env, next);
+    if (!signIn) return errorPage(TOO_MANY, 429);
+    // a guest comes in by an app's own sign-in alone (./guest-sign-in.ts)
+    const methods = signIn.app ? signIn.methods : signIn.methods.filter((m) => m !== "guest");
+    if (methods[0] === "guest") return Response.redirect(guestFormHref(env, next), 302);
+    if (methods[0] === "email") return emailAddressPage(env, next, signIn);
     return signInPage({
-      domain,
+      mind: configOf(env).controlPlaneHostname,
       next,
-      google: offersGoogle(env),
-      mailsCodes: Boolean(login.methods.email),
-      app,
+      app: signIn.app,
+      offersEmail: methods.includes("email"),
+      offersGuest: methods.includes("guest"),
       asksAtOpen: !url.searchParams.has(AFTER_SIGN_OUT),
     });
   }
@@ -142,17 +127,15 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
   if (members) return members;
   const emailSignIn = await emailSignInResponse(env, request);
   if (emailSignIn) return emailSignIn;
-  const googleSignIn = await googleSignInResponse(env, request);
-  if (googleSignIn) return googleSignIn;
-  const cloudflareSignIn = await cloudflareSignInResponse(env, request);
-  if (cloudflareSignIn) return cloudflareSignIn;
   const guestSignIn = await guestSignInResponse(env, request);
   if (guestSignIn) return guestSignIn;
+  const accessSignIn = await accessSignInResponse(env, request);
+  if (accessSignIn) return accessSignIn;
   const passkeySignIn = await passkeySignInResponse(env, request);
   if (passkeySignIn) return passkeySignIn;
   if (pathname === SIGN_OUT_PATH && request.method === "POST") return signOutResponse(env, request);
-  if (pathname === FIRST_OWNER_PATH && (get || request.method === "POST"))
-    return firstOwnerResponse(env, request);
+  const firstPasskey = await firstPasskeyResponse(env, request);
+  if (firstPasskey) return firstPasskey;
   if (pathname === KEY_TOKEN_PATH && request.method === "POST")
     return keyTokenResponse(env, request);
   const sessions = await sessionsResponse(env, request);

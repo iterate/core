@@ -135,13 +135,8 @@ main.centered > .tile {
   height: 2rem;
   font-size: 0.75rem;
 }
-/* the ways to sign in, one stack of buttons of one height */
-.ways {
-  display: flex;
-  flex-direction: column;
-  gap: 0.625rem;
-}
-main.centered :is(.ways, .stack) > button:not(.link) {
+/* a sign-in's buttons, each of one height */
+main.centered .stack > button:not(.link) {
   min-height: 2.875rem;
   font-size: 0.9375rem;
 }
@@ -151,13 +146,6 @@ main.centered p {
 /* a line in a centered card that stands alone in the middle: who is signed in, and the way out */
 main.centered > .center {
   text-align: center;
-}
-/* one quiet line under a sign-in's buttons: what the provider shares */
-main.centered > .note {
-  margin-top: -0.5rem;
-  font-size: 0.8125rem;
-  text-align: center;
-  text-wrap: balance;
 }
 .mark rect {
   fill: var(--foreground);
@@ -363,15 +351,6 @@ button.outline {
 }
 button.outline:hover {
   background: var(--accent);
-}
-/* "Sign in with Cloudflare", in Cloudflare's orange (tokens.css), its label bold */
-button.cloudflare {
-  background: var(--cloudflare-button);
-  color: var(--cloudflare-button-foreground);
-  font-weight: 600;
-}
-button.cloudflare:hover {
-  background: var(--cloudflare-button-hover);
 }
 /* a provider's mark before a button's words, on the words' middle */
 button:has(> svg) {

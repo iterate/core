@@ -1,51 +1,11 @@
 import { expect, test, vi } from "vitest";
-import { mindAddressOf } from "../mind-api.ts";
-import { type DiscoveredMind, discoverMind, resolveMind } from "./oauth.ts";
+import { discoverMind } from "./oauth.ts";
 
-test.for([
-  "afoop.com",
-  "iterate.afoop.com",
-  "https://iterate.afoop.com/",
-  "  ITERATE.Afoop.COM.  ",
-  "https://afoop.com/minds/x",
-  "afoop.com/",
-])("%s finds afoop.com", async (typed) => {
-  expect(await resolve(typed, ["afoop.com"])).toMatchObject({ address: "afoop.com" });
-});
-
-test("the typed host is asked as the platform's hostname first, then as the domain", async () => {
-  expect({
-    platformHostname: await resolve("iterate.afoop.com", ["afoop.com"]),
-    domainNamedIterate: await resolve("iterate.example.org", ["iterate.example.org"]),
-    domain: await resolve("afoop.com", ["afoop.com"]),
-  }).toEqual({
-    platformHostname: { address: "afoop.com", asked: ["afoop.com"] },
-    domainNamedIterate: {
-      address: "iterate.example.org",
-      asked: ["example.org", "iterate.example.org"],
-    },
-    domain: { address: "afoop.com", asked: ["afoop.com"] },
-  });
-});
-
-test("neither answering names both platform hostnames that were asked", async () => {
-  expect({
-    both: await resolve("iterate.nowhere.com", []),
-    one: await resolve("nowhere.com", []),
-  }).toMatchObject({
-    both: {
-      error:
-        "Neither iterate.nowhere.com nor iterate.iterate.nowhere.com answers as an iterate mind. Check the address.",
-    },
-    one: { error: "nowhere.com does not answer" },
-  });
-});
-
-test("a mind's sign-in provider is the one its own metadata names: its platform host by convention, or another https host of its choosing", async () => {
-  // the default mind: the issuer is the platform host
+test("a mind's sign-in provider is the one its own metadata names: its control-plane hostname by convention, or another https host of its choosing", async () => {
+  // the default mind: the issuer is the control-plane hostname
   expect(await discover("https://iterate.afoop.com")).toMatchObject({
     found: {
-      address: "afoop.com",
+      address: "iterate.afoop.com",
       issuer: "https://iterate.afoop.com",
       endpoints: { authorization: "https://iterate.afoop.com/authorize" },
     },
@@ -53,7 +13,7 @@ test("a mind's sign-in provider is the one its own metadata names: its platform 
   // a mind that keeps its sign-in elsewhere: discovery follows what the mind says
   expect(await discover("https://login.afoop-identity.example")).toEqual({
     found: {
-      address: "afoop.com",
+      address: "iterate.afoop.com",
       resource: "https://iterate.afoop.com/api",
       issuer: "https://login.afoop-identity.example",
       endpoints: {
@@ -73,33 +33,13 @@ test("a mind's sign-in provider is the one its own metadata names: its platform 
 test("an issuer that does not use https is refused, and never asked", async () => {
   for (const issuer of ["http://login.afoop-identity.example", "http://localhost:8788"])
     expect(await discover(issuer), issuer).toEqual({
-      found: { error: "afoop.com names a sign-in provider that does not use https." },
+      found: { error: "iterate.afoop.com names a sign-in provider that does not use https." },
       asked: ["https://iterate.afoop.com/.well-known/oauth-protected-resource/api"],
     });
 });
 
-/** `typed` resolved with discovery faked: `live` are the addresses whose platform answers. */
-async function resolve(typed: string, live: string[]) {
-  const parsed = mindAddressOf(typed);
-  if ("error" in parsed) return { error: parsed.error, asked: [] };
-  const asked: string[] = [];
-  const discover = async (address: string): Promise<DiscoveredMind | { error: string }> => {
-    asked.push(address);
-    if (!live.includes(address)) return { error: `${address} does not answer` };
-    return {
-      address,
-      resource: `https://iterate.${address}/api`,
-      issuer: `https://iterate.${address}`,
-      endpoints: { authorization: "https://a", token: "https://t" },
-      issParameter: true,
-    };
-  };
-  const found = await resolveMind(parsed.address, discover);
-  return { ...("error" in found ? { error: found.error } : { address: found.address }), asked };
-}
-
-/** `discoverMind("afoop.com")` against a fake of the two metadata documents, the mind naming
- *  `issuer` as its sign-in provider: what it found, and each URL it asked for. */
+/** `discoverMind("iterate.afoop.com")` against a fake of the two metadata documents, the mind
+ *  naming `issuer` as its sign-in provider: what it found, and each URL it asked for. */
 async function discover(issuer: string) {
   const asked: string[] = [];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -117,5 +57,5 @@ async function discover(issuer: string) {
       response_types_supported: ["code"],
     });
   });
-  return { found: await discoverMind("afoop.com"), asked };
+  return { found: await discoverMind("iterate.afoop.com"), asked };
 }

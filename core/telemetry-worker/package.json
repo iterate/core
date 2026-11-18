@@ -2,7 +2,8 @@
   "name": "core-telemetry-worker",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'src/**/*.test.ts'"
   },
   "dependencies": {
     "iterate": "workspace:*",

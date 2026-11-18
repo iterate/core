@@ -128,10 +128,10 @@ const CONTEXT_DESCRIPTIONS: { path: string; title: string; description: string }
       "The X account <user> that a member linked: its direct messages and the posts that mention iterate's bot.",
   },
   {
-    path: "/minds/iterate.com/integrations/<provider>/<account>",
+    path: "/minds/iterate.iterate.com/integrations/<provider>/<account>",
     title: "iterate Cloud's <provider> <account>",
     description:
-      "What iterate Cloud relayed for the <provider> account <account>, signed by the mind iterate.com: what this mind makes of it is on /integrations/<provider>/<account>.",
+      "What iterate Cloud relayed for the <provider> account <account>, signed by the mind iterate.iterate.com: what this mind makes of it is on /integrations/<provider>/<account>.",
   },
   {
     path: "/onboarding",

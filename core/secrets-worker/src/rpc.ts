@@ -7,11 +7,13 @@ import { SECRET_PATH, SECRET_USE_HEADER } from "iterate/secret-placeholder";
 import type { SecretsService, SecretVerb, SecretVerbs } from "iterate/workers";
 import { SET } from "./approvals-index.ts";
 import { cloudOffered } from "./cloud-client.ts";
-import type { Env } from "./env.ts";
+import { configOf, type Env } from "./env.ts";
 import { refreshBrokeredGrants } from "./grant-refresh.ts";
 import { secretsResponse } from "./http.ts";
 import { actsGate, secretObject } from "./objects.ts";
 import { listSetSecrets } from "./secret-list.ts";
+import { cloudOriginOf } from "./secrets.ts";
+import { hasCloudflareClient } from "./stack-client.ts";
 
 export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
   fetch(request: Parameters<SecretsService["fetch"]>[0]) {
@@ -27,35 +29,36 @@ export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
   }
   /* oxlint-enable iterate/mechanical-class-impl */
 
-  /** The secrets that are set, in one call (./secret-list.ts). `known` is the mind's own list of
-   *  paths, used until the vault's set is complete. */
-  async listSecrets(known: string[] = []) {
-    return listSetSecrets(
-      {
-        list: this.env.APPROVALS.getByName(SET),
-        secretOf: (path) => {
-          const secret = secretObject(this.env, path);
-          return {
-            // copied and let go at once: a list asks many objects in one call of this Worker
-            describe: (asked) => releasedAnswer(secret.secret(asked, "describe", undefined)),
-            keepListed: (asked) => secret.keepListed(asked),
-          };
-        },
+  /** The secrets that are set, in one call (./secret-list.ts). */
+  async listSecrets() {
+    return listSetSecrets({
+      list: this.env.APPROVALS.getByName(SET),
+      secretOf: (path) => {
+        const secret = secretObject(this.env, path);
+        return {
+          // copied and let go at once: a list asks many objects in one call of this Worker
+          describe: (asked) => releasedAnswer(secret.secret(asked, "describe", undefined)),
+          keepListed: (asked) => secret.keepListed(asked),
+        };
       },
-      known,
-    );
+    });
   }
 
-  /** The stack's iterate Cloud and the clients it publishes (./cloud-client.ts). */
-  async cloud() {
-    return cloudOffered(this.env.CLOUD_ORIGIN);
+  /** The iterate Cloud at `origin` and the clients it publishes (./cloud-client.ts). */
+  async cloud(origin: Parameters<SecretsService["cloud"]>[0]) {
+    return cloudOffered(cloudOriginOf(origin, "secrets.cloud"));
+  }
+
+  /** Whether the stack has its own OAuth client at Cloudflare (./stack-client.ts). */
+  async hasStackClient(name: Parameters<SecretsService["hasStackClient"]>[0]) {
+    return name === "cloudflare" && hasCloudflareClient(configOf(this.env).cloudflareClient);
   }
 
   /** The persons' grants that the Cloud brokers, refreshed on word (./grant-refresh.ts). */
-  async refreshGrants(...[known, after]: Parameters<SecretsService["refreshGrants"]>) {
+  async refreshGrants(after?: Parameters<SecretsService["refreshGrants"]>[0]) {
     return refreshBrokeredGrants(
       {
-        set: () => this.listSecrets(known),
+        set: () => this.listSecrets(),
         // copied and let go at once, as a list's answers are
         refresh: (path) => releasedAnswer(secretObject(this.env, path).refreshGrant(path)),
       },

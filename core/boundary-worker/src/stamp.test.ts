@@ -1,73 +1,109 @@
-// THE PERSON INGRESS STAMPS on a mind hostname's request (./stamp.ts): who they are and how they
-// signed in, from the auth Worker's answer for the session cookie or for a bearer, the app's own
-// MCP client's. The app's guard reads the way (iterate/sdk `auth.requirePerson`).
+// WHAT THE BOUNDARY STAMPS on a mind hostname's request (./stamp.ts): the person, from the auth
+// Worker's answer for the session cookie or for a bearer (the app's own MCP client's).
 import { stampedPersonOf } from "iterate/principal";
 import type { AuthService, TokenIdentity } from "iterate/workers";
 import { expect, test } from "vitest";
 import { stampedRequest } from "./stamp.ts";
 
+const config = { controlPlaneHostname: "iterate.example.com" };
 const signedIn: TokenIdentity = {
-  principal: { actor: "user_1", email: "ada@example.org" },
+  principal: { actor: "user_1", email: "ada@elsewhere.example" },
   grant: "grant_1",
   expiresAt: 2_000_000_000,
   member: false,
-  method: "cloudflare",
+  method: "email",
 };
 
-test.for<{ name: string; headers: Record<string, string>; identity: TokenIdentity }>([
-  {
-    name: "the session cookie",
-    headers: { cookie: "__Host-iterate-session=t" },
-    identity: signedIn,
+test.for<{ name: string; headers: Record<string, string> }>([
+  { name: "the session cookie", headers: { cookie: "__Host-iterate-session=t" } },
+  { name: "a bearer", headers: { authorization: "Bearer t" } },
+])(
+  "by $name, the person is stamped with how they signed in, and a stamp the caller sent is dropped",
+  async ({ headers }) => {
+    const request = new Request("https://app.example.com/", {
+      headers: {
+        ...headers,
+        "x-itx-person": JSON.stringify({ userId: "user_2", method: "passkey" }),
+      },
+    });
+    const auth = { whoIs: async () => signedIn } as unknown as AuthService;
+    const stamped = await stampedRequest(request, { auth, route: null, config });
+    expect(JSON.parse(stamped.forwarded.headers.get("x-itx-person")!)).toEqual({
+      userId: "user_1",
+      email: "ada@elsewhere.example",
+      name: "ada",
+      method: "email",
+    });
+    // the app reads it through the SDK
+    expect(stampedPersonOf(stamped.forwarded)).toMatchObject({ method: "email" });
+    expect(stamped).toMatchObject({ caller: "non-member" });
+    // a person who is no member gets when the sign-in ends, and no principal
+    expect(stamped.forwarded.headers.get("x-itx-expires")).toBe("2000000000");
+    expect(stamped.forwarded.headers.get("x-itx-principal")).toBeNull();
   },
-  { name: "a bearer", headers: { authorization: "Bearer t" }, identity: signedIn },
-  {
-    name: "a grant from before grants kept their way",
-    headers: { cookie: "__Host-iterate-session=t" },
-    identity: { ...signedIn, method: undefined },
-  },
-])("by $name, the person is stamped with the way they signed in", async ({ headers, identity }) => {
-  // a stamp the caller sent is dropped, whatever way it claims
-  const request = new Request("https://app.example.com/", {
-    headers: {
-      ...headers,
-      "x-itx-person": JSON.stringify({ userId: "user_2", method: "passkey" }),
-    },
-  });
-  const auth = { whoIs: async () => identity } as unknown as AuthService;
-  const stamped = await stampedRequest(request, { auth, route: null, domain: "example.com" });
-  expect(JSON.parse(stamped.forwarded.headers.get("x-itx-person")!)).toEqual({
+);
+
+test("a member's passkey is stamped on the person, beside the principal", async () => {
+  const member: TokenIdentity = { ...signedIn, member: true, method: "passkey" };
+  const auth = { whoIs: async () => member } as unknown as AuthService;
+  const stamped = await stampedRequest(
+    new Request("https://app.example.com/", { headers: { cookie: "__Host-iterate-session=t" } }),
+    { auth, route: null, config },
+  );
+  expect(stampedPersonOf(stamped.forwarded)).toEqual({
     userId: "user_1",
-    email: "ada@example.org",
+    email: "ada@elsewhere.example",
     name: "ada",
-    method: identity.method,
+    method: "passkey",
   });
-  expect(stamped).toMatchObject({ caller: "non-member", method: identity.method });
-  // a person who is no member gets when the sign-in ends, and no principal
-  expect(stamped.forwarded.headers.get("x-itx-expires")).toBe("2000000000");
+  expect(stamped).toMatchObject({ caller: "member" });
+  expect(stamped.forwarded.headers.get("x-itx-principal")).not.toBeNull();
+});
+
+test("a token that says no sign-in method is no person's: it stamps nobody", async () => {
+  const { method: _none, ...noPerson } = signedIn;
+  const auth = { whoIs: async () => noPerson } as unknown as AuthService;
+  const stamped = await stampedRequest(
+    new Request("https://app.example.com/", { headers: { authorization: "Bearer t" } }),
+    { auth, route: null, config },
+  );
+  expect(stamped).toMatchObject({ caller: "anonymous", email: null });
+  expect(stamped.forwarded.headers.get("x-itx-person")).toBeNull();
+});
+
+test("on the secret pages, the person of the issuer's session is stamped with the session's method", async () => {
+  const auth = {
+    browserSession: async () => ({
+      userId: "user_1",
+      email: "ada@elsewhere.example",
+      member: false,
+      method: "email",
+    }),
+  } as unknown as AuthService;
+  const stamped = await stampedRequest(
+    new Request("https://iterate.example.com/secrets/collect", { headers: { cookie: "c=1" } }),
+    { auth, route: "secrets", config },
+  );
+  expect(stampedPersonOf(stamped.forwarded)).toEqual({
+    userId: "user_1",
+    email: "ada@elsewhere.example",
+    name: "ada",
+    method: "email",
+  });
   expect(stamped.forwarded.headers.get("x-itx-principal")).toBeNull();
 });
 
-// The secret pages are on the platform's hostname, where the issuer's own session says who is there.
-test.for([
-  { name: "a member", member: true },
-  { name: "a person who is no member", member: false },
-])("on a secret page, $name is stamped a person with a name", async ({ member }) => {
-  const session = { userId: "user_1", email: "ada.lovelace@example.org", member };
-  const auth = { browserSession: async () => session } as unknown as AuthService;
-  const request = new Request("https://iterate.example.com/secrets/x", {
-    headers: { cookie: "__Host-iterate-auth-session=t" },
+test("a visitor's request for a page of the auth Worker keeps the token of Cloudflare Access, which that Worker checks itself", async () => {
+  const request = new Request("https://iterate.example.com/sign-in/access", {
+    headers: { "cf-access-jwt-assertion": "a-token", "x-itx-principal": "{}" },
   });
-  const stamped = await stampedRequest(request, { auth, route: "secrets", domain: "example.com" });
-  expect(JSON.parse(stamped.forwarded.headers.get("x-itx-person")!)).toEqual({
-    userId: "user_1",
-    email: "ada.lovelace@example.org",
-    name: "ada.lovelace",
+  // the cast: a page of the auth Worker asks the boundary nothing about the caller
+  const auth = {} as AuthService;
+  const stamped = await stampedRequest(request, { auth, route: "auth", config });
+  expect(Object.fromEntries(stamped.forwarded.headers)).toEqual({
+    "cf-access-jwt-assertion": "a-token",
   });
-  // the name is the person's alone: a member's principal has none
-  expect(JSON.parse(stamped.forwarded.headers.get("x-itx-principal") || "null")).toEqual(
-    member ? { actor: "user_1", email: "ada.lovelace@example.org" } : null,
-  );
+  expect(stamped).toMatchObject({ caller: "anonymous", email: null });
 });
 
 // A guest has a name and no address (core/auth-worker/src/guest-sign-in.ts). The name is text
@@ -86,7 +122,7 @@ test("a guest is stamped a person with the name they typed, no address and no pr
   const request = new Request("https://app.example.com/", {
     headers: { cookie: "__Host-iterate-session=t" },
   });
-  const stamped = await stampedRequest(request, { auth, route: null, domain: "example.com" });
+  const stamped = await stampedRequest(request, { auth, route: null, config });
   const header = stamped.forwarded.headers.get("x-itx-person")!;
   expect(header).toMatch(/^[\x20-\x7e]+$/);
   expect(stampedPersonOf(stamped.forwarded)).toEqual({
@@ -95,37 +131,31 @@ test("a guest is stamped a person with the name they typed, no address and no pr
     name,
     method: "guest",
   });
-  expect(stamped).toMatchObject({ caller: "non-member", email: null, method: "guest" });
+  expect(stamped).toMatchObject({ caller: "non-member", email: null });
   expect(stamped.forwarded.headers.get("x-itx-principal")).toBeNull();
   expect(stamped.forwarded.headers.get("x-itx-grant")).toBeNull();
 });
 
-// A sandbox's own session is served by its egress, inside the mind Worker
-// (core/mind-worker/src/sandbox/own-session.ts). The internet's way to the API stays this one: no
-// bearer, no caller, whatever else the request says.
-test("the mind's API from the internet with no bearer is refused here, whatever it claims", async () => {
-  let asked = 0;
-  const auth = {
-    whoIs: async () => {
-      asked += 1;
-      return null;
-    },
-  } as unknown as AuthService;
-  const request = new Request("https://iterate.example.com/api", {
-    headers: {
-      upgrade: "websocket",
-      "x-itx-principal": JSON.stringify({ actor: "user_1" }),
-      "x-itx-caller-path": "/agents/ada/box",
-      "x-itx-app": "1",
-      "x-iterate-sandbox-session-refused": "no",
-      cookie: "__Host-iterate-session=t",
-    },
+// A guest's stamp has no address whatever the token says: no reader takes the guest for the
+// owner of one
+test("a guest's token that names an address is stamped a guest with none", async () => {
+  const guest: TokenIdentity = {
+    principal: { actor: "user_9", email: "owner@example.com" },
+    grant: "grant_9",
+    expiresAt: 2_000_000_000,
+    member: false,
+    method: "guest",
+    name: "Bob",
+  };
+  const auth = { whoIs: async () => guest } as unknown as AuthService;
+  const request = new Request("https://app.example.com/", {
+    headers: { cookie: "__Host-iterate-session=t" },
   });
-  const stamped = await stampedRequest(request, { auth, route: "api", domain: "example.com" });
-  expect(stamped).toMatchObject({ answer: { status: 401 }, caller: "anonymous" });
-  // nothing a caller sent as a stamp goes on, and no credential was there to ask about
-  expect([...stamped.forwarded.headers.keys()].filter((name) => name.startsWith("x-itx-"))).toEqual(
-    [],
-  );
-  expect(asked).toBe(0);
+  const stamped = await stampedRequest(request, { auth, route: null, config });
+  expect(stampedPersonOf(stamped.forwarded)).toEqual({
+    userId: "user_9",
+    email: "",
+    name: "Bob",
+    method: "guest",
+  });
 });

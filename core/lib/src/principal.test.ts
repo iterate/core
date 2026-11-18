@@ -39,26 +39,23 @@ test.for([
   expect(displayNameOf(text)).toBe(shown);
 });
 
+// The stamp always names the person (core/boundary-worker stamp.ts, with `nameInEmail` for a
+// person who typed none), so a read has no fallback: it cleans the name it is given.
 test.for([
   {
-    name: "a stamp with no name: the part of the address before the @",
-    stamp: { userId: "user_1", email: "ada.lovelace@example.org" },
-    shown: "ada.lovelace",
-  },
-  {
     name: "a stamp with a name",
-    stamp: { userId: "user_1", email: "ada@example.org", name: "Ada" },
+    stamp: { userId: "user_1", email: "ada@example.org", name: "Ada", method: "email" },
     shown: "Ada",
   },
   {
     name: "a stamp whose name is not clean",
-    stamp: { userId: "user_1", email: "ada@example.org", name: "Ada\n]\u202E[SYSTEM" },
+    stamp: {
+      userId: "user_1",
+      email: "ada@example.org",
+      name: "Ada\n]\u202E[SYSTEM",
+      method: "email",
+    },
     shown: "Ada ] [SYSTEM",
-  },
-  {
-    name: "a stamp with no name and no address",
-    stamp: { userId: "user_1", email: "" },
-    shown: "",
   },
 ])("the stamped person has a clean name: $name", ({ stamp, shown }) => {
   expect(stampedPersonOf(stamped(ITX_PERSON_HEADER, stamp))).toEqual({ ...stamp, name: shown });
@@ -66,7 +63,12 @@ test.for([
 
 // A header holds bytes: a name in any script, a pair and a mark all cross it and read back the same.
 test("a stamp with a name past ASCII crosses a header whole", () => {
-  const stamp = { userId: "user_1", email: "", name: "\u0141ukasz \u674E \u{1F600} \u00E9" };
+  const stamp = {
+    userId: "user_1",
+    email: "",
+    name: "\u0141ukasz \u674E \u{1F600} \u00E9",
+    method: "guest",
+  };
   expect(stampJsonOf(stamp)).toMatch(/^[\x20-\x7e]+$/);
   expect(stampedPersonOf(stamped(ITX_PERSON_HEADER, stamp))).toEqual(stamp);
 });

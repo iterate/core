@@ -185,9 +185,28 @@ and cleanup as the CLI. `ITERATE_MIND_TOKEN`, when set, is used in place of a si
 ```js
 import { connectMind } from "iterate/node";
 
-using connection = await connectMind({ address: "example.com" });
+using connection = await connectMind({ address: "iterate.example.com" });
 console.log(await connection.itx.whoami());
 ```
+
+`address` is the mind's hostname as it is. For an address that a person typed, where a bare
+`example.com` means `iterate.example.com`, read it once with `addressOf(typed)` first.
+
+A client of your own dials `https://<address>/api` with capnweb over a WebSocket: the API has no
+other transport. The root of that session is small (`ControlPlaneApi` in `iterate/api`):
+`authenticate(token)` answers a session, and the session's `mind` is the mind's `itx` as the
+token's member. Call it at once and do not await it, so that capnweb sends your first calls in the
+same round trip:
+
+```js
+const api = newWebSocketRpcSession(socket);
+const itx = api.authenticate(token).mind.dup(); // a stub, usable now
+console.log(await itx.whoami());
+```
+
+With no token, `authenticate()` takes what the socket's own request carried: its `Authorization`
+bearer, or, from a page of the mind's control-plane hostname alone, the browser's session cookie.
+The socket closes with 1008 when the credential ends.
 
 ## Event types
 

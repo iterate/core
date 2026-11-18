@@ -1,4 +1,4 @@
-// Writes the git-ignored modules under src/generated: core/alchemy's `deploy` and `plan` run it first,
+// Writes the git-ignored modules under src/generated: core/alchemy's `deploy` runs it first,
 // so the Worker Alchemy bundles carries this checkout's SDK and templates.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";

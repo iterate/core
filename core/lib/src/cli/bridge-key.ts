@@ -4,7 +4,7 @@
 // mind allows the key once, on the mind's own page, for one capability name. From then on the key
 // signs a statement and gets a token for the mind's API that lives an hour
 // (core/auth-worker/src/key-tokens.ts), each time `provide` connects. The key has no end date: a
-// member ends it on `iterate.<mind>/keys`.
+// member ends it on `<mind>/keys`.
 //
 // THE PRIVATE KEY IS A FILE (mode 600). Whoever can read the file is the bridge. `signer` below is
 // the one place that touches it: a TPM, a Secure Enclave or the OS keychain would take its place
@@ -12,7 +12,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, resolve } from "node:path";
-import { platformOriginOf } from "../mind-api.ts";
 import {
   base64url,
   type Envelope,
@@ -85,7 +84,7 @@ export function enrolUrlOf(input: {
     provide: input.name,
     ...(input.paths?.length && { paths: input.paths.join(",") }),
   });
-  return `${platformOriginOf(input.address)}/keys/enrol?${query}`;
+  return `https://${input.address}/keys/enrol?${query}`;
 }
 
 /** One ask for a token. `seconds` asks for less than the hour (a test's). */
@@ -100,7 +99,7 @@ async function askForToken(input: {
     type: KEY_TOKEN_STATEMENT_TYPE,
     ...(input.seconds && { payload: { seconds: input.seconds } }),
   });
-  const answer = await fetch(`${platformOriginOf(input.address)}${KEY_TOKEN_PATH}`, {
+  const answer = await fetch(`https://${input.address}${KEY_TOKEN_PATH}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(envelope),
@@ -168,7 +167,7 @@ export const bridgeAppend =
   (address: string, key: BridgeKey) =>
   async (path: string, event: { type: string; payload?: Record<string, unknown> }) => {
     const envelope = await key.sign({ mind: address, path, ...event });
-    const answer = await fetch(`${platformOriginOf(address)}${STATEMENTS_PATH}`, {
+    const answer = await fetch(`https://${address}${STATEMENTS_PATH}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(envelope),

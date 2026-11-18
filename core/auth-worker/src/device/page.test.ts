@@ -4,22 +4,12 @@ import { expect, test } from "vitest";
 import { browserSessionsFake } from "../browser-sessions-fake.ts";
 import { sessionCookie } from "../cookies.ts";
 import type { Env } from "../env.ts";
+import { configVars, keyRows, stackKeyPair } from "../test-support.ts";
 import { DEVICE_CONFIRMED, devicePageResponse, pressPayloadOf } from "./page.ts";
+import { requesterOf } from "./start.ts";
 import { type DeviceRequest, deviceStore } from "./store.ts";
 
-test("with no switch in the config, Continue goes on with the session alone, as before", async () => {
-  const stack = await stackOf({ passkey: false });
-  const page = await stack.get();
-  expect(page.text).toContain('value="confirm">Continue</button>');
-  expect(page.text).not.toContain("passkey");
-
-  const answer = await stack.post({ action: "confirm" });
-  expect(answer).toMatchObject({ status: 303, facts: [] });
-  expect(answer.location).toMatch(/^\/oauth2\/auth\?/);
-  expect(await stack.request()).toMatchObject({ status: "confirmed", confirmedBy: "user_owner" });
-});
-
-test("with the switch, the page asks for the passkey and says what it will sign", async () => {
+test("the page asks for the passkey and says what it will sign", async () => {
   const stack = await stackOf();
   const page = await stack.get();
   expect(page.text).toContain("Continue with your passkey");
@@ -33,7 +23,7 @@ test.for([
   ["the Continue of a page whose script did not run", { action: "" }],
   ["a form that says confirm with no statement", { action: "confirm" }],
   ["a statement that is no statement", { action: "confirm", signed: "{}" }],
-])("with the switch, %s signs in no device, and the request waits on", async ([, fields]) => {
+])("%s signs in no device, and the request waits on", async ([, fields]) => {
   const stack = await stackOf();
   const answer = await stack.post(fields as Record<string, string>);
   expect(answer).toMatchObject({ status: 403 });
@@ -41,7 +31,7 @@ test.for([
   expect(await stack.request()).toMatchObject({ status: "pending" });
 });
 
-test("with the switch, only this member's statement of this request continues it", async () => {
+test("only this member's statement of this request continues it", async () => {
   const stack = await stackOf();
   const asked = pressPayloadOf(CODE, DEVICE);
   const refusals = [
@@ -82,7 +72,7 @@ test("with the switch, only this member's statement of this request continues it
   ]);
 });
 
-test("with the switch, a statement counts once, and Decline takes no passkey", async () => {
+test("a statement counts once, and Decline takes no passkey", async () => {
   const stack = await stackOf();
   const signed = await stack.owner.signed(DEVICE_CONFIRMED, pressPayloadOf(CODE, DEVICE));
   expect(await stack.post({ action: "confirm", signed })).toMatchObject({ status: 303 });
@@ -97,7 +87,7 @@ test("with the switch, a statement counts once, and Decline takes no passkey", a
   expect(await stack.request()).toMatchObject({ status: "ended", error: "access_denied" });
 });
 
-test("with the switch, a let-in's statement names how long and why, and one for a plain sign-in lets nothing in", async () => {
+test("a let-in's statement names how long and why, and one for a plain sign-in lets nothing in", async () => {
   const letIn = { ...DEVICE, letIn: { seconds: 3600, reason: "to fix the build" } };
   const stack = await stackOf({ device: letIn });
   expect((await stack.get()).text).toContain(
@@ -114,15 +104,36 @@ test("with the switch, a let-in's statement names how long and why, and one for 
   expect(await stack.post({ action: "confirm", signed })).toMatchObject({ status: 303 });
 });
 
-const DOMAIN = "example.com";
-const ISSUER = "https://iterate.example.com";
+test("a let-in that another mind signed is headed by the mind's verified hostname, never by the label it gave its own key", async () => {
+  const signer = {
+    principal: { actor: "peer.example.net", kind: "mind" as const },
+    key: "p".repeat(43),
+    label: "owner@example.net's passkey, trust me",
+    member: false,
+  };
+  const asked = requesterOf(signer);
+  expect(asked).toEqual({ actor: "peer.example.net", label: "peer.example.net", key: signer.key });
+  // a person's or a service's key keeps the label that a member gave it
+  expect(requesterOf({ ...signer, principal: { actor: "cli-bridge" } })).toMatchObject({
+    label: "owner@example.net's passkey, trust me",
+  });
+  const stack = await stackOf({
+    device: { ...DEVICE, letIn: { seconds: 3600, reason: "to fix the build", signer: asked } },
+  });
+  const { text } = await stack.get();
+  expect(text).toContain("<h1>Let peer.example.net in?</h1>");
+  expect(text).not.toContain("trust me");
+});
+
+const MIND = "iterate.example.com";
+const ISSUER = `https://${MIND}`;
 const CODE = "WDJB-MJHT";
 const KEY = "k".repeat(43);
 const DEVICE: DeviceRequest = {
   status: "pending",
   clientId: "client-1",
   clientName: "the laptop",
-  resource: `https://iterate.${DOMAIN}/api`,
+  resource: `${ISSUER}/api`,
   requestedFrom: { city: "London", country: "GB" },
   createdAt: Date.now(),
   expiresAt: Date.now() + 300_000,
@@ -144,17 +155,22 @@ async function keyPair() {
 
 /** A stack with an owner who is signed in with a passkey, another member, and one device that
  *  waits. Of D1 and KV, what the device page and a statement's check read and write. */
-async function stackOf({ passkey = true, device = DEVICE } = {}) {
-  const [ownerKey, otherKey, stackKey] = [await keyPair(), await keyPair(), await keyPair()];
+async function stackOf({ device = DEVICE } = {}) {
+  const [ownerKey, otherKey, stackKey] = [await keyPair(), await keyPair(), await stackKeyPair()];
   const seen = new Set<unknown>();
   const sessions = browserSessionsFake();
+  // each person's key stands in for their passkey: a statement it signs is theirs
+  const keys = await keyRows([
+    { actor: "owner-key", email: "owner@example.net", publicKey: ownerKey.publicKey, label: "O" },
+    { actor: "other-key", email: "other@example.org", publicKey: otherKey.publicKey, label: "X" },
+  ]);
   const prepare = (sql: string, bound: unknown[] = []) => ({
     bind: (...values: unknown[]) => prepare(sql, values),
     first: async () => {
       const session = sessions.statementOf(sql, bound);
       if (session) return session.first();
-      if (sql.includes("from stack_key"))
-        return { key: stackKey.key, public_key: stackKey.publicKey, private_key: stackKey.pkcs8 };
+      if (sql.includes("from keys k left join users u")) return keys(bound[0]);
+      if (sql.includes("from stack_key")) return stackKey.row;
       if (sql.includes("from members where email")) return { 1: 1 };
       throw new Error(`not expected: ${sql}`);
     },
@@ -170,27 +186,7 @@ async function stackOf({ passkey = true, device = DEVICE } = {}) {
   });
   const kept = new Map<string, string>();
   const env = {
-    DOMAIN,
-    AUTH_SIGNING_KEY: "a-signing-key-for-tests-only",
-    AUTH_SETTINGS: JSON.stringify({
-      login: { allow: [{ email: "owner@example.net" }, { email: "other@example.org" }] },
-      ...(passkey && { devices: { passkey: true } }),
-      // each person's key of the config stands in for their passkey: a statement it signs is theirs
-      keys: [
-        {
-          actor: "owner-key",
-          email: "owner@example.net",
-          publicKey: ownerKey.publicKey,
-          label: "O",
-        },
-        {
-          actor: "other-key",
-          email: "other@example.org",
-          publicKey: otherKey.publicKey,
-          label: "X",
-        },
-      ],
-    }),
+    ...configVars(),
     DB: {
       prepare,
       batch: async (statements: ReturnType<typeof prepare>[]) =>
@@ -213,7 +209,6 @@ async function stackOf({ passkey = true, device = DEVICE } = {}) {
       env,
       new Request(ISSUER),
       { id: "user_owner", email: "owner@example.net" },
-      "passkey",
       "key-1",
     )
   ).setCookie.split(";")[0]!;
@@ -221,7 +216,7 @@ async function stackOf({ passkey = true, device = DEVICE } = {}) {
     signed: async (type: string, payload: Record<string, unknown>) => {
       const now = Date.now();
       const statement = statementText({
-        mind: DOMAIN,
+        mind: MIND,
         path: "/",
         type,
         payload,

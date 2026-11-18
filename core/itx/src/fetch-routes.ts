@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
-import { ITERATE_ROUTING_SLUG_HEADER, ROUTING_SLUG } from "iterate/mind-ingress";
 
 const FetchRouteName = z
   .string()
@@ -33,19 +32,20 @@ const UrlPatternInit = z
     { message: "url is not a URLPattern" },
   );
 
-// The routing slug is absent on the apex, so a route naming one never takes the apex.
-const FetchRouteRequestMatcher = z.strictObject({
-  routingSlug: z
-    .string()
-    .max(63)
-    .regex(
-      ROUTING_SLUG,
-      "a routing slug is a DNS label starting with a letter: lowercase letters, digits and single hyphens, at most 63",
-    )
-    .optional(),
-  url: UrlPatternInit.optional(),
-  headers: z.record(z.string().min(1), z.string()).optional(),
-});
+// A matcher names at least one condition: no caller means "every request" by an empty one, and a
+// table entry with no condition that this kernel knows (an older reducer's field) matches nothing.
+function namesACondition({ url, headers }: { url?: object; headers?: object }): boolean {
+  return Object.keys(url || {}).length > 0 || Object.keys(headers || {}).length > 0;
+}
+
+const FetchRouteRequestMatcher = z
+  .strictObject({
+    url: UrlPatternInit.optional(),
+    headers: z.record(z.string().min(1), z.string()).optional(),
+  })
+  .refine(namesACondition, {
+    message: "a requestMatcher names a url field or a header: an empty one is no route",
+  });
 type FetchRouteRequestMatcher = z.infer<typeof FetchRouteRequestMatcher>;
 
 const FetchRouteAuthRequirement = z.strictObject({
@@ -147,8 +147,9 @@ function requestMatcherHolds(
   requestMatcher: FetchRouteRequestMatcher,
   request: { url: string; headers: Headers },
 ): boolean {
-  const { routingSlug, url, headers } = requestMatcher;
-  if (routingSlug && request.headers.get(ITERATE_ROUTING_SLUG_HEADER) !== routingSlug) return false;
+  // Fails closed on a table that this reduce did not write (a checkpoint of another version).
+  if (!namesACondition(requestMatcher)) return false;
+  const { url, headers } = requestMatcher;
   if (url && !new URLPattern(url).test(request.url)) return false;
   for (const [name, value] of Object.entries(headers || {}))
     if (request.headers.get(name) !== value) return false;

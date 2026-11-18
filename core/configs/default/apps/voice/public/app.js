@@ -53,8 +53,12 @@ const { principal } = await itx.whoami();
 /** The config repo's handle. A stub is used for one call, so each read asks for it again. */
 const repo = () => itx.repos.get("/repos/config");
 
-// The mind is its domain, and this host is one label under it.
-const domain = location.hostname.split(".").slice(1).join(".") || location.hostname;
+// The mind's address is its control-plane hostname, where its sign-in is: this host says it
+// (`/.auth/session.json`, ../app.ts). The page never works it out from its own hostname, which
+// may be in any zone of the mind.
+const mind = new URL((await (await fetch("/.auth/session.json")).json()).issuer).hostname;
+/** The zone this page is on: an app's hostname is one label under its zone, and the Dash is too. */
+const zone = location.hostname.split(".").slice(1).join(".");
 
 const messageOf = (error) => (error instanceof Error ? error.message : String(error));
 
@@ -178,7 +182,7 @@ function App() {
   return html`
     <${AppShell}
       app="Voice"
-      mind=${domain}
+      mind=${mind}
       mindHref=${() => "./"}
       nav=${html`<${Nav} />`}
       account=${principal}
@@ -207,8 +211,8 @@ function VoiceOff({ onDone }) {
   return html`
     <h1>Voice is off</h1>
     <p>
-      With voice on, you talk to ${domain} from this page: a live model listens and speaks, and one
-      of the mind's agents does the work.
+      With voice on, you talk to ${mind} from this page: a live model listens and speaks, and one of
+      the mind's agents does the work.
     </p>
     <p className="muted">
       "Turn voice on" makes one commit to this mind's config repo, in your name: package.json pins
@@ -402,7 +406,7 @@ function Phone({ pin }) {
     }
   };
 
-  let title = `Talk to ${domain}`;
+  let title = `Talk to ${mind}`;
   if (phase === "calling") title = "Calling…";
   if (phase === "live") title = speaking ? "Speaking…" : "Listening";
   const device = opened?.device;
@@ -447,7 +451,7 @@ function DeviceNote({ agentPath }) {
       </p>
       <p className="muted">
         <a
-          href=${`https://dash.${domain}/?agent=${encodeURIComponent(agentPath).replaceAll("%2F", "/")}`}
+          href=${`https://dash.${zone}/?agent=${encodeURIComponent(agentPath).replaceAll("%2F", "/")}`}
         >
           Open that agent's chat
         </a>
@@ -471,7 +475,7 @@ function Nav() {
           <${SidebarMenuItem}>
             <${SidebarMenuButton}
               tooltip="All agents"
-              render=${html`<a href=${`https://dash.${domain}/?page=agents`} />`}
+              render=${html`<a href=${`https://dash.${zone}/?page=agents`} />`}
             >
               <${BotIcon} />
               <span>All agents</span>

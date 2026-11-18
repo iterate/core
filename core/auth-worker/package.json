@@ -1,9 +1,6 @@
 {
   "name": "core-auth-worker",
   "type": "module",
-  "exports": {
-    "./config": "./src/config.ts"
-  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

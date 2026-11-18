@@ -4,12 +4,14 @@ The owner should come away with: someone else can join their mind, and they know
 
 ## Ready today
 
-- You cannot add a member. The owner adds each one at `https://iterate.<domain>/members` and
+- You cannot add a member. The owner adds each one at `https://<control-plane hostname>/members` and
   signs it with their passkey.
 - The new member signs in once and adds a passkey; after that only the passkey signs them in.
-  That first sign-in is a code by mail or Google, when the stack's config offers them, or a
-  one-use sign-in link the owner makes on the same page ("Make a sign-in link"): it works once,
-  within 24 hours.
+  That first sign-in is a one-use sign-in link that the owner makes on the same page ("Make a
+  sign-in link") and passes on: it works once, within 24 hours. No code by mail signs a member
+  in.
+- An owner's own first passkey: the mind's sign-in page has a link for an owner with no passkey
+  yet. Cloudflare mails that owner a code and proves the address, and the owner adds a passkey.
 - A member reaches the whole mind: every agent, every key's use, its code. Say so before they add
   someone.
 - Two members can be in one chat, and the chat shows who wrote each message. Your input does not:
@@ -36,5 +38,5 @@ Who uses the mind goes into `mind.md` through `/agents/onboarding/mind-md`
 ## Say
 
 - "Will anyone else use this mind with you?"
-- "You add them here: https://iterate.<domain>/members. A member reaches everything in your mind,
+- "You add them here: https://<control-plane hostname>/members. A member reaches everything in your mind,
   so add only people you would trust with all of it."

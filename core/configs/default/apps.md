@@ -35,16 +35,25 @@ apps/<name>/
   at `/theme.css` (`app.ts`) and its page links it after the UI kit's style sheet. It holds the
   colours and the corners (shadcn's theme variables). The apps are light, whatever the visitor's
   system says; to make them all dark, change `light` to `dark` in the file's `color-scheme` line.
-- **An app says what it is called and has an icon: `public/manifest.webmanifest` and
-  `public/icon.svg`.** Its page links both, so a browser tab shows the icon. `worker.ts` answers
-  these two files before its guard (`app.open`, `apps/open-files.ts`), so they are public: the
-  mind's sign-in pages read them. Every other file of an app is behind the guard. An app whose
-  guard is `this.auth.require` says `"iterate": { "for": "members" }` in its manifest: the
-  sign-in page then says "Dash is an app of iterate.<domain>" and "Dash is for people with access to it", and invites no new address. An app
-  for end users (the guestbook) leaves it out. An app whose guard names its ways
-  (`this.auth.requirePerson(request, { methods: ["cloudflare"] })`) names them in its manifest
-  too, `"iterate": { "methods": ["cloudflare"] }`: an MCP client sends no ways of its own, so its
-  sign-in for the app's `/mcp` then offers the app's ways.
+- **An app says what it is in a typed object in its `app.ts`, and has an icon,
+  `public/icon.svg`.** The object is an `AppDescription` of `iterate/sdk`:
+  `const DASH: AppDescription = { name: "Dash", icon: "/icon.svg", for: "members" };`.
+  `serveAppDescription(request, DASH)` answers it as JSON at `/.well-known/iterate-app` on the
+  app's host, where the mind's sign-in reads it. `worker.ts` answers the description and the icon
+  before its guard (`app.open`, `apps/open-files.ts`), so they are public. Every other file of an
+  app is behind the guard. An app whose guard is `this.auth.require` says `for: "members"`: the
+  sign-in page then says that the app works as the person, and opens on the passkey. An app for
+  end users (the guestbook) leaves it out, and its sign-in page opens on the mailed code.
+- **An app names how its people sign in: `signIn`, an ordered list of `"email"` and
+  `"passkey"`.** The sign-in page opens on the first and offers the others below it. The mind's
+  sign-in holds every sign-in for the app's host to the list, an MCP client's too, so the app's
+  guard takes no list. A passkey's session counts at every app. With no `signIn`, an app for
+  members gets the passkey alone, and any other app email then passkey. A mailed code signs in no
+  member: it gives a person who is no member a session for the apps, so an app for members has no
+  reason to name `"email"`. The code is mailed from
+  `sign-in@<the zone of the app's host>`, under the app's name.
+  `this.auth.person(request).method` says which of the two the person used. The platform reads no
+  web app manifest: an app that wants to be installable in a browser serves one of its own.
 - **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** The Dash, the docs
   and the guestbook apps serve that one file at `/live-reload.js` (`app.ts`), and each page loads
   it in its head; the Voice app does not.
@@ -118,8 +127,9 @@ pins.
 `integrations` in `worker.ts` lists the integration packages this mind hosts (`Integration` from
 `iterate/sdk`: a Telegram bot, your own GitHub App, and more, one folder each in
 https://github.com/jonastemplestein/iterategrations, whose recipes add one). Each is one element,
-from its package (`telegram()`, `github()`). `fetch` hands a package the requests on its own
-routing slug, and `processEvent` hands every package every event after the mind's own cases:
+from its package (`telegram()`, `github()`). A package that serves pages gets a case of its own
+in `fetch`, on its hostname's first label (`case "telegram": return telegram.fetch(request,
+this)`), and `processEvent` hands every package every event after the mind's own cases:
 a package's install hook is its `mind/worker-updated` case, where it registers its card on
 `/integrations` for the Dash's Integrations page (`iterate/integrations`; writing a package of
 your own: https://github.com/jonastemplestein/iterategrations/blob/main/adding-an-integration.md). A hook returns for an

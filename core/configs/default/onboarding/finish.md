@@ -5,8 +5,7 @@ The owner should come away with: nothing ends for them; you stay the agent that 
 ## Ready today
 
 Onboarding is finished when you judge that the owner has had the five things of the first sitting
-(the look, the website, the mail, the secret and its approval, the telemetry where the mind has
-it), or when they say it is enough. A reaction to a real result counts; your own explanation does
+(the look, the website, the mail, the secret and its approval, the telemetry), or when they say it is enough. A reaction to a real result counts; your own explanation does
 not.
 
 ## Not ready

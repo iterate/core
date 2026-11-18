@@ -249,7 +249,7 @@ test("a held mail shows every part that goes: a mail with a text and another HTM
 function asMember() {
   const member = { userId: "user_1", email: "jo@example.net" };
   return {
-    [ITX_PERSON_HEADER]: JSON.stringify(member),
+    [ITX_PERSON_HEADER]: JSON.stringify({ ...member, name: "jo", method: "passkey" }),
     [ITX_PRINCIPAL_HEADER]: JSON.stringify({ actor: member.userId, email: member.email }),
   };
 }

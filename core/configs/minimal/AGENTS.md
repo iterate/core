@@ -11,10 +11,11 @@ This mind has no agents and no schedules.
   the mind's root; `itx.cd(event.path)` is the event's own context. A case for
   `events.iterate.com/mind/worker-updated` runs after every published commit: that is the init
   hook.
-- `fetch` serves every host of the mind. The `x-iterate-routing-slug` header names the host
-  (`blog` for `blog.<domain>`, absent on the apex), so route on it with a plain `if`. A request
-  a fetch route takes never reaches it: the platform sends it to the route's target first
-  (`iterate tunnel <port>` sets a route per tunnel; `itx.fetchRoutes.set` sets one by hand).
+- `fetch` serves every hostname of the mind's zones but its control-plane hostname, where the platform
+  answers (sign-in, the API, MCP). Route on `new URL(request.url).hostname` in plain code: an
+  app's hostname is `<label>.<zone>` (`blog.example.com`). A request a fetch route takes never
+  reaches it: the platform sends it to the route's target first (`iterate tunnel <port>` sets a
+  route per tunnel; `itx.fetchRoutes.set` sets one by hand).
 
 `worker.ts` reaches the mind through the `itx` that `processEvent` is handed, or through
 `using itx = this.getItx()`: when the block ends, the scope, every call made through it and every

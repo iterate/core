@@ -11,6 +11,9 @@ test("the mind's own request to its host carries no session, and one fixed addre
       // the address the auth Worker counts its limits by: only the edge may say it
       "CF-Connecting-IP": "203.0.113.7",
       "cf-ipcountry": "GB",
+      // the edge's word that Cloudflare Access proved an address (the auth Worker's
+      // `/sign-in/access`): the mind's own request brings none
+      "cf-access-jwt-assertion": "a token that the mind's code holds",
       "x-forwarded-for": "203.0.113.7",
       "x-real-ip": "203.0.113.7",
       "true-client-ip": "203.0.113.7",

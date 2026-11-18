@@ -24,10 +24,10 @@ give the three ways at once:
 
 1. **Their ChatGPT plan: recommend this.** The agents' requests then use their ChatGPT Plus or
    Pro plan: no API key, no extra bill. They run one command on their own computer. Give it with
-   this mind's domain in it, in a code block of its own:
+   this mind's control-plane hostname in it, in a code block of its own:
 
    ```sh
-   npx iterate@latest chatgpt connect iterate.<domain>
+   npx iterate@latest chatgpt connect <control-plane hostname>
    ```
 
    It opens ChatGPT in their browser, and the plan's tokens land in this mind: nothing is pasted

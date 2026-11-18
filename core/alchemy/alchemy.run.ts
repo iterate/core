@@ -1,44 +1,72 @@
+// alchemy.run.ts — `alchemy deploy alchemy.run.ts --stage <alchemy.stageName>`: one mind, from one
+// config (src/config.ts), into the account that the config names.
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Alchemy from "alchemy";
+import { PLACEHOLDER_STAGE } from "alchemy/Alchemist/Operations";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { MindCloudflareTokenProvider } from "./src/cloudflare-token.ts";
-import { loadMindConfig, resourceNamesOf, stageOf } from "./src/config.ts";
-import { NarrowEventSubscriptionProvider } from "./src/event-subscriptions.ts";
-import { GoneQueueConsumerProvider } from "./src/queue-consumers.ts";
-import { mindStack } from "./src/stack.ts";
+import { AccessTeamProvider } from "./src/access-team.ts";
+import { ArtifactsNamespaceProvider } from "./src/artifacts-namespace.ts";
+import { ArtifactsRepoSubscriptionProvider } from "./src/artifacts-repo-subscription.ts";
+import { CatalogTablesOfSinksProvider } from "./src/catalog-tables-of-sinks.ts";
+import { CloudflareOAuthClientProvider } from "./src/cloudflare-oauth-client.ts";
+import { loadMindConfig, namesOf } from "./src/config.ts";
+import { DataCatalogProviderThatWaitsForItsToken } from "./src/data-catalog-token-wait.ts";
+import { mindStack, refuseDeploy } from "./src/stack.ts";
 
-// The account's own store by default: local state would keep the generated keys in this checkout in
-// clear, and a second checkout would mint new ones.
-const store = process.env.ITERATE_STATE_STORE || "cloudflare";
-if (store !== "local" && store !== "cloudflare")
-  throw new Error(
-    `ITERATE_STATE_STORE is ${JSON.stringify(store)}: cloudflare (the default) or local`,
-  );
+const config = loadMindConfig();
 
-const config = await loadMindConfig(stageOf(process.argv));
+/** Ends a command that is for another stage or another Cloudflare account than the config's. */
+const refuseAnotherStageOrAccount = Effect.gen(function* () {
+  const stage = yield* Alchemy.Stage;
+  if (stage !== config.alchemy.stageName)
+    return yield* refuseDeploy(
+      `the stage is ${stage}: pass --stage ${config.alchemy.stageName}, the config's alchemy.stageName`,
+    );
+  // an API token of the environment gets the config's account (`secrets` below); a sign-in by
+  // `alchemy login` keeps the account that the person chose
+  const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
+  if (accountId !== config.cloudflare.accountId)
+    return yield* refuseDeploy(
+      `the Cloudflare sign-in is for the account ${accountId}, and the config's account is ${config.cloudflare.accountId}: sign in to the config's account (alchemy login), or set CLOUDFLARE_API_TOKEN to a token of it`,
+    );
+});
 
-// Alchemy's Cloudflare providers and its state store read the account from the environment.
-process.env.CLOUDFLARE_ACCOUNT_ID ||= config.accountId;
-if (process.env.CLOUDFLARE_ACCOUNT_ID !== config.accountId)
-  throw new Error(
-    `CLOUDFLARE_ACCOUNT_ID is ${process.env.CLOUDFLARE_ACCOUNT_ID}, but the mind config's account is ${config.accountId}`,
-  );
 export default Alchemy.Stack(
   "mind",
   {
-    // Alchemy's providers, with three of our own: event subscriptions, which never read every
-    // subscription of the account (src/event-subscriptions.ts), queue consumers, whose delete on a
-    // queue that is gone counts as done (src/queue-consumers.ts), and account API tokens, where the
-    // mind's own token drops a group that Cloudflare refuses (src/cloudflare-token.ts).
-    providers: NarrowEventSubscriptionProvider().pipe(
-      Layer.provideMerge(GoneQueueConsumerProvider()),
-      Layer.provideMerge(MindCloudflareTokenProvider()),
-      Layer.provideMerge(Cloudflare.providers()),
-    ),
-    state:
-      store === "cloudflare"
-        ? Cloudflare.state({ workerName: resourceNamesOf(config.name).state })
-        : Alchemy.localState(),
+    providers: Layer.mergeAll(
+      AccessTeamProvider(),
+      ArtifactsNamespaceProvider(),
+      ArtifactsRepoSubscriptionProvider(),
+      CatalogTablesOfSinksProvider(),
+      CloudflareOAuthClientProvider(),
+      DataCatalogProviderThatWaitsForItsToken(),
+    ).pipe(Layer.provideMerge(Cloudflare.providers())),
+    // The state, with the generated keys, lives in the mind's own account. Alchemy opens it for
+    // a deploy and for a destroy, and a destroy does not run the stack's program: so both are
+    // refused here, before the state is opened. A command that addresses no deployment
+    // (`alchemy login`, `alchemy state`) builds the stack with Alchemy's placeholder stage.
+    state: Layer.unwrap(
+      Effect.gen(function* () {
+        if ((yield* Alchemy.Stage) !== PLACEHOLDER_STAGE) yield* refuseAnotherStageOrAccount;
+        return Cloudflare.state({
+          workerName: namesOf(config).state,
+          accountId: config.cloudflare.accountId,
+        });
+      }).pipe(Effect.orDie),
+    ).pipe(Layer.provide(Cloudflare.CloudflareApiLive()), Layer.orDie),
+    // Alchemy reads the account of an API token from CLOUDFLARE_ACCOUNT_ID: the config's answers,
+    // after the shell, so that it wins over a variable of the shell.
+    secrets: [
+      Alchemy.Secrets.ProcessEnv(),
+      ConfigProvider.layerAdd(
+        ConfigProvider.fromUnknown({ CLOUDFLARE_ACCOUNT_ID: config.cloudflare.accountId }),
+        { asPrimary: true },
+      ),
+    ],
   },
-  mindStack(config),
+  // the check again: a deploy runs the program, and none may take the placeholder stage
+  refuseAnotherStageOrAccount.pipe(Effect.andThen(mindStack(config))),
 );

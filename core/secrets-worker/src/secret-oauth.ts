@@ -2,10 +2,11 @@
 // record keep the placeholder. The nonce is no secret: the start page's cookie binds the attempt.
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
-import type { ClientAuth } from "iterate/api";
+import { CLOUDFLARE_OAUTH, type ClientAuth, type StackClientName } from "iterate/api";
 import { codedError } from "iterate/lib";
 import { base64url } from "iterate/signed";
 import type { CloudClient } from "./cloud-client.ts";
+import type { StackClient } from "./stack-client.ts";
 import {
   clientAuthOf,
   clientSecretReferenceOf,
@@ -40,13 +41,18 @@ export type NormalizedSecretOAuthOptions = {
   // `install`: a GitHub App's install page, which names no redirect URI and takes no PKCE challenge.
   // `beginEndpoint`: the Cloud's page the person confirms on, before the provider's.
   // `accounts`: the accounts whose installations the mind asks to be connected to.
+  // `origin`: the Cloud's own address, which the secret keeps (./cloud-client.ts).
   cloud?: {
     name: string;
+    origin: string;
     redirectUri: string;
     install: boolean;
     beginEndpoint?: string;
     accounts?: string[];
   };
+  // The client is the stack's own at Cloudflare (./stack-client.ts): `clientSecret` is "" here,
+  // and the exchange reads the secret from the Worker's config.
+  stack?: StackClientName["stack"];
 };
 
 export type AccountLookup = { url: string; id: string; name: string | null };
@@ -95,11 +101,12 @@ export function parseSecretOAuthState(value: string | null): SecretOAuthState | 
   }
 }
 
-// Never an open redirect: `next` must be on one of `origins`.
+// Never an open redirect: `next` must be an `https:` URL on one of `origins`. The scheme is asked
+// too: a `blob:` URL carries the origin of the page that made it.
 function nextUrlOf(next: unknown, origins: readonly string[]): string | null {
   if (!next) return null;
   const url = URL.canParse(String(next)) ? new URL(String(next)) : null;
-  if (!url || !origins.includes(url.origin))
+  if (!url || url.protocol !== "https:" || !origins.includes(url.origin))
     throw new Error(
       `next is an absolute URL on ${origins.join(" or ")}, got ${JSON.stringify(next)}`,
     );
@@ -108,12 +115,23 @@ function nextUrlOf(next: unknown, origins: readonly string[]): string | null {
 
 // With a Cloud client the Cloud says the endpoints, the client and the pin. Its token endpoint is
 // its broker, outside the pin, where a code and a sealed refresh token go and no usable token does.
+// `cloud` is that client as the Cloud at `cloud.origin` published it: the origin that the caller
+// named in `client.origin`, which the attempt and then the secret keep.
+// With the stack's own client (`stack`, ./stack-client.ts) the stack says them: Cloudflare's
+// endpoints, the client's id, its scopes and the pin. Its token endpoint is outside the pin too.
 export function normalizeSecretOAuth(
   given: unknown,
   nextOrigins: readonly string[] = [],
-  cloud: CloudClient | null = null,
+  cloud: (CloudClient & { origin: string }) | null = null,
+  stack: StackClient | null = null,
 ): NormalizedSecretOAuthOptions {
   if (!isRecord(given)) throw new Error("secrets.beginOAuth: options is an object");
+  // One or the other: with both, the stack's client secret would go to the Cloud's broker.
+  if (cloud && stack)
+    throw codedError(
+      "INVALID_INPUT",
+      "secrets.beginOAuth: client is a Cloud's ({ cloud, origin }) or the stack's own ({ stack }), never both",
+    );
   const install = given.install === true;
   const asked = cloud && isRecord(given.client) ? given.client.accounts : undefined;
   const accounts = (Array.isArray(asked) ? asked : []).filter(
@@ -133,39 +151,51 @@ export function normalizeSecretOAuth(
     "clientId",
     "clientSecret",
     "urls",
-  ].filter((key) => cloud && given[key] !== undefined);
+    // a Cloud's client takes the caller's; the stack's client has one way
+    ...(stack ? ["clientAuth"] : []),
+  ].filter((key) => (cloud || stack) && given[key] !== undefined);
   if (said.length || (cloud && install && !cloud.installUrl))
     throw codedError(
       "INVALID_INPUT",
       said.length
-        ? `secrets.beginOAuth: with a Cloud client, ${said.join(", ")} is the Cloud's to say`
+        ? `secrets.beginOAuth: with ${cloud ? "a Cloud client" : "the stack's client"}, ${said.join(", ")} is the ${cloud ? "Cloud" : "stack"}'s to say`
         : `secrets.beginOAuth: the Cloud's client ${cloud?.name} has no install page`,
     );
-  const options: Record<string, unknown> = cloud
-    ? {
-        ...given,
-        authorizationEndpoint: install ? cloud.installUrl : cloud.authorizationEndpoint,
-        tokenEndpoint: cloud.tokenEndpoint,
-        clientId: cloud.clientId,
-        urls: cloud.urls,
-        scope: given.scope ?? cloud.scopes?.join(" "),
-      }
-    : given;
+  const ofCloud = cloud && {
+    ...given,
+    authorizationEndpoint: install ? cloud.installUrl : cloud.authorizationEndpoint,
+    tokenEndpoint: cloud.tokenEndpoint,
+    clientId: cloud.clientId,
+    urls: cloud.urls,
+    scope: given.scope ?? cloud.scopes?.join(" "),
+  };
+  const ofStack = stack && {
+    ...given,
+    authorizationEndpoint: CLOUDFLARE_OAUTH.authorizationEndpoint,
+    tokenEndpoint: CLOUDFLARE_OAUTH.tokenEndpoint,
+    clientId: stack.clientId,
+    // the client's secret goes in the token request's form: the way it is registered
+    clientAuth: "client_secret_post",
+    urls: CLOUDFLARE_OAUTH.urls,
+    scope: stack.scope,
+  };
+  const options: Record<string, unknown> = ofCloud || ofStack || given;
+  // HTTPS ONLY, checked here, before an attempt is stored: a person's browser goes to the
+  // authorization endpoint, and the code, its verifier, the client secret and each refresh token
+  // go to the token endpoint. A Cloud client's endpoints are on the Cloud's origin, which is
+  // `https:` (./secrets.ts `cloudOriginOf`).
   const endpoint = (key: "authorizationEndpoint" | "tokenEndpoint") => {
     const url = new URL(String(options[key]));
-    if (url.protocol !== "http:" && url.protocol !== "https:")
-      throw new Error(`secrets.beginOAuth: ${key} must be an http(s) URL`);
+    if (url.protocol !== "https:")
+      throw new Error(`secrets.beginOAuth: ${key} must be an https URL`);
     return url;
   };
   const authorizationEndpoint = endpoint("authorizationEndpoint");
-  // the start page sends a person's browser there from the platform's own hostname
-  if (authorizationEndpoint.protocol !== "https:")
-    throw new Error("secrets.beginOAuth: authorizationEndpoint must be an https URL");
   const tokenEndpoint = endpoint("tokenEndpoint");
   if (typeof options.clientId !== "string" || !options.clientId)
     throw new Error("secrets.beginOAuth: clientId is required");
   const urls = options.urls === undefined ? [tokenEndpoint.origin] : originsOf(options.urls);
-  if (!cloud && !urls.includes(tokenEndpoint.origin))
+  if (!cloud && !stack && !urls.includes(tokenEndpoint.origin))
     throw new Error(
       `secrets.beginOAuth: tokenEndpoint ${tokenEndpoint.origin} is outside the pin ${urls.join(", ")} — the tokens only ever go toward a pinned host`,
     );
@@ -199,17 +229,20 @@ export function normalizeSecretOAuth(
     ...(cloud && {
       cloud: {
         name: cloud.name,
+        origin: cloud.origin,
         redirectUri: cloud.redirectUri,
         install,
         beginEndpoint: cloud.beginEndpoint,
         ...(accounts.length > 0 && { accounts }),
       },
     }),
+    ...(stack && { stack: stack.name }),
   };
 }
 
 const AccountLookupInput = z.object({
-  url: z.url({ protocol: /^https?$/ }),
+  // the lookup carries the access token as a bearer
+  url: z.url({ protocol: /^https$/ }),
   id: z.string().min(1),
   name: z.string().min(1).optional(),
 });
@@ -219,7 +252,7 @@ function accountLookupOf(value: unknown, urls: string[]): AccountLookup | null {
   if (!parsed.success)
     throw codedError(
       "INVALID_INPUT",
-      "secrets.beginOAuth: account is { url, id, name? } — the endpoint that names the account, and the JSON paths of its id and name",
+      "secrets.beginOAuth: account is { url, id, name? } — the https endpoint that names the account, and the JSON paths of its id and name",
     );
   const url = new URL(parsed.data.url);
   if (!urls.includes(url.origin))
@@ -315,7 +348,10 @@ export async function completeSecretOAuth(
     kind: "oauth-refresh-token" as const,
     tokenEndpoint: options.tokenEndpoint,
     clientAuth: options.clientAuth,
-    ...(cloud && { client: { cloud: cloud.name } }),
+    // the Cloud that the attempt named is the secret's Cloud from here on
+    ...(cloud && { client: { cloud: cloud.name, origin: cloud.origin } }),
+    // the stack's client refreshes the grant, with its secret out of the Worker's config
+    ...(options.stack && { client: { stack: options.stack } }),
   };
   return {
     material: {

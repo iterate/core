@@ -13,10 +13,13 @@ catalog:
   # containers library. Alchemy deploys a mind's stack (core/alchemy), on Effect: all pinned
   # exactly, so every deployer runs the same set.
   "@cloudflare/workers-types": ^5.20261103.1
-  alchemy: 2.0.0-beta.85
-  "@alchemy.run/cloudflare": 2.0.0-beta.85
-  effect: 4.1.2
-  "@effect/platform-node": 4.1.2
+  alchemy: 2.0.0-beta.87
+  "@alchemy.run/cloudflare": 2.0.0-beta.87
+  # the Cloudflare SDK under Alchemy, at the version that Alchemy 2.0.0-beta.87 pins: core/alchemy's
+  # own provider calls it (src/artifacts-repo-subscription.ts)
+  "@distilled.cloud/cloudflare": 1.0.0-rc.20
+  effect: 4.1.4
+  "@effect/platform-node": 4.1.4
 
   "@cloudflare/workers-oauth-provider": 1.2.4
   "@modelcontextprotocol/client": 2.1.0

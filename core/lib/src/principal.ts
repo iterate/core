@@ -42,53 +42,48 @@ export const ITX_GRANT_HEADER = "x-itx-grant";
 export const ITX_EXPIRES_HEADER = "x-itx-expires";
 
 /** A KEY'S TOKEN (core/auth-worker/src/key-tokens.ts): the service the key speaks for, the key as
- *  the grant it acts through (`key:<id>`), and the one capability it may lend, `itx.<provide>`. */
+ *  the grant it acts through (`key:<id>`), and the one capability it may lend, `itx.<provide>`.
+ *  Such a caller is no principal: its session of the API reaches its one lend and nothing else of
+ *  the mind. The boundary names it in the call that makes the mind's part of the session
+ *  (./workers.ts `ApiCaller`), and in no header. */
 export type Lender = { actor: string; key: string; provide: string };
 
-/** The header ingress sets for a key's token on the mind's API, as the JSON of a `Lender`, in place
- *  of `ITX_PRINCIPAL_HEADER`: such a caller is no principal, and reaches its one lend and nothing
- *  else of the mind (core/mind-worker/src/api.ts). Stripped from every inbound Request. */
-export const ITX_LENDER_HEADER = "x-itx-lender";
-
-const StampedLender = z.object({ actor: z.string(), key: z.string(), provide: z.string() });
-
-/** The lender ingress stamped on `request`, or null. Trusted as it stands, as `stampedCallerOf`. */
-export function stampedLenderOf(request: Request): Lender | null {
-  const lender = request.headers.get(ITX_LENDER_HEADER);
-  return lender ? StampedLender.parse(JSON.parse(lender)) : null;
-}
-
-/** HOW A PERSON SIGNED IN at the mind's issuer (core/auth-worker): what they proved to get the
- *  session that a token or a host's session came from. "passkey", "email" (a mailed code),
- *  "google", "cloudflare" and "guest" are ways an app can name (sdk/auth.ts `methods`);
- *  "first-owner-ticket" and "member-link" are a deploy's ticket and an owner's link, which exist
- *  to add a passkey. "guest" proves nothing: the person typed a name
- *  (core/auth-worker/src/guest-sign-in.ts). */
-export const SignInMethod = z.enum([
-  "passkey",
-  "email",
-  "google",
-  "cloudflare",
-  "first-owner-ticket",
-  "member-link",
-  "guest",
-]);
+/** HOW A PERSON SIGNED IN at the mind's issuer (core/auth-worker): what opened the session that
+ *  a token or a hostname's session came from. "passkey": a passkey, which a member alone has.
+ *  "email": a code that the mind mailed to the person's address. "guest": nothing proven, the
+ *  person typed a name (core/auth-worker/src/guest-sign-in.ts). An app names the ones it takes
+ *  for its people, in its order (`AppDescription.signIn`, ./app-description.ts); a passkey's
+ *  session counts at every app. */
+export const SignInMethod = z.enum(["passkey", "email", "guest"]);
 export type SignInMethod = z.infer<typeof SignInMethod>;
 
 /** A signed-in person as a mind's host knows them, member or not: the auth Worker's user id
- *  and their email, and `impersonatedBy` the platform admin signed in as them, as on `Principal`.
- *  An app that hands out something personal refuses, or records, a person an admin is signed in
- *  as. `method` is how they signed in, absent for a session made before sessions said it.
- *  `name` is what to call them on a page: the part of their email before the "@", or for a guest
- *  (`method` "guest") the name they typed. It is text to show (`displayNameOf`), never a key and
- *  never a reason to let someone in: `userId` is who they are. A guest has no address: `email` is
- *  "". */
-export type Person = {
+ *  and their email, `method`, how they signed in, and `impersonatedBy` the platform admin signed
+ *  in as them, as on `Principal`. An app that hands out something personal refuses, or records, a
+ *  person an admin is signed in as. `name` is what to call them on a page: the part of their
+ *  email before the "@", or for a guest the name they typed. It is text to show
+ *  (`displayNameOf`), never a key and never a reason to let someone in: `userId` is who they are.
+ *  Two kinds, told apart by `method`: a person who proved an address (`AddressedPerson`), and a
+ *  guest, who proved nothing and has no address (`Guest`, whose `email` is ""). */
+export type Person = AddressedPerson | Guest;
+
+/** A person whom a passkey or a mailed code signed in: `email` is the address they proved. */
+export type AddressedPerson = {
   userId: string;
   email: string;
   name: string;
+  method: "passkey" | "email";
   impersonatedBy?: { actor: string; email: string };
-  method?: SignInMethod;
+};
+
+/** A person who typed a name and proved nothing (core/auth-worker/src/guest-sign-in.ts). No
+ *  address: `email` is "", so no reader can take two guests for one person by it. */
+export type Guest = {
+  userId: string;
+  email: "";
+  name: string;
+  method: "guest";
+  impersonatedBy?: undefined;
 };
 
 /** The header ingress sets, as the JSON of a `Person`, on a mind host's Request from anyone
@@ -124,16 +119,21 @@ export const stampJsonOf = (stamp: unknown) =>
     (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
 
-const StampedPerson = z.object({
-  userId: z.string().min(1),
-  email: z.string(),
-  // a stamp may hold none: the reader then takes it from the address (`stampedPersonOf`)
-  name: z.string().optional(),
-  impersonatedBy: z.object({ actor: z.string().min(1), email: z.string() }).optional(),
-  // a way this SDK does not know is one no app names: the person counts as signed in by an
-  // unknown way
-  method: SignInMethod.optional().catch(undefined),
-});
+const StampedPerson = z.discriminatedUnion("method", [
+  z.object({
+    userId: z.string().min(1),
+    email: z.string(),
+    method: z.enum(["passkey", "email"]),
+    name: z.string(),
+    impersonatedBy: z.object({ actor: z.string().min(1), email: z.string() }).optional(),
+  }),
+  z.object({
+    userId: z.string().min(1),
+    email: z.literal(""),
+    method: z.literal("guest"),
+    name: z.string(),
+  }),
+]);
 
 /** THE PERSON INGRESS STAMPED on `request`, or null when nobody signed in. Trusted as it stands,
  *  as `stampedCallerOf`: a malformed stamp is a defect, and throws. */
@@ -142,7 +142,7 @@ export function stampedPersonOf(request: Request): Person | null {
   if (!stamped) return null;
   const person = StampedPerson.parse(JSON.parse(stamped));
   // cleaned here too, so that no app shows a name as some other stamp wrote it
-  return { ...person, name: displayNameOf(person.name || nameInEmail(person.email)) };
+  return { ...person, name: displayNameOf(person.name) };
 }
 
 /** What a person with an address is called for now: the part of it before the "@". */
@@ -161,18 +161,23 @@ export function stampedExpiryOf(request: Request): number | null {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
 }
 
-/** THE CALLER INGRESS STAMPED on `request`: the principal, and the grant they came through, which
- *  every event they append then carries. Null when nobody is stamped. Ingress strips every `x-itx-*`
- *  a caller sends and stamps its own, and only ingress reaches a mind, so the stamp is trusted
- *  as it stands: a malformed one is a defect, and throws. */
+/** THE CALLER INGRESS STAMPED on `request`: the principal, the grant they came through, which
+ *  every event they append then carries, and the signed-in person of a visitor to a mind's host
+ *  (`stampedPersonOf`). Null, and no person, when nobody is stamped. Ingress strips every
+ *  `x-itx-*` a caller sends and stamps its own, and only ingress reaches a mind, so the stamp is
+ *  trusted as it stands: a malformed one is a defect, and throws. This is the one read of who
+ *  asks: the kernel carries the answer with the call, and stamps each Request that it hands to
+ *  the mind's code from it (core/itx `stampCallerHeaders`). */
 export function stampedCallerOf(request: Request): {
   principal: Principal | null;
   grant: string | undefined;
+  person: Person | undefined;
 } {
   const principal = request.headers.get(ITX_PRINCIPAL_HEADER);
   return {
     principal: principal ? StampedPrincipal.parse(JSON.parse(principal)) : null,
     grant: request.headers.get(ITX_GRANT_HEADER) || undefined,
+    person: stampedPersonOf(request) || undefined,
   };
 }
 

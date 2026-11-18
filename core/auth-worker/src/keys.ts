@@ -1,14 +1,12 @@
 import {
   type Envelope,
   envelopeOf,
-  keyIdOf,
   statementHashOf,
   statementOf,
   verifySignature,
 } from "iterate/signed";
 import type { Verified } from "iterate/workers";
-import type { AuthConfig } from "./config.ts";
-import { type Env, issuerOf, iterateConfigOf } from "./env.ts";
+import { configOf, type Env, issuerOf } from "./env.ts";
 import { isMember } from "./members.ts";
 import { mindKeyOf } from "./minds.ts";
 import { stackKeyOf } from "./stack-key.ts";
@@ -22,8 +20,8 @@ export type KnownKey = {
   principal: { actor: string; email?: string; kind?: "mind" };
   publicKey: string;
   label: string;
-  format?: Envelope["signature"]["format"]; // none for a root key: it may sign in either
-  paths?: string[]; // none: any path
+  format: Envelope["signature"]["format"];
+  paths?: string[]; // none: a person's key, or another mind's
   provide?: string; // the capability a service's key may lend (./key-tokens.ts)
   outsider?: boolean; // a passkey added while its owner was no member (../migrations/0016)
 };
@@ -44,15 +42,13 @@ export async function verifiedStatement(
 > {
   const envelope = envelopeOf(value);
   if (!envelope) return { refused: "not an envelope: { statement, signature }" };
-  const config = iterateConfigOf(env);
-  // The stack's own key signs for the Cloud to check, never a statement to this stack.
+  // The stack's own key signs for others to check, never a statement to this stack.
   if (envelope.signature.key === (await stackKeyOf(env)).key)
     return { refused: "the stack's own key signs for others, not for this stack" };
-  const key =
-    (await knownKey(env, config, envelope.signature.key)) || (await mindKeyOf(env, envelope));
+  const key = (await knownKey(env, envelope.signature.key)) || (await mindKeyOf(env, envelope));
   if (!key) return { refused: UNKNOWN_KEY };
   if ("refused" in key) return key;
-  if (key.format && key.format !== envelope.signature.format)
+  if (key.format !== envelope.signature.format)
     return { refused: `this key signs as ${key.format}` };
   const issuer = issuerOf(env);
   const checked = await verifySignature(envelope, key.publicKey, {
@@ -62,7 +58,8 @@ export async function verifiedStatement(
   if ("refused" in checked) return checked;
   const statement = statementOf(envelope.statement);
   if ("refused" in statement) return statement;
-  if (statement.mind !== config.domain) return { refused: "the statement is for another mind" };
+  if (statement.mind !== configOf(env).controlPlaneHostname)
+    return { refused: "the statement is for another mind" };
   if (statement.from && key.principal.kind !== "mind")
     return { refused: "a statement from a mind is signed with that mind's key" };
   const now = Date.now();
@@ -121,41 +118,7 @@ export function personKeyRefusal(
   return null;
 }
 
-/** After a mailed code or a sign-in at Google proved `user`'s address, which is all it proves. A member
- *  who holds a passkey is refused: mail is no way round a passkey. A member who holds none goes to
- *  /keys to add the first: a passkey from before the address was a member is none (`holdsPasskey`),
- *  or whoever added it would lock the member out. Anyone else goes on, since a session gives a
- *  non-member nothing. */
-export async function addressProven(
-  env: Env,
-  user: { id: string; email: string },
-  next: string,
-): Promise<{ location: string } | { refused: string }> {
-  if (!(await isMember(env, user.email))) return { location: next };
-  if (await holdsPasskey(env, user.id))
-    return {
-      refused: `${user.email} has a passkey for ${iterateConfigOf(env).domain}, so nothing else signs it in. Sign in with the passkey. If it is lost, ask the mind's owner to remove it. The owner gets in again with a deploy.`,
-    };
-  return {
-    location: /^\/keys([/?#]|$)/.test(next) ? next : `/keys?${new URLSearchParams({ next })}`,
-  };
-}
-
-/** Whether the person holds a live passkey that counts for a member: one that was not added while
- *  they were no member (../migrations/0016). `any`: one of either kind. */
-export async function holdsPasskey(env: Env, userId: string, any = false): Promise<boolean> {
-  const held = await env.DB.prepare(
-    `select 1 from keys where user_id = ?1 and format = 'webauthn' and revoked_at is null
-       and outsider <= ?2 limit 1`,
-  )
-    .bind(userId, any ? 1 : 0)
-    .first();
-  return Boolean(held);
-}
-
-async function knownKey(env: Env, config: AuthConfig, id: string): Promise<KnownKey | null> {
-  const root = (await rootKeysOf(config)).get(id);
-  if (root) return root;
+async function knownKey(env: Env, id: string): Promise<KnownKey | null> {
   const row = await env.DB.prepare(
     `select k.public_key, k.format, k.label, k.actor, k.paths, k.provide, k.outsider,
        u.id as user_id, u.email
@@ -178,6 +141,7 @@ async function knownKey(env: Env, config: AuthConfig, id: string): Promise<Known
   const common = {
     publicKey: row.public_key,
     label: row.label,
+    // one of the two, by the check above, which TypeScript does not narrow a `string` by
     format: row.format as KnownKey["format"],
   };
   if (row.user_id && row.email)
@@ -194,23 +158,4 @@ async function knownKey(env: Env, config: AuthConfig, id: string): Promise<Known
       provide: row.provide || undefined,
     };
   return null;
-}
-
-const rootKeysByConfig = new WeakMap<AuthConfig, Promise<Map<string, KnownKey>>>();
-
-function rootKeysOf(config: AuthConfig): Promise<Map<string, KnownKey>> {
-  let keys = rootKeysByConfig.get(config);
-  if (!keys) {
-    keys = Promise.all(
-      (config.keys || []).map(
-        async ({ actor, email, publicKey, label, paths }) =>
-          [
-            await keyIdOf(publicKey),
-            { principal: email ? { actor, email } : { actor }, publicKey, label, paths },
-          ] as const,
-      ),
-    ).then((entries) => new Map(entries));
-    rootKeysByConfig.set(config, keys);
-  }
-  return keys;
 }

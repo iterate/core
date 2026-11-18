@@ -6,16 +6,19 @@ import {
   type TokenExchangeCallbackResult,
 } from "@cloudflare/workers-oauth-provider";
 import { codedError } from "iterate/lib";
-import { platformOriginOf } from "iterate/mind-api";
+import { type MindConfig, controlPlaneOriginOf, zoneOf } from "iterate/mind-config";
 import { SignInMethod } from "iterate/principal";
 import { HOST_SESSION_PREFIX, type TokenIdentity } from "iterate/workers";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
+import { appOf } from "./asking-app.ts";
 import { admitted, TOO_MANY } from "./device/limits.ts";
 import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { isBlocked } from "./blocked.ts";
-import { isMember, standingOf } from "./members.ts";
-import { cloudflareSignInOf, type Env, issuerOf, iterateConfigOf, offersMethod } from "./env.ts";
+import type { Reach } from "./cookies.ts";
+import { tokenAudiencesOf } from "./config.ts";
+import { isMember } from "./members.ts";
+import { configOf, type Env, issuerOf } from "./env.ts";
 
 export const AUTHORIZE_ENDPOINT = "/oauth2/auth";
 export const TOKEN_ENDPOINT = "/oauth2/token";
@@ -35,17 +38,21 @@ export function grantedScopes(
   return requested.length === 0 || requested.includes(scope) ? [scope] : null;
 }
 
-export function mindHostResourceOf(env: Env, resource: string | null | undefined) {
+/** `resource` when it is A MIND HOSTNAME'S ORIGIN, else null: `https://<hostname>` for any
+ *  hostname of any zone of the mind but the control-plane hostname, which is this Worker's own. A token
+ *  for it is for that whole host, so a person signs in on every hostname of every zone. */
+export function mindHostResourceOf(
+  config: Pick<MindConfig, "controlPlaneHostname" | "zones">,
+  resource: string | null | undefined,
+) {
   if (!resource || !URL.canParse(resource)) return null;
   const url = new URL(resource);
-  const { domain } = iterateConfigOf(env);
-  const underDomain = url.hostname === domain || url.hostname.endsWith(`.${domain}`);
   if (
     url.protocol !== "https:" ||
     url.port ||
     url.origin !== resource ||
-    !underDomain ||
-    url.origin === platformOriginOf(domain)
+    !zoneOf(config, url.hostname) ||
+    url.origin === controlPlaneOriginOf(config)
   )
     return null;
   return resource;
@@ -55,8 +62,9 @@ export function mindHostResourceOf(env: Env, resource: string | null | undefined
  *  whole host, so a path on one (`https://app.example.com/mcp`, or the bare `/` a URL parser adds)
  *  means its origin: an MCP client names its server's URL. Anything else is returned unchanged. */
 export function knownResourceOf(env: Env, resource: string): string {
-  if (iterateConfigOf(env).resources.includes(resource) || !URL.canParse(resource)) return resource;
-  return mindHostResourceOf(env, new URL(resource).origin) || resource;
+  const config = configOf(env);
+  if (tokenAudiencesOf(config).includes(resource) || !URL.canParse(resource)) return resource;
+  return mindHostResourceOf(config, new URL(resource).origin) || resource;
 }
 
 /** `request` with its `resource` as `knownResourceOf` reads it: the query's at the authorization
@@ -96,7 +104,7 @@ export const keptHostClientOf = (env: Env, host: string) => env.OAUTH_KV.get(hos
  *  whose code asks every hostname's visitor to sign in would make one for each name a stranger
  *  thinks of: so new ones are counted like new registrations, 120 in ten minutes for the stack. */
 export async function hostClientOf(env: Env, host: string): Promise<string> {
-  const hostResource = mindHostResourceOf(env, `https://${host}`);
+  const hostResource = mindHostResourceOf(configOf(env), `https://${host}`);
   if (!hostResource) throw codedError("INVALID_INPUT", `${host} is not a hostname of this mind`);
   const key = hostClientKeyOf(new URL(hostResource).host);
   const kept = await env.OAUTH_KV.get(key);
@@ -117,37 +125,54 @@ export async function hostClientOf(env: Env, host: string): Promise<string> {
 
 // A grant lives for as long as its client keeps refreshing it, and ends once it has been idle for
 // SESSION_IDLE_SECONDS. Only a let-in grant has a `deadline` (epoch ms), from which it is refused.
-// A grant made before 2026-11-12 carries one of thirty days, which nothing reads.
-export const GrantProps = z.object({
+// STRICT: a stored grant with a field that this code does not write, or without one that it
+// does, was made under other rules, and is no grant, at a token's validation and at a refresh.
+const GrantFields = z.strictObject({
   userId: z.string().startsWith("user_"),
   email: z.string(),
-  /** How the person signed in to get the grant, which an app's guard reads (iterate/sdk
-   *  `auth.requirePerson`), and which says whether its token acts as a member (`grantStandingOf`).
-   *  Absent on a grant made before grants kept it: no app that names its ways takes that one. */
+  /** HOW THE PERSON SIGNED IN, WHOSE SESSION GOT THE GRANT (./cookies.ts `PersonSession`).
+   *  "passkey": the grant acts as a member while its address is a member's, asked at every use.
+   *  "email": the grant of a person whom a mailed code signed in is for a mind hostname alone and
+   *  is never a member's, whatever its address becomes: mail must not open the mind
+   *  (`grantIsMembers`; one rule to remove keeps the old stack's, `standingByMethod`). A token
+   *  says it of its person (`tokenIdentity`). Absent only on a grant that the old stack made
+   *  before 13 Nov 2026, which has no `standingByMethod` either (`grantIsMembers`). */
   method: SignInMethod.optional(),
-  /** The name a guest typed (`method` "guest"). A guest's `email` is the key of their row
-   *  (`guest:<subject>`), which is no address: an owner's block names it (./members.ts). */
-  name: z.string().optional(),
-  /** A grant made since this rule carries it: such a grant acts as a member only while its sign-in
-   *  way gives a member's standing (`grantStandingOf`). A grant without it was made before, and
-   *  keeps the rule it was made under. */
+  /** The name a guest typed (./guest-sign-in.ts): a guest's grant alone has it. */
+  name: z.string().min(1).optional(),
+  /** A RULE TO REMOVE once every grant that the old stack made with no mark has ended or been
+   *  made again (the owner, 18 Nov 2026: "only if we remember to remove that cruft later on").
+   *  The mark says that a grant's standing is its method's, as `grantIsMembers` reads it. The old
+   *  stack wrote it on every grant since 16 Nov 2026, and this stack writes it on every grant it
+   *  makes (./authorize.ts). A grant without it is one that the old stack made before, which
+   *  keeps that stack's rule: a mailed code's grant of a member's address acts as a member, and
+   *  so does a grant that kept no method at all (made before 13 Nov 2026: the Beelink bridges'
+   *  device sign-in of 12 Nov is one). The live minds moved to this stack with their grants (iterate.com and Jeeves, 19 Nov 2026):
+   *  without the rule their members' agents and bridges would sign in again with a passkey. To
+   *  remove it: the unmarked case in `grantIsMembers`, the write in ./authorize.ts, and this field
+   *  once no stored grant holds it. */
   standingByMethod: z.literal(true).optional(),
-  /** The grant of a session that a passkey opened which was added while its owner was no member
-   *  (./cookies.ts `Session.outsider`): never a member's, whatever its address becomes. */
-  outsider: z.literal(true).optional(),
   deadline: z.number().int().positive().optional(),
   letIn: z
-    .object({
+    .strictObject({
       reason: z.string(),
       clientName: z.string(),
-      signer: z.object({ actor: z.string(), key: z.string() }).optional(),
+      signer: z.strictObject({ actor: z.string(), key: z.string() }).optional(),
     })
     .optional(),
 });
+// Only the old stack's unmarked grants lack a method: this stack writes both on every grant.
+const markedHasMethod = (grant: z.infer<typeof GrantFields>) =>
+  Boolean(grant.method) || !grant.standingByMethod;
+const MARKED_HAS_METHOD = { message: "a grant with standingByMethod names its method" };
+export const GrantProps = GrantFields.refine(markedHasMethod, MARKED_HAS_METHOD);
 export type GrantProps = z.infer<typeof GrantProps>;
 
 // The grant's id, which the library's validation does not report.
-const TokenProps = GrantProps.extend({ grantId: z.string().min(1) });
+const TokenProps = GrantFields.extend({ grantId: z.string().min(1) }).refine(
+  markedHasMethod,
+  MARKED_HAS_METHOD,
+);
 
 const SESSION_IDLE_SECONDS = 7 * 24 * 3600;
 const ACCESS_TOKEN_SECONDS = 3600;
@@ -164,15 +189,15 @@ const CLIENT_REGISTRATION_SECONDS = 2 * SESSION_IDLE_SECONDS;
 const CLIENT_METADATA_MAX_CHARACTERS = 4096;
 
 // Built per call: the library takes a fixed list of resources, and a call may be about one mind
-// hostname besides the config's.
+// hostname besides the config's audiences.
 export function authorizationServer(
   env: Env,
   { hostResource, facts }: { hostResource?: string | null; facts?: AccountFacts } = {},
 ) {
-  const { resources } = iterateConfigOf(env);
+  const audiences = tokenAudiencesOf(configOf(env));
   return new OAuthAuthorizationServer<Env>({
     issuer: issuerOf(env),
-    resources: hostResource ? [...resources, hostResource] : resources,
+    resources: hostResource ? [...audiences, hostResource] : audiences,
     authorizeEndpoint: AUTHORIZE_ENDPOINT,
     tokenEndpoint: TOKEN_ENDPOINT,
     clientRegistrationEndpoint: CLIENT_REGISTRATION_ENDPOINT,
@@ -219,8 +244,9 @@ export async function tokenIdentity(
   // The library looks a bearer up by a KV key made of its parts: past KV's 512-byte key limit the
   // lookup throws. Its own tokens are about 90 characters.
   if (new TextEncoder().encode(token).byteLength > 256) return null;
-  const hostResource = mindHostResourceOf(env, resource);
-  if (!hostResource && !iterateConfigOf(env).resources.includes(resource)) return null;
+  const config = configOf(env);
+  const hostResource = mindHostResourceOf(config, resource);
+  if (!hostResource && !tokenAudiencesOf(config).includes(resource)) return null;
   const validated = await authorizationServer(env, { hostResource }).validateToken(
     resource,
     token,
@@ -233,13 +259,16 @@ export async function tokenIdentity(
   const expiresAt = deadline
     ? Math.min(validated.expiresAt, Math.floor(deadline / 1000))
     : validated.expiresAt;
-  if (!hostOnlyWayServes(env, props.data.method, hostResource)) return null;
-  const member = (await grantStandingOf(env, props.data)) === "member";
+  const member = await grantIsMembers(env, props.data);
   if (expiresAt * 1000 <= Date.now() || (!hostResource && !member)) return null;
   // a member is never blocked, so only a mind hostname's token asks
   if (!member && (await isBlocked(env, props.data.email))) return null;
   // a guest has a name and no address: the key of their row stays here
-  if (props.data.method === "guest")
+  if (props.data.method === "guest") {
+    // A GUEST'S TOKEN IS GOOD ONLY WHILE THE APP STILL TAKES GUESTS: its description, as this
+    // issuer keeps it (./asking-app.ts, asked again within five minutes), names "guest". So an
+    // app that stops naming it ends every guest's reach at the next request.
+    if (!hostResource || !(await appOf(env, hostResource))?.signIn.includes("guest")) return null;
     return {
       principal: { actor: props.data.userId },
       grant: props.data.grantId,
@@ -248,6 +277,7 @@ export async function tokenIdentity(
       method: "guest",
       name: props.data.name,
     };
+  }
   return {
     principal: { actor: props.data.userId, email: props.data.email },
     grant: props.data.grantId,
@@ -257,38 +287,13 @@ export async function tokenIdentity(
   };
 }
 
-/** WHETHER A GRANT OF A WAY THAT PROVES NO ADDRESS SERVES `hostResource`: a sign-in at Cloudflare
- *  (./cloudflare-sign-in.ts) and a guest's (./guest-sign-in.ts) serve a mind hostname alone,
- *  never the mind's API, MCP server or `/provide`, and only while the stack offers the way. Asked
- *  at every use, so a deploy that takes the way away ends its grants. Every other way: true. */
-function hostOnlyWayServes(
-  env: Env,
-  method: SignInMethod | undefined,
-  hostResource: string | null,
-) {
-  if (method === "cloudflare") return Boolean(hostResource && cloudflareSignInOf(env));
-  if (method === "guest") return Boolean(hostResource && offersMethod(env, "guest"));
-  return true;
-}
-
-/** WHAT A GRANT IS TO THIS STACK NOW, asked at every use, as Cloudflare's is. A grant with
- *  `standingByMethod` has the standing (./members.ts `standingOf`) of a browser's session made the
- *  way the grant's person signed in, so an address that becomes a member's, or a deploy that stops
- *  Google signing a member in alone, makes no grant of a lesser sign-in a member's. A grant that
- *  kept no way proves none. A grant without the mark keeps the rule it was made under: a member's
- *  address, by any way but Cloudflare's. Its holder may be an agent or a bridge, which cannot
- *  press a passkey to sign in again. */
-async function grantStandingOf(env: Env, grant: GrantProps) {
-  if (grant.outsider) return "not-member";
-  if (!grant.standingByMethod)
-    return grant.method !== "cloudflare" &&
-      grant.method !== "guest" &&
-      (await isMember(env, grant.email))
-      ? "member"
-      : "not-member";
-  if (!grant.method) return "not-member";
-  return standingOf(env, { userId: grant.userId, email: grant.email, method: grant.method });
-}
+/** Whether a grant acts as a member now: a passkey's session got it, and its address is a
+ *  member's. And, BY A RULE TO REMOVE (`GrantProps.standingByMethod`), a grant that the old stack
+ *  made with no mark, for a mailed code or with no method at all: its address is a member's. */
+const grantIsMembers = async (env: Env, grant: GrantProps) =>
+  (grant.method === "passkey" ||
+    (!grant.standingByMethod && (grant.method === "email" || !grant.method))) &&
+  (await isMember(env, grant.email));
 
 /** The instant a let-in grant ends. A let-in grant with none ended at its making. */
 const letInDeadlineOf = (grant: GrantProps) => (grant.letIn ? grant.deadline || 1 : undefined);
@@ -317,13 +322,9 @@ async function grantLifetime(
   if (!parsed.success || parsed.data.userId !== input.userId)
     throw refused("props_invalid", "The session is no longer active.");
   const grant = parsed.data;
-  const hostResource = mindHostResourceOf(env, input.resource);
-  if (!hostOnlyWayServes(env, grant.method, hostResource))
-    throw refused("sign_in_method", "The session is no longer active.");
-  const standing = hostResource ? null : await grantStandingOf(env, grant);
-  // the reason is the standing: "not-member", or "passkey-owed" for a member's lesser sign-in
-  if (standing && standing !== "member")
-    throw refused(standing, "The session is no longer active.");
+  const hostResource = mindHostResourceOf(configOf(env), input.resource);
+  if (!hostResource && !(await grantIsMembers(env, grant)))
+    throw refused("not-member", "The session is no longer active.");
   if (hostResource && (await isBlocked(env, grant.email)))
     throw refused("blocked", "The session is no longer active.");
   const lifetime = grantLifetimeOf(grant, {
@@ -376,7 +377,7 @@ export async function tokenEndpointResponse(env: Env, request: Request, ctx: Exe
   const facts = new AccountFacts();
   const resource = form?.get("resource");
   const server = authorizationServer(env, {
-    hostResource: mindHostResourceOf(env, typeof resource === "string" ? resource : null),
+    hostResource: mindHostResourceOf(configOf(env), typeof resource === "string" ? resource : null),
     facts,
   });
   const token = form?.get("token");
@@ -425,8 +426,8 @@ export type SignIn = {
   clientId: string;
   /** The client's own name, or "" for one that gave none: a mind hostname's own sign-in. */
   clientName: string;
-  /** What it is for: a resource of the stack, or a mind hostname's origin. Absent on a grant made
-   *  before grants kept it. */
+  /** What it is for: a resource of the stack, or a mind hostname's origin. Absent when the
+   *  client's request named none. */
   resource?: string;
   /** Where the grant's code went: the client's own address, and its host. */
   redirectUri?: string;
@@ -458,17 +459,19 @@ export type SignIn = {
 /** What a grant keeps for these lists, written when it is made (./authorize.ts `complete`). */
 export const SignInMetadata = z.object({
   clientName: z.string(),
+  /** The grant's own `method` (`GrantProps`), kept where a list of a person's grants reads it. */
+  method: SignInMethod,
   resource: z.string().optional(),
   logoUri: z.string().optional(),
   until: z.number().optional(),
 });
 export type SignInMetadata = z.infer<typeof SignInMetadata>;
 
-/** The mind hostname whose own sign-in a grant is, read from where its code went: for a grant
- *  made before grants kept their resource. */
+/** The mind hostname whose own sign-in a grant is, read from where its code went: that host's
+ *  own callback. */
 function hostOfOwnCallback(env: Env, redirectUri: string | undefined) {
   if (!redirectUri || !URL.canParse(redirectUri)) return undefined;
-  const host = mindHostResourceOf(env, new URL(redirectUri).origin);
+  const host = mindHostResourceOf(configOf(env), new URL(redirectUri).origin);
   return host && redirectUri === hostCallbackOf(host) ? host : undefined;
 }
 
@@ -495,9 +498,13 @@ export type ClientWithAccess = {
  *  a CLI that the person let in is a client, an MCP client is one, and so is each of the mind's
  *  own hostnames, whose page holds a browser's session. /sessions shows a person their own, member
  *  or not, and the members page shows an owner every member's (./access-list.ts draws both). `endAccess` is the one way to end any of it. */
-export async function sessionsByClientOf(env: Env, userId: string): Promise<ClientWithAccess[]> {
+export async function sessionsByClientOf(
+  env: Env,
+  userId: string,
+  reach: Reach,
+): Promise<ClientWithAccess[]> {
   const clients = new Map<string, ClientWithAccess>();
-  for (const signIn of await signInsOf(env, userId)) {
+  for (const signIn of await signInsOf(env, userId, reach)) {
     const client = clients.get(signIn.clientId);
     if (client) {
       client.signIns.push(signIn);
@@ -527,15 +534,16 @@ export async function sessionsByClientOf(env: Env, userId: string): Promise<Clie
 
 /** THE ONE REVOKE: ends one sign-in of a person, or every sign-in that one client holds as that
  *  person, each with its tokens. Answers how many it ended: a sign-in or a client that is not
- *  that person's ends nothing. */
+ *  that person's, or not within `reach`, ends nothing. */
 export async function endAccess(
   env: Env,
   userId: string,
+  reach: Reach,
   which: { signIn: string } | { client: string },
   facts: AccountFacts,
 ): Promise<number> {
   const helpers = oauthHelpers(env);
-  const ending = (await signInsOf(env, userId)).filter((signIn) =>
+  const ending = (await signInsOf(env, userId, reach)).filter((signIn) =>
     "signIn" in which ? signIn.id === which.signIn : signIn.clientId === which.client,
   );
   for (const signIn of ending) {
@@ -549,7 +557,9 @@ export async function endAccess(
   return ending.length;
 }
 
-async function signInsOf(env: Env, userId: string): Promise<SignIn[]> {
+/** A person's live sign-ins within `reach`, newest first. A grant whose metadata says no method
+ *  is within "all" alone. */
+async function signInsOf(env: Env, userId: string, reach: Reach): Promise<SignIn[]> {
   const helpers = oauthHelpers(env);
   const signIns: SignIn[] = [];
   let cursor: string | undefined;
@@ -557,6 +567,7 @@ async function signInsOf(env: Env, userId: string): Promise<SignIn[]> {
     const page = await helpers.listUserGrants(userId, { cursor });
     for (const grant of page.items) {
       const metadata = SignInMetadata.safeParse(grant.metadata);
+      if (reach !== "all" && metadata.data?.method !== reach) continue;
       // The library sets a grant's end one idle limit ahead at each exchange of a grant that
       // holds a refresh token, and one access token's life ahead, once, on a grant that holds none.
       const renewedAt = grant.expiresAt && grant.expiresAt - SESSION_IDLE_SECONDS;
@@ -574,7 +585,7 @@ async function signInsOf(env: Env, userId: string): Promise<SignIn[]> {
           metadata.data?.clientName && metadata.data.clientName !== grant.clientId
             ? metadata.data.clientName
             : "",
-        resource: metadata.data?.resource || hostOfOwnCallback(env, grant.redirectUri),
+        resource: metadata.data?.resource,
         redirectUri: grant.redirectUri,
         goesTo: URL.canParse(grant.redirectUri || "")
           ? new URL(grant.redirectUri!).host

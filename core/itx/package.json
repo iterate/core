@@ -3,7 +3,9 @@
   "type": "module",
   "description": "itx: the context kernel as a library. A context Durable Object class any Worker can host",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./end-when-silent": "./src/end-when-silent.ts",
+    "./fetch-upgrade": "./src/context/fetch-upgrade.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

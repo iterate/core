@@ -3,7 +3,8 @@
 // names (iterate/oauth `discoverMind`). It registers its loopback redirect
 // (https://www.rfc-editor.org/rfc/rfc7591), sends the person to the issuer with PKCE, and redeems the
 // redirect back for tokens bound to one resource (https://www.rfc-editor.org/rfc/rfc8707): the
-// mind's API, or its `/provide`.
+// mind's API, or the right to hand in a mind that runs elsewhere (iterate/mind-api
+// `mindProvideConnectResourceOf`).
 
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";

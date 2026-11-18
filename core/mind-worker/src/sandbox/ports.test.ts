@@ -79,8 +79,8 @@ test("a port verb with arguments it does not take is refused, never sent to the 
 
 const own = sandboxPortTarget(BOX, 8080);
 const routes = [
-  route("sandbox-web", { routingSlug: "web" }, own),
-  route("tunnel-demo", { routingSlug: "demo" }, ["itx", "tunnels", "demo"]),
+  route("sandbox-web", { url: { hostname: "web.mind.example" } }, own),
+  route("tunnel-demo", { url: { hostname: "demo.mind.example" } }, ["itx", "tunnels", "demo"]),
   route("tunnel-host", { url: { hostname: "shop.mind.example" } }, ["itx", "tunnels", "host"]),
 ];
 
@@ -93,7 +93,7 @@ test.for([
   },
   { name: "the platform's hostname", port: "iterate", refused: true },
   { name: "a host of the template's apps", port: "dash", refused: true },
-  { name: "a tunnel's routing slug", port: "demo", refused: true },
+  { name: "a tunnel's hostname", port: "demo", refused: true },
   { name: "a hostname that a route matches by its URL", port: "shop", refused: true },
   { name: "no DNS label", port: "Web_1", refused: true },
   { name: "longer than a route's name allows", port: "a".repeat(56), refused: true },
@@ -176,7 +176,7 @@ test("exposePort writes the route first, so a caller that may not set a route wr
     allowed: [
       {
         route: "sandbox-notes",
-        requestMatcher: { routingSlug: "notes" },
+        requestMatcher: { url: { hostname: "notes.mind.example" } },
         target: own,
         authRequirement: { visitors: "mind-members" },
       },
@@ -202,7 +202,7 @@ test("a request to a ready port goes to the container's object with the port nam
 
 function route(
   fetchRouteName: string,
-  requestMatcher: { routingSlug?: string; url?: { hostname: string } },
+  requestMatcher: { url?: { hostname: string } },
   target: unknown,
 ) {
   return { fetchRouteName, requestMatcher, target, authRequirement: null };

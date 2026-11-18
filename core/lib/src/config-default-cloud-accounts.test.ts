@@ -4,9 +4,11 @@
 // The fake registry takes only what the real one takes (the contract's own schemas).
 import { expect, test } from "vitest";
 import { cloudAccountsEvent } from "../../configs/default/cloud-accounts.ts";
+import { ITERATE_CLOUD } from "../../configs/default/cloud-deliveries.ts";
 import { IntegrationRegistryContract } from "./integrations.ts";
 
-const CLOUD = "https://cloud.example.com";
+/** The Cloud that the template names: the one whose accounts stand under "iterate Cloud". */
+const CLOUD = ITERATE_CLOUD;
 const PUBLISHED = { type: "events.iterate.com/mind/worker-updated", path: "/" };
 
 test("a mind whose stack names a Cloud gets the section: a card for each app the Cloud offers, and a row for each account connected through one", async () => {
@@ -25,14 +27,14 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
   expect(cards.google).toMatchObject({
     title: "Google",
     section: "iterate-cloud",
-    icon: { routingSlug: "dash", path: "/brands/google.svg" },
+    icon: "https://dash.example.com/brands/google.svg",
     status: { kind: "ok", text: "Connected" },
   });
   expect(cards.github).toMatchObject({ status: { text: "2 accounts" } });
   // an app with no account has no status, and its button begins the first connect
   expect(cards.slack).not.toHaveProperty("status");
   expect(cards.slack).toMatchObject({
-    actions: [{ label: "Connect", routingSlug: "dash", path: "/connect/slack" }],
+    actions: [{ label: "Connect", url: "https://dash.example.com/connect/slack" }],
   });
   expect(cards.google).toMatchObject({ actions: [{ label: "Add account" }] });
   // a person's grant and an installation's token; nothing for a key of another service, nor for
@@ -44,8 +46,8 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
       details: { Secret: "/secrets/google" },
       // a person's grant is connected again to bring new scopes in (cloud-scopes.ts)
       actions: [
-        { label: "Connect again", routingSlug: "dash", path: "/connect/google?secret=google" },
-        { label: "Manage", routingSlug: "dash", path: "/?page=secrets" },
+        { label: "Connect again", url: "https://dash.example.com/connect/google?secret=google" },
+        { label: "Manage", url: "https://dash.example.com/?page=secrets" },
       ],
     },
     "github/github": expect.objectContaining({ account: "ada" }),
@@ -53,7 +55,7 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
     "github/github-installation-7": expect.objectContaining({
       account: "acme",
       details: { Kind: "App installation", Secret: "/secrets/github-installation-7" },
-      actions: [{ label: "Manage", routingSlug: "dash", path: "/?page=secrets" }],
+      actions: [{ label: "Manage", url: "https://dash.example.com/?page=secrets" }],
     }),
   });
 
@@ -97,7 +99,7 @@ test("a secret set again is asked for again, one that the service refuses says s
     account: "Google account",
     status: { kind: "attention", text: "Google refused the token. Connect the account again." },
     actions: [
-      { label: "Connect again", routingSlug: "dash", path: "/connect/google?secret=google" },
+      { label: "Connect again", url: "https://dash.example.com/connect/google?secret=google" },
       { label: "Manage" },
     ],
   });
@@ -111,7 +113,7 @@ test("a secret set again is asked for again, one that the service refuses says s
   expect(cards.google).toMatchObject({ actions: [{ label: "Connect" }] });
 });
 
-test("a mind whose stack names no Cloud has no section, an app the Cloud drops loses its card, and a Cloud that gives no list changes nothing", async () => {
+test("a mind whose Cloud never gave a list has no section, an app the Cloud drops loses its card, and a Cloud that gives no list changes nothing", async () => {
   const alone = cloudMind({ cloud: false });
   await cloudAccountsEvent(alone.itx, PUBLISHED);
   expect(alone.registry()).toEqual({ heading: undefined, cards: {}, rows: {} });
@@ -149,7 +151,7 @@ test("every other secret stands under 'Keys and accounts', Cloud or none: one li
   });
   // one card: no icon, no description, no status, no button; each row has its own dot
   expect(cards).toEqual({ secrets: { title: "Secrets (5)", section: "keys", actions: [] } });
-  const manage = [{ label: "Manage", routingSlug: "dash", path: "/?page=secrets" }];
+  const manage = [{ label: "Manage", url: "https://dash.example.com/?page=secrets" }];
   expect(rows).toEqual({
     // a grant through an app of the mind's own says so
     "secrets/google-own-app": {
@@ -217,7 +219,7 @@ test("every other secret stands under 'Keys and accounts', Cloud or none: one li
 test("a row an older template made gets today's buttons at the next publish, with no service asked, once", async () => {
   const mind = cloudMind();
   await cloudAccountsEvent(mind.itx, PUBLISHED);
-  const manage = { label: "Manage", routingSlug: "dash", path: "/?page=secrets" };
+  const manage = { label: "Manage", url: "https://dash.example.com/?page=secrets" };
   // what the template before "Connect again" left: a person's rows with "Manage" alone, one of
   // them a refusal
   const registry = mind.itx.cd("/integrations");
@@ -253,7 +255,7 @@ test("a row an older template made gets today's buttons at the next publish, wit
     status: { kind: "ok" },
     details: { Secret: "/secrets/google" },
     actions: [
-      { label: "Connect again", routingSlug: "dash", path: "/connect/google?secret=google" },
+      { label: "Connect again", url: "https://dash.example.com/connect/google?secret=google" },
       manage,
     ],
   });
@@ -263,7 +265,7 @@ test("a row an older template made gets today's buttons at the next publish, wit
     status: refused,
     details: { Secret: "/secrets/github" },
     actions: [
-      { label: "Connect again", routingSlug: "dash", path: "/connect/github?secret=github" },
+      { label: "Connect again", url: "https://dash.example.com/connect/github?secret=github" },
       manage,
     ],
   });
@@ -407,22 +409,40 @@ const deleted = (path: string) => ({
   payload: { path },
 });
 
-/** A mind whose stack names the Cloud at CLOUD, with a Google grant, a GitHub grant and a GitHub App
+/** A mind whose template names the Cloud at CLOUD (with `cloud: false`, that Cloud gives no list), with a Google grant, a GitHub grant and a GitHub App
  *  installation's secret through the Cloud's apps, a Google grant of an app of its own, and a
  *  key of another service. */
 function cloudMind({ cloud = true } = {}) {
-  const secrets = new Map<string, { urls: string[]; refresh?: string; cloud?: string }>([
+  const secrets = new Map<
+    string,
+    { urls: string[]; refresh?: string; cloud?: string; cloudOrigin?: string }
+  >([
     [
       "/secrets/google",
-      { urls: ["https://www.googleapis.com"], refresh: "oauth-refresh-token", cloud: "google" },
+      {
+        urls: ["https://www.googleapis.com"],
+        refresh: "oauth-refresh-token",
+        cloud: "google",
+        cloudOrigin: CLOUD,
+      },
     ],
     [
       "/secrets/github",
-      { urls: ["https://api.github.com"], refresh: "oauth-refresh-token", cloud: "github" },
+      {
+        urls: ["https://api.github.com"],
+        refresh: "oauth-refresh-token",
+        cloud: "github",
+        cloudOrigin: CLOUD,
+      },
     ],
     [
       "/secrets/github-installation-7",
-      { urls: ["https://api.github.com"], refresh: "github-app-installation", cloud: "github" },
+      {
+        urls: ["https://api.github.com"],
+        refresh: "github-app-installation",
+        cloud: "github",
+        cloudOrigin: CLOUD,
+      },
     ],
     [
       "/secrets/google-own-app",
@@ -483,6 +503,7 @@ function cloudMind({ cloud = true } = {}) {
     /** The "iterate Cloud" section, its cards by app. */
     registry: () => mind.section("iterate-cloud"),
     itx: {
+      url: async () => "https://example.com/",
       fetch: async (request: Request) => {
         // every secret here keeps its token as `accessToken`: a placeholder for another field
         // finds nothing, as the vault answers
@@ -498,7 +519,7 @@ function cloudMind({ cloud = true } = {}) {
       },
       secrets: {
         list: async () => [...secrets].map(([path, secret]) => ({ path, ...secret })),
-        cloud: async () => (cloud ? { origin: CLOUD, clients: mind.offered } : null),
+        cloud: async (origin: string) => ({ origin, clients: cloud ? mind.offered : [] }),
       },
       rewriteRules: { list: async () => structuredClone(mind.rules) },
       cd: (path: string) => ({

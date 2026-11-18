@@ -633,7 +633,7 @@ function calendarMind() {
 
 /** THE TWO FORMS OF THE CLOUD'S DELIVERY (cloud-deliveries.ts). The key form reaches calendarEvent as
  *  `processEvent` hands it on. The mind form goes through worker.ts `processMindEvent`: the same
- *  event under /minds/iterate.com, and the Cloud key's signature the mind iterate.com's. What the
+ *  event under /minds/iterate.iterate.com, and the Cloud key's signature the mind iterate.iterate.com's. What the
  *  mind makes of it is on the same context of its own in both. */
 function bothForms() {
   return [
@@ -646,7 +646,7 @@ function bothForms() {
       deliver: (itx: unknown, event: Delivered) =>
         (Object.create(Config.prototype) as Config).processMindEvent({
           event: inMindForm(event) as never,
-          mind: "iterate.com",
+          mind: "iterate.iterate.com",
           itx: itx as never,
         }),
     },
@@ -658,10 +658,13 @@ type Delivered = Parameters<typeof calendarEvent>[1];
 
 function inMindForm(event: Delivered) {
   const cloud = event.source?.signer?.principal.actor === "iterate-cloud";
-  const iterateCom = { principal: { actor: "iterate.com", kind: "mind" }, key: "iterate-com-key" };
+  const iterateCom = {
+    principal: { actor: "iterate.iterate.com", kind: "mind" },
+    key: "iterate-com-key",
+  };
   return {
     ...event,
-    path: `/minds/iterate.com${event.path}`,
+    path: `/minds/iterate.iterate.com${event.path}`,
     ...(cloud && { source: { signer: iterateCom } }),
   };
 }

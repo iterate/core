@@ -39,14 +39,17 @@
     "./facts": "./src/facts.ts",
     "./acts": "./src/acts.ts",
     "./signed": "./src/signed.ts",
+    "./mind-identity": "./src/mind-identity.ts",
+    "./mind-identity-log": "./src/mind-identity-log.ts",
     "./secret-placeholder": "./src/secret-placeholder.ts",
-    "./sign-in-access": "./src/sign-in-access.ts",
     "./stream/processor": "./src/stream/processor.ts",
     "./stream/contract": "./src/stream/contract.ts",
     "./stream/test-support": "./src/stream/test-support.ts",
     "./oauth-scopes": "./src/oauth-scopes.ts",
     "./mind-ingress": "./src/mind-ingress.ts",
+    "./app-description": "./src/app-description.ts",
     "./app-config": "./src/app-config.ts",
+    "./mind-config": "./src/mind-config.ts",
     "./compatibility-date": "./src/compatibility-date.ts",
     "./package-builds": "./src/package-builds.ts",
     "./platform-retry": "./src/platform-retry.ts",
@@ -133,13 +136,17 @@
         "types": "./dist/signed.d.mts",
         "import": "./dist/signed.mjs"
       },
+      "./mind-identity": {
+        "types": "./dist/mind-identity.d.mts",
+        "import": "./dist/mind-identity.mjs"
+      },
+      "./mind-identity-log": {
+        "types": "./dist/mind-identity-log.d.mts",
+        "import": "./dist/mind-identity-log.mjs"
+      },
       "./secret-placeholder": {
         "types": "./dist/secret-placeholder.d.mts",
         "import": "./dist/secret-placeholder.mjs"
-      },
-      "./sign-in-access": {
-        "types": "./dist/sign-in-access.d.mts",
-        "import": "./dist/sign-in-access.mjs"
       },
       "./stream/processor": {
         "types": "./dist/stream/processor.d.mts",
@@ -161,9 +168,17 @@
         "types": "./dist/mind-ingress.d.mts",
         "import": "./dist/mind-ingress.mjs"
       },
+      "./app-description": {
+        "types": "./dist/app-description.d.mts",
+        "import": "./dist/app-description.mjs"
+      },
       "./app-config": {
         "types": "./dist/app-config.d.mts",
         "import": "./dist/app-config.mjs"
+      },
+      "./mind-config": {
+        "types": "./dist/mind-config.d.mts",
+        "import": "./dist/mind-config.mjs"
       },
       "./compatibility-date": {
         "types": "./dist/compatibility-date.d.mts",

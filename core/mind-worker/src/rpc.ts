@@ -2,17 +2,35 @@
 // (iterate/workers). The boundary alone holds a binding to it. A mind that runs elsewhere (a home
 // lab) answers the same four calls over its socket.
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { contextAt } from "core-itx";
+import { contextAt, implicitRootsAt, sessionContext } from "core-itx";
 import type { MindTarget } from "iterate/workers";
 import { runApprovedAct } from "./approved-acts.ts";
 import type { Env } from "./env.ts";
 import { mindResponse } from "./http.ts";
 import { EMAIL_PATH, receiveEmail } from "./integrations/email.ts";
+import { LenderRoot } from "./lender-root.ts";
 import { appendAsPlatform } from "./platform-append.ts";
 
 export class Mind extends WorkerEntrypoint<Env> implements MindTarget {
   fetch(request: Parameters<MindTarget["fetch"]>[0]) {
     return mindResponse(request, this.env, this.ctx);
+  }
+
+  /** THE MIND FOR ONE SESSION OF THE CONTROL PLANE'S API. The boundary ended the session and
+   *  learned who it is (iterate/workers `ApiCaller`); only the boundary reaches this entrypoint,
+   *  so `who` is trusted as it stands. This invocation lives for as long as the boundary holds
+   *  the answer, and what the session lent ends with it (core-itx `sessionContext`). */
+  api(who: Parameters<MindTarget["api"]>[0]) {
+    const waitUntil = (promise: Promise<unknown>) => this.ctx.waitUntil(promise);
+    if ("principal" in who) return sessionContext(waitUntil, who);
+    // A key is no principal. Its lend is its own act in the log, through its key, and the root
+    // below is all that it reaches.
+    const { lender } = who;
+    return new LenderRoot(
+      sessionContext(waitUntil, { principal: { actor: lender.actor }, grant: lender.key }),
+      lender,
+      implicitRootsAt("/"),
+    );
   }
 
   /** Only the boundary reaches this entrypoint, so what it appends is the platform's, which the

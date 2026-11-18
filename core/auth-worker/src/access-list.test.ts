@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { clientsWithAccess, endFields, endsOf, logoOriginsOf } from "./access-list.ts";
 import type { Env } from "./env.ts";
+import { configVars } from "./test-support.ts";
 import type { ClientWithAccess, SignIn } from "./oauth.ts";
 
 test("a client is drawn once, with each sign-in it holds under it: what it reaches, since when, when it was last used and when it ends", () => {
@@ -138,11 +139,8 @@ const words = (html: string) =>
     .replaceAll(" ,", ",")
     .replaceAll(" .", ".");
 
-// the cast: the list reads the mind's domain and no binding
-const env = {
-  DOMAIN: "example.com",
-  AUTH_SETTINGS: JSON.stringify({ login: { allow: [{ email: "owner@example.net" }] } }),
-} as unknown as Env;
+// the cast: the list reads the mind's config and no binding
+const env = configVars() as unknown as Env;
 
 /** A Codex CLI's sign-in to the mind's MCP server, renewed nine days after it was made. */
 const codex: SignIn = {

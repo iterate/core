@@ -1,23 +1,20 @@
+import { type MindConfig, controlPlaneOriginOf, zoneOf } from "iterate/mind-config";
+
+/** WHERE A PAGE OF THIS WORKER MAY SEND A PERSON ON, of the `next` a link gave: an address of
+ *  the control-plane hostname, or of any hostname of any zone of the mind, which is the owner's own
+ *  site. The answer is the whole `https:` URL that was checked, never a part cut out of it, so the
+ *  browser goes exactly where the check looked: `//host` is that host, a `blob:` URL that carries
+ *  an origin is no `https:` URL, and neither becomes a path of this origin. Null for anywhere
+ *  else. */
 export function honouredNext(
   next: string | null,
-  issuer: string,
-  trustedClients: readonly string[] = [],
+  config: Pick<MindConfig, "controlPlaneHostname" | "zones">,
 ): string | null {
-  if (!next) return null;
-  let url: URL;
-  try {
-    url = new URL(next, issuer);
-  } catch {
-    return null;
-  }
-  // resolved first, so `//evil.example` and `/\evil.example` are judged by where they really go
-  if (url.origin === issuer) return `${url.pathname}${url.search}${url.hash}`;
-  // A hostname of the mind (its domain, or a label under it) is the owner's own site: the Dash,
-  // the Docs app. The issuer is `iterate.<domain>`.
-  const domain = new URL(issuer).hostname.split(".").slice(1).join(".");
-  if (url.protocol === "https:" && (url.hostname === domain || url.hostname.endsWith(`.${domain}`)))
-    return url.href;
-  return trustedClients.includes(url.origin) ? url.href : null;
+  if (!next || !URL.canParse(next, controlPlaneOriginOf(config))) return null;
+  const url = new URL(next, controlPlaneOriginOf(config));
+  const own = url.hostname === config.controlPlaneHostname || zoneOf(config, url.hostname) !== null;
+  if (url.protocol !== "https:" || url.port || url.username || url.password || !own) return null;
+  return url.href;
 }
 
 // The mind resolves dot segments, so `/integrations/../secrets/x` would land at `/secrets/x`
@@ -40,26 +37,9 @@ export const underPaths = (path: string, paths: readonly string[] | undefined) =
 
 const SERVICE_PATHS_ROOT = "/integrations/";
 
-/** The stack's name for its iterate Cloud. A reader trusts a signer by this name
- *  (core/configs/default/worker.ts), so no key gets it for the asking. */
-export const CLOUD_ACTOR = "iterate-cloud";
-
-/** A service names itself on `/keys/enrol`. The Cloud's name goes only to the key that the stack's
- *  own Cloud publishes (`<cloud.origin>/.well-known/iterate-cloud`), or to a key the stack's
- *  config names (`auth.keys`). `cloud` is null when the config names no Cloud, and its `publicKey`
- *  when that Cloud gave none. Answers why `publicKey` may not have the name, or null. */
-export function cloudNameRefusal(
-  publicKey: string,
-  cloud: { origin: string; publicKey: string | null } | null,
-): string | null {
-  if (!cloud)
-    return `The name ${CLOUD_ACTOR} is for this mind's iterate Cloud alone, and its config names none (cloud.origin).`;
-  if (!cloud.publicKey)
-    return `The name ${CLOUD_ACTOR} is for this mind's iterate Cloud alone, and ${cloud.origin} gave no key to compare. Try again.`;
-  return publicKey === cloud.publicKey
-    ? null
-    : `The name ${CLOUD_ACTOR} is for this mind's iterate Cloud alone, and this is not the key of ${cloud.origin}.`;
-}
+/** A name that a reader in the mind trusts a signer by (core/configs/default/worker.ts), so no
+ *  service gets it for the asking on `/keys/enrol`. */
+const RESERVED_ACTOR = "iterate-cloud";
 
 export type ServiceKeyRequest = {
   actor: string;
@@ -105,10 +85,12 @@ export function serviceKeyRequestOf(
   const provide = field("provide");
   if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(actor))
     return { refused: "The service's name must be lowercase letters, digits and hyphens." };
+  if (actor === RESERVED_ACTOR)
+    return { refused: `No service may call itself ${RESERVED_ACTOR} here.` };
   if (!label || label.length > 100) return { refused: "The service must give a short name." };
   if (!/^[A-Za-z0-9_-]+$/.test(publicKey)) return { refused: "The service sent no public key." };
   // A key a member allows on a page reaches integrations alone: a link someone was tricked into
-  // opening cannot ask for an agent's context or the mind's root. A wider key is the config's.
+  // opening cannot ask for an agent's context or the mind's root.
   if (
     !paths.every(
       (prefix) =>
@@ -174,11 +156,11 @@ export type StatementPart = { text: string; from?: "checked" | "link" | "you" };
  *  them (`enrolPayloadOf`), but nobody checked them. */
 export function statementInParts(
   ask: ServiceKeyRequest,
-  facts: { domain: string; key: string; person: string },
+  facts: { mind: string; key: string; person: string },
 ): StatementPart[][] {
   const checked = (text: string): StatementPart => ({ text, from: "checked" });
   const link = (text: string): StatementPart => ({ text, from: "link" });
-  const domain = checked(facts.domain);
+  const mind = checked(facts.mind);
   const lent = ask.provide && checked(`itx.${ask.provide}`);
   const adds: StatementPart[] = ask.paths.length
     ? [
@@ -196,12 +178,12 @@ export function statementInParts(
   const may: StatementPart[] = lent
     ? [
         { text: "lend its functions to " },
-        domain,
+        mind,
         { text: " as " },
         lent,
         ...(adds.length ? [{ text: ", and " }, ...adds] : []),
       ]
-    : [...adds, { text: ", in " }, domain];
+    : [...adds, { text: ", in " }, mind];
   const sentences: StatementPart[][] = [
     [
       { text: "I, " },
@@ -217,14 +199,14 @@ export function statementInParts(
     sentences.push(
       [
         { text: "The agents of " },
-        domain,
+        mind,
         { text: " call them, so the key's holder sees what they send." },
       ],
       [
         { text: "If " },
         lent,
         { text: " is lent to " },
-        domain,
+        mind,
         { text: " now, the key's holder takes it when that lend ends." },
       ],
     );
@@ -234,9 +216,6 @@ export function statementInParts(
       link(ask.actor),
       { text: " and this key." },
     ]);
-  // serviceKeyAsked (./keys-pages.ts) has compared the key with the one the stack's Cloud publishes
-  if (ask.actor === CLOUD_ACTOR)
-    sentences.push([domain, { text: " checked that this is the key of its iterate Cloud." }]);
   sentences.push([
     { text: "The link says that the key belongs to " },
     link(`“${ask.label}”`),
@@ -269,16 +248,16 @@ export function otherKeyLending(
 }
 
 /** THE CONSENT PAGE'S FIRST WORDS, for a person who has never met a key: what its holder can do
- *  in `domain`, and what it cannot. They name nobody: whose key it is, is the link's word, and
- *  the statement under them marks it so. */
+ *  in the mind `mind`, and what it cannot. They name nobody: whose key it is, is the link's word,
+ *  and the statement under them marks it so. */
 export function scopePlainly(
   { paths, provide }: Pick<ServiceKeyRequest, "paths" | "provide">,
-  domain: string,
+  mind: string,
 ) {
   const places = paths.length === 1 ? "one place" : `${paths.length} places`;
   const can = [
-    provide && `offer its functions to the agents of ${domain}`,
-    paths.length > 0 && `send messages to ${places} in ${domain}`,
+    provide && `offer its functions to the agents of ${mind}`,
+    paths.length > 0 && `send messages to ${places} in ${mind}`,
   ]
     .filter(Boolean)
     .join(", and ");

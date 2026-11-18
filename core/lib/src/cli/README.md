@@ -1,6 +1,7 @@
 # The iterate CLI
 
-The `iterate` command: each call talks to one mind, addressed by its domain (`iterate/mind-api`),
+The `iterate` command: each call talks to one mind, addressed by its control-plane hostname
+(`iterate/mind-api`; `example.com` is read as `iterate.example.com`),
 and a machine keeps a [profile](#profiles) for each mind it uses.
 Requires Node >=26; no Bun runtime. It is part of the SDK's package, [`iterate`](../../README.md),
 and every connection it makes is the Node client's ([`iterate/node`](../node.ts)).
@@ -8,6 +9,7 @@ and every connection it makes is the Node client's ([`iterate/node`](../node.ts)
 ```sh
 npx iterate                               # offline help
 npx iterate deploy                        # a new mind in your own Cloudflare account
+npx iterate identity show example.com     # the mind's id, and where its identity key is
 npx iterate login example.com             # sign in, and make it the profile's mind
 npx iterate login example.com --device    # approve from a phone, when the issuer offers it
 npx iterate whoami
@@ -23,7 +25,7 @@ npx iterate fs read ./notes.md            # a file's bytes on stdout; also write
 ```
 
 `--mind <address>` names another mind for one command. A mind's API is
-`https://iterate.<address>/api`, and its issuer is whatever the API's protected-resource metadata
+`https://<address>/api`, and its issuer is whatever the API's protected-resource metadata
 names (RFC 9728): the CLI finds it, registers itself there (RFC 7591), and signs in with PKCE and a
 loopback callback for the API as the resource (RFC 8707). The sign-in is kept per resource in
 `${XDG_CONFIG_HOME:-~/.config}/iterate/sessions.json`, mode 600, and refreshed before a connection
@@ -57,9 +59,10 @@ The link under the code works everywhere.
 
 ## Deploy a mind
 
-`iterate deploy` puts a new mind into your own Cloudflare account, at its own domain. It is one
-program with no model in it: it asks for the account and the domain, and does the rest. Its code is
-[deploy.ts](deploy.ts) and [cloudflare-access.ts](cloudflare-access.ts).
+`iterate deploy` puts a mind into your own Cloudflare account, at its own domain. It is one
+program with no model in it: it asks for the account and the domain, writes the one input of the
+stack's script ([core/alchemy](../../../alchemy/README.md)), and runs that script from this
+computer. Its code is [deploy.ts](deploy.ts) and [cloudflare-access.ts](cloudflare-access.ts).
 
 ```sh
 npx iterate deploy                                   # a person at a terminal: two questions
@@ -69,20 +72,25 @@ CLOUDFLARE_API_TOKEN=… npx iterate deploy --account <id> --domain example.com 
 
 What it does, in order:
 
-1. **The stack's source.** It fetches [iterate/core](https://github.com/iterate/core) into
-   `${XDG_CACHE_HOME:-~/.cache}/iterate/core` and installs it with pnpm (through `npx` when pnpm is
-   not installed), while you sign in. In a checkout of the source it deploys that checkout.
-   `--source <folder>` names a checkout, `--ref <branch or commit>` another version. It needs git.
-2. **Cloudflare.** You approve a code on Cloudflare's page (the device flow, with the `cf` CLI's
+1. **Cloudflare.** You approve a code on Cloudflare's page (the device flow, with the `cf` CLI's
    public client: no secret, no server of iterate's). The access lives about an hour and is not
    renewed. It is kept in the CLI's config folder until a deploy works, then revoked, so a second
-   run asks for no second approval. `CLOUDFLARE_API_TOKEN` replaces the sign-in ([the permissions
-   it needs](../../../alchemy/README.md#the-api-token)).
-3. **The account.** One that you selected on Cloudflare's page, or a new one in your name
+   run asks for no second approval. `CLOUDFLARE_API_TOKEN` replaces the sign-in.
+   - **Tick "Account API Token Provisioning" on Cloudflare's page.** Cloudflare marks it as
+     sensitive and leaves it unticked. The deploy makes two API tokens with which the mind reads
+     its own logs and metrics; they read nothing else and deploy nothing.
+   - **Without the tick the command deploys nothing.** It reads what the sign-in granted, and then
+     offers the other way: a link to Cloudflare's own page that makes an API token with the
+     deploy's permissions filled in, and a prompt where you paste the token. The token is not
+     shown, is never written to a file, and only the deploy itself runs with it. Or run the
+     command again and tick the box.
+   - The sign-in asks for what one deploy of the stack needs and for nothing more: `STACK_SCOPES`
+     in [cloudflare-access.ts](cloudflare-access.ts) says which resource needs each scope.
+2. **The account.** One that you selected on Cloudflare's page, or a new one in your name
    (`--new-account`): Cloudflare allows a login five extra accounts. An approval covers only the
    accounts selected on that page, so for a new account, or one you did not select, Cloudflare
    asks once more.
-4. **The domain.** A domain of the account, a new one that Cloudflare's registrar sells, or one
+3. **The domain.** A domain of the account, a new one that Cloudflare's registrar sells, or one
    from another registrar, whose nameservers you then change. It asks the registrar about up to
    20 names made from your name (the "-erate" names first, as iterate's is) and lists the free
    ones with their price a year. You can type a domain, or a few words to get more names. It asks
@@ -95,45 +103,140 @@ What it does, in order:
    best; a subdomain works when it is a zone of its own). A domain of the account with a route of
    another Worker, or with an A, AAAA, CNAME or MX record, is in use: the command says what is
    there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS
-   record and Workers route of that domain, right before the deploy and after every other check. The owner's own address must be elsewhere.
-5. **Workers Paid and R2.** It opens the page for each one that is off and waits until it is on.
-6. **The deploy**: `pnpm run deploy` of [core/alchemy](../../../alchemy/README.md), with a config
-   that names you as the only member. On a dev zone the whole command took 1 min 41 s, and 2 min 10 s when the new state store refused the first try.
+   record and Workers route of that domain, right before the deploy and after every other check.
+4. **Workers Paid and R2.** It opens the page for each one that is off and waits until it is on.
+5. **The config**, which is the script's one input, written to
+   `${XDG_CACHE_HOME:-~/.cache}/iterate/deploys/<stage>/config.json`:
+   - `controlPlaneHostname`: `iterate.<domain>`. `--control-plane-hostname` names another: the
+     domain itself, or one label under it.
+   - `ownerEmails`: the owner, who is the Cloudflare login unless `--owner` names another address.
+     The address must not be at the mind's own domain.
+   - `alchemy.stageName`, the middle of every resource's name (`iterate-<stage>-auth`): never
+     asked. It is the domain with `-` for each dot, cut to 32 characters, with `z` first when
+     the domain starts with a digit.
+   - `topology: "full-cloudflare"`, and `cloudflare`: the account and the one domain.
+   - `mindId`: for a new mind, the id of the identity that the command makes right before the
+     deploy ([The mind's identity key](#the-minds-identity-key)). A mind that is there already
+     keeps its own.
+6. **The source.** It fetches [iterate/core](https://github.com/iterate/core) into
+   `${XDG_CACHE_HOME:-~/.cache}/iterate/core` and installs it with pnpm (through `npx` when pnpm is
+   not installed), while you sign in. In a checkout of the source it deploys that checkout.
+   `--source <folder>` names a checkout, `--ref <branch or commit>` another version. It needs git.
+   A source from before the one Alchemy script is refused, before anything changes.
+7. **The deploy**: `pnpm run deploy --stage <stage> --yes` of core/alchemy. Its output goes to
+   `deploy.log` beside the config. A new state store can refuse the run that made it ("State
+   store request failed"): the command then deploys once more by itself. Any other failure prints
+   the log's last lines and its path. Then the command waits until the sign-in page and the
+   domain's own front page answered five times in a row. On a dev zone the whole command took
+   2 min 14 s (18 Nov 2026): the deploy 1 min 50 s, the wait 20 s.
+
+**A mind that is there already.** When a route of the domain names a mind's boundary Worker, the
+command reads that mind's own config from Cloudflare (the boundary Worker's variable `ITERATE`),
+shows it, and deploys over it with the same owners, hostname, domains and topology. `--owner` and
+`--control-plane-hostname` each replace what the mind has. It asks first; `--yes` is the yes. No
+file of an earlier deploy is needed. A run that changed nothing took 29 s.
 
 After the deploy, with a person at the terminal, it does the mind's first steps:
 
-1. **The passkey and the first sign-in.** It opens one page of your mind, with a link that works
-   once, within 24 hours. You add your passkey there, and the same page then signs this terminal
-   in (`iterate login`). A passkey is made in a browser: the CLI cannot make one.
+1. **The first sign-in.** It starts this terminal's sign-in (`iterate login`) and opens its page.
+   Your browser asks for a passkey there: you have none yet, so close that, and choose "prove your
+   email address with Cloudflare". Cloudflare mails a code to the owner's address. After the code
+   you add your passkey, and the same page then signs this terminal in. A passkey is made in a
+   browser: the CLI cannot make one.
 2. **What pays for the model:** a ChatGPT Plus or Pro plan ([A ChatGPT plan](#a-chatgpt-plan)), an
-   OpenAI API key that you paste on a page of your own mind, or nothing now.
-3. **The onboarding agent answers.** It says "hi" to `/agents/onboarding` and waits for the
-   model's answer, up to 50 seconds. With none it says why, and step 2 comes again.
-4. **The MCP server.** It offers to add `https://iterate.<domain>/mcp` to Claude Code and Codex,
-   whichever is installed, under the domain's name (`ada-labs-com`) for the whole user, and says how each one signs
-   in.
+   OpenAI API key that you paste on a page of your own mind, or nothing now. Then it says "hi" to
+   `/agents/onboarding` and waits for the model's answer, up to 50 seconds. With none it says
+   why, and the question comes again.
+3. **The MCP server.** It offers to add `https://<control plane>/mcp` to Claude Code and Codex,
+   whichever is installed, under the control plane's name (`iterate-ada-labs-com`) for the whole
+   user, and says how each one signs in.
 
 `--no-setup` leaves these steps out, and so does a run with nobody at the terminal: it then
-prints the link alone. The first sign-in comes back to this computer's browser: over SSH, use
-`--no-setup`, then `iterate login --device`. The config, the log and the name of the stack are in
-`${XDG_CACHE_HOME:-~/.cache}/iterate/deploys/<name>/`.
+prints the sign-in page alone.
 
-- **It handles the expected way alone.** A run that stops says why. Run it again: each step reads
-  what the account has, and a deploy keeps what it made. A coding agent can run and supervise it:
-  with nobody at the terminal each choice comes from its flag (`iterate deploy --help`), and a
-  missing one is named.
-- **No telemetry and no Cloudflare connection for the mind after a sign-in.** Both make API tokens
-  of the account, and the sign-in does not ask for the scope that makes them (Cloudflare lists it
-  as sensitive). With a token of your own that may make API tokens, `--api-tokens` turns both on.
-- **Sandboxes start the Cloudflare-managed image `cloudflare/debian-trixie`** (Node and npm).
-  The mind installs what it needs in a sandbox and saves a snapshot. `--iterate-dev-image` gives
-  the stack iterate's image instead (git, gh, Chromium, the coding CLIs): the deploy pushes it to
-  the account's registry, about 1.6 GB through this computer.
-- **It is for a new mind.** To update one, deploy from its stored config
-  ([core/alchemy](../../../alchemy/README.md#the-stored-config)). A deploy over a mind that this
-  command made writes its config again, with the owner as its only member.
-- `--no-cloud` leaves iterate Cloud out of the mind's config: no GitHub, Google or Slack client of
-  iterate's.
+**A terminal on another computer than your browser** (over SSH, or on Linux with no display).
+The whole command works there. Both sign-ins are device sign-ins: the terminal shows a page and
+a code, and you open the page in any browser. For the first sign-in to the mind, the last pages
+show the terminal's code, take a press of your new passkey, and ask you to allow the device
+([Login without a browser](#login-without-a-browser) says how the flow is chosen). No page is
+opened on the terminal's computer. One step cannot start from such a terminal: OpenAI's sign-in
+for a ChatGPT plan comes back to the computer that the browser is on. The command says so and
+names what to run there, `npx iterate@latest chatgpt connect <address>`, which signs that
+computer in to the mind first. Then it goes on and asks the onboarding agent, whose answer
+shows whether a model is connected. The coding agents that it offers the MCP server to are the
+ones on the terminal's computer, and it prints the commands for the other computer.
+
+**It handles the expected way alone.** A run that stops says why. Run it again: each step reads
+what the account has, and a deploy keeps what it made. A coding agent can run and supervise it:
+with nobody at the terminal each choice comes from its flag (`iterate deploy --help`), and a
+missing one is named.
+
+## Recover an owner
+
+`iterate recover --domain <domain> --owner <email>` is for an owner who has no passkey left. The
+mind itself has no way back for an owner: whoever holds an owner's mailbox must not hold the
+mind. So the proof is the mind's Cloudflare account, as it is for a deploy. Its code is
+[recover.ts](recover.ts).
+
+The command signs in to Cloudflare as `iterate deploy` does, and asks for much less: it reads the
+domain, its routes and the boundary Worker's settings, and it writes to D1. It finds the mind by
+its domain, checks that the address is one of the mind's owners, asks for a yes (`--yes`), and
+then runs two statements on the auth Worker's database, `iterate-<stage>-auth-db`:
+
+1. It revokes every passkey of that owner. A link opens nothing while one is live.
+2. It adds one sign-in link, of which the database holds only the SHA-256 of its random ticket.
+
+It prints the link, `https://<control plane>/keys/first#<ticket>`. The link works once, within 24
+hours, and whoever opens it adds the owner's new passkey: pass it on as you would a password.
+What the owner was signed in to (apps, terminals) stays signed in, and the owner ends it on the
+mind's page `/sessions`.
+
+## The mind's identity key
+
+A mind's id is the SHA-256 of its first signed identity record, the genesis
+([`iterate/mind-identity`](../mind-identity.ts)). The id stays when the mind's domain, its
+Cloudflare account or its keys change. A root key that signed the genesis proves that the mind is
+yours. Its code is [identity.ts](identity.ts).
+
+`iterate deploy` makes the identity of a new mind with no question, after your last answer and
+before anything is deployed. It needs Node 24.7 or newer for that, and says so at its start. It
+writes two files to `${XDG_CONFIG_HOME:-~/.config}/iterate/identities/`, each mode 600 in a folder
+of mode 700:
+
+- `<mind id>.key.json`: the one root key, an ML-DSA-65 key, as its 32-byte seed. It has no
+  passphrase. **Keep a copy of this file**: whoever has it can change the mind's root keys, and
+  without it nobody can. The command prints its path once, at the end of the first deploy. The
+  key is never printed and never leaves the computer.
+- `<mind id>.json`: the signed records, oldest first. The genesis names that key alone, with
+  threshold 1, and the control plane's hostname. The second lists the stack's working key.
+
+Once the mind answers, the command posts the records that the mind does not publish yet to
+`POST https://<control plane>/.well-known/iterate`. No sign-in is needed: a record proves itself.
+After a 5xx answer or a fault of the network it asks again after 1, 2, 4, 8 and 16 seconds, and
+after nothing else: a 4xx is the mind's last word. A post that fails does not fail the deploy: the
+command says what failed, and `iterate identity post` posts again.
+
+Then the command lists the stack's working key. The stack makes an ML-DSA-65 key in the deploy and
+shows it at `https://<control plane>/keys/stack.json` as a candidate: until a record lists it, the
+mind signs nothing as itself and takes no statement from another mind. When the last record does
+not list that key, the command writes the next record (the last one's content, with that key as
+its working key for statements), signs it with the key file, saves it with the others, and posts
+it. A stack on a new database shows a new key, and the next post lists it in place of the old one.
+The key is read over TLS from the mind's own hostname: whoever answers there gets their key
+listed.
+
+A deploy over a mind that has an id passes the id on, signs nothing and makes no key. From a
+computer that holds the mind's records it posts what is missing, and the last record again even
+when the mind has it: the mind then answers that it knows the record, and that request makes its
+stack deliver the events that it still owes the mind's own log. From any other computer it asks
+nothing and says nothing. `iterate recover` reads the mind's config and deploys nothing, so the id stays.
+
+```sh
+npx iterate identity show example.com   # the id, the last record's hostnames, the records here and published, the key file
+npx iterate identity post example.com   # post the records here that the mind lacks, and the last one again
+```
+
+Both read the id from the log that the mind publishes, so the mind must answer.
 
 ## Files of this machine
 
@@ -195,9 +298,9 @@ iterate tunnel 3000 --name hello --hostname hello.tunnels.example.com
 
 The URL alone goes to stdout; everything else goes to stderr. The tunnel lends the local port to
 the mind as `itx.tunnels.<name>` with the fetch route `tunnel-<name>` (`itx.fetchRoutes`) whose
-target is it. The route matches the name's host, `<name>.<address>` (`requestMatcher: {
-routingSlug }`), or with `--hostname` that one hostname alone (`url: { hostname }`). By default
-only signed-in visitors get through. The route lives as long as the lend: Ctrl-C deletes it, and a
+target is it. The route matches one hostname (`requestMatcher: { url: { hostname } }`):
+`<name>.<the mind's first zone>`, or the one `--hostname` names. By default only signed-in visitors
+get through. The route lives as long as the lend: Ctrl-C deletes it, and a
 tunnel that dies without it leaves the host answering 502 until the mind notices, then the
 route is gone too.
 
@@ -225,14 +328,16 @@ class LocalSite extends RpcTarget {
   }
 }
 // the route rides the lend: set again when the platform re-attaches it, gone when it ends
-await mind.provide(`itx.tunnels.${routingSlug}`, new LocalSite(), {
+// `mind.url()` is the apex of the mind's first zone
+const hostname = `${name}.${new URL(await mind.url()).hostname}`;
+await mind.provide(`itx.tunnels.${name}`, new LocalSite(), {
   fetchRoute: {
-    fetchRouteName: `tunnel-${routingSlug}`,
-    requestMatcher: { routingSlug },
+    fetchRouteName: `tunnel-${name}`,
+    requestMatcher: { url: { hostname } },
     authRequirement: null,
   },
 });
-console.log(`https://${routingSlug}.${address}/`);
+console.log(`https://${hostname}/`);
 ```
 
 ## Provide
@@ -300,7 +405,7 @@ iterate provide ./whatsapp.ts --key ~/.iterate/whatsapp.key --mind example.com
 ```
 
 - **The first run** makes a P-256 key pair, writes the private half to the file (mode 600) and
-  prints a link to `iterate.<mind>/keys/enrol`. A member of the mind opens it, signs in and presses
+  prints a link to `<mind>/keys/enrol`. A member of the mind opens it, signs in and presses
   Allow, which asks for their passkey: the passkey signs the key and what it may do. The bridge
   waits for that, for 15 minutes, and then connects.
 - **Every later run** connects with no person. Each connection asks the mind for a token with a
@@ -310,7 +415,7 @@ iterate provide ./whatsapp.ts --key ~/.iterate/whatsapp.key --mind example.com
   `provide` and nothing else, so the file cannot read or write the mind through it. With
   `--paths /integrations/whatsapp/` the link also asks for those paths, and the file's default
   export gets `append(path, { type, payload })`: it adds an event there, signed by the key.
-- **The key has no end date.** The member who allowed it sees it on `iterate.<mind>/keys`, with
+- **The key has no end date.** The member who allowed it sees it on `<mind>/keys`, with
   what it may do and the day it last asked for a token, and removes it there. After a removal the
   mind gives it no new token, and its open connection ends when its token does, within the hour.
 - **The file is the bridge.** Whoever can read the key file can lend that name. Keep it on the
@@ -343,8 +448,8 @@ profile, then `default`. `iterate login <address>` points the selected profile a
 iterate login example.com                  # the profile `default`
 iterate config set --name lab              # a second profile
 iterate --config lab login example.org     # sign it in; the first sign-in stays
-iterate whoami                             # example.com
-iterate --config lab whoami                # example.org
+iterate whoami                             # iterate.example.com
+iterate --config lab whoami                # iterate.example.org
 iterate --config lab provide ./whatsapp.ts # both can run at once, each in its own terminal
 iterate config set --name lab --set-workspace   # in a folder: commands there use `lab`
 iterate config use lab                     # make it the default

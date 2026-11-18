@@ -1,4 +1,4 @@
-import { newWebSocketRpcSession, newWorkersRpcResponse, type RpcTarget } from "capnweb";
+import { newWebSocketRpcSession, type RpcTarget } from "capnweb";
 import type { Caller } from "./caller.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import { disposeRpcStub } from "./context/rpc-stubs.ts";
@@ -10,9 +10,12 @@ import { IterateContextRpcTarget } from "./iterate-context.ts";
 // The longest delay a timer takes (2^31 − 1 ms).
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
-// A socket closes with 1008 (policy violation, RFC 6455 7.4.1) when the caller's credential ends.
-export async function serveSession(
-  request: Request,
+// A SESSION THAT ENDS IN THE MIND'S OWN WORKER: a page of one of the mind's hostnames opens it
+// (./serve-host.ts `itxSession`, ./person-context.ts), and each caller has checked that the request
+// is a WebSocket upgrade. A session of the API ends in the boundary (./iterate-context.ts
+// `sessionContext`). The socket closes with 1008 (policy violation, RFC 6455 7.4.1) when the
+// caller's credential ends.
+export function serveSession(
   ctx: ExecutionContext,
   session: {
     caller: Caller;
@@ -26,7 +29,7 @@ export async function serveSession(
     // `teardown` ends with the session: a lend made through another caller on it ends with it too.
     root?: (context: IterateContextRpcTarget, teardown: SessionTeardown) => RpcTarget;
   },
-): Promise<Response> {
+): Response {
   const teardown = new SessionTeardown();
   const context = new IterateContextRpcTarget(
     contexts(),
@@ -36,12 +39,6 @@ export async function serveSession(
     session.caller,
   );
   const root = session.root?.(context, teardown) ?? context;
-  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
-    try {
-      return await newWorkersRpcResponse(request, root);
-    } finally {
-      teardown.disposeAll();
-    }
   const pair = new WebSocketPair();
   const [client, server] = [pair[0], pair[1]];
   server.accept();
@@ -115,9 +112,18 @@ export function endedByFrames(
 
 // Holds each lend relay so it is not GC'd. Re-adding a key is a reconnect: the incumbent is
 // disposed, and the lease a stale handle holds cannot tear down its replacement.
+//
+// `disposeAll` is the session's end, and it is final: a lend whose attach was still on its way
+// then (./iterate-context.ts `provide` awaits the pager's dial) registers after it, with nothing
+// left to close its pager. Such a lend is closed as it registers.
 export class SessionTeardown {
   readonly #undoByKey = new Map<string, { dispose(): void }>();
+  #over = false;
   add(key: string, undo: { dispose(): void }): { dispose(): void } {
+    if (this.#over) {
+      undo.dispose();
+      return { dispose: () => {} };
+    }
     this.#undoByKey.get(key)?.dispose();
     this.#undoByKey.set(key, undo);
     return {
@@ -135,6 +141,7 @@ export class SessionTeardown {
     undo.dispose();
   }
   disposeAll(): void {
+    this.#over = true;
     for (const undo of this.#undoByKey.values()) undo.dispose();
     this.#undoByKey.clear();
   }

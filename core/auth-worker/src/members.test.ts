@@ -4,6 +4,7 @@ import { browserSessionsFake } from "./browser-sessions-fake.ts";
 import { sessionCookie } from "./cookies.ts";
 import type { Env } from "./env.ts";
 import { membersResponse } from "./members.ts";
+import { configVars, keyRows, stackKeyPair } from "./test-support.ts";
 
 const LINK = "events.iterate.com/account/member-link-made";
 
@@ -69,8 +70,8 @@ test("removal of a member ends what the member was given, each grant with its to
   });
 });
 
-const DOMAIN = "example.com";
-const ISSUER = "https://iterate.example.com";
+const MIND = "iterate.example.com";
+const ISSUER = `https://${MIND}`;
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 
 async function keyPair() {
@@ -92,7 +93,7 @@ async function stackOf({
   withPasskey = [],
   kept = [],
 }: { withPasskey?: string[]; kept?: string[] } = {}) {
-  const [ownerKey, otherKey, stackKey] = [await keyPair(), await keyPair(), await keyPair()];
+  const [ownerKey, otherKey, stackKey] = [await keyPair(), await keyPair(), await stackKeyPair()];
   const changed: string[] = [];
   // the OAuth library's store, by its keys: a grant, and each token of it under the grant's name
   const store = new Map(
@@ -100,13 +101,18 @@ async function stackOf({
   );
   const seen = new Set<unknown>();
   const sessions = browserSessionsFake();
+  // each person's key stands in for their passkey: a statement it signs is theirs
+  const keys = await keyRows([
+    { actor: "owner-key", email: "owner@example.net", publicKey: ownerKey.publicKey, label: "O" },
+    { actor: "other-key", email: "other@example.org", publicKey: otherKey.publicKey, label: "X" },
+  ]);
   const prepare = (sql: string, bound: unknown[] = []) => ({
     bind: (...values: unknown[]) => prepare(sql, values),
     first: async () => {
       const session = sessions.statementOf(sql, bound);
       if (session) return session.first();
-      if (sql.includes("from stack_key"))
-        return { key: stackKey.key, public_key: stackKey.publicKey, private_key: stackKey.pkcs8 };
+      if (sql.includes("from keys k left join users u")) return keys(bound[0]);
+      if (sql.includes("from stack_key")) return stackKey.row;
       if (sql.startsWith("delete from members where email")) {
         changed.push(`${String(bound[0])} removed`);
         return { email: bound[0] };
@@ -143,26 +149,7 @@ async function stackOf({
     },
   });
   const env = {
-    DOMAIN,
-    AUTH_SIGNING_KEY: "a-signing-key-for-tests-only",
-    AUTH_SETTINGS: JSON.stringify({
-      login: { allow: [{ email: "owner@example.net" }] },
-      // each person's key of the config stands in for their passkey: a statement it signs is theirs
-      keys: [
-        {
-          actor: "owner-key",
-          email: "owner@example.net",
-          publicKey: ownerKey.publicKey,
-          label: "O",
-        },
-        {
-          actor: "other-key",
-          email: "other@example.org",
-          publicKey: otherKey.publicKey,
-          label: "X",
-        },
-      ],
-    }),
+    ...configVars(),
     DB: {
       prepare,
       batch: async (statements: ReturnType<typeof prepare>[]) =>
@@ -183,7 +170,6 @@ async function stackOf({
       env,
       new Request(ISSUER),
       { id: "user_owner", email: "owner@example.net" },
-      "passkey",
       "key-1",
     )
   ).setCookie.split(";")[0]!;
@@ -191,7 +177,7 @@ async function stackOf({
     signed: async (type: string, payload: Record<string, unknown>) => {
       const now = Date.now();
       const statement = statementText({
-        mind: DOMAIN,
+        mind: MIND,
         path: "/",
         type,
         payload,

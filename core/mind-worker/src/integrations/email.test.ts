@@ -1,8 +1,9 @@
 import type { ItxHostRootContext, ReachableContext } from "core-itx";
 import type { GateAnswer } from "iterate/acts";
+import type { EmailSendInput } from "iterate/api";
 import type { Door } from "iterate/workers";
 import { expect, test } from "vitest";
-import { emailRoot } from "./email.ts";
+import { emailRoot, senderOf } from "./email.ts";
 
 test("a held mail keeps no reservation while it waits, so a retry of its delivery is not refused", async () => {
   const mind = mindWith([held, { sent: true, messageId: "<m1@example.com>" }]);
@@ -38,7 +39,7 @@ test("a recipient that is no single address is refused before anything is reserv
 
 test("a subject with a line break is refused before anything is reserved or asked: a header is one line", async () => {
   const mind = mindWith([{ sent: true, messageId: "<m4@example.com>" }]);
-  await expect(mind.send("jo@example.org", "Hello\r\nBcc: leak@example.net")).rejects.toThrow(
+  await expect(mind.send("jo@elsewhere.example", "Hello\r\nBcc: leak@example.net")).rejects.toThrow(
     "the subject has a line break",
   );
   expect({ asked: mind.asked, reserved: mind.reservations() }).toEqual({ asked: [], reserved: [] });
@@ -51,7 +52,7 @@ test("an answer to a mail whose subject arrived as two lines goes with that subj
       payload: {
         messageId: "m0@example.org",
         from: "mind@example.com",
-        to: ["jo@example.org"],
+        to: ["jo@elsewhere.example"],
         cc: [],
         subject: "Hello\r\nBcc: leak@example.net",
         text: "A mail.",
@@ -79,7 +80,7 @@ test("a mail the provider refuses is said on the mail log, and the caller still 
         type: "events.iterate.com/email/send-failed",
         payload: {
           from: "mind@example.com",
-          to: ["jo@example.org"],
+          to: ["jo@elsewhere.example"],
           cc: [],
           subject: "Hello",
           error: "the recipient is suppressed",
@@ -106,7 +107,7 @@ test("a mail an approval rule refuses records no send-failed fact: the gate's fa
     state: "rejected",
     digest: "d".repeat(64),
     facts: [],
-    by: "jo@example.org",
+    by: "jo@elsewhere.example",
     reason: "no",
   };
   const mind = mindWith([{ sent: false, error: "rejected", gate: rejected }]);
@@ -139,6 +140,57 @@ test("an answer to a person's mail goes as the first hop", async () => {
   expect(mind.sent).toMatchObject([{ headers: { "X-Iterate-Mail-Hops": "1" } }]);
 });
 
+test("a mail with no sender is refused, with words that say to give one: a mind has no default sender", async () => {
+  const mind = mindWith([{ sent: true, messageId: "<m6@example.com>" }]);
+  // the input arrives over the wire, where nothing holds a caller to the type
+  const withoutSender = (input: Omit<EmailSendInput, "from">) =>
+    mind.root.send(input as EmailSendInput);
+  await expect(
+    withoutSender({ to: "jo@elsewhere.example", subject: "Hello", text: "A mail." }),
+  ).rejects.toMatchObject({
+    code: "INVALID_INPUT",
+    message: expect.stringContaining("give the sender, `from`"),
+  });
+  // an answer to a mail names its sender too
+  await expect(withoutSender({ inReplyToOffset: 7, text: "An answer." })).rejects.toMatchObject({
+    code: "INVALID_INPUT",
+  });
+  expect({ asked: mind.asked, reserved: mind.reservations() }).toEqual({ asked: [], reserved: [] });
+});
+
+test("in one delivery, the same mail from another sender is another mail, and the same sender again is not sent twice", async () => {
+  const mind = mindWith([
+    { sent: true, messageId: "<m7@example.com>" },
+    { sent: true, messageId: "<m8@example.org>" },
+  ]);
+  const mail = { to: "jo@elsewhere.example", subject: "Hello", text: "A mail." };
+  await mind.root.send({ ...mail, from: "billing@example.com" });
+  await mind.root.send({ ...mail, from: "support@example.org" });
+  // the sender is one address whatever its case: this is the first mail again
+  await expect(mind.root.send({ ...mail, from: "Billing@Example.com" })).rejects.toMatchObject({
+    code: "PERMANENT_FAILURE",
+  });
+  expect(mind.sent).toMatchObject([
+    { from: { email: "billing@example.com" } },
+    { from: { email: "support@example.org" } },
+  ]);
+});
+
+test("a mail leaves from an address at any zone of the mind, and from no other", () => {
+  const config = { zones: ["example.com", "example.org"] };
+  expect(senderOf(" Agent@Example.ORG ", config)).toBe("agent@example.org");
+  expect(senderOf("agent@example.com", config)).toBe("agent@example.com");
+  for (const from of [
+    "agent@elsewhere.example",
+    "agent@notexample.com",
+    "Ada <ada@example.com>",
+    "agent@example.com.",
+    "a@outside.test@example.org",
+    "agent@example.com, eve@example.com",
+  ])
+    expect(() => senderOf(from, config), from).toThrow("at one of its zones");
+});
+
 type Outcome = Awaited<ReturnType<Door["sendEmail"]>>;
 
 const held: Outcome = {
@@ -161,7 +213,12 @@ function mindWith(
   const reservations = new Set<string>();
   const appended: { event: unknown; caller: unknown }[] = [];
   const asked: { wait: boolean; reserved: string[] }[] = [];
-  const sent: { subject: string; to: string[]; headers: Record<string, string> }[] = [];
+  const sent: {
+    from: { email: string };
+    subject: string;
+    to: string[];
+    headers: Record<string, string>;
+  }[] = [];
   const emailContext = {
     reserveSend: async (key: string) => {
       if (reservations.has(key)) return { reserved: false };
@@ -216,8 +273,10 @@ function mindWith(
       // no attachment is named, so no file is read
       files: {} as R2Bucket,
       egress: () => egress,
-      name: "mind",
-      domain: "example.com",
+      config: {
+        controlPlaneHostname: "iterate.example.com",
+        zones: ["example.com", "example.org"],
+      },
     },
   );
   return {
@@ -225,8 +284,11 @@ function mindWith(
     appended,
     reservations: () => [...reservations],
     sent,
-    send: (to = "jo@example.org", subject = "Hello") => root.send({ to, subject, text: "A mail." }),
-    answer: (inReplyToOffset: number) => root.send({ inReplyToOffset, text: "An answer." }),
+    send: (to = "jo@elsewhere.example", subject = "Hello") =>
+      root.send({ from: "mind@example.com", to, subject, text: "A mail." }),
+    answer: (inReplyToOffset: number) =>
+      root.send({ from: "mind@example.com", inReplyToOffset, text: "An answer." }),
+    root,
   };
 }
 

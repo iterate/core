@@ -7,6 +7,7 @@ import {
   appendAtAttach,
   eventsOfARedial,
   RpcStubDirectory,
+  stampCallerHeaders,
   unsetByClose,
   type UnsetByClose,
 } from "./rpc-stubs.ts";
@@ -170,6 +171,27 @@ test("a lend that takes the name from anyone (a member's) takes it from another 
     append: (events) => void appended.push(events),
   });
   expect({ record, appended }).toEqual({ record: undefined, appended: [ALL] });
+});
+
+test("a hop names its own caller on a request, over every caller that the request named itself", () => {
+  const carried = {
+    "x-itx-principal": JSON.stringify({ actor: "user_2" }),
+    "x-itx-grant": "grant_2",
+    "x-itx-person": JSON.stringify({ userId: "user_2", email: "b@example.net" }),
+    "x-itx-expires": "2000000000",
+    "x-itx-caller-path": "/elsewhere",
+    "x-itx-app": "1",
+    accept: "*/*",
+  };
+  const nobody = new Headers(carried);
+  stampCallerHeaders(nobody, null);
+  const person = { userId: "user_1", email: "a@example.com", name: "a", method: "email" as const };
+  const visitor = new Headers(carried);
+  stampCallerHeaders(visitor, { principal: null, app: true, person });
+  expect({ nobody: Object.fromEntries(nobody), visitor: Object.fromEntries(visitor) }).toEqual({
+    nobody: { accept: "*/*" },
+    visitor: { accept: "*/*", "x-itx-app": "1", "x-itx-person": JSON.stringify(person) },
+  });
 });
 
 const member = { actor: "user_1", email: "a@example.com" };

@@ -7,11 +7,11 @@ The owner should come away with: the mind builds apps, not only a page: for ever
 All three are true on a new mind. The guides are `apps.md` and `people.md` at the top of the
 mind's code: read them before a brief.
 
-- An app is a folder under `apps/` that answers one host, such as `shop.<domain>`, mounted with
+- An app is a folder under `apps/` that answers one host, such as `shop.<zone>`, mounted with
   one `case` in `fetch` of `worker.ts`.
 - The guard beside that case says who may come: none (open to everyone); `this.auth.require` (the
-  mind's members); `this.auth.requirePerson` (anyone who signs in on the mind's own sign-in page,
-  with a passkey or a mailed code, as the stack offers).
+  mind's members); `this.auth.requirePerson` (anyone who signs in on the mind's own sign-in page:
+  a person who is no member with a code that the mind mails, a member with a passkey).
 - A tool the owner wants (a list, a form, anything that keeps data or needs a sign-in) is never
   the homepage: it gets an address of its own.
 - An app links `apps/theme.css`, so it wears the owner's colours.
@@ -20,8 +20,8 @@ mind's code: read them before a brief.
 
 ## Not ready
 
-- A sign-in for people who are not members needs the stack's config to allow it
-  (`login.methods.email.anyone`, or Google). Read `people.md` before you promise one.
+- A person who is no member signs in with a code that the mind mails to their address. Read
+  `people.md` before you promise an app for such people.
 - The Dash's sidebar lists the apps from `apps/dash/public/app.js`. A row there for a new app is a
   change under `apps/dash/`: say the trade first (`onboarding/look.md`), and add it only on a yes.
 
@@ -46,4 +46,4 @@ check the outcome alone"; and the report rule of `onboarding/helpers.md`.
 - "This site is yours, and I can also build apps at their own addresses under your domain: open
   to everyone, for your people only, or for your customers with their own sign-in. Shall I make
   one?"
-- "Your order form is live at https://orders.<domain>/. Only people who sign in can use it."
+- "Your order form is live at https://orders.<zone>/. Only people who sign in can use it."

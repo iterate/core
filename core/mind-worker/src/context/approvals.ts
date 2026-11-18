@@ -1,7 +1,6 @@
 import type { ItxHostRootContext } from "core-itx";
 import type { ActRule } from "iterate/acts";
 import { releasedAnswer, reportIssue } from "iterate/lib";
-import { platformOriginOf } from "iterate/mind-api";
 import type { Door } from "iterate/workers";
 import { hopCaller } from "./hop-caller.ts";
 
@@ -23,7 +22,7 @@ type SecretRuleProposal = {
 export function approvalsRoot(
   context: ItxHostRootContext,
   egress: Pick<Door, "actRules" | "setActRules" | "proposeActRule" | "proposeStatement">,
-  domain: string,
+  controlPlaneOrigin: string,
 ) {
   // Read at each call, never as the root is built: a context builds its roots before it can say
   // who calls it.
@@ -56,7 +55,7 @@ export function approvalsRoot(
         egress.proposeActRule({ rule, from: from().path || context.path }),
       );
       await record(proposed.facts);
-      return { id: proposed.id, signAt: `${platformOriginOf(domain)}/secrets/approvals#proposed` };
+      return { id: proposed.id, signAt: `${controlPlaneOrigin}/secrets/approvals#proposed` };
     },
     // A statement for a person's passkey: the auth Worker keeps its exact text, and `signAt` is
     // its page, which carries no word of it. Signed, it lands on `path` as the person's event.

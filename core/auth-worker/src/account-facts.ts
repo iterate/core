@@ -2,16 +2,18 @@ import { type Facts, withFacts } from "iterate/facts";
 import type { Envelope } from "iterate/signed";
 import { z } from "zod";
 
-/** `session`: the browser's session it opened (./cookies.ts `sessionCookie`). A sign-in at
- *  Cloudflare has its own cookie and no such row. */
+/** `session`: the browser's session it opened (./cookies.ts `sessionCookie`). */
 const session = z.string().min(1);
 const SignedIn = z.union([
-  z.object({ method: z.literal("email"), session, at: z.number() }),
-  z.object({ method: z.literal("google"), session, at: z.number() }),
-  z.object({ method: z.literal("cloudflare"), at: z.number() }),
   z.object({ method: z.literal("passkey"), key: z.string().min(1), session, at: z.number() }),
-  z.object({ method: z.literal("first-owner-ticket"), session, at: z.number() }),
-  z.object({ method: z.literal("member-link"), session, at: z.number() }),
+  // a proof that opens the session that may add a first passkey (./enrolment.ts `Proof`)
+  z.object({
+    method: z.enum(["cloudflare-access", "member-link", "recovery-link"]),
+    session,
+    at: z.number(),
+  }),
+  // a mailed code that proved the address of a person who is no member (./email-sign-in.ts)
+  z.object({ method: z.literal("email"), session, at: z.number() }),
 ]);
 /** A new guest (./guest-sign-in.ts): the name they typed, and the host of the app that let them
  *  come. Once for each guest: the sessions a guest earns later write nothing. */
@@ -48,7 +50,7 @@ const SignedBy = z.object({
   signed: z.custom<Envelope>(),
 });
 const KeyAdded = z.union([
-  // `signer` and `signed`: on each passkey but a person's first, and one the owner's ticket adds
+  // `signer` and `signed`: on each passkey but a person's first
   SignedBy.partial().extend({
     key: z.string().min(1),
     label: z.string(),

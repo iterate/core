@@ -4,14 +4,15 @@ The owner should come away with: their own Claude or Codex can use the mind, and
 
 ## Ready today
 
-- The mind is an MCP server at `https://iterate.<domain>/mcp`, with one tool, `run`: a script,
+- The mind is an MCP server at `https://<control-plane hostname>/mcp`, with one tool, `run`: a script,
   `async (itx) => { … }`, run at the mind's root as the person signed in. Every run is logged.
-  The Dash shows the same commands at `https://dash.<domain>/?page=mcp`.
+  The Dash shows the same commands at `https://dash.<zone>/?page=mcp`.
 - Claude (the app or claude.ai): Settings, Connectors, "Add custom connector", with that address.
-- Claude Code: `claude mcp add --transport http <name> https://iterate.<domain>/mcp`, where
-  `<name>` is the domain with a hyphen for each dot (`example-com` for `example.com`). Then, inside
+- Claude Code: `claude mcp add --transport http <name> https://<control-plane hostname>/mcp`, where
+  `<name>` is the control-plane hostname with a hyphen for each dot (`iterate-example-com` for
+  `iterate.example.com`). Then, inside
   Claude Code: `/mcp`, pick `<name>`, Authenticate.
-- Codex CLI: `codex mcp add <name> --url https://iterate.<domain>/mcp`, then
+- Codex CLI: `codex mcp add <name> --url https://<control-plane hostname>/mcp`, then
   `codex mcp login <name>`. The owner signs in to the mind the first time their assistant uses it.
 
 ## Not ready
@@ -24,9 +25,9 @@ The owner should come away with: their own Claude or Codex can use the mind, and
 Give the one command, or the steps, for the assistant they use. To check, ask them to have it run
 `async (itx) => itx.whoami()` and tell you what it answered.
 
-Then "customise me": this prompt, with `<domain>` filled in, for them to paste into it:
+Then "customise me": this prompt, with `<zone>` filled in, for them to paste into it:
 
-> You are connected to my iterate mind at <domain> through its MCP tool `run`. Please write down
+> You are connected to my iterate mind at <zone> through its MCP tool `run`. Please write down
 > what you know about me, so that my mind knows me too: who I am, my work, the people I mention,
 > my preferences (how I like to be written to, my tools, my hours), and the projects I have open.
 > Mark anything you inferred, rather than heard from me, with "(inferred)". Leave out passwords,

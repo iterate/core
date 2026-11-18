@@ -2,7 +2,12 @@ import { errorCode } from "iterate/lib";
 import { stampedExpiryOf } from "iterate/principal";
 import { ITERATE_SERVE_CONTEXT_HEADER, ITERATE_SERVE_HEADER } from "iterate/mind-ingress";
 import type { Caller } from "./caller.ts";
-import { FETCH_UPGRADE_RESUMABLE_HEADER, spliceEyeballAnswer } from "./context/fetch-upgrade.ts";
+import {
+  FETCH_UPGRADE_CONTEXT_HEADER,
+  FETCH_UPGRADE_RESUMABLE_HEADER,
+  FETCH_UPGRADE_SOCKET_HEADER,
+  spliceEyeballAnswer,
+} from "./context/fetch-upgrade.ts";
 import { implicitRootsAt, resolveItxExpression } from "./context/itx-expression-rewriting.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import { itxExpressionEndingInFetch } from "./context/rpc-stubs.ts";
@@ -13,6 +18,17 @@ import { statelessExpressionFetch } from "./iterate-context.ts";
 import { personItxSession } from "./person-context.ts";
 import { serveSession } from "./session.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
+
+/** THE LEG OF A LENT STUB'S UPGRADE, DIALLED FROM OUTSIDE THE MIND'S WORKER
+ *  (./context/fetch-upgrade.ts `LentFetchHolder`), or null when `request` is none: it goes to the
+ *  context that the dial names, whose answer holds the leg's socket. The upgrade's id, which the
+ *  context made and gave to the holder alone, is what admits a leg there. Ask before any routing
+ *  by hostname or path: a leg has neither. */
+export function fetchUpgradeLegResponse(request: Request): Promise<Response> | null {
+  const context = request.headers.get(FETCH_UPGRADE_CONTEXT_HEADER);
+  if (!context || !request.headers.has(FETCH_UPGRADE_SOCKET_HEADER)) return null;
+  return contexts().getByName(context).fetch(request);
+}
 
 // Served where it arrived, never through the root's Durable Object: the root's snapshot says where
 // it goes. `unserved` answers whenever nothing serves the ingress.
@@ -59,10 +75,13 @@ export async function serveHostRequest(args: {
     if (route)
       return withoutServeHeader(held)(
         await statelessExpressionFetch(
+          // The route's target runs as loaded code that names no member. The visitor's person is
+          // the boundary's word, so it goes with the call.
           resolverUnder({
             principal: null,
             app: true,
             cause: caller.cause,
+            person: caller.person,
           }),
           () => route.target,
           request,
@@ -169,7 +188,7 @@ async function itxSession(args: {
     });
   if (request.headers.get("origin") !== url.origin)
     return new Response("This socket opens from a page of this host alone\n", { status: 403 });
-  return serveSession(request, args.ctx, {
+  return serveSession(args.ctx, {
     caller: { ...caller, via: { appPage: url.hostname } },
     endsAt,
     endReason: "the sign-in for this session ended: sign in again",

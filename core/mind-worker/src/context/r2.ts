@@ -10,7 +10,7 @@ const SCRIPT_RESULT_FILE = /\/script-results\/[^/]+$/;
 export function r2Root(
   context: ItxHostRootContext,
   bucket: R2Bucket,
-  { domain, secret }: { domain: string; secret: () => Promise<string> },
+  { controlPlaneHostname, secret }: { controlPlaneHostname: string; secret: () => Promise<string> },
 ): IterateContextApi["r2"] {
   const { path } = context;
   // What a context writes lands on its log, so no file is loose. The write comes first, so a crash
@@ -77,7 +77,7 @@ export function r2Root(
         key: input.key,
         method: input.method || "GET",
         expiresInSeconds: input.expiresInSeconds,
-        domain,
+        controlPlaneHostname,
         secret: await secret(),
       }),
   };
