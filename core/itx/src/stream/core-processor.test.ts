@@ -23,12 +23,6 @@ test.for([
     heldBy: { principal: person, via: { appPage: "chat.example.com" } },
   },
   {
-    name: "a script's live callback names whom the script ran for",
-    target: liveCallback,
-    source: { onBehalfOf: { principal: person, run: "/@4" } },
-    heldBy: { principal: person },
-  },
-  {
     name: "a member beside a person: the member holds it",
     target: liveCallback,
     source: { principal: member, onBehalfOf: { principal: person } },
@@ -41,6 +35,17 @@ test.for([
 
 test.for([
   { name: "a live callback that nobody named lent", target: liveCallback, source: {} },
+  // code that ran for someone holds its callback itself: they have no page open here
+  {
+    name: "a live callback that a script lent while it ran for someone",
+    target: liveCallback,
+    source: { onBehalfOf: { principal: person, run: "/@4" } },
+  },
+  {
+    name: "a live callback that a facet lent in someone's call",
+    target: liveCallback,
+    source: { onBehalfOf: { principal: person, call: "/agents/a#agent.message" } },
+  },
   {
     name: "a hosted processor that a member enabled",
     target: ["itx", "builtins", "facets", ["get", "agent"], "processEventBatch"],

@@ -122,6 +122,13 @@ What the page can do, on that one context:
 What it cannot do: reach another context, or the mind's `itx`, or append any other event, or run
 any other call. The context's own rewrite rules do not change what the socket reaches.
 
+What a person who is no member reads of other people there, in the log, the subscriptions and a
+facet's state: an id (`actor`), a name, and whether they are a guest. They read no address, not
+who an administrator is signed in as, and no grant or key id (`source.grant`, a rule's `lentBy`).
+A member's name is the part of their address before the "@". The person's own stamp is whole, and
+a member who opens the page reads what a member reads. This covers what the platform stamps, not
+words: an address that someone wrote into a message is in the message.
+
 ## The guestbook
 
 `apps/guestbook` is a whole app for end users, to copy or to turn on. Anyone reads it at

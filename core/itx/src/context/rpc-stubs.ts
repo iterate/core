@@ -5,6 +5,7 @@ import { ITX_PERSON_HEADER, ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
 import type { RewriteRuleConfigured } from "iterate/api";
 import {
+  canonicalItxExpressionPrefix,
   normalizedItxExpression,
   parse,
   print,
@@ -54,23 +55,85 @@ const LenderStampHeader = z.object({
   via: z.object({ appPage: z.string() }).optional(),
   onBehalfOf: OnBehalfOfStamp.optional(),
 });
+/** WHETHER AN EVENT IS A LEND'S OWN ROW, one that its attach may set and stamp with its lender
+ *  (iterate-context.ts `provide` and `subscribe` write no other): the rule at the key whose target
+ *  is the stub under it, the subscription `subscription:<name>` that delivers to the stub under
+ *  it, or a fetch route whose target is the key's own name. The attach stamps what it appends
+ *  with who lends, and readers trust that stamp by the event's type (a run's requester, a
+ *  message's speaker): so an attach appends nothing else. */
+export function isRowOfLend(event: unknown, rpcStubKey: string): boolean {
+  const row = RowOfLend.safeParse(event);
+  if (!row.success) return false;
+  const { type, payload } = row.data;
+  const targets = (expected: ItxExpressionInput) =>
+    print(normalizedItxExpression(payload.target)) === print(normalizedItxExpression(expected));
+  const stub: ItxExpression = ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]];
+  try {
+    if (type === "events.iterate.com/itx/rewrite-rule-configured")
+      return canonicalItxExpressionPrefix(payload.match) === rpcStubKey && targets(stub);
+    if (type === "events.iterate.com/itx/subscription-configured")
+      return rpcStubKey === `subscription:${payload.name}` && targets(stub);
+    return targets(rpcStubKey);
+  } catch {
+    // a match or a target that is no expression is no row of the lend
+    return false;
+  }
+}
+// An expression as a row's payload holds one, its text or its steps: the codec says whether it
+// is one (as fetch-routes.ts `FetchRouteTarget` does).
+const ExpressionInput = z.custom<ItxExpressionInput>((value) => {
+  try {
+    // the cast: the codec checks what it is given, and throws on anything that is no expression
+    normalizedItxExpression(value as ItxExpressionInput);
+    return true;
+  } catch {
+    return false;
+  }
+});
+const RowOfLend = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("events.iterate.com/itx/rewrite-rule-configured"),
+    payload: z.looseObject({ match: ExpressionInput, target: ExpressionInput }),
+  }),
+  z.object({
+    type: z.literal("events.iterate.com/itx/subscription-configured"),
+    payload: z.looseObject({ name: z.string(), target: ExpressionInput }),
+  }),
+  z.object({
+    type: z.literal("events.iterate.com/itx/fetch-route-configured"),
+    payload: z.looseObject({ target: ExpressionInput }),
+  }),
+]);
+
 // URI-encoded (rpc-stub-relay.ts): a header is a ByteString, and a key or an event is not.
 // Only the kernel's own pager dial sets this header: every hop that forwards a Request strips it
-// (`stampCallerHeaders`), and the boundary strips every `x-itx-*` a caller sends.
+// (`stampCallerHeaders`), and the boundary strips every `x-itx-*` a caller sends. So a header
+// that does not read as the kernel writes it is a defect, and throws: the attach answers 400.
 function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequest {
   const decoded = JSON.parse(decodeURIComponent(header)) as Partial<RpcStubPagerAttachRequest>;
   // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of JSON.parse output; the `Partial<...>` cast is a claim, not a guarantee
   if (typeof decoded?.rpcStubKey !== "string" || !Array.isArray(decoded.appendEvents))
     throw new Error("expected { rpcStubKey: string, appendEvents: [] }");
-  const lenderStamp = LenderStampHeader.safeParse(decoded.lenderStamp);
+  const { rpcStubKey } = decoded;
+  const foreign = decoded.appendEvents.findIndex((event) => !isRowOfLend(event, rpcStubKey));
+  if (foreign !== -1)
+    throw new Error(
+      `appendEvents[${foreign}] is no row of the lend ${JSON.stringify(rpcStubKey)}: an attach appends its lend's own rows alone`,
+    );
+  // An absent stamp is a lender's session from before the stamp (the attach then stamps nobody);
+  // one that is present and does not parse is never taken for an absent one.
+  const lenderStamp = LenderStampHeader.optional().safeParse(decoded.lenderStamp);
+  if (!lenderStamp.success)
+    throw new Error(
+      `a lenderStamp that names nobody the context can stamp: ${z.prettifyError(lenderStamp.error)}`,
+    );
   return {
-    rpcStubKey: decoded.rpcStubKey,
+    rpcStubKey,
     appendEvents: decoded.appendEvents,
     redial: decoded.redial === true,
     // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of JSON.parse output, as above: a present non-string is dropped, never coerced
     ...(typeof decoded.onlyFrom === "string" && { onlyFrom: decoded.onlyFrom }),
-    // a malformed stamp is dropped whole: the attach then stamps nobody, as with none
-    ...(lenderStamp.success && { lenderStamp: lenderStamp.data }),
+    lenderStamp: lenderStamp.data,
   };
 }
 

@@ -8,6 +8,8 @@ import { stampCaller, type Caller } from "./caller.ts";
 import { defineItxHost } from "./host.ts";
 import { IterateContextRpcTarget, statelessExpressionFetch } from "./iterate-context.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
+import type { ClientRpcStub } from "./context/rpc-stub-relay.ts";
+import { isRowOfLend } from "./context/rpc-stubs.ts";
 import { SessionTeardown } from "./session.ts";
 import { CoreContract, reduceCoreEventBatch } from "./stream/core-processor.ts";
 
@@ -85,6 +87,48 @@ test("a caller names no holder by what it writes in the subscribe input", async 
   expect(rowAfterAttach(dials[0]!.request)).toEqual({ source: { origin: "/" } });
 });
 
+// A key's token is no member's (core/boundary-worker/src/stamp.ts): its session's principal names
+// the service it speaks for, and no event may carry that as a member's act.
+test("a key's lend stamps its rule with nobody: the row says which key lends, and no principal", async () => {
+  const { kernel, dials } = kernelAs({ principal: { actor: "bridge-1" }, grant: "key:k1" });
+  using _lend = await kernel.provide("itx.bridge", liveStub(), { onlyFromItself: true });
+  const { appendEvents, lenderStamp } = dials[0]!.request;
+  // `toEqual`, twice: no key of the stamp or of the source may name the service
+  expect(lenderStamp).toEqual({ principal: null, grant: "key:k1" });
+  expect(appendEvents.map((event) => stampCaller(event, lenderStamp, "/"))).toEqual([
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.bridge",
+        target: ["itx", "builtins", "rpcStubs", ["get", "itx.bridge"]],
+        lentBy: "key:k1",
+      },
+      source: { origin: "/" },
+    },
+  ]);
+});
+
+// The attach refuses an event that is no row of its lend (rpc-stubs.test.ts): what the kernel's
+// own two verbs send must pass it.
+test("every event that a provide and a subscribe send at their attach is a row of that lend", async () => {
+  const { kernel, dials } = kernelAs({ principal: member, grant: "grant:1", via });
+  using _lend = await kernel.provide("itx.bridge", liveStub(), {
+    description: "a bridge",
+    fetchRoute: { fetchRouteName: "bridge", requestMatcher: { routingSlug: "bridge" } },
+  });
+  using _subscription = await kernel.subscribe({ target: liveCallback(), consumes: ["*"] });
+  expect(dials.map(({ request }) => request.appendEvents.map(({ type }) => type))).toEqual([
+    [
+      "events.iterate.com/itx/rewrite-rule-configured",
+      "events.iterate.com/itx/fetch-route-configured",
+    ],
+    ["events.iterate.com/itx/subscription-configured"],
+  ]);
+  for (const { request } of dials)
+    for (const event of request.appendEvents)
+      expect({ event, own: isRowOfLend(event, request.rpcStubKey) }).toMatchObject({ own: true });
+});
+
 test("loaded code's live subscription appends its row before the lend, which stamps nobody", async () => {
   const { kernel, dials } = kernelAs({ principal: null, app: true });
   using _subscription = await kernel.subscribe({ name: "sub-1", target: liveCallback() });
@@ -105,6 +149,7 @@ function targetThatAnswersItsStamps() {
 }
 
 type AttachRequest = {
+  rpcStubKey: string;
   appendEvents: StreamEventInput[];
   lenderStamp: Caller;
   redial: boolean;
@@ -147,6 +192,9 @@ function liveCallback() {
     },
   });
 }
+
+/** The same, as `provide` takes a live stub. */
+const liveStub = () => liveCallback() as unknown as ClientRpcStub;
 
 /** A pager's socket at the relay: the context answers each keepalive at once, and a close reaches
  *  the relay's listener as the runtime's close event would. */

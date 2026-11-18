@@ -125,8 +125,9 @@ export type SubscriptionListEntry = {
   halted?: { afterOffset: number; attempts: number; error?: string };
   /** Set on a live-callback row (its target is `itx.builtins.rpcStubs.get("subscription:<name>")`):
    *  who lent the callback, by the platform's stamp on the row's event: `source.principal`, else
-   *  `source.onBehalfOf.principal` (a person's one-context view, or a script that ran for someone),
-   *  with how they came (`via`). Never read from the payload. */
+   *  `source.onBehalfOf.principal` of a person's one-context view (a stamp with neither `run` nor
+   *  `call`), with how they came (`via`). Code that ran for someone (a script's run, a facet's
+   *  call) names no holder. Never read from the payload. */
   heldBy?: { principal: Principal; via?: { appPage: string } };
 };
 

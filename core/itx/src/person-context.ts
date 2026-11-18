@@ -20,10 +20,24 @@
 // ephemeral `presence/status`, which no log stores. The status names nobody and decides nothing:
 // the stamp says whose it is (no `call`, no `run`, `via.appPage`), and a reader counts it only for
 // the row its stamp's person holds, so a status that names another row is nobody's.
+//
+// WHAT THE PERSON READS OF OTHER PEOPLE. A person who is no member (a guest among them) reads
+// other people by what a page draws them with, and by nothing that is theirs alone
+// (`asAPersonReads`): an id to group by, a name, whether they are a guest. Every answer of the
+// view and every batch its live callback gets is read that way. A member who opens the view reads
+// what a member reads anywhere. It covers what the platform stamps and the states made from it,
+// not words: an address that somebody wrote into a message stays in the message.
 import { RpcTarget } from "capnweb";
 import { type ItxExpression } from "iterate/expression";
 import { codedError, resolveContextPath } from "iterate/lib";
-import { stampedExpiryOf, stampedPersonOf, type Person, type Principal } from "iterate/principal";
+import {
+  nameInEmail,
+  stampedCallerOf,
+  stampedExpiryOf,
+  stampedPersonOf,
+  type Person,
+  type Principal,
+} from "iterate/principal";
 import { z } from "zod";
 import type { Caller } from "./caller.ts";
 import { newChain } from "./cause.ts";
@@ -89,16 +103,39 @@ const MessageInput = z.union([
     .strict(),
 ]);
 
+/** A value as the view's person reads it: `asAPersonReads` for them, or as it is for a member. */
+type Reads = (value: unknown) => unknown;
+
+/** A page's live callback as capnweb hands it over: a callable stub (context/rpc-stub-relay.ts
+ *  `ClientRpcStub`). */
+type LiveCallback = ((events: unknown, range: unknown) => unknown) & {
+  dup(): LiveCallback;
+  itxLivenessProbe(): unknown;
+  onRpcBroken?(broken: () => void): void;
+  [Symbol.dispose]?(): void;
+};
+
 export class PersonContextRpcTarget extends RpcTarget {
   readonly #path: string;
   readonly #context: ContextReach;
   readonly #asPerson: CallAsPerson;
 
-  constructor(path: string, context: ContextReach, asPerson: CallAsPerson) {
+  /** `reads`: how the person reads each answer and each batch of events (WHAT THE PERSON READS
+   *  OF OTHER PEOPLE, above). It wraps each call into the context here, so no method below
+   *  can leave it out. */
+  constructor(path: string, context: ContextReach, asPerson: CallAsPerson, reads: Reads) {
     super();
     this.#path = path;
-    this.#context = context;
-    this.#asPerson = asPerson;
+    this.#context = {
+      invoke: async (call, ...args) => reads(await context.invoke(call, ...args)),
+      subscribe: (input) =>
+        context.subscribe({
+          ...input,
+          // the view's own `subscribe` lets a live callback alone through
+          target: readingCallback(input.target as LiveCallback, reads),
+        }),
+    };
+    this.#asPerson = async (...call) => reads(await asPerson(...call));
   }
 
   /** Itself, for its own path; any other path is refused. */
@@ -321,6 +358,7 @@ export async function personItxSession(args: {
       { status: 500 },
     );
   const onBehalfOf = { principal: principalOf(person), via: { appPage: url.hostname } };
+  const asThePersonReads = readsOf(request, person);
   const asPerson: CallAsPerson = async (expression, call) => {
     const { signingSecret } = itxHost();
     if (!signingSecret)
@@ -360,8 +398,110 @@ export async function personItxSession(args: {
           subscribe: (input) => holder.subscribe(input),
         },
         asPerson,
+        asThePersonReads,
       );
     },
+  });
+}
+
+/** HOW THE VIEW'S PERSON READS. The boundary stamps a principal beside the person for a member
+ *  alone (core/boundary-worker/src/stamp.ts): a member reads here what they read in their own
+ *  session. Anyone else, a guest among them, reads as `asAPersonReads` says. */
+export function readsOf(request: Request, person: Person): Reads {
+  return stampedCallerOf(request).principal
+    ? (value) => value
+    : (value) => asAPersonReads(value, person.userId);
+}
+
+/** WHAT A PERSON WHO IS NO MEMBER READS OF OTHER PEOPLE, in any value the view hands them: an
+ *  event, a subscription's row, a facet's state, a live state's delta. It goes by shape, because
+ *  the platform's stamp sits in many places (`source.principal`, `source.onBehalfOf`, a
+ *  schedule's `definedBy`, a row's `heldBy`, an agent's `saidBy`), and a place that is added
+ *  later is covered too.
+ *  - WHO SOMEONE IS (an object with a string `actor`) keeps the `actor`, to group by, and what a
+ *    page draws them with (`name`, `kind`). It loses `email` and `impersonatedBy`. A person with
+ *    an address and no name gets the name every person has: the part before the "@"
+ *    (iterate/principal `nameInEmail`).
+ *  - WHAT IS OF A SESSION goes: every `grant` (an OAuth grant's id, or a key's) but the one
+ *    beside the viewer's own `principal`, also where no principal stands beside it; and a rule's
+ *    `lentBy`, which is a grant too.
+ *  - THE VIEWER'S OWN (`actor` is `viewer`) stays whole, with the grant beside it.
+ *  - A LIVE STATE'S DELTA (`{ from, to, patch }`) whose patch names any of this is sent with no
+ *    patch, which tells the page to read the state again (core/lib `LiveStateDelta`): the state
+ *    it reads is one read this way, and a patch made against the whole state may not fit it.
+ *  Nothing else changes, and a value with none of this comes back as the same object. */
+export function asAPersonReads(value: unknown, viewer: string): unknown {
+  if (Array.isArray(value)) {
+    const read = value.map((item) => asAPersonReads(item, viewer));
+    if (read.every((item, index) => item === value[index])) return value;
+    return read;
+  }
+  if (!isJsonObject(value) || value.actor === viewer) return value;
+  const someone = namesSomeone(value);
+  const ofTheViewer = isJsonObject(value.principal) && value.principal.actor === viewer;
+  const read: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(value)) {
+    const theirsAlone =
+      key === "lentBy" ||
+      (someone && (key === "email" || key === "impersonatedBy")) ||
+      (key === "grant" && !ofTheViewer);
+    if (!theirsAlone) read[key] = asAPersonReads(field, viewer);
+  }
+  if (someone && typeof value.email === "string" && typeof value.name !== "string") {
+    const name = nameInEmail(value.email);
+    if (name) read.name = name;
+  }
+  if (
+    isLiveStateDelta(value) &&
+    (read.patch !== value.patch || value.patch.some(patchesWhatAPersonDoesNotRead))
+  )
+    read.patch = null;
+  const same =
+    Object.keys(read).length === Object.keys(value).length &&
+    Object.entries(read).every(([key, field]) => field === value[key]);
+  if (same) return value;
+  return read;
+}
+
+/** A JSON object, as an event, a row and a Workers RPC answer hold one: no array, and no
+ *  instance of a class. */
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- a guard over `unknown`: the value has no declared type to trust
+  if (!value || typeof value !== "object") return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/** Who someone is, as the platform stamps them: an object with their id in `actor`. */
+const namesSomeone = (value: Record<string, unknown>) => typeof value.actor === "string";
+
+/** A live state's delta that carries its patch (core/lib `LiveStateDelta`). */
+const isLiveStateDelta = (
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & { patch: unknown[] } =>
+  Array.isArray(value.patch) && typeof value.from === "number" && typeof value.to === "number";
+
+const PatchOperation = z.object({ path: z.string() });
+
+/** Whether one operation of a patch writes at, or inside, a field that `asAPersonReads` drops.
+ *  One that has no path is no operation the page could apply: it counts too. */
+function patchesWhatAPersonDoesNotRead(operation: unknown): boolean {
+  const parsed = PatchOperation.safeParse(operation);
+  if (!parsed.success) return true;
+  return parsed.data.path
+    .split("/")
+    .some((key) => ["email", "impersonatedBy", "grant", "lentBy"].includes(key));
+}
+
+/** THE PAGE'S LIVE CALLBACK, which gets each batch of events as the person reads it. The kernel's
+ *  lend dups the stub, probes it, hears it break and disposes of it
+ *  (context/rpc-stub-relay.ts): each of these goes to the page's own stub. */
+function readingCallback(callback: LiveCallback, reads: Reads): LiveCallback {
+  return Object.assign((events: unknown, range: unknown) => callback(reads(events), range), {
+    dup: () => readingCallback(callback.dup(), reads),
+    itxLivenessProbe: () => callback.itxLivenessProbe(),
+    onRpcBroken: (broken: () => void) => callback.onRpcBroken?.(broken),
+    [Symbol.dispose]: () => callback[Symbol.dispose]?.(),
   });
 }
 

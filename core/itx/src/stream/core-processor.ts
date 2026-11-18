@@ -476,7 +476,12 @@ function reduceCoreEvent(
       );
       // A live callback's row names who lent the callback, by the platform's stamp on its event
       // (the attach stamps it with the lender: rpc-stubs.ts `lenderStamp`), never by the payload.
-      const lender = event.source.principal ? event.source : event.source.onBehalfOf;
+      // A member's own session, or a person's one-context view (`onBehalfOf` with neither `run`
+      // nor `call`). Code that ran for someone holds its callback itself: they have no page here.
+      const { principal, onBehalfOf } = event.source;
+      const personsView =
+        onBehalfOf && !onBehalfOf.run && !onBehalfOf.call ? onBehalfOf : undefined;
+      const lender = principal ? event.source : personsView;
       const heldBy =
         lender?.principal &&
         jsonEqual(configuredTarget, [

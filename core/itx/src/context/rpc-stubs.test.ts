@@ -215,9 +215,20 @@ test.for([
   });
 });
 
+// A lender's session from before the stamp sends none.
+test("an attach with no stamp stamps nobody", () => {
+  // `toEqual`: a key that holds undefined is no stamp
+  expect(lendOfAttach({ rpcStubKey: "k", appendEvents: [] })).toEqual({
+    rpcStubKey: "k",
+    redial: false,
+  });
+});
+
+// Only the kernel writes the header: a stamp that does not parse is a defect, and is never taken
+// for an absent one.
 test.for([
-  { name: "no stamp", lenderStamp: undefined },
   { name: "a stamp that is no object", lenderStamp: "user_1" },
+  { name: "a stamp that is null", lenderStamp: null },
   { name: "a stamp with no principal field", lenderStamp: { grant: "grant:1" } },
   { name: "a principal with no actor", lenderStamp: { principal: { email: "a@example.com" } } },
   { name: "an actor that is no string", lenderStamp: { principal: { actor: 7 } } },
@@ -227,11 +238,103 @@ test.for([
     name: "an onBehalfOf with no principal",
     lenderStamp: { principal: null, onBehalfOf: { via: { appPage: "chat.example.com" } } },
   },
-])("an attach with $name stamps nobody", ({ lenderStamp }) => {
-  // `toEqual`: a key that holds undefined is no stamp
-  expect(lendOfAttach({ rpcStubKey: "k", appendEvents: [], lenderStamp })).toEqual({
-    rpcStubKey: "k",
-    redial: false,
+])("an attach with $name is refused with 400, and appends nothing", async ({ lenderStamp }) => {
+  const { answer, lends } = attach({ rpcStubKey: "k", appendEvents: [], lenderStamp });
+  expect({ status: answer?.status, lends }).toEqual({ status: 400, lends: [] });
+  expect(await answer?.text()).toContain("malformed x-itx-rpc-stub-pager header: a lenderStamp");
+});
+
+// The attach stamps what it appends with who lends, and a reader trusts that stamp by the
+// event's type: so it appends its lend's own rows, and nothing else.
+test.for<{ name: string; rpcStubKey: string; event: StreamEventInput }>([
+  {
+    name: "a run's request",
+    rpcStubKey: "itx.bridge",
+    event: { type: "events.iterate.com/itx/run-requested", payload: { script: "itx.secrets" } },
+  },
+  {
+    name: "a message to an agent",
+    rpcStubKey: "itx.bridge",
+    event: { type: "events.iterate.com/agent/message-received", payload: { message: "hi" } },
+  },
+  {
+    name: "a rule at another name",
+    rpcStubKey: "itx.bridge",
+    event: {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.secrets", target: LEND },
+    },
+  },
+  {
+    name: "a rule at the key with another target",
+    rpcStubKey: "itx.bridge",
+    event: {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.bridge", target: ELSEWHERE },
+    },
+  },
+  {
+    name: "a subscription under another name",
+    rpcStubKey: "subscription:sub-1",
+    event: {
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: {
+        name: "sub-2",
+        target: ["itx", "builtins", "rpcStubs", ["get", "subscription:sub-1"]],
+      },
+    },
+  },
+  {
+    name: "a subscription with an expression target",
+    rpcStubKey: "subscription:sub-1",
+    event: {
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: { name: "sub-1", target: ["itx", ["cd", "/"], ["append"]] },
+    },
+  },
+  {
+    name: "a fetch route to another target",
+    rpcStubKey: "itx.bridge",
+    event: {
+      type: "events.iterate.com/itx/fetch-route-configured",
+      payload: { fetchRouteName: "bridge", target: ELSEWHERE },
+    },
+  },
+])(
+  "an attach that would append $name is refused with 400, and appends nothing",
+  async ({ rpcStubKey, event }) => {
+    const { answer, lends } = attach({
+      rpcStubKey,
+      appendEvents: [event],
+      lenderStamp: { principal: member },
+    });
+    expect({ status: answer?.status, lends }).toEqual({ status: 400, lends: [] });
+    expect(await answer?.text()).toContain("no row of the lend");
+  },
+);
+
+test("an attach appends its lend's own rows: the rule, the route to its name, the subscription", () => {
+  const provide = [
+    RULE,
+    {
+      type: "events.iterate.com/itx/fetch-route-configured",
+      payload: { fetchRouteName: "bridge", target: ["itx", "bridge"] },
+    },
+  ];
+  const subscribe = [
+    {
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: {
+        name: "sub-1",
+        target: ["itx", "builtins", "rpcStubs", ["get", "subscription:sub-1"]],
+      },
+    },
+  ];
+  expect(attach({ rpcStubKey: "itx.bridge", appendEvents: provide })).toMatchObject({
+    appended: [provide],
+  });
+  expect(attach({ rpcStubKey: "subscription:sub-1", appendEvents: subscribe })).toMatchObject({
+    appended: [subscribe],
   });
 });
 
@@ -291,6 +394,14 @@ function rows(now: {
 /** What the context's directory hands its append for one pager dial with `request` in the header.
  *  The append refuses after it looked, so the attach answers 409: Node's Response has no 101. */
 function lendOfAttach(request: Record<string, unknown>) {
+  const { answer, lends } = attach(request);
+  expect(answer).toMatchObject({ status: 409 });
+  return lends[0];
+}
+
+/** One pager dial with `request` in the header: the directory's answer, each lend it handed its
+ *  append, and the events of each. */
+function attach(request: Record<string, unknown>) {
   vi.stubGlobal(
     "WebSocketPair",
     class {
@@ -299,13 +410,15 @@ function lendOfAttach(request: Record<string, unknown>) {
     },
   );
   const lends: unknown[] = [];
+  const appended: StreamEventInput[][] = [];
   const directory = new RpcStubDirectory({
     ctx: { acceptWebSocket: () => {}, getWebSockets: () => [] },
     onPresence: () => {},
     // only its type is read here: no stub is fetched through
     rpcStubFetch: {} as ConstructorParameters<typeof RpcStubDirectory>[0]["rpcStubFetch"],
-    appendEvents: (_events, lend) => {
+    appendEvents: (events, lend) => {
       lends.push(lend);
+      appended.push(events);
       throw codedError("STREAM_PAUSED", "the test reads the lend alone");
     },
   });
@@ -314,6 +427,5 @@ function lendOfAttach(request: Record<string, unknown>) {
       headers: { "x-itx-rpc-stub-pager": encodeURIComponent(JSON.stringify(request)) },
     }),
   );
-  expect(answer).toMatchObject({ status: 409 });
-  return lends[0];
+  return { answer, lends, appended };
 }

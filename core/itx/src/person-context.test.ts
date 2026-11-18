@@ -3,9 +3,40 @@
 // exact expression the view would send.
 import { errorCode } from "iterate/lib";
 import { expect, test, vi } from "vitest";
-import { PersonContextRpcTarget, personItxSession, principalOf } from "./person-context.ts";
+import {
+  asAPersonReads,
+  PersonContextRpcTarget,
+  personItxSession,
+  principalOf,
+  readsOf,
+} from "./person-context.ts";
 
 const PATH = "/agents/a";
+const via = { appPage: "meet.example.com" };
+/** A member, as the platform stamps one. */
+const ADA = { actor: "user_1", email: "ada@example.com" };
+/** The viewer: a person with an address who is no member. */
+const EVE = { actor: "user_2", email: "eve@example.net", name: "eve" };
+/** Another viewer: a guest. */
+const BOB = { actor: "user_9", name: "Bob", kind: "guest" };
+/** A member's message as a member reads it, and as a person who is no member reads it. */
+const ADAS_EVENT = {
+  type: "events.iterate.com/agent/message-received",
+  offset: 4,
+  path: PATH,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  payload: { message: "hello" },
+  source: { origin: "/", principal: ADA, grant: "grant:ada", via, cause: { chain: "c", depth: 0 } },
+};
+const ADAS_EVENT_AS_READ = {
+  ...ADAS_EVENT,
+  source: {
+    origin: "/",
+    principal: { actor: "user_1", name: "ada" },
+    via,
+    cause: { chain: "c", depth: 0 },
+  },
+};
 
 test("the chat's reads reach that context, spelled at the platform's fixed point", async () => {
   const { target, context } = view();
@@ -31,9 +62,201 @@ test("the chat's reads reach that context, spelled at the platform's fixed point
 
 test("a subscription takes the page's live callback under a name the kernel mints", async () => {
   const { target, context } = view();
-  const callback = () => {};
+  const callback = vi.fn();
   await target.subscribe({ name: "agent", consumes: ["*"], target: callback });
-  expect(context.subscribe).toHaveBeenCalledWith({ consumes: ["*"], target: callback });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: no name and no other option may reach the kernel
+  expect(context.subscribe.mock.calls).toEqual([[{ consumes: ["*"], target: expect.anything() }]]);
+  lentCallbackOf(context)([ADAS_EVENT], { from: 4, to: 4 });
+  expect(callback).toHaveBeenCalledWith([ADAS_EVENT], { from: 4, to: 4 });
+});
+
+// WHAT THE PERSON READS OF OTHER PEOPLE: each way a value leaves the view hands on the same reading.
+test.for<{ way: string; read: (v: ReturnType<typeof view>) => Promise<unknown> }>([
+  {
+    way: "readEvents",
+    read: async ({ target, context }) => {
+      context.invoke.mockResolvedValue([ADAS_EVENT]);
+      return target.readEvents(0, 10);
+    },
+  },
+  {
+    way: "the live callback",
+    read: async ({ target, context }) => {
+      const callback = vi.fn();
+      await target.subscribe({ target: callback });
+      lentCallbackOf(context)([ADAS_EVENT], { from: 4, to: 4 });
+      expect(callback).toHaveBeenCalledWith(expect.anything(), { from: 4, to: 4 });
+      return callback.mock.calls[0]![0];
+    },
+  },
+  {
+    way: "the answer to a message",
+    read: async ({ target, asPerson }) => {
+      asPerson.mockResolvedValue([ADAS_EVENT]);
+      return target.agents.get(PATH).message("hi");
+    },
+  },
+])(
+  "through $way a person reads a member's event with the member's id and name, and no address or grant",
+  async ({ read }) => {
+    // `toEqual`: no key of the stamp beyond these may be read
+    expect(await read(view(EVE.actor))).toEqual([ADAS_EVENT_AS_READ]);
+  },
+);
+
+test("subscriptions.list names another holder by id and name, a guest as they are, and the viewer whole", async () => {
+  const row = (name: string, principal: Record<string, unknown>) => ({
+    name,
+    target: `itx.builtins.rpcStubs.get('subscription:${name}')`,
+    consumes: ["presence/status"],
+    configuredAtOffset: 3,
+    heldBy: { principal, via },
+  });
+  const admin = { actor: "user_0", email: "root@example.com" };
+  const viewed = view(EVE.actor);
+  viewed.context.invoke.mockResolvedValue([
+    row("sub-ada", { ...ADA, impersonatedBy: admin }),
+    row("sub-eve", EVE),
+    row("sub-bob", BOB),
+  ]);
+  expect(await viewed.target.subscriptions.list()).toEqual([
+    row("sub-ada", { actor: "user_1", name: "ada" }),
+    row("sub-eve", EVE),
+    row("sub-bob", BOB),
+  ]);
+});
+
+test.for<{ name: string; value: unknown; read: unknown }>([
+  {
+    name: "a member whose script wrote it, and the grant they asked through",
+    value: { origin: PATH, onBehalfOf: { principal: ADA, grant: "grant:ada", run: "/@81" } },
+    read: {
+      origin: PATH,
+      onBehalfOf: { principal: { actor: "user_1", name: "ada" }, run: "/@81" },
+    },
+  },
+  {
+    name: "who set a schedule",
+    value: {
+      origin: PATH,
+      schedule: { key: "k", definedBy: { origin: "/", principal: ADA, grant: "grant:ada" } },
+    },
+    read: {
+      origin: PATH,
+      schedule: {
+        key: "k",
+        definedBy: { origin: "/", principal: { actor: "user_1", name: "ada" } },
+      },
+    },
+  },
+  {
+    name: "a key's lend from before it named nobody, and the rule's lender",
+    value: {
+      payload: { match: "itx.bridge", lentBy: "key:k1" },
+      source: { origin: "/", principal: { actor: "bridge" }, grant: "key:k1" },
+    },
+    read: {
+      payload: { match: "itx.bridge" },
+      source: { origin: "/", principal: { actor: "bridge" } },
+    },
+  },
+  {
+    name: "a grant that no principal stands beside, or a null one: a key's lend",
+    value: [
+      { origin: "/", grant: "key:k1" },
+      { principal: null, grant: "key:k1", via },
+    ],
+    read: [{ origin: "/" }, { principal: null, via }],
+  },
+  {
+    name: "whose words an agent's item holds",
+    value: {
+      rev: 7,
+      state: { items: [{ role: "user", content: "hi", saidBy: { ...ADA, script: true } }] },
+    },
+    read: {
+      rev: 7,
+      state: {
+        items: [
+          { role: "user", content: "hi", saidBy: { actor: "user_1", name: "ada", script: true } },
+        ],
+      },
+    },
+  },
+])("a person reads $name without what is theirs alone", ({ value, read }) => {
+  // `toEqual`: no key beyond these may be read
+  expect(asAPersonReads(value, EVE.actor)).toEqual(read);
+});
+
+test("the viewer's own stamp stays whole, with its grant, and a value that names nobody is the same object", () => {
+  const own = {
+    origin: PATH,
+    principal: { ...EVE, impersonatedBy: { actor: "user_0", email: "root@example.com" } },
+    grant: "grant:eve",
+    onBehalfOf: { principal: EVE, grant: "grant:eve", via },
+  };
+  const nobodys = [{ type: "x", payload: { actor: { type: "user" } }, source: { origin: PATH } }];
+  expect(asAPersonReads(own, EVE.actor)).toBe(own);
+  expect(asAPersonReads(nobodys, EVE.actor)).toBe(nobodys);
+  // a guest among the others is read as they are: they have a name and nothing else
+  const guests = { onBehalfOf: { principal: BOB, via } };
+  expect(asAPersonReads(guests, EVE.actor)).toBe(guests);
+});
+
+// A live state's seed is read as the person reads; a patch was made against the whole state.
+test("a live state's delta that names what a person does not read comes with no patch, and any other as it is", () => {
+  const delta = (patch: unknown[]) => ({
+    type: "events.iterate.com/itx/live-state-changed",
+    ephemeral: true,
+    payload: { key: "agent", from: 7, to: 8, patch },
+    source: { origin: PATH },
+  });
+  const plain = delta([
+    { op: "add", path: "/items/1", value: { role: "assistant", content: "hello" } },
+  ]);
+  expect(asAPersonReads(plain, EVE.actor)).toBe(plain);
+  for (const patch of [
+    [{ op: "add", path: "/items/1", value: { role: "user", content: "hi", saidBy: ADA } }],
+    [{ op: "replace", path: "/messageSpeakers/0/saidBy/email", value: "ada@example.com" }],
+    [{ op: "remove", path: "/messageSpeakers/0/saidBy/impersonatedBy" }],
+  ])
+    expect(asAPersonReads(delta(patch), EVE.actor)).toEqual({
+      ...plain,
+      payload: { key: "agent", from: 7, to: 8, patch: null },
+    });
+});
+
+test("a member who opens the view reads what a member reads; anyone else reads as a person", () => {
+  const person = { userId: EVE.actor, email: EVE.email, name: EVE.name };
+  const request = (headers: Record<string, string>) =>
+    new Request("https://meet.example.com/itx", { headers });
+  const asMember = readsOf(request({ "x-itx-principal": JSON.stringify(EVE) }), person);
+  expect(asMember([ADAS_EVENT])).toEqual([ADAS_EVENT]);
+  expect(readsOf(request({}), person)([ADAS_EVENT])).toEqual([ADAS_EVENT_AS_READ]);
+});
+
+test("the kernel's lend dups, probes, watches and disposes of the page's own callback", async () => {
+  const { target, context } = view(EVE.actor);
+  /** A page's stub, as capnweb hands one over; `dup` is what its `dup()` answers. */
+  const stub = (dup?: unknown) =>
+    Object.assign(vi.fn(), {
+      dup: vi.fn(() => dup),
+      itxLivenessProbe: vi.fn(() => "alive"),
+      onRpcBroken: vi.fn(),
+      [Symbol.dispose]: vi.fn(),
+    });
+  const dup = stub();
+  const callback = stub(dup);
+  await target.subscribe({ target: callback });
+  const lent = lentCallbackOf(context).dup();
+  lent([ADAS_EVENT], { from: 4, to: 4 });
+  expect(dup).toHaveBeenCalledWith([ADAS_EVENT_AS_READ], { from: 4, to: 4 });
+  expect(lent.itxLivenessProbe()).toBe("alive");
+  const broken = () => {};
+  lent.onRpcBroken?.(broken);
+  expect(dup.onRpcBroken).toHaveBeenCalledWith(broken);
+  lent[Symbol.dispose]?.();
+  expect(dup[Symbol.dispose]).toHaveBeenCalledOnce();
 });
 
 test("words to the agent and the stop of an answer go as the person, the stop in the platform's words", async () => {
@@ -333,12 +556,14 @@ test("a guest is named as who asked by their id and the name they typed, marked 
   });
 });
 
-function view() {
+/** The view over stand-ins for the context. `viewer`: the id of a person who is no member, who
+ *  reads as one; with none, the view hands on every value as it is, as for a member. */
+function view(viewer?: string) {
   const context = {
-    invoke: vi.fn(async (..._args: unknown[]) => "answer"),
+    invoke: vi.fn(async (..._args: unknown[]): Promise<unknown> => "answer"),
     subscribe: vi.fn(async (..._args: unknown[]) => "handle"),
   };
-  const asPerson = vi.fn(async (..._args: unknown[]) => "as the person");
+  const asPerson = vi.fn(async (..._args: unknown[]): Promise<unknown> => "as the person");
   return {
     context,
     asPerson,
@@ -346,8 +571,21 @@ function view() {
       PATH,
       context as unknown as ConstructorParameters<typeof PersonContextRpcTarget>[1],
       asPerson,
+      viewer ? (value) => asAPersonReads(value, viewer) : (value) => value,
     ),
   };
+}
+
+type LentCallback = ((events: unknown, range: unknown) => unknown) & {
+  dup(): LentCallback;
+  itxLivenessProbe(): unknown;
+  onRpcBroken?(broken: () => void): void;
+  [Symbol.dispose]?(): void;
+};
+
+/** The callback the view lent the kernel in its one `subscribe`. */
+function lentCallbackOf(context: ReturnType<typeof view>["context"]): LentCallback {
+  return (context.subscribe.mock.calls[0]![0] as { target: LentCallback }).target;
 }
 
 /** A page's `presence/status` as a member's page sends it, for its row `page-1`; `payload` adds

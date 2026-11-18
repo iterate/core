@@ -386,10 +386,12 @@ export class IterateContextRpcTarget extends RpcTarget {
   }
 
   // What the context stamps on the rows a lend appends at its attach: who this caller is, never
-  // what it may do.
+  // what it may do. A key's token is no member's (core/boundary-worker/src/stamp.ts), and its
+  // session's principal only names the service it speaks for (core/mind-worker/src/api.ts): its
+  // lend names nobody, and the rule's `lentBy` says which key lends.
   get #lenderStamp(): LenderStamp {
     const { principal, grant, via, onBehalfOf } = this.#caller;
-    return { principal, grant, via, onBehalfOf };
+    return { principal: grant?.startsWith("key:") ? null : principal, grant, via, onBehalfOf };
   }
 
   // The platform's is spelled `itx.builtins.append`, so a context's own rows never redirect it.
