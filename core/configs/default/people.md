@@ -7,6 +7,12 @@ Signing in says who someone is. Being a member is a separate list: a member reac
 mind (its API, its MCP server, every context), and anyone else reaches only what `fetch` serves
 them. So a page can serve people who are not members, an app's end users.
 
+When a member is removed, or one of their grants ends, their next request is refused. A session
+that is already open, such as a WebSocket to the mind's API or a live page, stays open until its
+credential ends: within an hour, or within 24 hours for a sign-in on a host of the mind and a
+let-in through `/provide`. The keys that a removed member allowed for services stay live until a
+member removes them on `https://iterate.<domain>/keys`.
+
 On every host of the mind, the platform holds the browser session. `fetch` gets each request
 stamped: `this.auth.person(request)` is `{ userId, email, method }` for anyone signed in, and a
 member is stamped as a principal too. Three guards, each `null` when the request may go on, else
