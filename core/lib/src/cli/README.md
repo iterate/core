@@ -31,6 +31,15 @@ when it ends within the minute. `ITERATE_MIND_TOKEN` supplies a token for script
 the sign-in. `ITERATE_SKIP_BROWSER_OPEN=1` prints the sign-in URL without opening a browser.
 `logout` ends the sign-ins at the issuer, when it can revoke, and forgets them.
 
+In a sandbox of a mind the CLI needs no sign-in and no profile. The platform sets `ITERATE_MIND`
+(the mind's address) and `ITERATE_SANDBOX` (the sandbox's context path) for each command. With
+both set, and no `--mind` and no `ITERATE_MIND_TOKEN`, the CLI sends no bearer, and the sandbox's
+egress serves the API as the code of the sandbox's own context. The variables are a hint and no
+credential: on any other computer they give a 401. `provide` there lends on the sandbox's context
+and prints `itx.cd("<sandbox path>").<name>`. A sandbox whose requests the mind filters (a rule for
+`itx.fetch`) gets no such session, and the CLI says so. `tunnel` does not work from that session
+yet: its fetch route rides a member's lend on `/`.
+
 ### Login without a browser
 
 `iterate login --device` signs in a computer whose browser nobody sees, such as a remote machine or

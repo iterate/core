@@ -178,8 +178,12 @@ export async function runProvide(input: {
       input.file.description ? { description: input.file.description } : undefined,
     );
     if (how === "first") {
-      console.log(match);
-      console.error(`${match} is live for ${connection.address}. Press Ctrl-C to stop.`);
+      // A session's root is `/` for a member, and a sandbox's own context for code in a sandbox:
+      // the lend sits there, and the mind calls it through that context.
+      const { path } = await mind.whoami();
+      const spelled = path === "/" ? match : `itx.cd(${JSON.stringify(path)}).${input.name}`;
+      console.log(spelled);
+      console.error(`${spelled} is live for ${connection.address}. Press Ctrl-C to stop.`);
     } else if (how === "again") console.error(`Reconnected: ${match} is live again.`);
     const lendEnded = lend.lendEnded().then(
       (reason) => `its lend ended: the stub ${reason}`,

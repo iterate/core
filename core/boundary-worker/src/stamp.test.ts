@@ -99,3 +99,33 @@ test("a guest is stamped a person with the name they typed, no address and no pr
   expect(stamped.forwarded.headers.get("x-itx-principal")).toBeNull();
   expect(stamped.forwarded.headers.get("x-itx-grant")).toBeNull();
 });
+
+// A sandbox's own session is served by its egress, inside the mind Worker
+// (core/mind-worker/src/sandbox/own-session.ts). The internet's way to the API stays this one: no
+// bearer, no caller, whatever else the request says.
+test("the mind's API from the internet with no bearer is refused here, whatever it claims", async () => {
+  let asked = 0;
+  const auth = {
+    whoIs: async () => {
+      asked += 1;
+      return null;
+    },
+  } as unknown as AuthService;
+  const request = new Request("https://iterate.example.com/api", {
+    headers: {
+      upgrade: "websocket",
+      "x-itx-principal": JSON.stringify({ actor: "user_1" }),
+      "x-itx-caller-path": "/agents/ada/box",
+      "x-itx-app": "1",
+      "x-iterate-sandbox-session-refused": "no",
+      cookie: "__Host-iterate-session=t",
+    },
+  });
+  const stamped = await stampedRequest(request, { auth, route: "api", domain: "example.com" });
+  expect(stamped).toMatchObject({ answer: { status: 401 }, caller: "anonymous" });
+  // nothing a caller sent as a stamp goes on, and no credential was there to ask about
+  expect([...stamped.forwarded.headers.keys()].filter((name) => name.startsWith("x-itx-"))).toEqual(
+    [],
+  );
+  expect(asked).toBe(0);
+});

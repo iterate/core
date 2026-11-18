@@ -1,8 +1,9 @@
 // A Durable Object of its own: a class linked to a container gets `ctx.container` only as one, not as
 // a facet (measured). `ctx.container` cannot cross an RPC, so `invoke(steps)` replays a chain here.
 import { DurableObject } from "cloudflare:workers";
-import { relayedCloseCode, truncateCloseReason } from "core-itx";
+import { DurableObjectNameCodec, relayedCloseCode, truncateCloseReason } from "core-itx";
 import { codedError } from "iterate/lib";
+import { sandboxVariablesOf } from "iterate/mind-api";
 import { z } from "zod";
 import filesTool from "../generated/sandbox-files-tool.js";
 import { SANDBOX_MAX_BUSY_MS } from "./contract.ts";
@@ -242,7 +243,20 @@ export class SandboxContainer extends DurableObject {
     await this.ctx.storage.put("env", env);
   }
   #envOf(given?: Record<string, string>): Record<string, string> {
-    return { ...TRUST_INTERCEPT_CA, ...this.#defaults, ...given };
+    return { ...TRUST_INTERCEPT_CA, ...this.#told(), ...this.#defaults, ...given };
+  }
+
+  /** Which mind's sandbox a process runs in (iterate/mind-api `sandboxVariablesOf`): how the
+   *  `iterate` CLI there finds the mind with no profile and no sign-in. */
+  #told(): Record<string, string> {
+    const { name } = this.ctx.id;
+    return name ? sandboxVariablesOf(this.env.DOMAIN, DurableObjectNameCodec.parse(name).path) : {};
+  }
+
+  /** A session that code in the sandbox holds is use (./own-session.ts): its frames stamp the
+   *  clock as a stream's chunks do, so the idle stop comes only after the session ends. */
+  async used(): Promise<void> {
+    if (this.ctx.container?.running) await this.#touchSometimes();
   }
 
   get #container(): Container {
@@ -311,7 +325,7 @@ export class SandboxContainer extends DurableObject {
       ...rest,
       // after `rest`: an `instance` key present and undefined would take Cloudflare's `lite`
       instance: rest.instance || SANDBOX_INSTANCE,
-      env: { ...TRUST_INTERCEPT_CA, ...rest.env },
+      env: { ...TRUST_INTERCEPT_CA, ...this.#told(), ...rest.env },
       enableInternet: false,
       ...runs,
     });

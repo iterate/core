@@ -3,6 +3,7 @@ import type { Caller } from "./caller.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import { disposeRpcStub } from "./context/rpc-stubs.ts";
 import { endWhenSilent } from "./end-when-silent.ts";
+import { truncateCloseReason } from "./context/websocket-close.ts";
 import { contexts } from "./host.ts";
 import { IterateContextRpcTarget } from "./iterate-context.ts";
 
@@ -17,6 +18,11 @@ export async function serveSession(
     caller: Caller;
     endsAt: number | null;
     endReason: string;
+    // The context the session's root is, `/` with none. A `cd` from `/` is not the same: the first
+    // hop would stamp `/` as the origin of what the session writes.
+    path?: string;
+    // Told of each message the client sends on a socket. A reason it answers ends the session.
+    onFrame?: () => string | void | Promise<string | void>;
     // `teardown` ends with the session: a lend made through another caller on it ends with it too.
     root?: (context: IterateContextRpcTarget, teardown: SessionTeardown) => RpcTarget;
   },
@@ -24,7 +30,7 @@ export async function serveSession(
   const teardown = new SessionTeardown();
   const context = new IterateContextRpcTarget(
     contexts(),
-    DurableObjectNameCodec.address("/"),
+    DurableObjectNameCodec.address(session.path || "/"),
     teardown,
     (promise) => ctx.waitUntil(promise),
     session.caller,
@@ -44,7 +50,7 @@ export async function serveSession(
   const peer = newWebSocketRpcSession(server, root) as unknown as {
     itxLivenessProbe(): Promise<unknown>;
   };
-  const { endsAt, endReason } = session;
+  const { endsAt, endReason, onFrame } = session;
   let ended = false;
   const end = () => {
     if (ended) return;
@@ -59,6 +65,7 @@ export async function serveSession(
     end();
     server.close(code, reason);
   };
+  if (onFrame) endedByFrames(server, onFrame, closeAndEnd);
   const timer =
     endsAt &&
     setTimeout(
@@ -89,6 +96,21 @@ export async function serveSession(
   server.addEventListener("close", end, { once: true });
   server.addEventListener("error", end, { once: true });
   return new Response(null, { status: 101, webSocket: client });
+}
+
+// A watcher that throws ends nothing: the session goes on, and the next frame asks again. Nor does
+// a close that throws: a socket that is closing already takes no second close.
+export function endedByFrames(
+  socket: Pick<WebSocket, "addEventListener">,
+  onFrame: () => string | void | Promise<string | void>,
+  close: (code: number, reason: string) => void,
+): void {
+  socket.addEventListener("message", () => {
+    void Promise.resolve()
+      .then(onFrame)
+      .then((reason) => reason && close(1008, truncateCloseReason(reason)))
+      .catch(() => undefined);
+  });
 }
 
 // Holds each lend relay so it is not GC'd. Re-adding a key is a reconnect: the incumbent is

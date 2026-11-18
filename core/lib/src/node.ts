@@ -20,7 +20,13 @@ import { deviceLogin, showsColors } from "./cli/device-login/index.ts";
 import { oauthLogin, refreshOAuthSession } from "./cli/oauth.ts";
 import { openPageCommand } from "./cli/open-page.ts";
 import { withTimeout } from "./lib.ts";
-import { mindAddressOf, mindApiUrlOf } from "./mind-api.ts";
+import {
+  mindAddressOf,
+  mindApiUrlOf,
+  ownSandboxOf,
+  SANDBOX_SESSION_REFUSED_HEADER,
+  sandboxSessionRefusal,
+} from "./mind-api.ts";
 
 /** Where a line for the person goes: stderr, so stdout stays a command's answer. */
 const printToStderr = (line: string) => console.error(line);
@@ -162,11 +168,28 @@ export async function connectMind(input: {
 }): Promise<MindConnection> {
   const address = addressOf(input.address);
   const resource = mindApiUrlOf(address);
-  const token = await mindToken({ address, resource, token: input.token, signIn: input.signIn });
+  // In a sandbox of this mind, with no token named, no bearer goes: the sandbox's egress serves the
+  // API as the sandbox's own context (iterate/mind-api `ownSandboxOf`). No sign-in is tried there.
+  const sandbox = input.token ? null : ownSandboxOf(process.env, address);
+  const token = sandbox
+    ? null
+    : await mindToken({ address, resource, token: input.token, signIn: input.signIn });
   const socket = new WebSocket(resource.replace(/^http/, "ws"), {
     handshakeTimeout: 15_000,
-    headers: { authorization: `Bearer ${token}` },
+    ...(token && { headers: { authorization: `Bearer ${token}` } }),
   });
+  // A sandbox's refused upgrade says why: its 401 is no call to sign in.
+  let refused = "";
+  if (sandbox)
+    socket.once("unexpected-response", (_request, response) => {
+      refused = sandboxSessionRefusal({
+        sandbox,
+        address,
+        status: response.statusCode,
+        why: response.headers[SANDBOX_SESSION_REFUSED_HEADER],
+      });
+      socket.terminate();
+    });
   // ws implements the DOM event/send/close interface consumed by capnweb.
   const itx = newWebSocketRpcSession<IterateContextApi>(socket as unknown as globalThis.WebSocket);
   let dead = "";
@@ -205,6 +228,6 @@ export async function connectMind(input: {
     } finally {
       socket.terminate();
     }
-    throw error;
+    throw refused ? new Error(refused, { cause: error }) : error;
   }
 }

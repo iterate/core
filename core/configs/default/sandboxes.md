@@ -69,10 +69,21 @@ if (!events.some((event) => event.type === "events.iterate.com/sandbox/started")
   The token's value is in the mind's vault alone, so deleting the secret stops every sandbox's
   git for that repo.
 
-- **A sandbox that runs the words of a person who is not a member** (a visitor, a mail, a
-  stranger's post) can use every secret of the mind through the egress, the git tokens too. Start
-  it with `start({ egress })` aimed at a fetch module that lets through only what that job needs
-  (the contract of `itx.sandboxes` says how), or give that work no sandbox.
+- **The `iterate` CLI in a sandbox needs no sign-in.** `iterate whoami`, `iterate itx run` and
+  `iterate provide <file>` there reach this mind as the code of the sandbox's own context, with no
+  token: each command has `ITERATE_MIND` and `ITERATE_SANDBOX`, and the sandbox's egress serves
+  the session. A lend from a sandbox sits on its context, so call it as
+  `itx.cd("<sandbox path>").<name>`. While the session is open the sandbox counts as used: its
+  idle stop comes after the session ends. Install the CLI once with `npm i -g iterate` where the
+  image has none.
+
+- **Code in an unfiltered sandbox can do what its creator's code can, the mind's config
+  included.** It can also use every secret of the mind through the egress, the git tokens too. So
+  a sandbox that runs text from outside (a cloned repository, a web page, a guest's words) gets
+  `start({ egress })` aimed at a fetch module that lets through only what that job needs (the
+  contract of `itx.sandboxes` says how), or lives beneath a jail, or does not exist. A sandbox
+  with a rule for `itx.fetch` on its context or above it gets no session of its own, and a rule
+  that lands later ends an open one.
 
 - **Claude Code and Codex** sign in with a placeholder in the command's environment, which the
   egress fills in. A command does not inherit the environment of another call: pass it each time.

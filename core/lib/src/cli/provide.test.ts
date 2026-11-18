@@ -98,6 +98,22 @@ test("when the next connection cannot be made, the present one is kept until it 
   expect(quiet.lines.join("\n")).toContain("Could not renew itx.standIn before its sign-in ends");
 });
 
+test("a lend from a sandbox's own session is spelled through the sandbox's context", async () => {
+  using quiet = quietConsole();
+  const box = connectionOf("box", [], "/agents/ada/box");
+  const run = runProvide({
+    connection: box.connection,
+    reconnect: async () => box.connection,
+    file: { provide: () => ({ hello: () => "hello" }) },
+    name: "standIn",
+    reconnectDelaysMs: [],
+  });
+  await box.lent;
+  box.close();
+  await expect(run).rejects.toThrow("could not reconnect");
+  expect(quiet.lines.at(0)).toBe('itx.cd("/agents/ada/box").standIn');
+});
+
 /** A config naming `baseUrl` with a stored token, and `provide` run as a child process: `live`
  *  answers the line it prints once lent, `stop` sends Ctrl-C and answers the exit code. */
 function cliConfig(baseUrl: string) {
@@ -152,7 +168,7 @@ function cliConfig(baseUrl: string) {
 
 /** A mind's connection as `runProvide` uses it, which says in `happened` when the name is lent over
  *  it and when it is let go. `close()` is the mind closing it. */
-function connectionOf(name: string, happened: string[]) {
+function connectionOf(name: string, happened: string[], path = "/") {
   const lent = Promise.withResolvers<void>();
   const disposed = Promise.withResolvers<void>();
   const closed = Promise.withResolvers<{ code: number; reason: string }>();
@@ -160,6 +176,7 @@ function connectionOf(name: string, happened: string[]) {
   const connection = {
     address: "example.com",
     itx: {
+      whoami: async () => ({ path }),
       provide: async () => {
         happened.push(`${name} lends`);
         lent.resolve();

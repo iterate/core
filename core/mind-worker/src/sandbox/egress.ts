@@ -1,22 +1,55 @@
 // Every request a container makes is the mind's own `itx.fetch`, as a call, never a request to
 // the context's `fetch`: that one routes on headers, and a container controls every header it sends.
-// Both resolve `itx.fetch` on the sandbox's context, so a rewrite rule there for `itx.fetch` sees
+// Both resolve `itx.fetch` on the sandbox's context, so a rule there for `itx.fetch` sees
 // every request, handshakes included: that rule is how a mind limits one sandbox (contract.ts says
 // how to write it). Its target passes a socket on only through `env.ITX.fetch`, never over RPC.
+// One request is answered here and not sent: a sandbox's own session with the mind's API
+// (./own-session.ts), and only for a sandbox that no such rule limits.
 import { WorkerEntrypoint } from "cloudflare:workers";
 import {
   contextAt,
   DurableObjectNameCodec,
   encodeFetchExpression,
   ITX_EXPRESSION_FETCH_HEADER,
+  serveSession,
   stampCallerHeaders,
 } from "core-itx";
+import { SANDBOX_SESSION_REFUSED_HEADER } from "iterate/mind-api";
 import type { Env } from "../env.ts";
+import type { SandboxContainer } from "./container.ts";
+import {
+  asHeaderValue,
+  asksForOwnSession,
+  egressFilterOf,
+  ownSessionOf,
+  sessionWatch,
+} from "./own-session.ts";
 
 /** Its props name the sandbox's context, which the container cannot reach. */
 export class SandboxEgress extends WorkerEntrypoint<Env, { iterateContextName: string }> {
   override async fetch(request: Request): Promise<Response> {
     const { path } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
+    if (!asksForOwnSession(request, this.env.DOMAIN)) return this.#send(request, path);
+    const filter = await this.#filter(path);
+    if (!filter) return this.#session(request, path);
+    // The rule's own target may add a bearer, so the request still goes. With none, the boundary's
+    // 401 says why the sandbox got no session of its own. So does a request that cannot go at all
+    // (a masked `itx.fetch`): a dropped connection would say nothing.
+    console.info({ event: "sandbox.session-refused", path, filter });
+    const answer = await this.#send(request, path).catch((error: unknown) => {
+      console.warn({ event: "sandbox.session-refused-send-failed", path, error: String(error) });
+      return null;
+    });
+    if (answer && answer.status !== 401) return answer;
+    const headers = new Headers(answer?.headers);
+    headers.set(SANDBOX_SESSION_REFUSED_HEADER, asHeaderValue(filter));
+    return new Response(answer ? answer.body : "This sandbox gets no session with its mind\n", {
+      status: 401,
+      headers,
+    });
+  }
+
+  async #send(request: Request, path: string): Promise<Response> {
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket")
       return this.#upgrade(request, path);
     const answer = await contextAt(path).invoke(["itx", ["fetch", request]], [], {
@@ -25,6 +58,60 @@ export class SandboxEgress extends WorkerEntrypoint<Env, { iterateContextName: s
     });
     // the context's `fetch` answers the `Response` it was given
     return withKnownLength(answer as Response, request);
+  }
+
+  /** Why this sandbox gets no session of its own, or null (./own-session.ts `egressFilterOf`). */
+  async #filter(path: string): Promise<string | null> {
+    const rows = await contextAt(path).invoke(["itx", "builtins", "rewriteRules", ["list"]], [], {
+      principal: null,
+      path,
+    });
+    return egressFilterOf(rows);
+  }
+
+  /** The mind's API as the code of the sandbox's own context, for as long as the socket lives. No
+   *  credential ends it: a rule that lands later does (`sessionWatch`). The API's HTTP batch form
+   *  is one request's session: each batch is checked against the rules, stamps the clock once, and
+   *  leaves one `session-opened` in the log. */
+  async #session(request: Request, path: string): Promise<Response> {
+    // `ctx.exports` holds what the Worker's main module exports, and is typed from that module.
+    // The module exports this class, so this file cannot name its type: the cast names the one
+    // class that is used here (./container.ts, exported by ../worker.ts), which is safe because
+    // the sandbox's facet reaches the same namespace by the same name.
+    const { SandboxContainer } = this.ctx.exports as unknown as {
+      SandboxContainer: DurableObjectNamespace<SandboxContainer>;
+    };
+    const container = SandboxContainer.getByName(this.ctx.props.iterateContextName);
+    // Never waited for: a stamp that fails or does not answer delays no session and skips no check.
+    const used = () =>
+      container.used().catch((error: unknown) => {
+        console.warn({ event: "sandbox.session-not-stamped", path, error: String(error) });
+      });
+    // At the fixed point: the fact is the platform's record, which no row of the sandbox masks.
+    const record = (fact: "opened" | "ended", payload: { reason?: string }) => {
+      console.info({ event: `sandbox.session-${fact}`, path, ...payload });
+      const event = { type: `events.iterate.com/sandbox/session-${fact}`, payload };
+      this.ctx.waitUntil(
+        contextAt(path)
+          .invoke(["itx", "builtins", ["append", event]], [], { principal: null, path })
+          .catch((error: unknown) =>
+            console.warn({ event: "sandbox.session-not-recorded", path, error: String(error) }),
+          ),
+      );
+    };
+    this.ctx.waitUntil(used());
+    record("opened", {});
+    return serveSession(request, this.ctx, {
+      ...ownSessionOf(path),
+      endsAt: null,
+      endReason: "",
+      onFrame: sessionWatch({
+        now: () => Date.now(),
+        used,
+        filter: () => this.#filter(path),
+        ended: (reason) => record("ended", { reason }),
+      }),
+    });
   }
 
   /** workerd's RPC cannot carry a Response that holds a socket, so a handshake takes the context's

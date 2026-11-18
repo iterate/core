@@ -82,6 +82,10 @@ const resolveConfigName = (workspacePath: string): string => {
  *  `login` stores the profile's), else the profile's. */
 const resolveMind = async (given?: string): Promise<string> => {
   if (given) return (await discoverAddress(given)).address;
+  // In a sandbox the platform names the mind (iterate/mind-api `sandboxVariablesOf`): no profile
+  // is needed there. `--config` still picks a profile.
+  const told = process.env.ITERATE_SANDBOX?.trim() && process.env.ITERATE_MIND?.trim();
+  if (told && !configFlagOverride) return addressOf(told);
   const name = resolveConfigName(process.cwd());
   const config = readConfig(name);
   if (config instanceof Error) throw config;
