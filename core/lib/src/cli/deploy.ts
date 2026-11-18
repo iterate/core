@@ -55,6 +55,7 @@ export type DeployInput = {
   owner?: string;
   buy?: boolean;
   yes?: boolean;
+  eraseRecords?: boolean;
   source?: string;
   ref?: string;
   cloud?: boolean;
@@ -380,11 +381,59 @@ const ZoneRow = z.object({ id: z.string(), name: z.string(), status: z.string() 
 /** A zone, and the stack whose boundary Worker serves it, when one does. */
 type Zone = z.infer<typeof ZoneRow> & {
   mind?: string;
-  /** Its routes could not be read, so nothing says whether a mind lives there. */
+  /** Its routes or records could not be read, so nothing says what lives there. */
   unread?: boolean;
+  /** What else uses the zone: a Worker's route, or a record that names a host or takes mail. */
+  uses?: string[];
 };
+const DnsRecord = z.object({
+  id: z.string(),
+  type: z.string(),
+  name: z.string(),
+  content: z.string().nullish(),
+});
 // a route that turns Workers off has `script: null`
-const Route = z.object({ script: z.string().nullish() });
+const Route = z.object({ id: z.string(), pattern: z.string(), script: z.string().nullish() });
+
+/** WHAT A ZONE HOLDS THAT A MIND WOULD REPLACE: every DNS record (Cloudflare lists no NS or SOA of
+ *  its own) and every Workers route. Undefined when Cloudflare did not answer with both. */
+async function holdingsOf(cf: Cloudflare, zoneId: string) {
+  const routes = resultOf(z.array(Route), await cf("GET", `/zones/${zoneId}/workers/routes`));
+  const records: z.infer<typeof DnsRecord>[] = [];
+  for (let page = 1; page <= 50; page++) {
+    const listed = resultOf(
+      z.array(DnsRecord),
+      await cf("GET", `/zones/${zoneId}/dns_records?per_page=100&page=${page}`),
+    );
+    if (!listed) return undefined;
+    records.push(...listed);
+    if (listed.length < 100) break;
+  }
+  if (!routes) return undefined;
+  return { routes, records };
+}
+
+/** Erases them, each by its id, and stops at the first that Cloudflare refuses: the deploy then
+ *  does not start, and a second run erases what is left. */
+async function eraseHoldings(cf: Cloudflare, zoneId: string) {
+  const holdings = await holdingsOf(cf, zoneId);
+  if (!holdings) throw new Error("Cloudflare did not answer with the zone's records and routes.");
+  for (const route of holdings.routes) {
+    const gone = await cf("DELETE", `/zones/${zoneId}/workers/routes/${route.id}`);
+    if (gone.status >= 300)
+      throw new Error(
+        `Cloudflare did not delete the route ${route.pattern} (${gone.status}): ${gone.error}`,
+      );
+  }
+  for (const record of holdings.records) {
+    const gone = await cf("DELETE", `/zones/${zoneId}/dns_records/${record.id}`);
+    if (gone.status >= 300)
+      throw new Error(
+        `Cloudflare did not delete the ${record.type} record ${record.name} (${gone.status}): ${gone.error}`,
+      );
+  }
+  return { routes: holdings.routes.length, records: holdings.records.length };
+}
 const Offer = z.object({
   name: z.string(),
   registrable: z.boolean().optional(),
@@ -408,7 +457,12 @@ async function accountsOf(cf: Cloudflare): Promise<Account[]> {
   return resultOf(z.array(Account), await cf("GET", "/accounts?per_page=50")) ?? [];
 }
 
-/** The account's zones (its first 50, or the one named `domain`), each with its stack. */
+/** The account's zones (its first 50, or the one named `domain`), each with its stack and with
+ *  what else uses it. A MIND TAKES A WHOLE ZONE THAT NOTHING ELSE USES: its site, its mail and its
+ *  sign-in are the zone's. So a route of another Worker, and a record that names a host or takes
+ *  mail (A, AAAA, CNAME, MX), each make a zone one that the command deploys to only after the
+ *  person agreed to erase what it holds. A stack's own records (AAAA 100::) and routes are not a
+ *  use. */
 async function zonesOf(cf: Cloudflare, account: string, domain?: string): Promise<Zone[]> {
   const which = domain ? `&name=${domain}` : "";
   const zones =
@@ -418,12 +472,33 @@ async function zonesOf(cf: Cloudflare, account: string, domain?: string): Promis
     ) ?? [];
   return Promise.all(
     zones.map(async ({ id, name, status }) => {
-      const routes = resultOf(z.array(Route), await cf("GET", `/zones/${id}/workers/routes`));
-      if (!routes) return { id, name, status, unread: true };
-      const script = routes
-        .map((route) => route.script || "")
-        .find((worker) => /^iterate-.+-(boundary|ingress)$/.test(worker));
-      return { id, name, status, mind: script?.replace(/^iterate-|-(boundary|ingress)$/g, "") };
+      const [routes, records] = await Promise.all([
+        cf("GET", `/zones/${id}/workers/routes`).then((answer) => resultOf(z.array(Route), answer)),
+        cf("GET", `/zones/${id}/dns_records?per_page=100`).then((answer) =>
+          resultOf(z.array(DnsRecord), answer),
+        ),
+      ]);
+      if (!routes || !records) return { id, name, status, unread: true };
+      const stack = /^iterate-.+-(boundary|ingress)$/;
+      const script = routes.map((route) => route.script || "").find((worker) => stack.test(worker));
+      const uses = [
+        ...routes
+          .filter((route) => !stack.test(route.script || ""))
+          .map((route) => `the route ${route.pattern} of ${route.script || "no Worker"}`),
+        ...records
+          .filter((record) => ["A", "AAAA", "CNAME", "MX"].includes(record.type))
+          .filter((record) => !(record.type === "AAAA" && record.content === "100::"))
+          .map((record) => `the ${record.type} record ${record.name}`),
+        // this list is the zone's first page: a zone that fills it is in use, whatever follows
+        ...(records.length >= 100 ? ["100 or more DNS records"] : []),
+      ];
+      return {
+        id,
+        name,
+        status,
+        mind: script?.replace(/^iterate-|-(boundary|ingress)$/g, ""),
+        uses,
+      };
     }),
   );
 }
@@ -469,7 +544,11 @@ async function pickDomain(
               .map((zone) => ({
                 value: zone.name,
                 label: zone.name,
-                hint: zone.mind ? "this mind is here already" : "in this account",
+                hint: zone.mind
+                  ? "this mind is here already"
+                  : zone.uses?.length
+                    ? "in this account, in use: its records would be erased"
+                    : "in this account, unused",
               })),
             ...offers.map((offer) => ({
               value: offer.name,
@@ -974,7 +1053,7 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       );
     if (pick.zone?.unread)
       throw new Error(
-        `Cloudflare did not answer with the Workers routes of ${domain}, so nothing says whether a mind lives there already. Nothing was changed. Run the command again.`,
+        `Cloudflare did not answer with the Workers routes and DNS records of ${domain}, so nothing says what lives there already. Nothing was changed. Run the command again.`,
       );
     if (pick.zone?.mind && pick.zone.mind !== name)
       throw new Error(
@@ -986,6 +1065,30 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
         `A mind named ${name} lives at ${elsewhere.name} already. Pass --name with another name for this one.`,
       );
     const again = pick.zone?.mind === name;
+    // A ZONE IN USE: the person says yes to losing everything on it, here, before anything
+    // changes. The erase itself is the last thing before the deploy (below).
+    const uses = (!again && pick.zone?.uses) || [];
+    const holdings = uses.length > 0 && pick.zone ? await holdingsOf(cf, pick.zone.id) : undefined;
+    if (uses.length > 0 && !holdings)
+      throw new Error(
+        `Cloudflare did not answer with the records of ${domain}. Nothing was changed. Run the command again.`,
+      );
+    if (holdings) {
+      const what = `${holdings.records.length} DNS record${holdings.records.length === 1 ? "" : "s"} and ${holdings.routes.length} Workers route${holdings.routes.length === 1 ? "" : "s"}`;
+      const some = `${uses.slice(0, 5).join(", ")}${uses.length > 5 ? ", and more" : ""}`;
+      const erase =
+        input.eraseRecords ||
+        (await ask<boolean>(
+          `${domain} is in use (${some}); pass --erase-records to erase its ${what}`,
+          () =>
+            p.confirm({
+              message: `${domain} is in use: ${some}. A mind takes the whole domain. I will erase all ${what} there: its site and its mail stop working. Go on?`,
+              initialValue: false,
+            }),
+        ));
+      if (!erase)
+        throw new Error("Nothing was changed. Run the command again with another domain.");
+    }
     if (
       again &&
       !input.yes &&
@@ -1081,6 +1184,12 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       ),
     );
     access = await renewed();
+    if (holdings && pick.zone) {
+      const erased = await eraseHoldings(cf, pick.zone.id);
+      p.log.success(
+        `Erased ${erased.records} DNS records and ${erased.routes} Workers routes of ${domain}.`,
+      );
+    }
     const deployBegan = Date.now();
     const deploying = wait(`Deploying the mind at ${domain}`);
     const code = await deployStack({

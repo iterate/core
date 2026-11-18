@@ -75,8 +75,11 @@ What it does, in order:
    from another registrar, whose nameservers you then change. It asks the registrar about up to
    20 names made from your name (the "-erate" names first, as iterate's is) and lists the free
    ones with their price a year. You can type a domain, or a few words to get more names. It asks
-   before it buys; `--buy` is the yes. The mind takes the whole domain, and the owner's own address must
-   be elsewhere.
+   before it buys; `--buy` is the yes. The mind takes a whole domain that nothing else uses (a new one is
+   best; a subdomain works when it is a zone of its own). A domain of the account with a route of
+   another Worker, or with an A, AAAA, CNAME or MX record, is in use: the command says what is
+   there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS
+   record and Workers route of that domain, right before the deploy and after every other check. The owner's own address must be elsewhere.
 5. **Workers Paid and R2.** It opens the page for each one that is off and waits until it is on.
 6. **The deploy**: `pnpm run deploy` of [core/alchemy](../../../alchemy/README.md), with a config
    that names you as the only member. On a dev zone the whole command took 1 min 41 s, and 2 min 10 s when the new state store refused the first try.

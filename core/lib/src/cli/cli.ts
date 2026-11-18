@@ -171,6 +171,12 @@ const launcherProcedures = {
           .describe(
             "Answer yes to the other questions: a domain you bring, a deploy over this mind",
           ),
+        eraseRecords: z
+          .boolean()
+          .optional()
+          .describe(
+            "A domain of the account that is in use: erase every DNS record and Workers route on it without a question",
+          ),
         source: z
           .string()
           .optional()

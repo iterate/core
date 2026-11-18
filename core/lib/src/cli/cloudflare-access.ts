@@ -43,7 +43,6 @@ const SCOPES = [
   "email-routing-rule.write",
   "queues.write",
   "secrets-store.write",
-  "workers-observability.read",
   "zone.read",
   "zone.write",
   "zone-settings.write",
