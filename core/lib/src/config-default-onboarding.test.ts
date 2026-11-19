@@ -7,6 +7,7 @@
 /// <reference path="../../configs/default/files.d.ts" />
 import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
+import { ITERATE_MIND as ITERATE_ID } from "../../configs/default/cloud-deliveries.ts";
 import { onboardingApp } from "../../configs/default/apps/onboarding/app.ts";
 import {
   type CloudCredit,
@@ -46,7 +47,7 @@ import { APP_DESCRIPTION_PATH, AppDescription } from "./app-description.ts";
 import { auth } from "./sdk/auth.ts";
 
 const STEP = "connect-iterate-cloud";
-const MELD = "/minds/iterate.iterate.com";
+const MELD = `/minds/${ITERATE_ID}`;
 const NOW = Date.parse("2026-11-18T22:00:00Z");
 const BALANCE = { grantedUsd: 10, spentUsd: 0.42, remainingUsd: 9.58 };
 const MIND_ID = "this-mind-id";
@@ -226,7 +227,7 @@ test("Connect: one link to sign the rule, and nothing at iterate or in the secre
       {
         path: MELD,
         type: "events.iterate.com/mind-meld/configured",
-        payload: { append: ["/minds/iterate.iterate.com/"] },
+        payload: { append: [`/minds/${ITERATE_ID}/`], name: "iterate.iterate.com" },
         next: "https://onboarding.example.com/",
       },
     ],
@@ -239,11 +240,11 @@ test("Connect: one link to sign the rule, and nothing at iterate or in the secre
   expect(mind.proposed).toHaveLength(1);
 
   // a rule that no member signed starts nothing
-  await hook(mind, credit, mind.sign(["/minds/iterate.iterate.com/"], false));
+  await hook(mind, credit, mind.sign([`/minds/${ITERATE_ID}/`], false));
   expect(calls).toEqual([]);
 
   // the member's signed rule: the grant, then each secret
-  await hook(mind, credit, mind.sign(["/minds/iterate.iterate.com/"]));
+  await hook(mind, credit, mind.sign([`/minds/${ITERATE_ID}/`]));
   expect(calls).toEqual(["connect", "set /secrets/openai", "set /secrets/exa", "balance"]);
   expect(secrets).toEqual({ "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" });
   const [card] = await onboardingCards(context);
@@ -398,7 +399,7 @@ test.for([
     );
     const context = contextOf(mind, credit);
     await runStep(context, STEP, "connect");
-    await hook(mind, credit, mind.sign(["/minds/iterate.iterate.com/"]));
+    await hook(mind, credit, mind.sign([`/minds/${ITERATE_ID}/`]));
     const note = mind.chat().map((event) => JSON.stringify(event.payload));
     expect(note).toHaveLength(1);
     expect(note[0]).toMatch(/The rule stands until the owner ends it with their passkey/);
@@ -425,7 +426,7 @@ test("an own OpenAI key and no Exa key: the offer, then at the signed rule Exa a
   const context = contextOf(mind, fake.credit);
   expect(await runStep(context, STEP, "check")).toMatchObject({ status: "not-asked" });
   await runStep(context, STEP, "connect");
-  await hook(mind, fake.credit, mind.sign(["/minds/iterate.iterate.com/"]));
+  await hook(mind, fake.credit, mind.sign([`/minds/${ITERATE_ID}/`]));
   expect(fake).toMatchObject({
     secrets: { "/secrets/openai": "own", "/secrets/exa": "iterate-proxy" },
   });
@@ -534,7 +535,7 @@ test("Connect pressed with the keys unset, then both keys set by the owner, then
   await runStep(context, STEP, "connect");
   fake.secrets["/secrets/openai"] = "own";
   fake.secrets["/secrets/exa"] = "own";
-  await hook(mind, fake.credit, mind.sign(["/minds/iterate.iterate.com/"]));
+  await hook(mind, fake.credit, mind.sign([`/minds/${ITERATE_ID}/`]));
   const [note] = mind.chat().map((event) => JSON.stringify(event.payload));
   expect(note).toMatch(
     /The mind takes no credit: the owner's own keys for OpenAI and Exa stay in use\./,
@@ -551,6 +552,30 @@ test("the offer says the passkey page comes only when no rule is signed yet", as
   expect(await sendsOf(fakeMind())).toMatch(/You allow that with your passkey on the next page,/);
   expect(await sendsOf(fakeMind({ meld: "member" }))).toMatch(
     /You allowed that with your passkey already, and you can end it at any time\./,
+  );
+});
+
+test("a rule by hostname, on /minds/iterate.iterate.com, still counts; an end signed by id after it ends it", async () => {
+  const sendsOf = async (rules: [string[], string, string][]) => {
+    const mind = fakeMind();
+    for (const [append, path, createdAt] of rules)
+      await mind.itx.cd(path).append({
+        type: "events.iterate.com/mind-meld/configured",
+        payload: { append },
+        createdAt,
+        source: { signer: { principal: { email: "owner@example.org" }, member: true } },
+      } as never);
+    const [card] = await onboardingCards(contextOf(mind, fakeCredit().credit));
+    return card?.points?.find((point) => point.title === "What iterate may send")?.text;
+  };
+  const before: [string[], string, string] = [
+    ["/minds/iterate.iterate.com/"],
+    "/minds/iterate.iterate.com",
+    "2026-11-18T10:00:00.000Z",
+  ];
+  expect(await sendsOf([before])).toMatch(/You allowed that with your passkey already/);
+  expect(await sendsOf([before, [[], MELD, "2026-11-20T10:00:00.000Z"]])).toMatch(
+    /You allow that with your passkey on the next page,/,
   );
 });
 
@@ -872,7 +897,7 @@ test("the credit is open as shipped; closed (creditOpen false): no card, no pres
   const context = { ...contextOf(mind, credit), creditOpen: false };
   expect(stepsOf(await onboardingCards(context))).toEqual(["connect-cloudflare"]);
   await expect(runStep(context, STEP, "connect")).rejects.toThrow("its steps: connect-cloudflare");
-  await stepEvent(context, mind.sign(["/minds/iterate.iterate.com/"]));
+  await stepEvent(context, mind.sign([`/minds/${ITERATE_ID}/`]));
   expect(calls).toEqual([]);
   expect(mind).toMatchObject({ proposed: [] });
   expect(mind.chat()).toEqual([]);
@@ -897,7 +922,7 @@ test("Disconnect deletes only iterate's secrets by proxy at once, then one link 
   expect(calls).toContain("delete /secrets/exa");
   expect(calls).not.toContain("delete /secrets/openai");
   expect(secrets).toEqual({ "/secrets/openai": "own", "/secrets/exa": "unset" });
-  expect(mind.proposed.at(-1)?.payload).toEqual({ append: [] });
+  expect(mind.proposed.at(-1)?.payload).toEqual({ append: [], name: "iterate.iterate.com" });
   expect(answer).toMatchObject({
     status: "disconnecting",
     link: "https://mind.example.com/sign/1",
@@ -1160,6 +1185,21 @@ test("enrolment-open from iterate.iterate.com connects a waiting step once: a se
   expect(mind).toMatchObject({ proposed: [] });
 });
 
+test("enrolment-open at iterate's hostname path (its mind in the hostname form, under a rule by hostname) connects a waiting step too", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
+  const context = contextOf(mind, fake.credit);
+  expect(await runStep(context, STEP, "connect")).toMatchObject({ status: "waiting" });
+  fake.state.connect = { ok: true, balance: BALANCE };
+  fake.calls.length = 0;
+  await mindHook(mind, fake.credit, {
+    ...fromIterate("events.iterate.com/cloud/enrolment-open", { hostname: "mind.example.com" }),
+    path: "/minds/iterate.iterate.com/cloud",
+  });
+  expect(fake.calls.filter((call) => call === "connect")).toEqual(["connect"]);
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "connected" });
+});
+
 test("enrolment-open does nothing on a declined step, on one with no rule, and from any other signer or path", async () => {
   const declined = fakeMind({ meld: "member" });
   const fake = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
@@ -1196,9 +1236,11 @@ test("enrolment-open does nothing on a declined step, on one with no rule, and f
   ) as OnboardingItx;
   for (const event of [
     { ...open, source: { signer: { principal: { kind: "mind", actor: "other.example.com" } } } },
-    { ...open, source: { signer: { principal: { actor: "iterate.iterate.com" } } } },
+    { ...open, source: { signer: { principal: { actor: ITERATE_ID } } } },
     { ...open, source: undefined },
+    { ...open, path: `/minds/${ITERATE_ID}/other` },
     { ...open, path: "/minds/iterate.iterate.com/other" },
+    { ...open, path: "/minds/iterate.example.com/cloud" },
   ])
     await onboardingMindEvent(itx, event);
   expect(reads).toBe(0);
@@ -1445,7 +1487,7 @@ test("the real set names iterate's proxy and null material, and reads the platfo
         null,
         {
           urls: ["https://api.exa.ai"],
-          proxy: { mind: "iterate.iterate.com", url: "https://cloud.iterate.com/secret-proxy" },
+          proxy: { mind: ITERATE_ID, url: "https://cloud.iterate.com/secret-proxy" },
         },
       ],
     ],
@@ -1914,7 +1956,7 @@ test("one note at the owner's signed rule, which starts the agent's turn: with t
   const mind = fakeMind();
   const { credit } = fakeCredit();
   await runStep(contextOf(mind, credit), STEP, "connect");
-  await hook(mind, credit, mind.sign(["/minds/iterate.iterate.com/"]));
+  await hook(mind, credit, mind.sign([`/minds/${ITERATE_ID}/`]));
   const notes = () => mind.chat().map((event) => JSON.stringify(event.payload));
   expect(notes()).toHaveLength(1);
   expect(notes()[0]).toMatch(/iterate\.iterate\.com can now send messages/);
@@ -1923,7 +1965,7 @@ test("one note at the owner's signed rule, which starts the agent's turn: with t
   const refused = fakeMind();
   const none = fakeCredit({ connect: { ok: false, reason: "none-today" } });
   await runStep(contextOf(refused, none.credit), STEP, "connect");
-  await hook(refused, none.credit, refused.sign(["/minds/iterate.iterate.com/"]));
+  await hook(refused, none.credit, refused.sign([`/minds/${ITERATE_ID}/`]));
   const [note] = refused.chat();
   expect(refused.chat()).toHaveLength(1);
   expect(JSON.stringify(note?.payload)).toMatch(
@@ -1949,7 +1991,7 @@ test("a note that fails at the signed rule leaves the connect waiting: the retry
       return { ...at, append: async () => Promise.reject(new Error("the append failed")) };
     },
   } as OnboardingItx;
-  const rule = mind.sign(["/minds/iterate.iterate.com/"]);
+  const rule = mind.sign([`/minds/${ITERATE_ID}/`]);
   await expect(stepEvent({ ...contextOf(mind, credit), itx }, rule)).rejects.toThrow(
     "the append failed",
   );
@@ -2228,14 +2270,14 @@ function fakeMind(
       },
     },
   };
-  /** The owner's signed rule, as the platform lands it on `/minds/iterate.iterate.com`. */
+  /** The owner's signed rule, as the platform lands it on `/minds/${ITERATE_ID}`. */
   const sign = (append: string[], member = true): MindEvent =>
     appendAt(MELD, {
       type: "events.iterate.com/mind-meld/configured",
       payload: { append },
       source: { signer: { principal: { email: "owner@example.org" }, member } },
     });
-  if (options.meld) sign(["/minds/iterate.iterate.com/"], options.meld === "member");
+  if (options.meld) sign([`/minds/${ITERATE_ID}/`], options.meld === "member");
   return {
     // the fake has what the step reads, and the step's type names the whole root
     itx: itx as unknown as OnboardingItx,
@@ -2360,14 +2402,14 @@ const hook = (mind: ReturnType<typeof fakeMind>, credit: CloudCredit, event: Min
 const mindHook = (mind: ReturnType<typeof fakeMind>, credit: CloudCredit, event: MindEvent) =>
   stepMindEvent(async () => contextOf(mind, credit), event);
 
-/** An event iterate.iterate.com signed on the mind's `/minds/iterate.iterate.com/cloud`. */
+/** An event iterate.iterate.com signed on the mind's `/minds/<iterate's id>/cloud`. */
 let delivered = 5000;
 const fromIterate = (type: string, payload: Record<string, unknown>): MindEvent => ({
   type,
-  path: "/minds/iterate.iterate.com/cloud",
+  path: `/minds/${ITERATE_ID}/cloud`,
   offset: ++delivered,
   payload,
-  source: { signer: { principal: { kind: "mind", actor: "iterate.iterate.com" } } },
+  source: { signer: { principal: { kind: "mind", actor: ITERATE_ID } } },
 });
 
 function realCredit(answers: {
@@ -2394,7 +2436,7 @@ function realCredit(answers: {
     },
     minds: {
       get: (mind: string) => {
-        expect(mind).toBe("iterate.iterate.com");
+        expect(mind).toBe(ITERATE_ID);
         return {
           fetch: (request: Request) => {
             expect(request.url.startsWith("https://cloud.iterate.com/secret-proxy/")).toBe(true);

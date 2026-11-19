@@ -14,7 +14,7 @@ import {
   type SecretRefresh,
 } from "iterate/api";
 import { codedError } from "iterate/lib";
-import { isMindControlPlaneHostname } from "iterate/signed";
+import { isMindControlPlaneHostname, isMindId } from "iterate/signed";
 import {
   basicCredentialOf,
   placeholderOf,
@@ -68,8 +68,8 @@ export function secretProxyOf(value: unknown): SecretProxy {
   const parsed = z.strictObject({ mind: z.string(), url: z.string() }).safeParse(value);
   if (!parsed.success) throw refuse("proxy is { mind, url }, two strings and nothing else");
   const { mind, url } = parsed.data;
-  if (!isMindControlPlaneHostname(mind))
-    throw refuse("proxy.mind is the control-plane hostname of a mind, lowercase");
+  if (!isMindId(mind) && !isMindControlPlaneHostname(mind))
+    throw refuse("proxy.mind is the id of a mind, or its control-plane hostname, lowercase");
   const parsedUrl = URL.parse(url);
   const asWritten =
     parsedUrl?.href === url || (parsedUrl?.pathname === "/" && parsedUrl.href === `${url}/`);

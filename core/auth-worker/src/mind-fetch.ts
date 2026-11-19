@@ -10,7 +10,7 @@ import {
 import type { AuthService } from "iterate/workers";
 import { z } from "zod";
 import { configOf, type Env, issuerOf } from "./env.ts";
-import { mindSignerOf } from "./minds.ts";
+import { isForThisMind, mindSignerOf } from "./minds.ts";
 import { stackKeyOf } from "./stack-key.ts";
 
 /** A mind's signed request lives five minutes (the sender's `signedByStack`, 300 seconds). */
@@ -68,7 +68,7 @@ async function checked(
   const fields = statementOf(envelope.statement);
   if ("refused" in fields) return { answer: fields };
   // unverified text: what a log line names of it is bounded
-  const hostname = fields.from?.slice(0, 80);
+  const hostname = (fields.fromHost || fields.from)?.slice(0, 80);
   const refused = (reason: string) => ({ answer: { refused: reason }, hostname });
   const asked = URL.parse(url);
   if (!asked) return refused("the request's URL is no absolute URL");
@@ -76,9 +76,9 @@ async function checked(
     return refused(`the statement is no ${MIND_FETCH_STATEMENT_TYPE}`);
   if (envelope.signature.format !== "ML-DSA-65")
     return refused("a mind's signed request is signed with its working key, ML-DSA-65");
-  if (fields.from === configOf(env).controlPlaneHostname)
+  if (fields.from && isForThisMind(fields.from, configOf(env)))
     return refused("a mind is no caller of itself: the statement is from this mind");
-  if (fields.mind !== configOf(env).controlPlaneHostname)
+  if (!isForThisMind(fields.mind, configOf(env)))
     return refused("the statement is for another mind");
   if (fields.path !== "/") return refused('a signed request\'s statement has the path "/"');
   const payload = FetchPayload.safeParse(fields.payload);

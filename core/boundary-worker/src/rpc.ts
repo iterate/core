@@ -21,6 +21,7 @@ import { type MindConfig, zoneOf, zoneOfMailAddress } from "iterate/mind-config"
 import type { Door as DoorService, SecretVerb, SecretVerbs } from "iterate/workers";
 import {
   isMindControlPlaneHostname,
+  isMindId,
   ITERATE_STATEMENT_HEADER,
   mindFetchStatements,
   signedRequestHeaders,
@@ -114,8 +115,11 @@ export class Door extends WorkerEntrypoint<Env, DoorProps> implements DoorServic
   }
 
   #signRefusal(signFor: string, request: Request, namesASecret: boolean) {
-    const own = boundaryConfigOf(this.env).controlPlaneHostname;
-    if (!isMindControlPlaneHostname(signFor) || signFor === own)
+    const { controlPlaneHostname: own, mindId } = boundaryConfigOf(this.env);
+    if (
+      (!isMindId(signFor) && !isMindControlPlaneHostname(signFor)) ||
+      [own, mindId].includes(signFor)
+    )
       return `${signFor} is no other mind to sign a request for`;
     if (new URL(request.url).protocol !== "https:")
       return "a request to another mind goes by https";

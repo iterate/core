@@ -5,11 +5,16 @@
 import { codedError, ITERATE_CAUSE_HEADER } from "./lib.ts";
 
 export type Statement = {
-  /** The mind it is for, by its control-plane hostname. */
+  /** The mind it is for: its id when another mind signed it; its control-plane hostname when one
+   *  of its own keys did, or a mind in the hostname form. */
   mind: string;
-  /** The mind that signed it, by its control-plane hostname, with a working key that its identity
-   *  log lists (./mind-identity-log.ts). Absent for a person's key or a service's. */
+  /** The mind that signed it, by its id, with a working key that its identity log lists
+   *  (./mind-identity-log.ts). A mind in the hostname form names its control-plane
+   *  hostname here and no `fromHost`. Absent for a person's key or a service's. */
   from?: string;
+  /** Where the receiver reads the log of `from`, an id: a control-plane hostname. An address that
+   *  proves nothing: the log there must hash to `from` and list this hostname. */
+  fromHost?: string;
   path: string;
   type: string;
   payload?: Record<string, unknown>;
@@ -89,16 +94,22 @@ export const STACK_KEY_PATH = "/keys/stack.json";
  *  is a candidate: the stack signs nothing with it, and the owner's command lists it with a root
  *  key. */
 export type StackKeyDocument = {
+  /** The mind's control-plane hostname. */
   mind: string;
+  /** The mind's id. A mind in the hostname form answers none. */
+  mindId: string;
   key: string;
   publicKey: string;
   algorithm: "ML-DSA-65";
   listed: boolean;
 };
 
-/** A mind's name as another mind writes it: its control-plane hostname, a lowercase DNS name. */
+/** A mind's address as another mind writes it: its control-plane hostname, a lowercase DNS name. */
 export const isMindControlPlaneHostname = (hostname: string) =>
   /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(hostname);
+
+/** A mind's identity: its id, the SHA-256 of its genesis record, 64 lowercase hex characters. */
+export const isMindId = (text: string) => /^[0-9a-f]{64}$/.test(text);
 
 export function statementText(fields: Omit<Statement, "nonce">): string {
   return JSON.stringify({
@@ -333,6 +344,7 @@ export function statementOf(text: string): Statement | { refused: string } {
   const valid =
     string(s.mind) &&
     (!("from" in s) || string(s.from)) &&
+    (!("fromHost" in s) || (string(s.from) && string(s.fromHost))) &&
     string(s.path) &&
     (s.path as string).startsWith("/") &&
     string(s.type) &&

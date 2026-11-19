@@ -5,6 +5,7 @@
 // as its signer, or is refused as there.
 import { codedError } from "iterate/lib";
 import { withFacts } from "iterate/facts";
+import type { MindConfig } from "iterate/mind-config";
 import { base64url, PLATFORM_NAMESPACES, statementHashOf, statementOf } from "iterate/signed";
 import type { AuthService, ProposedBy } from "iterate/workers";
 import { z } from "zod";
@@ -152,7 +153,7 @@ function draftPage(env: Env, draft: Draft | null): Response {
     type: draft.type,
     payload: draft.payload,
   });
-  const meaning = meaningOf(draft.path, draft.type, payload, mind);
+  const meaning = meaningOf(draft.path, draft.type, payload, configOf(env));
   const unknown = `<p>This adds one event of the type <code>${text(draft.type)}</code> to ${contextWords(draft.path)} of ${text(mind)}. This page cannot say what the event means: read it below before you sign.</p>`;
   const signer = draft.signer_email
     ? `<p>Only <code>${text(draft.signer_email)}</code> can sign it.</p>`
@@ -184,12 +185,13 @@ function meaningOf(
   path: string,
   type: string,
   payload: unknown,
-  mind: string,
+  own: Pick<MindConfig, "mindId" | "controlPlaneHostname">,
 ): { words: string } | { refused: string } {
   if (type !== "events.iterate.com/mind-meld/configured") return { words: "" };
-  const rule = meldRuleOf(path, payload, mind);
+  const rule = meldRuleOf(path, payload, own);
   if ("refused" in rule) return rule;
-  const name = `<strong>${text(rule.domain)}</strong>`;
+  const mind = own.controlPlaneHostname;
+  const name = `<strong>${text(rule.name)}</strong> (id <code>${text(rule.mind.slice(0, 12))}…</code>)`;
   if (!rule.append.length)
     return {
       words: `<p>End the rule that lets the mind ${name} add events to ${text(mind)}. It adds none from then on.</p>`,

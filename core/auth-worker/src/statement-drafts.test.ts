@@ -269,7 +269,11 @@ test("a press on a link that is closed says so, and what to do next", async () =
 
 test("a meld rule of this mind with itself is not explained as a grant, and its press is refused", async () => {
   const { env, passkeys } = await stack();
-  const changed = { path: `/minds/${MIND}`, type: MELD, payload: { append: ["/"] } };
+  const changed = {
+    path: `/minds/${"a".repeat(64)}`,
+    type: MELD,
+    payload: { append: ["/"], name: "peer.example.org" },
+  };
   const html = await pageOf(env, changed);
   expect(html).not.toContain("Let the mind");
   expect(html).toContain(
@@ -311,19 +315,21 @@ test.for([
 });
 
 const MELD = "events.iterate.com/mind-meld/configured";
+/** Another mind's id, an obvious fake. */
+const PEER = "b".repeat(64);
 
 test("a meld rule is said in words, each context on its own line, and the exact event is closed under them", async () => {
   const { env } = await stack();
   const html = await pageOf(env, {
-    path: "/minds/peer.example.org",
+    path: `/minds/${PEER}`,
     type: MELD,
-    payload: { append: ["/minds/peer.example.org/", "/"] },
+    payload: { append: [`/minds/${PEER}/`, "/"], name: "peer.example.org" },
   });
   expect(html).toContain(
-    "<p>Let the mind <strong>peer.example.org</strong> add events to iterate.example.com, under these contexts and the contexts beneath them:</p>",
+    `<p>Let the mind <strong>peer.example.org</strong> (id <code>${PEER.slice(0, 12)}…</code>) add events to iterate.example.com, under these contexts and the contexts beneath them:</p>`,
   );
   expect(html).toContain(
-    "<ul><li><code>/minds/peer.example.org/</code></li><li><code>/</code> (the root: every context of the mind)</li></ul>",
+    `<ul><li><code>/minds/${PEER}/</code></li><li><code>/</code> (the root: every context of the mind)</li></ul>`,
   );
   expect(html).toContain("It signs each event with any key that it publishes for statements.");
   expect(html).toContain("<details>\n        <summary>The exact event</summary>");
@@ -332,12 +338,12 @@ test("a meld rule is said in words, each context on its own line, and the exact 
 test("an empty meld rule is said as the end of the meld", async () => {
   const { env } = await stack();
   const html = await pageOf(env, {
-    path: "/minds/peer.example.org",
+    path: `/minds/${PEER}`,
     type: MELD,
-    payload: { append: [] },
+    payload: { append: [], name: "peer.example.org" },
   });
   expect(html).toContain(
-    "<p>End the rule that lets the mind <strong>peer.example.org</strong> add events to iterate.example.com. It adds none from then on.</p>",
+    `<p>End the rule that lets the mind <strong>peer.example.org</strong> (id <code>${PEER.slice(0, 12)}…</code>) add events to iterate.example.com. It adds none from then on.</p>`,
   );
 });
 

@@ -21,10 +21,10 @@ export type Principal = {
    *  principal (`x-itx-principal`, `source.principal`) never has it. */
   name?: string;
   impersonatedBy?: { actor: string; email: string };
-  /** "mind": another mind. Two places name one: a signer's principal (`source.signer`,
-   *  core/auth-worker/src/minds.ts), where `actor` is its domain, and a request that the mind
-   *  signed, which the boundary stamps in `ITX_MIND_HEADER` with `actor` the 64-hex mind id and
-   *  `hostname` beside it (`principalStampOf`). A mind is no member: who asks is not what they
+  /** "mind": another mind, with `actor` its 64-hex id and `hostname` beside it. Two places name
+   *  one: a signer's principal (`source.signer`, core/auth-worker/src/minds.ts; an event in the
+   *  hostname form has the hostname as `actor` and no `hostname`), and a request that the
+   *  mind signed, which the boundary stamps in `ITX_MIND_HEADER` (`principalStampOf`). A mind is no member: who asks is not what they
    *  may do, so the kernel carries it apart from every member (core/itx `Caller.mind`). "guest": a
    *  person who typed a name and proved nothing (`Person.method` "guest"), named as who asked or
    *  who holds, like `name`: a verified principal is never one. Absent: a person or a service. */

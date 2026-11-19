@@ -12,6 +12,7 @@ import { dashApp } from "./apps/dash/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 import {
+  enrolmentOf,
   onboardingEvent,
   onboardingMindEvent,
   runStep,
@@ -31,7 +32,12 @@ import {
   INTEGRATION_CALLABLE,
   removeCloudAccount,
 } from "./cloud-accounts.ts";
-import { cloudDeliveryOf, mindFormEvent, sayMindForm } from "./cloud-deliveries.ts";
+import {
+  cloudDeliveryOf,
+  mindFormEvent,
+  sayMindForm,
+  signedByIterate,
+} from "./cloud-deliveries.ts";
 import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
 import {
   CLIENT_DOCUMENT_PATH,
@@ -276,7 +282,7 @@ export default class extends IterateConfigEntrypoint {
         break;
       case "events.iterate.com/mind-meld/configured":
         // The owner signed the rule that lets iterate.iterate.com add events under
-        // /minds/iterate.iterate.com/:
+        // /minds/<its id>/ (ITERATE_MIND):
         // the onboarding agent is told, so it goes on by itself (cloud-handover.ts,
         // onboarding/let-iterate-in.md).
         await iterateLetInEvent(itx, event);
@@ -324,9 +330,19 @@ export default class extends IterateConfigEntrypoint {
     event,
     itx,
   }: IterateConfigProcessEventArgs<"agents"> & { mind: string }) {
-    if (cloudDeliveryOf(event)) await cloudDeliveryEvent(itx, event);
+    const delivery = cloudDeliveryOf(event);
+    if (delivery) await cloudDeliveryEvent(itx, event);
     // iterate let this mind in, or granted its credit: the onboarding step connects (never throws)
     await onboardingMindEvent(itx, event);
+    // iterate's own event that no case here takes: the log says where it was and why it stays
+    if (!delivery && !enrolmentOf(event) && signedByIterate(event))
+      console.warn({
+        event: "config.iterate-event-skipped",
+        type: event.type,
+        path: event.path,
+        offset: event.offset,
+        why: "this config reads iterate's events at <its context>/integrations/<provider>/<account> and <its context>/cloud, where its context is /minds/<iterate's id> or /minds/iterate.iterate.com",
+      });
   }
 
   // The platform has stored this mail on /integrations/email already; replies and agents react to
@@ -615,7 +631,7 @@ async function cloudDeliveryEvent(itx: Itx, event: IterateConfigProcessEventArgs
       //
       // GitHub's push counts only as iterate Cloud relayed it: on the installation's own log
       // under `/integrations/github/`, signed by the Cloud's key, or the same under
-      // `/minds/iterate.iterate.com/`, signed by that mind (cloud-deliveries.ts). The platform names a
+      // `/minds/<its id>/`, signed by that mind (cloud-deliveries.ts). The platform names a
       // signer from its own record of the key (the stack's config, a key a member enrolled, or
       // the key a mind publishes), never from what the statement says.
       const { delivery, body, path } = event.payload as {

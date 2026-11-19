@@ -26,6 +26,7 @@
 // first row that matches wins, so a row for one path comes before a row of its kind. Add a row
 // for each kind of context that your own code makes.
 import { errorCode, reportIssue } from "iterate/lib";
+import { ITERATE_MIND } from "./cloud-deliveries.ts";
 
 const CONTEXT_DESCRIPTIONS: { path: string; title: string; description: string }[] = [
   {
@@ -128,7 +129,7 @@ const CONTEXT_DESCRIPTIONS: { path: string; title: string; description: string }
       "The X account <user> that a member linked: its direct messages and the posts that mention iterate's bot.",
   },
   {
-    path: "/minds/iterate.iterate.com/integrations/<provider>/<account>",
+    path: `/minds/${ITERATE_MIND}/integrations/<provider>/<account>`,
     title: "iterate Cloud's <provider> <account>",
     description:
       "What iterate Cloud relayed for the <provider> account <account>, signed by the mind iterate.iterate.com: what this mind makes of it is on /integrations/<provider>/<account>.",

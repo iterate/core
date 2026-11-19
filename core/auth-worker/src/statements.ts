@@ -85,7 +85,7 @@ export async function admittedStatement(
       payload: statement.payload,
       at: statement.at,
       by: signer.principal.actor,
-      own: configOf(env).controlPlaneHostname,
+      own: configOf(env),
     });
     if ("refused" in meld) return refused(meld.refused);
   }

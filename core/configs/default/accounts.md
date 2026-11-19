@@ -37,7 +37,7 @@ scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of
   key on `/keys` first.
 - Every delivery of the Cloud (GitHub, Slack, Gmail, Calendar, X) comes in that form until the
   owner lets iterate.iterate.com in ([minds.md](minds.md)). Then the same type and payload arrive on
-  `/minds/iterate.iterate.com/integrations/<provider>/<account>`, signed by the mind iterate.iterate.com, and reach
+  `/minds/<iterate's id>/integrations/<provider>/<account>` (`ITERATE_MIND` in `cloud-deliveries.ts`), signed by the mind iterate.iterate.com, and reach
   `processMindEvent`, not `processEvent`. `cloudDeliveryOf(event)` (`cloud-deliveries.ts`) knows
   both forms: test a delivery with it, and keep what you make of one on its `context`, the mind's
   own `/integrations/<provider>/<account>`. The mind tells the Cloud that it reads that form

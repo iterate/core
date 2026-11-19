@@ -92,6 +92,7 @@ function mindFetching(domain: string) {
   } as unknown as ItxHostRootContext;
   const root = mindsRoot(scope, {
     mind: "example.com",
+    mindId: "a".repeat(64),
     boundary: () => ({
       signForMind: async () => {
         throw new Error("fetch signs nothing here");

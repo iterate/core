@@ -2,14 +2,19 @@ import type { ItxHostRootContext } from "core-itx";
 import { InvokeHandle, print } from "iterate/expression";
 import { codedError } from "iterate/lib";
 import { publishedMindOf } from "iterate/mind-identity-log";
-import { isMindControlPlaneHostname, PLATFORM_NAMESPACES, STATEMENTS_PATH } from "iterate/signed";
+import {
+  isMindControlPlaneHostname,
+  isMindId,
+  PLATFORM_NAMESPACES,
+  STATEMENTS_PATH,
+} from "iterate/signed";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { Door } from "iterate/workers";
 import { hopCaller } from "./hop-caller.ts";
 import { assertDeliveryCaller } from "./webhooks.ts";
 
 export const MINDS_ROOT_DESCRIPTION =
-  "another mind that lets this one in, by its control-plane hostname, as a row's target: `subscribe({ name, target: \"itx.minds.get('<hostname>').deliverEvents\" })` signs each event with this mind's key and adds it on that mind under /minds/<this mind><the event's path>; `.at('<path>').deliverEvents` adds it at that context of the other mind instead, when its rule lets this mind append there (minds.md in the config repo); `itx.minds.get('<hostname>').fetch(request)` sends an https request to that mind signed as this one, five minutes, so its boundary stamps this mind as the caller (a WebSocket upgrade is refused on this path). It is `itx.fetch(request, { signFor: '<hostname>' })` of the context where dispatch starts, one Request and nothing more, so that context's rule for itx.fetch decides it: for loaded code that is the caller, wherever the call is spelled (`minds` is answered at the caller); a member's itx.cd(<context>) handle starts at that context, so there that context's fetch decides. A mask refuses it, and a narrow fetch passes the request on and nothing else, so the built-in does not sign it (a request that names a by-proxy secret is still signed by the secrets Worker for that proxy); a context signs wherever it can reach the built-in fetch unchanged, its own or another context's by itx.cd, exactly as it can fetch there: a table that masks its own fetch and leaves itx.cd('/') open has not narrowed fetch. The kernel's loop count does not cross a mind's edge: never answer another mind's request or event with one to that mind unless the app bounds the exchange itself (a nest of requests ends only at Cloudflare's limit, a 503 at about the 14th; a chain of events never ends)";
+  "another mind that lets this one in, by its control-plane hostname, as a row's target: `subscribe({ name, target: \"itx.minds.get('<hostname>').deliverEvents\" })` signs each event with this mind's key and adds it on that mind under /minds/<this mind's id><the event's path>, signed for the id that the log at that hostname proves; `.at('<path>').deliverEvents` adds it at that context of the other mind instead, when its rule lets this mind append there (minds.md in the config repo); `itx.minds.get('<hostname or id>').fetch(request)` sends an https request to that mind signed as this one, five minutes, so its boundary stamps this mind as the caller (a WebSocket upgrade is refused on this path). It is `itx.fetch(request, { signFor: '<hostname>' })` of the context where dispatch starts, one Request and nothing more, so that context's rule for itx.fetch decides it: for loaded code that is the caller, wherever the call is spelled (`minds` is answered at the caller); a member's itx.cd(<context>) handle starts at that context, so there that context's fetch decides. A mask refuses it, and a narrow fetch passes the request on and nothing else, so the built-in does not sign it (a request that names a by-proxy secret is still signed by the secrets Worker for that proxy); a context signs wherever it can reach the built-in fetch unchanged, its own or another context's by itx.cd, exactly as it can fetch there: a table that masks its own fetch and leaves itx.cd('/') open has not narrowed fetch. The kernel's loop count does not cross a mind's edge: never answer another mind's request or event with one to that mind unless the app bounds the exchange itself (a nest of requests ends only at Cloudflare's limit, a 503 at about the 14th; a chain of events never ends)";
 
 const NOT_SENT = [...PLATFORM_NAMESPACES, "mind-meld"];
 
@@ -24,16 +29,21 @@ const isContextPath = (path: unknown): path is string =>
       .slice(1)
       .every((segment) => segment && segment !== "." && segment !== ".."));
 
-/** `itx.minds.get(hostname)`: a row's target that sends each event to the mind whose control-plane
- *  hostname is `hostname`, as a statement signed with this mind's key
- *  (core/auth-worker/src/minds.ts checks it there). `mind` is this mind's own control-plane
- *  hostname.
- *  WHERE IT LANDS: under `/minds/<this mind><the event's path>`, or, with `.at(path)` before the
- *  delivery, at that one context of the other mind, whatever context here the event is from. The
- *  other mind's rule decides whether this mind may append there; this side only spells the path. */
+/** `itx.minds.get(hostname)`: a row's target that sends each event to the mind at the
+ *  control-plane hostname `hostname`, as a statement signed with this mind's key for the id that
+ *  the log there proves (core/auth-worker/src/minds.ts checks it there). `mind` is this mind's own
+ *  control-plane hostname, `mindId` its id.
+ *  WHERE IT LANDS: under `/minds/<this mind's id><the event's path>`, or, with `.at(path)` before
+ *  the delivery, at that one context of the other mind, whatever context here the event is from.
+ *  The other mind's rule decides whether this mind may append there; this side only spells the
+ *  path. */
 export function mindsRoot(
   context: ItxHostRootContext,
-  { mind, boundary }: { mind: string; boundary: () => Pick<Door, "signForMind"> },
+  {
+    mind,
+    mindId,
+    boundary,
+  }: { mind: string; mindId: string; boundary: () => Pick<Door, "signForMind"> },
 ) {
   // Through the mind root's `itx.fetch`, so the root's rules for a way out apply. Not the context's
   // own: a context with no parent link (`/integrations/…`, `/minds/…`) has no `itx.fetch` at all,
@@ -46,10 +56,10 @@ export function mindsRoot(
   return {
     // An InvokeHandle, so across a `cd` hop the delivery's call reaches it whole, as a webhook's.
     get: (peer: string) => {
-      if (!isMindControlPlaneHostname(peer) || peer === mind)
+      if ((!isMindControlPlaneHostname(peer) && !isMindId(peer)) || [mind, mindId].includes(peer))
         throw codedError(
           "INVALID_INPUT",
-          "minds.get(hostname): another mind's control-plane hostname, lowercase",
+          "minds.get(mind): another mind's control-plane hostname, or its id, lowercase",
         );
       const delivery = (at?: string): InvokeHandle =>
         // A row's target is evaluated up to its last name, so `.at(path)` alone answers the handle
@@ -86,6 +96,12 @@ export function mindsRoot(
           throw new Error(
             `minds.get(hostname).${print(methodSteps)}: a mind answers deliverEvents(events) and deliverEvent(event), each also after at(path), and fetch(request)`,
           );
+        // an id says who, not where: the events go to the hostname, whose log proves the id
+        if (isMindId(peer))
+          throw codedError(
+            "INVALID_INPUT",
+            `minds.get(<id>).${method}: name the mind by its control-plane hostname to send it events; an id alone serves fetch(request), whose URL says where`,
+          );
         // `method` is a string only when the step is a call, `[name, ...args]`: its first argument.
         const sent = (call as unknown[])[1];
         await assertDeliveryCaller(
@@ -105,9 +121,10 @@ export function mindsRoot(
             // other mind refuses them always, so one sent would hold an ordered row for good.
             if (NOT_SENT.some((name) => event.type.startsWith(`events.iterate.com/${name}/`)))
               continue;
+            // for the id that the log at `peer` proves: no second read of it
             const envelope = await boundary().signForMind({
-              mind: peer,
-              path: at || `/minds/${mind}${event.path === "/" ? "" : event.path}`,
+              mind: published.expected,
+              path: at || `/minds/${mindId}${event.path === "/" ? "" : event.path}`,
               type: event.type,
               payload: event.payload,
               about: [`${event.path}@${event.offset}`],

@@ -2,6 +2,7 @@
 // cloud-deliveries.ts): the key form, the mind form, and what it refuses; and the mind's word to
 // the Cloud that it reads the mind form.
 import { expect, test, vi } from "vitest";
+import { ITERATE_MIND as ITERATE_ID } from "../../configs/default/cloud-deliveries.ts";
 import {
   cloudDeliveryOf,
   ITERATE_CLOUD,
@@ -9,11 +10,12 @@ import {
   sayMindForm,
   type MindFormItx,
 } from "../../configs/default/cloud-deliveries.ts";
+import Config from "../../configs/default/worker.ts";
 
 const CLOUD_KEY = { signer: { principal: { actor: "iterate-cloud" }, key: "cloud-key" } };
 /** The mind that is iterate Cloud, by its control-plane hostname: where the auth Worker publishes its keys. */
 const ITERATE_MIND = {
-  signer: { principal: { actor: "iterate.iterate.com", kind: "mind" }, key: "iterate-mind-key" },
+  signer: { principal: { actor: ITERATE_ID, kind: "mind" }, key: "iterate-mind-key" },
 };
 /** A signer named by the bare zone: no mind's name, since no mind's control-plane hostname. */
 const BARE_ZONE = {
@@ -32,7 +34,15 @@ test.for([
     delivery: ADA,
   },
   {
-    name: "the mind form: under /minds/iterate.iterate.com, signed by the mind iterate.iterate.com",
+    name: "the mind form: under /minds/<iterate's id>, signed by the mind iterate.iterate.com",
+    event: {
+      path: `/minds/${ITERATE_ID}/integrations/google/ada@example.com`,
+      source: ITERATE_MIND,
+    },
+    delivery: ADA,
+  },
+  {
+    name: "the mind form under a rule by hostname: under /minds/iterate.iterate.com, signed by iterate's id (its mind in the hostname form)",
     event: {
       path: "/minds/iterate.iterate.com/integrations/google/ada@example.com",
       source: ITERATE_MIND,
@@ -40,9 +50,16 @@ test.for([
     delivery: ADA,
   },
   {
-    name: "a delivery signed as the bare zone iterate.com is refused, on the Cloud mind's path",
+    name: "nor that path signed by another mind",
     event: {
       path: "/minds/iterate.iterate.com/integrations/google/ada@example.com",
+      source: { signer: { principal: { actor: "b".repeat(64), kind: "mind" }, key: "k" } },
+    },
+  },
+  {
+    name: "a delivery signed as the bare zone iterate.com is refused, on the Cloud mind's path",
+    event: {
+      path: `/minds/${ITERATE_ID}/integrations/google/ada@example.com`,
       source: BARE_ZONE,
     },
   },
@@ -57,14 +74,14 @@ test.for([
   {
     name: "the mind form signed by another mind is not the Cloud's",
     event: {
-      path: "/minds/iterate.iterate.com/integrations/google/ada@example.com",
+      path: `/minds/${ITERATE_ID}/integrations/google/ada@example.com`,
       source: { signer: { principal: { actor: "iterate.example.com", kind: "mind" }, key: "k" } },
     },
   },
   {
     name: "nor the mind form's path with the Cloud key's actor",
     event: {
-      path: "/minds/iterate.iterate.com/integrations/google/ada@example.com",
+      path: `/minds/${ITERATE_ID}/integrations/google/ada@example.com`,
       source: CLOUD_KEY,
     },
   },
@@ -101,17 +118,17 @@ test.for([
   {
     name: "nor the mind form one segment too long",
     event: {
-      path: "/minds/iterate.iterate.com/integrations/google/ada@example.com/more",
+      path: `/minds/${ITERATE_ID}/integrations/google/ada@example.com/more`,
       source: ITERATE_MIND,
     },
   },
   {
     name: "nor the mind form one segment too short",
-    event: { path: "/minds/iterate.iterate.com/integrations/google", source: ITERATE_MIND },
+    event: { path: `/minds/${ITERATE_ID}/integrations/google`, source: ITERATE_MIND },
   },
   {
     name: "nor the mind's own context for the meld",
-    event: { path: "/minds/iterate.iterate.com", source: ITERATE_MIND },
+    event: { path: `/minds/${ITERATE_ID}`, source: ITERATE_MIND },
   },
 ] as { name: string; event: Parameters<typeof cloudDeliveryOf>[0]; delivery?: unknown }[])(
   "$name",
@@ -119,6 +136,44 @@ test.for([
     expect(cloudDeliveryOf(event)).toEqual(delivery);
   },
 );
+
+test("iterate's own event that no case of the config takes is logged with why, in either form; another mind's is not", async () => {
+  const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+  // nothing is read for such an event: any read throws
+  const itx = new Proxy(
+    {},
+    {
+      get: () => {
+        throw new Error("read");
+      },
+    },
+  );
+  const config = Object.create(Config.prototype) as Config;
+  for (const path of [`/minds/${ITERATE_ID}/notes`, "/minds/iterate.iterate.com/notes"])
+    await config.processMindEvent({
+      event: { type: "events.iterate.com/test/note-added", path, offset: 3, source: ITERATE_MIND },
+      mind: ITERATE_ID,
+      itx,
+    } as never);
+  await config.processMindEvent({
+    event: {
+      type: "events.iterate.com/test/note-added",
+      path: `/minds/${"b".repeat(64)}/notes`,
+      offset: 4,
+      source: { signer: { principal: { actor: "b".repeat(64), kind: "mind" }, key: "k" } },
+    },
+    mind: "b".repeat(64),
+    itx,
+  } as never);
+  expect(warned.mock.calls.map(([line]) => (line as { path: string }).path)).toEqual([
+    `/minds/${ITERATE_ID}/notes`,
+    "/minds/iterate.iterate.com/notes",
+  ]);
+  expect(warned).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "config.iterate-event-skipped", why: expect.any(String) }),
+  );
+  warned.mockRestore();
+});
 
 const WORD = "cloud-deliveries:mind-form";
 

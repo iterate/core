@@ -199,14 +199,17 @@ async function signerOf(
 }
 
 /** WHO ASKS, as the approval page names it (./page.ts): a person's or a service's key by its
- *  label, which a member gave it when the key was added; ANOTHER MIND BY ITS HOSTNAME, which its
- *  identity log proves (../minds.ts). A mind's working key carries a label that the mind wrote
- *  itself, so that label never names who asks. */
+ *  label, which a member gave it when the key was added; ANOTHER MIND BY ITS ID (`actor`) AND ITS
+ *  HOSTNAME (the label), which its identity log proves (../minds.ts). A mind's working key carries
+ *  a label that the mind wrote itself, so that label never names who asks. */
 export function requesterOf(signer: Exclude<Verified, { refused: string }>["signer"]) {
   const { principal, label, key } = signer;
   return {
     actor: principal.actor,
-    label: principal.kind === "mind" ? principal.actor : label,
+    label:
+      principal.kind === "mind"
+        ? `${principal.hostname || principal.actor} (${principal.actor.slice(0, 12)}…)`
+        : label,
     key,
   };
 }

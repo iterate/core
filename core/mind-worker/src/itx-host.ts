@@ -183,7 +183,11 @@ defineItxHost({
       minds: {
         description: MINDS_ROOT_DESCRIPTION,
         build: (scope) =>
-          mindsRoot(scope, { mind: config().controlPlaneHostname, boundary: () => env.DOOR }),
+          mindsRoot(scope, {
+            mind: config().controlPlaneHostname,
+            mindId: config().mindId,
+            boundary: () => env.DOOR,
+          }),
         everyContext: true,
       },
     };

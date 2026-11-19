@@ -4,6 +4,7 @@
 // and refuses a second event with the same key, as the platform does.
 /// <reference path="../../configs/default/files.d.ts" />
 import { expect, test } from "vitest";
+import { ITERATE_MIND as ITERATE_ID } from "../../configs/default/cloud-deliveries.ts";
 import Config from "../../configs/default/worker.ts";
 
 const HANDOVER = {
@@ -194,12 +195,12 @@ test.for([
 
 const LET_IN = {
   type: "events.iterate.com/mind-meld/configured",
-  path: "/minds/iterate.iterate.com",
+  path: `/minds/${ITERATE_ID}`,
   offset: 4,
   source: {
     signer: { principal: { actor: "user-1", email: "owner@example.com" }, key: "passkey-1" },
   },
-  payload: { append: ["/minds/iterate.iterate.com/"] },
+  payload: { append: [`/minds/${ITERATE_ID}/`] },
 };
 
 test("the owner let iterate.iterate.com in: the onboarding agent is told once, with a note that starts its turn", async () => {
@@ -211,7 +212,7 @@ test("the owner let iterate.iterate.com in: the onboarding agent is told once, w
     path: "/agents/onboarding",
     event: {
       type: "events.iterate.com/agent/context-added",
-      idempotencyKey: "iterate-let-in:/minds/iterate.iterate.com@4",
+      idempotencyKey: `iterate-let-in:/minds/${ITERATE_ID}@4`,
       payload: { role: "developer" },
     },
   });

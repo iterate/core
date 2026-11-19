@@ -1,5 +1,5 @@
 import { codedError, errorCode, jsonEqual } from "iterate/lib";
-import { isMindControlPlaneHostname } from "iterate/signed";
+import { isMindControlPlaneHostname, isMindId } from "iterate/signed";
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
@@ -519,7 +519,7 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
 }
 
 /** THE BUILT-IN FETCH SIGNS WHEN ITS CALLER ASKS BY ARGUMENT: `fetch(request, { signFor })`, a
- *  mind's control-plane hostname, has the host sign the request as this mind for that one
+ *  mind's id or control-plane hostname, has the host sign the request as this mind for that one
  *  (core/mind-worker `mindsRoot`, the Door). Nothing else beside the request is taken: anything
  *  but exactly that object is INVALID_INPUT. */
 function signedFetchOptionsOf(more: unknown[]): string | undefined {
@@ -529,12 +529,14 @@ function signedFetchOptionsOf(more: unknown[]): string | undefined {
   if (!options.success)
     throw codedError(
       "INVALID_INPUT",
-      "fetch(request, options?): the method, headers and body go INTO the Request (`new Request(url, { method, headers, body })`); the only option is exactly { signFor: <another mind's control-plane hostname> }",
+      "fetch(request, options?): the method, headers and body go INTO the Request (`new Request(url, { method, headers, body })`); the only option is exactly { signFor: <another mind's id or control-plane hostname> }",
     );
   return options.data[0].signFor;
 }
 const SignedFetchOptions = z.tuple([
-  z.strictObject({ signFor: z.string().refine(isMindControlPlaneHostname) }),
+  z.strictObject({
+    signFor: z.string().refine((mind) => isMindId(mind) || isMindControlPlaneHostname(mind)),
+  }),
 ]);
 
 /** ONE FACT FOR EACH TRY TO SEND AS THE MIND, after the answer, on the calling context's log: who

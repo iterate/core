@@ -120,8 +120,8 @@ export async function appendMessage(
 export function speakerOf(source: StreamEvent["source"]): Speaker | undefined {
   if (source.schedule || source.copiedFrom || source.platform) return undefined;
   if (source.signer) {
-    const { actor, kind } = source.signer.principal;
-    return kind === "mind" ? { actor, kind } : undefined;
+    const { actor, kind, hostname } = source.signer.principal;
+    return kind === "mind" ? { actor, kind, hostname } : undefined;
   }
   const principal = source.principal || source.onBehalfOf?.principal;
   if (!principal) return undefined;

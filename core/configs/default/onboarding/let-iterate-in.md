@@ -22,16 +22,20 @@ answers after onboarding. It is the owner's choice, and the first thing they sig
 2. **On a yes, or when the owner asks what it is, say what it is in ONE sentence**, and give the
    link in the SAME message (point 3): when a person asks for a thing, give it; do not ask
    whether they would like it.
-   "It lets iterate.iterate.com add events to one place in your mind, `/minds/iterate.iterate.com/`, and
+   "It lets iterate.iterate.com add events to one place in your mind, under `/minds/` and iterate's id, and
    nothing else: it cannot read anything here." Say more only when the owner asks: the mind
    stores what iterate.iterate.com sends and acts on none of it; the owner ends it at any time at
    `https://<control-plane hostname>/minds`.
-3. **Give ONE link**: the `signAt` of this call (`minds.md`), made in the turn that gives it:
+3. **Give ONE link**: the `signAt` of this call (`minds.md`), made in the turn that gives it.
+   `ITERATE` is iterate's mind id (`ITERATE_MIND` in `cloud-deliveries.ts`); the rule is on
+   `/minds/<iterate's id>`:
    ```ts
+   // allow-high-entropy-next-line: iterate's public mind id, the hash of its genesis record
+   const ITERATE = "7780b12cd895879475d1b5d01974de09b23b6b9a15d518b534bd7f314b11ac95";
    const { signAt } = await itx.approvals.proposeStatement({
-     path: "/minds/iterate.iterate.com",
+     path: `/minds/${ITERATE}`,
      type: "events.iterate.com/mind-meld/configured",
-     payload: { append: ["/minds/iterate.iterate.com/"] },
+     payload: { append: [`/minds/${ITERATE}/`], name: "iterate.iterate.com" },
      next: "https://dash.<zone>/?agent=/agents/onboarding",
    });
    ```
@@ -39,13 +43,13 @@ answers after onboarding. It is the owner's choice, and the first thing they sig
    their own mind's: it shows what they allow, and they sign it with their passkey. Do not say
    what its button is called. Give no other link in that message, and no link to this chat. Do NOT ask the owner to tell you when they have signed, and end your turn: do
    not check in the turn that gives the link.
-4. **The mind tells you when it is done.** The signed rule lands on `/minds/iterate.iterate.com`, and
+4. **The mind tells you when it is done.** The signed rule lands on `/minds/<iterate's id>`, and
    `worker.ts` then puts a note into this chat that starts your turn: "The owner has let
    iterate.iterate.com in." When it arrives, say in one sentence that iterate can now send messages here,
    and go on with the next subject in the same message. If the owner writes first and no note has
-   come, check it yourself:
-   `await itx.cd("/minds/iterate.iterate.com").waitForEvent({ type: "events.iterate.com/mind-meld/configured", afterOffset: 0, timeoutMs: 15000 })`.
+   come, check it yourself, with `ITERATE` as in point 3:
+   ``await itx.cd(`/minds/${ITERATE}`).waitForEvent({ type: "events.iterate.com/mind-meld/configured", afterOffset: 0, timeoutMs: 15000 })``.
    When it times out, it is not done: say so, do not claim that it worked, and ask whether the
    page showed an error.
 5. **What iterate then says** arrives as events, each as itself, on the contexts under
-   `/minds/iterate.iterate.com/`. They wake no agent. Read them when the owner asks what iterate said.
+   `/minds/<iterate's id>/`. They wake no agent. Read them when the owner asks what iterate said.

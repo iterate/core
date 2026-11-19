@@ -29,6 +29,7 @@ test("a stack makes one ML-DSA-65 key, shows it as a candidate, and signs with i
   const first = await mind.published();
   expect(first).toEqual({
     mind: "mind-one.net",
+    mindId: mind.log.mind,
     key: await identityKeyIdOf(first.publicKey),
     publicKey: first.publicKey,
     algorithm: "ML-DSA-65",
@@ -89,8 +90,9 @@ test("two minds, up to B's intake's answer: A's stack signs a statement for B, a
       facts: decodeFacts(answer.headers.get(FACTS_HEADER) || ""),
     };
   };
+  // B by its id: A reads no log to sign
   const signed = await signedByStack(a.env, {
-    mind: "mind-b.net",
+    mind: b.log.mind,
     path: "/minds/mind-a.net/notes",
     type: "events.iterate.com/test/note-added",
     payload: { text: "hello" },
@@ -105,7 +107,7 @@ test("two minds, up to B's intake's answer: A's stack signs a statement for B, a
             type: "events.iterate.com/test/note-added",
             source: {
               signer: {
-                principal: { actor: "mind-a.net", kind: "mind" },
+                principal: { actor: a.log.mind, kind: "mind", hostname: "mind-a.net" },
                 key: (await a.published()).key,
               },
             },
@@ -116,10 +118,10 @@ test("two minds, up to B's intake's answer: A's stack signs a statement for B, a
   });
   expect(asked).toEqual(["https://mind-a.net/.well-known/iterate"]);
   // beyond its rule A adds nothing, and a statement of A's for another mind is not B's
-  const outside = await signedByStack(a.env, { mind: "mind-b.net", path: "/agents/x", type: "t" });
+  const outside = await signedByStack(a.env, { mind: b.log.mind, path: "/agents/x", type: "t" });
   expect(await send(outside)).toMatchObject({ status: 403 });
   const forC = await signedByStack(a.env, {
-    mind: "mind-c.net",
+    mind: "c".repeat(64),
     path: "/minds/mind-a.net/x",
     type: "t",
   });
@@ -193,7 +195,7 @@ test("a mind's signed request: D signs a GET for E's URL, E's auth Worker answer
   const url = "https://cloud.mind-e.net/secret-proxy/api.openai.com/v1/responses?x=1";
   const signed = (fields: Partial<Parameters<typeof signedByStack>[1]> = {}) =>
     signedByStack(d.env, {
-      mind: "mind-e.net",
+      mind: e.log.mind,
       path: "/",
       type: MIND_FETCH_STATEMENT_TYPE,
       payload: { method: "GET", url },
@@ -231,7 +233,7 @@ test("a mind's signed request: D signs a GET for E's URL, E's auth Worker answer
   expect(await check(await signed({ type: "events.iterate.com/test/note-added" }))).toEqual({
     refused: `the statement is no ${MIND_FETCH_STATEMENT_TYPE}`,
   });
-  expect(await check(await signed({ mind: "mind-f.net" }))).toEqual({
+  expect(await check(await signed({ mind: "f".repeat(64) }))).toEqual({
     refused: "the statement is for another mind",
   });
   expect(await check(await signed({ path: "/x" }))).toEqual({
@@ -342,7 +344,7 @@ test("a mind's signed request that ends while its sender's log is read is not st
   });
   const url = "https://mind-h.net/x";
   const signed = await signedByStack(g.env, {
-    mind: "mind-h.net",
+    mind: h.log.mind,
     path: "/",
     type: MIND_FETCH_STATEMENT_TYPE,
     payload: { method: "GET", url },

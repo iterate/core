@@ -6,8 +6,11 @@ import { expect, test } from "vitest";
 import { newIdentityLog } from "../../../lib/src/test-support/identity-log.ts";
 import { mindsRoot } from "./minds.ts";
 
+/** This mind's id, an obvious fake. */
+const OWN_ID = "a".repeat(64);
+
 test("deliverEvents reads the other mind's identity log, signs each event for it and posts it to its statements address, past the platform's and the rule's types", async () => {
-  const { handle, signed, posted } = await peer("peer-one.net", () => new Response("{}"));
+  const { handle, signed, posted, log } = await peer("peer-one.net", () => new Response("{}"));
   const events = [
     event("events.iterate.com/test/note-added", 3),
     event("events.iterate.com/itx/subscription-configured", 4),
@@ -16,8 +19,8 @@ test("deliverEvents reads the other mind's identity log, signs each event for it
   await handle.invoke([["deliverEvents", events, { from: 3, to: 5 }]]);
   expect(signed).toEqual([
     {
-      mind: "peer-one.net",
-      path: "/minds/example.com/notes",
+      mind: log.mind,
+      path: `/minds/${OWN_ID}/notes`,
       type: "events.iterate.com/test/note-added",
       payload: { text: "note 3" },
       about: ["/notes@3"],
@@ -25,7 +28,7 @@ test("deliverEvents reads the other mind's identity log, signs each event for it
   ]);
   expect(posted).toEqual([
     "GET https://peer-one.net/.well-known/iterate",
-    'POST https://peer-one.net/statements {"statement":"for peer-one.net","signature":{"format":"p256","key":"k","sig":"s"}}',
+    `POST https://peer-one.net/statements {"statement":"for ${log.mind}","signature":{"format":"p256","key":"k","sig":"s"}}`,
   ]);
 });
 
@@ -70,14 +73,15 @@ test("only the delivery loop's own call sends", async () => {
 });
 
 test("at(path) lands every event at that context of the other mind, whatever context it is from", async () => {
-  const { handle, signed } = await peer("peer-four.net", () => new Response("{}"));
+  // its own hostname: a reader keeps a log for a minute by its hostname
+  const { handle, signed, log } = await peer("peer-seven.net", () => new Response("{}"));
   await handle.invoke([
     ["at", "/agents/talk/example.com/plans"],
     ["deliverEvents", [event("events.iterate.com/agent/message-received", 9)], { from: 9, to: 9 }],
   ]);
   expect(signed).toEqual([
     {
-      mind: "peer-four.net",
+      mind: log.mind,
       path: "/agents/talk/example.com/plans",
       type: "events.iterate.com/agent/message-received",
       payload: { text: "note 9" },
@@ -118,13 +122,25 @@ test("at refuses a path that is no context's own, a second at, and anything but 
   expect(posted).toEqual([]);
 });
 
-test("get refuses this mind's own name and a name that is no hostname", () => {
+test("get refuses this mind's own name and id, and a name that is no hostname or id", () => {
   const { root } = minds(
     () => new Response("{}"),
     () => ({ principal: null }),
   );
-  expect(() => root.get("example.com")).toThrow(/another mind's control-plane hostname/);
-  expect(() => root.get("Peer.net")).toThrow(/another mind's control-plane hostname/);
+  for (const name of ["example.com", OWN_ID, "Peer.net", "B".repeat(64)])
+    expect(() => root.get(name)).toThrow(/another mind's control-plane hostname, or its id/);
+});
+
+test("get(<id>) sends no events: an id says who, and the hostname says where", async () => {
+  const { root, posted } = minds(
+    () => new Response("{}"),
+    () => ({ principal: null }),
+  );
+  const handle = root.get("b".repeat(64)) as InvokeHandle;
+  await expect(
+    handle.invoke([["deliverEvent", event("events.iterate.com/test/note-added", 1)]]),
+  ).rejects.toThrow("name the mind by its control-plane hostname to send it events");
+  expect(posted).toEqual([]);
 });
 
 /** The root at `/`, with a delivery caller that carries the hash of whatever is delivered (or a
@@ -151,7 +167,7 @@ async function peer(
     delivery = forged ? "forged" : await sha256Hex(JSON.stringify(sent));
     return invoke(steps);
   };
-  return { handle, signed, posted };
+  return { handle, signed, posted, log };
 }
 
 function minds(
@@ -177,6 +193,7 @@ function minds(
   } as unknown as ItxHostRootContext;
   const root = mindsRoot(scope, {
     mind: "example.com",
+    mindId: OWN_ID,
     boundary: () => ({
       signForMind: async (input) => {
         if (signing) throw signing;

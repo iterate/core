@@ -7,7 +7,7 @@
 // `STEPS`. Every step writes the four events of contract.ts on `/apps/onboarding`.
 import { errorCode } from "iterate/lib";
 import type { IterateConfigProcessEventArgs } from "iterate/sdk";
-import { ITERATE_MIND } from "../../cloud-deliveries.ts";
+import { iterateContextOf, signedByIterate } from "../../cloud-deliveries.ts";
 import {
   ONBOARDING_CONTEXT,
   type OnboardingEvent,
@@ -17,11 +17,7 @@ import {
 } from "./contract.ts";
 import { type CloudCredit, cloudCredit } from "./cloud-credit.ts";
 import { connectCloudflare } from "./steps/connect-cloudflare.ts";
-import {
-  CREDIT_OPEN,
-  connectIterateCloud,
-  ENROLMENT_CONTEXT,
-} from "./steps/connect-iterate-cloud.ts";
+import { CREDIT_OPEN, connectIterateCloud } from "./steps/connect-iterate-cloud.ts";
 
 /** The mind as the steps use it: the root's itx. */
 export type OnboardingItx = Pick<
@@ -119,7 +115,7 @@ export type Step = {
   /** Whether an event of the mind concerns the step: a cheap test, before anything is read. */
   hears(event: MindEvent): boolean;
   onEvent(context: StepContext, event: MindEvent, state: StepState, log: StepLog): Promise<void>;
-  /** An event iterate.iterate.com signed on `ENROLMENT_CONTEXT` (`onboardingMindEvent`). */
+  /** An event iterate.iterate.com signed on `/cloud` of its context (`onboardingMindEvent`). */
   onMindEvent?(
     context: StepContext,
     event: MindEvent,
@@ -387,7 +383,7 @@ export async function onboardingEvent(itx: OnboardingItx, event: MindEvent) {
 }
 
 /** THE HOOK FOR ANOTHER MIND'S EVENT (worker.ts `processMindEvent`): an event on
- *  `ENROLMENT_CONTEXT` that the mind iterate.iterate.com signed. Any other returns before anything
+ *  `/cloud` of iterate's context (`enrolmentOf`) that the mind iterate.iterate.com signed. Any other returns before anything
  *  is read. It never throws: a failure is one log line, and the card keeps its state. */
 export async function onboardingMindEvent(itx: OnboardingItx, event: MindEvent) {
   await stepMindEvent(() => stepContext(itx), event);
@@ -421,15 +417,11 @@ export async function stepMindEvent(contextOf: () => Promise<StepContext>, event
   }
 }
 
-/** iterate.iterate.com's own event on `ENROLMENT_CONTEXT`, as cloud-deliveries.ts `cloudDeliveryOf`
- *  tests a delivery in the mind form: the signer is the mind, by its key. */
-function enrolmentOf(event: MindEvent): boolean {
-  const principal = event.source?.signer?.principal;
-  return (
-    event.path === ENROLMENT_CONTEXT &&
-    principal?.kind === "mind" &&
-    principal.actor === ITERATE_MIND
-  );
+/** iterate.iterate.com's own event on `/cloud` of its context, as cloud-deliveries.ts `cloudDeliveryOf`
+ *  tests a delivery in the mind form: the signer is the mind, by its id, and the path is its
+ *  `/cloud` in either form (`iterateContextOf`). */
+export function enrolmentOf(event: MindEvent): boolean {
+  return iterateContextOf(event.path) === "/cloud" && signedByIterate(event);
 }
 
 /** The hook's work, for each step that hears the event: its own reaction, then a check. */

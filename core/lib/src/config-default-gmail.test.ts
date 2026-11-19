@@ -2,6 +2,7 @@
 // that the Cloud says was connected, what a push puts on the mailbox's log, what happens when Gmail
 // no longer has the history, and the day's renewal.
 import { expect, test } from "vitest";
+import { ITERATE_MIND as ITERATE_ID } from "../../configs/default/cloud-deliveries.ts";
 import { gmailEvent } from "../../configs/default/gmail.ts";
 import Config from "../../configs/default/worker.ts";
 import { codedError } from "./lib.ts";
@@ -552,7 +553,7 @@ function gmailMind() {
 
 /** THE TWO FORMS OF THE CLOUD'S DELIVERY (cloud-deliveries.ts). The key form reaches gmailEvent as
  *  `processEvent` hands it on. The mind form goes through worker.ts `processMindEvent`: the same
- *  event under /minds/iterate.iterate.com, and the Cloud key's signature the mind iterate.iterate.com's. What the
+ *  event under /minds/<iterate's id>, and the Cloud key's signature the mind iterate.iterate.com's. What the
  *  mind makes of it is on the same context of its own in both. */
 function bothForms() {
   return [
@@ -562,7 +563,7 @@ function bothForms() {
       deliver: (itx: unknown, event: Delivered) =>
         (Object.create(Config.prototype) as Config).processMindEvent({
           event: inMindForm(event) as never,
-          mind: "iterate.iterate.com",
+          mind: ITERATE_ID,
           itx: itx as never,
         }),
     },
@@ -575,12 +576,12 @@ type Delivered = Parameters<typeof gmailEvent>[1];
 function inMindForm(event: Delivered) {
   const cloud = event.source?.signer?.principal.actor === "iterate-cloud";
   const iterateCom = {
-    principal: { actor: "iterate.iterate.com", kind: "mind" },
+    principal: { actor: ITERATE_ID, kind: "mind" },
     key: "iterate-com-key",
   };
   return {
     ...event,
-    path: `/minds/iterate.iterate.com${event.path}`,
+    path: `/minds/${ITERATE_ID}${event.path}`,
     ...(cloud && { source: { signer: iterateCom } }),
   };
 }

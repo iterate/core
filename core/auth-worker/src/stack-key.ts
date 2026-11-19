@@ -7,11 +7,13 @@
 // command lists it (iterate/cli `postIdentity`).
 import { codedError } from "iterate/lib";
 import { identityKeyIdOf } from "iterate/mind-identity";
+import { publishedMindOf } from "iterate/mind-identity-log";
 import {
   base64url,
   type Envelope,
   fromBase64url,
   isMindControlPlaneHostname,
+  isMindId,
   signedMlDsa65,
   type StackKeyDocument,
   statementText,
@@ -90,6 +92,7 @@ export async function stackKeyResponse(env: Env): Promise<Response> {
   const { stack, listed } = await stackKeyListing(env);
   const document: StackKeyDocument = {
     mind: configOf(env).controlPlaneHostname,
+    mindId: configOf(env).mindId,
     key: stack.key,
     publicKey: stack.publicKey,
     algorithm: "ML-DSA-65",
@@ -118,8 +121,10 @@ async function stackKeyListing(env: Env): Promise<{ stack: StackKey; listed: boo
   return { stack, listed };
 }
 
-/** `mind`: the mind the statement is for, which reads this mind as `from`. Without it the
- *  statement's `mind` is this mind: that names the signer. Refused until the mind's identity
+/** `mind`: the mind the statement is for, by its id or its control-plane hostname; the statement
+ *  names it by its id, and this mind as `from` by its id with `fromHost`, where the other mind
+ *  reads this mind's log. Without it the statement's `mind` is this mind's hostname: that names
+ *  the signer (the vault's ask of the Cloud, which reads a hostname there). Refused until the mind's identity
  *  lists the stack's key, with an error that has no code: this ends when a record lists the key,
  *  so a subscription that sends to another mind must try again later. A coded refusal such as
  *  FORBIDDEN would halt its row for good (core/itx subscription-delivery.ts). */
@@ -128,22 +133,32 @@ export async function signedByStack(
   input: Parameters<AuthService["sign"]>[0],
 ): Promise<Envelope> {
   const { mind, path, type, payload, about, expiresInSeconds = DEFAULT_SECONDS } = input;
-  const own = configOf(env).controlPlaneHostname;
+  const { mindId, controlPlaneHostname: own } = configOf(env);
   const { stack, listed } = await stackKeyListing(env);
   if (!listed)
     throw new Error(
       "the mind's identity lists no working key of this stack yet, so the mind signs nothing as itself",
     );
-  if (mind && (!isMindControlPlaneHostname(mind) || mind === own))
-    throw codedError("INVALID_INPUT", "a statement for another mind names it, lowercase");
+  if (
+    mind &&
+    ((!isMindId(mind) && !isMindControlPlaneHostname(mind)) || [mindId, own].includes(mind))
+  )
+    throw codedError(
+      "INVALID_INPUT",
+      "a statement for another mind names its id, or its control-plane hostname, lowercase",
+    );
   if (!path.startsWith("/"))
     throw codedError("INVALID_INPUT", "a statement's path is a context's path, starting with /");
   if (!type) throw codedError("INVALID_INPUT", "a statement needs a type");
   if (!Number.isInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > MAX_SECONDS)
     throw codedError("INVALID_INPUT", "a statement expires between a second and a day ahead");
+  // An id signs at once. A hostname is read once to its id (a minute's cache in the reader): a
+  // proxy secret's cell from before holds one until the connect sets it again.
+  const peer = !mind || isMindId(mind) ? mind : await mindIdAt(mind);
+  if (peer === mindId) throw codedError("INVALID_INPUT", `${mind} is this mind`);
   const at = Date.now();
   const statement = statementText({
-    ...(mind ? { mind, from: own } : { mind: own }),
+    ...(peer ? { mind: peer, from: mindId, fromHost: own } : { mind: own }),
     path,
     type,
     payload,
@@ -154,12 +169,20 @@ export async function signedByStack(
   return signedMlDsa65(statement, stack.privateKey, stack.key);
 }
 
+/** THE ID OF THE MIND AT `hostname`, as its log proves it. An error with no code when the log
+ *  cannot be read: that may pass, so a subscription tries again. */
+async function mindIdAt(hostname: string): Promise<string> {
+  const published = await publishedMindOf(hostname, (request) => fetch(request));
+  if ("why" in published) throw new Error(`${hostname} gave no identity: ${published.why}`);
+  return published.expected;
+}
+
 /** `/integrations/<provider>/<account>`, and no segment more or less. A dot segment is refused
  *  beside it (`canonicalPath`): a mind resolves `..`, so one would name another place. */
 const DELIVERY_PATH = /^\/integrations\/[^/]+\/[^/]+$/;
 
 /** A PROVIDER'S DELIVERY FOR ANOTHER MIND, signed as this mind: on
- *  `/minds/<this mind>/integrations/<provider>/<account>` and on no other path. `path` is the
+ *  `/minds/<this mind's id>/integrations/<provider>/<account>` and on no other path. `path` is the
  *  last three segments; this writes the first two itself, so a caller cannot name another place.
  *  It is all that the `Deliveries` entrypoint signs (./rpc.ts). */
 export async function signedDeliveryByStack(
@@ -179,7 +202,7 @@ export async function signedDeliveryByStack(
     throw codedError("INVALID_INPUT", "a delivery's path is /integrations/<provider>/<account>");
   return signedByStack(env, {
     mind,
-    path: `/minds/${configOf(env).controlPlaneHostname}${path}`,
+    path: `/minds/${configOf(env).mindId}${path}`,
     type,
     payload,
     about,

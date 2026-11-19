@@ -2,6 +2,7 @@
 // watches a calendar that the Cloud says was connected, what a push puts on the calendar's log,
 // what happens when Google no longer has the sync token, and the day's new channel.
 import { expect, test, vi } from "vitest";
+import { ITERATE_MIND as ITERATE_ID } from "../../configs/default/cloud-deliveries.ts";
 import { calendarEvent } from "../../configs/default/calendar.ts";
 import Config from "../../configs/default/worker.ts";
 import { codedError } from "./lib.ts";
@@ -633,7 +634,7 @@ function calendarMind() {
 
 /** THE TWO FORMS OF THE CLOUD'S DELIVERY (cloud-deliveries.ts). The key form reaches calendarEvent as
  *  `processEvent` hands it on. The mind form goes through worker.ts `processMindEvent`: the same
- *  event under /minds/iterate.iterate.com, and the Cloud key's signature the mind iterate.iterate.com's. What the
+ *  event under /minds/<iterate's id>, and the Cloud key's signature the mind iterate.iterate.com's. What the
  *  mind makes of it is on the same context of its own in both. */
 function bothForms() {
   return [
@@ -646,7 +647,7 @@ function bothForms() {
       deliver: (itx: unknown, event: Delivered) =>
         (Object.create(Config.prototype) as Config).processMindEvent({
           event: inMindForm(event) as never,
-          mind: "iterate.iterate.com",
+          mind: ITERATE_ID,
           itx: itx as never,
         }),
     },
@@ -659,12 +660,12 @@ type Delivered = Parameters<typeof calendarEvent>[1];
 function inMindForm(event: Delivered) {
   const cloud = event.source?.signer?.principal.actor === "iterate-cloud";
   const iterateCom = {
-    principal: { actor: "iterate.iterate.com", kind: "mind" },
+    principal: { actor: ITERATE_ID, kind: "mind" },
     key: "iterate-com-key",
   };
   return {
     ...event,
-    path: `/minds/iterate.iterate.com${event.path}`,
+    path: `/minds/${ITERATE_ID}${event.path}`,
     ...(cloud && { source: { signer: iterateCom } }),
   };
 }

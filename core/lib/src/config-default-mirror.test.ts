@@ -5,6 +5,7 @@
 /// <reference path="../../configs/default/files.d.ts" />
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
+import { ITERATE_MIND as ITERATE_ID } from "../../configs/default/cloud-deliveries.ts";
 import dashIndex from "../../configs/default/apps/dash/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import dashFiles from "../../configs/default/apps/dash/public/";
@@ -199,7 +200,7 @@ test.for([
 test.for([
   {
     name: "a push in the mind form, signed by the mind iterate.iterate.com, is pulled through processMindEvent",
-    actor: "iterate.iterate.com",
+    actor: ITERATE_ID,
     calls: ["pull"],
   },
   { name: "nor one that another mind signed", actor: "example.com", calls: [] },
@@ -209,7 +210,7 @@ test.for([
   await config.processMindEvent({
     event: {
       type: "events.iterate.com/github/webhook-received",
-      path: "/minds/iterate.iterate.com/integrations/github/7",
+      path: `/minds/${ITERATE_ID}/integrations/github/7`,
       offset: 5,
       source: { signer: { principal: { actor, kind: "mind" }, key: `${actor}-key` } },
       payload: {

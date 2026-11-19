@@ -8,20 +8,26 @@ import {
 import type { Verified } from "iterate/workers";
 import { configOf, type Env, issuerOf } from "./env.ts";
 import { isMember } from "./members.ts";
-import { mindKeyOf } from "./minds.ts";
+import { isForThisMind, mindKeyOf } from "./minds.ts";
 import { stackKeyOf } from "./stack-key.ts";
 
 const MAX_LIFETIME_MS = 24 * 3600 * 1000;
+/** How far a statement's `at` may stand ahead of this Worker's clock. */
+const AT_AHEAD_MS = 60 * 1000;
 
 /** The one refusal a key's service acts on: its key waits for a member's consent (./key-tokens.ts). */
 export const UNKNOWN_KEY = "the key is not one this mind knows";
 
 export type KnownKey = {
-  principal: { actor: string; email?: string; kind?: "mind" };
+  /** Another mind's: `actor` is its id, `hostname` where its log was read, a label. */
+  principal: { actor: string; email?: string; kind?: "mind"; hostname?: string };
   publicKey: string;
   label: string;
   format: Envelope["signature"]["format"];
   paths?: string[]; // none: a person's key, or another mind's
+  /** Another mind's: what this Worker writes once a statement signed with the key verified (it
+   *  pins a row by hostname, ./minds.ts), or why the statement is refused after all. */
+  settle?: () => Promise<string | null>;
   provide?: string; // the capability a service's key may lend (./key-tokens.ts)
   outsider?: boolean; // a passkey added while its owner was no member (../migrations/0016)
 };
@@ -58,7 +64,7 @@ export async function verifiedStatement(
   if ("refused" in checked) return checked;
   const statement = statementOf(envelope.statement);
   if ("refused" in statement) return statement;
-  if (statement.mind !== configOf(env).controlPlaneHostname)
+  if (!isForThisMind(statement.mind, configOf(env)))
     return { refused: "the statement is for another mind" };
   if (statement.from && key.principal.kind !== "mind")
     return { refused: "a statement from a mind is signed with that mind's key" };
@@ -66,6 +72,13 @@ export async function verifiedStatement(
   if (statement.expires <= now) return { refused: "the statement has expired" };
   if (statement.expires > now + MAX_LIFETIME_MS)
     return { refused: "the statement expires more than a day from now" };
+  // A STATEMENT IS DATED BY THIS WORKER'S CLOCK, within a minute ahead and a day behind: the
+  // newest rule by `at` decides (./minds.ts `configuredMeld`), so a rule dated in the future
+  // would outlive the end that a member signs after it.
+  if (statement.at > now + AT_AHEAD_MS)
+    return { refused: "the statement is dated more than a minute from now" };
+  if (statement.at < now - MAX_LIFETIME_MS)
+    return { refused: "the statement is dated more than a day ago" };
   if (once) {
     // a repeat cannot insert, so a statement counts once
     const [, inserted] = await env.DB.batch([
@@ -76,6 +89,9 @@ export async function verifiedStatement(
     ]);
     if (!inserted?.meta.changes) return { refused: "the statement was seen before" };
   }
+  // last, so that a refused or repeated statement writes nothing here
+  const unsettled = await key.settle?.();
+  if (unsettled) return { refused: unsettled };
   return {
     signer: {
       principal: key.principal,

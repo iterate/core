@@ -44,6 +44,8 @@ const Speaker = z.object({
   name: z.string().optional(),
   guest: z.literal(true).optional(),
   kind: z.literal("mind").optional(),
+  /** Another mind's control-plane hostname, beside its id in `actor`: the words name it. */
+  hostname: z.string().optional(),
   script: z.literal(true).optional(),
   impersonatedBy: z.object({ actor: z.string(), email: z.string() }).optional(),
 });

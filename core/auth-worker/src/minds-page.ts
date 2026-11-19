@@ -2,8 +2,9 @@
 // row (./minds.ts), the copy of the latest `events.iterate.com/mind-meld/configured` rule that a
 // member signed. The list needs no script. The two presses do: a member's passkey here signs the
 // rule (./signed-change.ts `signScript`), and the page posts it to `/statements` (./statements.ts),
-// as any signed statement. To end a meld is the rule `{ append: [] }`. To let a mind in is the one
-// default rule, `{ append: ["/minds/<domain>/"] }`: a wider rule is an agent's proposal.
+// as any signed statement. Each rule is on `/minds/<the mind's id>` and names the hostname the
+// member saw. To end a meld is the rule `{ append: [], name }`. To let a mind in is the one
+// default rule, `{ append: ["/minds/<id>/"], name }`: a wider rule is an agent's proposal.
 import { identityKeyIdOf } from "iterate/mind-identity";
 import { publishedMindOf } from "iterate/mind-identity-log";
 import { isMindControlPlaneHostname, STATEMENTS_PATH } from "iterate/signed";
@@ -21,9 +22,12 @@ const PUBLISHED_PATH = "/minds/published";
 
 type MeldRow = {
   domain: string;
+  mind: string | null;
   append: string;
   key: string | null;
   configured_at: number;
+  pinned_at: number | null;
+  refused: string | null;
   email: string | null;
 };
 
@@ -70,17 +74,19 @@ async function publishedResponse(env: Env, domain: string): Promise<Response> {
 
 async function mindsPage(env: Env, mind: string): Promise<Response> {
   const { results } = await env.DB.prepare(
-    `select m.domain, m.append, m.key, m.configured_at, u.email
+    `select m.domain, m.mind, m.append, m.key, m.configured_at, m.pinned_at, m.refused, u.email
        from mind_melds m left join users u on u.id = m.configured_by order by m.domain`,
   ).all<MeldRow>();
   const melds = results.filter((row) => row.append !== "[]");
   const ended = results.filter((row) => row.append === "[]");
   const meldItem = (row: MeldRow) => {
     const append = z.array(z.string()).parse(JSON.parse(row.append));
-    return `<li><strong>${text(row.domain)}</strong>
+    const refused = row.refused ? Refused.safeParse(JSON.parse(row.refused)).data : undefined;
+    return `<li><strong>${text(row.domain)}</strong> ${idWords(row)}
         <span>may add events under ${append.map((path) => `<code>${text(path)}</code>`).join(", ")}</span>
         <span class="muted">signed with ${row.key ? `the key ${text(row.key.slice(0, 8))}` : "its published keys"}. ${text(row.email || "A member")} let it in at ${minute(row.configured_at)}.</span>
-        <button type="button" class="link" data-end="${text(row.domain)}">End</button>
+        ${refused?.mind ? `<span><strong>At ${minute(refused.at)} ${text(row.domain)} served another mind</strong>, the id <code>${text(refused.mind)}</code>, which is refused here. If that mind is the one you mean, End this and let it in again.</span>` : ""}
+        <button type="button" class="link" data-end="${text(row.domain)}" data-mind="${text(row.mind || "")}">End</button>
       </li>`;
   };
   return page({
@@ -104,7 +110,7 @@ async function mindsPage(env: Env, mind: string): Promise<Response> {
         <button type="submit">Read its keys</button>
       </form>
       <div id="found" hidden>
-        <p><strong data-domain></strong> publishes the keys <span data-keys></span>.</p>
+        <p><strong data-domain></strong> is the mind <code data-mind></code> and publishes the keys <span data-keys></span>.</p>
         <p data-rule></p>
         <button type="button">Let it in</button>
       </div>
@@ -113,23 +119,46 @@ async function mindsPage(env: Env, mind: string): Promise<Response> {
   });
 }
 
+/** WHICH MIND A ROW LETS IN, in words: the id a member's rule named; or, for a rule by hostname
+ *  that named a hostname alone, the id that the hostname served at its first use (trust on first
+ *  use, so the owner can see it and end it), or that none is pinned yet. */
+function idWords(row: MeldRow) {
+  if (!row.mind)
+    return `<span class="muted">No id yet: the first statement it signs pins it to the id that ${text(row.domain)} serves then.</span>`;
+  const id = `<code>${text(row.mind)}</code>`;
+  return row.pinned_at
+    ? `<span>the id ${id}, pinned to the id that this hostname served on ${minute(row.pinned_at)}.</span>`
+    : `<span>the id ${id}</span>`;
+}
+
+const Refused = z.object({ mind: z.string().nullable(), at: z.number() });
+
 const MINDS_SCRIPT = `
 const status = document.getElementById("status");
 const said = (error, fallback) => {
   statusFailed(status, error, fallback, "No passkey was used, so nothing was changed.");
 };
-async function signedRule(domain, append) {
+async function published(domain) {
+  const answer = await (await fetch("${PUBLISHED_PATH}?" + new URLSearchParams({ domain }))).json();
+  if (answer.why) throw new Error(answer.why);
+  return answer;
+}
+async function signedRule(mind, name, append) {
   statusSay(status, "Waiting for your passkey…");
-  const signed = await signedStatement({ path: "/minds/" + domain, type: "events.iterate.com/mind-meld/configured", payload: { append } });
+  const signed = await signedStatement({ path: "/minds/" + mind, type: "events.iterate.com/mind-meld/configured", payload: { append, name } });
   const answer = await fetch("${STATEMENTS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(signed) });
   if (!answer.ok) throw new Error((await answer.json().catch(() => ({}))).refused || "The rule was not taken.");
   location.reload();
 }
+// a row by hostname with no id yet: the id that its hostname serves now is the one it ends
 for (const end of document.querySelectorAll("button[data-end]"))
-  end.addEventListener("click", () => signedRule(end.dataset.end, []).catch((error) => said(error, "The meld did not end.")));
+  end.addEventListener("click", () =>
+    (async () => signedRule(end.dataset.mind || (await published(end.dataset.end)).mind, end.dataset.end, []))()
+      .catch((error) => said(error, "The meld did not end.")));
 const form = document.getElementById("let-in");
 const found = document.getElementById("found");
 let domain;
+let mind;
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   found.hidden = true;
@@ -137,17 +166,18 @@ form.addEventListener("submit", async (event) => {
   domain = typed;
   statusSay(status, "Reading the keys that " + domain + " publishes…");
   try {
-    const answer = await (await fetch("${PUBLISHED_PATH}?" + new URLSearchParams({ domain }))).json();
+    const answer = await published(domain);
     // a later submit asked for another mind: this answer is not for what the page now shows
     if (domain !== typed) return;
-    if (answer.why) throw new Error(answer.why);
+    mind = answer.mind;
     found.querySelector("[data-domain]").textContent = domain;
+    found.querySelector("[data-mind]").textContent = mind;
     found.querySelector("[data-keys]").textContent = answer.keys.length ? answer.keys.map((key) => key.key.slice(0, 8)).join(", ") : "none that sign statements yet";
-    found.querySelector("[data-rule]").textContent = domain + " may add events under /minds/" + domain + "/ of this mind, and nothing else.";
+    found.querySelector("[data-rule]").textContent = domain + " may add events under /minds/" + mind + "/ of this mind, and nothing else.";
     found.hidden = false;
     statusSay(status, "Your passkey signs this.");
   } catch (error) {
     if (domain === typed) said(error, "The keys could not be read.");
   }
 });
-found.querySelector("button").addEventListener("click", () => signedRule(domain, ["/minds/" + domain + "/"]).catch((error) => said(error, "The mind was not let in.")));`;
+found.querySelector("button").addEventListener("click", () => signedRule(mind, domain, ["/minds/" + mind + "/"]).catch((error) => said(error, "The mind was not let in.")));`;

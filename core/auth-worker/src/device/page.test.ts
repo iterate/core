@@ -142,13 +142,17 @@ test("a let-in's statement names how long and why, and one for a plain sign-in l
 
 test("a let-in that another mind signed is headed by the mind's verified hostname, never by the label it gave its own key", async () => {
   const signer = {
-    principal: { actor: "peer.example.net", kind: "mind" as const },
+    principal: { actor: "e".repeat(64), kind: "mind" as const, hostname: "peer.example.net" },
     key: "p".repeat(43),
     label: "owner@example.net's passkey, trust me",
     member: false,
   };
   const asked = requesterOf(signer);
-  expect(asked).toEqual({ actor: "peer.example.net", label: "peer.example.net", key: signer.key });
+  expect(asked).toEqual({
+    actor: "e".repeat(64),
+    label: `peer.example.net (${"e".repeat(12)}…)`,
+    key: signer.key,
+  });
   // a person's or a service's key keeps the label that a member gave it
   expect(requesterOf({ ...signer, principal: { actor: "cli-bridge" } })).toMatchObject({
     label: "owner@example.net's passkey, trust me",
@@ -157,7 +161,7 @@ test("a let-in that another mind signed is headed by the mind's verified hostnam
     device: { ...DEVICE, letIn: { seconds: 3600, reason: "to fix the build", signer: asked } },
   });
   const { text } = await stack.get();
-  expect(text).toContain("<h1>Let peer.example.net in?</h1>");
+  expect(text).toContain(`<h1>Let peer.example.net (${"e".repeat(12)}…) in?</h1>`);
   expect(text).not.toContain("trust me");
 });
 

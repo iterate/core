@@ -15,7 +15,7 @@
 // reason; not "spent"), not asked (the offer, with what is left of a grant this mind has).
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
-import { ITERATE_MIND } from "../../../cloud-deliveries.ts";
+import { ITERATE_HOSTNAME, ITERATE_MIND } from "../../../cloud-deliveries.ts";
 import { Balance, CREDIT_SECRETS } from "../cloud-credit.ts";
 import type { StepState } from "../contract.ts";
 import type { Card, MindEvent, Step, StepContext, StepLog } from "../steps.ts";
@@ -70,28 +70,38 @@ const takesCredit = (kind: z.infer<typeof Kind>) => kind === "unset" || kind ===
 /** A rule's payload: an empty `append` ends the meld. */
 const MeldRule = z.object({ append: z.array(z.string()) });
 
-/** THE LATEST RULE A MEMBER SIGNED for iterate, and who signed it. The context is read only when
- *  it exists: a read would make it. `ended` only when the context was READ and its latest rule is
- *  an end: a context missing from the catalog's page (more than 1,000 more active below it, or a
- *  row not yet written) is off but not ended, so nothing is deleted on it. */
+/** Where a member's rule for iterate is: on iterate's id, or, for a rule by hostname, on its
+ *  hostname. The auth Worker keeps one row for both (core/auth-worker/src/minds.ts), so the
+ *  latest rule over the two is the one in force. */
+const MELD_CONTEXTS = [MELD_CONTEXT, `/minds/${ITERATE_HOSTNAME}`];
+
+/** THE LATEST RULE A MEMBER SIGNED for iterate, and who signed it, over `MELD_CONTEXTS`. A context
+ *  is read only when it exists: a read would make it. `ended` only when a context was READ and the
+ *  latest rule is an end: a context missing from the catalog's page (more than 1,000 more active
+ *  below it, or a row not yet written) is off but not ended, so nothing is deleted on it. */
 async function meldOf(
   context: StepContext,
 ): Promise<{ on: boolean; ended: boolean; signer?: string }> {
-  const listed = await context.itx.contexts.list({ under: MELD_CONTEXT, limit: 1000 });
-  if (!listed.some((one) => one.path === MELD_CONTEXT)) return { on: false, ended: false };
   let meld: { on: boolean; ended: boolean; signer?: string } = { on: false, ended: false };
-  for (let after = 0; ;) {
-    const page = await context.itx.cd(MELD_CONTEXT).readEvents(after, 500);
-    for (const event of page.events) {
-      if (event.type !== "events.iterate.com/mind-meld/configured") continue;
-      if (event.source?.signer?.member !== true) continue;
-      const rule = MeldRule.safeParse(event.payload);
-      if (!rule.success) continue;
-      const on = rule.data.append.length > 0;
-      meld = { on, ended: !on, signer: event.source.signer.principal.email };
+  let latest = "";
+  for (const path of MELD_CONTEXTS) {
+    const listed = await context.itx.contexts.list({ under: path, limit: 1000 });
+    if (!listed.some((one) => one.path === path)) continue;
+    for (let after = 0; ;) {
+      const page = await context.itx.cd(path).readEvents(after, 500);
+      for (const event of page.events) {
+        if (event.type !== "events.iterate.com/mind-meld/configured") continue;
+        if (event.source?.signer?.member !== true) continue;
+        const rule = MeldRule.safeParse(event.payload);
+        // the later of two, by when it landed: a rule by id always came after one by hostname
+        if (!rule.success || event.createdAt < latest) continue;
+        latest = event.createdAt;
+        const on = rule.data.append.length > 0;
+        meld = { on, ended: !on, signer: event.source.signer.principal.email };
+      }
+      if (page.atHead || page.scannedThroughOffset <= after) break;
+      after = page.scannedThroughOffset;
     }
-    if (page.atHead || page.scannedThroughOffset <= after) break;
-    after = page.scannedThroughOffset;
   }
   return meld;
 }
@@ -587,7 +597,7 @@ async function creditOutcome(context: StepContext): Promise<Outcome> {
  *  while a connect waits (steps.ts `connectWaitsForRule`), so the agent has one turn for it. */
 async function tellSigned(context: StepContext, requestOffset: number, outcome: Outcome) {
   const signed =
-    "The owner signed the rule with their passkey just now: iterate.iterate.com can now send messages to this mind, under /minds/iterate.iterate.com/.";
+    "The owner signed the rule with their passkey just now: iterate.iterate.com can now send messages to this mind, under /minds/<iterate's id>/.";
   const content =
     "ownKeys" in outcome
       ? `${signed} The mind takes no credit: the owner's own keys for OpenAI and Exa stay in use. Say so in one sentence, and go on with the next subject in the same message (onboarding/connect-iterate-cloud.md).`
@@ -622,7 +632,7 @@ async function propose(context: StepContext, append: string[]) {
   return context.itx.approvals.proposeStatement({
     path: MELD_CONTEXT,
     type: "events.iterate.com/mind-meld/configured",
-    payload: { append },
+    payload: { append, name: ITERATE_HOSTNAME },
     next: `https://onboarding.${context.zone}/`,
   });
 }
@@ -758,9 +768,9 @@ async function changed(
     );
 }
 
-/** WHERE iterate.iterate.com adds its enrolment events, under the path the owner's rule lets it
- *  append to. steps.ts `onboardingMindEvent` hands the step only those it signed. */
-export const ENROLMENT_CONTEXT = `${MELD_CONTEXT}/cloud`;
+// iterate.iterate.com adds its enrolment events on `/cloud` of its context here, under the path
+// the owner's rule lets it append to; steps.ts `onboardingMindEvent` hands the step only those it
+// signed (`enrolmentOf`).
 const EnrolmentOpen = z.object({ hostname: z.string() });
 const Enrolled = z.object({ mind: z.string(), hostname: z.string() });
 
@@ -815,7 +825,7 @@ export const connectIterateCloud: Step = {
     "add-openai-key": { opens: true },
   },
   // open while CREDIT_OPEN is true; iterate Cloud's own mind gives the credit, so it is offered none
-  offered: (context) => context.creditOpen && context.mind !== ITERATE_MIND,
+  offered: (context) => context.creditOpen && context.mind !== ITERATE_HOSTNAME,
   words,
   check,
   act,

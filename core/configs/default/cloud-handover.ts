@@ -209,7 +209,7 @@ const helperBrief = (job: string, person: string) =>
 type LetInItx = Parameters<typeof connectWaitsForRule>[0] & Pick<HandoverItx, "cd">;
 
 /** THE OWNER LET iterate.iterate.com IN (onboarding/let-iterate-in.md): the rule the owner signed
- *  with their passkey lands as `mind-meld/configured` on `/minds/iterate.iterate.com`. When a person signed
+ *  with their passkey lands as `mind-meld/configured` on `/minds/<iterate's id>`. When a person signed
  *  it and it lets iterate.iterate.com add events somewhere, the onboarding agent gets a note that starts
  *  its turn, so the owner, whom the signing page has just brought back to the chat, need not say
  *  that they signed. Keyed by the event's path and offset: a replay adds nothing. An empty
@@ -232,8 +232,7 @@ export async function iterateLetInEvent(itx: LetInItx, event: LetInEvent) {
       idempotencyKey: `iterate-let-in:${event.path}@${event.offset}`,
       payload: {
         role: "developer",
-        content:
-          "The owner has let iterate.iterate.com in: their signed rule landed on /minds/iterate.iterate.com just now, and the signing page has brought the owner back to this chat. Say in one sentence that iterate can now send messages here, and go on with the next subject in the same message (onboarding/let-iterate-in.md, point 4).",
+        content: `The owner has let iterate.iterate.com in: their signed rule landed on /minds/${ITERATE_MIND} just now, and the signing page has brought the owner back to this chat. Say in one sentence that iterate can now send messages here, and go on with the next subject in the same message (onboarding/let-iterate-in.md, point 4).`,
       },
     })
     .catch((error: unknown) => {

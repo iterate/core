@@ -5,10 +5,13 @@
 //   the key form    on `/integrations/<provider>/<account>`, signed by the Cloud's key: the
 //                   signer's actor is `iterate-cloud`, the stack's own name for that key. It
 //                   reaches `processEvent`.
-//   the mind form   on `/minds/iterate.iterate.com/integrations/<provider>/<account>`, signed by
+//   the mind form   on `/minds/<iterate's id>/integrations/<provider>/<account>`, signed by
 //                   the mind iterate.iterate.com with the key it publishes. A mind gets this form
 //                   once its owner let iterate.iterate.com in (minds.md), AND the mind said
-//                   that it reads it (`sayMindForm`). It reaches `processMindEvent`.
+//                   that it reads it (`sayMindForm`). It reaches `processMindEvent`. While
+//                   iterate's mind signs in the hostname form, under a rule by hostname
+//                   it lands on `/minds/iterate.iterate.com/…` instead, still
+//                   signed by iterate's id: `iterateContextOf` takes both.
 //
 // Every reader of a delivery asks `cloudDeliveryOf`, and nothing else in this repo tests the
 // Cloud's signer for one. What this mind makes of a delivery (a message, a watch, a sync) stays on
@@ -21,10 +24,14 @@
  *  Cloud imports it from here. */
 export const ITERATE_CLOUD = "https://cloud.iterate.com";
 
-/** The mind that is iterate Cloud, when it signs as a mind: named, as every mind, by its control-plane
- *  hostname, where the auth Worker publishes its keys. No other hostname of its zones is its
- *  name: a statement signed as `iterate.com` is another signer's, and no delivery. */
-export const ITERATE_MIND = "iterate.iterate.com";
+/** The mind that is iterate Cloud, when it signs as a mind: by its id, the hash of its genesis
+ *  record, which its log at `ITERATE_HOSTNAME` proves. The id decides: a hostname can move to
+ *  another mind, the id cannot. */
+// allow-high-entropy-next-line: a public mind id, the SHA-256 of iterate.iterate.com's genesis record
+export const ITERATE_MIND = "7780b12cd895879475d1b5d01974de09b23b6b9a15d518b534bd7f314b11ac95";
+
+/** Where iterate's mind is: its control-plane hostname, an address and a label. */
+export const ITERATE_HOSTNAME = "iterate.iterate.com";
 
 /** An event as `processEvent` and `processMindEvent` hand it, as far as this file reads it. */
 export type CloudDeliveryEvent = {
@@ -34,7 +41,25 @@ export type CloudDeliveryEvent = {
 
 /** `/integrations/<provider>/<account>`, and no segment more or less. */
 const ACCOUNT_PATH = /^\/integrations\/([^/]+)\/([^/]+)$/;
-const MIND_PREFIX = `/minds/${ITERATE_MIND}`;
+/** iterate's context on this mind: by its id, where it lands its events, and by its hostname,
+ *  where a sender in the hostname form lands them under a rule by hostname
+ *  (core/auth-worker/src/minds.ts). The platform stamps iterate's id as the signer in both. */
+const ITERATE_CONTEXTS = [`/minds/${ITERATE_MIND}`, `/minds/${ITERATE_HOSTNAME}`];
+
+/** The path below iterate's context on this mind, in either form (`/cloud`,
+ *  `/integrations/<provider>/<account>`), or `/` for the context itself; null for any other
+ *  path. Every reader of iterate's events asks this, never one form alone. */
+export function iterateContextOf(path: string): string | null {
+  for (const prefix of ITERATE_CONTEXTS)
+    if (path === prefix || path.startsWith(`${prefix}/`)) return path.slice(prefix.length) || "/";
+  return null;
+}
+
+/** Whether iterate's mind signed `event`, by its id. */
+export function signedByIterate(event: CloudDeliveryEvent): boolean {
+  const principal = event.source?.signer?.principal;
+  return principal?.kind === "mind" && principal.actor === ITERATE_MIND;
+}
 
 /** The provider, the account and the mind's own context for it, when `event` is iterate Cloud's
  *  delivery in either form; else null. */
@@ -42,12 +67,13 @@ export function cloudDeliveryOf(
   event: CloudDeliveryEvent,
 ): { provider: string; account: string; context: string } | null {
   const principal = event.source?.signer?.principal;
-  const inMindForm = event.path.startsWith(`${MIND_PREFIX}/`);
-  const signed = inMindForm
-    ? principal?.kind === "mind" && principal.actor === ITERATE_MIND
+  const below = iterateContextOf(event.path);
+  // `below` is never empty: iterate's context itself is `/`
+  const signed = below
+    ? signedByIterate(event)
     : !principal?.kind && principal?.actor === "iterate-cloud";
   if (!signed) return null;
-  const context = inMindForm ? event.path.slice(MIND_PREFIX.length) : event.path;
+  const context = below || event.path;
   const [, provider, account] = ACCOUNT_PATH.exec(context) || [];
   return provider && account ? { provider, account, context } : null;
 }

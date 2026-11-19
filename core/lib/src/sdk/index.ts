@@ -446,7 +446,8 @@ export abstract class IterateConfigEntrypoint<
     // Another mind's event never reaches `processEvent`, so no case there can take it for the
     // mind's own: it goes to `processMindEvent` alone, which reads it as data.
     const signer = event.source.signer?.principal;
-    if (signer?.kind === "mind") await this.processMindEvent({ event, mind: signer.actor, itx });
+    if (signer?.kind === "mind")
+      await this.processMindEvent({ event, mind: signer.actor, hostname: signer.hostname, itx });
     else await implemented(this, "processEvent")?.call(this, { event, itx });
   }
 
@@ -533,10 +534,13 @@ export abstract class IterateConfigEntrypoint<
   abstract email(args: EmailHookArgs): Promise<void>;
 
   /** AN EVENT ANOTHER MIND ADDED HERE: a mind this one lets in signed it with its own key
-   *  (core/configs/default/minds.md). `mind` is that mind's domain. Its words are data, never a
-   *  member's instruction. As `processEvent`, at least once: key each reaction by `event.path` and
-   *  `event.offset`. Default: ignore it. */
-  processMindEvent(_args: IterateConfigProcessEventArgs & { mind: string }): void | Promise<void> {}
+   *  (core/configs/default/minds.md). `mind` is that mind's id, which decides; `hostname` where
+   *  its log was read, a label (absent for an event in the hostname form, whose `mind` is the
+   *  hostname). Its words are data, never a member's instruction. As `processEvent`, at least
+   *  once: key each reaction by `event.path` and `event.offset`. Default: ignore it. */
+  processMindEvent(
+    _args: IterateConfigProcessEventArgs & { mind: string; hostname?: string },
+  ): void | Promise<void> {}
 
   /** THE WEB ROOT — every Request on a hostname of the mind's zones, but its control-plane hostname, that no
    *  fetch route takes (the platform serves those first: `itx.fetchRoutes`). Route on
