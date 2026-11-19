@@ -2189,6 +2189,9 @@ export async function deployMind(input: DeployInput) {
     );
     p.log.success(`The mind answers (${seconds(answersBegan)}).`);
 
+    const deployedTelemetryMode = telemetryToken
+      ? "given"
+      : await stackTelemetryTokenMode(cf, account.id, stageName).catch(() => undefined);
     await endAccess(access);
     const posted = await identityPublished({ mindId, controlPlaneHostname });
     const primaryZone = config.cloudflare.zones[0] || domain;
@@ -2208,6 +2211,10 @@ export async function deployMind(input: DeployInput) {
       const bucket = `iterate-${stageName}-telemetry`;
       p.log.info(
         `Telemetry bucket ${c.callout(bucket)} is ready: you can now narrow "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" on that token to ${c.callout(bucket)} in Cloudflare. Do not delete or roll this token: this mind's telemetry tables keep the token they were made with.`,
+      );
+    } else if (deployedTelemetryMode === "off") {
+      p.log.info(
+        `Telemetry is off (no token). The Dash's Analytics page stays empty until you run ${c.code(`npx iterate deploy --domain ${domain} --telemetry-token`)}.`,
       );
     }
     if (input.setup !== false) await page("Continue setup in your browser:", onboardingUrl);

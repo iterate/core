@@ -572,6 +572,13 @@ test("deploy has no OAuth-client token prompt or Account API Token Provisioning,
   expect(source).toContain(
     'p.log.info(`${c.callout("MindConfig:")}\\n${formatMindConfigForStdout(deployedConfig)}`)',
   );
+  expect(source).toContain(
+    "Telemetry is off (no token). The Dash's Analytics page stays empty until you run",
+  );
+  // telemetry mode read must happen before endAccess revokes the Cloudflare sign-in token
+  expect(source.indexOf("const deployedTelemetryMode =")).toBeLessThan(
+    source.lastIndexOf("await endAccess(access);"),
+  );
   // iconic 𝑖 is printed on its own very first line before p.intro
   expect(source).toContain('console.log(c.mark("𝑖"));');
   expect(source.indexOf('console.log(c.mark("𝑖"));')).toBeLessThan(source.indexOf("p.intro("));
