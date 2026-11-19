@@ -44,10 +44,13 @@ export const IntegrationStatus = z.strictObject({
 export type IntegrationStatus = z.infer<typeof IntegrationStatus>;
 
 /** A button: its label and where it leads. A strict object, so a key the Dash would not render is
- *  refused like any other. */
+ *  refused like any other. `confirm`: the button changes something that cannot be undone (Remove).
+ *  The Dash asks this question first and, on yes, sends a POST to `url` on the page's own origin
+ *  and stays on the page; a button with it whose URL is on another origin is not drawn. */
 const IntegrationAction = z.strictObject({
   label: z.string().min(1).max(40),
   ...IntegrationTarget.shape,
+  confirm: z.string().min(1).max(400).optional(),
 });
 
 /** A square image the Dash shows beside a title (the service's own mark): an https URL. */
