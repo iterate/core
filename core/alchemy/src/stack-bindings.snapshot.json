@@ -1,0 +1,161 @@
+{
+  "full-cloudflare, mail forward": {
+    "Telemetry": [
+      "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
+      "ITERATE:plain_text",
+      "ITERATE__ANALYTICS_TOKEN:output of TelemetryAnalyticsToken.value",
+      "ITERATE__CATALOG_TOKEN:output of TelemetryCatalogToken.value",
+      "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
+      "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
+      "METRICS:Cloudflare.AnalyticsEngine.Dataset",
+      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream"
+    ],
+    "Auth": [
+      "DB:Cloudflare.D1Database AuthDb",
+      "ITERATE:output of AccessTeam.teamDomain, OwnerEmailProof.aud",
+      "ITERATE__SIGNING_KEY:output of AuthSigningKey.text",
+      "OAUTH_KV:Cloudflare.KV.Namespace AuthKv",
+      "SEND_EMAIL:Cloudflare.Email.SendEmail"
+    ],
+    "Secrets": [
+      "ACTS:Cloudflare.DurableObject (class ActsGate)",
+      "APPROVALS:Cloudflare.DurableObject (class ApprovalsIndex)",
+      "AUTH:Cloudflare.WorkerEntrypoint (worker Auth, entrypoint Auth)",
+      "CLOUDFLARE_CLIENT_ID:output of CloudflareClient.clientId",
+      "ITERATE:plain_text",
+      "ITERATE__AT_REST_KEY:output of SecretsAtRestKey.text",
+      "ITERATE__CLOUDFLARE_ACCOUNT_ID:plain_text",
+      "ITERATE__CLOUDFLARE_CLIENT:output of CloudflareClient.clientId, CloudflareClient.clientSecret, CloudflareClient.refusal",
+      "ITERATE__CLOUDFLARE_REALTIME:output of RealtimeSfu.appId, RealtimeSfu.secret, TurnKey.keyId, TurnKey.key",
+      "LOADER:Cloudflare.DynamicWorker",
+      "SECRET:Cloudflare.DurableObject (class SecretDurableObject)"
+    ],
+    "Mind": [
+      "AI:Cloudflare.Workers.AI",
+      "ARTIFACTS:Cloudflare.Artifacts.Namespace",
+      "BROWSER:Cloudflare.Browser",
+      "CF_VERSION_METADATA:Cloudflare.Workers.VersionMetadata",
+      "CONTEXTS:Cloudflare.DurableObject (class IterateContextDurableObject)",
+      "DOOR:Cloudflare.WorkerEntrypoint (worker Boundary, entrypoint Door)",
+      "FILES:Cloudflare.R2.Bucket FILES",
+      "IMAGES:Cloudflare.Images.Images",
+      "ITERATE:plain_text",
+      "ITERATE__SIGNING_KEY:output of MindSigningKey.text",
+      "LOADER:Cloudflare.DynamicWorker",
+      "MIND_KV:Cloudflare.KV.Namespace MindKv",
+      "SANDBOX_CONTAINER:Cloudflare.DurableObject (class SandboxContainer, containers SandboxContainer)",
+      "TELEMETRY_METRICS:Cloudflare.AnalyticsEngine.Dataset"
+    ],
+    "Boundary": [
+      "AUTH:Cloudflare.WorkerEntrypoint (worker Auth, entrypoint Auth)",
+      "DEPLOY_CONFIG:plain_text",
+      "ITERATE:plain_text",
+      "MAIL_FORWARD_TO:plain_text",
+      "MIND:Cloudflare.WorkerEntrypoint (worker Mind, entrypoint Mind)",
+      "SECRETS:Cloudflare.WorkerEntrypoint (worker Secrets, entrypoint Secrets)",
+      "SECRET_USE:Cloudflare.WorkerEntrypoint (worker Secrets, entrypoint SecretUse)",
+      "SEND_EMAIL:Cloudflare.Email.SendEmail",
+      "TELEMETRY:Cloudflare.WorkerEntrypoint (worker Telemetry, entrypoint Telemetry)"
+    ]
+  },
+  "full-cloudflare, no mail forward": {
+    "Telemetry": [
+      "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
+      "ITERATE:plain_text",
+      "ITERATE__ANALYTICS_TOKEN:output of TelemetryAnalyticsToken.value",
+      "ITERATE__CATALOG_TOKEN:output of TelemetryCatalogToken.value",
+      "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
+      "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
+      "METRICS:Cloudflare.AnalyticsEngine.Dataset",
+      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream"
+    ],
+    "Auth": [
+      "DB:Cloudflare.D1Database AuthDb",
+      "ITERATE:output of AccessTeam.teamDomain, OwnerEmailProof.aud",
+      "ITERATE__SIGNING_KEY:output of AuthSigningKey.text",
+      "OAUTH_KV:Cloudflare.KV.Namespace AuthKv",
+      "SEND_EMAIL:Cloudflare.Email.SendEmail"
+    ],
+    "Secrets": [
+      "ACTS:Cloudflare.DurableObject (class ActsGate)",
+      "APPROVALS:Cloudflare.DurableObject (class ApprovalsIndex)",
+      "AUTH:Cloudflare.WorkerEntrypoint (worker Auth, entrypoint Auth)",
+      "CLOUDFLARE_CLIENT_ID:output of CloudflareClient.clientId",
+      "ITERATE:plain_text",
+      "ITERATE__AT_REST_KEY:output of SecretsAtRestKey.text",
+      "ITERATE__CLOUDFLARE_ACCOUNT_ID:plain_text",
+      "ITERATE__CLOUDFLARE_CLIENT:output of CloudflareClient.clientId, CloudflareClient.clientSecret, CloudflareClient.refusal",
+      "ITERATE__CLOUDFLARE_REALTIME:output of RealtimeSfu.appId, RealtimeSfu.secret, TurnKey.keyId, TurnKey.key",
+      "LOADER:Cloudflare.DynamicWorker",
+      "SECRET:Cloudflare.DurableObject (class SecretDurableObject)"
+    ],
+    "Mind": [
+      "AI:Cloudflare.Workers.AI",
+      "ARTIFACTS:Cloudflare.Artifacts.Namespace",
+      "BROWSER:Cloudflare.Browser",
+      "CF_VERSION_METADATA:Cloudflare.Workers.VersionMetadata",
+      "CONTEXTS:Cloudflare.DurableObject (class IterateContextDurableObject)",
+      "DOOR:Cloudflare.WorkerEntrypoint (worker Boundary, entrypoint Door)",
+      "FILES:Cloudflare.R2.Bucket FILES",
+      "IMAGES:Cloudflare.Images.Images",
+      "ITERATE:plain_text",
+      "ITERATE__SIGNING_KEY:output of MindSigningKey.text",
+      "LOADER:Cloudflare.DynamicWorker",
+      "MIND_KV:Cloudflare.KV.Namespace MindKv",
+      "SANDBOX_CONTAINER:Cloudflare.DurableObject (class SandboxContainer, containers SandboxContainer)",
+      "TELEMETRY_METRICS:Cloudflare.AnalyticsEngine.Dataset"
+    ],
+    "Boundary": [
+      "AUTH:Cloudflare.WorkerEntrypoint (worker Auth, entrypoint Auth)",
+      "DEPLOY_CONFIG:plain_text",
+      "ITERATE:plain_text",
+      "MIND:Cloudflare.WorkerEntrypoint (worker Mind, entrypoint Mind)",
+      "SECRETS:Cloudflare.WorkerEntrypoint (worker Secrets, entrypoint Secrets)",
+      "SECRET_USE:Cloudflare.WorkerEntrypoint (worker Secrets, entrypoint SecretUse)",
+      "SEND_EMAIL:Cloudflare.Email.SendEmail",
+      "TELEMETRY:Cloudflare.WorkerEntrypoint (worker Telemetry, entrypoint Telemetry)"
+    ]
+  },
+  "external mind, no mail forward": {
+    "Telemetry": [
+      "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
+      "ITERATE:plain_text",
+      "ITERATE__ANALYTICS_TOKEN:output of TelemetryAnalyticsToken.value",
+      "ITERATE__CATALOG_TOKEN:output of TelemetryCatalogToken.value",
+      "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
+      "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
+      "METRICS:Cloudflare.AnalyticsEngine.Dataset",
+      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream"
+    ],
+    "Auth": [
+      "DB:Cloudflare.D1Database AuthDb",
+      "ITERATE:output of AccessTeam.teamDomain, OwnerEmailProof.aud",
+      "ITERATE__SIGNING_KEY:output of AuthSigningKey.text",
+      "OAUTH_KV:Cloudflare.KV.Namespace AuthKv",
+      "SEND_EMAIL:Cloudflare.Email.SendEmail"
+    ],
+    "Secrets": [
+      "ACTS:Cloudflare.DurableObject (class ActsGate)",
+      "APPROVALS:Cloudflare.DurableObject (class ApprovalsIndex)",
+      "AUTH:Cloudflare.WorkerEntrypoint (worker Auth, entrypoint Auth)",
+      "CLOUDFLARE_CLIENT_ID:output of CloudflareClient.clientId",
+      "ITERATE:plain_text",
+      "ITERATE__AT_REST_KEY:output of SecretsAtRestKey.text",
+      "ITERATE__CLOUDFLARE_ACCOUNT_ID:plain_text",
+      "ITERATE__CLOUDFLARE_CLIENT:output of CloudflareClient.clientId, CloudflareClient.clientSecret, CloudflareClient.refusal",
+      "ITERATE__CLOUDFLARE_REALTIME:output of RealtimeSfu.appId, RealtimeSfu.secret, TurnKey.keyId, TurnKey.key",
+      "LOADER:Cloudflare.DynamicWorker",
+      "SECRET:Cloudflare.DurableObject (class SecretDurableObject)"
+    ],
+    "Boundary": [
+      "AUTH:Cloudflare.WorkerEntrypoint (worker Auth, entrypoint Auth)",
+      "DEPLOY_CONFIG:plain_text",
+      "ITERATE:plain_text",
+      "PROVIDED_MIND:Cloudflare.DurableObject (class ProvidedMind)",
+      "SECRETS:Cloudflare.WorkerEntrypoint (worker Secrets, entrypoint Secrets)",
+      "SECRET_USE:Cloudflare.WorkerEntrypoint (worker Secrets, entrypoint SecretUse)",
+      "SEND_EMAIL:Cloudflare.Email.SendEmail",
+      "TELEMETRY:Cloudflare.WorkerEntrypoint (worker Telemetry, entrypoint Telemetry)"
+    ]
+  }
+}

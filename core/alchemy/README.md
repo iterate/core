@@ -14,6 +14,11 @@ with no passkey left a way back in. What follows is the deploy by hand.
 - Five Workers: telemetry, auth, secrets, mind and boundary. Only the boundary has routes. With
   the topology `external-mind-connects-into-cloudflare-boundary`, the stack has no mind Worker
   and nothing that only a mind Worker binds.
+- `src/stack-bindings.snapshot.json` lists each Worker's bindings, by name and kind and never by
+  value, as `src/stack.ts` declares them for three fixed configs. A pull request that adds,
+  removes or renames a binding must change that file, so the change shows in its diff:
+  `src/stack-bindings.test.ts` fails until it does. If the change is meant, rewrite the file with
+  `UPDATE_STACK_BINDINGS=1 pnpm --filter core-alchemy test`.
 - Every resource of the account is named `iterate-<alchemy.stageName>-…` (`namesOf` in
   `src/config.ts`).
 - The stack's state, with the generated keys, the two API tokens' values and the secrets of the
