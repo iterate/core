@@ -27,6 +27,7 @@ import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as accounts from "@distilled.cloud/cloudflare/accounts";
 import { apiTokenCredentials, Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as iam from "@distilled.cloud/cloudflare/iam";
+import * as Retry from "@distilled.cloud/cloudflare/Retry";
 import * as user from "@distilled.cloud/cloudflare/user";
 import * as zones from "@distilled.cloud/cloudflare/zones";
 import * as Provider from "alchemy/Provider";
@@ -92,6 +93,7 @@ export const CloudflareOAuthClientProvider = (token?: string) =>
       yield* withToken(token)(
         iam.deleteOauthClient({ accountId, oauthClientId: output.clientId }),
       ).pipe(
+        noRetryOnPermissionRefusal,
         Effect.catchIf(notThere, () => Effect.void),
         // A destroy by a credential that may not delete OAuth clients still erases the mind. The
         // client stays in the account, and nothing holds its secret once the state is gone.
@@ -128,6 +130,7 @@ export const oauthClientCalls = (
   return {
     read: (oauthClientId: string) =>
       using(iam.getOauthClient({ accountId, oauthClientId })).pipe(
+        noRetryOnPermissionRefusal,
         Effect.catchIf(notThere, () => Effect.undefined),
       ),
     make: using(
@@ -139,9 +142,11 @@ export const oauthClientCalls = (
         // the secret goes in the token request's form: the secrets Worker sends it so
         tokenEndpointAuthMethod: "client_secret_post",
       }),
-    ),
+    ).pipe(noRetryOnPermissionRefusal),
     patch: (oauthClientId: string) =>
-      using(iam.patchOauthClient({ ...wanted, accountId, oauthClientId })),
+      using(iam.patchOauthClient({ ...wanted, accountId, oauthClientId })).pipe(
+        noRetryOnPermissionRefusal,
+      ),
     // a read that the credential surely may make: it fails for one that is not valid, and so
     // tells that from one that lacks a permission. The deploy's own may read zones ("zone.read");
     // a given token holds one permission, and verifies itself (an account's token, or a person's).
@@ -244,19 +249,26 @@ export const oauthClientMadeOrKept = <E, R>(
     };
   });
 
-/** WHETHER AN ERROR HAS THE SHAPE OF A REFUSAL FOR PERMISSION. Cloudflare's API on 18 Nov
- *  2026: a valid token without "OAuth Client Read/Write" gets 403 code 10000 "Authentication error"; a token that does not exist gets 401
- *  with the same code and words; a malformed one 400 code 9106. The SDK maps code 10000 to
- *  `Unauthorized` and keeps only the words, not the status, and it tries the call again for
- *  about 24 s first, because Cloudflare answers the same words to a valid token under load. Code
- *  10001 "Method not allowed for token" (`Forbidden`) is a refusal too; its other words
- *  ("internal error", "Unable to authenticate request") are Cloudflare's own failures. So the
- *  shape is those words alone, and `oauthClientMadeOrKept` then proves the credential valid.
- *  What stays ambiguous: a valid token that Cloudflare refuses under load for all of the 24 s
- *  counts as a refusal, and the next deploy asks again. */
-const refusedForPermissionShape = (error: unknown) =>
+/** WHETHER AN ERROR HAS THE SHAPE OF A REFUSAL FOR PERMISSION. Cloudflare answers 403 code 10000
+ *  "Authentication error" (mapped to `Unauthorized` or `Forbidden`) or code 10001 "Method not
+ *  allowed for token" (`Forbidden`) for a valid token lacking permission. `credentialWorks` then
+ *  proves the credential itself is valid before treating it as a refusal rather than a failure. */
+export const refusedForPermissionShape = (error: unknown) =>
   (Predicate.isTagged(error, "Unauthorized") && /^Authentication error$/i.test(wordsOf(error))) ||
-  (Predicate.isTagged(error, "Forbidden") && /method not allowed for token/i.test(wordsOf(error)));
+  (Predicate.isTagged(error, "Forbidden") &&
+    (/method not allowed for token/i.test(wordsOf(error)) ||
+      /^Authentication error$/i.test(wordsOf(error))));
+
+/** Retries transient Cloudflare errors (throttling, 5xx) with the SDK's default policy, but skips
+ *  retrying permission-refusal shapes so deploys without OAuth-client or API-token write fail fast
+ *  instead of waiting ~24 s on retries. */
+export const noRetryOnPermissionRefusal = Retry.policy((lastError) => {
+  const base = Retry.makeDefault(lastError);
+  return {
+    ...base,
+    while: (error) => !refusedForPermissionShape(error) && (base.while?.(error) ?? true),
+  };
+});
 
 /** Cloudflare's answer for a client that the account does not have (404 "oauth client not
  *  found"). The SDK gives it as `NotFound`, which its types for these calls do not list

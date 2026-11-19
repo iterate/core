@@ -30,10 +30,10 @@ with no passkey left a way back in. What follows is the deploy by hand.
   `iterate-<alchemy.stageName>-turn`, by Alchemy's own resources. The secrets Worker alone holds
   their secrets, and serves them as `/secrets/cloudflare-realtime-sfu` and
   `/secrets/cloudflare-turn`. They cost nothing until a call uses them.
-- Seven providers of our own are beside the script, each for one thing that Alchemy does not do
-  (read in 2.0.0-beta.85 and in beta.87, the version that `pnpm-workspace.yaml` pins), and one
-  wrapper of Alchemy's own (`src/realtime.ts`). The header of each file says what, and when the
-  file can go.
+- Our own providers beside the script handle what Alchemy does not do yet (read in 2.0.0-beta.85
+  and beta.87, the version that `pnpm-workspace.yaml` pins), along with thin wrappers of Alchemy's
+  providers (`src/realtime.ts`, `src/telemetry-token.ts`). The header of each file says what, and
+  when the file can go.
 
 ## The one input
 
@@ -127,9 +127,8 @@ pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the termin
   `CLOUDFLARE_OAUTH_CLIENT_API_TOKEN`: when it is set, every call for the client uses it, and the
   deploy's credential makes none (`src/cloudflare-oauth-client.ts`). `iterate deploy` does not ask
   for it. A deploy's own API token that holds the permission needs no second token.
-- A deploy with neither is no failure: it takes about 24 seconds longer, makes no client and says
-  so, and each later deploy asks again. The secrets Worker's plain-text variable
-  `CLOUDFLARE_CLIENT_ID` says which: the client's id, or `none`.
+- A deploy with neither is no failure: permission refusals skip the SDK's retry loop and fail fast,
+  making no client and saying so, and each later deploy asks again.
 - The deploy makes a Realtime SFU app and a TURN key (`src/realtime.ts`), which need the
   permission to make Realtime (Calls) resources: "Calls Write" (`calls.write`), which the deploy
   asks for, or "Realtime" or "Realtime Admin". A credential without it is no failure either: the deploy makes neither,

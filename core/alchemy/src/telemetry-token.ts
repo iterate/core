@@ -19,9 +19,11 @@ import { Resource } from "alchemy/Resource";
 import * as Effect from "effect/Effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as Layer from "effect/Layer";
-import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
-import { z } from "zod";
+import {
+  noRetryOnPermissionRefusal,
+  refusedForPermissionShape,
+} from "./cloudflare-oauth-client.ts";
 
 export type TelemetryToken = Resource<
   "Iterate.TelemetryToken",
@@ -73,15 +75,6 @@ export const TelemetryTokenProvider = (token?: string) =>
     delete: () => Effect.void,
   });
 
-const tokenDeletePermissionRefused = (error: unknown) => {
-  const message = z.object({ message: z.string() }).safeParse(error).data?.message || "";
-  return (
-    (Predicate.isTagged(error, "Unauthorized") && /^Authentication error$/i.test(message)) ||
-    (Predicate.isTagged(error, "Forbidden") &&
-      (/method not allowed for token/i.test(message) || /^Authentication error$/i.test(message)))
-  );
-};
-
 /** Attempts to delete a legacy `Cloudflare.ApiToken.AccountApiToken`. When Cloudflare refuses for
  *  missing API-token write permission (and a read proves the credential is valid), logs the token
  *  name and dashboard URL so the owner can remove it manually and returns success. */
@@ -92,7 +85,7 @@ export const deleteLegacyAccountApiToken = <E, R, E2, R2>(
   say: (line: string) => void,
 ) =>
   remove.pipe(
-    Effect.catchIf(tokenDeletePermissionRefused, (refused) =>
+    Effect.catchIf(refusedForPermissionShape, (refused) =>
       credentialWorks.pipe(
         Effect.flatMap(() =>
           Effect.sync(() =>
@@ -119,7 +112,7 @@ export const AccountApiTokenDeleteFallbackProvider = () =>
         ...base,
         delete: (input) =>
           deleteLegacyAccountApiToken(
-            base.delete(input),
+            base.delete(input).pipe(noRetryOnPermissionRefusal),
             zones
               .listZones({ account: { id: input.output.accountId }, perPage: 1 })
               .pipe(

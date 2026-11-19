@@ -26,7 +26,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync }
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { isDeepStrictEqual, promisify } from "node:util";
+import { isDeepStrictEqual, promisify, styleText } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
 import { mindAddressAsTyped } from "../mind-api.ts";
@@ -394,6 +394,40 @@ export function candidatesOf(name: string, words = ""): string[] {
 // ---------------------------------------------------------------------------------------------
 // The terminal.
 
+/** Whether ANSI color styling should be emitted to stdout (respects NO_COLOR, FORCE_COLOR,
+ *  TERM=dumb, and TTY). */
+export function isColorEnabled(env: NodeJS.ProcessEnv, isTTY: boolean) {
+  if (env.NO_COLOR) return false;
+  if (env.FORCE_COLOR && env.FORCE_COLOR !== "0") return true;
+  if (env.TERM === "dumb") return false;
+  return isTTY;
+}
+
+const styled = (format: Parameters<typeof styleText>[0], text: string, enabled: boolean) =>
+  enabled ? styleText(format, text, { validateStream: false }) : text;
+
+/** Tasteful ANSI palette for `iterate deploy`. Returns plain text when `enabled` is false. */
+export function createPalette(enabled: boolean) {
+  return {
+    /** Iconic `𝑖` logo mark on the very first line. */
+    mark: (text: string) => styled(["bold", "magenta"], text, enabled),
+    /** Cloudflare account names — distinct warm yellow everywhere they appear. */
+    account: (text: string) => styled(["bold", "yellow"], text, enabled),
+    /** One-time Cloudflare device verification code. */
+    code: (text: string) => styled(["bold", "magenta"], text, enabled),
+    /** Domain names and mind hostnames. */
+    domain: (text: string) => styled(["bold", "cyan"], text, enabled),
+    /** Clickable Cloudflare dashboard and onboarding URLs. */
+    url: (text: string) => styled(["underline", "blue"], text, enabled),
+    /** Section headings inside the unified domain picker. */
+    heading: (text: string) => styled("bold", text, enabled),
+    /** Key callouts (titles, button names, bucket names). */
+    callout: (text: string) => styled("bold", text, enabled),
+  };
+}
+
+const palette = () => createPalette(isColorEnabled(process.env, Boolean(process.stdout.isTTY)));
+
 /** Whether a person is at this terminal: requires a TTY, no CI flag, and no coding agent wrapper. */
 export const isInteractiveEnv = (env: NodeJS.ProcessEnv, isTTY: boolean) => {
   const inCi = Boolean(env.CI && env.CI !== "0" && env.CI.toLowerCase() !== "false");
@@ -480,7 +514,7 @@ async function until<T>(
 /** A page the person must act on: printed, and opened once they press Enter when a person is
  *  there, so browser focus is not yanked before they can read the instructions. */
 async function page(text: string, url: string) {
-  p.log.step(`${text}\n${url}`);
+  p.log.step(`${text}\n${palette().url(url)}`);
   if (!interactive() || process.env.ITERATE_SKIP_BROWSER_OPEN === "1") return;
   // a browser here is not the one the person looks at
   if (signInFlow() === "device") return;
@@ -579,6 +613,13 @@ async function sourceOf(input: DeployInput): Promise<Source> {
       env: { ...process.env, ...PNPM_COMPAT_ENV, CI: "1" },
       maxBuffer: 64 << 20,
     });
+  // pre-build core-mind-worker in the background while the person signs in and answers prompts
+  // so `alchemy deploy` and `alchemy plan` do not have to rebuild it later
+  await exec(pnpm.command, [...pnpm.first, "--filter", "core-mind-worker", "build"], {
+    cwd: dir,
+    env: { ...process.env, ...PNPM_COMPAT_ENV, CI: "1" },
+    maxBuffer: 64 << 20,
+  });
   return { dir, pnpm };
 }
 
@@ -600,30 +641,32 @@ type Run = {
   adopt?: boolean;
 };
 
-/** THE ARGUMENTS OF `pnpm run deploy` of core/alchemy. A deploy that stopped before its end can
- *  leave a resource that Cloudflare made and Alchemy's state does not hold, since its creation was
- *  under way at the stop: Alchemy then refuses it ("OwnedBySomeoneElse", for a Pipelines stream,
- *  which carries no owner's tag) unless `--adopt` takes it over. The stage's state store says that
- *  such a resource, under the stage's own name, is the stack's own: so a deploy that goes on
- *  adopts. So does a new mind beside a store that reads as a destroy's leftover: a stack that
- *  stopped before its first Worker and its first record reads the same from outside, with its
- *  bucket, tokens and streams there, and after a real destroy nothing is there to take over. No
- *  other deploy adopts. */
+/** THE ARGUMENTS OF `alchemy deploy` in core/alchemy (`sourceOf` already built `core-mind-worker`
+ *  in the background, so deploys and retries skip redundant rebuilds). A deploy that stopped before
+ *  its end can leave a resource that Cloudflare made and Alchemy's state does not hold, since its
+ *  creation was under way at the stop: Alchemy then refuses it ("OwnedBySomeoneElse", for a
+ *  Pipelines stream, which carries no owner's tag) unless `--adopt` takes it over. The stage's
+ *  state store says that such a resource, under the stage's own name, is the stack's own: so a
+ *  deploy that goes on adopts. So does a new mind beside a store that reads as a destroy's
+ *  leftover: a stack that stopped before its first Worker and its first record reads the same from
+ *  outside, with its bucket, tokens and streams there, and after a real destroy nothing is there to
+ *  take over. No other deploy adopts. */
 export const deployArgsOf = (stageName: string, adopt = false) => [
-  "run",
+  "exec",
+  "alchemy",
   "deploy",
+  "alchemy.run.ts",
   "--stage",
   stageName,
   "--yes",
   ...(adopt ? ["--adopt"] : []),
 ];
 
-/** THE COMMANDS OF A PLAN of core/alchemy, which changes nothing: the mind Worker's build, which
- *  the plan reads as a deploy does (`pnpm run deploy` builds it first), then Alchemy's plan of the
- *  stage. Each resource gets one line, `[Name] noop`, `update`, `create`, `delete` and the like:
- *  what a caller with nobody at the terminal reads before it deploys. */
+/** THE COMMANDS OF A PLAN of core/alchemy, which changes nothing: Alchemy's plan of the stage
+ *  (`sourceOf` already built `core-mind-worker`). Each resource gets one line, `[Name] noop`,
+ *  `update`, `create`, `delete` and the like: what a caller with nobody at the terminal reads
+ *  before it deploys. */
 export const planArgsOf = (stageName: string) => [
-  ["--filter", "core-mind-worker", "build"],
   ["exec", "alchemy", "plan", "alchemy.run.ts", "--stage", stageName, "--no-input"],
 ];
 
@@ -795,7 +838,7 @@ async function accountsOf(cf: Cloudflare): Promise<{ all: Account[]; covered: Ac
       if (read.status === 200) return [account];
       if (read.status === 403 || read.status === 404) return [];
       throw new Error(
-        `Cloudflare did not say whether this access covers the account ${account.name} (${read.status}: ${read.error}). Run the command again.`,
+        `Cloudflare did not say whether this access covers the account ${palette().account(account.name)} (${read.status}: ${read.error}). Run the command again.`,
       );
     }),
   );
@@ -878,11 +921,13 @@ export function domainPickerOptions(input: {
   offers: readonly Offer[];
   zones: readonly Zone[];
   maxOffers?: number;
+  color?: boolean;
 }): DomainPickerOption[] {
+  const c = createPalette(input.color ?? false);
   const readableZones = input.zones.filter((zone) => !zone.unread);
   const shownOffers = input.offers.slice(0, input.maxOffers ?? 6);
   const options: DomainPickerOption[] = [
-    { value: "\0heading-buy", label: "Buy a brand new domain", disabled: true },
+    { value: "\0heading-buy", label: c.heading("Buy a brand new domain"), disabled: true },
     ...shownOffers.map((offer) => ({
       value: offer.name,
       label: offer.name,
@@ -893,7 +938,11 @@ export function domainPickerOptions(input: {
       label: "Enter a brand new domain name and buy that",
       hint: "type a domain to buy, or keywords for more names",
     },
-    { value: "\0heading-zones", label: "Use an existing cloudflare zone", disabled: true },
+    {
+      value: "\0heading-zones",
+      label: c.heading("Use an existing cloudflare zone"),
+      disabled: true,
+    },
   ];
   if (readableZones.length > 0) {
     for (const zone of readableZones) {
@@ -933,7 +982,12 @@ async function pickDomain(
   let offers = input.domain ? [] : await free();
   let maxOffers = 6;
   for (;;) {
-    const options = domainPickerOptions({ offers, zones, maxOffers });
+    const options = domainPickerOptions({
+      offers,
+      zones,
+      maxOffers,
+      color: isColorEnabled(process.env, Boolean(process.stdout.isTTY)),
+    });
     const firstSelectable = options.find((option) => !option.disabled)?.value;
     let domain =
       input.domain?.toLowerCase() ||
@@ -1134,13 +1188,14 @@ async function pickAccount(
   let chosen = input.newAccount ? NEW : input.account;
   if (!chosen && covered.length === 0)
     throw new Error("This access to Cloudflare covers no account.");
+  const c = palette();
   chosen ||= await ask<string>("pass --account <id or name>, or --new-account", () =>
     p.select({
       message: "Which Cloudflare account does the mind live in?",
       options: [
         ...covered.map((account) => ({
           value: account.id,
-          label: account.name,
+          label: c.account(account.name),
           hint: account.id.slice(0, 8),
         })),
         {
@@ -1161,7 +1216,7 @@ async function pickAccount(
       : undefined;
     if (byId) return { account: byId, covered: true };
     throw new Error(
-      `You have no Cloudflare account ${JSON.stringify(chosen)}. This access covers: ${covered.map((a) => `${a.name} (${a.id})`).join(", ") || "none"}.`,
+      `You have no Cloudflare account ${JSON.stringify(chosen)}. This access covers: ${covered.map((a) => `${c.account(a.name)} (${a.id})`).join(", ") || "none"}.`,
     );
   }
   // an earlier run made it: a second run makes no second account
@@ -1174,7 +1229,7 @@ async function pickAccount(
     throw new Error(
       `Cloudflare made no new account (${made.status}): ${made.error}. Its rules: the login is at least seven days old, it is Super Administrator of an account, and it has fewer than five extra accounts. Run again with an account you have.`,
     );
-  p.log.success(`Made the Cloudflare account ${fresh}.`);
+  p.log.success(`Made the Cloudflare account ${c.account(fresh)}.`);
   // a sign-in's approval names the accounts it covers, so not this one; a token for all of the
   // person's accounts reaches it at once
   return { account, covered: (await cf("GET", `/accounts/${account.id}`)).status === 200 };
@@ -1352,10 +1407,11 @@ async function telemetryTokenStep(
     throw new Error(
       `Telemetry needs one account-owned Cloudflare API token (${TELEMETRY_TOKEN_ENV}). Create it at:\n${url}\nIf the bucket ${bucket} already exists, scope "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" to ${bucket}. Then re-run with ${TELEMETRY_TOKEN_ENV}=<token>. Nothing was changed.`,
     );
+  const c = palette();
   await page(
     [
-      `Create one account-owned Cloudflare telemetry API token for ${account.name} so your mind can read its own logs and metrics.`,
-      `Permissions are pre-filled (Workers R2 Data Catalog Write, Workers R2 Storage Bucket Item Write, Workers R2 SQL Read, Account Analytics Read). Select account "${account.name}" if prompted; if the bucket ${bucket} already exists, scope "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" to ${bucket} alone (for a new mind, you can narrow it to ${bucket} after the first deploy). Click "Continue to summary" → "Create Token", and copy the token.`,
+      `Create one account-owned Cloudflare telemetry API token for ${c.account(account.name)} so your mind can read its own logs and metrics.`,
+      `Permissions are pre-filled (Workers R2 Data Catalog Write, Workers R2 Storage Bucket Item Write, Workers R2 SQL Read, Account Analytics Read). Select account ${c.account(account.name)} if prompted; if the bucket ${c.callout(bucket)} already exists, scope "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" to ${c.callout(bucket)} alone (for a new mind, you can narrow it to ${c.callout(bucket)} after the first deploy). Click ${c.callout('"Continue to summary" → "Create Token"')}, and copy the token.`,
     ].join("\n"),
     url,
   );
@@ -1443,8 +1499,10 @@ async function identityPublished(mind: { mindId: string; controlPlaneHostname: s
 export async function deployMind(input: DeployInput) {
   const began = Date.now();
   const children = new Set<ChildProcess>();
-  // 𝑖 is U+1D456, the letter of iterate's logo
-  p.intro("𝑖  iterate deploy: a mind in your own Cloudflare account");
+  const c = palette();
+  // 𝑖 is U+1D456, the letter of iterate's logo, printed alone on the very first line
+  console.log(c.mark("𝑖"));
+  p.intro(`${c.callout("iterate deploy")}: a mind in your own Cloudflare account`);
 
   try {
     if (process.platform === "win32")
@@ -1458,7 +1516,7 @@ export async function deployMind(input: DeployInput) {
         DEPLOY_SCOPES,
         async ({ url, code, minutes }) => {
           await page(
-            `Sign in at Cloudflare and approve the access. Check that the page shows the code ${code}. Select the account for the mind. The code works for ${minutes} minutes.`,
+            `Sign in at Cloudflare and approve the access. Check that the page shows the code ${c.code(code)}. Select the account for the mind. The code works for ${minutes} minutes.`,
             url.href,
           );
         },
@@ -1545,21 +1603,21 @@ export async function deployMind(input: DeployInput) {
     if (!covered) {
       if (access.from !== "sign-in")
         throw new Error(
-          `The token in CLOUDFLARE_API_TOKEN does not reach the account ${account.name} (${account.id}).`,
+          `The token in CLOUDFLARE_API_TOKEN does not reach the account ${c.account(account.name)} (${account.id}).`,
         );
       // nobody may be at Cloudflare's page: the kept sign-in is the whole approval
       if (access.keptIn)
         throw new SignInEnded(
-          `The kept sign-in in ${access.keptIn} does not cover the account ${account.name} (${account.id}). Sign in again and select that account on Cloudflare's page: iterate cloudflare sign-in.`,
+          `The kept sign-in in ${access.keptIn} does not cover the account ${c.account(account.name)} (${account.id}). Sign in again and select that account on Cloudflare's page: iterate cloudflare sign-in.`,
         );
       await endAccess(access);
       p.log.info(
-        `Cloudflare asks once more, for the account ${account.name}: select it on its page.`,
+        `Cloudflare asks once more, for the account ${c.account(account.name)}: select it on its page.`,
       );
       access = await signIn(true);
       if ((await cf("GET", `/accounts/${account.id}`)).status !== 200)
         throw new Error(
-          `The approval does not cover the account ${account.name}. Run the command again and select it on Cloudflare's page.`,
+          `The approval does not cover the account ${c.account(account.name)}. Run the command again and select it on Cloudflare's page.`,
         );
     }
     // `productRead`: on, off with Cloudflare's words, or a stop when the read itself failed
@@ -1585,7 +1643,7 @@ export async function deployMind(input: DeployInput) {
     if (zeroTrust.next === "stop") throw new Error(zeroTrust.words);
     const state = (read: typeof paidRead) => (read.on ? "on" : `off (Cloudflare: ${read.why})`);
     p.log.info(
-      `Account ${account.name}: Workers Paid ${state(paidRead)}, R2 ${state(r2Read)}, ${zones.length} domain${zones.length === 1 ? "" : "s"}.`,
+      `Account ${c.account(account.name)}: Workers Paid ${state(paidRead)}, R2 ${state(r2Read)}, ${zones.length} domain${zones.length === 1 ? "" : "s"}.`,
     );
 
     // the names offered come from the person's name at Cloudflare, else from the owner's address
@@ -1808,7 +1866,7 @@ export async function deployMind(input: DeployInput) {
       );
     }
     const zone = await zoneOf(cf, account.id, pick);
-    p.log.success(`${zone.name} is active in the account.`);
+    p.log.success(`${c.domain(zone.name)} is active in the account.`);
     if (!pick.zone) {
       const [arrived] = await zonesOf(cf, account.id, domain);
       if (!arrived || arrived.unread)
@@ -1834,7 +1892,7 @@ export async function deployMind(input: DeployInput) {
     if (input.plan) {
       const plan = join(work, "plan.log");
       writeFileSync(plan, "");
-      const planning = wait(`Planning the deploy of the mind at ${controlPlaneHostname}`);
+      const planning = wait(`Planning the deploy of the mind at ${c.domain(controlPlaneHostname)}`);
       const run = {
         source: ready,
         stageName,
@@ -1864,7 +1922,7 @@ export async function deployMind(input: DeployInput) {
       );
     }
     const deployBegan = Date.now();
-    const deploying = wait(`Deploying the mind at ${controlPlaneHostname}`);
+    const deploying = wait(`Deploying the mind at ${c.domain(controlPlaneHostname)}`);
     const code = await deployStack({
       source: ready,
       stageName,
@@ -1918,7 +1976,7 @@ export async function deployMind(input: DeployInput) {
     const answersBegan = Date.now();
     let good = 0;
     await until(
-      `Waiting for ${controlPlaneHostname} to answer steadily`,
+      `Waiting for ${c.domain(controlPlaneHostname)} to answer steadily`,
       async () => {
         const before = good;
         good = 0;
@@ -1941,17 +1999,17 @@ export async function deployMind(input: DeployInput) {
     const onboardingUrl = onboardingUrlOf(primaryZone);
     p.log.success(
       deployed
-        ? `Your mind at ${controlPlaneHostname} is updated.`
-        : `Your mind is deployed at ${controlPlaneHostname}.`,
+        ? `Your mind at ${c.domain(controlPlaneHostname)} is updated.`
+        : `Your mind is deployed at ${c.domain(controlPlaneHostname)}.`,
     );
-    p.log.info(`MindConfig:\n${formatMindConfigForStdout(deployedConfig)}`);
+    p.log.info(`${c.callout("MindConfig:")}\n${formatMindConfigForStdout(deployedConfig)}`);
     const keyLine = identityKeyLineOf(keyFileOf(IDENTITIES, mindId), {
       gaveTheId: !config.mindId,
       posted,
     });
     if (keyLine) p.log.info(keyLine);
     if (input.setup !== false) await page("Continue setup in your browser:", onboardingUrl);
-    else p.log.step(`Continue setup in your browser:\n${onboardingUrl}`);
+    else p.log.step(`Continue setup in your browser:\n${c.url(onboardingUrl)}`);
     // the check's miss, said above, ends the command non-zero once every step is done
     if (missed) throw new Error(missed);
     p.outro(`Done in ${seconds(began)}.`);

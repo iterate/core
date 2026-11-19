@@ -326,10 +326,6 @@ export const mindStack = (config: MindConfig) =>
             ),
           ),
         ),
-        // Whether the stack has its client, in words that any reader of the Worker's settings
-        // sees: the client's id (no secret: it is in every consent link), or `none`.
-        // `iterate deploy` reads it (core/lib/src/cli/deploy.ts `stackHasOAuthClient`).
-        CLOUDFLARE_CLIENT_ID: cloudflareClient.clientId.pipe(Output.map((id) => id || "none")),
         // The SFU app and TURN key above, for this Worker alone, which serves them as two secrets
         // that the stack made: each one's id and secret, or why it was not made. One secret
         // variable, as JSON (core/secrets-worker/src/config.ts `cloudflareRealtime`).

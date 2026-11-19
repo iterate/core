@@ -16,6 +16,7 @@ import {
   boundaryCheck,
   boundaryMisses,
   candidatesOf,
+  createPalette,
   deployArgsOf,
   deployConfigOf,
   deployedMind,
@@ -25,9 +26,11 @@ import {
   erateOf,
   formatMindConfigForStdout,
   identityKeyLineOf,
+  isColorEnabled,
   isInteractiveEnv,
   mindConfigIn,
   onboardingUrlOf,
+  planArgsOf,
   PNPM_COMPAT_ENV,
   pnpmCommandOf,
   productRead,
@@ -360,6 +363,36 @@ test("verifyTelemetryToken accepts active account-owned tokens and rejects user-
   expect(invalid).toEqual({ ok: false, error: "Invalid access token" });
 });
 
+test("CLI color palette respects NO_COLOR/TERM/TTY and styles Cloudflare account names, codes, domains, URLs, and headings", () => {
+  expect(isColorEnabled({}, true)).toBe(true);
+  expect(isColorEnabled({}, false)).toBe(false);
+  expect(isColorEnabled({ NO_COLOR: "1" }, true)).toBe(false);
+  expect(isColorEnabled({ TERM: "dumb" }, true)).toBe(false);
+  expect(isColorEnabled({ FORCE_COLOR: "1" }, false)).toBe(true);
+  expect(isColorEnabled({ FORCE_COLOR: "0" }, true)).toBe(true);
+  expect(isColorEnabled({ NO_COLOR: "1", FORCE_COLOR: "1" }, true)).toBe(false);
+
+  const plain = createPalette(false);
+  expect(plain.mark("𝑖")).toBe("𝑖");
+  expect(plain.account("Jonas's Account")).toBe("Jonas's Account");
+  expect(plain.code("ABCD-EFGH")).toBe("ABCD-EFGH");
+  expect(plain.domain("jonaserate.com")).toBe("jonaserate.com");
+  expect(plain.url("https://onboarding.jonaserate.com/")).toBe(
+    "https://onboarding.jonaserate.com/",
+  );
+
+  const colored = createPalette(true);
+  expect(colored.mark("𝑖")).toContain("\u001b[");
+  expect(colored.account("Jonas's Account")).toContain("\u001b[");
+  expect(colored.account("Jonas's Account")).not.toBe(colored.domain("Jonas's Account"));
+  expect(colored.code("ABCD-EFGH")).toContain("\u001b[");
+  expect(colored.url("https://onboarding.jonaserate.com/")).toContain("\u001b[");
+
+  const styledOptions = domainPickerOptions({ offers: [], zones: [], color: true });
+  expect(styledOptions[0]?.label).toContain("Buy a brand new domain");
+  expect(styledOptions[0]?.label).toContain("\u001b[");
+});
+
 test("pnpmCommandOf uses local pnpm only when major version matches packageManager, else npx --yes", () => {
   expect(pnpmCommandOf("pnpm@12.18.0", "12.18.0\n")).toEqual({ command: "pnpm", first: [] });
   expect(pnpmCommandOf("pnpm@12.18.0", "12.0.1")).toEqual({ command: "pnpm", first: [] });
@@ -410,8 +443,16 @@ test("deploy has no OAuth-client token prompt or Account API Token Provisioning,
     "await telemetryTokenStep(cf, account, stageName, { plan: input.plan })",
   );
   expect(source).toContain(
-    "p.log.info(`MindConfig:\\n${formatMindConfigForStdout(deployedConfig)}`)",
+    'p.log.info(`${c.callout("MindConfig:")}\\n${formatMindConfigForStdout(deployedConfig)}`)',
   );
+  // iconic 𝑖 is printed on its own very first line before p.intro
+  expect(source).toContain('console.log(c.mark("𝑖"));');
+  expect(source.indexOf('console.log(c.mark("𝑖"));')).toBeLessThan(source.indexOf("p.intro("));
+  // sourceOf pre-builds core-mind-worker in the background; deployArgsOf/planArgsOf skip rebuilding
+  expect(source).toContain('"--filter", "core-mind-worker", "build"');
+  expect(planArgsOf("ada-labs-com")).toEqual([
+    ["exec", "alchemy", "plan", "alchemy.run.ts", "--stage", "ada-labs-com", "--no-input"],
+  ]);
   expect(source).toContain("Press Enter to open in browser...");
   expect(source.indexOf("Press Enter to open in browser...")).toBeLessThan(
     source.indexOf("openPageCommand(new URL(url)"),
@@ -681,8 +722,10 @@ test("the store with this stage's config on this computer goes on with that conf
   // its deploy adopts what an earlier one made and its state does not hold, and so does a new mind
   // beside a leftover store (a stack that stopped before its first Worker reads the same); no other
   expect(deployArgsOf("ada-labs-com", true)).toEqual([
-    "run",
+    "exec",
+    "alchemy",
     "deploy",
+    "alchemy.run.ts",
     "--stage",
     "ada-labs-com",
     "--yes",

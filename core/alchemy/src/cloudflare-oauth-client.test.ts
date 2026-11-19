@@ -199,6 +199,34 @@ void test("a given API token makes each of the provider's calls, and the deploy'
   }
 });
 
+void test("permission refusal on oauth client create fails fast in one request instead of retrying for 24 s", async () => {
+  let attempts = 0;
+  const cloudflare = HttpClient.make((request) =>
+    Effect.sync(() => {
+      attempts += 1;
+      return HttpClientResponse.fromWeb(
+        request,
+        Response.json(
+          { success: false, errors: [{ code: 10000, message: "Authentication error" }] },
+          { status: 403 },
+        ),
+      );
+    }),
+  );
+  const exit = await Effect.runPromiseExit(
+    oauthClientCalls("account-1", wanted).make.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(HttpClient.HttpClient, cloudflare),
+          fromApiToken({ apiToken: Redacted.make("the-deploy-token") }),
+        ),
+      ),
+    ),
+  );
+  assert.equal(exit._tag, "Failure");
+  assert.equal(attempts, 1);
+});
+
 const keptClient = {
   clientId: "kept-client",
   clientSecret: Redacted.make("kept-secret"),
