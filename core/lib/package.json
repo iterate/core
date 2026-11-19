@@ -20,7 +20,7 @@
     "cli"
   ],
   "engines": {
-    "node": ">=26"
+    "node": ">=22"
   },
   "exports": {
     "./sdk": "./src/sdk/index.ts",

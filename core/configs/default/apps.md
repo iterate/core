@@ -142,19 +142,22 @@ Dash shows what it registered and links to its page.
 
 ## Onboarding
 
-`apps/onboarding/` shows a new owner's onboarding steps as cards above the chat with
-`/agents/onboarding`. A card uses no model, so it works before anything pays for one. Each step is
-one module of `apps/onboarding/steps/`, one entry in the list `STEPS` (`steps.ts`): its words,
-its `check` of the facts, and its actions. Every button is also the onboarding agent's call
-`itx.config.onboardingStep(step, action)`, which answers `{ status, words, link? }`. The steps
-write four events on `/apps/onboarding` (`contract.ts`), and the page draws their reduced state.
+`apps/onboarding/` is a centered, no-AI setup wizard that gets a new owner from a fresh deploy into
+their Dash chat with `/agents/onboarding`:
 
-The first step is "Connect to iterate Cloud": the owner signs the meld rule with a passkey, and
-the mind takes iterate's credit for OpenAI and Exa by iterate's proxy, where no key of theirs is
-set (`onboarding/connect-iterate-cloud.md`). The second is "Connect Cloudflare": one consent at
-Cloudflare through the stack's own OAuth client, the same connect as the Integrations card's
-"Connect" (`cloudflareConnect`, `cloudflare.md`). A stack whose deploy made no client shows no
-button, and names the command that makes it. A new step is one more file and one more entry.
+1. **Connect to iterate Cloud (optional):** the owner signs the meld rule with a passkey and takes
+   iterate's credit for OpenAI and Exa by iterate's proxy, or skips (`steps/connect-iterate-cloud.ts`).
+2. **Configure AI:** ready to continue if iterate Cloud credit is connected; otherwise the owner
+   adds an OpenAI API key (`itx.secrets.collectFromUser`), connects a ChatGPT Plus/Pro plan
+   (`npx iterate@latest chatgpt connect <mind>`), or uses Cloudflare AI Gateway credit.
+3. **Verify & wake:** a loading gate that runs a real server-side test LLM inference request
+   (`POST /verify-ai`), triggers the idempotent opener on `/agents/onboarding`, and waits for the
+   onboarding agent's first assistant response before redirecting to
+   `https://dash.<zone>/?agent=/agents/onboarding`.
+
+The step "Connect to iterate Cloud" writes four events on `/apps/onboarding` (`contract.ts`), and
+every button of it is also the onboarding agent's call `itx.config.onboardingStep(step, action)`,
+which answers `{ status, words, link? }`.
 
 ## Voice
 

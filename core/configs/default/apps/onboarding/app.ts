@@ -1,8 +1,10 @@
-// app.ts — THE ONBOARDING APP, as worker.ts mounts it: the host of one page for members, the
-// step cards above the chat with /agents/onboarding (public/app.js draws them). Two paths of its
-// own, both the same functions as the agent's tool `itx.config.onboardingStep(step, action)`:
-//   GET  /steps.json             every card, checked first (steps.ts `onboardingCards`)
-//   POST /steps/<step>/<action>  one press (steps.ts `runStep`), answered as the tool answers
+// app.ts — THE ONBOARDING APP, as worker.ts mounts it: a centered, no-AI setup wizard for members
+// (public/app.js). Endpoints:
+//   GET  /steps.json             onboarding step cards, checked first (steps.ts `onboardingCards`)
+//   POST /steps/<step>/<action>  one step press (steps.ts `runStep`), same as itx.config.onboardingStep
+//   GET  /ai-status.json         configured AI credentials and mind address (verify-ai.ts `aiStatus`)
+//   POST /collect-openai-key     mind secret-collection link for /secrets/openai
+//   POST /verify-ai              real server-side test LLM inference request (verify-ai.ts `verifyAi`)
 // worker.ts guards the host before this file runs: only a member gets here, and nothing of the
 // mind is read or written for anyone else.
 import { type AppDescription, serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
@@ -14,6 +16,7 @@ import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import files from "./public/";
 import { onboardingCards, runStep, stepContext } from "./steps.ts";
+import { aiStatus, collectOpenAiKey, verifyAi } from "./verify-ai.ts";
 
 /** WHAT THE ONBOARDING APP SAYS OF ITSELF: the mind's sign-in pages show its name and its icon,
  *  and open on the passkey alone, since it is for members (../open-files.ts answers it to anyone). */
@@ -34,6 +37,18 @@ export function onboardingApp() {
       if (pathname === "/steps.json" && request.method === "GET") {
         using itx = host.getItx();
         return await answer(async () => onboardingCards(await stepContext(itx)));
+      }
+      if (pathname === "/ai-status.json" && request.method === "GET") {
+        using itx = host.getItx();
+        return await answer(async () => aiStatus(itx));
+      }
+      if (pathname === "/collect-openai-key" && request.method === "POST") {
+        using itx = host.getItx();
+        return await answer(async () => collectOpenAiKey(itx));
+      }
+      if (pathname === "/verify-ai" && request.method === "POST") {
+        using itx = host.getItx();
+        return await answer(async () => verifyAi(itx));
       }
       const press = PRESS.exec(pathname);
       if (press && request.method === "POST") {

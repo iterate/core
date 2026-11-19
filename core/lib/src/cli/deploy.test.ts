@@ -1,11 +1,9 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runInNewContext } from "node:vm";
 import { expect, test } from "vitest";
 import { MindConfig as ScriptConfig } from "../../../alchemy/src/config.ts";
 import {
-  apiTokenPage,
   DEPLOY_SCOPES,
   MAKES_API_TOKENS,
   RECOVER_SCOPES,
@@ -13,25 +11,21 @@ import {
   STACK_SCOPES,
 } from "./cloudflare-access.ts";
 import {
-  candidatesOf,
-  closingOf,
-  chatgptPlanWay,
-  deployArgsOf,
   boundaryCheck,
   boundaryMisses,
+  candidatesOf,
+  deployArgsOf,
   deployConfigOf,
   deployedMind,
   earlierDeployOf,
   erateOf,
-  firstSignInWords,
   identityKeyLineOf,
-  mcpInstalls,
+  isInteractiveEnv,
   mindConfigIn,
-  OAUTH_CLIENT_TOKEN,
-  oauthClientStep,
-  onboardingTurnScript,
+  onboardingUrlOf,
+  PNPM_COMPAT_ENV,
+  pnpmCommandOf,
   saysTheStateStoreRefused,
-  stackHasOAuthClient,
   stageNameOf,
   zeroTrustStep,
 } from "./deploy.ts";
@@ -195,15 +189,19 @@ test("a deployed mind whose config holds no id is read all the same, and only su
   });
 });
 
-test("a deploy asks for ML-DSA-65 only for a mind with no id, before anything changes; the identity steps ask for themselves where they sign or check", () => {
+test("ML-DSA-65 is checked only for a mind with no id, before any account mutation or domain purchase", () => {
   const source = readFileSync(new URL("./deploy.ts", import.meta.url), "utf8");
   expect(source.match(/.*mlDsaRequired\(.*/g)).toEqual([
     "    if (!config.mindId) await mlDsaRequired();",
   ]);
   expect(source).not.toContain("canVerifyMlDsa65");
   const identity = readFileSync(new URL("./identity.ts", import.meta.url), "utf8");
-  // a birth, and a check of the records here; nothing before a post with no records here
+  // key creation (newIdentity) and verification of held records (heldIdentity)
   expect(identity.match(/^ {2}await mlDsaRequired\(\);$/gm)).toHaveLength(2);
+  // checked before buying a domain or erasing zone holdings
+  expect(source.indexOf("if (!config.mindId) await mlDsaRequired();")).toBeLessThan(
+    source.indexOf("const zone = await zoneOf("),
+  );
   expect(source.indexOf("if (!config.mindId) await mlDsaRequired();")).toBeLessThan(
     source.indexOf("await eraseHoldings("),
   );
@@ -266,24 +264,26 @@ test("what a sign-in did not grant is read from the token answer's scope, and an
   ]);
 });
 
-test("the page that makes an API token instead names each of the stack's permissions by its key, as read or edit", () => {
-  const page = apiTokenPage();
-  expect(page.origin + page.pathname).toBe("https://dash.cloudflare.com/");
-  expect(page.searchParams.get("to")).toBe("/:account/api-tokens");
-  const keys = JSON.parse(page.searchParams.get("permissionGroupKeys") || "");
-  // and "OAuth Client Write", by its group's id, for the stack's own OAuth client
-  expect(keys).toHaveLength(STACK_SCOPES.length + 1);
-  expect(keys).toEqual(
-    expect.arrayContaining([
-      { key: "workers_scripts", type: "edit" },
-      { key: "zone", type: "read" },
-      { key: "r2_catalog_sql", type: "read" },
-      { key: "access_acct", type: "edit" },
-      { key: "account_api_tokens", type: "edit" },
-      // allow-high-entropy-next-line: the id of the permission group "OAuth Client Write", public and the same in every account
-      { key: "50fc2f43318f40e4855a35d8de5bf643", type: "edit" },
-    ]),
-  );
+test("pnpmCommandOf uses local pnpm only when major version matches packageManager, else npx --yes", () => {
+  expect(pnpmCommandOf("pnpm@12.18.0", "12.18.0\n")).toEqual({ command: "pnpm", first: [] });
+  expect(pnpmCommandOf("pnpm@12.18.0", "12.0.1")).toEqual({ command: "pnpm", first: [] });
+  expect(pnpmCommandOf("pnpm@12.18.0", "9.15.0")).toEqual({
+    command: "npx",
+    first: ["--yes", "pnpm@12.18.0"],
+  });
+  expect(pnpmCommandOf("pnpm@12.18.0", undefined)).toEqual({
+    command: "npx",
+    first: ["--yes", "pnpm@12.18.0"],
+  });
+  expect(pnpmCommandOf("pnpm@12.18.0", "")).toEqual({
+    command: "npx",
+    first: ["--yes", "pnpm@12.18.0"],
+  });
+  expect(PNPM_COMPAT_ENV).toEqual({
+    npm_config_engine_strict: "false",
+    npm_config_manage_package_manager_versions: "false",
+    COREPACK_ENABLE_STRICT: "0",
+  });
 });
 
 test("the deploy runs again by itself after the state store's refusal, and after no other failure", () => {
@@ -295,70 +295,23 @@ test("the deploy runs again by itself after the state store's refusal, and after
   expect(saysTheStateStoreRefused("[15:25:30.212] INFO: Computing plan")).toBe(false);
 });
 
-test("the onboarding turn runs in the mind: it says hi to the onboarding agent and answers how the model's request ended", async () => {
-  const said: string[] = [];
-  const result = { status: "succeeded", text: "Welcome" };
-  const itx = {
-    agents: {
-      get: (path: string) => ({
-        message: async (text: string) => {
-          said.push(`${path}: ${text}`);
-          return { offset: 7 };
-        },
-      }),
-    },
-    cd: () => ({
-      readEvents: async () => ({
-        events: [
-          { type: "events.iterate.com/agent/llm-request-started", payload: {} },
-          { type: "events.iterate.com/agent/llm-request-settled", payload: { result } },
-        ],
-      }),
-    }),
-  };
-  // the script is text for the mind: here it runs as the function it spells
-  const turn = runInNewContext(`(${onboardingTurnScript()})`, { setTimeout });
-  expect(await turn(itx)).toEqual(result);
-  expect(said).toEqual(["/agents/onboarding: hi"]);
-});
-
-test("the MCP server goes to Claude Code and Codex for the whole user, under the control-plane hostname's own name", () => {
-  expect(
-    mcpInstalls("iterate.ada-labs.com").map(({ command, args }) => [command, ...args].join(" ")),
-  ).toEqual([
-    "claude mcp add --transport http --scope user iterate-ada-labs-com https://iterate.ada-labs.com/mcp",
-    "codex mcp add iterate-ada-labs-com --url https://iterate.ada-labs.com/mcp",
-  ]);
-});
-
-test("the words before the first sign-in fit the flow: the device flow names the page to open and the page with the terminal's code", () => {
-  const browser = firstSignInWords("browser", ["ada@example.org"]).join(" ");
-  const device = firstSignInWords("device", ["ada@example.org", "charles@example.org"]).join(" ");
-  for (const words of [browser, device]) {
-    expect(words).toContain('"prove your email address with Cloudflare"');
-    expect(words).toContain("add your passkey");
-  }
-  expect(browser).toContain("opens now");
-  expect(browser).toContain("Cloudflare mails a code to ada@example.org.");
-  expect(browser).toContain("The same page then signs this terminal in.");
-  expect(device).toContain("Open the page below in your browser, on any computer.");
-  expect(device).toContain("Cloudflare mails a code to ada@example.org or charles@example.org.");
-  expect(device).toContain("shows the same code as this terminal");
-  expect(device).not.toContain("opens now");
-});
-
-test("with the browser on another computer, the ChatGPT plan is a command to run there, and here it is the command's own step", () => {
-  expect(chatgptPlanWay("browser", "iterate.ada-labs.com")).toEqual({
-    hint: "recommended",
-    runThere: undefined,
-  });
-  expect(chatgptPlanWay("device", "iterate.ada-labs.com")).toMatchObject({
-    hint: "connected from the computer with your browser",
-    runThere: expect.stringContaining("  npx iterate@latest chatgpt connect iterate.ada-labs.com"),
-  });
-  // a control plane at a zone's apex is typed as a URL: a bare `ada-labs.com` reads as iterate.ada-labs.com
-  expect(chatgptPlanWay("device", "ada-labs.com").runThere).toContain(
-    "chatgpt connect https://ada-labs.com",
+test("deploy has no manual API token prompt, strips inherited OAuth token, respects CI=1, waits for Enter before opening browser, and ends at onboarding.<zone>", () => {
+  expect(onboardingUrlOf("ada-labs.com")).toBe("https://onboarding.ada-labs.com/");
+  expect(isInteractiveEnv({}, true)).toBe(true);
+  expect(isInteractiveEnv({ CI: "1" }, true)).toBe(false);
+  expect(isInteractiveEnv({ CI: "true" }, true)).toBe(false);
+  expect(isInteractiveEnv({ CI: "0" }, true)).toBe(true);
+  expect(isInteractiveEnv({ CI: "false" }, true)).toBe(true);
+  expect(isInteractiveEnv({}, false)).toBe(false);
+  const source = readFileSync(new URL("./deploy.ts", import.meta.url), "utf8");
+  expect(source).not.toContain("apiTokenPage");
+  expect(source).not.toContain("oauthClientStep");
+  expect(source).toContain(
+    "const { CLOUDFLARE_OAUTH_CLIENT_API_TOKEN: _droppedOAuthToken, ...parentEnv } = process.env;",
+  );
+  expect(source).toContain("Press Enter to open in browser...");
+  expect(source.indexOf("Press Enter to open in browser...")).toBeLessThan(
+    source.indexOf("openPageCommand(new URL(url)"),
   );
 });
 
@@ -408,65 +361,6 @@ test("Zero Trust: an organization goes on; none, or Access not enabled, is set u
     next: "stop",
     words: expect.stringMatching(/^Cloudflare refused to set up the account's Zero Trust/),
   });
-  // the page that makes a token instead fills in both of Access's permissions: "Access:
-  // Organizations, Identity Providers, and Groups Write" and "Access: Apps and Policies Write"
-  expect(JSON.parse(apiTokenPage().searchParams.get("permissionGroupKeys") || "")).toEqual(
-    expect.arrayContaining([
-      { key: "access_acct", type: "edit" },
-      { key: "access", type: "edit" },
-    ]),
-  );
-});
-
-test("the OAuth client's gate: asked only for a stack with no client, whose deploy's credential may not make it, with a person there", () => {
-  const account = { id: "0".repeat(32), name: "Ada's account" };
-  const state = {
-    hasClient: false,
-    credentialMay: false,
-    given: false,
-    person: true,
-    account,
-    domain: "ada-labs.com",
-  };
-  // a stack that has its client, or a credential that may make it: nothing is asked
-  expect(oauthClientStep({ ...state, hasClient: true })).toEqual({ next: "go" });
-  expect(oauthClientStep({ ...state, credentialMay: true })).toEqual({ next: "go" });
-  // an agent's token in the environment is used, and nobody is asked
-  expect(oauthClientStep({ ...state, given: true, person: false })).toEqual({ next: "given" });
-  // nobody at the terminal, or --no-setup: the deploy goes on, and the words say how to get it
-  const later = oauthClientStep({ ...state, person: false });
-  expect(later).toEqual({
-    next: "later",
-    words: expect.stringContaining("run `npx iterate deploy --domain ada-labs.com` once more"),
-  });
-  expect(later.next === "later" && later.words).toContain(OAUTH_CLIENT_TOKEN);
-  // a person: the page with "OAuth Client Write" alone, and what the client is for
-  const asked = oauthClientStep(state);
-  if (asked.next !== "ask") throw new Error(asked.next);
-  expect(asked.words).toContain(
-    "so that your mind can read your own Cloudflare account: its logs, usage and settings. It can change nothing there.",
-  );
-  expect(asked.words).toContain("choose the account Ada's account");
-  const page = new URL(asked.page);
-  expect(page.searchParams.get("to")).toBe("/:account/api-tokens");
-  expect(JSON.parse(page.searchParams.get("permissionGroupKeys") || "")).toEqual([
-    // allow-high-entropy-next-line: the id of the permission group "OAuth Client Write", public and the same in every account
-    { key: "50fc2f43318f40e4855a35d8de5bf643", type: "edit" },
-  ]);
-});
-
-test("a stack has its OAuth client when its secrets Worker's settings name the client's id", () => {
-  const settings = (text?: string) => ({
-    bindings: [
-      { type: "secret_text", name: "ITERATE__CLOUDFLARE_CLIENT" },
-      ...(text ? [{ type: "plain_text", name: "CLOUDFLARE_CLIENT_ID", text }] : []),
-    ],
-  });
-  expect(stackHasOAuthClient(settings("client-1"))).toBe(true);
-  expect(stackHasOAuthClient(settings("none"))).toBe(false);
-  // settings with no CLOUDFLARE_CLIENT_ID, and no secrets Worker at all: no client, so the deploy asks
-  expect(stackHasOAuthClient(settings())).toBe(false);
-  expect(stackHasOAuthClient(undefined)).toBe(false);
 });
 
 test("a deploy over a mind keeps every field of the config that the mind was deployed with, and changes only what a flag names", () => {
@@ -602,63 +496,6 @@ test("a mind of the earlier stack is named as such, and no path of the command d
   expect(arrivedMind).toBeLessThan(arrivedErase);
   expect(arrivedErase).toBeLessThan(at("await eraseHoldings(cf, zone.id)"));
   expect(at("await eraseHoldings(cf, zone.id)")).toBeLessThan(at("await deployStack({"));
-});
-
-test("the last words over a mind that was there say that it is updated, and offer a first passkey only to an owner that the run added", () => {
-  const mind = { controlPlaneHostname: "iterate.ada-labs.com", zone: "ada-labs.com" };
-  const owners = ["ada@example.org", "charles@example.org"];
-  // a new mind: the first passkey for every owner, and its chat and model
-  const fresh = closingOf({ ...mind, owners });
-  expect(fresh).toMatchObject({
-    newOwners: owners,
-    signInWords: expect.stringMatching(
-      /^Open your mind's sign-in page\. As an owner with no passkey yet \(ada@example\.org, charles@example\.org\)/,
-    ),
-    title: "Your mind is at iterate.ada-labs.com",
-  });
-  expect(fresh.lines.map((line) => line.split(":")[0])).toEqual([
-    "Talk to your mind",
-    "Sign in from here",
-    "Give it a model",
-    "Its MCP server",
-  ]);
-  // an update with the same owners: no first-passkey words, no chat and no model
-  const updated = closingOf({ ...mind, owners, ownersBefore: owners });
-  expect(updated).toEqual({
-    newOwners: [],
-    signInWords:
-      'The mind at iterate.ada-labs.com is updated. Its owners sign in with a passkey on its sign-in page; an owner with no passkey yet chooses "prove your email address with Cloudflare" there:',
-    title: "Your mind at iterate.ada-labs.com is updated",
-    lines: [
-      "Sign in from here:   npx iterate@latest login iterate.ada-labs.com",
-      "Its MCP server:      https://iterate.ada-labs.com/mcp",
-    ],
-  });
-  // `--owner` with a new address over a mind: the first passkey for that address alone
-  const handedOn = closingOf({ ...mind, owners: ["grace@example.org"], ownersBefore: owners });
-  expect(handedOn).toMatchObject({
-    newOwners: ["grace@example.org"],
-    signInWords: expect.stringContaining("(grace@example.org)"),
-    title: "Your mind at iterate.ada-labs.com is updated",
-  });
-});
-
-test("each closing command is one line with the whole address, however long the hostname", () => {
-  const controlPlaneHostname = `iterate.${"a-very-long-name-of-a-mind.".repeat(3)}example.com`;
-  const { lines } = closingOf({
-    controlPlaneHostname,
-    zone: controlPlaneHostname.slice("iterate.".length),
-    owners: ["ada@example.org"],
-  });
-  for (const line of lines) expect(line).not.toContain("\n");
-  expect(lines).toContain(
-    `Give it a model:     npx iterate@latest chatgpt connect ${controlPlaneHostname}`,
-  );
-  expect(lines).toContain(`Sign in from here:   npx iterate@latest login ${controlPlaneHostname}`);
-  // the lines are printed as they are, never in a box that wraps them to the terminal's width
-  const command = readFileSync(new URL("./deploy.ts", import.meta.url).pathname, "utf8");
-  expect(command).not.toContain("p.note(");
-  expect(command).toContain("for (const line of closing.lines) console.log(`│  ${line}`);");
 });
 
 const store = "/workers/scripts/iterate-ada-labs-com-state/settings";

@@ -54,16 +54,12 @@ change nothing there. `cloudflare.md` has the rest.
    ```
    `tell` is the agent that talks to the owner. Give no other link in that message, and no link
    to this chat. Make no second link while the owner may be on Cloudflare's page: the vault keeps
-   one consent, and a new link ends the one they are on. Give the same link again. During
-   onboarding, the step's `connect` does this for you (`onboarding.md`). Do not say what a button on Cloudflare's page is called. Do NOT ask the owner to
+   one consent, and a new link ends the one they are on. Give the same link again. Do not say what a button on Cloudflare's page is called. Do NOT ask the owner to
    tell you when they have approved, and do not check in the turn that gives the link.
 2. **`way` is `"stack-client"`, on most minds.** The link is Cloudflare's own page. The owner
    approves there, as a member of the account, and Cloudflare brings them back to the chat.
 3. **`way` is `"own-client"` with `makeTheClient`:** the mind has no OAuth client in the
-   account yet. The plain way: the owner runs `npx iterate deploy --domain <zone>` once more
-   and pastes one Cloudflare API token when it asks (the card "Connect Cloudflare" says the
-   same). Say that first. Only an owner who would rather make one by hand makes it, once. Say
-   so in one sentence, and say what to enter
+   account yet, so the owner makes one once. Say so in one sentence, and say what to enter
    from `makeTheClient`: where, the name, the redirect URI and the scopes. The same ONE link is
    a page of the mind that shows those steps and takes the client's ID and secret. You never see
    the secret. It leads back to the Dash's Integrations page: the owner presses "Connect" on the

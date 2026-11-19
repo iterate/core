@@ -18,37 +18,29 @@
         }
       }
     </script>
-    <!-- THE PAGE'S SESSION, asked for here and not when the app's modules have loaded, which is
-         a second later: app.js takes the answer (the mind's address) from `__session`. Without
-         this line the app asks for it itself when it runs. It stands before the stylesheets,
-         because a script after a stylesheet waits for it. -->
+    <!-- The page's session, fetched while modules load so app.js reads the mind's address at once. -->
     <script>
       window.__session = fetch("/.auth/session.json").then((answer) => answer.json());
     </script>
-    <!-- The kit's stylesheet for a page with the docs editor: everything styles.css holds, and
-         the editor's own classes and its live preview's look. It takes the place of styles.css:
-         a page links one of the two, never both (the two would disagree about which rule wins). -->
     <link
       rel="stylesheet"
-      href="https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261119T160000Z-2a2fbae/docs-editor.css"
+      href="https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261119T160000Z-2a2fbae/styles.css"
     />
-    <!-- The look of this mind's apps: apps/theme.css, one file for every app. One line there
-         makes them all dark. shadcn's components also ask for the class `dark`, so the script
-         puts it on <html> when the file says dark. -->
+    <!-- The look of this mind's apps: apps/theme.css, shared across every app. -->
     <link rel="stylesheet" href="/theme.css" />
     <script>
       if (getComputedStyle(document.documentElement).colorScheme === "dark")
         document.documentElement.classList.add("dark");
     </script>
     <link rel="stylesheet" href="/app.css" />
-    <!-- The page takes a new commit by itself: apps/live-reload/live-reload.js says how. Take
-         this line out, and the page changes at its next load only. It is in the head, where the
-         browser can wait for it before it draws: after a reload that the script asked for,
-         nothing is drawn before the script has put what the person saw back over the app. -->
     <script type="module" src="/live-reload.js" blocking="render"></script>
   </head>
   <body>
-    <div id="root"><p class="p-4 text-sm text-muted-foreground">Connecting…</p></div>
+    <div id="root">
+      <main class="wizard-page">
+        <p class="text-sm text-muted-foreground">Connecting…</p>
+      </main>
+    </div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

@@ -83,13 +83,13 @@ const RecordsFile = z.object({
 export const keyFileOf = (dir: string, mindId: string) => join(dir, `${mindId}.key.json`);
 const recordsFileOf = (dir: string, mindId: string) => join(dir, `${mindId}.json`);
 
-/** Stops with one sentence when this runtime has no ML-DSA-65 (`has`, the runtime's own answer
- *  but in a test): it can then make no identity and check no record. Asked only where a run
- *  signs or checks. */
+/** Stops with a clear suggestion to upgrade Node when this runtime has no ML-DSA-65 (`has`, the
+ *  runtime's own answer except in a test): it cannot create or verify a mind's identity key.
+ *  Checked only at key-creation or record-verification time. */
 export async function mlDsaRequired(has = canVerifyMlDsa65) {
   if (!(await has()))
     throw new Error(
-      `This needs Node 24.7 or newer: this one (${process.versions.node}) has no ML-DSA-65, the algorithm of a mind's identity key.`,
+      `Node ${process.versions.node} does not support ML-DSA-65, which is needed to create or verify a mind's identity key. Upgrade to Node 24.7 or newer (e.g. via nvm, fnm, or https://nodejs.org) and run the command again.`,
     );
 }
 

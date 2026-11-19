@@ -175,21 +175,11 @@ async function provideWith(input: {
 /** `iterate login`: sign in to the mind at `address` (as `addressOf` read it from what a person
  *  typed), check who that is, and make it the profile's mind. `chatgpt connect` signs in by this
  *  too. */
-const login = async (input: {
-  address: string;
-  device?: boolean;
-  expectUser?: string;
-  /** `iterate deploy`'s first sign-in: how it shows the browser flow's page, and where the
-   *  sign-in's lines go. The flow is the one for this process, as for `iterate login`. */
-  openBrowser?: (url: URL) => void;
-  print?: (line: string) => void;
-}) => {
+const login = async (input: { address: string; device?: boolean; expectUser?: string }) => {
   const mind = await discoveredMind(input.address);
   const resource = mindApiUrlOf(mind.address);
   const session = await signInToMind(mind, resource, {
     flow: loginFlowFor({ device: input.device, env: process.env, platform: process.platform }),
-    openBrowser: input.openBrowser,
-    print: input.print,
   });
   using connection = await connectMind({ address: mind.address, token: session.token });
   const who = await connection.itx.whoami();
@@ -290,7 +280,7 @@ const launcherProcedures = {
           .default(true)
           .meta({ negatable: true })
           .describe(
-            "With a person at the terminal, after the deploy: the first sign-in and the passkey, a ChatGPT plan or an API key for the model, a check that the onboarding agent answers, and the mind's MCP server in Claude Code and Codex",
+            "With a person at the terminal, after the deploy: wait for Enter and open https://onboarding.<zone>/ in the browser to continue setup",
           ),
       }),
     )
@@ -298,25 +288,7 @@ const launcherProcedures = {
       description:
         "Deploy a mind into your own Cloudflare account, at its own domain: sign in at Cloudflare, choose the account and the domain, and the stack is deployed from this computer. A mind that is there already is deployed over, with its own config",
     })
-    .handler(async ({ input }) =>
-      deployMind(input, {
-        // the command hands on the mind's control-plane hostname, which is taken as it is
-        signIn: async (address, openBrowser) => {
-          // the sign-in's lines, the device flow's page and code among them, beside the command's own
-          const print = (line: string) => console.log(line.replaceAll(/^/gm, "│  "));
-          print((await login({ address, openBrowser, print })).message);
-          return connect(address);
-        },
-        connectChatgpt: (connection, print) =>
-          connectChatgpt({
-            itx: connection.itx,
-            address: connection.address,
-            test: true,
-            print,
-            openBrowser: (url) => openForSignIn(url, print),
-          }),
-      }),
-    ),
+    .handler(async ({ input }) => deployMind(input)),
   recover: os
     .input(
       z.object({

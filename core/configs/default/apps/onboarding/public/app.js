@@ -1,12 +1,9 @@
-// app.js — THE ONBOARDING APP'S PAGE: a plain list of step cards above the chat with
-// /agents/onboarding. The cards come from the host (`GET /steps.json`, ../app.ts), drawn again
-// whenever the onboarding log moves; a button is one `POST /steps/<step>/<action>`, the same
-// call as the agent's tool `itx.config.onboardingStep(step, action)` (../steps.ts). A card uses
-// no model: it works before anything pays for one. Everything it draws is a component of
-// @iterate-com/ui, loaded through the import map in index.html.
-import { html, render, useCallback, useEffect, useState } from "@iterate-com/ui/page";
-import { AppShell } from "@iterate-com/ui/components/app-shell";
-import { AgentChat } from "@iterate-com/ui/components/agent-chat/agent-chat";
+// app.js — THE ONBOARDING WIZARD: a centered, no-AI 3-step setup flow.
+//   Step 1: Connect to iterate Cloud (optional, collapsible fine print)
+//   Step 2: Configure AI (iterate Cloud credit, OpenAI API key, ChatGPT Plus/Pro, or Cloudflare AI Gateway)
+//   Step 3: Verify & wake gate (real server-side POST /verify-ai + wait for /agents/onboarding's
+//           first assistant response before redirecting to https://dash.<zone>/?agent=/agents/onboarding)
+import { html, render, useCallback, useEffect, useRef, useState } from "@iterate-com/ui/page";
 import { Badge } from "@iterate-com/ui/components/ui/badge";
 import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
 import {
@@ -17,27 +14,27 @@ import {
   CardHeader,
   CardTitle,
 } from "@iterate-com/ui/components/ui/card";
-import {
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-} from "@iterate-com/ui/components/ui/sidebar";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import { newWebSocketRpcSession, useContextStub, useIterateContext } from "@iterate-com/ui/live";
-import { LayoutDashboardIcon, SparklesIcon } from "@iterate-com/ui/icons";
+import {
+  CheckIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  KeyRoundIcon,
+  SparklesIcon,
+  SquareTerminalIcon,
+} from "@iterate-com/ui/icons";
 
 const AGENT = "/agents/onboarding";
+const CLOUD_STEP = "connect-iterate-cloud";
 
-/** What the mind says first in the empty chat: the same words and key as the Dash's opener
- *  (apps/dash/public/app.js), so the first message is one, whichever page the owner opens. */
+/** The idempotent opener for /agents/onboarding, matching Dash's apps/dash/public/app.js. */
 const OPENER =
   "The owner has just opened this chat for the first time and has typed nothing yet. Send your first message now: words only, no script (onboarding.md, 'Your first message').";
 
 // ── the member's itx ──
-// As ../../docs/public/app.js: one WebSocket to this host's /itx, a capnweb session whose root is
-// the mind's itx, as the member the platform signed in on this host. Three closes in a minute
-// stop the reloads.
 const socket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
 const itx = newWebSocketRpcSession(socket);
 socket.addEventListener("close", () => {
@@ -55,16 +52,12 @@ socket.addEventListener("close", () => {
   else document.getElementById("root").textContent = "Disconnected. Reload the page to connect.";
 });
 
-const { principal } = await itx.whoami();
-// The mind's address is its control-plane hostname: this host says it (`/.auth/session.json`).
-// index.html asks for it in its head, while the modules load.
 const hostSession =
   window.__session ?? fetch("/.auth/session.json").then((answer) => answer.json());
 const mind = new URL((await hostSession).issuer).hostname;
-/** The zone this page is on: an app's hostname is one label under its zone. */
 const zone = location.hostname.split(".").slice(1).join(".");
+const dashOnboardingUrl = `https://dash.${zone}/?agent=${AGENT}`;
 
-/** The host's answer as JSON, or a throw with its words. */
 async function ask(path, method = "GET") {
   const response = await fetch(path, { method });
   const body = await response.json().catch(() => ({}));
@@ -72,52 +65,59 @@ async function ask(path, method = "GET") {
   return body;
 }
 
-/** Anything said in the chat: by a person, by the agent, or by an opener. Words that raise no
- *  turn (iterate Cloud's handover) are context, not a start. */
-const said = (event) =>
-  event.type === "events.iterate.com/agent/message-received" ||
-  (event.type === "events.iterate.com/agent/context-added" &&
-    event.payload?.role !== "system" &&
-    event.payload?.llmRequestPolicy?.behaviour !== "dont-trigger-request");
+/** True only when the model itself has produced a visible reply: either prose carrying
+ *  `llmRequestOffset`, or a script-written message after a model-authored assistant turn.
+ *  Code-written notices like credit-spent carry no `llmRequestOffset` and precede any model turn. */
+const hasModelReply = (events) => {
+  const firstModelOffset = events.find(
+    (event) =>
+      event.type === "events.iterate.com/agent/context-added" &&
+      event.payload?.role === "assistant" &&
+      event.payload?.llmRequestOffset !== undefined,
+  )?.offset;
+  return events.some(
+    (event) =>
+      event.type === "events.iterate.com/agent/web-message-sent" &&
+      (event.payload?.llmRequestOffset !== undefined ||
+        (firstModelOffset !== undefined && event.offset > firstModelOffset)),
+  );
+};
 
-function App() {
-  return html`
-    <${AppShell}
-      app="Onboarding"
-      mind=${mind}
-      mindHref=${() => "./"}
-      nav=${html`<${Nav} />`}
-      account=${principal}
-      locationKey="/"
-    >
-      <div className="onboarding">
-        <${Steps} />
-        <div className="onboarding-chat"><${Chat} /></div>
-      </div>
-    <//>
-  `;
+function friendlyWakeError(raw) {
+  const text = String(raw || "").trim();
+  if (!text || text.startsWith("{") || text.includes('"error"'))
+    return "Your onboarding agent could not complete its first response. Check your AI configuration and try again.";
+  if (/402|credit|billing|quota|payment/i.test(text))
+    return "Your AI provider reported a billing or credit issue. Go back to check your AI configuration.";
+  if (/401|invalid.*key|unauthorized/i.test(text))
+    return "Your AI credentials were rejected. Go back to update your AI configuration.";
+  return text.slice(0, 240);
 }
 
-// ── the step cards ──
-
-function Steps() {
+function App() {
   const [cards, setCards] = useState();
-  const [error, setError] = useState();
+  const [aiStatus, setAiStatus] = useState();
+  const [loadError, setLoadError] = useState();
+  const [step, setStep] = useState();
   const [busy, setBusy] = useState();
-  const reload = useCallback(
-    () =>
-      ask("/steps.json").then(
-        (next) => {
-          setCards(next);
-          setError(undefined);
-        },
-        (failure) => setError(failure.message),
-      ),
-    [],
-  );
-  // the log of the steps, live: every event on it draws the cards again
-  const log = useContextStub(() => itx.cd("/apps/onboarding"), []);
-  const live = useIterateContext(log.stub, {
+  const [actionError, setActionError] = useState();
+  const initializedRef = useRef(false);
+  const prevCloudStatusRef = useRef();
+
+  const reload = useCallback(async () => {
+    try {
+      const [nextCards, nextAi] = await Promise.all([ask("/steps.json"), ask("/ai-status.json")]);
+      setCards(nextCards);
+      setAiStatus(nextAi);
+      setLoadError(undefined);
+    } catch (failure) {
+      setLoadError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }, []);
+
+  // Watch the onboarding log live so passkey signing updates Step 1 immediately.
+  const onboardingLog = useContextStub(() => itx.cd("/apps/onboarding"), []);
+  const liveOnboarding = useIterateContext(onboardingLog.stub, {
     consumes: [
       "onboarding/step-declined",
       "onboarding/step-action-requested",
@@ -125,194 +125,749 @@ function Steps() {
       "onboarding/step-checked",
     ],
   });
-  const head = live.events.at(-1)?.offset;
-  useEffect(() => void reload(), [reload, head]);
-  // back to the tab, from the passkey page or the key's form: the facts may have changed
+  const onboardingHead = liveOnboarding.events.at(-1)?.offset;
   useEffect(() => {
-    const seen = () => document.visibilityState === "visible" && reload();
-    document.addEventListener("visibilitychange", seen);
-    return () => document.removeEventListener("visibilitychange", seen);
+    void reload();
+  }, [reload, onboardingHead]);
+
+  // Refresh state when the user returns from a passkey, OpenAI key, or Cloudflare tab.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void reload();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [reload]);
 
-  async function press(step, { action, opens }) {
-    // a press whose answer may be a page opens its tab now: after an await the browser blocks it
-    const tab = opens ? window.open("about:blank", "_blank") : null;
-    setBusy(`${step}/${action}`);
+  const cloudCard = cards?.find((card) => card.step === CLOUD_STEP);
+  const offersCloud = Boolean(cloudCard);
+
+  // Choose the initial step once loaded, and auto-advance from Step 1 once iterate Cloud connects.
+  useEffect(() => {
+    if (!cards || !aiStatus) return;
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      prevCloudStatusRef.current = cloudCard?.status;
+      if (!cloudCard || cloudCard.status === "connected" || cloudCard.status === "own-keys") {
+        setStep(2);
+      } else {
+        setStep(1);
+      }
+      return;
+    }
+    const prev = prevCloudStatusRef.current;
+    prevCloudStatusRef.current = cloudCard?.status;
+    if (step === 1 && prev === "connecting" && cloudCard?.status === "connected") {
+      setStep(2);
+    }
+  }, [cards, aiStatus, cloudCard, step]);
+
+  async function pressCloud(button) {
+    const tab = button.opens ? window.open("about:blank", "_blank") : null;
+    setBusy(button.action);
+    setActionError(undefined);
     try {
-      const answer = await ask(`/steps/${step}/${action}`, "POST");
+      const answer = await ask(`/steps/${CLOUD_STEP}/${button.action}`, "POST");
       if (tab && answer.link) tab.location.href = answer.link;
       else tab?.close();
-      // a page the card did not expect (it changed since it was drawn): this tab goes there, as no
-      // new one may open after an await
       if (!tab && answer.link) window.location.assign(answer.link);
       await reload();
     } catch (failure) {
       tab?.close();
-      setError(failure.message);
+      setActionError(failure instanceof Error ? failure.message : String(failure));
     } finally {
       setBusy(undefined);
     }
   }
 
-  // no step offered on this mind (none yet, or each closed): the chat alone, with no empty box
-  if (!error && !cards?.length) return null;
+  async function skipCloud() {
+    setActionError(undefined);
+    const shouldDecline =
+      cloudCard &&
+      (cloudCard.status === "not-asked" ||
+        cloudCard.status === "unavailable" ||
+        cloudCard.status === "connecting");
+    if (shouldDecline) {
+      setBusy("decline");
+      try {
+        await ask(`/steps/${CLOUD_STEP}/decline`, "POST");
+        await reload();
+      } catch (failure) {
+        setActionError(failure instanceof Error ? failure.message : String(failure));
+      } finally {
+        setBusy(undefined);
+      }
+    }
+    setStep(2);
+  }
+
+  async function openOpenAiKeyForm() {
+    const tab = window.open("about:blank", "_blank");
+    setBusy("collect-openai-key");
+    setActionError(undefined);
+    try {
+      const { link } = await ask("/collect-openai-key", "POST");
+      if (tab && link) tab.location.href = link;
+      else if (link) window.location.assign(link);
+      else tab?.close();
+    } catch (failure) {
+      tab?.close();
+      setActionError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
+  if (loadError && !cards) {
+    return html`
+      <main className="wizard-page">
+        <div className="wizard-shell">
+          <${Card}>
+            <${CardHeader}>
+              <${CardTitle}>Could not load onboarding<//>
+              <${CardDescription} className="wizard-error-text" role="alert">${loadError}<//>
+            <//>
+            <${CardFooter}>
+              <${Button} onClick=${() => void reload()}>Try again<//>
+            <//>
+          <//>
+        </div>
+      </main>
+    `;
+  }
+
+  if (!cards || !aiStatus || step === undefined) {
+    return html`
+      <main className="wizard-page">
+        <div className="wizard-gate">
+          <${Spinner} className="size-6" />
+          <p className="wizard-gate-desc">Loading your mind…</p>
+        </div>
+      </main>
+    `;
+  }
+
+  const wizardSteps = offersCloud
+    ? [
+        { id: 1, label: "1. iterate Cloud" },
+        { id: 2, label: "2. Configure AI" },
+        { id: 3, label: "3. Verify & launch" },
+      ]
+    : [
+        { id: 2, label: "1. Configure AI" },
+        { id: 3, label: "2. Verify & launch" },
+      ];
+
+  let activeStep = null;
+  if (step === 1 && cloudCard) {
+    activeStep = html`
+      <${CloudStep}
+        card=${cloudCard}
+        busy=${busy}
+        error=${actionError}
+        onPress=${pressCloud}
+        onSkip=${skipCloud}
+        onContinue=${() => setStep(2)}
+      />
+    `;
+  } else if (step === 2) {
+    activeStep = html`
+      <${AiStep}
+        aiStatus=${aiStatus}
+        cloudCard=${cloudCard}
+        offersCloud=${offersCloud}
+        busy=${busy}
+        error=${actionError}
+        onBack=${() => setStep(1)}
+        onAddOpenAiKey=${openOpenAiKeyForm}
+        onRefresh=${reload}
+        onContinue=${() => {
+          setActionError(undefined);
+          setStep(3);
+        }}
+      />
+    `;
+  } else if (step === 3) {
+    activeStep = html`
+      <${VerifyStep}
+        onBackToAi=${() => {
+          void reload();
+          setStep(2);
+        }}
+      />
+    `;
+  }
+
   return html`
-    <section className="onboarding-steps" aria-label="Onboarding steps">
-      ${error ? html`<p className="onboarding-error" role="alert">${error}</p>` : null}
-      ${(cards || []).map(
-        (card) => html`<${StepCard} key=${card.step} card=${card} busy=${busy} onPress=${press} />`,
-      )}
-    </section>
+    <main className="wizard-page">
+      <div className="wizard-shell">
+        <header className="wizard-brand">
+          <p className="wizard-mind">${mind}</p>
+          <ol className="wizard-stepper" aria-label="Setup progress">
+            ${wizardSteps.map((item) => {
+              const state = item.id === step ? "active" : item.id < step ? "done" : "upcoming";
+              const clickable = step !== 3 && item.id !== step && item.id < 3;
+              return html`
+                <li key=${item.id}>
+                  <button
+                    type="button"
+                    className="wizard-step-pill"
+                    data-state=${state}
+                    data-clickable=${clickable ? "true" : "false"}
+                    disabled=${!clickable}
+                    onClick=${() => clickable && setStep(item.id)}
+                  >
+                    ${state === "done" ? html`<${CheckIcon} className="size-3" />` : null}
+                    <span>${item.label}</span>
+                  </button>
+                </li>
+              `;
+            })}
+          </ol>
+        </header>
+        ${activeStep}
+      </div>
+    </main>
   `;
 }
 
-function StepCard({ card, busy, onPress }) {
-  const short = card.text.length <= 1 && !card.points && !card.command;
-  const content = card.points || card.command;
-  const footer = card.buttons.length || card.footnote;
-  // a refusal reads as an error
-  const failed = card.status === "failed";
-  return html`
-    <${Card} data-step=${card.step} data-status=${card.status} size=${short ? "sm" : undefined}>
-      <${CardHeader}>
-        <${CardTitle}>
-          ${card.title} ${card.optional ? html`<${Badge} variant="outline">optional<//>` : null}
-        <//>
-        ${card.text.map(
-          (line) => html`
-            <${CardDescription}
-              key=${line}
-              className=${failed ? "onboarding-error" : undefined}
-              role=${failed ? "alert" : undefined}
-            >
-              ${line}
-            <//>
+// ── Step 1: Connect to iterate Cloud (optional) ──
+
+function CloudFinePrint({ extraText, points, footnote }) {
+  let pointList = null;
+  if (points?.length) {
+    pointList = html`
+      <dl className="wizard-points">
+        ${points.map(
+          (point) => html`
+            <div key=${point.title}>
+              <dt>${point.title}</dt>
+              <dd>${point.text}</dd>
+            </div>
           `,
         )}
-      <//>
-      ${content ? html`<${CardContent}><${Points} card=${card} /><//>` : null}
-      ${footer ? html`<${Buttons} card=${card} busy=${busy} onPress=${onPress} />` : null}
-    <//>
-  `;
-}
-
-/** The card's points, and its command for the owner's own computer. */
-function Points({ card }) {
-  const points = (card.points || []).map((one) => html`<${Point} key=${one.title} point=${one} />`);
+      </dl>
+    `;
+  }
   return html`
-    ${points.length ? html`<dl className="onboarding-points">${points}</dl>` : null}
-    ${card.command ? html`<pre className="onboarding-command"><code>${card.command}</code></pre>` : null}
+    <details className="wizard-details">
+      <summary>How it works & privacy details</summary>
+      <div className="wizard-details-body">
+        ${extraText.map((line) => html`<p key=${line} className="m-0">${line}</p>`)} ${pointList}
+        ${footnote ? html`<p className="wizard-footnote">${footnote}</p>` : null}
+      </div>
+    </details>
   `;
 }
 
-function Point({ point }) {
-  return html`
-    <div>
-      <dt>${point.title}</dt>
-      <dd>${point.text}</dd>
-    </div>
-  `;
-}
+function CloudStep({ card, busy, error, onPress, onSkip, onContinue }) {
+  const status = card.status;
+  const summary = card.text[0];
+  // Show the iterate approval sentence outside the fold so owners read it before pressing Connect.
+  const approvalLine = card.text.slice(1).find((line) => /approves each mind/i.test(line));
+  const extraText = card.text.slice(1).filter((line) => line !== approvalLine);
+  const hasFinePrint =
+    extraText.length > 0 || Boolean(card.points?.length) || Boolean(card.footnote);
+  const connectBtn = card.buttons.find((b) => b.action === "connect");
+  const disconnectBtn = card.buttons.find((b) => b.action === "disconnect");
+  const checkBtn = card.buttons.find((b) => b.action === "check");
+  const waitingLink = card.buttons.find((b) => b.href);
+  const showHeaderSummary =
+    Boolean(summary) &&
+    status !== "failed" &&
+    status !== "connected" &&
+    status !== "connecting" &&
+    status !== "disconnecting";
 
-/** The card's buttons: a link opens its page in a new tab; an action is one press. */
-function Buttons({ card, busy, onPress }) {
-  const shared = { step: card.step, busy, onPress };
-  const buttons = card.buttons.map(
-    (button) => html`<${StepButton} key=${button.label} button=${button} ...${shared} />`,
-  );
-  const footnote = card.footnote;
-  return html`
-    <${CardFooter} className="onboarding-buttons">
-      ${buttons} ${footnote ? html`<span className="onboarding-footnote">${footnote}</span>` : null}
-    <//>
-  `;
-}
+  let statusBanner = null;
+  if (status === "failed" && summary) {
+    statusBanner = html`
+      <div className="wizard-status-banner" data-tone="error" role="alert">
+        <${CircleAlertIcon} className="size-4 shrink-0 mt-0.5" />
+        <span>${card.text.join(" ")}</span>
+      </div>
+    `;
+  } else if (status === "connecting" || status === "disconnecting") {
+    statusBanner = html`
+      <div className="wizard-status-banner">
+        <${Spinner} className="size-4 shrink-0 mt-0.5" />
+        <span>${card.text.join(" ") || "Waiting for your passkey…"}</span>
+      </div>
+    `;
+  } else if (status === "connected") {
+    statusBanner = html`
+      <div className="wizard-status-banner">
+        <${CircleCheckIcon} className="size-4 shrink-0 mt-0.5" />
+        <span>${card.text.join(" ")}</span>
+      </div>
+    `;
+  }
 
-function StepButton({ step, button, busy, onPress }) {
-  const variant = button.primary ? "default" : "outline";
-  if (button.href)
-    return html`
+  let primaryButton;
+  let secondaryButton = null;
+  if (status === "connected") {
+    if (connectBtn) {
+      primaryButton = html`
+        <${Button}
+          disabled=${Boolean(busy)}
+          data-action="connect"
+          onClick=${() => onPress(connectBtn)}
+        >
+          ${busy === "connect" ? html`<${Spinner} /> Connecting…` : connectBtn.label}
+        <//>
+      `;
+      secondaryButton = html`<${Button} variant="outline" onClick=${onContinue}>Continue<//>`;
+    } else {
+      primaryButton = html`<${Button} onClick=${onContinue}>Continue<//>`;
+    }
+  } else if ((status === "connecting" || status === "disconnecting") && waitingLink?.href) {
+    primaryButton = html`
       <a
-        className=${buttonVariants({ variant })}
-        href=${button.href}
+        className=${buttonVariants({ variant: "default" })}
+        href=${waitingLink.href}
         target="_blank"
         rel="noopener"
       >
-        ${button.label}
+        ${waitingLink.label}
       </a>
     `;
-  return html`
-    <${Button}
-      variant=${variant}
-      disabled=${Boolean(busy)}
-      data-action=${button.action}
-      onClick=${() => onPress(step, button)}
-    >
-      ${busy === `${step}/${button.action}` ? "…" : button.label}
-    <//>
-  `;
-}
+  } else if (status === "disconnecting" && disconnectBtn) {
+    primaryButton = html`
+      <${Button}
+        disabled=${Boolean(busy)}
+        data-action="disconnect"
+        onClick=${() => onPress(disconnectBtn)}
+      >
+        ${busy === "disconnect" ? html`<${Spinner} /> Disconnecting…` : disconnectBtn.label}
+      <//>
+    `;
+  } else if (connectBtn) {
+    primaryButton = html`
+      <${Button}
+        disabled=${Boolean(busy)}
+        data-action="connect"
+        onClick=${() => onPress(connectBtn)}
+      >
+        ${busy === "connect" ? html`<${Spinner} /> Connecting…` : connectBtn.label}
+      <//>
+    `;
+  } else if (checkBtn) {
+    primaryButton = html`
+      <${Button} disabled=${Boolean(busy)} data-action="check" onClick=${() => onPress(checkBtn)}>
+        ${busy === "check" ? html`<${Spinner} /> Checking…` : checkBtn.label}
+      <//>
+    `;
+  } else {
+    primaryButton = html`<${Button} onClick=${onContinue}>Continue<//>`;
+  }
 
-// ── the chat with the onboarding agent ──
+  let skipButton = null;
+  if (status !== "connected") {
+    skipButton = html`
+      <${Button} variant="outline" disabled=${Boolean(busy)} data-action="skip" onClick=${onSkip}>
+        Skip
+      <//>
+    `;
+  }
 
-function Chat() {
-  const agent = useContextStub(() => itx.cd(AGENT), []);
-  const context = useIterateContext(agent.stub, AgentChat.contextOptions);
-  // THE MIND SPEAKS FIRST: once the whole log is read and nothing was said in it, the opener
-  // starts the agent's first turn. The key makes it one event, whatever reloads or tabs.
-  const { stub } = agent;
-  const empty = context.caughtUp && !context.events.some(said);
-  useEffect(() => {
-    if (!stub || !empty) return;
-    stub
-      .append({
-        type: "events.iterate.com/agent/context-added",
-        idempotencyKey: `opener:${AGENT}`,
-        payload: { role: "developer", content: OPENER },
-      })
-      .catch(() => {}); // another tab or the Dash said it first
-  }, [stub, empty]);
-  const [state, setState] = useState({});
-  return html`
-    <${AgentChat}
-      path=${AGENT}
-      me=${principal?.actor}
-      context=${context}
-      error=${agent.error}
-      state=${state}
-      onStateChange=${(patch) => setState((previous) => ({ ...previous, ...patch }))}
-      onMessage=${(input) => itx.agents.get(AGENT).message(input)}
-      onAppend=${agent.stub ? (events) => agent.stub.append(...events) : undefined}
-      signedUrl=${async (file) => (await itx.files.get(file).url()).url}
-      placeholder="Message your onboarding agent"
-    />
-  `;
-}
+  let disconnectButton = null;
+  if (disconnectBtn && status !== "disconnecting") {
+    disconnectButton = html`
+      <${Button}
+        variant="ghost"
+        size="sm"
+        disabled=${Boolean(busy)}
+        data-action="disconnect"
+        onClick=${() => onPress(disconnectBtn)}
+      >
+        ${disconnectBtn.label}
+      <//>
+    `;
+  }
 
-/** The sidebar's two rows: this page, and the Dash. */
-function Nav() {
+  let finePrint = null;
+  if (hasFinePrint && status !== "failed" && status !== "connected" && status !== "disconnecting") {
+    finePrint = html`
+      <${CloudFinePrint} extraText=${extraText} points=${card.points} footnote=${card.footnote} />
+    `;
+  }
+
   return html`
-    <${SidebarGroup}>
-      <${SidebarGroupContent}>
-        <${SidebarMenu}>
-          <${SidebarMenuItem}>
-            <${SidebarMenuButton} isActive tooltip="Onboarding" render=${html`<a href="./" />`}>
-              <${SparklesIcon} />
-              <span>Onboarding</span>
-            <//>
-          <//>
-          <${SidebarMenuItem}>
-            <${SidebarMenuButton}
-              tooltip="Dash"
-              render=${html`<a href=${`https://dash.${zone}/?agent=${AGENT}`} />`}
-            >
-              <${LayoutDashboardIcon} />
-              <span>Dash</span>
-            <//>
-          <//>
+    <${Card} data-step="cloud" data-status=${status}>
+      <${CardHeader}>
+        <${CardTitle} className="wizard-card-title">
+          <${SparklesIcon} className="size-4" />
+          <span>${card.title}</span>
+          ${card.optional ? html`<${Badge} variant="outline">optional<//>` : null}
         <//>
+        ${showHeaderSummary ? html`<${CardDescription}>${summary}<//>` : null}
+        ${showHeaderSummary && approvalLine ? html`<${CardDescription}>${approvalLine}<//>` : null}
+      <//>
+
+      <${CardContent} className="wizard-options">
+        ${error ? html`<p className="wizard-error-text" role="alert">${error}</p>` : null}
+        ${statusBanner} ${card.command ? html`<${CopyCommand} command=${card.command} />` : null}
+        ${finePrint}
+      <//>
+
+      <${CardFooter} className="wizard-actions">
+        <div className="wizard-actions-group">
+          ${primaryButton} ${secondaryButton} ${skipButton}
+        </div>
+        ${disconnectButton}
       <//>
     <//>
+  `;
+}
+
+// ── Step 2: Configure AI ──
+
+function AiStep({
+  aiStatus,
+  cloudCard,
+  offersCloud,
+  busy,
+  error,
+  onBack,
+  onAddOpenAiKey,
+  onRefresh,
+  onContinue,
+}) {
+  const hasCloudCredit = aiStatus.openai === "iterate-proxy" && cloudCard?.status === "connected";
+  const hasChatgpt = aiStatus.chatgpt;
+  const hasOwnOpenAi = aiStatus.openai === "own" || aiStatus.openai === "other-proxy";
+  const hasReadyProvider = hasCloudCredit || hasChatgpt || hasOwnOpenAi;
+  const chatgptCommand = `npx iterate@latest chatgpt connect ${aiStatus.mind}`;
+
+  const readyLabels = [
+    hasChatgpt && "ChatGPT Plus/Pro plan is connected.",
+    hasOwnOpenAi && "Your OpenAI API key is saved.",
+    hasCloudCredit &&
+      `iterate Cloud credit is connected${cloudCard?.text?.[0] ? ` (${cloudCard.text[0]})` : ""}.`,
+  ].filter(Boolean);
+
+  const openAiLabel =
+    busy === "collect-openai-key"
+      ? html`<${Spinner} /> Opening…`
+      : hasOwnOpenAi
+        ? "Replace OpenAI API key"
+        : "Add OpenAI API key";
+
+  const optionsList = html`
+    <div className="wizard-options">
+      <div className="wizard-option">
+        <div className="wizard-option-header">
+          <h3 className="wizard-option-title">
+            <${KeyRoundIcon} className="size-4" />
+            <span>OpenAI API key</span>
+          </h3>
+          ${hasOwnOpenAi ? html`<${Badge} variant="secondary">Saved<//>` : null}
+        </div>
+        <p className="wizard-option-desc">
+          Stored in your mind's secret vault and sent only to api.openai.com.
+        </p>
+        <div>
+          <${Button}
+            variant="outline"
+            size="sm"
+            disabled=${Boolean(busy)}
+            data-action="collect-openai-key"
+            onClick=${onAddOpenAiKey}
+          >
+            ${openAiLabel}
+          <//>
+        </div>
+      </div>
+
+      <div className="wizard-option">
+        <div className="wizard-option-header">
+          <h3 className="wizard-option-title">
+            <${SquareTerminalIcon} className="size-4" />
+            <span>ChatGPT Plus or Pro</span>
+          </h3>
+          ${hasChatgpt ? html`<${Badge} variant="secondary">Connected<//>` : null}
+        </div>
+        <p className="wizard-option-desc">
+          Run this command on your computer to connect your personal ChatGPT subscription:
+        </p>
+        <${CopyCommand} command=${chatgptCommand} />
+      </div>
+
+      <div className="wizard-option">
+        <div className="wizard-option-header">
+          <h3 className="wizard-option-title">
+            <${ExternalLinkIcon} className="size-4" />
+            <span>Cloudflare AI Gateway credit</span>
+          </h3>
+        </div>
+        <p className="wizard-option-desc">
+          Use prepaid AI Gateway credit in your own Cloudflare account with no extra key.
+        </p>
+        <div>
+          <a
+            className=${buttonVariants({ variant: "outline", size: "sm" })}
+            href="https://dash.cloudflare.com/?to=/:account/ai/ai-gateway"
+            target="_blank"
+            rel="noopener"
+          >
+            Open Cloudflare AI Gateway
+          </a>
+        </div>
+      </div>
+    </div>
+  `;
+
+  let bodyContent = optionsList;
+  if (hasReadyProvider) {
+    bodyContent = html`
+      <div className="wizard-status-banner">
+        <${CircleCheckIcon} className="size-4 shrink-0 mt-0.5" />
+        <span>${readyLabels.join(" ")}</span>
+      </div>
+      <details className="wizard-details">
+        <summary>Add or change AI credentials</summary>
+        <div className="wizard-details-body">${optionsList}</div>
+      </details>
+    `;
+  }
+
+  return html`
+    <${Card} data-step="ai">
+      <${CardHeader}>
+        <${CardTitle}>Configure AI<//>
+        <${CardDescription}>
+          ${
+            hasReadyProvider
+              ? "Your mind has an AI connection configured. Continue to verify that it works."
+              : "Choose how your mind pays for AI models before launching your onboarding agent."
+          }
+        <//>
+      <//>
+
+      <${CardContent} className="wizard-options">
+        ${error ? html`<p className="wizard-error-text" role="alert">${error}</p>` : null}
+        ${bodyContent}
+      <//>
+
+      <${CardFooter} className="wizard-actions">
+        <div className="wizard-actions-group">
+          ${offersCloud ? html`<${Button} variant="outline" onClick=${onBack}>Back<//>` : null}
+          <${Button} variant="ghost" size="sm" onClick=${() => void onRefresh()}> Refresh <//>
+        </div>
+        <${Button} data-action="verify-and-launch" onClick=${onContinue}> Verify & launch <//>
+      <//>
+    <//>
+  `;
+}
+
+// ── Step 3: Verify & wake gate ──
+
+function VerifyStep({ onBackToAi }) {
+  const [attempt, setAttempt] = useState(0);
+  const [phase, setPhase] = useState("verifying-ai"); // "verifying-ai" | "waking-agent" | "error"
+  const [errorMessage, setErrorMessage] = useState();
+  const wakeTriggeredRef = useRef(false);
+  const wakeStartOffsetRef = useRef(0);
+
+  const agent = useContextStub(() => itx.cd(AGENT), []);
+  const agentContext = useIterateContext(agent.stub, {
+    consumes: [
+      "events.iterate.com/agent/web-message-sent",
+      "events.iterate.com/agent/context-added",
+      "events.iterate.com/agent/message-received",
+      "events.iterate.com/agent/llm-request-started",
+      "events.iterate.com/agent/llm-request-settled",
+    ],
+  });
+
+  // Phase 1: run real server-side LLM inference verification (`POST /verify-ai`).
+  useEffect(() => {
+    let cancelled = false;
+    wakeTriggeredRef.current = false;
+    setPhase("verifying-ai");
+    setErrorMessage(undefined);
+
+    (async () => {
+      try {
+        const result = await ask("/verify-ai", "POST");
+        if (cancelled) return;
+        if (!result.ok) {
+          setErrorMessage(
+            result.error ||
+              "Could not verify your AI connection. Go back to check your AI configuration.",
+          );
+          setPhase("error");
+          return;
+        }
+        setPhase("waking-agent");
+      } catch (failure) {
+        if (cancelled) return;
+        setErrorMessage(friendlyWakeError(failure instanceof Error ? failure.message : failure));
+        setPhase("error");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
+
+  // Phase 2: trigger idempotent opener on /agents/onboarding and wait for first model-written reply.
+  useEffect(() => {
+    if (phase !== "waking-agent" || !agentContext.caughtUp) return;
+    const events = agentContext.events;
+
+    if (hasModelReply(events)) {
+      window.location.assign(dashOnboardingUrl);
+      return;
+    }
+
+    if (wakeTriggeredRef.current) {
+      const failedAfterWake = events.find(
+        (event) =>
+          event.offset > wakeStartOffsetRef.current &&
+          event.type === "events.iterate.com/agent/llm-request-settled" &&
+          event.payload?.result?.status &&
+          event.payload.result.status !== "succeeded",
+      );
+      if (failedAfterWake) {
+        setErrorMessage(friendlyWakeError(failedAfterWake.payload?.result?.errorMessage));
+        setPhase("error");
+      }
+      return;
+    }
+
+    wakeTriggeredRef.current = true;
+    wakeStartOffsetRef.current = events.at(-1)?.offset ?? 0;
+
+    (async () => {
+      try {
+        await itx.agents.create(AGENT).catch(() => {});
+        const stub = agent.stub || itx.cd(AGENT);
+        // Find the last event that triggers an LLM turn (user/developer context or incoming
+        // message; assistant notices like credit-spent do not trigger a turn).
+        const lastTrigger = [...events]
+          .reverse()
+          .find(
+            (event) =>
+              event.type === "events.iterate.com/agent/message-received" ||
+              (event.type === "events.iterate.com/agent/context-added" &&
+                (event.payload?.role === "user" || event.payload?.role === "developer") &&
+                event.payload?.llmRequestPolicy?.behaviour !== "dont-trigger-request"),
+          );
+        if (!lastTrigger) {
+          await stub
+            .append({
+              type: "events.iterate.com/agent/context-added",
+              idempotencyKey: `opener:${AGENT}`,
+              payload: { role: "developer", content: OPENER },
+            })
+            .catch(() => {});
+          return;
+        }
+        // Only append a recovery wake turn when the latest triggered turn has already settled
+        // without producing a model reply; never duplicate a pending or in-flight opener.
+        const lastSettled = [...events]
+          .reverse()
+          .find((event) => event.type === "events.iterate.com/agent/llm-request-settled");
+        const lastStarted = [...events]
+          .reverse()
+          .find((event) => event.type === "events.iterate.com/agent/llm-request-started");
+        const pendingOrInFlight =
+          !lastSettled ||
+          lastSettled.offset < lastTrigger.offset ||
+          Boolean(lastStarted && lastStarted.offset > lastSettled.offset);
+        if (!pendingOrInFlight) {
+          await stub
+            .append({
+              type: "events.iterate.com/agent/context-added",
+              idempotencyKey: `onboarding-wake:${lastSettled.offset}`,
+              payload: { role: "developer", content: OPENER },
+            })
+            .catch(() => {});
+        }
+      } catch (failure) {
+        setErrorMessage(friendlyWakeError(failure instanceof Error ? failure.message : failure));
+        setPhase("error");
+      }
+    })();
+  }, [phase, agentContext.caughtUp, agentContext.events, agent.stub]);
+
+  // Bounded wait while waking the onboarding agent (60 seconds).
+  useEffect(() => {
+    if (phase !== "waking-agent") return;
+    const timer = setTimeout(() => {
+      setErrorMessage(
+        "Your onboarding agent took too long to respond. Try again or check your AI configuration.",
+      );
+      setPhase("error");
+    }, 60_000);
+    return () => clearTimeout(timer);
+  }, [phase, attempt]);
+
+  const statusTitle =
+    phase === "verifying-ai"
+      ? "Checking that AI connection works…"
+      : "Waking your onboarding agent…";
+  const statusDesc =
+    phase === "verifying-ai"
+      ? "Running a quick test request to confirm your model responds."
+      : "Opening your mind once your onboarding agent replies.";
+
+  let gateContent = html`
+    <div className="wizard-gate">
+      <${Spinner} className="size-6" />
+      <p className="wizard-gate-title">${statusTitle}</p>
+      <p className="wizard-gate-desc">${statusDesc}</p>
+    </div>
+  `;
+  let errorFooter = null;
+  if (phase === "error") {
+    gateContent = html`
+      <div className="wizard-gate">
+        <${CircleAlertIcon} className="size-6 text-destructive" />
+        <p className="wizard-gate-title">AI connection check failed</p>
+        <p className="wizard-gate-desc" role="alert">${errorMessage}</p>
+      </div>
+    `;
+    errorFooter = html`
+      <${CardFooter} className="wizard-actions">
+        <${Button} variant="outline" data-action="back-to-ai" onClick=${onBackToAi}>
+          Back to AI setup
+        <//>
+        <${Button} data-action="retry-verify" onClick=${() => setAttempt((n) => n + 1)}>
+          Try again
+        <//>
+      <//>
+    `;
+  }
+
+  return html`
+    <${Card} data-step="verify" data-phase=${phase}>
+      <${CardContent}>${gateContent}<//>
+      ${errorFooter}
+    <//>
+  `;
+}
+
+function CopyCommand({ command }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard unavailable
+    }
+  }
+  return html`
+    <div className="wizard-command-row">
+      <pre className="wizard-command"><code>${command}</code></pre>
+      <${Button} variant="outline" size="sm" onClick=${() => void copy()}>
+        ${copied ? html`<${CheckIcon} className="size-3.5" /> Copied` : html`<${CopyIcon} className="size-3.5" /> Copy`}
+      <//>
+    </div>
   `;
 }
 

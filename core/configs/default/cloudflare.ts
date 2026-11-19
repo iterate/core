@@ -728,31 +728,6 @@ async function keepCard(
     });
 }
 
-/** THE CONNECTION AS THE INTEGRATIONS CARD LAST SAW IT (`keepCard`), with no request to
- *  Cloudflare: the account's name and whether the grant reaches it, or Cloudflare's words for the
- *  problem. Undefined before the first check of a grant. */
-export async function cloudflareConnection(
-  itx: Pick<CloudflareItx, "cd">,
-): Promise<{ account: string; ok: boolean; problem?: string } | undefined> {
-  const { state } = await itx
-    .cd("/integrations")
-    .facets.get<{ snapshot(): Promise<{ state: unknown }> }>("integration")
-    .snapshot();
-  const row = z
-    .object({
-      account: z.string(),
-      status: z.object({ kind: z.string(), text: z.string().optional() }),
-    })
-    .safeParse(Registry.parse(state).connections[`${CARD}/${ROW}`]).data;
-  return (
-    row && {
-      account: row.account,
-      ok: row.status.kind === "ok",
-      problem: row.status.text,
-    }
-  );
-}
-
 /** One check of the grant, with the time it was made, and no longer than CHECK_MS. */
 async function checkedInTime(
   itx: Pick<CloudflareItx, "fetch" | "url">,

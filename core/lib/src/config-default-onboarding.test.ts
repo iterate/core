@@ -6,7 +6,7 @@
 // answers the event it has.
 /// <reference path="../../configs/default/files.d.ts" />
 import { readFileSync } from "node:fs";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { onboardingApp } from "../../configs/default/apps/onboarding/app.ts";
 import {
   type CloudCredit,
@@ -31,16 +31,20 @@ import {
   type StepContext,
   stepEvent,
 } from "../../configs/default/apps/onboarding/steps.ts";
+import {
+  aiStatus,
+  collectOpenAiKey,
+  humanAiError,
+  verifyAi,
+  type VerifyAiItx,
+} from "../../configs/default/apps/onboarding/verify-ai.ts";
 import Config from "../../configs/default/worker.ts";
 import { APP_DESCRIPTION_PATH, AppDescription } from "./app-description.ts";
 import { auth } from "./sdk/auth.ts";
 
 const STEP = "connect-iterate-cloud";
-const CLOUDFLARE = "connect-cloudflare";
 const MELD = "/minds/iterate.iterate.com";
 const NOW = Date.parse("2026-11-18T22:00:00Z");
-/** The consent page of the stack's own client at Cloudflare, as the fake vault begins it. */
-const CONSENT = "https://dash.cloudflare.com/oauth2/auth?client_id=stack-client";
 const BALANCE = { grantedUsd: 10, spentUsd: 0.42, remainingUsd: 9.58 };
 
 // ── the reduce ──
@@ -799,247 +803,12 @@ test("the credit is open as shipped; closed (creditOpen false): no card, no pres
   const mind = fakeMind();
   const { credit, calls } = fakeCredit();
   const context = { ...contextOf(mind, credit), creditOpen: false };
-  expect(stepsOf(await onboardingCards(context))).toEqual(["connect-cloudflare"]);
-  await expect(runStep(context, STEP, "connect")).rejects.toThrow("its steps: connect-cloudflare");
+  expect(stepsOf(await onboardingCards(context))).toEqual([]);
+  await expect(runStep(context, STEP, "connect")).rejects.toThrow("its steps: none");
   await stepEvent(context, mind.sign(["/minds/iterate.iterate.com/"]));
   expect(calls).toEqual([]);
   expect(mind).toMatchObject({ proposed: [] });
   expect(mind.chat()).toEqual([]);
-});
-
-// ── the step "Connect Cloudflare" ──
-
-test("Connect Cloudflare on a stack with no OAuth client: no button, the deploy command, the same words for the agent, and nothing reaches Cloudflare", async () => {
-  const mind = fakeMind();
-  const { credit } = fakeCredit();
-  const context = contextOf(mind, credit);
-  expect(await cloudflareCard(context)).toEqual({
-    step: CLOUDFLARE,
-    status: "no-client",
-    title: "Connect Cloudflare",
-    optional: true,
-    text: [
-      "Your mind can read its own Cloudflare account: logs, usage, settings. It can change nothing there.",
-      "This mind has no OAuth client at Cloudflare yet. Run this command once more on your computer and paste one Cloudflare API token when it asks:",
-    ],
-    command: "npx iterate deploy --domain example.com",
-    buttons: [],
-  });
-  // the agent's tool: the same words, and a press of "connect" begins nothing
-  const answer = await runStep(context, CLOUDFLARE, "connect");
-  expect(answer).toEqual({
-    status: "no-client",
-    words: expect.stringContaining("Command: npx iterate deploy --domain example.com"),
-    link: undefined,
-  });
-  expect(mind).toMatchObject({ outside: [] });
-});
-
-test("Connect Cloudflare: one sentence and one button; no request to Cloudflare before the member presses; the press begins the stack's own connect, and the tool answers its link", async () => {
-  const mind = fakeMind({ cloudflare: { stackClient: true } });
-  const { credit } = fakeCredit();
-  const context = contextOf(mind, credit);
-  expect(await cloudflareCard(context)).toEqual({
-    step: CLOUDFLARE,
-    status: "not-asked",
-    title: "Connect Cloudflare",
-    optional: true,
-    text: [
-      "Your mind can read its own Cloudflare account: logs, usage, settings. It can change nothing there.",
-    ],
-    buttons: [
-      { label: "Connect Cloudflare", action: "connect", primary: true, opens: true },
-      { label: "Not now", action: "decline" },
-    ],
-  });
-  expect(mind).toMatchObject({ outside: [] });
-  // the press: the same connect as the Integrations card's "Connect", through the stack's client
-  const answer = await runStep(context, CLOUDFLARE, "connect");
-  const consent = "https://dash.cloudflare.com/oauth2/auth?client_id=stack-client";
-  expect(answer).toMatchObject({ status: "connecting", link: consent });
-  expect(mind.outside[0]).toBe(
-    `beginOAuth /secrets/cloudflare ${JSON.stringify({
-      client: { stack: "cloudflare" },
-      straightToProvider: true,
-      next: "https://onboarding.example.com/",
-    })}`,
-  );
-  expect(mind.outside.filter((call) => call.startsWith("fetch"))).toEqual([]);
-  expect(await cloudflareCard(context)).toMatchObject({
-    status: "connecting",
-    text: ["Waiting for your approval on Cloudflare's page."],
-    buttons: [{ label: "Open Cloudflare's page", href: consent, primary: true }],
-  });
-});
-
-test("Connect Cloudflare after the consent: the account's name; the template's words for another account; a refusal reads as an error", async () => {
-  // the vault refused the consent: its own words, as a failure with Try again
-  const refused = fakeMind({ cloudflare: { stackClient: true } });
-  const { credit } = fakeCredit();
-  await runStep(contextOf(refused, credit), CLOUDFLARE, "connect");
-  refused.cloudflare.attempt = {
-    status: "failed",
-    error:
-      "The consent does not reach the Cloudflare account that holds this mind (abc). Nothing was kept.",
-  };
-  expect(await cloudflareCard(contextOf(refused, credit))).toMatchObject({
-    status: "failed",
-    text: [
-      "The consent does not reach the Cloudflare account that holds this mind (abc). Nothing was kept.",
-    ],
-    buttons: [
-      { label: "Try again", action: "connect", primary: true, opens: true },
-      { label: "Not now", action: "decline" },
-    ],
-  });
-
-  // the consent kept: its set settles the connect, and the card names the account
-  const mind = fakeMind({ cloudflare: { stackClient: true } });
-  const context = contextOf(mind, credit);
-  await runStep(context, CLOUDFLARE, "connect");
-  Object.assign(mind.cloudflare, {
-    held: true,
-    attempt: { status: "complete" },
-    row: { account: "Ada's account", status: { kind: "ok" } },
-  });
-  await stepEvent(context, {
-    type: "events.iterate.com/secret/set",
-    path: "/secrets/cloudflare",
-    offset: 900,
-  });
-  expect(await cloudflareCard(context)).toEqual({
-    step: CLOUDFLARE,
-    status: "connected",
-    title: "Cloudflare is connected",
-    text: ["Your mind reads the account Ada's account. It can change nothing there."],
-    buttons: [{ label: "Connect again", action: "again", opens: true }],
-  });
-  // a consent of another account, as the template's check wrote it on the Integrations card
-  mind.cloudflare.row = {
-    account: "Cloudflare account",
-    status: {
-      kind: "error",
-      text: "The consent does not reach the Cloudflare account that holds example.com: it is for another account. Connect again, and approve as a member of the account that holds example.com.",
-    },
-  };
-  await stepEvent(context, {
-    type: "events.iterate.com/integration/connection-configured",
-    path: "/integrations",
-    offset: 901,
-  });
-  expect(await cloudflareCard(context)).toMatchObject({
-    status: "failed",
-    text: [
-      expect.stringMatching(
-        /^The consent does not reach the Cloudflare account that holds example\.com/,
-      ),
-    ],
-    buttons: [{ label: "Connect again", action: "again", primary: true, opens: true }],
-  });
-  expect(mind.outside.filter((call) => call.startsWith("fetch"))).toEqual([]);
-});
-
-// ── the table of "Connect Cloudflare" (steps/connect-cloudflare.ts, at the top): one test a row ──
-
-test("table, no-client: neither connect nor again begins anything", async () => {
-  const { context, begins } = cloudflareTable({ stackClient: false });
-  for (const action of ["connect", "again"])
-    expect(await runStep(context, CLOUDFLARE, action)).toMatchObject({ status: "no-client" });
-  expect(begins()).toBe(0);
-});
-
-test("table, not-asked and declined: Connect Cloudflare begins, and the page opens its tab", async () => {
-  const { begins, press } = cloudflareTable();
-  await press("Not now");
-  expect(await press("Connect Cloudflare")).toMatchObject({ status: "connecting", link: CONSENT });
-  expect(begins()).toBe(1);
-});
-
-test("table, connecting: connect answers the same link and begins nothing; again begins", async () => {
-  const { context, begins } = cloudflareTable();
-  const first = await runStep(context, CLOUDFLARE, "connect");
-  // the owner is on Cloudflare's page; the agent, or a second tab's button, presses again
-  expect(await runStep(context, CLOUDFLARE, "connect")).toEqual(first);
-  expect(begins()).toBe(1);
-  expect(await runStep(context, CLOUDFLARE, "again")).toMatchObject({ status: "connecting" });
-  expect(begins()).toBe(2);
-});
-
-test("table, failed with no grant: Try again begins a new consent; Not now puts it aside", async () => {
-  const { mind, begins, press, refused } = cloudflareTable();
-  await press("Connect Cloudflare");
-  mind.cloudflare.attempt = refused;
-  expect(await press("Try again")).toMatchObject({ status: "connecting", link: CONSENT });
-  expect(begins()).toBe(2);
-  mind.cloudflare.attempt = refused;
-  expect(await press("Not now")).toMatchObject({ status: "declined" });
-});
-
-test("table, failed: an attempt that a later begin replaced is no longer connecting, and Try again begins", async () => {
-  const { mind, card, begins, press } = cloudflareTable();
-  await press("Connect Cloudflare");
-  // the Integrations card's "Connect" began its own attempt on the same path
-  mind.cloudflare.attempt = { status: "unavailable" };
-  expect(await card()).toMatchObject({
-    status: "failed",
-    text: ["A newer link to Cloudflare replaced this one. Nothing was kept from it."],
-  });
-  expect(await press("Try again")).toMatchObject({ status: "connecting" });
-  expect(begins()).toBe(2);
-});
-
-test("table, connected: connect begins nothing; Connect again begins, and the page opens its tab", async () => {
-  const { begins, press, kept, context } = cloudflareTable();
-  await press("Connect Cloudflare");
-  await kept();
-  expect(await runStep(context, CLOUDFLARE, "connect")).toMatchObject({
-    status: "connected",
-    link: undefined,
-  });
-  expect(begins()).toBe(1);
-  expect(await press("Connect again")).toMatchObject({ status: "connecting", link: CONSENT });
-  expect(begins()).toBe(2);
-});
-
-test("table, connected and a newer attempt refused: Try again begins a new consent, though the earlier grant is held", async () => {
-  const { mind, context, card, begins, press, kept, refused } = cloudflareTable();
-  await press("Connect Cloudflare");
-  await kept();
-  await press("Connect again");
-  mind.cloudflare.attempt = refused;
-  expect(await card()).toMatchObject({
-    status: "failed",
-    text: [refused.error],
-  });
-  expect(await press("Try again")).toMatchObject({ status: "connecting", link: CONSENT });
-  expect(begins()).toBe(3);
-  // the agent's connect on the same failed card begins too
-  mind.cloudflare.attempt = refused;
-  expect(await runStep(context, CLOUDFLARE, "connect")).toMatchObject({ status: "connecting" });
-  expect(begins()).toBe(4);
-  // Not now puts the refused attempt aside: the card is the grant's again
-  mind.cloudflare.attempt = refused;
-  expect(await press("Not now")).toMatchObject({ status: "connected" });
-});
-
-test("table, another account: Connect again begins", async () => {
-  const { begins, press, kept } = cloudflareTable();
-  await press("Connect Cloudflare");
-  await kept({
-    account: "Cloudflare account",
-    status: { kind: "error", text: "The consent does not reach the account that holds this mind." },
-  });
-  expect(await press("Connect again")).toMatchObject({ status: "connecting" });
-  expect(begins()).toBe(2);
-});
-
-test("table, the hour ran out: Try again begins", async () => {
-  const { context, begins, press } = cloudflareTable();
-  await press("Connect Cloudflare");
-  const later = { ...context, now: NOW + 3_600_001 };
-  expect(await runStep(later, CLOUDFLARE, "check")).toMatchObject({ status: "failed" });
-  expect(await runStep(later, CLOUDFLARE, "connect")).toMatchObject({ status: "connecting" });
-  expect(begins()).toBe(2);
 });
 
 test("a passkey page that expired unsigned settles as not-signed", async () => {
@@ -1211,7 +980,7 @@ test("the tool refuses a step or an action it does not have, with the ones it ha
   );
   // iterate Cloud's own mind is offered no credit: no card, and the tool has no such step
   const cloud = { ...contextOf(mind, credit), mind: "iterate.iterate.com" };
-  expect(stepsOf(await onboardingCards(cloud))).toEqual(["connect-cloudflare"]);
+  expect(stepsOf(await onboardingCards(cloud))).toEqual([]);
   await expect(runStep(cloud, STEP, "check")).rejects.toThrow(`no step "${STEP}" on this mind`);
 });
 
@@ -1453,9 +1222,9 @@ test("the two paths keep the mind's handle until their answer is made: a handle 
     },
   } as unknown as Parameters<typeof app.fetch>[1];
   const cards = await app.fetch(new Request("https://onboarding.example.com/steps.json"), host);
-  // as shipped (CREDIT_OPEN true) the page gets iterate Cloud's card and Cloudflare's
+  // as shipped (CREDIT_OPEN true) the page gets iterate Cloud's card alone (no connect-cloudflare)
   expect(cards).toMatchObject({ status: 200 });
-  expect(stepsOf(await cards.json())).toEqual([STEP, "connect-cloudflare"]);
+  expect(stepsOf(await cards.json())).toEqual([STEP]);
   const press = await app.fetch(
     new Request(`https://onboarding.example.com/steps/${STEP}/check`, { method: "POST" }),
     host,
@@ -1465,6 +1234,194 @@ test("the two paths keep the mind's handle until their answer is made: a handle 
     status: 200,
     body: { status: "unavailable" },
   });
+  const statusRes = await app.fetch(
+    new Request("https://onboarding.example.com/ai-status.json"),
+    host,
+  );
+  expect({ status: statusRes.status, body: await statusRes.json() }).toEqual({
+    status: 200,
+    body: { chatgpt: false, openai: "unset", mind: "mind.example.com", zone: "example.com" },
+  });
+  const collectRes = await app.fetch(
+    new Request("https://onboarding.example.com/collect-openai-key", { method: "POST" }),
+    host,
+  );
+  expect({ status: collectRes.status, body: await collectRes.json() }).toEqual({
+    status: 200,
+    body: { link: "https://mind.example.com/secrets/collect/1" },
+  });
+  const verifyRes = await app.fetch(
+    new Request("https://onboarding.example.com/verify-ai", { method: "POST" }),
+    host,
+  );
+  expect(verifyRes).toMatchObject({ status: 200 });
+  expect(await verifyRes.json()).toEqual({ ok: true, provider: "ai-gateway" });
+});
+
+// ── verify-ai & centered no-AI wizard ──
+
+test("verifyAi tests providers in agent priority order (ChatGPT -> /secrets/openai -> Cloudflare AI Gateway)", async () => {
+  const sseOk =
+    'data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: {"type":"response.completed"}\n\n';
+  const calls: string[] = [];
+
+  // 1. ChatGPT plan set -> uses /secrets/chatgpt first and omits max_output_tokens (plan tokens refuse it)
+  let chatgptBody: Record<string, unknown> = {};
+  const chatgptItx = fakeVerifyItx({
+    secrets: { "/secrets/chatgpt": { set: true }, "/secrets/openai": { set: true } },
+    fetch: async (request) => {
+      calls.push(request.headers.get("authorization") || "");
+      chatgptBody = (await request.json()) as Record<string, unknown>;
+      return new Response(sseOk, { status: 200 });
+    },
+  });
+  expect(await verifyAi(chatgptItx)).toEqual({ ok: true, provider: "chatgpt" });
+  expect(calls).toEqual(['Bearer getSecret("/secrets/chatgpt", { field: "accessToken" })']);
+  expect(chatgptBody).not.toHaveProperty("max_output_tokens");
+
+  // 2. iterate Cloud proxy set -> reports iterate-cloud and caps max_output_tokens to 256
+  let proxyBody: Record<string, unknown> = {};
+  const cloudItx = fakeVerifyItx({
+    secrets: { "/secrets/openai": { set: true, proxy: ITERATE_PROXY } },
+    fetch: async (request) => {
+      proxyBody = (await request.json()) as Record<string, unknown>;
+      return new Response(sseOk, { status: 200 });
+    },
+  });
+  expect(await verifyAi(cloudItx)).toEqual({ ok: true, provider: "iterate-cloud" });
+  expect(proxyBody).toMatchObject({ max_output_tokens: 256, store: false });
+
+  // 3. Own OpenAI key set -> reports openai and accepts response.incomplete (when capped by max_output_tokens)
+  const ownItx = fakeVerifyItx({
+    secrets: { "/secrets/openai": { set: true } },
+    fetch: async () =>
+      new Response(
+        'data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: {"type":"response.incomplete"}\n\n',
+        { status: 200 },
+      ),
+  });
+  expect(await verifyAi(ownItx)).toEqual({ ok: true, provider: "openai" });
+
+  // 4. No keys set -> tests Cloudflare AI Gateway
+  const gwItx = fakeVerifyItx({
+    aiRun: async () => new Response(sseOk, { status: 200 }),
+  });
+  expect(await verifyAi(gwItx)).toEqual({ ok: true, provider: "ai-gateway" });
+});
+
+test("verifyAi rejects truncated SSE streams without completion and bounds stalled response body reads", async () => {
+  // Truncated stream: one text delta with no response.completed/incomplete must fail
+  const truncatedItx = fakeVerifyItx({
+    secrets: { "/secrets/openai": { set: true } },
+    fetch: async () =>
+      new Response('data: {"type":"response.output_text.delta","delta":"partial"}\n\n', {
+        status: 200,
+      }),
+    aiRun: async () => new Response("payment required", { status: 402 }),
+  });
+  expect(await verifyAi(truncatedItx)).toMatchObject({ ok: false });
+
+  // Stalled body stream after 200 headers must fail within timeoutMs and cancel the body
+  let cancelled = false;
+  const stalledItx = fakeVerifyItx({
+    secrets: { "/secrets/openai": { set: true } },
+    fetch: async () =>
+      new Response(
+        new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { status: 200 },
+      ),
+    aiRun: async () => new Response("payment required", { status: 402 }),
+  });
+  expect(await verifyAi(stalledItx, { timeoutMs: 30 })).toMatchObject({ ok: false });
+  expect(cancelled).toBe(true);
+});
+
+test("verifyAi translates 402/401/429 and SSE failures into clean human-readable errors, never raw JSON", async () => {
+  // Raw JSON 402 from Cloudflare AI Gateway
+  const noCreditGw = fakeVerifyItx({
+    aiRun: async () =>
+      Response.json(
+        { success: false, errors: [{ code: 2010, message: "Insufficient AI Gateway credits" }] },
+        { status: 402 },
+      ),
+  });
+  const gwFailed = await verifyAi(noCreditGw);
+  expect(gwFailed).toMatchObject({ ok: false });
+  if (gwFailed.ok) throw new Error("expected failure");
+  expect(gwFailed.error).toContain("Cloudflare AI Gateway has no credit yet");
+  expect(gwFailed.error).not.toContain("{");
+
+  // Configured invalid OpenAI key takes precedence over fallback AI Gateway error
+  const badKey = fakeVerifyItx({
+    secrets: { "/secrets/openai": { set: true } },
+    fetch: async () =>
+      Response.json(
+        { error: { code: "invalid_api_key", message: "Incorrect API key provided" } },
+        { status: 401 },
+      ),
+    aiRun: async () =>
+      Response.json({ errors: [{ message: "payment required" }] }, { status: 402 }),
+  });
+  const keyFailed = await verifyAi(badKey);
+  expect(keyFailed).toEqual({
+    ok: false,
+    error: expect.stringContaining("Your OpenAI API key was rejected"),
+  });
+
+  // iterate Cloud not-approved 403
+  expect(
+    humanAiError(
+      "iterate-cloud",
+      403,
+      JSON.stringify({ error: { code: "iterate_credit_not_approved", message: "Not approved" } }),
+    ),
+  ).toContain("iterate Cloud has not approved this mind yet");
+
+  // SSE 200 with response.failed event must fail, not pass
+  const failedSse = fakeVerifyItx({
+    secrets: { "/secrets/openai": { set: true } },
+    fetch: async () =>
+      new Response(
+        'data: {"type":"response.failed","response":{"status":"failed","error":{"code":"insufficient_quota"}}}\n\n',
+        { status: 200 },
+      ),
+    aiRun: async () => new Response("payment required", { status: 402 }),
+  });
+  const sseResult = await verifyAi(failedSse);
+  expect(sseResult).toMatchObject({ ok: false });
+  if (sseResult.ok) throw new Error("expected failure");
+  expect(sseResult.error).toContain("no available credit or billing is not set up");
+});
+
+test("aiStatus and collectOpenAiKey read credentials and create a secret-collection link", async () => {
+  const { itx } = fakeMind();
+  expect(await aiStatus(itx)).toEqual({
+    chatgpt: false,
+    openai: "unset",
+    mind: "mind.example.com",
+    zone: "example.com",
+  });
+  expect(await collectOpenAiKey(itx)).toEqual({
+    link: "https://mind.example.com/secrets/collect/1",
+  });
+});
+
+test("onboarding page is a centered no-AI wizard with no AgentChat, no connect-cloudflare, visible approval line, and model-authored reply gate", () => {
+  const pageJs = readFileSync(
+    new URL("../../configs/default/apps/onboarding/public/app.js", import.meta.url),
+    "utf8",
+  );
+  expect(pageJs).not.toContain("AgentChat");
+  expect(pageJs).not.toContain("connect-cloudflare");
+  expect(pageJs).toContain("/verify-ai");
+  expect(pageJs).toContain("https://dash.${zone}/?agent=${AGENT}");
+  expect(pageJs).toContain("approves each mind");
+  expect(pageJs).toContain("llmRequestOffset");
+  expect(pageJs).toContain('status === "disconnecting"');
 });
 
 test("one note at the owner's signed rule, which starts the agent's turn: with the balance when the credit came, and with the reason when it did not", async () => {
@@ -1577,6 +1534,9 @@ test.for([
       );
     for (const answer of [
       await at("/steps.json"),
+      await at("/ai-status.json"),
+      await at("/collect-openai-key", { method: "POST" }),
+      await at("/verify-ai", { method: "POST" }),
       await at(`/steps/${STEP}/disconnect`, { method: "POST" }),
       await at("/itx", { headers: { upgrade: "websocket" } }),
       await at("/"),
@@ -1623,18 +1583,8 @@ function fakeMind(
     meld?: "member" | "other" | null;
     /** The catalog's page leaves out these contexts (more active ones fill it, or no row yet). */
     unlisted?: string[];
-    /** The mind's Cloudflare: whether the deploy made the stack's client, a kept grant, the
-     *  Integrations card's row for it, and what the vault says of a connect's attempt. */
-    cloudflare?: {
-      stackClient?: boolean;
-      held?: boolean;
-      row?: { account: string; status: { kind: string; text?: string } };
-      attempt?: { status: string; error?: string };
-    };
   } = {},
 ) {
-  const cloudflare = { stackClient: false, held: false, ...options.cloudflare };
-  /** Every call that reaches Cloudflare or begins a connect: none before a member's press. */
   const outside: string[] = [];
   const kv = new Map<string, string>();
   const logs = new Map<string, Logged[]>();
@@ -1667,21 +1617,17 @@ function fakeMind(
       }),
       append: async (...events: Omit<Logged, "path" | "offset">[]) =>
         events.map((event) => appendAt(path, event)),
-      // the Integrations registry, as the template's Cloudflare card keeps it
-      facets: {
-        get: () => ({
-          snapshot: async () => ({
-            state: {
-              integrations: {},
-              connections: cloudflare.row ? { "cloudflare/account": cloudflare.row } : {},
-            },
-          }),
-        }),
-      },
     }),
     fetch: async (request: Request) => {
       outside.push(`fetch ${request.url}`);
       return new Response(null, { status: 500 });
+    },
+    ai: {
+      run: async () =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
     },
     kv: {
       get: async (key: string) => kv.get(key) ?? null,
@@ -1710,24 +1656,10 @@ function fakeMind(
         outside.push("collectFromUser");
         return { url: "https://mind.example.com/secrets/collect/1" };
       },
-      hasStackClient: async (name: string) => name === "cloudflare" && cloudflare.stackClient,
       describe: async (path: string) => ({
         path,
-        set: path === "/secrets/cloudflare" && cloudflare.held,
+        set: false,
       }),
-      beginOAuth: async (path: string, input: Record<string, unknown>) => {
-        outside.push(`beginOAuth ${path} ${JSON.stringify(input)}`);
-        // the vault's one attempt for the path: a new one waits
-        delete cloudflare.attempt;
-        return {
-          authorizationUrl: "https://dash.cloudflare.com/oauth2/auth?client_id=stack-client",
-          nonce: `attempt-${outside.filter((call) => call.startsWith("beginOAuth")).length}`,
-        };
-      },
-      oauthResult: async (path: string, { nonce }: { nonce: string }) => {
-        outside.push(`oauthResult ${path} ${nonce}`);
-        return cloudflare.attempt || { status: "pending" };
-      },
     },
     email: {
       send: async (mail: { from: string; to: unknown; text?: string }) => {
@@ -1746,7 +1678,6 @@ function fakeMind(
   return {
     // the fake has what the step reads, and the step's type names the whole root
     itx: itx as unknown as OnboardingItx,
-    cloudflare,
     outside,
     logs,
     proposed,
@@ -1755,6 +1686,28 @@ function fakeMind(
     onboarding: () => logOf("/apps/onboarding").map((e) => e.type.split("/").at(-1)),
     chat: () => logOf("/agents/onboarding"),
   };
+}
+
+function fakeVerifyItx(options: {
+  secrets?: Record<string, { set: boolean; proxy?: { mind: string; url: string } }>;
+  fetch?: (request: Request) => Promise<Response>;
+  aiRun?: () => Promise<Response>;
+}): VerifyAiItx {
+  return {
+    whoami: async () => ({ path: "/", mindSlug: "mind.example.com" }),
+    url: async () => "https://example.com/",
+    fetch: options.fetch || (async () => new Response("unexpected", { status: 500 })),
+    ai: {
+      run: options.aiRun || (async () => new Response('{"error":"no credit"}', { status: 402 })),
+    },
+    secrets: {
+      describe: async (path: string) => ({
+        path,
+        set: false,
+        ...options.secrets?.[path],
+      }),
+    },
+  } as unknown as VerifyAiItx;
 }
 
 /** A press's check is keyed by the millisecond (steps.ts `runStep`): two in one write once. */
@@ -1819,51 +1772,6 @@ function fakeCredit(
     },
   };
   return { credit, calls, secrets, state, setThrows };
-}
-
-/** A Cloudflare mind with the stack's client, and the press of a card's button by its label, as
- *  the page presses it: a press that answers a page is one the page opens a tab for. */
-function cloudflareTable(
-  cloudflare: NonNullable<Parameters<typeof fakeMind>[0]>["cloudflare"] = {},
-) {
-  const mind = fakeMind({ cloudflare: { stackClient: true, ...cloudflare } });
-  const context = contextOf(mind, fakeCredit().credit);
-  // a press's checks are keyed by its millisecond: each press here has its own
-  let clock = NOW;
-  const now = vi.spyOn(Date, "now").mockImplementation(() => ++clock);
-  onTestFinished(() => now.mockRestore());
-  const begins = () => mind.outside.filter((call) => call.startsWith("beginOAuth")).length;
-  // each page open at its own moment: an open's check is keyed by its time
-  let opens = 0;
-  const card = () => cloudflareCard({ ...context, now: NOW + ++opens });
-  const press = async (label: string) => {
-    const button = (await card())?.buttons.find((one) => one.label === label);
-    if (!button?.action) throw new Error(`no button "${label}"`);
-    const answer = await runStep(context, CLOUDFLARE, button.action);
-    if (answer.link) expect(button).toMatchObject({ opens: true });
-    return answer;
-  };
-  /** The vault kept the consent: the grant is held, and the template's check named the account. */
-  const kept = async (
-    row: { account: string; status: { kind: string; text?: string } } = {
-      account: "Ada's account",
-      status: { kind: "ok" },
-    },
-  ) => {
-    Object.assign(mind.cloudflare, { held: true, attempt: { status: "complete" }, row });
-    await stepEvent(context, {
-      type: "events.iterate.com/secret/set",
-      path: "/secrets/cloudflare",
-      offset: 900 + begins(),
-    });
-  };
-  const refused = { status: "failed", error: "Not the account that holds this mind." };
-  return { mind, context, begins, card, press, kept, refused };
-}
-
-/** The card "Connect Cloudflare", as the page draws it. */
-async function cloudflareCard(context: StepContext) {
-  return (await onboardingCards(context)).find((card) => card.step === CLOUDFLARE);
 }
 
 /** The steps of the cards, in the page's order. */

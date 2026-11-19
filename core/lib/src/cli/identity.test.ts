@@ -558,9 +558,9 @@ test("an identity that an earlier run made for a hostname is found again: the ne
   expect(existsSync(older.keyFile)).toBe(true);
 });
 
-test("with no ML-DSA-65 in the runtime, the command stops with one sentence that names Node", async () => {
+test("with no ML-DSA-65 in the runtime, mlDsaRequired suggests upgrading to Node 24.7+", async () => {
   await expect(mlDsaRequired(async () => false)).rejects.toThrow(
-    /^This needs Node 24\.7 or newer: this one \(.+\) has no ML-DSA-65, the algorithm of a mind's identity key\.$/,
+    /^Node .+ does not support ML-DSA-65, which is needed to create or verify a mind's identity key\. Upgrade to Node 24\.7 or newer/,
   );
   await expect(mlDsaRequired()).resolves.toBeUndefined();
 });
