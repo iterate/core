@@ -132,6 +132,10 @@ The exception is a jail, a context with a bare `itx ⇒ null` row plus the grant
 jail is closed both ways: its code appends nowhere, and no code appends into it. Grant it
 `itx.append` and every context can append into it too; its own code still cannot lift the null. A
 jail confines the code that runs in it, not the contexts it creates through a grant: jail those too.
+No jail's rule names a host of the mind's own zones: code that may fetch one states the depth that
+the app's handler there works at, and an event that the app stores at the limit can cost the events
+beside it their reactions. A redirect that leads a jailed agent's request there arrives as nobody
+and begins a chain.
 
 ## Testing a processor
 

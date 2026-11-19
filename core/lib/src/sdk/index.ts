@@ -117,8 +117,14 @@ export abstract class FacetDurableObject<
     // A Request the facet serves runs under the cause it carries (../cause.ts).
     const serve = (this as { fetch?: (request: Request) => unknown }).fetch;
     if (serve)
+      // the cast: `serve` is typed to answer `unknown` only so it can be read off `this`; it is the
+      // subclass's own `fetch`, which answers a Response as every Durable Object's fetch must
       this.fetch = (request: Request) =>
-        runCausedBy(causeOfRequest(request), () => serve.call(this, request)) as Promise<Response>;
+        runCausedBy(
+          causeOfRequest(request),
+          () => serve.call(this, request),
+          "clear",
+        ) as Promise<Response>;
   }
 
   /** THE CALL UNDER A CAUSE (`walkUnderCause`): a caller's `itx.facets.get(name).<steps>`, the
@@ -352,7 +358,7 @@ export abstract class IterateConfigEntrypoint<
     // The author's `fetch` runs under the cause its Request carries (../cause.ts).
     const serve = this.fetch;
     this.fetch = (request: Request) =>
-      runCausedBy(causeOfRequest(request), () => serve.call(this, request));
+      runCausedBy(causeOfRequest(request), () => serve.call(this, request), "clear");
   }
 
   /** The platform's delivery of one event (the dispatch boundary refuses any other caller),

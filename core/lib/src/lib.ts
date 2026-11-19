@@ -91,12 +91,20 @@ export function mailHopsOf(value: string | undefined): number | null {
 }
 
 /** OUR MARK (core/itx/src/cause.ts): what the platform sends — a request, a mail — carries the cause of
- *  the code that sent it here, as JSON; a request that comes back with it resumes its chain. */
+ *  the code that sent it here, as JSON; only the mind's own request to the host that its fetch
+ *  named resumes its chain with it (`causeOfOwnRequest` says which redirect is such a fetch). */
 export const ITERATE_CAUSE_HEADER = "X-Iterate-Cause";
+/** THE MIND'S OWN REQUEST, as the boundary says it to the mind Worker: a request that the mind's
+ *  code sent to a host of its own zones, which never left the stack. Only the boundary writes it,
+ *  after it strips every `x-itx-*` header and every mark; with it, our mark for the host that the
+ *  code's fetch named resumes its chain. */
+export const ITX_OWN_HEADER = "x-itx-own";
 /** OUR MARK AS IT LEAVES THE STACK, in a request to a host that is not the stack's own, or in a
- *  mail: the counts and when the chain began, so another stack that gets it counts on. What began
- *  the chain and the event it runs for name the stack's own contexts (`<path>@<offset>`), and stay
- *  behind. Null for no mark, and for one that the kernel did not write. */
+ *  mail: the counts and when the chain began. No stack reads it at its edge today (a request from
+ *  outside begins a chain): it leaves for the day one does. What began the chain and the event it
+ *  runs for name the stack's own contexts (`<path>@<offset>`), and stay behind, as does the host
+ *  that egress names for the mind's own request (`to`). Null for no mark, and for one that the
+ *  kernel did not write. */
 export function causeLeavingTheStack(mark: string | null | undefined): string | null {
   if (!mark) return null;
   let cause: unknown;

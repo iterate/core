@@ -25,8 +25,12 @@ import {
   statementHashOf,
 } from "iterate/signed";
 import type { AuthService, TokenIdentity } from "iterate/workers";
+import { ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { type MindHostCaller, mindHostCallerOf } from "./mind-host-sign-in.ts";
 import { appCookiesOf, sessionTokenOf } from "./session-cookies.ts";
+
+/** Our mark's header name as iterated header names are: lowercase. */
+const CAUSE_HEADER = ITERATE_CAUSE_HEADER.toLowerCase();
 
 export type Stamped = {
   forwarded: Request;
@@ -52,10 +56,12 @@ export async function stampedRequest(
   },
 ): Promise<Stamped> {
   // Only the boundary stamps `x-itx-*`, and what it forwards to trusts the stamp: drop whatever a
-  // caller sent. Iterated header names are lowercase. A signed statement never reaches the code.
+  // caller sent. Iterated header names are lowercase. A signed statement never reaches the code,
+  // nor does a caller's mark (the mind's own request gets its own back: ./http.ts `ownStamped`).
   const headers = new Headers(
     [...request.headers].filter(
-      ([name]) => !name.startsWith("x-itx-") && name !== ITERATE_STATEMENT_HEADER,
+      ([name]) =>
+        !name.startsWith("x-itx-") && name !== ITERATE_STATEMENT_HEADER && name !== CAUSE_HEADER,
     ),
   );
   const url = new URL(request.url);

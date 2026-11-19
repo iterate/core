@@ -19,6 +19,7 @@ export { fetchUpgradeLegResponse, serveHostRequest } from "./serve-host.ts";
 export { sha256Hex, signClaims, stampCaller, verifyClaims, type Caller } from "./caller.ts";
 export {
   causeHeader,
+  causeOfOwnRequest,
   refuseActPastLimit,
   runningCause,
   runningUnder,

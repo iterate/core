@@ -36,6 +36,7 @@ import {
 } from "./control-plane-api.ts";
 import type { DoorEnv } from "./env.ts";
 import { ProvidedDoor } from "./provided-door.ts";
+import type { DoorProps } from "./rpc.ts";
 
 /** THE BOUNDARY'S MARK ON THE DIAL. ./mind-transport.ts alone sets it, and removes it from every
  *  other request that it sends to this object. A request with the mark is a session of the API
@@ -126,7 +127,11 @@ export class ProvidedMind extends DurableObject<DoorEnv> {
     // The first cast: the boundary declares no `GlobalProps`, so `ctx.exports` has no typed
     // member. `Door` is an export of ./worker.ts, the Worker's main module. The second: a
     // `ProvidedDoor` answers every method of that Door by name, and its class declares none.
-    const door = new ProvidedDoor((this.ctx.exports as unknown as { Door: object }).Door, () =>
+    // `provided`: this Door's own request is no mind's own (./rpc.ts `Door.fetch`).
+    const exports = this.ctx.exports as unknown as {
+      Door: (options: { props: DoorProps }) => object;
+    };
+    const door = new ProvidedDoor(exports.Door({ props: { provided: true } }), () =>
       session.isOpen(),
     ) as unknown as Door;
     let handedIn = false;

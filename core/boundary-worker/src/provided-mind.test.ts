@@ -47,7 +47,7 @@ test("with no link, a request is answered 503 and every other call fails as unav
 });
 
 test("a mind that hands in its connect function gets every request, mail and act, and the boundary's door", async () => {
-  const { boundary, dial } = stack();
+  const { boundary, dial, door } = stack();
   const home = await dial();
   const mind = pretendMind("home");
   await home.handIn(mind);
@@ -67,6 +67,7 @@ test("a mind that hands in its connect function gets every request, mail and act
   });
   // the door that `connect` was called with, kept with `dup()`, is the boundary's own
   expect(await home.door().isMember("ada@example.com")).toBe(true);
+  expect(door).toMatchObject({ props: [{ provided: true }] });
 });
 
 test("the dial reaches the object with the boundary's mark and without a caller's stamps: its session authenticates there", async () => {
@@ -319,6 +320,7 @@ function acceptedSocketOf(answer: Response) {
 function stack({ homeLabTokenEndsIn = 60_000 } = {}) {
   const door = {
     asked: 0,
+    props: [] as object[],
     isMember: async () => {
       door.asked += 1;
       return true;
@@ -339,7 +341,15 @@ function stack({ homeLabTokenEndsIn = 60_000 } = {}) {
   // the object asks the auth Worker itself: it has the boundary's own bindings
   const bindings = { ITERATE: JSON.stringify(CONFIG), AUTH: { whoIs } };
   const object = new ProvidedMind(
-    { exports: { Door: door } } as unknown as DurableObjectState,
+    // the Door is minted with the props of a provided one (./rpc.ts `DoorProps`)
+    {
+      exports: {
+        Door: ({ props }: { props: object }) => {
+          door.props.push(props);
+          return door;
+        },
+      },
+    } as unknown as DurableObjectState,
     bindings as unknown as ConstructorParameters<typeof ProvidedMind>[1],
   );
   const env = {

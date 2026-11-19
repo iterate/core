@@ -46,13 +46,13 @@ test("a good statement: the mind is stamped in x-itx-mind by the URL and method 
   expect(forwarded).not.toHaveProperty("iterate-auth-statement");
 });
 
-test("a good statement beside a member's session and a bearer: the statement decides alone, no session and no bearer is read or reaches the app; the app's own cookies and the cause pass", async () => {
+test("a good statement beside a member's session and a bearer: the statement decides alone, no session and no bearer is read or reaches the app; the app's own cookies pass, and the sender's mark does not", async () => {
   const { auth, asked } = authAnswering({ principal: MIND, expiresAt: 1_900_000_000 });
   const stamped = await stampedRequest(
     signed({
       cookie: "__Host-iterate-session=member-token; app=kept",
       authorization: "Bearer ours",
-      // the sender's cause reaches the mind's kernel, which reads it at ingress
+      // a request from outside begins a chain: the sender's mark stays at the boundary
       "x-iterate-cause": CAUSE,
     }),
     { auth, route: null, config },
@@ -61,9 +61,14 @@ test("a good statement beside a member's session and a bearer: the statement dec
   expect(forwarded).toMatchObject({
     cookie: "app=kept",
     "x-itx-mind": JSON.stringify(MIND),
-    "x-iterate-cause": CAUSE,
   });
-  for (const name of ["authorization", "x-itx-principal", "x-itx-person", "x-itx-grant"])
+  for (const name of [
+    "authorization",
+    "x-itx-principal",
+    "x-itx-person",
+    "x-itx-grant",
+    "x-iterate-cause",
+  ])
     expect(forwarded).not.toHaveProperty(name);
   // neither the session nor the bearer is asked about
   expect(asked).toMatchObject({ whoIs: [] });

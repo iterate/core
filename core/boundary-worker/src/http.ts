@@ -8,6 +8,7 @@ import { recordFacts as recorded, withFacts } from "iterate/facts";
 import { controlPlaneRouteOf, MIND_PROVIDE_EXTERNAL_MIND_HEADER } from "iterate/mind-api";
 import { isControlPlaneHostname, type MindConfig } from "iterate/mind-config";
 import { MIND_IDENTITY_PATH } from "iterate/mind-identity-log";
+import { ITERATE_CAUSE_HEADER, ITX_OWN_HEADER } from "iterate/lib";
 import { withoutOutsidePlaceholders } from "iterate/secret-placeholder";
 import type { MindTarget } from "iterate/workers";
 import { boundaryConfigOf } from "./config.ts";
@@ -51,6 +52,9 @@ export async function boundaryResponse(
   env: DoorEnv,
   ctx: ExecutionContext,
   mind: MindTransport,
+  // the Door's alone (./rpc.ts), for every request of the mind's to a hostname of its zones; the
+  // stamp is set only on the forward to the mind's hosts (`ownStamped`)
+  { own }: { own?: true } = {},
 ): Promise<Response> {
   const request = withoutOutsidePlaceholders(incoming);
   const dotted = dottedHostnameRefusal(request);
@@ -68,7 +72,7 @@ export async function boundaryResponse(
   };
   if (!isControlPlaneRequest(request, config))
     return mindHostResponse(request, { auth: env.AUTH, config, recordFacts }, (forwarded) =>
-      mind.fetch(forwarded),
+      mind.fetch(own ? ownStamped(forwarded, request) : forwarded),
     );
   const url = new URL(request.url);
   const route = controlPlaneRouteOf(url);
@@ -117,4 +121,15 @@ export async function boundaryResponse(
     return recordFacts(answered);
   }
   return confinedAnswer(await mind.fetch(forwarded));
+}
+
+/** The mind's own request, stamped so after `stampedRequest` stripped every `x-itx-*` header and
+ *  every mark: only the mind's hosts get it, with the mark that the code's egress wrote, which
+ *  resumes its chain there (core/itx/src/cause.ts). */
+function ownStamped(forwarded: Request, own: Request): Request {
+  const headers = new Headers(forwarded.headers);
+  headers.set(ITX_OWN_HEADER, "1");
+  const mark = own.headers.get(ITERATE_CAUSE_HEADER);
+  if (mark) headers.set(ITERATE_CAUSE_HEADER, mark);
+  return new Request(forwarded, { headers });
 }

@@ -1,8 +1,8 @@
 // THE DOOR (./rpc.ts): which of the mind's requests are its own, and which sender a mail may have.
 import { MIND_FETCH_STATEMENT_TYPE, statementText } from "iterate/signed";
-import type { AuthService } from "iterate/workers";
+import type { AuthService, MindTarget } from "iterate/workers";
 import { expect, test, vi } from "vitest";
-import { boundaryResponse, type MindTransport } from "./http.ts";
+import type { Env } from "./env.ts";
 import { Door, senderRefusal } from "./rpc.ts";
 
 const config = {
@@ -31,26 +31,21 @@ test("the mind's request to a hostname of its zones goes in through the boundary
     outside.push(request.url);
     return new Response("the internet's");
   });
+  // the mind Worker's `Mind` entrypoint, as the boundary's handler reaches it (./mind-transport.ts)
   const env = {
     ITERATE: JSON.stringify(config),
     AUTH: { whoIs: async () => null } as Partial<AuthService>,
-  } as Parameters<typeof boundaryResponse>[1];
-  const waiting = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
-  const mind = {
-    fetch: async (request: Request) => {
-      reachedMind.push(request);
-      return new Response("the mind's own");
-    },
-  } as Partial<MindTransport> as MindTransport;
-  // The Workers shim's entrypoint has no constructor: the test gives it the env, and as
-  // `ctx.exports.default` the Worker's real fetch handler (./worker.ts).
+    MIND: {
+      fetch: async (request: Request) => {
+        reachedMind.push(request);
+        return new Response("the mind's own");
+      },
+    } as Partial<MindTarget>,
+  } as Env;
+  // The Workers shim's entrypoint has no constructor: the test gives it the env and a context.
   const door = Object.assign(new Door(undefined as never, undefined as never), {
     env,
-    ctx: {
-      exports: {
-        default: { fetch: (request: Request) => boundaryResponse(request, env, waiting, mind) },
-      },
-    },
+    ctx: { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
   });
   const ask = (url: string) =>
     door.fetch(
@@ -68,12 +63,27 @@ test("the mind's request to a hostname of its zones goes in through the boundary
     "https://app.example.org/",
     "https://app.example.org/",
   ]);
-  // nobody's request: no cookie rides in, and the address is the mind's own fixed one
+  // nobody's request: no cookie rides in, and the address is the mind's own fixed one; the
+  // boundary says it is the mind's own (iterate/lib `ITX_OWN_HEADER`)
   for (const request of reachedMind) {
     expect(request.headers.get("cookie")).toBeNull();
     expect(request.headers.get("cf-connecting-ip")).toBe("192.0.0.8");
+    expect(request.headers.get("x-itx-own")).toBe("1");
   }
   expect(outside).toEqual(["https://example.net/"]);
+  // A PROVIDED MIND'S DOOR (./provided-mind.ts): its own request goes in with no stamp, so the
+  // mind that is reached resumes no cause of that session's
+  reachedMind.length = 0;
+  const provided = Object.assign(new Door(undefined as never, undefined as never), {
+    env,
+    ctx: {
+      waitUntil() {},
+      passThroughOnException() {},
+      props: { provided: true },
+    } as unknown as ExecutionContext,
+  });
+  await provided.fetch(new Request("https://app.example.org/"));
+  expect(reachedMind.map((request) => request.headers.get("x-itx-own"))).toEqual([null]);
 });
 
 test("only fetchForMind signs: it uses the statement again while it lives and lets no answer give it back; a header that code writes signs nothing and does not leave", async () => {

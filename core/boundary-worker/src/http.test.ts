@@ -128,6 +128,44 @@ test("the header means nothing off the API's own address: the MCP server answers
   });
 });
 
+// THE MIND'S OWN REQUEST (iterate/lib `ITX_OWN_HEADER`): only the Door's argument says it, after
+// the strip, and only the mind's hosts are told; nothing from outside can say it.
+test("only the Door's own request to a host of the mind carries the own stamp and its mark: one from outside that writes both, and an own request to the control plane, carry neither anywhere", async () => {
+  const reached: [string, string | null, string | null][] = [];
+  const heard = (where: string) => async (request: Request) => {
+    reached.push([
+      `${where} ${new URL(request.url).pathname}`,
+      request.headers.get("x-itx-own"),
+      request.headers.get("x-iterate-cause"),
+    ]);
+    return new Response("ok");
+  };
+  const env = {
+    ITERATE: JSON.stringify(CONFIG),
+    AUTH: { fetch: heard("auth"), whoIs: async () => null } as Partial<AuthService>,
+  } as Parameters<typeof boundaryResponse>[1];
+  const mind = { fetch: heard("mind"), append: async () => {} } as Partial<MindTransport>;
+  const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
+  const ask = (url: string, own?: true) =>
+    boundaryResponse(
+      new Request(url, { headers: { "x-itx-own": "1", "X-Iterate-Cause": "a mark" } }),
+      env,
+      ctx,
+      mind as MindTransport,
+      own && { own },
+    );
+  await ask("https://app.example.org/own", true);
+  await ask("https://app.example.org/outside");
+  await ask("https://iterate.example.com/sign-in", true);
+  await ask("https://iterate.example.com/api/webhooks/github", true);
+  expect(reached).toEqual([
+    ["mind /own", "1", "a mark"],
+    ["mind /outside", null, null],
+    ["auth /sign-in", null, null],
+    ["mind /api/webhooks/github", null, null],
+  ]);
+});
+
 /** A stack whose auth Worker and mind say that they were reached. `asked`: each token the auth
  *  Worker was asked about, with the audience. `link`: the mind runs elsewhere, and `linked` is
  *  each dial that the boundary let in. The home lab's token is live for the audience of the right

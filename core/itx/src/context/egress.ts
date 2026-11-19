@@ -22,7 +22,7 @@ export function egress(
   // what the host says to loaded code is for the mind's own code alone
   for (const name of Object.keys(itxHost().loadedCodeRequestHeaders?.() || {}))
     headers.delete(name);
-  if (cause) headers.set(ITERATE_CAUSE_HEADER, causeHeader(cause));
+  if (cause) headers.set(ITERATE_CAUSE_HEADER, causeHeader(cause, new URL(request.url).hostname));
   headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER);
   // Chromium drops User-Agent on a Request it builds, and GitHub's API refuses a request without one.
   if (!headers.has("user-agent")) headers.set("user-agent", "iterate");

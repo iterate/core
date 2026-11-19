@@ -14,7 +14,7 @@ import { AsyncLocalStorage as NodeAsyncLocalStorage } from "node:async_hooks";
 import { ITERATE_CAUSE_HEADER, loopLimitOf } from "./lib.ts";
 
 type Carrier = {
-  run<T>(cause: unknown, code: () => T): T;
+  run<T>(cause: unknown, code: () => T, newest?: "clear"): T;
   current(): unknown;
   carryOnFetch(): void;
 };
@@ -37,7 +37,7 @@ function newCarrier(): Carrier {
     return store ? store.cause : newest;
   };
   return {
-    run(cause, code) {
+    run(cause, code, clear) {
       // what a call needs only for itself (its hops, the delivery its writes are keyed by) is not
       // kept; the cause is carried unread (`unknown`), so only the fields kept are named
       const { chain, depth, at, parent } = (cause ?? {}) as {
@@ -46,7 +46,7 @@ function newCarrier(): Carrier {
         at?: unknown;
         parent?: unknown;
       };
-      if (loaded) newest = chain === undefined ? undefined : { chain, depth, at, parent };
+      if (loaded) newest = clear || chain === undefined ? undefined : { chain, depth, at, parent };
       return running.run({ cause }, code);
     },
     current,
@@ -81,8 +81,10 @@ function newCarrier(): Carrier {
 }
 
 /** Run `code` under `cause` — the platform's word for why, or none (the platform then begins a
- *  chain for what it does). */
-export const runCausedBy = <T>(cause: unknown, code: () => T): T => carrier.run(cause, code);
+ *  chain for what it does). `"clear"`: a request's fetch leaves no newest cause behind, so code
+ *  outside any call after it runs under none (a visitor's request and the mind's own alike). */
+export const runCausedBy = <T>(cause: unknown, code: () => T, newest?: "clear"): T =>
+  carrier.run(cause, code, newest);
 
 /** The cause the running code runs under, for the platform. */
 export const currentCause = (): unknown => carrier.current();

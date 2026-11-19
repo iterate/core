@@ -5,8 +5,17 @@
 // 2. One call crosses at most MAX_CONTEXT_HOPS contexts. Hops ride the call, never an event.
 // 3. What code writes while it handles a delivery is keyed by it (`writeKey`), so a retry never
 //    repeats what an attempt before it did.
+// 4. At a mind's edge the kernel reads one mark: the mind's own request to one of its hosts
+//    resumes the chain (`causeOfOwnRequest`). A request from outside begins a chain, though one
+//    that leaves carries ours (iterate/lib `leavingTheStack`).
 
-import { codedError, errorCode, ITERATE_CAUSE_HEADER, oneStepDeeper } from "iterate/lib";
+import {
+  codedError,
+  errorCode,
+  ITERATE_CAUSE_HEADER,
+  ITX_OWN_HEADER,
+  oneStepDeeper,
+} from "iterate/lib";
 import { z } from "zod";
 
 export type Cause = {
@@ -33,6 +42,61 @@ export function newChain(origin: string): Cause {
     at: Date.now(),
   };
 }
+
+/** THE CAUSE OF THE MIND'S OWN REQUEST to one of its hosts (`ITX_OWN_HEADER`, the boundary's
+ *  word) that its code's fetch NAMED: our mark one step deeper, so the chain that sent it goes on.
+ *  The kernel's egress writes the host it sends to into the mark (`to`), and only that host resumes.
+ *  THE TWO WAYS A REDIRECT IS FOLLOWED DIFFER. Over the kernel's `itx.fetch`, the Door's binding
+ *  follows it with a second call that carries the first leg's mark, so it resumes nothing, also
+ *  from one own host to another (an apex to its www). Over a loaded Worker's own global `fetch`,
+ *  the runtime follows it with a second fetch of the context (`ItxEntrypoint.fetch`): that is a
+ *  fetch the code made, its context's rule for `itx.fetch` decides it, and it resumes at the true
+ *  depth plus one. On neither path can the host that answers state a depth, a chain or a parent.
+ *  Any other request, and a mark of any other form, with no chain or for another host, has none,
+ *  and begins a chain as before: the boundary and the mind Worker take a caller's mark off
+ *  (core/boundary-worker/src/stamp.ts, core/mind-worker/src/http.ts `hostRequestOf`), so no
+ *  visitor's mark goes in. A count past the limit is cut to the limit plus one, and a time ahead of the clock to
+ *  now, so no mark stops the clock or overflows.
+ *  KNOWN: inside one mind a cause is its code's own word, so code that may fetch an own host can
+ *  make the app's handler there work at a depth of its choosing. An event that the app stores at
+ *  the limit has its delivery refused, and the batch rule can then skip its neighbours' reactions
+ *  on the app's contexts. Calls could do this before (a cause rides a call); own requests now can
+ *  too. The batch rule is the fault, and its change belongs to the next design.
+ *  NOT ENDED: an app whose handler is a plain WorkerEntrypoint, not one of the SDK's two classes,
+ *  runs its fetch outside a scope, so a chain through it begins again (the config worker's apps
+ *  are fetch modules behind the SDK's entrypoint, and are counted). The SDK's fetch leaves no
+ *  newest cause in its isolate (iterate/lib `runCausedBy`), so an own request's depth stays with
+ *  its own handling. */
+export function causeOfOwnRequest(headers: Headers, host: string): Cause | undefined {
+  if (headers.get(ITX_OWN_HEADER) !== "1") return undefined;
+  const written = headers.get(ITERATE_CAUSE_HEADER);
+  if (!written || written.length > OWN_MARK_LENGTH_LIMIT) return undefined;
+  let fields: unknown;
+  try {
+    fields = JSON.parse(written);
+  } catch {
+    return undefined;
+  }
+  const mark = parseCause(fields);
+  if (!mark?.chain) return undefined;
+  // the cast: the mark parsed as `WrittenCause`, a zod object, so `fields` is an object
+  const { to } = fields as { to?: unknown };
+  if (typeof to !== "string" || sameHost(to) !== sameHost(host)) return undefined;
+  // A request is a new call, so its hops begin at 0: they ride one call alone. The parent goes
+  // into the events that the app appends, so it is taken only as `causeHeader` writes it.
+  const { chain, parent } = mark;
+  const now = Date.now();
+  return oneStepDeeper({
+    chain,
+    depth: Math.min(mark.depth, LOOP_DEPTH_LIMIT + 1),
+    at: Math.min(mark.at ?? now, now),
+    parent: parent && PRINTABLE_ASCII.test(parent) ? parent : undefined,
+  });
+}
+
+/** The longest own mark read. Ours is under 2,500 characters even when every character of its
+ *  chain and parent (512 each) is escaped, with a hostname of 253 and its counts. */
+const OWN_MARK_LENGTH_LIMIT = 4096;
 
 export function deepestCause(causes: readonly (Cause | undefined)[]): Cause | undefined {
   let deepest: Cause | undefined;
@@ -98,15 +162,20 @@ export function crossingOneMore(cause: Cause, into: string, contexts = 1): Cause
   return { ...cause, hops };
 }
 
-export function causeHeader({ chain, depth, at, hops, parent }: Cause): string {
+/** `to`: the host that egress sends the request to, for `causeOfOwnRequest` alone. */
+export function causeHeader({ chain, depth, at, hops, parent }: Cause, to?: string): string {
   return JSON.stringify({
     chain,
     depth,
     at,
     hops: hops ?? 0,
     ...(parent && PRINTABLE_ASCII.test(parent) && { parent }),
+    to,
   });
 }
+
+/** A hostname as DNS compares it: in any letter case, with or without its trailing dot. */
+const sameHost = (host: string) => host.toLowerCase().replace(/\.$/, "");
 
 export function requestCausedBy(request: Request, cause: Cause): Request {
   const headers = new Headers(request.headers);

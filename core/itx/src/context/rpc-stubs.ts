@@ -1,5 +1,5 @@
 import { failureKind } from "iterate/platform-retry";
-import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
+import { codedError, errorCode, ITERATE_CAUSE_HEADER, ITX_OWN_HEADER } from "iterate/lib";
 import { ITERATE_STATEMENT_HEADER } from "iterate/signed";
 import {
   ITX_EXPIRES_HEADER,
@@ -569,6 +569,7 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
     FETCH_UPGRADE_CONTEXT_HEADER,
     FETCH_UPGRADE_EYEBALL_HEADER,
     ITERATE_CAUSE_HEADER,
+    ITX_OWN_HEADER,
     ITX_EXPRESSION_FETCH_HEADER,
     // a mind's signed statement is the platform's alone: none that code wrote goes on
     ITERATE_STATEMENT_HEADER,

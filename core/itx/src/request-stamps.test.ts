@@ -3,15 +3,25 @@
 // worker, an app, a facet and a lent stub each get what the call's `Caller` carries, whatever
 // the Request said and whichever way `fetch` was called.
 import { env } from "cloudflare:workers";
+import { ITERATE_CAUSE_HEADER, ITX_OWN_HEADER, LOOP_LIMIT_HEADER } from "iterate/lib";
 import type { ItxExpression } from "iterate/expression";
 import { stampedCallerOf } from "iterate/principal";
 import { IterateConfigEntrypoint } from "iterate/sdk";
 import { expect, test } from "vitest";
 import { DurableObjectNameCodec } from "./context/paths.ts";
-import { fetchStepsForLoadedCode, RpcStubDirectory } from "./context/rpc-stubs.ts";
+import {
+  fetchStepsForLoadedCode,
+  parseFetchExpression,
+  RpcStubDirectory,
+} from "./context/rpc-stubs.ts";
 import { statelessResolverFor } from "./context/stateless-context.ts";
 import { defineItxHost } from "./host.ts";
-import { IterateContextRpcTarget, type IterateContextNamespace } from "./iterate-context.ts";
+import { causeOfOwnRequest, newChain, parseCause } from "./cause.ts";
+import {
+  IterateContextRpcTarget,
+  statelessExpressionFetch,
+  type IterateContextNamespace,
+} from "./iterate-context.ts";
 import { serveHostRequest } from "./serve-host.ts";
 import { SessionTeardown } from "./session.ts";
 
@@ -41,6 +51,8 @@ const FORGED = {
   "x-itx-expires": "2000000000",
   "x-itx-caller-path": "/",
   "x-itx-app": "1",
+  "x-itx-own": "1",
+  [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: "a forged one", depth: 15 }),
   [CONTROL_PLANE_HOSTNAME]: "iterate.evil.example",
 };
 /** What a request carries when nobody is named: the host's word alone. */
@@ -52,6 +64,8 @@ const NOBODY = {
   "x-itx-expires": null,
   "x-itx-caller-path": null,
   "x-itx-app": null,
+  "x-itx-own": null,
+  [ITERATE_CAUSE_HEADER]: null,
   [CONTROL_PLANE_HOSTNAME]: "iterate.example.com",
 };
 
@@ -107,6 +121,92 @@ test("a member's request to the config worker carries the member, the grant and 
     "x-itx-grant": "grant_1",
     "x-itx-person": JSON.stringify(OWNER),
   });
+});
+
+// THE MIND'S OWN REQUEST RESUMES ITS CHAIN: the mind Worker hands `causeOfOwnRequest` to
+// `serveHostRequest` as the caller's cause (core/mind-worker/src/http.ts), and what the app's
+// handler then does is refused past the limit (./cause.ts).
+test("an own request whose mark is at the loop limit answers 508 with the limit's marker when its handler acts (one stored record is the deployed proof's); with no stamp it acts as before", async () => {
+  const acting = (headers: Record<string, string>) => {
+    const request = new Request("https://guestbook.example.org/act", { headers });
+    return serveHostRequest({
+      ctx,
+      request,
+      caller: {
+        principal: null,
+        cause: causeOfOwnRequest(request.headers, new URL(request.url).hostname),
+      },
+    }) as Promise<Response>;
+  };
+  const mark = (depth: number) =>
+    JSON.stringify({ chain: "a chain", depth, at: Date.now(), to: "guestbook.example.org" });
+  const own = await acting({ [ITX_OWN_HEADER]: "1", [ITERATE_CAUSE_HEADER]: mark(16) });
+  const notOwn = await acting({ [ITERATE_CAUSE_HEADER]: mark(16) });
+  // below the limit the handler's request leaves, and egress names the host it sends to
+  egressed.length = 0;
+  await (await acting({ [ITX_OWN_HEADER]: "1", [ITERATE_CAUSE_HEADER]: mark(3) })).text();
+  expect(egressed.map((sent) => JSON.parse(sent!))).toMatchObject([
+    { chain: "a chain", to: "out.example" },
+  ]);
+  expect({
+    own: [own.status, own.headers.get(LOOP_LIMIT_HEADER)],
+    notOwn: [notOwn.status, await notOwn.text()],
+  }).toEqual({ own: [508, "recorded"], notOwn: [200, "out"] });
+});
+
+// A REDIRECT THAT LOADED CODE'S OWN `fetch` FOLLOWS: the request in a Worker has redirect mode
+// "manual", so the kernel hands the 302 back, and the loaded isolate's runtime follows it with a
+// second call of its global outbound (`ItxEntrypoint.fetch`) and the same SDK mark. Each leg is a
+// fetch that the code made itself: egress names its host, so the second leg resumes at the own
+// host, at the true depth plus one, and the context's rule for `itx.fetch` decides it.
+test("a redirect that loaded code's own fetch follows is a second fetch of the context: its mark names the own host and resumes there one step deeper", async () => {
+  const sdkMark = JSON.stringify({ chain: "a chain", depth: 5, at: Date.now() });
+  egressed.length = 0;
+  for (const url of ["https://outside.example/", "https://own.example.org/"])
+    await (await fetchAsLoadedCode("/", url, sdkMark)).text();
+  const [first, second] = egressed.map((sent) => JSON.parse(sent!));
+  const own = new Headers({ [ITX_OWN_HEADER]: "1", [ITERATE_CAUSE_HEADER]: egressed[1]! });
+  expect({
+    to: [first.to, second.to],
+    resumed: causeOfOwnRequest(own, "own.example.org")?.depth,
+  }).toEqual({ to: ["outside.example", "own.example.org"], resumed: 6 });
+});
+
+test("a rule for itx.fetch that refuses the own host stops that second leg before egress", async () => {
+  egressed.length = 0;
+  const sdkMark = JSON.stringify({ chain: "a chain", depth: 5, at: Date.now() });
+  const legs = await Promise.all(
+    ["https://outside.example/", "https://own.example.org/"].map(async (url) => {
+      const answer = await fetchAsLoadedCode("/narrow", url, sdkMark);
+      return [answer.status, await answer.text()];
+    }),
+  );
+  expect({ legs, egressed }).toEqual({
+    legs: [
+      [200, "out"],
+      [403, "narrow: not an allowed host"],
+    ],
+    egressed: [expect.stringContaining('"to":"outside.example"')],
+  });
+});
+
+// A VISITOR'S MARK: with no cause of the kernel's own, the mark that a request from outside carries
+// reaches neither the app that serves it nor the egress of a route that sends it on.
+test("a visitor's mark reaches neither the app nor the egress of a route that sends the request on", async () => {
+  const mark = JSON.stringify({ chain: "a stranger's", depth: 15, at: Date.now() });
+  egressed.length = 0;
+  const served = (url: string) =>
+    serveHostRequest({
+      ctx,
+      request: new Request(url, { headers: { [ITERATE_CAUSE_HEADER]: mark } }),
+      caller: { principal: null },
+    }) as Promise<Response>;
+  const app = (await stampsOf(await served("https://guestbook.example.org/post"))) as Record<
+    string,
+    string | null
+  >;
+  await (await served("https://proxy.example.org/post")).text();
+  expect({ app: app[ITERATE_CAUSE_HEADER], egressed }).toEqual({ app: null, egressed: [null] });
 });
 
 // THE ACCEPTANCE OF A MIND IN `x-itx-mind` (no reader takes it for a member): a request that
@@ -281,6 +381,10 @@ function lentStub() {
 defineItxHost({
   firstPartyFacets: {},
   loadedCodeRequestHeaders: () => ({ [CONTROL_PLANE_HOSTNAME]: "iterate.example.com" }),
+  egress: async (request: Request) => {
+    egressed.push(request.headers.get(ITERATE_CAUSE_HEADER));
+    return new Response("out");
+  },
   loader: {
     prepareConfinedWorker: async () => ({
       loaderId: "loader-1",
@@ -293,6 +397,34 @@ defineItxHost({
   },
 });
 
+/** The root names the loaded worker `itx.guestbook`. `/narrow` sends its `itx.fetch` to that
+ *  worker's narrow fetch (`answerOf`), which lets only an outside host through. */
+function rulesAt(path: string) {
+  const guestbook = {
+    match: ["itx", "guestbook"],
+    target: ["itx", "builtins", "workers", ["get", SPEC]],
+  };
+  if (path === "/") return [guestbook];
+  if (path === "/narrow")
+    return [guestbook, { match: ["itx", "fetch"], target: ["itx", "guestbook", "fetch"] }];
+  return [];
+}
+
+/** Loaded code's raw `fetch` at `path`, as `ItxEntrypoint.fetch` (iterate-context.ts) takes it:
+ *  the caller's cause is the SDK's mark on the Request, and the expression is `itx.fetch`. */
+function fetchAsLoadedCode(path: string, url: string, mark: string) {
+  const caller = { principal: null, app: true as const, cause: parseCause(mark) };
+  return statelessExpressionFetch(
+    statelessResolverFor({ namespace, address: DurableObjectNameCodec.address(path), caller, ctx }),
+    () => parseFetchExpression("itx.fetch"),
+    new Request(url, { headers: { [ITERATE_CAUSE_HEADER]: mark } }),
+    "itx.fetch",
+  ) as Promise<Response>;
+}
+
+/** The mark on each Request that the host's egress got here. */
+const egressed: (string | null)[] = [];
+
 const SPEC = { source: { "worker.js": "export default {}" }, mainModule: "worker.js" };
 
 /** A mind of two contexts, `/` and `/guestbook`, whose root names the loaded worker
@@ -303,10 +435,7 @@ const namespace = {
   getByName: (name: string) => ({
     rulesSnapshot: async () => ({
       version: "1",
-      rules:
-        DurableObjectNameCodec.parse(name).path === "/"
-          ? [{ match: ["itx", "guestbook"], target: ["itx", "builtins", "workers", ["get", SPEC]] }]
-          : [],
+      rules: rulesAt(DurableObjectNameCodec.parse(name).path),
       routing: {
         ingressTarget: ["itx", "guestbook"],
         fetchRoutes: {
@@ -316,6 +445,13 @@ const namespace = {
             authRequirement: null,
             priority: 0,
             configuredOffset: 1,
+          },
+          proxied: {
+            requestMatcher: { url: { hostname: "proxy.example.org" } },
+            target: ["itx", "fetch"],
+            authRequirement: null,
+            priority: 0,
+            configuredOffset: 3,
           },
           membersOnly: {
             requestMatcher: { url: { hostname: "members.example.org" } },
@@ -360,6 +496,39 @@ function mindStamped(): Record<string, string> {
   return { "x-itx-mind": JSON.stringify(MIND), "x-itx-expires": "2000000000" };
 }
 
+/** The loaded worker's handler acts: its `fetch` out carries the mark of the cause it runs under
+ *  (the SDK carrier's `carryOnFetch`), and the root's outbound entrypoint reads it as
+ *  `ItxEntrypoint.fetch` does (iterate-context.ts), whose span naming needs the runtime. */
+function actOutbound(request: Request) {
+  const caller = {
+    principal: null,
+    app: true as const,
+    cause: parseCause(request.headers.get(ITERATE_CAUSE_HEADER)) || newChain("loaded code"),
+  };
+  return statelessExpressionFetch(
+    statelessResolverFor({ namespace, address: DurableObjectNameCodec.address("/"), caller, ctx }),
+    () => parseFetchExpression("itx.fetch"),
+    new Request("https://out.example/"),
+    "itx.fetch",
+  );
+}
+
+/** The narrow fetch sends an allowed request on through the root's own `itx.fetch`, under the
+ *  cause it runs under. */
+function narrowOut(request: Request) {
+  const caller = {
+    principal: null,
+    app: true as const,
+    cause: parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),
+  };
+  return statelessExpressionFetch(
+    statelessResolverFor({ namespace, address: DurableObjectNameCodec.address("/"), caller, ctx }),
+    () => parseFetchExpression("itx.fetch"),
+    new Request(request.url),
+    "itx.fetch",
+  );
+}
+
 /** The last Request that a loaded worker's `fetch` got here. */
 let lastRequest: Request | undefined;
 
@@ -367,7 +536,12 @@ let lastRequest: Request | undefined;
 function answerOf(request: Request) {
   lastRequest = request;
   // an app that asks the kernel for a session in its answer's place, with no guard of its own
-  const { pathname } = new URL(request.url);
+  const { hostname, pathname } = new URL(request.url);
+  // the narrow fetch of `/narrow`: an outside host goes on to the built-in fetch, an own one not
+  if (hostname === "outside.example") return narrowOut(request);
+  if (hostname === "own.example.org")
+    return new Response("narrow: not an allowed host", { status: 403 });
+  if (pathname === "/act") return actOutbound(request);
   if (pathname === "/asks-itx")
     return new Response(null, { headers: { "x-iterate-serve": "itx" } });
   if (pathname === "/asks-person-itx")

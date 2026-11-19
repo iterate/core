@@ -2,8 +2,14 @@
 // stamped who asks. A request on the control-plane hostname is for the platform's own paths (a signed
 // file URL, a webhook, MCP). A request on any other hostname goes to the mind's own
 // host, which is the config's worker.
-import { contextAt, fetchUpgradeLegResponse, serveHostRequest } from "core-itx";
-import { releasedAnswer } from "iterate/lib";
+import {
+  type Caller,
+  causeOfOwnRequest,
+  contextAt,
+  fetchUpgradeLegResponse,
+  serveHostRequest,
+} from "core-itx";
+import { ITERATE_CAUSE_HEADER, releasedAnswer } from "iterate/lib";
 import { controlPlaneRouteOf } from "iterate/mind-api";
 import { isControlPlaneHostname, controlPlaneOriginOf } from "iterate/mind-config";
 import { stampedCallerOf } from "iterate/principal";
@@ -21,13 +27,15 @@ export async function mindResponse(request: Request, env: Env, ctx: ExecutionCon
   if (leg) return leg;
   const config = mindWorkerConfigOf(env);
   const url = new URL(request.url);
-  if (!isControlPlaneHostname(config, url.hostname))
+  if (!isControlPlaneHostname(config, url.hostname)) {
+    const host = hostRequestOf(request);
     return serveHostRequest({
       ctx,
-      request,
-      caller: stampedCallerOf(request),
+      request: host.request,
+      caller: { ...stampedCallerOf(request), cause: host.cause },
       itxSessions: true,
     });
+  }
   // Of the control plane, the boundary sends the mind the API and MCP alone.
   const route = controlPlaneRouteOf(url);
   // The signature is the permission, so a signed file URL is answered before any bearer check.
@@ -62,6 +70,16 @@ export async function mindResponse(request: Request, env: Env, ctx: ExecutionCon
   }
   if (route === "mcp") return serveMcp(request);
   return new Response("Not found\n", { status: 404 });
+}
+
+/** A request to one of the mind's hosts, and its cause. The mind's own request resumes its chain;
+ *  any other begins one, and its mark goes no further (core/itx/src/cause.ts). */
+export function hostRequestOf(request: Request): { request: Request; cause: Caller["cause"] } {
+  const cause = causeOfOwnRequest(request.headers, new URL(request.url).hostname);
+  if (cause || !request.headers.has(ITERATE_CAUSE_HEADER)) return { request, cause };
+  const headers = new Headers(request.headers);
+  headers.delete(ITERATE_CAUSE_HEADER);
+  return { request: new Request(request, { headers }), cause: undefined };
 }
 
 /** No secret material: core/alchemy/scripts/smoke.ts reads these. */

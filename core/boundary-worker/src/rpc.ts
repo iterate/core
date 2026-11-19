@@ -27,10 +27,17 @@ import {
 } from "iterate/signed";
 import { z } from "zod";
 import { boundaryConfigOf } from "./config.ts";
-import type { DoorEnv } from "./env.ts";
+import type { Env } from "./env.ts";
+import { boundaryResponse } from "./http.ts";
+import { mindTransportOf } from "./mind-transport.ts";
 import { ownRequestHeaders } from "./own-request.ts";
 
-export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
+// The Door is an entrypoint of the boundary Worker, whose `env` holds the mind's binding too.
+/** `provided`: the Door that a mind which runs elsewhere is given (./provided-mind.ts). The stack's
+ *  own binding (core/alchemy `DOOR`) sets none. */
+export type DoorProps = { provided?: true };
+
+export class Door extends WorkerEntrypoint<Env, DoorProps> implements DoorService {
   async fetch(request: Parameters<DoorService["fetch"]>[0]) {
     // Only the Door names a secret in SECRET_USE_HEADER, and only `fetchForMind` signs.
     const headers = new Headers(request.headers);
@@ -55,14 +62,18 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
     // The boundary's handler refuses a hostname that ends with a dot (421): the mind's own
     // request goes in as the same DNS name without it.
     url.hostname = url.hostname.replace(/\.$/, "");
-    // The global `fetch` fails inside a zone of the stack: the boundary's own handler answers, and
-    // strips the mind's stamps. The cast: the boundary declares no `GlobalProps`, so `ctx.exports`
-    // has no typed member, and the default export of a Worker's main module is its fetch handler.
-    const inbound = (this.ctx.exports as unknown as { default: Fetcher }).default;
-    // The mind's own request to one of its hosts is nobody's (./own-request.ts).
+    // The global `fetch` fails inside a zone of the stack: the boundary's own handler answers, in
+    // this invocation, and strips the mind's stamps. An argument, never a header, says that the
+    // request is the mind's own, so nothing from outside can say it. The mind's own request to one
+    // of its hosts is nobody's (./own-request.ts). Only the stack's own mind Worker says so: a
+    // provided mind's Door may serve a session that is not the active mind's.
     return withFacts(
-      await inbound.fetch(
+      await boundaryResponse(
         new Request(url, new Request(outbound, { headers: ownRequestHeaders(outbound.headers) })),
+        this.env,
+        this.ctx,
+        mindTransportOf(this.env),
+        this.ctx.props?.provided ? {} : { own: true },
       ),
       [],
     );
