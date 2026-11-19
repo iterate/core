@@ -27,9 +27,11 @@ import {
   onboardingCards,
   onboardingEvent,
   type OnboardingItx,
+  onboardingMindEvent,
   runStep,
   type StepContext,
   stepEvent,
+  stepMindEvent,
 } from "../../configs/default/apps/onboarding/steps.ts";
 import {
   aiStatus,
@@ -46,6 +48,7 @@ const STEP = "connect-iterate-cloud";
 const MELD = "/minds/iterate.iterate.com";
 const NOW = Date.parse("2026-11-18T22:00:00Z");
 const BALANCE = { grantedUsd: 10, spentUsd: 0.42, remainingUsd: 9.58 };
+const MIND_ID = "this-mind-id";
 
 // ── the reduce ──
 
@@ -279,33 +282,83 @@ test("an owner's own OpenAI key is never written: the credit takes Exa alone, an
 });
 
 test.for([
-  ["none-today", /today's are gone\. Try again tomorrow \(UTC\)\./],
-  ["paused", /iterate's credit is paused until tomorrow \(UTC\)\./],
+  [
+    "none-today",
+    "failed",
+    "iterate made all its new grants for today. Try again tomorrow (UTC).",
+    "Try again · Not now · End the rule",
+  ],
+  [
+    "paused",
+    "failed",
+    "iterate's credit is paused until tomorrow (UTC).",
+    "Try again · Not now · End the rule",
+  ],
   [
     "not-approved",
-    /iterate has not approved this mind yet\. A person at iterate approves each mind\. Try again when they have\./,
+    "waiting",
+    "iterate has your request. A person at iterate approves each mind. You get the credit when they have.",
+    "Try again · Not now · End the rule",
   ],
-  ["not-recognised", /did not recognise this mind's signature/],
-  ["cloud-unreachable", /iterate Cloud did not answer\. Try again in a minute\./],
+  [
+    "ended",
+    "ended",
+    "A person at iterate ended this mind's credit. Your mind goes on with its own keys.",
+    "End the rule",
+  ],
+  [
+    "hostname-enrolled",
+    "failed",
+    "Another mind at this hostname has iterate's credit. A person at iterate ends it first; then try again.",
+    "Try again · Not now · End the rule",
+  ],
+  [
+    "not-recognised",
+    "failed",
+    "iterate Cloud did not recognise this mind's signature. Update your mind on your computer, then try again.",
+    "Try again · Not now · End the rule",
+  ],
+  [
+    "cloud-unreachable",
+    "failed",
+    "iterate Cloud did not answer. Try again in a minute.",
+    "Try again · Not now · End the rule",
+  ],
 ] as const)(
-  "a grant refused as %s sets no secret, and the card says why",
-  async ([reason, words]) => {
+  "a grant refused as %s sets no secret and deletes none, and the card says why",
+  async ([reason, status, words, buttons]) => {
     const mind = fakeMind({ meld: "member" });
     const { credit, calls, secrets } = fakeCredit({ connect: { ok: false, reason } });
     const answer = await runStep(contextOf(mind, credit), STEP, "connect");
-    expect(calls.filter((call) => call.startsWith("set "))).toEqual([]);
+    expect(calls.filter((call) => /^(set|delete) /.test(call))).toEqual([]);
     expect(secrets).toEqual({ "/secrets/openai": "unset", "/secrets/exa": "unset" });
-    expect(answer).toMatchObject({ status: "failed" });
-    expect(answer.words).toMatch(words);
+    expect(answer).toMatchObject({ status });
+    // the first line, outside the fold, then the rule that stands, then the buttons (an update's
+    // command between them has a test of its own)
+    const lines = answer.words.split("\n\n").slice(1);
+    expect(lines.filter((line) => !line.startsWith("Command: "))).toEqual([
+      words,
+      "Your signed rule still lets iterate send help and updates to this mind. End it with your passkey to stop that.",
+      `Buttons: ${buttons}`,
+    ]);
   },
 );
+
+test("the 200 at the connect: both secrets by iterate's proxy where none is set, the card connected, none deleted", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const { credit, calls, secrets } = fakeCredit({ secrets: { "/secrets/openai": "own" } });
+  const answer = await runStep(contextOf(mind, credit), STEP, "connect");
+  expect(answer).toMatchObject({ status: "connected" });
+  expect(secrets).toEqual({ "/secrets/openai": "own", "/secrets/exa": "iterate-proxy" });
+  expect(calls.filter((call) => /^(set|delete) /.test(call))).toEqual(["set /secrets/exa"]);
+});
 
 test("not approved yet: no secret by proxy, the rule stands, and a press once iterate approved the mind connects with no new passkey", async () => {
   const mind = fakeMind({ meld: "member" });
   const fake = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
   const context = contextOf(mind, fake.credit);
   const refused = await runStep(context, STEP, "connect");
-  expect(refused).toMatchObject({ status: "failed" });
+  expect(refused).toMatchObject({ status: "waiting" });
   expect(fake).toMatchObject({ secrets: { "/secrets/openai": "unset", "/secrets/exa": "unset" } });
   expect(refused.words).toMatch(/Your signed rule still lets iterate send help and updates/);
   expect(refused.words).toMatch(/Buttons: Try again · Not now · End the rule/);
@@ -342,7 +395,7 @@ test.for([
     expect(note).toHaveLength(1);
     expect(note[0]).toMatch(/The rule stands until the owner ends it with their passkey/);
     const card = await runStep(context, STEP, "check");
-    expect(card).toMatchObject({ status: "failed" });
+    expect(card).toMatchObject({ status: reason === "not-approved" ? "waiting" : "failed" });
     expect(card.words).toMatch(
       /Your signed rule still lets iterate send help and updates to this mind\. End it with your passkey to stop that\./,
     );
@@ -969,6 +1022,147 @@ test("a request that iterate's proxy refused for storage starts a check and chan
   expect(mind).toMatchObject({ mailed: [] });
 });
 
+test("iterate's limit at the provider on a forwarded answer deletes no secret by iterate's proxy: the card stays connected", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  const before = await runStep(context, STEP, "check");
+  fake.calls.length = 0;
+  await hook(mind, fake.credit, {
+    type: "events.iterate.com/agent/llm-request-settled",
+    path: "/agents/a",
+    offset: 901,
+    payload: {
+      failedKeys: [{ key: 1, error: "503 iterate_credit_provider_limit: iterate's limit" }],
+    },
+  });
+  expect(fake).toMatchObject({
+    calls: ["balance"],
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" },
+  });
+  expect(await runStep(context, STEP, "check")).toEqual(before);
+});
+
+test("enrolment-open from iterate.iterate.com connects a waiting step once: a second delivery connects no second time, and the agent is told once", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
+  const context = contextOf(mind, fake.credit);
+  expect(await runStep(context, STEP, "connect")).toMatchObject({ status: "waiting" });
+  // a person at iterate let the hostname in
+  fake.state.connect = { ok: true, balance: BALANCE };
+  fake.calls.length = 0;
+  const open = fromIterate("events.iterate.com/cloud/enrolment-open", {
+    hostname: "mind.example.com",
+  });
+  await mindHook(mind, fake.credit, open);
+  await mindHook(mind, fake.credit, open);
+  expect(fake.calls.filter((call) => call === "connect")).toEqual(["connect"]);
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" },
+  });
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "connected" });
+  expect(mind.chat().map((event) => JSON.stringify(event.payload))).toEqual([
+    expect.stringMatching(/iterate approved this mind just now, and the mind has \$9\.58/),
+  ]);
+  expect(mind).toMatchObject({ proposed: [] });
+});
+
+test("enrolment-open does nothing on a declined step, on one with no rule, and from any other signer or path", async () => {
+  const declined = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
+  const context = contextOf(declined, fake.credit);
+  await runStep(context, STEP, "connect");
+  await nextMs();
+  await runStep(context, STEP, "decline");
+  fake.state.connect = { ok: true, balance: BALANCE };
+  fake.calls.length = 0;
+  const open = fromIterate("events.iterate.com/cloud/enrolment-open", {
+    hostname: "mind.example.com",
+  });
+  await mindHook(declined, fake.credit, open);
+  expect(fake.calls).not.toContain("connect");
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "declined" });
+
+  // no rule: no connect, and no passkey page from an event
+  const unsigned = fakeMind();
+  const quiet = fakeCredit();
+  await mindHook(unsigned, quiet.credit, open);
+  expect(quiet).toMatchObject({ calls: [] });
+  expect(unsigned).toMatchObject({ proposed: [] });
+
+  // another signer, or another path: returns before anything is read
+  let reads = 0;
+  const itx = new Proxy(
+    {},
+    {
+      get: () => {
+        reads += 1;
+        throw new Error("read");
+      },
+    },
+  ) as OnboardingItx;
+  for (const event of [
+    { ...open, source: { signer: { principal: { kind: "mind", actor: "other.example.com" } } } },
+    { ...open, source: { signer: { principal: { actor: "iterate.iterate.com" } } } },
+    { ...open, source: undefined },
+    { ...open, path: "/minds/iterate.iterate.com/other" },
+  ])
+    await onboardingMindEvent(itx, event);
+  expect(reads).toBe(0);
+});
+
+test("enrolled for THIS mind's id settles the step connected, with the secrets, as a 200 does; for another id nothing; a failure throws nothing", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.state.connect = { ok: true, balance: BALANCE };
+  fake.calls.length = 0;
+  const grant = { hostname: "mind.example.com", grantedUsd: 10, remainingUsd: 10 };
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  await mindHook(
+    mind,
+    fake.credit,
+    fromIterate("events.iterate.com/cloud/enrolled", { ...grant, mind: "other-mind-id" }),
+  );
+  expect(info).toHaveBeenCalledTimes(1);
+  info.mockRestore();
+  expect(fake.calls).not.toContain("connect");
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "waiting" });
+
+  await mindHook(
+    mind,
+    fake.credit,
+    fromIterate("events.iterate.com/cloud/enrolled", { ...grant, mind: MIND_ID }),
+  );
+  expect(fake.calls.filter((call) => call === "connect")).toEqual(["connect"]);
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" },
+  });
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "connected" });
+  expect(mind.chat()).toHaveLength(1);
+
+  // the hook's own failure: one log line, no throw, and the card keeps its state
+  const broken = fakeMind({ meld: "member" });
+  const failing = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
+  await runStep(contextOf(broken, failing.credit), STEP, "connect");
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const itx = { ...broken.itx, url: async () => Promise.reject(new Error("no url")) };
+  await expect(
+    onboardingMindEvent(
+      itx as OnboardingItx,
+      fromIterate("events.iterate.com/cloud/enrolment-open", { hostname: "mind.example.com" }),
+    ),
+  ).resolves.toBeUndefined();
+  expect(warn).toHaveBeenCalledTimes(1);
+  warn.mockRestore();
+  await nextMs();
+  expect(await runStep(contextOf(broken, failing.credit), STEP, "check")).toMatchObject({
+    status: "waiting",
+  });
+});
+
 test("the tool refuses a step or an action it does not have, with the ones it has", async () => {
   const mind = fakeMind();
   const { credit } = fakeCredit();
@@ -1160,6 +1354,8 @@ test.for([
     },
     "not-approved",
   ],
+  [403, { error: { code: "iterate_credit_ended" } }, "ended"],
+  [409, { error: { code: "iterate_credit_hostname_enrolled" } }, "hostname-enrolled"],
   [401, {}, "not-recognised"],
   [502, {}, "no-working-key"],
   [500, {}, "cloud-unreachable"],
@@ -1381,6 +1577,18 @@ test("verifyAi translates 402/401/429 and SSE failures into clean human-readable
     ),
   ).toContain("iterate Cloud has not approved this mind yet");
 
+  // iterate's own limit at the provider, on a forwarded answer: for each provider, the same words
+  for (const provider of ["iterate-cloud", "openai"] as const)
+    expect(
+      humanAiError(
+        provider,
+        503,
+        JSON.stringify({ error: { code: "iterate_credit_provider_limit", message: "Limit" } }),
+      ),
+    ).toBe(
+      "iterate's account at the provider reached its spend limit, and iterate is told. Your mind goes on with its own keys.",
+    );
+
   // SSE 200 with response.failed event must fail, not pass
   const failedSse = fakeVerifyItx({
     secrets: { "/secrets/openai": { set: true } },
@@ -1441,7 +1649,7 @@ test("one note at the owner's signed rule, which starts the agent's turn: with t
   const [note] = refused.chat();
   expect(refused.chat()).toHaveLength(1);
   expect(JSON.stringify(note?.payload)).toMatch(
-    /The credit did not come: iterate gives a limited number/,
+    /The credit did not come: iterate made all its new grants for today/,
   );
   // a connect on a mind whose rule was signed before writes no note: the press shows the outcome
   const before = fakeMind({ meld: "member" });
@@ -1473,6 +1681,80 @@ test("a note that fails at the signed rule leaves the connect waiting: the retry
   expect(mind.chat().map((event) => JSON.stringify(event.payload))).toEqual([
     expect.stringMatching(/\$9\.58 of iterate's credit/),
   ]);
+});
+
+test("at iterate's enrolment-open, a note that fails is one log line: the connect still settles connected, with no ask left waiting", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.state.connect = { ok: true, balance: BALANCE };
+  const itx = {
+    ...mind.itx,
+    cd: (path: string) => {
+      const at = mind.itx.cd(path);
+      if (path !== "/agents/onboarding") return at;
+      return { ...at, append: async () => Promise.reject(new Error("the append failed")) };
+    },
+  } as OnboardingItx;
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await stepMindEvent(
+    async () => ({ ...context, itx }),
+    fromIterate("events.iterate.com/cloud/enrolment-open", { hostname: "mind.example.com" }),
+  );
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "onboarding.approved-note-failed" }),
+  );
+  warn.mockRestore();
+  await nextMs();
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "connected" });
+  expect(mind.chat()).toEqual([]);
+});
+
+test("at iterate's enrolment-open, a settle that throws once ends the ask as stopped at once: Try again, and a later event of iterate's connects", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.state.connect = { ok: true, balance: BALANCE };
+  let fail = true;
+  const itx = {
+    ...mind.itx,
+    cd: (path: string) => {
+      const at = mind.itx.cd(path);
+      if (path !== "/apps/onboarding") return at;
+      return {
+        ...at,
+        append: async (...events: { type: string }[]) => {
+          if (fail && events[0]?.type === "onboarding/step-action-settled") {
+            fail = false;
+            throw new Error("the settle failed");
+          }
+          return at.append(...(events as Parameters<typeof at.append>));
+        },
+      };
+    },
+  } as OnboardingItx;
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await stepMindEvent(
+    async () => ({ ...context, itx }),
+    fromIterate("events.iterate.com/cloud/enrolment-open", { hostname: "mind.example.com" }),
+  );
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "onboarding.mind-event-failed" }),
+  );
+  warn.mockRestore();
+  await nextMs();
+  // the secrets were set before the settle failed: the credit pays, and the card says the connect
+  // stopped, with Try again, at once and not after the ask's expiry
+  const stopped = await runStep(context, STEP, "check");
+  expect(stopped).toMatchObject({ status: "connected" });
+  expect(stopped.words).toMatch(/The connect stopped before it finished\./);
+  expect(stopped.words).toMatch(/Buttons: Try again/);
+  await nextMs();
+  const again = await runStep(context, STEP, "connect");
+  expect(again).toMatchObject({ status: "connected" });
+  expect(again.words).not.toMatch(/stopped/);
 });
 
 test("the credit-used mail goes once for each grant: two checks at the same moment, and a balance that passes zero again, send no second one", async () => {
@@ -1607,7 +1889,7 @@ function fakeMind(
   const proposed: { payload: unknown; next?: string }[] = [];
   const mailed: { from: string; to: unknown; text?: string }[] = [];
   const itx = {
-    whoami: async () => ({ path: "/", mindSlug: "mind.example.com" }),
+    whoami: async () => ({ path: "/", mindSlug: "mind.example.com", mindId: MIND_ID }),
     url: async () => "https://example.com/",
     cd: (path: string) => ({
       readEvents: async (after = 0) => ({
@@ -1789,6 +2071,20 @@ const contextOf = (mind: ReturnType<typeof fakeMind>, credit: CloudCredit): Step
 /** The hook, as worker.ts calls it, with the double in place of the real calls. */
 const hook = (mind: ReturnType<typeof fakeMind>, credit: CloudCredit, event: MindEvent) =>
   stepEvent(contextOf(mind, credit), event);
+
+/** The hook for another mind's event (worker.ts `processMindEvent`), with the double. */
+const mindHook = (mind: ReturnType<typeof fakeMind>, credit: CloudCredit, event: MindEvent) =>
+  stepMindEvent(async () => contextOf(mind, credit), event);
+
+/** An event iterate.iterate.com signed on the mind's `/minds/iterate.iterate.com/cloud`. */
+let delivered = 5000;
+const fromIterate = (type: string, payload: Record<string, unknown>): MindEvent => ({
+  type,
+  path: "/minds/iterate.iterate.com/cloud",
+  offset: ++delivered,
+  payload,
+  source: { signer: { principal: { kind: "mind", actor: "iterate.iterate.com" } } },
+});
 
 function realCredit(answers: {
   describe?: Record<string, unknown>;

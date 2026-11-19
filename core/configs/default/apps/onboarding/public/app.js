@@ -186,6 +186,7 @@ function App() {
       cloudCard &&
       (cloudCard.status === "not-asked" ||
         cloudCard.status === "unavailable" ||
+        cloudCard.status === "waiting" ||
         cloudCard.status === "connecting");
     if (shouldDecline) {
       setBusy("decline");

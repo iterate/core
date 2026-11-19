@@ -10,7 +10,12 @@ import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 import { dashApp } from "./apps/dash/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
-import { onboardingEvent, runStep, stepContext } from "./apps/onboarding/steps.ts";
+import {
+  onboardingEvent,
+  onboardingMindEvent,
+  runStep,
+  stepContext,
+} from "./apps/onboarding/steps.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
 // Voice devices and the phone line (apps.md, "Voice devices") are off: take the "// " off this
 // line and off `installVoice` in the init case below, in the commit that adds the package.
@@ -312,6 +317,8 @@ export default class extends IterateConfigEntrypoint {
     itx,
   }: IterateConfigProcessEventArgs<"agents"> & { mind: string }) {
     if (cloudDeliveryOf(event)) await cloudDeliveryEvent(itx, event);
+    // iterate let this mind in, or granted its credit: the onboarding step connects (never throws)
+    await onboardingMindEvent(itx, event);
   }
 
   // The platform has stored this mail on /integrations/email already; replies and agents react to

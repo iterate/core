@@ -1,11 +1,13 @@
-// steps.ts — THE LIST OF ONBOARDING STEPS, and the three ways in to them: `runStep` (a button's
+// steps.ts — THE LIST OF ONBOARDING STEPS, and the four ways in to them: `runStep` (a button's
 // press, and the same as the agent's tool `itx.config.onboardingStep(step, action)`),
-// `onboardingCards` (what the page draws), and `onboardingEvent` (the hook in worker.ts, for the
-// events of the mind that change a step). A step is one module of steps/ with
+// `onboardingCards` (what the page draws), `onboardingEvent` (the hook in worker.ts, for the
+// events of the mind that change a step) and `onboardingMindEvent` (worker.ts `processMindEvent`,
+// for iterate.iterate.com's enrolment events). A step is one module of steps/ with
 // `{ id, actions, offered, words, check, act, hears, onEvent }`; a new step is one more entry in
 // `STEPS`. Every step writes the four events of contract.ts on `/apps/onboarding`.
 import { errorCode } from "iterate/lib";
 import type { IterateConfigProcessEventArgs } from "iterate/sdk";
+import { ITERATE_MIND } from "../../cloud-deliveries.ts";
 import {
   ONBOARDING_CONTEXT,
   type OnboardingEvent,
@@ -14,7 +16,11 @@ import {
   type StepState,
 } from "./contract.ts";
 import { type CloudCredit, cloudCredit } from "./cloud-credit.ts";
-import { CREDIT_OPEN, connectIterateCloud } from "./steps/connect-iterate-cloud.ts";
+import {
+  CREDIT_OPEN,
+  connectIterateCloud,
+  ENROLMENT_CONTEXT,
+} from "./steps/connect-iterate-cloud.ts";
 
 /** The mind as the steps use it: the root's itx. */
 export type OnboardingItx = Pick<
@@ -80,6 +86,13 @@ export type StepLog = {
     action: string,
     signing?: { link?: string; expires: number; attempt?: string },
   ): Promise<number>;
+  /** Asks for an action once for each `once`: the ask's offset, or nothing when this `once` asked
+   *  before (a second delivery of the same event). */
+  requestOnce(
+    action: string,
+    once: string,
+    signing: { expires: number },
+  ): Promise<number | undefined>;
   settle(requestOffset: number, failure?: { reason: string; words?: string }): Promise<void>;
 };
 
@@ -105,6 +118,13 @@ export type Step = {
   /** Whether an event of the mind concerns the step: a cheap test, before anything is read. */
   hears(event: MindEvent): boolean;
   onEvent(context: StepContext, event: MindEvent, state: StepState, log: StepLog): Promise<void>;
+  /** An event iterate.iterate.com signed on `ENROLMENT_CONTEXT` (`onboardingMindEvent`). */
+  onMindEvent?(
+    context: StepContext,
+    event: MindEvent,
+    state: StepState,
+    log: StepLog,
+  ): Promise<void>;
   /** After a check changed the facts: what the step does once at that change. */
   changed?(
     context: StepContext,
@@ -119,7 +139,9 @@ export type MindEvent = {
   path: string;
   offset: number;
   payload?: unknown;
-  source?: { signer?: { principal: { email?: string }; member?: boolean } };
+  source?: {
+    signer?: { principal: { email?: string; kind?: string; actor?: string }; member?: boolean };
+  };
 };
 
 /** THE STEPS, in the order the page shows them. */
@@ -201,6 +223,16 @@ function logOf(context: StepContext, step: Step, state: OnboardingState): StepLo
       const now = (await readState(context.itx)).steps[step.id]?.action;
       if (!now) throw new Error(`onboarding: the ask "${action}" of ${step.id} did not land`);
       return now.requestOffset;
+    },
+    async requestOnce(action, once, signing) {
+      const offset = await append(
+        context.itx,
+        "onboarding/step-action-requested",
+        `onboarding/step-action-requested:${step.id}:${action}:${once}`,
+        { step: step.id, action, expires: new Date(signing.expires).toISOString() },
+      );
+      // the same key with the same payload answers the ask that landed before: not a new one
+      return offset !== undefined && offset > state.offset ? offset : undefined;
     },
     async settle(requestOffset, failure) {
       await append(
@@ -351,6 +383,52 @@ export async function onboardingCards(context: StepContext): Promise<Card[]> {
 export async function onboardingEvent(itx: OnboardingItx, event: MindEvent) {
   if (!STEPS.some((step) => step.hears(event))) return;
   await stepEvent(await stepContext(itx), event);
+}
+
+/** THE HOOK FOR ANOTHER MIND'S EVENT (worker.ts `processMindEvent`): an event on
+ *  `ENROLMENT_CONTEXT` that the mind iterate.iterate.com signed. Any other returns before anything
+ *  is read. It never throws: a failure is one log line, and the card keeps its state. */
+export async function onboardingMindEvent(itx: OnboardingItx, event: MindEvent) {
+  await stepMindEvent(() => stepContext(itx), event);
+}
+
+/** That hook's work, with the steps' context made only for an event it takes: a check, the step's
+ *  own reaction, then a check. */
+export async function stepMindEvent(contextOf: () => Promise<StepContext>, event: MindEvent) {
+  if (!enrolmentOf(event)) return;
+  try {
+    const context = await contextOf();
+    const cause = `${event.path}@${event.offset}`;
+    for (const step of STEPS) {
+      if (!step.onMindEvent || !step.offered(context)) continue;
+      const state = await refresh(context, step, await readState(context.itx), cause);
+      await step.onMindEvent(
+        context,
+        event,
+        state.steps[step.id] || blank(),
+        logOf(context, step, state),
+      );
+      await refresh(context, step, await readState(context.itx), `after:${cause}`);
+    }
+  } catch (error) {
+    console.warn({
+      event: "onboarding.mind-event-failed",
+      type: event.type,
+      offset: event.offset,
+      error: String(error),
+    });
+  }
+}
+
+/** iterate.iterate.com's own event on `ENROLMENT_CONTEXT`, as cloud-deliveries.ts `cloudDeliveryOf`
+ *  tests a delivery in the mind form: the signer is the mind, by its key. */
+function enrolmentOf(event: MindEvent): boolean {
+  const principal = event.source?.signer?.principal;
+  return (
+    event.path === ENROLMENT_CONTEXT &&
+    principal?.kind === "mind" &&
+    principal.actor === ITERATE_MIND
+  );
 }
 
 /** The hook's work, for each step that hears the event: its own reaction, then a check. */

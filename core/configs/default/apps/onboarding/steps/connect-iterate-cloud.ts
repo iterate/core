@@ -101,11 +101,13 @@ const FAILURES: Record<string, string> = {
   "not-recognised": `iterate Cloud did not recognise this mind's signature. Update your mind on your computer, then try again.`,
   "no-working-key": `iterate Cloud could not check this mind's key. Update your mind on your computer, then try again.`,
   "stack-without-proxy": `This mind's platform code cannot use the credit yet. Update your mind on your computer, then try again.`,
-  "none-today":
-    "iterate gives a limited number of new credits each day, and today's are gone. Try again tomorrow (UTC).",
+  "none-today": "iterate made all its new grants for today. Try again tomorrow (UTC).",
   paused: "iterate's credit is paused until tomorrow (UTC).",
   "not-approved":
-    "iterate has not approved this mind yet. A person at iterate approves each mind. Try again when they have.",
+    "iterate has your request. A person at iterate approves each mind. You get the credit when they have.",
+  ended: "A person at iterate ended this mind's credit. Your mind goes on with its own keys.",
+  "hostname-enrolled":
+    "Another mind at this hostname has iterate's credit. A person at iterate ends it first; then try again.",
   stopped: "The connect stopped before it finished.",
   spent: "This mind's iterate credit is used.",
   "approval-rule":
@@ -326,6 +328,31 @@ function words(state: StepState, context: StepContext): Card {
         { label: "Not now", action: "decline" },
       ],
     };
+  // iterate has the request, and a person there approves it: iterate's `cloud/enrolment-open`
+  // connects (`enrolmentEvent`), and Try again does the same at once
+  if (state.failure?.reason === "not-approved")
+    return {
+      ...card,
+      status: "waiting",
+      title: "Waiting for iterate",
+      optional: true,
+      text: [FAILURES["not-approved"]!, ...(facts?.meld ? [RULE_STANDS] : [])],
+      buttons: [
+        { label: "Try again", action: "connect", primary: true },
+        { label: "Not now", action: "decline" },
+        ...(facts?.meld ? [{ label: "End the rule", action: "disconnect" }] : []),
+      ],
+    };
+  // iterate ended the credit for good: no Try again
+  if (state.failure?.reason === "ended")
+    return {
+      ...card,
+      status: "ended",
+      title: "No credit from iterate Cloud",
+      optional: true,
+      text: [FAILURES.ended!, ...(facts?.meld ? [RULE_STANDS] : [])],
+      buttons: facts?.meld ? [{ label: "End the rule", action: "disconnect" }] : [],
+    };
   // a press on a spent grant: while spent the spent card says it; once the balance is back, the offer
   if (state.failure && state.failure.reason !== "spent")
     return {
@@ -448,14 +475,24 @@ async function finishConnect(
   context: StepContext,
   requestOffset: number,
   log: StepLog,
-  options: { tell?: boolean } = {},
+  options: { tell?: "signed" | "approved" } = {},
 ): Promise<void> {
   const outcome = await creditOutcome(context);
   const failure = "failed" in outcome && { reason: outcome.failed, words: outcome.words };
   // The note comes BEFORE the settle: while the connect waits, cloud-handover.ts writes no note
   // of its own, so a retry after a failure between the two still finds it waiting and writes
   // this one (keyed: once).
-  if (options.tell) await tellSigned(context, requestOffset, outcome);
+  if (options.tell === "signed") await tellSigned(context, requestOffset, outcome);
+  // iterate's approval tells the agent only when the credit came: a failure stays on the card.
+  // No event of the owner's waits for this note, and the hook keeps no throw for a retry, so a
+  // note that fails is one log line and the settle still comes
+  if (options.tell === "approved" && "remainingUsd" in outcome)
+    await tellAgent(context, `onboarding/connected:${requestOffset}`, {
+      role: "developer",
+      content: `iterate approved this mind just now, and the mind has ${dollars(outcome.remainingUsd)} of iterate's credit for ${outcome.pays.join(" and ") || "nothing: the owner's own keys stay in use"} (by iterate's proxy, where no key of theirs was set). Tell the owner in one sentence, with the balance (onboarding/connect-iterate-cloud.md).`,
+    }).catch((error: unknown) =>
+      console.warn({ event: "onboarding.approved-note-failed", error: String(error) }),
+    );
   await log.settle(requestOffset, failure || undefined);
 }
 
@@ -626,7 +663,7 @@ async function onEvent(context: StepContext, event: MindEvent, state: StepState,
   if (rule.data.append.length > 0) {
     if (state.action?.name !== "connect") return;
     const { requestOffset } = state.action;
-    await finishConnect(context, requestOffset, log, { tell: true });
+    await finishConnect(context, requestOffset, log, { tell: "signed" });
     return;
   }
   // the rule and the credit are one offer: the end of the rule ends the credit
@@ -680,6 +717,53 @@ async function changed(
     );
 }
 
+/** WHERE iterate.iterate.com adds its enrolment events, under the path the owner's rule lets it
+ *  append to. steps.ts `onboardingMindEvent` hands the step only those it signed. */
+export const ENROLMENT_CONTEXT = `${MELD_CONTEXT}/cloud`;
+const EnrolmentOpen = z.object({ hostname: z.string() });
+const Enrolled = z.object({ mind: z.string(), hostname: z.string() });
+
+/** The cards on which the step waits for iterate: the last connect did not come, and it was not
+ *  ended. Not connected, not declined, no ask that waits, and not spent. */
+const WAITS_FOR_ITERATE = new Set(["waiting", "failed"]);
+
+/** iterate LET THIS MIND IN (`cloud/enrolment-open`), or GRANTED IT (`cloud/enrolled`, for THIS
+ *  mind's id): the step connects as Try again does, with no new passkey, once for each delivered
+ *  event (`requestOnce`, keyed by the event). On a declined, ended or connected step: nothing. */
+async function onMindEvent(context: StepContext, event: MindEvent, state: StepState, log: StepLog) {
+  if (event.type === "events.iterate.com/cloud/enrolled") {
+    const enrolled = Enrolled.safeParse(event.payload).data;
+    const { mindId } = await context.itx.whoami();
+    if (!enrolled || enrolled.mind !== mindId) {
+      console.info({ event: "onboarding.enrolled-another-mind", mind: enrolled?.mind });
+      return;
+    }
+  } else if (
+    event.type !== "events.iterate.com/cloud/enrolment-open" ||
+    !EnrolmentOpen.safeParse(event.payload).success
+  )
+    return;
+  if (!factsOf(state)?.meld || !WAITS_FOR_ITERATE.has(words(state, context).status)) return;
+  const requestOffset = await log.requestOnce("connect", `${event.path}@${event.offset}`, {
+    expires: context.now + CONNECT_MS,
+  });
+  if (requestOffset === undefined) return;
+  try {
+    await finishConnect(context, requestOffset, log, { tell: "approved" });
+  } catch (error) {
+    // the hook keeps no throw, so no redelivery comes: the ask ends now as "stopped", and the card
+    // shows Try again, and a later event of iterate's finds it failed and connects again. When the
+    // settle itself is what failed, this one may fail too: then the ask waits for its `expires`,
+    // as before, and the next check settles it
+    await log
+      .settle(requestOffset, { reason: "stopped" })
+      .catch((settleError: unknown) =>
+        console.warn({ event: "onboarding.stopped-settle-failed", error: String(settleError) }),
+      );
+    throw error;
+  }
+}
+
 export const connectIterateCloud: Step = {
   id: "connect-iterate-cloud",
   // the passkey page comes only to sign the rule (Connect with none) or to end it (Disconnect with
@@ -696,5 +780,6 @@ export const connectIterateCloud: Step = {
   act,
   hears,
   onEvent,
+  onMindEvent,
   changed,
 };

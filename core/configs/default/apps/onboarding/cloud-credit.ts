@@ -40,6 +40,8 @@ export type CreditFailure =
   | "paused" // 402 iterate_credit_paused: iterate's total for the day is spent
   | "not-connected" // 402 iterate_credit_not_connected: this mind has no grant (a balance)
   | "not-approved" // 403 iterate_credit_not_approved: an owner of iterate has not let this mind in yet
+  | "ended" // 403 iterate_credit_ended: a person at iterate ended this mind's credit, for good
+  | "hostname-enrolled" // 409 iterate_credit_hostname_enrolled: another mind id at this hostname has it
   | "not-recognised" // 401: the Cloud did not recognise this mind's signature
   | "no-working-key" // 502: the Cloud could not use this mind's key
   | "stack-without-proxy" // the stack keeps no secret by proxy
@@ -101,12 +103,14 @@ const Description = z.object({
 const StackKey = z.object({ listed: z.boolean().optional() });
 const Refusal = z.object({ error: z.object({ code: z.string(), message: z.string().optional() }) });
 
-/** The 402 codes of the secret proxy, by the step's name for each. */
+/** The refusal codes of the secret proxy (402, 403 and 409), by the step's name for each. */
 const REFUSALS: Record<string, CreditFailure> = {
   iterate_credit_none_today: "none-today",
   iterate_credit_paused: "paused",
   iterate_credit_not_connected: "not-connected",
   iterate_credit_not_approved: "not-approved",
+  iterate_credit_ended: "ended",
+  iterate_credit_hostname_enrolled: "hostname-enrolled",
 };
 
 /** Why the proxy refused, from its status and its error's code. */
