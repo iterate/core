@@ -36,6 +36,7 @@ test("the default config's pages and folders load here as the platform's loader 
     "brands/google.svg",
     "brands/slack.svg",
     "brands/x.svg",
+    "call-facet.js",
     "icon.svg",
   ]);
   expect(onboardingIndex).toMatch(/<title>Onboarding<\/title>/);

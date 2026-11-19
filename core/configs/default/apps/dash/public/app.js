@@ -47,6 +47,7 @@ import {
   UsersIcon,
   WaypointsIcon,
 } from "@iterate-com/ui/icons";
+import { CALL_FACET } from "./call-facet.js";
 
 // The member's itx, from this host's /itx (app.ts answers it): over the socket that index.html
 // dialled in its head, when it is there. The Dash draws in the frame that index.html drew, and
@@ -71,6 +72,11 @@ const pages = [
     name: "Agents",
     icon: BotIcon,
     component: DashAgents,
+    // a call on any agent's page: "Start a call" turns the call facet on for the agent (call.ts)
+    call: {
+      enable: (itx, path) => itx.cd(path).processors.enable("call", CALL_FACET),
+      voiceAppHref: `https://voice.${zone}`,
+    },
     // what the mind says first in an agent's empty chat, the first time anyone opens it: the
     // onboarding agent greets a new owner (onboarding.md is what it is told)
     openers: {

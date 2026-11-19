@@ -5,6 +5,13 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
+import { CALL_FACET } from "../../configs/default/call.ts";
+// @ts-expect-error -- a plain browser module of the Dash, with no types
+import { CALL_FACET as DASH_CALL_FACET } from "../../configs/default/apps/dash/public/call-facet.js";
+
+test("the Dash's call facet spec is the config's own: the Dash turns on the call that call.ts hosts", () => {
+  expect(DASH_CALL_FACET).toEqual(CALL_FACET);
+});
 
 test("no file of the template names a path of the Dash that acts: the Integrations page's buttons call the mind's config", () => {
   const template = fileURLToPath(new URL("../../configs/default/", import.meta.url));
