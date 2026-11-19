@@ -38,7 +38,7 @@ that names your task BEFORE the task, not after a failure:
 `await itx.repos.get("/repos/config").readFile("apps.md")`.
 
 - Before you build or change an app or a page, use iterate's UI components, add an integration
-  package or turn Voice on: [apps.md](apps.md).
+  package or turn voice devices on: [apps.md](apps.md).
 - Before you act on GitHub, Gmail, Calendar or X events, ask for more scopes, register a card on
   the Integrations page, connect an MCP server or mirror this repo to GitHub:
   [accounts.md](accounts.md).
@@ -156,8 +156,6 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   ([apps.md](apps.md), "The Dash"). `https://<control-plane hostname>/` sends everyone to the Dash.
 - `apps/docs/` is the Docs app, on `docs.<zone>` for members: the files of this mind's repos,
   written together in a browser ([docs-app.md](docs-app.md)).
-- `apps/voice/` is the Voice app, on `voice.<zone>` for members: a call to the mind from a browser
-  ([apps.md](apps.md), "Voice").
 - `apps/onboarding/` is the onboarding app, on `onboarding.<zone>` for members: the onboarding
   steps as cards above the chat with `/agents/onboarding`, each button also the agent's
   `itx.config.onboardingStep(step, action)` ([apps.md](apps.md), "Onboarding").

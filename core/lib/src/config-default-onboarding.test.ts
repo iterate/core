@@ -242,7 +242,7 @@ test("Connect: one link to sign the rule, and nothing at iterate or in the secre
     title: "Connected to iterate Cloud",
     text: ["$9.58 of $10 left."],
     buttons: [
-      { label: "Try a voice call", href: "https://voice.example.com/" },
+      { label: "Try a voice call", href: "https://dash.example.com/?agent=/agents/onboarding" },
       { label: "Disconnect", action: "disconnect", opens: true },
     ],
   });

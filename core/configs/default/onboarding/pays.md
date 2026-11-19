@@ -14,7 +14,8 @@ You answer, so something pays now. An agent uses the first of these that is set 
 
 ## Not ready
 
-- A voice call is paid by the OpenAI key alone, never by the plan or the credit (`onboarding/speak.md`).
+- The voice agent in a call is paid by `/secrets/openai` alone: iterate Cloud's credit or the
+  owner's own key, never the Cloudflare credit (`onboarding/speak.md`).
 
 ## How
 

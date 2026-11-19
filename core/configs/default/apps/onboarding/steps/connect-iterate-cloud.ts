@@ -273,7 +273,7 @@ function words(state: StepState, context: StepContext): Card {
         ...(half ? [{ label: "Try again", action: "connect", primary: true }] : []),
         {
           label: "Try a voice call",
-          href: `https://voice.${context.zone}/`,
+          href: `https://dash.${context.zone}/?agent=/agents/onboarding`,
           ...(!half && { primary: true }),
         },
         { label: "Disconnect", action: "disconnect" },

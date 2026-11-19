@@ -48,7 +48,7 @@ The places:
   `/sessions` (every browser and app signed in as them, each one to end), `/members`, and
   `/self-test`, which checks the whole installation: ask them to open it and say what failed.
 - `https://docs.<zone>`: the mind's code and notes, with each file's history.
-- `https://voice.<zone>`: a call to the mind (`onboarding/speak.md`).
+- A call on any agent, from its chat in the Dash: "Start a call" (`onboarding/speak.md`).
 
 ## Say
 

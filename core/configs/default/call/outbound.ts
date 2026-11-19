@@ -5,7 +5,7 @@
 //
 //   /secrets/cloudflare-realtime-sfu   { appSecret }, and its public `appId`   (the deploy makes it)
 //   /secrets/cloudflare-turn           { apiToken }, and its public `keyId`    (the deploy makes it)
-//   /secrets/openai                    OpenAI's key, the Voice app's too       (iterate Cloud, or a member)
+//   /secrets/openai                    OpenAI's key, the voice agent's         (iterate Cloud, or a member)
 //
 // Every answer from outside is parsed here with a schema, so the call reads typed values.
 import { z } from "zod";

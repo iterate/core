@@ -1,8 +1,8 @@
 # Apps
 
 How an app of this mind is laid out and mounted, the UI components a page loads, the integration
-packages, Voice and the call on an agent: `apps/`, `apps/theme.css`,
-`apps/live-reload/live-reload.js`, `apps/open-files.ts`, `apps/dash/public/app.js`, `apps/voice/`,
+packages, the call on an agent and voice devices: `apps/`, `apps/theme.css`,
+`apps/live-reload/live-reload.js`, `apps/open-files.ts`, `apps/dash/public/app.js`,
 `apps/onboarding/`, `call.ts` and `integrations` in `worker.ts`.
 
 An app is a folder under `apps/`, and a convention, not a framework: copy one to start one of your
@@ -57,7 +57,7 @@ apps/<name>/
   web app manifest: an app that wants to be installable in a browser serves one of its own.
 - **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** The Dash, the docs
   and the guestbook apps serve that one file at `/live-reload.js` (`app.ts`), and each page loads
-  it in its head; the Voice app does not.
+  it in its head.
   When a commit is published, a stylesheet that changed is swapped in place. A page whose
   script changed reloads once nobody types in it, and what the person saw stays over the app
   until the app has drawn itself again. A member's page hears of a publication at once; any
@@ -159,16 +159,15 @@ The step "Connect to iterate Cloud" writes four events on `/apps/onboarding` (`c
 every button of it is also the onboarding agent's call `itx.config.onboardingStep(step, action)`,
 which answers `{ status, words, link? }`.
 
-## Voice
+## Voice devices
 
-`apps/voice/` makes a browser a voice device of the mind. Call opens the microphone; a live model
-(OpenAI's, with the mind's key at `/secrets/openai`) listens and speaks; what it cannot answer it
-hands to the device's own agent, `/agents/voice/<device>`, an agent like any other, which
-remembers every call. The code is the package `@iterate-com/voice`; its README says how a call
-works.
+To talk to the mind in a browser, start a call on any agent in the Dash and add the voice agent
+("A call on an agent", below): nothing to install. The package `@iterate-com/voice` is for
+devices outside the Dash, a phone line or a speaker: a live model (OpenAI's, with the mind's key
+at `/secrets/openai`) listens and speaks, and hands what it cannot answer to the device's own
+agent, `/agents/voice/<device>`, which remembers every call. Its README says how a call works.
 
-Voice is off in a new mind, because it needs that package and a key. The page says so, and its
-"Turn voice on" makes this commit in the member's name. To make it by hand:
+It is off in a new mind. To turn it on, make this commit:
 
 ```text
 package.json   "dependencies": { "@iterate-com/voice": "<a build of npm's main tag, pinned>" }
@@ -176,15 +175,16 @@ voice.ts       export { default, VoiceAgentDurableObject } from "@iterate-com/vo
 worker.ts      take the "// " off the import of installVoice, and off installVoice(itx) in the init case
 ```
 
-The page then asks for the OpenAI key once, if the mind has none. The page loads its voice code
-from the build that `package.json` pins, so the page and the mind's relay are one build: to
-upgrade, change that pin. A commit that changes what `voice.ts` bundles ends the calls in progress.
+To upgrade, change that pin. A commit that changes what `voice.ts` bundles ends the device calls
+in progress.
 
 ## A call on an agent
 
 Any agent's context can hold a call: everyone in it talks, and shares a camera and a screen,
 through Cloudflare Realtime's SFU, and a member can add the voice agent, which everyone hears and
-talks to. No app is needed: a page draws the call with the UI kit's parts (`@iterate-com/ui`).
+talks to. No app is needed and nothing is turned on: every agent's page in the Dash has "Start a
+call", and the call offers the voice agent. It never joins by itself: a member adds it, since it
+costs money each minute. A page draws the call with the UI kit's parts (`@iterate-com/ui`).
 
 - **The call is a facet on the agent's context**, the processor row `call`: `call.ts` at the
   config's root (a publication offers a facet's class only from a root module or an app's

@@ -14,9 +14,6 @@ import docsFiles from "../../configs/default/apps/docs/public/";
 import onboardingIndex from "../../configs/default/apps/onboarding/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import onboardingFiles from "../../configs/default/apps/onboarding/public/";
-import voiceIndex from "../../configs/default/apps/voice/index.html";
-// oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
-import voiceFiles from "../../configs/default/apps/voice/public/";
 import Config from "../../configs/default/worker.ts";
 import { APP_DESCRIPTION_PATH, AppDescription } from "./app-description.ts";
 
@@ -41,16 +38,6 @@ test("the default config's pages and folders load here as the platform's loader 
   ]);
   expect(onboardingIndex).toMatch(/<title>Onboarding<\/title>/);
   expect(Object.keys(onboardingFiles)).toEqual(["app.css", "app.js", "icon.svg"]);
-  expect(voiceIndex).toMatch(/<title>Voice<\/title>/);
-  expect(Object.keys(voiceFiles)).toEqual([
-    "app.css",
-    "app.js",
-    "audio.js",
-    "capture-worklet.js",
-    "icon.svg",
-    "playback-worklet.js",
-    "turn-on.js",
-  ]);
 });
 
 test("the homepage answers GET and HEAD of / alone: anything else that no case takes is not found, so a webhook nothing serves is not acknowledged", async () => {
@@ -82,7 +69,7 @@ test("the homepage answers GET and HEAD of / alone: anything else that no case t
   });
 });
 
-test.for(["docs", "dash", "voice", "onboarding"])(
+test.for(["docs", "dash", "onboarding"])(
   "the %s app says what it is and shows its icon to anyone, and nothing else before a sign-in",
   async (host) => {
     const refusal = new Response("Sign in\n", { status: 401 });
@@ -122,7 +109,7 @@ test("the Dash leads to every other app the default worker mounts", () => {
   // the hosts the worker's `fetch` answers: one `case "<host>":` each
   const worker = readFileSync(new URL("../../configs/default/worker.ts", import.meta.url), "utf8");
   const mounted = [...worker.matchAll(/^ {6}case "([a-z]+)":/gm)].map(([, host]) => host);
-  expect(mounted).toEqual(["docs", "dash", "voice", "onboarding"]);
+  expect(mounted).toEqual(["docs", "dash", "onboarding"]);
   const linked = [...String(dashFiles["app.js"]).matchAll(/\bhost: "([a-z]+)"/g)].map(
     ([, host]) => host,
   );

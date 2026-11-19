@@ -11,9 +11,8 @@ import { dashApp } from "./apps/dash/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 import { onboardingEvent, runStep, stepContext } from "./apps/onboarding/steps.ts";
-import { voiceApp } from "./apps/voice/app.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
-// Voice is off (apps.md, "Voice"). The Voice app's "Turn voice on" takes the "// " off this
+// Voice devices and the phone line (apps.md, "Voice devices") are off: take the "// " off this
 // line and off `installVoice` in the init case below, in the commit that adds the package.
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
@@ -63,7 +62,6 @@ const integrations: Integration[] = [];
 // (apps.md). Each `app.ts` exports the function that makes one.
 const docs = docsApp();
 const dash = dashApp();
-const voice = voiceApp();
 const onboarding = onboardingApp();
 // The guestbook, an example of an app for end users, people who are not members (people.md, "The
 // guestbook"). To turn it on, uncomment this line, its import above and its case in `fetch`.
@@ -106,7 +104,7 @@ export default class extends IterateConfigEntrypoint {
         // (cloud-deliveries.ts, and `processMindEvent` below). Keep both, or the Cloud sends the
         // key form alone.
         await publishStep("mind-form", () => sayMindForm(itx));
-        // Voice, when it is on: the service at `itx.voice`, which the Voice app calls.
+        // Voice devices, when they are on: the service at `itx.voice` (apps.md, "Voice devices").
         // await installVoice(itx);
         // A heartbeat, for a mind that should wake on its own (to check on itself and repair what
         // it finds, say): uncommented, it appends `heartbeat` on `/` every five minutes and wakes the
@@ -331,8 +329,6 @@ export default class extends IterateConfigEntrypoint {
         return docs.open?.(request) || this.auth.require(request) || docs.fetch(request, this);
       case "dash": // the Dash, for members: the mind seen from above, and every agent's chat
         return dash.open?.(request) || this.auth.require(request) || dash.fetch(request, this);
-      case "voice": // the Voice app, for members: call the mind from a browser
-        return voice.open?.(request) || this.auth.require(request) || voice.fetch(request, this);
       case "onboarding": // the onboarding app, for members: the steps above the onboarding chat
         return (
           onboarding.open?.(request) ||

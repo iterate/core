@@ -33,7 +33,7 @@ test("an app's page asks for its session in its head, while its modules load, an
         existsSync(new URL(`${app}/public/app.js`, apps)) &&
         read(`${app}/public/app.js`).includes("/.auth/session.json"),
     );
-  expect(asking).toEqual(expect.arrayContaining(["dash", "docs", "onboarding", "voice"]));
+  expect(asking).toEqual(expect.arrayContaining(["dash", "docs", "onboarding"]));
   for (const app of asking) {
     const page = read(`${app}/index.html`);
     const asked = page.indexOf('window.__session = fetch("/.auth/session.json")');

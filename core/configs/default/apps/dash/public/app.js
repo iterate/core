@@ -40,7 +40,6 @@ import {
   LayoutDashboardIcon,
   LockKeyholeIcon,
   LogOutIcon,
-  PhoneIcon,
   PlugIcon,
   ShieldCheckIcon,
   SparklesIcon,
@@ -75,7 +74,6 @@ const pages = [
     // a call on any agent's page: "Start a call" turns the call facet on for the agent (call.ts)
     call: {
       enable: (itx, path) => itx.cd(path).processors.enable("call", CALL_FACET),
-      voiceAppHref: `https://voice.${zone}`,
     },
     // what the mind says first in an agent's empty chat, the first time anyone opens it: the
     // onboarding agent greets a new owner (onboarding.md is what it is told)
@@ -103,7 +101,6 @@ const pages = [
 // gets a row here.
 const apps = [
   { name: "Docs", host: "docs", icon: BookOpenIcon },
-  { name: "Voice", host: "voice", icon: PhoneIcon },
   { name: "Onboarding", host: "onboarding", icon: SparklesIcon },
 ].map((app) => ({ ...app, href: `https://${app.host}.${zone}` }));
 

@@ -8,7 +8,7 @@ are also the plainest examples of how a mind is configured.
 
 - `default/` — the template a stack's mind starts from unless its config names another
   (`mind.template`, core/alchemy). It has the homepage, the Dash (agents, onboarding and the
-  rest), the docs and Voice apps (voice itself is off until a member turns it on) and a guestbook
+  rest), the docs app, a call on any agent with its voice agent, and a guestbook
   that is off (`apps/`), the agents (`agents.ts`), the agent kinds (`agent-kinds/`), cases in
   `worker.ts` that hand email, Slack and X messages to agents, and the place for the integration packages the
   mind hosts. Its init case (`mind/worker-updated`) installs the apps and sets no schedule: an

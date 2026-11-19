@@ -9,7 +9,7 @@ export default {
       // A NO-BUILD APP'S PAGE SCRIPT RUNS IN A BROWSER AND NOWHERE ELSE. Nothing renders it on a
       // server, so a global read while it draws or at its top has no server to fail on, and a
       // date in the visitor's own locale is the point. Nothing bundles it either, so an import of
-      // an address made at run time (the Voice app's pinned build) costs no code split.
+      // an address made at run time costs no code split.
       {
         files: ["apps/*/public/**", "apps/live-reload/**"],
         rules: [

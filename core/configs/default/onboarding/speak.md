@@ -1,44 +1,39 @@
 # Talking to the mind
 
-The owner should come away with: they can talk to their mind in a browser today, after one step, and they know what is not ready.
+The owner should come away with: they can talk to their mind in a browser today, with nothing to
+turn on, and they know what is not ready.
 
 ## Ready today
 
-- In the browser, after one step. Voice is off in a new mind. The owner opens
-  `https://voice.<zone>` and presses "Turn voice on". That makes one commit in their name: it
-  pins the package `@iterate-com/voice` in `package.json`, adds `voice.ts`, and turns
-  `installVoice` on in `worker.ts` (`apps.md` at the top of the mind's code, "Voice").
-- The page then asks once for an OpenAI API key, if the mind has none (`/secrets/openai`). OpenAI
-  bills the calls to their account: a ChatGPT plan does not pay for a call, and neither does the
-  Cloudflare credit.
-- A call opens the microphone; a live model listens and speaks. What it cannot answer it hands to
-  the device's own agent, `/agents/voice/<device>`, which remembers every call.
+- In the browser, in a call on any agent. In the agent's chat in the Dash
+  (`https://dash.<zone>/?agent=<path>`), "Start a call" opens it; others can join, with a
+  camera and a screen, and a guest by a share link (`apps.md`, "A call on an agent").
+- In the call, a member adds the voice agent: a live model that everyone hears and talks to. It
+  never joins by itself. It leaves when its host leaves, when a member sends it away, or after 30
+  minutes.
+- It is paid by `/secrets/openai`: iterate Cloud's credit, or the owner's own OpenAI key, which
+  they save on the Dash's Secrets page. The Cloudflare credit does not pay for it. Without either,
+  the call says so when a member adds it.
 
 ## Not ready
 
 - By phone: not ready. A phone number is an order at a telephone provider and a setup. Name it as
   something you can set up later, when they ask.
 - From a device of its own (a speaker, a watch): not ready. Say so.
-- The commit that turns voice on changes `worker.ts`, so from then on `worker.ts` no longer takes
-  the template's updates by itself (`template-updates.md`).
 
 ## How
 
-Ask once, when it fits. Say both facts (the button, and the OpenAI key that pays) in one
-sentence, with the link. On a "later", note it in `mind.md` through `/agents/onboarding/mind-md`.
+Ask once, when it fits. Say how in one sentence, with the link to this chat. On a "later", note
+it in `mind.md` through `/agents/onboarding/mind-md`.
 
-When they say it is on, check:
+Check that the voice agent can be paid for:
 
 ```ts
-const repo = itx.repos.get("/repos/config");
-return {
-  voice: (await repo.readFile("voice.ts")) !== null,
-  key: (await itx.secrets.describe("/secrets/openai")).set,
-};
+return { key: (await itx.secrets.describe("/secrets/openai")).set };
 ```
 
 ## Say
 
 - "Do you want to talk to your mind?"
-- "Open https://voice.<zone> and press 'Turn voice on'. It asks once for an OpenAI key, and
-  OpenAI bills you for the calls; your ChatGPT plan does not cover them."
+- "Press 'Start a call' at the top of this chat, then 'Voice agent'. It talks back, and it
+  costs a little each minute, from your iterate credit or your own OpenAI key."
