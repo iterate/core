@@ -75,10 +75,11 @@ export type Card = {
 
 /** The writes a step makes on the onboarding log, for its own name. */
 export type StepLog = {
-  /** Asks for an action: its offset names the ask. */
+  /** Asks for an action: its offset names the ask. `expires` bounds the ask: with a `link` it is
+   *  the signing page's end, without one the time by which the step's own work must settle it. */
   request(
     action: string,
-    signing?: { link: string; expires: number; attempt?: string },
+    signing?: { link?: string; expires: number; attempt?: string },
   ): Promise<number>;
   settle(requestOffset: number, failure?: { reason: string; words?: string }): Promise<void>;
 };
@@ -189,7 +190,8 @@ function logOf(context: StepContext, step: Step, state: OnboardingState): StepLo
         {
           step: step.id,
           action,
-          ...(signing && { link: signing.link, expires: new Date(signing.expires).toISOString() }),
+          ...(signing?.link && { link: signing.link }),
+          ...(signing && { expires: new Date(signing.expires).toISOString() }),
           ...(signing?.attempt && { attempt: signing.attempt }),
         },
       );
@@ -216,11 +218,15 @@ function logOf(context: StepContext, step: Step, state: OnboardingState): StepLo
   };
 }
 
-/** A sign-in page that expired unsigned settles its ask as "not-signed". */
+/** An ask past its `expires` settles: a sign-in page that expired unsigned as "not-signed", and an
+ *  ask with no page, whose own work did not settle it in time (the invocation died), as "stopped".
+ *  So no ask waits for ever. */
 async function settleExpired(context: StepContext, step: Step, state: OnboardingState) {
   const action = state.steps[step.id]?.action;
   if (!action?.expires || Date.parse(action.expires) > context.now) return false;
-  await logOf(context, step, state).settle(action.requestOffset, { reason: "not-signed" });
+  await logOf(context, step, state).settle(action.requestOffset, {
+    reason: action.link ? "not-signed" : "stopped",
+  });
   return true;
 }
 

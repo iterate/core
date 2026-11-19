@@ -230,12 +230,14 @@ await itx.config.onboardingStep("connect-iterate-cloud", action); // → { statu
 ```
 
 Call `check` first. When it answers that this mind has no step "connect-iterate-cloud" (iterate
-Cloud's credit is not open yet), or its `status` is `unavailable`, ask the "let iterate in"
+Cloud's credit is not open yet), or its `status` is `unavailable` or `own-keys`, ask the "let iterate in"
 question as before (`onboarding/let-iterate-in.md`) and do not name the credit; on any other
 status, make the offer below.
 
 Ask it early, when the first moment has landed, in one sentence: "iterate gives your mind $10 of
-credit for AI, so agents and voice calls work at once. Want it?" It takes the place of the "let
+credit for AI: voice calls, web research, and your agents' requests, which your Cloudflare credit
+pays for today. Want it?" Do not say that the agents need it: they already run on the owner's
+Cloudflare credit. It takes the place of the "let
 iterate in" ask: its passkey press signs the same rule. A no is `decline`, a fine answer: note it
 and do not offer it again. On a yes, call `connect` and say two sentences: the $10, and that
 requests to OpenAI and Exa then pass through iterate, which stores the numbers alone. Give the

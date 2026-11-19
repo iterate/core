@@ -3,7 +3,7 @@
 // mind's stack can sign a request as the mind. steps/connect-iterate-cloud.ts calls nothing else
 // outside the onboarding log, so its tests replace this one object.
 //
-// What it needs of the stack (the secret proxy's contract, iterate-config apps/secret-proxy):
+// What it needs of the stack (the secret proxy's contract, iterate-config apps/cloud/secret-proxy.ts):
 //   - the mind signs a request to another mind: `itx.minds.get(mind).fetch(request)`;
 //   - a secret by proxy: `itx.secrets.set(path, null, { urls, proxy })`, and `describe(path).proxy`;
 //   - its own key listed in `/keys/stack.json` (`listed: true`), or the proxy answers 502.
@@ -17,8 +17,8 @@ export const ITERATE_PROXY = { mind: ITERATE_MIND, url: `${ITERATE_CLOUD}/secret
 
 /** The two secrets the credit pays for, and where each may go. */
 export const CREDIT_SECRETS = [
-  { path: "/secrets/openai", urls: ["https://api.openai.com"] },
-  { path: "/secrets/exa", urls: ["https://api.exa.ai"] },
+  { path: "/secrets/openai", urls: ["https://api.openai.com"], name: "OpenAI" },
+  { path: "/secrets/exa", urls: ["https://api.exa.ai"], name: "Exa" },
 ] as const;
 
 /** How long the step waits for iterate Cloud or the stack's key document. */
@@ -38,7 +38,7 @@ export type CreditFailure =
   | "not-connected" // 402 iterate_credit_not_connected: this mind has no grant (a balance)
   | "not-recognised" // 401: the Cloud did not recognise this mind's signature
   | "no-working-key" // 502: the Cloud could not use this mind's key
-  | "stack-without-proxy" // the stack cannot sign a request to another mind
+  | "stack-without-proxy" // the stack keeps no secret by proxy
   | "cloud-unreachable"; // no answer, or one of no known shape
 
 export type CreditAnswer =
@@ -48,6 +48,14 @@ export type CreditAnswer =
 /** What a secret path holds, for the step: nothing, the owner's own value, iterate's proxy, or a
  *  proxy of someone else's. */
 export type SecretKind = "unset" | "own" | "iterate-proxy" | "other-proxy";
+
+export type SetAnswer =
+  | "set"
+  | "own"
+  | "other-proxy"
+  | "no-proxy-layer"
+  | "approval-rule"
+  | "being-set";
 
 export type CloudCredit = {
   /** Whether this mind's stack signs requests as the mind: its key document says `listed`. The
@@ -60,18 +68,22 @@ export type CloudCredit = {
   secret(path: string): Promise<SecretKind>;
   /** A secret by iterate's proxy at `path`, where the path holds no value: "own" when it holds
    *  the owner's own (the platform refuses to replace it), "no-proxy-layer" when the stack has no
-   *  secret by proxy. */
-  setByProxy(path: string, urls: readonly string[]): Promise<"set" | "own" | "no-proxy-layer">;
+   *  secret by proxy, and the vault's two refusals: "approval-rule" (the path has one, and no use
+   *  by proxy passes it) and, for a path set since the read, what it now holds: "set" when a
+   *  concurrent connect made it iterate's proxy, "own", "other-proxy" (another proxy the owner
+   *  chose, which stays), or "being-set" while a write is still in flight. */
+  setByProxy(path: string, urls: readonly string[]): Promise<SetAnswer>;
   /** Deletes the secret at `path` when it is iterate's proxy, and nothing else. */
   deleteProxy(path: string): Promise<boolean>;
 };
 
 /** The secrets Worker's refusal of `null` material: a stack without the secret by proxy. */
 const NO_PROXY_LAYER = /material is a string or a JSON object/;
-/** The platform's refusal to put a secret by proxy over a value: the owner's own key stays. */
-const HOLDS_A_KEY = /holds a key of its own/;
-/** The minds API of a stack without signed requests between minds. */
-const NO_MIND_FETCH = /a mind answers deliverEvents/;
+/** The vault's refusals of a secret by proxy (core/secrets-worker/src/secret/durable-object.ts,
+ *  `secrets.set with proxy: <path> …`), by their stable part: the path has an approval rule; the
+ *  path is set, or a write to it is in flight. */
+const HAS_APPROVAL_RULE = /has an approval rule, which no use by proxy can pass/;
+const SET_OR_BEING_SET = /is set or being set; delete it first/;
 
 const Description = z.object({
   set: z.boolean(),
@@ -110,11 +122,7 @@ function inTime<T>(answer: Promise<T>): Promise<T> {
 /** The calls of a real mind. */
 export function cloudCredit(itx: OnboardingItx): CloudCredit {
   const ask = async (path: "connect" | "balance"): Promise<CreditAnswer> => {
-    // The signed request between minds is a method of the stack's minds API that the type does
-    // not name yet: on a stack without it the call throws, and that throw is read below.
-    const cloud = itx.minds.get(ITERATE_PROXY.mind) as unknown as {
-      fetch(request: Request): Promise<Response>;
-    };
+    const cloud = itx.minds.get(ITERATE_PROXY.mind);
     let response: Response;
     try {
       response = await inTime(
@@ -125,12 +133,8 @@ export function cloudCredit(itx: OnboardingItx): CloudCredit {
         ),
       );
     } catch (error) {
-      const message = messageOf(error);
-      return {
-        ok: false,
-        reason: NO_MIND_FETCH.test(message) ? "stack-without-proxy" : "cloud-unreachable",
-        message,
-      };
+      // a stack too old to sign never gets here: its key document is not listed (`canSign`)
+      return { ok: false, reason: "cloud-unreachable", message: messageOf(error) };
     }
     const body: unknown = await response.json().catch(() => null);
     if (response.ok) {
@@ -148,7 +152,7 @@ export function cloudCredit(itx: OnboardingItx): CloudCredit {
   };
 
   const secret = async (path: string): Promise<SecretKind> => {
-    // describe answers more fields than its type names (`proxy`, with the secret by proxy)
+    // parsed, not trusted: an older stack's describe answers no `proxy`
     const described = Description.parse(await itx.secrets.describe(path));
     if (!described.set) return "unset";
     if (!described.proxy) return "own";
@@ -175,19 +179,18 @@ export function cloudCredit(itx: OnboardingItx): CloudCredit {
     async setByProxy(path, urls) {
       if ((await secret(path)) === "own") return "own";
       try {
-        // `null` material and `proxy` are the secret by proxy's, which the type does not name yet;
-        // a stack without it refuses the call, and that refusal is read below
-        const set = itx.secrets.set as unknown as (
-          path: string,
-          material: null,
-          options: { urls: string[]; proxy: typeof ITERATE_PROXY },
-        ) => Promise<unknown>;
-        await set.call(itx.secrets, path, null, { urls: [...urls], proxy: ITERATE_PROXY });
+        // a stack without the secret by proxy refuses `null` material, and that refusal is read below
+        await itx.secrets.set(path, null, { urls: [...urls], proxy: ITERATE_PROXY });
       } catch (error) {
         const message = messageOf(error);
         if (NO_PROXY_LAYER.test(message)) return "no-proxy-layer";
-        // the platform refuses to replace a value: the owner's key, set since the read above
-        if (HOLDS_A_KEY.test(message) || (await secret(path)) === "own") return "own";
+        if (HAS_APPROVAL_RULE.test(message)) return "approval-rule";
+        // the vault refuses a proxy over anything set since the read above: say what it holds now
+        if (SET_OR_BEING_SET.test(message)) {
+          const now = await secret(path);
+          if (now === "iterate-proxy") return "set";
+          return now === "unset" ? "being-set" : now;
+        }
         throw error;
       }
       // a stack that took the call but keeps no proxy made no secret by proxy

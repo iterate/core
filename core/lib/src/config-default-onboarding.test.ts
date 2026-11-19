@@ -120,13 +120,19 @@ test("not asked: the card says what iterate sees and cannot see, and offers Conn
     ],
     footnote: "You can disconnect at any time.",
   });
-  expect(card?.text[0]).toMatch(/gives your mind \$10 of credit for AI/);
+  expect(card?.text).toEqual([
+    "iterate, the company that made this software, gives your mind $10 of credit for AI: voice calls, web research, and your agents' model requests.",
+    "Your agents already work without it, paid by your own Cloudflare account (its AI Gateway credit). After you connect, each agent request goes to iterate's credit first.",
+  ]);
+  expect(card?.points?.find((point) => point.title === "When the $10 is spent")?.text).toBe(
+    "Your agents go on through your own Cloudflare account, but each of their requests still goes to iterate first and is refused there, until you disconnect or add a key of your own. Voice calls and web research stop until you add a key of your own. A key of your own always wins over the credit.",
+  );
   const sees = card?.points?.find((point) => point.title === "What iterate sees")?.text;
   expect(sees).toMatch(
     /It stores the numbers \(which model, how much, the cost\), not the content\./,
   );
   expect(sees).toMatch(
-    /The requests are made on iterate's accounts at OpenAI and Exa, and those providers keep them as they keep any request\./,
+    /iterate's proxy refuses a request that asks OpenAI to store it\. OpenAI and Exa still keep what their own policies keep, such as abuse logs, and OpenAI keeps the working files of a code tool it runs for up to 20 idle minutes\./,
   );
   expect(card?.points?.map((point) => point.title)).toEqual([
     "What iterate sees",
@@ -249,7 +255,7 @@ test.for([
   ["none-today", /today's are gone\. Try again tomorrow \(UTC\)\./],
   ["paused", /iterate's credit is paused until tomorrow \(UTC\)\./],
   ["not-recognised", /did not recognise this mind's signature/],
-  ["cloud-unreachable", /iterate Cloud did not answer\. Nothing was set up\./],
+  ["cloud-unreachable", /iterate Cloud did not answer\. Try again in a minute\./],
 ] as const)(
   "a grant refused as %s sets no secret, and the card says why",
   async ([reason, words]) => {
@@ -262,6 +268,244 @@ test.for([
     expect(answer.words).toMatch(words);
   },
 );
+
+test.for([
+  "none-today",
+  "paused",
+  "not-recognised",
+  "no-working-key",
+  "cloud-unreachable",
+  "stack-without-proxy",
+] as const)(
+  "after the signed rule, a connect that failed as %s says that the rule stands and how to end it, in the card and in the agent's note; only an outage says to try again in a minute",
+  async (reason) => {
+    const mind = fakeMind();
+    const { credit } = fakeCredit(
+      reason === "stack-without-proxy" ? { proxyLayer: false } : { connect: { ok: false, reason } },
+    );
+    const context = contextOf(mind, credit);
+    await runStep(context, STEP, "connect");
+    await hook(mind, credit, mind.sign(["/minds/iterate.iterate.com/"]));
+    const note = mind.chat().map((event) => JSON.stringify(event.payload));
+    expect(note).toHaveLength(1);
+    expect(note[0]).toMatch(/The rule stands until the owner ends it with their passkey/);
+    const card = await runStep(context, STEP, "check");
+    expect(card).toMatchObject({ status: "failed" });
+    expect(card.words).toMatch(
+      /Your signed rule still lets iterate send help and updates to this mind\. End it with your passkey to stop that\./,
+    );
+    expect(card.words).toMatch(/Try again · Not now · End the rule/);
+    for (const words of [card.words, note[0]]) {
+      expect(words).not.toMatch(/Nothing was set up/);
+      expect(/Try again in a minute/.test(words!)).toBe(reason === "cloud-unreachable");
+    }
+  },
+);
+
+test("an own OpenAI key and no Exa key: the offer, then at the signed rule Exa alone by proxy, and the note says the credit pays for Exa", async () => {
+  const mind = fakeMind();
+  const fake = fakeCredit({ secrets: { "/secrets/openai": "own" } });
+  const context = contextOf(mind, fake.credit);
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "not-asked" });
+  await runStep(context, STEP, "connect");
+  await hook(mind, fake.credit, mind.sign(["/minds/iterate.iterate.com/"]));
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "own", "/secrets/exa": "iterate-proxy" },
+  });
+  const [note] = mind.chat().map((event) => JSON.stringify(event.payload));
+  expect(note).toMatch(/\$9\.58 of iterate's credit for Exa \(by iterate's proxy/);
+  const card = await runStep(context, STEP, "check");
+  expect(card).toMatchObject({ status: "connected" });
+  expect(card.words).toMatch(
+    /Your own OpenAI key stays in use\. The credit pays for web research\./,
+  );
+  expect(mind).toMatchObject({ mailed: [] });
+});
+
+test("both keys the owner's: no offer, a press asks nothing, and with the rule signed the card says it stands; no mail even at a spent balance", async () => {
+  const own = { "/secrets/openai": "own", "/secrets/exa": "own" } as const;
+  const fresh = fakeMind();
+  const first = fakeCredit({ secrets: own });
+  const context = contextOf(fresh, first.credit);
+  const card = await runStep(context, STEP, "check");
+  expect(card).toMatchObject({ status: "own-keys" });
+  expect(card.words).toMatch(/Your mind uses your own keys for OpenAI and Exa/);
+  expect(card.words).not.toMatch(/Buttons:/);
+  await runStep(context, STEP, "connect");
+  expect(first).toMatchObject({ calls: [] });
+  expect(fresh).toMatchObject({ proposed: [] });
+
+  const melded = fakeMind({ meld: "member" });
+  const second = fakeCredit({ secrets: own });
+  second.state.balance = { ok: true, balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0 } };
+  const signed = await runStep(contextOf(melded, second.credit), STEP, "check");
+  expect(signed).toMatchObject({ status: "own-keys" });
+  expect(signed.words).toMatch(/Your signed rule still lets iterate send help/);
+  expect(signed.words).toMatch(/Buttons: End the rule/);
+  expect(melded).toMatchObject({ mailed: [] });
+  expect(melded.chat()).toEqual([]);
+});
+
+test("declined, then both keys the owner's: the own-keys card wins over declined, with End the rule when a rule stands, and a press asks iterate nothing", async () => {
+  for (const meld of [undefined, "member"] as const) {
+    const mind = fakeMind(meld ? { meld } : {});
+    const fake = fakeCredit();
+    const context = contextOf(mind, fake.credit);
+    expect(await runStep(context, STEP, "decline")).toMatchObject({ status: "declined" });
+    fake.secrets["/secrets/openai"] = "own";
+    fake.secrets["/secrets/exa"] = "own";
+    // the checks before, with the keys unset, read the balance: count from here
+    fake.calls.length = 0;
+    const card = await runStep(context, STEP, "check");
+    expect(card).toMatchObject({ status: "own-keys" });
+    expect(card.words).not.toMatch(/Buttons:.*Connect/);
+    if (meld) expect(card.words).toMatch(/Buttons: End the rule/);
+    else expect(card.words).not.toMatch(/Buttons:/);
+    expect(await runStep(context, STEP, "connect")).toMatchObject({ status: "own-keys" });
+    // nothing asks iterate: no grant, no secret, and no balance read for a mind with its own keys
+    expect(fake).toMatchObject({ calls: [] });
+    expect(mind).toMatchObject({ proposed: [] });
+  }
+});
+
+test("a connect that throws on the press path settles as failed: Try again and End the rule, never Connecting for ever", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ setThrows: { "/secrets/openai": "RPC: the connection was lost" } });
+  const answer = await runStep(contextOf(mind, fake.credit), STEP, "connect");
+  expect(answer).toMatchObject({ status: "failed" });
+  expect(answer.words).toMatch(/The connect stopped before it finished\./);
+  expect(answer.words).not.toMatch(/already pays/);
+  expect(answer.words).toMatch(/Try again · Not now · End the rule/);
+});
+
+test("OpenAI set by proxy, then Exa's set throws: the card says what stands, and a second press finishes it with no second grant", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ setThrows: { "/secrets/exa": "RPC: the connection was lost" } });
+  const context = contextOf(mind, fake.credit);
+  const half = await runStep(context, STEP, "connect");
+  expect(half).toMatchObject({ status: "connected" });
+  expect(half.words).toMatch(/Buttons: Try again · Try a voice call · Disconnect/);
+  expect(half.words).toMatch(
+    /The connect stopped before it finished\. iterate's credit already pays for OpenAI\. Try again sets up the rest\./,
+  );
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "unset" },
+  });
+  // the proxy gives one grant for each mind id: a second connect answers the same balance
+  delete fake.setThrows["/secrets/exa"];
+  const whole = await runStep(context, STEP, "connect");
+  expect(whole).toMatchObject({ status: "connected" });
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" },
+  });
+  expect(fake.calls.filter((call) => call.startsWith("set "))).toEqual([
+    "set /secrets/openai",
+    "set /secrets/exa",
+    "set /secrets/exa",
+  ]);
+});
+
+test("Connect pressed with the keys unset, then both keys set by the owner, then the rule signed: no grant is asked, the note says no credit is taken, the card is own-keys", async () => {
+  const mind = fakeMind();
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.secrets["/secrets/openai"] = "own";
+  fake.secrets["/secrets/exa"] = "own";
+  await hook(mind, fake.credit, mind.sign(["/minds/iterate.iterate.com/"]));
+  const [note] = mind.chat().map((event) => JSON.stringify(event.payload));
+  expect(note).toMatch(
+    /The mind takes no credit: the owner's own keys for OpenAI and Exa stay in use\./,
+  );
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "own-keys" });
+  expect(fake).toMatchObject({ calls: [] });
+});
+
+test("the offer says the passkey page comes only when no rule is signed yet", async () => {
+  const sendsOf = async (mind: ReturnType<typeof fakeMind>) => {
+    const [card] = await onboardingCards(contextOf(mind, fakeCredit().credit));
+    return card?.points?.find((point) => point.title === "What iterate may send")?.text;
+  };
+  expect(await sendsOf(fakeMind())).toMatch(/You allow that with your passkey on the next page,/);
+  expect(await sendsOf(fakeMind({ meld: "member" }))).toMatch(
+    /You allowed that with your passkey already, and you can end it at any time\./,
+  );
+});
+
+test("the spent card with an own OpenAI key names only what stopped: web research", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({
+    secrets: { "/secrets/openai": "own", "/secrets/exa": "iterate-proxy" },
+    balance: { ok: true, balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0 } },
+  });
+  const card = await runStep(contextOf(mind, fake.credit), STEP, "check");
+  expect(card).toMatchObject({ status: "spent" });
+  expect(card.words).toMatch(/Web research stops until you add a key of your own\./);
+  expect(card.words).not.toMatch(/Your agents go on/);
+});
+
+test("the guides say who pays, and the spoken offer does not claim the agents need the credit", () => {
+  const read = (path: string) =>
+    readFileSync(new URL(`../../configs/default/${path}`, import.meta.url), "utf8").replaceAll(
+      /\s+/g,
+      " ",
+    );
+  const guide = read("onboarding/connect-iterate-cloud.md");
+  expect(guide).toContain(
+    "before the connect, the mind's agents already work, paid by the owner's own Cloudflare account",
+  );
+  expect(guide).toContain(
+    "When the credit is spent, the agents go on through the owner's Cloudflare account, but each request still goes to iterate first and is refused there, until the owner disconnects or sets a key of their own. Voice calls and web research stop until the owner sets a key.",
+  );
+  const offer =
+    "iterate gives your mind $10 of credit for AI: voice calls, web research, and your agents' requests, which your Cloudflare credit pays for today. Want it?";
+  for (const text of [guide, read("onboarding.md")]) {
+    expect(text).toContain(offer);
+    expect(text).not.toContain("so agents and voice calls work at once");
+  }
+});
+
+test("a connect whose invocation died before its settle waits 60 s at most: then stopped, with Try again, and a press connects", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  // the press logs its ask, then its invocation dies: the grant's call never answers
+  const answer = fake.credit.connect;
+  fake.credit.connect = () => new Promise(() => {});
+  void runStep(context, STEP, "connect");
+  await vi.waitFor(async () =>
+    expect(await runStep({ ...context, now: NOW + 30_000 }, STEP, "check")).toMatchObject({
+      status: "connecting",
+    }),
+  );
+  fake.credit.connect = answer;
+  const later = { ...context, now: NOW + 61_000 };
+  const card = await runStep(later, STEP, "check");
+  expect(card).toMatchObject({ status: "failed" });
+  expect(card.words).toMatch(/The connect stopped before it finished\./);
+  expect(card.words).toMatch(/Try again · Not now · End the rule/);
+  expect(await runStep(later, STEP, "connect")).toMatchObject({ status: "connected" });
+});
+
+test("a concurrent connect won the write: the vault refuses the second set, the path is iterate's proxy, and the ask settles as connected with no failure", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const { credit } = realCredit({
+    stackKey: { listed: true },
+    setThrows: "secrets.set with proxy: /secrets/openai is set or being set; delete it first",
+    raced: {
+      "/secrets/openai": { set: true, proxy: ITERATE_PROXY },
+      "/secrets/exa": { set: true, proxy: ITERATE_PROXY },
+    },
+  });
+  const card = await runStep(contextOf(mind, credit), STEP, "connect");
+  expect(card).toMatchObject({ status: "connected" });
+  expect(card.words).not.toMatch(/stopped|being changed|Try again/);
+  const [settled] = mind.logs
+    .get("/apps/onboarding")!
+    .filter((event) => event.type === "onboarding/step-action-settled");
+  expect(settled?.payload).toMatchObject({ outcome: "succeeded" });
+  expect(settled?.payload).not.toHaveProperty("words");
+});
 
 test("a stack without the secret by proxy settles stack-without-proxy, and the card names the update", async () => {
   const mind = fakeMind({ meld: "member" });
@@ -302,12 +546,12 @@ test("the onboarding agent names no credit on such a stack, nor while the credit
     "utf8",
   ).replaceAll(/\s+/g, " ");
   expect(guide).toContain(
-    `Call \`check\` first. When it answers that this mind has no step "${STEP}" (iterate Cloud's credit is not open yet), or its \`status\` is \`${status}\`, ask the "let iterate in" question as before`,
+    `Call \`check\` first. When it answers that this mind has no step "${STEP}" (iterate Cloud's credit is not open yet), or its \`status\` is \`${status}\` or \`own-keys\`, ask the "let iterate in" question as before`,
   );
 });
 
-test("while the credit is closed (CREDIT_OPEN false, as shipped): no card, no press, and at the owner's signed rule nothing asks iterate or the secrets", async () => {
-  expect(CREDIT_OPEN).toBe(false);
+test("the credit is open as shipped; closed (creditOpen false): no card, no press, and at the owner's signed rule nothing asks iterate or the secrets", async () => {
+  expect(CREDIT_OPEN).toBe(true);
   const mind = fakeMind();
   const { credit, calls } = fakeCredit();
   const context = { ...contextOf(mind, credit), creditOpen: false };
@@ -604,7 +848,15 @@ test("the credit used: the card names the three ways to pay, and the chat and th
   };
   const answer = await runStep(context, STEP, "check");
   expect(answer).toMatchObject({ status: "spent" });
-  expect(answer.words).toMatch(/Your \$10 of credit is used\. Choose what pays now:/);
+  expect(answer.words).toMatch(/Your \$10 of credit is used\./);
+  // who pays now, said plainly: the agents fall back to Cloudflare, voice and research stop
+  expect(answer.words).toMatch(
+    /Your agents go on through your own Cloudflare account, but each of their requests still goes to iterate first and is refused there, until you disconnect or add a key of your own\./,
+  );
+  expect(answer.words).toMatch(
+    /Voice calls and web research stop until you add a key of your own\./,
+  );
+  expect(answer.words).toMatch(/Choose what pays now:/);
   expect(answer.words).toMatch(/Command: npx iterate@latest chatgpt connect mind\.example\.com/);
   expect(answer.words).toMatch(/Add my OpenAI key · Add Cloudflare credit · Disconnect/);
   const drawn = () =>
@@ -624,6 +876,28 @@ test("the credit used: the card names the three ways to pay, and the chat and th
   });
 });
 
+test("a request that iterate's proxy refused for storage starts a check and changes nothing: the card stays, no chat message, no mail", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  const before = await runStep(context, STEP, "check");
+  expect(before).toMatchObject({ status: "connected" });
+  fake.calls.length = 0;
+  for (const code of ["iterate_credit_store_not_off", "iterate_credit_nothing_stored"])
+    await hook(mind, fake.credit, {
+      type: "events.iterate.com/agent/llm-request-settled",
+      path: "/agents/a",
+      offset: 900,
+      payload: { failedKeys: [{ key: 1, error: `400 ${code}: storage at OpenAI must be off` }] },
+    });
+  // each event read the balance again, and set or deleted nothing
+  expect(fake).toMatchObject({ calls: ["balance", "balance"] });
+  expect(await runStep(context, STEP, "check")).toEqual(before);
+  expect(mind.chat()).toEqual([]);
+  expect(mind).toMatchObject({ mailed: [] });
+});
+
 test("the tool refuses a step or an action it does not have, with the ones it has", async () => {
   const mind = fakeMind();
   const { credit } = fakeCredit();
@@ -633,9 +907,10 @@ test("the tool refuses a step or an action it does not have, with the ones it ha
   await expect(runStep(contextOf(mind, credit), STEP, "explode")).rejects.toThrow(
     "its actions: check, decline, connect, disconnect, add-openai-key",
   );
-  // iterate Cloud's own mind is offered no credit
+  // iterate Cloud's own mind is offered no credit: no card, and the tool has no such step
   const cloud = { ...contextOf(mind, credit), mind: "iterate.iterate.com" };
   expect(stepsOf(await onboardingCards(cloud))).toEqual(["connect-cloudflare"]);
+  await expect(runStep(cloud, STEP, "check")).rejects.toThrow(`no step "${STEP}" on this mind`);
 });
 
 test("the hook reads nothing for an event no step hears", async () => {
@@ -690,12 +965,57 @@ test("the real set names iterate's proxy and null material, and reads the platfo
   const own = realCredit({ describe: { "/secrets/openai": { set: true } } });
   expect(await own.credit.setByProxy("/secrets/openai", ["https://api.openai.com"])).toBe("own");
   expect(own).toMatchObject({ sets: [] });
-  const raced = realCredit({
+  // the vault's own two refusals of a proxy (core/secrets-worker/src/secret/durable-object.ts)
+  const ruled = realCredit({
     setThrows:
-      "secrets.set with proxy: /secrets/openai holds a key of its own; delete it first if the secret proxy is to take its place",
+      "secrets.set with proxy: /secrets/openai has an approval rule, which no use by proxy can pass; clear the rule first",
   });
-  expect(await raced.credit.setByProxy("/secrets/openai", ["https://api.openai.com"])).toBe("own");
+  expect(await ruled.credit.setByProxy("/secrets/openai", ["https://api.openai.com"])).toBe(
+    "approval-rule",
+  );
+  const inFlight = realCredit({
+    setThrows: "secrets.set with proxy: /secrets/openai is set or being set; delete it first",
+  });
+  expect(await inFlight.credit.setByProxy("/secrets/openai", ["https://api.openai.com"])).toBe(
+    "being-set",
+  );
+  // the path was set since the read: say what it holds now
+  for (const [now, answer] of [
+    [{ set: true, proxy: ITERATE_PROXY }, "set"],
+    [{ set: true }, "own"],
+    [{ set: true, proxy: { mind: "x.example", url: "https://x.example/p" } }, "other-proxy"],
+  ] as const) {
+    const raced = realCredit({
+      setThrows: "secrets.set with proxy: /secrets/exa is set or being set; delete it first",
+      raced: { "/secrets/exa": now },
+    });
+    expect(await raced.credit.setByProxy("/secrets/exa", ["https://api.exa.ai"])).toBe(answer);
+  }
+  // any other refusal is the step's to read (it settles as stopped)
+  const other = realCredit({ setThrows: "RPC: the connection was lost" });
+  await expect(other.credit.setByProxy("/secrets/exa", ["https://api.exa.ai"])).rejects.toThrow(
+    "the connection was lost",
+  );
 });
+
+test.for([
+  [
+    "approval-rule",
+    /has an approval rule on the mind's Secrets page, and iterate's proxy cannot pass one\. Remove the rule, then try again\./,
+  ],
+  ["being-set", /was being changed while the credit connected\. Try again\./],
+] as const)(
+  "the vault's refusal %s settles as a failure with its own words",
+  async ([answer, words]) => {
+    const mind = fakeMind({ meld: "member" });
+    const fake = fakeCredit();
+    fake.credit.setByProxy = async () => answer;
+    const card = await runStep(contextOf(mind, fake.credit), STEP, "connect");
+    expect(card).toMatchObject({ status: "failed" });
+    expect(card.words).toMatch(words);
+    expect(card.words).toMatch(/Try again · Not now · End the rule/);
+  },
+);
 
 test("the real describe tells the owner's key, iterate's proxy and another proxy apart; a delete takes iterate's alone", async () => {
   const { credit, deleted } = realCredit({
@@ -730,16 +1050,18 @@ test.for([
   expect(await credit.connect()).toMatchObject({ ok: false, reason });
 });
 
-test("the real grant answers the balance; a stack with no signed request between minds is stack-without-proxy; the key document says whether the mind signs", async () => {
+test("the real grant answers the balance; a call that throws is cloud-unreachable; the key document says whether the mind signs", async () => {
   expect(await realCredit({}).credit.connect()).toEqual({ ok: true, balance: BALANCE });
-  const older = realCredit({
+  const thrown = realCredit({
     cloud: async () => {
-      throw new Error(
-        "minds.get(hostname).fetch: a mind answers deliverEvents(events) and deliverEvent(event), each also after at(path)",
-      );
+      throw new Error("network connection lost");
     },
   });
-  expect(await older.credit.balance()).toMatchObject({ ok: false, reason: "stack-without-proxy" });
+  expect(await thrown.credit.balance()).toMatchObject({
+    ok: false,
+    reason: "cloud-unreachable",
+    message: "network connection lost",
+  });
   expect(await realCredit({ stackKey: { listed: true } }).credit.canSign()).toBe(true);
   expect(await realCredit({ stackKey: { listed: false } }).credit.canSign()).toBe(false);
   // today's document, before the identity's working key: no `listed`
@@ -782,16 +1104,17 @@ test("the two paths keep the mind's handle until their answer is made: a handle 
     },
   } as unknown as Parameters<typeof app.fetch>[1];
   const cards = await app.fetch(new Request("https://onboarding.example.com/steps.json"), host);
-  // as shipped (CREDIT_OPEN false) the page gets no card of iterate Cloud's: Cloudflare's alone
+  // as shipped (CREDIT_OPEN true) the page gets iterate Cloud's card and Cloudflare's
   expect(cards).toMatchObject({ status: 200 });
-  expect(stepsOf(await cards.json())).toEqual(["connect-cloudflare"]);
+  expect(stepsOf(await cards.json())).toEqual([STEP, "connect-cloudflare"]);
   const press = await app.fetch(
     new Request(`https://onboarding.example.com/steps/${STEP}/check`, { method: "POST" }),
     host,
   );
-  expect({ status: press.status, body: await press.json() }).toEqual({
-    status: 400,
-    body: { error: `onboarding: no step "${STEP}" on this mind; its steps: connect-cloudflare` },
+  // no key document answers, so the stack cannot sign: the card says to update, and asks nothing
+  expect({ status: press.status, body: await press.json() }).toMatchObject({
+    status: 200,
+    body: { status: "unavailable" },
   });
 });
 
@@ -1086,9 +1409,12 @@ function fakeCredit(
     connect?: Awaited<ReturnType<CloudCredit["connect"]>>;
     balance?: Awaited<ReturnType<CloudCredit["balance"]>>;
     proxyLayer?: boolean;
+    /** A set that throws this, for each path, until the test deletes it. */
+    setThrows?: Record<string, string>;
   } = {},
 ) {
   const calls: string[] = [];
+  const setThrows = { ...init.setThrows };
   const secrets: Record<string, SecretKind> = {
     "/secrets/openai": "unset",
     "/secrets/exa": "unset",
@@ -1111,6 +1437,7 @@ function fakeCredit(
     secret: async (path) => secrets[path] || "unset",
     setByProxy: async (path) => {
       calls.push(`set ${path}`);
+      if (setThrows[path]) throw new Error(setThrows[path]);
       if (init.proxyLayer === false) return "no-proxy-layer";
       if (secrets[path] === "own") return "own";
       secrets[path] = "iterate-proxy";
@@ -1123,7 +1450,7 @@ function fakeCredit(
       return true;
     },
   };
-  return { credit, calls, secrets, state };
+  return { credit, calls, secrets, state, setThrows };
 }
 
 /** A Cloudflare mind with the stack's client, and the press of a card's button by its label, as
@@ -1190,6 +1517,8 @@ const hook = (mind: ReturnType<typeof fakeMind>, credit: CloudCredit, event: Min
 function realCredit(answers: {
   describe?: Record<string, unknown>;
   setThrows?: string;
+  /** What a concurrent write made of a path, landed just before the set's refusal. */
+  raced?: Record<string, unknown>;
   stackKey?: unknown;
   cloud?: () => Promise<Response>;
 }) {
@@ -1217,7 +1546,10 @@ function realCredit(answers: {
       describe: async (path: string) => ({ path, set: false, ...(described[path] as object) }),
       set: async (...args: unknown[]) => {
         sets.push(args);
-        if (answers.setThrows) throw new Error(answers.setThrows);
+        if (answers.setThrows) {
+          Object.assign(described, answers.raced);
+          throw new Error(answers.setThrows);
+        }
         described[args[0] as string] = { set: true, proxy: ITERATE_PROXY };
       },
       delete: async (path: string) => {

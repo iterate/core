@@ -8,8 +8,9 @@
 // proxy recognises a mind by its signed request alone (cloud-credit.ts says what each call needs).
 //
 // The card's states, first that holds wins: connecting or disconnecting (an ask waits), connected
-// or spent (a rule, a balance and a secret by iterate's proxy), declined, unavailable (the stack cannot sign as the mind yet),
-// failed (the last ask, with its reason), not asked.
+// or spent (a rule, a balance and a secret by iterate's proxy), own keys (a stack that signs, and
+// both secrets are the owner's: no offer), declined, unavailable (the stack cannot sign as the mind
+// yet), failed (the last ask, with its reason), not asked.
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
 import { ITERATE_MIND } from "../../../cloud-deliveries.ts";
@@ -20,17 +21,20 @@ import type { Card, MindEvent, Step, StepContext, StepLog } from "../steps.ts";
 /** What iterate gives a new mind, in dollars: the card's words before the Cloud said a balance. */
 const CREDIT_USD = 10;
 
-/** WHETHER THIS STEP IS OFFERED AT ALL. False until iterate Cloud's secret proxy is live: an
- *  offer that ends in "iterate Cloud did not answer" after a passkey press is worse than none.
- *  While it is false, no mind shows the card, the tool answers that the mind has no such step
- *  (the onboarding agent then asks the "let iterate in" question, onboarding.md section 5), and
- *  nothing asks iterate for anything. The pull request that lands when the secret proxy is live
- *  sets it to true. Tests open the step by `StepContext.creditOpen`. */
-export const CREDIT_OPEN = false;
+/** WHETHER THIS STEP IS OFFERED AT ALL. True while iterate Cloud's secret proxy
+ *  (cloud-credit.ts `ITERATE_PROXY`) is live and spends a key of its own. Set it to false to close the step: then
+ *  no mind shows the card, the tool answers that the mind has no such step (the onboarding agent
+ *  then asks the "let iterate in" question, onboarding.md section 5), and nothing asks iterate for
+ *  anything. Tests set `StepContext.creditOpen` either way. */
+export const CREDIT_OPEN = true;
 
 /** Where the rule lands, and the one path under which it lets iterate add events. */
 const MELD_CONTEXT = `/minds/${ITERATE_MIND}`;
 const MELD_APPEND = `/minds/${ITERATE_MIND}/`;
+
+/** How long a connect with no passkey page may wait for its own work: past it, the next check or
+ *  press settles it as "stopped" (steps.ts `settleExpired`). */
+const CONNECT_MS = 60_000;
 
 /** The command that updates a mind's platform code, run on the owner's computer. */
 const UPDATE_COMMAND = "npx iterate@latest deploy";
@@ -53,6 +57,9 @@ const Facts = z.object({
 type Facts = z.infer<typeof Facts>;
 
 const factsOf = (state: StepState): Facts | undefined => Facts.safeParse(state.facts).data;
+
+/** A path the credit can pay for: one with no key, or one already by iterate's proxy. */
+const takesCredit = (kind: z.infer<typeof Kind>) => kind === "unset" || kind === "iterate-proxy";
 
 /** A rule's payload: an empty `append` ends the meld. */
 const MeldRule = z.object({ append: z.array(z.string()) });
@@ -81,17 +88,42 @@ async function meldOf(context: StepContext): Promise<{ on: boolean; signer?: str
 /** The words of each reason an ask failed. */
 const FAILURES: Record<string, string> = {
   "not-signed": "The passkey page expired before it was signed. Nothing was connected.",
-  "cloud-unreachable": "iterate Cloud did not answer. Nothing was set up. Try again in a minute.",
+  "cloud-unreachable": "iterate Cloud did not answer. Try again in a minute.",
   "not-recognised": `iterate Cloud did not recognise this mind's signature. Update your mind on your computer, then try again.`,
   "no-working-key": `iterate Cloud could not check this mind's key. Update your mind on your computer, then try again.`,
   "stack-without-proxy": `This mind's platform code cannot use the credit yet. Update your mind on your computer, then try again.`,
   "none-today":
     "iterate gives a limited number of new credits each day, and today's are gone. Try again tomorrow (UTC).",
   paused: "iterate's credit is paused until tomorrow (UTC).",
+  stopped: "The connect stopped before it finished.",
+  "approval-rule":
+    "A key of the credit has an approval rule on the mind's Secrets page, and iterate's proxy cannot pass one. Remove the rule, then try again.",
+  "being-set": "A key of the credit was being changed while the credit connected. Try again.",
 };
+
+/** What stands after a signed rule when the credit did not come, and how to end it. */
+const RULE_STANDS =
+  "Your signed rule still lets iterate send help and updates to this mind. End it with your passkey to stop that.";
 
 /** The reasons whose fix is the update command. */
 const UPDATE_REASONS = new Set(["not-recognised", "no-working-key", "stack-without-proxy"]);
+
+/** WHO PAYS before the connect: the agents' last key is the mind's AI Gateway (agents.ts). */
+const AGENTS_PAID_TODAY =
+  "Your agents already work without it, paid by your own Cloudflare account (its AI Gateway credit). After you connect, each agent request goes to iterate's credit first.";
+
+/** WHO PAYS when the credit is spent, for the paths that go by iterate's proxy: an agent's request
+ *  still goes to iterate first, is refused there, and the next key (the AI Gateway) answers. */
+function whenSpent(openaiByProxy: boolean, exaByProxy: boolean): string[] {
+  const stops = [openaiByProxy && "voice calls", exaByProxy && "web research"].filter(Boolean);
+  const stop = stops.join(" and ");
+  return [
+    openaiByProxy &&
+      "Your agents go on through your own Cloudflare account, but each of their requests still goes to iterate first and is refused there, until you disconnect or add a key of your own.",
+    stop &&
+      `${stop[0]!.toUpperCase()}${stop.slice(1)} ${stops.length > 1 ? "stop" : "stops"} until you add a key of your own.`,
+  ].filter((line): line is string => Boolean(line));
+}
 
 const dollars = (usd: number) => `$${usd.toFixed(2).replace(/\.00$/, "")}`;
 
@@ -132,7 +164,12 @@ function words(state: StepState, context: StepContext): Card {
         ...card,
         status: "spent",
         title: "Your iterate credit is used",
-        text: [`Your ${dollars(grantedUsd)} of credit is used. Choose what pays now:`, ...own],
+        text: [
+          `Your ${dollars(grantedUsd)} of credit is used.`,
+          ...whenSpent(facts.openai === "iterate-proxy", facts.exa === "iterate-proxy"),
+          "Choose what pays now:",
+          ...own,
+        ],
         command: `npx iterate@latest chatgpt connect ${context.mind}`,
         buttons: [
           { label: "I ran the command: check again", action: "check" },
@@ -144,26 +181,48 @@ function words(state: StepState, context: StepContext): Card {
           { label: "Disconnect", action: "disconnect" },
         ],
       };
+    // a half-done connect: one secret by proxy, and the last ask's failure says what is missing
+    const half = state.failure && (state.failure.words || FAILURES[state.failure.reason]);
     return {
       ...card,
       status: "connected",
       title: "Connected to iterate Cloud",
-      text: [`${dollars(remainingUsd)} of ${dollars(grantedUsd)} left.`, ...own],
+      text: [
+        `${dollars(remainingUsd)} of ${dollars(grantedUsd)} left.`,
+        ...own,
+        ...(half ? [half] : []),
+      ],
       buttons: [
-        { label: "Try a voice call", href: `https://voice.${context.zone}/`, primary: true },
+        ...(half ? [{ label: "Try again", action: "connect", primary: true }] : []),
+        {
+          label: "Try a voice call",
+          href: `https://voice.${context.zone}/`,
+          ...(!half && { primary: true }),
+        },
         { label: "Disconnect", action: "disconnect" },
       ],
     };
   }
+  // both keys are the owner's: the credit would pay for nothing, so it is not offered, also after
+  // a "not now". A stack that cannot sign keeps its own card below.
+  if (facts?.canSign && facts.openai === "own" && facts.exa === "own")
+    return {
+      ...card,
+      status: "own-keys",
+      optional: true,
+      text: [
+        "Your mind uses your own keys for OpenAI and Exa, so it needs no credit from iterate.",
+        ...(facts.meld ? [RULE_STANDS] : []),
+      ],
+      buttons: facts.meld ? [{ label: "End the rule", action: "disconnect" }] : [],
+    };
   if (state.declined)
     return facts?.meld
       ? {
           ...card,
           status: "declined",
           title: "No credit from iterate Cloud",
-          text: [
-            "Your signed rule still lets iterate send help and updates to this mind. End it with your passkey to stop that.",
-          ],
+          text: [RULE_STANDS],
           buttons: [
             { label: "Connect", action: "connect" },
             { label: "End the rule", action: "disconnect" },
@@ -195,11 +254,15 @@ function words(state: StepState, context: StepContext): Card {
       ...card,
       status: "failed",
       optional: true,
-      text: [state.failure.words || FAILURES[state.failure.reason] || "The connect failed."],
+      text: [
+        state.failure.words || FAILURES[state.failure.reason] || "The connect failed.",
+        ...(facts?.meld ? [RULE_STANDS] : []),
+      ],
       ...(UPDATE_REASONS.has(state.failure.reason) && { command: UPDATE_COMMAND }),
       buttons: [
         { label: "Try again", action: "connect", primary: true },
         { label: "Not now", action: "decline" },
+        ...(facts?.meld ? [{ label: "End the rule", action: "disconnect" }] : []),
       ],
     };
   return {
@@ -207,12 +270,13 @@ function words(state: StepState, context: StepContext): Card {
     status: "not-asked",
     optional: true,
     text: [
-      `iterate, the company that made this software, gives your mind ${dollars(CREDIT_USD)} of credit for AI. Agents, voice calls and web research work at once, with no key of yours.`,
+      `iterate, the company that made this software, gives your mind ${dollars(CREDIT_USD)} of credit for AI: voice calls, web research, and your agents' model requests.`,
+      AGENTS_PAID_TODAY,
     ],
     points: [
       {
         title: "What iterate sees",
-        text: "While your mind uses the credit, its requests to OpenAI and Exa go through iterate Cloud, on iterate's accounts there. iterate can see those requests and their answers as they pass. It stores the numbers (which model, how much, the cost), not the content. The requests are made on iterate's accounts at OpenAI and Exa, and those providers keep them as they keep any request.",
+        text: "While your mind uses the credit, its requests to OpenAI and Exa go through iterate Cloud, on iterate's accounts there. iterate can see those requests and their answers as they pass. It stores the numbers (which model, how much, the cost), not the content. The requests are made on iterate's accounts at OpenAI and Exa. iterate's proxy refuses a request that asks OpenAI to store it. OpenAI and Exa still keep what their own policies keep, such as abuse logs, and OpenAI keeps the working files of a code tool it runs for up to 20 idle minutes.",
       },
       {
         title: "What iterate cannot see",
@@ -220,11 +284,13 @@ function words(state: StepState, context: StepContext): Card {
       },
       {
         title: "What iterate may send",
-        text: `Help and updates, as events in one place of your mind (${MELD_APPEND}), and there too the messages of accounts you connect through iterate Cloud. You allow that with your passkey on the next page, and you can end it at any time.`,
+        text: `Help and updates, as events in one place of your mind (${MELD_APPEND}), and there too the messages of accounts you connect through iterate Cloud. ${facts?.meld ? "You allowed that with your passkey already" : "You allow that with your passkey on the next page"}, and you can end it at any time.`,
       },
       {
         title: `When the ${dollars(CREDIT_USD)} is spent`,
-        text: "Your mind uses your own way to pay, if you set one. A key of your own always wins over the credit.",
+        text: [...whenSpent(true, true), "A key of your own always wins over the credit."].join(
+          " ",
+        ),
       },
     ],
     buttons: [
@@ -245,8 +311,9 @@ async function check(context: StepContext, state: StepState): Promise<Facts> {
   ]);
   const last = factsOf(state);
   const facts: Facts = { canSign, meld: meld.on, openai, exa };
-  // the Cloud is asked only once a member let iterate in, and only by a stack that signs
-  if (!canSign || !meld.on) return facts;
+  // the Cloud is asked only once a member let iterate in, only by a stack that signs, and only
+  // for a mind that can take the credit: iterate learns nothing of a mind with its own keys
+  if (!canSign || !meld.on || ![openai, exa].some(takesCredit)) return facts;
   const answer = await credit.balance();
   if (answer.ok) return { ...facts, balance: answer.balance };
   if (answer.reason === "paused")
@@ -265,41 +332,66 @@ async function finishConnect(
   options: { tell?: boolean } = {},
 ): Promise<void> {
   const outcome = await creditOutcome(context);
+  const failure = "failed" in outcome && { reason: outcome.failed, words: outcome.words };
   // The note comes BEFORE the settle: while the connect waits, cloud-handover.ts writes no note
   // of its own, so a retry after a failure between the two still finds it waiting and writes
   // this one (keyed: once).
   if (options.tell) await tellSigned(context, requestOffset, outcome);
-  await log.settle(requestOffset, "failed" in outcome ? { reason: outcome.failed } : undefined);
+  await log.settle(requestOffset, failure || undefined);
 }
 
-/** The grant, and both secrets by iterate's proxy where none is set. */
-async function creditOutcome(
-  context: StepContext,
-): Promise<{ failed: string } | { remainingUsd: number }> {
-  const answer = await context.credit.connect();
-  if (!answer.ok) return { failed: answer.reason };
-  for (const { path, urls } of CREDIT_SECRETS) {
-    if ((await context.credit.secret(path)) !== "unset") continue;
-    if ((await context.credit.setByProxy(path, urls)) === "no-proxy-layer")
-      return { failed: "stack-without-proxy" };
+type Outcome =
+  | { failed: string; words?: string }
+  | { remainingUsd: number; pays: string[] }
+  | { ownKeys: true };
+
+/** The grant, and both secrets by iterate's proxy where none is set. A throw is a failure too, so
+ *  the ask settles. An invocation that dies before the settle leaves the ask to its `expires`. */
+async function creditOutcome(context: StepContext): Promise<Outcome> {
+  const pays: string[] = [];
+  // what stands after a half-done connect: the secrets already by proxy, and Try again finishes
+  const stopped = (reason: string): Outcome => ({
+    failed: reason,
+    words: [
+      FAILURES[reason],
+      pays.length > 0 &&
+        `iterate's credit already pays for ${pays.join(" and ")}. Try again sets up the rest.`,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  });
+  try {
+    // the keys first: no grant is asked for a mind whose own keys leave nothing to pay for
+    const kinds = await Promise.all(CREDIT_SECRETS.map(({ path }) => context.credit.secret(path)));
+    if (!kinds.some(takesCredit)) return { ownKeys: true };
+    const answer = await context.credit.connect();
+    if (!answer.ok) return { failed: answer.reason };
+    for (const [index, { path, urls, name }] of CREDIT_SECRETS.entries()) {
+      const kind = kinds[index]!;
+      const set = kind === "unset" ? await context.credit.setByProxy(path, urls) : kind;
+      if (set === "no-proxy-layer") return stopped("stack-without-proxy");
+      if (set === "approval-rule" || set === "being-set") return stopped(set);
+      if (set === "set" || set === "iterate-proxy") pays.push(name);
+    }
+    return { remainingUsd: answer.balance.remainingUsd, pays };
+  } catch (error) {
+    console.warn({ event: "onboarding.connect-stopped", error: String(error) });
+    return stopped("stopped");
   }
-  return { remainingUsd: answer.balance.remainingUsd };
 }
 
 /** THE ONE NOTE AT THE OWNER'S SIGNED RULE, which starts the onboarding agent's turn: the signing
  *  page has brought the owner back to the chat. cloud-handover.ts `iterateLetInEvent` writes none
  *  while a connect waits (steps.ts `connectWaitsForRule`), so the agent has one turn for it. */
-async function tellSigned(
-  context: StepContext,
-  requestOffset: number,
-  outcome: { failed: string } | { remainingUsd: number },
-) {
+async function tellSigned(context: StepContext, requestOffset: number, outcome: Outcome) {
   const signed =
     "The owner signed the rule with their passkey just now: iterate.iterate.com can now send messages to this mind, under /minds/iterate.iterate.com/.";
   const content =
-    "failed" in outcome
-      ? `${signed} The credit did not come: ${FAILURES[outcome.failed] || "the connect failed."} Say both in one sentence each, and go on with the next subject in the same message (onboarding/connect-iterate-cloud.md).`
-      : `${signed} The mind has ${dollars(outcome.remainingUsd)} of iterate's credit for OpenAI and Exa (by iterate's proxy, where no key of theirs was set). Say so in one sentence, with the balance, and go on with the next subject in the same message (onboarding/connect-iterate-cloud.md).`;
+    "ownKeys" in outcome
+      ? `${signed} The mind takes no credit: the owner's own keys for OpenAI and Exa stay in use. Say so in one sentence, and go on with the next subject in the same message (onboarding/connect-iterate-cloud.md).`
+      : "failed" in outcome
+        ? `${signed} The credit did not come: ${outcome.words || FAILURES[outcome.failed] || "the connect failed."} The rule stands until the owner ends it with their passkey (the card's "End the rule"). Say both in one sentence each, and go on with the next subject in the same message (onboarding/connect-iterate-cloud.md).`
+        : `${signed} The mind has ${dollars(outcome.remainingUsd)} of iterate's credit for ${outcome.pays.join(" and ") || "nothing: the owner's own keys stay in use"} (by iterate's proxy, where no key of theirs was set). Say so in one sentence, with the balance, and go on with the next subject in the same message (onboarding/connect-iterate-cloud.md).`;
   await tellAgent(context, `onboarding/connected:${requestOffset}`, { role: "developer", content });
 }
 
@@ -357,13 +449,17 @@ async function act(
     await log.request(action, { link: signAt, expires });
     return { link: signAt };
   }
-  // connect: offers nothing a stack that cannot sign could do
-  if (!facts?.canSign) return;
+  // connect: offers nothing a stack that cannot sign could do, nor a credit that pays for nothing
+  if (!facts?.canSign || (facts.openai === "own" && facts.exa === "own")) return;
   // a second press while one waits answers the waiting ask and its link
   if (state.action?.name === "connect") return;
   // the rule was signed before: no page, no new rule, and the press itself shows the outcome
   if (facts.meld) {
-    await finishConnect(context, await log.request(action), log);
+    await finishConnect(
+      context,
+      await log.request(action, { expires: context.now + CONNECT_MS }),
+      log,
+    );
     return;
   }
   const { signAt, expires } = await propose(context, [MELD_APPEND]);
@@ -373,7 +469,10 @@ async function act(
 
 const CREDIT_PATHS = new Set<string>(CREDIT_SECRETS.map((secret) => secret.path));
 
-/** A failed agent request whose key answered with one of iterate's credit codes. */
+/** A failed agent request whose key answered with one of iterate's credit codes. It only starts a
+ *  check, which reads the balance: a refusal that is no spent credit (`iterate_credit_store_not_off`,
+ *  `iterate_credit_nothing_stored`) leaves the card as it was, because "used" comes from the
+ *  balance alone (`changed`). */
 const CreditRefused = z.object({
   failedKeys: z.array(z.object({ error: z.string().regex(/iterate_credit_/) })).min(1),
 });
@@ -461,8 +560,7 @@ export const connectIterateCloud: Step = {
     disconnect: { opens: true },
     "add-openai-key": { opens: true },
   },
-  // closed until iterate Cloud's side is live (CREDIT_OPEN); iterate Cloud's own mind gives the
-  // credit, so it is offered none
+  // open while CREDIT_OPEN is true; iterate Cloud's own mind gives the credit, so it is offered none
   offered: (context) => context.creditOpen && context.mind !== ITERATE_MIND,
   words,
   check,
