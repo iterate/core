@@ -81,15 +81,18 @@ export const OWN_CLIENT_SCOPES = {
  *  is the consent page. */
 export async function cloudflareConnect(
   itx: Pick<CloudflareItx, "secrets" | "kv" | "url">,
-  options: { tell?: string } = {},
+  options: { tell?: string; next?: string } = {},
 ) {
   if (options.tell && !AGENT_PATH.test(options.tell))
     throw new Error('cloudflareConnect: tell is the path of an agent, like "/agents/onboarding"');
   const dash = `https://dash.${new URL(await itx.url()).hostname}`;
-  // after the consent: back to the chat that asked, or to the page with the card
-  const next = options.tell
-    ? `${dash}/?agent=${encodeURIComponent(options.tell)}`
-    : `${dash}/?page=integrations`;
+  // after the consent: `next` (the page whose button began it), else back to the chat that
+  // asked, else to the page with the card
+  const next =
+    options.next ||
+    (options.tell
+      ? `${dash}/?agent=${encodeURIComponent(options.tell)}`
+      : `${dash}/?page=integrations`);
   if (await itx.secrets.hasStackClient("cloudflare")) {
     const { authorizationUrl, nonce } = await itx.secrets.beginOAuth(CLOUDFLARE_GRANT, {
       client: { stack: "cloudflare" },
@@ -98,7 +101,8 @@ export async function cloudflareConnect(
       next,
     });
     await keepTell(itx, nonce, options.tell);
-    return { way: "stack-client" as const, link: authorizationUrl };
+    // `nonce` names the attempt: `itx.secrets.oauthResult(CLOUDFLARE_GRANT, { nonce })`
+    return { way: "stack-client" as const, link: authorizationUrl, nonce };
   }
   const client = await itx.secrets.describe(OWN_CLIENT);
   const clientId = client.set ? client.public?.clientId : undefined;
@@ -719,6 +723,31 @@ async function keepCard(
       type: "events.iterate.com/integration/connection-configured",
       payload: { integration: CARD, connection: ROW, row },
     });
+}
+
+/** THE CONNECTION AS THE INTEGRATIONS CARD LAST SAW IT (`keepCard`), with no request to
+ *  Cloudflare: the account's name and whether the grant reaches it, or Cloudflare's words for the
+ *  problem. Undefined before the first check of a grant. */
+export async function cloudflareConnection(
+  itx: Pick<CloudflareItx, "cd">,
+): Promise<{ account: string; ok: boolean; problem?: string } | undefined> {
+  const { state } = await itx
+    .cd("/integrations")
+    .facets.get<{ snapshot(): Promise<{ state: unknown }> }>("integration")
+    .snapshot();
+  const row = z
+    .object({
+      account: z.string(),
+      status: z.object({ kind: z.string(), text: z.string().optional() }),
+    })
+    .safeParse(Registry.parse(state).connections[`${CARD}/${ROW}`]).data;
+  return (
+    row && {
+      account: row.account,
+      ok: row.status.kind === "ok",
+      problem: row.status.text,
+    }
+  );
 }
 
 /** One check of the grant, with the time it was made, and no longer than CHECK_MS. */

@@ -151,7 +151,10 @@ write four events on `/apps/onboarding` (`contract.ts`), and the page draws thei
 
 The first step is "Connect to iterate Cloud": the owner signs the meld rule with a passkey, and
 the mind takes iterate's credit for OpenAI and Exa by iterate's proxy, where no key of theirs is
-set (`onboarding/connect-iterate-cloud.md`). A new step is one more file and one more entry.
+set (`onboarding/connect-iterate-cloud.md`). The second is "Connect Cloudflare": one consent at
+Cloudflare through the stack's own OAuth client, the same connect as the Dash's
+`/connect/cloudflare` (`cloudflare.md`). A stack whose deploy made no client shows no button,
+and names the command that makes it. A new step is one more file and one more entry.
 
 ## Voice
 

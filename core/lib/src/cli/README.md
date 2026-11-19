@@ -76,9 +76,8 @@ What it does, in order:
    public client: no secret, no server of iterate's). The access lives about an hour and is not
    renewed. It is kept in the CLI's config folder until a deploy works, then revoked, so a second
    run asks for no second approval. `CLOUDFLARE_API_TOKEN` replaces the sign-in. A person's
-   sign-in used as that token works for an update and cannot make the stack's OAuth client: each
-   such deploy says "No OAuth client … was made", takes about 24 s longer and uploads the secrets
-   Worker again (seen on both live minds, 19 Nov 2026).
+   sign-in used as that token works for an update and cannot make the stack's OAuth client (step
+   5 below).
    - **Tick "Account API Token Provisioning" on Cloudflare's page.** Cloudflare marks it as
      sensitive and leaves it unticked. The deploy makes two API tokens with which the mind reads
      its own logs and metrics; they read nothing else and deploy nothing.
@@ -118,7 +117,32 @@ What it does, in order:
    plan there. Cloudflare may ask for a payment method and charges nothing for the Free plan.
    With nobody at the terminal it stops with that page's address. Whether Cloudflare allows the
    set-up through the API on an account that never had Zero Trust is not yet seen.
-5. **The config**, which is the script's one input, written to
+5. **The mind's OAuth client at Cloudflare**, through which a member connects the mind to its own
+   account, so that it reads its logs, usage and settings and changes nothing there
+   ([core/alchemy](../../../alchemy/README.md)). Making it needs the permission "OAuth Client
+   Write". Cloudflare's sign-in has no scope for it (its 404 scopes name none), and a token that
+   a sign-in makes may not hold it (Cloudflare refuses: "The OAuth session does not include the
+   scopes required"). So the command asks for one API token with that one permission:
+   - It asks only when the stack has no client and the deploy's own credential may not make one.
+     It knows the first from the secrets Worker's settings, whose plain-text variable
+     `CLOUDFLARE_CLIENT_ID` is the client's id or `none` (a mind deployed before it had the
+     variable is asked once); the second by a list of the account's OAuth clients with that
+     credential. A mind that has its client is asked nothing.
+   - It opens Cloudflare's page for an account's token with "OAuth Client Write" filled in
+     (`https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=[{"key":"<the group's id>","type":"edit"}]&name=…`:
+     the page takes a group's id for an account's token, and this group has no short key). You
+     choose the account, press "Continue to summary" and "Create Token", and paste the token at a
+     hidden prompt. The command checks it (`/accounts/<id>/tokens/verify`, and a list of the
+     account's OAuth clients), gives it to the script as `CLOUDFLARE_OAUTH_CLIENT_API_TOKEN` for
+     the client alone, and never writes it to a file or a log. After the deploy it reads the
+     secrets Worker again, says that the client is made, and that you may delete the token at
+     `https://dash.cloudflare.com/<account id>/api-tokens`.
+   - Enter on an empty prompt, `--no-setup`, or nobody at the terminal: the deploy goes on without
+     the client, and says how to get it: the same command again. An agent that supervises a run
+     sets `CLOUDFLARE_OAUTH_CLIENT_API_TOKEN` instead; the command checks it and uses it. It is a
+     variable and no flag, as `CLOUDFLARE_API_TOKEN` is: a flag's value stays in the shell's
+     history and in the list of processes.
+6. **The config**, which is the script's one input, written to
    `${XDG_CACHE_HOME:-~/.cache}/iterate/deploys/<stage>/config.json`:
    - `controlPlaneHostname`: `iterate.<domain>`. `--control-plane-hostname` names another: the
      domain itself, or one label under it.
@@ -131,12 +155,12 @@ What it does, in order:
    - `mindId`: for a new mind, the id of the identity that the command makes right before the
      deploy ([The mind's identity key](#the-minds-identity-key)). A mind that is there already
      keeps its own.
-6. **The source.** It fetches [iterate/core](https://github.com/iterate/core) into
+7. **The source.** It fetches [iterate/core](https://github.com/iterate/core) into
    `${XDG_CACHE_HOME:-~/.cache}/iterate/core` and installs it with pnpm (through `npx` when pnpm is
    not installed), while you sign in. In a checkout of the source it deploys that checkout.
    `--source <folder>` names a checkout, `--ref <branch or commit>` another version. It needs git.
    A source from before the one Alchemy script is refused, before anything changes.
-7. **The deploy**: `pnpm run deploy --stage <stage> --yes` of core/alchemy. Its output goes to
+8. **The deploy**: `pnpm run deploy --stage <stage> --yes` of core/alchemy. Its output goes to
    `deploy.log` beside the config. A new state store can refuse the run that made it ("State
    store request failed"): the command then deploys once more by itself. Any other failure prints
    the log's last lines and its path. Run the command again on the same computer: it goes on
@@ -188,16 +212,16 @@ refused. The way out is core/alchemy's script by hand, with `--adopt` after the 
 
 After the deploy, with a person at the terminal, it does the mind's first steps:
 
-1. **The first sign-in.** It starts this terminal's sign-in (`iterate login`) and opens its page.
+2. **The first sign-in.** It starts this terminal's sign-in (`iterate login`) and opens its page.
    Your browser asks for a passkey there: you have none yet, so close that, and choose "prove your
    email address with Cloudflare". Cloudflare mails a code to the owner's address. After the code
    you add your passkey, and the same page then signs this terminal in. A passkey is made in a
    browser: the CLI cannot make one.
-2. **What pays for the model:** a ChatGPT Plus or Pro plan ([A ChatGPT plan](#a-chatgpt-plan)), an
+3. **What pays for the model:** a ChatGPT Plus or Pro plan ([A ChatGPT plan](#a-chatgpt-plan)), an
    OpenAI API key that you paste on a page of your own mind, or nothing now. Then it says "hi" to
    `/agents/onboarding` and waits for the model's answer, up to 50 seconds. With none it says
    why, and the question comes again.
-3. **The MCP server.** It offers to add `https://<control plane>/mcp` to Claude Code and Codex,
+4. **The MCP server.** It offers to add `https://<control plane>/mcp` to Claude Code and Codex,
    whichever is installed, under the control plane's name (`iterate-ada-labs-com`) for the whole
    user, and says how each one signs in.
 

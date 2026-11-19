@@ -13,11 +13,21 @@
 // credential that may make the client makes it. Any other failure fails the deploy: see `refusedForPermission` for
 // how a refusal is told from an invalid credential.
 //
+// AN API TOKEN FOR THE CLIENT ALONE. A sign-in at Cloudflare cannot grant "OAuth Client Write" (no
+// OAuth scope names it), and a token that a sign-in makes may not hold it either. So
+// `iterate deploy` takes one API token with that one permission from the person, and gives it to
+// the script as `CLOUDFLARE_OAUTH_CLIENT_API_TOKEN` (`OAUTH_CLIENT_TOKEN`). When it is set, every
+// call of this resource uses it, and the deploy's own credential makes no call here; otherwise
+// the deploy's credential makes them, as for every other resource.
+//
 // Alchemy has no resource for an account's OAuth clients (2.0.0-beta.85 and beta.87); the SDK under it has
 // the calls. When Alchemy has one that keeps the secret and takes a refusal as an outcome, this
 // file goes.
 import * as Cloudflare from "@alchemy.run/cloudflare";
+import * as accounts from "@distilled.cloud/cloudflare/accounts";
+import { apiTokenCredentials, Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as iam from "@distilled.cloud/cloudflare/iam";
+import * as user from "@distilled.cloud/cloudflare/user";
 import * as zones from "@distilled.cloud/cloudflare/zones";
 import * as Provider from "alchemy/Provider";
 import { Resource } from "alchemy/Resource";
@@ -52,7 +62,11 @@ export const CloudflareOAuthClient = Resource<CloudflareOAuthClient>(
   "Iterate.CloudflareOAuthClient",
 );
 
-export const CloudflareOAuthClientProvider = () =>
+/** The environment variable of the API token for the client alone (see the top of the file). */
+export const OAUTH_CLIENT_TOKEN = "CLOUDFLARE_OAUTH_CLIENT_API_TOKEN";
+
+/** The provider. `token`: the API token for the client alone, when the deploy was given one. */
+export const CloudflareOAuthClientProvider = (token?: string) =>
   Provider.succeed(CloudflareOAuthClient, {
     // A stack with no client, or with a change that was refused, asks again at every deploy: this
     // deploy's credential may be one that may. Otherwise only a change of the name, the address
@@ -66,29 +80,18 @@ export const CloudflareOAuthClientProvider = () =>
         redirectUris: [news.redirectUri],
         scopes: [...news.scopes],
       };
-      return yield* oauthClientMadeOrKept(wanted, output, {
-        read: (oauthClientId) =>
-          iam
-            .getOauthClient({ accountId, oauthClientId })
-            .pipe(Effect.catchIf(notThere, () => Effect.undefined)),
-        make: iam.createOauthClient({
-          ...wanted,
-          accountId,
-          grantTypes: ["authorization_code", "refresh_token"],
-          responseTypes: ["code"],
-          // the secret goes in the token request's form: the secrets Worker sends it so
-          tokenEndpointAuthMethod: "client_secret_post",
-        }),
-        patch: (oauthClientId) => iam.patchOauthClient({ ...wanted, accountId, oauthClientId }),
-        // a read that every deploy's credential may make ("zone.read"): it fails for a credential
-        // that is not valid, and so tells that from one that lacks a permission
-        credentialWorks: zones.listZones({ account: { id: accountId }, perPage: 1 }),
-      });
+      return yield* oauthClientMadeOrKept(
+        wanted,
+        output,
+        oauthClientCalls(accountId, wanted, token),
+      );
     }),
     delete: Effect.fn(function* ({ output, olds }) {
       if (!output.clientId) return;
       const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
-      yield* iam.deleteOauthClient({ accountId, oauthClientId: output.clientId }).pipe(
+      yield* withToken(token)(
+        iam.deleteOauthClient({ accountId, oauthClientId: output.clientId }),
+      ).pipe(
         Effect.catchIf(notThere, () => Effect.void),
         // A destroy by a credential that may not delete OAuth clients still erases the mind. The
         // client stays in the account, and nothing holds its secret once the state is gone.
@@ -100,6 +103,55 @@ export const CloudflareOAuthClientProvider = () =>
       );
     }),
   });
+
+/** An effect of Cloudflare's SDK that runs with `token`, when there is one, in place of the
+ *  deploy's credential. */
+const withToken =
+  (token: string | undefined) =>
+  <A, E, R>(call: Effect.Effect<A, E, R>) =>
+    token
+      ? Effect.provideService(
+          call,
+          Credentials,
+          Effect.succeed(apiTokenCredentials({ apiToken: Redacted.make(token) })),
+        )
+      : call;
+
+/** THE CALLS OF CLOUDFLARE'S API THAT THE PROVIDER MAKES for the account `accountId`: with
+ *  `token` when it is given, else with the deploy's credential. */
+export const oauthClientCalls = (
+  accountId: string,
+  wanted: { clientName: string; redirectUris: string[]; scopes: string[] },
+  token?: string,
+) => {
+  const using = withToken(token);
+  return {
+    read: (oauthClientId: string) =>
+      using(iam.getOauthClient({ accountId, oauthClientId })).pipe(
+        Effect.catchIf(notThere, () => Effect.undefined),
+      ),
+    make: using(
+      iam.createOauthClient({
+        ...wanted,
+        accountId,
+        grantTypes: ["authorization_code", "refresh_token"],
+        responseTypes: ["code"],
+        // the secret goes in the token request's form: the secrets Worker sends it so
+        tokenEndpointAuthMethod: "client_secret_post",
+      }),
+    ),
+    patch: (oauthClientId: string) =>
+      using(iam.patchOauthClient({ ...wanted, accountId, oauthClientId })),
+    // a read that the credential surely may make: it fails for one that is not valid, and so
+    // tells that from one that lacks a permission. The deploy's own may read zones ("zone.read");
+    // a given token holds one permission, and verifies itself (an account's token, or a person's).
+    credentialWorks: token
+      ? using(
+          accounts.verifyToken({ accountId }).pipe(Effect.catchCause(() => user.verifyToken({}))),
+        )
+      : zones.listZones({ account: { id: accountId }, perPage: 1 }),
+  };
+};
 
 /** Whether a deploy must ask Cloudflare again, with unchanged props: the stack has no client,
  *  or a change to it was refused. */

@@ -456,7 +456,11 @@ async function changed(
 
 export const connectIterateCloud: Step = {
   id: "connect-iterate-cloud",
-  actions: ["connect", "disconnect", "add-openai-key"],
+  actions: {
+    connect: { opens: true },
+    disconnect: { opens: true },
+    "add-openai-key": { opens: true },
+  },
   // closed until iterate Cloud's side is live (CREDIT_OPEN); iterate Cloud's own mind gives the
   // credit, so it is offered none
   offered: (context) => context.creditOpen && context.mind !== ITERATE_MIND,

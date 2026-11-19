@@ -49,6 +49,7 @@ import {
   DEPLOY_SCOPES,
   endAccess,
   MAKES_API_TOKENS,
+  OAUTH_CLIENT_WRITE,
   parsed,
   resultOf,
 } from "./cloudflare-access.ts";
@@ -270,6 +271,72 @@ export function zeroTrustStep(account: string, answer: Answer, tried: boolean) {
   } as const;
 }
 
+/** THE ENVIRONMENT VARIABLE OF AN API TOKEN THAT MAKES THE STACK'S OWN OAUTH CLIENT, and nothing
+ *  else: the script's own name for it (core/alchemy src/cloudflare-oauth-client.ts). The command
+ *  takes it from its own environment too, so an agent that supervises a run sets it and nobody
+ *  pastes: one name in both places, as `CLOUDFLARE_API_TOKEN` is. It is a variable and no flag,
+ *  since a flag's value stays in the shell's history and in the list of processes. */
+export const OAUTH_CLIENT_TOKEN = "CLOUDFLARE_OAUTH_CLIENT_API_TOKEN";
+
+/** WHETHER A DEPLOYED STACK HAS ITS OWN OAUTH CLIENT AT CLOUDFLARE, from its secrets Worker's
+ *  settings: the stack gives that Worker the client's id as the plain-text variable
+ *  `CLOUDFLARE_CLIENT_ID`, or `none` (core/alchemy src/stack.ts). The client's secret is in a
+ *  secret variable, whose text no read shows, and which holds Cloudflare's refusal when there is
+ *  no client: its existence says nothing. Settings with no such variable, and no secrets Worker
+ *  at all, count as no client: the deploy asks for the token. */
+export const stackHasOAuthClient = (settings: unknown) => {
+  const id = WorkerSettings.safeParse(settings).data?.bindings.find(
+    (binding) => binding.type === "plain_text" && binding.name === "CLOUDFLARE_CLIENT_ID",
+  )?.text;
+  return Boolean(id && id !== "none");
+};
+
+/** The words for a mind that is deployed with no OAuth client at Cloudflare: how to get it later. */
+export const oauthClientLaterWords = (domain: string) =>
+  `The mind has no OAuth client at Cloudflare yet, so it cannot read your Cloudflare account. To add it, run \`npx iterate deploy --domain ${domain}\` once more and paste one Cloudflare API token when it asks. An agent that runs the command sets ${OAUTH_CLIENT_TOKEN} to an API token of the account with "OAuth Client Write" instead.`;
+
+/** WHAT THE COMMAND DOES FOR THE STACK'S OWN OAUTH CLIENT AT CLOUDFLARE (core/alchemy
+ *  src/cloudflare-oauth-client.ts), before the deploy. The client needs the permission "OAuth
+ *  Client Write", which no scope of Cloudflare's sign-in grants, and which a token made through a
+ *  sign-in may not hold (Cloudflare refuses it: "The OAuth session does not include the scopes
+ *  required"). So it comes by one API token that the person makes on Cloudflare's own page:
+ *
+ *  - `go`: nothing to do. The stack has its client, or the deploy's own credential may make it
+ *    (an API token of the environment, or a pasted one, that holds the permission);
+ *  - `given`: the environment has the token (`OAUTH_CLIENT_TOKEN`): checked, then used;
+ *  - `later`: nobody at the terminal, or `--no-setup`: the deploy goes on without the client, and
+ *    the words say how to get it;
+ *  - `ask`: the page that makes the token with that one permission, and the words for it. */
+export function oauthClientStep(state: {
+  hasClient: boolean;
+  credentialMay: boolean;
+  given: boolean;
+  person: boolean;
+  account: { id: string; name: string };
+  domain: string;
+}) {
+  if (state.hasClient || state.credentialMay) return { next: "go" } as const;
+  if (state.given) return { next: "given" } as const;
+  if (!state.person) return { next: "later", words: oauthClientLaterWords(state.domain) } as const;
+  return {
+    next: "ask",
+    page: apiTokenPage([OAUTH_CLIENT_WRITE], "iterate: the mind's OAuth client").href,
+    words: `One more permission: your mind gets its own OAuth client at Cloudflare, so that your mind can read your own Cloudflare account: its logs, usage and settings. It can change nothing there. Cloudflare's sign-in cannot grant the permission that makes the client, so make one API token with it on this page, where "OAuth Client Write" is filled in: choose the account ${state.account.name}, press "Continue to summary", then "Create Token", and copy the token. The deploy uses it only to make the client.`,
+  } as const;
+}
+
+/** Whether `token` is an API token of `account` (or of a person) that may list the account's
+ *  OAuth clients: the read of a token that holds "OAuth Client Write" (or Read). */
+export async function oauthClientTokenWorks(token: string, account: string) {
+  const call = cloudflare(token);
+  const known =
+    (await call("GET", `/accounts/${account}/tokens/verify`)).status === 200 ||
+    (await call("GET", "/user/tokens/verify")).status === 200;
+  return (
+    known && (await call("GET", `/accounts/${account}/oauth_clients?per_page=1`)).status === 200
+  );
+}
+
 /** A word made to end in "erate", as "iterate" does: one final a, e, i, o, u or y goes first,
  *  when more than that letter is there (misha gives misherate, jonas gives jonaserate). */
 export const erateOf = (word: string) =>
@@ -485,6 +552,8 @@ type Run = {
   /** the file that holds the script's one input */
   config: string;
   token: string;
+  /** an API token for the stack's OAuth client alone (`OAUTH_CLIENT_TOKEN`), when there is one */
+  clientToken?: string;
   log: string;
   children: Set<ChildProcess>;
   say?: (line: string) => void;
@@ -524,6 +593,8 @@ function deployOnce(run: Run): Promise<{ code: number; storeRefused: boolean }> 
         NO_COLOR: "1",
         FORCE_COLOR: "0",
         CLOUDFLARE_API_TOKEN: run.token,
+        // only the token that this run checked, or none: an unset value is left out
+        [OAUTH_CLIENT_TOKEN]: run.clientToken,
         ITERATE_MIND_CONFIG: run.config,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -535,7 +606,7 @@ function deployOnce(run: Run): Promise<{ code: number; storeRefused: boolean }> 
       const lines = (rest + chunk.toString("utf8")).split("\n");
       rest = lines.pop() ?? "";
       for (const raw of lines) {
-        const line = raw.replaceAll(run.token, "[token]").trimEnd();
+        const line = hidden(raw, run).trimEnd();
         file.write(`${line}\n`);
         if (saysTheStateStoreRefused(line)) storeRefused = true;
         if (line.trim()) run.say?.(line.trim());
@@ -546,11 +617,18 @@ function deployOnce(run: Run): Promise<{ code: number; storeRefused: boolean }> 
     child.on("error", failed);
     child.on("close", (code) => {
       run.children.delete(child);
-      file.end(`${rest.replaceAll(run.token, "[token]")}\n`);
+      file.end(`${hidden(rest, run)}\n`);
       done({ code: code ?? 1, storeRefused });
     });
   });
 }
+
+/** A line of the deploy's output with the text of each of its tokens replaced. */
+const hidden = (line: string, run: Run) =>
+  [run.token, run.clientToken].reduce<string>(
+    (text, token) => (token ? text.replaceAll(token, "[token]") : text),
+    line,
+  );
 
 /** The deploy. When the state store refused it (`saysTheStateStoreRefused`), it runs once more. */
 async function deployStack(run: Run): Promise<number> {
@@ -1729,6 +1807,58 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       holdings = await holdingsToErase(arrived.uses || [], zone.id);
     }
 
+    // THE STACK'S OWN OAUTH CLIENT AT CLOUDFLARE (`oauthClientStep`): one API token with "OAuth
+    // Client Write", which the deploy's credential lacks, for the client alone. It is never shown
+    // and never written to a file; the deploy's log has "[token]" for its text.
+    const secretsSettings = `/accounts/${account.id}/workers/scripts/iterate-${stageName}-secrets/settings`;
+    const givenClientToken = process.env[OAUTH_CLIENT_TOKEN]?.trim();
+    const clientStep = oauthClientStep({
+      hasClient: stackHasOAuthClient((await cf("GET", secretsSettings)).result),
+      credentialMay:
+        (
+          await cloudflare(pasted || access.token)(
+            "GET",
+            `/accounts/${account.id}/oauth_clients?per_page=1`,
+          )
+        ).status === 200,
+      given: Boolean(givenClientToken),
+      person: input.setup !== false && interactive(),
+      account,
+      domain,
+    });
+    let clientToken: string | undefined;
+    if (clientStep.next === "given") {
+      if (!givenClientToken || !(await oauthClientTokenWorks(givenClientToken, account.id)))
+        throw new Error(
+          `The token in ${OAUTH_CLIENT_TOKEN} is no API token of the account ${account.name} that may make OAuth clients ("OAuth Client Write"). Nothing was changed.`,
+        );
+      clientToken = givenClientToken;
+    }
+    if (clientStep.next === "ask") {
+      page(clientStep.words, clientStep.page);
+      for (;;) {
+        const typed = (
+          await ask<string>("", () =>
+            p.password({
+              message:
+                "Paste the API token here (it is not shown), or press Enter to deploy without the client",
+            }),
+          )
+        )?.trim();
+        if (!typed) break;
+        if (await oauthClientTokenWorks(typed, account.id)) {
+          clientToken = typed;
+          break;
+        }
+        p.log.warn(
+          `Cloudflare does not know that text as an API token of the account ${account.name} with "OAuth Client Write". Paste the token again, or press Enter to deploy without the client.`,
+        );
+      }
+    }
+    // the deploy goes on without the client: said before it, so that a run that stops later said it
+    if (clientStep.next === "later" || (clientStep.next === "ask" && !clientToken))
+      p.log.warn(oauthClientLaterWords(domain));
+
     // A NEW MIND'S IDENTITY (./identity.ts), made after the person's last answer: its key and
     // its signed genesis are on this computer before the script gets the id. A mind that has an
     // id keeps it, and this run signs nothing. That holds for an id that is no genesis's hash
@@ -1750,6 +1880,7 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       stageName,
       config: configFile,
       token: pasted || access.token,
+      clientToken,
       log,
       children,
       say: deploying.say,
@@ -1787,6 +1918,15 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       10,
     );
     p.log.success(`The mind answers (${seconds(answersBegan)}).`);
+    // the client that a given token was for: said in words, read from the stack and not assumed
+    if (clientToken) {
+      if (stackHasOAuthClient((await cf("GET", secretsSettings)).result))
+        p.log.success(
+          `The mind's OAuth client at Cloudflare is made: the mind can read its own Cloudflare account, and change nothing there. The token you gave for it is not needed any more: delete it at https://dash.cloudflare.com/${account.id}/api-tokens`,
+        );
+      else p.log.warn(oauthClientLaterWords(domain));
+    }
+
     await endAccess(access);
     const posted = await identityPublished({ mindId, controlPlaneHostname });
     // The mind is deployed: a fault in its first steps is a line, never a failed deploy. With

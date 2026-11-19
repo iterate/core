@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Forbidden, InternalServerError, Unauthorized } from "@distilled.cloud/cloudflare/Errors";
+import { fromApiToken } from "@distilled.cloud/cloudflare/Credentials";
 import * as Effect from "effect/Effect";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import { asksAgain, oauthClientMadeOrKept } from "./cloudflare-oauth-client.ts";
+import { asksAgain, oauthClientCalls, oauthClientMadeOrKept } from "./cloudflare-oauth-client.ts";
 
 const wanted = {
   clientName: "iterate-example-com-cloudflare",
@@ -154,6 +158,45 @@ void test("a client that Cloudflare made with no secret fails the deploy, by its
     JSON.stringify(exit),
     /iterate-example-com-cloudflare \(made-client\) and gave no secret/,
   );
+});
+
+void test("a given API token makes each of the provider's calls, and the deploy's credential none", async () => {
+  for (const [token, expected] of [
+    ["the-client-token", "Bearer the-client-token"],
+    [undefined, "Bearer the-deploy-token"],
+  ] as const) {
+    const sent: string[] = [];
+    // Cloudflare as a client that records each request: a client that is not there (404)
+    const cloudflare = HttpClient.make((request) =>
+      Effect.sync(() => {
+        sent.push(`${request.method} ${request.url} ${request.headers.authorization}`);
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json(
+            { success: false, errors: [{ code: 70700, message: "oauth client not found" }] },
+            { status: 404 },
+          ),
+        );
+      }),
+    );
+    const calls = oauthClientCalls("account-1", wanted, token);
+    const read = await Effect.runPromise(
+      calls
+        .read("client-1")
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.succeed(HttpClient.HttpClient, cloudflare),
+              fromApiToken({ apiToken: Redacted.make("the-deploy-token") }),
+            ),
+          ),
+        ),
+    );
+    assert.equal(read, undefined);
+    assert.deepEqual(sent, [
+      `GET https://api.cloudflare.com/client/v4/accounts/account-1/oauth_clients/client-1 ${expected}`,
+    ]);
+  }
 });
 
 const keptClient = {

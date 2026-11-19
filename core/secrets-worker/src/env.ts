@@ -26,6 +26,9 @@ declare global {
       /** Made by the stack and bound as a secret: the config's `cloudflareRealtime`, as JSON
        *  (./config.ts). Never returned or logged. */
       ITERATE__CLOUDFLARE_REALTIME: string;
+      /** The stack's client's id, or `none`: for `iterate deploy`, which reads the Worker's
+       *  settings. This Worker reads `ITERATE__CLOUDFLARE_CLIENT`, not this. */
+      CLOUDFLARE_CLIENT_ID: string;
       /** The config's `cloudflareAccountId`: the account that the stack runs in (./config.ts). */
       ITERATE__CLOUDFLARE_ACCOUNT_ID: string;
       /** One object per secret, named by its path (./secret/durable-object.ts). */

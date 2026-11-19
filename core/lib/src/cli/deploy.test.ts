@@ -25,8 +25,11 @@ import {
   identityKeyLineOf,
   mcpInstalls,
   mindConfigIn,
+  OAUTH_CLIENT_TOKEN,
+  oauthClientStep,
   onboardingTurnScript,
   saysTheStateStoreRefused,
+  stackHasOAuthClient,
   stageNameOf,
   zeroTrustStep,
 } from "./deploy.ts";
@@ -407,6 +410,57 @@ test("Zero Trust: an organization goes on; none, or Access not enabled, is set u
       { key: "access", type: "edit" },
     ]),
   );
+});
+
+test("the OAuth client's gate: asked only for a stack with no client, whose deploy's credential may not make it, with a person there", () => {
+  const account = { id: "0".repeat(32), name: "Ada's account" };
+  const state = {
+    hasClient: false,
+    credentialMay: false,
+    given: false,
+    person: true,
+    account,
+    domain: "ada-labs.com",
+  };
+  // a stack that has its client, or a credential that may make it: nothing is asked
+  expect(oauthClientStep({ ...state, hasClient: true })).toEqual({ next: "go" });
+  expect(oauthClientStep({ ...state, credentialMay: true })).toEqual({ next: "go" });
+  // an agent's token in the environment is used, and nobody is asked
+  expect(oauthClientStep({ ...state, given: true, person: false })).toEqual({ next: "given" });
+  // nobody at the terminal, or --no-setup: the deploy goes on, and the words say how to get it
+  const later = oauthClientStep({ ...state, person: false });
+  expect(later).toEqual({
+    next: "later",
+    words: expect.stringContaining("run `npx iterate deploy --domain ada-labs.com` once more"),
+  });
+  expect(later.next === "later" && later.words).toContain(OAUTH_CLIENT_TOKEN);
+  // a person: the page with "OAuth Client Write" alone, and what the client is for
+  const asked = oauthClientStep(state);
+  if (asked.next !== "ask") throw new Error(asked.next);
+  expect(asked.words).toContain(
+    "so that your mind can read your own Cloudflare account: its logs, usage and settings. It can change nothing there.",
+  );
+  expect(asked.words).toContain("choose the account Ada's account");
+  const page = new URL(asked.page);
+  expect(page.searchParams.get("to")).toBe("/:account/api-tokens");
+  expect(JSON.parse(page.searchParams.get("permissionGroupKeys") || "")).toEqual([
+    // allow-high-entropy-next-line: the id of the permission group "OAuth Client Write", public and the same in every account
+    { key: "50fc2f43318f40e4855a35d8de5bf643", type: "edit" },
+  ]);
+});
+
+test("a stack has its OAuth client when its secrets Worker's settings name the client's id", () => {
+  const settings = (text?: string) => ({
+    bindings: [
+      { type: "secret_text", name: "ITERATE__CLOUDFLARE_CLIENT" },
+      ...(text ? [{ type: "plain_text", name: "CLOUDFLARE_CLIENT_ID", text }] : []),
+    ],
+  });
+  expect(stackHasOAuthClient(settings("client-1"))).toBe(true);
+  expect(stackHasOAuthClient(settings("none"))).toBe(false);
+  // settings with no CLOUDFLARE_CLIENT_ID, and no secrets Worker at all: no client, so the deploy asks
+  expect(stackHasOAuthClient(settings())).toBe(false);
+  expect(stackHasOAuthClient(undefined)).toBe(false);
 });
 
 test("a deploy over a mind keeps every field of the config that the mind was deployed with, and changes only what a flag names", () => {

@@ -10,7 +10,10 @@ import { AccessTeamProvider } from "./src/access-team.ts";
 import { ArtifactsNamespaceProvider } from "./src/artifacts-namespace.ts";
 import { ArtifactsRepoSubscriptionProvider } from "./src/artifacts-repo-subscription.ts";
 import { CatalogTablesOfSinksProvider } from "./src/catalog-tables-of-sinks.ts";
-import { CloudflareOAuthClientProvider } from "./src/cloudflare-oauth-client.ts";
+import {
+  CloudflareOAuthClientProvider,
+  OAUTH_CLIENT_TOKEN,
+} from "./src/cloudflare-oauth-client.ts";
 import { loadMindConfig, namesOf } from "./src/config.ts";
 import { DataCatalogProviderThatWaitsForItsToken } from "./src/data-catalog-token-wait.ts";
 import { CallsWithoutWriteProviders } from "./src/realtime.ts";
@@ -42,7 +45,8 @@ export default Alchemy.Stack(
       ArtifactsNamespaceProvider(),
       ArtifactsRepoSubscriptionProvider(),
       CatalogTablesOfSinksProvider(),
-      CloudflareOAuthClientProvider(),
+      // with the API token that `iterate deploy` checked for the client alone, when it gave one
+      CloudflareOAuthClientProvider(process.env[OAUTH_CLIENT_TOKEN]?.trim() || undefined),
       DataCatalogProviderThatWaitsForItsToken(),
       // Alchemy's own providers of the SFU app and TURN key, where a credential without "Calls
       // Write" leaves them not made (src/realtime.ts): these win over `Cloudflare.providers()`

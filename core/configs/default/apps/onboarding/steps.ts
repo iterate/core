@@ -14,12 +14,22 @@ import {
   type StepState,
 } from "./contract.ts";
 import { type CloudCredit, cloudCredit } from "./cloud-credit.ts";
+import { connectCloudflare } from "./steps/connect-cloudflare.ts";
 import { CREDIT_OPEN, connectIterateCloud } from "./steps/connect-iterate-cloud.ts";
 
 /** The mind as the steps use it: the root's itx. */
 export type OnboardingItx = Pick<
   IterateConfigProcessEventArgs["itx"],
-  "cd" | "whoami" | "fetch" | "url" | "secrets" | "approvals" | "contexts" | "minds" | "email"
+  | "cd"
+  | "whoami"
+  | "fetch"
+  | "url"
+  | "secrets"
+  | "approvals"
+  | "contexts"
+  | "minds"
+  | "email"
+  | "kv"
 >;
 
 /** What a step is handed for one call. */
@@ -35,8 +45,16 @@ export type StepContext = {
   creditOpen: boolean;
 };
 
-/** One button of a card: an action of the step, or a link. */
-export type CardButton = { label: string; action?: string; href?: string; primary?: boolean };
+/** One button of a card: an action of the step, or a link. `opens`: the press answers a page to
+ *  open, so the page opens its tab in the press itself, or the browser blocks it. steps.ts sets it
+ *  from the step's `actions`; a step's `words` never does. */
+export type CardButton = {
+  label: string;
+  action?: string;
+  href?: string;
+  primary?: boolean;
+  opens?: true;
+};
 
 /** WHAT THE PAGE DRAWS FOR A STEP, and what the agent's tool answers in words. */
 export type Card = {
@@ -58,14 +76,18 @@ export type Card = {
 /** The writes a step makes on the onboarding log, for its own name. */
 export type StepLog = {
   /** Asks for an action: its offset names the ask. */
-  request(action: string, signing?: { link: string; expires: number }): Promise<number>;
+  request(
+    action: string,
+    signing?: { link: string; expires: number; attempt?: string },
+  ): Promise<number>;
   settle(requestOffset: number, failure?: { reason: string; words?: string }): Promise<void>;
 };
 
 export type Step = {
   id: string;
-  /** The actions of its buttons, besides "decline" and "check", which every step has. */
-  actions: readonly string[];
+  /** The actions of its buttons, besides "decline" and "check", which every step has. `opens`:
+   *  its answer may be a page to open (an action that answers a link and does not say so fails). */
+  actions: Readonly<Record<string, { opens: boolean }>>;
   /** Whether this mind is offered the step. */
   offered(context: StepContext): boolean;
   words(state: StepState, context: StepContext): Card;
@@ -99,7 +121,7 @@ export type MindEvent = {
 };
 
 /** THE STEPS, in the order the page shows them. */
-const STEPS: readonly Step[] = [connectIterateCloud];
+const STEPS: readonly Step[] = [connectIterateCloud, connectCloudflare];
 
 /** What the agent's tool answers: the card's status, its words as plain text, and the one link
  *  the owner opens next, when there is one. */
@@ -168,6 +190,7 @@ function logOf(context: StepContext, step: Step, state: OnboardingState): StepLo
           step: step.id,
           action,
           ...(signing && { link: signing.link, expires: new Date(signing.expires).toISOString() }),
+          ...(signing?.attempt && { attempt: signing.attempt }),
         },
       );
       if (offset !== undefined) return offset;
@@ -237,6 +260,17 @@ function stepOf(context: StepContext, id: string): Step {
   return step;
 }
 
+/** The step's card, each button that may answer a page marked `opens`. */
+function cardOf(step: Step, state: StepState, context: StepContext): Card {
+  const card = step.words(state, context);
+  return {
+    ...card,
+    buttons: card.buttons.map((button) =>
+      button.action && step.actions[button.action]?.opens ? { ...button, opens: true } : button,
+    ),
+  };
+}
+
 /** The card's words as plain text, for the agent. */
 function answerOf(card: Card, state: StepState, made?: string): StepAnswer {
   const words = [
@@ -246,7 +280,9 @@ function answerOf(card: Card, state: StepState, made?: string): StepAnswer {
     ...(card.command ? [`Command: ${card.command}`] : []),
     ...(card.buttons.length ? [`Buttons: ${card.buttons.map((b) => b.label).join(" · ")}`] : []),
   ].join("\n\n");
-  const link = made || state.action?.link;
+  // the waiting ask's page, while the card still offers it: an ask put aside answers no page
+  const waiting = card.buttons.some((button) => button.href && button.href === state.action?.link);
+  const link = made || (waiting ? state.action?.link : undefined);
   return { status: card.status, words, link };
 }
 
@@ -258,9 +294,10 @@ export async function runStep(
   action: string,
 ): Promise<StepAnswer> {
   const step = stepOf(context, id);
-  if (!["check", "decline", ...step.actions].includes(action))
+  const own = Object.keys(step.actions);
+  if (!["check", "decline", ...own].includes(action))
     throw new Error(
-      `onboarding: ${id} has no action "${action}"; its actions: check, decline, ${step.actions.join(", ")}`,
+      `onboarding: ${id} has no action "${action}"; its actions: check, decline, ${own.join(", ")}`,
     );
   const pressed = `${action}@${Date.now()}`;
   let state = await refresh(context, step, await readState(context.itx), pressed);
@@ -275,11 +312,16 @@ export async function runStep(
     );
   else if (action !== "check")
     link = (await step.act(context, action, current, logOf(context, step, state)))?.link;
+  // the page opens a tab only for an action that says it opens one
+  if (link && !step.actions[action]?.opens)
+    throw new Error(
+      `onboarding: ${id}'s action "${action}" answered a page; its actions say it opens none`,
+    );
   // what the action changed (a grant, a secret): the card follows at once
   if (action !== "check")
     state = await refresh(context, step, await readState(context.itx), `after:${pressed}`);
   const after = state.steps[id] || blank();
-  return answerOf(step.words(after, context), after, link);
+  return answerOf(cardOf(step, after, context), after, link);
 }
 
 /** EVERY CARD OF THIS MIND, checked first: what the page draws when it opens. */
@@ -288,7 +330,7 @@ export async function onboardingCards(context: StepContext): Promise<Card[]> {
   const cards: Card[] = [];
   for (const step of STEPS.filter((one) => one.offered(context))) {
     state = await refresh(context, step, state, `open@${context.now}`);
-    cards.push(step.words(state.steps[step.id] || blank(), context));
+    cards.push(cardOf(step, state.steps[step.id] || blank(), context));
   }
   return cards;
 }

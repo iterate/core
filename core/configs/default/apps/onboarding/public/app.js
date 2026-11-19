@@ -29,10 +29,6 @@ import { LayoutDashboardIcon, SparklesIcon } from "@iterate-com/ui/icons";
 
 const AGENT = "/agents/onboarding";
 
-/** The actions whose answer may be a page to open: the tab is opened in the press itself, or
- *  the browser blocks it. */
-const OPENS_A_PAGE = new Set(["connect", "disconnect", "add-openai-key"]);
-
 /** What the mind says first in the empty chat: the same words and key as the Dash's opener
  *  (apps/dash/public/app.js), so the first message is one, whichever page the owner opens. */
 const OPENER =
@@ -135,8 +131,9 @@ function Steps() {
     return () => document.removeEventListener("visibilitychange", seen);
   }, [reload]);
 
-  async function press(step, action) {
-    const tab = OPENS_A_PAGE.has(action) ? window.open("about:blank", "_blank") : null;
+  async function press(step, { action, opens }) {
+    // a press whose answer may be a page opens its tab now: after an await the browser blocks it
+    const tab = opens ? window.open("about:blank", "_blank") : null;
     setBusy(`${step}/${action}`);
     try {
       const answer = await ask(`/steps/${step}/${action}`, "POST");
@@ -167,13 +164,25 @@ function StepCard({ card, busy, onPress }) {
   const short = card.text.length <= 1 && !card.points && !card.command;
   const content = card.points || card.command;
   const footer = card.buttons.length || card.footnote;
+  // a refusal reads as an error
+  const failed = card.status === "failed";
   return html`
     <${Card} data-step=${card.step} data-status=${card.status} size=${short ? "sm" : undefined}>
       <${CardHeader}>
         <${CardTitle}>
           ${card.title} ${card.optional ? html`<${Badge} variant="outline">optional<//>` : null}
         <//>
-        ${card.text.map((line) => html`<${CardDescription} key=${line}>${line}<//>`)}
+        ${card.text.map(
+          (line) => html`
+            <${CardDescription}
+              key=${line}
+              className=${failed ? "onboarding-error" : undefined}
+              role=${failed ? "alert" : undefined}
+            >
+              ${line}
+            <//>
+          `,
+        )}
       <//>
       ${content ? html`<${CardContent}><${Points} card=${card} /><//>` : null}
       ${footer ? html`<${Buttons} card=${card} busy=${busy} onPress=${onPress} />` : null}
@@ -231,7 +240,7 @@ function StepButton({ step, button, busy, onPress }) {
       variant=${variant}
       disabled=${Boolean(busy)}
       data-action=${button.action}
-      onClick=${() => onPress(step, button.action)}
+      onClick=${() => onPress(step, button)}
     >
       ${busy === `${step}/${button.action}` ? "…" : button.label}
     <//>

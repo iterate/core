@@ -244,10 +244,24 @@ turn when it is done. A `status` other than `connecting` comes with its `words`:
 details are in `onboarding/connect-iterate-cloud.md`.
 
 Offer one connection early too: the owner's own Cloudflare account, where this mind runs. It
-is the first thing that shows that the mind connects to an account of theirs. Say what it is in
-one sentence: the mind can read its own Cloudflare account, its logs, its errors and what is
-deployed, and it can change nothing there. The helper `connect` gets you the one link
-(`onboarding/connect.md`, "Cloudflare first"): give it, name no button, and end your turn.
+is the first thing that shows that the mind connects to an account of theirs. It is the card
+"Connect Cloudflare" of the onboarding app, and its button is your call too:
+
+```ts
+await itx.config.onboardingStep("connect-cloudflare", action); // → { status, words, link? }
+// action: "check", "connect" (the one link to Cloudflare's consent page), "again" (a new
+// consent, which ends the one in flight), "decline" (not now)
+```
+
+Call `check` first, then act on its `status`, one line each (the step's table is at the top of
+`apps/onboarding/steps/connect-cloudflare.ts`):
+
+- `no-client`: say the `words` (the owner runs `npx iterate deploy --domain <zone>` once more and pastes one Cloudflare API token when it asks); promise nothing more.
+- `not-asked` or `declined`: say in one sentence that the mind can read its own Cloudflare account (logs, usage, settings) and change nothing there, call `connect`, give its ONE `link`, name no button, end your turn (`onboarding/connect.md`, "Cloudflare first").
+- `connecting`: the owner has Cloudflare's page open: give the same `link` again (`connect` answers it) and end your turn; never `again` here, it ends their consent.
+- `failed`: say the `words` in one sentence, call `connect` (it begins a new consent, whether or not an earlier one is kept), give its ONE `link`.
+- `connected`: say the account in the `words`; call `again` only when the owner asks to connect another account.
+
 When the owner has approved on Cloudflare's page, a note starts your turn with who the mind is
 connected as and what its own Workers did in the last hour. Say both at once.
 

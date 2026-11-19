@@ -120,31 +120,35 @@ export const RECOVER_SCOPES = [
 export const scopesLacking = (asked: readonly string[], granted: string | undefined) =>
   granted ? asked.filter((scope) => !granted.split(/\s+/).includes(scope)) : [];
 
-/** CLOUDFLARE'S OWN PAGE THAT MAKES AN API TOKEN OF AN ACCOUNT, with the stack's permissions
- *  filled in: for a person who does not let a sign-in make API tokens. The person chooses the
- *  account, presses Create, and pastes the token into the command. Each permission is named by
- *  its key, which is the scope's own name with `_` for each `-`, and by `read` or `edit`
+/** "OAUTH CLIENT WRITE", the permission that makes the stack's own OAuth client (core/alchemy
+ *  src/cloudflare-oauth-client.ts), as the token page takes it: by the group's id. No OAuth scope
+ *  names it, so a sign-in can never grant it, and it has no short key. The page takes a group's
+ *  id for an account's token, and ignores `type` then
+ *  (https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/).
+ *  The id was read from the dev account's `/tokens/permission_groups` on 18 Nov 2026. */
+// allow-high-entropy-next-line: the id of a Cloudflare permission group, public and the same in every account
+export const OAUTH_CLIENT_WRITE = { key: "50fc2f43318f40e4855a35d8de5bf643", type: "edit" };
+
+/** CLOUDFLARE'S OWN PAGE THAT MAKES AN API TOKEN OF AN ACCOUNT, with `permissions` filled in:
+ *  by default the stack's, for a person who does not let a sign-in make API tokens, and
+ *  "OAuth Client Write". The person chooses the account, presses Create, and pastes the token
+ *  into the command. Each permission is named by its key, which is the scope's own name with `_`
+ *  for each `-`, and by `read` or `edit`
  *  (https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/).
  *  The page names in a notice each key that it does not know. */
-export function apiTokenPage() {
+export function apiTokenPage(
+  permissions: { key: string; type: string }[] = [
+    ...STACK_SCOPES.map((scope) => ({
+      key: scope.replace(/[.:][a-z]+$/, "").replaceAll("-", "_"),
+      type: scope.endsWith(".read") ? "read" : "edit",
+    })),
+    OAUTH_CLIENT_WRITE,
+  ],
+  name = "iterate deploy",
+) {
   const page = new URL("https://dash.cloudflare.com/?to=/:account/api-tokens");
-  page.searchParams.set(
-    "permissionGroupKeys",
-    JSON.stringify([
-      ...STACK_SCOPES.map((scope) => ({
-        key: scope.replace(/[.:][a-z]+$/, "").replaceAll("-", "_"),
-        type: scope.endsWith(".read") ? "read" : "edit",
-      })),
-      // "OAuth Client Write", which makes the stack's own OAuth client (core/alchemy
-      // src/cloudflare-oauth-client.ts). No OAuth scope names it, so it has no short key: the
-      // page takes a permission group's id too (the id read from the dev account's
-      // permission_groups, 18 Nov 2026; not yet tried on the page itself).
-      // the group's id (Cloudflare calls a group id canonical)
-      // allow-high-entropy-next-line: the id of a Cloudflare permission group, public and the same in every account
-      { key: "50fc2f43318f40e4855a35d8de5bf643", type: "edit" },
-    ]),
-  );
-  page.searchParams.set("name", "iterate deploy");
+  page.searchParams.set("permissionGroupKeys", JSON.stringify(permissions));
+  page.searchParams.set("name", name);
   return page;
 }
 

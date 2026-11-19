@@ -76,11 +76,15 @@ pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the termin
   `STACK_SCOPES` in [cloudflare-access.ts](../lib/src/cli/cloudflare-access.ts). A sign-in's
   scope is an API token's permission under another spelling (`workers-scripts.write` is "Workers
   Scripts Write").
-- An API token of the deploy also needs the permission "OAuth Client Write" for the OAuth client.
-  A credential without it, such as a person's sign-in, is no failure: the deploy takes about 24
-  seconds longer, makes no client and says so, and each later deploy asks again. Until one makes
-  it, a member makes a client by hand and gives it to the mind (the template's
-  `cloudflare.md`).
+- The OAuth client needs the permission "OAuth Client Write". A person's sign-in can never hold
+  it: Cloudflare's sign-in has no scope for it, and a token that a sign-in makes may not hold it.
+  So the deploy takes one more API token, with that one permission, in
+  `CLOUDFLARE_OAUTH_CLIENT_API_TOKEN`: when it is set, every call for the client uses it, and the
+  deploy's credential makes none (`src/cloudflare-oauth-client.ts`). `iterate deploy` asks for it
+  and sets it. A deploy's own API token that holds the permission needs no second token.
+- A deploy with neither is no failure: it takes about 24 seconds longer, makes no client and says
+  so, and each later deploy asks again. The secrets Worker's plain-text variable
+  `CLOUDFLARE_CLIENT_ID` says which: the client's id, or `none`.
 - The deploy makes a Realtime SFU app and a TURN key (`src/realtime.ts`), which need the
   permission to make Realtime (Calls) resources: "Calls Write" (`calls.write`), which the deploy
   asks for, or "Realtime" or "Realtime Admin". A credential without it is no failure either: the deploy makes neither,

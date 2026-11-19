@@ -5,7 +5,7 @@
 // this state. An agent that wants to know what the page shows reads this file.
 //
 //   onboarding/step-declined          { step }
-//   onboarding/step-action-requested  { step, action, link?, expires? }
+//   onboarding/step-action-requested  { step, action, link?, expires?, attempt? }
 //   onboarding/step-action-settled    { step, requestOffset, outcome, reason?, words? }
 //   onboarding/step-checked           { step, facts }
 //
@@ -29,6 +29,8 @@ const Requested = z.object({
   link: z.string().url().optional(),
   /** When that page stops working (an ISO time). */
   expires: z.string().optional(),
+  /** The vault's name for a connect that the page begins (`itx.secrets.oauthResult`'s nonce). */
+  attempt: z.string().max(200).optional(),
 });
 const Settled = z.object({
   step: StepName,
@@ -49,7 +51,13 @@ export type StepState = {
   /** The owner said "not now", and asked nothing since. */
   declined: boolean;
   /** The action that waits for its settlement. */
-  action: null | { name: string; requestOffset: number; link?: string; expires?: string };
+  action: null | {
+    name: string;
+    requestOffset: number;
+    link?: string;
+    expires?: string;
+    attempt?: string;
+  };
   /** The last action failed, and nothing was asked since. */
   failure: null | { reason: string; words?: string };
   /** What the step's `check` last read, or null before its first. */
@@ -85,12 +93,12 @@ export function reduce(state: OnboardingState, event: OnboardingEvent): Onboardi
     case "onboarding/step-action-requested": {
       const parsed = Requested.safeParse(event.payload);
       if (!parsed.success) return at;
-      const { step: name, action, link, expires } = parsed.data;
+      const { step: name, action, link, expires, attempt } = parsed.data;
       return step(name, (current) => ({
         ...current,
         declined: false,
         failure: null,
-        action: { name: action, requestOffset: event.offset, link, expires },
+        action: { name: action, requestOffset: event.offset, link, expires, attempt },
       }));
     }
     case "onboarding/step-action-settled": {

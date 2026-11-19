@@ -22,6 +22,8 @@ test("with the stack's client, the one link is Cloudflare's own consent page, an
   expect(await cloudflareConnect(mind.itx, { tell: "/agents/onboarding" })).toEqual({
     way: "stack-client",
     link: "https://iterate.example.com/secrets/oauth/start?n=1",
+    // the attempt's name in the vault, for `itx.secrets.oauthResult`
+    nonce: "attempt-1",
   });
 
   expect(mind).toMatchObject({
