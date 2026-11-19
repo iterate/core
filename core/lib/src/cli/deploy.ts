@@ -551,6 +551,60 @@ export const PNPM_COMPAT_ENV = {
   COREPACK_ENABLE_STRICT: "0",
 } as const;
 
+/** Child-process env for `pnpm` vs `npx`: npm/npx warns on unknown `manage-package-manager-versions`,
+ *  so omit and strip that pnpm-only variable when invoking via `npx`. */
+export function pnpmEnvFor(
+  command: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  if (command === "npx") {
+    const { npm_config_manage_package_manager_versions: _pnpmOnly, ...rest } = baseEnv;
+    return {
+      ...rest,
+      npm_config_engine_strict: PNPM_COMPAT_ENV.npm_config_engine_strict,
+      COREPACK_ENABLE_STRICT: PNPM_COMPAT_ENV.COREPACK_ENABLE_STRICT,
+    };
+  }
+  return { ...baseEnv, ...PNPM_COMPAT_ENV };
+}
+
+/** Summarizes Alchemy's verbose log stream into a concise progress label (`12 of 48 resources`),
+ *  ignoring noisy reconcile lines, npm warnings, and raw stack output objects. */
+export function createDeployProgress() {
+  let planned = 0;
+  const done = new Set<string>();
+  return {
+    /** Feeds one Alchemy log line and returns a short status label when progress changes. */
+    onLine(line: string): string | undefined {
+      const planMatch = /\bPlan:\s+(.+)/.exec(line);
+      if (planMatch) {
+        let total = 0;
+        for (const count of planMatch[1]!.matchAll(
+          /(\d+)\s+to\s+(?:create|update|adopted|replace|delete|orphaned)\b/g,
+        )) {
+          total += Number(count[1]);
+        }
+        if (total > 0) {
+          planned = total;
+          return `0 of ${planned} resources`;
+        }
+        return undefined;
+      }
+      const settled = /\[([^\]]+)\]\s+(?:created|updated|deleted|replaced|adopted)\b/.exec(line);
+      if (settled) {
+        done.add(settled[1]!);
+        return planned > 0
+          ? `${Math.min(done.size, planned)} of ${planned} resources`
+          : `${done.size} resource${done.size === 1 ? "" : "s"}`;
+      }
+      if (/state store/i.test(line) && /(?:bootstrapping|updating|creating)/i.test(line)) {
+        return "preparing state store";
+      }
+      return undefined;
+    },
+  };
+}
+
 /** How to run pnpm for `packageManager`: use local `pnpm` only when its major version matches
  *  `packageManager`; otherwise run `npx --yes <packageManager>`. */
 export function pnpmCommandOf(
@@ -610,14 +664,14 @@ async function sourceOf(input: DeployInput): Promise<Source> {
   if (!own || !existsSync(join(dir, "core/alchemy/node_modules/alchemy/bin/cli.js")))
     await exec(pnpm.command, [...pnpm.first, "install", "--frozen-lockfile"], {
       cwd: dir,
-      env: { ...process.env, ...PNPM_COMPAT_ENV, CI: "1" },
+      env: { ...pnpmEnvFor(pnpm.command), CI: "1" },
       maxBuffer: 64 << 20,
     });
   // pre-build core-mind-worker in the background while the person signs in and answers prompts
   // so `alchemy deploy` and `alchemy plan` do not have to rebuild it later
   await exec(pnpm.command, [...pnpm.first, "--filter", "core-mind-worker", "build"], {
     cwd: dir,
-    env: { ...process.env, ...PNPM_COMPAT_ENV, CI: "1" },
+    env: { ...pnpmEnvFor(pnpm.command), CI: "1" },
     maxBuffer: 64 << 20,
   });
   return { dir, pnpm };
@@ -688,8 +742,7 @@ function deployOnce(
     const child = spawn(command, [...first, ...args], {
       cwd: join(run.source.dir, "core/alchemy"),
       env: {
-        ...parentEnv,
-        ...PNPM_COMPAT_ENV,
+        ...pnpmEnvFor(command, parentEnv),
         CI: "1",
         NO_COLOR: "1",
         FORCE_COLOR: "0",
@@ -1923,6 +1976,19 @@ export async function deployMind(input: DeployInput) {
     }
     const deployBegan = Date.now();
     const deploying = wait(`Deploying the mind at ${c.domain(controlPlaneHostname)}`);
+    const progress = createDeployProgress();
+    // Keep Alchemy's verbose log in `deploy.log` only: in interactive terminals update the
+    // single spinner line with concise resource progress; in non-interactive runs stay quiet
+    // except for retry notices (tail of `deploy.log` is still printed on failure).
+    const onDeployLine = (line: string) => {
+      if (line.startsWith("The new state store refused")) {
+        deploying.say(line);
+        return;
+      }
+      if (!interactive()) return;
+      const status = progress.onLine(line);
+      if (status) deploying.say(status);
+    };
     const code = await deployStack({
       source: ready,
       stageName,
@@ -1931,7 +1997,7 @@ export async function deployMind(input: DeployInput) {
       telemetryToken,
       log,
       children,
-      say: deploying.say,
+      say: onDeployLine,
       adopt: Boolean(earlier),
     });
     if (code !== 0) {
@@ -1941,7 +2007,7 @@ export async function deployMind(input: DeployInput) {
         `The deploy failed (exit ${code}). Its whole log: ${log}. A deploy keeps what it made: run the command again on this computer, and it goes on with this deploy's config.`,
       );
     }
-    deploying.done(`Deployed (${seconds(deployBegan)}).`);
+    deploying.done(`Deployed (${seconds(deployBegan)}). Full log: ${log.replace(homedir(), "~")}`);
     const boundary = `/accounts/${account.id}/workers/scripts/iterate-${stageName}-boundary/settings`;
     const check = await boundaryCheck(
       () => cf("GET", boundary),

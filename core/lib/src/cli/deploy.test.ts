@@ -16,6 +16,7 @@ import {
   boundaryCheck,
   boundaryMisses,
   candidatesOf,
+  createDeployProgress,
   createPalette,
   deployArgsOf,
   deployConfigOf,
@@ -33,6 +34,7 @@ import {
   planArgsOf,
   PNPM_COMPAT_ENV,
   pnpmCommandOf,
+  pnpmEnvFor,
   productRead,
   redactMindConfig,
   saysTheStateStoreRefused,
@@ -413,6 +415,37 @@ test("pnpmCommandOf uses local pnpm only when major version matches packageManag
     npm_config_manage_package_manager_versions: "false",
     COREPACK_ENABLE_STRICT: "0",
   });
+  expect(
+    pnpmEnvFor("npx", {
+      PATH: "/usr/bin",
+      npm_config_manage_package_manager_versions: "false",
+    }),
+  ).toEqual({
+    PATH: "/usr/bin",
+    npm_config_engine_strict: "false",
+    COREPACK_ENABLE_STRICT: "0",
+  });
+  expect(pnpmEnvFor("pnpm", { PATH: "/usr/bin" })).toEqual({
+    PATH: "/usr/bin",
+    ...PNPM_COMPAT_ENV,
+  });
+});
+
+test("createDeployProgress summarizes Alchemy resource progress and ignores raw stack output and warnings", () => {
+  const progress = createDeployProgress();
+  expect(progress.onLine('npm warn Unknown env config "manage-package-manager-versions"')).toBe(
+    undefined,
+  );
+  expect(progress.onLine("Bootstrapping Cloudflare State Store 'iterate-ada-state'")).toBe(
+    "preparing state store",
+  );
+  expect(progress.onLine("Plan: 45 to create, 3 to update, 2 binding changes")).toBe(
+    "0 of 48 resources",
+  );
+  expect(progress.onLine("[21:45:43.607] INFO: [AuthDb] create")).toBe(undefined);
+  expect(progress.onLine("[21:45:44.100] INFO: [AuthDb] created (0.5s)")).toBe("1 of 48 resources");
+  expect(progress.onLine("[21:45:45.200] INFO: [Auth] updated (1.1s)")).toBe("2 of 48 resources");
+  expect(progress.onLine("{ controlPlaneHostname: 'iterate.alpiti.com' }")).toBe(undefined);
 });
 
 test("the deploy runs again by itself after the state store's refusal, and after no other failure", () => {
