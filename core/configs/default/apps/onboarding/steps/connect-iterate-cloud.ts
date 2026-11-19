@@ -57,6 +57,8 @@ const Facts = z.object({
   paused: z.boolean().optional(),
   /** The rule was read, and a member ended it, while a path stayed by iterate's proxy. */
   ended: z.boolean().optional(),
+  /** A person at iterate ended this mind's credit, for good (403 `iterate_credit_ended`). */
+  iterateEnded: z.boolean().optional(),
 });
 type Facts = z.infer<typeof Facts>;
 
@@ -228,6 +230,25 @@ function words(state: StepState, context: StepContext): Card {
         ? [{ label: "Open the page again", href: state.action.link, primary: true }]
         : [],
     };
+  // iterate ended the credit for good, at a press of Connect or at a check's balance read (which has
+  // deleted the secrets by iterate's proxy): no Try again, and no offer
+  if (state.failure?.reason === "ended" || facts?.iterateEnded)
+    return {
+      ...card,
+      status: "ended",
+      title: "No credit from iterate Cloud",
+      optional: true,
+      text: [
+        FAILURES.ended!,
+        ...(stays.length
+          ? [
+              `Your mind's requests to ${stays.join(" and ")} still go to iterate and are refused there, until the next check switches them off.`,
+            ]
+          : []),
+        ...(facts?.meld ? [RULE_STANDS] : []),
+      ],
+      buttons: facts?.meld ? [{ label: "End the rule", action: "disconnect" }] : [],
+    };
   // the credit is certainly spent, from the balance alone. `check` has deleted the secrets by
   // iterate's proxy, so there is no Connect: it would set them for nothing
   if (facts?.meld && facts.balance && spentOf(facts.balance) === "spent")
@@ -343,16 +364,6 @@ function words(state: StepState, context: StepContext): Card {
         ...(facts?.meld ? [{ label: "End the rule", action: "disconnect" }] : []),
       ],
     };
-  // iterate ended the credit for good: no Try again
-  if (state.failure?.reason === "ended")
-    return {
-      ...card,
-      status: "ended",
-      title: "No credit from iterate Cloud",
-      optional: true,
-      text: [FAILURES.ended!, ...(facts?.meld ? [RULE_STANDS] : [])],
-      buttons: facts?.meld ? [{ label: "End the rule", action: "disconnect" }] : [],
-    };
   // a press on a spent grant: while spent the spent card says it; once the balance is back, the offer
   if (state.failure && state.failure.reason !== "spent")
     return {
@@ -429,7 +440,21 @@ async function check(context: StepContext, state: StepState): Promise<Facts> {
   // the Cloud is asked only once a member let iterate in, only by a stack that signs, and only
   // for a mind that can take the credit: iterate learns nothing of a mind with its own keys
   if (!canSign || !meld.on || ![openai, exa].some(takesCredit)) return facts;
+  // ENDED: a person at iterate ended this mind's credit for good (403 `iterate_credit_ended`). As
+  // for spent, the secrets by iterate's proxy are deleted (deleteProxy: never an owner's own key),
+  // so no request goes to iterate first and is refused there. The end is kept from the last facts
+  // with no new ask: a later outage or pause never brings the offer back. Each check deletes again
+  // a path that stayed. An older proxy answers an ended mind `not-connected`: that keeps the offer
+  const stays = openai === "iterate-proxy" || exa === "iterate-proxy";
+  if (last?.iterateEnded)
+    return {
+      ...facts,
+      iterateEnded: true,
+      ...(stays && (await switchOff(context, openai, exa))),
+    };
   const answer = await credit.balance();
+  if (!answer.ok && answer.reason === "ended")
+    return { ...facts, iterateEnded: true, ...(await switchOff(context, openai, exa)) };
   if (!answer.ok) return { ...facts, ...lastBalance(answer.reason, last) };
   // under zero is not enough: only a balance that is certainly spent switches anything off
   if (spentOf(answer.balance) !== "spent") return { ...facts, balance: answer.balance };

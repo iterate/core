@@ -1022,6 +1022,82 @@ test("a request that iterate's proxy refused for storage starts a check and chan
   expect(mind).toMatchObject({ mailed: [] });
 });
 
+test("a balance read answered ended: the ended card with no press, the secret by iterate's proxy deleted, the owner's own key kept", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ secrets: { "/secrets/openai": "own" } });
+  const context = contextOf(mind, fake.credit);
+  expect(await runStep(context, STEP, "connect")).toMatchObject({ status: "connected" });
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "own", "/secrets/exa": "iterate-proxy" },
+  });
+  // a person at iterate ended the credit: the next check reads 403 iterate_credit_ended
+  fake.state.balance = { ok: false, reason: "ended" };
+  fake.calls.length = 0;
+  await nextMs();
+  const [card] = await onboardingCards({ ...context, now: NOW + 1 });
+  expect(card).toMatchObject({
+    status: "ended",
+    text: [
+      "A person at iterate ended this mind's credit. Your mind goes on with its own keys.",
+      "Your signed rule still lets iterate send help and updates to this mind. End it with your passkey to stop that.",
+    ],
+    buttons: [{ label: "End the rule", action: "disconnect", opens: true }],
+  });
+  expect(fake).toMatchObject({
+    calls: ["balance", "delete /secrets/exa"],
+    secrets: { "/secrets/openai": "own", "/secrets/exa": "unset" },
+  });
+  // the end is for good: a later outage, pause or old answer keeps the ended card, asks iterate
+  // nothing, and sets and deletes nothing
+  for (const reason of ["cloud-unreachable", "paused", "not-connected"] as const) {
+    fake.state.balance = { ok: false, reason };
+    fake.calls.length = 0;
+    await nextMs();
+    expect(await runStep(context, STEP, "check")).toMatchObject({ status: "ended" });
+    expect(fake).toMatchObject({
+      calls: [],
+      secrets: { "/secrets/openai": "own", "/secrets/exa": "unset" },
+    });
+  }
+});
+
+test("a balance read answered ended while the vault keeps a path (a form is open): the card says which path still goes to iterate, and the next check deletes it", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.state.balance = { ok: false, reason: "ended" };
+  fake.state.deleteKept.add("/secrets/openai");
+  await nextMs();
+  const kept = await runStep(context, STEP, "check");
+  expect(kept).toMatchObject({ status: "ended" });
+  expect(kept.words).toMatch(/Your mind's requests to OpenAI still go to iterate/);
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "unset" },
+  });
+  fake.state.deleteKept.clear();
+  await nextMs();
+  const done = await runStep(context, STEP, "check");
+  expect(done).toMatchObject({ status: "ended" });
+  expect(done.words).not.toMatch(/still go to iterate/);
+  expect(fake).toMatchObject({ secrets: { "/secrets/openai": "unset", "/secrets/exa": "unset" } });
+});
+
+test("an older proxy's answer for an ended mind (402 not-connected) keeps today's card and deletes nothing", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.state.balance = { ok: false, reason: "not-connected" };
+  fake.calls.length = 0;
+  await nextMs();
+  expect(await runStep(context, STEP, "check")).not.toMatchObject({ status: "ended" });
+  expect(fake.calls.filter((call) => call.startsWith("delete "))).toEqual([]);
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" },
+  });
+});
+
 test("iterate's limit at the provider on a forwarded answer deletes no secret by iterate's proxy: the card stays connected", async () => {
   const mind = fakeMind({ meld: "member" });
   const fake = fakeCredit();
@@ -1359,10 +1435,14 @@ test.for([
   [401, {}, "not-recognised"],
   [502, {}, "no-working-key"],
   [500, {}, "cloud-unreachable"],
-] as const)("the Cloud's %i answer is read as its reason", async ([status, body, reason]) => {
-  const { credit } = realCredit({ cloud: async () => Response.json(body, { status }) });
-  expect(await credit.connect()).toMatchObject({ ok: false, reason });
-});
+] as const)(
+  "the Cloud's %i answer is read as its reason, at the connect and at the balance",
+  async ([status, body, reason]) => {
+    const { credit } = realCredit({ cloud: async () => Response.json(body, { status }) });
+    expect(await credit.connect()).toMatchObject({ ok: false, reason });
+    expect(await credit.balance()).toMatchObject({ ok: false, reason });
+  },
+);
 
 test("the real grant answers the balance; a call that throws is cloud-unreachable; the key document says whether the mind signs", async () => {
   expect(await realCredit({}).credit.connect()).toEqual({ ok: true, balance: BALANCE });
@@ -1588,6 +1668,17 @@ test("verifyAi translates 402/401/429 and SSE failures into clean human-readable
     ).toBe(
       "iterate's account at the provider reached its spend limit, and iterate is told. Your mind goes on with its own keys.",
     );
+
+  // iterate_credit_ended on a forwarded answer
+  expect(
+    humanAiError(
+      "iterate-cloud",
+      403,
+      JSON.stringify({ error: { code: "iterate_credit_ended", message: "Ended" } }),
+    ),
+  ).toBe(
+    "A person at iterate ended this mind's credit. Add your own OpenAI key, ChatGPT plan, or Cloudflare AI Gateway credit.",
+  );
 
   // SSE 200 with response.failed event must fail, not pass
   const failedSse = fakeVerifyItx({

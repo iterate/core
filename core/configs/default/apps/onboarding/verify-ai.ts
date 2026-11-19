@@ -132,6 +132,8 @@ export function humanAiError(provider: AiProvider, status: number, rawText: stri
   // iterate's own limit, not the mind's: nothing here deletes a secret by iterate's proxy
   if (code === "iterate_credit_provider_limit")
     return "iterate's account at the provider reached its spend limit, and iterate is told. Your mind goes on with its own keys.";
+  if (code === "iterate_credit_ended")
+    return "A person at iterate ended this mind's credit. Add your own OpenAI key, ChatGPT plan, or Cloudflare AI Gateway credit.";
   if (code === "iterate_credit_not_approved")
     return "iterate Cloud has not approved this mind yet. Wait for approval, or go back to add your own OpenAI key, ChatGPT plan, or Cloudflare AI Gateway credit.";
   if (code === "iterate_credit_none_today")
