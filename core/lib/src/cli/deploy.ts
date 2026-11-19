@@ -49,6 +49,9 @@ import {
   DEPLOY_SCOPES,
   endAccess,
   MAKES_API_TOKENS,
+  SIGN_IN_ENDED_EXIT,
+  SIGN_IN_FILE,
+  SignInEnded,
   OAUTH_CLIENT_WRITE,
   parsed,
   resultOf,
@@ -79,6 +82,8 @@ export type DeployInput = {
   source?: string;
   ref?: string;
   setup?: boolean;
+  /** the stack's plan alone, over a mind that is there: nothing changes (`planArgsOf`) */
+  plan?: boolean;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -579,13 +584,26 @@ export const deployArgsOf = (stageName: string, adopt = false) => [
   ...(adopt ? ["--adopt"] : []),
 ];
 
-/** One `pnpm run deploy` of core/alchemy: its exit code, and whether the state store refused it.
- *  Every line goes to the log file, with the token's text replaced. */
-function deployOnce(run: Run): Promise<{ code: number; storeRefused: boolean }> {
+/** THE COMMANDS OF A PLAN of core/alchemy, which changes nothing: the mind Worker's build, which
+ *  the plan reads as a deploy does (`pnpm run deploy` builds it first), then Alchemy's plan of the
+ *  stage. Each resource gets one line, `[Name] noop`, `update`, `create`, `delete` and the like:
+ *  what a caller with nobody at the terminal reads before it deploys. */
+export const planArgsOf = (stageName: string) => [
+  ["--filter", "core-mind-worker", "build"],
+  ["exec", "alchemy", "plan", "alchemy.run.ts", "--stage", stageName, "--no-input"],
+];
+
+/** One `pnpm run deploy` of core/alchemy (or other arguments of pnpm there): its exit code, and
+ *  whether the state store refused it. Every line goes to the log file, with the token's text
+ *  replaced. */
+function deployOnce(
+  run: Run,
+  args = deployArgsOf(run.stageName, run.adopt),
+): Promise<{ code: number; storeRefused: boolean }> {
   return new Promise((done, failed) => {
     const file = createWriteStream(run.log, { flags: "a" });
     const { command, first } = run.source.pnpm;
-    const child = spawn(command, [...first, ...deployArgsOf(run.stageName, run.adopt)], {
+    const child = spawn(command, [...first, ...args], {
       cwd: join(run.source.dir, "core/alchemy"),
       env: {
         ...process.env,
@@ -1475,6 +1493,8 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
           );
         },
         fresh,
+        // a kept sign-in (`iterate cloudflare sign-in`) is a sign-in too: the same checks
+        process.env[SIGN_IN_FILE]?.trim() || undefined,
       );
     let access = await signIn();
     // THE ACCESS ENDS WITHIN THE HOUR, and a wait for a card or a domain can be longer. So each
@@ -1487,7 +1507,7 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       }));
     const cf: Cloudflare = async (method, path, body) => {
       access = await renewed().catch((error: unknown) => {
-        throw new Stop(error instanceof Error ? error.message : String(error));
+        throw new Stop(error instanceof Error ? error.message : String(error), { cause: error });
       });
       return cloudflare(access.token)(method, path, body);
     };
@@ -1502,6 +1522,10 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       const tokenPage = apiTokenPage().href;
       if (!interactive()) {
         await endAccess(access);
+        if (access.keptIn)
+          throw new SignInEnded(
+            `${why} Nothing was changed. Sign out of the kept sign-in in ${access.keptIn} (iterate cloudflare sign-out), and sign in again with it ticked.`,
+          );
         throw new Error(
           `${why} Nothing was changed. Run the command again and tick it. Or make an API token of the account with the deploy's permissions at ${tokenPage} and run the command with it as CLOUDFLARE_API_TOKEN.`,
         );
@@ -1537,6 +1561,15 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     );
     const login = said?.email.toLowerCase();
     // an account's own API token reads no user: the owner then comes by the flag
+    // a refusal ends a kept sign-in; any other answer (an outage, a rate limit) leaves it as it is
+    if ((user.status === 401 || user.status === 403) && access.keptIn)
+      throw new SignInEnded(
+        `Cloudflare refused the kept sign-in in ${access.keptIn} (${user.status}). Sign in again: iterate cloudflare sign-in.`,
+      );
+    if (user.status !== 200 && access.keptIn)
+      throw new Error(
+        `Cloudflare did not answer who the kept sign-in in ${access.keptIn} is (${user.status}: ${user.error}). The file is as it was. Run the command again later.`,
+      );
     if (user.status !== 200 && access.from === "sign-in") {
       await endAccess(access);
       throw new Error(
@@ -1567,6 +1600,11 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       if (access.from !== "sign-in")
         throw new Error(
           `The token in CLOUDFLARE_API_TOKEN does not reach the account ${account.name} (${account.id}).`,
+        );
+      // nobody may be at Cloudflare's page: the kept sign-in is the whole approval
+      if (access.keptIn)
+        throw new SignInEnded(
+          `The kept sign-in in ${access.keptIn} does not cover the account ${account.name} (${account.id}). Sign in again and select that account on Cloudflare's page: iterate cloudflare sign-in.`,
         );
       await endAccess(access);
       p.log.info(
@@ -1655,6 +1693,24 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       deployed: mind,
     });
     const { controlPlaneHostname } = config;
+    // A PLAN CHANGES NOTHING: only over a mind that is there, whose account needs no step that
+    // writes (each one below is skipped when this holds), and that has its id
+    if (input.plan) {
+      const missing = [
+        ...(deployed ? [] : [`no mind is at ${domain}`]),
+        ...(config.mindId ? [] : ["the mind has no id"]),
+        ...(paid ? [] : ["Workers Paid is off"]),
+        ...(r2 ? [] : ["R2 is off"]),
+        ...(zeroTrust.next === "go" ? [] : ["Zero Trust is not set up"]),
+        ...(resultOf(z.object({ subdomain: z.string().min(1) }), subdomain)
+          ? []
+          : ["the account has no workers.dev name"]),
+      ];
+      if (missing.length > 0)
+        throw new Error(
+          `--plan reads a mind that is there and changes nothing, and here ${missing.join(", ")}. A deploy comes first. Nothing was changed.`,
+        );
+    }
     // a mind with no id gets one, which this run makes or checks: asked before anything changes
     if (!config.mindId) await mlDsaRequired();
     if (deployed) {
@@ -1812,6 +1868,7 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     // and never written to a file; the deploy's log has "[token]" for its text.
     const secretsSettings = `/accounts/${account.id}/workers/scripts/iterate-${stageName}-secrets/settings`;
     const givenClientToken = process.env[OAUTH_CLIENT_TOKEN]?.trim();
+    // a plan makes no client and asks for no token: the plan of a deploy with none
     const clientStep = oauthClientStep({
       hasClient: stackHasOAuthClient((await cf("GET", secretsSettings)).result),
       credentialMay:
@@ -1821,8 +1878,8 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
             `/accounts/${account.id}/oauth_clients?per_page=1`,
           )
         ).status === 200,
-      given: Boolean(givenClientToken),
-      person: input.setup !== false && interactive(),
+      given: Boolean(givenClientToken) && !input.plan,
+      person: input.setup !== false && interactive() && !input.plan,
       account,
       domain,
     });
@@ -1867,6 +1924,31 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       config.mindId || (await identityOfNewMind(controlPlaneHostname, Boolean(earlier?.leftover)));
     writeFileSync(configFile, `${JSON.stringify({ ...config, mindId }, null, 2)}\n`);
     access = await renewed();
+    if (input.plan) {
+      const plan = join(work, "plan.log");
+      writeFileSync(plan, "");
+      const planning = wait(`Planning the deploy of the mind at ${controlPlaneHostname}`);
+      const run = {
+        source: ready,
+        stageName,
+        config: configFile,
+        token: access.token,
+        log: plan,
+        children,
+      };
+      for (const args of planArgsOf(stageName)) {
+        const { code } = await deployOnce(run, args);
+        if (code !== 0) {
+          planning.fail(`The plan failed (exit ${code}).`);
+          throw new Error(
+            `The plan failed (exit ${code}). Its whole log: ${plan}. Nothing was changed.`,
+          );
+        }
+      }
+      planning.done(`The plan: ${plan}`);
+      p.outro(`Nothing was changed. Done in ${seconds(began)}.`);
+      return;
+    }
     if (holdings) {
       const erased = await eraseHoldings(cf, zone.id);
       p.log.success(
@@ -1964,6 +2046,10 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     for (const child of children) child.kill();
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro(`Stopped after ${seconds(began)}.`);
-    process.exit(1);
+    // a kept sign-in that no longer works needs a person: its own exit code says so
+    const ended =
+      error instanceof SignInEnded ||
+      (error instanceof Error && error.cause instanceof SignInEnded);
+    process.exit(ended ? SIGN_IN_ENDED_EXIT : 1);
   }
 }

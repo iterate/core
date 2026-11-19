@@ -4,7 +4,9 @@
 // profile, or the only one picks it, and `--mind <address>` overrides it for one command. Every
 // connection is the Node client's (../node.ts `connectMind`).
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { text as streamText } from "node:stream/consumers";
 import { dirname } from "node:path";
 import process from "node:process";
 import repl from "node:repl";
@@ -16,6 +18,16 @@ import { addressOf, connectMind, discoveredMind, openForSignIn, signInToMind } f
 import { mindApiUrlOf, mindMcpUrlOf, mindProvideConnectResourceOf } from "../mind-api.ts";
 import { connectChatgpt } from "./chatgpt.ts";
 import { isCodingAgent } from "./coding-agent.ts";
+import {
+  endKeptSignIn,
+  KeptSignIn,
+  keptSignInOf,
+  lockKept,
+  parsed,
+  SIGN_IN_FILE,
+  tokensMadeThrough,
+  writeKeptSignIn,
+} from "./cloudflare-access.ts";
 import { deployMind } from "./deploy.ts";
 import { IDENTITIES, type IdentityIo, postIdentity, shownIdentity } from "./identity.ts";
 import { recoverOwner } from "./recover.ts";
@@ -213,6 +225,12 @@ const launcherProcedures = {
             "A checkout of iterate's core to deploy from (default: the one this runs in, else iterate/core's main)",
           ),
         ref: z.string().optional().describe("A branch or commit of iterate/core to deploy"),
+        plan: z
+          .boolean()
+          .optional()
+          .describe(
+            "Change nothing: over a mind that is there already, write the stack's plan (Alchemy's, of each resource: noop, update, create, delete) to plan.log beside the deploy's config, with the same sign-in, source and config as a deploy",
+          ),
         setup: z
           .boolean()
           .default(true)
@@ -258,6 +276,104 @@ const launcherProcedures = {
         "For an owner with no passkey left, run by whoever holds the mind's Cloudflare account: sign in at Cloudflare, revoke that owner's passkeys, and print a link that signs the owner in once to add a new one",
     })
     .handler(async ({ input }) => recoverOwner(input)),
+  // A KEPT SIGN-IN AT CLOUDFLARE (cloudflare-access.ts): `iterate deploy` with nobody at
+  // Cloudflare's page, by the same sign-in as a person's. The sign-in goes to a file or to a secret
+  // store through a pipe, never through a flag's value, which stays in the shell's history.
+  cloudflare: {
+    signIn: os
+      .input(
+        z.object({
+          file: z.string().optional().describe("Keep the sign-in in this new file, mode 600"),
+          print: z
+            .boolean()
+            .optional()
+            .describe(
+              "Print the sign-in as one JSON document on standard output, for a pipe into a secret store (e.g. | doppler secrets set NAME > /dev/null, since doppler prints the value it sets); the page and the code go to standard error",
+            ),
+        }),
+      )
+      .meta({
+        description: `Sign in at Cloudflare for \`iterate deploy\` with nobody at Cloudflare's page: the deploy's scopes and offline_access. The sign-in can do everything a deploy can, making API tokens of the account among it. A deploy uses it with ${SIGN_IN_FILE}=<file>, and rewrites the file at each renewal`,
+      })
+      .handler(async ({ input }) => {
+        if (Boolean(input.file) === Boolean(input.print))
+          throw new Error("Say where the sign-in goes: --file <path>, or --print.");
+        if (input.print && process.stdout.isTTY)
+          throw new Error(
+            "--print writes the sign-in's tokens to standard output: pipe it into a secret store, or use --file.",
+          );
+        if (input.file && existsSync(input.file))
+          throw new Error(
+            `${input.file} is there already. Sign out of the sign-in in it first (iterate cloudflare sign-out --file ${input.file}), or choose another path.`,
+          );
+        const kept = await keptSignInOf(({ url, code, minutes }) =>
+          console.error(
+            `Open this page, check that it shows the code ${code}, select ONLY the mind's account, tick "Account API Token Provisioning", and approve. The code works for ${minutes} minutes.\n\n  ${url.href}\n`,
+          ),
+        );
+        if (!input.file) {
+          process.stdout.write(`${JSON.stringify(kept)}\n`);
+          return;
+        }
+        try {
+          writeKeptSignIn(input.file, kept);
+        } catch (error) {
+          // a grant that nobody holds is ended
+          await endKeptSignIn(kept);
+          throw new Error(
+            `The sign-in could not be written to ${input.file} (${error instanceof Error ? error.message : String(error)}), so it is revoked. Run the command again.`,
+          );
+        }
+        return {
+          message: `Kept in ${input.file} (mode 600). Deploy with ${SIGN_IN_FILE}=${input.file}. End it with iterate cloudflare sign-out --file ${input.file}.`,
+        };
+      }),
+    signOut: os
+      .input(
+        z.object({
+          file: z
+            .string()
+            .optional()
+            .describe(
+              "The file of the sign-in, deleted after the revocation (default: the sign-in's JSON on standard input)",
+            ),
+        }),
+      )
+      .meta({
+        description:
+          "Revoke a kept sign-in at Cloudflare (iterate cloudflare sign-in), and delete its file. A secret store's copy is yours to delete",
+      })
+      .handler(async ({ input }) => {
+        if (!input.file && process.stdin.isTTY)
+          throw new Error("Name the sign-in: --file <path>, or its JSON on standard input.");
+        // a deploy that renews the sign-in while it is revoked would keep a live one in the file
+        if (input.file) lockKept(input.file);
+        const text = input.file
+          ? readFileSync(input.file, "utf8")
+          : await streamText(process.stdin);
+        const kept = parsed(KeptSignIn, text);
+        if (!kept)
+          throw new Error(
+            `${input.file || "Standard input"} holds no sign-in of iterate cloudflare sign-in.`,
+          );
+        // read before the revocation, while the access works: these tokens outlive it
+        const made = await tokensMadeThrough(kept).catch(() => undefined);
+        const refused = await endKeptSignIn(kept);
+        if (refused.length > 0)
+          throw new Error(
+            `Cloudflare did not take the revocation (${refused.join("; ")}). Nothing is deleted. Run the command again.`,
+          );
+        if (input.file) rmSync(input.file, { force: true });
+        const tokens = made
+          ? made.length > 0
+            ? `The API tokens that deploys made stay until you delete them: ${made.map((found) => `${found.tokens.join(", ")} in ${found.account} (${found.page})`).join("; ")}. Deleting them turns off the mind's telemetry until its next deploy.`
+            : "Deploys made no API token in the accounts that it reached."
+          : "Its access had ended, so the API tokens that deploys made were not listed: look for iterate-<stage>-telemetry-catalog and -analytics on each account's API tokens page. They stay until you delete them.";
+        return {
+          message: `Revoked at Cloudflare${input.file ? `, and ${input.file} is deleted` : ""}. ${tokens}`,
+        };
+      }),
+  },
   identity: {
     show: os
       .input(z.object({ mind: mindArgument }))

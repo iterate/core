@@ -9,6 +9,7 @@ and every connection it makes is the Node client's ([`iterate/node`](../node.ts)
 ```sh
 npx iterate                               # offline help
 npx iterate deploy                        # a new mind in your own Cloudflare account
+npx iterate cloudflare sign-in --file f  # a kept sign-in, for deploys with nobody at the page
 npx iterate identity show example.com     # the mind's id, and where its identity key is
 npx iterate login example.com             # sign in, and make it the profile's mind
 npx iterate login example.com --device    # approve from a phone, when the issuer offers it
@@ -244,6 +245,70 @@ ones on the terminal's computer, and it prints the commands for the other comput
 computer: each step reads what the account has, and a deploy keeps what it made. A coding agent
 can run and supervise it: with nobody at the terminal each choice comes from its flag
 (`iterate deploy --help`), and a missing one is named.
+
+### Deploy with nobody at Cloudflare's page: a kept sign-in
+
+A CI job, or a script that updates your minds, deploys by the same command and the same sign-in
+as a person. The person signs in once and keeps the sign-in; each deploy then renews it.
+Hand a kept sign-in only to code that no pull request can change: the CLI and the stack from a
+checkout of your own default branch (`node <checkout>/core/lib/bin/iterate.js deploy --source
+<checkout>`), or a CLI release that only your default branch can publish. A CI run of a pull
+request that can publish a package or push a mirror can also put its own code there.
+
+```sh
+npx iterate cloudflare sign-in --file ~/.iterate-cloudflare-sign-in.json      # once, a person
+ITERATE_CLOUDFLARE_SIGN_IN_FILE=~/.iterate-cloudflare-sign-in.json \
+  npx iterate deploy --account <id> --domain example.com --yes --no-setup < /dev/null
+npx iterate cloudflare sign-out --file ~/.iterate-cloudflare-sign-in.json     # the end of it
+```
+
+- **`iterate cloudflare sign-in`** opens the deploy's page with the deploy's scopes and
+  `offline_access`. Select only the mind's account, and tick "Account API Token Provisioning".
+  A grant that lacks a scope, or comes with no refresh token, is revoked and nothing is kept.
+  `--file <path>` keeps it in a new file of mode 600. `--print` prints it as one JSON document
+  on standard output, for a pipe into a secret store (`| doppler secrets set NAME > /dev/null`,
+  `| gh secret set NAME`); it refuses a terminal. The tokens never go through a flag's value,
+  which stays in the shell's history and in the list of processes.
+- **`iterate deploy`** with `ITERATE_CLOUDFLARE_SIGN_IN_FILE=<file>` uses it as a sign-in: the
+  same check of the granted scopes, the same words. It does not revoke it at its end.
+  `CLOUDFLARE_API_TOKEN` set as well is refused. An account that the sign-in does not cover is a
+  stop: nobody is there to approve another.
+- **`iterate cloudflare sign-out`** revokes both tokens at Cloudflare and deletes the file (or
+  reads the JSON on standard input: a secret store's copy is yours to delete). It lists the API
+  tokens that deploys made in the accounts it reached (`iterate-<stage>-telemetry-catalog` and
+  `-analytics`): **a token made through a sign-in outlives the sign-in's revocation** until you
+  delete it. Deleting them turns off the mind's telemetry until its next deploy.
+- **`iterate deploy --plan`** changes nothing: over a mind that is there, with the same sign-in,
+  source and config as a deploy, it writes the stack's plan (one line a resource: `noop`,
+  `update`, `create`, `delete`, …) to `plan.log` beside the deploy's config. A caller with nobody
+  at the terminal reads it before it deploys.
+
+**What a kept sign-in can do: everything that a deploy can, in the accounts you selected.** It
+writes Workers, DNS records and every other resource of the stack, and it makes API tokens of
+the account ("Account API Token Provisioning": the deploy makes the mind's two telemetry tokens
+with it). A token made through a sign-in may hold only permissions that the sign-in's scopes
+cover, and none that manages tokens or OAuth clients. Keep it where you keep a production secret: a file of mode 600 on a computer that
+only you use, or a secret store. End it with `iterate cloudflare sign-out` when you no longer need
+it.
+
+**Each renewal replaces the refresh token** (Cloudflare's rotation, measured 18 Nov 2026). So:
+
+- The command renews the access token when it has less than 20 minutes left, and writes the
+  renewed sign-in to the file (a temporary file and a rename) before it uses it. From then on
+  the earlier refresh token is stale: **copy the file back to your secret store after every
+  run**, whatever its exit code.
+- When the file cannot be written, the renewed sign-in goes to the CLI's config folder
+  (`cloudflare-sign-in-renewed-<time>.json`) and the command stops: the words name both files.
+  When that write fails too, the renewed sign-in is revoked and you sign in again.
+- **One command at a time on one sign-in.** The command holds `<file>.lock` while it runs and
+  refuses a second one. The lock sees only this computer: a secret store's caller runs one deploy
+  for a sign-in at a time (GitHub Actions: one `concurrency` group for the jobs that use it).
+- **A sign-in that no longer works** stops the command with exit code 3 and "The kept sign-in
+  at Cloudflare in <file> no longer works (Cloudflare: …)". A person signs in again. An outage
+  at Cloudflare exits 1 and leaves the file as it is.
+- Not known: whether Cloudflare keeps the earlier refresh token alive for a while after a
+  renewal, and how long a refresh token lives unused. Deploy at least once a week, and watch
+  for exit code 3.
 
 ## Erase a mind
 
