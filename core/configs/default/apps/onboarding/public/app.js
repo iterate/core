@@ -2,7 +2,8 @@
 //   Step 1: Connect to iterate Cloud (optional, collapsible fine print)
 //   Step 2: Configure AI (iterate Cloud credit, OpenAI API key, ChatGPT Plus/Pro, or Cloudflare AI Gateway)
 //   Step 3: Verify & wake gate (real server-side POST /verify-ai + wait for /agents/onboarding's
-//           first assistant response before redirecting to https://dash.<zone>/?agent=/agents/onboarding)
+//           first assistant response, then show the verified result and clear Done state with link
+//           into https://dash.<zone>/?agent=/agents/onboarding)
 import { html, render, useCallback, useEffect, useRef, useState } from "@iterate-com/ui/page";
 import { Badge } from "@iterate-com/ui/components/ui/badge";
 import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
@@ -94,11 +95,31 @@ function friendlyWakeError(raw) {
   return text.slice(0, 240);
 }
 
+const PROVIDER_LABELS = {
+  chatgpt: "ChatGPT Plus/Pro",
+  "iterate-cloud": "iterate Cloud credit",
+  openai: "OpenAI API key",
+  "ai-gateway": "Cloudflare AI Gateway",
+};
+
+function verifySummaryOf(result) {
+  const provider = PROVIDER_LABELS[result.provider] || result.provider;
+  const parts = [result.model || "model"];
+  if (result.reply) parts.push(`replied "${result.reply}"`);
+  else parts.push("responded");
+  if (result.usage) {
+    const total = result.usage.inputTokens + result.usage.outputTokens;
+    parts.push(`(${total} tokens)`);
+  }
+  return `${provider}: ${parts.join(" ")}.`;
+}
+
 function App() {
   const [cards, setCards] = useState();
   const [aiStatus, setAiStatus] = useState();
   const [loadError, setLoadError] = useState();
   const [step, setStep] = useState();
+  const [verified, setVerified] = useState();
   const [busy, setBusy] = useState();
   const [actionError, setActionError] = useState();
   const initializedRef = useRef(false);
@@ -130,6 +151,19 @@ function App() {
     void reload();
   }, [reload, onboardingHead]);
 
+  // Watch /agents/onboarding live so revisiting onboarding after setup shows "Done", and Step 3
+  // sees the first model-authored reply immediately.
+  const agent = useContextStub(() => itx.cd(AGENT), []);
+  const agentContext = useIterateContext(agent.stub, {
+    consumes: [
+      "events.iterate.com/agent/web-message-sent",
+      "events.iterate.com/agent/context-added",
+      "events.iterate.com/agent/message-received",
+      "events.iterate.com/agent/llm-request-started",
+      "events.iterate.com/agent/llm-request-settled",
+    ],
+  });
+
   // Refresh state when the user returns from a passkey, OpenAI key, or Cloudflare tab.
   useEffect(() => {
     const onVisible = () => {
@@ -142,13 +176,26 @@ function App() {
   const cloudCard = cards?.find((card) => card.step === CLOUD_STEP);
   const offersCloud = Boolean(cloudCard);
 
+  const handleVerified = useCallback((result) => {
+    setVerified(result);
+    setStep(4);
+  }, []);
+
   // Choose the initial step once loaded, and auto-advance from Step 1 once iterate Cloud connects.
+  // Do not block the wizard if watching /agents/onboarding fails.
+  const agentSettled = Boolean(agentContext.caughtUp || agent.error || agentContext.error);
   useEffect(() => {
-    if (!cards || !aiStatus) return;
+    if (!cards || !aiStatus || !agentSettled) return;
     if (!initializedRef.current) {
       initializedRef.current = true;
       prevCloudStatusRef.current = cloudCard?.status;
-      if (!cloudCard || cloudCard.status === "connected" || cloudCard.status === "own-keys") {
+      if (agentContext.caughtUp && hasModelReply(agentContext.events)) {
+        setStep(4);
+      } else if (
+        !cloudCard ||
+        cloudCard.status === "connected" ||
+        cloudCard.status === "own-keys"
+      ) {
         setStep(2);
       } else {
         setStep(1);
@@ -160,7 +207,7 @@ function App() {
     if (step === 1 && prev === "connecting" && cloudCard?.status === "connected") {
       setStep(2);
     }
-  }, [cards, aiStatus, cloudCard, step]);
+  }, [cards, aiStatus, cloudCard, step, agentSettled, agentContext.caughtUp, agentContext.events]);
 
   async function pressCloud(button) {
     const tab = button.opens ? window.open("about:blank", "_blank") : null;
@@ -291,7 +338,22 @@ function App() {
   } else if (step === 3) {
     activeStep = html`
       <${VerifyStep}
+        agent=${agent}
+        agentContext=${agentContext}
         onBackToAi=${() => {
+          void reload();
+          setStep(2);
+        }}
+        onDone=${handleVerified}
+      />
+    `;
+  } else if (step === 4) {
+    activeStep = html`
+      <${DoneStep}
+        verifyResult=${verified}
+        aiStatus=${aiStatus}
+        cloudCard=${cloudCard}
+        onReviewAi=${() => {
           void reload();
           setStep(2);
         }}
@@ -688,28 +750,21 @@ function AiStep({
 
 // ── Step 3: Verify & wake gate ──
 
-function VerifyStep({ onBackToAi }) {
+function VerifyStep({ agent, agentContext, onBackToAi, onDone }) {
   const [attempt, setAttempt] = useState(0);
   const [phase, setPhase] = useState("verifying-ai"); // "verifying-ai" | "waking-agent" | "error"
+  const [verifyResult, setVerifyResult] = useState();
   const [errorMessage, setErrorMessage] = useState();
+  const verifyResultRef = useRef();
   const wakeTriggeredRef = useRef(false);
   const wakeStartOffsetRef = useRef(0);
-
-  const agent = useContextStub(() => itx.cd(AGENT), []);
-  const agentContext = useIterateContext(agent.stub, {
-    consumes: [
-      "events.iterate.com/agent/web-message-sent",
-      "events.iterate.com/agent/context-added",
-      "events.iterate.com/agent/message-received",
-      "events.iterate.com/agent/llm-request-started",
-      "events.iterate.com/agent/llm-request-settled",
-    ],
-  });
 
   // Phase 1: run real server-side LLM inference verification (`POST /verify-ai`).
   useEffect(() => {
     let cancelled = false;
     wakeTriggeredRef.current = false;
+    verifyResultRef.current = undefined;
+    setVerifyResult(undefined);
     setPhase("verifying-ai");
     setErrorMessage(undefined);
 
@@ -725,6 +780,8 @@ function VerifyStep({ onBackToAi }) {
           setPhase("error");
           return;
         }
+        verifyResultRef.current = result;
+        setVerifyResult(result);
         setPhase("waking-agent");
       } catch (failure) {
         if (cancelled) return;
@@ -744,7 +801,7 @@ function VerifyStep({ onBackToAi }) {
     const events = agentContext.events;
 
     if (hasModelReply(events)) {
-      window.location.assign(dashOnboardingUrl);
+      onDone(verifyResultRef.current);
       return;
     }
 
@@ -817,7 +874,7 @@ function VerifyStep({ onBackToAi }) {
         setPhase("error");
       }
     })();
-  }, [phase, agentContext.caughtUp, agentContext.events, agent.stub]);
+  }, [phase, agentContext.caughtUp, agentContext.events, agent.stub, onDone]);
 
   // Bounded wait while waking the onboarding agent (60 seconds).
   useEffect(() => {
@@ -838,13 +895,24 @@ function VerifyStep({ onBackToAi }) {
   const statusDesc =
     phase === "verifying-ai"
       ? "Running a quick test request to confirm your model responds."
-      : "Opening your mind once your onboarding agent replies.";
+      : "Waiting for your onboarding agent's first message.";
+
+  let verifyBanner = null;
+  if (verifyResult) {
+    verifyBanner = html`
+      <div className="wizard-status-banner">
+        <${CircleCheckIcon} className="size-4 shrink-0 mt-0.5" />
+        <span>AI check passed — ${verifySummaryOf(verifyResult)}</span>
+      </div>
+    `;
+  }
 
   let gateContent = html`
     <div className="wizard-gate">
       <${Spinner} className="size-6" />
       <p className="wizard-gate-title">${statusTitle}</p>
       <p className="wizard-gate-desc">${statusDesc}</p>
+      ${verifyBanner}
     </div>
   `;
   let errorFooter = null;
@@ -872,6 +940,55 @@ function VerifyStep({ onBackToAi }) {
     <${Card} data-step="verify" data-phase=${phase}>
       <${CardContent}>${gateContent}<//>
       ${errorFooter}
+    <//>
+  `;
+}
+
+// ── Step 4: Done ──
+
+function DoneStep({ verifyResult, aiStatus, cloudCard, onReviewAi }) {
+  const hasCloudCredit = aiStatus.openai === "iterate-proxy" && cloudCard?.status === "connected";
+  const hasOwnOpenAi = aiStatus.openai === "own" || aiStatus.openai === "other-proxy";
+  const activeProviders = [
+    aiStatus.chatgpt && PROVIDER_LABELS.chatgpt,
+    hasOwnOpenAi && PROVIDER_LABELS.openai,
+    hasCloudCredit && PROVIDER_LABELS["iterate-cloud"],
+  ].filter(Boolean);
+  const summaryLine = verifyResult
+    ? `AI check passed — ${verifySummaryOf(verifyResult)}`
+    : activeProviders.length > 0
+      ? `Connected via ${activeProviders.join(", ")}. Your onboarding agent has replied and is ready.`
+      : "Your onboarding agent has replied and is ready.";
+
+  return html`
+    <${Card} data-step="done">
+      <${CardHeader}>
+        <${CardTitle} className="wizard-card-title">
+          <${CircleCheckIcon} className="size-5" />
+          <span>Done: your mind is set up</span>
+        <//>
+        <${CardDescription}>
+          Your AI connection works and your onboarding agent is waiting in the Dash.
+        <//>
+      <//>
+
+      <${CardContent} className="wizard-options">
+        <div className="wizard-status-banner">
+          <${CircleCheckIcon} className="size-4 shrink-0 mt-0.5" />
+          <span>${summaryLine}</span>
+        </div>
+      <//>
+
+      <${CardFooter} className="wizard-actions">
+        <${Button} variant="outline" data-action="review-ai" onClick=${onReviewAi}> AI settings <//>
+        <a
+          className=${buttonVariants({ variant: "default" })}
+          href=${dashOnboardingUrl}
+          data-action="open-dash"
+        >
+          Open Dash
+        </a>
+      <//>
     <//>
   `;
 }

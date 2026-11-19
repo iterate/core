@@ -1637,14 +1637,18 @@ test("the two paths keep the mind's handle until their answer is made: a handle 
     host,
   );
   expect(verifyRes).toMatchObject({ status: 200 });
-  expect(await verifyRes.json()).toEqual({ ok: true, provider: "ai-gateway" });
+  expect(await verifyRes.json()).toEqual({
+    ok: true,
+    provider: "ai-gateway",
+    model: "gpt-6.1-sol",
+  });
 });
 
 // ── verify-ai & centered no-AI wizard ──
 
 test("verifyAi tests providers in agent priority order (ChatGPT -> /secrets/openai -> Cloudflare AI Gateway)", async () => {
   const sseOk =
-    'data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: {"type":"response.completed"}\n\n';
+    'data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":18,"output_tokens":3}}}\n\n';
   const calls: string[] = [];
 
   // 1. ChatGPT plan set -> uses /secrets/chatgpt first and omits max_output_tokens (plan tokens refuse it)
@@ -1657,7 +1661,13 @@ test("verifyAi tests providers in agent priority order (ChatGPT -> /secrets/open
       return new Response(sseOk, { status: 200 });
     },
   });
-  expect(await verifyAi(chatgptItx)).toEqual({ ok: true, provider: "chatgpt" });
+  expect(await verifyAi(chatgptItx)).toEqual({
+    ok: true,
+    provider: "chatgpt",
+    model: "gpt-6.1-sol",
+    reply: "ok",
+    usage: { inputTokens: 18, outputTokens: 3 },
+  });
   expect(calls).toEqual(['Bearer getSecret("/secrets/chatgpt", { field: "accessToken" })']);
   expect(chatgptBody).not.toHaveProperty("max_output_tokens");
 
@@ -1670,7 +1680,13 @@ test("verifyAi tests providers in agent priority order (ChatGPT -> /secrets/open
       return new Response(sseOk, { status: 200 });
     },
   });
-  expect(await verifyAi(cloudItx)).toEqual({ ok: true, provider: "iterate-cloud" });
+  expect(await verifyAi(cloudItx)).toEqual({
+    ok: true,
+    provider: "iterate-cloud",
+    model: "gpt-6.1-sol",
+    reply: "ok",
+    usage: { inputTokens: 18, outputTokens: 3 },
+  });
   expect(proxyBody).toMatchObject({ max_output_tokens: 256, store: false });
 
   // 3. Own OpenAI key set -> reports openai and accepts response.incomplete (when capped by max_output_tokens)
@@ -1682,13 +1698,24 @@ test("verifyAi tests providers in agent priority order (ChatGPT -> /secrets/open
         { status: 200 },
       ),
   });
-  expect(await verifyAi(ownItx)).toEqual({ ok: true, provider: "openai" });
+  expect(await verifyAi(ownItx)).toEqual({
+    ok: true,
+    provider: "openai",
+    model: "gpt-6.1-sol",
+    reply: "ok",
+  });
 
   // 4. No keys set -> tests Cloudflare AI Gateway
   const gwItx = fakeVerifyItx({
     aiRun: async () => new Response(sseOk, { status: 200 }),
   });
-  expect(await verifyAi(gwItx)).toEqual({ ok: true, provider: "ai-gateway" });
+  expect(await verifyAi(gwItx)).toEqual({
+    ok: true,
+    provider: "ai-gateway",
+    model: "gpt-6.1-sol",
+    reply: "ok",
+    usage: { inputTokens: 18, outputTokens: 3 },
+  });
 });
 
 test("verifyAi rejects truncated SSE streams without completion and bounds stalled response body reads", async () => {
@@ -1827,6 +1854,10 @@ test("onboarding page is a centered no-AI wizard with no AgentChat, no connect-c
   expect(pageJs).toContain("approves each mind");
   expect(pageJs).toContain("llmRequestOffset");
   expect(pageJs).toContain('status === "disconnecting"');
+  expect(pageJs).toContain("Done: your mind is set up");
+  expect(pageJs).toContain('data-action="open-dash"');
+  expect(pageJs).toContain("AI check passed");
+  expect(pageJs).not.toContain("window.location.assign(dashOnboardingUrl)");
 });
 
 test("one note at the owner's signed rule, which starts the agent's turn: with the balance when the credit came, and with the reason when it did not", async () => {

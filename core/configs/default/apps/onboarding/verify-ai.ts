@@ -21,7 +21,20 @@ export type AiStatus = {
   zone: string;
 };
 
-export type VerifyAiResult = { ok: true; provider: AiProvider } | { ok: false; error: string };
+export type VerifyAiUsage = {
+  inputTokens: number;
+  outputTokens: number;
+};
+
+export type VerifyAiResult =
+  | {
+      ok: true;
+      provider: AiProvider;
+      model: string;
+      reply?: string;
+      usage?: VerifyAiUsage;
+    }
+  | { ok: false; error: string };
 
 const ErrorEnvelope = z.object({
   error: z
@@ -44,6 +57,7 @@ const ErrorEnvelope = z.object({
 const StreamEvent = z.object({
   type: z.string(),
   delta: z.string().optional(),
+  text: z.string().optional(),
   error: z
     .object({
       code: z.string().optional(),
@@ -54,6 +68,12 @@ const StreamEvent = z.object({
   response: z
     .object({
       status: z.string().optional(),
+      usage: z
+        .object({
+          input_tokens: z.number().optional(),
+          output_tokens: z.number().optional(),
+        })
+        .optional(),
       error: z
         .object({
           code: z.string().optional(),
@@ -198,6 +218,9 @@ export function humanAiError(provider: AiProvider, status: number, rawText: stri
 function checkStreamBody(provider: AiProvider, bodyText: string): VerifyAiResult {
   let sawTerminalCompletion = false;
   let sawEvent = false;
+  let deltaText = "";
+  let doneText = "";
+  let usage: VerifyAiUsage | undefined;
   for (const line of bodyText.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("data:")) continue;
@@ -224,18 +247,57 @@ function checkStreamBody(provider: AiProvider, bodyText: string): VerifyAiResult
         error: humanAiError(provider, 502, JSON.stringify({ error: event.response?.error || {} })),
       };
     }
-    if (event.type === "response.completed" || event.type === "response.incomplete")
+    if (event.type === "response.output_text.delta" && event.delta) deltaText += event.delta;
+    if (event.type === "response.output_text.done" && event.text) doneText = event.text;
+    if (event.type === "response.completed" || event.type === "response.incomplete") {
       sawTerminalCompletion = true;
+      const u = event.response?.usage;
+      if (u?.input_tokens !== undefined && u.output_tokens !== undefined) {
+        usage = { inputTokens: u.input_tokens, outputTokens: u.output_tokens };
+      }
+    }
   }
-  if (sawTerminalCompletion) return { ok: true, provider };
+  const reply = (deltaText || doneText).trim().slice(0, 80) || undefined;
+  if (sawTerminalCompletion) {
+    return {
+      ok: true,
+      provider,
+      model: TEST_MODEL,
+      reply,
+      usage,
+    };
+  }
   if (!sawEvent) {
     // Some gateways may answer a non-streamed Responses JSON object; accept a finished response.
     try {
       const nonStream = z
-        .object({ status: z.string().optional(), output: z.array(z.unknown()).optional() })
+        .object({
+          status: z.string().optional(),
+          output_text: z.string().optional(),
+          output: z.array(z.unknown()).optional(),
+          usage: z
+            .object({
+              input_tokens: z.number().optional(),
+              output_tokens: z.number().optional(),
+            })
+            .optional(),
+        })
         .safeParse(JSON.parse(bodyText)).data;
-      if (nonStream?.status === "completed" || nonStream?.status === "incomplete")
-        return { ok: true, provider };
+      if (nonStream?.status === "completed" || nonStream?.status === "incomplete") {
+        const nonStreamReply = (nonStream.output_text || "").trim().slice(0, 80) || undefined;
+        const u = nonStream.usage;
+        const nonStreamUsage =
+          u?.input_tokens !== undefined && u.output_tokens !== undefined
+            ? { inputTokens: u.input_tokens, outputTokens: u.output_tokens }
+            : undefined;
+        return {
+          ok: true,
+          provider,
+          model: TEST_MODEL,
+          reply: nonStreamReply,
+          usage: nonStreamUsage,
+        };
+      }
     } catch {
       // fall through to generic failure
     }
