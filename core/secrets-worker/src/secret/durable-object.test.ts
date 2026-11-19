@@ -982,7 +982,7 @@ test("a secret made with one Cloud sends nothing to another, whatever a later ca
     seen.push({
       url: request.url,
       method: request.method,
-      statement: request.headers.has("iterate-statement"),
+      statement: request.headers.has("iterate-auth-statement"),
       body: await request.text(),
     });
     // the other Cloud publishes a client of the same name, with every address on its own origin
@@ -1492,7 +1492,7 @@ function cloudThatAnswers(answer: () => Response) {
     asked.push({
       url: request.url,
       refreshToken: new URLSearchParams(await request.text()).get("refresh_token"),
-      signed: request.headers.has("iterate-statement"),
+      signed: request.headers.has("iterate-auth-statement"),
     });
     return answer();
   });

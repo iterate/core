@@ -27,8 +27,10 @@ import { codedError, leavingTheStack } from "iterate/lib";
 import { z } from "zod";
 import { originsOf, sha256Hex } from "./secrets.ts";
 
-/** The header a brokered request carries: base64url of the signed statement's JSON. */
-const STATEMENT_HEADER = "iterate-statement";
+/** The header a brokered request carries: base64url of the signed statement's JSON. Workers Logs
+ *  keep a header whole unless its name holds auth, key, secret, token or jwt (then "REDACTED"); the
+ *  Cloud's Worker reads this name first and `iterate-statement` still (cloud-clients worker.ts). */
+const STATEMENT_HEADER = "iterate-auth-statement";
 
 /** What the Cloud publishes of one client (`GET <cloud>/.well-known/iterate-cloud`). */
 const CloudClient = z.object({
