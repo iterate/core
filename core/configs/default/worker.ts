@@ -17,7 +17,13 @@ import { voiceApp } from "./apps/voice/app.ts";
 // line and off `installVoice` in the init case below, in the commit that adds the package.
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
-import { cloudAccountSecret, cloudAccountsEvent, removeCloudAccount } from "./cloud-accounts.ts";
+import {
+  cloudAccountSecret,
+  cloudAccountsEvent,
+  connectCloudAccount,
+  INTEGRATION_CALLABLE,
+  removeCloudAccount,
+} from "./cloud-accounts.ts";
 import { cloudDeliveryOf, mindFormEvent, sayMindForm } from "./cloud-deliveries.ts";
 import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
 import {
@@ -377,6 +383,21 @@ export default class extends IterateConfigEntrypoint {
   async cloudflareConnect(options?: { tell?: string }) {
     using itx = this.getItx();
     return await cloudflareConnect(itx, options);
+  }
+
+  /** `itx.config.connectCloudAccount(app, again?)`: the Integrations page's "Connect", "Add
+   *  account" and "Connect again" for an app of iterate Cloud's, and an agent's. It answers
+   *  `{ secret, link }`: the secret the connect fills, and the page the member opens to approve
+   *  (cloud-accounts.ts `connectCloudAccount`; accounts.md). */
+  async connectCloudAccount(app: string, again?: string) {
+    using itx = this.getItx();
+    return await connectCloudAccount(itx, app, again);
+  }
+
+  /** `itx.config.integrationCalls()`: the names of this config's functions that a card's button
+   *  may call (cloud-accounts.ts `INTEGRATION_CALLABLE`). The Dash asks once, and calls no other. */
+  integrationCalls() {
+    return [...INTEGRATION_CALLABLE];
   }
 
   /** `itx.config.removeCloudAccount(path)`: the Integrations page's "Remove" for an account that

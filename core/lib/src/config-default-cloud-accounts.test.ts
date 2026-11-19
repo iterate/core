@@ -6,10 +6,17 @@ import { expect, test } from "vitest";
 import {
   cloudAccountSecret,
   cloudAccountsEvent,
+  connectCloudAccount,
+  INTEGRATION_CALLABLE,
   removeCloudAccount,
 } from "../../configs/default/cloud-accounts.ts";
 import { ITERATE_CLOUD } from "../../configs/default/cloud-deliveries.ts";
-import { IntegrationRegistryContract } from "./integrations.ts";
+import {
+  callAnswerLink,
+  IntegrationCard,
+  IntegrationConnection,
+  IntegrationRegistryContract,
+} from "./integrations.ts";
 
 /** The Cloud that the template names: the one whose accounts stand under "iterate Cloud". */
 const CLOUD = ITERATE_CLOUD;
@@ -38,7 +45,7 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
   // an app with no account has no status, and its button begins the first connect
   expect(cards.slack).not.toHaveProperty("status");
   expect(cards.slack).toMatchObject({
-    actions: [{ label: "Connect", url: "https://dash.example.com/connect/slack" }],
+    actions: [{ label: "Connect", call: { name: "connectCloudAccount", args: ["slack"] } }],
   });
   expect(cards.google).toMatchObject({ actions: [{ label: "Add account" }] });
   // a person's grant and an installation's token; nothing for a key of another service, nor for
@@ -50,9 +57,12 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
       details: { Secret: "/secrets/google" },
       // a person's grant is connected again to bring new scopes in (cloud-scopes.ts)
       actions: [
-        { label: "Connect again", url: "https://dash.example.com/connect/google?secret=google" },
+        {
+          label: "Connect again",
+          call: { name: "connectCloudAccount", args: ["google", "google"] },
+        },
         { label: "Manage", url: "https://dash.example.com/?page=secrets" },
-        removeOf("google", "google"),
+        removeOf("google"),
       ],
     },
     "github/github": expect.objectContaining({ account: "ada" }),
@@ -62,7 +72,7 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
       details: { Kind: "App installation", Secret: "/secrets/github-installation-7" },
       actions: [
         { label: "Manage", url: "https://dash.example.com/?page=secrets" },
-        removeOf("github", "github-installation-7"),
+        removeOf("github-installation-7"),
       ],
     }),
   });
@@ -107,7 +117,7 @@ test("a secret set again is asked for again, one that the service refuses says s
     account: "Google account",
     status: { kind: "attention", text: "Google refused the token. Connect the account again." },
     actions: [
-      { label: "Connect again", url: "https://dash.example.com/connect/google?secret=google" },
+      { label: "Connect again", call: { name: "connectCloudAccount", args: ["google", "google"] } },
       { label: "Manage" },
       { label: "Remove" },
     ],
@@ -264,9 +274,9 @@ test("a row an older template made gets today's buttons at the next publish, wit
     status: { kind: "ok" },
     details: { Secret: "/secrets/google" },
     actions: [
-      { label: "Connect again", url: "https://dash.example.com/connect/google?secret=google" },
+      { label: "Connect again", call: { name: "connectCloudAccount", args: ["google", "google"] } },
       manage,
-      removeOf("google", "google"),
+      removeOf("google"),
     ],
   });
   // a refusal keeps its words, and gets the same buttons
@@ -275,9 +285,9 @@ test("a row an older template made gets today's buttons at the next publish, wit
     status: refused,
     details: { Secret: "/secrets/github" },
     actions: [
-      { label: "Connect again", url: "https://dash.example.com/connect/github?secret=github" },
+      { label: "Connect again", call: { name: "connectCloudAccount", args: ["github", "github"] } },
       manage,
-      removeOf("github", "github"),
+      removeOf("github"),
     ],
   });
   expect(rows["github/github-installation-7"]).toEqual(installation);
@@ -404,16 +414,16 @@ test("several X accounts: each is a row by its handle under X's one card, with '
   const { cards, rows } = mind.registry();
   expect(cards.x).toMatchObject({
     status: { text: "2 accounts" },
-    actions: [{ label: "Add account", url: "https://dash.example.com/connect/x" }],
+    actions: [{ label: "Add account", call: { name: "connectCloudAccount", args: ["x"] } }],
   });
   expect(rows["x/x"]).toMatchObject({ account: "@ada", details: { Secret: "/secrets/x" } });
   expect(rows["x/x-2"]).toMatchObject({
     account: "@grace",
     details: { Secret: "/secrets/x-2" },
     actions: [
-      { label: "Connect again", url: "https://dash.example.com/connect/x?secret=x-2" },
+      { label: "Connect again", call: { name: "connectCloudAccount", args: ["x", "x-2"] } },
       { label: "Manage" },
-      removeOf("x", "x-2"),
+      removeOf("x-2"),
     ],
   });
   // the Cloud's id of each account is kept, for its deliveries
@@ -434,7 +444,13 @@ test("Remove: the Cloud lets go of the account, what the mind kept for the secre
 
   const removed = await removeCloudAccount(mind.itx, "/secrets/x-2");
 
-  expect(removed).toEqual({ secret: "/secrets/x-2", app: "x", account: "43", cloud: "released" });
+  expect(removed).toEqual({
+    secret: "/secrets/x-2",
+    app: "x",
+    account: "43",
+    cloud: "released",
+    said: "Removed /secrets/x-2. iterate Cloud stopped its deliveries.",
+  });
   expect(mind).toMatchObject({
     cloudAsks: [
       { route: "/clients/x/ask/release", secret: "/secrets/x-2", body: { account: "43" } },
@@ -480,6 +496,7 @@ test("Remove: while another secret holds the same account, the Cloud is not aske
     app: "google",
     account: "ada@example.com",
     cloud: "shared",
+    said: "Removed /secrets/google-2. Another secret holds the same account, and its deliveries go on.",
   });
   expect(mind).toMatchObject({ cloudAsks: [] });
   expect(Object.fromEntries(mind.kv)).toEqual({
@@ -521,6 +538,7 @@ test("Remove: a Cloud that refuses, a service that gives no answer, GitHub and a
     app: "x",
     account: "42",
     cloud: { notReleased: "503 no" },
+    said: "Removed /secrets/x. iterate Cloud did not stop its deliveries: 503 no",
   });
   expect(mind.secrets.has("/secrets/x")).toBe(false);
   // X gives no answer: nobody can say which account to let go of
@@ -533,6 +551,7 @@ test("Remove: a Cloud that refuses, a service that gives no answer, GitHub and a
     secret: "/secrets/github-installation-7",
     app: "github",
     cloud: "not-offered",
+    said: "Removed /secrets/github-installation-7. iterate Cloud keeps delivering the installations' events.",
   });
   expect(mind.cloudAsks.length).toBe(1);
   // a key, or a secret that is not there: nothing changes
@@ -541,6 +560,72 @@ test("Remove: a Cloud that refuses, a service that gives no answer, GitHub and a
   );
   await expect(removeCloudAccount(mind.itx, "/secrets/x-9")).rejects.toThrow("no account");
   expect(mind.secrets.has("/secrets/openai")).toBe(true);
+});
+
+test("every function a card's button calls is one the config offers to buttons, and nothing else is offered", async () => {
+  const mind = withX(cloudMind());
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+  const { cards, rows } = mind.registry();
+  const actions = [
+    ...Object.values(cards).flatMap((card) => IntegrationCard.parse(card).actions),
+    ...Object.values(rows).flatMap((row) => IntegrationConnection.parse(row).actions),
+  ];
+  const called = new Set(actions.flatMap((action) => ("call" in action ? [action.call.name] : [])));
+  // cloudflare.ts's card calls cloudflareConnect (config-default-cloudflare-card.test.ts)
+  expect([...called, "cloudflareConnect"].toSorted()).toEqual([...INTEGRATION_CALLABLE].toSorted());
+});
+
+test("each account connected from a card gets the first free name, 'Connect again' keeps its own, and the answer is the page to approve on", async () => {
+  const secrets = new Set<string>();
+  const begun: { path: string; options: unknown }[] = [];
+  const itx = {
+    url: async () => "https://example.com/",
+    secrets: {
+      list: async () => [...secrets].map((path) => ({ path, urls: [] })),
+      beginOAuth: async (path: string, options: unknown) => {
+        begun.push({ path, options });
+        // as the vault answers: its start page on the mind's control plane
+        return {
+          authorizationUrl: `https://iterate.example.com/secrets/oauth/start?path=${encodeURIComponent(path)}`,
+        };
+      },
+    },
+  };
+  const connect = (app: string, again?: string) => connectCloudAccount(itx, app, again);
+
+  const first = await connect("x");
+  expect(first).toEqual({
+    secret: "/secrets/x",
+    link: "https://iterate.example.com/secrets/oauth/start?path=%2Fsecrets%2Fx",
+  });
+  // the Dash follows the link: it is on the mind's control plane (iterate/integrations)
+  expect(callAnswerLink(first, CONTROL_PLANE)).toMatchObject({ follow: expect.any(URL) });
+  expect(begun).toEqual([
+    {
+      path: "/secrets/x",
+      options: {
+        client: { cloud: "x", origin: CLOUD },
+        install: false,
+        // back to the Integrations page, where the button was pressed
+        next: "https://dash.example.com/?page=integrations",
+      },
+    },
+  ]);
+  secrets.add("/secrets/x");
+  expect(await connect("x")).toMatchObject({ secret: "/secrets/x-2" });
+  secrets.add("/secrets/x-2");
+  expect(await connect("x")).toMatchObject({ secret: "/secrets/x-3" });
+  expect(await connect("x", "x-2")).toMatchObject({ secret: "/secrets/x-2" });
+  // a button never connects again over another app's secret, nor over one that is not set
+  secrets.add("/secrets/google");
+  expect(await connect("x", "google")).toMatchObject({ secret: "/secrets/x-3" });
+  expect(await connect("x", "x-9")).toMatchObject({ secret: "/secrets/x-3" });
+  // GitHub's connect is the App's install page
+  expect(begun.at(-1)?.options).not.toHaveProperty("install", true);
+  await connect("github");
+  expect(begun.at(-1)?.options).toMatchObject({ install: true });
+  // a name that is no app's
+  await expect(connect("../x")).rejects.toThrow("is no name of an app");
 });
 
 test("a delivery's account names its secret: the one kept for it, else the one that holds it; none once it was removed", async () => {
@@ -597,11 +682,11 @@ const deleted = (path: string) => ({
   payload: { path },
 });
 
-/** A row's "Remove": a change that the Dash asks about first (removeCloudAccount). */
-const removeOf = (app: string, name: string) =>
+/** A row's "Remove": a call of `removeCloudAccount` that the Dash asks about first. */
+const removeOf = (name: string) =>
   expect.objectContaining({
     label: "Remove",
-    url: `https://dash.example.com/remove/${app}?secret=${name}`,
+    call: { name: "removeCloudAccount", args: [`/secrets/${name}`] },
     confirm: expect.stringContaining(`The mind deletes /secrets/${name}`),
   });
 
@@ -795,3 +880,6 @@ function cloudMind({ cloud = true } = {}) {
   };
   return mind;
 }
+
+/** The test mind's control plane. */
+const CONTROL_PLANE = "iterate.example.com";

@@ -24,7 +24,7 @@ test("right after a publish, a connected mind shows the connection: who consente
     icon: "https://dash.example.com/brands/cloudflare.svg",
     status: { kind: "ok", text: "Connected" },
     actions: [
-      { label: "Connect again", url: "https://dash.example.com/connect/cloudflare" },
+      { label: "Connect again", call: { name: "cloudflareConnect" } },
       { label: "Manage", url: "https://dash.example.com/?page=secrets" },
     ],
   });
@@ -67,7 +67,7 @@ test("a mind that is not connected offers the connect, and a consent of its own 
   expect(mind.registry()).toEqual({
     card: expect.objectContaining({
       status: { kind: "attention", text: "Not connected." },
-      actions: [{ label: "Connect", url: "https://dash.example.com/connect/cloudflare" }],
+      actions: [{ label: "Connect", call: { name: "cloudflareConnect" } }],
     }),
     row: undefined,
   });

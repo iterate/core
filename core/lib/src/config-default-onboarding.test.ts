@@ -609,7 +609,7 @@ test("Connect Cloudflare: one sentence and one button; no request to Cloudflare 
     ],
   });
   expect(mind).toMatchObject({ outside: [] });
-  // the press: the same connect as the Dash's /connect/cloudflare, through the stack's client
+  // the press: the same connect as the Integrations card's "Connect", through the stack's client
   const answer = await runStep(context, CLOUDFLARE, "connect");
   const consent = "https://dash.cloudflare.com/oauth2/auth?client_id=stack-client";
   expect(answer).toMatchObject({ status: "connecting", link: consent });
@@ -734,7 +734,7 @@ test("table, failed with no grant: Try again begins a new consent; Not now puts 
 test("table, failed: an attempt that a later begin replaced is no longer connecting, and Try again begins", async () => {
   const { mind, card, begins, press } = cloudflareTable();
   await press("Connect Cloudflare");
-  // the Dash's /connect/cloudflare began its own attempt on the same path
+  // the Integrations card's "Connect" began its own attempt on the same path
   mind.cloudflare.attempt = { status: "unavailable" };
   expect(await card()).toMatchObject({
     status: "failed",

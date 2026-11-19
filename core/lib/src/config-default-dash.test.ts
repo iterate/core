@@ -57,7 +57,13 @@ test("'Remove' is a POST from the page, for a secret of the app it names; the an
   const done = await remove("?secret=x-2");
   expect([done.status, await done.json()]).toEqual([
     200,
-    { secret: "/secrets/x-2", app: "x", account: "43", cloud: "released" },
+    {
+      secret: "/secrets/x-2",
+      app: "x",
+      account: "43",
+      cloud: "released",
+      said: "Removed /secrets/x-2. iterate Cloud stopped its deliveries.",
+    },
   ]);
   expect(mind.secrets.has("/secrets/x-2")).toBe(false);
   // the vault's refusal comes back in its own words
@@ -103,6 +109,7 @@ function fakeMind() {
   const begun: { path: string; client: unknown }[] = [];
   const kv = new Map<string, string>();
   const itx = {
+    url: async () => "https://example.com/",
     secrets: {
       list: async () =>
         [...secrets].map((path) => ({

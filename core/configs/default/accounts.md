@@ -170,7 +170,24 @@ connected to. To connect a service, a member asks an agent; then it shows there.
 
   A card or a row is set again whole whenever it changes, and `null` removes it (a card's
   `null` removes its rows). A button leads to an absolute `url`; a page of the mind's own is
-  `await itx.url({ hostname, path })`. `section` names another card, which is then drawn as their heading.
+  `await itx.url({ hostname, path })`. Or a button calls ONE function of this config, as the
+  member who pressed it: `{ label: "Connect", call: { name: "cloudflareConnect", args: [] } }`,
+  a name of `worker.ts`'s entrypoint and JSON arguments. A button acts on the press; the whole
+  call, `name(args)`, is its title. A button with a `confirm` asks first: the page's dialog shows
+  the question as the card's words, and below it the whole call. Write a `confirm` for a button
+  that cannot be undone (Remove, Disconnect), and for no other. After the call, the page goes on
+  to the answer's `link` when it is `https:` on the mind's control plane, and shows its `said`
+  under the buttons. `section` names another card, which is then drawn as their
+  heading.
+
+  The page calls only a function that the config offers to buttons. It asks
+  `itx.config.integrationCalls()` once, and that METHOD of `worker.ts`'s entrypoint answers the
+  names (`INTEGRATION_CALLABLE` in `cloud-accounts.ts`): add the function of a new button there.
+  Write `integrationCalls`, and each function that a button calls, as a method, never as an arrow
+  field (`integrationCalls = () => [...]`): Workers RPC reaches a class's methods alone. With no
+  such method, the page says "This mind's config offers no function to buttons" at each press.
+  The Dash's `/connect/<app>`, `/connect/cloudflare` and `POST /remove/<app>` still answer, for a
+  card that an older config wrote; no card of this template links to them, and no new card should.
 
 - An MCP server: `itx.connectToMcp(url, { headers })` gives a live handle and keeps no record of
   the server. Only the secret that its header names stays. So keep the server's credential in a

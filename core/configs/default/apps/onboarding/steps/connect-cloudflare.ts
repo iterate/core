@@ -1,6 +1,6 @@
 // connect-cloudflare.ts — THE STEP "Connect Cloudflare": the mind reads its own Cloudflare account
 // (its logs, usage and settings) and changes nothing there. One button, which begins the same
-// connect as the Dash's `/connect/cloudflare` (../../../cloudflare.ts `cloudflareConnect`): one
+// connect as the Integrations card's "Connect" (../../../cloudflare.ts `cloudflareConnect`): one
 // consent on Cloudflare's own page, through the OAuth client that the stack's deploy made in the
 // account.
 //

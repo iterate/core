@@ -24,7 +24,9 @@ set up, and you query its logs and traces. You change nothing in the account wit
   make one. Then a member makes one by hand, once. The answer has `makeTheClient`:
   `{ where, name, redirectUri, grantTypes, tokenEndpointAuthMethod, scopes }`. Say those to the
   member in plain words. The `link` is a form of this mind: it shows the same steps and takes the
-  client's ID and secret, which you never see, and it leads on to Cloudflare's consent page. When
+  client's ID and secret, which you never see. It leads back to the Dash's Integrations page,
+  where the card's "Connect" begins the consent: tell the member to press it. The consent begun
+  there tells no agent: read the card afterwards. When
   the mind holds such a client already (`/secrets/cloudflare-client`), the `link` is the consent
   page.
 - **The vault is the guard.** Before it keeps a consent through the stack's client, it checks
@@ -36,7 +38,8 @@ set up, and you query its logs and traces. You change nothing in the account wit
   when it does not reach the mind's zone, the card and the note say it is for another account.
 - The Dash's Integrations page has the card (`cloudflare.ts` `cloudflareConnectionEvent`):
   "Connected" with the account, who consented and the time of the last check, or "Not connected"
-  with a "Connect" button that leads to the same link.
+  with a "Connect" button that calls `cloudflareConnect` at the press, as the member, and goes on
+  to its link.
 
 ## What it reads
 

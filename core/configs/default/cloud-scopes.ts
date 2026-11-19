@@ -1,5 +1,6 @@
 // cloud-scopes.ts — THE SCOPES THIS MIND'S CONNECTS ASK FOR, through each of iterate Cloud's apps.
-// The Dash's "Connect", "Add account" and "Connect again" buttons read it (apps/dash/app.ts).
+// The Integrations page's "Connect", "Add account" and "Connect again" read it
+// (cloud-accounts.ts `connectCloudAccount`).
 //
 // The key is the Cloud's name for the app: `google`, `x`, `github` or `slack`. The value is the
 // whole scope string of that app's connects, with spaces between the scopes. An app with no entry

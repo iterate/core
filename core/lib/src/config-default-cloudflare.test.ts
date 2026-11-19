@@ -12,6 +12,7 @@ import {
   OWN_CLIENT_SCOPES,
 } from "../../configs/default/cloudflare.ts";
 import { CLOUDFLARE_READ_SCOPES } from "./api.ts";
+import { callAnswerLink } from "./integrations.ts";
 
 const ACCOUNT = "aaaaabbbbbccccc111112222233333aa";
 const BEARER = 'Bearer getSecret("/secrets/cloudflare", { field: "accessToken" })';
@@ -89,7 +90,7 @@ test("with no client of the stack's, the one link is the mind's form for a clien
           { name: "clientSecret", label: "Client secret" },
         ],
         // the form leads on to the consent page, and keeps the agent that asked
-        redirectUrl: "https://dash.example.com/connect/cloudflare?tell=%2Fagents%2Fonboarding",
+        redirectUrl: "https://dash.example.com/?page=integrations",
       },
     ],
   });
@@ -129,6 +130,21 @@ test("a client that a member made is what the consent goes through: its secret a
   // what a member ticks is within what the stack's own client may read
   const read: readonly string[] = CLOUDFLARE_READ_SCOPES;
   expect(Object.keys(OWN_CLIENT_SCOPES).filter((scope) => !read.includes(scope))).toEqual([]);
+});
+
+test("each way of the Cloudflare card's Connect answers a link that the Dash follows: the vault's start page or its form, on the control plane", async () => {
+  const follows = (answer: unknown) =>
+    expect(callAnswerLink(answer, "iterate.example.com")).toMatchObject({
+      follow: expect.any(URL),
+    });
+  follows(await cloudflareConnect(mindWith({ stackClient: true }).itx));
+  // no client of the stack's: the form for a member's own, then the consent through it
+  follows(await cloudflareConnect(mindWith({ stackClient: false }).itx));
+  follows(
+    await cloudflareConnect(
+      mindWith({ stackClient: false, ownClient: "a-member-made-client" }).itx,
+    ),
+  );
 });
 
 test("execute is one request to Cloudflare's REST API, with the grant's token as a placeholder, never a value", async () => {

@@ -65,8 +65,10 @@ change nothing there. `cloudflare.md` has the rest.
    same). Say that first. Only an owner who would rather make one by hand makes it, once. Say
    so in one sentence, and say what to enter
    from `makeTheClient`: where, the name, the redirect URI and the scopes. The same ONE link is
-   a page of the mind that shows those steps, takes the client's ID and secret, and leads on to
-   Cloudflare's page. You never see the secret.
+   a page of the mind that shows those steps and takes the client's ID and secret. You never see
+   the secret. It leads back to the Dash's Integrations page: the owner presses "Connect" on the
+   Cloudflare card there, which opens Cloudflare's page. Say so. That consent tells you nothing:
+   read the card (`await itx.integrations.list()`) when the owner says they are back.
 4. **The mind tells the agent when it is done.** Before the vault keeps a consent through the
    stack's client, it checks that Cloudflare granted only the read scopes and that the consent
    reaches one account, the one that holds this mind. A consent that fails either check is not

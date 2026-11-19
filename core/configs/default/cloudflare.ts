@@ -134,8 +134,9 @@ export async function cloudflareConnect(
         { name: "clientId", label: "Client ID", public: true },
         { name: "clientSecret", label: "Client secret" },
       ],
-      // on to the consent page, through the Dash's own connect address
-      redirectUrl: `${dash}/connect/cloudflare${options.tell ? `?tell=${encodeURIComponent(options.tell)}` : ""}`,
+      // back to the Integrations page, whose card's "Connect" now begins the consent with the
+      // client: a press, as the member, never a page that acts on a GET
+      redirectUrl: `${dash}/?page=integrations`,
     });
     return { way: "own-client" as const, link: url, makeTheClient };
   }
@@ -676,8 +677,9 @@ async function keepCard(
       description: DESCRIPTION,
       icon,
       status: { kind: "attention", text: "Not connected." },
-      // the Dash's own address, which begins the connect for the member who pressed it
-      actions: [{ label: "Connect", url: `${dash}/connect/cloudflare` }],
+      // the press calls `cloudflareConnect` as the member who pressed it, and the page goes on to
+      // the one link it answers
+      actions: [{ label: "Connect", call: { name: "cloudflareConnect" } }],
     };
   } else {
     const connected = "account" in check;
@@ -691,7 +693,7 @@ async function keepCard(
           ? { kind: "error", text: "The grant is for another account. Connect again." }
           : { kind: "error", text: "Cloudflare did not answer the last check" },
       actions: [
-        { label: "Connect again", url: `${dash}/connect/cloudflare` },
+        { label: "Connect again", call: { name: "cloudflareConnect" } },
         { label: "Manage", url: `${dash}/?page=secrets` },
       ],
     };

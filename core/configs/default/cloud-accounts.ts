@@ -5,7 +5,7 @@
 //
 //   "iterate Cloud"      one card for each app that this mind's Cloud offers (Google, GitHub,
 //                        Slack, X): what it is for, and a button that begins a connect ("Connect",
-//                        then "Add account"; apps/dash/app.ts answers it). A card has one row for
+//                        then "Add account"; `connectCloudAccount`). A card has one row for
 //                        each account that a member connected through that app: whose account it
 //                        is, and the secret that holds it, with "Remove" (`removeCloudAccount`,
 //                        which an agent calls too). An agent connects one the same way
@@ -52,6 +52,7 @@
 import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
 import { ITERATE_CLOUD } from "./cloud-deliveries.ts";
+import { CLOUD_SCOPES } from "./cloud-scopes.ts";
 
 /** The heading's name in the registry: the cards under it name it as their `section`, and their
  *  own names start with it. */
@@ -272,7 +273,11 @@ async function keepCloudSection(
       ...(connected > 0 && {
         status: { kind: "ok", text: connected === 1 ? "Connected" : `${connected} accounts` },
       }),
-      actions: [{ label: connected ? "Add account" : "Connect", url: `${dash}/connect/${name}` }],
+      // the button begins a connect at the press (`connectCloudAccount`), and the page goes on
+      // to the link it answers
+      actions: [
+        { label: connected ? "Add account" : "Connect", call: { name: CONNECT, args: [name] } },
+      ],
     });
     await keepRows(registry, integration, rows);
   }
@@ -607,10 +612,12 @@ export type RemovedAccount = {
   /** The Cloud's id for the account, when the service answered whose it is. */
   account?: string;
   cloud: "released" | "shared" | "not-offered" | { notReleased: string };
+  /** What was done, in words: the Integrations page shows them under the row's buttons. */
+  said: string;
 };
 
-/** REMOVE ONE ACCOUNT CONNECTED THROUGH iterate Cloud: the Integrations page's "Remove" (the Dash's
- *  `POST /remove/<app>`) and an agent's `itx.config.removeCloudAccount(path)`. In this order:
+/** REMOVE ONE ACCOUNT CONNECTED THROUGH iterate Cloud: the Integrations page's "Remove" (a call
+ *  of `itx.config.removeCloudAccount(path)` after the member said yes) and an agent's. In this order:
  *
  *  1. Whose account the secret holds is asked, while the secret can still be used.
  *  2. The Cloud is asked to let go of the account for this mind (`ask/release`): its deliveries
@@ -661,7 +668,86 @@ export async function removeCloudAccount(itx: AccountsItx, path: string): Promis
     }
   }
   await itx.secrets.delete(path);
-  return { secret: path, app: client, account, cloud };
+  return { secret: path, app: client, account, cloud, said: saidOfRemove(path, cloud) };
+}
+
+/** What a Remove did, in words, by what the Cloud did with the account's deliveries. */
+function saidOfRemove(path: string, cloud: RemovedAccount["cloud"]): string {
+  if (cloud === "released") return `Removed ${path}. iterate Cloud stopped its deliveries.`;
+  if (cloud === "shared")
+    return `Removed ${path}. Another secret holds the same account, and its deliveries go on.`;
+  if (cloud === "not-offered")
+    return `Removed ${path}. iterate Cloud keeps delivering the installations' events.`;
+  return `Removed ${path}. iterate Cloud did not stop its deliveries: ${cloud.notReleased}`.slice(
+    0,
+    400,
+  );
+}
+
+/** THE FUNCTIONS THIS CONFIG OFFERS TO A CARD'S BUTTON: worker.ts answers them as
+ *  `itx.config.integrationCalls()`, and the Dash calls a button's function only when its name is
+ *  among them (iterate/integrations `INTEGRATION_CALLS`). A card of your own whose button calls a
+ *  function of this config names it here too. */
+export const INTEGRATION_CALLABLE = [
+  "cloudflareConnect",
+  "connectCloudAccount",
+  "removeCloudAccount",
+] as const;
+
+/** The config function that the cards' "Connect", "Add account" and "Connect again" call. */
+const CONNECT = "connectCloudAccount";
+
+/** The part of `itx` that a connect uses. */
+type ConnectItx = {
+  url(): Promise<string>;
+  secrets: {
+    list(): Promise<{ path: string }[]>;
+    beginOAuth(
+      path: string,
+      options: {
+        client: { cloud: string; origin: string };
+        install?: boolean;
+        scope?: string;
+        next?: string;
+      },
+    ): Promise<{ authorizationUrl: string }>;
+  };
+};
+
+/** BEGIN A CONNECT THROUGH ONE OF iterate Cloud's APPS: the Integrations page's "Connect", "Add
+ *  account" and "Connect again" (each calls `itx.config.connectCloudAccount(app, again?)` at the
+ *  press, as the member who pressed it), and an agent's. The answer's `link` is the secrets
+ *  Worker's start page, which shows the secret and the hosts its tokens go to before anything
+ *  leaves for the service. Nothing is stored until the member approves there, and then the
+ *  member's browser comes back to the Dash's Integrations page.
+ *
+ *  `again` names a secret to connect again in place (its row's "Connect again"): only a secret
+ *  that is set and is of this app's own family, `<app>` or `<app>-<anything>`, so a button never
+ *  writes over another app's secret. With none, or another, the account gets the first free name:
+ *  `/secrets/google`, then `/secrets/google-2`. The scopes are the mind's own choice for the app
+ *  (cloud-scopes.ts), else the Cloud's defaults. For GitHub the member chooses the installation on
+ *  the App's own install page. */
+export async function connectCloudAccount(
+  itx: ConnectItx,
+  app: string,
+  again?: string,
+): Promise<{ secret: string; link: string }> {
+  if (!/^[a-z0-9-]{1,40}$/.test(app))
+    throw new Error(`connectCloudAccount: ${app} is no name of an app of iterate Cloud's`);
+  const taken = new Set((await itx.secrets.list()).map((secret) => secret.path));
+  let path = `/secrets/${app}`;
+  for (let n = 2; taken.has(path); n += 1) path = `/secrets/${app}-${n}`;
+  if (again && (again === app || again.startsWith(`${app}-`)) && taken.has(`/secrets/${again}`))
+    path = `/secrets/${again}`;
+  const dash = `https://dash.${new URL(await itx.url()).hostname}`;
+  const { authorizationUrl } = await itx.secrets.beginOAuth(path, {
+    client: { cloud: app, origin: ITERATE_CLOUD },
+    install: app === "github",
+    ...(Object.hasOwn(CLOUD_SCOPES, app) && CLOUD_SCOPES[app] && { scope: CLOUD_SCOPES[app] }),
+    // back to the page whose button began it: the vault takes an absolute URL of the mind's
+    next: `${dash}/?page=integrations`,
+  });
+  return { secret: path, link: authorizationUrl };
 }
 
 /** Another secret of the app that holds `account` too, else null. Throws, so that the Remove
@@ -722,11 +808,11 @@ function rowActionsOf(
   return [
     ...(secret.refresh === "github-app-installation"
       ? []
-      : [{ label: "Connect again", url: `${dash}/connect/${client}?secret=${name}` }]),
+      : [{ label: "Connect again", call: { name: CONNECT, args: [client, name] } }]),
     { label: "Manage", url: `${dash}/?page=secrets` },
     {
       label: "Remove",
-      url: `${dash}/remove/${client}?secret=${name}`,
+      call: { name: "removeCloudAccount", args: [secret.path] },
       confirm: `Remove ${account}? The mind deletes ${secret.path}${
         app.whoami.account
           ? ` and asks iterate Cloud to stop delivering for this ${app.title} account`
