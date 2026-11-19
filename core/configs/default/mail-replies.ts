@@ -27,7 +27,8 @@
 // address proves nothing for it. No peer is allowed by default. At the hop limit (8 by default,
 // `email/mind-hop-limit-configured`) it reaches no agent, and the worker records
 // `email/mind-mail-held`. So two minds' agents that answer each other in one thread stop there.
-// Only a person's own append sets these (`withMindMailSetting`).
+// Only a person's own append sets these (`withMindMailSetting`). That slows an agent and stops no
+// one: an agent with the mind's whole reach can commit code that reads the log otherwise.
 //
 // KNOWN GAP: the count follows the thread. Two minds whose agents answer each other with a NEW
 // thread each time start at hop 1 each time: only the kernel's loop guard stops them
@@ -115,8 +116,9 @@ const Peer = z.union([
 /**
  * `settings` with `event` applied: `email/mind-hop-limit-configured { limit }`,
  * `email/mind-peer-allowed { address } | { domain }` and `email/mind-peer-removed` the same. Only
- * a person's own append counts (`source.principal`): the mind's code and the platform cannot
- * widen who reaches its agents. Any other event, or a malformed one, changes nothing.
+ * a person's own append counts (`source.principal`): an agent's own append does not set them. It
+ * slows an agent and stops no one, since an agent can also commit code. Any other event, or a
+ * malformed one, changes nothing.
  */
 export function withMindMailSetting(
   settings: MindMailSettings,

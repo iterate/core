@@ -114,7 +114,9 @@ What the page can do, on that one context:
 - get a download URL for a file under the context's path.
 
 What it cannot do: reach another context, or the mind's `itx`, or append any other event, or run
-any other call. The context's own rewrite rules do not change what the socket reaches.
+any other call. The context's own rewrite rules do not change what the socket reaches. But the
+agent it sends words to has the mind's whole reach: what that agent does for the person is the
+agent's choice, so its instructions, not the socket, are the boundary there.
 
 What a person who is no member reads of other people there, in the log, the subscriptions and a
 facet's state: an id (`actor`), a name, and whether they are a guest. They read no address, not
