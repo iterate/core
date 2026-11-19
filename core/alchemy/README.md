@@ -55,21 +55,34 @@ mind starts from it, so a field that no Worker holds, such as `cloudflare.contai
 
 A mind takes each of its zones whole: nothing else may use them.
 
-Each mail to an address at a zone reaches the mind. With `"mail": { "forwardTo": "team@example.org" }`
-the boundary then forwards each mail there as it arrived, with Email Routing's own forward: its
-From is the sender's, so a reply goes to the sender. The mind has the mail first.
+Each mail to an address at a zone reaches the mind: the boundary stores it on the mind's
+`/integrations/email` (`email/received`), and only that step can fail the delivery, so Cloudflare
+delivers again. Then the mind's config gets it while the delivery is live, in its `email` method
+(iterate/sdk `IterateConfigEntrypoint`). There `forward(to)` sends the original on, as it arrived,
+with Email Routing's own forward: its From is the sender's, so a reply goes to the sender.
 
 - The address must be a verified destination address of the account's Email Routing: add it in
   the dashboard (Email Routing, Destination addresses) and confirm the link Cloudflare mails to it.
-  The config refuses an address at a zone of the mind: its mail would come back.
-- Cloudflare forwards only a mail whose sender is proven: one that is not stays in the mind alone,
-  and the delivery stands.
-- **The cost of a forward address that does not work.** While the address is not verified, is
-  removed from the account, or refuses mail, every mail to the mind fails for its sender: the mind
-  keeps the mail, the delivery fails, and the sender gets it back.
-- Each forward that fails is an `events.iterate.com/email/forward-failed` fact on the mind's
-  `/integrations/email`, with Cloudflare's words. A mail whose `X-Forwarded-To` already names the
-  address is not forwarded again (such a fact too), so an address that leads back makes no loop.
+- Cloudflare forwards only a mail whose sender is proven. `forward` throws a coded error instead of
+  forwarding: NOT_FORWARDABLE, FORWARDED_BEFORE (a mail goes to one address once, and never to an
+  address that its `X-Forwarded-To` names, so an address that leads back makes no loop), REFUSED
+  (Cloudflare's words) or EXPIRED (after the delivery, or after the hook's time).
+- Each forward is an `events.iterate.com/email/forwarded` fact. The boundary gives the hook 15 s
+  of its own time: the clock stops while Cloudflare answers a forward, which took 3 to 10 s on
+  19 Nov 2026. A forward whose answer does not come within 20 s more is the same fact with
+  `answered: false`. A hook that throws, that runs past its own time, or that the mind could not
+  be reached for, and a config with no `email` (one fact for each config commit), are
+  `events.iterate.com/email/hook-failed` facts: the delivery stands.
+
+**The older way, which goes:** with `"mail": { "forwardTo": "team@example.org" }` the boundary
+forwards each mail there itself, before the config's hook and through the same forward, so the
+hook cannot forward the same mail there again. The config refuses an address at a zone of the
+mind: its mail would come back. Each forward that fails is an
+`events.iterate.com/email/forward-failed` fact, with Cloudflare's words; a mail whose sender is not
+proven stays in the mind alone, and the delivery stands. **The cost of a forward address that does
+not work:** while the address is not verified, is removed from the account, or refuses mail, every
+mail to the mind fails for its sender: the mind keeps the mail, the delivery fails, the sender gets
+it back, and the config's hook does not run. A mind's config forwards in its own `email` instead.
 
 `mindId` is the SHA-256 of the mind's signed genesis record (`iterate/mind-identity`). The stack
 signs and checks nothing with it: every Worker gets it as config, and the auth Worker accepts the

@@ -7,6 +7,7 @@ import type {
   SecretRefresh,
   StackClientName,
 } from "./api.ts";
+import type { EmailHookArgs } from "./email.ts";
 import type { Facts } from "./facts.ts";
 import type { Lender, Principal, SignInMethod } from "./principal.ts";
 import type { Envelope, Statement } from "./signed.ts";
@@ -32,6 +33,14 @@ export interface MindTarget {
   append(path: string, events: StreamEventInput[], fromAuth?: boolean): Promise<void>;
   /** A redelivery records nothing new. */
   receiveEmail(mail: ReceivedEmail): Promise<void>;
+  /** THE CONFIG'S `email` HOOK FOR ONE DELIVERY, after `receiveEmail` took the mail (iterate/sdk
+   *  `IterateConfigEntrypoint.email`). `forward` is a capability that the boundary made for this
+   *  delivery and that dies with it: a function, which Workers RPC and capnweb each pass as a stub,
+   *  and which each hop wraps again in a function of its own (core/boundary-worker/src/mail.ts).
+   *  The mind records what the hook did: a throw, or a config with no `email`, is an
+   *  `email/hook-failed` fact, never this call's failure. It throws only when the mind could not
+   *  be reached or could not record. */
+  email(args: EmailHookArgs): Promise<void>;
   /** An act a member approved after its caller stopped waiting (./acts.ts): the mind does it now,
    *  once, and writes what came of it on the caller's context. The gate decides whether it is
    *  still to do, so a second call does nothing. */

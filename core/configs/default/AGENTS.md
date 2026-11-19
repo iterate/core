@@ -64,6 +64,11 @@ that names your task BEFORE the task, not after a failure:
 
 ## worker.ts
 
+A mind has three methods, and `worker.ts` implements each. From outside come `fetch` (every
+request) and `email` (every mail). Inside, `processEvent` adds every event; outside parties also
+append to the mind's contexts through its API at `/api`, which is why much of a mind's logic
+lives in `processEvent`.
+
 `worker.ts` extends `IterateConfigEntrypoint` from `iterate/sdk`, which holds the hosts (a
 processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/stream/processor`):
 
@@ -80,6 +85,15 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
   case says who may come: none for a public site, `this.auth.require` for members,
   `this.auth.requirePerson` for anyone signed in. A fetch route can take a hostname's requests
   first ([apps.md](apps.md)).
+- `email({ mail, forward })` runs for every mail to an address of the mind, while its delivery
+  is live. The platform has stored the mail on `/integrations/email` before, and `processEvent`
+  gets its `email/received` too: replies and agents react there. `await forward("a@b.c")`
+  sends the original on, as it arrived, to an address that a person verified as a destination
+  in the mind's Cloudflare account; it records `email/forwarded`, and throws a coded error otherwise
+  (`EmailHookArgs` in `iterate/email`). A throw here, or a hook that runs past its time limit
+  (15 s of its own: the wait for Cloudflare's answer to a forward does not count), loses no
+  mail: it is an `email/hook-failed` fact on `/integrations/email`. Await each forward: the
+  capability ends when `email` returns, and a forward that is still running then ends EXPIRED.
 - `integrations` lists the integration packages this mind hosts (`Integration` from
   `iterate/sdk`), one element each ([apps.md](apps.md)).
 

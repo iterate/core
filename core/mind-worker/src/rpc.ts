@@ -9,6 +9,7 @@ import { runApprovedAct } from "./approved-acts.ts";
 import type { Env } from "./env.ts";
 import { mindResponse } from "./http.ts";
 import { EMAIL_PATH, receiveEmail } from "./integrations/email.ts";
+import { runEmailHook } from "./integrations/email-hook.ts";
 import { LenderRoot } from "./lender-root.ts";
 import { appendAsPlatform } from "./platform-append.ts";
 
@@ -47,6 +48,30 @@ export class Mind extends WorkerEntrypoint<Env> implements MindTarget {
 
   async receiveEmail(mail: Parameters<MindTarget["receiveEmail"]>[0]) {
     await receiveEmail(this.env.FILES, contextAt(EMAIL_PATH), mail);
+  }
+
+  /** THE CONFIG'S `email` HOOK for one delivery (iterate/workers `MindTarget.email`), on the root
+   *  context as `processEvent` runs (./integrations/email-hook.ts). workerd's `WorkerEntrypoint`
+   *  types `email` as a Worker's native mail handler; this entrypoint is a named one, which never
+   *  gets that event: only the boundary calls it, over RPC. */
+  // @ts-expect-error -- MindTarget's hook, not workerd's native mail handler: see above
+  async email(args: Parameters<MindTarget["email"]>[0]) {
+    const root = contextAt("/");
+    const asPlatform = { principal: null, platform: true as const };
+    await runEmailHook(
+      {
+        deliverEmail: (hookArgs) =>
+          root.invoke("itx.builtins.cd('/').config.deliverEmail", [hookArgs], asPlatform),
+        // a send's mark is the row that `reserveSend` puts, here only after the send went
+        emailLog: {
+          sentBefore: (key) => contextAt(EMAIL_PATH).sentBefore(key),
+          markSent: (key) => contextAt(EMAIL_PATH).reserveSend(key),
+        },
+        readRoot: (expression) => root.invoke(expression, [], { principal: null }),
+        append: (events) => appendAsPlatform(EMAIL_PATH, events),
+      },
+      args,
+    );
   }
 
   async runAct(held: Parameters<MindTarget["runAct"]>[0]) {

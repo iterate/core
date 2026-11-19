@@ -224,7 +224,13 @@ test("a request stamped with another mind reaches the config worker's fetch as t
   });
   const answer = await serveHostRequest({ ctx, request, caller: stampedCallerOf(request) });
   const reached = lastRequest!;
-  const configWorker = new (class extends IterateConfigEntrypoint {})({} as never, {} as never);
+  const configWorker = new (class extends IterateConfigEntrypoint {
+    override async email() {}
+    override async processEvent() {}
+    override fetch() {
+      return new Response("Not found\n", { status: 404 });
+    }
+  })({} as never, {} as never);
   const refusal = configWorker.auth.itx(reached);
   expect({
     stamps: await stampsOf(answer),

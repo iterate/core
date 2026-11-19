@@ -120,6 +120,28 @@ test("a publication keeps the entry module's files after its probe passed and be
   });
 });
 
+test("a commit whose class lacks an abstract method is published, and its worker-updated names what it lacks, once for the commit; a commit with all three names nothing", async () => {
+  const lacking = mindOf({
+    owes: true,
+    head: "seed",
+    probed: { ...aConfig, missing: ["email", "processEvent"] },
+  });
+  lacking.deliver(lacking.state);
+  await lacking.settled();
+  expect(lacking.platformFacts.at(-1)).toMatchObject({
+    type: "events.iterate.com/mind/worker-updated",
+    idempotencyKey: "mind/publication:5",
+    payload: { commitOid: "seed", missing: ["email", "processEvent"] },
+  });
+  const whole = mindOf({ owes: true, head: "seed", probed: aConfig });
+  whole.deliver(whole.state);
+  await whole.settled();
+  expect(whole.platformFacts.at(-1)).toMatchObject({
+    type: "events.iterate.com/mind/worker-updated",
+  });
+  expect(whole.platformFacts.at(-1)!.payload).not.toHaveProperty("missing");
+});
+
 test("a publication whose probe is refused keeps nothing", async () => {
   const mind = mindOf({
     owes: true,

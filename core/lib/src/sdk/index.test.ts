@@ -1,5 +1,7 @@
 // sdk/index.test.ts — `IterateConfigEntrypoint` in Node, on the `cloudflare:workers` shim's base class.
 import { expect, test } from "vitest";
+import type { EmailHookArgs } from "../email.ts";
+import { codedError, errorCode } from "../lib.ts";
 import type { StreamEvent } from "../stream/processor.ts";
 import {
   FacetDurableObject,
@@ -36,14 +38,78 @@ test("deliverEvent hands processEvent the event and the root in one round trip, 
   ]);
 });
 
-test("the defaults: an event is ignored, without opening its context, and every request is not found", async () => {
+test("a config that lacks the three abstract methods, as the loader never type-checks: an event is taken as handled without opening its context, each request gets a page that says so, and a mail answers missing", async () => {
+  // the casts: the type system refuses such a class, and the loader is what lets one through
+  abstract class Lacking extends IterateConfigEntrypoint {}
   const log: string[] = [];
-  const entrypoint = configEntrypoint(log);
+  const entrypoint = new (Lacking as unknown as new (ctx: never, env: never) => Lacking)(
+    {} as never,
+    {} as never,
+  );
+  const ITX = {
+    get: () => {
+      log.push("get");
+      return {};
+    },
+  };
+  Object.assign(entrypoint, { env: { ITX } });
   await entrypoint.deliverEvent(event);
   expect(log).toEqual([]);
-  expect(await entrypoint.fetch(new Request("https://mind.example/"))).toMatchObject({
-    status: 404,
+  const page = await entrypoint.fetch(new Request("https://mind.example/"));
+  expect({ status: page.status, text: await page.text() }).toEqual({
+    status: 501,
+    text: "This mind's config has no fetch method, so it serves no page.\n",
   });
+  expect(await entrypoint.deliverEmail({ mail: {} as never, forward: async () => {} })).toBe(
+    "missing",
+  );
+});
+
+test("deliverEmail hands email the mail and the forward, and its throw is the caller's", async () => {
+  const forwarded: string[] = [];
+  const entrypoint = configEntrypoint([]);
+  const args = {
+    mail: { subject: "hello" } as never,
+    forward: async (to: string) => void forwarded.push(to),
+  };
+  expect(await entrypoint.deliverEmail(args)).toBe("done");
+  expect(forwarded).toEqual(["team@elsewhere.example"]);
+  await expect(
+    entrypoint.deliverEmail({ ...args, mail: { subject: "throw" } as never }),
+  ).rejects.toThrow("the hook failed");
+});
+
+test("a forward that the config calls after the delivery ended throws EXPIRED in the config's own runtime, with the runtime's words", async () => {
+  let kept: EmailHookArgs["forward"] | undefined;
+  const entrypoint = new (class extends IterateConfigEntrypoint {
+    override processEvent() {}
+    override fetch() {
+      return new Response("Not found\n", { status: 404 });
+    }
+    override async email({ forward }: EmailHookArgs) {
+      kept = forward;
+    }
+  })({} as never, {} as never);
+  const lateCallOf = async (lent: EmailHookArgs["forward"]) => {
+    await entrypoint.deliverEmail({ mail: {} as never, forward: lent });
+    return await kept!("team@elsewhere.example").catch((error: unknown) => error);
+  };
+  // the lent stub is gone once the mind's call has returned: workerd throws at the call itself
+  const disposed = await lateCallOf(() => {
+    throw new Error("RPC stub used after being disposed.");
+  });
+  expect(errorCode(disposed)).toBe("EXPIRED");
+  expect((disposed as Error).message).toContain("RPC stub used after being disposed.");
+  // the boundary's invocation ended under the call: a rejection
+  const lost = await lateCallOf(() => Promise.reject(new Error("Network connection lost.")));
+  expect(errorCode(lost)).toBe("EXPIRED");
+  // a refusal with a code of its own, and any other failure, stay as they are
+  const refused = await lateCallOf(() =>
+    Promise.reject(codedError("REFUSED", "destination address not verified")),
+  );
+  expect(errorCode(refused)).toBe("REFUSED");
+  const other = await lateCallOf(() => Promise.reject(new Error("something else")));
+  expect(errorCode(other)).toBeUndefined();
 });
 
 test("an event another mind signed reaches processMindEvent alone, with that mind's domain", async () => {
@@ -51,6 +117,10 @@ test("an event another mind signed reaches processMindEvent alone, with that min
   const entrypoint = new (class extends IterateConfigEntrypoint {
     override processEvent({ event }: IterateConfigProcessEventArgs) {
       seen.push(`processEvent ${event.path}`);
+    }
+    override async email() {}
+    override fetch() {
+      return new Response("Not found\n", { status: 404 });
     }
     override processMindEvent({ event, mind }: IterateConfigProcessEventArgs & { mind: string }) {
       seen.push(`processMindEvent ${mind} ${event.path}`);
@@ -184,6 +254,13 @@ function configEntrypoint(
   const entrypoint = new (class extends IterateConfigEntrypoint {
     override processEvent(args: IterateConfigProcessEventArgs) {
       return handler?.(args);
+    }
+    override async email({ mail, forward }: EmailHookArgs) {
+      if (mail.subject === "throw") throw new Error("the hook failed");
+      await forward("team@elsewhere.example");
+    }
+    override fetch() {
+      return new Response("Not found\n", { status: 404 });
     }
     async appendThroughGetItx(path: string) {
       using itx = this.getItx();

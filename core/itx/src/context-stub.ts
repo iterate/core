@@ -175,6 +175,7 @@ export function reachableContext(
     read: (...page) => released(stub().read(...page)),
     reserveSend: (key) => released(stub().reserveSend(key)),
     releaseSend: (key) => stub().releaseSend(key),
+    sentBefore: (key) => stub().sentBefore(key),
     invoke: (call, args = [], caller = { principal: null }) =>
       hop.invoke(normalizedItxExpression(call), args, caller),
   };

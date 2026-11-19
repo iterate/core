@@ -64,6 +64,10 @@ type ErrorCode =
   | "GONE" // a target that says it is gone for good (an HTTP webhook's 410): the delivery halts its row, which an operator's resume reopens
   | "LOOP_LIMIT" // code reacting to code too many hand-offs deep (core/itx/src/cause.ts): the act is refused for good, never retried
   | "UNAVAILABLE" // the platform failed the call, not the caller: `data` is { kind, retryAfterMs } — a deploy's reset ("deploy-reset"), a lost connection ("disconnected") or an overload ("overloaded"); an idempotent call may be asked again after retryAfterMs, and an HTTP edge answers it 503 with that Retry-After
+  | "NOT_FORWARDABLE" // a received mail's forward (iterate/email `EmailHookArgs`): Cloudflare forwards no mail whose sender it did not prove
+  | "FORWARDED_BEFORE" // a received mail's forward: this mail went to that address before, or its X-Forwarded-To names it
+  | "REFUSED" // a received mail's forward: Cloudflare refused it for another reason, its words in the message (an address that is no verified destination)
+  | "EXPIRED" // a received mail's forward after its delivery ended: the original is no longer there to forward
   | "PERMANENT_FAILURE"; // a failure no repeat can change (a subscriber's poison event): a delivery halts on it at once instead of climbing its retry ladder (core/itx/src/stream/subscription-delivery.ts); a processor's work in flight that died with its host five times, whose revive is refused and recorded as `itx/work-failed` (stream/processor.ts)
 // (There is no separate boundary-validation library: the append method's own runtime guards
 // throw plain Errors; a client is JUST capnweb, so malformed args surface as ordinary errors.)

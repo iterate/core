@@ -17,9 +17,10 @@ export { Door } from "./rpc.ts";
 
 export default {
   fetch: (request, env, ctx) => boundaryResponse(request, env, ctx, mindTransportOf(env)),
-  // A failure throws, so Cloudflare delivers the mail again: a mind that runs elsewhere and is not
-  // connected is such a failure. The fact's idempotency key keeps a retry after a committed append
-  // from landing twice.
+  // The mind stores the mail, then its config's `email` hook runs (./mail.ts says the order). A
+  // failure to store throws, so Cloudflare delivers the mail again: a mind that runs elsewhere and
+  // is not connected is such a failure. The fact's idempotency key keeps a retry after a committed
+  // append from landing twice. Nothing the hook does fails the delivery.
   email: (message, env) => receivedMail(message, env, mindTransportOf(env)),
   // The stack's one queue of Cloudflare events (./cloudflare-events.ts): a row for each kind. An
   // event for a mind that is not connected is retried until it is, or the consumer's retries run

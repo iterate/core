@@ -42,6 +42,8 @@ test("a request's fetch on the SDK's entrypoint leaves no newest cause behind, t
   const env = { ITX: { get: () => ({ append() {}, [Symbol.dispose]() {} }) } };
   const plain = Object.assign(new Plain({} as never, env), { env });
   const app = new (class extends IterateConfigEntrypoint {
+    override async email() {}
+    override async processEvent() {}
     override async fetch(_request: Request) {
       return new Response(JSON.stringify(currentCause()));
     }

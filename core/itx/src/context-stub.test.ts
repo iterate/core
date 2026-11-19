@@ -54,6 +54,7 @@ test("what a context answers to append, read and the send reservations is copied
         held("read", { events: [{ offset: 3 }], scannedThroughOffset: 3, atHead: true }),
       reserveSend: async () => held("reserveSend", { reserved: true }),
       releaseSend: async () => undefined,
+      sentBefore: async () => true,
     }),
   };
   const context = reachableContext(namespace as never, DurableObjectNameCodec.address("/"), "test");
@@ -67,6 +68,7 @@ test("what a context answers to append, read and the send reservations is copied
   });
   expect(await context.reserveSend("k")).toEqual({ reserved: true });
   expect(await context.releaseSend("k")).toBeUndefined();
+  expect(await context.sentBefore("k")).toBe(true);
   expect(released).toEqual(["append", "read", "reserveSend"]);
 });
 

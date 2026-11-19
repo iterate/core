@@ -73,7 +73,15 @@ test("every member that the platform's handle on the config or the entrypoint's 
   };
   walk(new InvokeHandle(() => null));
   // an entrypoint with no methods of its own: its fields (`auth`, `getItx`, …) and its classes'
-  walk(new (class extends IterateConfigEntrypoint {})({} as never, {} as never));
+  walk(
+    new (class extends IterateConfigEntrypoint {
+      override async email() {}
+      override async processEvent() {}
+      override fetch() {
+        return new Response("Not found\n", { status: 404 });
+      }
+    })({} as never, {} as never),
+  );
   const callable = [...declared].filter((name) => IntegrationCall.safeParse({ name }).success);
   expect(callable).toEqual([]);
   // the walk found the members that matter

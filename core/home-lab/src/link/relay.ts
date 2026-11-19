@@ -1,4 +1,5 @@
 import { RpcTarget } from "cloudflare:workers";
+import type { MindTarget } from "iterate/workers";
 
 /** Forwards every method `Class`'s base lacks. Never `then` (an instance is no thenable) nor `dup`:
  *  capnweb calls `dup` on a target passed as a parameter, and workerd refuses to send it. */
@@ -22,10 +23,21 @@ export function forwardEveryMethod<Instance extends object>(
   );
 }
 
-export function relayTo(target: () => object) {
-  class Relay extends RpcTarget {}
+/** The mind, for the boundary: every method of `MindTarget` goes on to the local Mind Worker as it
+ *  came. */
+export function relayTo(target: () => MindTarget) {
+  class Relay extends RpcTarget {
+    /** The config's `email` hook (iterate/workers `MindTarget.email`). capnweb hands `forward` in as
+     *  a stub of its own, which lasts while this call does and calls back over the link to the
+     *  boundary. It never goes into Workers RPC as it is: a function of this isolate's calls it, and
+     *  Workers RPC hands the local Mind Worker a stub of that function. */
+    email({ mail, forward }: Parameters<MindTarget["email"]>[0]) {
+      return target().email({ mail, forward: (to) => forward(to) });
+    }
+  }
+  // the cast: a Workers RPC stub answers each of the mind's methods by name
   forwardEveryMethod(Relay, (_relay, method, args) =>
-    (target() as Record<string, (...args: unknown[]) => unknown>)[method]!(...args),
+    (target() as unknown as Record<string, (...args: unknown[]) => unknown>)[method]!(...args),
   );
   return new Relay();
 }

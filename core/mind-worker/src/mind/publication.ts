@@ -25,7 +25,11 @@ export type MindPublisher = {
 export async function probedConfig(
   files: RepoFiles,
   publisher: Pick<MindPublisher, "identityOf" | "probe" | "keepModules">,
-): Promise<{ mainModule: string; modules: WorkerManifest["modules"] }> {
+): Promise<{
+  mainModule: string;
+  modules: WorkerManifest["modules"];
+  missing: ConfigMethod[];
+}> {
   const { entry } = readPackage(files, "the config repo");
   if (Object.hasOwn(files, PROBE_MODULE))
     throw new Error(`${PROBE_MODULE} is the platform's publication probe: rename that file`);
@@ -48,6 +52,7 @@ export async function probedConfig(
   await publisher.keepModules(files, entry);
   return {
     mainModule: entry,
+    missing: answer.missing,
     modules: Object.fromEntries(
       identities.map(([module, identity]) => [
         module,
@@ -116,10 +121,17 @@ export function configPointer(
 
 const PROBE_MODULE = ".iterate-publication-probe.js";
 
+/** The abstract methods of `IterateConfigEntrypoint` (iterate/sdk). The loader never type-checks,
+ *  so a commit may lack one: it is published, and `mind/worker-updated` names what it lacks, once
+ *  for the commit. */
+const ConfigMethod = z.enum(["fetch", "processEvent", "email"]);
+type ConfigMethod = z.infer<typeof ConfigMethod>;
+
 const ProbeAnswer = z.object({
   configEntrypoint: z.boolean(),
   constructError: z.string().nullable(),
   classes: z.record(z.string(), z.array(z.string())),
+  missing: z.array(ConfigMethod).default([]),
 });
 
 // The modules a facet's class may live in: those at the root, and each app's backend
@@ -151,8 +163,10 @@ function probeModule(entry: string, modules: string[]): string {
     `    let constructError = null;`,
     `    if (configEntrypoint) try { new Entry(this.ctx, this.env); } catch (error) { constructError = messageOf(error); }`,
     `    const classes = { ${JSON.stringify(entry)}: classesOf(main) };`,
+    // On the prototype, as Workers RPC and `deliverEvent` reach a method: an arrow field is none.
+    `    const missing = configEntrypoint ? ${JSON.stringify(ConfigMethod.options)}.filter((name) => typeof Entry.prototype[name] !== "function") : [];`,
     ...guarded,
-    `    return { configEntrypoint, constructError, classes };`,
+    `    return { configEntrypoint, constructError, classes, missing };`,
     `  }`,
     `}`,
     ``,

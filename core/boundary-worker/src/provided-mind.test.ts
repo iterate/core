@@ -18,10 +18,12 @@ import {
   MIND_TAKEN_OVER_CLOSE_CODE,
   type MindTarget,
 } from "iterate/workers";
+import { codedError } from "iterate/lib";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { boundaryResponse } from "./http.ts";
+import { receivedMail } from "./mail.ts";
 import { mindTransportOf } from "./mind-transport.ts";
-import { PROVIDED_MIND_DIAL_HEADER, ProvidedMind } from "./provided-mind.ts";
+import { KEPT_FACTS_MAX, PROVIDED_MIND_DIAL_HEADER, ProvidedMind } from "./provided-mind.ts";
 
 const NOT_CONNECTED = "This mind runs elsewhere and is not connected right now.\n";
 const VISITOR = "https://example.com/";
@@ -38,6 +40,7 @@ test("with no link, a request is answered 503 and every other call fails as unav
     boundary.append("/", []),
     boundary.runAct({ digest: "d", text: "t" }),
     boundary.receiveEmail({ events: [], files: [] }),
+    boundary.email({ mail: {} as never, forward: async () => {} }),
   ])
     await expect(call).rejects.toMatchObject({
       code: "UNAVAILABLE",
@@ -68,6 +71,40 @@ test("a mind that hands in its connect function gets every request, mail and act
   // the door that `connect` was called with, kept with `dup()`, is the boundary's own
   expect(await home.door().isMember("ada@example.com")).toBe(true);
   expect(door).toMatchObject({ props: [{ provided: true }] });
+});
+
+test("the config's email hook reaches a mind at home with its forward, and the forward calls back across the link to the boundary's invocation", async () => {
+  const { boundary, dial } = stack();
+  const home = await dial();
+  const mind = pretendMind("home");
+  await home.handIn(mind);
+  const forwarded: string[] = [];
+  const forward = async (to: string) => {
+    if (to === "refused@elsewhere.example")
+      throw Object.assign(new Error("destination address not verified"), { code: "REFUSED" });
+    forwarded.push(to);
+  };
+  await boundary.email({
+    mail: { subject: "a@elsewhere.example refused@elsewhere.example" } as never,
+    forward,
+  });
+  expect(forwarded).toEqual(["a@elsewhere.example"]);
+  // a refusal crosses back with its words
+  expect(mind).toMatchObject({
+    calls: [
+      [
+        "email",
+        "a@elsewhere.example refused@elsewhere.example",
+        ["sent", "Error: destination address not verified"],
+      ],
+    ],
+  });
+  // The forward is the call's: capnweb lets go of it when the call returns, so a hook that kept
+  // it reaches nothing. On Cloudflare the boundary's own forward also says EXPIRED by then.
+  await expect(async () => mind.keptForward!("late@elsewhere.example")).rejects.toThrow(
+    "This RpcImportHook was already disposed.",
+  );
+  expect(forwarded).toEqual(["a@elsewhere.example"]);
 });
 
 test("the dial reaches the object with the boundary's mark and without a caller's stamps: its session authenticates there", async () => {
@@ -195,7 +232,7 @@ test("an answer that is no mind replaces nothing: the mind that is connected sta
     careless.session.provideExternalMind(() => ({}) as unknown as MindTarget),
   ).rejects.toMatchObject({
     code: "INVALID_INPUT",
-    message: expect.stringContaining("connect(door) answers the mind"),
+    message: expect.stringContaining("connect answers the mind"),
   });
   expect(await (await boundary.fetch(new Request(VISITOR))).text()).toBe(
     `healthy answered ${VISITOR}`,
@@ -290,6 +327,288 @@ test("a deploy without the binding of its topology says which one is missing", (
   );
 });
 
+test("the link breaks during the config's hook: its hook-failed fact is kept, and appended once when the mind is back, marked late", async () => {
+  const { boundary, dial, storage } = stack();
+  const home = await dial();
+  const away = pretendMind("home", { emailHangs: true });
+  await home.handIn(away);
+  const delivery = receivedMail(mailMessage(), { AUTH: { isMember: async () => false } }, boundary);
+  // the hook runs
+  await vi.waitFor(() => expect(away.keptForward).toBeDefined());
+  home.socket.close(1001, "the home lab stops");
+  await delivery;
+  expect(keptTypes(storage)).toEqual(["events.iterate.com/email/hook-failed"]);
+
+  const back = pretendMind("back");
+  await (await dial()).handIn(back);
+  await vi.waitFor(() => expect(keptTypes(storage)).toEqual([]));
+  expect(back).toMatchObject({
+    calls: [
+      [
+        "append",
+        "/integrations/email",
+        [
+          {
+            type: "events.iterate.com/email/hook-failed",
+            idempotencyKey: expect.stringMatching(/^email\/hook-failed:unreachable:\/email\//),
+            payload: {
+              why: "unreachable",
+              error: expect.any(String),
+              raw: expect.stringMatching(/^\/email\//),
+              recordedLate: { happenedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) },
+            },
+          },
+        ],
+      ],
+    ],
+  });
+  // a later hand-in finds nothing more to append
+  const again = pretendMind("again");
+  await (await dial()).handIn(again);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(again).toMatchObject({ calls: [] });
+});
+
+test("facts kept while the mind is away are appended in the order they happened", async () => {
+  const { boundary, dial } = stack();
+  await boundary.appendOrKeep!("/integrations/email", fact("first"));
+  await boundary.appendOrKeep!("/integrations/email", fact("second"));
+  const back = pretendMind("back");
+  await (await dial()).handIn(back);
+  await vi.waitFor(() => expect([...back.log.keys()]).toEqual(["first", "second"]));
+  expect(back.calls.map((call) => (call[2] as Fact[])[0]!.idempotencyKey)).toEqual([
+    "first",
+    "second",
+  ]);
+});
+
+test("past the bound the oldest kept fact is dropped, and the next fact appended says how many were", async () => {
+  const { boundary, dial, storage } = stack();
+  for (let index = 0; index <= KEPT_FACTS_MAX; index += 1)
+    await boundary.appendOrKeep!("/integrations/email", fact(`fact-${index}`));
+  expect(keptTypes(storage)).toHaveLength(KEPT_FACTS_MAX);
+  const back = pretendMind("back");
+  await (await dial()).handIn(back);
+  await vi.waitFor(() => expect(back.log).toMatchObject({ size: KEPT_FACTS_MAX }));
+  expect(back.log.has("fact-0")).toBe(false);
+  const [oldest, next] = back.calls.map((call) => (call[2] as Fact[])[0]!);
+  expect(oldest).toMatchObject({
+    idempotencyKey: "fact-1",
+    payload: { recordedLate: { droppedBefore: 1 } },
+  });
+  expect(next!.payload).not.toHaveProperty("recordedLate.droppedBefore");
+});
+
+test("a fact that reached the mind before its link broke is not written twice", async () => {
+  const { boundary, dial, storage } = stack();
+  const log = new Map<string, unknown>();
+  const home = await dial();
+  await home.handIn(pretendMind("home", { log, appendHangs: true }));
+  const appended = boundary.appendOrKeep!("/integrations/email", fact("forwarded"));
+  await vi.waitFor(() => expect(log.has("forwarded")).toBe(true));
+  home.socket.close(1001, "the home lab stops");
+  await appended;
+  expect(keptTypes(storage)).toHaveLength(1);
+
+  const back = pretendMind("back", { log });
+  await (await dial()).handIn(back);
+  await vi.waitFor(() => expect(keptTypes(storage)).toEqual([]));
+  // the late copy was refused for its key, and the mind's log holds the first one alone
+  expect(back.calls).toHaveLength(1);
+  expect([...log.entries()]).toEqual([["forwarded", { to: "a@elsewhere.example" }]]);
+});
+
+test("a kept fact that the mind refuses is dropped and does not hold back the next", async () => {
+  const { boundary, dial, storage } = stack();
+  await boundary.appendOrKeep!("/integrations/email", fact("refused"));
+  await boundary.appendOrKeep!("/integrations/email", fact("taken"));
+  const back = pretendMind("back", {
+    refuse: ({ idempotencyKey }) =>
+      idempotencyKey === "refused" ? codedError("INVALID_INPUT", "not this one") : undefined,
+  });
+  await (await dial()).handIn(back);
+  await vi.waitFor(() => expect([...back.log.keys()]).toEqual(["taken"]));
+  expect(keptTypes(storage)).toEqual([]);
+});
+
+test.for([
+  [
+    "a platform failure",
+    () =>
+      codedError("UNAVAILABLE", "the mind's log is resetting", {
+        kind: "disconnected",
+        retryAfterMs: 1_000,
+      }),
+  ],
+  ["an unclassified failure", () => new Error("the mind's process ran out of memory")],
+] as const)(
+  "a kept fact that meets %s in a drain stays, with every one after it, for the next drain",
+  async ([, failure]) => {
+    const { boundary, dial, storage } = stack();
+    await boundary.appendOrKeep!("/integrations/email", fact("first"));
+    await boundary.appendOrKeep!("/integrations/email", fact("second"));
+    const failing = pretendMind("failing", { refuse: failure });
+    await (await dial()).handIn(failing);
+    await vi.waitFor(() => expect(failing.calls).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(failing.calls).toHaveLength(1);
+    expect(keptTypes(storage)).toHaveLength(2);
+    const back = pretendMind("back");
+    await (await dial()).handIn(back);
+    await vi.waitFor(() => expect([...back.log.keys()]).toEqual(["first", "second"]));
+  },
+);
+
+test("one drain at a time: keeps while a drain waits queue no other, and a drain that fails is not run again for them", async () => {
+  const { boundary, dial, storage } = stack();
+  await boundary.appendOrKeep!("/integrations/email", fact("first"));
+  let release!: () => void;
+  const unavailable = () =>
+    codedError("UNAVAILABLE", "the mind's log is resetting", {
+      kind: "overloaded",
+      retryAfterMs: 1_000,
+    });
+  // every append of a kept fact waits, then fails; every live append fails at once
+  const replay = new Promise<void>((_resolve, reject) => (release = () => reject(unavailable())));
+  replay.catch(() => {});
+  const home = pretendMind("home", {
+    waits: (fact) => (fact.payload.recordedLate ? replay : undefined),
+    refuse: () => unavailable(),
+  });
+  await (await dial()).handIn(home);
+  await vi.waitFor(() => expect(home.calls).toHaveLength(1));
+  for (const key of ["second", "third", "fourth"])
+    await boundary.appendOrKeep!("/integrations/email", fact(key));
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const replays = home.calls.filter(
+    (call) => (call[2] as Fact[])[0]!.payload.recordedLate !== undefined,
+  );
+  expect(replays).toHaveLength(1);
+  expect(keptTypes(storage)).toHaveLength(4);
+});
+
+test("nothing is kept for a mind that is connected: a fact it takes is appended once, and one it refuses throws", async () => {
+  const { boundary, dial, storage } = stack();
+  const home = pretendMind("home", {
+    refuse: ({ idempotencyKey }) =>
+      idempotencyKey === "refused" ? codedError("INVALID_INPUT", "not this one") : undefined,
+  });
+  await (await dial()).handIn(home);
+  await boundary.appendOrKeep!("/integrations/email", fact("taken"));
+  await expect(
+    boundary.appendOrKeep!("/integrations/email", fact("refused")),
+  ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  expect(keptTypes(storage)).toEqual([]);
+  expect([...home.log.keys()]).toEqual(["taken"]);
+});
+
+test.for([
+  [
+    "a platform failure",
+    () =>
+      codedError("UNAVAILABLE", "the mind's log is resetting", {
+        kind: "deploy-reset",
+        retryAfterMs: 1_000,
+      }),
+  ],
+  ["an unclassified failure", () => new Error("the mind's process ran out of memory")],
+] as const)(
+  "a live append that meets %s, while its link stays, is kept and not thrown, not tried again on that link at once, and appended after the next live append lands",
+  async ([, failure]) => {
+    const { boundary, dial, storage } = stack();
+    let failures = 1;
+    const home = pretendMind("home", {
+      refuse: () => (failures-- > 0 ? failure() : undefined),
+    });
+    await (await dial()).handIn(home);
+    await expect(
+      boundary.appendOrKeep!("/integrations/email", fact("forwarded")),
+    ).resolves.toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(home.calls).toHaveLength(1);
+    expect(keptTypes(storage)).toHaveLength(1);
+    await boundary.appendOrKeep!("/integrations/email", fact("next"));
+    await vi.waitFor(() => expect([...home.log.keys()]).toEqual(["next", "forwarded"]));
+    await vi.waitFor(() => expect(keptTypes(storage)).toEqual([]));
+  },
+);
+
+test("a newer link's hand-in while an older link's replay is pending drains once more when that replay fails: the kept facts reach the newer link with no further trigger", async () => {
+  const { boundary, dial, storage } = stack();
+  await boundary.appendOrKeep!("/integrations/email", fact("kept"));
+  let release!: () => void;
+  const replay = new Promise<void>(
+    (_resolve, reject) => (release = () => reject(new Error("the older link broke"))),
+  );
+  replay.catch(() => {});
+  const older = pretendMind("older", { waits: () => replay });
+  await (await dial()).handIn(older);
+  await vi.waitFor(() => expect(older.calls).toHaveLength(1));
+  const newer = pretendMind("newer");
+  await (await dial()).handIn(newer);
+  release();
+  await vi.waitFor(() => expect([...newer.log.keys()]).toEqual(["kept"]));
+  await vi.waitFor(() => expect(keptTypes(storage)).toEqual([]));
+});
+
+test("an append to an older link that fails after a newer link's hand-in is kept, and appended to the newer link without another hand-in", async () => {
+  const { boundary, dial, storage } = stack();
+  const older = pretendMind("older", { appendHangs: true });
+  await (await dial()).handIn(older);
+  const appended = boundary.appendOrKeep!("/integrations/email", fact("forwarded"));
+  await vi.waitFor(() => expect(older.log.has("forwarded")).toBe(true));
+  // the newer hand-in drains what is kept (nothing yet), then the older link's call fails
+  const newer = pretendMind("newer");
+  await (await dial()).handIn(newer);
+  await appended;
+  await vi.waitFor(() => expect([...newer.log.keys()]).toEqual(["forwarded"]));
+  await vi.waitFor(() => expect(keptTypes(storage)).toEqual([]));
+});
+
+/** One fact of a mail, by its key. */
+type Fact = { type: string; idempotencyKey?: string; payload: Record<string, unknown> };
+const fact = (idempotencyKey: string) => ({
+  type: "events.iterate.com/email/forwarded",
+  idempotencyKey,
+  payload: { to: "a@elsewhere.example" },
+});
+
+/** The type of each fact that the object keeps, in its order. */
+function keptTypes(storage: ReturnType<typeof fakeKv>) {
+  return [...storage.list({ prefix: "kept-fact:" })].map(
+    ([, kept]) => (kept as { fact: Fact }).fact.type,
+  );
+}
+
+/** A Durable Object's synchronous KV, ordered as SQLite's. */
+function fakeKv() {
+  const store = new Map<string, unknown>();
+  return {
+    get: (key: string) => structuredClone(store.get(key)),
+    put: (key: string, value: unknown) => void store.set(key, structuredClone(value)),
+    delete: (key: string) => store.delete(key),
+    list: ({ prefix = "", limit = Infinity }: { prefix?: string; limit?: number } = {}) =>
+      [...store.entries()]
+        .filter(([key]) => key.startsWith(prefix))
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .slice(0, limit)
+        .map(([key, value]): [string, unknown] => [key, structuredClone(value)]),
+  };
+}
+
+/** One mail as Cloudflare hands it to the boundary. */
+function mailMessage() {
+  return {
+    from: "ada@sender.example",
+    to: "hello@example.com",
+    raw: new TextEncoder().encode("From: ada@sender.example\r\nSubject: hello\r\n\r\nhi\r\n")
+      .buffer,
+    headers: new Headers(),
+    forward: async () => {},
+  } as unknown as ForwardableEmailMessage;
+}
+
 const CONFIG = {
   mindId: "a".repeat(64),
   controlPlaneHostname: "iterate.example.com",
@@ -327,6 +646,7 @@ function stack({ homeLabTokenEndsIn = 60_000 } = {}) {
     },
   };
   const reachedObject: Record<string, string>[] = [];
+  const storage = fakeKv();
   // as the auth Worker answers: a token is live for one audience
   const whoIs: AuthService["whoIs"] = async (token, resource) => {
     const audience = { [HOME_LAB]: "/api/provide-connect", [MEMBER]: "/api" }[token];
@@ -349,6 +669,7 @@ function stack({ homeLabTokenEndsIn = 60_000 } = {}) {
           return door;
         },
       },
+      storage: { kv: storage },
     } as unknown as DurableObjectState,
     bindings as unknown as ConstructorParameters<typeof ProvidedMind>[1],
   );
@@ -358,7 +679,7 @@ function stack({ homeLabTokenEndsIn = 60_000 } = {}) {
       // the object's own methods, called on the object, as a Durable Object's stub calls them
       getByName: (): Pick<
         ProvidedMind,
-        "fetch" | "api" | "append" | "runAct" | "receiveEmail"
+        "fetch" | "api" | "append" | "runAct" | "receiveEmail" | "email" | "appendOrKeep"
       > => ({
         fetch: (request) => {
           if (request.headers.has(PROVIDED_MIND_DIAL_HEADER))
@@ -369,6 +690,8 @@ function stack({ homeLabTokenEndsIn = 60_000 } = {}) {
         append: (...call) => object.append(...call),
         runAct: (held) => object.runAct(held),
         receiveEmail: (mail) => object.receiveEmail(mail),
+        email: (args) => object.email(args),
+        appendOrKeep: (path, fact) => object.appendOrKeep(path, fact),
       }),
     },
   } as unknown as Parameters<typeof mindTransportOf>[0];
@@ -380,6 +703,8 @@ function stack({ homeLabTokenEndsIn = 60_000 } = {}) {
     boundary,
     door,
     reachedObject,
+    /** The object's storage: the facts it keeps. */
+    storage,
     /** A session whose dial says that it hands in a mind, authenticated with `token` in the
      *  call, as a home lab's launcher does. */
     async dial(more: Record<string, string> = {}, token = HOME_LAB) {
@@ -412,7 +737,27 @@ function stack({ homeLabTokenEndsIn = 60_000 } = {}) {
 
 /** A mind that says what it was asked. `marks`: the dial's mark on each request it got. Its own
  *  API for a session says who the session is. */
-function pretendMind(name: string) {
+function pretendMind(
+  name: string,
+  {
+    log = new Map<string, unknown>(),
+    refuse,
+    appendHangs = false,
+    emailHangs = false,
+    waits,
+  }: {
+    /** The mind's log: each fact's payload by its idempotency key, as the mind's stream keeps it. */
+    log?: Map<string, unknown>;
+    /** The mind's refusal of a fact, if any. */
+    refuse?: (fact: Fact) => Error | undefined;
+    /** What the mind's append of a fact answers instead, before anything else, if anything. */
+    waits?: (fact: Fact) => Promise<void> | undefined;
+    /** The mind takes each fact and never answers: its link breaks under the call. */
+    appendHangs?: boolean;
+    /** The config's hook never ends. */
+    emailHangs?: boolean;
+  } = {},
+) {
   class Api extends RpcTarget {
     readonly #who: ApiCaller;
     constructor(who: ApiCaller) {
@@ -429,6 +774,7 @@ function pretendMind(name: string) {
   }
   class Mind extends RpcTarget {
     calls: unknown[][] = [];
+    log = log;
     marks: (string | null)[] = [];
     sessions: ApiCaller[] = [];
     fetch(request: Request) {
@@ -444,14 +790,51 @@ function pretendMind(name: string) {
       this.sessions.push(who);
       return new Api(who);
     }
+    // As the mind's stream: a key it has, with another payload, is IDEMPOTENCY_CONFLICT.
     append(...call: unknown[]) {
       this.calls.push(["append", ...call]);
+      for (const fact of call[1] as Fact[]) {
+        const waiting = waits?.(fact);
+        if (waiting) return waiting;
+        const refusal = refuse?.(fact);
+        if (refusal) throw refusal;
+        if (!fact.idempotencyKey) continue;
+        const before = log.get(fact.idempotencyKey);
+        if (before !== undefined && JSON.stringify(before) !== JSON.stringify(fact.payload))
+          throw codedError("IDEMPOTENCY_CONFLICT", `${fact.idempotencyKey} is on the log already`);
+        log.set(fact.idempotencyKey, fact.payload);
+      }
+      if (appendHangs) return new Promise(() => {});
     }
     runAct(...call: unknown[]) {
       this.calls.push(["runAct", ...call]);
     }
     receiveEmail(...call: unknown[]) {
       this.calls.push(["receiveEmail", ...call]);
+    }
+    /** The forward of the delivery it was last handed, kept past its call as a careless config
+     *  would keep it. */
+    keptForward?: (to: string) => Promise<void>;
+    // The config's hook as the mind runs it: a forward to each address the subject names, and
+    // what each answered.
+    async email({
+      mail,
+      forward,
+    }: {
+      mail: { subject: string };
+      forward(to: string): Promise<void>;
+    }) {
+      this.keptForward = forward;
+      if (emailHangs) return new Promise(() => {});
+      const answers: unknown[] = [];
+      for (const to of mail.subject.split(" "))
+        answers.push(
+          await forward(to).then(
+            () => "sent",
+            (error: unknown) => String(error),
+          ),
+        );
+      this.calls.push(["email", mail.subject, answers]);
     }
   }
   return new Mind();

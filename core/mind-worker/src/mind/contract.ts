@@ -104,6 +104,11 @@ export const MindContract = defineProcessorContract({
         commitOid: z.string().min(1),
         generation: z.number().int().positive(),
         modules: WorkerManifest.shape.modules,
+        /** The abstract methods of `IterateConfigEntrypoint` that the main module's class lacks,
+         *  as the probe read its prototype; absent when it has all three. Published all the
+         *  same: a request then gets a 501 page, an event is taken as handled, and a mail is kept
+         *  and not passed on (`email/hook-failed` `missing`). */
+        missing: z.array(z.enum(["fetch", "processEvent", "email"])).optional(),
       }),
     },
     "events.iterate.com/mind/worker-update-failed": {

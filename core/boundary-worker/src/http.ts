@@ -21,11 +21,21 @@ import { confinedAnswer, httpsRedirect, stampedRequest } from "./stamp.ts";
 /** The mind, as the boundary reaches it. */
 export type MindTransport = Pick<
   MindTarget,
-  "fetch" | "append" | "runAct" | "receiveEmail" | "api"
+  "fetch" | "append" | "runAct" | "receiveEmail" | "email" | "api"
 > & {
   /** Only where the mind runs elsewhere: the answer to its dial, a session of the API that ends
    *  in the object which holds the mind's link (./provided-mind.ts). */
   link?(dial: Request): Promise<Response>;
+  /** Only where the mind runs elsewhere: one platform fact, appended now, or kept and appended
+   *  when the mind is back (./provided-mind.ts `appendOrKeep`). */
+  appendOrKeep?(path: string, fact: PlatformFact): Promise<void>;
+};
+
+/** One platform fact for the mind's log, with the key that makes it one. */
+export type PlatformFact = {
+  type: string;
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
 };
 
 /** THE BOUNDARY'S ONE RULE: a request on the mind's control-plane hostname is the control plane's

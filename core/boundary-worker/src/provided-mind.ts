@@ -23,9 +23,22 @@
 // this object and for the boundary's own invocation). From that moment the session's mind is no
 // link, its door refuses every call (./provided-door.ts), and its capnweb session reads no
 // further message.
+//
+// THE FACTS THAT A MIND AWAY COULD NOT TAKE. A fact of a mail (./mail.ts: `email/forwarded`,
+// `email/forward-failed`, `email/hook-failed`) that the mind does not take, for any reason but its
+// own typed refusal (not connected, a link that breaks under the call, a platform failure), is
+// kept in this object's storage (`appendOrKeep`), and appended in its order by ONE DRAIN at a time
+// (`#drain`), after a hand-in and after a live append that landed. A ROW GOES ONLY WHEN ITS APPEND
+// LANDED OR THE MIND REFUSED IT BY A TYPED CODE: any other answer stops the drain, and every row
+// stays. At most KEPT_FACTS_MAX are kept: a fact past the bound
+// drops the oldest, and the next fact appended says how many were dropped. Each is appended with
+// its own idempotency key, so a fact that reached the mind before the link broke is refused as
+// IDEMPOTENCY_CONFLICT (the late payload differs) and not written twice. Its payload's
+// `recordedLate` says when it happened (iterate/email).
 import { DurableObject } from "cloudflare:workers";
 import { RpcStub } from "capnweb";
-import { codedError } from "iterate/lib";
+import { codedError, errorCode } from "iterate/lib";
+import { failureKind } from "iterate/platform-retry";
 import type { Door, MindTarget } from "iterate/workers";
 import { boundaryConfigOf } from "./config.ts";
 import {
@@ -35,8 +48,19 @@ import {
   SESSION_ENDS,
 } from "./control-plane-api.ts";
 import type { DoorEnv } from "./env.ts";
+import type { PlatformFact } from "./http.ts";
 import { ProvidedDoor } from "./provided-door.ts";
 import type { DoorProps } from "./rpc.ts";
+
+/** How many facts this object keeps for a mind that is away. A mail makes at most a few, so 100
+ *  is a long absence, and 100 small rows. */
+export const KEPT_FACTS_MAX = 100;
+/** Each kept fact's key: the prefix and its number, padded so that the keys list in order. */
+const KEPT_FACT_PREFIX = "kept-fact:";
+/** The next fact's number, and how many were dropped at the bound and not said yet. */
+const KEPT_FACTS_STATE = "kept-facts";
+type KeptFactsState = { next: number; dropped: number };
+type KeptFact = { path: string; fact: PlatformFact; happenedAt: string };
 
 /** THE BOUNDARY'S MARK ON THE DIAL. ./mind-transport.ts alone sets it, and removes it from every
  *  other request that it sends to this object. A request with the mark is a session of the API
@@ -53,6 +77,9 @@ export class ProvidedMind extends DurableObject<DoorEnv> {
    *  an earlier call than the link's is late, and never replaces the link. */
   #handIns = 0;
   #linkOrder = 0;
+  /** A drain runs, and one was asked for while it ran. */
+  #draining = false;
+  #drainAgain = false;
 
   override async fetch(request: Request): Promise<Response> {
     // ONE SESSION OF THE API THAT ENDS IN THIS OBJECT: the dial of a mind that runs elsewhere. It
@@ -91,8 +118,35 @@ export class ProvidedMind extends DurableObject<DoorEnv> {
     await this.#mind().append(path, events, fromAuth);
   }
 
+  /** ONE PLATFORM FACT that must reach the mind's log: appended now, or kept. ONLY THE MIND'S OWN
+   *  TYPED REFUSAL THROWS, from a link that is still the link (`failureKind` "refused": a coded
+   *  error other than UNAVAILABLE), which no later append mends. Every other failure keeps the fact.
+   *  No drain straight after a keep on the link that just failed; one at once when a newer link is
+   *  there (its hand-in's drain can have run before this call to the older link failed). */
+  async appendOrKeep(path: string, fact: PlatformFact) {
+    const link = this.#link;
+    if (link)
+      try {
+        await link.mind.append(path, [fact]);
+        return void this.#drain();
+      } catch (error) {
+        if (this.#link === link && failureKind(error) === "refused") throw error;
+      }
+    this.#keep({ path, fact, happenedAt: new Date().toISOString() });
+    if (this.#link && this.#link !== link) void this.#drain();
+  }
+
   async receiveEmail(mail: Parameters<MindTarget["receiveEmail"]>[0]) {
     await this.#mind().receiveEmail(mail);
+  }
+
+  /** THE CONFIG'S `email` HOOK, over the link (iterate/workers `MindTarget.email`). `forward` is a
+   *  Workers RPC stub of the boundary's invocation here. capnweb sends its own stubs, its targets
+   *  and plain functions, so a function of this object's calls the stub, and capnweb hands that
+   *  function to the far end as a stub of its own: the home lab calls back through it, and it
+   *  lasts while this call does. */
+  async email({ mail, forward }: Parameters<MindTarget["email"]>[0]) {
+    await this.#mind().email({ mail, forward: (to) => forward(to) });
   }
 
   async runAct(held: Parameters<MindTarget["runAct"]>[0]) {
@@ -106,6 +160,89 @@ export class ProvidedMind extends DurableObject<DoorEnv> {
         retryAfterMs: 10_000,
       });
     return this.#link.mind;
+  }
+
+  /** Keeps one fact; past the bound, the oldest goes, and is counted. The synchronous KV: no other
+   *  call runs between the reads and the writes. */
+  #keep(kept: KeptFact) {
+    const kv = this.ctx.storage.kv;
+    const state = kv.get<KeptFactsState>(KEPT_FACTS_STATE) ?? { next: 0, dropped: 0 };
+    kv.put(`${KEPT_FACT_PREFIX}${String(state.next).padStart(12, "0")}`, kept);
+    state.next += 1;
+    const keys = [...kv.list({ prefix: KEPT_FACT_PREFIX })].map(([key]) => key);
+    for (const key of keys.slice(0, Math.max(0, keys.length - KEPT_FACTS_MAX))) {
+      const oldest = kv.get<KeptFact>(key);
+      kv.delete(key);
+      state.dropped += 1;
+      console.error({
+        event: "boundary.kept-fact-dropped",
+        message: `more than ${KEPT_FACTS_MAX} facts wait for the mind: the oldest is dropped`,
+        path: oldest?.path,
+        type: oldest?.fact.type,
+        idempotencyKey: oldest?.fact.idempotencyKey,
+      });
+    }
+    kv.put(KEPT_FACTS_STATE, state);
+    console.info({
+      event: "boundary.mind-fact-kept",
+      path: kept.path,
+      type: kept.fact.type,
+      idempotencyKey: kept.fact.idempotencyKey,
+      kept: Math.min(keys.length, KEPT_FACTS_MAX),
+    });
+  }
+
+  /** THE DRAIN, one at a time: asked for while one runs, it runs once more, and nothing queues.
+   *  The kept facts, the oldest first, until none is left or one neither landed nor was refused. */
+  async #drain() {
+    if (this.#draining) return void (this.#drainAgain = true);
+    this.#draining = true;
+    // A pass that stops on a failure still honours a drain asked for while it ran: a newer link's
+    // hand-in during an older link's pending replay drains once more, to the newer link.
+    do {
+      this.#drainAgain = false;
+      await this.#appendEachKept().catch((error: unknown) =>
+        console.error({ event: "boundary.kept-facts-not-appended", error: String(error) }),
+      );
+    } while (this.#drainAgain);
+    this.#draining = false;
+  }
+
+  async #appendEachKept() {
+    const kv = this.ctx.storage.kv;
+    for (;;) {
+      const link = this.#link;
+      const [key, kept] = [...kv.list<KeptFact>({ prefix: KEPT_FACT_PREFIX, limit: 1 })][0] ?? [];
+      if (!link || !key || !kept) return;
+      const { dropped } = kv.get<KeptFactsState>(KEPT_FACTS_STATE)!;
+      const recordedLate = {
+        happenedAt: kept.happenedAt,
+        ...(dropped > 0 && { droppedBefore: dropped }),
+      };
+      try {
+        await link.mind.append(kept.path, [
+          { ...kept.fact, payload: { ...kept.fact.payload, recordedLate } },
+        ]);
+        if (dropped > 0) {
+          const state = kv.get<KeptFactsState>(KEPT_FACTS_STATE)!;
+          kv.put(KEPT_FACTS_STATE, { ...state, dropped: state.dropped - dropped });
+        }
+      } catch (error) {
+        // Not landed, not refused (a broken link, a platform or unclassified failure): it stays.
+        if (this.#link !== link || failureKind(error) !== "refused")
+          throw new Error(`${kept.fact.idempotencyKey}: ${String(error)}`);
+        const reachedBefore = errorCode(error) === "IDEMPOTENCY_CONFLICT";
+        // The mind's typed refusal, which no retry mends, or the fact that reached it before.
+        console[reachedBefore ? "info" : "error"]({
+          event: reachedBefore ? "boundary.kept-fact-reached-before" : "boundary.kept-fact-refused",
+          path: kept.path,
+          type: kept.fact.type,
+          idempotencyKey: kept.fact.idempotencyKey,
+          ...(!reachedBefore && { appendError: String(error) }),
+        });
+      }
+      kv.delete(key);
+    }
   }
 
   /** ONE SESSION'S PART OF `provideExternalMind`: it takes one mind. At the session's end, whatever
@@ -151,7 +288,7 @@ export class ProvidedMind extends DurableObject<DoorEnv> {
         (answer as Partial<Disposable> | null | undefined)?.[Symbol.dispose]?.();
         throw codedError(
           "INVALID_INPUT",
-          "connect(door) answers the mind, an RpcTarget with fetch, api, append, runAct and receiveEmail",
+          "connect answers the mind, an RpcTarget with fetch, api, append, runAct, receiveEmail and email",
         );
       }
       // The cast: capnweb's class types no target, and the mind's process answers its `MindTarget`.
@@ -171,6 +308,7 @@ export class ProvidedMind extends DurableObject<DoorEnv> {
       this.#linkOrder = order;
       console.info({ event: "boundary.mind-link-opened", replaced: Boolean(older) });
       older?.takeOver();
+      void this.#drain();
     };
   }
 }

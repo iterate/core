@@ -872,5 +872,6 @@ export interface ReachableContext {
   ): Promise<StreamPage>;
   reserveSend(key: string): Promise<{ recorded?: StreamEvent; reserved: boolean }>;
   releaseSend(key: string): Promise<void>;
+  sentBefore(key: string): Promise<boolean>;
   invoke(call: ItxExpressionInput, args?: unknown[], caller?: Caller): Promise<unknown>;
 }

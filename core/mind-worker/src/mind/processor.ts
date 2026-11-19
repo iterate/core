@@ -76,7 +76,7 @@ export type KeptByTheFacet = {
 };
 
 type PublicationAttempt =
-  | { kind: "admitted"; mainModule: string; manifest: WorkerManifest }
+  | { kind: "admitted"; mainModule: string; manifest: WorkerManifest; missing: string[] }
   // `superseded`: main moved on before the commit was looked at, which says nothing about it
   | { kind: "refused"; error: string; superseded?: true }
   // The head read is not the commit and no newer commit is known: the read is behind the commit's
@@ -764,12 +764,17 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
         await landOnce(publisher, ...refused);
         return true;
       }
-      const { mainModule, manifest } = attempt;
+      const { mainModule, manifest, missing } = attempt;
       const pointer = configPointer(commitOid, mainModule, manifest);
       const outcome = {
         type: "events.iterate.com/mind/worker-updated",
         idempotencyKey: `mind/publication:${generation}`,
-        payload: { commitOid, generation, modules: manifest.modules },
+        payload: {
+          commitOid,
+          generation,
+          modules: manifest.modules,
+          ...(missing.length > 0 && { missing }),
+        },
       };
       // A mind being created gets its ingress in this batch too, so creation waits out one fence.
       // Should its key name another event, the batch is refused whole and lands without it.
@@ -820,9 +825,9 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     const seedProbe = this.#seedProbes.get(commitOid);
     this.#seedProbes.delete(commitOid);
     try {
-      const { mainModule, modules } = await (seedProbe ||
+      const { mainModule, modules, missing } = await (seedProbe ||
         probedConfig(await publisher.files(commitOid), publisher));
-      return { kind: "admitted", mainModule, manifest: { generation, modules } };
+      return { kind: "admitted", mainModule, manifest: { generation, modules }, missing };
     } catch (error) {
       if (isPlatformFailureKind(failureKind(error))) throw error;
       return { kind: "refused", error: error instanceof Error ? error.message : String(error) };

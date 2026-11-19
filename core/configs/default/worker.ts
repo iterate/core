@@ -1,4 +1,4 @@
-import { EmailContract, type EmailState } from "iterate/email";
+import { EmailContract, type EmailHookArgs, type EmailState } from "iterate/email";
 import { errorCode, reportIssue } from "iterate/lib";
 import {
   IterateConfigEntrypoint,
@@ -313,6 +313,10 @@ export default class extends IterateConfigEntrypoint {
   }: IterateConfigProcessEventArgs<"agents"> & { mind: string }) {
     if (cloudDeliveryOf(event)) await cloudDeliveryEvent(itx, event);
   }
+
+  // The platform has stored this mail on /integrations/email already; replies and agents react to
+  // it in processEvent. Forward it here, while the delivery is live: await forward("a@b.c").
+  async email(_args: EmailHookArgs) {}
 
   // Every hostname of the mind's zones but its control-plane hostname, where the platform answers. An app's
   // hostname is `<label>.<zone>` on each zone (`dash.example.com`), so there is one case for each

@@ -49,6 +49,19 @@ test("only the platform says that a forward of a mail failed: a member reads it 
   expect(() => refuseNonPlatformWrites(failed, { principal: null })).toThrow(/platform's own/);
 });
 
+test("only the platform says where a mail was forwarded and how the config's email hook failed: a forged forward would refuse the real one as FORWARDED_BEFORE", () => {
+  const facts = [
+    { type: "events.iterate.com/email/forwarded" },
+    { type: "events.iterate.com/email/hook-failed" },
+  ];
+  const loadedCode: Caller = { principal: null, app: true, path: "/integrations/email" };
+  expect(() => refuseNonPlatformWrites(facts, platform)).not.toThrow();
+  for (const fact of facts) {
+    expect(() => refuseNonPlatformWrites([fact], loadedCode)).toThrow(/platform's own/);
+    expect(() => refuseNonPlatformWrites([fact], { principal: null })).toThrow(/platform's own/);
+  }
+});
+
 test("only the platform says that a deploy reached the mind: loaded code cannot replace the stack's record, with a key or with none", () => {
   const deployed = {
     type: "events.iterate.com/mind/stack-deployed",

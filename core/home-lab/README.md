@@ -22,8 +22,10 @@ authenticates there with that token as every client does, and calls `provideExte
 session that it gets, with a function that takes the boundary's door and answers the mind
 (`iterate/workers` `ControlPlaneSession`). The boundary keeps what the function
 answers in a Durable Object, `ProvidedMind`, for as long as the socket is open, and sends the mind
-every request, mail, act and API session through it. The root is born at start: its config repo is
-seeded and published. Then `http://localhost:8789/` is the apex of the first zone,
+every request, mail, act and API session through it. A mail comes in through the stack's
+Cloudflare Email Routing, as for any mind, and the config's `email` hook runs here: its
+`forward(to)` calls back over the socket to the boundary while the delivery lasts. The root is
+born at start: its config repo is seeded and published. Then `http://localhost:8789/` is the apex of the first zone,
 `<label>.localhost:8789` is `<label>.<zone>` (nobody signed in), and through the stack
 `https://<zone>/` is the same mind.
 
@@ -33,6 +35,16 @@ Cloudflare restarts a Durable Object when its Worker's code changes, and that cl
 The link is one of them, and so is every WebSocket that a visitor has open to the mind. The new
 link meets the new boundary. While there is no link, the boundary answers 503 for the mind. The
 link also ends when its token does, and then this process dials again with a fresh token.
+
+**A mind that was away finds on its log what happened while it was away.** A mail that arrives
+while there is no link fails its delivery, and Cloudflare delivers it again: on 19 Nov 2026 it
+tried again after 23 s and 95 s, with no bounce, and the third try was stored and forwarded. A
+fact of a mail that the boundary could not append because the link was gone or broke under the
+call (`email/forwarded`, `email/forward-failed`, `email/hook-failed`) is kept in `ProvidedMind`'s
+storage, at most 100, and appended right after the mind hands itself in again, in its order. Its
+payload's `recordedLate.happenedAt` says when it happened; `droppedBefore` says how many older
+facts were dropped at the bound. A fact that reached the mind before the link broke is not
+written twice: its idempotency key refuses the late copy.
 
 **To upgrade, deploy the stack's Workers first, then restart the mind here.** From `core/alchemy` at
 the new commit, `pnpm run deploy --stage <name>` with the stack's config. Then check out the same

@@ -708,6 +708,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     read: async (afterOffset, limit, options) => this.#stream.read(afterOffset, limit, options),
     reserveSend: async (key) => this.reserveSend(key),
     releaseSend: async (key) => this.releaseSend(key),
+    sentBefore: async (key) => this.sentBefore(key),
     invoke: (call, args = [], caller = this.#caller) =>
       this.#callerStorage.run(caller, () => this.#itxExpressionResolver.invoke(call, ...args)),
   };
@@ -1320,6 +1321,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   releaseSend(key: string): void {
     this.#nameActiveSpan();
     this.ctx.storage.kv.delete(`send:${key}`);
+  }
+  // A read alone: a fact under the key, or a `send:` row (`reserveSend` puts one).
+  sentBefore(key: string): boolean {
+    this.#nameActiveSpan();
+    return (
+      !!this.#stream.storage.readEventByIdempotencyKey(key) ||
+      !!this.ctx.storage.kv.get(`send:${key}`)
+    );
   }
 
   recordLoopLimit(cause: unknown, message: string): void {

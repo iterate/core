@@ -4,6 +4,11 @@ This repository is the mind's code. A commit to `main` publishes it: the platfor
 `worker.ts`, the `main` in `package.json`, and every context of the mind runs the new code.
 This mind has no agents and no schedules.
 
+A mind has three methods, and `worker.ts` implements each. From outside come `fetch` (every
+request) and `email` (every mail). Inside, `processEvent` adds every event; outside parties also
+append to the mind's contexts through its API at `/api`, which is why much of a mind's logic
+lives in `processEvent`.
+
 `worker.ts` extends `IterateConfigEntrypoint` from `iterate/sdk`:
 
 - `processEvent({ event, itx })` sees every durable event of every context of the mind, one at
@@ -16,6 +21,15 @@ This mind has no agents and no schedules.
   app's hostname is `<label>.<zone>` (`blog.example.com`). A request a fetch route takes never
   reaches it: the platform sends it to the route's target first (`iterate tunnel <port>` sets a
   route per tunnel; `itx.fetchRoutes.set` sets one by hand).
+- `email({ mail, forward })` runs for every mail to an address of the mind, while its delivery
+  is live. The platform has stored the mail on `/integrations/email` before, and `processEvent`
+  gets its `email/received` too: replies and agents react there. `await forward("a@b.c")`
+  sends the original on, as it arrived, to an address that a person verified as a destination
+  in the mind's Cloudflare account; it records `email/forwarded`, and throws a coded error otherwise
+  (`EmailHookArgs` in `iterate/email`). A throw here, or a hook that runs past its time limit
+  (15 s of its own: the wait for Cloudflare's answer to a forward does not count), loses no
+  mail: it is an `email/hook-failed` fact on `/integrations/email`. Await each forward: the
+  capability ends when `email` returns, and a forward that is still running then ends EXPIRED.
 
 `worker.ts` reaches the mind through the `itx` that `processEvent` is handed, or through
 `using itx = this.getItx()`: when the block ends, the scope, every call made through it and every

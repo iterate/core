@@ -40,10 +40,11 @@ export const MindConfig = z
        *  image. Only iterate's own mind sets it. */
       containerImage: z.string().min(1).optional(),
     }),
-    /** Absent: each mail stays in the mind alone. `forwardTo`: each mail is then forwarded there
-     *  as it arrived (a team's mailbox or group). The address must be a verified destination
-     *  address of the account's Email Routing, which a person confirms once by the link
-     *  Cloudflare mails to it. */
+    /** A FORWARD BY THE STACK, beside the config's own `email` method (iterate/sdk), where a
+     *  mind's config forwards. Absent: the config's `email` alone decides where a mail goes. `forwardTo`:
+     *  each mail is also forwarded there as it arrived (a team's mailbox or group), before the
+     *  config's `email` runs. The address must be a verified destination address of the
+     *  account's Email Routing, which a person confirms once by the link Cloudflare mails to it. */
     mail: z.strictObject({ forwardTo: z.email() }).optional(),
   })
   // One label, because Cloudflare's certificate for a zone covers the zone and `*.<zone>` alone.

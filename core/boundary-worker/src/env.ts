@@ -1,4 +1,5 @@
 import type { AuthService, MindTarget, SecretsService, TelemetryService } from "iterate/workers";
+import type { MindTransport } from "./http.ts";
 
 // Bindings are typed by their iterate/workers interfaces, not workers-types' `Service<…>`, whose
 // `Stub` mapping needs a branded entrypoint and turns `unknown` in an event's payload into `never`.
@@ -24,6 +25,7 @@ export type Env = DoorEnv & {
   PROVIDED_MIND?: {
     getByName(
       name: string,
-    ): Pick<MindTarget, "fetch" | "append" | "runAct" | "receiveEmail" | "api">;
+    ): Pick<MindTarget, "fetch" | "append" | "runAct" | "receiveEmail" | "email" | "api"> &
+      Required<Pick<MindTransport, "appendOrKeep">>;
   };
 };
