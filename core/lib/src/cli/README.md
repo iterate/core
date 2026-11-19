@@ -104,7 +104,9 @@ What it does, in order:
    there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS
    record and Workers route of that domain, right before the deploy and after every other check.
 4. **Workers Paid, R2 and Zero Trust.** It opens the page for each one that is off and waits
-   until it is on. An owner proves their address through Cloudflare Access, which needs the
+   until it is on. Off means Cloudflare refused the read, and the account's line shows its words.
+   A read that failed is not a fact: a 429 or a 5xx is read again, and after three the command
+   stops with nothing changed and says to run it again. An owner proves their address through Cloudflare Access, which needs the
    account's Zero Trust organization. When the account has none, the command first sets one up
    through Cloudflare's API, as the script would, with a team name that Cloudflare picks. When
    Cloudflare refuses that because Zero Trust was never turned on, it opens the account's Zero

@@ -257,6 +257,30 @@ export async function boundaryCheck(
   return miss ? { miss } : { unread: status };
 }
 
+/** WHETHER A PRODUCT OF THE ACCOUNT IS ON (Workers Paid, R2), by a read of one of its paths: 200
+ *  is on, and Cloudflare's refusal (a 4xx but 429) is off. A READ THAT FAILED IS NOT A FACT: a
+ *  429, a 5xx or anything else is read again, up to three reads with `pause` between them, and
+ *  then the command stops and says so. `off` keeps Cloudflare's words, so the account's line can
+ *  show them. */
+export async function productRead(
+  what: string,
+  read: () => Promise<{ status: number; error: string }>,
+  pause: () => Promise<unknown>,
+): Promise<{ on: true } | { on: false; why: string }> {
+  for (let attempt = 1; ; attempt++) {
+    const answer = await read();
+    if (answer.status === 200) return { on: true };
+    const why = `${answer.status}: ${answer.error}`;
+    if (answer.status >= 400 && answer.status < 500 && answer.status !== 429)
+      return { on: false, why };
+    if (attempt === 3)
+      throw new Error(
+        `Cloudflare did not answer whether ${what} is on (${why}), three times. A read that failed says nothing about the account. Nothing was changed. Run the command again.`,
+      );
+    await pause();
+  }
+}
+
 /** Whether a line of a deploy's output says that the stack's state store refused a request. A
  *  store that the same run made does so in its first seconds, and nothing is made without state:
  *  the one failure after which the command deploys again by itself. */
@@ -1360,22 +1384,30 @@ export async function deployMind(input: DeployInput) {
           `The approval does not cover the account ${account.name}. Run the command again and select it on Cloudflare's page.`,
         );
     }
-    const on = async (path: string) =>
-      (await cf("GET", `/accounts/${account.id}${path}`)).status === 200;
+    // `productRead`: on, off with Cloudflare's words, or a stop when the read itself failed
+    const product = (what: string, path: string) =>
+      productRead(
+        what,
+        () => cf("GET", `/accounts/${account.id}${path}`),
+        () => sleep(2000),
+      );
     const paidPath = "/containers/applications";
     const r2Path = "/r2/buckets?per_page=1";
     const zeroTrustPath = `/accounts/${account.id}/access/organizations`;
-    const [paid, r2, zones, subdomain, zeroTrustRead] = await Promise.all([
-      on(paidPath),
-      on(r2Path),
+    const [paidRead, r2Read, zones, subdomain, zeroTrustRead] = await Promise.all([
+      product("Workers Paid", paidPath),
+      product("R2", r2Path),
       zonesOf(cf, account.id),
       cf("GET", `/accounts/${account.id}/workers/subdomain`),
       cf("GET", zeroTrustPath),
     ]);
+    const { on: paid } = paidRead;
+    const { on: r2 } = r2Read;
     let zeroTrust = zeroTrustStep(account.id, zeroTrustRead, false);
     if (zeroTrust.next === "stop") throw new Error(zeroTrust.words);
+    const state = (read: typeof paidRead) => (read.on ? "on" : `off (Cloudflare: ${read.why})`);
     p.log.info(
-      `Account ${account.name}: Workers Paid ${paid ? "on" : "off"}, R2 ${r2 ? "on" : "off"}, ${zones.length} domain${zones.length === 1 ? "" : "s"}.`,
+      `Account ${account.name}: Workers Paid ${state(paidRead)}, R2 ${state(r2Read)}, ${zones.length} domain${zones.length === 1 ? "" : "s"}.`,
     );
 
     // the names offered come from the person's name at Cloudflare, else from the owner's address
@@ -1557,14 +1589,17 @@ export async function deployMind(input: DeployInput) {
         "Turn on Workers Paid: 5 dollars a month. Cloudflare asks for a card there.",
         `https://dash.cloudflare.com/${account.id}/workers/plans`,
       );
-      await until("Waiting for Workers Paid", () => on(paidPath));
+      await until(
+        "Waiting for Workers Paid",
+        async () => (await product("Workers Paid", paidPath)).on,
+      );
     }
     if (!r2) {
       await page(
         "Turn on R2: it is free at this size.",
         `https://dash.cloudflare.com/${account.id}/r2/overview`,
       );
-      await until("Waiting for R2", () => on(r2Path));
+      await until("Waiting for R2", async () => (await product("R2", r2Path)).on);
     }
     // ZERO TRUST (`zeroTrustStep`): set up by the command where Cloudflare allows it, else a gate
     if (zeroTrust.next === "make") {

@@ -25,6 +25,7 @@ import {
   onboardingUrlOf,
   PNPM_COMPAT_ENV,
   pnpmCommandOf,
+  productRead,
   saysTheStateStoreRefused,
   stageNameOf,
   zeroTrustStep,
@@ -725,6 +726,42 @@ test("the check after a deploy reads again before it calls a miss, and a read th
       { status: 502 },
     ),
   ).toEqual({ outcome: { unread: 502 }, pauses: 4 });
+});
+
+test("a product is on at 200 and off at Cloudflare's refusal; a read that failed is read again, and three are a stop, never 'off'", async () => {
+  const reads = (...statuses: number[]) => {
+    const asked: number[] = [];
+    return {
+      asked,
+      read: async () => {
+        const status = statuses[asked.length] ?? 200;
+        asked.push(status);
+        return { status, error: status === 403 ? "Please enable R2 (code 10042)" : "busy" };
+      },
+    };
+  };
+  const pause = async () => undefined;
+
+  const on = reads(200);
+  expect(await productRead("R2", on.read, pause)).toEqual({ on: true });
+  expect(on).toMatchObject({ asked: [200] });
+
+  const off = reads(403);
+  expect(await productRead("R2", off.read, pause)).toEqual({
+    on: false,
+    why: "403: Please enable R2 (code 10042)",
+  });
+  expect(off).toMatchObject({ asked: [403] });
+
+  const late = reads(429, 503, 200);
+  expect(await productRead("R2", late.read, pause)).toEqual({ on: true });
+  expect(late).toMatchObject({ asked: [429, 503, 200] });
+
+  const never = reads(500, 502, 429, 403);
+  await expect(productRead("R2", never.read, pause)).rejects.toThrow(
+    "Cloudflare did not answer whether R2 is on (429: busy), three times. A read that failed says nothing about the account. Nothing was changed. Run the command again.",
+  );
+  expect(never).toMatchObject({ asked: [500, 502, 429] });
 });
 
 test("the flag's forward is one plain address, or none; an empty one is refused, not read as no flag", () => {
