@@ -47,7 +47,7 @@ const BUILT_IN_ROOT_DESCRIPTIONS = {
     "durable future appends: `schedules.set({ key, when, events })` · `schedules.cancel(key)`",
   readEvents: "read this log: `(await itx.readEvents(afterOffset, limit)).events`",
   waitForEvent: "block until an event lands: `waitForEvent({ type, afterOffset, timeoutMs })`",
-  cd: "any context of the mind, with every verb: `itx.cd('/').waitForEvent(…)`, `itx.cd('./child').append({ type, payload })`; a jail's bare null refuses what reaches in",
+  cd: "any context of the mind, with every verb: `itx.cd('/').waitForEvent(…)`, `itx.cd('./child').append({ type, payload })`; a jail's bare null refuses what reaches in. A parent's rows bind no child: code at a context is held only by that context's own bare `itx => null`",
   fetch: "the internet through the mind's egress: `itx.fetch(new Request(url))`",
   rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
   rewriteRules: "this table, described: `await rewriteRules.list()`",
@@ -1285,7 +1285,10 @@ export class ItxExpressionResolver {
       const liveRules = at === this.#path ? this.#rewriteRules : undefined;
       let fixedPoint: ItxExpression = ["itx", "builtins", ...withoutBuiltIns(entered)];
       let rules: readonly ItxExpressionRewriteRule[] = [];
-      if (liveRules || !entersOwnRoot(entered)) {
+      // A host's root of every context (`url`, `webhooks`, `minds`) reads the table too: loaded
+      // code's call of it that ends in `fetch` comes here, and the context's own mask must hold.
+      const enteredRoot = itxExpressionStepName(withoutBuiltIns(entered)[0]) || "";
+      if (liveRules || !entersOwnRoot(entered) || roots().portable.has(enteredRoot)) {
         if (liveRules) rules = liveRules();
         else if (!isBuiltInsRooted(entered)) {
           const snapshot = await this.#reach.snapshotOf(at);

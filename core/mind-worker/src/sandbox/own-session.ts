@@ -62,15 +62,28 @@ const Rows = z.array(
 
 /** WHY A SANDBOX GETS NO SESSION, by its context's `rewriteRules.list()`, or null when it gets
  *  one. The list holds the one row that a call of `itx.fetch` from there reaches. The mind's own
- *  fetch is the built-in. Any other row filters what the sandbox sends, and no row means that the
- *  name is masked. A list that cannot be read as rows gives no session. */
+ *  fetch is the built-in at `/`. Any other row filters what the sandbox sends, and no row means
+ *  that the name is masked. A list that cannot be read as rows gives no session.
+ *
+ *  A session is loaded code of the sandbox's own context, where `cd` is implicit, so no rule of a
+ *  context above it binds the session. A mask on the way to `/` gives no session for that reason,
+ *  and so does the built-in fetch given back below `/` (by a context with a bare `itx => null`).
+ *  A mask at `/` does bind the session (its calls of a root's name meet the root's table): it
+ *  takes no session. Masks of the names implicit at the sandbox too (`cd`, `run`, `workers`) are
+ *  not in the list, and this check cannot see them. */
 export function egressFilterOf(rows: unknown): string | null {
   const parsed = Rows.safeParse(rows);
   if (!parsed.success) return "its context's rules could not be read";
   const row = parsed.data.find((candidate) => candidate.match === "itx.fetch");
   if (!row) return "itx.fetch is masked for it";
-  if (row.target === "itx.builtins.fetch") return null;
-  return `the mind filters what it sends (the rule for itx.fetch at ${row.context || "its context"})`;
+  if (row.target !== "itx.builtins.fetch" || row.context !== "/")
+    return `the mind filters what it sends (the rule for itx.fetch at ${row.context || "its context"})`;
+  const mask = parsed.data.find(
+    (candidate) => candidate.target === null && candidate.context !== "/",
+  );
+  if (mask)
+    return `a context above it masks ${String(mask.match)} (at ${mask.context || "its context"})`;
+  return null;
 }
 
 /** WHAT A LIVE SESSION DOES ON EACH FRAME (core-itx `serveSession`'s `onFrame`). An open session
