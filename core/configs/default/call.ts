@@ -26,7 +26,7 @@ import {
 } from "iterate/stream/processor";
 import { z } from "zod";
 import { Call, CALL_DUE, type CallData } from "./call/rules.ts";
-import { isLive, reduceShare, SHARE_EVENTS, ShareState } from "./call/share.ts";
+import { isLive, LINK_ENDED, reduceShare, SHARE_EVENTS, ShareState } from "./call/share.ts";
 
 /** The event that sets or un-sets a row; un-set (`target: null`) for a page means it left. */
 const ROW_SET = "events.iterate.com/itx/subscription-configured";
@@ -58,7 +58,7 @@ const CallContract = defineProcessorContract({
 });
 type State = ProcessorState<typeof CallContract>;
 
-class CallProcessor extends StreamProcessor<State> {
+export class CallProcessor extends StreamProcessor<State> {
   contract = CallContract;
   readonly #call: Call;
   constructor(call: Call) {
@@ -100,8 +100,9 @@ class CallProcessor extends StreamProcessor<State> {
       const page = unset.data.name;
       runInBackground(() => this.#call.pageGone(page));
     }
-    // its own look, and the pass at the head after a start: who is out, the voice agent's bounds
-    if (event?.type === CALL_DUE || (!event && delivery.caughtUp))
+    // its own look, the pass at the head after a start, and a link's end (its guests leave the
+    // call now, not at the next look): who is out, the voice agent's bounds
+    if (event?.type === CALL_DUE || event?.type === LINK_ENDED || (!event && delivery.caughtUp))
       runInBackground(() => this.#call.sweep(state));
     return undefined;
   }

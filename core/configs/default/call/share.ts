@@ -7,8 +7,8 @@
 //   share/link-made     { link, secretHash, until }   a new link: its public id, the SHA-256 of
 //                                                      its secret (lower-case hex), its end (ms)
 //   share/link-ended    { link }                       the link works no more, before its end
-//   share/guest-joined  { link, guest: { userId, name } }  a guest came in by it (the page where
-//                                                      guests land writes it)
+//   share/guest-joined  { link, guest: { userId, name } }  a guest came in by it (the guest
+//                                                      routes of apps/meet/app.ts write it)
 //
 // Who made or ended a link is the event's `source`, which the platform stamps, never a payload
 // field. The log holds a link's secret only as its hash: a guest reads the whole context. A link
@@ -21,8 +21,8 @@
 import { z } from "zod";
 
 const LINK_MADE = "share/link-made";
-const LINK_ENDED = "share/link-ended";
-const GUEST_JOINED = "share/guest-joined";
+export const LINK_ENDED = "share/link-ended";
+export const GUEST_JOINED = "share/guest-joined";
 export const SHARE_EVENTS = [LINK_MADE, LINK_ENDED, GUEST_JOINED];
 
 const LinkMade = z.object({

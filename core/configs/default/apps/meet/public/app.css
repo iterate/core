@@ -1,0 +1,98 @@
+/* app.css — Meet's own layout, as plain CSS on the theme's variables (apps/theme.css):
+   @iterate-com/ui's stylesheet holds the utility classes of its own components and no others. */
+.meet,
+.meet-narrow {
+  margin: 0 auto;
+  padding: 2rem 1rem 4rem;
+  display: grid;
+  gap: 1rem;
+}
+.meet {
+  max-width: 80rem;
+}
+.meet-narrow {
+  max-width: 40rem;
+}
+.meet-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+.meet-subtitle {
+  font-weight: 600;
+}
+.meet-note {
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+.meet-error {
+  font-size: 0.875rem;
+  color: var(--destructive);
+}
+.meet-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.meet-grow {
+  flex: 1 1 12rem;
+}
+.meet-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.meet-band {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+/* the chat, and a member's panes beside it on a wide screen, under it on a narrow one */
+.meet-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+@media (min-width: 64rem) {
+  .meet-columns {
+    grid-template-columns: minmax(0, 1fr) 22rem;
+  }
+}
+.meet-aside {
+  display: grid;
+  gap: 1rem;
+}
+.meet-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.meet-links {
+  display: grid;
+  gap: 0.5rem;
+}
+.meet-call-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.meet-call-row:hover {
+  background: var(--accent);
+}
+/* the agent's chat takes the height it is given */
+.meet-chat-pane {
+  display: flex;
+  flex-direction: column;
+  height: 70vh;
+  min-height: 24rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}

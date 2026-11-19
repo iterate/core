@@ -1,3 +1,4 @@
+import type { IterateContextApiWith } from "iterate/api";
 import { EmailContract, type EmailHookArgs, type EmailState } from "iterate/email";
 import { errorCode, reportIssue } from "iterate/lib";
 import {
@@ -16,6 +17,8 @@ import {
   runStep,
   stepContext,
 } from "./apps/onboarding/steps.ts";
+import { meetApp } from "./apps/meet/app.ts";
+import { startMeeting } from "./apps/meet/meeting.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
 // Voice devices and the phone line (apps.md, "Voice devices") are off: take the "// " off this
 // line and off `installVoice` in the init case below, in the commit that adds the package.
@@ -67,6 +70,9 @@ const integrations: Integration[] = [];
 // (apps.md). Each `app.ts` exports the function that makes one.
 const docs = docsApp();
 const dash = dashApp();
+// Meet: start a meeting, and any agent's chat with its call, for members and their guests
+// (apps.md, "Meet"). The call's facet class is call.ts.
+const meet = meetApp();
 const onboarding = onboardingApp();
 // The guestbook, an example of an app for end users, people who are not members (people.md, "The
 // guestbook"). To turn it on, uncomment this line, its import above and its case in `fetch`.
@@ -340,6 +346,8 @@ export default class extends IterateConfigEntrypoint {
         return docs.open?.(request) || this.auth.require(request) || docs.fetch(request, this);
       case "dash": // the Dash, for members: the mind seen from above, and every agent's chat
         return dash.open?.(request) || this.auth.require(request) || dash.fetch(request, this);
+      case "meet": // Meet, for members and their guests: no guard here, its routes ask for who they need
+        return meet.fetch(request, this);
       case "onboarding": // the onboarding app, for members: the steps above the onboarding chat
         return (
           onboarding.open?.(request) ||
@@ -374,6 +382,18 @@ export default class extends IterateConfigEntrypoint {
   async slack(method: string, args?: Record<string, unknown>) {
     using itx = this.getItx();
     return await slackForAgent(itx, method, args);
+  }
+
+  /** `itx.config.startMeeting({ title?, path? })`: a new meeting, an agent under `/agents/meet/`
+   *  with its call on, or the call on for the agent `path`; it answers `{ path }`. Meet's
+   *  "Start new meeting" is this call, and an agent makes one the same way (apps/meet/meeting.ts).
+   *  Its page is `https://meet.<zone>/contexts<path>`. */
+  async startMeeting(options?: { title?: string; path?: string }) {
+    // A cast, safe and needed: `getItx()` is typed as the bare `IterateContextApi`, but the
+    // root's table has `agents` by the agents app's rewrite rule, as processEvent's own itx type
+    // (`IterateConfigProcessEventArgs<"agents">`) says. The SDK has no typed getItx for it.
+    using itx = this.getItx() as IterateContextApiWith<"agents"> & Disposable;
+    return await startMeeting(itx, options);
   }
 
   /** `itx.config.onboardingStep(step, action)`: one press of a button of the onboarding app, as

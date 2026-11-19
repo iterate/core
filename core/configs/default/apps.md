@@ -1,9 +1,9 @@
 # Apps
 
 How an app of this mind is laid out and mounted, the UI components a page loads, the integration
-packages, the call on an agent and voice devices: `apps/`, `apps/theme.css`,
+packages, the call on an agent, Meet and voice devices: `apps/`, `apps/theme.css`,
 `apps/live-reload/live-reload.js`, `apps/open-files.ts`, `apps/dash/public/app.js`,
-`apps/onboarding/`, `call.ts` and `integrations` in `worker.ts`.
+`apps/onboarding/`, `call.ts`, `apps/meet/` and `integrations` in `worker.ts`.
 
 An app is a folder under `apps/`, and a convention, not a framework: copy one to start one of your
 own.
@@ -185,6 +185,7 @@ through Cloudflare Realtime's SFU, and a member can add the voice agent, which e
 talks to. No app is needed and nothing is turned on: every agent's page in the Dash has "Start a
 call", and the call offers the voice agent. It never joins by itself: a member adds it, since it
 costs money each minute. A page draws the call with the UI kit's parts (`@iterate-com/ui`).
+Meet (below) is the template's page for it.
 
 - **The call is a facet on the agent's context**, the processor row `call`: `call.ts` at the
   config's root (a publication offers a facet's class only from a root module or an app's
@@ -242,4 +243,26 @@ costs money each minute. A page draws the call with the UI kit's parts (`@iterat
   screens and what the call says, beside the chat. TURN over TLS on 443 where UDP is blocked,
   pickers for the microphone, camera and speaker, repair of a failed connection, three simulcast
   layers for a camera. Capture starts only by the person's own press: a page that joins again by
-  itself keeps the mute, and its camera and screen stay off.
+  itself keeps the mute, and its camera and screen stay off. `useCallPip`, `CallPipButton` and
+  `CallPipPlace` put the tiles in a floating window where the browser has Document
+  Picture-in-Picture.
+
+## Meet
+
+`apps/meet/` is Meet, on `meet.<zone>`: "Start new meeting", the recent meetings, and any agent's
+chat with its call at `/contexts/<agent>`. It has no API of its own: the page holds the member's
+`/itx` socket.
+
+- **A meeting is an agent** `/agents/meet/<YYYY-MM-DD>-<HHMM>-<slug>` (UTC; the slug from the title,
+  or three random words). `itx.config.startMeeting({ title?, path? })` makes one and turns its call
+  on, or turns the call on for the agent `path`; it answers `{ path }`. The page's button is this
+  call, and an agent starts a meeting the same way (`apps/meet/meeting.ts`).
+- **A meeting's page** is the agent's chat (Chat | Events: Events is the raw log), the call's bar,
+  its tiles, a pop-out of the tiles, "Add to calendar" (Google Calendar's form, or an `.ics` file
+  built in the page) and the links for guests (7 days at most). The pop-out works in Chrome and
+  Edge alone (Document Picture-in-Picture): other browsers get no button.
+- **Guests** come by a share link, `/join/<agent>#<secret>`: the page keeps the secret in the tab
+  (in the address, when the tab cannot store it), the guest signs in with a name, and `app.ts`'s
+  guest routes append `share/guest-joined`, then open the platform's view of the one agent's context for them (`personItx` with `{ guests: true }`). An
+  invite that holds a guest link lets anyone who has it in until the link ends.
+- **No live reload**: a reload for a commit would drop the call.

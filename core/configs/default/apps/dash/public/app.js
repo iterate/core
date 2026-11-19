@@ -101,6 +101,7 @@ const pages = [
 // gets a row here.
 const apps = [
   { name: "Docs", host: "docs", icon: BookOpenIcon },
+  { name: "Meet", host: "meet", icon: UsersIcon },
   { name: "Onboarding", host: "onboarding", icon: SparklesIcon },
 ].map((app) => ({ ...app, href: `https://${app.host}.${zone}` }));
 

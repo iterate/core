@@ -2,7 +2,8 @@
 
 How a page serves people who are not members (the guards, the ways to sign in, the sign-in page),
 a worked example, and the guestbook app: `this.auth` in `worker.ts` and `apps/guestbook/`. A call's
-guests use its person methods ([apps.md](apps.md), "A call on an agent").
+guests use its person methods ([apps.md](apps.md), "A call on an agent"); Meet's guests come by a
+share link into one agent's chat and call ([apps.md](apps.md), "Meet").
 
 Signing in says who someone is. Being a member is a separate list: a member reaches the whole
 mind (its API, its MCP server, every context), and anyone else reaches only what `fetch` serves

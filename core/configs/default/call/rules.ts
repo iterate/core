@@ -33,7 +33,11 @@
 //   carries: a guest's own call stamps it as the guest; the sweep at the head runs under the cause
 //   of the last event the processor read, which can be a member's (iterate/stream/processor
 //   `#headCause`), and `pageGone` under the row's un-set.
-// - BOUNDS: at most `MAX_PAGES` pages in a call and `MAX_PAGES_PER_ACTOR` for one person; the
+// - BOUNDS: at most `MAX_PAGES` pages in a call and `MAX_PAGES_PER_ACTOR` for one person; guests
+//   at most `MAX_GUEST_PAGES` in all and `MAX_PAGES_PER_GUEST` each, so members can always join;
+//   at most `NOTES_PER_ACTOR_PER_MINUTE` notes of the call's facts (a join, a leave, a camera) on
+//   the agent's log for one person, so a join and leave loop floods nothing (what people say has
+//   its own cap, `CAPTION.perMinute`); a guest leaves the call when their link ends, not at the next look. The
 //   stored call is parsed (`CallData`), and a shape that does not parse starts a fresh call.
 // - THE VOICE AGENT: a member alone starts it (it bills the mind's owner, and the host's tab holds
 //   its control channel). It ends when its host's page leaves, when no member is in the call, when
@@ -112,6 +116,15 @@ export type Asked =
  *  sweep makes two calls a row in series. */
 const MAX_PAGES = 50;
 const MAX_PAGES_PER_ACTOR = 4;
+/** Guests' share of a call: at most `MAX_GUEST_PAGES` pages of guests in all, and
+ *  `MAX_PAGES_PER_GUEST` for one guest, so that a link's holders never fill a call that members
+ *  can no more join. */
+const MAX_GUEST_PAGES = 20;
+const MAX_PAGES_PER_GUEST = 2;
+/** The notes of the call's facts (a join, a leave, a camera) on the agent's log for one person, a
+ *  minute: more are not written, so that a join and leave loop does not flood the agent's log and
+ *  its model's context. What people say is not counted here (`CAPTION.perMinute`). */
+const NOTES_PER_ACTOR_PER_MINUTE = 10;
 /** A person as the call draws them: the platform's shape (an `actor`), so a guest's view of the
  *  live state reads no address. */
 const Who = z.object({
@@ -307,6 +320,8 @@ export class Call {
   #setupAsked = false;
   /** Each member's calls in the current minute (a person's are counted by the kernel). */
   #asked = new Map<string, { minute: number; count: number }>();
+  /** The notes written for each person in the current minute (`NOTES_PER_ACTOR_PER_MINUTE`). */
+  #noted = new Map<string, { minute: number; count: number }>();
   /** When the next look is set for. */
   #armedAt = 0;
   /** The transcription sessions made in the last ten minutes, and the lines each speaker said in
@@ -370,6 +385,13 @@ export class Call {
       if (rows.length >= MAX_PAGES) refuse(`This call has ${MAX_PAGES} pages in it, its most.`);
       if (rows.filter((one) => one.who.actor === who.actor).length >= MAX_PAGES_PER_ACTOR)
         refuse(`You are in this call on ${MAX_PAGES_PER_ACTOR} pages. Leave on one first.`);
+      if (!member && rows.filter((one) => !one.member).length >= MAX_GUEST_PAGES)
+        refuse(`This call has ${MAX_GUEST_PAGES} guests' pages in it, its most for guests.`);
+      if (
+        !member &&
+        rows.filter((one) => one.who.actor === who.actor).length >= MAX_PAGES_PER_GUEST
+      )
+        refuse(`A guest is in a call on ${MAX_PAGES_PER_GUEST} pages at most. Leave on one first.`);
       data.pages[own] = { who, member, since: this.#deps.now(), tracks: {}, admission, seq };
       data.since ??= this.#deps.now();
       after.notes.push([`${nameOf(who)} joined the call.`, { kind: "joined", who }]);
@@ -906,6 +928,17 @@ export class Call {
     }
   }
 
+  /** Whether one more note for the person in `callNote.who` fits this minute's bound. */
+  #mayNote(callNote: Record<string, unknown>) {
+    const actor = Who.safeParse(callNote.who).data?.actor ?? "";
+    const minute = Math.floor(this.#deps.now() / 60_000);
+    const seen = this.#noted.get(actor);
+    const count = seen?.minute === minute ? seen.count + 1 : 1;
+    if (this.#noted.size >= 1_000 && !seen) this.#noted.clear();
+    this.#noted.set(actor, { minute, count });
+    return count <= NOTES_PER_ACTOR_PER_MINUTE;
+  }
+
   /** Who asks, by the kernel's word, and that `page` is their own row: else a refusal. */
   async #admit(asked: Asked, page: unknown) {
     const principal = asked?.principal;
@@ -929,7 +962,9 @@ export class Call {
     const own = Page.safeParse(page);
     if (!own.success || !(await this.#deps.holds(own.data, actor!)))
       refuse("That page is not yours.");
-    const name = (principal!.name || principal!.email?.split("@", 1)[0] || "").slice(0, 40);
+    // the name as a note holds it, also in the call's data and its live state: a guest's name is
+    // the guest's own claim, and every reader of the live state draws it
+    const name = claimedName(principal!.name || principal!.email?.split("@", 1)[0] || "");
     const who: Who = member
       ? { actor: actor!, name: name || "A member" }
       : { actor: actor!, name: name || "Guest", kind: "guest" };
@@ -1082,7 +1117,8 @@ export class Call {
         .audit("call/voice-agent-hangup-abandoned", { providerSession, tries: HANGUP_TRIES })
         .catch(() => {});
     for (const [content, callNote] of after.notes)
-      await this.#deps.note(`[call] ${content}`, callNote).catch(() => {});
+      if (this.#mayNote(callNote))
+        await this.#deps.note(`[call] ${content}`, callNote).catch(() => {});
     for (const providerSession of due)
       if (await voiceAgentHangup(this.#out(), providerSession))
         await this.#locked((data) => {

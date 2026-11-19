@@ -170,6 +170,9 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   ([apps.md](apps.md), "The Dash"). `https://<control-plane hostname>/` sends everyone to the Dash.
 - `apps/docs/` is the Docs app, on `docs.<zone>` for members: the files of this mind's repos,
   written together in a browser ([docs-app.md](docs-app.md)).
+- `apps/meet/` is Meet, on `meet.<zone>`: start a meeting (`itx.config.startMeeting`), and any
+  agent's chat with its call, for members and the guests they let in by a link
+  ([apps.md](apps.md), "Meet").
 - `apps/onboarding/` is the onboarding app, on `onboarding.<zone>` for members: the onboarding
   steps as cards above the chat with `/agents/onboarding`, each button also the agent's
   `itx.config.onboardingStep(step, action)` ([apps.md](apps.md), "Onboarding").

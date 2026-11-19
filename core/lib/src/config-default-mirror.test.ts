@@ -109,7 +109,7 @@ test("the Dash leads to every other app the default worker mounts", () => {
   // the hosts the worker's `fetch` answers: one `case "<host>":` each
   const worker = readFileSync(new URL("../../configs/default/worker.ts", import.meta.url), "utf8");
   const mounted = [...worker.matchAll(/^ {6}case "([a-z]+)":/gm)].map(([, host]) => host);
-  expect(mounted).toEqual(["docs", "dash", "onboarding"]);
+  expect(mounted).toEqual(["docs", "dash", "meet", "onboarding"]);
   const linked = [...String(dashFiles["app.js"]).matchAll(/\bhost: "([a-z]+)"/g)].map(
     ([, host]) => host,
   );
