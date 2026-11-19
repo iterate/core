@@ -62,9 +62,8 @@ type Challenge = {
  *  gets the mail whose code leads to the words of what signs them in. Any other address is one
  *  that anyone can type. */
 export const NON_MEMBER_CODES_AN_HOUR = 20;
-/** How many codes an hour one mailbox gets from all clients together, as the old stack mailed
- *  (git show 503f90fed:core/auth-worker/src/email-sign-in.ts): what keeps an inbox from a flood.
- *  One client address also gets one a minute for one mailbox. */
+/** How many codes an hour one mailbox gets from all clients together: what keeps an inbox from a
+ *  flood. One client address also gets one a minute for one mailbox. */
 export const CODES_AN_HOUR_FOR_A_MAILBOX = 5;
 /** How many codes one client address may ask for in ten minutes, mailed or not. */
 const CHALLENGES_IN_TEN_MINUTES_FOR_A_CLIENT = 20;

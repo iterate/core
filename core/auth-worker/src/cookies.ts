@@ -346,7 +346,8 @@ export async function guestFormOf(env: Env, request: Request) {
   const form = z
     .object({ next: z.string(), state: z.string().min(1) })
     .safeParse(await claimsOf(env, request, GUEST_FORM_COOKIE, "guest-form"));
-  return form.success ? form.data : null;
+  if (!form.success) return null;
+  return form.data;
 }
 
 export const clearGuestFormCookie = cookie(GUEST_FORM_COOKIE, "", 0);

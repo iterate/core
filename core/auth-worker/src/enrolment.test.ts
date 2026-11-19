@@ -519,8 +519,8 @@ test("a code for a tagged address of a mailbox that was mailed just now waits, a
 });
 
 // A PASSKEY OF AN ADDRESS THAT IS NO MEMBER'S, from before ../migrations/0016: its `outsider`
-// reads 0 (Jeeves's jonas@nustom.com after the move of 19 Nov 2026 holds two). It never signs in,
-// and never bars a member's first passkey, also once an owner adds the address.
+// reads 0. It never signs in, and never bars a member's first passkey, also once an owner adds
+// the address.
 test("a passkey that an address held while it was no member's never signs in and never bars its first passkey as a member", async () => {
   const stack = stackOf();
   // the control: an owner's key of the same shape signs in

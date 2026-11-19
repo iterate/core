@@ -8,9 +8,9 @@
 // A CREDENTIAL THAT MAY NOT MAKE OAUTH CLIENTS IS AN EXPECTED OUTCOME, and no failure: an API
 // token needs the permission "OAuth Client Write", and Cloudflare lists no OAuth scope for it, so
 // a person's sign-in has none. Cloudflare then answers 403 code 10000 "Authentication error"
-// (measured 18 Nov 2026). The resource answers `refusal`, Cloudflare's words, and no client, and
-// the stack goes on without one. Each later deploy asks again, so the first credential that may
-// make the client makes it. Any other failure fails the deploy: see `refusedForPermission` for
+// (Cloudflare's API on 18 Nov 2026). The resource answers `refusal`, Cloudflare's words, and no
+// client, and the stack goes on without one. Each later deploy asks again, so the first
+// credential that may make the client makes it. Any other failure fails the deploy: see `refusedForPermission` for
 // how a refusal is told from an invalid credential.
 //
 // Alchemy has no resource for an account's OAuth clients (2.0.0-beta.85 and beta.87); the SDK under it has
@@ -192,9 +192,8 @@ export const oauthClientMadeOrKept = <E, R>(
     };
   });
 
-/** WHETHER AN ERROR HAS THE SHAPE OF A REFUSAL FOR PERMISSION. Measured 18 Nov 2026
- *  (connect-cloudflare-proof/probe-refusal-kinds.log): a valid token without "OAuth Client
- *  Read/Write" gets 403 code 10000 "Authentication error"; a token that does not exist gets 401
+/** WHETHER AN ERROR HAS THE SHAPE OF A REFUSAL FOR PERMISSION. Cloudflare's API on 18 Nov
+ *  2026: a valid token without "OAuth Client Read/Write" gets 403 code 10000 "Authentication error"; a token that does not exist gets 401
  *  with the same code and words; a malformed one 400 code 9106. The SDK maps code 10000 to
  *  `Unauthorized` and keeps only the words, not the status, and it tries the call again for
  *  about 24 s first, because Cloudflare answers the same words to a valid token under load. Code

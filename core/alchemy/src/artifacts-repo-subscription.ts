@@ -67,8 +67,8 @@ export const ArtifactsRepoSubscriptionProvider = () =>
           })
           .pipe(
             // Cloudflare takes one subscription for a repo, to any queue, and answers 405 to a
-            // second. A create that was cut off before its id was stored left this stack's own:
-            // the repo's subscription to this stack's queue. One to another queue is not ours.
+            // second. A create that is cut off before its id is stored leaves this stack's own: the
+            // repo's subscription to this stack's queue. One to another queue is not ours.
             Effect.catchTag("SubscriptionAlreadyExists", (exists) =>
               Effect.gen(function* () {
                 const ofTheRepo = yield* queues.listSubscriptions

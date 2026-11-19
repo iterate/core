@@ -459,8 +459,11 @@ export type SignIn = {
 /** What a grant keeps for these lists, written when it is made (./authorize.ts `complete`). */
 export const SignInMetadata = z.object({
   clientName: z.string(),
-  /** The grant's own `method` (`GrantProps`), kept where a list of a person's grants reads it. */
-  method: SignInMethod,
+  /** The grant's own `method` (`GrantProps`), kept where a list of a person's grants reads it.
+   *  Absent on a grant of the earlier stack that kept no method, and read as absent when it is one
+   *  that this stack does not know (`google`, `cloudflare`): the list still shows the rest. Only the
+   *  list's `reach` reads it; a grant's standing is `GrantProps`'s alone (`grantIsMembers`). */
+  method: SignInMethod.optional().catch(undefined),
   resource: z.string().optional(),
   logoUri: z.string().optional(),
   until: z.number().optional(),

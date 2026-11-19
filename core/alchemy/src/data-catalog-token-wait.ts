@@ -1,8 +1,8 @@
 // data-catalog-token-wait.ts — THE DATA CATALOG WAITS FOR ITS NEW TOKEN. The stack makes the
 // catalog's API token and, seconds later, gives it to the catalog (./stack.ts). Cloudflare's
 // catalog does not know a new token at once. It then refuses it ("InvalidCredential: The provided
-// credential for warehouse=… is not valid": one first deploy in three, measured 18 Nov 2026) and
-// takes the same token some seconds later.
+// credential for warehouse=… is not valid") and takes the same token some seconds later. One first
+// deploy in three meets that refusal (18 Nov 2026).
 //
 // Alchemy's provider turns the catalog on before it gives it the token, so a deploy that fails
 // there leaves a catalog that the next deploy does not own, and refuses without `--adopt`. This

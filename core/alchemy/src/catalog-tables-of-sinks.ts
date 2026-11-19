@@ -2,7 +2,7 @@
 // sink makes its own Iceberg table, and Cloudflare makes no sink for a table that exists
 // ("writing to existing Catalog tables is not yet supported"). R2 keeps a catalog's tables when
 // the catalog is turned off and when its bucket is deleted, and gives them back to a new bucket
-// of the same name. So a stage that was destroyed could not deploy again.
+// of the same name. So without this resource a destroyed stage cannot deploy again.
 //
 // This resource makes nothing. The sinks take their tables' namespace from it, so a destroy
 // deletes the pipelines and the sinks first, then drops the tables here, and then turns the

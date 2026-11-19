@@ -1,8 +1,8 @@
 // artifacts-namespace.ts — THE MIND'S ARTIFACTS NAMESPACE AS A RESOURCE. Alchemy's own
 // `Cloudflare.Artifacts.Namespace` is a binding's marker and makes nothing: Cloudflare makes a
-// namespace at the first repo created under its name. Through the REST API that holds; through a
-// Worker's binding the mind's first repo did not make one (measured 18 Nov 2026). So the stack
-// makes it, and a destroy deletes it, with the repos in it.
+// namespace at the first repo created under its name. That holds through the REST API, but a repo
+// created through a Worker's binding makes no namespace (18 Nov 2026). So the stack makes it, and
+// a destroy deletes it, with the repos in it.
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import { formatHeaders } from "@distilled.cloud/cloudflare/Credentials";
 import * as Provider from "alchemy/Provider";

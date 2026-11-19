@@ -14,6 +14,7 @@ import {
   knownResourceOf,
   mindHostResourceOf,
   oauthHelpers,
+  sessionsByClientOf,
   TOKEN_ENDPOINT,
   tokenEndpointResponse,
   withKnownResource,
@@ -422,6 +423,46 @@ test("the old stack's grant of a guest is a guest's: its host alone, no member, 
   });
   expect(tokens).not.toHaveProperty("refresh_token");
   expect((await exchanged(stack, API, guest)).answer).toMatchObject({ status: 400 });
+});
+
+// A GRANT OF THE EARLIER STACK in a person's list: its metadata kept no method, or one that this
+// stack does not know. The list shows its client's name, its resource and its fixed end, and it is
+// within "all" alone.
+test.each([
+  ["no method", {}],
+  ["a method that this stack does not know", { method: "google" }],
+])("a sign-in whose metadata keeps %s is listed with the rest of its metadata", async (_, kept) => {
+  const stack = stackOf();
+  const helpers = oauthHelpers(stack);
+  const redirectUri = "http://127.0.0.1:7777/callback";
+  const { clientId } = await helpers.createClient({
+    redirectUris: [redirectUri],
+    tokenEndpointAuthMethod: "none",
+    grantTypes: ["authorization_code", "refresh_token"],
+    responseTypes: ["code"],
+  });
+  const query = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    resource: API,
+    scope: "iterate",
+    code_challenge: await calculatePKCECodeChallenge(generateRandomCodeVerifier()),
+    code_challenge_method: "S256",
+  });
+  const until = Date.now() + DAY_MS;
+  await helpers.completeAuthorization({
+    request: await helpers.parseAuthRequest(new Request(`${ISSUER}/oauth2/auth?${query}`)),
+    userId: owner.userId,
+    metadata: { clientName: "an old client", resource: API, until, ...kept },
+    scope: ["iterate"],
+    revokeExistingGrants: false,
+    props: owner,
+  });
+  expect(await sessionsByClientOf(stack, owner.userId, "all")).toMatchObject([
+    { clientId, name: "an old client", signIns: [{ resource: API, until }] },
+  ]);
+  expect(await sessionsByClientOf(stack, owner.userId, "email")).toEqual([]);
 });
 
 const OWNER = "owner@elsewhere.test";

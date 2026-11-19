@@ -372,7 +372,8 @@ async function passkeyIdOf(env: Env, publicKey: string): Promise<string | null> 
     return null;
   }
   const key = await keyIdOf(publicKey);
-  return key === (await stackKeyOf(env)).key ? null : key;
+  if (key === (await stackKeyOf(env)).key) return null;
+  return key;
 }
 
 /** A LINK'S TICKET, SPENT BY THIS CALL: an owner's (./members.ts `memberLink`), or the recovery
