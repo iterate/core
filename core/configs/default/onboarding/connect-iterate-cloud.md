@@ -29,9 +29,12 @@ key of the owner's is set. The owner's own key is never replaced.
 Who pays: before the connect, the mind's agents already work, paid by the owner's own Cloudflare
 account (its AI Gateway credit, the last of the agents' keys in `agents.ts`). After it, each agent
 request goes to iterate's credit first, and voice calls and web research work. When the credit is
-spent, the agents go on through the owner's Cloudflare account, but each request still goes to
-iterate first and is refused there, until the owner disconnects or sets a key of their own. Voice
-calls and web research stop until the owner sets a key.
+spent, the step deletes its two secrets by iterate's proxy (the rule stays), so the mind's requests
+no longer go to iterate: the agents go on with the owner's ChatGPT plan if they connected one, else
+with their Cloudflare account, and voice calls and web research stop until the owner sets a key of
+their own. The card, one message in this chat and one mail say so once. A balance under zero is
+not yet spent while iterate still counts an interrupted request (up to 15 minutes): the card says
+so, and nothing is deleted.
 
 What iterate then sees: the mind's requests to OpenAI and Exa, and their answers, as they pass.
 It stores the numbers (which model, how much, the cost), not the content. The requests are made on

@@ -7,10 +7,12 @@
 // No request goes to iterate before a member's signed rule. The rule is this page's gate: the
 // proxy recognises a mind by its signed request alone (cloud-credit.ts says what each call needs).
 //
-// The card's states, first that holds wins: connecting or disconnecting (an ask waits), connected
-// or spent (a rule, a balance and a secret by iterate's proxy), own keys (a stack that signs, and
-// both secrets are the owner's: no offer), declined, unavailable (the stack cannot sign as the mind
-// yet), failed (the last ask, with its reason), not asked.
+// When the credit is certainly spent, the step deletes its secrets by iterate's proxy; the rule
+// stays. The card's states, first that holds wins: disconnecting or connecting (an ask waits),
+// spent (a rule and a certainly spent balance), connected (a rule, a balance and a secret by
+// iterate's proxy), own keys (a stack that signs, and both secrets are the owner's: no offer),
+// declined, unavailable (the stack cannot sign as the mind yet), failed (the last ask, with its
+// reason; not "spent"), not asked (the offer, with what is left of a grant this mind has).
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
 import { ITERATE_MIND } from "../../../cloud-deliveries.ts";
@@ -96,6 +98,7 @@ const FAILURES: Record<string, string> = {
     "iterate gives a limited number of new credits each day, and today's are gone. Try again tomorrow (UTC).",
   paused: "iterate's credit is paused until tomorrow (UTC).",
   stopped: "The connect stopped before it finished.",
+  spent: "This mind's iterate credit is used.",
   "approval-rule":
     "A key of the credit has an approval rule on the mind's Secrets page, and iterate's proxy cannot pass one. Remove the rule, then try again.",
   "being-set": "A key of the credit was being changed while the credit connected. Try again.",
@@ -112,20 +115,59 @@ const UPDATE_REASONS = new Set(["not-recognised", "no-working-key", "stack-witho
 const AGENTS_PAID_TODAY =
   "Your agents already work without it, paid by your own Cloudflare account (its AI Gateway credit). After you connect, each agent request goes to iterate's credit first.";
 
-/** WHO PAYS when the credit is spent, for the paths that go by iterate's proxy: an agent's request
- *  still goes to iterate first, is refused there, and the next key (the AI Gateway) answers. */
-function whenSpent(openaiByProxy: boolean, exaByProxy: boolean): string[] {
-  const stops = [openaiByProxy && "voice calls", exaByProxy && "web research"].filter(Boolean);
-  const stop = stops.join(" and ");
+/** WHO PAYS when the credit is spent: the step has deleted its secrets by iterate's proxy
+ *  (`check`), so nothing goes to iterate first, and each path falls to what the owner set. */
+const SPENT_SWITCHED_OFF = "Your mind's requests no longer go to iterate.";
+function afterSpent(openai: string | undefined, exa: string | undefined): string[] {
+  // a delete that failed leaves a path by proxy: say which, until a later check deletes it
+  const left = [openai === "iterate-proxy" && "OpenAI", exa === "iterate-proxy" && "Exa"].filter(
+    Boolean,
+  );
   return [
-    openaiByProxy &&
-      "Your agents go on through your own Cloudflare account, but each of their requests still goes to iterate first and is refused there, until you disconnect or add a key of your own.",
-    stop &&
-      `${stop[0]!.toUpperCase()}${stop.slice(1)} ${stops.length > 1 ? "stop" : "stops"} until you add a key of your own.`,
+    left.length === 0
+      ? SPENT_SWITCHED_OFF
+      : `Your mind's requests to ${left.join(" and ")} still go to iterate and are refused there, until the next check switches them off.`,
+    OPENAI_AFTER[openai || "unset"],
+    EXA_AFTER[exa || "unset"],
   ].filter((line): line is string => Boolean(line));
 }
 
-const dollars = (usd: number) => `$${usd.toFixed(2).replace(/\.00$/, "")}`;
+/** Each path after the switch-off, by what `/secrets/<path>` holds. The agents' keys go: a ChatGPT
+ *  plan, then `/secrets/openai`, then the AI Gateway (agents.ts); voice and Exa have no next key.
+ *  A path still by iterate's proxy has no line: the sentence above names it. */
+const OPENAI_AFTER: Record<string, string> = {
+  own: "Your agents and voice calls run on your own OpenAI key.",
+  "other-proxy": "Your agents and voice calls run through the proxy your mind set for OpenAI.",
+  unset:
+    "Your agents go on with your ChatGPT plan if you connected one, else with your Cloudflare account. Voice calls need a key of your own.",
+};
+const EXA_AFTER: Record<string, string> = {
+  own: "Web research runs on your own Exa key.",
+  "other-proxy": "Web research runs through the proxy your mind set for Exa.",
+  unset: "Web research needs a key of your own.",
+};
+
+const dollars = (usd: number) =>
+  `${usd < 0 ? "-" : ""}$${Math.abs(usd).toFixed(2).replace(/\.00$/, "")}`;
+
+/** HOW SURE A BALANCE IS THAT THE CREDIT IS SPENT. An interrupted request is charged a high
+ *  estimate that its real cost replaces up to 15 minutes later, so a balance under zero is not
+ *  always spent. "spent" only when iterate says what it may still give back (`pendingUsd`) and
+ *  even that leaves nothing; "counting" while it may still give back; "unknown" from a proxy that
+ *  does not say (older than `pendingUsd`): on its word nothing is switched off and no mail goes. */
+type Spent = "no" | "spent" | "counting" | "unknown";
+function spentOf(balance: Balance | undefined): Spent {
+  if (!balance || balance.remainingUsd > 0) return "no";
+  if (balance.pendingUsd === undefined) return "unknown";
+  return balance.remainingUsd + balance.pendingUsd <= 0 ? "spent" : "counting";
+}
+
+/** The connected card's one sentence for a balance under zero that is not certainly spent. */
+const UNDER_ZERO: Partial<Record<Spent, string>> = {
+  counting:
+    "iterate is still counting an interrupted request. Until it has, it refuses your mind's requests; this ends within 15 minutes.",
+  unknown: "Your balance is at or under zero, so iterate refuses your mind's requests for now.",
+};
 
 function words(state: StepState, context: StepContext): Card {
   const facts = factsOf(state);
@@ -149,6 +191,27 @@ function words(state: StepState, context: StepContext): Card {
         ? [{ label: "Open the page again", href: state.action.link, primary: true }]
         : [],
     };
+  // the credit is certainly spent, from the balance alone. `check` has deleted the secrets by
+  // iterate's proxy, so there is no Connect: it would set them for nothing
+  if (facts?.meld && facts.balance && spentOf(facts.balance) === "spent")
+    return {
+      ...card,
+      status: "spent",
+      title: "Your iterate credit is used",
+      text: [
+        `Your ${dollars(facts.balance.grantedUsd)} of credit is used.`,
+        ...afterSpent(facts.openai, facts.exa),
+      ],
+      command: `npx iterate@latest chatgpt connect ${context.mind}`,
+      buttons: [
+        { label: "Add my OpenAI key", action: "add-openai-key", primary: true },
+        {
+          label: "Add Cloudflare credit",
+          href: "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway",
+        },
+        { label: "End the rule", action: "disconnect" },
+      ],
+    };
   // the credit is in use: a rule, a balance, and a secret that goes by iterate's proxy
   const inUse = facts?.openai === "iterate-proxy" || facts?.exa === "iterate-proxy";
   if (facts?.meld && facts.balance && inUse) {
@@ -158,29 +221,8 @@ function words(state: StepState, context: StepContext): Card {
         "Your own OpenAI key stays in use. The credit pays for web research.",
       facts.exa === "own" && "Your own Exa key stays in use.",
       facts.paused && FAILURES.paused,
+      UNDER_ZERO[spentOf(facts.balance)],
     ].filter((line): line is string => Boolean(line));
-    if (remainingUsd <= 0)
-      return {
-        ...card,
-        status: "spent",
-        title: "Your iterate credit is used",
-        text: [
-          `Your ${dollars(grantedUsd)} of credit is used.`,
-          ...whenSpent(facts.openai === "iterate-proxy", facts.exa === "iterate-proxy"),
-          "Choose what pays now:",
-          ...own,
-        ],
-        command: `npx iterate@latest chatgpt connect ${context.mind}`,
-        buttons: [
-          { label: "I ran the command: check again", action: "check" },
-          { label: "Add my OpenAI key", action: "add-openai-key", primary: true },
-          {
-            label: "Add Cloudflare credit",
-            href: "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway",
-          },
-          { label: "Disconnect", action: "disconnect" },
-        ],
-      };
     // a half-done connect: one secret by proxy, and the last ask's failure says what is missing
     const half = state.failure && (state.failure.words || FAILURES[state.failure.reason]);
     return {
@@ -249,7 +291,8 @@ function words(state: StepState, context: StepContext): Card {
         { label: "Not now", action: "decline" },
       ],
     };
-  if (state.failure)
+  // a press on a spent grant: while spent the spent card says it; once the balance is back, the offer
+  if (state.failure && state.failure.reason !== "spent")
     return {
       ...card,
       status: "failed",
@@ -265,12 +308,17 @@ function words(state: StepState, context: StepContext): Card {
         ...(facts?.meld ? [{ label: "End the rule", action: "disconnect" }] : []),
       ],
     };
+  // a grant this mind already has, with money left (it came back, or the owner disconnected)
+  const left = facts?.balance && facts.balance.remainingUsd > 0 ? facts.balance.remainingUsd : 0;
+  const offered = left || CREDIT_USD;
   return {
     ...card,
     status: "not-asked",
     optional: true,
     text: [
-      `iterate, the company that made this software, gives your mind ${dollars(CREDIT_USD)} of credit for AI: voice calls, web research, and your agents' model requests.`,
+      left
+        ? `Your mind has ${dollars(left)} of iterate's credit for AI left: voice calls, web research, and your agents' model requests.`
+        : `iterate, the company that made this software, gives your mind ${dollars(CREDIT_USD)} of credit for AI: voice calls, web research, and your agents' model requests.`,
       AGENTS_PAID_TODAY,
     ],
     points: [
@@ -287,10 +335,8 @@ function words(state: StepState, context: StepContext): Card {
         text: `Help and updates, as events in one place of your mind (${MELD_APPEND}), and there too the messages of accounts you connect through iterate Cloud. ${facts?.meld ? "You allowed that with your passkey already" : "You allow that with your passkey on the next page"}, and you can end it at any time.`,
       },
       {
-        title: `When the ${dollars(CREDIT_USD)} is spent`,
-        text: [...whenSpent(true, true), "A key of your own always wins over the credit."].join(
-          " ",
-        ),
+        title: `When the ${dollars(offered)} is spent`,
+        text: "Your mind stops sending requests to iterate. Your agents go on with your ChatGPT plan if you connected one, else with your Cloudflare account; voice calls and web research stop until you add a key of your own. A key of your own always wins over the credit.",
       },
     ],
     buttons: [
@@ -315,12 +361,38 @@ async function check(context: StepContext, state: StepState): Promise<Facts> {
   // for a mind that can take the credit: iterate learns nothing of a mind with its own keys
   if (!canSign || !meld.on || ![openai, exa].some(takesCredit)) return facts;
   const answer = await credit.balance();
-  if (answer.ok) return { ...facts, balance: answer.balance };
-  if (answer.reason === "paused")
-    return { ...facts, ...(last?.balance && { balance: last.balance }), paused: true };
-  // no grant: no balance. No answer: the last numbers stay
-  if (answer.reason === "not-connected") return facts;
-  return { ...facts, ...(last?.balance && { balance: last.balance }) };
+  if (!answer.ok) return { ...facts, ...lastBalance(answer.reason, last) };
+  // under zero is not enough: only a balance that is certainly spent switches anything off
+  if (spentOf(answer.balance) !== "spent") return { ...facts, balance: answer.balance };
+  // SPENT: iterate's proxy is switched off for this mind, so no request goes to iterate first and
+  // is refused there. deleteProxy deletes iterate's proxy and nothing else; the rule stays. Every
+  // check of a spent balance does it, so a retry, two checks at once, or a mind spent before this
+  // code all end with no secret by iterate's proxy. Not on "paused" or "none-today": they end
+  // tomorrow and answer no balance, above.
+  if (openai !== "iterate-proxy" && exa !== "iterate-proxy")
+    return { ...facts, balance: answer.balance };
+  // a delete that throws leaves that path by proxy in the facts, and the next check tries again
+  const [openaiOff, exaOff] = await Promise.all(
+    CREDIT_SECRETS.map(({ path }) =>
+      credit.deleteProxy(path).catch((error: unknown) => {
+        console.warn({ event: "onboarding.switch-off-failed", path, error: String(error) });
+        return false;
+      }),
+    ),
+  );
+  return {
+    ...facts,
+    openai: openaiOff ? "unset" : openai,
+    exa: exaOff ? "unset" : exa,
+    balance: answer.balance,
+  };
+}
+
+/** The facts' balance when iterate gave no new one: the last numbers stay, except with no grant. */
+function lastBalance(reason: string, last: Facts | undefined): Partial<Facts> {
+  if (reason === "paused") return { ...(last?.balance && { balance: last.balance }), paused: true };
+  if (reason === "not-connected") return {};
+  return { ...(last?.balance && { balance: last.balance }) };
 }
 
 /** THE GRANT AND THE SECRETS, after a member's signed rule: each path set only where it is unset,
@@ -366,6 +438,8 @@ async function creditOutcome(context: StepContext): Promise<Outcome> {
     if (!kinds.some(takesCredit)) return { ownKeys: true };
     const answer = await context.credit.connect();
     if (!answer.ok) return { failed: answer.reason };
+    // a spent grant sets nothing: the next check would only switch the proxy off again
+    if (spentOf(answer.balance) === "spent") return { failed: "spent" };
     for (const [index, { path, urls, name }] of CREDIT_SECRETS.entries()) {
       const kind = kinds[index]!;
       const set = kind === "unset" ? await context.credit.setByProxy(path, urls) : kind;
@@ -521,11 +595,13 @@ async function changed(
 ) {
   const next = Facts.safeParse(after).data;
   const last = Facts.safeParse(before).data;
-  const inUse = next?.openai === "iterate-proxy" || next?.exa === "iterate-proxy";
-  if (!next?.meld || !next.balance || !inUse || next.balance.remainingUsd > 0) return;
-  if (last?.balance && last.balance.remainingUsd <= 0) return;
+  // a balance exists only after a grant, so a mind that never took the credit has none
+  if (!next?.meld || !next.balance || spentOf(next.balance) !== "spent") return;
+  if (spentOf(last?.balance) === "spent") return;
   const text = [
-    `Your ${dollars(next.balance.grantedUsd)} of iterate credit is used. Choose what pays now:`,
+    `Your ${dollars(next.balance.grantedUsd)} of iterate credit is used.`,
+    ...afterSpent(next.openai, next.exa),
+    "Choose what pays now:",
     `- Your ChatGPT plan: run \`npx iterate@latest chatgpt connect ${context.mind}\` on your computer.`,
     `- Your own OpenAI key: the button on https://onboarding.${context.zone}/ opens the mind's form for it.`,
     "- Cloudflare credit: add it at https://dash.cloudflare.com/?to=/:account/ai/ai-gateway",

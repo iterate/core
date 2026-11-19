@@ -125,7 +125,7 @@ test("not asked: the card says what iterate sees and cannot see, and offers Conn
     "Your agents already work without it, paid by your own Cloudflare account (its AI Gateway credit). After you connect, each agent request goes to iterate's credit first.",
   ]);
   expect(card?.points?.find((point) => point.title === "When the $10 is spent")?.text).toBe(
-    "Your agents go on through your own Cloudflare account, but each of their requests still goes to iterate first and is refused there, until you disconnect or add a key of your own. Voice calls and web research stop until you add a key of your own. A key of your own always wins over the credit.",
+    "Your mind stops sending requests to iterate. Your agents go on with your ChatGPT plan if you connected one, else with your Cloudflare account; voice calls and web research stop until you add a key of your own. A key of your own always wins over the credit.",
   );
   const sees = card?.points?.find((point) => point.title === "What iterate sees")?.text;
   expect(sees).toMatch(
@@ -337,7 +337,10 @@ test("both keys the owner's: no offer, a press asks nothing, and with the rule s
 
   const melded = fakeMind({ meld: "member" });
   const second = fakeCredit({ secrets: own });
-  second.state.balance = { ok: true, balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0 } };
+  second.state.balance = {
+    ok: true,
+    balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0, pendingUsd: 0 },
+  };
   const signed = await runStep(contextOf(melded, second.credit), STEP, "check");
   expect(signed).toMatchObject({ status: "own-keys" });
   expect(signed.words).toMatch(/Your signed rule still lets iterate send help/);
@@ -432,16 +435,204 @@ test("the offer says the passkey page comes only when no rule is signed yet", as
   );
 });
 
-test("the spent card with an own OpenAI key names only what stopped: web research", async () => {
+test.for([
+  ["/secrets/openai", "own", "Your agents and voice calls run on your own OpenAI key."],
+  [
+    "/secrets/openai",
+    "other-proxy",
+    "Your agents and voice calls run through the proxy your mind set for OpenAI.",
+  ],
+  [
+    "/secrets/openai",
+    "unset",
+    "Your agents go on with your ChatGPT plan if you connected one, else with your Cloudflare account. Voice calls need a key of your own.",
+  ],
+  ["/secrets/exa", "own", "Web research runs on your own Exa key."],
+  ["/secrets/exa", "other-proxy", "Web research runs through the proxy your mind set for Exa."],
+  ["/secrets/exa", "unset", "Web research needs a key of your own."],
+] as const)(
+  "spent with %s %s: only the other path's proxy is deleted, this one stays, and the card and the mail say what it runs on",
+  async ([path, kind, line]) => {
+    const other = path === "/secrets/openai" ? "/secrets/exa" : "/secrets/openai";
+    const mind = fakeMind({ meld: "member" });
+    const fake = fakeCredit({
+      secrets: { [path]: kind, [other]: "iterate-proxy" },
+      balance: {
+        ok: true,
+        balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0, pendingUsd: 0 },
+      },
+    });
+    const card = await runStep(contextOf(mind, fake.credit), STEP, "check");
+    expect(fake).toMatchObject({ secrets: { [path]: kind, [other]: "unset" } });
+    expect(fake.calls.filter((call) => call.startsWith("delete "))).toEqual([`delete ${other}`]);
+    expect(card).toMatchObject({ status: "spent" });
+    expect(card.words).toContain(line);
+    expect(mind.mailed[0]?.text).toContain(line);
+  },
+);
+
+test("paused (iterate's total for the day) deletes nothing: the card stays connected, with the pause", async () => {
   const mind = fakeMind({ meld: "member" });
-  const fake = fakeCredit({
-    secrets: { "/secrets/openai": "own", "/secrets/exa": "iterate-proxy" },
-    balance: { ok: true, balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0 } },
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.state.balance = { ok: false, reason: "paused" };
+  const card = await runStep(context, STEP, "check");
+  expect(fake.calls.filter((call) => call.startsWith("delete "))).toEqual([]);
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" },
   });
-  const card = await runStep(contextOf(mind, fake.credit), STEP, "check");
+  expect(card).toMatchObject({ status: "connected" });
+  expect(card.words).toMatch(/iterate's credit is paused until tomorrow \(UTC\)\./);
+});
+
+test.for([
+  [
+    "under zero with an estimate iterate may still replace",
+    { pendingUsd: 1.5 },
+    "iterate is still counting an interrupted request. Until it has, it refuses your mind's requests; this ends within 15 minutes.",
+  ],
+  [
+    "under zero from a proxy that says nothing of pending estimates",
+    {},
+    "Your balance is at or under zero, so iterate refuses your mind's requests for now.",
+  ],
+] as const)(
+  "%s: nothing is deleted, no mail, and the connected card says why requests are refused",
+  async ([, pending, line]) => {
+    const mind = fakeMind({ meld: "member" });
+    const fake = fakeCredit();
+    const context = contextOf(mind, fake.credit);
+    await runStep(context, STEP, "connect");
+    fake.state.balance = {
+      ok: true,
+      balance: { grantedUsd: 10, spentUsd: 10.4, remainingUsd: -0.4, ...pending },
+    };
+    const card = await runStep(context, STEP, "check");
+    expect(fake.calls.filter((call) => call.startsWith("delete "))).toEqual([]);
+    expect(fake).toMatchObject({
+      secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" },
+    });
+    expect(mind).toMatchObject({ mailed: [] });
+    expect(card).toMatchObject({ status: "connected" });
+    expect(card.words).toContain("-$0.40 of $10 left.");
+    expect(card.words).toContain(line);
+  },
+);
+
+test("the mail goes at the true end: under zero while iterate counts, then certainly spent", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.state.balance = {
+    ok: true,
+    balance: { grantedUsd: 10, spentUsd: 10.4, remainingUsd: -0.4, pendingUsd: 1.5 },
+  };
+  await runStep(context, STEP, "check");
+  expect(mind).toMatchObject({ mailed: [] });
+  // the real cost replaced the estimate, and the rest of the grant was used after it
+  await nextMs();
+  fake.state.balance = {
+    ok: true,
+    balance: { grantedUsd: 10, spentUsd: 10.1, remainingUsd: -0.1, pendingUsd: 0 },
+  };
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "spent" });
+  expect(mind.mailed).toHaveLength(1);
+  expect(fake).toMatchObject({ secrets: { "/secrets/openai": "unset", "/secrets/exa": "unset" } });
+});
+
+test.for([
+  ["no answer", { ok: false, reason: "cloud-unreachable" }],
+  ["paused", { ok: false, reason: "paused" }],
+] as const)(
+  "%s while the last known balance was spent: nothing is deleted on a remembered number",
+  async ([, answer]) => {
+    const mind = fakeMind({ meld: "member" });
+    // a mind spent while a proxy without `pendingUsd` answered: its secrets by proxy still stand
+    const fake = fakeCredit();
+    const context = contextOf(mind, fake.credit);
+    await runStep(context, STEP, "connect");
+    fake.state.balance = { ok: true, balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0 } };
+    await runStep(context, STEP, "check");
+    await nextMs();
+    fake.state.balance = answer;
+    await runStep(context, STEP, "check");
+    expect(fake.calls.filter((call) => call.startsWith("delete "))).toEqual([]);
+    expect(mind).toMatchObject({ mailed: [] });
+  },
+);
+
+test("a delete that throws at the spent moment: every card still answers, the card names what still goes to iterate, and the next check deletes it", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.state.deleteThrows.add("/secrets/exa");
+  fake.state.balance = {
+    ok: true,
+    balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0, pendingUsd: 0 },
+  };
+  const cards = await onboardingCards(context);
+  const card = cards.find((one) => one.step === STEP);
   expect(card).toMatchObject({ status: "spent" });
-  expect(card.words).toMatch(/Web research stops until you add a key of your own\./);
-  expect(card.words).not.toMatch(/Your agents go on/);
+  expect(card?.text).toContain(
+    "Your mind's requests to Exa still go to iterate and are refused there, until the next check switches them off.",
+  );
+  expect(card?.text).not.toContain("Your mind's requests no longer go to iterate.");
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "unset", "/secrets/exa": "iterate-proxy" },
+  });
+  fake.state.deleteThrows.clear();
+  await nextMs();
+  const after = await runStep(context, STEP, "check");
+  expect(fake).toMatchObject({ secrets: { "/secrets/exa": "unset" } });
+  expect(after.words).toContain("Your mind's requests no longer go to iterate.");
+  expect(mind.mailed).toHaveLength(1);
+});
+
+test("a balance that comes back above zero (an estimate settled lower): the card offers Connect again, and a press sets the secrets on the same grant", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.state.balance = {
+    ok: true,
+    balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0, pendingUsd: 0 },
+  };
+  fake.state.connect = fake.state.balance;
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "spent" });
+  // a press while spent sets nothing: the grant answers zero
+  expect(await runStep(context, STEP, "connect")).toMatchObject({ status: "spent" });
+  expect(fake).toMatchObject({ secrets: { "/secrets/openai": "unset", "/secrets/exa": "unset" } });
+  // the estimate settles: the same grant has money again
+  await nextMs();
+  const back = { ok: true as const, balance: { grantedUsd: 10, spentUsd: 9.9, remainingUsd: 0.1 } };
+  fake.state.balance = back;
+  fake.state.connect = back;
+  const offer = await runStep(context, STEP, "check");
+  expect(offer).toMatchObject({ status: "not-asked" });
+  expect(offer.words).toMatch(/Buttons: Connect · Not now/);
+  // the offer says what is left of this mind's grant, not a new $10
+  expect(offer.words).toContain(
+    "Your mind has $0.10 of iterate's credit for AI left: voice calls, web research, and your agents' model requests.",
+  );
+  expect(offer.words).toContain("When the $0.10 is spent");
+  expect(offer.words).not.toMatch(/gives your mind \$10/);
+  const again = await runStep(context, STEP, "connect");
+  expect(again).toMatchObject({ status: "connected" });
+  expect(again.words).toMatch(/\$0\.10 of \$10 left\./);
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" },
+  });
+  // one mail and one message for the grant, also after it is spent a second time
+  await nextMs();
+  fake.state.balance = {
+    ok: true,
+    balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0, pendingUsd: 0 },
+  };
+  await runStep(context, STEP, "check");
+  expect(mind.mailed).toHaveLength(1);
 });
 
 test("the guides say who pays, and the spoken offer does not claim the agents need the credit", () => {
@@ -455,8 +646,10 @@ test("the guides say who pays, and the spoken offer does not claim the agents ne
     "before the connect, the mind's agents already work, paid by the owner's own Cloudflare account",
   );
   expect(guide).toContain(
-    "When the credit is spent, the agents go on through the owner's Cloudflare account, but each request still goes to iterate first and is refused there, until the owner disconnects or sets a key of their own. Voice calls and web research stop until the owner sets a key.",
+    "When the credit is spent, the step deletes its two secrets by iterate's proxy (the rule stays), so the mind's requests no longer go to iterate: the agents go on with the owner's ChatGPT plan if they connected one, else with their Cloudflare account, and voice calls and web research stop until the owner sets a key of their own.",
   );
+  for (const text of [guide, read("onboarding.md")])
+    expect(text).not.toMatch(/still goes to iterate first|first and is refused/);
   const offer =
     "iterate gives your mind $10 of credit for AI: voice calls, web research, and your agents' requests, which your Cloudflare credit pays for today. Want it?";
   for (const text of [guide, read("onboarding.md")]) {
@@ -837,39 +1030,49 @@ test("Disconnect deletes only iterate's secrets by proxy at once, then one link 
   });
 });
 
-test("the credit used: the card names the three ways to pay, and the chat and the owner's mail say it once", async () => {
+test("the credit used: iterate's proxy is switched off once, the card says what runs now, and the chat and the owner's mail say it once", async () => {
   const mind = fakeMind({ meld: "member" });
   const fake = fakeCredit();
   const context = contextOf(mind, fake.credit);
   await runStep(context, STEP, "connect");
   fake.state.balance = {
     ok: true,
-    balance: { grantedUsd: 10, spentUsd: 10.2, remainingUsd: -0.2 },
+    balance: { grantedUsd: 10, spentUsd: 10.2, remainingUsd: -0.2, pendingUsd: 0 },
   };
   const answer = await runStep(context, STEP, "check");
+  // switched off: both secrets by iterate's proxy deleted, once; the rule stays
+  expect(fake).toMatchObject({ secrets: { "/secrets/openai": "unset", "/secrets/exa": "unset" } });
+  expect(fake.calls.filter((call) => call.startsWith("delete "))).toEqual([
+    "delete /secrets/openai",
+    "delete /secrets/exa",
+  ]);
+  expect(mind).toMatchObject({ proposed: [] });
   expect(answer).toMatchObject({ status: "spent" });
-  expect(answer.words).toMatch(/Your \$10 of credit is used\./);
-  // who pays now, said plainly: the agents fall back to Cloudflare, voice and research stop
-  expect(answer.words).toMatch(
-    /Your agents go on through your own Cloudflare account, but each of their requests still goes to iterate first and is refused there, until you disconnect or add a key of your own\./,
-  );
-  expect(answer.words).toMatch(
-    /Voice calls and web research stop until you add a key of your own\./,
-  );
-  expect(answer.words).toMatch(/Choose what pays now:/);
+  const spentText = [
+    "Your $10 of credit is used.",
+    "Your mind's requests no longer go to iterate.",
+    "Your agents go on with your ChatGPT plan if you connected one, else with your Cloudflare account. Voice calls need a key of your own.",
+    "Web research needs a key of your own.",
+  ];
+  for (const line of spentText) expect(answer.words).toContain(line);
+  expect(answer.words).not.toMatch(/iterate first|Connect ·|· Connect/);
   expect(answer.words).toMatch(/Command: npx iterate@latest chatgpt connect mind\.example\.com/);
-  expect(answer.words).toMatch(/Add my OpenAI key · Add Cloudflare credit · Disconnect/);
+  expect(answer.words).toMatch(/Buttons: Add my OpenAI key · Add Cloudflare credit · End the rule/);
+  expect(mind.mailed[0]?.text).toContain(
+    "Your $10 of iterate credit is used.\nYour mind's requests no longer go to iterate.\nYour agents go on with your ChatGPT plan if you connected one, else with your Cloudflare account. Voice calls need a key of your own.\nWeb research needs a key of your own.\nChoose what pays now:",
+  );
   const drawn = () =>
     mind.chat().filter((event) => event.type === "events.iterate.com/agent/web-message-sent");
   expect(drawn()).toHaveLength(1);
   expect(mind).toMatchObject({
     mailed: [{ from: "onboarding@example.com", to: "owner@example.org" }],
   });
-  // checked again, and the page opened again: nothing more is said
+  // checked again, and the page opened again: nothing more is said or deleted
   await runStep(context, STEP, "check");
   await onboardingCards(context);
   expect(drawn()).toHaveLength(1);
   expect(mind.mailed).toHaveLength(1);
+  expect(fake.calls.filter((call) => call.startsWith("delete "))).toHaveLength(2);
   // the key's form is the mind's own: the answer is its link, and the agent sees no value
   expect(await runStep(context, STEP, "add-openai-key")).toMatchObject({
     link: "https://mind.example.com/secrets/collect/1",
@@ -1176,17 +1379,22 @@ test("the credit-used mail goes once for each grant: two checks at the same mome
   await runStep(context, STEP, "connect");
   fake.state.balance = {
     ok: true,
-    balance: { grantedUsd: 10, spentUsd: 10.2, remainingUsd: -0.2 },
+    balance: { grantedUsd: 10, spentUsd: 10.2, remainingUsd: -0.2, pendingUsd: 0 },
   };
   // a page open and the hook at once: both see the change from the same facts
   await Promise.all([runStep(context, STEP, "check"), onboardingCards(context)]);
   expect(mind).toMatchObject({ mailed: [{ to: "owner@example.org" }] });
+  // and one delete of each path: the second check finds it unset
+  expect(fake.calls.filter((call) => call.startsWith("delete "))).toEqual([
+    "delete /secrets/openai",
+    "delete /secrets/exa",
+  ]);
   // a reservation settles below its estimate: the balance goes up, then down again
   fake.state.balance = { ok: true, balance: { grantedUsd: 10, spentUsd: 9.9, remainingUsd: 0.1 } };
   await runStep(context, STEP, "check");
   fake.state.balance = {
     ok: true,
-    balance: { grantedUsd: 10, spentUsd: 10.3, remainingUsd: -0.3 },
+    balance: { grantedUsd: 10, spentUsd: 10.3, remainingUsd: -0.3, pendingUsd: 0 },
   };
   await runStep(context, STEP, "check");
   expect(mind.mailed).toHaveLength(1);
@@ -1400,6 +1608,11 @@ function fakeMind(
   };
 }
 
+/** A press's check is keyed by the millisecond (steps.ts `runStep`): two in one write once. */
+function nextMs() {
+  return new Promise((resolve) => setTimeout(resolve, 2));
+}
+
 /** A double of the step's calls outside its log: what the Cloud and the secrets answer, and every
  *  call made. */
 function fakeCredit(
@@ -1420,9 +1633,12 @@ function fakeCredit(
     "/secrets/exa": "unset",
     ...init.secrets,
   };
+  type Answer = Awaited<ReturnType<CloudCredit["balance"]>>;
   const state = {
-    connect: init.connect || { ok: true as const, balance: BALANCE },
-    balance: init.balance || { ok: true as const, balance: BALANCE },
+    connect: init.connect || ({ ok: true, balance: BALANCE } as Answer),
+    balance: init.balance || ({ ok: true, balance: BALANCE } as Answer),
+    /** A delete of each path named here throws, until the test removes it. */
+    deleteThrows: new Set<string>(),
   };
   const credit: CloudCredit = {
     canSign: async () => init.canSign ?? true,
@@ -1444,6 +1660,7 @@ function fakeCredit(
       return "set";
     },
     deleteProxy: async (path) => {
+      if (state.deleteThrows.has(path)) throw new Error("the vault did not answer");
       if (secrets[path] !== "iterate-proxy") return false;
       calls.push(`delete ${path}`);
       secrets[path] = "unset";

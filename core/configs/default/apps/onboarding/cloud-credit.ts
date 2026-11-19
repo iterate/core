@@ -28,6 +28,9 @@ export const Balance = z.object({
   grantedUsd: z.number(),
   spentUsd: z.number(),
   remainingUsd: z.number(),
+  /** This mind's charged estimates that a correction can still replace (an interrupted request,
+   *  for up to 15 minutes). Absent from a proxy older than it. */
+  pendingUsd: z.number().optional(),
 });
 export type Balance = z.infer<typeof Balance>;
 
