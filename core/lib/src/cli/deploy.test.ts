@@ -40,6 +40,7 @@ import {
   saysTheStateStoreRefused,
   stageNameOf,
   telemetryTokenStep,
+  unfinishedDeployIn,
   verifyTelemetryToken,
   zeroTrustStep,
 } from "./deploy.ts";
@@ -859,7 +860,7 @@ test("the store with this stage's config on this computer goes on with that conf
   ]);
   expect(deployArgsOf("ada-labs-com")).not.toContain("--adopt");
   const command = readFileSync(new URL("./deploy.ts", import.meta.url).pathname, "utf8");
-  expect(command.match(/adopt: .*/g)).toEqual(["adopt: Boolean(earlier),"]);
+  expect(command.match(/adopt: .*/g)).toEqual(["adopt: Boolean(earlier || resuming),"]);
   expect(command).toContain(
     'This computer holds the config of an earlier deploy of this mind (${configFile.replace(homedir(), "~")}), and the account holds its stack\'s state store: going on with that config. Its owners: ',
   );
@@ -1051,6 +1052,44 @@ test("the flag's forward is one plain address, or none; an empty one is refused,
   expect(() => deployConfigOf({ ...answers, mailForwardTo: "Team <team@group.example>" })).toThrow(
     /no email address/,
   );
+});
+
+test("unfinishedDeployIn matches only a marker for the same account, stage, domain, and mind id", () => {
+  const dir = mkdtempSync(join(tmpdir(), "deploy-marker-"));
+  const markerFile = join(dir, "deploying.json");
+  const expected = {
+    accountId: "a".repeat(32),
+    stageName: "alpiti-com",
+    domain: "alpiti.com",
+    mindId: "b".repeat(64),
+  };
+
+  expect(unfinishedDeployIn(markerFile, expected)).toBeUndefined();
+
+  writeFileSync(markerFile, JSON.stringify({ ...expected, firstDeploy: true }));
+  expect(unfinishedDeployIn(markerFile, expected)).toEqual({ ...expected, firstDeploy: true });
+  expect(unfinishedDeployIn(markerFile, { ...expected, mindId: undefined })).toBeUndefined();
+  expect(unfinishedDeployIn(markerFile, { ...expected, mindId: "c".repeat(64) })).toBeUndefined();
+  expect(unfinishedDeployIn(markerFile, { ...expected, domain: "other.com" })).toBeUndefined();
+  expect(unfinishedDeployIn(markerFile, { ...expected, stageName: "other" })).toBeUndefined();
+  expect(
+    unfinishedDeployIn(markerFile, { ...expected, accountId: "d".repeat(32) }),
+  ).toBeUndefined();
+
+  writeFileSync(markerFile, "not json");
+  expect(unfinishedDeployIn(markerFile, expected)).toBeUndefined();
+
+  // deployMind writes deploying.json before deployStack, removes it on success, resumes without
+  // asking --yes when no config changed, adopts unfinished resources, and says "deployed" when
+  // finishing a first deploy.
+  const source = readFileSync(new URL("./deploy.ts", import.meta.url), "utf8");
+  expect(source).toContain('const markerFile = join(work, "deploying.json");');
+  expect(source).toContain(
+    "if (resuming && changes.length === 0 && forwardAfter === forwardBefore)",
+  );
+  expect(source).toContain("adopt: Boolean(earlier || resuming)");
+  expect(source).toContain("rmSync(markerFile, { force: true });");
+  expect(source).toContain("deployed && !resuming?.firstDeploy");
 });
 
 /** An account's answer for the settings of the Worker at each path in `found`, a 404 elsewhere. */

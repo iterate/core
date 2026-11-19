@@ -22,7 +22,14 @@
 // what it made. Each choice has a flag, so a coding agent can run and supervise it with nobody at
 // the terminal.
 import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -1388,6 +1395,34 @@ export async function earlierDeployOf(
   );
 }
 
+const UnfinishedDeploy = z.object({
+  accountId: z.string(),
+  stageName: z.string(),
+  domain: z.string(),
+  mindId: z.string(),
+  firstDeploy: z.boolean(),
+});
+
+/** Reads `deploying.json` when this computer started a deploy of the same mind that stopped before
+ *  finishing (including after the boundary Worker existed). Returns the marker when its account,
+ *  stage, domain, and mind id match, otherwise `undefined`. */
+export function unfinishedDeployIn(
+  markerFile: string,
+  expected: { accountId: string; stageName: string; domain: string; mindId?: string },
+) {
+  if (!expected.mindId || !existsSync(markerFile)) return undefined;
+  const marker = parsed(UnfinishedDeploy, readFileSync(markerFile, "utf8"));
+  if (
+    marker &&
+    marker.accountId === expected.accountId &&
+    marker.stageName === expected.stageName &&
+    marker.domain === expected.domain &&
+    marker.mindId === expected.mindId
+  )
+    return marker;
+  return undefined;
+}
+
 /** Verifies that a pasted or env-provided Cloudflare telemetry API token is an active
  *  account-owned token for `accountId`. Rejects user-owned tokens (which stop working when that
  *  user leaves the account) with a specific message. */
@@ -1777,6 +1812,7 @@ export async function deployMind(input: DeployInput) {
     const stageName = pick.zone?.stageName || stageNameOf(domain);
     const work = join(CACHE, "deploys", stageName);
     const configFile = join(work, "config.json");
+    const markerFile = join(work, "deploying.json");
     const deployed = await deployedMind(cf, account.id, stageName);
     if (deployed && !deployed.zones.includes(domain))
       throw new Error(
@@ -1786,6 +1822,14 @@ export async function deployMind(input: DeployInput) {
       throw new Error(
         `The mind at ${deployed.controlPlaneHostname} was deployed before its stack kept the deploy's whole config, so a deploy from here could drop what no Worker holds, such as its sandboxes' image. Nothing was changed. Deploy it once with its own config by core/alchemy's script (core/alchemy/README.md), then run the command again.`,
       );
+    const resuming = deployed
+      ? unfinishedDeployIn(markerFile, {
+          accountId: account.id,
+          stageName,
+          domain,
+          mindId: deployed.mindId,
+        })
+      : undefined;
     // AN EARLIER DEPLOY (`earlierDeployOf`): one whose config is here goes on with that config, its
     // mind's id among it, but for what a flag names; a destroy's leftover store is a new mind
     const earlier = deployed
@@ -1854,14 +1898,18 @@ export async function deployMind(input: DeployInput) {
       const how = `${
         changes.length > 0 ? `with ${changes.join(" and ")}` : "with the same owners and hostname"
       }${forwardWords ? `; it ${forwardWords}` : ""}`;
-      if (
-        !input.yes &&
-        !(await ask<boolean>(`a mind is at ${domain} already; pass --yes to deploy over it`, () =>
-          p.confirm({ message: `Deploy over it, ${how}?` }),
-        ))
-      )
-        throw new Error("Nothing was changed.");
-      p.log.info(`Deploying over it, ${how}.`);
+      if (resuming && changes.length === 0 && forwardAfter === forwardBefore) {
+        p.log.info(`Resuming the unfinished deploy of ${domain} (${how}).`);
+      } else {
+        if (
+          !input.yes &&
+          !(await ask<boolean>(`a mind is at ${domain} already; pass --yes to deploy over it`, () =>
+            p.confirm({ message: `Deploy over it, ${how}?` }),
+          ))
+        )
+          throw new Error("Nothing was changed.");
+        p.log.info(`Deploying over it, ${how}.`);
+      }
     } else if (unfinished)
       p.log.info(
         `This computer holds the config of an earlier deploy of this mind (${configFile.replace(homedir(), "~")}), and the account holds its stack's state store: going on with that config. Its owners: ${config.ownerEmails.join(", ")}; its control plane: ${controlPlaneHostname}.`,
@@ -2056,6 +2104,20 @@ export async function deployMind(input: DeployInput) {
       const status = progress.onLine(line);
       if (status) deploying.say(status);
     };
+    writeFileSync(
+      markerFile,
+      `${JSON.stringify(
+        {
+          accountId: account.id,
+          stageName,
+          domain,
+          mindId,
+          firstDeploy: !deployed || Boolean(resuming?.firstDeploy),
+        },
+        null,
+        2,
+      )}\n`,
+    );
     const code = await deployStack({
       source: ready,
       stageName,
@@ -2065,7 +2127,7 @@ export async function deployMind(input: DeployInput) {
       log,
       children,
       say: onDeployLine,
-      adopt: Boolean(earlier),
+      adopt: Boolean(earlier || resuming),
     });
     if (code !== 0) {
       deploying.fail(`The deploy failed (exit ${code}).`);
@@ -2074,6 +2136,7 @@ export async function deployMind(input: DeployInput) {
         `The deploy failed (exit ${code}). Its whole log: ${log}. A deploy keeps what it made: run the command again on this computer, and it goes on with this deploy's config.`,
       );
     }
+    rmSync(markerFile, { force: true });
     deploying.done(`Deployed (${seconds(deployBegan)}). Full log: ${log.replace(homedir(), "~")}`);
     const boundary = `/accounts/${account.id}/workers/scripts/iterate-${stageName}-boundary/settings`;
     const check = await boundaryCheck(
@@ -2131,7 +2194,7 @@ export async function deployMind(input: DeployInput) {
     const primaryZone = config.cloudflare.zones[0] || domain;
     const onboardingUrl = onboardingUrlOf(primaryZone);
     p.log.success(
-      deployed
+      deployed && !resuming?.firstDeploy
         ? `Your mind at ${c.domain(controlPlaneHostname)} is updated.`
         : `Your mind is deployed at ${c.domain(controlPlaneHostname)}.`,
     );

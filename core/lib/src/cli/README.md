@@ -198,9 +198,12 @@ the store and no mind's boundary Worker, the next run decides by what is there:
   stack ("Erase a mind", with a config of that stage and account); the command then deploys a
   new mind there. `--erase-records` erases no record of a half-made stack.
 
-One gap is known: a stop after the boundary Worker exists makes the next run a deploy over a
-mind that is there, which does not adopt, so a resource that was under way at the stop is
-refused. The way out is core/alchemy's script by hand, with `--adopt` after the deploy's flags.
+When a deploy stops after the boundary Worker already exists, `${XDG_CACHE_HOME:-~/.cache}/iterate/deploys/<stage>/deploying.json`
+stays on disk until `deployStack` finishes. Rerunning the same command on this computer resumes
+that unfinished deploy without asking for `--yes`, passes `--adopt` to take over any resource
+that was under way at the stop, and reports the mind as deployed (not updated) when finishing a
+first deploy. Running from another computer (without `deploying.json`) treats it as a deploy over
+an existing mind and asks before going on.
 
 After the deploy, once the mind is answering and its identity is posted, the command prints a short
 success message, waits for Enter, and opens `https://onboarding.<zone>/` in the browser to continue
