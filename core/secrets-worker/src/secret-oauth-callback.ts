@@ -28,10 +28,14 @@ export async function secretOAuthCallback(
   const url = new URL(request.url);
   const state = parseSecretOAuthState(url.searchParams.get("state"));
   if (!state || !SECRET_PATH.test(state.path))
-    return callbackPage(400, "This link is not one the platform issued, or it has expired.");
+    return callbackPage(
+      request,
+      400,
+      "This link is not one the platform issued, or it has expired.",
+    );
   const { start } = state;
   if (!start || !(await startedHere(request, start, state.path, state.nonce)))
-    return notStartedHere();
+    return notStartedHere(request);
   const admission = admitted(request, await anyoneWithLinkOf(state.path, state.nonce));
   if (admission instanceof Response) return admission;
   const providerError = url.searchParams.get("error");
@@ -44,23 +48,24 @@ export async function secretOAuthCallback(
         by: admission.by,
       });
     } catch (error) {
-      return callbackPage(400, error instanceof Error ? error.message : String(error));
+      return callbackPage(request, 400, error instanceof Error ? error.message : String(error));
     }
     if (ended.status === "declined")
       return withStartCleared(
         ended.next
           ? seeOther(ended.next)
-          : callbackPage(200, "You declined. You can close this tab."),
+          : callbackPage(request, 200, "You declined. You can close this tab."),
         { start, path: state.path, nonce: state.nonce },
       );
     const again = new URL(startLinkOf(url.origin, state.path, state.nonce));
     return plainPage(
+      request,
       400,
       `<p role="alert" data-type="error">${escaped(`The provider could not connect the account. It answered: ${providerError}`)}</p><p><a href="${escaped(again.pathname + again.search)}">Try again</a></p>`,
     );
   }
   const code = url.searchParams.get("code");
-  if (!code) return callbackPage(400, "The provider sent no authorization code.");
+  if (!code) return callbackPage(request, 400, "The provider sent no authorization code.");
   let answer: Awaited<ReturnType<CompleteOAuth>>;
   try {
     answer = await completeOAuth(state.path, {
@@ -71,13 +76,18 @@ export async function secretOAuthCallback(
     });
   } catch (error) {
     return callbackPage(
+      request,
       400,
       `Storing the tokens for ${state.path} failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   const page = answer.result.next
     ? seeOther(answer.result.next)
-    : callbackPage(200, `Done: the secret ${state.path} holds the tokens. You can close this tab.`);
+    : callbackPage(
+        request,
+        200,
+        `Done: the secret ${state.path} holds the tokens. You can close this tab.`,
+      );
   return withFacts(
     await withStartCleared(page, { start, path: state.path, nonce: state.nonce }),
     answer.facts,

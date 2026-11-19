@@ -481,8 +481,88 @@ grid-template-columns: auto minmax(0, 1fr);
 .access form {
 grid-column: 2;
 }
+}
+.masthead {
+display: flex;
+align-items: center;
+gap: 0.75rem;
+}
+.masthead .mind {
+font-weight: 600;
+overflow-wrap: anywhere;
+}
+.sr-only {
+position: absolute;
+width: 1px;
+height: 1px;
+margin: -1px;
+padding: 0;
+overflow: hidden;
+clip-path: inset(50%);
+white-space: nowrap;
+border: 0;
+}
+.prose {
+display: flex;
+flex-direction: column;
+gap: 0.75rem;
+}
+.reveal-field {
+position: relative;
+display: flex;
+}
+main .reveal-field > input {
+flex: 1;
+min-width: 0;
+padding-right: 2.75rem;
+}
+.reveal-field > button.reveal {
+position: absolute;
+top: 0;
+right: 0;
+bottom: 0;
+display: grid;
+place-items: center;
+width: 2.5rem;
+min-height: 0;
+padding: 0;
+background: none;
+color: var(--muted-foreground);
+}
+.reveal-field > button.reveal:hover {
+color: var(--foreground);
+}
+.reveal svg {
+width: 1.125rem;
+height: 1.125rem;
+}
+.reveal[aria-pressed="true"] .shows,
+.reveal[aria-pressed="false"] .hides {
+display: none;
+}
+button[aria-disabled="true"] {
+cursor: progress;
+opacity: 0.6;
+}
+a.button {
+display: flex;
+align-items: center;
+justify-content: center;
+min-height: 2.25rem;
+padding: 0 1rem;
+border-radius: calc(var(--radius) - 2px);
+background: var(--primary);
+color: var(--primary-foreground);
+font-size: 0.875rem;
+text-decoration: none;
+}
+main.wide a.button {
+display: inline-flex;
+}
+a.button:hover {
+background: color-mix(in oklab, var(--primary) 90%, transparent);
 }`;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-7dqMyqtlBz9rW2Admm29D9IE7lap0rzAQyTpodY4UjU='";
+export const plainPageCssHash = "'sha256-bFVjvjtap6ZIxq9IXdI1R2Oek+MAIbJbqFg0SCPd7fc='";

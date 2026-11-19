@@ -225,7 +225,8 @@ const CollectField = z.object({
 
 const CollectInput = z.object({
   egress: z.object({ urls: z.array(z.string()) }),
-  description: z.string().optional(),
+  // the form's Markdown takes time that grows faster than its length on a hostile line
+  description: z.string().max(4000).optional(),
   fields: z
     .array(CollectField)
     .min(1)

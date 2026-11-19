@@ -317,7 +317,7 @@ test("the mailed code's page for an app's sign-in names the host it signs in to,
   // the mind's own line of who gets a code is not on an app's page
   expect(html).not.toContain("Anyone can sign in");
   // the one image the page may load is on the app's own origin
-  expect(answer!.headers.get("content-security-policy")).toContain(`img-src ${ORIGIN}`);
+  expect(answer!.headers.get("content-security-policy")).toContain(`img-src data: ${ORIGIN}`);
   // a sign-in for the mind itself has no mailed code: its address page leads to its sign-in page
   const plain = await emailSignInResponse(
     stack.env,
@@ -372,7 +372,9 @@ test("the four pages of an app's sign-in agree: each shows the app's icon and it
     // the mind's own words for its own sign-in are not on an app's page
     expect(html, page).not.toContain(`Sign in to ${MIND}`);
     expect(html, page).not.toContain("Anyone can sign in");
-    expect(answer!.headers.get("content-security-policy"), page).toContain(`img-src ${ORIGIN}`);
+    expect(answer!.headers.get("content-security-policy"), page).toContain(
+      `img-src data: ${ORIGIN}`,
+    );
   }
   // the code's page: one sentence over the field, which names the host; what to do when no code
   // comes is under the button, with the way back

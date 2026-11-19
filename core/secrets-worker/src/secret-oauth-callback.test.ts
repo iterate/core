@@ -110,7 +110,9 @@ async function callbackFromTheProvider(query: string): Promise<Request> {
   );
   const [cookie] = page.headers.get("set-cookie")!.split(";");
   const proceed = new URL(
-    /<a href="([^"]+)">Continue/.exec(await page.text())![1]!.replace(/&(amp|#38);/g, "&"),
+    /<a class="button" href="([^"]+)">Continue/
+      .exec(await page.text())![1]!
+      .replace(/&(amp|#38);/g, "&"),
     PLATFORM,
   );
   const start = proceed.searchParams.get("start")!;

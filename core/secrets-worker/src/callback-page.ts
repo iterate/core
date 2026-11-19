@@ -1,36 +1,53 @@
 import type { SecretOperation } from "iterate/api";
 import { ITX_PERSON_HEADER, stampedCallerOf, type Person } from "iterate/principal";
-import { plainPageCssHash, standalonePage } from "iterate/standalone-page";
+import { PLAIN_PAGE_ICON_SRC, plainPageCssHash, standalonePage } from "iterate/standalone-page";
 
 // Safe inside HTML text and a double-quoted attribute only.
 export const escaped = (text: string) =>
   text.replace(/[&<>"]/g, (character) => `&#${character.charCodeAt(0)};`);
 
-// `body` is HTML the caller escaped. `wide`: a page a person works in (the approvals), where the
-// others are the narrow card of one question.
+// `body` is HTML the caller escaped. The page names its mind by `mind`, or else by the request's
+// hostname: the control plane's, the one host where the vault's pages answer.
 export function plainPage(
+  request: Request,
   status: number,
   body: string,
-  formAction = "'none'",
-  scriptNonce?: string,
-  wide = false,
-  // what the browser's tab says: a page a person keeps open names itself
-  title = "iterate",
+  {
+    formAction = "'none'",
+    scriptNonce,
+    // a page a person works in (the approvals), where the others are the narrow card of one question
+    wide = false,
+    // what the browser's tab says: a page a person keeps open names itself
+    title = "iterate",
+    // a page whose script fetches from its own origin (the approvals); no other page may fetch
+    connects = false,
+    mind = new URL(request.url).hostname,
+  }: {
+    formAction?: string;
+    scriptNonce?: string;
+    wide?: boolean;
+    title?: string;
+    connects?: boolean;
+    mind?: string;
+  } = {},
 ): Response {
-  const script = scriptNonce ? `script-src 'nonce-${scriptNonce}'; connect-src 'self'; ` : "";
+  const script = scriptNonce
+    ? `script-src 'nonce-${scriptNonce}'; ${connects ? "connect-src 'self'; " : ""}`
+    : "";
   return new Response(
     standalonePage({
       title,
-      head: `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`,
+      head: "",
       body,
       wide,
+      mind,
     }),
     {
       status,
       headers: {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
-        "content-security-policy": `default-src 'none'; ${script}style-src ${plainPageCssHash}; img-src 'self'; base-uri 'none'; form-action ${formAction}; frame-ancestors 'none'`,
+        "content-security-policy": `default-src 'none'; ${script}style-src ${plainPageCssHash}; img-src 'self' ${PLAIN_PAGE_ICON_SRC}; base-uri 'none'; form-action ${formAction}; frame-ancestors 'none'`,
         "x-frame-options": "DENY",
         // Not `no-referrer`: under it a form's POST sends `Origin: null`, and the boundary counts a
         // member's cookie on a write only from this origin, so the member would arrive signed out.
@@ -41,8 +58,9 @@ export function plainPage(
 }
 
 // Browser specs' failure reports quote an element marked `role="alert"` and `data-type="error"`.
-export function callbackPage(status: number, text: string): Response {
+export function callbackPage(request: Request, status: number, text: string): Response {
   return plainPage(
+    request,
     status,
     status >= 400
       ? `<p role="alert" data-type="error">${escaped(text)}</p>`
@@ -62,7 +80,11 @@ export function admitted(request: Request, anyoneWithLink: boolean): { by: PageC
   };
   if (anyoneWithLink || by?.member) return { by };
   if (by)
-    return callbackPage(403, `You are signed in as ${by.email}, who is not a member of this mind.`);
+    return callbackPage(
+      request,
+      403,
+      `You are signed in as ${by.email}, who is not a member of this mind.`,
+    );
   const { pathname, search } = new URL(request.url);
   return new Response(null, {
     status: 303,

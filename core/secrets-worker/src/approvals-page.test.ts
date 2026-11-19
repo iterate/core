@@ -18,6 +18,9 @@ test("no value of the page comes from its address: a link with a rule's words in
     gate: idleGate(),
   });
   const html = await opened.text();
+  // the page names the mind as its config does, and its script may fetch from its own origin
+  expect(html).toContain('<span class="mind">example.com</span>');
+  expect(opened.headers.get("content-security-policy")).toContain("connect-src 'self'");
   // the form that a member fills by hand, as it is with no link: its own first values, one Save
   for (const plain of [
     'name="path" value="/secrets/"',

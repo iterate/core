@@ -1,5 +1,5 @@
 import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
-import { plainPageCssHash, standalonePage } from "iterate/standalone-page";
+import { PLAIN_PAGE_ICON_SRC, plainPageCssHash, standalonePage } from "iterate/standalone-page";
 import { type AskingApp, appTile } from "./asking-app.ts";
 import { clientTile, knownMarkOf, shownLogoOf } from "./client-mark.ts";
 
@@ -64,7 +64,7 @@ export function page(
         ? `style-src ${plainPageCssHash} 'nonce-${nonce}'`
         : `style-src ${plainPageCssHash}`,
       ...(input.script ? [`script-src 'nonce-${nonce}'`, "connect-src 'self'"] : []),
-      ...(input.imageOrigin ? [`img-src ${input.imageOrigin}`] : []),
+      `img-src ${PLAIN_PAGE_ICON_SRC}${input.imageOrigin ? ` ${input.imageOrigin}` : ""}`,
     ].join("; "),
   );
   headers.set("x-frame-options", "DENY");

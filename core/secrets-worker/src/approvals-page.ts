@@ -98,7 +98,8 @@ export async function secretApprovals(request: Request, deps: ApprovalsDeps): Pr
   if (pathname === RULES_PATH && request.method === "POST") {
     const form = await request.formData();
     const path = String(form.get("path") ?? "");
-    if (!SECRET_PATH.test(path)) return callbackPage(400, "Name a secret as /secrets/<name>.");
+    if (!SECRET_PATH.test(path))
+      return callbackPage(request, 400, "Name a secret as /secrets/<name>.");
     const words = (name: string) =>
       String(form.get(name) ?? "")
         .split(/[\s,]+/)
@@ -108,6 +109,7 @@ export async function secretApprovals(request: Request, deps: ApprovalsDeps): Pr
     // shows it, in words.
     if (form.get("new") && (await deps.secretOf(path).approvals(path)).rule)
       return plainPage(
+        request,
         400,
         `<p role="alert" data-type="error">${escaped(path)} has a rule already. <a href="${SECRET_APPROVALS_PATH}#${escaped(ruleBlockId(path))}">Change it in its own block.</a></p>`,
       );
@@ -129,7 +131,7 @@ export async function secretApprovals(request: Request, deps: ApprovalsDeps): Pr
         answer.facts,
       );
     } catch (error) {
-      return callbackPage(400, error instanceof Error ? error.message : String(error));
+      return callbackPage(request, 400, error instanceof Error ? error.message : String(error));
     }
   }
   // The rules for acts, by a member's session alone. The gate says when that is not enough, and
@@ -154,7 +156,7 @@ export async function secretApprovals(request: Request, deps: ApprovalsDeps): Pr
     const { facts } = await deps.gate.rejectProposal({ id: body.data.reject, by });
     return withFacts(Response.json({ ok: true }), facts);
   }
-  if (pathname === SECRET_APPROVALS_PATH && request.method === "GET") return page(deps);
+  if (pathname === SECRET_APPROVALS_PATH && request.method === "GET") return page(request, deps);
   return new Response("Method not allowed", { status: 405 });
 }
 
@@ -196,7 +198,7 @@ async function statement(request: Request, deps: ApprovalsDeps): Promise<Respons
 }
 
 // The script shows a request's parts, from the text it hashed.
-async function page(deps: ApprovalsDeps): Promise<Response> {
+async function page(request: Request, deps: ApprovalsDeps): Promise<Response> {
   const secrets: { path: string; rule: ApprovalRule | null; held: HeldRow[] }[] = [];
   for (const path of await deps.index.paths()) {
     const { rule, held } = await deps.secretOf(path).approvals(path);
@@ -249,12 +251,17 @@ async function page(deps: ApprovalsDeps): Promise<Response> {
   };
   const nonce = crypto.randomUUID();
   return plainPage(
+    request,
     200,
     `${body}<script type="application/json" id="approvals-data">${JSON.stringify(data).replaceAll("<", "\\u003c")}</script><script nonce="${nonce}">${SCRIPT}${ACTS_SCRIPT}</script>`,
-    "'self'",
-    nonce,
-    true,
-    "Approvals",
+    {
+      formAction: "'self'",
+      scriptNonce: nonce,
+      connects: true,
+      wide: true,
+      title: "Approvals",
+      mind: deps.mind,
+    },
   );
 }
 

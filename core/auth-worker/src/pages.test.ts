@@ -163,12 +163,13 @@ test("a client's own logo is shown only for a verified domain, from that domain,
     logoUri: "https://cdn.example.org/logo.png",
   });
   expect(verified.headers.get("content-security-policy")).toContain(
-    "img-src https://cdn.example.org",
+    "img-src data: https://cdn.example.org",
   );
   expect(await kept("consent-own-logo", verified)).toContain(
     `<img src="https://cdn.example.org/logo.png" alt="" referrerpolicy="no-referrer">`,
   );
-  // a client that registered itself says its own logo: no tile of it is shown, and no image may load
+  // a client that registered itself says its own logo: no tile of it is shown, and no image may
+  // load but the page's own icon, inline
   for (const details of [
     { logoUri: "https://cdn.example.org/logo.png" },
     { clientDomain: "example.org", logoUri: "https://elsewhere.example/logo.png" },
@@ -176,7 +177,7 @@ test("a client's own logo is shown only for a verified domain, from that domain,
     { clientDomain: "example.org", logoUri: "javascript:alert(1)" },
   ]) {
     const answer = consent(details);
-    expect(answer.headers.get("content-security-policy")).not.toContain("img-src");
+    expect(answer.headers.get("content-security-policy")?.split("; ")).toContain("img-src data:");
     const html = await answer.text();
     expect(html).not.toContain("<img");
     expect(html).not.toMatch(/class="asks"|data-client-mark/);

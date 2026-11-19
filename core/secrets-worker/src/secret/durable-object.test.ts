@@ -300,6 +300,17 @@ test("a member's passkey that did not check its user approves no request and cha
   });
 });
 
+test("a collection form's description is at most 4,000 characters: the page's Markdown is slow on a long hostile line", async () => {
+  const { secret } = await vault();
+  const ask = (description: string) =>
+    secret.secret(PATH, "collectFromUser", {
+      egress: { urls: ["https://gmail.googleapis.com"] },
+      description,
+    });
+  await expect(ask("[".repeat(4001))).rejects.toThrow(/4000/);
+  await expect(ask("a".repeat(4000))).resolves.toMatchObject({ url: expect.any(String) });
+});
+
 test("a delete that comes in while a new value is being sealed is the later word: the value is not stored", async () => {
   const { secret } = await vault();
   // not awaited: it has reserved its version and seals

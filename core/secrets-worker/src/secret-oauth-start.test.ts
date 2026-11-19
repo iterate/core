@@ -21,7 +21,7 @@ test("a client of the mind's own shows the page to confirm on, and goes to the p
   expect(html).toContain("You are connecting an account for this secret");
   const [cookie] = page.headers.get("set-cookie")!.split(";");
   const proceed = new URL(
-    /<a href="([^"]+)">Continue/.exec(html)![1]!.replace(/&(amp|#38);/g, "&"),
+    /<a class="button" href="([^"]+)">Continue/.exec(html)![1]!.replace(/&(amp|#38);/g, "&"),
     link,
   ).href;
   // the link alone, in another browser, shows the page again
@@ -115,7 +115,7 @@ test("a client of iterate Cloud's whose secret is to be used in an unusual way s
     expect(html).toContain(line);
   const [cookie] = page.headers.get("set-cookie")!.split(";");
   const proceed = new URL(
-    /<a href="([^"]+)">Continue/.exec(html)![1]!.replace(/&(amp|#38);/g, "&"),
+    /<a class="button" href="([^"]+)">Continue/.exec(html)![1]!.replace(/&(amp|#38);/g, "&"),
     link,
   ).href;
   const on = await secretOAuthStart(navigation(proceed, cookie), async () => cloud);

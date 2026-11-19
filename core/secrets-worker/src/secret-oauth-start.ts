@@ -53,11 +53,11 @@ export async function secretOAuthStart(
   const url = new URL(request.url);
   const path = url.searchParams.get("path");
   const nonce = url.searchParams.get("nonce");
-  if (!path || !nonce) return noLongerInFlight();
+  if (!path || !nonce) return noLongerInFlight(request);
   if (!isDocumentNavigation(request))
-    return callbackPage(200, "Open this link in your browser to continue.");
+    return callbackPage(request, 200, "Open this link in your browser to continue.");
   const target = await targetOf(path, nonce);
-  if (!target) return noLongerInFlight();
+  if (!target) return noLongerInFlight(request);
   const admission = admitted(request, target.anyoneWithLink);
   if (admission instanceof Response) return admission;
   const given = url.searchParams.get("start");
@@ -74,15 +74,16 @@ export async function secretOAuthStart(
   if (!began && (!confirmedElsewhere || unusual)) {
     url.searchParams.set("start", start);
     const page = plainPage(
+      request,
       200,
-      `<h1>${escaped(path)}</h1><p>You are connecting an account for this secret. Its tokens are only ever sent to ${target.urls.map(escaped).join(", ")}.</p>${target.returnTo ? "<p>The app you approve is iterate's own. iterate Cloud adds the app's secret when the tokens are fetched, and keeps none of them.</p>" : ""}${useLines(target.use, target.anyoneWithLink)}<p><a href="${escaped(url.href)}">Continue</a></p>`,
+      `<h1>${escaped(path)}</h1><p>You are connecting an account for this secret. Its tokens are only ever sent to ${target.urls.map(escaped).join(", ")}.</p>${target.returnTo ? "<p>The app you approve is iterate's own. iterate Cloud adds the app's secret when the tokens are fetched, and keeps none of them.</p>" : ""}${useLines(target.use, target.anyoneWithLink)}<a class="button" href="${escaped(url.href)}">Continue</a>`,
     );
     page.headers.append("set-cookie", bound);
     return page;
   }
   const to = new URL(target.authorizationUrl);
   const state = parseSecretOAuthState(to.searchParams.get("state"));
-  if (!state) return callbackPage(400, "This link is not one the platform issued.");
+  if (!state) return callbackPage(request, 400, "This link is not one the platform issued.");
   const own = stateOf({ ...state, start });
   to.searchParams.set(
     "state",
@@ -99,8 +100,9 @@ export async function secretOAuthStart(
   return new Response(null, { status: 302, headers });
 }
 
-const noLongerInFlight = () =>
+const noLongerInFlight = (request: Request) =>
   callbackPage(
+    request,
     400,
     "This link is no longer in flight: a newer link replaced it, or it already finished. Ask for a new one.",
   );
@@ -119,8 +121,9 @@ export async function startedHere(
   return secretsEqual(held, start);
 }
 
-export const notStartedHere = () =>
+export const notStartedHere = (request: Request) =>
   callbackPage(
+    request,
     403,
     "This sign-in was not started in this browser, or it already finished. Open the link you were given again, in this browser.",
   );
