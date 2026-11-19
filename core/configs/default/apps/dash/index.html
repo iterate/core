@@ -21,14 +21,16 @@
         }
       }
     </script>
-    <!-- THE PAGE'S SOCKET, dialled here and not when the app's modules have loaded, which is a
-         second later: `memberItx` (@iterate-com/ui/live, in app.js) takes it for its first
-         session. Without this line the app dials for itself when it runs. It stands before the
-         stylesheets, because a script after a stylesheet waits for it. -->
+    <!-- THE PAGE'S SOCKET AND ITS SESSION, asked for here and not when the app's modules have
+         loaded, which is a second later: `memberItx` (@iterate-com/ui/live, in app.js) takes the
+         socket for its first session, and app.js takes the session's answer (the mind's
+         address) from `__session`. Without these lines the app asks for both itself when it runs.
+         It stands before the stylesheets, because a script after a stylesheet waits for it. -->
     <script>
       try {
         window.__itxSocket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
       } catch {}
+      window.__session = fetch("/.auth/session.json").then((answer) => answer.json());
     </script>
     <!-- THE FRAME'S SHAPE, said before the first paint. The body draws the app's frame from HTML
          and app.css alone, in the places the shell will draw it, so nothing moves when the app

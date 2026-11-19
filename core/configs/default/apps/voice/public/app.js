@@ -56,7 +56,10 @@ const repo = () => itx.repos.get("/repos/config");
 // The mind's address is its control-plane hostname, where its sign-in is: this host says it
 // (`/.auth/session.json`, ../app.ts). The page never works it out from its own hostname, which
 // may be in any zone of the mind.
-const mind = new URL((await (await fetch("/.auth/session.json")).json()).issuer).hostname;
+// index.html asks for it in its head, while the modules load.
+const hostSession =
+  window.__session ?? fetch("/.auth/session.json").then((answer) => answer.json());
+const mind = new URL((await hostSession).issuer).hostname;
 /** The zone this page is on: an app's hostname is one label under its zone, and the Dash is too. */
 const zone = location.hostname.split(".").slice(1).join(".");
 

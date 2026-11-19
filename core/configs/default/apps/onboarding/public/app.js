@@ -57,7 +57,10 @@ socket.addEventListener("close", () => {
 
 const { principal } = await itx.whoami();
 // The mind's address is its control-plane hostname: this host says it (`/.auth/session.json`).
-const mind = new URL((await (await fetch("/.auth/session.json")).json()).issuer).hostname;
+// index.html asks for it in its head, while the modules load.
+const hostSession =
+  window.__session ?? fetch("/.auth/session.json").then((answer) => answer.json());
+const mind = new URL((await hostSession).issuer).hostname;
 /** The zone this page is on: an app's hostname is one label under its zone. */
 const zone = location.hostname.split(".").slice(1).join(".");
 

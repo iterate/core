@@ -18,6 +18,13 @@
         }
       }
     </script>
+    <!-- THE PAGE'S SESSION, asked for here and not when the app's modules have loaded, which is
+         a second later: app.js takes the answer (the mind's address) from `__session`. Without
+         this line the app asks for it itself when it runs. It stands before the stylesheets,
+         because a script after a stylesheet waits for it. -->
+    <script>
+      window.__session = fetch("/.auth/session.json").then((answer) => answer.json());
+    </script>
     <link
       rel="stylesheet"
       href="https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261119T070425Z-adbcfe8/styles.css"

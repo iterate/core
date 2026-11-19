@@ -49,13 +49,17 @@ import {
 } from "@iterate-com/ui/icons";
 
 // The member's itx, from this host's /itx (app.ts answers it): over the socket that index.html
-// dialled in its head, when it is there. Nothing here waits for the mind: the Dash draws at once,
-// in the frame that index.html drew, and asks the mind who is signed in.
+// dialled in its head, when it is there. The Dash draws in the frame that index.html drew, and
+// asks the mind who is signed in after it has drawn.
 const itx = memberItx();
 // The mind's address is its control-plane hostname, where the stack's own pages are (keys, members,
 // approvals): this host says it (`/.auth/session.json`, ../app.ts). The page never works it out
-// from its own hostname, which may be in any zone of the mind.
-const stack = (await (await fetch("/.auth/session.json")).json()).issuer;
+// from its own hostname, which may be in any zone of the mind. The Dash waits for this answer
+// before it draws. index.html asks for it in its head, while the modules load, so it is
+// usually there when this line runs.
+const hostSession =
+  window.__session ?? fetch("/.auth/session.json").then((answer) => answer.json());
+const stack = (await hostSession).issuer;
 const mind = new URL(stack).hostname;
 /** The zone this page is on: an app's hostname is one label under its zone. */
 const zone = location.hostname.split(".").slice(1).join(".");

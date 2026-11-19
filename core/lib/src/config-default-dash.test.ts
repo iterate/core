@@ -2,6 +2,7 @@
 // Integrations page's buttons lead there: "Connect" and "Add account" give a new account the first
 // free name (`/secrets/x`, then `/secrets/x-2`), "Connect again" keeps its own, and "Remove" is a
 // POST from the page alone that forgets one account of that app.
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { expect, test } from "vitest";
 import { dashApp } from "../../configs/default/apps/dash/app.ts";
 import { ITERATE_CLOUD } from "../../configs/default/cloud-deliveries.ts";
@@ -65,6 +66,34 @@ test("'Remove' is a POST from the page, for a secret of the app it names; the an
     400,
     "Could not remove the account: /secrets/x-2 is no account connected through iterate Cloud: delete a key on the Secrets page",
   ]);
+});
+
+test("an app's page asks for its session in its head, while its modules load, and app.js takes that answer", () => {
+  const apps = new URL("../../configs/default/apps/", import.meta.url);
+  const read = (file: string) => readFileSync(new URL(file, apps), "utf8");
+  const asking = readdirSync(apps, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map(({ name }) => name)
+    .filter(
+      (app) =>
+        existsSync(new URL(`${app}/public/app.js`, apps)) &&
+        read(`${app}/public/app.js`).includes("/.auth/session.json"),
+    );
+  expect(asking).toEqual(expect.arrayContaining(["dash", "docs", "onboarding", "voice"]));
+  for (const app of asking) {
+    const page = read(`${app}/index.html`);
+    const asked = page.indexOf('window.__session = fetch("/.auth/session.json")');
+    // before the first stylesheet, which a script after it waits for, and before the app's module
+    expect({ app, asked: asked > 0 }).toEqual({ app, asked: true });
+    expect({ app, beforeStyles: asked < page.indexOf('rel="stylesheet"') }).toEqual({
+      app,
+      beforeStyles: true,
+    });
+    expect({ app, takes: read(`${app}/public/app.js`).includes("window.__session") }).toEqual({
+      app,
+      takes: true,
+    });
+  }
 });
 
 /** A mind's root as the Dash's host hands it out: X secrets of the Cloud's, whose account X says is

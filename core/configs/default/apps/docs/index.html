@@ -18,6 +18,13 @@
         }
       }
     </script>
+    <!-- THE PAGE'S SESSION, asked for here and not when the app's modules have loaded, which is
+         a second later: app.js takes the answer (the mind's address) from `__session`. Without
+         this line the app asks for it itself when it runs. It stands before the stylesheets,
+         because a script after a stylesheet waits for it. -->
+    <script>
+      window.__session = fetch("/.auth/session.json").then((answer) => answer.json());
+    </script>
     <!-- The kit's stylesheet for a page with the docs editor: everything styles.css holds, and
          the editor's own classes and its live preview's look. It takes the place of styles.css:
          a page links one of the two, never both (the two would disagree about which rule wins). -->
