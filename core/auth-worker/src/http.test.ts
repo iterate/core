@@ -5,25 +5,36 @@ import { sqliteStack } from "./test-support.ts";
 
 const ISSUER = "https://iterate.example.com";
 
-test("the control-plane hostname has no start page: `/` leads a signed-out visitor to the mind's own front page", async () => {
+test("the control-plane hostname has no start page: `/` leads a visitor to the mind's Dash", async () => {
   for (const method of ["GET", "HEAD"]) {
     const answer = await asked("/", { method });
     expect(answer).toMatchObject({ status: 302 });
     expect(Object.fromEntries(answer.headers)).toMatchObject({
-      location: "https://example.com/",
+      location: "https://dash.example.com/",
       "cache-control": "no-store",
     });
   }
 });
 
-test("a control plane at its zone's apex is the front page's own address: `/` leads to the sessions page, never back to itself", async () => {
+test("a control plane at the Dash's own address never redirects `/` back to itself: it leads to `/sessions`", async () => {
+  const { env } = sqliteStack({ controlPlaneHostname: "dash.example.com" });
+  const answer = await authResponse(new Request("https://dash.example.com/"), env, {
+    waitUntil: () => {},
+  } as unknown as ExecutionContext);
+  expect({ status: answer.status, location: answer.headers.get("location") }).toEqual({
+    status: 302,
+    location: "/sessions",
+  });
+});
+
+test("a control plane at its zone's apex still leads `/` to the mind's Dash", async () => {
   const { env } = sqliteStack({ controlPlaneHostname: "example.com" });
   const answer = await authResponse(new Request("https://example.com/"), env, {
     waitUntil: () => {},
   } as unknown as ExecutionContext);
   expect({ status: answer.status, location: answer.headers.get("location") }).toEqual({
     status: 302,
-    location: "/sessions",
+    location: "https://dash.example.com/",
   });
 });
 

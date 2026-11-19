@@ -373,8 +373,8 @@ test("a code that went out while the address was no member's signs nobody in onc
 });
 
 // THE CONTROL PLANE'S OWN SIGN-IN HAS NO MAILED CODE: the address page and the request for a code
-// lead back to its sign-in page, and nothing is mailed or kept. So does a `next` that is too long
-// to keep, which goes on to the mind's front page.
+// lead back to its sign-in page, and nothing is mailed or kept. So do an empty `next` and a `next`
+// that is too long to keep, both of which go on to the mind's Dash.
 test.for([
   { name: "the control plane's own page", next: "/keys" },
   { name: "the mind's API, for an outside client", next: "/oauth2/auth?client_id=c" },
@@ -399,9 +399,9 @@ test.for([
     expect(page.headers.get("location")).toBe(
       `/sign-in?${new URLSearchParams({ next: next || "/" })}`,
     );
-    if (name.includes("too long"))
+    if (name === "no next at all" || name.includes("too long"))
       expect(posted.headers.get("location")).toBe(
-        `/sign-in?${new URLSearchParams({ next: "https://example.com/" })}`,
+        `/sign-in?${new URLSearchParams({ next: "https://dash.example.com/" })}`,
       );
     expect(stack).toMatchObject({ mailed: [] });
     expect(stack.db.prepare("select count(*) as n from email_challenges").get()).toEqual({ n: 0 });
@@ -523,9 +523,15 @@ test("a code for a tagged address of a mailbox that was mailed just now waits, a
 // the address.
 test("a passkey that an address held while it was no member's never signs in and never bars its first passkey as a member", async () => {
   const stack = stackOf();
-  // the control: an owner's key of the same shape signs in
-  expect(await passkeySignedIn(stack.env, await passkeyOfRow(stack, OWNER))).toMatchObject({
+  // the control: an owner's key of the same shape signs in, and with no `next` goes on to the Dash
+  const ownerKey = await passkeyOfRow(stack, OWNER);
+  expect(await passkeySignedIn(stack.env, ownerKey)).toMatchObject({
     status: 200,
+    next: "https://dash.example.com/",
+  });
+  expect(await passkeySignedIn(stack.env, ownerKey, "/keys")).toMatchObject({
+    status: 200,
+    next: "https://iterate.example.com/keys",
   });
   const old = await passkeyOfRow(stack, GUEST);
   expect(await passkeySignedIn(stack.env, old)).toMatchObject({ status: 403 });
@@ -1343,7 +1349,11 @@ async function passkeyOfRow(stack: Stack, email: string) {
 }
 
 /** The passkey sign-in of ./passkey-sign-in.ts, as a browser's authenticator answers it. */
-async function passkeySignedIn(env: Env, passkey: { credentialId: string; privateKey: CryptoKey }) {
+async function passkeySignedIn(
+  env: Env,
+  passkey: { credentialId: string; privateKey: CryptoKey },
+  next?: string,
+) {
   const asked = await ask(env, "/sign-in/passkey/challenge", { method: "POST" });
   const { statement } = (await asked.json()) as { statement: string };
   const encoder = new TextEncoder();
@@ -1384,7 +1394,13 @@ async function passkeySignedIn(env: Env, passkey: { credentialId: string; privat
       sig: base64url(new Uint8Array([0x30, body.length, ...body])),
       authenticatorData: base64url(authenticatorData),
       clientDataJSON: base64url(clientDataJSON),
+      next,
     }),
   });
-  return { status: answer.status, cookie: cookieOf(answer, "__Host-iterate-auth-session") };
+  const parsed = (await answer.json()) as { next?: string };
+  return {
+    status: answer.status,
+    cookie: cookieOf(answer, "__Host-iterate-auth-session"),
+    next: parsed.next,
+  };
 }

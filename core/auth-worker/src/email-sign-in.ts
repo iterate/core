@@ -33,7 +33,7 @@ import { emailSessionCookie, sessionsOverRemoved } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import { clientOf, TOO_MANY } from "./device/limits.ts";
 import { passkeysOf } from "./enrolment.ts";
-import { configOf, type Env, homeOf, issuerOf } from "./env.ts";
+import { configOf, dashOf, type Env, issuerOf } from "./env.ts";
 import { honouredNext } from "./key-rules.ts";
 import { appSignIn, errorPage, page, passkeySignIn, text } from "./pages.ts";
 import { isMember } from "./members.ts";
@@ -186,9 +186,9 @@ export function emailAddressPage(
 async function start(env: Env, request: Request) {
   const form = await request.formData().catch(() => null);
   // where the person goes on once signed in: an address of the mind's own, kept whole as it was
-  // checked, else the mind's front page
+  // checked, else the mind's Dash
   const asked = honouredNext(String(form?.get("next") || ""), configOf(env));
-  const next = asked && asked.length <= NEXT_MAX_CHARACTERS ? asked : homeOf(env);
+  const next = asked && asked.length <= NEXT_MAX_CHARACTERS ? asked : dashOf(env);
   const signIn = await signInOf(env, next);
   if (!signIn) return errorPage(TOO_MANY, 429);
   if (!signIn.methods.includes("email")) return toSignIn(next);

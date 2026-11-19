@@ -23,7 +23,7 @@ import { TOO_MANY } from "./device/limits.ts";
 import { emailAddressPage, emailSignInResponse } from "./email-sign-in.ts";
 import { guestFormHref, guestSignInResponse } from "./guest-sign-in.ts";
 import { firstPasskeyResponse } from "./enrolment.ts";
-import { configOf, type Env, homeOf, issuerOf } from "./env.ts";
+import { configOf, dashOf, type Env, issuerOf } from "./env.ts";
 import { identityIntakeResponse, identityLogResponse } from "./identity.ts";
 import { keyTokenResponse } from "./key-tokens.ts";
 import { keysPagesResponse } from "./keys-pages.ts";
@@ -81,20 +81,20 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
     });
   if (pathname === MIND_IDENTITY_PATH && request.method === "POST")
     return identityIntakeResponse(env, request);
-  // The control-plane hostname has no start page: `/` leads to the mind's own front page, whose own
+  // The control-plane hostname has no start page: `/` leads to the mind's Dash, whose own
   // sign-in decides the rest. A signed-in person who is no member would only be refused there:
   // that person reads it here.
   if (pathname === "/" && get) {
     const session = await personSessionOf(env, request);
     if (session && !(await isMemberSession(env, session)))
       return notMemberPage({ mind: configOf(env).controlPlaneHostname, email: session.email });
-    // A control plane at its zone's apex is the front page's own address: a redirect there would
+    // A control plane at `dash.<zone>` is the Dash's own address: a redirect there would
     // come back here for ever, so this address shows where the person is signed in.
-    const home = homeOf(env);
+    const dash = dashOf(env);
     return new Response(null, {
       status: 302,
       headers: {
-        location: home === `${issuerOf(env)}/` ? SESSIONS_PATH : home,
+        location: dash === `${issuerOf(env)}/` ? SESSIONS_PATH : dash,
         "cache-control": "no-store",
       },
     });

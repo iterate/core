@@ -3,7 +3,7 @@ import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
 import { sessionCookie } from "./cookies.ts";
 import { clientOf, TOO_MANY } from "./device/limits.ts";
-import { configOf, type Env, homeOf, issuerOf } from "./env.ts";
+import { configOf, dashOf, type Env, issuerOf } from "./env.ts";
 import { honouredNext } from "./key-rules.ts";
 import { verifiedStatement } from "./keys.ts";
 
@@ -100,9 +100,9 @@ async function finish(env: Env, request: Request) {
     payload: { method: "passkey", key: signer, session, at: Date.now() },
   });
   const headers = new Headers({ "set-cookie": setCookie });
-  // where the browser goes on: the whole address that was checked, else the mind's front page
+  // where the browser goes on: the whole address that was checked, else the mind's Dash
   return facts.on(
-    json({ next: honouredNext(next || null, configOf(env)) || homeOf(env) }, 200, headers),
+    json({ next: honouredNext(next || null, configOf(env)) || dashOf(env) }, 200, headers),
   );
 }
 

@@ -37,13 +37,12 @@ export const configOf = (env: Env) => authConfigOf(env);
  *  secret pages. */
 export const issuerOf = (env: Env) => controlPlaneOriginOf(configOf(env));
 
-/** The mind's own front page, which its config worker serves: at the apex of the zone that the
- *  control-plane hostname is in. Where a person goes on from a page of this Worker when nothing named
- *  another place. A control plane at its zone's apex is that address itself, which answers with
- *  the sessions page (./http.ts). */
-export function homeOf(env: Env) {
+/** The mind's Dash (`https://dash.<zone>/`), where the control-plane root and returning sign-ins
+ *  with no `next` URL go. A control plane at `dash.<zone>` itself falls back to the sessions page
+ *  (./http.ts). */
+export function dashOf(env: Env) {
   const config = configOf(env);
-  return `https://${zoneOf(config, config.controlPlaneHostname)}/`;
+  return `https://dash.${zoneOf(config, config.controlPlaneHostname)}/`;
 }
 
 /** The mind's onboarding wizard (`https://onboarding.<zone>/`), where a new person continues setup
