@@ -6,57 +6,59 @@ queries, the billing token, and telemetry for a mind that exists: `cloudflare.ts
 `itx.config.cloudflare`.
 
 A mind runs in its owner's Cloudflare account. A member connects the mind to that account with
-one approval on Cloudflare's own page. The consent is kept as the secret `/secrets/cloudflare`,
-and the vault refreshes it each hour. `(await itx.secrets.describe("/secrets/cloudflare")).set`
+one approval on the page of Cloudflare's own MCP server, `https://mcp.cloudflare.com`, and then
+on Cloudflare's page. The consent is kept as the secret `/secrets/cloudflare`. The vault
+refreshes its token when it is used after the hour. The consent itself ends 30 days after the
+approval: then a member connects again. `(await itx.secrets.describe("/secrets/cloudflare")).set`
 says whether this mind is connected. With it you look at what the account runs and how it is
 set up, and you query its logs and traces. You change nothing in the account with it.
 
 ## Connect
 
-- `await itx.config.cloudflareConnect({ tell: "<your own path>" })` answers `{ way, link }`.
+- `await itx.config.cloudflareConnect({ tell: "<your own path>" })` answers `{ link, nonce }`.
   Give a member the ONE `link`, in the turn that made it: it lasts an hour. `tell` is the agent
   that asks (`/agents/onboarding`): when the consent has landed, that agent gets a note that
-  starts its turn, and Cloudflare's page brings the member back to its chat.
-- `way: "stack-client"`: the stack has an OAuth client of its own in the account
-  (`await itx.secrets.hasStackClient("cloudflare")`). The link is Cloudflare's consent page. The
-  member approves there, and it is done. Only a member of that Cloudflare account can approve.
-- `way: "own-client"`: the stack has no client, because the credential that deployed it may not
-  make one. Then a member makes one by hand, once. The answer has `makeTheClient`:
-  `{ where, name, redirectUri, grantTypes, tokenEndpointAuthMethod, scopes }`. Say those to the
-  member in plain words. The `link` is a form of this mind: it shows the same steps and takes the
-  client's ID and secret, which you never see. It leads back to the Dash's Integrations page,
-  where the card's "Connect" begins the consent: tell the member to press it. The consent begun
-  there tells no agent: read the card afterwards. When
-  the mind holds such a client already (`/secrets/cloudflare-client`), the `link` is the consent
-  page.
-- **The vault is the guard.** Before it keeps a consent through the stack's client, it checks
-  that Cloudflare granted only scopes of the list, and that the consent reaches exactly one
-  account, the one that the stack runs in. Otherwise nothing is kept, and the mind's page that
-  Cloudflare sends the member back to shows why, and to connect again and select only that
-  account. The agent that asked
-  gets the same words in its note, at the mind's next publish or next consent. A consent through a member's own client is kept as it is;
-  when it does not reach the mind's zone, the card and the note say it is for another account.
+  starts its turn, and the page brings the member back to its chat.
+- The mind is its own client at the MCP server: no OAuth client is made in the account, and
+  nobody pastes a token. The client id is the URL of a document that the mind serves on its
+  zone's apex, `https://<zone>/cloudflare-mcp-client.json`; the server shows its name on its
+  page. Only a member of the Cloudflare account that holds the mind can approve.
+- **The vault is the guard.** The server's page lets the member choose more than the mind asks
+  for. Before the vault keeps a consent, it checks that every scope granted is a read of the
+  list (or one that the server adds to every grant: `user:read`, `account:read`,
+  `offline_access`), and that the consent reaches exactly one account, the one that holds the
+  mind's zone. The list of reads is the vault's own for Cloudflare: no code of the mind can
+  leave it out or widen it. Otherwise nothing is kept, the refused grant goes back to the
+  server, and the mind's page that the member comes back to says why: the extra scopes by name,
+  or the account. Each refresh is held to the same scopes, and a refresh whose answer names no
+  scopes is refused. The agent that asked gets the same words in its note at once.
+- **A refused consent can end the one before it.** Cloudflare ends the mind's earlier grant
+  when it grants a new one. So a refused "Full access" press can leave the mind with no working
+  connection: the card and the note say so, and a member connects again.
 - The Dash's Integrations page has the card (`cloudflare.ts` `cloudflareConnectionEvent`):
-  "Connected" with the account, who consented and the time of the last check, or "Not connected"
-  with a "Connect" button that calls `cloudflareConnect` at the press, as the member, and goes on
-  to its link.
+  "Connected" with the account, who consented and the time of the last check, "Not connected",
+  or the last refusal, with a "Connect" button that calls `cloudflareConnect` at the press, as
+  the member, and goes on to its link.
 
 ## What it reads
 
-- **What it may do:** query the Workers' logs and traces; read the Workers' names, settings and
-  deployments (a plain-text variable's value is a setting), their routes, the zones with their
-  DNS records and settings, the Email Routing rules, the pipelines, and the names and settings
-  of D1 databases, KV namespaces, R2 buckets and queues; and read who consented. Thirteen
-  scopes, each named in iterate/api `CLOUDFLARE_READ_SCOPES`.
-- **What it may not do:** every change. Also not: read a Worker's code, tail a Worker, run SQL
-  or an analytics query, run a model, read a KV value, an R2 object or a queue's messages, or
-  read the account's settings, API tokens, members, notifications, Access applications or
-  bills. The consent holds read scopes alone (iterate/api
-  `CLOUDFLARE_READ_SCOPES`), and the vault refuses a connect through the stack's client that asks
-  for any other. Every member and agent of the mind can use the consent, so it must not be a way
-  to take the stack over. Cloudflare refuses what it may not do (403): tell a member, and do not
-  look for a way round. A member changes the account in Cloudflare's dashboard or through a
-  deploy of the stack.
+- **What it may do:** read nearly anything in the account: the Workers' logs, traces, code,
+  settings and deployments, their routes, the zones with their DNS records and settings, KV
+  values, R2 objects, queues, pipelines, the account's settings and members, and who consented.
+  The owner's rule: the connection reads anything, except what could let its holder act as the
+  mind or as a member. The scopes are iterate/api `CLOUDFLARE_READ_SCOPES`: every read of the
+  MCP server's "Read only" set.
+- **What it may not do:** every change. Also not, by the owner's rule
+  (iterate/api `CLOUDFLARE_READS_LEFT_OUT`, each with its reason): run SQL on a D1 database (the
+  auth database holds the mind's own signing key), read a zone's request logs (Logpull: they
+  can hold cookies), or tail a Worker. Every member and agent of the mind can use the consent,
+  so it must not be a way to take the stack over. Cloudflare refuses what it may not do (403):
+  tell a member, and do not look for a way round. A member changes the account in Cloudflare's
+  dashboard or through a deploy of the stack.
+- **Some reads cost money or show another service's key.** `POST /accounts/<id>/ai/run/<model>`
+  runs a model and bills; an Images signing key, a Turnstile widget's secret and an Access
+  application's SCIM credential read in clear. Read those only on a member's word, and never
+  repeat such a key.
 - **The mind's own code changes by a commit to this repo, never through Cloudflare.**
 - **What the logs show of a request:** the `cookie` and `authorization` headers are redacted;
   every other header reads in clear, and a URL is redacted only where a value looks like a long
@@ -77,7 +79,10 @@ you do not know, or to run several in one go. Both go with the same consent.
   `boundary`, `secrets`, `auth` and `telemetry`). When `status` is not 200, `body` says why.
 - `await itx.config.cloudflare("execute", { method, path, body })` is one request to Cloudflare's
   REST API, `https://api.cloudflare.com/client/v4` + `path`, and answers `{ status, body }`
-  (`method` is GET when not given). An answer over 24,000 characters comes as
+  (`method` is GET when not given). It goes through the MCP server's `execute` tool, because the
+  consent's token is the server's own and opens the server alone: each request takes about
+  0.1 s more than a straight one. When Cloudflare refuses, `body` is the server's words, with
+  Cloudflare's status in `status`. An answer over 24,000 characters comes as
   `{ status, cut: true, text }`: ask for less, with `per_page`, a filter or a limit.
 - `await itx.config.cloudflareLastHour()` answers who the mind is connected as, each of the
   mind's own Workers' requests of the last hour by outcome, and the newest five error lines.
@@ -88,10 +93,10 @@ you do not know, or to run several in one go. Both go with the same consent.
   runs code against the API: in its `{ code }`, `cloudflare.request({ method, path, body })` is
   the API and `accountId` is the account. `"docs"` searches Cloudflare's documentation
   (`{ query }`). The server reaches what the consent reaches and no more.
-- Both are `itx.fetch` and `itx.connectToMcp` with the header
+- Both send the header
   `authorization: 'Bearer getSecret("/secrets/cloudflare", { field: "accessToken" })'`: a
-  placeholder, never the token. The vault sends the token to Cloudflare's API and its MCP server
-  alone.
+  placeholder, never the token. The vault sends the token to the MCP server alone; Cloudflare's
+  API would not take it.
 - Name a Worker by its name, never by a list. The second example below groups invocations by
   `$metadata.service`: without its service filter it names every Worker of the account that ran
   in the hour.

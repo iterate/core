@@ -50,6 +50,8 @@ import {
   accountOf,
   beginSecretOAuth,
   completeSecretOAuth,
+  grantCeilingOf,
+  grantRefusal,
   normalizeSecretOAuth,
   stateOf,
   type PendingSecretOAuth,
@@ -57,20 +59,14 @@ import {
 import { startLinkOf } from "../secret-oauth-start.ts";
 import { stackSecretDescription, stackSecretOf, stackSecretRefusal } from "../stack-secrets.ts";
 import {
-  isStackTokenEndpoint,
-  stackClientFor,
-  stackClientSecretOf,
-  stackGrantRefusal,
-} from "../stack-client.ts";
-import {
   accessTokenEnded,
   clientSecretReferenceOf,
-  type ClientSecretOf,
   cloudOriginOf,
   githubAppJwt,
   hmacSha256Hex,
   isRecord,
   normalizeSecretRecord,
+  oauthTokenRequest,
   originPinned,
   type ProxiedSecretRecord,
   proxiedSecretRecordOf,
@@ -1072,12 +1068,6 @@ export class SecretDurableObject extends DurableObject<Env> {
     };
   }
 
-  /** The secret of the stack's own client at Cloudflare, out of this Worker's config, whatever a
-   *  record holds in its place (../stack-client.ts). */
-  #stackClientSecretOf(): ClientSecretOf {
-    return async () => stackClientSecretOf(configOf(this.env).cloudflareClient);
-  }
-
   async #beginOAuth(
     path: string,
     options: unknown,
@@ -1101,16 +1091,16 @@ export class SecretDurableObject extends DurableObject<Env> {
     const cloud = origin
       ? { ...(await cloudClientOf(origin, String(client?.cloud))), origin }
       : null;
-    // the stack's own client at Cloudflare: this Worker's config holds it, and names its scopes
-    const stack =
-      client && "stack" in client
-        ? stackClientFor(config.cloudflareClient, client, isRecord(options) ? options : {})
-        : null;
+    // the stack makes no OAuth client at Cloudflare: a config that names it is told the way
+    if (client && "stack" in client)
+      throw codedError(
+        "INVALID_INPUT",
+        "secrets.beginOAuth: the stack has no OAuth client at Cloudflare any more. A mind connects through Cloudflare's MCP server, as its own client: the default template's cloudflare.ts `cloudflareConnect`.",
+      );
     const normalized = normalizeSecretOAuth(
       options,
       [controlPlaneOrigin, ...(mindOrigin ? [mindOrigin] : [])],
       cloud,
-      stack,
     );
     const nonce = crypto.randomUUID();
     // a placeholder that cannot resolve is refused now, before a human is sent to consent
@@ -1219,7 +1209,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   async completeOAuth(
     path: string,
     input: { code: string; nonce: string; by: PageCaller; cloudProof?: string },
-  ): Promise<SecretAnswer<{ next: string | null; scopes: string[] }>> {
+  ): Promise<SecretAnswer<{ next: string | null; scopes: string[] }> | SecretRefusal> {
     this.#pathOf(path);
     const { by } = input;
     const pending = this.ctx.storage.kv.get<PendingAttempt>("pending");
@@ -1242,13 +1232,9 @@ export class SecretDurableObject extends DurableObject<Env> {
       pending,
       input.code,
       async (exchange) => {
-        const { cloud, stack } = pending.options;
-        // a Cloud's broker checks its own origin; the stack's client has one token endpoint
-        const allowed =
-          !!cloud ||
-          (stack
-            ? isStackTokenEndpoint(exchange.url)
-            : originPinned(exchange.url, pending.options.urls));
+        const { cloud } = pending.options;
+        // a Cloud's broker checks its own origin
+        const allowed = !!cloud || originPinned(exchange.url, pending.options.urls);
         if (!allowed)
           throw new Error(`the token endpoint ${new URL(exchange.url).origin} is outside the pin`);
         const response = await (
@@ -1264,49 +1250,59 @@ export class SecretDurableObject extends DurableObject<Env> {
           : (pending.options.scope || "").split(/\s+/).filter(Boolean);
         return response;
       },
-      pending.options.stack ? this.#stackClientSecretOf() : this.#clientSecretOf(path),
+      this.#clientSecretOf(path),
       input.cloudProof,
     );
-    // a grant through the stack's own client is checked here, and nothing is kept unless it
-    // passes: only the list's scopes, and the one account that the stack runs in
-    if (pending.options.stack) {
-      const accessToken = secretMaterialStringOf(record.material, "accessToken");
-      const refusal = await stackGrantRefusal(
-        granted,
-        configOf(this.env).cloudflareAccountId,
-        (at) =>
-          dispatch(
-            new Request(`https://api.cloudflare.com/client/v4${at}`, {
-              headers: { authorization: `Bearer ${accessToken}` },
-              redirect: "manual",
-            }),
-          ),
-      );
-      if (refusal) {
-        this.ctx.storage.kv.put<PendingAttempt>("pending", {
-          ...pending,
-          ended: { status: "failed", error: refusal, at: Date.now() },
-        });
-        throw new Error(refusal);
-      }
-    }
+    // A REFUSAL BEFORE ANYTHING IS KEPT (`#refuseGrant`): the new tokens go nowhere.
+    const refuse = (words: string) => this.#refuseGrant(path, pending, input.nonce, record, words);
+    // the ceiling: only scopes of the list, and the answer must name them
+    const ceiling = grantCeilingOf(pending.options.grantedWithin, [
+      pending.options.tokenEndpoint,
+      ...pending.options.urls,
+    ]);
+    const overCeiling = ceiling && grantRefusal(granted, ceiling);
+    if (overCeiling) return refuse(overCeiling);
     let account: { id: string; name: string | null } | undefined;
     const lookup = pending.options.account;
     if (lookup) {
       const identity = await dispatch(
         new Request(lookup.url, {
+          method: lookup.method || "GET",
           headers: {
             authorization: `Bearer ${secretMaterialStringOf(record.material, "accessToken")}`,
+            ...(lookup.body && {
+              "content-type": "application/json",
+              // an MCP server takes a request that accepts both
+              accept: "application/json, text/event-stream",
+            }),
           },
+          body: lookup.body,
           redirect: "manual",
         }),
       );
       if (!identity.ok) {
         await identity.body?.cancel();
+        if (pending.options.expectAccount)
+          return refuse(
+            `The provider did not say which account the grant is for (it answered ${identity.status}). Nothing was kept.`,
+          );
         throw new Error(`the account lookup answered ${identity.status}`);
       }
-      account = accountOf(await identity.json(), lookup);
+      const named: unknown = await identity.json().catch(() => null);
+      try {
+        account = accountOf(named, lookup);
+      } catch (error) {
+        if (!pending.options.expectAccount) throw error;
+        return refuse(
+          `The provider named no one account for the grant. It must be for ${pending.options.expectAccount} alone. Nothing was kept.`,
+        );
+      }
     }
+    const expected = pending.options.expectAccount;
+    if (expected && account?.id !== expected)
+      return refuse(
+        `The grant is for ${account ? `"${account.id}"` : "an account that was not named"}, and this connection is for ${expected} alone. Nothing was kept. Connect again, and choose only that account.`,
+      );
     // a write, or a newer attempt, that landed while the provider was answering wins
     if (
       this.#version() !== pending.basedOn ||
@@ -1324,6 +1320,78 @@ export class SecretDurableObject extends DurableObject<Env> {
       account,
     });
     return { result: { next: pending.options.next, scopes }, facts: [{ path, events: [fact] }] };
+  }
+
+  /** A GRANT THAT THE VAULT REFUSED: nothing is kept. The attempt ends with the words that the
+   *  person's page shows, unless a newer attempt took its place while the provider answered; the
+   *  refused tokens go back to the provider when the connect named its revocation endpoint
+   *  (RFC 7009); and the `secret/grant-refused` fact tells the mind's code. */
+  async #refuseGrant(
+    path: string,
+    pending: PendingAttempt,
+    nonce: string,
+    record: SecretRecord,
+    words: string,
+  ): Promise<SecretRefusal> {
+    const now = this.ctx.storage.kv.get<PendingAttempt>("pending");
+    if (now?.nonce === nonce)
+      this.ctx.storage.kv.put<PendingAttempt>("pending", {
+        ...now,
+        ended: { status: "failed", error: words, at: Date.now() },
+      });
+    const revoked = await this.#revoke(path, pending.options, record.material);
+    console.info({ event: "secret.grant-refused", path, revoked });
+    return {
+      refused: { code: "FORBIDDEN", message: words },
+      facts: [
+        {
+          path,
+          events: [
+            {
+              type: "events.iterate.com/secret/grant-refused",
+              payload: { nonce, reason: words, revoked },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  /** RFC 7009: the refresh token, then the access token, given back at the connect's revocation
+   *  endpoint. True when the provider took each; false when there is no endpoint or one failed. */
+  async #revoke(
+    path: string,
+    options: PendingSecretOAuth["options"],
+    material: SecretMaterial,
+  ): Promise<boolean> {
+    const endpoint = options.revocationEndpoint;
+    if (!endpoint || options.cloud) return false;
+    try {
+      const clientSecret = await this.#clientSecretOf(path)(options.clientSecret, endpoint);
+      let revoked = true;
+      for (const hint of ["refreshToken", "accessToken"] as const) {
+        const token = secretMaterialStringOf(material, hint);
+        if (!token) continue;
+        const response = await dispatch(
+          oauthTokenRequest({
+            tokenEndpoint: endpoint,
+            clientId: options.clientId,
+            clientSecret,
+            clientAuth: options.clientAuth,
+            params: {
+              token,
+              token_type_hint: hint === "refreshToken" ? "refresh_token" : "access_token",
+            },
+          }),
+        );
+        await response.body?.cancel();
+        revoked &&= response.ok;
+      }
+      return revoked;
+    } catch (error) {
+      console.info({ event: "secret.revoke-failed", path, error: String(error) });
+      return false;
+    }
   }
 
   async #collectFromUser(path: string, input: unknown): Promise<{ path: string; url: string }> {
@@ -2111,24 +2179,10 @@ export class SecretDurableObject extends DurableObject<Env> {
           material: record.material,
         });
       else if (refresh.client && "stack" in refresh.client)
-        // The stack's own client at Cloudflare: its token endpoint is outside the pin, so the
-        // request goes to that one address or nowhere, with the secret out of the config.
-        next = await refreshSecretMaterial(
-          refresh,
-          record.material,
-          (exchange) => {
-            if (!isStackTokenEndpoint(exchange.url))
-              throw new Error(
-                `the exchange endpoint ${new URL(exchange.url).origin} is not the stack's client's`,
-              );
-            console.info({
-              event: "secret.refresh-request",
-              path,
-              url: new URL(exchange.url).origin,
-            });
-            return dispatch(exchange);
-          },
-          this.#stackClientSecretOf(),
+        // A grant through the stack's own client at Cloudflare: the stack holds no such client's
+        // secret, so it cannot refresh. A member connects again.
+        throw new Error(
+          "this grant went through the stack's own OAuth client at Cloudflare, which the stack no longer has: connect again (the default template's cloudflareConnect)",
         );
       else
         next = await refreshSecretMaterial(
@@ -2138,6 +2192,7 @@ export class SecretDurableObject extends DurableObject<Env> {
             ? this.#brokered(refresh.client, "token")
             : pinnedDispatch,
           this.#clientSecretOf(path),
+          grantCeilingOf(refresh.grantedWithin, [refresh.tokenEndpoint, ...urls]),
         );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

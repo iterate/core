@@ -34,8 +34,10 @@ import {
 import { cloudDeliveryOf, mindFormEvent, sayMindForm } from "./cloud-deliveries.ts";
 import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
 import {
+  CLIENT_DOCUMENT_PATH,
   cloudflareBilling,
   cloudflareBillingToken,
+  cloudflareClientDocument,
   cloudflareConnect,
   cloudflareConnectionEvent,
   cloudflareForAgent,
@@ -363,6 +365,12 @@ export default class extends IterateConfigEntrypoint {
         // users. Signed out, the platform turns the answer into a sign-in and comes back here.
         if (pathname === "/me")
           return this.auth.requirePerson(request) || Response.json(this.auth.person(request));
+        // The mind's client at Cloudflare's MCP server, for anyone: the server fetches it at a
+        // connect (cloudflare.ts `cloudflareClientDocument`). Public, no secret in it.
+        if (pathname === CLIENT_DOCUMENT_PATH && request.method === "GET") {
+          using itx = this.getItx();
+          return await cloudflareClientDocument(itx, new URL(request.url).origin);
+        }
         // Anything else that no case takes is not found: a webhook to a hostname that nothing
         // serves must not be answered as taken.
         if (pathname !== "/" || !["GET", "HEAD"].includes(request.method))
@@ -418,7 +426,7 @@ export default class extends IterateConfigEntrypoint {
   }
 
   /** `itx.config.cloudflareConnect({ tell? })`: the one link that a member opens to connect the
-   *  mind to its own Cloudflare account, and which of the two ways it is (cloudflare.ts;
+   *  mind to its own Cloudflare account, through Cloudflare's MCP server (cloudflare.ts;
    *  cloudflare.md). `tell`: the agent that asks, which is told when the consent has landed. */
   async cloudflareConnect(options?: { tell?: string }) {
     using itx = this.getItx();

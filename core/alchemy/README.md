@@ -21,11 +21,14 @@ with no passkey left a way back in. What follows is the deploy by hand.
   `UPDATE_STACK_BINDINGS=1 pnpm --filter core-alchemy test`.
 - Every resource of the account is named `iterate-<alchemy.stageName>-…` (`namesOf` in
   `src/config.ts`).
-- The stack's state, with the generated keys, the telemetry API token's value and the secrets of the
-  OAuth client, the SFU app and the TURN key, is in the Worker `iterate-<alchemy.stageName>-state` of the same account.
-- One private OAuth client of the account, `iterate-<alchemy.stageName>-cloudflare`, registered
-  with read scopes alone (iterate/api `CLOUDFLARE_READ_SCOPES`). A member connects the mind to
-  its own account through it, and the secrets Worker alone holds its secret.
+- The stack's state, with the generated keys, the telemetry API token's value and the secrets of
+  the SFU app and the TURN key, is in the Worker `iterate-<alchemy.stageName>-state` of the same account.
+- No OAuth client. A member connects the mind to its own account through Cloudflare's MCP
+  server, for which the mind is its own client (core/configs/default/cloudflare.ts). A stack
+  deployed before 19 Nov 2026 has a client `iterate-<alchemy.stageName>-cloudflare`: its row
+  leaves the state at the next deploy with no call (`src/retired-cloudflare-oauth-client.ts`),
+  and the client stays in the account until a member deletes it (Manage Account, OAuth
+  clients).
 - One Realtime SFU app, `iterate-<alchemy.stageName>-realtime-sfu`, and one TURN key,
   `iterate-<alchemy.stageName>-turn`, by Alchemy's own resources. The secrets Worker alone holds
   their secrets, and serves them as `/secrets/cloudflare-realtime-sfu` and
@@ -121,14 +124,6 @@ pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the termin
   `TelemetryCatalogToken` / `TelemetryAnalyticsToken` deletes them when the credential has
   API-token write permission, or logs their names and dashboard link for manual removal when it
   does not.
-- The OAuth client needs the permission "OAuth Client Write". A person's sign-in can never hold
-  it: Cloudflare's sign-in has no scope for it, and a token that a sign-in makes may not hold it.
-  A manual deploy may pass an API token with that permission in
-  `CLOUDFLARE_OAUTH_CLIENT_API_TOKEN`: when it is set, every call for the client uses it, and the
-  deploy's credential makes none (`src/cloudflare-oauth-client.ts`). `iterate deploy` does not ask
-  for it. A deploy's own API token that holds the permission needs no second token.
-- A deploy with neither is no failure: permission refusals skip the SDK's retry loop and fail fast,
-  making no client and saying so, and each later deploy asks again.
 - The deploy makes a Realtime SFU app and a TURN key (`src/realtime.ts`), which need the
   permission to make Realtime (Calls) resources: "Calls Write" (`calls.write`), which the deploy
   asks for, or "Realtime" or "Realtime Admin". A credential without it is no failure either: the deploy makes neither,
@@ -166,8 +161,8 @@ A destroy erases the mind: its contexts, files, repos, members and secrets. It l
   limited number.
 - The TXT record `_dmarc.<zone>`, which Cloudflare's Email Sending wrote.
 - R2's record of the telemetry bucket's data catalog, as inactive. No API removes it.
-- The OAuth client, when the destroy's credential may not delete OAuth clients: the destroy
-  says so and goes on.
+- The OAuth client of a stack deployed before 19 Nov 2026: a member deletes it in the
+  dashboard.
 - The SFU app and the TURN key, when the destroy's credential lacks the permission to delete Realtime (Calls)
   resources: the destroy
   says so and goes on.

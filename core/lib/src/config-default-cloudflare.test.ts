@@ -1,44 +1,80 @@
 // The default config's Cloudflare connection (core/configs/default/cloudflare.ts): the one link
-// of a connect, by the stack's client or by a member's own, the calls of Cloudflare's REST API
-// and of its MCP server with the grant that the vault keeps, and the billing token.
+// of a connect, at Cloudflare's MCP server with the mind as its own client, the calls of
+// Cloudflare's REST API through the server's `execute` and of the server's other tools with the
+// grant that the vault keeps, and the billing token.
+import { runInNewContext } from "node:vm";
 import { expect, test } from "vitest";
+import { z } from "zod";
 import {
+  accountCheckCode,
+  CLIENT_DOCUMENT_PATH,
   cloudflareBilling,
   cloudflareBillingToken,
+  cloudflareClientDocument,
   cloudflareConnect,
   cloudflareForAgent,
   cloudflareLastHour,
   cloudflareMcpForAgent,
-  OWN_CLIENT_SCOPES,
 } from "../../configs/default/cloudflare.ts";
 import { CLOUDFLARE_READ_SCOPES } from "./api.ts";
 import { callAnswerLink } from "./integrations.ts";
 
 const ACCOUNT = "aaaaabbbbbccccc111112222233333aa";
 const BEARER = 'Bearer getSecret("/secrets/cloudflare", { field: "accessToken" })';
+const MCP = "https://mcp.cloudflare.com/mcp";
 
-test("with the stack's client, the one link is Cloudflare's own consent page, and the mind names no client, scope or secret", async () => {
-  const mind = mindWith({ stackClient: true });
+test("the one link is the MCP server's consent page, for the mind as its own client: all reads asked, the vault's two checks named", async () => {
+  const mind = mindWith({});
 
   expect(await cloudflareConnect(mind.itx, { tell: "/agents/onboarding" })).toEqual({
-    way: "stack-client",
     link: "https://iterate.example.com/secrets/oauth/start?n=1",
     // the attempt's name in the vault, for `itx.secrets.oauthResult`
     nonce: "attempt-1",
   });
 
-  expect(mind).toMatchObject({
-    begun: [
-      {
-        path: "/secrets/cloudflare",
-        options: {
-          client: { stack: "cloudflare" },
-          straightToProvider: true,
-          // the consent brings the member back to the chat of the agent that asked
-          next: "https://dash.example.com/?agent=%2Fagents%2Fonboarding",
-        },
+  const [begun] = mind.begun;
+  expect(begun).toMatchObject({
+    path: "/secrets/cloudflare",
+    options: {
+      authorizationEndpoint: "https://mcp.cloudflare.com/authorize",
+      tokenEndpoint: "https://mcp.cloudflare.com/token",
+      // the client id is the URL of the mind's own document: no client in the account
+      clientId: `https://example.com${CLIENT_DOCUMENT_PATH}`,
+      // a public client: no client authentication at the token endpoint
+      clientAuth: "none",
+      scope: `${CLOUDFLARE_READ_SCOPES.join(" ")} offline_access`,
+      grantedWithin: [...CLOUDFLARE_READ_SCOPES, "user:read", "account:read", "offline_access"],
+      account: {
+        url: MCP,
+        method: "POST",
+        id: "result.content.0.text@json.id",
+        name: "result.content.0.text@json.name",
       },
-    ],
+      expectAccount: "example.com",
+      // the token goes to the MCP server alone
+      urls: ["https://mcp.cloudflare.com"],
+      // a refused grant goes back to the server (RFC 7009)
+      revocationEndpoint: "https://mcp.cloudflare.com/token",
+      extra: { resource: MCP },
+      straightToProvider: true,
+      // the consent brings the member back to the chat of the agent that asked
+      next: "https://dash.example.com/?agent=%2Fagents%2Fonboarding",
+    },
+  });
+  expect(Object.keys(begun?.options || {})).not.toContain("clientSecret");
+  // the account check is one call of the server's `execute`, with the code that names the zone
+  expect(
+    z.object({ account: z.object({ body: z.unknown() }) }).parse(begun?.options).account,
+  ).toMatchObject({
+    body: {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "execute",
+        arguments: { code: accountCheckCode("example.com"), truncate: false },
+      },
+    },
   });
   // the agent to tell is kept for this attempt alone
   expect(JSON.parse(mind.kv["cloudflare/connect-tell"] || "")).toMatchObject([
@@ -57,94 +93,72 @@ test("with the stack's client, the one link is Cloudflare's own consent page, an
   );
 });
 
-test("with no client of the stack's, the one link is the mind's form for a client that a member makes, and it says how to make it", async () => {
-  const mind = mindWith({ stackClient: false });
-
-  const answer = await cloudflareConnect(mind.itx, { tell: "/agents/onboarding" });
-
-  expect(answer).toEqual({
-    way: "own-client",
-    link: "https://iterate.example.com/collect",
-    makeTheClient: {
-      where: expect.stringContaining("Manage Account, OAuth clients"),
-      name: "iterate",
-      redirectUri: "https://iterate.example.com/secrets/oauth/callback",
-      grantTypes: ["authorization_code", "refresh_token"],
-      tokenEndpointAuthMethod: "client_secret_post",
-      scopes: Object.values(OWN_CLIENT_SCOPES),
-    },
-  });
-  expect(mind).toMatchObject({ begun: [] });
-  expect(mind).toMatchObject({
-    collected: [
-      {
-        path: "/secrets/cloudflare-client",
-        // the client's secret goes to Cloudflare's token endpoint, for the grant's refresh alone
-        egress: { urls: ["https://dash.cloudflare.com"] },
-        lendTo: ["/secrets/cloudflare"],
-        description: expect.stringContaining(
-          "Redirect URI: `https://iterate.example.com/secrets/oauth/callback`",
-        ),
-        fields: [
-          { name: "clientId", label: "Client ID", public: true },
-          { name: "clientSecret", label: "Client secret" },
-        ],
-        // the form leads on to the consent page, and keeps the agent that asked
-        redirectUrl: "https://dash.example.com/?page=integrations",
+test("the account check names the zone only for a grant of exactly one account, the one that holds the zone", async () => {
+  const run = (accounts: { id: string; name: string }[], zones: unknown[]) =>
+    runInNewContext(`(${accountCheckCode("example.com")})()`, {
+      cloudflare: {
+        request: async ({ path }: { path: string }) => ({
+          result: path.startsWith("/accounts") ? accounts : zones,
+        }),
       },
-    ],
-  });
-});
-
-test("a client that a member made is what the consent goes through: its secret as a placeholder, read scopes alone", async () => {
-  const mind = mindWith({ stackClient: false, ownClient: "a-member-made-client" });
-
-  expect(await cloudflareConnect(mind.itx)).toEqual({
-    way: "own-client",
-    link: "https://iterate.example.com/secrets/oauth/start?n=1",
-  });
-
-  expect(mind).toMatchObject({ collected: [] });
-  expect(mind).toMatchObject({
-    begun: [
-      {
-        path: "/secrets/cloudflare",
-        options: {
-          authorizationEndpoint: "https://dash.cloudflare.com/oauth2/auth",
-          tokenEndpoint: "https://dash.cloudflare.com/oauth2/token",
-          clientId: "a-member-made-client",
-          clientSecret: 'getSecret("/secrets/cloudflare-client", { field: "clientSecret" })',
-          clientAuth: "client_secret_post",
-          scope: `${Object.keys(OWN_CLIENT_SCOPES).join(" ")} offline_access`,
-          urls: [
-            "https://dash.cloudflare.com",
-            "https://api.cloudflare.com",
-            "https://mcp.cloudflare.com",
-          ],
-          straightToProvider: true,
-          next: "https://dash.example.com/?page=integrations",
-        },
-      },
-    ],
-  });
-  // what a member ticks is within what the stack's own client may read
-  const read: readonly string[] = CLOUDFLARE_READ_SCOPES;
-  expect(Object.keys(OWN_CLIENT_SCOPES).filter((scope) => !read.includes(scope))).toEqual([]);
-});
-
-test("each way of the Cloudflare card's Connect answers a link that the Dash follows: the vault's start page or its form, on the control plane", async () => {
-  const follows = (answer: unknown) =>
-    expect(callAnswerLink(answer, "iterate.example.com")).toMatchObject({
-      follow: expect.any(URL),
     });
-  follows(await cloudflareConnect(mindWith({ stackClient: true }).itx));
-  // no client of the stack's: the form for a member's own, then the consent through it
-  follows(await cloudflareConnect(mindWith({ stackClient: false }).itx));
-  follows(
-    await cloudflareConnect(
-      mindWith({ stackClient: false, ownClient: "a-member-made-client" }).itx,
-    ),
-  );
+  const ada = { id: ACCOUNT, name: "Ada's account" };
+  const zone = { name: "example.com", account: { id: ACCOUNT } };
+  expect([
+    await run([ada], [zone]),
+    await run([ada, { id: "b".repeat(32), name: "Bea's" }], [zone]),
+    await run([ada], []),
+    await run([{ id: "b".repeat(32), name: "Bea's" }], [zone]),
+    await run([ada], [{ name: "example.com.evil.net", account: { id: ACCOUNT } }]),
+  ]).toEqual([
+    { id: "example.com", name: "Ada's account" },
+    { accounts: 2 },
+    { accounts: 1 },
+    { accounts: 1 },
+    { accounts: 1 },
+  ]);
+});
+
+test("the client document: public, its own URL as the client id, the vault's callback its one redirect", async () => {
+  const mind = mindWith({});
+  const answer = await cloudflareClientDocument(mind.itx, "https://example.com");
+  expect(await answer.json()).toEqual({
+    client_id: "https://example.com/cloudflare-mcp-client.json",
+    client_name: "iterate mind example.com",
+    client_uri: "https://example.com",
+    redirect_uris: ["https://iterate.example.com/secrets/oauth/callback"],
+    grant_types: ["authorization_code", "refresh_token"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+  });
+});
+
+test("a request goes to the MCP server as one call of execute, with the grant as a placeholder, never a value", async () => {
+  const mind = mindWith({ grant: true });
+  await cloudflareForAgent(mind.itx, "execute", { path: "/zones" });
+  expect(mind).toMatchObject({
+    mcp: [
+      {
+        authorization: BEARER,
+        accept: "application/json, text/event-stream",
+        redirect: "manual",
+        tool: "execute",
+        truncate: false,
+      },
+    ],
+  });
+  // a token that the server refuses: its status, as it is
+  const refused = mindWith({ grant: true }, undefined, 401);
+  expect(await cloudflareForAgent(refused.itx, "execute", { path: "/zones" })).toEqual({
+    status: 401,
+    body: "invalid_token",
+  });
+});
+
+test("the Cloudflare card's Connect answers a link that the Dash follows: the vault's start page, on the control plane", async () => {
+  expect(
+    callAnswerLink(await cloudflareConnect(mindWith({}).itx), "iterate.example.com"),
+  ).toMatchObject({ follow: expect.any(URL) });
 });
 
 test("execute is one request to Cloudflare's REST API, with the grant's token as a placeholder, never a value", async () => {
@@ -166,6 +180,7 @@ test("execute is one request to Cloudflare's REST API, with the grant's token as
         authorization: BEARER,
         body: '{"view":"events"}',
         redirect: "manual",
+        via: "execute",
       },
     ],
   });
@@ -199,7 +214,7 @@ test("whoami keeps Cloudflare's words when Cloudflare refuses, and says so when 
   );
   expect(await cloudflareForAgent(refusing.itx, "whoami")).toEqual({
     status: 403,
-    body: "Cloudflare answered 403 to the grant: Authentication error",
+    body: "Cloudflare answered 403 to the grant: Cloudflare API error: GET /zones?name=example.com&per_page=1 returned HTTP 403: Authentication error",
   });
   // Cloudflare answers, and the grant does not list the mind's zone
   const another = mindWith({ grant: true }, () => Response.json({ result: [] }));
@@ -211,17 +226,17 @@ test("whoami keeps Cloudflare's words when Cloudflare refuses, and says so when 
   });
 });
 
-test("a long answer comes cut, and an answer that is no JSON comes as its text", async () => {
-  const long = mindWith({ grant: true }, () => new Response("x".repeat(30_000)));
+test("a long answer comes cut, and Cloudflare's refusal comes with its status and its words", async () => {
+  const long = mindWith({ grant: true }, () => Response.json({ result: "x".repeat(30_000) }));
   expect(await cloudflareForAgent(long.itx, "execute", { path: "/zones" })).toMatchObject({
     status: 200,
     cut: true,
-    text: expect.stringMatching(/^x{24000}…\(cut: ask for less/),
+    text: expect.stringMatching(/^\{"result":"x{23989}…\(cut: ask for less/),
   });
   const plain = mindWith({ grant: true }, () => new Response("no", { status: 403 }));
   expect(await cloudflareForAgent(plain.itx, "execute", { path: "/zones" })).toEqual({
     status: 403,
-    body: "no",
+    body: "Cloudflare API error: GET /zones returned HTTP 403: no",
   });
 });
 
@@ -426,9 +441,11 @@ function cloudflareOfTheMind(request: Request) {
 /** A mind at `iterate.example.com` with the zone `example.com`: what its vault holds, what it
  *  sent to Cloudflare (which answers `answer`), what it dialed, began and asked a person for. */
 function mindWith(
-  held: { grant?: boolean; billing?: boolean; stackClient?: boolean; ownClient?: string },
+  held: { grant?: boolean; billing?: boolean },
   answer: (request: Request) => Response | Promise<Response> = () =>
     Response.json({ success: true, result: [] }),
+  /** The MCP server's own status: 401 refuses the token. */
+  serverStatus = 200,
 ) {
   const sent: {
     method: string;
@@ -436,7 +453,10 @@ function mindWith(
     authorization: string | null;
     body: string;
     redirect: string;
+    via?: "execute";
   }[] = [];
+  /** Each call of the MCP server's `execute` over HTTP. */
+  const mcp: Record<string, unknown>[] = [];
   const dialed: {
     url: string;
     headers: Record<string, string>;
@@ -449,10 +469,50 @@ function mindWith(
   const set: Record<string, boolean | undefined> = {
     "/secrets/cloudflare": held.grant,
     "/secrets/cloudflare-billing": held.billing,
-    "/secrets/cloudflare-client": !!held.ownClient,
   };
+  /** Cloudflare's MCP server, as far as `execute` goes: it runs the request that the code names
+   *  against Cloudflare (`answer`), and answers what the code returns, as text in the result. */
+  async function mcpServer(request: Request) {
+    const call = ToolCall.parse(await request.json());
+    mcp.push({
+      authorization: request.headers.get("authorization"),
+      accept: request.headers.get("accept"),
+      redirect: request.redirect,
+      tool: call.params.name,
+      truncate: call.params.arguments.truncate,
+    });
+    if (serverStatus !== 200) return new Response("invalid_token", { status: serverStatus });
+    const named = call.params.arguments.code.match(/cloudflare\.request\((\{.*\})\)/)?.[1];
+    const asked = Asked.parse(JSON.parse(named || "{}"));
+    const url = `https://api.cloudflare.com/client/v4${asked.path}`;
+    const body = asked.body === undefined ? "" : JSON.stringify(asked.body);
+    sent.push({
+      method: asked.method,
+      url,
+      authorization: request.headers.get("authorization"),
+      body,
+      redirect: request.redirect,
+      via: "execute",
+    });
+    const cloudflare = await answer(
+      new Request(url, { method: asked.method, body: body || undefined }),
+    );
+    const text = await cloudflare.text();
+    const returned = cloudflare.ok
+      ? { status: 200, body: JSON.parse(text) }
+      : {
+          status: cloudflare.status,
+          body: `Cloudflare API error: ${asked.method} ${asked.path} returned HTTP ${cloudflare.status}: ${text}`,
+        };
+    return Response.json({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text: JSON.stringify(returned) }] },
+    });
+  }
   return {
     sent,
+    mcp,
     dialed,
     begun,
     collected,
@@ -460,13 +520,7 @@ function mindWith(
     itx: {
       url: async () => "https://example.com",
       secrets: {
-        describe: async (path: string) => ({
-          path,
-          set: !!set[path],
-          ...(path === "/secrets/cloudflare-client" &&
-            held.ownClient && { public: { clientId: held.ownClient } }),
-        }),
-        hasStackClient: async () => !!held.stackClient,
+        describe: async (path: string) => ({ path, set: !!set[path] }),
         oauthCallbackUrl: async () => "https://iterate.example.com/secrets/oauth/callback",
         beginOAuth: async (path: string, options: Record<string, unknown>) => {
           begun.push({ path, options });
@@ -488,6 +542,7 @@ function mindWith(
         delete: async (key: string) => void delete kv[key],
       },
       fetch: async (request: Request) => {
+        if (request.url === MCP) return await mcpServer(request);
         const body = await request.clone().text();
         sent.push({
           method: request.method,
@@ -517,3 +572,11 @@ function mindWith(
     },
   };
 }
+
+const ToolCall = z.object({
+  params: z.object({
+    name: z.string(),
+    arguments: z.object({ code: z.string(), truncate: z.boolean().optional() }),
+  }),
+});
+const Asked = z.object({ method: z.string(), path: z.string(), body: z.unknown().optional() });

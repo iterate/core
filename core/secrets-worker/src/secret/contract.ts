@@ -27,9 +27,11 @@ const StoredRefresh: z.ZodType<SecretRefresh> = z.union([
     kind: z.literal("oauth-refresh-token"),
     tokenEndpoint: z.url({ protocol: /^https$/ }),
     clientAuth: z.enum(["client_secret_basic", "client_secret_post", "none"]),
+    /** The grant's scope ceiling, checked again at each refresh (../secret-oauth.ts). */
+    grantedWithin: z.array(z.string().min(1)).optional(),
     /** The iterate Cloud's client that brokers the refresh, and that Cloud's origin, when the
      *  grant was connected through one (../cloud-client.ts). Or the stack's own client at
-     *  Cloudflare, by its name (../stack-client.ts). */
+     *  Cloudflare, which the stack does not make: such a grant is read, and does not refresh. */
     client: z
       .union([CloudClientName, z.strictObject({ stack: z.literal("cloudflare") })])
       .optional(),
@@ -92,6 +94,12 @@ export type SecretFact =
       };
     }
   | { type: "events.iterate.com/secret/deleted"; payload: { path: string } }
+  // a consent that the vault refused (its ceiling, or its account): nothing was kept. `nonce`
+  // names the attempt; `revoked`: the provider took the refused tokens back (RFC 7009).
+  | {
+      type: "events.iterate.com/secret/grant-refused";
+      payload: { nonce: string; reason: string; revoked: boolean };
+    }
   // the sealed cell left the vault, for a caller that proved the at-rest key
   | { type: "events.iterate.com/secret/exported"; payload: { path: string } }
   // `answerLost`, on a refresh that failed: true when no answer came, so the provider may have

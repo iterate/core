@@ -1267,13 +1267,11 @@ const VARS = {
   }),
   ITERATE__AT_REST_KEY: "at-rest-key-for-tests-only",
   // a stack whose deploy made no OAuth client at Cloudflare (../stack-client.test.ts has one)
-  ITERATE__CLOUDFLARE_CLIENT: JSON.stringify({ refusal: "Authentication error" }),
   // a stack whose deploy made no SFU app or TURN key (../stack-secrets.test.ts has them)
   ITERATE__CLOUDFLARE_REALTIME: JSON.stringify({
     sfu: { refusal: "Authentication error" },
     turn: { refusal: "Authentication error" },
   }),
-  ITERATE__CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
 };
 
 /** A vault with one secret and its rule. With `cloud`, the secret is one connected through the

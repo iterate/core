@@ -16,9 +16,10 @@
 // connects in. The stack then has no mind Worker and nothing that only a mind Worker binds, and
 // the boundary, the same build, holds the connection in a Durable Object of its own.
 //
-// The stack generates four keys (three with an external mind), keeps one owner-created telemetry
-// API token in state, and makes one OAuth client in the account, through which a member connects
-// the mind to the account.
+// The stack generates four keys (three with an external mind) and keeps one owner-created
+// telemetry API token in state. It makes no OAuth client: a member connects the mind to the
+// account through Cloudflare's MCP server, for which the mind is its own client
+// (core/configs/default/cloudflare.ts).
 // An owner signs in first with a code mailed to their address, by the mind or by Cloudflare
 // Access, and adds a passkey.
 import { readFileSync } from "node:fs";
@@ -30,15 +31,12 @@ import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
-import { CLOUDFLARE_READ_SCOPES } from "iterate/api";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
-import { SECRET_OAUTH_CALLBACK_PATH } from "iterate/secret-placeholder";
 import { z } from "zod";
 import { AccessTeam } from "./access-team.ts";
 import { ArtifactsNamespace } from "./artifacts-namespace.ts";
 import { ArtifactsRepoSubscription } from "./artifacts-repo-subscription.ts";
 import { CatalogTablesOfSinks } from "./catalog-tables-of-sinks.ts";
-import { CloudflareOAuthClient } from "./cloudflare-oauth-client.ts";
 import { type MindConfig, namesOf } from "./config.ts";
 import { REALTIME_SFU, realtimeConfigOf, TURN_KEY } from "./realtime.ts";
 import { TelemetryToken } from "./telemetry-token.ts";
@@ -281,17 +279,6 @@ export const mindStack = (config: MindConfig) =>
       },
     });
 
-    // ── the stack's own OAuth client at Cloudflare: a member connects the mind to this account ──
-    // One private client, which only a member of this account can approve, registered with the
-    // scopes that read the account and deploy nothing. A consent comes back to the secrets
-    // Worker's callback on the control-plane hostname. A deploy whose credential may not make
-    // OAuth clients makes none, and says why (./cloudflare-oauth-client.ts).
-    const cloudflareClient = yield* CloudflareOAuthClient("CloudflareClient", {
-      name: names.cloudflareClient,
-      redirectUri: `https://${config.controlPlaneHostname}${SECRET_OAUTH_CALLBACK_PATH}`,
-      scopes: CLOUDFLARE_READ_SCOPES,
-    });
-
     // ── the stack's Realtime SFU app and TURN key at Cloudflare: calls work from the first deploy ──
     // Neither costs anything until a call uses it. Cloudflare shows each one's secret only when
     // it makes it: the stack's state keeps it. A deploy whose credential may not make Realtime
@@ -308,24 +295,6 @@ export const mindStack = (config: MindConfig) =>
       env: {
         ITERATE: JSON.stringify(sharedConfigOf(config)),
         ITERATE__AT_REST_KEY: atRestKey,
-        // The client above, for this Worker alone: its id and its secret, or Cloudflare's words
-        // for why the stack has none. One secret variable, as JSON
-        // (core/secrets-worker/src/config.ts `cloudflareClient`).
-        ITERATE__CLOUDFLARE_CLIENT: Output.all(
-          cloudflareClient.clientId,
-          cloudflareClient.clientSecret,
-          cloudflareClient.refusal,
-        ).pipe(
-          Output.map(([clientId, clientSecret, refusal]) =>
-            Redacted.make(
-              JSON.stringify(
-                clientSecret
-                  ? { clientId, clientSecret: Redacted.value(clientSecret) }
-                  : { refusal },
-              ),
-            ),
-          ),
-        ),
         // The SFU app and TURN key above, for this Worker alone, which serves them as two secrets
         // that the stack made: each one's id and secret, or why it was not made. One secret
         // variable, as JSON (core/secrets-worker/src/config.ts `cloudflareRealtime`).
@@ -339,8 +308,6 @@ export const mindStack = (config: MindConfig) =>
             Redacted.make(JSON.stringify(realtimeConfigOf({ appId, appSecret, keyId, key }))),
           ),
         ),
-        // the account that the stack runs in: a grant through the client above must reach it alone
-        ITERATE__CLOUDFLARE_ACCOUNT_ID: accountId,
         AUTH: Cloudflare.WorkerEntrypoint(auth, { entrypoint: "Auth" }),
         SECRET: Cloudflare.DurableObject("SECRET", { className: "SecretDurableObject" }),
         APPROVALS: Cloudflare.DurableObject("APPROVALS", { className: "ApprovalsIndex" }),

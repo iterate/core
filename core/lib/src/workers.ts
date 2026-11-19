@@ -367,9 +367,7 @@ export interface SecretsService {
    *  through. The caller names the Cloud: no config of the stack does. No client when the Cloud
    *  gave no list. */
   cloud(origin: string): Promise<{ origin: string; clients: string[] }>;
-  /** WHETHER THE STACK HAS ITS OWN OAUTH CLIENT AT CLOUDFLARE (./api.ts `StackClientName`): what
-   *  `beginOAuth(path, { client: { stack: "cloudflare" } })` goes through. Never its id or its
-   *  secret, which stay in the secrets Worker's config. */
+  /** Always false: the stack makes no OAuth client at Cloudflare (./api.ts `hasStackClient`). */
   hasStackClient(name: StackClientName["stack"]): Promise<boolean>;
   /** THE PERSONS' GRANTS THAT THE ITERATE CLOUD BROKERS, REFRESHED ON WORD, whichever client of
    *  the Cloud a grant is of: one row for each, and the facts for the mind's log.

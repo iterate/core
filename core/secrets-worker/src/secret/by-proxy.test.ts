@@ -814,13 +814,11 @@ async function vault() {
       topology: "full-cloudflare",
     }),
     ITERATE__AT_REST_KEY: AT_REST_KEY,
-    ITERATE__CLOUDFLARE_CLIENT: JSON.stringify({ refusal: "Authentication error" }),
     // a stack whose deploy made no SFU app or TURN key (../stack-secrets.test.ts has them)
     ITERATE__CLOUDFLARE_REALTIME: JSON.stringify({
       sfu: { refusal: "Authentication error" },
       turn: { refusal: "Authentication error" },
     }),
-    ITERATE__CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
     APPROVALS: {
       getByName: () => ({
         add: async (path: string) => {

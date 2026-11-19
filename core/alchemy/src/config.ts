@@ -103,7 +103,6 @@ export const namesOf = ({ alchemy }: { alchemy: { stageName: string } }) => {
     authKv: `${prefix}-auth-kv`,
     ownerEmailProof: `${prefix}-owner-email-proof`,
     secrets: `${prefix}-secrets`,
-    cloudflareClient: `${prefix}-cloudflare`,
     realtimeSfu: `${prefix}-realtime-sfu`,
     turnKey: `${prefix}-turn`,
     mind: `${prefix}-mind`,

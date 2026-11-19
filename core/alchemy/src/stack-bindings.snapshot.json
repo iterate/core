@@ -24,8 +24,6 @@
       "AUTH:Cloudflare.WorkerEntrypoint (worker Auth, entrypoint Auth)",
       "ITERATE:plain_text",
       "ITERATE__AT_REST_KEY:output of SecretsAtRestKey.text",
-      "ITERATE__CLOUDFLARE_ACCOUNT_ID:plain_text",
-      "ITERATE__CLOUDFLARE_CLIENT:output of CloudflareClient.clientId, CloudflareClient.clientSecret, CloudflareClient.refusal",
       "ITERATE__CLOUDFLARE_REALTIME:output of RealtimeSfu.appId, RealtimeSfu.secret, TurnKey.keyId, TurnKey.key",
       "LOADER:Cloudflare.DynamicWorker",
       "SECRET:Cloudflare.DurableObject (class SecretDurableObject)"
@@ -83,8 +81,6 @@
       "AUTH:Cloudflare.WorkerEntrypoint (worker Auth, entrypoint Auth)",
       "ITERATE:plain_text",
       "ITERATE__AT_REST_KEY:output of SecretsAtRestKey.text",
-      "ITERATE__CLOUDFLARE_ACCOUNT_ID:plain_text",
-      "ITERATE__CLOUDFLARE_CLIENT:output of CloudflareClient.clientId, CloudflareClient.clientSecret, CloudflareClient.refusal",
       "ITERATE__CLOUDFLARE_REALTIME:output of RealtimeSfu.appId, RealtimeSfu.secret, TurnKey.keyId, TurnKey.key",
       "LOADER:Cloudflare.DynamicWorker",
       "SECRET:Cloudflare.DurableObject (class SecretDurableObject)"
@@ -141,8 +137,6 @@
       "AUTH:Cloudflare.WorkerEntrypoint (worker Auth, entrypoint Auth)",
       "ITERATE:plain_text",
       "ITERATE__AT_REST_KEY:output of SecretsAtRestKey.text",
-      "ITERATE__CLOUDFLARE_ACCOUNT_ID:plain_text",
-      "ITERATE__CLOUDFLARE_CLIENT:output of CloudflareClient.clientId, CloudflareClient.clientSecret, CloudflareClient.refusal",
       "ITERATE__CLOUDFLARE_REALTIME:output of RealtimeSfu.appId, RealtimeSfu.secret, TurnKey.keyId, TurnKey.key",
       "LOADER:Cloudflare.DynamicWorker",
       "SECRET:Cloudflare.DurableObject (class SecretDurableObject)"

@@ -224,73 +224,245 @@ export type ClientAuth = "client_secret_basic" | "client_secret_post" | "none";
  *  secret. */
 export type CloudClientName = { cloud: string; origin: string };
 
-/** THE STACK'S OWN CLIENT AT CLOUDFLARE, as a secret names it: one private OAuth client that the
- *  mind's deploy made inside the mind's own Cloudflare account (core/alchemy
- *  src/cloudflare-oauth-client.ts). Its id and its secret are config of the secrets Worker alone:
- *  no code of the mind sees them. The secrets Worker fills in the client, Cloudflare's two
- *  endpoints (`CLOUDFLARE_OAUTH`) and the pin, and takes no scope outside
- *  `CLOUDFLARE_READ_SCOPES`. `itx.secrets.hasStackClient("cloudflare")` says whether the stack
- *  has it: a deploy whose credential may not make OAuth clients makes none. */
+/** A grant whose refresh names the stack's own OAuth client at Cloudflare. The stack makes no such
+ *  client (a mind connects through Cloudflare's MCP server, as its own client), so such a grant
+ *  does not refresh, and a member connects again. */
 export type StackClientName = { stack: "cloudflare" };
 
-/** WHERE A CONSENT AT CLOUDFLARE IS ASKED FOR AND EXCHANGED, and where its token may go: the REST
- *  API and Cloudflare's own MCP server. The two endpoints are Cloudflare's OAuth 2 server, which
- *  serves an account's own clients too: a consent and a refresh through a private client went
- *  through them on 18 Nov 2026. */
+/** CLOUDFLARE'S OWN OAUTH SERVER, the one behind its dashboard: where a connect through a client
+ *  that a member made in the account asks and exchanges, and where its token may go. The default
+ *  template connects through Cloudflare's MCP server instead (core/configs/default/cloudflare.ts);
+ *  a config of a mind's own that still connects here is held to the vault's own ceiling for
+ *  Cloudflare, reads alone, as every connect to Cloudflare is. */
 export const CLOUDFLARE_OAUTH = {
   authorizationEndpoint: "https://dash.cloudflare.com/oauth2/auth",
   tokenEndpoint: "https://dash.cloudflare.com/oauth2/token",
   urls: ["https://api.cloudflare.com", "https://mcp.cloudflare.com"],
 } as const;
 
-/** WHAT A MIND'S CLOUDFLARE CONNECTION MAY READ: the OAuth scopes that the stack's client is
- *  registered with, that a connect asks for, and outside which the secrets Worker refuses a
- *  connect through that client and a grant. THE PROMISE to the owner: the mind can read its own
- *  Cloudflare account (logs, errors, what is deployed) and can change nothing there. So each
- *  scope is what debugging the mind's own stack needs, and no more: no write, no read of data
- *  (a Worker's code, a database's rows, a key's value, an object), no read of a credential, no
- *  read that runs a query or a model or sends anything. Left out by name, among others:
- *    `workers-scripts.read`, `.content_read`, `workers-tail.read`  a Worker's code, live requests
- *    `d1.read`, `r2-catalog-sql.read`, `account-analytics.read`   run SQL
- *    `account-settings.read`        shows a Turnstile widget's secret and TSIG secrets
- *    `workers-kv-storage.read`, `workers-r2.read`                  values and objects
- *    `ai.read`                      invokes models, which bill
- *    `bot-management.read`, `bot-management-feedback.read`        submit feedback
- *    `notifications.read`           gives an unsubscribe token
- *    `snippets.read`                reads snippets' source
- *    `aig.read`                     may show a custom provider's headers
- *    `access-app.read`              an application's answer has its SCIM password or token
- *    `argotunnel.read`              reads a tunnel's token
- *    `queues.read`                  may pull and peek at messages
- *  core/lib/src/cloudflare-read-scopes.test.ts holds the list to the rule. Each scope is one of
- *  Cloudflare's own (`GET /oauth/scopes` of its API lists them). `offline_access`, which brings
- *  the refresh token, is no part of the list: Cloudflare adds it to a client that has the refresh
- *  grant, and a connect asks for it too. */
+/** WHAT A MIND'S CLOUDFLARE CONNECTION MAY READ: the OAuth scopes that a connect asks for, and
+ *  outside which the vault keeps no grant from Cloudflare (`grantedWithin`, and the vault's own
+ *  ceiling). THE RULE, the owner's: "we basically want the cloudflare connection to be able to read ANYTHING
+ *  EXCEPT THE SECRET ENCRYPTION KEY". So the list is every read of Cloudflare's MCP server's
+ *  "Read only" template (github.com/cloudflare/mcp at 19f7601: each scope whose last part is
+ *  `read`, `metadata_read`, `monitoring` or `report`), less the reads in
+ *  `CLOUDFLARE_READS_LEFT_OUT`: the ones by which a holder could come to act as the mind or as a
+ *  member, by reading one of the stack's four random secrets (the at-rest key, the auth signing
+ *  key, the telemetry secret, the mind's signing key) or what they protect. No write is in it:
+ *  Cloudflare refuses every write. The reads include data (a Worker's code, KV values, R2
+ *  objects), reads that bill (`ai.read` runs models) and reads that show a third party's
+ *  credential (`images.read`, `account-settings.read`): the owner chose that. The MCP server adds
+ *  `user:read`, `account:read` and `offline_access` to every grant; they are no part of the list.
+ *  core/lib/src/cloudflare-read-scopes.test.ts holds the list to the rule. */
 export const CLOUDFLARE_READ_SCOPES = [
-  // who consented: `GET /user`, which Cloudflare's MCP server asks of an OAuth token
-  "user-details.read",
-  // the Workers: names, settings, deployments and versions, without their source
-  "workers-scripts.metadata_read",
-  // the Workers' logs, traces and request counts (the telemetry query)
-  "workers-observability.read",
-  // the routes and custom domains that send a zone's requests to a Worker
-  "workers-routes.read",
-  // the names, sizes and settings of the stack's data: D1 databases (no SQL), KV namespaces (no
-  // value), R2 buckets (no object), queues (no message)
+  "access-acct.read",
+  "access-app.read",
+  "access-audit-log.read",
+  "access-certificate.read",
+  "access-custom-page.read",
+  "access-device-posture.read",
+  "access-group.read",
+  "access-idp.read",
+  "access-key.read",
+  "access-org.read",
+  "access-policy-test.read",
+  "access-policy.read",
+  "access-population.read",
+  "access-saml-certificate.read",
+  "access-scim-log.read",
+  "access-service-token.read",
+  "access-ssh-auditing.read",
+  "access-tag.read",
+  "access-users.read",
+  "access.read",
+  "account-analytics.read",
+  "account-api-gateway.read",
+  "account-custom-asset.read",
+  "account-custom-error-rules.read",
+  "account-custom-pages.read",
+  "account-disable-esc.read",
+  "account-dns-settings.read",
+  "account-firewall-access-rules.read",
+  "account-logs.read",
+  "account-rule-lists.read",
+  "account-rulesets.read",
+  "account-security-center-insights.read",
+  "account-security-center-partner-integrations.read",
+  "account-settings.read",
+  "account-ssl-and-certificates.read",
+  "account-waf.read",
+  "account-waiting-rooms.read",
+  "address-maps.read",
+  "agw.read",
+  "ai-model.read",
+  "ai-search.metadata_read",
+  "ai-search.read",
+  "ai.read",
+  "aiaudit.read",
+  "aig.metadata_read",
+  "aig.read",
+  "analytics.read",
+  "api-gateway.read",
+  "argotunnel.read",
+  "artifacts.read",
+  "bot-management-feedback.read",
+  "bot-management.read",
+  "browser-rendering.read",
+  "cache-settings.read",
+  "calls.read",
+  "casb.read",
+  "cf-agents.read",
+  "cfspeed.read",
+  "challenge-widgets.read",
+  "chinanetwork-steering.read",
+  "cloud-connector.read",
+  "cloud-email-security.read",
+  "cloudchamber.read",
+  "cloudforce-one.read",
+  "config-settings.read",
+  "connectivity-directory.read",
+  "constellation.read",
+  "containers.read",
+  "custom-errors.read",
+  "custom-pages.read",
+  "cws.read",
   "d1.metadata_read",
-  "workers-kv-storage.metadata_read",
-  "workers-r2.metadata_read",
-  "queues.metadata_read",
-  // telemetry's pipelines, streams and sinks: their settings (a sink's credentials are not in
-  // Cloudflare's answer)
-  "pipelines.read",
-  // the zones, their DNS records and their settings (SSL mode, Email Routing's switch)
-  "zone.read",
+  "ddos-botnet-feed.read",
+  "ddos-protection.read",
+  "dls.read",
+  "dns-firewall.read",
+  "dns-view.read",
   "dns.read",
-  "zone-settings.read",
-  // mail in: each zone's Email Routing rules
+  "domain-page-shield.read",
+  "dynamic-redirect.read",
+  "email-routing-account-rule.read",
+  "email-routing-address.read",
   "email-routing-rule.read",
+  "email-routing-suppression.read",
+  "email-security-dmarcreports.read",
+  "email-sending.read",
+  "fbm.read",
+  "field-extractor.read",
+  "firewall-for-ai.read",
+  "firewall-services.read",
+  "flagship.read",
+  "fraud-detection-pii.read",
+  "fraud-detection.read",
+  "fraud-feedback.read",
+  "healthcheck.read",
+  "http-applications.read",
+  "http-ddos-managed-ruleset.read",
+  "images.metadata_read",
+  "images.read",
+  "intel.read",
+  "iot.read",
+  "ip-prefix-bgp-on-demand.read",
+  "ip-prefix.read",
+  "k2.read",
+  "l4-ddos-managed-ruleset.read",
+  "load-balancers-account.read",
+  "load-balancers.read",
+  "load-balancing-monitors-and-pools.read",
+  "magic-firewall.read",
+  "magic-transit.read",
+  "magic-wan.read",
+  "managed-headers.read",
+  "mass-url-redirects.read",
+  "mcp-portals.read",
+  "memberships.read",
+  "messaging.metadata_read",
+  "messaging.read",
+  "moq.read",
+  "notifications.read",
+  "origin.read",
+  "page-rules.read",
+  "page-shield.read",
+  "page.read",
+  "pages.metadata_read",
+  "payments-gateway.read",
+  "pcaps-api.read",
+  "pipelines.read",
+  "precursor.read",
+  "pubsub.read",
+  "query-cache.read",
+  "queues.metadata_read",
+  "queues.read",
+  "r2-catalog-sql.read",
+  "r2-catalog.read",
+  "radar.read",
+  "rag.read",
+  "realtime.read",
+  "registrar-domains.read",
+  "registrar-sandbox-domains.read",
+  "reports-application-security-report.read",
+  "request-tracer.read",
+  "resource-library.read",
+  "resource-sharing.read",
+  "response-compression.read",
+  "sanitize.read",
+  "secrets-store.read",
+  "select-configuration.read",
+  "snippets.read",
+  "ssl-and-certificates.read",
+  "stream.metadata_read",
+  "stream.read",
+  "tag.read",
+  "teams-cds-compute-account.read",
+  "teams-connector-cloudflared.monitoring",
+  "teams-connector-cloudflared.read",
+  "teams-connector-warp.read",
+  "teams-connectors.read",
+  "teams-dex.read",
+  "teams-networks.read",
+  "teams-pii.read",
+  "teams-resilience.read",
+  "teams.read",
+  "teams.report",
+  "transform-rules.read",
+  "trust-and-safety.read",
+  "url-scanner.read",
+  "user-details.read",
+  "vectorize.read",
+  "waiting-rooms.read",
+  "web3-hostnames.read",
+  "websearch.metadata_read",
+  "websearch.read",
+  "workers-ci.read",
+  "workers-kv-storage.metadata_read",
+  "workers-kv-storage.read",
+  "workers-observability.read",
+  "workers-r2-bucket-item.read",
+  "workers-r2.metadata_read",
+  "workers-r2.read",
+  "workers-routes.read",
+  "workers-scripts.metadata_read",
+  "workers-scripts.read",
+  "workers_ai.metadata_read",
+  "zaraz.read",
+  "zone-access.read",
+  "zone-custom-asset.read",
+  "zone-disable-esc.read",
+  "zone-dns-settings.read",
+  "zone-observability.read",
+  "zone-security-center-insights.read",
+  "zone-security-center-partner-assets.read",
+  "zone-settings.read",
+  "zone-transform-rules.read",
+  "zone-versioning.read",
+  "zone-waf.read",
+  "zone.read",
 ] as const;
+
+/** THE READS LEFT OUT of `CLOUDFLARE_READ_SCOPES`, each with its reason: a closed list. A read
+ *  that is not here and is in the server's "Read only" template is in the list. */
+export const CLOUDFLARE_READS_LEFT_OUT = {
+  "d1.read":
+    "runs SQL on the stack's databases: the auth database holds the mind's own signing key's seed in clear (`stack_key.seed`), with which a holder signs as the mind",
+  "logs.read":
+    "reads a zone's request logs, whose fields include `Cookies` and `RequestHeaders`: a member's session cookie lets its holder act as that member",
+  "workers-tail.read":
+    "starts a live tail of a Worker's requests, with their headers: Workers Logs redact the cookie and the authorization header, but a tail's redaction was not proven",
+} as const;
 
 /** How the secret's facet re-mints an expired credential, in its own trusted code: the
  *  exchange reads this secret's own material, POSTs to an endpoint within the pin, and writes the
@@ -309,10 +481,14 @@ export type SecretRefresh =
       kind: "oauth-refresh-token";
       tokenEndpoint: string;
       clientAuth?: ClientAuth;
+      /** The grant's scope ceiling (`SecretOAuthOptions.grantedWithin`), within the vault's own for
+       *  the provider: a refresh whose answer names a scope outside it, or names none, is refused,
+       *  and the new tokens are not kept. */
+      grantedWithin?: string[];
       /** `cloud`: the client is that of the iterate Cloud at `origin`, and `tokenEndpoint` is that
        *  Cloud's broker, which adds the client secret. The refresh token in the material is sealed
-       *  for this deployment and means nothing anywhere else. `stack`: the client is the stack's
-       *  own at Cloudflare, and the secrets Worker adds its secret from its own config. */
+       *  for this deployment and means nothing anywhere else. `stack`: the stack's former client
+       *  at Cloudflare (`StackClientName`): such a grant no longer refreshes. */
       client?: { platform: IntegrationProvider } | CloudClientName | StackClientName;
     }
   /** A GitHub App installation's token (`POST <apiOrigin>/app/installations/<id>/access_tokens`
@@ -521,28 +697,23 @@ export type SignInProvider = Exclude<IntegrationProvider, "slack" | "x">;
 /** Whose OAuth app a secret's `beginOAuth` goes through when it is not a client passed in the
  *  clear: one of an iterate Cloud's by its name there (`github`, `google`, `x`) and that Cloud's
  *  `origin` (`CloudClientName`), the app every deployment shares. The Cloud keeps that app's secret and
- *  adds it to the exchange and to each refresh; the tokens stay in this secret. Or the stack's
- *  own client at Cloudflare (`StackClientName`), whose secret the secrets Worker holds. */
-export type SecretOAuthClient =
-  | StackClientName
-  | (CloudClientName & {
-      /** For a GitHub App of the Cloud's: the accounts (a person's or an organization's login)
-       *  whose installations this mind asks to be connected to. The member's consent reaches
-       *  every account they administer; the mind gets the events and the installation tokens
-       *  of these alone, and the Cloud's page names them before the member approves. With none
-       *  named it gets no installation, unless `install: true` sends the member to the App's
-       *  install page, where the one they choose is connected. */
-      accounts?: string[];
-    });
+ *  adds it to the exchange and to each refresh; the tokens stay in this secret. */
+export type SecretOAuthClient = CloudClientName & {
+  /** For a GitHub App of the Cloud's: the accounts (a person's or an organization's login)
+   *  whose installations this mind asks to be connected to. The member's consent reaches
+   *  every account they administer; the mind gets the events and the installation tokens
+   *  of these alone, and the Cloud's page names them before the member approves. With none
+   *  named it gets no installation, unless `install: true` sends the member to the App's
+   *  install page, where the one they choose is connected. */
+  accounts?: string[];
+};
 
 /** What `secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the OAuth client
  *  (the mind's own in the clear, or an integration's `client`), the scope, the pin, and any extra
  *  authorize parameters the provider needs (Google: `access_type=offline`, `prompt=consent`). */
 export type SecretOAuthOptions = {
   /** The provider's two endpoints. Absent with a Cloud client, which names them, the client's id
-   *  and the pin itself, and with the stack's own client (`client: { stack: "cloudflare" }`), for
-   *  which the secrets Worker fills them in. With that client `scope` may name only scopes of
-   *  `CLOUDFLARE_READ_SCOPES`, and is all of them when absent. */
+   *  and the pin itself. */
   authorizationEndpoint?: string;
   tokenEndpoint?: string;
   /** Exactly one of `clientId` and `client`. */
@@ -577,6 +748,19 @@ export type SecretOAuthOptions = {
   /** How the token endpoint wants the client credential. */
   clientAuth?: ClientAuth;
   scope?: string;
+  /** THE SCOPE CEILING: every scope that the grant may hold. With it the platform keeps a grant
+   *  only when the token answer names the scopes it granted (`scope`) and each one is in the list:
+   *  an answer that names one outside it, or names none, is refused before anything is kept, and
+   *  the person's page says which scopes were too many. A refresh whose answer names a scope
+   *  outside it, or names none, is refused the same way. `scope` itself must be within it. Not
+   *  with `client`. THE VAULT'S OWN CEILING: for a provider that it holds to reads alone
+   *  (Cloudflare: `CLOUDFLARE_READ_SCOPES` and the three scopes that its MCP server adds), a
+   *  connect is held to that list with or without this one, and this one may only narrow it. */
+  grantedWithin?: string[];
+  /** RFC 7009's endpoint, within `urls`: a grant that the vault refuses (its ceiling, its account)
+   *  goes back there, its refresh token and its access token, and the `secret/grant-refused` fact
+   *  says whether the provider took them. */
+  revocationEndpoint?: string;
   /** The origins the tokens may be sent to; defaults to the token endpoint's, which it must include. */
   urls?: string[];
   extra?: Record<string, string>;
@@ -588,9 +772,13 @@ export type SecretOAuthOptions = {
    *  not (X; any provider without an ID token): a JSON endpoint within `urls`, which the secret's
    *  facet calls once with the new access token before anything is stored, and the paths of the
    *  account's id and, when it has one, its name (`data.id`, `data.username`). `completeOAuth`
-   *  answers the account, and `expectAccount` is checked against its id. Not with `client`: the
-   *  deployment's app names its own accounts. */
-  account?: { url: string; id: string; name?: string };
+   *  answers the account, and `expectAccount` is checked against its id: another account, no
+   *  account, or an answer that is not 200 is refused, and nothing is kept. `method: "POST"` with
+   *  `body` (JSON) asks a JSON-RPC endpoint, such as an MCP server's `tools/call`. A step of a path
+   *  that ends in `@json` reads a string that holds JSON, as an MCP tool's text does:
+   *  `result.content.0.text@json.id`. Not with `client`: the deployment's app names its own
+   *  accounts. */
+  account?: { url: string; id: string; name?: string; method?: "GET" | "POST"; body?: unknown };
   /** Whoever holds the start link may consent, signed in or not; the page says so. Without it, only
    *  a member of the mind, signed in. */
   anyoneWithLink?: boolean;
@@ -1681,10 +1869,8 @@ export interface IterateContextApi {
      *  `client: { cloud: <name>, origin }` of `beginOAuth`. No client when the Cloud gave no
      *  list. */
     cloud(origin: string): Promise<{ origin: string; clients: string[] }>;
-    /** Whether the stack has its own OAuth client at Cloudflare, which
-     *  `beginOAuth(path, { client: { stack: "cloudflare" } })` goes through. False when the
-     *  deploy's credential may not make OAuth clients: a member then makes one by hand, and a
-     *  connect names it as `clientId` and `clientSecret`. Never the client's id or its secret. */
+    /** Always false: the stack makes no OAuth client at Cloudflare. A config that asks connects
+     *  with no stack client. */
     hasStackClient(name: StackClientName["stack"]): Promise<boolean>;
     /** The link to a form on the platform's own hostname where a person enters a value an agent
      *  must never see in chat. The form shows the secret's path, its pin, what it may be used for

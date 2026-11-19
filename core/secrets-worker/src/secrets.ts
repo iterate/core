@@ -643,12 +643,13 @@ export class RefreshUnanswered extends Error {
   }
 }
 
-// RFC 6749 §6.
+// RFC 6749 §6. `ceiling`: the scopes that the grant is held to (./secret-oauth.ts `grantCeilingOf`).
 export async function refreshSecretMaterial(
   refresh: Extract<SecretRefresh, { kind: "oauth-refresh-token" }>,
   material: SecretMaterial | null,
   fetchFn: (request: Request) => Promise<Response>,
   clientSecretOf: ClientSecretOf,
+  ceiling: readonly string[] | undefined = refresh.grantedWithin,
 ): Promise<Record<string, unknown>> {
   const record = typeof material === "object" && material ? material : {};
   const reads = REFRESH_READS[refresh.kind].safeParse(record);
@@ -674,6 +675,27 @@ export async function refreshSecretMaterial(
       `${refresh.kind}: the token endpoint answered ${response.status}`,
       response.status === 429 || response.status === 504,
     );
+  // THE CEILING HOLDS AT EACH REFRESH, closed on what the answer does not say: an answer that
+  // names a scope outside it, or names none, is refused, and its tokens are not kept.
+  if (ceiling && response.ok) {
+    const answer: unknown = await response
+      .clone()
+      .json()
+      .catch(() => null);
+    const scopes =
+      isRecord(answer) && typeof answer.scope === "string"
+        ? answer.scope.split(/[\s,]+/).filter(Boolean)
+        : [];
+    if (!scopes.length)
+      throw new Error(
+        `${refresh.kind}: the token endpoint did not say which scopes the refreshed grant holds, and this grant is kept only while they can be checked: the new tokens were not kept. Connect again.`,
+      );
+    const outside = scopes.filter((scope) => !ceiling.includes(scope));
+    if (outside.length)
+      throw new Error(
+        `${refresh.kind}: the token endpoint answered scopes beyond the grant's ceiling (${outside.join(", ")}): the new tokens were not kept`,
+      );
+  }
   // The client secret stays as held: a placeholder, never the value it resolved to. The end of
   // the old access token goes: the new answer names the new token's end, or none.
   const { [ACCESS_TOKEN_EXPIRES_AT]: _ended, ...kept } = record;

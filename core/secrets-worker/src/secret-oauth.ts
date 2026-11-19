@@ -2,11 +2,10 @@
 // record keep the placeholder. The nonce is no secret: the start page's cookie binds the attempt.
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
-import { CLOUDFLARE_OAUTH, type ClientAuth, type StackClientName } from "iterate/api";
+import { CLOUDFLARE_READ_SCOPES, type ClientAuth } from "iterate/api";
 import { codedError } from "iterate/lib";
 import { base64url } from "iterate/signed";
 import type { CloudClient } from "./cloud-client.ts";
-import type { StackClient } from "./stack-client.ts";
 import {
   clientAuthOf,
   clientSecretReferenceOf,
@@ -35,6 +34,11 @@ export type NormalizedSecretOAuthOptions = {
   extra: Record<string, string>;
   next: string | null;
   account: AccountLookup | null;
+  // the scope ceiling (iterate/api `grantedWithin`), and the account the grant must be for
+  grantedWithin?: string[];
+  expectAccount?: string;
+  // RFC 7009: where a refused grant is given back
+  revocationEndpoint?: string;
   use: SecretUse;
   anyoneWithLink: boolean;
   straightToProvider?: true;
@@ -50,12 +54,16 @@ export type NormalizedSecretOAuthOptions = {
     beginEndpoint?: string;
     accounts?: string[];
   };
-  // The client is the stack's own at Cloudflare (./stack-client.ts): `clientSecret` is "" here,
-  // and the exchange reads the secret from the Worker's config.
-  stack?: StackClientName["stack"];
 };
 
-export type AccountLookup = { url: string; id: string; name: string | null };
+// `body`: the JSON text of a POST (`method`), such as an MCP server's `tools/call`.
+export type AccountLookup = {
+  url: string;
+  id: string;
+  name: string | null;
+  method?: "POST";
+  body?: string;
+};
 
 // Nothing a browser may see.
 export type PendingSecretOAuth = {
@@ -117,21 +125,12 @@ function nextUrlOf(next: unknown, origins: readonly string[]): string | null {
 // its broker, outside the pin, where a code and a sealed refresh token go and no usable token does.
 // `cloud` is that client as the Cloud at `cloud.origin` published it: the origin that the caller
 // named in `client.origin`, which the attempt and then the secret keep.
-// With the stack's own client (`stack`, ./stack-client.ts) the stack says them: Cloudflare's
-// endpoints, the client's id, its scopes and the pin. Its token endpoint is outside the pin too.
 export function normalizeSecretOAuth(
   given: unknown,
   nextOrigins: readonly string[] = [],
   cloud: (CloudClient & { origin: string }) | null = null,
-  stack: StackClient | null = null,
 ): NormalizedSecretOAuthOptions {
   if (!isRecord(given)) throw new Error("secrets.beginOAuth: options is an object");
-  // One or the other: with both, the stack's client secret would go to the Cloud's broker.
-  if (cloud && stack)
-    throw codedError(
-      "INVALID_INPUT",
-      "secrets.beginOAuth: client is a Cloud's ({ cloud, origin }) or the stack's own ({ stack }), never both",
-    );
   const install = given.install === true;
   const asked = cloud && isRecord(given.client) ? given.client.accounts : undefined;
   const accounts = (Array.isArray(asked) ? asked : []).filter(
@@ -151,14 +150,12 @@ export function normalizeSecretOAuth(
     "clientId",
     "clientSecret",
     "urls",
-    // a Cloud's client takes the caller's; the stack's client has one way
-    ...(stack ? ["clientAuth"] : []),
-  ].filter((key) => (cloud || stack) && given[key] !== undefined);
+  ].filter((key) => cloud && given[key] !== undefined);
   if (said.length || (cloud && install && !cloud.installUrl))
     throw codedError(
       "INVALID_INPUT",
       said.length
-        ? `secrets.beginOAuth: with ${cloud ? "a Cloud client" : "the stack's client"}, ${said.join(", ")} is the ${cloud ? "Cloud" : "stack"}'s to say`
+        ? `secrets.beginOAuth: with a Cloud client, ${said.join(", ")} is the Cloud's to say`
         : `secrets.beginOAuth: the Cloud's client ${cloud?.name} has no install page`,
     );
   const ofCloud = cloud && {
@@ -169,17 +166,7 @@ export function normalizeSecretOAuth(
     urls: cloud.urls,
     scope: given.scope ?? cloud.scopes?.join(" "),
   };
-  const ofStack = stack && {
-    ...given,
-    authorizationEndpoint: CLOUDFLARE_OAUTH.authorizationEndpoint,
-    tokenEndpoint: CLOUDFLARE_OAUTH.tokenEndpoint,
-    clientId: stack.clientId,
-    // the client's secret goes in the token request's form: the way it is registered
-    clientAuth: "client_secret_post",
-    urls: CLOUDFLARE_OAUTH.urls,
-    scope: stack.scope,
-  };
-  const options: Record<string, unknown> = ofCloud || ofStack || given;
+  const options: Record<string, unknown> = ofCloud || given;
   // HTTPS ONLY, checked here, before an attempt is stored: a person's browser goes to the
   // authorization endpoint, and the code, its verifier, the client secret and each refresh token
   // go to the token endpoint. A Cloud client's endpoints are on the Cloud's origin, which is
@@ -195,11 +182,32 @@ export function normalizeSecretOAuth(
   if (typeof options.clientId !== "string" || !options.clientId)
     throw new Error("secrets.beginOAuth: clientId is required");
   const urls = options.urls === undefined ? [tokenEndpoint.origin] : originsOf(options.urls);
-  if (!cloud && !stack && !urls.includes(tokenEndpoint.origin))
+  if (!cloud && !urls.includes(tokenEndpoint.origin))
     throw new Error(
       `secrets.beginOAuth: tokenEndpoint ${tokenEndpoint.origin} is outside the pin ${urls.join(", ")} — the tokens only ever go toward a pinned host`,
     );
   const account = accountLookupOf(options.account, urls);
+  // the vault's own ceiling for the provider: the scope answer that it checks must be the
+  // provider's own, so a grant whose token may go to the provider comes from its token endpoint
+  const own = ownCeilingOf([authorizationEndpoint.origin, tokenEndpoint.origin, ...urls]);
+  if (own && !ownCeilingOf([tokenEndpoint.origin]))
+    throw codedError(
+      "INVALID_INPUT",
+      `secrets.beginOAuth: a grant whose token may go to ${own.provider} comes from ${own.provider}'s own token endpoint, not ${tokenEndpoint.origin}`,
+    );
+  const grantedWithin = grantedWithinOf(options.grantedWithin, options.scope, Boolean(cloud), own);
+  const revocationEndpoint = revocationEndpointOf(options.revocationEndpoint, urls);
+  const expectAccount = typeof options.expectAccount === "string" ? options.expectAccount : "";
+  if ("expectAccount" in options && !expectAccount)
+    throw codedError(
+      "INVALID_INPUT",
+      "secrets.beginOAuth: expectAccount is the account's id, a string",
+    );
+  if (expectAccount && !account && !cloud)
+    throw codedError(
+      "INVALID_INPUT",
+      "secrets.beginOAuth: expectAccount needs account, the endpoint that names the account of the new tokens",
+    );
   const extra: Record<string, string> = {};
   if (isRecord(options.extra))
     for (const [key, value] of Object.entries(options.extra)) extra[key] = String(value);
@@ -223,6 +231,9 @@ export function normalizeSecretOAuth(
     extra,
     next: nextUrlOf(options.next, nextOrigins),
     account,
+    grantedWithin,
+    expectAccount: expectAccount || undefined,
+    revocationEndpoint,
     use: secretUseOf(options),
     anyoneWithLink: options.anyoneWithLink === true,
     ...(options.straightToProvider === true && { straightToProvider: true }),
@@ -236,7 +247,6 @@ export function normalizeSecretOAuth(
         ...(accounts.length > 0 && { accounts }),
       },
     }),
-    ...(stack && { stack: stack.name }),
   };
 }
 
@@ -245,7 +255,121 @@ const AccountLookupInput = z.object({
   url: z.url({ protocol: /^https$/ }),
   id: z.string().min(1),
   name: z.string().min(1).optional(),
+  method: z.enum(["GET", "POST"]).optional(),
+  body: z.unknown().optional(),
 });
+
+/** A scope's name: no space, no comma, as a `scope` string separates them. */
+const SCOPE_NAME = /^[^\s,]{1,200}$/;
+
+/** THE VAULT'S OWN CEILING FOR A PROVIDER: the scopes outside which it keeps no grant whose
+ *  tokens the provider issues or may receive. No caller can leave it out or widen it: a caller's
+ *  `grantedWithin` only narrows it. Cloudflare's OAuth (its dashboard's server and its MCP
+ *  server's) grants reads alone here: a grant that writes could change the account that the mind
+ *  runs in, its own Workers among them. The MCP server adds `user:read`, `account:read` and
+ *  `offline_access` to every grant. */
+const OWN_CEILINGS: readonly { provider: string; hosts: RegExp; scopes: readonly string[] }[] = [
+  {
+    provider: "Cloudflare",
+    hosts: /(^|\.)cloudflare\.com$/,
+    scopes: [...CLOUDFLARE_READ_SCOPES, "user:read", "account:read", "offline_access"],
+  },
+];
+
+/** The vault's own ceiling for the first provider that one of `origins` belongs to. */
+function ownCeilingOf(origins: readonly string[]) {
+  return OWN_CEILINGS.find(({ hosts }) =>
+    origins.some((origin) => URL.canParse(origin) && hosts.test(new URL(origin).hostname)),
+  );
+}
+
+/** THE CEILING THAT A GRANT IS HELD TO, at its consent and at each refresh: the caller's
+ *  `grantedWithin`, within the vault's own for the provider; the vault's own when the caller
+ *  named none. A grant kept before the vault had its own ceiling meets it at its next refresh. */
+export function grantCeilingOf(
+  given: readonly string[] | undefined,
+  origins: readonly string[],
+): readonly string[] | undefined {
+  const own = ownCeilingOf(origins)?.scopes;
+  if (!own) return given;
+  return given ? given.filter((scope) => own.includes(scope)) : own;
+}
+
+// The scope ceiling (iterate/api `grantedWithin`): a list of scope names, which holds every scope
+// that the connect asks for, within the vault's own for the provider (`own`). With a Cloud's
+// client the client says the scopes.
+function grantedWithinOf(
+  value: unknown,
+  scope: unknown,
+  client: boolean,
+  own: ReturnType<typeof ownCeilingOf>,
+): string[] | undefined {
+  const given = value === undefined ? undefined : scopeListOf(value, client);
+  const ownScopes = own?.scopes;
+  if (!given && !ownScopes) return undefined;
+  const within = [...new Set(given || ownScopes)];
+  const wider = ownScopes ? within.filter((each) => !ownScopes.includes(each)) : [];
+  if (wider.length)
+    throw codedError(
+      "INVALID_INPUT",
+      `secrets.beginOAuth: grantedWithin names ${wider.join(", ")}, beyond what the vault keeps of a grant from ${own?.provider}: reads alone`,
+    );
+  const outside = (typeof scope === "string" ? scope.split(/\s+/) : [])
+    .filter(Boolean)
+    .filter((each) => !within.includes(each));
+  if (outside.length)
+    throw codedError(
+      "INVALID_INPUT",
+      own && !given
+        ? `secrets.beginOAuth: scope asks for ${outside.join(", ")}, beyond what the vault keeps of a grant from ${own.provider}: reads alone`
+        : `secrets.beginOAuth: scope asks for ${outside.join(", ")}, which grantedWithin does not hold`,
+    );
+  return within;
+}
+
+/** A caller's `grantedWithin`: 1 to 1000 scope names, and only with a client of its own. */
+function scopeListOf(value: unknown, client: boolean): string[] {
+  if (
+    client ||
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 1000 ||
+    !value.every((each): each is string => typeof each === "string" && SCOPE_NAME.test(each))
+  )
+    throw codedError(
+      "INVALID_INPUT",
+      client
+        ? "secrets.beginOAuth: grantedWithin is for a client of your own (clientId)"
+        : "secrets.beginOAuth: grantedWithin is a list of scope names, 1 to 1000",
+    );
+  return value;
+}
+
+/** RFC 7009's endpoint, where the vault gives back a grant that it refused: https, within the
+ *  pin, since the refused token goes there. */
+function revocationEndpointOf(value: unknown, urls: string[]): string | undefined {
+  if (value === undefined) return undefined;
+  const url = typeof value === "string" && URL.canParse(value) ? new URL(value) : null;
+  if (url?.protocol !== "https:" || !urls.includes(url.origin))
+    throw codedError(
+      "INVALID_INPUT",
+      `secrets.beginOAuth: revocationEndpoint is an https URL within the pin ${urls.join(", ")}`,
+    );
+  return url.href;
+}
+
+/** WHY A GRANT IS REFUSED BY ITS CEILING (`grantedWithin`), in words for the person's page, or
+ *  undefined when it may be kept. `granted` is the token answer's `scope`. Closed on what the
+ *  answer does not say: a grant whose answer names no scope is refused, since the platform cannot
+ *  tell what the person approved. */
+export function grantRefusal(granted: string | undefined, within: readonly string[]) {
+  const scopes = (granted || "").split(/[\s,]+/).filter(Boolean);
+  if (!scopes.length)
+    return "The provider did not say which permissions it granted, and this connection keeps only a grant whose permissions it can check. Nothing was kept.";
+  const outside = scopes.filter((scope) => !within.includes(scope));
+  if (!outside.length) return undefined;
+  return `The grant holds permissions that this connection may not hold: ${outside.join(", ")}. Nothing was kept. Connect again, and approve only the permissions that were asked for: do not add any, and do not choose a wider set such as "Full access".`;
+}
 function accountLookupOf(value: unknown, urls: string[]): AccountLookup | null {
   if (value === undefined) return null;
   const parsed = AccountLookupInput.safeParse(value);
@@ -260,7 +384,15 @@ function accountLookupOf(value: unknown, urls: string[]): AccountLookup | null {
       "INVALID_INPUT",
       `secrets.beginOAuth: account.url ${url.origin} is outside the pin ${urls.join(", ")} — the token only ever goes toward a pinned host`,
     );
-  return { url: url.href, id: parsed.data.id, name: parsed.data.name || null };
+  const { method, body } = parsed.data;
+  if (body !== undefined && method !== "POST")
+    throw codedError("INVALID_INPUT", 'secrets.beginOAuth: account.body goes with method: "POST"');
+  return {
+    url: url.href,
+    id: parsed.data.id,
+    name: parsed.data.name || null,
+    ...(method === "POST" && { method, body: JSON.stringify(body ?? {}) }),
+  };
 }
 
 export function accountOf(
@@ -274,11 +406,23 @@ export function accountOf(
   return { id, name: typeof name === "string" && name ? name : null };
 }
 
+// `a.b.0.c`; a step that ends in `@json` reads a string that holds JSON (an MCP tool's text).
 function jsonPathOf(json: unknown, path: string): unknown {
   let value = json;
-  for (const key of path.split(".")) {
-    if (!isRecord(value)) return undefined;
-    value = value[key];
+  for (const step of path.split(".")) {
+    const parse = step.endsWith("@json");
+    const key = parse ? step.slice(0, -"@json".length) : step;
+    if (Array.isArray(value)) value = /^\d+$/.test(key) ? value[Number(key)] : undefined;
+    else if (isRecord(value)) value = value[key];
+    else return undefined;
+    if (parse) {
+      if (typeof value !== "string") return undefined;
+      try {
+        value = JSON.parse(value);
+      } catch {
+        return undefined;
+      }
+    }
   }
   return value;
 }
@@ -348,10 +492,10 @@ export async function completeSecretOAuth(
     kind: "oauth-refresh-token" as const,
     tokenEndpoint: options.tokenEndpoint,
     clientAuth: options.clientAuth,
+    // the ceiling holds at each refresh too
+    grantedWithin: options.grantedWithin,
     // the Cloud that the attempt named is the secret's Cloud from here on
     ...(cloud && { client: { cloud: cloud.name, origin: cloud.origin } }),
-    // the stack's client refreshes the grant, with its secret out of the Worker's config
-    ...(options.stack && { client: { stack: options.stack } }),
   };
   return {
     material: {

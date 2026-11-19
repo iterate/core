@@ -13,17 +13,16 @@
 // logs the token name and dashboard URL for manual removal, and lets Alchemy clear state.
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
+import * as Retry from "@distilled.cloud/cloudflare/Retry";
 import * as zones from "@distilled.cloud/cloudflare/zones";
 import * as Provider from "alchemy/Provider";
 import { Resource } from "alchemy/Resource";
 import * as Effect from "effect/Effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
-import {
-  noRetryOnPermissionRefusal,
-  refusedForPermissionShape,
-} from "./cloudflare-oauth-client.ts";
+import { z } from "zod";
 
 export type TelemetryToken = Resource<
   "Iterate.TelemetryToken",
@@ -126,3 +125,26 @@ export const AccountApiTokenDeleteFallbackProvider = () =>
       return wrapped;
     }),
   ).pipe(Layer.provide(Cloudflare.ApiToken.AccountApiTokenProvider()));
+
+/** WHETHER AN ERROR HAS THE SHAPE OF A REFUSAL FOR PERMISSION. Cloudflare answers 403 code 10000
+ *  "Authentication error" (mapped to `Unauthorized` or `Forbidden`) or code 10001 "Method not
+ *  allowed for token" (`Forbidden`) for a valid token lacking permission. */
+const refusedForPermissionShape = (error: unknown) =>
+  (Predicate.isTagged(error, "Unauthorized") && /^Authentication error$/i.test(wordsOf(error))) ||
+  (Predicate.isTagged(error, "Forbidden") &&
+    (/method not allowed for token/i.test(wordsOf(error)) ||
+      /^Authentication error$/i.test(wordsOf(error))));
+
+/** Retries transient Cloudflare errors (throttling, 5xx) with the SDK's default policy, but not a
+ *  refusal for permission, so a deploy without API-token write fails fast instead of waiting
+ *  about 24 s on retries. */
+const noRetryOnPermissionRefusal = Retry.policy((lastError) => {
+  const base = Retry.makeDefault(lastError);
+  return {
+    ...base,
+    while: (error) => !refusedForPermissionShape(error) && (base.while?.(error) ?? true),
+  };
+});
+
+const wordsOf = (refused: unknown) =>
+  z.object({ message: z.string() }).safeParse(refused).data?.message || "no reason given";

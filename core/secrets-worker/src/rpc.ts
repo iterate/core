@@ -7,13 +7,12 @@ import { SECRET_PATH, SECRET_USE_HEADER } from "iterate/secret-placeholder";
 import type { SecretsService, SecretVerb, SecretVerbs } from "iterate/workers";
 import { SET } from "./approvals-index.ts";
 import { cloudOffered } from "./cloud-client.ts";
-import { configOf, type Env } from "./env.ts";
+import type { Env } from "./env.ts";
 import { refreshBrokeredGrants } from "./grant-refresh.ts";
 import { secretsResponse } from "./http.ts";
 import { actsGate, secretObject } from "./objects.ts";
 import { listSetSecrets } from "./secret-list.ts";
 import { cloudOriginOf } from "./secrets.ts";
-import { hasCloudflareClient } from "./stack-client.ts";
 import { STACK_SECRET_PATHS } from "./stack-secrets.ts";
 
 export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
@@ -52,9 +51,9 @@ export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
     return cloudOffered(cloudOriginOf(origin, "secrets.cloud"));
   }
 
-  /** Whether the stack has its own OAuth client at Cloudflare (./stack-client.ts). */
-  async hasStackClient(name: Parameters<SecretsService["hasStackClient"]>[0]) {
-    return name === "cloudflare" && hasCloudflareClient(configOf(this.env).cloudflareClient);
+  /** Always false: the stack makes no OAuth client at Cloudflare (iterate/api `hasStackClient`). */
+  async hasStackClient(_name: Parameters<SecretsService["hasStackClient"]>[0]) {
+    return false;
   }
 
   /** The persons' grants that the Cloud brokers, refreshed on word (./grant-refresh.ts). */

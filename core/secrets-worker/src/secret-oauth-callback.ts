@@ -1,6 +1,6 @@
 import { withFacts } from "iterate/facts";
 import { SECRET_PATH } from "iterate/secret-placeholder";
-import type { SecretAnswer } from "iterate/workers";
+import type { SecretAnswer, SecretRefusal } from "iterate/workers";
 import { admitted, callbackPage, escaped, plainPage, type PageCaller } from "./callback-page.ts";
 import { parseSecretOAuthState } from "./secret-oauth.ts";
 import {
@@ -13,7 +13,7 @@ import {
 type CompleteOAuth = (
   path: string,
   input: { code: string; nonce: string; by: PageCaller; cloudProof: string },
-) => Promise<SecretAnswer<{ next: string | null; scopes: string[] }>>;
+) => Promise<SecretAnswer<{ next: string | null; scopes: string[] }> | SecretRefusal>;
 type RecordOAuthError = (
   path: string,
   input: { nonce: string; error: string; by: PageCaller },
@@ -81,6 +81,16 @@ export async function secretOAuthCallback(
       `Storing the tokens for ${state.path} failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  // the vault refused the grant and kept nothing: its words, and its fact
+  if ("refused" in answer)
+    return withFacts(
+      callbackPage(
+        request,
+        400,
+        `Storing the tokens for ${state.path} failed: ${answer.refused.message}`,
+      ),
+      answer.facts,
+    );
   const page = answer.result.next
     ? seeOther(answer.result.next)
     : callbackPage(

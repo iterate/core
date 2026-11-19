@@ -1,10 +1,11 @@
 // cloudflare.ts — THE MIND'S CLOUDFLARE CONNECTION (cloudflare.md): a member's consent at
-// Cloudflare, kept as the grant `/secrets/cloudflare`, with which the mind's agents read the
-// account that the mind runs in: what is deployed, its logs and its errors. It reads and changes
-// nothing: the grant holds read scopes alone (iterate/api `CLOUDFLARE_READ_SCOPES`), so
-// Cloudflare itself refuses a write.
+// Cloudflare's own MCP server (https://mcp.cloudflare.com), kept as the grant `/secrets/cloudflare`,
+// with which the mind's agents read the account that the mind runs in: what is deployed, its
+// settings, its logs and its errors. It reads and changes nothing: the grant holds read scopes
+// alone (iterate/api `CLOUDFLARE_READ_SCOPES`), so Cloudflare itself refuses a write.
 //
 //   cloudflareConnect          the one link a member opens to connect (`itx.config.cloudflareConnect`)
+//   cloudflareClientDocument   the mind's client at the MCP server: a document on the zone's apex
 //   cloudflareForAgent         Cloudflare's REST API with the grant (`itx.config.cloudflare`)
 //   cloudflareMcpForAgent      Cloudflare's own MCP server with the grant (`itx.config.cloudflareMcp`)
 //   cloudflareLastHour         the mind's own Workers in the last hour (`itx.config.cloudflareLastHour`)
@@ -13,29 +14,43 @@
 //   cloudflareConnectionEvent  what worker.ts calls for every event: the check of a new grant,
 //                              and the connection's card on the Dash's Integrations page
 //
-// TWO WAYS TO THE SAME GRANT, and `cloudflareConnect` says which applies. The stack's own OAuth
-// client: the deploy made it in the mind's account, the secrets Worker holds its secret, and the
-// link goes straight to Cloudflare's consent page (`itx.secrets.hasStackClient("cloudflare")`).
-// Or a client that a member makes by hand in Cloudflare's dashboard, when the deploy's credential
-// could make none: the link is then a form of this mind that takes the client's id and secret,
-// says how to make the client, and leads on to the same consent page.
+// THE MIND IS ITS OWN CLIENT. No OAuth client is made in the account and nobody pastes a token.
+// The client id is the URL of a document that the mind serves on its zone's apex
+// (`https://<zone>/cloudflare-mcp-client.json`, a client-id metadata document): the MCP server
+// fetches it and shows its name on its page. The client is public, with PKCE.
 //
-// THE VAULT IS THE GUARD of a grant through the stack's client: before it keeps one, it checks
-// that Cloudflare granted only the read scopes and that the grant reaches one account, the
-// mind's own (core/secrets-worker src/stack-client.ts `stackGrantRefusal`). This file only reads
-// the grant and says what it found: the account that holds the mind's first zone, on the card
-// and to the agent that asked for the connect. A grant through a member's hand-made client that
-// does not reach that zone is kept, and the card says it is for another account.
-import { CLOUDFLARE_OAUTH, type CollectSecretInput, type SecretOAuthOptions } from "iterate/api";
+// THE TOKEN IS THE MCP SERVER'S OWN. The server keeps Cloudflare's own grant and gives the mind a
+// token that opens https://mcp.cloudflare.com/mcp alone; the vault's pin sends it nowhere else.
+// So every REST request goes through the server's `execute` tool, as code that the server runs
+// with `cloudflare.request()` (`cloudflareRequest`).
+//
+// THE VAULT IS THE GUARD. The server's page lets the member choose more than was asked ("Full
+// access", or the editable list). Before the vault keeps a grant, it checks two things and keeps
+// nothing when one fails: every scope that the token answer names is within the vault's own
+// ceiling for Cloudflare, reads alone, which no caller can leave out or widen (core/secrets-worker
+// `ownCeilingOf`; `grantedWithin` here narrows it to the list), and the grant reaches exactly one
+// account, the one that holds the mind's first zone (`expectAccount`, the code of
+// `accountCheckCode` through `execute`). Each refresh is held to the same scopes, and one whose
+// answer names none is refused. A refused grant goes back to the server. This file then reads
+// the grant and says what it found, on the card and to the agent that asked.
+import {
+  CLOUDFLARE_READ_SCOPES,
+  type CollectSecretInput,
+  type SecretOAuthOptions,
+} from "iterate/api";
 import { errorCode, jsonEqual } from "iterate/lib";
 import { z } from "zod";
 
 const CLOUDFLARE_GRANT = "/secrets/cloudflare";
-/** The client a member made by hand: `clientId`, which is public, and `clientSecret`. */
-const OWN_CLIENT = "/secrets/cloudflare-client";
 const CLOUDFLARE_API = "https://api.cloudflare.com";
 const CLOUDFLARE_REST = `${CLOUDFLARE_API}/client/v4`;
-const CLOUDFLARE_MCP = "https://mcp.cloudflare.com/mcp";
+/** Cloudflare's MCP server: its authorization server, and its one resource. */
+const MCP_ORIGIN = "https://mcp.cloudflare.com";
+const CLOUDFLARE_MCP = `${MCP_ORIGIN}/mcp`;
+/** What the MCP server adds to every grant, whatever is asked: reads, and the refresh. */
+const SERVER_ADDS = ["user:read", "account:read", "offline_access"];
+/** The path of the mind's client document on the zone's apex: its URL is the client id. */
+export const CLIENT_DOCUMENT_PATH = "/cloudflare-mcp-client.json";
 /** The grant's token, as a placeholder that the vault fills in on the way out. */
 const BEARER = `Bearer getSecret("${CLOUDFLARE_GRANT}", { field: "accessToken" })`;
 /** A path of Cloudflare's API: it starts with one slash and has no `.` or `..` part. */
@@ -52,40 +67,20 @@ const TELL_KEY = "cloudflare/connect-tell";
 const ATTEMPT_MS = 60 * 60_000;
 const AGENT_PATH = /^\/agents\/[A-Za-z0-9/_-]{1,200}$/;
 
-/** THE SCOPES OF A CLIENT THAT A MEMBER MAKES BY HAND, each with the name that Cloudflare's
- *  dashboard shows for it: few enough to tick, and enough for what the guides do (who is
- *  connected, the Workers' logs, the zones, and the names and sizes of the account's data). Each
- *  is one of iterate/api `CLOUDFLARE_READ_SCOPES`. A connect asks for exactly these, so the
- *  client must have every one. */
-export const OWN_CLIENT_SCOPES = {
-  "user-details.read": "User Details Read",
-  "workers-scripts.metadata_read": "Workers Metadata Read-Only",
-  "workers-observability.read": "Workers Observability Read",
-  "workers-routes.read": "Workers Routes Read",
-  "zone.read": "Zone Read",
-  "dns.read": "DNS Read",
-  "d1.metadata_read": "D1 Metadata Read",
-  "workers-kv-storage.metadata_read": "Workers KV Storage Metadata Read",
-  "workers-r2.metadata_read": "Workers R2 Storage Metadata Read",
-};
-
-/** `itx.config.cloudflareConnect({ tell? })`: the ONE link to give a member, and which way it is.
- *  `tell` is the path of the agent that asks (`/agents/onboarding`): once the consent has landed
- *  and is checked, that agent gets a note that starts its turn, and the member's browser comes
- *  back to its chat.
- *
- *  `way: "stack-client"`: `link` is Cloudflare's own consent page, for the client that the deploy
- *  made. `way: "own-client"`: the stack has no client. With no client of a member's yet, `link`
- *  is this mind's form for the client's id and secret, `makeTheClient` says what the member sets
- *  up in Cloudflare's dashboard first, and the form leads on to the consent page. With one, `link`
- *  is the consent page. */
+/** `itx.config.cloudflareConnect({ tell? })`: the ONE link to give a member, the MCP server's
+ *  consent page for this mind, and `nonce`, which names the attempt
+ *  (`itx.secrets.oauthResult(CLOUDFLARE_GRANT, { nonce })`). `tell` is the path of the agent that
+ *  asks (`/agents/onboarding`): once the consent has landed and is checked, that agent gets a note
+ *  that starts its turn, and the member's browser comes back to its chat. */
 export async function cloudflareConnect(
   itx: Pick<CloudflareItx, "secrets" | "kv" | "url">,
   options: { tell?: string; next?: string } = {},
 ) {
   if (options.tell && !AGENT_PATH.test(options.tell))
     throw new Error('cloudflareConnect: tell is the path of an agent, like "/agents/onboarding"');
-  const dash = `https://dash.${new URL(await itx.url()).hostname}`;
+  const apex = new URL(await itx.url());
+  const zone = apex.hostname;
+  const dash = `https://dash.${zone}`;
   // after the consent: `next` (the page whose button began it), else back to the chat that
   // asked, else to the page with the card
   const next =
@@ -93,68 +88,85 @@ export async function cloudflareConnect(
     (options.tell
       ? `${dash}/?agent=${encodeURIComponent(options.tell)}`
       : `${dash}/?page=integrations`);
-  if (await itx.secrets.hasStackClient("cloudflare")) {
-    const { authorizationUrl, nonce } = await itx.secrets.beginOAuth(CLOUDFLARE_GRANT, {
-      client: { stack: "cloudflare" },
-      // Cloudflare's consent is the one page the member confirms on
-      straightToProvider: true,
-      next,
-    });
-    await keepTell(itx, nonce, options.tell);
-    // `nonce` names the attempt: `itx.secrets.oauthResult(CLOUDFLARE_GRANT, { nonce })`
-    return { way: "stack-client" as const, link: authorizationUrl, nonce };
-  }
-  const client = await itx.secrets.describe(OWN_CLIENT);
-  const clientId = client.set ? client.public?.clientId : undefined;
-  if (!clientId) {
-    const makeTheClient = {
-      where:
-        "Cloudflare's dashboard, in the account that holds this mind: Manage Account, OAuth clients",
-      name: "iterate",
-      redirectUri: await itx.secrets.oauthCallbackUrl(),
-      grantTypes: ["authorization_code", "refresh_token"],
-      tokenEndpointAuthMethod: "client_secret_post",
-      scopes: Object.values(OWN_CLIENT_SCOPES),
-    };
-    const { url } = await itx.secrets.collectFromUser({
-      path: OWN_CLIENT,
-      // the client's secret goes to Cloudflare's token endpoint alone, for the grant's refresh
-      egress: { urls: [new URL(CLOUDFLARE_OAUTH.tokenEndpoint).origin] },
-      lendTo: [CLOUDFLARE_GRANT],
-      description: [
-        `Make an OAuth client in ${makeTheClient.where}.`,
-        `- Name: \`${makeTheClient.name}\``,
-        `- Redirect URI: \`${makeTheClient.redirectUri}\``,
-        "- Grant types: authorization code and refresh token; the client keeps a secret",
-        `- Scopes: ${makeTheClient.scopes.join(", ")}`,
-        "",
-        "Then enter the client's ID and its secret here. Your mind reads the account with them and changes nothing in it.",
-      ].join("\n"),
-      fields: [
-        { name: "clientId", label: "Client ID", public: true },
-        { name: "clientSecret", label: "Client secret" },
-      ],
-      // back to the Integrations page, whose card's "Connect" now begins the consent with the
-      // client: a press, as the member, never a page that acts on a GET
-      redirectUrl: `${dash}/?page=integrations`,
-    });
-    return { way: "own-client" as const, link: url, makeTheClient };
-  }
   const { authorizationUrl, nonce } = await itx.secrets.beginOAuth(CLOUDFLARE_GRANT, {
-    authorizationEndpoint: CLOUDFLARE_OAUTH.authorizationEndpoint,
-    tokenEndpoint: CLOUDFLARE_OAUTH.tokenEndpoint,
-    clientId,
-    clientSecret: `getSecret("${OWN_CLIENT}", { field: "clientSecret" })`,
-    clientAuth: "client_secret_post",
-    // `offline_access` brings the refresh token: Cloudflare's token ends after an hour
-    scope: [...Object.keys(OWN_CLIENT_SCOPES), "offline_access"].join(" "),
-    // with a client of the mind's own, the vault wants the token endpoint's host in the pin
-    urls: [new URL(CLOUDFLARE_OAUTH.tokenEndpoint).origin, ...CLOUDFLARE_OAUTH.urls],
+    authorizationEndpoint: `${MCP_ORIGIN}/authorize`,
+    tokenEndpoint: `${MCP_ORIGIN}/token`,
+    clientId: `${apex.origin}${CLIENT_DOCUMENT_PATH}`,
+    // a public client, as its document says (`token_endpoint_auth_method: "none"`)
+    clientAuth: "none",
+    // `offline_access` brings the refresh token: the server's token ends after an hour
+    scope: [...CLOUDFLARE_READ_SCOPES, "offline_access"].join(" "),
+    // the vault keeps no grant that names a scope beyond these, at the consent or at a refresh
+    grantedWithin: [...new Set([...CLOUDFLARE_READ_SCOPES, ...SERVER_ADDS])],
+    // and none that reaches another account, or more than one
+    account: {
+      url: CLOUDFLARE_MCP,
+      method: "POST",
+      body: executeCall(accountCheckCode(zone)),
+      id: "result.content.0.text@json.id",
+      name: "result.content.0.text@json.name",
+    },
+    expectAccount: zone,
+    // the token goes to the MCP server alone
+    urls: [MCP_ORIGIN],
+    // RFC 7009: a grant that the vault refuses goes back to the server (its metadata's
+    // `revocation_endpoint` is its token endpoint)
+    revocationEndpoint: `${MCP_ORIGIN}/token`,
+    // RFC 8707: the token is for the server's one resource
+    extra: { resource: CLOUDFLARE_MCP },
+    // the server's page is the one page the member confirms on
     straightToProvider: true,
     next,
   });
   await keepTell(itx, nonce, options.tell);
-  return { way: "own-client" as const, link: authorizationUrl };
+  return { link: authorizationUrl, nonce };
+}
+
+/** THE ACCOUNT CHECK, as code for the MCP server's `execute`, which the vault runs with the new
+ *  token before it keeps it: `{ id: <zone>, name: <account> }` only when the grant reaches
+ *  exactly one account and that account holds `zone`; else `{ accounts: <how many> }`, which
+ *  names no zone, and the vault refuses. */
+export function accountCheckCode(zone: string) {
+  return `async () => {
+  const accounts = (await cloudflare.request({ method: "GET", path: "/accounts?per_page=50" })).result || [];
+  if (accounts.length !== 1) return { accounts: accounts.length };
+  const zones = (await cloudflare.request({ method: "GET", path: ${JSON.stringify(`/zones?name=${zone}&per_page=1`)} })).result || [];
+  const held = zones.find((each) => each.name === ${JSON.stringify(zone)});
+  if (!held || held.account.id !== accounts[0].id) return { accounts: 1 };
+  return { id: held.name, name: accounts[0].name };
+}`;
+}
+
+/** One stateless call of the MCP server's `execute` tool, as JSON-RPC: the whole answer, which
+ *  the server would cut at about 6,000 tokens. */
+function executeCall(code: string) {
+  return {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "execute", arguments: { code, truncate: false } },
+  };
+}
+
+/** THE MIND'S CLIENT AT THE MCP SERVER: the client-id metadata document that the server fetches
+ *  at a connect (draft-ietf-oauth-client-id-metadata-document). Public: no secret is in it. Its
+ *  `client_id` is its own URL, and the vault's callback is its one redirect URI. */
+export async function cloudflareClientDocument(
+  itx: Pick<CloudflareItx, "secrets">,
+  origin: string,
+): Promise<Response> {
+  return Response.json(
+    {
+      client_id: `${origin}${CLIENT_DOCUMENT_PATH}`,
+      client_name: `iterate mind ${new URL(origin).hostname}`,
+      client_uri: origin,
+      redirect_uris: [await itx.secrets.oauthCallbackUrl()],
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+    },
+    { headers: { "cache-control": "public, max-age=300" } },
+  );
 }
 
 const Tells = z.array(z.object({ nonce: z.string(), agent: z.string(), at: z.number() }));
@@ -181,28 +193,65 @@ async function dropTell(itx: Pick<CloudflareItx, "kv">, nonce: string) {
   await itx.kv.put(TELL_KEY, JSON.stringify(tells.filter((tell) => tell.nonce !== nonce)));
 }
 
-/** One request to Cloudflare's REST API with the grant. */
+/** One request to Cloudflare's REST API with the grant, through the MCP server's `execute`: the
+ *  server runs `cloudflare.request()` with its own grant at Cloudflare, and answers what Cloudflare
+ *  answered. `cloudflare.request()` throws for an answer that is no success, and its words name
+ *  Cloudflare's status, which comes back as `status` with the words as `text`. A status of the
+ *  MCP server itself (a refused token: 401) comes back as it is. */
 async function cloudflareRequest(
   itx: Pick<CloudflareItx, "fetch">,
   method: string,
   path: string,
   body?: unknown,
 ): Promise<{ status: number; text: string }> {
-  const withBody = body !== undefined && method !== "GET";
+  const request = { method, path, ...(body !== undefined && method !== "GET" && { body }) };
+  const code = `async () => {
+  try {
+    return { status: 200, body: await cloudflare.request(${JSON.stringify(request)}) };
+  } catch (error) {
+    const said = String((error && error.message) || error);
+    return { status: Number((said.match(/returned HTTP (\\d{3})/) || [])[1] || 502), body: said.slice(0, 2000) };
+  }
+}`;
   const answer = await itx.fetch(
-    new Request(`${CLOUDFLARE_REST}${path}`, {
-      method,
+    new Request(CLOUDFLARE_MCP, {
+      method: "POST",
       headers: {
         authorization: BEARER,
-        ...(withBody && { "content-type": "application/json" }),
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
       },
-      body: withBody ? JSON.stringify(body) : undefined,
-      // the grant goes to Cloudflare's API alone
+      body: JSON.stringify(executeCall(code)),
+      // the grant goes to the MCP server alone
       redirect: "manual",
     }),
   );
-  return { status: answer.status, text: await answer.text() };
+  const text = await answer.text();
+  if (answer.status !== 200) return { status: answer.status, text };
+  const called = ExecuteAnswer.safeParse(bodyOf(text)).data;
+  const said = called?.result?.content.find((part) => part.type === "text")?.text;
+  const done = Executed.safeParse(said && !called?.result?.isError && bodyOf(said));
+  if (!done.success)
+    return {
+      status: 502,
+      text: `Cloudflare's MCP server did not run the request: ${(said || text).slice(0, 600)}`,
+    };
+  return {
+    status: done.data.status,
+    text: typeof done.data.body === "string" ? done.data.body : JSON.stringify(done.data.body),
+  };
 }
+
+/** The MCP server's answer to a `tools/call`, and what the code in it returned. */
+const ExecuteAnswer = z.object({
+  result: z
+    .object({
+      isError: z.boolean().optional(),
+      content: z.array(z.object({ type: z.string(), text: z.string().optional() })),
+    })
+    .optional(),
+});
+const Executed = z.object({ status: z.number(), body: z.unknown() });
 
 /** Throws the words for a mind with no grant. */
 async function grantHeld(itx: Pick<CloudflareItx, "secrets">): Promise<void> {
@@ -570,6 +619,11 @@ export async function cloudflareBilling(
 const CARD = "cloudflare";
 const ROW = "account";
 
+/** Cloudflare ends a mind's earlier grant when the same client is granted again: a refused new
+ *  grant can leave the mind with none that works. Said when the earlier one no longer answers. */
+const EARLIER_ENDED =
+  "The connection before it does not answer either: Cloudflare ends it when it grants a new one, so the mind is not connected now.";
+
 const DESCRIPTION =
   "Your mind reads the Cloudflare account it runs in: what is deployed, its logs and its errors. It can change nothing there. Agents call it with itx.config.cloudflare(tool, args) and itx.config.cloudflareMcp(tool, args).";
 
@@ -579,12 +633,20 @@ const Registry = z.object({
   connections: z.record(z.string(), z.unknown()).default({}),
 });
 
-export type CloudflareConnectionEvent = { type: string; path: string; offset?: number };
+export type CloudflareConnectionEvent = {
+  type: string;
+  path: string;
+  offset?: number;
+  payload?: unknown;
+};
 
-/** A publish of this repo (on the root), or the fact that `/secrets/cloudflare` was set or
- *  deleted (on the secret's own log), makes the card true; any other event does nothing. After a
- *  set or a publish, each agent that asked for a connect whose attempt has ended is told how it
- *  went. */
+/** The vault's `secret/grant-refused` fact: the attempt it ended, and its words. */
+const Refusal = z.object({ nonce: z.string(), reason: z.string() });
+
+/** A publish of this repo (on the root), or the fact that `/secrets/cloudflare` was set, deleted
+ *  or refused a grant (on the secret's own log), makes the card true; any other event does
+ *  nothing. After a set, a refusal or a publish, each agent that asked for a connect whose
+ *  attempt has ended is told how it went. */
 export async function cloudflareConnectionEvent(
   itx: CloudflareItx,
   event: CloudflareConnectionEvent,
@@ -593,11 +655,15 @@ export async function cloudflareConnectionEvent(
   const set = event.path === CLOUDFLARE_GRANT && event.type === "events.iterate.com/secret/set";
   const deleted =
     event.path === CLOUDFLARE_GRANT && event.type === "events.iterate.com/secret/deleted";
-  if (!published && !set && !deleted) return;
+  const refused =
+    event.path === CLOUDFLARE_GRANT && event.type === "events.iterate.com/secret/grant-refused";
+  if (!published && !set && !deleted && !refused) return;
   const held = (await itx.secrets.describe(CLOUDFLARE_GRANT)).set;
   const check = held ? await checkedInTime(itx) : null;
-  await keepCard(itx, check);
-  if (!deleted) await tellTheAgents(itx, check);
+  await keepCard(itx, check, refused);
+  // a refused attempt that a newer one replaced is no longer the vault's to answer: the fact is
+  const refusal = refused ? Refusal.safeParse(event.payload).data : undefined;
+  if (!deleted) await tellTheAgents(itx, check, held && !(check && "account" in check), refusal);
 }
 
 /** Each agent that asked for a connect gets a note that starts its turn once its attempt has
@@ -608,15 +674,20 @@ export async function cloudflareConnectionEvent(
 async function tellTheAgents(
   itx: CloudflareItx,
   check: (GrantCheck & { at: string }) | null,
+  earlierEnded: boolean,
+  refusal?: z.infer<typeof Refusal>,
 ): Promise<void> {
   for (const { nonce, agent } of await tellsOf(itx)) {
-    const result = await itx.secrets.oauthResult(CLOUDFLARE_GRANT, { nonce });
+    const result =
+      refusal?.nonce === nonce
+        ? { status: "failed" as const, error: refusal.reason }
+        : await itx.secrets.oauthResult(CLOUDFLARE_GRANT, { nonce });
     if (result.status === "pending") continue;
     const content =
       result.status === "complete" && check
         ? await connectedNote(itx, check, agent)
         : result.status === "failed" || result.status === "declined"
-          ? `The Cloudflare consent was not kept: ${result.error.slice(0, 400)} Say so in one sentence and give the link again: await itx.config.cloudflareConnect({ tell: "${agent}" }).`
+          ? `The Cloudflare consent was not kept: ${result.error.slice(0, 400)}${earlierEnded ? ` ${EARLIER_ENDED}` : ""} Say so in one sentence and give the link again: await itx.config.cloudflareConnect({ tell: "${agent}" }).`
           : null;
     if (content)
       await itx
@@ -656,10 +727,12 @@ async function connectedNote(
   return `Cloudflare is connected: the consent${check.user ? ` of ${check.user}` : ""} reads the account "${check.account.name}", which holds this mind, and Cloudflare's page has brought the member back to this chat. ${seen} Say in the same message, in plain words, who it is connected as${check.user ? "" : " (Cloudflare did not say: say so)"} and what the last hour shows, and that the mind can read the account and change nothing in it. For the error lines themselves: await itx.config.cloudflareLastHour() (cloudflare.md).`;
 }
 
-/** The card and its row, made true. Only what differs from the registry is appended. */
+/** The card and its row, made true. Only what differs from the registry is appended. `refused`:
+ *  the vault has just refused a new grant, and the card says so. */
 async function keepCard(
   itx: CloudflareItx,
   check: (GrantCheck & { at: string }) | null,
+  refused = false,
 ): Promise<void> {
   const registry = itx.cd("/integrations");
   const { state } = await registry.facets
@@ -676,7 +749,12 @@ async function keepCard(
       title: "Cloudflare",
       description: DESCRIPTION,
       icon,
-      status: { kind: "attention", text: "Not connected." },
+      status: refused
+        ? {
+            kind: "error",
+            text: "The last consent was refused, and nothing was kept. Connect again.",
+          }
+        : { kind: "attention", text: "Not connected." },
       // the press calls `cloudflareConnect` as the member who pressed it, and the page goes on to
       // the one link it answers
       actions: [{ label: "Connect", call: { name: "cloudflareConnect" } }],
@@ -687,11 +765,22 @@ async function keepCard(
       title: "Cloudflare",
       description: DESCRIPTION,
       icon,
-      status: connected
-        ? { kind: "ok", text: "Connected" }
-        : check.refused
-          ? { kind: "error", text: "The grant is for another account. Connect again." }
-          : { kind: "error", text: "Cloudflare did not answer the last check" },
+      status:
+        refused && connected
+          ? {
+              kind: "attention",
+              text: "The last consent was refused, and nothing was kept. The connection before it still works.",
+            }
+          : refused
+            ? {
+                kind: "error",
+                text: "The last consent was refused, and nothing was kept. The connection before it does not answer: Cloudflare ends it when it grants a new one. Connect again.",
+              }
+            : connected
+              ? { kind: "ok", text: "Connected" }
+              : check.refused
+                ? { kind: "error", text: "The grant is for another account. Connect again." }
+                : { kind: "error", text: "Cloudflare did not answer the last check" },
       actions: [
         { label: "Connect again", call: { name: "cloudflareConnect" } },
         { label: "Manage", url: `${dash}/?page=secrets` },
@@ -705,7 +794,7 @@ async function keepCard(
       details: {
         ...(connected && { "Account id": check.account.id.slice(0, 200) }),
         ...(connected && check.user && { "Connected as": check.user.slice(0, 200) }),
-        API: CLOUDFLARE_REST,
+        API: `${CLOUDFLARE_REST}, through the MCP server's execute`,
         "MCP server": CLOUDFLARE_MCP,
         Use: 'itx.config.cloudflare("execute", { method, path, body }), "whoami"; itx.config.cloudflareMcp("search" or "execute", { code })',
         Checked: `${check.at}: ${connected ? "Cloudflare answered" : "failed"}`,
@@ -754,7 +843,6 @@ export type CloudflareItx = {
   url(): Promise<string>;
   secrets: {
     describe(path: string): Promise<{ set: boolean; public?: Record<string, string> }>;
-    hasStackClient(name: "cloudflare"): Promise<boolean>;
     oauthCallbackUrl(): Promise<string>;
     beginOAuth(
       path: string,

@@ -10,13 +10,10 @@ import { AccessTeamProvider } from "./src/access-team.ts";
 import { ArtifactsNamespaceProvider } from "./src/artifacts-namespace.ts";
 import { ArtifactsRepoSubscriptionProvider } from "./src/artifacts-repo-subscription.ts";
 import { CatalogTablesOfSinksProvider } from "./src/catalog-tables-of-sinks.ts";
-import {
-  CloudflareOAuthClientProvider,
-  OAUTH_CLIENT_TOKEN,
-} from "./src/cloudflare-oauth-client.ts";
 import { loadMindConfig, namesOf } from "./src/config.ts";
 import { DataCatalogProviderThatWaitsForItsToken } from "./src/data-catalog-token-wait.ts";
 import { CallsWithoutWriteProviders } from "./src/realtime.ts";
+import { RetiredCloudflareOAuthClientProvider } from "./src/retired-cloudflare-oauth-client.ts";
 import { mindStack, refuseDeploy } from "./src/stack.ts";
 import {
   AccountApiTokenDeleteFallbackProvider,
@@ -50,8 +47,9 @@ export default Alchemy.Stack(
       ArtifactsNamespaceProvider(),
       ArtifactsRepoSubscriptionProvider(),
       CatalogTablesOfSinksProvider(),
-      // with an optional API token for the OAuth client when deploying by hand
-      CloudflareOAuthClientProvider(process.env[OAUTH_CLIENT_TOKEN]?.trim() || undefined),
+      // the stack's former OAuth client: its row leaves the state with no call
+      // (src/retired-cloudflare-oauth-client.ts)
+      RetiredCloudflareOAuthClientProvider(),
       // with the owner-created telemetry API token on first deploy or rotation; kept in state after
       TelemetryTokenProvider(process.env[TELEMETRY_TOKEN]?.trim() || undefined),
       // legacy AccountApiToken cleanup succeeds even without API-token write scope on fresh sign-ins

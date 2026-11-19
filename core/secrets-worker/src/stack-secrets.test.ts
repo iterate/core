@@ -127,9 +127,7 @@ function secretAt(path: string, cloudflareRealtime: object) {
       topology: "full-cloudflare",
     }),
     ITERATE__AT_REST_KEY: "at-rest-key-for-tests-only",
-    ITERATE__CLOUDFLARE_CLIENT: JSON.stringify({ refusal: "Authentication error" }),
     ITERATE__CLOUDFLARE_REALTIME: JSON.stringify(cloudflareRealtime),
-    ITERATE__CLOUDFLARE_ACCOUNT_ID: "0".repeat(32),
     APPROVALS: { getByName: () => ({ add: async () => {}, remove: async () => {} }) },
   };
   // the cast: the object reads only the bindings above
