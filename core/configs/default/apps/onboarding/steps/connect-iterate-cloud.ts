@@ -121,6 +121,16 @@ const FAILURES: Record<string, string> = {
 const RULE_STANDS =
   "Your signed rule still lets iterate send help and updates to this mind. End it with your passkey to stop that.";
 
+/** THE LINK TO THIS MIND'S PAGE ON iterate Cloud, on each card with a rule: a route of this app
+ *  (open-cloud.ts) that signs the open and posts its one-use token, so no link is in the card. */
+const openCloud = (context: StepContext) => ({
+  label: "Open iterate Cloud",
+  href: `https://onboarding.${context.zone}/open-cloud`,
+});
+
+/** The words of a reason the Cloud refused, for open-cloud.ts. */
+export const failureWords = (reason: string): string | undefined => FAILURES[reason];
+
 /** The reasons whose fix is the update command. */
 const UPDATE_REASONS = new Set(["not-recognised", "no-working-key", "stack-without-proxy"]);
 
@@ -247,7 +257,9 @@ function words(state: StepState, context: StepContext): Card {
           : []),
         ...(facts?.meld ? [RULE_STANDS] : []),
       ],
-      buttons: facts?.meld ? [{ label: "End the rule", action: "disconnect" }] : [],
+      buttons: facts?.meld
+        ? [openCloud(context), { label: "End the rule", action: "disconnect" }]
+        : [],
     };
   // the credit is certainly spent, from the balance alone. `check` has deleted the secrets by
   // iterate's proxy, so there is no Connect: it would set them for nothing
@@ -267,6 +279,7 @@ function words(state: StepState, context: StepContext): Card {
           label: "Add Cloudflare credit",
           href: "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway",
         },
+        openCloud(context),
         { label: "End the rule", action: "disconnect" },
       ],
     };
@@ -299,6 +312,7 @@ function words(state: StepState, context: StepContext): Card {
           href: `https://dash.${context.zone}/?agent=/agents/onboarding`,
           ...(!half && { primary: true }),
         },
+        openCloud(context),
         { label: "Disconnect", action: "disconnect" },
       ],
     };
@@ -361,7 +375,9 @@ function words(state: StepState, context: StepContext): Card {
       buttons: [
         { label: "Try again", action: "connect", primary: true },
         { label: "Not now", action: "decline" },
-        ...(facts?.meld ? [{ label: "End the rule", action: "disconnect" }] : []),
+        ...(facts?.meld
+          ? [openCloud(context), { label: "End the rule", action: "disconnect" }]
+          : []),
       ],
     };
   // a press on a spent grant: while spent the spent card says it; once the balance is back, the offer

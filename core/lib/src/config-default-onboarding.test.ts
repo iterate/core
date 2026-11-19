@@ -33,6 +33,7 @@ import {
   stepEvent,
   stepMindEvent,
 } from "../../configs/default/apps/onboarding/steps.ts";
+import { openCloud } from "../../configs/default/apps/onboarding/open-cloud.ts";
 import {
   aiStatus,
   collectOpenAiKey,
@@ -49,6 +50,11 @@ const MELD = "/minds/iterate.iterate.com";
 const NOW = Date.parse("2026-11-18T22:00:00Z");
 const BALANCE = { grantedUsd: 10, spentUsd: 0.42, remainingUsd: 9.58 };
 const MIND_ID = "this-mind-id";
+const OPEN_TOKEN = "one-use-token-aaaaabbbbbccccc";
+const OPEN_LINK = {
+  label: "Open iterate Cloud",
+  href: "https://onboarding.example.com/open-cloud",
+};
 
 // ── the reduce ──
 
@@ -199,6 +205,7 @@ test("a press opens a tab only where a page can come: Connect before the rule, D
   expect(card?.buttons).toEqual([
     { label: "Try again", action: "connect", primary: true },
     { label: "Not now", action: "decline" },
+    OPEN_LINK,
     { label: "End the rule", action: "disconnect", opens: true },
   ]);
 });
@@ -246,6 +253,7 @@ test("Connect: one link to sign the rule, and nothing at iterate or in the secre
     text: ["$9.58 of $10 left."],
     buttons: [
       { label: "Try a voice call", href: "https://dash.example.com/?agent=/agents/onboarding" },
+      OPEN_LINK,
       { label: "Disconnect", action: "disconnect", opens: true },
     ],
   });
@@ -298,13 +306,13 @@ test.for([
     "not-approved",
     "waiting",
     "iterate has your request. A person at iterate approves each mind. You get the credit when they have.",
-    "Try again · Not now · End the rule",
+    "Try again · Not now · Open iterate Cloud · End the rule",
   ],
   [
     "ended",
     "ended",
     "A person at iterate ended this mind's credit. Your mind goes on with its own keys.",
-    "End the rule",
+    "Open iterate Cloud · End the rule",
   ],
   [
     "hostname-enrolled",
@@ -361,7 +369,7 @@ test("not approved yet: no secret by proxy, the rule stands, and a press once it
   expect(refused).toMatchObject({ status: "waiting" });
   expect(fake).toMatchObject({ secrets: { "/secrets/openai": "unset", "/secrets/exa": "unset" } });
   expect(refused.words).toMatch(/Your signed rule still lets iterate send help and updates/);
-  expect(refused.words).toMatch(/Buttons: Try again · Not now · End the rule/);
+  expect(refused.words).toMatch(/Buttons: Try again · Not now · Open iterate Cloud · End the rule/);
   // a person at iterate approved the mind: the Cloud grants
   fake.state.connect = { ok: true, balance: BALANCE };
   await nextMs();
@@ -399,7 +407,11 @@ test.for([
     expect(card.words).toMatch(
       /Your signed rule still lets iterate send help and updates to this mind\. End it with your passkey to stop that\./,
     );
-    expect(card.words).toMatch(/Try again · Not now · End the rule/);
+    expect(card.words).toMatch(
+      reason === "not-approved"
+        ? /Try again · Not now · Open iterate Cloud · End the rule/
+        : /Try again · Not now · End the rule/,
+    );
     for (const words of [card.words, note[0]]) {
       expect(words).not.toMatch(/Nothing was set up/);
       expect(/Try again in a minute/.test(words!)).toBe(reason === "cloud-unreachable");
@@ -492,7 +504,9 @@ test("OpenAI set by proxy, then Exa's set throws: the card says what stands, and
   const context = contextOf(mind, fake.credit);
   const half = await runStep(context, STEP, "connect");
   expect(half).toMatchObject({ status: "connected" });
-  expect(half.words).toMatch(/Buttons: Try again · Try a voice call · Disconnect/);
+  expect(half.words).toMatch(
+    /Buttons: Try again · Try a voice call · Open iterate Cloud · Disconnect/,
+  );
   expect(half.words).toMatch(
     /The connect stopped before it finished\. iterate's credit already pays for OpenAI\. Try again sets up the rest\./,
   );
@@ -978,7 +992,9 @@ test("the credit used: iterate's proxy is switched off once, the card says what 
   for (const line of spentText) expect(answer.words).toContain(line);
   expect(answer.words).not.toMatch(/iterate first|Connect ·|· Connect/);
   expect(answer.words).toMatch(/Command: npx iterate@latest chatgpt connect mind\.example\.com/);
-  expect(answer.words).toMatch(/Buttons: Add my OpenAI key · Add Cloudflare credit · End the rule/);
+  expect(answer.words).toMatch(
+    /Buttons: Add my OpenAI key · Add Cloudflare credit · Open iterate Cloud · End the rule/,
+  );
   expect(mind.mailed[0]?.text).toContain(
     "Your $10 of iterate credit is used.\nYour mind's requests no longer go to iterate.\nYour agents go on with your ChatGPT plan if you connected one, else with your Cloudflare account. Voice calls need a key of your own.\nWeb research needs a key of your own.\nChoose what pays now:",
   );
@@ -1041,7 +1057,7 @@ test("a balance read answered ended: the ended card with no press, the secret by
       "A person at iterate ended this mind's credit. Your mind goes on with its own keys.",
       "Your signed rule still lets iterate send help and updates to this mind. End it with your passkey to stop that.",
     ],
-    buttons: [{ label: "End the rule", action: "disconnect", opens: true }],
+    buttons: [OPEN_LINK, { label: "End the rule", action: "disconnect", opens: true }],
   });
   expect(fake).toMatchObject({
     calls: ["balance", "delete /secrets/exa"],
@@ -1237,6 +1253,96 @@ test("enrolled for THIS mind's id settles the step connected, with the secrets, 
   expect(await runStep(contextOf(broken, failing.credit), STEP, "check")).toMatchObject({
     status: "waiting",
   });
+});
+
+test("GET /open-cloud signs one open for each load, and its page posts the one-use token to iterate Cloud at once; no event of the mind holds the token", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  const connected = await runStep(context, STEP, "connect");
+  expect(connected.words).toMatch(/Buttons: Try a voice call · Open iterate Cloud · Disconnect/);
+  const [card] = await onboardingCards(context);
+  // a plain link to the app's own route: no token in the card
+  expect(card?.buttons).toContainEqual(OPEN_LINK);
+  fake.calls.length = 0;
+  for (const load of [1, 2]) {
+    const answer = await openCloud(fake.credit);
+    expect(answer).toMatchObject({ status: 200 });
+    expect(answer.headers.get("cache-control")).toBe("no-store");
+    expect(answer.headers.get("referrer-policy")).toBe("no-referrer");
+    const html = await answer.text();
+    expect(html).toContain('<form method="post" action="https://cloud.iterate.com/open">');
+    expect(html).toContain(`<input type="hidden" name="token" value="${OPEN_TOKEN}">`);
+    expect(html).toContain("<script>document.forms[0].submit()</script>");
+    expect(html).toContain('<button type="submit">Continue</button>');
+    expect(fake.calls).toHaveLength(load);
+  }
+  expect(fake).toMatchObject({ calls: ["open", "open"] });
+  expect(JSON.stringify([...mind.logs.values()])).not.toContain(OPEN_TOKEN);
+});
+
+test.for([
+  ["not-recognised", "iterate Cloud did not recognise this mind&#39;s signature. Update your mind"],
+  ["not-approved", "iterate has your request. A person at iterate approves each mind."],
+  ["cloud-unreachable", "<p>iterate Cloud did not answer. Try again.</p>"],
+] as const)(
+  "GET /open-cloud refused as %s: a plain page with the words, and no form",
+  async ([reason, words]) => {
+    const fake = fakeCredit();
+    fake.state.open = { ok: false, reason };
+    const answer = await openCloud(fake.credit);
+    expect(answer).toMatchObject({ status: 502 });
+    const html = await answer.text();
+    expect(html).toContain(words);
+    expect(html).not.toContain("<form");
+  },
+);
+
+test("Open iterate Cloud is on every card with a rule (connected, waiting, spent, ended), and on none without one", async () => {
+  const waiting = fakeMind({ meld: "member" });
+  const notYet = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
+  expect(await runStep(contextOf(waiting, notYet.credit), STEP, "connect")).toMatchObject({
+    status: "waiting",
+    words: expect.stringMatching(/Open iterate Cloud/),
+  });
+  const ended = fakeMind({ meld: "member" });
+  const over = fakeCredit({ connect: { ok: false, reason: "ended" } });
+  expect(await runStep(contextOf(ended, over.credit), STEP, "connect")).toMatchObject({
+    status: "ended",
+    words: expect.stringMatching(/Open iterate Cloud/),
+  });
+  const spent = fakeMind({ meld: "member" });
+  const used = fakeCredit({
+    balance: {
+      ok: true,
+      balance: { grantedUsd: 10, spentUsd: 10, remainingUsd: 0, pendingUsd: 0 },
+    },
+  });
+  expect(await runStep(contextOf(spent, used.credit), STEP, "check")).toMatchObject({
+    status: "spent",
+    words: expect.stringMatching(/Open iterate Cloud/),
+  });
+
+  // no rule: no link
+  const fresh = fakeMind();
+  const [offer] = await onboardingCards(contextOf(fresh, fakeCredit().credit));
+  expect(offer?.buttons.map((button) => button.label)).not.toContain("Open iterate Cloud");
+});
+
+test("the real open signs one POST to /secret-proxy/open, and takes only a token from its answer", async () => {
+  const good = realCredit({
+    cloud: async () => Response.json({ token: OPEN_TOKEN, expiresAt: NOW + 300_000 }),
+  });
+  expect(await good.credit.open()).toEqual({ ok: true, token: OPEN_TOKEN });
+  expect(good).toMatchObject({
+    cloudRequests: ["POST https://cloud.iterate.com/secret-proxy/open"],
+  });
+  const odd = realCredit({
+    cloud: async () => Response.json({ token: '"><script>', expiresAt: NOW }),
+  });
+  expect(await odd.credit.open()).toMatchObject({ ok: false, reason: "cloud-unreachable" });
+  const refused = realCredit({ cloud: async () => Response.json({}, { status: 401 }) });
+  expect(await refused.credit.open()).toMatchObject({ ok: false, reason: "not-recognised" });
 });
 
 test("the tool refuses a step or an action it does not have, with the ones it has", async () => {
@@ -1911,6 +2017,7 @@ test.for([
       await at("/collect-openai-key", { method: "POST" }),
       await at("/verify-ai", { method: "POST" }),
       await at(`/steps/${STEP}/disconnect`, { method: "POST" }),
+      await at("/open-cloud"),
       await at("/itx", { headers: { upgrade: "websocket" } }),
       await at("/"),
     ])
@@ -2112,6 +2219,7 @@ function fakeCredit(
   const state = {
     connect: init.connect || ({ ok: true, balance: BALANCE } as Answer),
     balance: init.balance || ({ ok: true, balance: BALANCE } as Answer),
+    open: { ok: true, token: OPEN_TOKEN } as Awaited<ReturnType<CloudCredit["open"]>>,
     /** A delete of each path named here throws, until the test removes it. */
     deleteThrows: new Set<string>(),
     /** The vault keeps each path named here (a key form or a sign-in on it is open). */
@@ -2135,6 +2243,10 @@ function fakeCredit(
       if (secrets[path] === "own") return "own";
       secrets[path] = "iterate-proxy";
       return "set";
+    },
+    open: async () => {
+      calls.push("open");
+      return state.open;
     },
     deleteProxy: async (path) => {
       if (state.deleteThrows.has(path)) throw new Error("the vault did not answer");
@@ -2191,6 +2303,7 @@ function realCredit(answers: {
 }) {
   const sets: unknown[][] = [];
   const deleted: string[] = [];
+  const cloudRequests: string[] = [];
   const described: Record<string, unknown> = { ...answers.describe };
   const itx = {
     whoami: async () => ({ path: "/", mindSlug: "mind.example.com" }),
@@ -2204,6 +2317,7 @@ function realCredit(answers: {
         return {
           fetch: (request: Request) => {
             expect(request.url.startsWith("https://cloud.iterate.com/secret-proxy/")).toBe(true);
+            cloudRequests.push(`${request.method} ${request.url}`);
             return answers.cloud ? answers.cloud() : Promise.resolve(Response.json(BALANCE));
           },
         };
@@ -2232,5 +2346,5 @@ function realCredit(answers: {
       },
     },
   };
-  return { credit: cloudCredit(itx as unknown as OnboardingItx), sets, deleted };
+  return { credit: cloudCredit(itx as unknown as OnboardingItx), sets, deleted, cloudRequests };
 }

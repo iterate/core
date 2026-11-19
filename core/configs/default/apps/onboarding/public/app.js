@@ -372,7 +372,7 @@ function CloudStep({ card, busy, error, onPress, onSkip, onContinue }) {
   const connectBtn = card.buttons.find((b) => b.action === "connect");
   const disconnectBtn = card.buttons.find((b) => b.action === "disconnect");
   const checkBtn = card.buttons.find((b) => b.action === "check");
-  const waitingLink = card.buttons.find((b) => b.href);
+  const waitingLink = card.buttons.find((b) => b.href && !b.href.endsWith("/open-cloud"));
   const showHeaderSummary =
     Boolean(summary) &&
     status !== "failed" &&
@@ -471,6 +471,24 @@ function CloudStep({ card, busy, error, onPress, onSkip, onContinue }) {
     `;
   }
 
+  // this mind's page on iterate Cloud: a plain link to this app's /open-cloud, which signs the
+  // open and posts its one-use token in the new tab (open-cloud.ts)
+  const openCloudLink = card.buttons.find((b) => b.href?.endsWith("/open-cloud"));
+  let openCloudButton = null;
+  if (openCloudLink) {
+    openCloudButton = html`
+      <a
+        className=${buttonVariants({ variant: "ghost", size: "sm" })}
+        data-action="open-cloud"
+        href=${openCloudLink.href}
+        target="_blank"
+        rel="noopener"
+      >
+        ${openCloudLink.label}
+      </a>
+    `;
+  }
+
   let disconnectButton = null;
   if (disconnectBtn && status !== "disconnecting") {
     disconnectButton = html`
@@ -483,6 +501,13 @@ function CloudStep({ card, busy, error, onPress, onSkip, onContinue }) {
       >
         ${disconnectBtn.label}
       <//>
+    `;
+  }
+
+  let footerEnd = null;
+  if (openCloudButton || disconnectButton) {
+    footerEnd = html`
+      <div className="wizard-actions-group">${openCloudButton} ${disconnectButton}</div>
     `;
   }
 
@@ -515,7 +540,7 @@ function CloudStep({ card, busy, error, onPress, onSkip, onContinue }) {
         <div className="wizard-actions-group">
           ${primaryButton} ${secondaryButton} ${skipButton}
         </div>
-        ${disconnectButton}
+        ${footerEnd}
       <//>
     <//>
   `;
