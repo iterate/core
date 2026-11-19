@@ -354,6 +354,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     } = {
       set: (input) => this.#set(path, input),
       delete: () => this.#delete(path),
+      deleteIfProxy: () => this.#deleteIfProxy(path),
       describe: () => this.#describe(path),
       importSealed: (input) => this.#importSealed(path, input.cell, input.proof),
       exportSealed: (input) => this.#exportSealed(path, input.proof, input.until),
@@ -409,7 +410,31 @@ export class SecretDurableObject extends DurableObject<Env> {
     this.#pathOf(path);
     if (this.#version() === 0)
       throw codedError("SECRET_NOT_SET", `secret ${path}: never set — nothing to delete`);
+    return this.#drop(path, this.#current());
+  }
+
+  /** A DELETE ONLY OF A SECRET BY PROXY, decided with no await between the look and the delete:
+   *  anything else (a value, a write that reserved a later version, a live OAuth attempt or key
+   *  form, nothing) stays, and the answer says `deleted: false`. An attempt or a form that lapsed,
+   *  by the test their own calls use, blocks nothing, and the delete removes it as `delete` does. */
+  async #deleteIfProxy(path: string): Promise<SecretAnswer<{ path: string; deleted: boolean }>> {
+    this.#pathOf(path);
     const held = this.#current();
+    const now = Date.now();
+    const attempt = this.ctx.storage.kv.get<PendingAttempt>("pending");
+    const form = this.ctx.storage.kv.get<Collecting>("collecting");
+    const byProxy =
+      held?.cell.byProxy === true &&
+      this.#version() === held.cell.version &&
+      !(attempt && !attempt.ended && attempt.until > now) &&
+      !(form && form.until > now);
+    if (!byProxy) return { result: { path, deleted: false }, facts: [] };
+    const { facts } = await this.#drop(path, held);
+    return { result: { path, deleted: true }, facts };
+  }
+
+  /** The delete itself: its first part is synchronous, so a check just before it holds. */
+  async #drop(path: string, held: Current | undefined): Promise<SecretAnswer<{ path: string }>> {
     // A write that reserved its version before this delete, and still seals, is earlier than the
     // delete: `#write` reads this and keeps no value of it.
     this.ctx.storage.kv.put("deleted-through", this.#version());

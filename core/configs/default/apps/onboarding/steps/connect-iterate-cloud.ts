@@ -55,6 +55,8 @@ const Facts = z.object({
   balance: Balance.optional(),
   /** iterate's total for the day is spent: every mind waits for the next UTC day. */
   paused: z.boolean().optional(),
+  /** The rule was read, and a member ended it, while a path stayed by iterate's proxy. */
+  ended: z.boolean().optional(),
 });
 type Facts = z.infer<typeof Facts>;
 
@@ -67,11 +69,15 @@ const takesCredit = (kind: z.infer<typeof Kind>) => kind === "unset" || kind ===
 const MeldRule = z.object({ append: z.array(z.string()) });
 
 /** THE LATEST RULE A MEMBER SIGNED for iterate, and who signed it. The context is read only when
- *  it exists: a read would make it. */
-async function meldOf(context: StepContext): Promise<{ on: boolean; signer?: string }> {
+ *  it exists: a read would make it. `ended` only when the context was READ and its latest rule is
+ *  an end: a context missing from the catalog's page (more than 1,000 more active below it, or a
+ *  row not yet written) is off but not ended, so nothing is deleted on it. */
+async function meldOf(
+  context: StepContext,
+): Promise<{ on: boolean; ended: boolean; signer?: string }> {
   const listed = await context.itx.contexts.list({ under: MELD_CONTEXT, limit: 1000 });
-  if (!listed.some((one) => one.path === MELD_CONTEXT)) return { on: false };
-  let meld: { on: boolean; signer?: string } = { on: false };
+  if (!listed.some((one) => one.path === MELD_CONTEXT)) return { on: false, ended: false };
+  let meld: { on: boolean; ended: boolean; signer?: string } = { on: false, ended: false };
   for (let after = 0; ;) {
     const page = await context.itx.cd(MELD_CONTEXT).readEvents(after, 500);
     for (const event of page.events) {
@@ -79,7 +85,8 @@ async function meldOf(context: StepContext): Promise<{ on: boolean; signer?: str
       if (event.source?.signer?.member !== true) continue;
       const rule = MeldRule.safeParse(event.payload);
       if (!rule.success) continue;
-      meld = { on: rule.data.append.length > 0, signer: event.source.signer.principal.email };
+      const on = rule.data.append.length > 0;
+      meld = { on, ended: !on, signer: event.source.signer.principal.email };
     }
     if (page.atHead || page.scannedThroughOffset <= after) break;
     after = page.scannedThroughOffset;
@@ -120,9 +127,7 @@ const AGENTS_PAID_TODAY =
 const SPENT_SWITCHED_OFF = "Your mind's requests no longer go to iterate.";
 function afterSpent(openai: string | undefined, exa: string | undefined): string[] {
   // a delete that failed leaves a path by proxy: say which, until a later check deletes it
-  const left = [openai === "iterate-proxy" && "OpenAI", exa === "iterate-proxy" && "Exa"].filter(
-    Boolean,
-  );
+  const left = byIterate(openai, exa);
   return [
     left.length === 0
       ? SPENT_SWITCHED_OFF
@@ -131,6 +136,18 @@ function afterSpent(openai: string | undefined, exa: string | undefined): string
     EXA_AFTER[exa || "unset"],
   ].filter((line): line is string => Boolean(line));
 }
+
+/** The names of the paths still by iterate's proxy. */
+function byIterate(openai: string | undefined, exa: string | undefined): string[] {
+  return [openai === "iterate-proxy" && "OpenAI", exa === "iterate-proxy" && "Exa"].filter(
+    (name): name is string => Boolean(name),
+  );
+}
+
+/** AFTER A DISCONNECT, a path the vault would not delete (a key form or a sign-in on it is open:
+ *  `secrets.deleteIfProxy`): its requests still go to iterate, and the card says so. */
+const stillOn = (left: string[]) =>
+  `Your mind's requests to ${left.join(" and ")} still go to iterate, because a form or a sign-in for that key is open. Press Disconnect again when it is closed.`;
 
 /** Each path after the switch-off, by what `/secrets/<path>` holds. The agents' keys go: a ChatGPT
  *  plan, then `/secrets/openai`, then the AI Gateway (agents.ts); voice and Exa have no next key.
@@ -172,15 +189,27 @@ const UNDER_ZERO: Partial<Record<Spent, string>> = {
 function words(state: StepState, context: StepContext): Card {
   const facts = factsOf(state);
   const card = { step: connectIterateCloud.id, title: "Connect to iterate Cloud" };
+  const stays = byIterate(facts?.openai, facts?.exa);
   if (state.action?.name === "disconnect")
     return {
       ...card,
       status: "disconnecting",
       title: "Disconnected from iterate Cloud",
       text: [
-        "No request goes through iterate any more. iterate may still send messages here until you end the rule with your passkey.",
+        stays.length
+          ? `${stillOn(stays)} iterate may still send messages here until you end the rule with your passkey.`
+          : "No request goes through iterate any more. iterate may still send messages here until you end the rule with your passkey.",
       ],
       buttons: state.action.link ? [{ label: "End", href: state.action.link, primary: true }] : [],
+    };
+  // the rule ended, and a path stayed by iterate's proxy: each check tries the delete again
+  if (facts?.ended && stays.length)
+    return {
+      ...card,
+      status: "disconnecting",
+      title: "Disconnecting from iterate Cloud",
+      text: [stillOn(stays)],
+      buttons: [{ label: "Disconnect again", action: "disconnect", primary: true }],
     };
   if (state.action)
     return {
@@ -357,6 +386,12 @@ async function check(context: StepContext, state: StepState): Promise<Facts> {
   ]);
   const last = factsOf(state);
   const facts: Facts = { canSign, meld: meld.on, openai, exa };
+  // THE RULE ENDED, AND A PATH STAYED: a path that a Disconnect or the rule's end could not delete
+  // (the vault keeps it while a key form or a sign-in on it is open) is tried again at each check.
+  // Only on an end that was read: a rule missing from the catalog's page deletes nothing, and a
+  // proxy set by hand on a mind that never had a rule stays
+  if (meld.ended && (openai === "iterate-proxy" || exa === "iterate-proxy"))
+    return { ...facts, ended: true, ...(await switchOff(context, openai, exa)) };
   // the Cloud is asked only once a member let iterate in, only by a stack that signs, and only
   // for a mind that can take the credit: iterate learns nothing of a mind with its own keys
   if (!canSign || !meld.on || ![openai, exa].some(takesCredit)) return facts;
@@ -371,21 +406,26 @@ async function check(context: StepContext, state: StepState): Promise<Facts> {
   // tomorrow and answer no balance, above.
   if (openai !== "iterate-proxy" && exa !== "iterate-proxy")
     return { ...facts, balance: answer.balance };
-  // a delete that throws leaves that path by proxy in the facts, and the next check tries again
+  return { ...facts, ...(await switchOff(context, openai, exa)), balance: answer.balance };
+}
+
+/** Deletes both secrets by iterate's proxy, and answers what each path holds after it. A delete
+ *  that throws, or that the vault refuses (a key form or a sign-in on the path is open), leaves that
+ *  path by proxy in the facts, and the next check tries again. */
+async function switchOff(
+  context: StepContext,
+  openai: Facts["openai"],
+  exa: Facts["exa"],
+): Promise<Pick<Facts, "openai" | "exa">> {
   const [openaiOff, exaOff] = await Promise.all(
     CREDIT_SECRETS.map(({ path }) =>
-      credit.deleteProxy(path).catch((error: unknown) => {
+      context.credit.deleteProxy(path).catch((error: unknown) => {
         console.warn({ event: "onboarding.switch-off-failed", path, error: String(error) });
         return false;
       }),
     ),
   );
-  return {
-    ...facts,
-    openai: openaiOff ? "unset" : openai,
-    exa: exaOff ? "unset" : exa,
-    balance: answer.balance,
-  };
+  return { openai: openaiOff ? "unset" : openai, exa: exaOff ? "unset" : exa };
 }
 
 /** The facts' balance when iterate gave no new one: the last numbers stay, except with no grant. */
@@ -517,7 +557,8 @@ async function act(
     return { link: url };
   }
   if (action === "disconnect") {
-    for (const { path } of CREDIT_SECRETS) await context.credit.deleteProxy(path);
+    // a path that stays is said on the card, and does not hold up the rule's end
+    await switchOff(context, facts?.openai || "unset", facts?.exa || "unset");
     if (!facts?.meld) return log.settle(await log.request(action));
     const { signAt, expires } = await propose(context, []);
     await log.request(action, { link: signAt, expires });
@@ -579,7 +620,7 @@ async function onEvent(context: StepContext, event: MindEvent, state: StepState,
     return;
   }
   // the rule and the credit are one offer: the end of the rule ends the credit
-  for (const { path } of CREDIT_SECRETS) await context.credit.deleteProxy(path);
+  await switchOff(context, "unset", "unset");
   if (state.action?.name === "disconnect") await log.settle(state.action.requestOffset);
 }
 

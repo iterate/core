@@ -1637,6 +1637,12 @@ export interface IterateContextApi {
      *  callback, `<platform origin>/secrets/oauth/callback`. */
     oauthCallbackUrl(): Promise<string>;
     delete(path: string): Promise<{ path: string }>;
+    /** Deletes the secret at `path` only while it goes by proxy, with no write, live OAuth attempt
+     *  or live key form in flight, all decided in one turn of the secret's object; else deletes
+     *  nothing (`deleted: false`), with no throw. It names no proxy: none can be set over another
+     *  without a delete between, so `describe` first tells whose proxy it is. A rule on the exact
+     *  name `itx.secrets.delete` does not hold this verb; a rule on `itx.secrets.*` holds both. */
+    deleteIfProxy(path: string): Promise<{ path: string; deleted: boolean }>;
     /** Whether the secret at `path` is set, never its value: by a value, or by proxy with
      *  `proxy` and no value here. `set` is false for a path that holds neither, one never set
      *  included. A read alone: no fact. The answer has more fields

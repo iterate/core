@@ -305,6 +305,8 @@ export type SecretVerbs = {
   /** The options, with `material` beside them. */
   set: { input: unknown; answer: SecretAnswer<{ path: string }> };
   delete: { input: undefined; answer: SecretAnswer<{ path: string }> };
+  /** ./api.ts `secrets.deleteIfProxy` says when it deletes. */
+  deleteIfProxy: { input: undefined; answer: SecretAnswer<{ path: string; deleted: boolean }> };
   describe: { input: undefined; answer: SecretDescription };
   /** ./api.ts `secrets.importSealed` says what the proof is over and which cells are taken. */
   importSealed: { input: { cell: string; proof: string }; answer: SecretAnswer<{ path: string }> };

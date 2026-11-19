@@ -20,6 +20,22 @@ test("the vault's answer is released when the mind has read it, so its session d
   expect(vault).toMatchObject({ asked: 3, released: 3 });
 });
 
+test("deleteIfProxy() answers the vault's result with `deleted`, its fact lands on the secret's log, and the answer is released", async () => {
+  const vault = pretendVault();
+  const mind = mindOf();
+  const secrets = secretsRoot(mind, vault.egress);
+
+  expect(await secrets.deleteIfProxy("/secrets/openai")).toEqual({
+    path: "/secrets/openai",
+    deleted: true,
+  });
+  expect({ vault, appended: appends.get(mind) }).toMatchObject({
+    vault: { asked: 1, released: 1 },
+    appended: [{ path: "/secrets/openai", types: ["events.iterate.com/secret/deleted"] }],
+  });
+  expect(vault.open()).toBe(0);
+});
+
 test("list() is one call of the vault, which keeps the paths of its own secrets, and its answer is released", async () => {
   const vault = pretendVault();
   const secrets = secretsRoot(mindOf(), vault.egress);
@@ -79,6 +95,11 @@ function pretendVault({ hasNoListOrCloud = false } = {}) {
     if (verb === "describe") return held({ path, set: true });
     if (path === "/secrets/refused")
       return held({ refused: { code: "FORBIDDEN", message: "not this one" }, facts: [] });
+    if (verb === "deleteIfProxy")
+      return held({
+        result: { path, deleted: true },
+        facts: [{ path, events: [{ type: "events.iterate.com/secret/deleted" }] }],
+      });
     return held({ result: path, facts: [{ path, events: [{ type: "proof/fact" }] }] });
   };
   const grants = ["/secrets/github-jo", "/secrets/github-sam"];

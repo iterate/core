@@ -81,15 +81,20 @@ test("a stack that made neither: each path is not set, with the deploy's reason,
   expect(sent).toEqual([]);
 });
 
-test.for(["set", "delete", "exportSealed", "beginOAuth", "collectFromUser", "signHmac"])(
-  "the mind may not %s a secret that the stack made",
-  async (verb) => {
-    const { secret } = secretAt(TURN_PATH, MADE);
-    await expect(
-      secret.secret(TURN_PATH, verb, { material: "x", urls: ["https://example.net"] }),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  },
-);
+test.for([
+  "set",
+  "delete",
+  "deleteIfProxy",
+  "exportSealed",
+  "beginOAuth",
+  "collectFromUser",
+  "signHmac",
+])("the mind may not %s a secret that the stack made", async (verb) => {
+  const { secret } = secretAt(TURN_PATH, MADE);
+  await expect(
+    secret.secret(TURN_PATH, verb, { material: "x", urls: ["https://example.net"] }),
+  ).rejects.toMatchObject({ code: "FORBIDDEN" });
+});
 
 /** The secret's object at `path`, in a stack whose deploy left `cloudflareRealtime`, and each
  *  request that left it. */

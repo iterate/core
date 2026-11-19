@@ -1030,6 +1030,54 @@ test("Disconnect deletes only iterate's secrets by proxy at once, then one link 
   });
 });
 
+test("a Disconnect whose OpenAI proxy the vault keeps (a key form is open): the card names it, the rule's end goes on, and a check after the form closed deletes it", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit();
+  const context = contextOf(mind, fake.credit);
+  await runStep(context, STEP, "connect");
+  fake.state.deleteKept.add("/secrets/openai");
+  const still =
+    "Your mind's requests to OpenAI still go to iterate, because a form or a sign-in for that key is open. Press Disconnect again when it is closed.";
+  const answer = await runStep(context, STEP, "disconnect");
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "unset" },
+  });
+  // the rule's end is not held up: its page is the answer
+  expect(answer).toMatchObject({
+    status: "disconnecting",
+    link: "https://mind.example.com/sign/1",
+  });
+  expect(answer.words).toContain(still);
+  expect(answer.words).not.toContain("No request goes through iterate any more.");
+  // the owner signs the end; the form is still open: the card says so, with Disconnect again
+  await hook(mind, fake.credit, mind.sign([]));
+  await nextMs();
+  const after = await runStep(context, STEP, "check");
+  expect(after).toMatchObject({ status: "disconnecting" });
+  expect(after.words).toContain(still);
+  expect(after.words).toMatch(/Buttons: Disconnect again/);
+  // the form closed (lapsed or used): the next check deletes the proxy
+  fake.state.deleteKept.clear();
+  await nextMs();
+  expect(await runStep(context, STEP, "check")).toMatchObject({ status: "not-asked" });
+  expect(fake).toMatchObject({ secrets: { "/secrets/openai": "unset" } });
+});
+
+test.for([
+  ["a connected mind whose rule is missing from the catalog's page", "member", "iterate-proxy"],
+  ["a mind that never had a rule, with a proxy its own code set", null, "iterate-proxy"],
+] as const)("%s: a check deletes nothing, and asks nothing of iterate", async ([, meld, kind]) => {
+  const mind = fakeMind({ meld, unlisted: [MELD] });
+  const fake = fakeCredit({
+    secrets: { "/secrets/openai": kind, "/secrets/exa": "iterate-proxy" },
+  });
+  await runStep(contextOf(mind, fake.credit), STEP, "check");
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": kind, "/secrets/exa": "iterate-proxy" },
+  });
+  expect(fake.calls.filter((call) => call.startsWith("delete ") || call === "balance")).toEqual([]);
+});
+
 test("the credit used: iterate's proxy is switched off once, the card says what runs now, and the chat and the owner's mail say it once", async () => {
   const mind = fakeMind({ meld: "member" });
   const fake = fakeCredit();
@@ -1235,7 +1283,42 @@ test("the real describe tells the owner's key, iterate's proxy and another proxy
   ).toEqual(["unset", "own", "iterate-proxy", "other-proxy"]);
   for (const path of ["/secrets/openai", "/secrets/exa", "/secrets/other"])
     await credit.deleteProxy(path);
-  expect(deleted).toEqual(["/secrets/exa"]);
+  // by the vault's conditional delete, never the plain one
+  expect(deleted).toEqual(["if-proxy /secrets/exa"]);
+});
+
+test("the real deleteProxy: an owner's key that lands after the describe stays, and the answer is false", async () => {
+  const { credit, deleted } = realCredit({
+    describe: { "/secrets/openai": { set: true, proxy: ITERATE_PROXY } },
+    beforeDelete: { "/secrets/openai": { set: true } },
+  });
+  expect(await credit.deleteProxy("/secrets/openai")).toBe(false);
+  expect(deleted).toEqual([]);
+});
+
+test.for([
+  ['NOT_A_METHOD: "deleteIfProxy" is not a method at step 2 of secrets.deleteIfProxy'],
+  ['The RPC receiver does not implement the method "deleteIfProxy".'],
+  ['secrets: "deleteIfProxy" is no verb of a secret'],
+] as const)(
+  "the real deleteProxy on an older stack (%s) falls back to describe, then delete",
+  async ([message]) => {
+    const { credit, deleted } = realCredit({
+      describe: { "/secrets/openai": { set: true, proxy: ITERATE_PROXY } },
+      deleteIfProxyThrows: new Error(message),
+    });
+    expect(await credit.deleteProxy("/secrets/openai")).toBe(true);
+    expect(deleted).toEqual(["/secrets/openai"]);
+  },
+);
+
+test("the real deleteProxy throws any other error of the verb, and the fallback deletes nothing", async () => {
+  const { credit, deleted } = realCredit({
+    describe: { "/secrets/openai": { set: true, proxy: ITERATE_PROXY } },
+    deleteIfProxyThrows: new Error("the vault did not answer"),
+  });
+  await expect(credit.deleteProxy("/secrets/openai")).rejects.toThrow("the vault did not answer");
+  expect(deleted).toEqual([]);
 });
 
 test.for([
@@ -1475,6 +1558,8 @@ function fakeMind(
   options: {
     canSign?: boolean;
     meld?: "member" | "other" | null;
+    /** The catalog's page leaves out these contexts (more active ones fill it, or no row yet). */
+    unlisted?: string[];
     /** The mind's Cloudflare: whether the deploy made the stack's client, a kept grant, the
      *  Integrations card's row for it, and what the vault says of a connect's attempt. */
     cloudflare?: {
@@ -1544,6 +1629,7 @@ function fakeMind(
       list: async ({ under }: { under: string }) =>
         [...logs.keys()]
           .filter((path) => path === under || path.startsWith(`${under}/`))
+          .filter((path) => !options.unlisted?.includes(path))
           .map((path) => ({ path })),
     },
     approvals: {
@@ -1639,6 +1725,8 @@ function fakeCredit(
     balance: init.balance || ({ ok: true, balance: BALANCE } as Answer),
     /** A delete of each path named here throws, until the test removes it. */
     deleteThrows: new Set<string>(),
+    /** The vault keeps each path named here (a key form or a sign-in on it is open). */
+    deleteKept: new Set<string>(),
   };
   const credit: CloudCredit = {
     canSign: async () => init.canSign ?? true,
@@ -1661,7 +1749,7 @@ function fakeCredit(
     },
     deleteProxy: async (path) => {
       if (state.deleteThrows.has(path)) throw new Error("the vault did not answer");
-      if (secrets[path] !== "iterate-proxy") return false;
+      if (secrets[path] !== "iterate-proxy" || state.deleteKept.has(path)) return false;
       calls.push(`delete ${path}`);
       secrets[path] = "unset";
       return true;
@@ -1738,6 +1826,10 @@ function realCredit(answers: {
   raced?: Record<string, unknown>;
   stackKey?: unknown;
   cloud?: () => Promise<Response>;
+  /** What lands on a path after its describe and before `deleteIfProxy` (an owner's key). */
+  beforeDelete?: Record<string, unknown>;
+  /** What `deleteIfProxy` throws: an older stack's refusal, or any other error. */
+  deleteIfProxyThrows?: Error;
 }) {
   const sets: unknown[][] = [];
   const deleted: string[] = [];
@@ -1771,6 +1863,14 @@ function realCredit(answers: {
       },
       delete: async (path: string) => {
         deleted.push(path);
+      },
+      // the vault's condition, as it decides it: a secret by proxy and nothing else
+      deleteIfProxy: async (path: string) => {
+        if (answers.deleteIfProxyThrows) throw answers.deleteIfProxyThrows;
+        Object.assign(described, answers.beforeDelete);
+        const byProxy = Boolean((described[path] as { proxy?: unknown } | undefined)?.proxy);
+        if (byProxy) deleted.push(`if-proxy ${path}`);
+        return { path, deleted: byProxy };
       },
     },
   };

@@ -87,6 +87,11 @@ const NO_PROXY_LAYER = /material is a string or a JSON object/;
  *  path is set, or a write to it is in flight. */
 const HAS_APPROVAL_RULE = /has an approval rule, which no use by proxy can pass/;
 const SET_OR_BEING_SET = /is set or being set; delete it first/;
+/** A stack older than `secrets.deleteIfProxy`, by its two refusals: a mind Worker whose `secrets`
+ *  has no such method (the kernel's NOT_A_METHOD, or workerd's RPC across a stub), or a vault that
+ *  knows no such verb (INVALID_INPUT `is no verb of a secret`). Any other error is thrown. */
+const OLDER_STACK =
+  /"deleteIfProxy" is not a method|does not implement the method "deleteIfProxy"|"deleteIfProxy" is no verb of a secret/;
 
 const Description = z.object({
   set: z.boolean(),
@@ -200,9 +205,19 @@ export function cloudCredit(itx: OnboardingItx): CloudCredit {
       return (await secret(path)) === "iterate-proxy" ? "set" : "no-proxy-layer";
     },
     async deleteProxy(path) {
+      // describe first: a path by another proxy is never asked to go
       if ((await secret(path)) !== "iterate-proxy") return false;
-      await itx.secrets.delete(path);
-      return true;
+      try {
+        // the vault deletes only while the path is still by proxy, in one turn of its object, so
+        // an own key saved after the describe stays
+        return (await itx.secrets.deleteIfProxy(path)).deleted;
+      } catch (error) {
+        if (!OLDER_STACK.test(messageOf(error))) throw error;
+        // AN OLDER STACK, without the verb: today's describe, then delete. An own key saved
+        // between the two is deleted (the race the verb closes); it ends at the stack's update
+        await itx.secrets.delete(path);
+        return true;
+      }
     },
   };
 }

@@ -333,6 +333,120 @@ test("a set with proxy while a value's set is in flight is refused, and the valu
   await value;
   expect(await secret.secret(PATH, "describe", undefined)).not.toHaveProperty("proxy");
 });
+test("deleteIfProxy deletes a secret by proxy, with its fact, and the vault's list drops it", async () => {
+  const { secret, listed } = await vault();
+  await secret.secret(PATH, "set", { material: null, urls: OPENAI, proxy: PROXY });
+  expect([...listed]).toEqual([PATH]);
+  const deleted = secret.secret(PATH, "deleteIfProxy", undefined);
+  expect(await deleted).toMatchObject({ result: { deleted: true } });
+  expect([...listed]).toEqual([]);
+  expect(await deleted).toEqual({
+    result: { path: PATH, deleted: true },
+    facts: [
+      {
+        path: PATH,
+        events: [{ type: "events.iterate.com/secret/deleted", payload: { path: PATH } }],
+      },
+    ],
+  });
+  expect(await secret.secret(PATH, "describe", undefined)).toEqual({ path: PATH, set: false });
+  // a second call finds nothing to do, and says so
+  expect(await secret.secret(PATH, "deleteIfProxy", undefined)).toEqual({
+    result: { path: PATH, deleted: false },
+    facts: [],
+  });
+});
+
+test.for(["a key form", "an OAuth attempt"] as const)(
+  "deleteIfProxy over %s that lapsed deletes the proxy: a lapsed one blocks nothing",
+  async (what) => {
+    const { secret } = await vault();
+    await secret.secret(PATH, "set", { material: null, urls: OPENAI, proxy: PROXY });
+    const begun =
+      what === "a key form"
+        ? await secret.secret(PATH, "collectFromUser", { egress: { urls: OPENAI } })
+        : await secret.secret(PATH, "beginOAuth", {
+            authorizationEndpoint: "https://provider.example/authorize",
+            tokenEndpoint: "https://provider.example/token",
+            clientId: "client",
+          });
+    expect(begun).toBeTruthy();
+    // a day and an hour later: past a form's 24 hours and an attempt's own end
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 25 * 60 * 60_000);
+    try {
+      expect(await secret.secret(PATH, "deleteIfProxy", undefined)).toMatchObject({
+        result: { path: PATH, deleted: true },
+      });
+    } finally {
+      clock.mockRestore();
+    }
+    expect(await secret.secret(PATH, "describe", undefined)).toEqual({ path: PATH, set: false });
+  },
+);
+
+test("deleteIfProxy deletes nothing but a secret by proxy: a value, a path never set, an OAuth attempt, a key form", async () => {
+  const { secret } = await vault();
+  const nothing = { result: { path: PATH, deleted: false }, facts: [] };
+  // never set: no throw
+  expect(await secret.secret(PATH, "deleteIfProxy", undefined)).toEqual(nothing);
+  // an own value
+  await secret.secret(PATH, "set", { material: "sk-own-aaaa", urls: OPENAI });
+  expect(await secret.secret(PATH, "deleteIfProxy", undefined)).toEqual(nothing);
+  expect(await secret.secret(PATH, "describe", undefined)).toMatchObject({ set: true });
+  expect(await secret.secret(PATH, "describe", undefined)).not.toHaveProperty("proxy");
+  await secret.secret(PATH, "delete", undefined);
+  // a proxy with a key form open on it: the owner's form stays
+  await secret.secret(PATH, "set", { material: null, urls: OPENAI, proxy: PROXY });
+  const form = (await secret.secret(PATH, "collectFromUser", { egress: { urls: OPENAI } })) as {
+    url: string;
+  };
+  expect(await secret.secret(PATH, "deleteIfProxy", undefined)).toEqual(nothing);
+  expect(await secret.secret(PATH, "describe", undefined)).toMatchObject({ proxy: PROXY });
+  expect(form).toMatchObject({ url: expect.any(String) });
+  await secret.secret(PATH, "delete", undefined);
+  // a proxy with an OAuth attempt waiting on it
+  await secret.secret(PATH, "set", { material: null, urls: OPENAI, proxy: PROXY });
+  await secret.secret(PATH, "beginOAuth", {
+    authorizationEndpoint: "https://provider.example/authorize",
+    tokenEndpoint: "https://provider.example/token",
+    clientId: "client",
+  });
+  expect(await secret.secret(PATH, "deleteIfProxy", undefined)).toEqual(nothing);
+  expect(await secret.secret(PATH, "describe", undefined)).toMatchObject({ proxy: PROXY });
+});
+
+test("deleteIfProxy after the caller's describe saw the proxy, and the owner's own value landed since: the value stays", async () => {
+  const { secret } = await vault();
+  await secret.secret(PATH, "set", { material: null, urls: OPENAI, proxy: PROXY });
+  expect(await secret.secret(PATH, "describe", undefined)).toMatchObject({ proxy: PROXY });
+  // the owner's key: a value's set over a proxy is an ordinary set
+  await secret.secret(PATH, "set", { material: "sk-own-aaaa", urls: OPENAI });
+  expect(await secret.secret(PATH, "deleteIfProxy", undefined)).toEqual({
+    result: { path: PATH, deleted: false },
+    facts: [],
+  });
+  const described = await secret.secret(PATH, "describe", undefined);
+  expect(described).toMatchObject({ set: true });
+  expect(described).not.toHaveProperty("proxy");
+});
+
+test("deleteIfProxy while an own value's set is in flight over the proxy deletes nothing, and the value lands", async () => {
+  const { secret, holdNextAdd } = await vault();
+  await secret.secret(PATH, "set", { material: null, urls: OPENAI, proxy: PROXY });
+  const release = holdNextAdd();
+  // not awaited: it has reserved its version and waits on the vault's list
+  const value = secret.secret(PATH, "set", { material: "sk-own-aaaa", urls: OPENAI });
+  expect(await secret.secret(PATH, "deleteIfProxy", undefined)).toEqual({
+    result: { path: PATH, deleted: false },
+    facts: [],
+  });
+  release();
+  await value;
+  const described = await secret.secret(PATH, "describe", undefined);
+  expect(described).toMatchObject({ set: true });
+  expect(described).not.toHaveProperty("proxy");
+});
+
 test("a use whose secret is set again while it is signed does not leave, and says to send it again", async () => {
   const { secret, hooks } = await vault();
   await secret.secret(PATH, "set", { material: null, urls: OPENAI, proxy: PROXY });
@@ -689,6 +803,8 @@ async function vault() {
   const signs: { mind?: string; expiresInSeconds?: number }[] = [];
   // what runs while the auth Worker signs, and the one call of the vault's list that waits
   const hooks: { duringSign?: () => Promise<void>; nextAdd?: Promise<void> } = {};
+  /** The vault's list of set secrets, as its `add` and `remove` leave it. */
+  const listed = new Set<string>();
   const env = {
     ITERATE: JSON.stringify({
       mindId: "a".repeat(64),
@@ -707,12 +823,15 @@ async function vault() {
     ITERATE__CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
     APPROVALS: {
       getByName: () => ({
-        add: async () => {
+        add: async (path: string) => {
           const waits = hooks.nextAdd;
           hooks.nextAdd = undefined;
           await waits;
+          listed.add(path);
         },
-        remove: async () => {},
+        remove: async (path: string) => {
+          listed.delete(path);
+        },
       }),
     },
     AUTH: {
@@ -760,6 +879,7 @@ async function vault() {
     stackKey,
     signs,
     hooks,
+    listed,
     /** Holds the next call of the vault's list until the answered function is called. */
     holdNextAdd: () => {
       let go = () => {};
