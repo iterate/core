@@ -23,6 +23,7 @@ import {
   STATEMENTS_PATH,
   statementText,
 } from "../signed.ts";
+import { ProvideRefusal, type ProvideState } from "./provide-state.ts";
 
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 /** How long the first run waits for a member to allow the key. */
@@ -119,6 +120,13 @@ async function askForToken(input: {
   };
 }
 
+/** The refusals of /keys/token (core/auth-worker/src/keys.ts, key-tokens.ts) that say the CLI
+ *  signed what this stack does not take: no retry and no member changes them. */
+const protocolRefusals = new Set([
+  "the statement is for another mind",
+  `the statement is not ${KEY_TOKEN_STATEMENT_TYPE} at /`,
+]);
+
 /** A TOKEN FOR THE BRIDGE at `address`, to lend `itx.<name>`. A key the mind does not know yet is
  *  not an error on the first run (`wait`): the link to allow it is printed once, and this asks
  *  again until a member has allowed it. Later a refusal is the answer: the key was removed. */
@@ -130,6 +138,8 @@ export async function bridgeToken(input: {
   seconds?: number;
   /** wait for a member to allow the key, and print the link with this */
   wait?: (line: string) => void;
+  /** `--json`: the state while it waits */
+  report?: (state: ProvideState) => void;
   /** a test's timing */
   timing?: { waitMs: number; askEveryMs: number };
 }): Promise<string> {
@@ -140,23 +150,51 @@ export async function bridgeToken(input: {
     const answer = await askForToken(input);
     if ("token" in answer) {
       if (answer.provide !== input.name)
-        throw new Error(
+        throw new ProvideRefusal(
           `This key was allowed to lend itx.${answer.provide}, not itx.${input.name}. Use --name ${answer.provide}, or another key file.`,
+          {
+            state: "notAllowed",
+            why: `This key was allowed to lend itx.${answer.provide}, not itx.${input.name}.`,
+            waiting: false,
+          },
         );
       return answer.token;
     }
+    if (protocolRefusals.has(answer.why))
+      // The CLI signed for the hostname it asked, and that hostname's stack answers that the
+      // statement is not for it, or not of a type it takes: the two disagree on the protocol (a
+      // stack names itself by its control-plane hostname). A --mind that names another hostname
+      // of the mind reads the same, so the message names both.
+      throw new ProvideRefusal(
+        `The mind refused this bridge's key: ${answer.why}. This iterate CLI and the mind do not agree: update the CLI, or check that --mind names the mind's control-plane hostname.`,
+        {
+          state: "incompatible",
+          why: `${answer.why}: this iterate CLI and the mind do not agree on the protocol`,
+        },
+      );
     if (answer.refused !== "invalid_client" && answer.refused !== "invalid_scope")
       throw new Error(`The mind gave this bridge's key no token: ${answer.why}.`);
     if (!input.wait)
-      throw new Error(
+      throw new ProvideRefusal(
         `This bridge's key is not allowed on ${input.address}: ${answer.why}. A member allows it at ${link}`,
+        { state: "notAllowed", why: `${answer.why}.`, link, waiting: false },
       );
-    if (!asked)
+    if (!asked) {
       input.wait(
         `This bridge's key is not allowed on ${input.address} yet. A member of the mind opens this link and signs with a passkey:\n\n  ${link}\n\nWaiting for that...`,
       );
+      input.report?.({
+        state: "notAllowed",
+        why: "No member has allowed this key yet.",
+        link,
+        waiting: true,
+      });
+    }
     if (Date.now() + askEveryMs > waitUntil)
-      throw new Error(`Nobody allowed this bridge's key in time. Open ${link} and run this again.`);
+      throw new ProvideRefusal(
+        `Nobody allowed this bridge's key in time. Open ${link} and run this again.`,
+        { state: "notAllowed", why: "Nobody allowed this key in time.", link, waiting: false },
+      );
     await new Promise((resolved) => setTimeout(resolved, askEveryMs));
   }
 }

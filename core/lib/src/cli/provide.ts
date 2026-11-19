@@ -6,6 +6,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { RpcTarget } from "capnweb";
 import type { MindConnection } from "../node.ts";
+import { ProvideRefusal, type ProvideState } from "./provide-state.ts";
 
 /** What `iterate provide` reads from a file: its default export, called on every connection with
  *  that connection's mind, answers the object whose functions are lent; `description`, when
@@ -139,7 +140,8 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fil
  *  ends under it — the file's default export is called with that connection's root as `itx`,
  *  and what it answers is lent again at the same name: the file keeps its long-lived state (a
  *  socket, a session) in its own module scope and reaches the mind through the newest `itx`.
- *  `itx.<name>` is printed on stdout once live. Only when every attempt to reconnect fails does it
+ *  `itx.<name>` is printed on stdout once live (with `report`, the states instead: --json). Only
+ *  when every attempt to reconnect fails, or the mind refuses the key (`ProvideRefusal`), does it
  *  end, with an error. A connection whose sign-in is about to end is replaced before it does (THE
  *  HANDOVER, below), so the hourly end of a token costs no call. */
 export async function runProvide(input: {
@@ -156,12 +158,16 @@ export async function runProvide(input: {
   endsAt?: () => number | undefined;
   /** how long before that end the next connection is made — a test's, `renewBeforeMs` otherwise */
   renewBeforeMs?: number;
+  /** `--json`: each change of state (provide-state.ts); the human lines go to stderr regardless */
+  report?: (state: ProvideState) => void;
 }): Promise<void> {
   if (!NAME.test(input.name))
     throw new Error(
       `${JSON.stringify(input.name)} is not a capability name: letters and digits starting with a letter, dotted segments allowed (whatsapp, whatsapp.jonas).`,
     );
   const match = `itx.${input.name}`;
+  /** how the mind calls the lend, known once the first is live */
+  let spelled = match;
   let stop = () => {};
   const stopped = new Promise<"stopped">((resolve) => (stop = () => resolve("stopped")));
   process.once("SIGINT", stop);
@@ -181,10 +187,15 @@ export async function runProvide(input: {
       // A session's root is `/` for a member, and a sandbox's own context for code in a sandbox:
       // the lend sits there, and the mind calls it through that context.
       const { path } = await mind.whoami();
-      const spelled = path === "/" ? match : `itx.cd(${JSON.stringify(path)}).${input.name}`;
-      console.log(spelled);
+      spelled = path === "/" ? match : `itx.cd(${JSON.stringify(path)}).${input.name}`;
+      // with --json stdout is the states' alone: the name is the live state's
+      if (!input.report) console.log(spelled);
       console.error(`${spelled} is live for ${connection.address}. Press Ctrl-C to stop.`);
-    } else if (how === "again") console.error(`Reconnected: ${match} is live again.`);
+      input.report?.({ state: "live", mind: connection.address, name: spelled, again: false });
+    } else if (how === "again") {
+      console.error(`Reconnected: ${match} is live again.`);
+      input.report?.({ state: "live", mind: connection.address, name: spelled, again: true });
+    }
     const lendEnded = lend.lendEnded().then(
       (reason) => `its lend ended: the stub ${reason}`,
       (error: unknown) => `its lend ended: ${messageOf(error)}`,
@@ -276,8 +287,17 @@ export async function runProvide(input: {
         throw new Error(
           `${match} disconnected and could not reconnect (${lastFailure}). Run iterate provide again.`,
         );
+      input.report?.({
+        state: "reconnecting",
+        attempt: failures,
+        of: delaysMs.length,
+        inMs: delayMs,
+        lastFailure,
+      });
       if ((await after(delayMs, "waited")) === "stopped") return;
       const connection = await input.reconnect().catch((error: unknown) => {
+        // the mind's own answer about the key or the protocol: another try changes nothing
+        if (error instanceof ProvideRefusal) throw error;
         lastFailure = messageOf(error);
         console.error(`Could not reconnect: ${lastFailure}`);
         return null;

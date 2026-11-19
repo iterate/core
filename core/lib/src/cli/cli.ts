@@ -35,7 +35,8 @@ import { runFs } from "./fs.ts";
 import { loginFlowFor, unexpectedUser } from "./device-login/flow.ts";
 import { revokeSession } from "./oauth.ts";
 import { bridgeAppend, bridgeKeyOf, bridgeToken } from "./bridge-key.ts";
-import { importProvidedFile, nameOfFile, runProvide } from "./provide.ts";
+import { importProvidedFile, nameOfFile, type ProvidedFile, runProvide } from "./provide.ts";
+import { finalStateOf, type ProvideState } from "./provide-state.ts";
 import { runTunnel } from "./tunnel.ts";
 import { shareMyComputer } from "./share-my-computer.ts";
 import {
@@ -122,6 +123,53 @@ function signInEndsAt(address: string): number | undefined {
   if (process.env.ITERATE_MIND_TOKEN?.trim()) return undefined;
   const ends = Date.parse(readSession(mindApiUrlOf(address))?.expiresAt || "");
   return Number.isFinite(ends) ? ends : undefined;
+}
+
+/** `iterate provide`'s lend, with a sign-in or (`key`) the bridge's own key, until Ctrl-C. */
+async function provideWith(input: {
+  address: string;
+  file: ProvidedFile;
+  name: string;
+  key?: string;
+  paths?: string;
+  report?: (state: ProvideState) => void;
+}) {
+  const { address, file, name, report } = input;
+  if (!input.key) {
+    // runProvide owns the connection from here, and every one `reconnect` opens
+    await runProvide({
+      connection: await connect(address),
+      reconnect: () => connect(address),
+      file,
+      name,
+      endsAt: () => signInEndsAt(address),
+      report,
+    });
+    return;
+  }
+  // THE BRIDGE'S OWN KEY (bridge-key.ts): each connection asks for a new token, which lives
+  // an hour. The first waits for a member to allow the key. A later one does not: a key that
+  // a member removed is refused, and the bridge says so and ends.
+  const key = await bridgeKeyOf(input.key);
+  const paths = input.paths?.split(",").map((path) => path.trim());
+  // ITERATE_KEY_TOKEN_SECONDS: a test's, to see a token end without waiting an hour
+  const seconds = Number(process.env.ITERATE_KEY_TOKEN_SECONDS) || undefined;
+  let tokenEndsAt = 0;
+  const connectWithKey = async (wait?: (line: string) => void) => {
+    const token = await bridgeToken({ address, name, key, paths, seconds, wait, report });
+    // a key's token lives the hour, or the seconds asked for
+    tokenEndsAt = Date.now() + (seconds || 3600) * 1000;
+    return connectMind({ address, token, signIn: false });
+  };
+  await runProvide({
+    connection: await connectWithKey((line) => console.error(line)),
+    reconnect: () => connectWithKey(),
+    file,
+    name,
+    append: bridgeAppend(address, key),
+    endsAt: () => tokenEndsAt,
+    report,
+  });
 }
 
 /** `iterate login`: sign in to the mind at `address` (as `addressOf` read it from what a person
@@ -700,6 +748,12 @@ const launcherProcedures = {
           .describe(
             "With --key: where the key may also add events, comma-separated, under /integrations/ (e.g. /integrations/whatsapp/)",
           ),
+        json: z
+          .boolean()
+          .optional()
+          .describe(
+            "Print one JSON object per line on stdout at each change of state (connecting, live, reconnecting, notAllowed, incompatible, stopped), for a program that keeps the lend; the human lines stay on stderr",
+          ),
         mind: mindOption,
       }),
     )
@@ -708,43 +762,22 @@ const launcherProcedures = {
         "Lend a local file's functions to a mind as itx.<name> until Ctrl-C; the file's folder installs its own dependencies",
     })
     .handler(async ({ input }) => {
-      // the file first: a missing dependency is the answer before any sign-in
-      const file = await importProvidedFile(input.file);
-      const name = input.name || nameOfFile(input.file);
-      const address = await resolveMind(input.mind);
-      if (!input.key) {
-        // runProvide owns the connection from here, and every one `reconnect` opens
-        await runProvide({
-          connection: await connect(address),
-          reconnect: () => connect(address),
-          file,
-          name,
-          endsAt: () => signInEndsAt(address),
-        });
-        return;
+      // --json: one state per line on stdout (provide-state.ts), the last one as it ends
+      const report = input.json
+        ? (state: ProvideState) => process.stdout.write(`${JSON.stringify(state)}\n`)
+        : undefined;
+      try {
+        // the file first: a missing dependency is the answer before any sign-in
+        const file = await importProvidedFile(input.file);
+        const name = input.name || nameOfFile(input.file);
+        const address = await resolveMind(input.mind);
+        report?.({ state: "connecting", mind: address, name: `itx.${name}` });
+        await provideWith({ address, file, name, key: input.key, paths: input.paths, report });
+        report?.({ state: "stopped", why: "stopped by Ctrl-C or a signal" });
+      } catch (error) {
+        report?.(finalStateOf(error));
+        throw error;
       }
-      // THE BRIDGE'S OWN KEY (bridge-key.ts): each connection asks for a new token, which lives
-      // an hour. The first waits for a member to allow the key. A later one does not: a key that
-      // a member removed is refused, and the bridge says so and ends.
-      const key = await bridgeKeyOf(input.key);
-      const paths = input.paths?.split(",").map((path) => path.trim());
-      // ITERATE_KEY_TOKEN_SECONDS: a test's, to see a token end without waiting an hour
-      const seconds = Number(process.env.ITERATE_KEY_TOKEN_SECONDS) || undefined;
-      let tokenEndsAt = 0;
-      const connectWithKey = async (wait?: (line: string) => void) => {
-        const token = await bridgeToken({ address, name, key, paths, seconds, wait });
-        // a key's token lives the hour, or the seconds asked for
-        tokenEndsAt = Date.now() + (seconds || 3600) * 1000;
-        return connectMind({ address, token, signIn: false });
-      };
-      await runProvide({
-        connection: await connectWithKey((line) => console.error(line)),
-        reconnect: () => connectWithKey(),
-        file,
-        name,
-        append: bridgeAppend(address, key),
-        endsAt: () => tokenEndsAt,
-      });
     }),
   config: {
     get: os

@@ -10,6 +10,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { expect, test, vi } from "vitest";
 import { rpcTargetOf, runProvide } from "./provide.ts";
+import { finalStateOf, ProvideRefusal, ProvideState } from "./provide-state.ts";
 
 const bin = fileURLToPath(new URL("../../bin/iterate.js", import.meta.url));
 
@@ -114,6 +115,84 @@ test("a lend from a sandbox's own session is spelled through the sandbox's conte
   expect(quiet.lines.at(0)).toBe('itx.cd("/agents/ada/box").standIn');
 });
 
+test("--json: live, then before each wait the attempt, its delay and the last failure, then live again; when every attempt fails it stops", async () => {
+  using _quiet = quietConsole();
+  const reported: ProvideState[] = [];
+  const first = connectionOf("first", []);
+  const second = connectionOf("second", []);
+  const reconnects = [second.connection];
+  const run = runProvide({
+    connection: first.connection,
+    reconnect: async () => reconnects.shift() || Promise.reject(new Error("the mind is not there")),
+    file: { provide: () => ({ hello: () => "hello" }) },
+    name: "standIn",
+    reconnectDelaysMs: [1, 2],
+    report: (state) => reported.push(ProvideState.parse(state)),
+  });
+  await first.lent;
+  first.close();
+  await second.lent;
+  second.close();
+  const stopped = await run.then(() => null, finalStateOf);
+  const closed = "1008: the sign-in for this session ended";
+  expect([...reported, stopped]).toEqual([
+    { state: "live", mind: "example.com", name: "itx.standIn", again: false },
+    { state: "reconnecting", attempt: 1, of: 2, inMs: 1, lastFailure: closed },
+    { state: "live", mind: "example.com", name: "itx.standIn", again: true },
+    { state: "reconnecting", attempt: 1, of: 2, inMs: 1, lastFailure: closed },
+    { state: "reconnecting", attempt: 2, of: 2, inMs: 2, lastFailure: "the mind is not there" },
+    {
+      state: "stopped",
+      why: "itx.standIn disconnected and could not reconnect (the mind is not there). Run iterate provide again.",
+    },
+  ]);
+});
+
+test("a refusal from the mind about the key ends the run at once: another try would change nothing", async () => {
+  using _quiet = quietConsole();
+  const first = connectionOf("first", []);
+  let asked = 0;
+  const removed = new ProvideRefusal("This bridge's key is not allowed on example.com", {
+    state: "notAllowed",
+    why: "the key is not one this mind knows.",
+    waiting: false,
+  });
+  const run = runProvide({
+    connection: first.connection,
+    reconnect: async () => {
+      asked += 1;
+      throw removed;
+    },
+    file: { provide: () => ({ hello: () => "hello" }) },
+    name: "standIn",
+    reconnectDelaysMs: [1, 1, 1],
+  });
+  await first.lent;
+  first.close();
+  await expect(run).rejects.toBe(removed);
+  expect({ asked, state: finalStateOf(removed).state }).toEqual({ asked: 1, state: "notAllowed" });
+});
+
+test("iterate provide --json prints only states on stdout, the last one as it ends: here stopped, with the reason", async () => {
+  using temporary = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
+  const file = join(temporary.path, "hello.mjs");
+  writeFileSync(file, `export default () => ({ hello: () => "hello" });`);
+  using cli = cliConfig("http://127.0.0.1:1");
+  // a name that never resolves (RFC 2606), and the bridge's own key: no sign-in, no browser
+  const key = join(temporary.path, "hello.key");
+  const run = cli.provide([file, "--mind", "mind.invalid", "--key", key, "--json"]);
+  expect(await run.exited, run.stderr()).not.toBe(0);
+  const states = run
+    .stdout()
+    .trim()
+    .split("\n")
+    .map((line) => ProvideState.parse(JSON.parse(line)));
+  // the address is checked before any connection: no "connecting"
+  expect(states).toEqual([
+    { state: "stopped", why: "iterate.mind.invalid could not be reached. Check the address." },
+  ]);
+}, 60_000);
+
 /** A config naming `baseUrl` with a stored token, and `provide` run as a child process: `live`
  *  answers the line it prints once lent, `stop` sends Ctrl-C and answers the exit code. */
 function cliConfig(baseUrl: string) {
@@ -140,7 +219,9 @@ function cliConfig(baseUrl: string) {
       });
       children.push(child);
       let stderr = "";
+      let stdout = "";
       child.stderr!.on("data", (chunk) => (stderr += chunk));
+      child.stdout!.on("data", (chunk) => (stdout += chunk));
       const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
       const live = new Promise<string>((resolve, reject) => {
         createInterface({ input: child.stdout! }).once("line", resolve);
@@ -153,6 +234,7 @@ function cliConfig(baseUrl: string) {
         live,
         exited,
         stderr: () => stderr,
+        stdout: () => stdout,
         stop: () => {
           child.kill("SIGINT");
           return exited;

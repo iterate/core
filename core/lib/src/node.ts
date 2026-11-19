@@ -30,6 +30,9 @@ import {
   sandboxSessionRefusal,
 } from "./mind-api.ts";
 
+/** What `iterate provide --json` prints, one per line: parse each line with it. */
+export { ProvideState } from "./cli/provide-state.ts";
+
 /** Where a line for the person goes: stderr, so stdout stays a command's answer. */
 const printToStderr = (line: string) => console.error(line);
 
