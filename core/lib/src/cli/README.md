@@ -75,7 +75,10 @@ What it does, in order:
 1. **Cloudflare.** You approve a code on Cloudflare's page (the device flow, with the `cf` CLI's
    public client: no secret, no server of iterate's). The access lives about an hour and is not
    renewed. It is kept in the CLI's config folder until a deploy works, then revoked, so a second
-   run asks for no second approval. `CLOUDFLARE_API_TOKEN` replaces the sign-in.
+   run asks for no second approval. `CLOUDFLARE_API_TOKEN` replaces the sign-in. A person's
+   sign-in used as that token works for an update and cannot make the stack's OAuth client: each
+   such deploy says "No OAuth client … was made", takes about 24 s longer and uploads the secrets
+   Worker again (seen on both live minds, 19 Nov 2026).
    - **Tick "Account API Token Provisioning" on Cloudflare's page.** Cloudflare marks it as
      sensitive and leaves it unticked. The deploy makes two API tokens with which the mind reads
      its own logs and metrics; they read nothing else and deploy nothing.
@@ -188,6 +191,24 @@ ones on the terminal's computer, and it prints the commands for the other comput
 what the account has, and a deploy keeps what it made. A coding agent can run and supervise it:
 with nobody at the terminal each choice comes from its flag (`iterate deploy --help`), and a
 missing one is named.
+
+## Erase a mind
+
+The CLI has no erase command. The stack's own script erases a mind, from the source that
+`iterate deploy` fetched, with the config that it wrote. It cannot be undone: the mind's contexts,
+files, repos, members and secrets are gone.
+
+```sh
+cd "${XDG_CACHE_HOME:-$HOME/.cache}/iterate/core/core/alchemy"
+export ITERATE_MIND_CONFIG="${XDG_CACHE_HOME:-$HOME/.cache}/iterate/deploys/<stage>/config.json"
+export CLOUDFLARE_API_TOKEN=…   # a token of the mind's account, or: pnpm exec alchemy login
+pnpm run destroy --stage <stage> --yes
+```
+
+`<stage>` is the mind's domain with `-` for each dot (`ada-labs-com`): the folder name under
+`deploys/`. `--yes` is for a run with nobody at the terminal. What a destroy leaves (the state
+store, a `_dmarc` record, the account's Zero Trust team, the zones) is in
+[core/alchemy's README](../../../alchemy/README.md#what-a-destroy-leaves).
 
 ## Recover an owner
 

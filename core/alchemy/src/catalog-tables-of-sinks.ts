@@ -7,7 +7,7 @@
 // This resource makes nothing. The sinks take their tables' namespace from it, so a destroy
 // deletes the pipelines and the sinks first, then drops the tables here, and then turns the
 // catalog off. Alchemy's own `Cloudflare.Basin.Table` cannot stand in: it makes the table, which
-// a sink then refuses (2.0.0-beta.85).
+// a sink then refuses (2.0.0-beta.85 and beta.87).
 import type * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Provider from "alchemy/Provider";
 import { Resource } from "alchemy/Resource";

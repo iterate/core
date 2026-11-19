@@ -21,8 +21,8 @@ with no passkey left a way back in. What follows is the deploy by hand.
 - One private OAuth client of the account, `iterate-<alchemy.stageName>-cloudflare`, registered
   with read scopes alone (iterate/api `CLOUDFLARE_READ_SCOPES`). A member connects the mind to
   its own account through it, and the secrets Worker alone holds its secret.
-- Six providers of our own are beside the script, each for one thing that Alchemy
-  2.0.0-beta.85 does not do. The header of each file says what, and when the file can go.
+- Six providers of our own are beside the script, each for one thing that Alchemy does not do
+  (read in 2.0.0-beta.85 and in beta.87, the version that `pnpm-workspace.yaml` pins). The header of each file says what, and when the file can go.
 
 ## The one input
 
@@ -57,7 +57,7 @@ From `core/alchemy`, with the config in `mind.config.local.json` (git ignores th
 export ITERATE_MIND_CONFIG=mind.config.local.json
 pnpm exec alchemy login                        # or CLOUDFLARE_API_TOKEN, a token of the config's account
 pnpm run deploy --stage <alchemy.stageName>
-pnpm run destroy --stage <alchemy.stageName>
+pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the terminal
 ```
 
 - `deploy` is the mind Worker's build (`core/mind-worker/scripts/build.ts`: the SDK and the
@@ -92,7 +92,11 @@ Two refusals of a first deploy are known:
   name. A deploy over such a stack's records, not moved by hand, stops in its plan with
   "OwnedBySomeoneElse" for the zone's records and routes, and changes nothing. Destroy that
   stack, or move it with its runbook; never pass `--adopt` to get past it: the old records
-  would then delete what the new ones took over.
+  would then delete what the new ones took over. The first deploy over a Worker record of the
+  earlier stack ends with Alchemy's "Reconciling worker routes (0)": it deletes every route of
+  the boundary in the zone, also the two that the Route resources adopted in the same run: the
+  mind answered 522 for 54 s on one move and for 2 s on the other (18 and 19 Nov 2026). After that
+  deploy the record holds no route, and later deploys delete none.
 
 ## What a destroy leaves
 

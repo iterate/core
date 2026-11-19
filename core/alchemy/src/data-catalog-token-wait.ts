@@ -6,7 +6,7 @@
 //
 // Alchemy's provider turns the catalog on before it gives it the token, so a deploy that fails
 // there leaves a catalog that the next deploy does not own, and refuses without `--adopt`. This
-// provider is Alchemy's (2.0.0-beta.85), with that refusal waited out inside the one deploy.
+// provider is Alchemy's (2.0.0-beta.85 and beta.87), with that refusal waited out inside the one deploy.
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";

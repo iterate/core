@@ -6,7 +6,7 @@
 // this resource reads them, makes one only where the account has none, changes nothing that
 // exists, and deletes nothing.
 //
-// Alchemy's own resources (2.0.0-beta.85) do not fit an account that is shared:
+// Alchemy's own resources (2.0.0-beta.85 and beta.87) do not fit an account that is shared:
 // `Cloudflare.Access.Organization` writes the whole organization on every deploy, with its
 // default for every setting the stack does not declare, and `Cloudflare.Access.IdentityProvider`
 // takes an existing PIN login as its own (it finds it by its type) and deletes it at a destroy.

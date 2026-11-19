@@ -5,6 +5,13 @@ bindings, and OAuth app sessions, under `iterate/*`. The package exports source 
 workspace and compiled JavaScript with declarations when packed. Its `iterate` bin is the CLI
 ([src/cli/README.md](src/cli/README.md)).
 
+`npx iterate deploy` puts a mind into your own Cloudflare account. The CLI has no erase command:
+the stack's script erases a mind, from the source and the config that the deploy left in
+`${XDG_CACHE_HOME:-~/.cache}/iterate` (`core/core/alchemy` and `deploys/<stage>/config.json`):
+`ITERATE_MIND_CONFIG=<that config> pnpm run destroy --stage <stage> --yes` in that folder, with a
+Cloudflare token of the mind's account. It cannot be undone. The CLI README's "Erase a mind" has
+the steps and what a destroy leaves.
+
 ## The SDK/platform line
 
 The SDK holds what a mind's own code and apps run or speak: a loaded worker, a facet, a

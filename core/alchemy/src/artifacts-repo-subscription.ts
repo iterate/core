@@ -3,7 +3,7 @@
 // (https://developers.cloudflare.com/queues/event-subscriptions/), and so do the calls of the
 // Cloudflare SDK under Alchemy, which this provider makes. Alchemy's own
 // `Cloudflare.Queues.Subscription` does not list that source and reads none back
-// (2.0.0-beta.85). When it does, this file goes.
+// (2.0.0-beta.85 and beta.87). When it does, this file goes.
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as queues from "@distilled.cloud/cloudflare/queues";
 import { isResolved } from "alchemy/Diff";

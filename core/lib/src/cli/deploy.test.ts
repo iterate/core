@@ -14,6 +14,7 @@ import {
 } from "./cloudflare-access.ts";
 import {
   candidatesOf,
+  closingOf,
   chatgptPlanWay,
   deployConfigOf,
   deployedMind,
@@ -527,4 +528,61 @@ test("a mind of the earlier stack is named as such, and no path of the command d
   expect(arrivedMind).toBeLessThan(arrivedErase);
   expect(arrivedErase).toBeLessThan(at("await eraseHoldings(cf, zone.id)"));
   expect(at("await eraseHoldings(cf, zone.id)")).toBeLessThan(at("await deployStack({"));
+});
+
+test("the last words over a mind that was there say that it is updated, and offer a first passkey only to an owner that the run added", () => {
+  const mind = { controlPlaneHostname: "iterate.ada-labs.com", zone: "ada-labs.com" };
+  const owners = ["ada@example.org", "charles@example.org"];
+  // a new mind: the first passkey for every owner, and its chat and model
+  const fresh = closingOf({ ...mind, owners });
+  expect(fresh).toMatchObject({
+    newOwners: owners,
+    signInWords: expect.stringMatching(
+      /^Open your mind's sign-in page\. As an owner with no passkey yet \(ada@example\.org, charles@example\.org\)/,
+    ),
+    title: "Your mind is at iterate.ada-labs.com",
+  });
+  expect(fresh.lines.map((line) => line.split(":")[0])).toEqual([
+    "Talk to your mind",
+    "Sign in from here",
+    "Give it a model",
+    "Its MCP server",
+  ]);
+  // an update with the same owners: no first-passkey words, no chat and no model
+  const updated = closingOf({ ...mind, owners, ownersBefore: owners });
+  expect(updated).toEqual({
+    newOwners: [],
+    signInWords:
+      'The mind at iterate.ada-labs.com is updated. Its owners sign in with a passkey on its sign-in page; an owner with no passkey yet chooses "prove your email address with Cloudflare" there:',
+    title: "Your mind at iterate.ada-labs.com is updated",
+    lines: [
+      "Sign in from here:   npx iterate@latest login iterate.ada-labs.com",
+      "Its MCP server:      https://iterate.ada-labs.com/mcp",
+    ],
+  });
+  // `--owner` with a new address over a mind: the first passkey for that address alone
+  const handedOn = closingOf({ ...mind, owners: ["grace@example.org"], ownersBefore: owners });
+  expect(handedOn).toMatchObject({
+    newOwners: ["grace@example.org"],
+    signInWords: expect.stringContaining("(grace@example.org)"),
+    title: "Your mind at iterate.ada-labs.com is updated",
+  });
+});
+
+test("each closing command is one line with the whole address, however long the hostname", () => {
+  const controlPlaneHostname = `iterate.${"a-very-long-name-of-a-mind.".repeat(3)}example.com`;
+  const { lines } = closingOf({
+    controlPlaneHostname,
+    zone: controlPlaneHostname.slice("iterate.".length),
+    owners: ["ada@example.org"],
+  });
+  for (const line of lines) expect(line).not.toContain("\n");
+  expect(lines).toContain(
+    `Give it a model:     npx iterate@latest chatgpt connect ${controlPlaneHostname}`,
+  );
+  expect(lines).toContain(`Sign in from here:   npx iterate@latest login ${controlPlaneHostname}`);
+  // the lines are printed as they are, never in a box that wraps them to the terminal's width
+  const command = readFileSync(new URL("./deploy.ts", import.meta.url).pathname, "utf8");
+  expect(command).not.toContain("p.note(");
+  expect(command).toContain("for (const line of closing.lines) console.log(`│  ${line}`);");
 });

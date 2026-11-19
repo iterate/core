@@ -13,7 +13,7 @@
 // make the client makes it. Any other failure fails the deploy: see `refusedForPermission` for
 // how a refusal is told from an invalid credential.
 //
-// Alchemy has no resource for an account's OAuth clients (2.0.0-beta.85); the SDK under it has
+// Alchemy has no resource for an account's OAuth clients (2.0.0-beta.85 and beta.87); the SDK under it has
 // the calls. When Alchemy has one that keeps the secret and takes a refusal as an outcome, this
 // file goes.
 import * as Cloudflare from "@alchemy.run/cloudflare";

@@ -199,6 +199,41 @@ export function mindConfigIn(settings: unknown): Omit<DeployedMind, "stageName">
 export const saysTheStateStoreRefused = (line: string) =>
   /State store .*failed|StateStoreError/.test(line);
 
+/** THE RUN'S LAST WORDS: the mind's sign-in, then its addresses and commands, one to a line.
+ *  The words for a first passkey are for a new mind's owners, or for an owner that this run
+ *  added to a mind that was there (`ownersBefore`). Every other owner is sent to the sign-in
+ *  page, with one clause for an owner who never added a passkey. A mind that was there has its
+ *  chat and its model, so its lines name neither. */
+export function closingOf(mind: {
+  controlPlaneHostname: string;
+  zone: string;
+  owners: string[];
+  ownersBefore?: string[];
+}) {
+  const { controlPlaneHostname, ownersBefore } = mind;
+  const address = mindAddressAsTyped(controlPlaneHostname);
+  const updated = Boolean(ownersBefore);
+  const newOwners = mind.owners.filter((owner) => !ownersBefore?.includes(owner));
+  return {
+    newOwners,
+    signInWords:
+      newOwners.length > 0
+        ? `Open your mind's sign-in page. As an owner with no passkey yet (${newOwners.join(", ")}), choose "prove your email address with Cloudflare", enter the code that Cloudflare mails you, and add your passkey:`
+        : `The mind at ${controlPlaneHostname} is updated. Its owners sign in with a passkey on its sign-in page; an owner with no passkey yet chooses "prove your email address with Cloudflare" there:`,
+    title: updated
+      ? `Your mind at ${controlPlaneHostname} is updated`
+      : `Your mind is at ${controlPlaneHostname}`,
+    lines: [
+      ...(updated
+        ? []
+        : [`Talk to your mind:   https://dash.${mind.zone}/?agent=/agents/onboarding`]),
+      `Sign in from here:   npx iterate@latest login ${address}`,
+      ...(updated ? [] : [`Give it a model:     npx iterate@latest chatgpt connect ${address}`]),
+      `Its MCP server:      ${mindMcpUrlOf(controlPlaneHostname)}`,
+    ],
+  };
+}
+
 /** WHAT THE COMMAND DOES NEXT FOR THE ACCOUNT'S ZERO TRUST ORGANIZATION, by Cloudflare's answer to
  *  `GET /accounts/<id>/access/organizations`, or, once `tried`, to the set-up after it. An owner
  *  proves their address through Cloudflare Access, which needs the organization
@@ -1644,27 +1679,26 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     // The mind is deployed: a fault in its first steps is a line, never a failed deploy. With
     // nobody at the terminal, the sign-in page is all there is to do here.
     const signInPage = `https://${controlPlaneHostname}/sign-in`;
-    const firstSignInWords = `Open your mind's sign-in page. As an owner with no passkey yet (${config.ownerEmails.join(", ")}), choose "prove your email address with Cloudflare", enter the code that Cloudflare mails you, and add your passkey:`;
-    if (input.setup !== false && interactive())
+    const closing = closingOf({
+      controlPlaneHostname,
+      zone: config.cloudflare.zones[0] || domain,
+      owners: config.ownerEmails,
+      ownersBefore: deployed?.ownerEmails,
+    });
+    if (closing.newOwners.length === 0) p.log.step(`${closing.signInWords}\n${signInPage}`);
+    else if (input.setup !== false && interactive())
       await (async () => {
-        using connection = await firstSignIn(controlPlaneHostname, config.ownerEmails, steps);
+        using connection = await firstSignIn(controlPlaneHostname, closing.newOwners, steps);
         for (const step of firstSteps) await step(connection, steps);
       })().catch((error: unknown) =>
         p.log.warn(
           `The first steps did not end: ${error instanceof Error ? error.message : String(error)}. Your mind's sign-in page: ${signInPage}`,
         ),
       );
-    else page(firstSignInWords, signInPage);
-    p.note(
-      [
-        `Talk to your mind:   https://dash.${config.cloudflare.zones[0]}/?agent=/agents/onboarding`,
-        `Sign in from here:   npx iterate@latest login ${mindAddressAsTyped(controlPlaneHostname)}`,
-        `Give it a model:     npx iterate@latest chatgpt connect ${mindAddressAsTyped(controlPlaneHostname)}`,
-        `Its MCP server:      ${mindMcpUrlOf(controlPlaneHostname)}`,
-      ].join("\n"),
-      `Your mind is at ${controlPlaneHostname}`,
-    );
-    // outside the box above, whose lines wrap: a path stays whole
+    else page(closing.signInWords, signInPage);
+    // plain lines, never wrapped by this program: a command copied from one is whole
+    p.log.success(closing.title);
+    for (const line of closing.lines) console.log(`│  ${line}`);
     const keyLine = identityKeyLineOf(keyFileOf(IDENTITIES, mindId), {
       gaveTheId: !config.mindId,
       posted,
