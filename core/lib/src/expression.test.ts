@@ -82,6 +82,18 @@ test("a string expression over the char limit is refused, coded, before any pars
   ).toHaveLength(3);
 });
 
+test.for([
+  { name: "undefined", value: undefined },
+  { name: "null", value: null },
+  { name: "a number", value: 5 },
+  { name: "an object", value: {} },
+  { name: "an empty array", value: [] },
+])("a parsed expression that is $name is refused in the parser's words", ({ value }) => {
+  expect(() => normalizedItxExpression(value as unknown as ItxExpression)).toThrowError(
+    /^expression: an expression is a non-empty array in /,
+  );
+});
+
 // ── invoke handle ── the dotted invoke's pure mechanism (the prototype hop and the path proxies it
 // hands out), in-process, driven over a real capnweb RpcStub.
 

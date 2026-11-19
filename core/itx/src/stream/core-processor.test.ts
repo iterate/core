@@ -3,7 +3,7 @@
 import type { StreamEvent } from "iterate/stream/processor";
 import { expect, test } from "vitest";
 import { defineItxHost } from "../host.ts";
-import { CoreContract, reduceCoreEventBatch } from "./core-processor.ts";
+import { CoreContract, normalizeControlEvent, reduceCoreEventBatch } from "./core-processor.ts";
 
 const member = { actor: "user_1", email: "a@example.com" };
 const person = { actor: "user_2", email: "b@example.com" };
@@ -86,6 +86,16 @@ test("the row's un-set removes it, holder and all", () => {
     subscriptionEvent(2, { name: "sub-1", target: null }, {}),
   ]);
   expect(state).not.toHaveProperty(["subscriptions", "sub-1"]);
+});
+
+test("an append of a row with no `target` is refused in words that name the field", () => {
+  const event = {
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name: "sub-1", expression: liveCallback }, // a wrong key: no `target`
+  };
+  expect(() => normalizeControlEvent(event, "/")).toThrowError(
+    "a subscription needs a `target`: an itx expression, { path } for a copy, or null to remove the row",
+  );
 });
 
 defineItxHost({ firstPartyFacets: {} });

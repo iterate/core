@@ -593,6 +593,11 @@ function normalizeSubscriptionConfigured(input: {
     .boolean({ error: "a subscription's `ordered` is a boolean: false for fan-out delivery" })
     .optional()
     .parse(input.ordered);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- a missing key (undefined) is a caller's mistake; null removes the row
+  if (input.target === undefined)
+    throw new Error(
+      "a subscription needs a `target`: an itx expression, { path } for a copy, or null to remove the row",
+    );
   // Stored parsed: a target can carry a facet's whole source, which the reduce must never re-parse
   // through the string codec (its 2 KiB cap). A copy target is the one object target.
   const copy =

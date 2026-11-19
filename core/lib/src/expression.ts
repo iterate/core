@@ -171,7 +171,8 @@ export function parse(source: string, options?: { holes?: boolean }): ItxExpress
  *  parser's words. */
 function assertItxExpressionShape(expression: ItxExpression): void {
   const fail = (m: string): never => {
-    throw new Error(`expression: ${m} in ${JSON.stringify(expression).slice(0, 200)}`);
+    // `String(…)`: JSON.stringify(undefined) is undefined, and the refusal must keep its words.
+    throw new Error(`expression: ${m} in ${String(JSON.stringify(expression)).slice(0, 200)}`);
   };
   // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime shape validation of wire/stored data; the ItxExpression array type is a claim here, not a guarantee
   if (!Array.isArray(expression) || expression.length === 0)
