@@ -79,15 +79,19 @@ test("the platform's own template commit that does not load is said as a fact of
 });
 
 test("a template commit that a newer commit replaced is not said so, and neither is somebody's commit that does not load", async () => {
-  // main is at another commit when the template's commit is looked at
+  // main is at another commit when the template's commit is looked at, and that commit's fact came
   const replaced = mindOf({ owes: false, head: "another commit" });
   replaced.deliver(replaced.state);
   await replaced.settled();
-  replaced.deliver(replaced.owing("template", 7));
+  replaced.deliver(replaced.owing("template", 7, { commitOid: "another commit", offset: 8 }));
   await replaced.settled();
-  expect(replaced.platformFacts.map((fact) => fact.type)).toEqual([
-    "events.iterate.com/mind/worker-update-failed",
-  ]);
+  // the template's commit is superseded, and the newer commit does not load: its own failure
+  expect(replaced.platformFacts.map((fact) => [fact.type, Object(fact.payload).commitOid])).toEqual(
+    [
+      ["events.iterate.com/mind/worker-update-failed", "template"],
+      ["events.iterate.com/mind/worker-update-failed", "another commit"],
+    ],
+  );
   // somebody's own commit after the template's: its failure is its own fact alone
   const theirs = mindOf({ owes: false, head: "theirs" });
   theirs.deliver(theirs.state);
@@ -130,9 +134,134 @@ test("a publication whose probe is refused keeps nothing", async () => {
   });
 });
 
+test("a head read behind the commit's own fact, its parent, is read again, and the commit publishes", async () => {
+  vi.useFakeTimers();
+  try {
+    const mind = mindOf({ owes: true, head: ["parent", "seed"], probed: aConfig });
+    mind.deliver(mind.state);
+    await vi.advanceTimersByTimeAsync(6_000);
+    await mind.settled();
+    expect({
+      headReads: mind.headReads,
+      facts: mind.platformFacts.map((fact) => fact.type),
+    }).toEqual({
+      headReads: 2,
+      facts: [
+        "events.iterate.com/itx/rewrite-rule-configured",
+        "events.iterate.com/itx/rewrite-rule-configured",
+        "events.iterate.com/mind/worker-updated",
+      ],
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a commit whose newer commit's fact came is still a supersession, with its words, and its head is not read", async () => {
+  const mind = mindOf({ owes: false, head: "newer", probed: aConfig });
+  mind.deliver(mind.owing("seed", 5, { commitOid: "newer", offset: 8 }));
+  await mind.settled();
+  expect({
+    headReads: mind.headReads,
+    facts: mind.platformFacts.map((fact) => fact.type),
+    first: mind.platformFacts[0],
+  }).toEqual({
+    // the newer commit's own publication reads it once
+    headReads: 1,
+    facts: [
+      "events.iterate.com/mind/worker-update-failed",
+      "events.iterate.com/itx/rewrite-rule-configured",
+      "events.iterate.com/itx/rewrite-rule-configured",
+      "events.iterate.com/mind/worker-updated",
+    ],
+    first: superseded("seed", 5, "newer"),
+  });
+});
+
+test("a commit left owed by its bounded give-up, and overtaken by a newer commit that published, is settled at the next incarnation with one event and no read", async () => {
+  vi.useFakeTimers();
+  try {
+    // nine reads behind the seed's fact, then main at the newer commit
+    const heads = [...Array.from({ length: 9 }, () => "parent"), "newer"];
+    const mind = mindOf({ owes: true, head: heads, probed: aConfig });
+    mind.deliver(mind.state);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await mind.settled();
+    expect(mind.current).toMatchObject({ unpublishedCommits: [{ commitOid: "seed", offset: 5 }] });
+    // the newer commit's fact, in the same incarnation: it publishes, and the seed stays owed
+    mind.deliver({
+      ...mind.current,
+      configRepoTip: { commitOid: "newer", offset: 8 },
+      unpublishedCommits: [...mind.current.unpublishedCommits, { commitOid: "newer", offset: 8 }],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await mind.settled();
+    expect(mind.current).toMatchObject({
+      publishedCommit: "newer",
+      unpublishedCommits: [{ commitOid: "seed", offset: 5 }],
+    });
+    const before = { reads: mind.headReads, facts: mind.platformFacts.length };
+    mind.restart();
+    mind.deliver(mind.current);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await mind.settled();
+    expect({
+      reads: mind.headReads - before.reads,
+      facts: mind.platformFacts.slice(before.facts),
+      owed: mind.current.unpublishedCommits,
+    }).toEqual({ reads: 0, facts: [superseded("seed", 5, "newer")], owed: [] });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a checkpoint of the older build that holds an owed commit a newer one overtook settles it at its first wake, with one event and no read", async () => {
+  const mind = mindOf({ owes: false, head: "newer", probed: aConfig });
+  // a state that owes the seed (offset 5) while a newer commit (offset 8) is the tip and published
+  const checkpoint: MindState = {
+    ...mind.state,
+    configRepoTip: { commitOid: "newer", offset: 8 },
+    unpublishedCommits: [{ commitOid: "seed", offset: 5 }],
+    publishedCommit: "newer",
+  };
+  mind.deliver(checkpoint);
+  await mind.settled();
+  expect({
+    reads: mind.headReads,
+    facts: mind.platformFacts,
+    owed: mind.current.unpublishedCommits,
+  }).toEqual({ reads: 0, facts: [superseded("seed", 5, "newer")], owed: [] });
+});
+
+test("a head that stays behind is read on the publication's bounded waits, each give-up is said as unavailable, and the commit stays owed", async () => {
+  vi.useFakeTimers();
+  try {
+    const mind = mindOf({ owes: true, head: "parent", probed: aConfig });
+    mind.deliver(mind.state);
+    // three runs of three reads (0, 5 and 30 s), 30 s apart: 165 s
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await mind.settled();
+    const failed = {
+      type: "events.iterate.com/mind/worker-update-failed",
+      payload: {
+        commitOid: "seed",
+        generation: 5,
+        error: "the config repo's main read parent, not seed, and no newer commit of it is known",
+        unavailable: true,
+      },
+    };
+    expect({ headReads: mind.headReads, facts: mind.platformFacts }).toEqual({
+      headReads: 9,
+      facts: [failed, failed, failed],
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 /** A created mind on `/`, seeded from an older template and untouched since, and the processor
  *  with everything it reaches recorded. `owes`: its newest commit is not published yet. `head`:
- *  the commit main is at when a publication looks (by default another one: main moved on). */
+ *  the commit main is at when a publication looks (by default the seed). */
 test("the first wake of an incarnation gives the root what refreshes the persons' grants once a day, and a second pass does not again", async () => {
   const mind = mindOf({ owes: false });
   mind.deliver(mind.state);
@@ -552,12 +681,13 @@ function incarnationOf({
 
 function mindOf({
   owes,
-  head = "another commit",
+  head = "seed",
   there = {},
   probed = {},
 }: {
   owes: boolean;
-  head?: string;
+  /** What each read of main's head answers, in turn; the last answer stays. */
+  head?: string | string[];
   /** What the publication's probe answers: by default nothing of a config, so it is refused. */
   probed?: unknown;
   /** What the root holds already under the daily refresh's key and name. The schedule is the
@@ -573,6 +703,7 @@ function mindOf({
   const background: Promise<unknown>[] = [];
   let kept: TemplateKept | undefined;
   const seeded = { "worker.ts": "the older worker\n" };
+  let headReads = 0;
   const state: MindState = MindContract.stateSchema.parse({
     creation: { status: "created", offset: 2 },
     configRepoTip: { commitOid: "seed", offset: 5 },
@@ -644,7 +775,11 @@ function mindOf({
     if (verb === "files") return seeded;
     throw new Error(`the test's repo has no ${verb}`);
   };
+  // the state last delivered, which the platform's facts reduce onto, each at the next offset
+  let current = state;
+  let nextOffset = 100;
   const deliver = (delivered: MindState) =>
+    (current = delivered) &&
     processor.processEvent({
       state: delivered,
       delivery: { caughtUp: true },
@@ -652,9 +787,12 @@ function mindOf({
       runInBackground: (work: () => Promise<unknown>) => void background.push(work()),
     } as unknown as Parameters<MindProcessor["processEvent"]>[0]);
   const publisher: MindPublisher = {
-    // by default main moved on: the publication is refused, which is an outcome like any other.
-    // A commit that main is at does not load here: the probe below answers nothing of a config.
-    head: async () => head,
+    // A commit that main is at does not load here unless `probed` says so: by default the probe
+    // answers nothing of a config, and the publication is refused, an outcome like any other.
+    head: async () => {
+      headReads += 1;
+      return typeof head === "string" ? head : head[Math.min(headReads, head.length) - 1]!;
+    },
     files: async () => {
       published.push("files");
       return seeded;
@@ -674,24 +812,35 @@ function mindOf({
       published.push("append");
       platformFacts.push(...events);
       asked.push("publication:outcome delivered while it runs");
-      deliver({ ...state, unpublishedCommits: [], lastPublicationFactOffset: 6 });
+      let reduced = current;
+      for (const event of events)
+        reduced =
+          processor.reduce({
+            event: { ...event, offset: nextOffset++ } as unknown as Parameters<
+              MindProcessor["reduce"]
+            >[0]["event"],
+            state: reduced,
+          } as Parameters<MindProcessor["reduce"]>[0]) || reduced;
+      deliver(reduced);
     },
   };
-  const processor = new MindProcessor(
-    () => ({ invoke, [Symbol.dispose]() {} }) as unknown as ReturnType<ItxScope>,
-    () => publisher,
-    {
-      template: async () => kept,
-      keepTemplate: async (next) => void (kept = next),
-    },
-    // the build's templates: one, with a file newer than the repo's and a file the repo lacks
-    {
-      default: [
-        { path: "worker.ts", content: "the newer worker\n" },
-        { path: "apps/onboarding/app.ts", content: "the onboarding app\n" },
-      ],
-    },
-  );
+  const incarnation = () =>
+    new MindProcessor(
+      () => ({ invoke, [Symbol.dispose]() {} }) as unknown as ReturnType<ItxScope>,
+      () => publisher,
+      {
+        template: async () => kept,
+        keepTemplate: async (next) => void (kept = next),
+      },
+      // the build's templates: one, with a file newer than the repo's and a file the repo lacks
+      {
+        default: [
+          { path: "worker.ts", content: "the newer worker\n" },
+          { path: "apps/onboarding/app.ts", content: "the onboarding app\n" },
+        ],
+      },
+    );
+  let processor = incarnation();
   return {
     state,
     asked,
@@ -701,14 +850,31 @@ function mindOf({
     platformFacts,
     root,
     deliver,
-    /** The state once the fact of commit `commitOid` arrived at `offset`: its publication is owed. */
-    owing: (commitOid: string, offset: number): MindState => ({
+    /** The state once the fact of commit `commitOid` arrived at `offset`: its publication is owed.
+     *  `newer`: the fact of a commit after it arrived too. */
+    owing: (
+      commitOid: string,
+      offset: number,
+      newer?: { commitOid: string; offset: number },
+    ): MindState => ({
       ...state,
-      configRepoTip: { commitOid, offset },
-      unpublishedCommits: [{ commitOid, offset }],
+      configRepoTip: newer || { commitOid, offset },
+      unpublishedCommits: [{ commitOid, offset }, ...(newer ? [newer] : [])],
     }),
     get kept() {
       return kept;
+    },
+    /** The state last delivered, with the platform's facts reduced onto it. */
+    get current() {
+      return current;
+    },
+    /** A new incarnation of the root: a new processor over the same repo, publisher and storage. */
+    restart() {
+      processor = incarnation();
+    },
+    /** How many times a publication read main's head. */
+    get headReads() {
+      return headReads;
     },
     /** Every piece of background work the processor started has ended, with what it started. */
     async settled() {
@@ -722,3 +888,14 @@ type ItxScope = ConstructorParameters<typeof MindProcessor>[0];
 
 // what the probe answers of a config whose entry is an IterateConfigEntrypoint that constructs
 const aConfig = { configEntrypoint: true, constructError: null, classes: {} };
+
+// the refusal of a commit that a newer commit superseded
+const superseded = (commitOid: string, generation: number, by: string) => ({
+  type: "events.iterate.com/mind/worker-update-failed",
+  idempotencyKey: `mind/publication:${generation}`,
+  payload: {
+    commitOid,
+    generation,
+    error: `main moved on to ${by} before this commit was published`,
+  },
+});

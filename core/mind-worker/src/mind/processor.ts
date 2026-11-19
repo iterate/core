@@ -78,7 +78,11 @@ export type KeptByTheFacet = {
 type PublicationAttempt =
   | { kind: "admitted"; mainModule: string; manifest: WorkerManifest }
   // `superseded`: main moved on before the commit was looked at, which says nothing about it
-  | { kind: "refused"; error: string; superseded?: true };
+  | { kind: "refused"; error: string; superseded?: true }
+  // The head read is not the commit and no newer commit is known: the read is behind the commit's
+  // own fact (the remote's ref answered before the push, or a newer commit's fact is still on its
+  // way). Read again on the publication's waits; never refused.
+  | { kind: "behind"; error: string };
 
 /** The schedule's key and the row's name at the root, the event that the schedule appends, and
  *  its period (`#armGrantRefresh`). The Cloud ends a GitHub claim that is not made again
@@ -734,6 +738,10 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
       } finally {
         clearTimeout(budget);
       }
+      if (attempt.kind === "behind") {
+        lastFailure = new Error(attempt.error);
+        continue;
+      }
       if (attempt.kind === "refused") {
         const refused: StreamEventInput[] = [
           {
@@ -792,12 +800,21 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     generation: number,
     publisher: MindPublisher,
   ): Promise<PublicationAttempt> {
-    const head = await publisher.head();
-    if (head !== commitOid)
+    // Only a newer commit's fact makes this one superseded, owed still or settled already: the
+    // state's tip is the newest commit fact, in a checkpoint of any age. A head read is not ordered
+    // after the fact that woke this publication, so a head that is not the commit may be its parent.
+    const tip = this.#newestState?.configRepoTip;
+    if (tip && tip.offset > generation)
       return {
         kind: "refused",
         superseded: true,
-        error: `main moved on to ${head || "no commit (unborn)"} before this commit was published`,
+        error: `main moved on to ${tip.commitOid} before this commit was published`,
+      };
+    const head = await publisher.head();
+    if (head !== commitOid)
+      return {
+        kind: "behind",
+        error: `the config repo's main read ${head || "no commit (unborn)"}, not ${commitOid}, and no newer commit of it is known`,
       };
     // once: an attempt run again probes what the repo holds
     const seedProbe = this.#seedProbes.get(commitOid);
