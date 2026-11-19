@@ -1,16 +1,16 @@
 // telemetry-token.ts — THE STACK'S TELEMETRY API TOKEN, PROVIDED BY THE OWNER AND KEPT IN STATE.
 // One Cloudflare account-owned API token serves both the R2 Data Catalog / SQL queries and the
 // Analytics Engine queries of the telemetry Worker (./stack.ts). Because a Cloudflare OAuth
-// sign-in does not need "Account API Token Provisioning" to create tokens, the owner creates this
-// single token in Cloudflare's dashboard and passes it in `CLOUDFLARE_TELEMETRY_API_TOKEN` on the
-// first deploy (or when rotating it). The stack keeps the redacted value in Alchemy's state so
-// later deploys and plans reuse it without asking again.
+// sign-in does not request "Account API Token Provisioning", the owner creates this single token
+// in Cloudflare's dashboard and passes it in `CLOUDFLARE_TELEMETRY_API_TOKEN` when turning
+// telemetry tables on. The stack keeps the redacted value in Alchemy's state so later deploys
+// and plans reuse it without asking again, and refuses a different token because Pipelines
+// catalog sinks keep the token they were made with.
 //
-// `AccountApiTokenDeleteFallbackProvider` also wraps Alchemy's `AccountApiTokenProvider` so
-// upgrading an existing stack (whose state still holds legacy `TelemetryCatalogToken` and
-// `TelemetryAnalyticsToken`) succeeds even with a fresh deploy sign-in that lacks API-token write
-// permission: when Cloudflare refuses deletion for permission, it verifies the credential is valid,
-// logs the token name and dashboard URL for manual removal, and lets Alchemy clear state.
+// `AccountApiTokenDeleteFallbackProvider` wraps Alchemy's `AccountApiTokenProvider` so deleting
+// an `AccountApiToken` resource succeeds even with a deploy sign-in that lacks API-token write
+// permission: when Cloudflare refuses deletion for missing permission, it verifies the credential
+// is valid, logs the token name and dashboard URL for manual removal, and lets Alchemy clear state.
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Retry from "@distilled.cloud/cloudflare/Retry";
@@ -43,12 +43,11 @@ export type TelemetryToken = Resource<
 export const TelemetryToken = Resource<TelemetryToken>("Iterate.TelemetryToken");
 
 /** How the stack wires telemetry tables:
- *  - `"minted"`: an existing mind whose state already holds `TelemetryCatalogToken` or
- *    `TelemetryAnalyticsToken` — keep the two `AccountApiToken` resources, sinks, and bindings as
- *    they were (plan is `noop`, no deletes, no migration).
- *  - `"given"`: `TelemetryToken` is already in state, or `CLOUDFLARE_TELEMETRY_API_TOKEN` was
- *    provided — use the single owner-created token.
- *  - `"off"`: neither stored nor provided — deploy without telemetry tables, catalog, or sinks. */
+ *  - `"minted"`: state holds `TelemetryCatalogToken` or `TelemetryAnalyticsToken` — declare those
+ *    two `AccountApiToken` resources so catalog sinks keep their original credentials.
+ *  - `"given"`: state holds `TelemetryToken` or `CLOUDFLARE_TELEMETRY_API_TOKEN` is set — use the
+ *    single owner-created token and refuse any different token.
+ *  - `"off"`: neither stored nor provided — omit the telemetry bucket, catalog, sinks, and pipelines. */
 export type TelemetryMode = "minted" | "given" | "off";
 
 const isLiveResource = (persisted: PersistedState | undefined): persisted is ResourceState =>
@@ -58,8 +57,9 @@ const isLiveResource = (persisted: PersistedState | undefined): persisted is Res
 export const isTelemetryTokenPersisted = (persisted: PersistedState | undefined): boolean =>
   Boolean(isLiveResource(persisted) && persisted.attr && "value" in persisted.attr);
 
-/** Chooses the stack's telemetry mode from its persisted state rows and optional env token.
- *  A `minted` mind always stays `minted` (no delete, no migration). */
+/** Chooses the stack's telemetry mode from persisted state rows and an optional env token.
+ *  Minted-token stacks stay in `minted` mode because catalog sinks keep the credentials they were
+ *  created with. */
 export const telemetryModeFromState = (
   rows: {
     catalogToken?: PersistedState;
@@ -92,18 +92,21 @@ export const telemetryModeOf = (stage: string, providedToken?: string) =>
 /** Environment variable carrying the owner-created Cloudflare telemetry API token. */
 export const TELEMETRY_TOKEN = "CLOUDFLARE_TELEMETRY_API_TOKEN";
 
-/** Whether the resource needs an update given the currently provided token and existing state. */
-export const telemetryTokenNeedsUpdate = (
-  provided: string | undefined,
-  output: { value: Redacted.Redacted<string> } | undefined,
-) => Boolean(provided && output && Redacted.value(output.value) !== provided);
+/** Refusal when a different telemetry token is passed to a mind whose tables already hold one.
+ *  Cloudflare Pipelines catalog sinks keep the credentials they were created with and refuse a
+ *  replacement sink on an existing catalog table. */
+export const TELEMETRY_TOKEN_IMMUTABLE =
+  "This mind's telemetry token cannot be changed: its tables keep the token they were made with.";
 
-/** Resolves the telemetry token value from the provided env value or existing Alchemy state. */
+/** Resolves the telemetry token value from existing Alchemy state or the provided env value,
+ *  refusing any token that differs from the stored one. */
 export const telemetryTokenValueOf = (
   provided: string | undefined,
   output: { value: Redacted.Redacted<string> } | undefined,
 ) => {
-  const value = provided ? Redacted.make(provided) : output?.value;
+  if (provided && output && Redacted.value(output.value) !== provided)
+    return Effect.die(TELEMETRY_TOKEN_IMMUTABLE);
+  const value = output?.value || (provided ? Redacted.make(provided) : undefined);
   if (!value)
     return Effect.die(
       `${TELEMETRY_TOKEN} is not set: create an account-owned Cloudflare API token with "Workers R2 Data Catalog Write", "Workers R2 Storage Bucket Item Write", "Workers R2 SQL Read", and "Account Analytics Read", then pass it in ${TELEMETRY_TOKEN} (iterate deploy opens a pre-filled dashboard link for it).`,
@@ -111,22 +114,22 @@ export const telemetryTokenValueOf = (
   return Effect.succeed({ value });
 };
 
-/** Provider for `TelemetryToken`. Stores `token` in state on first deploy or rotation, and reuses
- *  the kept state value on later deploys when `token` is omitted. */
+/** Provider for `TelemetryToken`. Stores `token` in state on creation, reuses the stored value on
+ *  later deploys, and refuses a different token so catalog sinks are never left with dead credentials. */
 export const TelemetryTokenProvider = (token?: string) =>
   Provider.succeed(TelemetryToken, {
     diff: ({ output }) =>
-      Effect.succeed(
-        telemetryTokenNeedsUpdate(token, output) ? ({ action: "update" } as const) : undefined,
-      ),
+      token && output && Redacted.value(output.value) !== token
+        ? Effect.die(TELEMETRY_TOKEN_IMMUTABLE)
+        : Effect.succeed(undefined),
     reconcile: ({ output }) => telemetryTokenValueOf(token, output),
     // The token was created by the person in Cloudflare's dashboard, not by the deploy.
     delete: () => Effect.void,
   });
 
-/** Attempts to delete a legacy `Cloudflare.ApiToken.AccountApiToken`. When Cloudflare refuses for
- *  missing API-token write permission (and a read proves the credential is valid), logs the token
- *  name and dashboard URL so the owner can remove it manually and returns success. */
+/** Attempts to delete a `Cloudflare.ApiToken.AccountApiToken`. When Cloudflare refuses for missing
+ *  API-token write permission (and a read proves the credential is valid), logs the token name and
+ *  dashboard URL so the owner can remove it manually and returns success. */
 export const deleteLegacyAccountApiToken = <E, R, E2, R2>(
   remove: Effect.Effect<void, E, R>,
   credentialWorks: Effect.Effect<unknown, E2, R2>,
@@ -139,7 +142,7 @@ export const deleteLegacyAccountApiToken = <E, R, E2, R2>(
         Effect.flatMap(() =>
           Effect.sync(() =>
             say(
-              `Legacy API token ${token.name} (${token.tokenId}) stays in Cloudflare: this deploy credential lacks permission to delete API tokens. Delete it in Cloudflare's dashboard: https://dash.cloudflare.com/${token.accountId}/api-tokens`,
+              `API token ${token.name} (${token.tokenId}) stays in Cloudflare: this deploy credential lacks permission to delete API tokens. Delete it in Cloudflare's dashboard: https://dash.cloudflare.com/${token.accountId}/api-tokens`,
             ),
           ),
         ),
@@ -148,8 +151,8 @@ export const deleteLegacyAccountApiToken = <E, R, E2, R2>(
     ),
   );
 
-/** Overrides Alchemy's `AccountApiTokenProvider` so deleting legacy `TelemetryCatalogToken` and
- *  `TelemetryAnalyticsToken` resources succeeds even without `account_api_tokens` write scope. */
+/** Overrides Alchemy's `AccountApiTokenProvider` so deleting `AccountApiToken` resources succeeds
+ *  even without `account_api_tokens` write scope. */
 export const AccountApiTokenDeleteFallbackProvider = () =>
   Provider.effect(
     Cloudflare.ApiToken.AccountApiToken,

@@ -115,17 +115,19 @@ pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the termin
   Scripts Write").
 - Telemetry tables (`events`, `logs`, `spans`, and `metrics` SQL) are optional (`src/telemetry-token.ts`,
   `telemetryModeOf`):
-  - **Earlier minted-token minds (`minted`):** a stack whose Alchemy state already holds `TelemetryCatalogToken`
-    or `TelemetryAnalyticsToken` keeps those two `AccountApiToken` resources, sinks, and bindings
-    as they were — `alchemy plan` is `noop` for telemetry, with no deletes and no token asked.
+  - **Stack-managed tokens (`minted`):** a stack whose Alchemy state holds `TelemetryCatalogToken`
+    or `TelemetryAnalyticsToken` declares those two `AccountApiToken` resources, sinks, and bindings
+    so existing catalog sinks keep their credentials (`alchemy plan` is `noop` for telemetry, with
+    no deletes and no token asked).
   - **Owner-provided token (`given`):** passing `CLOUDFLARE_TELEMETRY_API_TOKEN` (one account-owned
     token with "Workers R2 Data Catalog Write", "Workers R2 Storage Bucket Item Write", "Workers R2
     SQL Read", and "Account Analytics Read", or `iterate deploy --telemetry-token`) turns telemetry
     tables on and keeps the redacted token in Alchemy's state so later deploys and plans keep every
-    telemetry resource with no changes. When `iterate-<alchemy.stageName>-telemetry` exists, you can
-    narrow "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" on that token to that
-    bucket alone.
-  - **No token (`off`):** a fresh deploy with no token in the environment and none in state succeeds
+    telemetry resource with no changes. **Do not delete or roll this token:** the mind's Pipelines
+    catalog sinks keep the token they were made with, and a `given` mind refuses a changed token.
+    When `iterate-<alchemy.stageName>-telemetry` exists, you can narrow "Workers R2 Storage Bucket
+    Item Write" and "Workers R2 SQL Read" on that token to that bucket alone.
+  - **No token (`off`):** a deploy with no token in the environment and none in state succeeds
     without creating the telemetry R2 bucket, Data Catalog, sink tables, Pipelines
     streams/sinks/pipelines, or OTLP observability destinations; `itx.telemetry.query` answers
     `"telemetry tables are off: add a telemetry token"`.

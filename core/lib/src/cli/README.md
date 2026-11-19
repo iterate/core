@@ -107,7 +107,9 @@ telemetry token"`. To turn telemetry tables on (at first deploy or later), run
    one account-owned token `iterate-<stage>-telemetry`, waits for Enter before opening it, and
    verifies the pasted token) or pass `CLOUDFLARE_TELEMETRY_API_TOKEN=<token>`. Once added, Alchemy
    keeps the token in the stack's encrypted state so later deploys and plans keep telemetry tables
-   with no changes and without asking again.
+   with no changes and without asking again. **Do not delete or roll this token:** the mind's
+   telemetry tables keep the token they were made with, and a mind with a given token refuses a
+   changed token.
 5. **Workers Paid, R2 and Zero Trust.** It opens the page for each one that is off and waits
    until it is on. Off means Cloudflare refused the read, and the account's line shows its words.
    A read that failed is not a fact: a 429 or a 5xx is read again, and after three the command

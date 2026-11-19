@@ -170,7 +170,7 @@ void test("telemetry modes: minted keeps both AccountApiToken resources, given u
     runMode("off"),
   ]);
 
-  // Minted mode: exact Telemetry bindings & two AccountApiToken resources, no TelemetryToken
+  // Minted mode declares both AccountApiToken resources and their Worker bindings
   assert.deepEqual(minted.workers.Telemetry, [
     "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
     "ITERATE:plain_text",
@@ -185,7 +185,7 @@ void test("telemetry modes: minted keeps both AccountApiToken resources, given u
   assert.equal(minted.resources.TelemetryAnalyticsToken, "Cloudflare.ApiToken.AccountApiToken");
   assert.equal(minted.resources.TelemetryToken, undefined);
 
-  // Given mode: TelemetryToken and TELEMETRY_TOKEN_SOURCE marker, no AccountApiToken
+  // Given mode declares TelemetryToken and the TELEMETRY_TOKEN_SOURCE marker
   assert.deepEqual(given.workers.Telemetry, [
     "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
     "ITERATE:plain_text",
@@ -201,7 +201,7 @@ void test("telemetry modes: minted keeps both AccountApiToken resources, given u
   assert.equal(given.resources.TelemetryCatalogToken, undefined);
   assert.equal(given.resources.TelemetryAnalyticsToken, undefined);
 
-  // Off mode: leaves out the 15 telemetry-table resources and 6 Telemetry Worker bindings
+  // Off mode omits telemetry-table resources and bindings while keeping METRICS and OTLP secret
   assert.deepEqual(off.workers.Telemetry, [
     "ITERATE:plain_text",
     "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",

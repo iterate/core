@@ -13,9 +13,11 @@ import {
   deleteLegacyAccountApiToken,
   isTelemetryTokenPersisted,
   TELEMETRY_TOKEN,
+  TELEMETRY_TOKEN_IMMUTABLE,
+  TelemetryToken,
+  TelemetryTokenProvider,
   telemetryModeFromState,
   telemetryModeOf,
-  telemetryTokenNeedsUpdate,
   telemetryTokenValueOf,
 } from "./telemetry-token.ts";
 
@@ -29,17 +31,39 @@ void test("first deploy with a provided token stores it redacted, and missing to
   assert.match(JSON.stringify(missing), new RegExp(TELEMETRY_TOKEN));
 });
 
-void test("later deploys reuse the kept token without prompting and update only on rotation", async () => {
+void test("later deploys reuse the kept token (omitted or identical) and refuse a changed token in both diff and reconcile", async () => {
   const kept = { value: Redacted.make("cf-telemetry-v1") };
-  assert.equal(telemetryTokenNeedsUpdate(undefined, kept), false);
-  assert.equal(telemetryTokenNeedsUpdate("cf-telemetry-v1", kept), false);
-  assert.equal(telemetryTokenNeedsUpdate("cf-telemetry-v2", kept), true);
 
   const reused = await Effect.runPromise(telemetryTokenValueOf(undefined, kept));
   assert.equal(Redacted.value(reused.value), "cf-telemetry-v1");
 
-  const rotated = await Effect.runPromise(telemetryTokenValueOf("cf-telemetry-v2", kept));
-  assert.equal(Redacted.value(rotated.value), "cf-telemetry-v2");
+  const same = await Effect.runPromise(telemetryTokenValueOf("cf-telemetry-v1", kept));
+  assert.equal(Redacted.value(same.value), "cf-telemetry-v1");
+
+  const changedReconcile = await Effect.runPromiseExit(
+    telemetryTokenValueOf("cf-telemetry-v2", kept),
+  );
+  assert.equal(changedReconcile._tag, "Failure");
+  assert.ok(JSON.stringify(changedReconcile).includes(TELEMETRY_TOKEN_IMMUTABLE));
+
+  const diffWith = (token: string | undefined) =>
+    Effect.gen(function* () {
+      const provider = yield* TelemetryToken.Provider;
+      // TelemetryTokenProvider.diff inspects only `output`; omit unused Alchemy diff context fields.
+      return yield* provider.diff!({
+        id: "TelemetryToken",
+        news: { name: "iterate-ada-telemetry" },
+        olds: { name: "iterate-ada-telemetry" },
+        output: kept,
+      } as Parameters<NonNullable<typeof provider.diff>>[0]);
+    }).pipe(Effect.provide(TelemetryTokenProvider(token)));
+
+  assert.equal(await Effect.runPromise(diffWith(undefined)), undefined);
+  assert.equal(await Effect.runPromise(diffWith("cf-telemetry-v1")), undefined);
+
+  const changedDiff = await Effect.runPromiseExit(diffWith("cf-telemetry-v2"));
+  assert.equal(changedDiff._tag, "Failure");
+  assert.ok(JSON.stringify(changedDiff).includes(TELEMETRY_TOKEN_IMMUTABLE));
 });
 
 void test("telemetryModeOf resolves minted, given, and off across the three state fixtures and fails on state-store errors", async () => {
@@ -71,7 +95,7 @@ void test("telemetryModeOf resolves minted, given, and off across the three stat
   assert.equal(isTelemetryTokenPersisted({ ...givenRow, status: "deleting" }), false);
   assert.equal(isTelemetryTokenPersisted({ ...givenRow, attr: {} }), false);
 
-  // Fixture 1: existing mind with minted tokens stays minted (even if env token is set)
+  // Minted tokens in state stay in minted mode even when an env token is set
   assert.equal(
     telemetryModeFromState({ catalogToken: mintedCatalog, analyticsToken: mintedAnalytics }),
     "minted",
@@ -84,11 +108,11 @@ void test("telemetryModeOf resolves minted, given, and off across the three stat
     "minted",
   );
 
-  // Fixture 2: mind with TelemetryToken in state, or fresh deploy with env token -> given
+  // Stored TelemetryToken or an env token selects given mode
   assert.equal(telemetryModeFromState({ givenToken: givenRow }), "given");
   assert.equal(telemetryModeFromState({}, "env-tok"), "given");
 
-  // Fixture 3: fresh mind with no token in state and no env token -> off
+  // No stored token and no env token selects off mode
   assert.equal(telemetryModeFromState({}), "off");
 
   // State service integration across all three fixtures
@@ -165,7 +189,7 @@ void test("legacy AccountApiToken delete succeeds when permitted, logs and conti
   );
   assert.deepEqual(okLines, []);
 
-  // Fresh branch sign-in lacking API-token write (Unauthorized "Authentication error" or Forbidden "Method not allowed for token")
+  // Sign-in lacking API-token write scope (Unauthorized "Authentication error" or Forbidden "Method not allowed for token")
   for (const refusal of [
     new Unauthorized({ message: "Authentication error" }),
     new Forbidden({ message: "Method not allowed for token" }),

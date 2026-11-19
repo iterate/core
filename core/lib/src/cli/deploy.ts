@@ -80,7 +80,7 @@ export type DeployInput = {
   source?: string;
   ref?: string;
   setup?: boolean;
-  /** turn on (or rotate) telemetry tables with an account-owned Cloudflare telemetry API token */
+  /** turn on telemetry tables with an account-owned Cloudflare telemetry API token */
   telemetryToken?: boolean;
   /** the stack's plan alone, over a mind that is there: nothing changes (`planArgsOf`) */
   plan?: boolean;
@@ -571,15 +571,17 @@ export function pnpmEnvFor(
 }
 
 /** Summarizes Alchemy's verbose log stream into a concise progress label (`12 of 48 resources`),
- *  ignoring noisy reconcile lines, npm warnings, and raw stack output objects. */
+ *  ignoring noisy reconcile lines, plan preview lines, npm warnings, and raw stack output objects. */
 export function createDeployProgress() {
   let planned = 0;
+  let planEnded = false;
   const done = new Set<string>();
   return {
     /** Feeds one Alchemy log line and returns a short status label when progress changes. */
     onLine(line: string): string | undefined {
       const planMatch = /\bPlan:\s+(.+)/.exec(line);
       if (planMatch) {
+        planEnded = true;
         let total = 0;
         for (const count of planMatch[1]!.matchAll(
           /(\d+)\s+to\s+(?:create|update|adopted|replace|delete|orphaned)\b/g,
@@ -592,8 +594,10 @@ export function createDeployProgress() {
         }
         return undefined;
       }
-      const settled = /\[([^\]]+)\]\s+(?:created|updated|deleted|replaced|adopted)\b/.exec(line);
-      if (settled) {
+      const settled = /\bINFO:\s+\[([^\]]+)\]\s+(created|updated|deleted|replaced|adopted)\b/.exec(
+        line,
+      );
+      if (settled && (settled[2] !== "adopted" || planEnded)) {
         done.add(settled[1]!);
         return planned > 0
           ? `${Math.min(done.size, planned)} of ${planned} resources`
@@ -1416,39 +1420,44 @@ export async function verifyTelemetryToken(
   }
 }
 
-/** Whether an existing mind's telemetry Worker already holds earlier minted API tokens
- *  (`ITERATE__CATALOG_TOKEN` without the `TELEMETRY_TOKEN_SOURCE: "provided"` marker). */
-async function stackHasMintedTelemetryTokens(
+/** Reads the deployed telemetry Worker's bindings to identify its token mode:
+ *  - `"given"`: carries `TELEMETRY_TOKEN_SOURCE: "provided"`
+ *  - `"minted"`: carries `ITERATE__CATALOG_TOKEN` without `TELEMETRY_TOKEN_SOURCE: "provided"`
+ *  - `"off"`: no telemetry Worker or no catalog token binding */
+async function stackTelemetryTokenMode(
   cf: Cloudflare,
   account: string,
   stageName: string,
-): Promise<boolean> {
+): Promise<"minted" | "given" | "off"> {
   const settings = await cf(
     "GET",
     `/accounts/${account}/workers/scripts/iterate-${stageName}-telemetry/settings`,
   );
-  if (settings.status === 404) return false;
+  if (settings.status === 404) return "off";
   if (settings.status !== 200)
     throw new Error(
       `Cloudflare did not answer with the telemetry Worker's settings (${settings.status}: ${settings.error}). Nothing was changed. Run the command again.`,
     );
   const bindings = WorkerSettings.safeParse(settings.result).data?.bindings || [];
-  const hasCatalogToken = bindings.some((binding) => binding.name === "ITERATE__CATALOG_TOKEN");
   const hasProvidedMarker = bindings.some(
     (binding) =>
       binding.type === "plain_text" &&
       binding.name === "TELEMETRY_TOKEN_SOURCE" &&
       binding.text === "provided",
   );
-  return hasCatalogToken && !hasProvidedMarker;
+  if (hasProvidedMarker) return "given";
+  const hasCatalogToken = bindings.some((binding) => binding.name === "ITERATE__CATALOG_TOKEN");
+  return hasCatalogToken ? "minted" : "off";
 }
 
 /** Collects and verifies the optional account-owned Cloudflare telemetry API token:
- *  - On an existing `minted` mind, `--telemetry-token` changes nothing and says so in one sentence;
+ *  - With `--telemetry-token` on a `minted` mind, stops with nothing changed (`mintedAlready`);
+ *  - With `--telemetry-token` on a `given` mind, refuses because catalog sinks keep the token they
+ *    were made with;
  *  - Uses `CLOUDFLARE_TELEMETRY_API_TOKEN` from the environment when set (for deploy and `--plan`);
  *  - Otherwise skips with no prompt and no stop unless `--telemetry-token` was passed;
- *  - With `--telemetry-token`, opens Cloudflare's pre-filled dashboard link (after Enter) and reads
- *    the token, or prints the link and stops cleanly when no terminal is attached. */
+ *  - With `--telemetry-token` on an `off` mind, opens Cloudflare's pre-filled dashboard link (after
+ *    Enter) and reads the token, or prints the link and stops cleanly with no terminal attached. */
 export async function telemetryTokenStep(
   cf: Cloudflare,
   account: Account,
@@ -1461,8 +1470,13 @@ export async function telemetryTokenStep(
     verify?: typeof verifyTelemetryToken;
   } = {},
 ): Promise<{ token?: string; mintedAlready?: boolean }> {
-  if (options.prompt && (await stackHasMintedTelemetryTokens(cf, account.id, stageName))) {
-    return { mintedAlready: true };
+  if (options.prompt) {
+    const mode = await stackTelemetryTokenMode(cf, account.id, stageName);
+    if (mode === "minted") return { mintedAlready: true };
+    if (mode === "given")
+      throw new Error(
+        "This mind's telemetry token cannot be changed: its tables keep the token they were made with.",
+      );
   }
   const verify = options.verify || verifyTelemetryToken;
   const env = options.env || process.env;
@@ -1481,13 +1495,19 @@ export async function telemetryTokenStep(
   const canPrompt = options.isInteractive ?? interactive();
   if (!canPrompt)
     throw new Error(
-      `To turn on telemetry tables, create one account-owned Cloudflare API token at:\n${url}\nThen run again with ${TELEMETRY_TOKEN_ENV}=<token>. Nothing was changed.`,
+      [
+        `To turn on telemetry tables, create one account-owned Cloudflare API token at:`,
+        url,
+        `Do not delete or roll this token: this mind's telemetry tables keep the token they were made with.`,
+        `Then run again with ${TELEMETRY_TOKEN_ENV}=<token>. Nothing was changed.`,
+      ].join("\n"),
     );
   const c = palette();
   await page(
     [
       `Create one account-owned telemetry API token for ${c.account(account.name)} to enable SQL over events, logs, spans, and metrics.`,
       `Open this link (select account ${c.account(account.name)} if asked), click ${c.callout('"Continue to summary" → "Create Token"')}, and copy it:`,
+      `Do not delete or roll this token: this mind's telemetry tables keep the token they were made with.`,
     ].join("\n"),
     url,
   );
@@ -2124,7 +2144,7 @@ export async function deployMind(input: DeployInput) {
     if (telemetryToken) {
       const bucket = `iterate-${stageName}-telemetry`;
       p.log.info(
-        `Telemetry bucket ${c.callout(bucket)} is ready: you can now narrow "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" on that token to ${c.callout(bucket)} in Cloudflare.`,
+        `Telemetry bucket ${c.callout(bucket)} is ready: you can now narrow "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" on that token to ${c.callout(bucket)} in Cloudflare. Do not delete or roll this token: this mind's telemetry tables keep the token they were made with.`,
       );
     }
     if (input.setup !== false) await page("Continue setup in your browser:", onboardingUrl);

@@ -89,9 +89,9 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
 
     // ── telemetry: first, because every other Worker exports its logs and spans to it ──
     // Three modes (./telemetry-token.ts `telemetryModeOf`):
-    //   - "minted": existing mind with two minted AccountApiToken resources — kept as is (`noop`).
-    //   - "given": single owner-created TelemetryToken kept in state.
-    //   - "off": no telemetry token — no bucket, catalog, sinks, pipelines, or OTLP destinations.
+    //   - "minted": two stack-managed AccountApiToken resources.
+    //   - "given": one owner-created TelemetryToken kept in state.
+    //   - "off": no telemetry bucket, catalog, sinks, pipelines, or OTLP destinations.
     let telemetryTableBindings:
       | {
           ITERATE__CATALOG_TOKEN: Output.Output<Redacted.Redacted<string>>;
@@ -118,8 +118,8 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
       let catalogTokenValue: Output.Output<Redacted.Redacted<string>>;
       let analyticsTokenValue: Output.Output<Redacted.Redacted<string>>;
       if (telemetryMode === "minted") {
-        // Earlier minted-token stack: keep both AccountApiToken resources with their exact props so
-        // existing minds plan `noop` for telemetry and never delete tokens their sinks still hold.
+        // Stack-managed catalog and analytics tokens keep existing sinks bound to the credentials
+        // they were created with; removing or replacing them stops catalog sink writes.
         const catalogToken = yield* Cloudflare.ApiToken.AccountApiToken("TelemetryCatalogToken", {
           name: `${names.telemetryBucket}-catalog`,
           policies: [

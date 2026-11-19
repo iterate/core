@@ -256,7 +256,7 @@ test("sign-in never asks for Account API Token Provisioning, stack uses Telemetr
     new URL("../../../alchemy/src/stack.ts", import.meta.url).pathname,
     "utf8",
   );
-  // AccountApiToken is kept solely inside the `minted` branch; new stacks use TelemetryToken (or off)
+  // AccountApiToken is declared only in minted mode; given mode uses TelemetryToken
   expect(script).toContain('if (telemetryMode === "minted")');
   expect(script).toContain('TelemetryToken("TelemetryToken"');
 
@@ -367,7 +367,7 @@ test("verifyTelemetryToken accepts active account-owned tokens and rejects user-
   expect(invalid).toEqual({ ok: false, error: "Invalid access token" });
 });
 
-test("telemetryTokenStep skips with no prompt by default, uses env token when set, requires token with --telemetry-token, and stops cleanly on a minted mind", async () => {
+test("telemetryTokenStep skips by default, uses env token when set, stops cleanly on minted, refuses changes on given, and warns not to delete or roll the token", async () => {
   const account = { id: "a".repeat(32), name: "iterate (dev/preview)" };
   const okVerify = async () => ({ ok: true as const });
   const noTelemetryWorker = async () => ({
@@ -382,6 +382,18 @@ test("telemetryTokenStep skips with no prompt by default, uses env token when se
       bindings: [
         { type: "secret_text", name: "ITERATE__CATALOG_TOKEN" },
         { type: "secret_text", name: "ITERATE__ANALYTICS_TOKEN" },
+      ],
+    },
+    total: 1,
+    error: "",
+  });
+  const givenTelemetryWorker = async () => ({
+    status: 200,
+    result: {
+      bindings: [
+        { type: "secret_text", name: "ITERATE__CATALOG_TOKEN" },
+        { type: "secret_text", name: "ITERATE__ANALYTICS_TOKEN" },
+        { type: "plain_text", name: "TELEMETRY_TOKEN_SOURCE", text: "provided" },
       ],
     },
     total: 1,
@@ -406,7 +418,7 @@ test("telemetryTokenStep skips with no prompt by default, uses env token when se
     }),
   ).resolves.toEqual({ token: "tok-from-env" });
 
-  // --telemetry-token on an existing minted mind: reports mintedAlready and changes nothing
+  // --telemetry-token on a minted mind reports mintedAlready without prompting
   await expect(
     telemetryTokenStep(mintedTelemetryWorker, account, "ada-labs-com", {
       env: {},
@@ -416,7 +428,19 @@ test("telemetryTokenStep skips with no prompt by default, uses env token when se
     }),
   ).resolves.toEqual({ mintedAlready: true });
 
-  // --telemetry-token with no terminal and no env var on a mind without minted tokens: prints dashboard link
+  // --telemetry-token on a given mind refuses because its sinks keep the token they were made with
+  await expect(
+    telemetryTokenStep(givenTelemetryWorker, account, "ada-labs-com", {
+      env: {},
+      prompt: true,
+      isInteractive: false,
+      verify: okVerify,
+    }),
+  ).rejects.toThrow(
+    "This mind's telemetry token cannot be changed: its tables keep the token they were made with.",
+  );
+
+  // --telemetry-token with no terminal and no env var prints dashboard link and do-not-delete warning
   await expect(
     telemetryTokenStep(noTelemetryWorker, account, "ada-labs-com", {
       env: {},
@@ -424,7 +448,9 @@ test("telemetryTokenStep skips with no prompt by default, uses env token when se
       isInteractive: false,
       verify: okVerify,
     }),
-  ).rejects.toThrow(/dash\.cloudflare\.com.*CLOUDFLARE_TELEMETRY_API_TOKEN/s);
+  ).rejects.toThrow(
+    /dash\.cloudflare\.com.*Do not delete or roll this token.*CLOUDFLARE_TELEMETRY_API_TOKEN/s,
+  );
 });
 
 test("CLI color palette respects NO_COLOR/TERM/TTY and styles Cloudflare account names, codes, domains, URLs, and headings", () => {
@@ -493,7 +519,7 @@ test("pnpmCommandOf uses local pnpm only when major version matches packageManag
   });
 });
 
-test("createDeployProgress summarizes Alchemy resource progress and ignores raw stack output and warnings", () => {
+test("createDeployProgress summarizes Alchemy resource progress and ignores plan previews, raw stack output, and warnings", () => {
   const progress = createDeployProgress();
   expect(progress.onLine('npm warn Unknown env config "manage-package-manager-versions"')).toBe(
     undefined,
@@ -501,12 +527,17 @@ test("createDeployProgress summarizes Alchemy resource progress and ignores raw 
   expect(progress.onLine("Bootstrapping Cloudflare State Store 'iterate-ada-state'")).toBe(
     "preparing state store",
   );
-  expect(progress.onLine("Plan: 45 to create, 3 to update, 2 binding changes")).toBe(
+  // Plan-time adopted preview lines must not be counted before Plan: finishes
+  expect(progress.onLine("[AuthDb] adopted")).toBe(undefined);
+  expect(progress.onLine("[21:45:42.000] INFO: [AuthDb] adopted")).toBe(undefined);
+  expect(progress.onLine("Plan: 45 to create, 2 to update, 1 to adopted, 2 binding changes")).toBe(
     "0 of 48 resources",
   );
+  expect(progress.onLine("[AuthDb] adopted")).toBe(undefined);
   expect(progress.onLine("[21:45:43.607] INFO: [AuthDb] create")).toBe(undefined);
   expect(progress.onLine("[21:45:44.100] INFO: [AuthDb] created (0.5s)")).toBe("1 of 48 resources");
   expect(progress.onLine("[21:45:45.200] INFO: [Auth] updated (1.1s)")).toBe("2 of 48 resources");
+  expect(progress.onLine("[21:45:46.000] INFO: [Bucket] adopted (0.4s)")).toBe("3 of 48 resources");
   expect(progress.onLine("{ controlPlaneHostname: 'iterate.alpiti.com' }")).toBe(undefined);
 });
 
