@@ -7,10 +7,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { text as streamText } from "node:stream/consumers";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import process from "node:process";
 import repl from "node:repl";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { RpcTarget } from "capnweb";
 import { createCli, os, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
@@ -824,6 +825,22 @@ const launcherProcedures = {
   },
 };
 
+const PackageVersion = z.object({ version: z.string().min(1) });
+
+/** Reads this CLI package's `version` from the nearest `package.json` above `fromUrl`
+ *  (works identically from `src/cli/cli.ts` and the built `dist/cli.mjs`). */
+export function packageVersionOf(fromUrl: string = import.meta.url): string {
+  for (let dir = dirname(fileURLToPath(fromUrl)); ; dir = dirname(dir)) {
+    const manifest = join(dir, "package.json");
+    if (existsSync(manifest)) {
+      const parsed = PackageVersion.safeParse(JSON.parse(readFileSync(manifest, "utf8")));
+      if (parsed.success) return parsed.data.version;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return "0.0.0";
+  }
+}
+
 export const runCli = async () => {
   // the machine's own files, no sign-in and no flags of ours (fs.ts); a sandbox runs the same file alone
   if (process.argv[2] === "fs") {
@@ -832,9 +849,11 @@ export const runCli = async () => {
   }
   configFlagOverride = consumeCliStringFlag("--config");
   if (process.argv.length === 2) process.argv.push("--help");
+  if (process.argv.length === 3 && process.argv[2] === "-v") process.argv[2] = "--version";
   const cli = createCli({
     router: launcherProcedures,
     name: "iterate",
+    version: packageVersionOf(),
     description:
       "The iterate CLI: sign in to a mind by its address, run itx scripts in it, and lend it what runs on this machine.",
   });
