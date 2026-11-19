@@ -364,6 +364,10 @@ export const mindStack = (config: MindConfig) =>
       limits: { subrequests: 1_000_000, cpuMs: 300_000 },
       env: {
         ITERATE: JSON.stringify(sharedConfigOf(config)),
+        // This deploy's whole config, which no Worker reads: `iterate deploy` over the mind
+        // starts from it (core/lib/src/cli/deploy.ts `mindConfigIn`), so a field that no Worker
+        // holds, such as the sandboxes' image, stays at the next deploy.
+        DEPLOY_CONFIG: JSON.stringify(config),
         AUTH: Cloudflare.WorkerEntrypoint(auth, { entrypoint: "Auth" }),
         SECRETS: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "Secrets" }),
         SECRET_USE: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "SecretUse" }),

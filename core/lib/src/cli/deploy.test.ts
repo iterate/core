@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expect, test } from "vitest";
+import { MindConfig as ScriptConfig } from "../../../alchemy/src/config.ts";
 import {
   apiTokenPage,
   DEPLOY_SCOPES,
@@ -15,6 +16,7 @@ import {
   candidatesOf,
   chatgptPlanWay,
   deployConfigOf,
+  deployedMind,
   erateOf,
   firstSignInWords,
   identityKeyLineOf,
@@ -23,6 +25,7 @@ import {
   onboardingTurnScript,
   saysTheStateStoreRefused,
   stageNameOf,
+  zeroTrustStep,
 } from "./deploy.ts";
 
 test("the stage is the zone with a hyphen for each dot, at most 32 characters, a letter first", () => {
@@ -345,4 +348,183 @@ test("with the browser on another computer, the ChatGPT plan is a command to run
   expect(chatgptPlanWay("device", "ada-labs.com").runThere).toContain(
     "chatgpt connect https://ada-labs.com",
   );
+});
+
+test("Zero Trust: an organization goes on; none, or Access not enabled, is set up once, then a gate; any other refusal stops", () => {
+  const account = "0".repeat(32);
+  const answer = (status: number, result: unknown, error = "") => ({
+    status,
+    result,
+    total: 0,
+    error,
+  });
+  const there = answer(200, { auth_domain: "frosty-moon-7a3b.cloudflareaccess.com" });
+  const none = answer(404, null, "access.api.error.not_found (code 12130)");
+  const noDomain = answer(200, { auth_domain: "" });
+  const notEnabled = answer(
+    403,
+    null,
+    "access.api.error.not_enabled: Access is not enabled. Visit the Access dashboard at https://dash.cloudflare.com/ and click the 'Enable Access' button. (code 9999)",
+  );
+  const noPermission = answer(403, null, "Authentication error (code 10000)");
+
+  for (const tried of [false, true])
+    expect(zeroTrustStep(account, there, tried)).toEqual({ next: "go" });
+  // the read: the command tries the script's own set-up first
+  for (const read of [none, noDomain, notEnabled])
+    expect(zeroTrustStep(account, read, false)).toEqual({ next: "make" });
+  // the set-up refused for Access or a plan, or with no organization after it: the gate
+  for (const after of [
+    none,
+    noDomain,
+    notEnabled,
+    answer(403, null, "a plan is required (code 9999)"),
+  ])
+    expect(zeroTrustStep(account, after, true)).toEqual({
+      next: "gate",
+      page: `https://one.dash.cloudflare.com/${account}/`,
+      words:
+        "Turn on Zero Trust: an owner of the mind proves their email address through Cloudflare Access, which is part of it.\nOn this page choose a team name and the Free plan. Cloudflare may ask for a payment method, and the Free plan charges nothing.",
+    });
+  // a permission is no gate: Cloudflare's words, and the permission that a pasted token needs
+  expect(zeroTrustStep(account, noPermission, false)).toEqual({
+    next: "stop",
+    words:
+      'Cloudflare refused to read the account\'s Zero Trust organization (403: Authentication error (code 10000)). The access needs "Access: Organizations, Identity Providers, and Groups Write". Nothing is deployed.',
+  });
+  expect(zeroTrustStep(account, noPermission, true)).toMatchObject({
+    next: "stop",
+    words: expect.stringMatching(/^Cloudflare refused to set up the account's Zero Trust/),
+  });
+  // the page that makes a token instead fills in both of Access's permissions: "Access:
+  // Organizations, Identity Providers, and Groups Write" and "Access: Apps and Policies Write"
+  expect(JSON.parse(apiTokenPage().searchParams.get("permissionGroupKeys") || "")).toEqual(
+    expect.arrayContaining([
+      { key: "access_acct", type: "edit" },
+      { key: "access", type: "edit" },
+    ]),
+  );
+});
+
+test("a deploy over a mind keeps every field of the config that the mind was deployed with, and changes only what a flag names", () => {
+  const accountId = "0".repeat(32);
+  const whole = ScriptConfig.parse({
+    mindId: "cd".repeat(32),
+    controlPlaneHostname: "iterate.ada-labs.com",
+    ownerEmails: ["ada@example.org"],
+    topology: "full-cloudflare",
+    alchemy: { stageName: "ada-labs-com" },
+    cloudflare: {
+      accountId,
+      zones: ["ada-labs.com"],
+      containerImage: `registry.cloudflare.com/${accountId}/iterate-sandbox@sha256:${"ab".repeat(32)}`,
+    },
+  });
+  // every field of the script's config, nested ones too, is in this one: a new field fails here
+  type Shape = Record<string, object>;
+  const pathsOf = (shape: Shape, at = ""): string[] =>
+    Object.entries(shape).flatMap(([key, field]) => {
+      const inner = "unwrap" in field ? (field as { unwrap: () => object }).unwrap() : field;
+      return "shape" in inner ? pathsOf(inner.shape as Shape, `${at}${key}.`) : [`${at}${key}`];
+    });
+  const valuePaths = (value: object, at = ""): string[] =>
+    Object.entries(value).flatMap(([key, field]) =>
+      field && typeof field === "object" && !Array.isArray(field)
+        ? valuePaths(field, `${at}${key}.`)
+        : [`${at}${key}`],
+    );
+  expect(valuePaths(whole).sort()).toEqual(pathsOf(ScriptConfig.shape).sort());
+
+  // the boundary's settings as the stack writes them (core/alchemy/src/stack.ts)
+  const script = readFileSync(
+    new URL("../../../alchemy/src/stack.ts", import.meta.url).pathname,
+    "utf8",
+  );
+  expect(script).toContain("DEPLOY_CONFIG: JSON.stringify(config),");
+  const settingsOf = (config: typeof whole & Record<string, unknown>) => ({
+    bindings: [
+      {
+        type: "plain_text",
+        name: "ITERATE",
+        text: JSON.stringify({
+          mindId: config.mindId,
+          controlPlaneHostname: config.controlPlaneHostname,
+          zones: config.cloudflare.zones,
+          ownerEmails: config.ownerEmails,
+          topology: config.topology,
+        }),
+      },
+      { type: "plain_text", name: "DEPLOY_CONFIG", text: JSON.stringify(config) },
+    ],
+  });
+  const overMind = (config: typeof whole & Record<string, unknown>, flags = {}) => {
+    const read = mindConfigIn(settingsOf(config));
+    if (!read) throw new Error("no config read");
+    return deployConfigOf({
+      accountId,
+      domain: "ada-labs.com",
+      deployed: { ...read, stageName: config.alchemy.stageName },
+      ...flags,
+    });
+  };
+  expect(overMind(whole)).toEqual(whole);
+  expect(ScriptConfig.parse(overMind(whole))).toEqual(whole);
+  // a field that this command does not know survives too
+  const later = { ...whole, later: true, cloudflare: { ...whole.cloudflare, later: 1 } };
+  expect(overMind(later)).toEqual(later);
+  // a flag changes what it names, and nothing else
+  expect(overMind(whole, { owner: "grace@example.org" })).toEqual({
+    ...whole,
+    ownerEmails: ["grace@example.org"],
+  });
+  // a mind deployed before the stack kept its whole config is read, with no deploy config: the
+  // command then deploys nothing over it (deployMind)
+  expect(
+    mindConfigIn({ bindings: settingsOf(whole).bindings.slice(0, 1) })?.deployConfig,
+  ).toBeUndefined();
+});
+
+test("a mind of the earlier stack is named as such, and no path of the command deploys over it or erases its domain", async () => {
+  // the earlier stack's boundary: bindings, and no variable ITERATE
+  const asked: string[] = [];
+  const cf = (async (method: string, path: string) => {
+    asked.push(`${method} ${path}`);
+    return {
+      status: 200,
+      result: {
+        bindings: [
+          { type: "service", name: "AUTH", service: "iterate-ada-labs-com-auth" },
+          { type: "send_email", name: "SEND_EMAIL" },
+        ],
+      },
+      total: 0,
+      error: "",
+    };
+  }) as Parameters<typeof deployedMind>[0];
+  await expect(deployedMind(cf, "account", "ada-labs-com")).rejects.toThrow(
+    "The mind whose boundary Worker is iterate-ada-labs-com-boundary runs iterate's earlier stack, and this command works on a mind of the new stack alone. It does not move a mind from the earlier stack yet: iterate moves it. Nothing was changed.",
+  );
+  expect(asked).toEqual([
+    "GET /accounts/account/workers/scripts/iterate-ada-labs-com-boundary/settings",
+  ]);
+  // In the command, the read of a mind comes before the question that erases a domain's records,
+  // before the erase and before the deploy, whatever the flags: its error ends the run there. A
+  // mind with no deploy config stops there too. A domain that comes during the run with a
+  // boundary's route stops before the erase.
+  const command = readFileSync(new URL("./deploy.ts", import.meta.url).pathname, "utf8");
+  const at = (text: string) => {
+    const index = command.indexOf(text);
+    expect(index, text).toBeGreaterThan(0);
+    return index;
+  };
+  const read = at("const deployed = await deployedMind(cf, account.id, stageName);");
+  const noDeployConfig = at("if (deployed && !deployed.deployConfig)");
+  const ask = at("let holdings =\n      pick.zone && !deployed");
+  const arrivedMind = at("if (arrived.stageName)");
+  const arrivedErase = at("holdings = await holdingsToErase(arrived.uses");
+  expect(read).toBeLessThan(noDeployConfig);
+  expect(noDeployConfig).toBeLessThan(ask);
+  expect(arrivedMind).toBeLessThan(arrivedErase);
+  expect(arrivedErase).toBeLessThan(at("await eraseHoldings(cf, zone.id)"));
+  expect(at("await eraseHoldings(cf, zone.id)")).toBeLessThan(at("await deployStack({"));
 });

@@ -27,7 +27,9 @@ with no passkey left a way back in. What follows is the deploy by hand.
 ## The one input
 
 A JSON file that `ITERATE_MIND_CONFIG` names, parsed by `MindConfig` in `src/config.ts`, where
-each field has its doc. No environment variable changes what it means.
+each field has its doc. No environment variable changes what it means. The boundary Worker keeps
+the whole input as its variable `DEPLOY_CONFIG`, which no Worker reads: `iterate deploy` over a
+mind starts from it, so a field that no Worker holds, such as `cloudflare.containerImage`, stays.
 
 ```json
 {

@@ -79,7 +79,9 @@ What it does, in order:
    - **Tick "Account API Token Provisioning" on Cloudflare's page.** Cloudflare marks it as
      sensitive and leaves it unticked. The deploy makes two API tokens with which the mind reads
      its own logs and metrics; they read nothing else and deploy nothing.
-   - **Without the tick the command deploys nothing.** It reads what the sign-in granted, and then
+   - **Without the tick the command deploys nothing.** It reads what the sign-in granted
+     (Cloudflare's token answer names each granted scope: a person's sign-in with this list got
+     all 28 scopes on 18 Nov 2026), and then
      offers the other way: a link to Cloudflare's own page that makes an API token with the
      deploy's permissions filled in, and a prompt where you paste the token. The token is not
      shown, is never written to a file, and only the deploy itself runs with it. Or run the
@@ -104,7 +106,15 @@ What it does, in order:
    another Worker, or with an A, AAAA, CNAME or MX record, is in use: the command says what is
    there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS
    record and Workers route of that domain, right before the deploy and after every other check.
-4. **Workers Paid and R2.** It opens the page for each one that is off and waits until it is on.
+4. **Workers Paid, R2 and Zero Trust.** It opens the page for each one that is off and waits
+   until it is on. An owner proves their address through Cloudflare Access, which needs the
+   account's Zero Trust organization. When the account has none, the command first sets one up
+   through Cloudflare's API, as the script would, with a team name that Cloudflare picks. When
+   Cloudflare refuses that because Zero Trust was never turned on, it opens the account's Zero
+   Trust page (`https://one.dash.cloudflare.com/<account id>/`): choose a team name and the Free
+   plan there. Cloudflare may ask for a payment method and charges nothing for the Free plan.
+   With nobody at the terminal it stops with that page's address. Whether Cloudflare allows the
+   set-up through the API on an account that never had Zero Trust is not yet seen.
 5. **The config**, which is the script's one input, written to
    `${XDG_CACHE_HOME:-~/.cache}/iterate/deploys/<stage>/config.json`:
    - `controlPlaneHostname`: `iterate.<domain>`. `--control-plane-hostname` names another: the
@@ -132,9 +142,17 @@ What it does, in order:
 
 **A mind that is there already.** When a route of the domain names a mind's boundary Worker, the
 command reads that mind's own config from Cloudflare (the boundary Worker's variable `ITERATE`),
-shows it, and deploys over it with the same owners, hostname, domains and topology. `--owner` and
-`--control-plane-hostname` each replace what the mind has. It asks first; `--yes` is the yes. No
-file of an earlier deploy is needed. A run that changed nothing took 29 s.
+shows it, and deploys over it. The deploy starts from the whole config that the mind was deployed
+with, which the stack keeps in the boundary Worker's variable `DEPLOY_CONFIG`, so every field
+stays, the sandboxes' image among them. `--owner` and `--control-plane-hostname` each replace
+what the mind has. It asks first; `--yes` is the yes. No file of an earlier deploy is needed. A
+run over a mind with a sandbox image planned no changes and took 29 s (18 Nov 2026).
+
+- A mind deployed before the stack kept `DEPLOY_CONFIG` is refused, with nothing changed: deploy
+  it once with core/alchemy's script and its own config, then the command works over it.
+- A mind of iterate's earlier stack (its boundary Worker has no variable `ITERATE`) is refused
+  too. The command does not move such a mind, and never offers to erase its domain: iterate
+  moves it.
 
 After the deploy, with a person at the terminal, it does the mind's first steps:
 

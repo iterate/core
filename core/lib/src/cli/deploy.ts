@@ -39,6 +39,7 @@ import {
 import type { MindConnection, MindItx } from "../node.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import {
+  type Answer,
   type Cloudflare,
   apiTokenPage,
   cloudflare,
@@ -102,8 +103,22 @@ const DeployedConfig = z
       "the apex of one of zones, or one label under one: a zone's certificate covers no deeper name",
   });
 
-/** A mind that is deployed: its stage, and its own config. */
-type DeployedMind = z.infer<typeof DeployedConfig> & { stageName: string };
+/** THE WHOLE CONFIG OF THE DEPLOY THAT A MIND RUNS, as the stack keeps it in its boundary
+ *  Worker's plain-text variable `DEPLOY_CONFIG` (core/alchemy/src/config.ts `MindConfig`). It holds
+ *  what no Worker reads, such as `cloudflare.containerImage`, the sandboxes' image. Each field is
+ *  kept as it is, those that this command does not know too: a deploy over the mind starts from
+ *  it, and a field that it lost would plan as a change. */
+const KeptDeployConfig = z.looseObject({
+  alchemy: z.looseObject({ stageName: z.string() }),
+  cloudflare: z.looseObject({ accountId: z.string(), zones: z.array(z.string()) }),
+});
+
+/** A mind that is deployed: its stage, its own config, and its deploy's whole config, which a
+ *  mind deployed before the stack kept it lacks. */
+type DeployedMind = z.infer<typeof DeployedConfig> & {
+  stageName: string;
+  deployConfig?: z.infer<typeof KeptDeployConfig>;
+};
 
 /** THE SCRIPT'S ONE INPUT (core/alchemy/src/config.ts `MindConfig`) BUT FOR A NEW MIND'S ID, or
  *  an error that says which answer it refuses. A new mind takes the zone `domain` whole, has
@@ -146,13 +161,16 @@ export function deployConfigOf(answers: {
     throw new Error(
       `The owner is an email address, and ${ownerEmails.join(", ") || "none"} is not.`,
     );
+  // a mind that is there starts from its deploy's whole config: only what a flag names changes
+  const kept = deployed?.deployConfig;
   return {
+    ...kept,
     mindId: deployed?.mindId,
     controlPlaneHostname,
     ownerEmails,
     topology: deployed?.topology || ("full-cloudflare" as const),
-    alchemy: { stageName: deployed?.stageName || stageNameOf(answers.domain) },
-    cloudflare: { accountId: answers.accountId, zones },
+    alchemy: { ...kept?.alchemy, stageName: deployed?.stageName || stageNameOf(answers.domain) },
+    cloudflare: { ...kept?.cloudflare, accountId: answers.accountId, zones },
   };
 }
 
@@ -165,11 +183,14 @@ const WorkerSettings = z.object({
 /** A DEPLOYED MIND'S CONFIG OUT OF ITS BOUNDARY WORKER'S SETTINGS: the stack gives every Worker
  *  the same config as the plain-text variable `ITERATE` (iterate/mind-config), and Cloudflare
  *  lists a Worker's plain-text variables with their text. Undefined for settings that hold none. */
-export function mindConfigIn(settings: unknown) {
-  const variable = WorkerSettings.safeParse(settings).data?.bindings.find(
-    (binding) => binding.type === "plain_text" && binding.name === "ITERATE",
-  );
-  return variable?.text ? parsed(DeployedConfig, variable.text) : undefined;
+export function mindConfigIn(settings: unknown): Omit<DeployedMind, "stageName"> | undefined {
+  const text = (name: string) =>
+    WorkerSettings.safeParse(settings).data?.bindings.find(
+      (binding) => binding.type === "plain_text" && binding.name === name,
+    )?.text;
+  const config = parsed(DeployedConfig, text("ITERATE") || "");
+  const deployConfig = parsed(KeptDeployConfig, text("DEPLOY_CONFIG") || "");
+  return config && { ...config, deployConfig };
 }
 
 /** Whether a line of a deploy's output says that the stack's state store refused a request. A
@@ -177,6 +198,40 @@ export function mindConfigIn(settings: unknown) {
  *  the one failure after which the command deploys again by itself. */
 export const saysTheStateStoreRefused = (line: string) =>
   /State store .*failed|StateStoreError/.test(line);
+
+/** WHAT THE COMMAND DOES NEXT FOR THE ACCOUNT'S ZERO TRUST ORGANIZATION, by Cloudflare's answer to
+ *  `GET /accounts/<id>/access/organizations`, or, once `tried`, to the set-up after it. An owner
+ *  proves their address through Cloudflare Access, which needs the organization
+ *  (core/alchemy/src/access-team.ts). Cloudflare answers:
+ *
+ *  - 200 with the team's domain: there is one: go on;
+ *  - 404, or 200 with no domain: there is none;
+ *  - 403 "access.api.error.not_enabled: Access is not enabled" (code 9999): Zero Trust was never
+ *    turned on.
+ *
+ *  For both of the last two the command first tries the set-up that the script would make, the
+ *  same `POST` with no name, so Cloudflare picks the team's (`make`). Refused for Access or a plan,
+ *  it is a gate that the person clears on Cloudflare's page; any other refusal, a missing
+ *  permission say, stops the command with Cloudflare's words. Nobody has yet seen the set-up on
+ *  an account that never had Zero Trust: whether Cloudflare allows it there is unknown. */
+export function zeroTrustStep(account: string, answer: Answer, tried: boolean) {
+  if (answer.status === 200 && resultOf(z.object({ auth_domain: z.string().min(1) }), answer))
+    return { next: "go" } as const;
+  const none = answer.status === 404 || answer.status === 200;
+  const notEnabled = /not_enabled|not enabled|\bplans?\b|subscription/i.test(answer.error);
+  if (!tried && (none || notEnabled)) return { next: "make" } as const;
+  if (none || notEnabled)
+    return {
+      next: "gate",
+      page: `https://one.dash.cloudflare.com/${account}/`,
+      words:
+        "Turn on Zero Trust: an owner of the mind proves their email address through Cloudflare Access, which is part of it.\nOn this page choose a team name and the Free plan. Cloudflare may ask for a payment method, and the Free plan charges nothing.",
+    } as const;
+  return {
+    next: "stop",
+    words: `Cloudflare refused ${tried ? "to set up" : "to read"} the account's Zero Trust organization (${answer.status}: ${answer.error}). The access needs "Access: Organizations, Identity Providers, and Groups Write". Nothing is deployed.`,
+  } as const;
+}
 
 /** A word made to end in "erate", as "iterate" does: one final a, e, i, o, u or y goes first,
  *  when more than that letter is there (misha gives misherate, jonas gives jonaserate). */
@@ -896,6 +951,17 @@ export async function deployedMind(cf: Cloudflare, account: string, stageName: s
   const boundary = `iterate-${stageName}-boundary`;
   const settings = await cf("GET", `/accounts/${account}/workers/scripts/${boundary}/settings`);
   if (settings.status === 404) return undefined;
+  // A boundary Worker with no variable `ITERATE` is one of iterate's earlier stack, which kept a
+  // mind's config elsewhere: this command neither deploys over it nor erases its domain.
+  if (
+    settings.status === 200 &&
+    !WorkerSettings.safeParse(settings.result).data?.bindings.some(
+      (binding) => binding.name === "ITERATE",
+    )
+  )
+    throw new Error(
+      `The mind whose boundary Worker is ${boundary} runs iterate's earlier stack, and this command works on a mind of the new stack alone. It does not move a mind from the earlier stack yet: iterate moves it. Nothing was changed.`,
+    );
   const config = mindConfigIn(settings.result);
   if (!config)
     throw new Error(
@@ -1322,12 +1388,16 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       (await cf("GET", `/accounts/${account.id}${path}`)).status === 200;
     const paidPath = "/containers/applications";
     const r2Path = "/r2/buckets?per_page=1";
-    const [paid, r2, zones, subdomain] = await Promise.all([
+    const zeroTrustPath = `/accounts/${account.id}/access/organizations`;
+    const [paid, r2, zones, subdomain, zeroTrustRead] = await Promise.all([
       on(paidPath),
       on(r2Path),
       zonesOf(cf, account.id),
       cf("GET", `/accounts/${account.id}/workers/subdomain`),
+      cf("GET", zeroTrustPath),
     ]);
+    let zeroTrust = zeroTrustStep(account.id, zeroTrustRead, false);
+    if (zeroTrust.next === "stop") throw new Error(zeroTrust.words);
     p.log.info(
       `Account ${account.name}: Workers Paid ${paid ? "on" : "off"}, R2 ${r2 ? "on" : "off"}, ${zones.length} domain${zones.length === 1 ? "" : "s"}.`,
     );
@@ -1354,6 +1424,10 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     if (deployed && !deployed.zones.includes(domain))
       throw new Error(
         `The account has a mind at ${deployed.controlPlaneHostname} whose stack is named ${stageName}, the name that a mind at ${domain} gets, and ${domain} is none of its domains (${deployed.zones.join(", ")}). Choose another domain.`,
+      );
+    if (deployed && !deployed.deployConfig)
+      throw new Error(
+        `The mind at ${deployed.controlPlaneHostname} was deployed before its stack kept the deploy's whole config, so a deploy from here could drop what no Worker holds, such as its sandboxes' image. Nothing was changed. Deploy it once with its own config by core/alchemy's script (core/alchemy/README.md), then run the command again.`,
       );
     const config = deployConfigOf({
       accountId: account.id,
@@ -1469,6 +1543,29 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       );
       await until("Waiting for R2", () => on(r2Path));
     }
+    // ZERO TRUST (`zeroTrustStep`): set up by the command where Cloudflare allows it, else a gate
+    if (zeroTrust.next === "make") {
+      const made = await cf("POST", zeroTrustPath, {});
+      const after = await cf("GET", zeroTrustPath);
+      const set = zeroTrustStep(account.id, after, true).next === "go";
+      zeroTrust = zeroTrustStep(account.id, set ? after : made, true);
+      if (set)
+        p.log.success(
+          "Zero Trust is set up in the account, with a team name that Cloudflare chose.",
+        );
+    }
+    if (zeroTrust.next === "stop") throw new Error(zeroTrust.words);
+    if (zeroTrust.next === "gate") {
+      if (!interactive())
+        throw new Error(
+          `${zeroTrust.words}\n${zeroTrust.page}\nThen run the command again. Nothing is deployed.`,
+        );
+      page(zeroTrust.words, zeroTrust.page);
+      await until(
+        "Waiting for Zero Trust",
+        async () => zeroTrustStep(account.id, await cf("GET", zeroTrustPath), true).next === "go",
+      );
+    }
     const zone = await zoneOf(cf, account.id, pick);
     p.log.success(`${zone.name} is active in the account.`);
     if (!pick.zone) {
@@ -1476,6 +1573,11 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       if (!arrived || arrived.unread)
         throw new Error(
           `Cloudflare did not answer with the Workers routes and DNS records of ${domain}, so nothing says what lives there. Nothing was changed. Run the command again.`,
+        );
+      // a route of a mind's boundary came with the domain: the run's checks of a mind come first
+      if (arrived.stageName)
+        throw new Error(
+          `${domain} came with the route of a mind's boundary Worker, iterate-${arrived.stageName}-boundary. Nothing was changed. Run the command again.`,
         );
       holdings = await holdingsToErase(arrived.uses || [], zone.id);
     }
