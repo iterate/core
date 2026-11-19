@@ -21,7 +21,6 @@ import {
   InvokeHandle,
   normalizedItxExpression,
 } from "iterate/expression";
-import { ITX_PRINCIPAL_HEADER, stampedPersonOf, type Principal } from "iterate/principal";
 import type {
   ContextListing,
   ContextListOptions,
@@ -34,9 +33,6 @@ import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/
 import { causeOfDelivery, deepestCause, newChain, parseCause, type Cause } from "./cause.ts";
 import {
   ITX_APP_HEADER,
-  ITX_CALLER_PATH_HEADER,
-  ITX_RUNS_ROW_HEADER,
-  ITX_GRANT_HEADER,
   isConfigPointerMatch,
   refuseNonPlatformWrites,
   sha256Hex,
@@ -51,6 +47,7 @@ import {
 import { mintOnBehalfOf, type OnBehalfOf } from "./on-behalf-of.ts";
 import { normalizeControlEvent, type CoreState } from "./stream/core-processor.ts";
 import {
+  callerOfStampedRequest,
   ITX_EXPRESSION_FETCH_HEADER,
   parseFetchExpression,
   itxExpressionEndingInFetch,
@@ -1424,33 +1421,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
         headers.delete(ITX_APP_HEADER);
-        // Trusted, so asserted rather than parsed: the edge sets it after admission, and every other
-        // source of it is stripped (ItxEntrypoint strips a loaded worker's).
-        const principal = JSON.parse(
-          headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
-        ) as Principal | null;
-        const grant = headers.get(ITX_GRANT_HEADER) || undefined;
-        // as the principal: the hop that sent this request stamped it from its own caller
-        const person = stampedPersonOf(request) || undefined;
-        const callerPath = headers.get(ITX_CALLER_PATH_HEADER) || undefined;
-        headers.delete(ITX_CALLER_PATH_HEADER);
-        const runsRow = headers.get(ITX_RUNS_ROW_HEADER) !== null;
-        headers.delete(ITX_RUNS_ROW_HEADER);
-        const cause = parseCause(headers.get(ITERATE_CAUSE_HEADER)) ?? newChain("a request");
-        headers.delete(ITERATE_CAUSE_HEADER);
+        const caller = callerOfStampedRequest(request, headers, app);
         const forwarded = new Request(request, {
           headers,
           body: this.#expressionFetchBody(request),
         });
-        const caller = {
-          principal,
-          grant,
-          person,
-          path: callerPath,
-          cause,
-          ...(app && { app: true as const }),
-          ...(runsRow && { runsRow: true as const }),
-        };
         const result = await this.#callerStorage.run(caller, () =>
           this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),
         );

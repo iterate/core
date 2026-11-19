@@ -233,6 +233,10 @@ test("a member who opens the view reads what a member reads; anyone else reads a
   const asMember = readsOf(request({ "x-itx-principal": JSON.stringify(EVE) }), person);
   expect(asMember([ADAS_EVENT])).toEqual([ADAS_EVENT]);
   expect(readsOf(request({}), person)([ADAS_EVENT])).toEqual([ADAS_EVENT_AS_READ]);
+  // another mind (`x-itx-mind`) is no member: its request reads as a person's who is none
+  const mind = { actor: "ab".repeat(32), kind: "mind", hostname: "iterate.peer.example" };
+  const asMind = readsOf(request({ "x-itx-mind": JSON.stringify(mind) }), person);
+  expect(asMind([ADAS_EVENT])).toEqual([ADAS_EVENT_AS_READ]);
 });
 
 test("the kernel's lend dups, probes, watches and disposes of the page's own callback", async () => {

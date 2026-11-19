@@ -6,6 +6,7 @@
 // caller, and signs its own tokens, stays in the platform.
 import { z } from "zod";
 import { codedError } from "./lib.ts";
+import { isMindControlPlaneHostname } from "./signed.ts";
 
 /** Who is acting: a stable actor id (the auth Worker's user id) and, when known, an email. A
  *  platform admin signed in as someone else is two people (RFC 8693's subject and actor): the
@@ -20,16 +21,31 @@ export type Principal = {
    *  principal (`x-itx-principal`, `source.principal`) never has it. */
   name?: string;
   impersonatedBy?: { actor: string; email: string };
-  /** "mind": another mind, which signed with the key it publishes; `actor` is its domain. Only a
-   *  signer's principal has it (`source.signer`, core/auth-worker/src/minds.ts). "guest": a person
-   *  who typed a name and proved nothing (`Person.method` "guest"), named as who asked or who
-   *  holds, like `name`: a verified principal is never one. Absent: a person or a service. */
+  /** "mind": another mind. Two places name one: a signer's principal (`source.signer`,
+   *  core/auth-worker/src/minds.ts), where `actor` is its domain, and a request that the mind
+   *  signed, which the boundary stamps in `ITX_MIND_HEADER` with `actor` the 64-hex mind id and
+   *  `hostname` beside it (`principalStampOf`). A mind is no member: who asks is not what they
+   *  may do, so the kernel carries it apart from every member (core/itx `Caller.mind`). "guest": a
+   *  person who typed a name and proved nothing (`Person.method` "guest"), named as who asked or
+   *  who holds, like `name`: a verified principal is never one. Absent: a person or a service. */
   kind?: "mind" | "guest";
+  /** A mind's control-plane hostname, beside its id in a mind's stamp: text to show, never a key.
+   *  A hostname can move to another mind, the id cannot: decide by `actor`. */
+  hostname?: string;
 };
 
 /** The header ingress sets on a Request it forwards on a member's behalf, after the bearer or the
- *  session cookie checks out, and strips from every inbound Request. */
+ *  session cookie checks out, and strips from every inbound Request. It names a member alone:
+ *  another mind has `ITX_MIND_HEADER`. Read both through `principalStampOf`. */
 export const ITX_PRINCIPAL_HEADER = "x-itx-principal";
+
+/** The header ingress sets, as the JSON of a mind's `Principal` (`{ actor: <mind id>, kind:
+ *  "mind", hostname }`), on a Request that another mind signed and ingress checked, and strips
+ *  from every inbound Request. A header of its own, beside `ITX_PRINCIPAL_HEADER` as
+ *  `ITX_PERSON_HEADER` is: a reader that knows only `ITX_PRINCIPAL_HEADER` (one of a Worker or an
+ *  SDK from before this header) sees nobody, and refuses as for nobody, so no order of deploys is
+ *  needed for a mind's request to stay no member's. Never beside a member, a grant or a person. */
+export const ITX_MIND_HEADER = "x-itx-mind";
 
 /** The header the edge sets beside `ITX_PRINCIPAL_HEADER`: the OAuth grant the principal acts
  *  through, one per connected client. Stripped from every inbound Request. */
@@ -148,11 +164,61 @@ export function stampedPersonOf(request: Request): Person | null {
 /** What a person with an address is called for now: the part of it before the "@". */
 export const nameInEmail = (email: string) => displayNameOf(email.split("@")[0] || "");
 
-const StampedPrincipal = z.object({
-  actor: z.string(),
+/** A MEMBER'S STAMP: a person or the operator. It never has a mind's fields, `kind` or
+ *  `hostname`: so a mind's stamp that lost its `kind` is a defect, never a member. */
+export const MemberPrincipal = z.object({
+  actor: z.string().min(1),
   email: z.string().optional(),
   impersonatedBy: z.object({ actor: z.string(), email: z.string() }).optional(),
+  kind: z.never().optional(),
+  hostname: z.never().optional(),
 });
+/** A member as the platform stamps one: what `Caller.principal` holds (core/itx). Its `kind` and
+ *  `hostname` are `never`, so a mind's stamp does not compile in its place. */
+export type MemberPrincipal = z.infer<typeof MemberPrincipal>;
+
+/** A PRINCIPAL THAT THE PLATFORM VOUCHES IS A MEMBER, read as one where it enters the kernel (the
+ *  API's session, core/mind-worker rpc.ts). Throws for one with a mind's or a guest's fields: a
+ *  defect, because only a member's is passed here. */
+export const memberPrincipalOf = (principal: Principal): MemberPrincipal =>
+  MemberPrincipal.parse(principal);
+
+/** ANOTHER MIND'S STAMP: its id, which decides, and its control-plane hostname, a label. Nothing
+ *  else rides it. */
+const MindPrincipal = z.strictObject({
+  actor: z.string().regex(/^[0-9a-f]{64}$/, "a mind's id: 64 lower-case hex"),
+  kind: z.literal("mind"),
+  hostname: z.string().refine(isMindControlPlaneHostname, "a mind's control-plane hostname"),
+});
+/** Another mind as the platform stamps one: what `Caller.mind` holds (core/itx). */
+export type MindPrincipal = z.infer<typeof MindPrincipal>;
+
+/** WHO IS STAMPED AS A PRINCIPAL: the member in `ITX_PRINCIPAL_HEADER`, read with the member's
+ *  schema, and another mind in `ITX_MIND_HEADER`, read with the mind's. The two schemas cannot be
+ *  crossed, so a mind is never `principal`. This is the one reader of both headers
+ *  (`stampedCallerOf`, and the kernel's own read of a Request it stamped). Ingress strips every
+ *  `x-itx-*` a caller sends, so a stamp is trusted as it stands: a malformed one, a header that is
+ *  present and empty, or a member and a mind on one request, is a defect, and throws. An absent
+ *  header is nobody. */
+export function principalStampOf(headers: Headers): {
+  principal: MemberPrincipal | null;
+  mind: MindPrincipal | undefined;
+} {
+  const principal = stampIn(headers, ITX_PRINCIPAL_HEADER, MemberPrincipal) || null;
+  const mind = stampIn(headers, ITX_MIND_HEADER, MindPrincipal);
+  if (principal && mind)
+    throw new Error(`a member and a mind are stamped on one request: a defect`);
+  return { principal, mind };
+}
+
+/** The stamp in the header `name`, parsed with `schema`, or undefined when the header is absent. */
+function stampIn<T>(headers: Headers, name: string, schema: z.ZodType<T>): T | undefined {
+  const stamped = headers.get(name);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- absent (null) is nobody, present and empty is a defect: the two must not collapse
+  if (stamped === null) return undefined;
+  if (!stamped) throw new Error(`${name} is present and empty: a defect`);
+  return schema.parse(JSON.parse(stamped));
+}
 
 /** When the credential stamped on `request` ends, in epoch milliseconds, or null when none is
  *  stamped (`ITX_EXPIRES_HEADER`). */
@@ -161,24 +227,30 @@ export function stampedExpiryOf(request: Request): number | null {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
 }
 
-/** THE CALLER INGRESS STAMPED on `request`: the principal, the grant they came through, which
- *  every event they append then carries, and the signed-in person of a visitor to a mind's host
- *  (`stampedPersonOf`). Null, and no person, when nobody is stamped. Ingress strips every
- *  `x-itx-*` a caller sends and stamps its own, and only ingress reaches a mind, so the stamp is
- *  trusted as it stands: a malformed one is a defect, and throws. This is the one read of who
- *  asks: the kernel carries the answer with the call, and stamps each Request that it hands to
- *  the mind's code from it (core/itx `stampCallerHeaders`). */
+/** THE CALLER INGRESS STAMPED on `request`: the principal, a member, and the grant they came
+ *  through, which every event they append then carries; or `mind`, another mind whose signed
+ *  request ingress checked, which is never a principal and comes with no grant; and the signed-in
+ *  person of a visitor to a mind's host (`stampedPersonOf`). Null, and no person, when nobody is
+ *  stamped. Ingress strips every `x-itx-*` a caller sends and stamps its own, and only ingress
+ *  reaches a mind, so the stamp is trusted as it stands: a malformed one is a defect, and throws,
+ *  as does a grant or a person beside a mind: a mind's request is no person's, so it never opens a
+ *  person's view. This is the one read of who asks: the kernel carries the answer with the call,
+ *  and stamps each Request that it hands to the mind's code from it (core/itx
+ *  `stampCallerHeaders`), and reads it back with this where such a Request arrives. */
 export function stampedCallerOf(request: Request): {
-  principal: Principal | null;
+  principal: MemberPrincipal | null;
+  mind: MindPrincipal | undefined;
   grant: string | undefined;
   person: Person | undefined;
 } {
-  const principal = request.headers.get(ITX_PRINCIPAL_HEADER);
-  return {
-    principal: principal ? StampedPrincipal.parse(JSON.parse(principal)) : null,
-    grant: request.headers.get(ITX_GRANT_HEADER) || undefined,
-    person: stampedPersonOf(request) || undefined,
-  };
+  const { principal, mind } = principalStampOf(request.headers);
+  const grant = request.headers.get(ITX_GRANT_HEADER) || undefined;
+  const person = stampedPersonOf(request) || undefined;
+  if (mind && grant)
+    throw new Error(`a grant is stamped beside a mind (${ITX_MIND_HEADER}): a defect`);
+  if (mind && person)
+    throw new Error(`a person is stamped beside a mind (${ITX_MIND_HEADER}): a defect`);
+  return { principal, mind, grant, person };
 }
 
 /** WHO CALLS A SERVICE, a Worker of the stack's own Cloudflare account that its config names
@@ -191,13 +263,14 @@ export const ServiceCaller = z.object({
   mind: z.string(),
   path: z.string(),
   call: z.string(),
-  principal: StampedPrincipal.optional(),
+  // a member's: a call carries `Caller.principal`, which is never a mind
+  principal: MemberPrincipal.optional(),
   grant: z.string().optional(),
   onBehalfOf: z
     .object({
       // who asked, with the name to show them by and whether they are a guest (`Principal.name`,
       // `kind`), which the caller's own verified `principal` above never has
-      principal: StampedPrincipal.extend({
+      principal: MemberPrincipal.extend({
         name: z.string().optional(),
         kind: z.enum(["mind", "guest"]).optional().catch(undefined),
       }),

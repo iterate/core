@@ -2,11 +2,13 @@ import { expect, test, vi } from "vitest";
 import { type ItxExpression, parseItxExpressionPrefix } from "iterate/expression";
 import { codedError } from "iterate/lib";
 import type { StreamEventInput } from "iterate/stream/processor";
+import type { Caller } from "../caller.ts";
 import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
 import {
   appendAtAttach,
   eventsOfARedial,
   RpcStubDirectory,
+  callerOfStampedRequest,
   stampCallerHeaders,
   unsetByClose,
   type UnsetByClose,
@@ -176,6 +178,7 @@ test("a lend that takes the name from anyone (a member's) takes it from another 
 test("a hop names its own caller on a request, over every caller that the request named itself", () => {
   const carried = {
     "x-itx-principal": JSON.stringify({ actor: "user_2" }),
+    "x-itx-mind": JSON.stringify({ actor: "cd".repeat(32), kind: "mind", hostname: "a.example" }),
     "x-itx-grant": "grant_2",
     "x-itx-person": JSON.stringify({ userId: "user_2", email: "b@example.net" }),
     "x-itx-expires": "2000000000",
@@ -192,6 +195,77 @@ test("a hop names its own caller on a request, over every caller that the reques
     nobody: { accept: "*/*" },
     visitor: { accept: "*/*", "x-itx-app": "1", "x-itx-person": JSON.stringify(person) },
   });
+});
+
+// The request that a mind's code gets names another mind that asks in `x-itx-principal`, so the
+// code can decide by its id; never beside a member, and never with a grant.
+test("a hop names another mind that asks in x-itx-mind, with no grant, and a member over it", () => {
+  const mind = { actor: "ab".repeat(32), kind: "mind" as const, hostname: "iterate.peer.example" };
+  const member = { actor: "user_1", email: "a@example.com" };
+  const byMind = new Headers({ "x-itx-grant": "grant_forged" });
+  stampCallerHeaders(byMind, { principal: null, mind, grant: "grant_1" });
+  const both = new Headers();
+  stampCallerHeaders(both, { principal: member, mind, grant: "grant_1" });
+  expect({ byMind: Object.fromEntries(byMind), both: Object.fromEntries(both) }).toEqual({
+    byMind: { "x-itx-mind": JSON.stringify(mind) },
+    both: { "x-itx-principal": JSON.stringify(member), "x-itx-grant": "grant_1" },
+  });
+});
+
+// A grant rides a caller with no principal (a key's session, whose lend names no member) as it
+// rides a member; beside a mind it is never written.
+test("a hop writes a grant with no principal, and no grant beside a mind", () => {
+  const mind = { actor: "ab".repeat(32), kind: "mind" as const, hostname: "iterate.peer.example" };
+  const byKey = new Headers();
+  stampCallerHeaders(byKey, { principal: null, grant: "key:x" });
+  const byMind = new Headers();
+  stampCallerHeaders(byMind, { principal: null, mind, grant: "key:x" });
+  expect({ byKey: Object.fromEntries(byKey), byMind: Object.fromEntries(byMind) }).toEqual({
+    byKey: { "x-itx-grant": "key:x" },
+    byMind: { "x-itx-mind": JSON.stringify(mind) },
+  });
+});
+
+// The context's expression fetch reads back what a hop stamped: another mind comes back as `mind`,
+// never as the principal, and with no grant; a member comes back as the principal.
+test("a context's expression fetch reads another mind that a hop stamped as mind, never as the principal", () => {
+  const mind = { actor: "ab".repeat(32), kind: "mind" as const, hostname: "iterate.peer.example" };
+  const readBack = (caller: Caller) => {
+    const headers = new Headers();
+    stampCallerHeaders(headers, caller);
+    const request = new Request("https://context.example/", { headers });
+    const { principal, mind, grant } = callerOfStampedRequest(request, headers, false);
+    return { principal, mind, grant };
+  };
+  expect([
+    readBack({ principal: null, mind, grant: "grant_1" }),
+    readBack({ principal: { actor: "user_1" }, grant: "grant_1" }),
+  ]).toEqual([
+    { principal: null, mind, grant: undefined },
+    { principal: { actor: "user_1" }, mind: undefined, grant: "grant_1" },
+  ]);
+});
+
+// The expression fetch reads as ingress does: a grant or a person beside a mind is a defect there
+// too, though no hop of the kernel writes one (`stampCallerHeaders` drops the grant).
+test.for([
+  {
+    beside: "a grant",
+    header: "x-itx-grant",
+    value: "grant_1",
+    refusal: /grant is stamped beside a mind/,
+  },
+  {
+    beside: "a person",
+    header: "x-itx-person",
+    value: JSON.stringify({ userId: "user_1", email: "a@example.com", name: "a", method: "email" }),
+    refusal: /person is stamped beside a mind/,
+  },
+])("a context's expression fetch refuses $beside beside a mind", ({ header, value, refusal }) => {
+  const mind = { actor: "ab".repeat(32), kind: "mind", hostname: "iterate.peer.example" };
+  const headers = new Headers({ "x-itx-mind": JSON.stringify(mind), [header]: value });
+  const request = new Request("https://context.example/", { headers });
+  expect(() => callerOfStampedRequest(request, headers, false)).toThrow(refusal);
 });
 
 const member = { actor: "user_1", email: "a@example.com" };

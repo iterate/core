@@ -17,7 +17,7 @@ export type OnBehalfOf = {
   call?: string;
 };
 
-export const PrincipalStamp = z.object({
+const PrincipalStamp = z.object({
   actor: z.string(),
   email: z.string().optional(),
   // a person's name to show, and that they are a guest (iterate/principal `Principal.name`,

@@ -1,6 +1,6 @@
 import { itxExpressionStepName, type ItxExpressionPrefix } from "iterate/expression";
 import { codedError } from "iterate/lib";
-import type { Person, Principal } from "iterate/principal";
+import type { MemberPrincipal, MindPrincipal, Person, Principal } from "iterate/principal";
 import type { EventCopiedFrom, StreamEventInput } from "iterate/stream/processor";
 import { storedCause, type Cause } from "./cause.ts";
 import type { OnBehalfOf } from "./on-behalf-of.ts";
@@ -8,13 +8,22 @@ import type { OnBehalfOf } from "./on-behalf-of.ts";
 // Set only by trusted code: the DO's `invoke` is a Workers-RPC verb, never capnweb-exposed, so a
 // client cannot supply its own `Caller`.
 export type Caller = {
-  principal: Principal | null;
+  // A member, or null. Never another mind: that rides `mind`, so no check that reads this field
+  // can take a mind for a member. The two types differ, so a swapped assignment does not compile.
+  principal: MemberPrincipal | null;
   grant?: string;
   // The signed-in person of a visitor, member or not, as the boundary stamped them on the request
   // that this call serves (iterate/principal `stampedCallerOf`). Read there alone: a Request that
   // the kernel hands to loaded code names the person from here (./context/rpc-stubs.ts
   // `stampCallerHeaders`), never from its own headers.
   person?: Person;
+  // Another mind that asks, as the boundary stamped it on the request that this call serves
+  // (iterate/principal `principalStampOf`): `{ actor: <mind id>, kind: "mind", hostname }`. Read
+  // there alone, and carried wherever `person` is. It gives NO authority: nothing decides by it,
+  // no event is stamped with it, and to the kernel the call is one that names no member. A Request
+  // that the kernel hands to loaded code names it in `x-itx-mind` when no member asks
+  // (./context/rpc-stubs.ts `stampCallerHeaders`), so the mind's own code can decide by its id.
+  mind?: MindPrincipal;
   // A member's session held by a page of the mind's own host (serve-host.ts `itxSession`).
   via?: { appPage: string };
   // Set by the first `cd` hop. Its presence means the input expression was already admitted;
@@ -64,6 +73,7 @@ export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   const source: NonNullable<StreamEventInput["source"]> = { origin: caller.path || here };
   if (caller.cause) source.cause = storedCause(caller.cause);
   if (event.source?.processor) source.processor = event.source.processor;
+  // a member alone: `caller.mind` is no principal, and stamps nothing
   if (caller.principal) source.principal = caller.principal;
   if (caller.principal && caller.grant) source.grant = caller.grant;
   if (caller.principal && caller.via) source.via = caller.via;
@@ -102,7 +112,8 @@ export function refusePlatformIdempotencyKeys(
   caller: Caller,
 ): void {
   if (caller.platform && !caller.signer) return;
-  const fromOutside = caller.app || caller.principal || caller.signer;
+  // another mind's request is from outside, as a member's is, though it names no member
+  const fromOutside = caller.app || caller.principal || caller.mind || caller.signer;
   for (const event of events) {
     if (event.type === "events.iterate.com/itx/schedule-set")
       // the cast: a schedule's payload holds the events that it will append

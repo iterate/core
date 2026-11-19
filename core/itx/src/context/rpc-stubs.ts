@@ -2,8 +2,11 @@ import { failureKind } from "iterate/platform-retry";
 import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import {
   ITX_EXPIRES_HEADER,
+  ITX_MIND_HEADER,
   ITX_PERSON_HEADER,
   ITX_PRINCIPAL_HEADER,
+  MemberPrincipal,
+  stampedCallerOf,
   stampJsonOf,
 } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
@@ -17,7 +20,7 @@ import {
   type ItxExpressionInput,
 } from "iterate/expression";
 import { z } from "zod";
-import { causeHeader, type Cause } from "../cause.ts";
+import { causeHeader, newChain, parseCause, type Cause } from "../cause.ts";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
@@ -26,7 +29,7 @@ import {
   type Caller,
 } from "../caller.ts";
 import { itxHost } from "../host.ts";
-import { OnBehalfOfStamp, PrincipalStamp } from "../on-behalf-of.ts";
+import { OnBehalfOfStamp } from "../on-behalf-of.ts";
 import {
   FETCH_UPGRADE_CONTEXT_HEADER,
   FETCH_UPGRADE_EYEBALL_HEADER,
@@ -53,10 +56,13 @@ export type RpcStubPagerAttachRequest = {
   lenderStamp?: LenderStamp;
 };
 /** The part of a `Caller` that names who it is, and nothing that gives it power (`platform`,
- *  `app`, `config`, `signer`, `approvedAct`, `runsRow`, `path`, `delivery`). */
+ *  `app`, `config`, `signer`, `approvedAct`, `runsRow`, `path`, `delivery`). `mind` is left out
+ *  on purpose: another mind stamps no event (caller.ts `stampCaller`), so a lend that a mind's
+ *  request makes stamps nobody. */
 export type LenderStamp = Pick<Caller, "principal" | "grant" | "via" | "onBehalfOf">;
 const LenderStampHeader = z.object({
-  principal: PrincipalStamp.nullable(),
+  // a member's, as `Caller.principal` is: a `kind` on it is a defect, never dropped
+  principal: MemberPrincipal.nullable(),
   grant: z.string().optional(),
   via: z.object({ appPage: z.string() }).optional(),
   onBehalfOf: OnBehalfOfStamp.optional(),
@@ -550,6 +556,7 @@ export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
 export function stampCallerHeaders(headers: Headers, caller: Caller | null): void {
   for (const name of [
     ITX_PRINCIPAL_HEADER,
+    ITX_MIND_HEADER,
     ITX_GRANT_HEADER,
     ITX_PERSON_HEADER,
     ITX_EXPIRES_HEADER,
@@ -566,13 +573,48 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
     headers.delete(name);
   if (!caller) return;
   if (caller.cause) headers.set(ITERATE_CAUSE_HEADER, causeHeader(caller.cause));
+  // the member, or else another mind that asks, each in its own header: one request never names
+  // both (iterate/principal `principalStampOf`)
   if (caller.principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(caller.principal));
-  if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
+  else if (caller.mind) headers.set(ITX_MIND_HEADER, JSON.stringify(caller.mind));
+  // a grant rides the member, and any caller that is no mind: a key's session has one and no
+  // principal (iterate-context.ts `#lenderStamp`); a grant beside a mind is a defect where it is
+  // read, so a mind's request carries none
+  if (caller.grant && (caller.principal || !caller.mind))
+    headers.set(ITX_GRANT_HEADER, caller.grant);
   // a name may hold any letter, and a header holds bytes (iterate/principal `stampJsonOf`)
   if (caller.person) headers.set(ITX_PERSON_HEADER, stampJsonOf(caller.person));
   if (caller.path) headers.set(ITX_CALLER_PATH_HEADER, caller.path);
   if (caller.app) headers.set(ITX_APP_HEADER, "1");
   if (caller.runsRow) headers.set(ITX_RUNS_ROW_HEADER, "1");
+}
+
+/** WHO ASKS IN A CONTEXT'S EXPRESSION FETCH (../iterate-context-durable-object.ts): the `Caller`
+ *  that the hop which sent `request` stamped from its own (`stampCallerHeaders`). Every other
+ *  source of these headers is stripped (the boundary strips a caller's, `ItxEntrypoint` a loaded
+ *  worker's), so they are the hop's word. Who asks is read by the one reader that ingress uses
+ *  (iterate/principal `stampedCallerOf`): another mind is `mind`, never a member, and a grant or
+ *  a person beside it throws here as it does there. Only the hop's own fields are read here: the
+ *  caller's path, its row's run and its cause, each taken off `headers`, the copy that goes on.
+ *  `app`: the request came from loaded code. */
+export function callerOfStampedRequest(request: Request, headers: Headers, app: boolean): Caller {
+  const { principal, mind, grant, person } = stampedCallerOf(request);
+  const path = headers.get(ITX_CALLER_PATH_HEADER) || undefined;
+  headers.delete(ITX_CALLER_PATH_HEADER);
+  const runsRow = headers.get(ITX_RUNS_ROW_HEADER) !== null;
+  headers.delete(ITX_RUNS_ROW_HEADER);
+  const cause = parseCause(headers.get(ITERATE_CAUSE_HEADER)) ?? newChain("a request");
+  headers.delete(ITERATE_CAUSE_HEADER);
+  return {
+    principal,
+    grant,
+    person,
+    mind,
+    path,
+    cause,
+    ...(app && { app: true as const }),
+    ...(runsRow && { runsRow: true as const }),
+  };
 }
 
 /** THE REQUEST THAT LOADED CODE GETS, from the arguments of a `fetch` (those of `new Request`: a
@@ -594,6 +636,7 @@ export function requestForLoadedCode(
     principal: caller.principal,
     grant: caller.grant,
     person: caller.person,
+    mind: caller.mind,
     cause,
   });
   for (const [name, value] of Object.entries(itxHost().loadedCodeRequestHeaders?.() || {}))

@@ -75,13 +75,14 @@ export async function serveHostRequest(args: {
     if (route)
       return withoutServeHeader(held)(
         await statelessExpressionFetch(
-          // The route's target runs as loaded code that names no member. The visitor's person is
-          // the boundary's word, so it goes with the call.
+          // The route's target runs as loaded code that names no member. The visitor's person, and
+          // another mind that asks, are the boundary's word, so they go with the call.
           resolverUnder({
             principal: null,
             app: true,
             cause: caller.cause,
             person: caller.person,
+            mind: caller.mind,
           }),
           () => route.target,
           request,
@@ -165,7 +166,8 @@ const withoutServeHeader =
 // A MEMBER'S OWN ITX, FOR THE PAGE THEY ARE ON (iterate/sdk `auth.itx`). The config worker's answer
 // asked for it; it named no caller and handed over no Request. The caller is the one the boundary
 // stamped on the Request this invocation was given, so nothing user code built or altered is read.
-// A principal on a mind host is a member (the boundary stamps no other). The session is the
+// A principal on a mind host is a member: another mind is `caller.mind`, never a principal
+// (iterate/principal `principalStampOf`), so it gets the refusal below. The session is the
 // host's own: a WebSocket upgrade from that origin, ended when the stamp ends, and marked, so what
 // the page appends says it came through a page of the mind's code.
 async function itxSession(args: {

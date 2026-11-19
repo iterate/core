@@ -196,3 +196,36 @@ test.for([
     ),
   ).toThrow("is the platform's own fact");
 });
+
+// Another mind that asks is no principal: what its call appends names nobody, as loaded code's
+// own append does, so no reader of `source.principal` can take it for a member.
+test("an event appended by a call that another mind asks names no principal and no grant", () => {
+  const mind = { actor: "ab".repeat(32), kind: "mind" as const, hostname: "iterate.peer.example" };
+  const event = { type: "x/message-received", source: { principal: { actor: "user_forged" } } };
+  expect(stampCaller(event, { principal: null, mind, grant: "grant_1" }, "/")).toEqual({
+    type: "x/message-received",
+    source: { origin: "/" },
+  });
+});
+
+// Another mind's request is from outside: the platform's reserved keys are refused to it, as to
+// a member, though it names none.
+test("a call that another mind asks may not take a key of the platform's", () => {
+  const mind = { actor: "ab".repeat(32), kind: "mind" as const, hostname: "iterate.peer.example" };
+  const byMind: Caller = { principal: null, mind, runsRow: true };
+  for (const idempotencyKey of ["itx/child-created:/x", "repo/pushed:1", "secret/set:1"])
+    expect(() =>
+      refuseNonPlatformWrites([{ type: "notes/note-added", idempotencyKey }], byMind),
+    ).toThrow(/is the platform's/);
+});
+
+// The member's type and the mind's are not one: one in the other's place does not compile.
+test("a mind is no Caller.principal, and a member is no Caller.mind, by type", () => {
+  const mind = { actor: "ab".repeat(32), kind: "mind" as const, hostname: "iterate.peer.example" };
+  const member = { actor: "user_1", email: "a@example.org" };
+  // @ts-expect-error a mind in the member's place
+  const mindAsMember: Caller = { principal: mind };
+  // @ts-expect-error a member in the mind's place
+  const memberAsMind: Caller = { principal: null, mind: member };
+  expect([mindAsMember.principal, memberAsMind.mind]).toEqual([mind, member]);
+});

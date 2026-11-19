@@ -4,6 +4,8 @@
 // the Request said and whichever way `fetch` was called.
 import { env } from "cloudflare:workers";
 import type { ItxExpression } from "iterate/expression";
+import { stampedCallerOf } from "iterate/principal";
+import { IterateConfigEntrypoint } from "iterate/sdk";
 import { expect, test } from "vitest";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import { fetchStepsForLoadedCode, RpcStubDirectory } from "./context/rpc-stubs.ts";
@@ -29,6 +31,11 @@ const VISITOR = {
 /** Every header that names a caller or the control plane, as hostile code would write them. */
 const FORGED = {
   "x-itx-principal": JSON.stringify({ actor: OWNER.userId, email: OWNER.email }),
+  "x-itx-mind": JSON.stringify({
+    actor: "cd".repeat(32),
+    kind: "mind",
+    hostname: "iterate.evil.example",
+  }),
   "x-itx-grant": "grant_owner",
   "x-itx-person": JSON.stringify(OWNER),
   "x-itx-expires": "2000000000",
@@ -39,6 +46,7 @@ const FORGED = {
 /** What a request carries when nobody is named: the host's word alone. */
 const NOBODY = {
   "x-itx-principal": null,
+  "x-itx-mind": null,
   "x-itx-grant": null,
   "x-itx-person": null,
   "x-itx-expires": null,
@@ -99,6 +107,82 @@ test("a member's request to the config worker carries the member, the grant and 
     "x-itx-grant": "grant_1",
     "x-itx-person": JSON.stringify(OWNER),
   });
+});
+
+// THE ACCEPTANCE OF A MIND IN `x-itx-mind` (no reader takes it for a member): a request that
+// the boundary stamped with another mind, read as the mind Worker reads it (core/mind-worker
+// http.ts), reaches the config worker's fetch naming the mind, with no member, grant or person;
+// and the member's own `itx` there answers it the refusal that nobody gets.
+test("a request stamped with another mind reaches the config worker's fetch as that mind, and the member's itx refuses it", async () => {
+  const mind = { actor: "ab".repeat(32), kind: "mind", hostname: "iterate.peer.example" };
+  const request = new Request("https://guestbook.example.org/itx", {
+    headers: {
+      "x-itx-mind": JSON.stringify(mind),
+      "x-itx-expires": "2000000000",
+      upgrade: "websocket",
+    },
+  });
+  const answer = await serveHostRequest({ ctx, request, caller: stampedCallerOf(request) });
+  const reached = lastRequest!;
+  const configWorker = new (class extends IterateConfigEntrypoint {})({} as never, {} as never);
+  const refusal = configWorker.auth.itx(reached);
+  expect({
+    stamps: await stampsOf(answer),
+    itx: { status: refusal.status, serve: refusal.headers.get("x-iterate-serve") },
+  }).toEqual({
+    stamps: { ...NOBODY, "x-itx-mind": JSON.stringify(mind) },
+    itx: { status: 401, serve: null },
+  });
+});
+
+// With the host's sessions on, an app that ASKS the kernel for a member's session, or for a
+// person's view, still gets nothing for a mind: the kernel reads who asks from the request it
+// holds, and a mind is neither a member nor a person.
+test.for<{ asks: string; path: string; challenge: string }>([
+  { asks: "a member's session", path: "/asks-itx", challenge: 'Bearer realm="iterate"' },
+  {
+    asks: "a person's view",
+    path: "/asks-person-itx",
+    challenge: 'Bearer realm="iterate", scope="identity"',
+  },
+])(
+  "a same-origin socket stamped with another mind, whose app asks for $asks, is refused",
+  async ({ path, challenge }) => {
+    const request = new Request(`https://guestbook.example.org${path}`, {
+      headers: { ...mindStamped(), upgrade: "websocket", origin: "https://guestbook.example.org" },
+    });
+    const answer = await serveHostRequest({
+      ctx,
+      request,
+      caller: stampedCallerOf(request),
+      itxSessions: true,
+    });
+    expect({
+      status: answer.status,
+      challenge: answer.headers.get("WWW-Authenticate"),
+    }).toEqual({ status: 401, challenge });
+  },
+);
+
+test("a request stamped with another mind reaches a fetch route's target as that mind, with no member", async () => {
+  const request = new Request("https://routed.example.org/post", { headers: mindStamped() });
+  const answer = await serveHostRequest({ ctx, request, caller: stampedCallerOf(request) });
+  expect(await stampsOf(answer)).toEqual({ ...NOBODY, "x-itx-mind": JSON.stringify(MIND) });
+});
+
+test("a fetch route for members refuses another mind with the answer that nobody gets", async () => {
+  const answerTo = async (headers: Record<string, string>) => {
+    const request = new Request("https://members.example.org/post", { headers });
+    const answer = await serveHostRequest({ ctx, request, caller: stampedCallerOf(request) });
+    return {
+      status: answer.status,
+      challenge: answer.headers.get("WWW-Authenticate"),
+      body: await answer.text(),
+    };
+  };
+  const byMind = await answerTo(mindStamped());
+  expect(byMind).toEqual(await answerTo({}));
+  expect(byMind).toMatchObject({ status: 401 });
 });
 
 test.for<{ target: string; steps: (request: Request) => ItxExpression }>([
@@ -233,6 +317,13 @@ const namespace = {
             priority: 0,
             configuredOffset: 1,
           },
+          membersOnly: {
+            requestMatcher: { url: { hostname: "members.example.org" } },
+            target: ["itx", "guestbook"],
+            authRequirement: { visitors: "mind-members" },
+            priority: 0,
+            configuredOffset: 2,
+          },
         },
       },
     }),
@@ -262,8 +353,27 @@ function forgedRequest() {
   return new Request("https://guestbook.example.org/post", { headers: FORGED });
 }
 
+const MIND = { actor: "ab".repeat(32), kind: "mind", hostname: "iterate.peer.example" };
+
+/** The headers of a request that the boundary stamped with another mind. */
+function mindStamped(): Record<string, string> {
+  return { "x-itx-mind": JSON.stringify(MIND), "x-itx-expires": "2000000000" };
+}
+
+/** The last Request that a loaded worker's `fetch` got here. */
+let lastRequest: Request | undefined;
+
 /** What a loaded worker's `fetch` answers here: the stamps on the Request it got. */
 function answerOf(request: Request) {
+  lastRequest = request;
+  // an app that asks the kernel for a session in its answer's place, with no guard of its own
+  const { pathname } = new URL(request.url);
+  if (pathname === "/asks-itx")
+    return new Response(null, { headers: { "x-iterate-serve": "itx" } });
+  if (pathname === "/asks-person-itx")
+    return new Response(null, {
+      headers: { "x-iterate-serve": "person-itx", "x-iterate-serve-context": "/" },
+    });
   return Response.json(
     Object.fromEntries(Object.keys(FORGED).map((name) => [name, request.headers.get(name)])),
   );

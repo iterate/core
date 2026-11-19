@@ -3,6 +3,7 @@
 // lab) answers the same four calls over its socket.
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { contextAt, implicitRootsAt, sessionContext } from "core-itx";
+import { memberPrincipalOf } from "iterate/principal";
 import type { MindTarget } from "iterate/workers";
 import { runApprovedAct } from "./approved-acts.ts";
 import type { Env } from "./env.ts";
@@ -22,7 +23,8 @@ export class Mind extends WorkerEntrypoint<Env> implements MindTarget {
    *  the answer, and what the session lent ends with it (core-itx `sessionContext`). */
   api(who: Parameters<MindTarget["api"]>[0]) {
     const waitUntil = (promise: Promise<unknown>) => this.ctx.waitUntil(promise);
-    if ("principal" in who) return sessionContext(waitUntil, who);
+    if ("principal" in who)
+      return sessionContext(waitUntil, { ...who, principal: memberPrincipalOf(who.principal) });
     // A key is no principal. Its lend is its own act in the log, through its key, and the root
     // below is all that it reaches.
     const { lender } = who;

@@ -1,12 +1,12 @@
 // sdk/auth.ts — WHO IS ASKING, for a mind's config worker: `this.auth` on `IterateConfigEntrypoint`
 // (./index.ts). It reads the stamps ingress puts on a request for one of the mind's hostnames,
 // and answers the challenge that makes ingress sign a person in. The guards are below.
-import { z } from "zod";
 import { isSameOriginBrowserRequest } from "../lib.ts";
 import {
   type AddressedPerson,
-  ITX_PRINCIPAL_HEADER,
   type Person,
+  type Principal,
+  principalStampOf,
   stampedPersonOf,
 } from "../principal.ts";
 import {
@@ -14,8 +14,6 @@ import {
   ITERATE_SERVE_CONTEXT_HEADER,
   ITERATE_SERVE_HEADER,
 } from "../mind-ingress.ts";
-
-const Principal = z.object({ actor: z.string().min(1), email: z.string().optional() });
 
 /** GUARDS FOR A MIND'S CONFIG WORKER, before it serves a page. Every hostname of the mind's
  *  domain but `iterate.<domain>` is the mind's own, and on each one ingress holds the browser
@@ -32,6 +30,11 @@ const Principal = z.object({ actor: z.string().min(1), email: z.string().optiona
  *      by it. `method` is how they signed in: "passkey" or "email". The app names which it takes
  *      (`AppDescription.signIn`, ../app-description.ts) and the mind's issuer holds every sign-in
  *      to that list, so the guards take no list of methods.
+ *    - `auth.principal` reads who is stamped as a principal, or null: a member's
+ *      `{ actor, email }`, or ANOTHER MIND's `{ actor, kind: "mind", hostname }`, on a request that
+ *      the mind signed. A mind is no member: `auth.require` refuses it, as it refuses nobody. An
+ *      app that serves other minds reads `kind === "mind"`, then decides by `actor`, the mind's id;
+ *      `hostname` is a label to show, which can move to another mind.
  *
  *  GUESTS. An app that names `"guest"` in its `signIn` lets in anyone who types a name
  *  (core/auth-worker/src/guest-sign-in.ts). EVERY GUARD REFUSES A GUEST unless its call says
@@ -62,13 +65,16 @@ const Principal = z.object({ actor: z.string().min(1), email: z.string().optiona
  *  into the sign-in on this host and back to the page; a person signed in who is no member gets one
  *  refusal page in place of a member's page. A fetch, a write or a WebSocket upgrade gets the 401
  *  (or, for a non-member at a member's page, a 403) itself. Ingress answers `/.iterate/` on every
- *  mind hostname itself: `/.iterate/sign-out` takes a POST from the host's own page. Any app can
- *  ask for a member the same way:
+ *  mind hostname itself: `/.iterate/sign-out` takes a POST from the host's own page. Any app asks
+ *  for a member so:
  *
  *  ```js
- *  if (!request.headers.get("x-itx-principal"))
- *    return new Response("Sign in\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
+ *  const refused = this.auth.require(request);
+ *  if (refused) return refused;
  *  ```
+ *
+ *  Read who asks through `this.auth`, never from a header by hand: the platform names a member and
+ *  another mind in headers of their own, and `auth.principal` reads both.
  *
  *  A write or a WebSocket upgrade must also come from this origin (or carry no Origin, a non-browser
  *  client), else 403. Ingress already sends such a cookie request on anonymous; this repeats the
@@ -80,12 +86,17 @@ export const auth = {
   require(request: Request): Response | null {
     const refused = crossSiteRefusal(request);
     if (refused) return refused;
-    const principal = request.headers.get(ITX_PRINCIPAL_HEADER);
-    if (principal) {
-      Principal.parse(JSON.parse(principal)); // Platform-owned stamp; malformed means a defect.
-      return null;
-    }
+    // a member alone: another mind's stamp gets the answer that nobody gets. The stamp is the
+    // platform's, so a malformed one is a defect, and throws.
+    if (principalStampOf(request.headers).principal) return null;
     return signIn('Bearer realm="iterate"');
+  },
+  /** WHO IS STAMPED AS A PRINCIPAL: a member, or another mind (`kind: "mind"`, `actor` its id,
+   *  `hostname` a label), or null. AN ANSWER IS NOT A MEMBER: decide by `kind` (a mind has
+   *  `"mind"`, a member none), then by `actor`; guard a member's page with `auth.require`. */
+  principal(request: Request): Principal | null {
+    const { principal, mind } = principalStampOf(request.headers);
+    return principal || mind || null;
   },
   requirePerson(request: Request, options: GuestOption = {}): Response | null {
     const refused = crossSiteRefusal(request);

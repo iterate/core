@@ -333,15 +333,16 @@ export abstract class IterateConfigEntrypoint<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
 > extends WorkerEntrypoint<Env> {
   /** At fetch entry: `const denied = this.auth.require(request); if (denied) return denied;`
-   *  `x-itx-principal` is on a request only when a mind member (or the operator) sent it, safe
-   *  to act on. A page for people who are not members asks with `this.auth.requirePerson(request)`
-   *  and reads who they are with `this.auth.person(request)` (`x-itx-person`). A private route
-   *  written by hand answers the platform's sign-in challenge, which the edge turns into the
-   *  sign-in for a page load (`auth.require` does the same):
+   *  It lets in a mind member (or the operator) alone. `this.auth.principal(request)` names who
+   *  is stamped as a principal: a member, or another mind that signed its request, which is no
+   *  member (`kind: "mind"`). Read both through `this.auth`, never by hand. A page for people who are not members asks
+   *  with `this.auth.requirePerson(request)` and reads who they are with
+   *  `this.auth.person(request)` (`x-itx-person`). A private route answers the platform's sign-in
+   *  challenge, which the edge turns into the sign-in for a page load:
    *
    *  ```js
-   *  if (!request.headers.get("x-itx-principal"))
-   *    return new Response("Sign in\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
+   *  const refused = this.auth.require(request);
+   *  if (refused) return refused;
    *  ```
    *  Public, so a package the worker hosts (`Integration`) reaches it through the worker. */
   readonly auth = auth;

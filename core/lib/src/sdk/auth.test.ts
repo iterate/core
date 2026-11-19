@@ -226,6 +226,56 @@ test.for<{ name: string; headers: Record<string, string>; status: number }>([
   },
 );
 
+// ANOTHER MIND IS NO MEMBER. Its stamp gets the answer that nobody gets, from the member guard
+// and from the member's own `itx`; `auth.principal` names it, for an app that serves other minds.
+const MIND = { actor: "ab".repeat(32), kind: "mind", hostname: "iterate.peer.example" };
+const byMind = { "x-itx-mind": JSON.stringify(MIND) };
+
+test.for(["GET", "POST"])("a %s stamped with a mind gets the 401 that nobody gets", (method) => {
+  const mind = auth.require(workerRequest(method, byMind));
+  const nobody = auth.require(workerRequest(method, {}));
+  expect({
+    status: mind?.status,
+    challenge: mind?.headers.get("WWW-Authenticate"),
+  }).toEqual({ status: nobody?.status, challenge: nobody?.headers.get("WWW-Authenticate") });
+  expect(mind?.status).toBe(401);
+});
+
+test("a mind asking for the member's itx gets the refusal, not the socket", () => {
+  const answer = auth.itx(workerRequest("GET", { upgrade: "websocket", ...byMind }));
+  expect({ status: answer.status, serve: answer.headers.get("x-iterate-serve") }).toEqual({
+    status: 401,
+    serve: null,
+  });
+});
+
+test("auth.principal answers a member, a mind, and nobody", () => {
+  expect([
+    auth.principal(workerRequest("GET", signedIn)),
+    auth.principal(workerRequest("GET", byMind)),
+    auth.principal(workerRequest("GET", {})),
+  ]).toEqual([{ actor: "user:1" }, MIND, null]);
+});
+
+// THE POINT OF A HEADER OF ITS OWN: a reader from before `x-itx-mind`, which knows only
+// `x-itx-principal`, sees nobody on a mind's request, and refuses as for nobody. This is the guard
+// that the SDK's docs taught before (a raw read of the member's header), and the old `require`.
+test("a request that carries only x-itx-mind is nobody to a reader that knows only x-itx-principal", () => {
+  const request = workerRequest("GET", byMind);
+  const oldGuard = (asked: Request) =>
+    asked.headers.get("x-itx-principal")
+      ? null
+      : new Response("Sign in\n", {
+          status: 401,
+          headers: { "WWW-Authenticate": 'Bearer realm="iterate"' },
+        });
+  expect({
+    memberHeader: request.headers.get("x-itx-principal"),
+    oldGuard: oldGuard(request)?.status,
+    require: auth.require(request)?.status,
+  }).toEqual({ memberHeader: null, oldGuard: 401, require: 401 });
+});
+
 function workerRequest(method: string, headers: Record<string, string>) {
   return new Request("https://worker.example/x", { method, headers });
 }
