@@ -211,10 +211,32 @@ costs money each minute. A page draws the call with the UI kit's parts (`@iterat
   host's page leaves, when no member is in the call, when a member sends it away, and after 30
   minutes; a hang-up OpenAI did not take is tried again.
 - **What the agent is told**: one quiet message for each fact (who joined and left, a camera or a
-  screen on and off, the voice agent in and out), `payload.callNote` beside its words, and no
-  turn. A guest is named as "a guest who gives the name …": the name is the guest's claim, cut to
-  40 characters, with no bracket and no line break. Failures of the SFU and OpenAI go to the audit
-  log `<agent>/call`.
+  screen on and off, the voice agent in and out, and what was said), `payload.callNote` beside its
+  words, and no turn. A guest is named as "a guest who gives the name …": the name is the guest's
+  claim, cut to 40 characters, with no bracket and no line break.
+- **What is said reaches the agent.** Each page transcribes its own person's microphone with
+  OpenAI's `gpt-live-transcribe` (a socket with a one-minute key that `transcription` makes from
+  `/secrets/openai`, which never leaves the mind), and only speech is sent. Each finished line goes
+  to `said`, and the agent reads it as `[call] <who> said: "…"`: a member as "<name> (a member)", never by
+  their address (a guest's view reads the agent's log), and a guest as "a guest who gives the name
+  …". Both methods are person methods, so a guest's words count, as
+  words from outside. Bounds: 40 lines a minute for each speaker, 1,000 characters a line, 60
+  transcription sessions in ten minutes for the call. A page transcribes only while it is in the
+  call and its microphone is not muted: a mute closes the session. OpenAI bills
+  `gpt-live-transcribe` by the minute of audio, $0.017 a minute
+  ([price](https://developers.openai.com/api/docs/pricing)), so one person who speaks for an hour
+  costs about $1.02; silence is not sent. What the voice agent said comes from its host
+  page alone. A mind with no OpenAI key has no captions; the call works without them.
+- **The voice agent can ask the agent of the context** (OpenAI's client delegation, its one way
+  out). The model asks on its host tab; the tab hands the request to `delegate` (a member's call,
+  from the host page alone), and the call puts it on the agent's log as a message that starts a
+  turn and is owed an answer: who is in the call, the recent talk as quoted material, and a tag. The
+  agent always answers, in one short spoken reply that begins with the tag, and may look things up
+  for anyone; while a guest is in the call it takes no action with an effect on the transcript
+  alone, and says that a member must type it in the chat. The answer comes back in the live state,
+  and the host tab gives it to the model to say. One request at a time, 6 a minute; an answer
+  waits 90 s at most, and the request ends when the voice agent leaves.
+  Failures of the SFU and OpenAI go to the audit log `<agent>/call`.
 - **The page's parts** (the UI kit): `useCall(context, page, liveValue)` holds the call in the tab;
   `CallBar` is its controls, small enough for an agent's header; `CallTiles` is the cameras, the
   screens and what the call says, beside the chat. TURN over TLS on 443 where UDP is blocked,

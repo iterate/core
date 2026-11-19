@@ -7,12 +7,12 @@
 // root module (or an app's `backend.ts`).
 //
 // - THE PROCESSOR folds the context's share links (call/share.ts) into its state, and tells the call
-//   when a page's row is un-set (`itx/subscription-configured` with no target) and when its own
+//   when the agent wrote a message (a delegation's answer, maybe), when a page's row is un-set (`itx/subscription-configured` with no target) and when its own
 //   look is due (`call/due`, the schedule the call sets). Its live state is what a page draws:
 //   the call (call/rules.ts `live`) and the live links, with no secret's hash.
-// - THE METHODS read who asked from the kernel (`onBehalfOf()`, iterate/sdk). `join`, `signal`
-//   and `leave` are person methods too: a guest's one-context view may call them, and the call
-//   checks the guest's link at each. `voiceAgent` is a member's alone.
+// - THE METHODS read who asked from the kernel (`onBehalfOf()`, iterate/sdk). `join`, `signal`,
+//   `leave`, `transcription` and `said` are person methods too: a guest's one-context view may
+//   call them, and the call checks the guest's link at each. `voiceAgent` is a member's alone.
 // - WHAT IT REACHES: the agent's own context (rows, lent stubs, the quiet notes, its schedule),
 //   the audit log `<agent>/call`, and the mind's root for `fetch` and secrets, which fill each
 //   placeholder on the way out.
@@ -32,10 +32,13 @@ import { isLive, reduceShare, SHARE_EVENTS, ShareState } from "./call/share.ts";
 const ROW_SET = "events.iterate.com/itx/subscription-configured";
 /** A row un-set: its name, and no target. */
 const RowUnset = z.object({ name: z.string(), target: z.null() });
+/** The agent's message: the answer to the voice agent's request, when it is one. */
+const AGENT_SAID = "events.iterate.com/agent/web-message-sent";
+const AgentSaid = z.object({ message: z.string() });
 
 /** How a page turns the call on for an agent: `itx.cd(agent).processors.enable("call", CALL_FACET)`.
  *  The class is this file, in the mind's published config. */
-const CONSUMES = [...SHARE_EVENTS, ROW_SET, CALL_DUE];
+const CONSUMES = [...SHARE_EVENTS, ROW_SET, CALL_DUE, AGENT_SAID];
 export const CALL_FACET = {
   className: "CallDurableObject",
   mainModule: "call.ts",
@@ -87,6 +90,11 @@ class CallProcessor extends StreamProcessor<State> {
   }
 
   override processEvent({ event, state, delivery, runInBackground }: ProcessEventArgs<State>) {
+    if (event?.type === AGENT_SAID) {
+      const said = AgentSaid.safeParse(event.payload);
+      const offset = event.offset;
+      if (said.success) runInBackground(() => this.#call.agentSaid(said.data.message, offset));
+    }
     const unset = event?.type === ROW_SET ? RowUnset.safeParse(event.payload) : null;
     if (unset?.success) {
       const page = unset.data.name;
@@ -113,8 +121,17 @@ export const noteEvent = (content: string, callNote: Record<string, unknown>) =>
 });
 
 export class CallDurableObject extends StreamProcessorDurableObject<State> {
-  static override publicMethods = [...super.publicMethods, "join", "signal", "leave", "voiceAgent"];
-  static override personMethods = ["join", "signal", "leave"];
+  static override publicMethods = [
+    ...super.publicMethods,
+    "join",
+    "signal",
+    "leave",
+    "voiceAgent",
+    "transcription",
+    "said",
+    "delegate",
+  ];
+  static override personMethods = ["join", "signal", "leave", "transcription", "said"];
 
   readonly #call = new Call({
     path: String(this.ctx.props.iterateContextName),
@@ -143,6 +160,21 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
         when: { at: new Date(at).toISOString() },
         events: [{ type: CALL_DUE }],
       });
+    },
+    ask: async (content, idempotencyKey) => {
+      using itx = this.getItx();
+      const [event] = await itx.append({
+        type: "events.iterate.com/agent/context-added",
+        idempotencyKey,
+        payload: {
+          role: "user",
+          actor: { type: "user" },
+          content,
+          answerOwed: true,
+          callNote: { kind: "asked" },
+        },
+      });
+      return Number(event?.offset) || 0;
     },
     outbound: () => ({
       // each call in its own scope, and the answer read whole inside it: no stub outlives a block
@@ -181,6 +213,18 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
   /** Out of the call. */
   leave(page: unknown, admission?: unknown) {
     return this.#call.leave(this.onBehalfOf(), page, admission);
+  }
+  /** A short-lived key for one transcription session of this page's own microphone. */
+  transcription(page: unknown, admission?: unknown) {
+    return this.#call.transcription(this.onBehalfOf(), page, admission);
+  }
+  /** A finished line said: `{ id, text }`, or `{ id, text, ai: true }` from the voice agent's host. */
+  said(page: unknown, line: unknown, admission?: unknown) {
+    return this.#call.said(this.onBehalfOf(), page, line, admission);
+  }
+  /** The voice agent's request for the agent: `{ delegation, transcript }`, from its host page. */
+  delegate(page: unknown, request: unknown, admission?: unknown) {
+    return this.#call.delegate(this.onBehalfOf(), page, request, admission);
   }
   /** The voice agent: `{ start: sdpOffer }` (a member, from the host page), or `{ stop: why }`. */
   voiceAgent(page: unknown, act: unknown, admission?: unknown) {

@@ -11,5 +11,6 @@ export const CALL_FACET = {
     "share/guest-joined",
     "events.iterate.com/itx/subscription-configured",
     "call/due",
+    "events.iterate.com/agent/web-message-sent",
   ],
 };
