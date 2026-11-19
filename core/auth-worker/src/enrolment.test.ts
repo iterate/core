@@ -785,6 +785,8 @@ test.for([
   { next: "http://shop.second.example/", ends: "https://onboarding.example.com/" },
   { next: "blob:https://iterate.example.com/a-page", ends: "https://onboarding.example.com/" },
   { next: "javascript:alert(1)", ends: "https://onboarding.example.com/" },
+  { next: "/", ends: "https://onboarding.example.com/" },
+  { next: "https://iterate.example.com/", ends: "https://onboarding.example.com/" },
   { next: "", ends: "https://onboarding.example.com/" },
 ])(
   "after the first passkey, the browser that came with next $next ends at $ends",

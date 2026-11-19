@@ -33,8 +33,7 @@ import { AccountFacts } from "./account-facts.ts";
 import { isOwner } from "./config.ts";
 import { cookieClaimsOf, cookieOf, newSessionId, sessionCookie, userAgentOf } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
-import { configOf, type Env, issuerOf, onboardingOf } from "./env.ts";
-import { honouredNext } from "./key-rules.ts";
+import { configOf, type Env, explicitFirstPasskeyNext, issuerOf, onboardingOf } from "./env.ts";
 import { outsiderKeysRevoked, outsiderKeysRevokedFacts } from "./keys-pages.ts";
 import { isMember } from "./members.ts";
 import { page, text } from "./pages.ts";
@@ -183,7 +182,7 @@ export async function firstPasskeyResponse(env: Env, request: Request): Promise<
     return session
       ? firstPasskeyAdded(env, request, session)
       : json({ error: "This sign-in is over. Sign in again." }, 403);
-  const next = honouredNext(url.searchParams.get("next"), configOf(env));
+  const next = explicitFirstPasskeyNext(url.searchParams.get("next"), env);
   return session ? formPage(env, session, next) : linkPage(env, next);
 }
 
@@ -345,7 +344,7 @@ async function firstPasskeyAdded(
       {
         key,
         label,
-        next: honouredNext(input.data.next || null, configOf(env)) || onboardingOf(env),
+        next: explicitFirstPasskeyNext(input.data.next || null, env) || onboardingOf(env),
       },
       { headers: { "set-cookie": made.setCookie, "cache-control": "no-store" } },
     ),

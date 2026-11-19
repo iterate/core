@@ -18,8 +18,7 @@
 import { createRemoteJWKSet, errors, jwtVerify } from "jose";
 import { z } from "zod";
 import { enrolmentCookie, FIRST_PASSKEY_PATH } from "./enrolment.ts";
-import { configOf, type Env, onboardingOf } from "./env.ts";
-import { honouredNext } from "./key-rules.ts";
+import { configOf, type Env, explicitFirstPasskeyNext, onboardingOf } from "./env.ts";
 import { errorPage } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
 
@@ -32,7 +31,7 @@ export async function accessSignInResponse(env: Env, request: Request) {
   if (url.pathname !== "/sign-in/access" || request.method !== "GET") return null;
   const config = configOf(env);
   const mind = config.controlPlaneHostname;
-  const next = honouredNext(url.searchParams.get("next"), config) || onboardingOf(env);
+  const next = explicitFirstPasskeyNext(url.searchParams.get("next"), env) || onboardingOf(env);
   const refusal = (outcome: string, words: string) => {
     console.info({ event: "auth.cloudflare-access-proof", outcome });
     return errorPage(words, 403, undefined, [{ href: signInHref(next), label: "Sign in" }]);

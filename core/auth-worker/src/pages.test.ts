@@ -97,6 +97,25 @@ test("the mind's sign-in offers the passkey as its main action, and below it an 
   );
   // an app's page asks for no passkey as it opens
   expect(forApp).not.toContain("signIn(false)");
+  // an app for members (such as Onboarding) shows the owner's Cloudflare Access link carrying its OAuth next
+  const forOnboarding = await signInPage({
+    mind: MIND,
+    next: "/oauth2/auth?client_id=onboarding",
+    app: {
+      host: "onboarding.example.com",
+      origin: "https://onboarding.example.com",
+      name: "Onboarding",
+      icon: "https://onboarding.example.com/icon.svg",
+      members: true,
+      signIn: ["passkey"],
+    },
+    offersEmail: false,
+    offersGuest: false,
+    asksAtOpen: false,
+  }).text();
+  expect(forOnboarding).toContain(
+    `<a href="/sign-in/access?next=%2Foauth2%2Fauth%3Fclient_id%3Donboarding">prove your email address with Cloudflare</a>`,
+  );
 });
 
 test("the consent page asks one question, with Deny and Allow as a pair", async () => {

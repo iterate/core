@@ -4,6 +4,7 @@
 // an app of the mind (./asking-app.ts).
 import { controlPlaneOriginOf, zoneOf } from "iterate/mind-config";
 import { authConfigOf } from "./config.ts";
+import { honouredNext } from "./key-rules.ts";
 
 // THE BINDINGS are declared on `Cloudflare.Env`, which the OAuth library's types default to, as
 // `wrangler types` declares them. `Env` is the same type by name.
@@ -46,8 +47,16 @@ export function dashOf(env: Env) {
 }
 
 /** The mind's onboarding wizard (`https://onboarding.<zone>/`), where a new person continues setup
- *  after adding their first passkey when no `next` URL was passed. */
+ *  after adding their first passkey when no explicit `next` URL was passed. */
 export function onboardingOf(env: Env) {
   const config = configOf(env);
   return `https://onboarding.${zoneOf(config, config.controlPlaneHostname)}/`;
+}
+
+/** An explicit destination under this mind for first-passkey enrolment, or `null` when `next` is
+ *  missing, invalid, or the bare control-plane root (`/` or `https://<controlPlaneHostname>/`),
+ *  which is a placeholder with no page of its own and should fall back to `onboardingOf(env)`. */
+export function explicitFirstPasskeyNext(raw: string | null, env: Env): string | null {
+  const honoured = honouredNext(raw, configOf(env));
+  return honoured && honoured !== `${issuerOf(env)}/` ? honoured : null;
 }

@@ -122,9 +122,9 @@ export function appSignIn(app: AskingApp, { heading }: { heading?: string } = {}
  *  way. With `app`, the sign-in is for that app of the mind (`appSignIn`). `mind`
  *  is the mind's name, its control-plane hostname, on this page and on each page below. A sign-in
  *  whose first method is the mailed code opens on that page instead (./http.ts). A sign-in that
- *  names no app also has an owner's link to Cloudflare Access, the one proof of an address that
- *  the mind takes for an owner with no passkey yet (./access-sign-in.ts); an app's own sign-in
- *  has not: Access is for owners alone. */
+ *  names no app, or an app for members (such as Onboarding or Dash), also has an owner's link to
+ *  Cloudflare Access, the one proof of an address that the mind takes for an owner with no passkey
+ *  yet (./access-sign-in.ts); an app for anyone has not: Access is for owners alone. */
 export function signInPage(input: {
   mind: string;
   next: string;
@@ -147,9 +147,10 @@ export function signInPage(input: {
   const email =
     (input.offersEmail ? way("/sign-in/email", "Sign in with your email address") : "") +
     (input.offersGuest ? way("/sign-in/guest", "Come in as a guest") : "");
-  const ownerProof = input.app
-    ? ""
-    : `<p class="muted">An owner with no passkey yet: <a href="${text(`/sign-in/access?${new URLSearchParams({ next })}`)}">prove your email address with Cloudflare</a>, and then add one.</p>`;
+  const ownerProof =
+    input.app && !input.app.members
+      ? ""
+      : `<p class="muted">An owner with no passkey yet: <a href="${text(`/sign-in/access?${new URLSearchParams({ next })}`)}">prove your email address with Cloudflare</a>, and then add one.</p>`;
   return page({
     title: asking?.title || `Sign in to ${mind}`,
     mark: asking?.mark,

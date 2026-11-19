@@ -36,7 +36,7 @@ test("a token for an owner with no passkey yet opens the session that adds the f
   expect(keys.headers.get("location")).toBe(`${ISSUER}/sign-in?next=%2Fkeys`);
 });
 
-test("the sign-in goes on to the `next` it was given, when that is an address of the mind's own", async () => {
+test("the sign-in goes on to the `next` it was given, when that is an explicit address of the mind's own; bare control-plane root falls back to onboarding", async () => {
   const { env } = sqliteStack();
   const locationFor = async (next: string) =>
     (
@@ -44,11 +44,32 @@ test("the sign-in goes on to the `next` it was given, when that is an address of
     ).headers.get("location");
   expect([
     await locationFor("https://dash.example.com/agents"),
+    await locationFor("/oauth2/auth?client_id=onboarding"),
+    await locationFor("/"),
+    await locationFor("https://iterate.example.com/"),
     await locationFor("https://elsewhere.example.net/"),
   ]).toEqual([
     `/keys/first?next=${encodeURIComponent("https://dash.example.com/agents")}`,
+    `/keys/first?next=${encodeURIComponent("https://iterate.example.com/oauth2/auth?client_id=onboarding")}`,
+    `/keys/first?next=${encodeURIComponent("https://onboarding.example.com/")}`,
+    `/keys/first?next=${encodeURIComponent("https://onboarding.example.com/")}`,
     `/keys/first?next=${encodeURIComponent("https://onboarding.example.com/")}`,
   ]);
+});
+
+test("new owner path from /sign-in (no next) through Cloudflare Access lands on the onboarding wizard, never the control-plane root", async () => {
+  const { env } = sqliteStack();
+  const signInHtml = await (await ask(env, "/sign-in", null)).text();
+  const match = /href="(\/sign-in\/access\?[^"]+)"/.exec(signInHtml);
+  expect(match?.[1]).toBe("/sign-in/access?next=%2F");
+  const accessAnswer = await ask(env, match![1]!, await tokenOf());
+  expect({
+    status: accessAnswer.status,
+    location: accessAnswer.headers.get("location"),
+  }).toEqual({
+    status: 303,
+    location: `/keys/first?next=${encodeURIComponent("https://onboarding.example.com/")}`,
+  });
 });
 
 test.for([
