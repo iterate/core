@@ -14,7 +14,21 @@ const SignedIn = z.union([
   }),
   // a mailed code that proved the address of a person who is no member (./email-sign-in.ts)
   z.object({ method: z.literal("email"), session, at: z.number() }),
+  // another mind vouched that this person is its member (./mind-sign-in.ts): that mind's id and
+  // hostname. No session row: the cookie is the session (./cookies.ts `mindSessionCookie`)
+  z.object({
+    method: z.literal("mind"),
+    mind: z.string().min(1),
+    hostname: z.string().min(1),
+    at: z.number(),
+  }),
 ]);
+/** This mind vouched for its member to another mind (./vouch.ts): that mind's id and hostname. */
+const SignInVouched = z.object({
+  mind: z.string().min(1),
+  hostname: z.string().min(1),
+  at: z.number(),
+});
 /** A new guest (./guest-sign-in.ts): the name they typed, and the host of the app that let them
  *  come. Once for each guest: the sessions a guest earns later write nothing. */
 const GuestSignedIn = z.object({
@@ -129,6 +143,10 @@ export type AccountFact = (
       payload: z.infer<typeof GuestSignedIn>;
     }
   | { type: "events.iterate.com/account/guest-refused"; payload: z.infer<typeof GuestRefused> }
+  | {
+      type: "events.iterate.com/account/sign-in-vouched";
+      payload: z.infer<typeof SignInVouched>;
+    }
 ) & { idempotencyKey?: string };
 
 // A record for the mind, never the authority: members and live grants are this Worker's D1 and KV.

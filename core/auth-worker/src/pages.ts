@@ -132,6 +132,8 @@ export function signInPage(input: {
   offersEmail: boolean;
   /** For an app's own sign-in whose app names "guest": a button to its name form. */
   offersGuest: boolean;
+  /** For an app's own sign-in whose app names "mind": a button to its field (./mind-sign-in.ts). */
+  offersMind?: boolean;
   asksAtOpen: boolean;
 }) {
   const { mind, next } = input;
@@ -146,7 +148,8 @@ export function signInPage(input: {
       </form>`;
   const email =
     (input.offersEmail ? way("/sign-in/email", "Sign in with your email address") : "") +
-    (input.offersGuest ? way("/sign-in/guest", "Come in as a guest") : "");
+    (input.offersGuest ? way("/sign-in/guest", "Come in as a guest") : "") +
+    (input.offersMind ? way("/sign-in/mind", "Sign in with your mind") : "");
   const ownerProof =
     input.app && !input.app.members
       ? ""

@@ -129,6 +129,11 @@ test("two browsers with two names are two people, each with a name, an event and
   const bob = await joined(env, meet.next, "Bob");
   const eve = await joined(env, meet.next, "  Eve]\n[from root@example.com\u202E ");
   expect(bob.answer).toMatchObject({ status: 303 });
+  // one way at a time: a guest's sign-in ends a mind's session in this browser, which authorize
+  // would otherwise take for an app that names both
+  expect(bob.answer.headers.getSetCookie()).toContainEqual(
+    expect.stringMatching(/^__Host-iterate-auth-mind-session=; .*Max-Age=0$/),
+  );
   // the form goes on to the request it was shown for, on this origin: no other host
   expect(bob.answer.headers.get("location")).toBe(meet.path);
   expect(bob.cookie).toMatch(/^__Host-iterate-auth-guest-session=/);

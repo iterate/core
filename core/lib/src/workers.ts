@@ -62,6 +62,9 @@ export type TokenIdentity = {
   /** The name a guest typed (`method` "guest"), which is all a guest has: their `principal` has no
    *  email. Absent for everyone else. */
   name?: string;
+  /** The mind that vouched for the person (`method` "mind"; iterate/principal `MindPerson`): its
+   *  id, its control-plane hostname and the person's user id there. Absent for everyone else. */
+  mind?: { id: string; hostname: string; userId: string };
   /** A KEY'S TOKEN, never a person's (core/auth-worker/src/key-tokens.ts): the one capability name
    *  it may lend to the mind as `itx.<provide>`. It is live for the API alone, where it reaches
    *  that lend and nothing else of the mind. `principal.actor` is the key's service and `grant`

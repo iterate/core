@@ -124,7 +124,8 @@ export async function hostClientOf(env: Env, host: string): Promise<string> {
 }
 
 // A grant lives for as long as its client keeps refreshing it, and ends once it has been idle for
-// SESSION_IDLE_SECONDS. Only a let-in grant has a `deadline` (epoch ms), from which it is refused.
+// SESSION_IDLE_SECONDS. Only a let-in grant and a member of another mind's have a `deadline` (epoch
+// ms), from which it is refused.
 // STRICT: a stored grant with a field that this code does not write, or without one that it
 // does, was made under other rules, and is no grant, at a token's validation and at a refresh.
 const GrantFields = z.strictObject({
@@ -138,8 +139,13 @@ const GrantFields = z.strictObject({
    *  says it of its person (`tokenIdentity`). Absent only on a grant that the old stack made
    *  before 13 Nov 2026, which has no `standingByMethod` either (`grantIsMembers`). */
   method: SignInMethod.optional(),
-  /** The name a guest typed (./guest-sign-in.ts): a guest's grant alone has it. */
+  /** The name a guest typed (./guest-sign-in.ts), or the hostname of the mind that vouched for a
+   *  member of it (./mind-sign-in.ts): a guest's grant and such a member's alone have it. */
   name: z.string().min(1).optional(),
+  /** The mind that vouched (method "mind"): its id, its hostname and the person's user id there. */
+  mind: z
+    .strictObject({ id: z.string().min(1), hostname: z.string().min(1), userId: z.string().min(1) })
+    .optional(),
   /** A RULE TO REMOVE once every grant that the old stack made with no mark has ended or been
    *  made again (the owner, 18 Nov 2026: "only if we remember to remove that cruft later on").
    *  The mark says that a grant's standing is its method's, as `grantIsMembers` reads it. The old
@@ -255,7 +261,7 @@ export async function tokenIdentity(
   if (!validated) return null;
   const props = TokenProps.safeParse(validated.props);
   if (!props.success || props.data.userId !== validated.userId) return null;
-  const deadline = letInDeadlineOf(props.data);
+  const deadline = deadlineOf(props.data);
   const expiresAt = deadline
     ? Math.min(validated.expiresAt, Math.floor(deadline / 1000))
     : validated.expiresAt;
@@ -278,6 +284,22 @@ export async function tokenIdentity(
       name: props.data.name,
     };
   }
+  // A MEMBER OF ANOTHER MIND'S TOKEN, as a guest's, is good only while the app still names "mind",
+  // and names the mind that vouched; the key of their row stays here.
+  if (props.data.method === "mind") {
+    const { mind, name } = props.data;
+    if (!hostResource || !mind || !(await appOf(env, hostResource))?.signIn.includes("mind"))
+      return null;
+    return {
+      principal: { actor: props.data.userId },
+      grant: props.data.grantId,
+      expiresAt,
+      member: false,
+      method: "mind",
+      name,
+      mind,
+    };
+  }
   return {
     principal: { actor: props.data.userId, email: props.data.email },
     grant: props.data.grantId,
@@ -295,8 +317,10 @@ const grantIsMembers = async (env: Env, grant: GrantProps) =>
     (!grant.standingByMethod && (grant.method === "email" || !grant.method))) &&
   (await isMember(env, grant.email));
 
-/** The instant a let-in grant ends. A let-in grant with none ended at its making. */
-const letInDeadlineOf = (grant: GrantProps) => (grant.letIn ? grant.deadline || 1 : undefined);
+/** The instant a let-in grant, or a member of another mind's, ends: when their cookie does
+ *  (./cookies.ts `mindSessionCookie`). One with none ended at its making. */
+const deadlineOf = (grant: GrantProps) =>
+  grant.letIn || grant.method === "mind" ? grant.deadline || 1 : undefined;
 
 // The library revokes a grant this refuses, with its tokens. A let-in grant gets one access token
 // for its whole remaining time: nobody may refresh it. Any other grant gets an access token and
@@ -335,6 +359,8 @@ async function grantLifetime(
   if (lifetime === "deadline_passed") throw refused(lifetime, "The session has expired.");
   if (lifetime === "guest_no_refresh")
     throw refused(lifetime, "A guest's session is not renewed here. Open the page again.");
+  if (lifetime === "mind_no_refresh")
+    throw refused(lifetime, "A sign-in by another mind is not renewed here. Open the page again.");
   if (lifetime === "let_in_no_refresh")
     throw refused(lifetime, "Being let in cannot be renewed. Ask again.");
   return { accessTokenProps: { ...grant, grantId: input.grantId }, ...lifetime };
@@ -348,8 +374,9 @@ export function grantLifetimeOf(
   | { accessTokenTTL: number; refreshTokenTTL?: number }
   | "deadline_passed"
   | "let_in_no_refresh"
-  | "guest_no_refresh" {
-  const deadline = letInDeadlineOf(grant);
+  | "guest_no_refresh"
+  | "mind_no_refresh" {
+  const deadline = deadlineOf(grant);
   // A GUEST'S 15 MINUTES ARE ALL A GRANT GIVES: no refresh token (0 is the library's "none"), and
   // one a grant got before this rule renews nothing. The next 15 minutes are earned at the
   // authorization endpoint, where the cookie, the block and the bounds are asked again
@@ -358,6 +385,14 @@ export function grantLifetimeOf(
   if (grant.method === "guest" && exchange.refresh) return "guest_no_refresh";
   if (grant.method === "guest" && exchange.host)
     return { accessTokenTTL: GUEST_HOST_ACCESS_TOKEN_SECONDS, refreshTokenTTL: 0 };
+  // A MEMBER OF ANOTHER MIND keeps the rest of the 24 hours that their mind's vouch gave, on a mind
+  // hostname alone, and renews nothing (./mind-sign-in.ts).
+  if (grant.method === "mind") {
+    const remaining = Math.floor(((deadline || 1) - exchange.now) / 1000);
+    if (!exchange.host || remaining < 60) return "deadline_passed";
+    if (exchange.refresh) return "mind_no_refresh";
+    return { accessTokenTTL: remaining, refreshTokenTTL: 0 };
+  }
   if (!deadline && exchange.host) return { accessTokenTTL: HOST_ACCESS_TOKEN_SECONDS };
   if (!deadline) return { accessTokenTTL: ACCESS_TOKEN_SECONDS };
   const remaining = Math.floor((deadline - exchange.now) / 1000);

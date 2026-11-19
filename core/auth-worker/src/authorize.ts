@@ -9,10 +9,12 @@ import { AccountFacts } from "./account-facts.ts";
 import { appOf, appTakes, askingAppOf } from "./asking-app.ts";
 import {
   clearGuestCookie,
+  clearMindCookie,
   clearSessionCookie,
   endThisSession,
   guestCookie,
   guestOf,
+  mindSessionOf,
   type PersonSession,
   personSessionOf,
 } from "./cookies.ts";
@@ -30,6 +32,7 @@ import { chooserPage, consentPage, errorPage, notMemberPage } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
 import { admitted, TOO_MANY } from "./device/limits.ts";
 import { GUEST_SESSIONS_PER_TEN_MINUTES, guestRefusal } from "./guest-sign-in.ts";
+import { mindPersonName } from "./mind-sign-in.ts";
 import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { deviceStore } from "./device/store.ts";
 
@@ -86,8 +89,13 @@ async function describe(env: Env, request: Request) {
   // (`guestAt`).
   const session: SignedIn | null =
     (await personSessionOf(env, request)) ||
-    (hostSignIn ? await guestAt(env, hostResource, request) : null);
+    (hostSignIn
+      ? (await guestAt(env, hostResource, request)) ||
+        (await mindPersonAt(env, hostResource, request))
+      : null);
   const guest = session?.method === "guest";
+  // a member of another mind, as a guest: a cookie of their own, with no session row
+  const cookieOnly = guest || session?.method === "mind";
   const signIn = `${issuerOf(env)}${signInHref(here)}`;
   if (!session) return Response.redirect(signIn, 302);
   // AN APP NAMES HOW ITS PEOPLE SIGN IN, and this endpoint holds every code for the app's host to
@@ -100,15 +108,19 @@ async function describe(env: Env, request: Request) {
   // who is signed in and offer another account. Either comes back here without it. A guest's
   // cookie ends for either: the name form is the page that says who they are, and its answer is
   // a new guest.
-  if (prompt === "login" || (prompt && guest)) {
+  if (prompt === "login" || (prompt && cookieOnly)) {
     const facts = new AccountFacts();
-    if (!guest) await endThisSession(env, request, facts);
+    if (!cookieOnly) await endThisSession(env, request, facts);
     return facts.on(
       new Response(null, {
         status: 302,
         headers: {
           location: signIn,
-          "set-cookie": guest ? clearGuestCookie : clearSessionCookie,
+          "set-cookie": guest
+            ? clearGuestCookie
+            : cookieOnly
+              ? clearMindCookie
+              : clearSessionCookie,
           "cache-control": "no-store",
         },
       }),
@@ -218,9 +230,36 @@ async function decide(env: Env, request: Request) {
   return approve(env, session, approved.request, client, approved.headers);
 }
 
-/** WHO A GRANT IS FOR: a person's session at the issuer, or a guest, who has no session row
- *  (./guest-sign-in.ts). `name`: the name a guest typed, which the grant keeps. */
-type SignedIn = Pick<PersonSession, "userId" | "email" | "method"> & { name?: string };
+/** WHO A GRANT IS FOR: a person's session at the issuer, or a guest or a member of another mind,
+ *  who have no session row (./guest-sign-in.ts, ./mind-sign-in.ts). `name`: the name a guest
+ *  typed, or the other mind's hostname, which the grant keeps. `mind`: the mind that vouched, and
+ *  `until` when that cookie ends (epoch ms), which the grant keeps as its deadline. */
+type SignedIn = Pick<PersonSession, "userId" | "email" | "method"> & {
+  name?: string;
+  mind?: { id: string; hostname: string; userId: string };
+  until?: number;
+};
+
+/** THE MEMBER OF ANOTHER MIND THIS BROWSER IS, for the own sign-in of the host at `hostResource`,
+ *  or null: the host's app names "mind". Read here alone, as the guest's cookie is. */
+async function mindPersonAt(
+  env: Env,
+  hostResource: string,
+  request: Request,
+): Promise<SignedIn | null> {
+  const app = await appOf(env, hostResource);
+  if (!app?.signIn.includes("mind")) return null;
+  const person = await mindSessionOf(env, request);
+  if (!person) return null;
+  return {
+    userId: person.userId,
+    email: person.email,
+    method: "mind",
+    name: mindPersonName(person.mind.hostname),
+    mind: person.mind,
+    until: person.expiresAt,
+  };
+}
 
 /** THE GUEST THIS BROWSER IS, for the own sign-in of the host at `hostResource`, or null: the
  *  host's app names guests, and no owner blocked this guest. Read here alone, so the cookie gives
@@ -278,6 +317,7 @@ async function complete(
     email: session.email,
     method: session.method,
     name: session.name,
+    ...(session.mind && { mind: session.mind, deadline: session.until }),
     // a rule to remove, with its unmarked case (./oauth.ts `GrantProps.standingByMethod`)
     standingByMethod: true,
     ...(letIn && {

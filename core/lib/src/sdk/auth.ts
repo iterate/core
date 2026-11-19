@@ -2,8 +2,11 @@
 // (./index.ts). It reads the stamps ingress puts on a request for one of the mind's hostnames,
 // and answers the challenge that makes ingress sign a person in. The guards are below.
 import { isSameOriginBrowserRequest } from "../lib.ts";
+import { isMindControlPlaneHostname } from "../signed.ts";
 import {
   type AddressedPerson,
+  type Guest,
+  type MindPerson,
   type Person,
   type Principal,
   principalStampOf,
@@ -51,6 +54,17 @@ import {
  *  comes in as the member, never as a guest. Name the other ways beside "guest" in `signIn`
  *  (`["guest", "passkey"]`) for a sign-in page that offers them.
  *
+ *  MEMBERS OF OTHER MINDS. An app that names `"mind"` in its `signIn` lets in a member of any
+ *  other mind, whose own mind signs that they are one (core/auth-worker/src/mind-sign-in.ts). Every
+ *  guard refuses such a person unless its call says `{ minds: true }`. With it, `auth.person`
+ *  may answer `{ userId, email: "", name, method: "mind", mind: { id, hostname, userId } }`
+ *  (iterate/principal `MindPerson`): `mind.id` is their mind's id, which decides; `hostname` is a
+ *  label; `mind.userId` is who they are at their mind. No address comes, and they are no member
+ *  here. ANOTHER SITE CAN SIGN A VISITOR IN AS A MEMBER OF ITS OWN MIND (a login CSRF), so a page
+ *  that shows what belongs to a mind says first whose it is ("Signed in as a member of
+ *  <hostname>"). The session lasts 24 hours, and then the person asks their mind again. To send a
+ *  person to their mind at once, from a link that names it, answer `auth.mindSignIn`.
+ *
  *  ```js
  *  const refused = this.auth.requirePerson(request); // a person who proved an address
  *  if (refused) return refused;
@@ -59,6 +73,12 @@ import {
  *  const refused = this.auth.requirePerson(request, { guests: true }); // a guest too
  *  if (refused) return refused;
  *  const visitor = this.auth.person(request, { guests: true }); // visitor.method === "guest"?
+ *
+ *  const visitor = this.auth.person(request, { minds: true }); // a member of another mind too
+ *  if (!visitor) {
+ *    const mind = new URL(request.url).searchParams.get("mind");
+ *    return mind ? this.auth.mindSignIn(request, mind) : this.auth.requirePerson(request, { minds: true });
+ *  }
  *  ```
  *
  *  Signed out, `auth.require` answers `401` with `WWW-Authenticate: Bearer realm="iterate"`, and
@@ -99,16 +119,37 @@ export const auth = {
     const { principal, mind } = principalStampOf(request.headers);
     return principal || mind || null;
   },
-  requirePerson(request: Request, options: GuestOption = {}): Response | null {
+  requirePerson(request: Request, options: PersonOptions = {}): Response | null {
     const refused = crossSiteRefusal(request);
     if (refused) return refused;
     const person = stampedPersonOf(request);
-    if (person && (person.method !== "guest" || options.guests)) return null;
-    // a guest here: a sign-in would bring the same guest back
-    if (person) return guestRefusal();
+    if (person && taken(person, options)) return null;
+    // a guest or another mind's member here: a sign-in would bring the same person back
+    if (person) return wayRefusal(person.method);
     return signIn('Bearer realm="iterate", scope="identity"');
   },
   person: personOf,
+  /** TO THE PERSON'S OWN MIND AT `hostname`, to sign in as its member: a 302 to this mind's
+   *  issuer, which asks that mind and comes back to this URL without its `mind` parameter. There
+   *  the route answers `requirePerson`'s refusal as for anyone signed out, and ingress signs the
+   *  person in with no question. Only for an app that names `"mind"` in its `signIn`; a hostname
+   *  that is no mind's control-plane hostname gets a 400. */
+  mindSignIn(request: Request, hostname: string): Response {
+    const mind = hostname.trim().toLowerCase();
+    if (!isMindControlPlaneHostname(mind))
+      return new Response("That is no mind's address.\n", {
+        status: 400,
+        headers: { "Cache-Control": "no-store" },
+      });
+    const next = new URL(request.url);
+    next.searchParams.delete("mind");
+    const to = new URL(`https://${auth.controlPlaneHostname(request)}/sign-in/mind`);
+    to.search = new URLSearchParams({ mind, next: next.href }).toString();
+    return new Response(null, {
+      status: 302,
+      headers: { location: to.href, "Cache-Control": "no-store" },
+    });
+  },
   /** THE MEMBER'S OWN `itx`, FOR THE PAGE THEY ARE ON: answer this from the path the page opens
    *  its WebSocket on (`new WebSocket("/itx")`, a capnweb session). It answers the member guard's
    *  refusal, or asks the platform to serve the socket in this answer's place. The platform
@@ -152,7 +193,7 @@ export const auth = {
   personItx(
     request: Request,
     path: string,
-    options: GuestOption & { admits?: string } = {},
+    options: PersonOptions & { admits?: string } = {},
   ): Response {
     return (
       auth.requirePerson(request, options) ||
@@ -205,25 +246,45 @@ export const auth = {
   },
 };
 
-/** `{ guests: true }`: this route takes a guest too (see GUESTS above). */
-type GuestOption = { guests?: boolean };
+/** `{ guests: true }`: this route takes a guest too (see GUESTS above). `{ minds: true }`: and a
+ *  member of another mind (see MEMBERS OF OTHER MINDS). */
+type PersonOptions = { guests?: boolean; minds?: boolean };
+
+/** The person that a call with `O` may answer. */
+type PersonFor<O extends PersonOptions> =
+  | AddressedPerson
+  | (O extends { guests: true } ? Guest : never)
+  | (O extends { minds: true } ? MindPerson : never);
+
+const taken = (person: Person, options: PersonOptions) =>
+  person.method === "guest"
+    ? Boolean(options.guests)
+    : person.method === "mind"
+      ? Boolean(options.minds)
+      : true;
 
 /** WHO IS SIGNED IN, or null: a person who proved an address, and with `{ guests: true }` a
- *  guest too. Signed out, and a guest without the option: null. */
-function personOf(request: Request, options?: { guests?: false }): AddressedPerson | null;
-function personOf(request: Request, options: { guests: true }): Person | null;
-function personOf(request: Request, options: GuestOption = {}): Person | null {
+ *  guest too, with `{ minds: true }` a member of another mind too. Signed out, and a person whom
+ *  the options do not name: null. */
+function personOf<O extends PersonOptions = {}>(
+  request: Request,
+  options?: O,
+): PersonFor<O> | null {
   const person = stampedPersonOf(request);
-  return person && (person.method !== "guest" || options.guests) ? person : null;
+  // the cast: `taken` lets a guest through only with `guests` and another mind's member only
+  // with `minds`, which is what `PersonFor<O>` says; TypeScript cannot narrow a union by a generic
+  return person && taken(person, options || {}) ? (person as PersonFor<O>) : null;
 }
 
-/** A guest at a route that takes none: 403, and no sign-in, which would bring the same guest
- *  back. */
-const guestRefusal = () =>
-  new Response("This page takes no guests. Sign out, and sign in with your address.\n", {
-    status: 403,
-    headers: { "Cache-Control": "no-store" },
-  });
+/** A guest, or another mind's member, at a route that takes none: 403, and no sign-in, which
+ *  would bring the same person back. */
+const wayRefusal = (method: Person["method"]) =>
+  new Response(
+    method === "mind"
+      ? "This page takes no sign-in by another mind. Sign out, and sign in here.\n"
+      : "This page takes no guests. Sign out, and sign in with your address.\n",
+    { status: 403, headers: { "Cache-Control": "no-store" } },
+  );
 
 /** A write or a WebSocket upgrade from another origin: 403. */
 function crossSiteRefusal(request: Request): Response | null {

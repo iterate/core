@@ -353,6 +353,134 @@ export async function guestFormOf(env: Env, request: Request) {
 export const clearGuestFormCookie = cookie(GUEST_FORM_COOKIE, "", 0);
 export const clearGuestCookie = cookie(GUEST_COOKIE, "", 0);
 
+// A MEMBER OF ANOTHER MIND (./mind-sign-in.ts) has a cookie like a guest's: no row, and read by the
+// authorization endpoint alone, for a host's own sign-in whose app names "mind". It holds the user
+// id, the key of the row, and the mind that vouched: its id, its hostname and the person's user
+// id there. It lasts 24 hours from the vouch and is never set again, so a member whom that mind
+// removes keeps this mind's session for 24 hours at most; then their mind is asked again.
+const MIND_COOKIE = "__Host-iterate-auth-mind-session";
+const MIND_SESSION_SECONDS = 24 * 3600;
+/** The sign-in's own cookie, between `POST /sign-in/mind` and the return from the person's mind:
+ *  the browser that started it, and what it waits for. The return is a POST from the other mind's
+ *  page, a cross-site request, so the cookie is `SameSite=None`: a Lax one is not sent with it.
+ *  Its path is the sign-in's alone, so no other request carries it, and with a path it cannot have
+ *  the `__Host-` prefix: `__Secure-`, with no Domain, is host-only too. */
+const MIND_FORM_COOKIE = "__Secure-iterate-auth-mind-form";
+const MIND_FORM_SECONDS = 10 * 60;
+export const MIND_FORM_PATH = "/sign-in/mind";
+
+/** The key of a member of another mind's row in `users.email`: `mind:<that mind's id>:<their user
+ *  id there>`. No address, so no proof of an address reaches it, and it is nobody's member. */
+export const MIND_KEY_PREFIX = "mind:";
+
+/** Whom another mind vouched for: that mind and the person's user id there. */
+export type Vouched = { id: string; hostname: string; userId: string };
+
+/** The cookie of a member of another mind, set once at the vouch. */
+export async function mindSessionCookie(
+  env: Env,
+  person: { id: string; key: string; mind: Vouched },
+) {
+  const { mind } = person;
+  const token = await signed(env, "mind-session", {
+    key: person.key,
+    mind: mind.id,
+    hostname: mind.hostname,
+    user: mind.userId,
+  })
+    .setSubject(person.id)
+    .setExpirationTime(`${MIND_SESSION_SECONDS}s`)
+    .sign(keyOf(env));
+  return cookie(MIND_COOKIE, token, MIND_SESSION_SECONDS);
+}
+
+/** THE MEMBER OF ANOTHER MIND THIS BROWSER IS, or null; `expiresAt` in epoch milliseconds, the
+ *  end that no visit moves. */
+export async function mindSessionOf(
+  env: Env,
+  request: Request,
+): Promise<{ userId: string; email: string; mind: Vouched; expiresAt: number } | null> {
+  const claims = await claimsOf(env, request, MIND_COOKIE, "mind-session");
+  const parsed = z
+    .object({
+      sub: z.string().startsWith("user_"),
+      key: z.string().startsWith(MIND_KEY_PREFIX),
+      mind: z.string().min(1),
+      hostname: z.string().min(1),
+      user: z.string().min(1),
+      exp: z.number(),
+    })
+    .safeParse(claims);
+  if (!parsed.success) return null;
+  const { sub, key, mind, hostname, user, exp } = parsed.data;
+  return {
+    userId: sub,
+    email: key,
+    mind: { id: mind, hostname, userId: user },
+    expiresAt: exp * 1000,
+  };
+}
+
+/** What a sign-in by another mind waits for (./mind-sign-in.ts). */
+export type MindForm = {
+  next: string;
+  hostname: string;
+  mind: string;
+  state: string;
+  nonce: string;
+};
+
+export async function mindFormCookie(env: Env, form: MindForm) {
+  const token = await signed(env, "mind-form", form)
+    .setExpirationTime(`${MIND_FORM_SECONDS}s`)
+    .sign(keyOf(env));
+  return mindFormCookieOf(token, MIND_FORM_SECONDS);
+}
+
+export async function mindFormOf(env: Env, request: Request): Promise<MindForm | null> {
+  const form = z
+    .object({
+      next: z.string().min(1),
+      hostname: z.string().min(1),
+      mind: z.string().min(1),
+      state: z.string().min(1),
+      nonce: z.string().min(1),
+    })
+    .safeParse(await claimsOf(env, request, MIND_FORM_COOKIE, "mind-form"));
+  if (!form.success) return null;
+  return form.data;
+}
+
+const mindFormCookieOf = (value: string, maxAgeSeconds: number) =>
+  `${MIND_FORM_COOKIE}=${value}; HttpOnly; Secure; SameSite=None; Path=${MIND_FORM_PATH}; Max-Age=${maxAgeSeconds}`;
+
+export const clearMindFormCookie = mindFormCookieOf("", 0);
+
+// A MEMBER'S INTENT TO OPEN AN APP OF ANOTHER MIND (./vouch.ts `/sign-in/open`): set by this mind's
+// own page, for one use and two minutes, so that a vouch to a mind that this mind lets in goes on
+// with no press only when the member began it here. Any other site's link to the vouch gets the
+// Continue page.
+const VOUCH_INTENT_COOKIE = "__Host-iterate-auth-vouch-intent";
+const VOUCH_INTENT_SECONDS = 120;
+
+export async function vouchIntentCookie(env: Env, intent: { app: string; user: string }) {
+  const token = await signed(env, "vouch-intent", intent)
+    .setExpirationTime(`${VOUCH_INTENT_SECONDS}s`)
+    .sign(keyOf(env));
+  return cookie(VOUCH_INTENT_COOKIE, token, VOUCH_INTENT_SECONDS);
+}
+
+export async function vouchIntentOf(env: Env, request: Request) {
+  const intent = z
+    .object({ app: z.string().min(1), user: z.string().min(1) })
+    .safeParse(await claimsOf(env, request, VOUCH_INTENT_COOKIE, "vouch-intent"));
+  if (!intent.success) return null;
+  return intent.data;
+}
+
+export const clearVouchIntentCookie = cookie(VOUCH_INTENT_COOKIE, "", 0);
+export const clearMindCookie = cookie(MIND_COOKIE, "", 0);
+
 const signed = (env: Env, audience: string, claims: Record<string, string>) =>
   new SignJWT(claims)
     .setProtectedHeader({ alg: "HS256" })

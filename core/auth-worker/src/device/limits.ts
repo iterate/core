@@ -34,7 +34,7 @@ export function clientOf(request: Request): string {
  *  stack's bound for its guests, from its config; 120 for every other kind. */
 export async function admitted(
   env: Env,
-  kind: "device" | "registration" | "host-client" | "guest" | "guest-session",
+  kind: "device" | "registration" | "host-client" | "guest" | "guest-session" | "mind",
   request: Request,
   stackBound = 120,
   guest?: string,

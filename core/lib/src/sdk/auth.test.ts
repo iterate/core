@@ -174,6 +174,56 @@ test("a stamp of a guest with an address is a defect", () => {
   ).toThrow();
 });
 
+// A member of another mind, which vouched for them: no address, no member here. EVERY GUARD
+// REFUSES THEM unless its call says `{ minds: true }`; a guest's option does not take them, nor
+// theirs a guest.
+test("a member of another mind passes no guard that did not ask for minds", () => {
+  const stamp = {
+    userId: "user_1",
+    email: "",
+    name: "iterate.other.example",
+    method: "mind",
+    mind: { id: "b".repeat(64), hostname: "iterate.other.example", userId: "user_b" },
+  };
+  const request = workerRequest("GET", { "x-itx-person": JSON.stringify(stamp) });
+  expect(auth.person(request)).toBeNull();
+  expect(auth.person(request, { guests: true })).toBeNull();
+  expect(auth.requirePerson(request)).toMatchObject({ status: 403 });
+  expect(auth.requirePerson(request, { guests: true })).toMatchObject({ status: 403 });
+  expect(auth.require(request)).toMatchObject({ status: 401 });
+  expect(auth.principal(request)).toBeNull();
+  expect(auth.person(request, { minds: true })).toEqual(stamp);
+  expect(auth.requirePerson(request, { minds: true })).toBeNull();
+  const guest = { userId: "user_2", email: "", name: "Bob", method: "guest" };
+  const asGuest = workerRequest("GET", { "x-itx-person": JSON.stringify(guest) });
+  expect(auth.person(asGuest, { minds: true })).toBeNull();
+  // a stamp of the way mind with an address, or with no mind, is a defect
+  for (const wrong of [
+    { ...stamp, email: "a@example.org" },
+    { ...stamp, mind: undefined },
+  ])
+    expect(() =>
+      auth.person(workerRequest("GET", { "x-itx-person": JSON.stringify(wrong) }), { minds: true }),
+    ).toThrow();
+});
+
+// The way to a person's own mind: to the issuer at the control-plane hostname, back to this URL
+// without its `mind` parameter, where the route then answers the sign-in challenge.
+test("mindSignIn sends the person to the issuer's way, and back to the page without mind=", () => {
+  const request = new Request("https://cloud.example.com/mind?mind=x&tab=credit", {
+    headers: { "x-iterate-control-plane-hostname": "iterate.example.com" },
+  });
+  const answer = auth.mindSignIn(request, " Iterate.Other.Example ");
+  expect(answer).toMatchObject({ status: 302 });
+  const to = new URL(answer.headers.get("location")!);
+  expect([to.origin, to.pathname]).toEqual(["https://iterate.example.com", "/sign-in/mind"]);
+  expect(Object.fromEntries(to.searchParams)).toEqual({
+    mind: "iterate.other.example",
+    next: "https://cloud.example.com/mind?tab=credit",
+  });
+  expect(auth.mindSignIn(request, "not a host")).toMatchObject({ status: 400 });
+});
+
 // What a member's page of the UI kit asks of its app's host: its socket and the shell's three
 // /.auth/ answers, for the mind whose control-plane hostname the boundary stamped. Any other path is the
 // app's. The app here is on a second zone of the mind: its issuer is still the control-plane hostname,

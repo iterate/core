@@ -30,6 +30,25 @@ that member in. An app names which of the two it takes, and in which order ([app
 - `this.auth.person(request)`: who they are, or `null`. Key what you keep for a person by
   `userId`, which never changes; an email can.
 
+### Members of other minds
+
+An app that names `"mind"` in its `signIn` lets in a member of any other mind: the person types
+their mind's address, their mind asks them to confirm, and signs that they are one of its members.
+There is no click only when their mind lets this mind in and they opened the app from their own
+mind (`https://<their mind>/sign-in/open?to=<the app's URL>`). No email address is sent. Every
+guard refuses such a person unless its call says `{ minds: true }`, and
+`this.auth.person(request, { minds: true })` answers
+`{ userId, email: "", name, method: "mind", mind: { id, hostname, userId } }`. Decide by `mind.id`,
+that mind's id; `hostname` is a label. They are no member here.
+
+- A link that names the mind skips the field: answer `this.auth.mindSignIn(request, hostname)` when
+  there is no person and the URL has `?mind=`. It comes back without `mind=`, where the route
+  answers `requirePerson`'s refusal and the platform signs the person in with no question.
+- Another site can sign a visitor in as a member of the attacker's own mind. So a page that shows
+  what belongs to a mind says first whose it is: "Signed in as a member of `<hostname>`".
+- The session lasts 24 hours and is not renewed. A member whom their mind removes keeps it that
+  long at most.
+
 The paths under `/.iterate/` on every host are the platform's: a form that POSTs to
 `/.iterate/sign-out` signs the person out.
 

@@ -43,6 +43,7 @@ import { AccountFacts } from "./account-facts.ts";
 import { type AskingApp, askingAppOf } from "./asking-app.ts";
 import {
   clearGuestFormCookie,
+  clearMindCookie,
   GUEST_KEY_PREFIX,
   guestCookie,
   guestFormCookie,
@@ -135,6 +136,8 @@ async function made(env: Env, request: Request): Promise<Response> {
   const headers = new Headers({ location: shown.next, "cache-control": "no-store" });
   headers.append("set-cookie", await guestCookie(env, { id: user.id, key: user.email, name }));
   headers.append("set-cookie", clearGuestFormCookie);
+  // one way at a time: a mind's session in this browser ends, so authorize takes this guest
+  headers.append("set-cookie", clearMindCookie);
   return facts.on(new Response(null, { status: 303, headers }));
 }
 

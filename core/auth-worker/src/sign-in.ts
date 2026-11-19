@@ -1,5 +1,10 @@
 import { AccountFacts } from "./account-facts.ts";
-import { clearGuestCookie, clearSessionCookie, endThisSession } from "./cookies.ts";
+import {
+  clearGuestCookie,
+  clearMindCookie,
+  clearSessionCookie,
+  endThisSession,
+} from "./cookies.ts";
 import { configOf, type Env, issuerOf } from "./env.ts";
 import { honouredNext } from "./key-rules.ts";
 import { errorPage } from "./pages.ts";
@@ -32,5 +37,6 @@ export async function signOutResponse(env: Env, request: Request) {
   });
   // the guest this browser was ends too (./guest-sign-in.ts)
   headers.append("set-cookie", clearGuestCookie);
+  headers.append("set-cookie", clearMindCookie);
   return facts.on(new Response(null, { status: 303, headers }));
 }

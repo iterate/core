@@ -22,6 +22,8 @@ import {
 import { TOO_MANY } from "./device/limits.ts";
 import { emailAddressPage, emailSignInResponse } from "./email-sign-in.ts";
 import { guestFormHref, guestSignInResponse } from "./guest-sign-in.ts";
+import { mindSignInResponse } from "./mind-sign-in.ts";
+import { vouchResponse } from "./vouch.ts";
 import { firstPasskeyResponse } from "./enrolment.ts";
 import { configOf, dashOf, type Env, issuerOf } from "./env.ts";
 import { identityIntakeResponse, identityLogResponse } from "./identity.ts";
@@ -109,8 +111,16 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
     const signIn = await signInOf(env, next);
     if (!signIn) return errorPage(TOO_MANY, 429);
     // a guest comes in by an app's own sign-in alone (./guest-sign-in.ts)
-    const methods = signIn.app ? signIn.methods : signIn.methods.filter((m) => m !== "guest");
+    const methods = signIn.app
+      ? signIn.methods
+      : signIn.methods.filter((m) => m !== "guest" && m !== "mind");
     if (methods[0] === "guest") return Response.redirect(guestFormHref(env, next), 302);
+    // a member of another mind comes in by an app's own sign-in alone (./mind-sign-in.ts)
+    if (methods[0] === "mind")
+      return Response.redirect(
+        `${issuerOf(env)}/sign-in/mind?${new URLSearchParams({ next })}`,
+        302,
+      );
     if (methods[0] === "email") return emailAddressPage(env, next, signIn);
     return signInPage({
       mind: configOf(env).controlPlaneHostname,
@@ -118,6 +128,7 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
       app: signIn.app,
       offersEmail: methods.includes("email"),
       offersGuest: methods.includes("guest"),
+      offersMind: methods.includes("mind"),
       asksAtOpen: !url.searchParams.has(AFTER_SIGN_OUT),
     });
   }
@@ -129,6 +140,10 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
   if (emailSignIn) return emailSignIn;
   const guestSignIn = await guestSignInResponse(env, request);
   if (guestSignIn) return guestSignIn;
+  const mindSignIn = await mindSignInResponse(env, request);
+  if (mindSignIn) return mindSignIn;
+  const vouch = await vouchResponse(env, request);
+  if (vouch) return vouch;
   const accessSignIn = await accessSignInResponse(env, request);
   if (accessSignIn) return accessSignIn;
   const passkeySignIn = await passkeySignInResponse(env, request);

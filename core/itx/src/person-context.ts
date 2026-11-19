@@ -737,6 +737,8 @@ function canonicalPathOf(path: string | null): string | null {
  *  is marked as one: the name is all that says who they are, and it is their own claim. */
 export function principalOf(person: Person): Principal {
   if (person.method === "guest") return { actor: person.userId, name: person.name, kind: "guest" };
+  // a member of another mind has no address here: their name is that mind's hostname
+  if (person.method === "mind") return { actor: person.userId, name: person.name };
   return {
     actor: person.userId,
     email: person.email,

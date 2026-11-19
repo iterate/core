@@ -159,3 +159,32 @@ test("a guest's token that names an address is stamped a guest with none", async
     method: "guest",
   });
 });
+
+// A member of another mind (core/auth-worker/src/mind-sign-in.ts): stamped a person with the mind
+// that vouched, no address whatever the token says, and no principal: no member here.
+test("a member of another mind is stamped with that mind, no address and no principal", async () => {
+  const mind = { id: "b".repeat(64), hostname: "iterate.other.example", userId: "user_b" };
+  const vouched: TokenIdentity = {
+    principal: { actor: "user_9", email: "owner@example.com" },
+    grant: "grant_9",
+    expiresAt: 2_000_000_000,
+    member: false,
+    method: "mind",
+    name: mind.hostname,
+    mind,
+  };
+  const auth = { whoIs: async () => vouched } as unknown as AuthService;
+  const request = new Request("https://app.example.com/", {
+    headers: { cookie: "__Host-iterate-session=t" },
+  });
+  const stamped = await stampedRequest(request, { auth, route: null, config });
+  expect(stampedPersonOf(stamped.forwarded)).toEqual({
+    userId: "user_9",
+    email: "",
+    name: mind.hostname,
+    method: "mind",
+    mind,
+  });
+  expect(stamped).toMatchObject({ caller: "non-member" });
+  expect(stamped.forwarded.headers.get("x-itx-principal")).toBeNull();
+});

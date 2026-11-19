@@ -67,10 +67,11 @@ export type Lender = { actor: string; key: string; provide: string };
 /** HOW A PERSON SIGNED IN at the mind's issuer (core/auth-worker): what opened the session that
  *  a token or a hostname's session came from. "passkey": a passkey, which a member alone has.
  *  "email": a code that the mind mailed to the person's address. "guest": nothing proven, the
- *  person typed a name (core/auth-worker/src/guest-sign-in.ts). An app names the ones it takes
+ *  person typed a name (core/auth-worker/src/guest-sign-in.ts). "mind": the person's own mind
+ *  signed that they are one of its members (core/auth-worker/src/mind-sign-in.ts). An app names the ones it takes
  *  for its people, in its order (`AppDescription.signIn`, ./app-description.ts); a passkey's
  *  session counts at every app. */
-export const SignInMethod = z.enum(["passkey", "email", "guest"]);
+export const SignInMethod = z.enum(["passkey", "email", "guest", "mind"]);
 export type SignInMethod = z.infer<typeof SignInMethod>;
 
 /** A signed-in person as a mind's host knows them, member or not: the auth Worker's user id
@@ -79,9 +80,10 @@ export type SignInMethod = z.infer<typeof SignInMethod>;
  *  person an admin is signed in as. `name` is what to call them on a page: the part of their
  *  email before the "@", or for a guest the name they typed. It is text to show
  *  (`displayNameOf`), never a key and never a reason to let someone in: `userId` is who they are.
- *  Two kinds, told apart by `method`: a person who proved an address (`AddressedPerson`), and a
- *  guest, who proved nothing and has no address (`Guest`, whose `email` is ""). */
-export type Person = AddressedPerson | Guest;
+ *  Three kinds, told apart by `method`: a person who proved an address (`AddressedPerson`), a
+ *  guest, who proved nothing and has no address (`Guest`, whose `email` is ""), and a member of
+ *  another mind, which vouched for them (`MindPerson`, whose `email` is "" too). */
+export type Person = AddressedPerson | Guest | MindPerson;
 
 /** A person whom a passkey or a mailed code signed in: `email` is the address they proved. */
 export type AddressedPerson = {
@@ -99,6 +101,20 @@ export type Guest = {
   email: "";
   name: string;
   method: "guest";
+  impersonatedBy?: undefined;
+};
+
+/** A MEMBER OF ANOTHER MIND, which signed that they are (core/auth-worker/src/mind-sign-in.ts): no
+ *  member here, and no address, since that mind sends none. `mind.id` is that mind's id, which
+ *  decides; `mind.hostname` its control-plane hostname, a label; `mind.userId` the person's user id
+ *  there. `userId` is this mind's own id for them, stable for that pair. `name` is the hostname,
+ *  as a name to show. */
+export type MindPerson = {
+  userId: string;
+  email: "";
+  name: string;
+  method: "mind";
+  mind: { id: string; hostname: string; userId: string };
   impersonatedBy?: undefined;
 };
 
@@ -148,6 +164,17 @@ const StampedPerson = z.discriminatedUnion("method", [
     email: z.literal(""),
     method: z.literal("guest"),
     name: z.string(),
+  }),
+  z.object({
+    userId: z.string().min(1),
+    email: z.literal(""),
+    method: z.literal("mind"),
+    name: z.string(),
+    mind: z.strictObject({
+      id: z.string().regex(/^[0-9a-f]{64}$/),
+      hostname: z.string().refine(isMindControlPlaneHostname),
+      userId: z.string().min(1),
+    }),
   }),
 ]);
 

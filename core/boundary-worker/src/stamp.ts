@@ -171,6 +171,7 @@ export async function stampedRequest(
       // a guest's is the one they typed, which is all they have
       identity.name || nameInEmail(identity.principal.email || ""),
       identity.method,
+      identity.mind,
     );
     headers.set(ITX_PERSON_HEADER, stampJsonOf(person));
     // when the sign-in ends, member or not: a person's socket (sdk/auth.ts `personItx`) ends then
@@ -185,10 +186,24 @@ export async function stampedRequest(
   };
 }
 
-/** THE STAMP OF A PERSON: a guest's has no address, whatever else the token says, so no reader
- *  of the stamp takes a guest for a person with one (iterate/principal `Guest`). */
-const personOf = (userId: string, email: string, name: string, method: SignInMethod): Person =>
-  method === "guest" ? { userId, email: "", name, method } : { userId, email, name, method };
+/** THE STAMP OF A PERSON: a guest's and another mind's member's have no address, whatever else
+ *  the token says, so no reader of the stamp takes them for a person with one (iterate/principal
+ *  `Guest`, `MindPerson`). A member of another mind has the mind that vouched for them, or no
+ *  stamp: a token that says "mind" and names none is a defect. */
+function personOf(
+  userId: string,
+  email: string,
+  name: string,
+  method: SignInMethod,
+  mind?: { id: string; hostname: string; userId: string },
+): Person {
+  if (method === "guest") return { userId, email: "", name, method };
+  if (method === "mind") {
+    if (!mind) throw new Error("a token of the way mind names no mind: a defect");
+    return { userId, email: "", name, method, mind };
+  }
+  return { userId, email, name, method };
+}
 
 /** A MIND'S SIGNED REQUEST (core/auth-worker/src/mind-fetch.ts): stamped in `ITX_MIND_HEADER`
  *  alone, or a 401 of the boundary's own; a check that throws is a 503. The statement decides
