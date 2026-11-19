@@ -30,7 +30,7 @@ import { AGENTS_MODULE, AGENTS_PATH, agentsFacetSpec } from "./install.ts";
  *  itself needs no list code. An agent whose log has no such rows shows only its path. They're
  *  appended as `subscription-configured` events because `subscribe` only lets loaded code lend
  *  live callbacks. */
-const CATALOG_ROWS = [
+export const CATALOG_ROWS = [
   // what runs it: the agent's own birth certificate
   {
     name: "catalog-kind",
@@ -63,11 +63,13 @@ const CATALOG_ROWS = [
   },
   // the first non-blank line of each message from a person (role "user", from a user or with no
   // actor), of which the catalog keeps the earliest; the message also answers whatever the agent
-  // was waiting for and starts its next turn, so it clears the activity
+  // was waiting for and starts its next turn, so it clears the activity. A call's note ("[call] …
+  // joined the call", the template's call.ts `noteEvent`, with `callNote`) is a person's message
+  // that nobody wrote: it is no first words
   {
     name: "catalog-first-words",
     consumes: ["events.iterate.com/agent/context-added"],
-    filter: `payload.role = "user" and $not(payload.actor.type != "user")`,
+    filter: `payload.role = "user" and $not(payload.actor.type != "user") and $not($exists(payload.callNote))`,
     target: {
       path: AGENTS_PATH,
       type: "events.iterate.com/agent/listing-updated",
