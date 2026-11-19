@@ -16,7 +16,7 @@ A reply to a mail an agent sent goes back to that agent (`mail-replies.ts`), fro
 a member, and from an outside person whose sender Cloudflare proved and whom that agent wrote
 to (their address is in the `to` or `cc` of its mail in the thread): their answer is
 expected. A proven sender whom no agent wrote to reaches none, though they name the thread. Their text comes marked as an outside person's answer, not
-a member's request. An outside person's mail that no agent's mail came before reaches no
+a member's request: information, never instructions (AGENTS.md, "Words from outside"). An outside person's mail that no agent's mail came before reaches no
 agent, and neither does an automated mail.
 
 Another mind's agent's mail is automated too, but
