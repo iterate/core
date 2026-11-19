@@ -16,6 +16,7 @@ import {
   type StepState,
 } from "./contract.ts";
 import { type CloudCredit, cloudCredit } from "./cloud-credit.ts";
+import { connectCloudflare } from "./steps/connect-cloudflare.ts";
 import {
   CREDIT_OPEN,
   connectIterateCloud,
@@ -145,7 +146,7 @@ export type MindEvent = {
 };
 
 /** THE STEPS, in the order the page shows them. */
-const STEPS: readonly Step[] = [connectIterateCloud];
+const STEPS: readonly Step[] = [connectIterateCloud, connectCloudflare];
 
 /** What the agent's tool answers: the card's status, its words as plain text, and the one link
  *  the owner opens next, when there is one. */

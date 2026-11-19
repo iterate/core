@@ -870,8 +870,8 @@ test("the credit is open as shipped; closed (creditOpen false): no card, no pres
   const mind = fakeMind();
   const { credit, calls } = fakeCredit();
   const context = { ...contextOf(mind, credit), creditOpen: false };
-  expect(stepsOf(await onboardingCards(context))).toEqual([]);
-  await expect(runStep(context, STEP, "connect")).rejects.toThrow("its steps: none");
+  expect(stepsOf(await onboardingCards(context))).toEqual(["connect-cloudflare"]);
+  await expect(runStep(context, STEP, "connect")).rejects.toThrow("its steps: connect-cloudflare");
   await stepEvent(context, mind.sign(["/minds/iterate.iterate.com/"]));
   expect(calls).toEqual([]);
   expect(mind).toMatchObject({ proposed: [] });
@@ -1356,8 +1356,55 @@ test("the tool refuses a step or an action it does not have, with the ones it ha
   );
   // iterate Cloud's own mind is offered no credit: no card, and the tool has no such step
   const cloud = { ...contextOf(mind, credit), mind: "iterate.iterate.com" };
-  expect(stepsOf(await onboardingCards(cloud))).toEqual([]);
+  expect(stepsOf(await onboardingCards(cloud))).toEqual(["connect-cloudflare"]);
   await expect(runStep(cloud, STEP, "check")).rejects.toThrow(`no step "${STEP}" on this mind`);
+});
+
+test("Connect Cloudflare: offered with Not now, a press answers the MCP server's consent link that comes back here, and a set grant connects the card", async () => {
+  const mind = fakeMind();
+  const begun: { path: string; options: { next?: string } }[] = [];
+  let set = false;
+  const itx = {
+    ...mind.itx,
+    secrets: {
+      ...mind.itx.secrets,
+      describe: async (path: string) => ({ path, set: path === "/secrets/cloudflare" && set }),
+      beginOAuth: async (path: string, options: { next?: string }) => {
+        begun.push({ path, options });
+        return { authorizationUrl: "https://mind.example.com/secrets/oauth/start?n=1", nonce: "n" };
+      },
+    },
+  } as unknown as OnboardingItx;
+  const context = { ...contextOf(mind, fakeCredit().credit), itx };
+  const cardOf = async () =>
+    (await onboardingCards(context)).find((card) => card.step === "connect-cloudflare");
+
+  expect(await cardOf()).toMatchObject({
+    status: "not-asked",
+    buttons: [
+      { label: "Connect Cloudflare", action: "connect", primary: true, opens: true },
+      { label: "Not now", action: "decline" },
+    ],
+  });
+  expect(await runStep(context, "connect-cloudflare", "connect")).toMatchObject({
+    link: "https://mind.example.com/secrets/oauth/start?n=1",
+  });
+  expect(begun).toMatchObject([
+    {
+      path: "/secrets/cloudflare",
+      options: {
+        authorizationEndpoint: "https://mcp.cloudflare.com/authorize",
+        next: "https://onboarding.example.com/",
+      },
+    },
+  ]);
+  set = true;
+  await stepEvent(context, {
+    type: "events.iterate.com/secret/set",
+    path: "/secrets/cloudflare",
+    offset: 99,
+  });
+  expect(await cardOf()).toMatchObject({ status: "connected", buttons: [] });
 });
 
 test("the hook reads nothing for an event no step hears", async () => {
@@ -1604,9 +1651,9 @@ test("the two paths keep the mind's handle until their answer is made: a handle 
     },
   } as unknown as Parameters<typeof app.fetch>[1];
   const cards = await app.fetch(new Request("https://onboarding.example.com/steps.json"), host);
-  // as shipped (CREDIT_OPEN true) the page gets iterate Cloud's card alone (no connect-cloudflare)
+  // as shipped (CREDIT_OPEN true) the page gets iterate Cloud's card, then Cloudflare's
   expect(cards).toMatchObject({ status: 200 });
-  expect(stepsOf(await cards.json())).toEqual([STEP]);
+  expect(stepsOf(await cards.json())).toEqual([STEP, "connect-cloudflare"]);
   const press = await app.fetch(
     new Request(`https://onboarding.example.com/steps/${STEP}/check`, { method: "POST" }),
     host,
@@ -1842,13 +1889,16 @@ test("aiStatus and collectOpenAiKey read credentials and create a secret-collect
   });
 });
 
-test("onboarding page is a centered no-AI wizard with no AgentChat, no connect-cloudflare, visible approval line, and model-authored reply gate", () => {
+test("onboarding page is a centered no-AI wizard with no AgentChat, the optional Connect Cloudflare card on Configure AI, visible approval line, and model-authored reply gate", () => {
   const pageJs = readFileSync(
     new URL("../../configs/default/apps/onboarding/public/app.js", import.meta.url),
     "utf8",
   );
   expect(pageJs).not.toContain("AgentChat");
-  expect(pageJs).not.toContain("connect-cloudflare");
+  expect(pageJs).toContain('const CLOUDFLARE_STEP = "connect-cloudflare";');
+  expect(pageJs).toContain("pressStep(CLOUDFLARE_STEP, button)");
+  // a failed press on the optional card shows on that card, not on Configure AI below it
+  expect(pageJs).toContain("error=${optionalError}");
   expect(pageJs).toContain("/verify-ai");
   expect(pageJs).toContain("https://dash.${zone}/?agent=${AGENT}");
   expect(pageJs).toContain("approves each mind");

@@ -1,6 +1,7 @@
 // app.js — THE ONBOARDING WIZARD: a centered, no-AI 3-step setup flow.
 //   Step 1: Connect to iterate Cloud (optional, collapsible fine print)
-//   Step 2: Configure AI (iterate Cloud credit, OpenAI API key, ChatGPT Plus/Pro, or Cloudflare AI Gateway)
+//   Step 2: Configure AI (iterate Cloud credit, OpenAI API key, ChatGPT Plus/Pro, or Cloudflare AI Gateway),
+//           and below it the optional card "Connect Cloudflare" (steps/connect-cloudflare.ts)
 //   Step 3: Verify & wake gate (real server-side POST /verify-ai + wait for /agents/onboarding's
 //           first assistant response, then show the verified result and clear Done state with link
 //           into https://dash.<zone>/?agent=/agents/onboarding)
@@ -30,6 +31,7 @@ import {
 
 const AGENT = "/agents/onboarding";
 const CLOUD_STEP = "connect-iterate-cloud";
+const CLOUDFLARE_STEP = "connect-cloudflare";
 
 /** The idempotent opener for /agents/onboarding, matching Dash's apps/dash/public/app.js. */
 const OPENER =
@@ -122,6 +124,8 @@ function App() {
   const [verified, setVerified] = useState();
   const [busy, setBusy] = useState();
   const [actionError, setActionError] = useState();
+  // an optional step's own failure, shown on its own card, not on the step below it
+  const [optionalError, setOptionalError] = useState();
   const initializedRef = useRef(false);
   const prevCloudStatusRef = useRef();
 
@@ -209,19 +213,22 @@ function App() {
     }
   }, [cards, aiStatus, cloudCard, step, agentSettled, agentContext.caughtUp, agentContext.events]);
 
-  async function pressCloud(button) {
+  const cloudflareCard = cards?.find((card) => card.step === CLOUDFLARE_STEP);
+
+  async function pressStep(stepId, button) {
+    const setError = stepId === CLOUD_STEP ? setActionError : setOptionalError;
     const tab = button.opens ? window.open("about:blank", "_blank") : null;
     setBusy(button.action);
-    setActionError(undefined);
+    setError(undefined);
     try {
-      const answer = await ask(`/steps/${CLOUD_STEP}/${button.action}`, "POST");
+      const answer = await ask(`/steps/${stepId}/${button.action}`, "POST");
       if (tab && answer.link) tab.location.href = answer.link;
       else tab?.close();
       if (!tab && answer.link) window.location.assign(answer.link);
       await reload();
     } catch (failure) {
       tab?.close();
-      setActionError(failure instanceof Error ? failure.message : String(failure));
+      setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
       setBusy(undefined);
     }
@@ -313,13 +320,24 @@ function App() {
         card=${cloudCard}
         busy=${busy}
         error=${actionError}
-        onPress=${pressCloud}
+        onPress=${(button) => pressStep(CLOUD_STEP, button)}
         onSkip=${skipCloud}
         onContinue=${() => setStep(2)}
       />
     `;
   } else if (step === 2) {
+    let cloudflareOffer = null;
+    if (cloudflareCard)
+      cloudflareOffer = html`
+        <${OptionalStep}
+          card=${cloudflareCard}
+          busy=${busy}
+          error=${optionalError}
+          onPress=${(button) => pressStep(CLOUDFLARE_STEP, button)}
+        />
+      `;
     activeStep = html`
+      ${cloudflareOffer}
       <${AiStep}
         aiStatus=${aiStatus}
         cloudCard=${cloudCard}
@@ -391,6 +409,46 @@ function App() {
         ${activeStep}
       </div>
     </main>
+  `;
+}
+
+// ── An optional step's card, drawn as the step's words give it (steps.ts `Card`) ──
+
+function OptionalStep({ card, busy, error, onPress }) {
+  const buttons = card.buttons.map(
+    (button) => html`
+      <${Button}
+        key=${button.label}
+        variant=${button.primary ? "default" : "outline"}
+        disabled=${Boolean(busy)}
+        onClick=${() => onPress(button)}
+      >
+        ${busy === button.action ? html`<${Spinner} className="size-4" />` : null} ${button.label}
+      <//>
+    `,
+  );
+  let footer = null;
+  if (buttons.length)
+    footer = html`
+      <${CardFooter} className="wizard-actions">
+        <div className="wizard-actions-group">${buttons}</div>
+      <//>
+    `;
+  return html`
+    <${Card} className="mb-4">
+      <${CardHeader}>
+        <${CardTitle} className="wizard-card-title">
+          ${card.title} ${card.optional ? html`<${Badge} variant="secondary">optional<//>` : null}
+        <//>
+        ${card.text.map((line) => html`<${CardDescription} key=${line}>${line}<//>`)}
+      <//>
+      ${
+        error
+          ? html`<${CardContent}><p className="wizard-error-text" role="alert">${error}</p><//>`
+          : null
+      }
+      ${footer}
+    <//>
   `;
 }
 
