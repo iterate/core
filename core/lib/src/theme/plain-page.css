@@ -65,6 +65,15 @@ main.wide {
     padding-top: 3rem;
   }
 }
+/* A field's text at 16 px at least on a narrow screen and on every touch screen (a phone held
+   sideways is wide): iOS Safari zooms the page into a field with smaller text. */
+@media (max-width: 40rem), (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"]),
+  select,
+  textarea {
+    font-size: max(1rem, 16px);
+  }
+}
 .mark {
   display: flex;
 }
@@ -322,9 +331,16 @@ main:not(.wide) .stack {
 main:not(.wide) .stack > button:not(.link) {
   width: 100%;
 }
-/* a yes and a no share the card's width */
+/* a yes and a no share the card's width, each label on one line. A button is never narrower than
+   its words, so when the two do not fit side by side (a phone, a long label), each takes a line
+   of its own, as wide as the card. When the main action is last (a no, then a yes), the lines
+   go upwards: the main action is then on top. */
 main:not(.wide) .actions > button:not(.link) {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: max-content;
+}
+main:not(.wide) .actions:has(> button:last-of-type:not(.secondary, .outline, .link)) {
+  flex-wrap: wrap-reverse;
 }
 main:not(.wide)
   :is(input:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"]), textarea) {

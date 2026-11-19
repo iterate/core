@@ -116,10 +116,10 @@ async function mindsPage(env: Env, mind: string): Promise<Response> {
 const MINDS_SCRIPT = `
 const status = document.getElementById("status");
 const said = (error, fallback) => {
-  status.textContent = error.name === "NotAllowedError" ? "No passkey was used, so nothing was changed." : error.message || fallback;
+  statusFailed(status, error, fallback, "No passkey was used, so nothing was changed.");
 };
 async function signedRule(domain, append) {
-  status.textContent = "Waiting for your passkey…";
+  statusSay(status, "Waiting for your passkey…");
   const signed = await signedStatement({ path: "/minds/" + domain, type: "events.iterate.com/mind-meld/configured", payload: { append } });
   const answer = await fetch("${STATEMENTS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(signed) });
   if (!answer.ok) throw new Error((await answer.json().catch(() => ({}))).refused || "The rule was not taken.");
@@ -135,7 +135,7 @@ form.addEventListener("submit", async (event) => {
   found.hidden = true;
   const typed = form.domain.value.trim().toLowerCase();
   domain = typed;
-  status.textContent = "Reading the keys that " + domain + " publishes…";
+  statusSay(status, "Reading the keys that " + domain + " publishes…");
   try {
     const answer = await (await fetch("${PUBLISHED_PATH}?" + new URLSearchParams({ domain }))).json();
     // a later submit asked for another mind: this answer is not for what the page now shows
@@ -145,7 +145,7 @@ form.addEventListener("submit", async (event) => {
     found.querySelector("[data-keys]").textContent = answer.keys.length ? answer.keys.map((key) => key.key.slice(0, 8)).join(", ") : "none that sign statements yet";
     found.querySelector("[data-rule]").textContent = domain + " may add events under /minds/" + domain + "/ of this mind, and nothing else.";
     found.hidden = false;
-    status.textContent = "Your passkey signs this.";
+    statusSay(status, "Your passkey signs this.");
   } catch (error) {
     if (domain === typed) said(error, "The keys could not be read.");
   }

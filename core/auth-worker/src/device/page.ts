@@ -16,6 +16,13 @@ const OUTCOMES = {
   declined: "You declined. The device is not signed in.",
   failed: "This sign-in did not finish. Start it again on the device.",
 } as const;
+/** A code that a member approved, opened again (a reload, the browser's back, an in-app browser
+ *  that opens the link once more): its row stays, `approved` or `redeemed`, until a minute after
+ *  the code's own end (./store.ts), and says so in place of "no device is waiting". */
+const USED = {
+  device: "This code was used: the device is signed in. You can close this page.",
+  letIn: "This code was used: it is let in. You can close this page.",
+} as const;
 const LET_IN_OUTCOMES = {
   approved: "You let it in, for the time it asked. You can close this page.",
   declined: "You declined. It is not let in.",
@@ -66,6 +73,11 @@ export async function devicePageResponse(env: Env, request: Request) {
   const store = deviceStore(env.OAUTH_KV);
   const found = await store.byUserCode(userCode);
   const device = found?.request;
+  if (device?.status === "approved" || device?.status === "redeemed") {
+    const title = device.letIn ? "Let in" : "Device sign-in";
+    const words = device.letIn ? USED.letIn : USED.device;
+    return page({ title, body: `<h1>${title}</h1><p>${text(words)}</p>` });
+  }
   const waits =
     device &&
     device.expiresAt > Date.now() &&
@@ -196,13 +208,13 @@ form.addEventListener("submit", async (event) => {
   if (!event.submitter?.hasAttribute("data-continue") || form.signed.value) return;
   event.preventDefault();
   try {
-    status.textContent = "Waiting for your passkey…";
+    statusSay(status, "Waiting for your passkey…");
     form.signed.value = JSON.stringify(await signedStatement({ type: "${DEVICE_CONFIRMED}", payload: JSON.parse(form.dataset.press) }));
     // by its mark, not by its name: the Decline button has the same name
     form.querySelector("[data-action]").value = "confirm";
     form.submit();
   } catch (error) {
-    status.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.message || "The device is not signed in.";
+    statusFailed(status, error, "The device is not signed in.");
   }
 });`;
 

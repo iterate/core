@@ -201,16 +201,30 @@ export interface AuthService {
   /** A statement that waits a day for a member's passkey at `signAt`, a page that needs no
    *  sign-in. Signed, it lands on `path` as `POST /statements` takes it. `from`: the context that
    *  asks, as the page shows it; `next`: where the page goes once signed, a host of the mind.
-   *  `signerEmail`: the one person who signs; a non-member signs at `/people/<address>` alone. */
+   *  `signerEmail`: the one person who signs; a non-member signs at `/people/<address>` alone.
+   *  `by`: who asked, as the platform stamped the call (`ProposedBy`). */
   proposeStatement(input: {
     path: string;
     type: string;
     payload?: Record<string, unknown>;
     from?: string;
+    by?: ProposedBy;
     signerEmail?: string;
     next?: string;
   }): Promise<{ draft: string; signAt: string; expires: number }>;
 }
+
+/** WHO ASKED FOR A STATEMENT, as the platform stamped the call that proposed it (core/itx
+ *  `Caller`): a member, a signed-in person who is no member, a guest, another mind, or `code`,
+ *  the mind's own code with nobody's call behind it (an agent's own turn, a schedule). None of
+ *  these is the caller's own word, but a guest's `name` is what the guest typed, and a mind's
+ *  `hostname` is a label. */
+export type ProposedBy =
+  | { kind: "member"; email?: string }
+  | { kind: "person"; email: string }
+  | { kind: "guest"; name: string }
+  | { kind: "mind"; hostname: string }
+  | { kind: "code" };
 
 /** One fact of the mind's identity on its way to `/`: the event to append there as the platform,
  *  and the id by which the auth Worker is told that it is stored. `mind`: an accepted record's

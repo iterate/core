@@ -3,12 +3,13 @@
 // pages are also written there as files, for a look in a browser.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { plainPageCssHash } from "iterate/standalone-page";
 import { expect, test } from "vitest";
 import { emailAddressPage } from "./email-sign-in.ts";
 import type { Env } from "./env.ts";
 import { deviceTile } from "./device/page.ts";
-import { chooserPage, consentPage, errorPage, page, signInPage } from "./pages.ts";
+import { chooserPage, consentPage, errorPage, page, signInPage, STATUS_SCRIPT } from "./pages.ts";
 import { configVars } from "./test-support.ts";
 
 const MIND = "iterate.example.com";
@@ -304,6 +305,53 @@ test("a page's own style is allowed by the page's nonce, beside the shared style
   // a page with no style of its own allows the shared stylesheet alone
   const plain = page({ title: "Plain", body: "" }).headers.get("content-security-policy");
   expect(plain?.split("; ")).toContain(`style-src ${plainPageCssHash}`);
+});
+
+test("every scripted page has one line for its press: a refusal reads as an error, a closed passkey sheet stays quiet", async () => {
+  // the page's own script text, run on a stand-in for its status line
+  const { statusFailed, statusSay } = runInNewContext(
+    `${STATUS_SCRIPT}; ({ statusFailed, statusSay })`,
+  ) as Record<string, (...args: unknown[]) => void>;
+  const line = () => {
+    const state = { text: "", muted: true, role: "status", scrolled: false };
+    return {
+      state,
+      set textContent(words: string) {
+        state.text = words;
+      },
+      classList: {
+        add: () => void (state.muted = true),
+        remove: () => void (state.muted = false),
+      },
+      setAttribute: (_name: string, value: string) => void (state.role = value),
+      scrollIntoView: () => void (state.scrolled = true),
+    };
+  };
+  const refused = line();
+  statusFailed!(refused, new Error("Not signed: the statement has expired."), "Not signed.");
+  expect(refused).toMatchObject({
+    state: {
+      text: "Not signed: the statement has expired.",
+      muted: false,
+      role: "alert",
+      scrolled: true,
+    },
+  });
+  const closed = line();
+  statusFailed!(closed, Object.assign(new Error(""), { name: "NotAllowedError" }), "Not signed.");
+  expect(closed).toMatchObject({
+    state: {
+      text: "No passkey was used. Press again when you are ready.",
+      muted: true,
+      role: "status",
+      scrolled: false,
+    },
+  });
+  // a refused line goes quiet again with the next press
+  statusSay!(refused, "Waiting for your passkey…");
+  expect(refused).toMatchObject({ state: { muted: true, role: "status" } });
+  const html = await page({ title: "A press", body: "", script: "statusSay;" }).text();
+  expect(html).toContain("function statusRefused(line, words)");
 });
 
 async function kept(name: string, answer: Response) {

@@ -225,7 +225,7 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const { challenge, user, email, rp, next } = form.dataset;
   try {
-    status.textContent = "Waiting for your new passkey…";
+    statusSay(status, "Waiting for your new passkey…");
     // With no name typed the passkey is named after the device, where the browser says which,
     // and the day: the press never waits for a name.
     const day = new Date().toISOString().slice(0, 10);
@@ -246,10 +246,10 @@ form.addEventListener("submit", async (event) => {
     const answer = await response.json();
     if (!response.ok) throw new Error(answer.error);
     // said before the next page loads: "Waiting for your new passkey…" would stand there meanwhile
-    status.textContent = "Your passkey is added. One moment…";
+    statusSay(status, "Your passkey is added. One moment…");
     location.assign(answer.next);
   } catch (error) {
-    status.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.message || "The passkey was not added.";
+    statusFailed(status, error, "The passkey was not added.");
   }
 });`;
 
@@ -439,7 +439,7 @@ else fetch("${LINK_PATH}", {
   body: JSON.stringify({ ticket }),
 }).then(
   (answer) => answered(answer.ok),
-  () => { status.textContent = "This site could not be reached. Reload the page to try again."; },
+  () => { statusRefused(status, "This site could not be reached. Reload the page to try again."); },
 );`;
 
 function json(body: unknown, status = 200, headers = new Headers()) {

@@ -87,6 +87,42 @@ test("a statement counts once, and Decline takes no passkey", async () => {
   expect(await stack.request()).toMatchObject({ status: "ended", error: "access_denied" });
 });
 
+test.for([
+  ["approved", "This code was used: the device is signed in. You can close this page."],
+  ["redeemed", "This code was used: the device is signed in. You can close this page."],
+] as const)(
+  "a code that was %s says so when its page opens again, with no form and no alert",
+  async ([status, words]) => {
+    const stack = await stackOf();
+    await stack.start({ ...DEVICE, status, confirmedBy: "user_owner" });
+    const page = await stack.get();
+    expect({
+      status: page.status,
+      said: page.text.includes(`<p>${words}</p>`),
+      form: page.text.includes("<form"),
+      alert: page.text.includes('<p role="alert"'),
+    }).toEqual({ status: 200, said: true, form: false, alert: false });
+    // a let-in's code says it in its own words
+    await stack.start({ ...DEVICE, status, letIn: { seconds: 3600, reason: "a test" } });
+    expect((await stack.get()).text).toContain(
+      "<p>This code was used: it is let in. You can close this page.</p>",
+    );
+  },
+);
+
+test("a code that is unknown, or that ran out unused, keeps the form and its words", async () => {
+  const stack = await stackOf();
+  const unknown = await stack.get("BCDF-GHJK");
+  const words = "No device is waiting for this code. It may have expired.";
+  expect({ status: unknown.status, said: unknown.text.includes(words) }).toEqual({
+    status: 400,
+    said: true,
+  });
+  expect(unknown.text).toContain('<input name="user_code" value="BCDF-GHJK"');
+  await stack.start({ ...DEVICE, expiresAt: Date.now() - 1 });
+  expect((await stack.get()).text).toContain(words);
+});
+
 test("a let-in's statement names how long and why, and one for a plain sign-in lets nothing in", async () => {
   const letIn = { ...DEVICE, letIn: { seconds: 3600, reason: "to fix the build" } };
   const stack = await stackOf({ device: letIn });
@@ -241,11 +277,11 @@ async function stackOf({ device = DEVICE } = {}) {
     start,
     /** The device's request as the store holds it now. */
     request: () => store.byKey(KEY),
-    get: async () =>
+    get: async (userCode = CODE) =>
       answered(
         await devicePageResponse(
           env,
-          new Request(`${ISSUER}/oauth2/device?user_code=${CODE}`, { headers: { cookie } }),
+          new Request(`${ISSUER}/oauth2/device?user_code=${userCode}`, { headers: { cookie } }),
         ),
       ),
     /** The page's own form, posted by the owner's session. */

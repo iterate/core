@@ -8,6 +8,28 @@ export const text = (value: string) =>
 
 /** One page. `wide` is a page a person reads or works in (the keys, the members);
  *  without it the page is the narrow card of one question and one action. */
+/** THE LINE UNDER A PAGE'S PRESS, the same on every page that has a script: `statusSay` for what
+ *  goes on (quiet, `role="status"`), `statusRefused` for a press that did not do what it was for
+ *  (the page's error colour, `role="alert"`, scrolled into view), and `statusFailed` for a caught
+ *  error, where a passkey sheet that the person closed is no error (`NotAllowedError`). */
+export const STATUS_SCRIPT = `
+function statusSay(line, words) {
+  line.textContent = words;
+  line.classList.add("muted");
+  line.setAttribute("role", "status");
+}
+function statusRefused(line, words) {
+  line.textContent = words;
+  line.classList.remove("muted");
+  line.setAttribute("role", "alert");
+  line.scrollIntoView({ block: "nearest" });
+}
+function statusFailed(line, error, fallback, unused = "No passkey was used. Press again when you are ready.") {
+  if (error.name === "NotAllowedError") statusSay(line, unused);
+  else statusRefused(line, error.message || fallback);
+}
+`;
+
 export function page(
   input: {
     title: string;
@@ -50,7 +72,7 @@ export function page(
   // form's POST, and the consent and sign-out forms are checked by their Origin.
   headers.set("referrer-policy", "same-origin");
   const body = input.script
-    ? `${input.body}<script nonce="${nonce}">${input.script}</script>`
+    ? `${input.body}<script nonce="${nonce}">${STATUS_SCRIPT}${input.script}</script>`
     : input.body;
   return new Response(
     standalonePage({
@@ -171,7 +193,7 @@ let asking;
 const signIn = async (pressed) => {
   asking?.abort();
   const ask = (asking = new AbortController());
-  status.textContent = "Waiting for your passkey…";
+  statusSay(status, "Waiting for your passkey…");
   try {
     const { statement, challenge } = await post("/sign-in/passkey/challenge", {});
     const assertion = await navigator.credentials.get({ signal: ask.signal, publicKey: {
@@ -192,8 +214,7 @@ const signIn = async (pressed) => {
   } catch (error) {
     if (ask !== asking) return;
     // the page's own ask, closed by the person or refused by the browser, is no fault of theirs
-    const unused = pressed ? "No passkey was used. Try again." : "";
-    status.textContent = error.name === "NotAllowedError" ? unused : error.message || "The passkey did not sign you in.";
+    statusFailed(status, error, "The passkey did not sign you in.", pressed ? undefined : "");
   }
 };
 form.addEventListener("submit", (event) => {

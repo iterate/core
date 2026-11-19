@@ -107,24 +107,35 @@ const MeldRule = z.strictObject({
   key: z.string().min(1).optional(),
 });
 
-/** THE RULE A MEMBER SIGNED, written as the `mind_melds` row, or why it is refused. `path` is the
- *  statement's, `/minds/<domain>`; `own` is this mind's domain. A rule older than the row's is
- *  not taken, so an old rule sent again changes nothing. */
+/** A MELD RULE AS THIS MIND WOULD TAKE IT, or why it refuses it: the one check of both the press
+ *  (`configuredMeld`) and the sign page's words (./statement-drafts.ts), so that the page never
+ *  explains a rule that the press then refuses. `path` is the statement's, `/minds/<domain>`;
+ *  `own` is this mind's domain. */
+export function meldRuleOf(
+  path: string,
+  payload: unknown,
+  own: string,
+): { domain: string; append: string[]; key?: string } | { refused: string } {
+  const domain = path.slice("/minds/".length);
+  if (!path.startsWith("/minds/") || !isMindControlPlaneHostname(domain))
+    return { refused: "a mind meld is set on /minds/<domain>, for another mind's domain" };
+  if (domain === own) return { refused: "a mind does not meld with itself" };
+  const rule = MeldRule.safeParse(payload);
+  if (!rule.success)
+    return { refused: "a mind meld's payload is { append: [at most 20 context paths], key? }" };
+  return { domain, ...rule.data };
+}
+
+/** THE RULE A MEMBER SIGNED, written as the `mind_melds` row, or why it is refused
+ *  (`meldRuleOf`). A rule older than the row's is not taken, so an old rule sent again changes
+ *  nothing. */
 export async function configuredMeld(
   env: Env,
-  rule: { path: string; payload: unknown; at: number; by: string; own: string },
+  signed: { path: string; payload: unknown; at: number; by: string; own: string },
 ): Promise<{ domain: string; append: string[] } | { refused: string }> {
-  const domain = rule.path.slice("/minds/".length);
-  if (
-    !rule.path.startsWith("/minds/") ||
-    !isMindControlPlaneHostname(domain) ||
-    domain === rule.own
-  )
-    return { refused: "a mind meld is set on /minds/<domain>, for another mind's domain" };
-  const payload = MeldRule.safeParse(rule.payload);
-  if (!payload.success)
-    return { refused: "a mind meld's payload is { append: [at most 20 context paths], key? }" };
-  const { append, key } = payload.data;
+  const rule = meldRuleOf(signed.path, signed.payload, signed.own);
+  if ("refused" in rule) return rule;
+  const { domain, append, key } = rule;
   await env.DB.prepare(
     `insert into mind_melds (domain, append, key, configured_at, configured_by)
      values (?1, ?2, ?3, ?4, ?5)
@@ -132,7 +143,7 @@ export async function configuredMeld(
        configured_at = excluded.configured_at, configured_by = excluded.configured_by
      where excluded.configured_at >= mind_melds.configured_at`,
   )
-    .bind(domain, JSON.stringify(append), key || null, rule.at, rule.by)
+    .bind(domain, JSON.stringify(append), key || null, signed.at, signed.by)
     .run();
   console.info({ event: "auth.mind-meld-configured", domain, append });
   return { domain, append };

@@ -90,6 +90,13 @@ margin: 0 auto;
 padding-top: 3rem;
 }
 }
+@media (max-width: 40rem), (pointer: coarse) {
+input:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"]),
+select,
+textarea {
+font-size: max(1rem, 16px);
+}
+}
 .mark {
 display: flex;
 }
@@ -331,7 +338,11 @@ main:not(.wide) .stack > button:not(.link) {
 width: 100%;
 }
 main:not(.wide) .actions > button:not(.link) {
-flex: 1;
+flex: 1 1 0;
+min-width: max-content;
+}
+main:not(.wide) .actions:has(> button:last-of-type:not(.secondary, .outline, .link)) {
+flex-wrap: wrap-reverse;
 }
 main:not(.wide)
 :is(input:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"]), textarea) {
@@ -474,4 +485,4 @@ grid-column: 2;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-soIhy0Td4CCy8Oq3NEnXcos5myEzFMB37rfEh9XXN6U='";
+export const plainPageCssHash = "'sha256-7dqMyqtlBz9rW2Admm29D9IE7lap0rzAQyTpodY4UjU='";

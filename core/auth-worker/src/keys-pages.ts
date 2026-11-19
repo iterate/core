@@ -203,7 +203,7 @@ form.addEventListener("submit", async (event) => {
   const { challenge, user, email, rp } = form.dataset;
   try {
     if (!made) {
-      status.textContent = "Waiting for your new passkey…";
+      statusSay(status, "Waiting for your new passkey…");
       // With no name typed the passkey is named after the device, where the browser says which,
       // and the day: the press never waits for a name.
       const day = new Date().toISOString().slice(0, 10);
@@ -226,16 +226,17 @@ form.addEventListener("submit", async (event) => {
         body: { label: typed || device + ", " + day, publicKey: b64u(publicKey), credentialId: credential.id, clientDataJSON: b64u(credential.response.clientDataJSON) },
       };
       form.querySelector("button").textContent = "Confirm with a passkey you have";
-      status.textContent = "The new passkey is made. Now confirm it with a passkey you already have here.";
+      statusSay(status, "The new passkey is made. Now confirm it with a passkey you already have here.");
       return;
     }
-    status.textContent = "Waiting for a passkey you already have…";
+    statusSay(status, "Waiting for a passkey you already have…");
     made.body.signed = await signedStatement({ type: "${KEY_ADDED}", payload: { key: made.key } });
     const response = await fetch("${KEYS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(made.body) });
     if (!response.ok) throw new Error((await response.json()).error);
     location.reload();
   } catch (error) {
-    status.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.name === "InvalidStateError" ? "This device holds a passkey of yours for this site already. Make the new one on another device or a security key." : error.message || "The passkey was not added.";
+    if (error.name === "InvalidStateError") statusRefused(status, "This device holds a passkey of yours for this site already. Make the new one on another device or a security key.");
+    else statusFailed(status, error, "The passkey was not added.");
   }
 });
 // A key is removed by a statement one of the person's passkeys signs: the press is the consent.
@@ -245,11 +246,11 @@ for (const remove of document.querySelectorAll("form[data-remove]"))
     event.preventDefault();
     const said = document.getElementById("removal");
     try {
-      said.textContent = "Waiting for your passkey…";
+      statusSay(said, "Waiting for your passkey…");
       remove.signed.value = JSON.stringify(await signedStatement({ type: "${KEY_REMOVED}", payload: { key: remove.key.value } }));
       remove.submit();
     } catch (error) {
-      said.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.message || "The key was not removed.";
+      statusFailed(said, error, "The key was not removed.");
     }
   });`;
 
@@ -540,12 +541,12 @@ form.addEventListener("submit", async (event) => {
   if (!event.submitter?.hasAttribute("data-allow") || form.signed.value) return;
   event.preventDefault();
   try {
-    status.textContent = "Waiting for your passkey…";
+    statusSay(status, "Waiting for your passkey…");
     form.signed.value = JSON.stringify(await signedStatement({ type: "${KEY_ADDED}", payload: JSON.parse(form.dataset.enrol) }));
     form.decision.value = "allow";
     form.submit();
   } catch (error) {
-    status.textContent = error.name === "NotAllowedError" ? "No passkey was used. Try again." : error.message || "The key was not added.";
+    statusFailed(status, error, "The key was not added.");
   }
 });`;
 

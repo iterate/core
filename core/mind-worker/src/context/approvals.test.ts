@@ -58,9 +58,57 @@ test("a proposed statement names the calling context as its asker and answers th
       type: "demo/statement-asked",
       payload: { append: ["/"] },
       from: "/agents/onboarding",
+      // no member, person or mind behind the call: the agent's own turn
+      by: { kind: "code" },
     },
   ]);
 });
+
+test.for([
+  [
+    "a member",
+    { principal: { actor: "user_ada", email: "ada@example.org" } },
+    { kind: "member", email: "ada@example.org" },
+  ],
+  [
+    "a signed-in person who is no member",
+    { principal: null, person: { email: "bo@example.org", name: "Bo" } },
+    { kind: "person", email: "bo@example.org" },
+  ],
+  [
+    "a guest, by the name they typed",
+    { principal: null, person: { email: "", name: "Cy" } },
+    { kind: "guest", name: "Cy" },
+  ],
+  [
+    "another mind",
+    {
+      principal: null,
+      mind: { actor: "a".repeat(64), kind: "mind", hostname: "peer.example.net" },
+    },
+    { kind: "mind", hostname: "peer.example.net" },
+  ],
+] as const)(
+  "a statement that %s proposes names them as the platform stamped them",
+  async ([, stamp, by]) => {
+    const asked: { by?: unknown }[] = [];
+    const egress = {
+      ...pretendGate().egress,
+      proposeStatement: async (input: { by?: unknown }) => {
+        asked.push(input);
+        return { draft: "d1", signAt: "", expires: 1 };
+      },
+    };
+    const caller = { ...mind(), caller: () => ({ ...stamp, path: "/" }) };
+    const approvals = approvalsRoot(
+      caller as unknown as ItxHostRootContext,
+      egress,
+      "https://iterate.example.com",
+    );
+    await approvals.proposeStatement({ path: "/minds/example.org", type: "demo/statement-asked" });
+    expect(asked.map((input) => input.by)).toEqual([by]);
+  },
+);
 
 const rule = ActRule.parse({ verb: "itx.whatsapp.sendMessage" });
 

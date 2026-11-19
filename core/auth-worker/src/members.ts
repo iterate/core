@@ -586,14 +586,14 @@ const form = document.getElementById("add");
 const status = document.getElementById("status");
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  status.textContent = "Waiting for your passkey…";
+  statusSay(status, "Waiting for your passkey…");
   try {
     const signed = await signedStatement({ type: "${MEMBER_ADDED}", payload: { email: form.email.value.trim().toLowerCase() } });
     const answer = await fetch("${MEMBERS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(signed) });
     if (!answer.ok) throw new Error((await answer.json()).error);
     location.reload();
   } catch (error) {
-    status.textContent = error.name === "NotAllowedError" ? "No passkey was used, so no member was added." : error.message || "The member was not added.";
+    statusFailed(status, error, "The member was not added.", "No passkey was used, so no member was added.");
   }
 });
 // An owner's act on a member's way in: the owner's passkey signs the act and the member it names.
@@ -603,11 +603,11 @@ for (const act of document.querySelectorAll("form[data-signed]"))
     event.preventDefault();
     const said = act.querySelector("[data-status]");
     try {
-      said.textContent = "Waiting for your passkey…";
+      statusSay(said, "Waiting for your passkey…");
       act.signed.value = JSON.stringify(await signedStatement({ type: act.dataset.signed, payload: { email: act.email.value.trim().toLowerCase() } }));
       act.submit();
     } catch (error) {
-      said.textContent = error.name === "NotAllowedError" ? "No passkey was used, so nothing was changed." : error.message || "Nothing was changed.";
+      statusFailed(said, error, "Nothing was changed.", "No passkey was used, so nothing was changed.");
     }
   });`;
 

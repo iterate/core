@@ -1,7 +1,7 @@
-import type { ItxHostRootContext } from "core-itx";
+import type { Caller, ItxHostRootContext } from "core-itx";
 import type { ActRule } from "iterate/acts";
 import { releasedAnswer, reportIssue } from "iterate/lib";
-import type { Door } from "iterate/workers";
+import type { Door, ProposedBy } from "iterate/workers";
 import { hopCaller } from "./hop-caller.ts";
 
 export const APPROVALS_ROOT_DESCRIPTION =
@@ -74,9 +74,20 @@ export function approvalsRoot(
           signerEmail: input.signerEmail,
           next: input.next,
           from: from().path || context.path,
+          by: proposedBy(from()),
         }),
       );
       return { draft, signAt, expires };
     },
   };
+}
+
+/** Who asks for a statement, for its page: the member, the signed-in person or the other mind
+ *  that the platform stamped on the call, else the mind's own code. */
+function proposedBy(caller: Caller): ProposedBy {
+  if (caller.principal) return { kind: "member", email: caller.principal.email || undefined };
+  if (caller.person?.email) return { kind: "person", email: caller.person.email };
+  if (caller.person) return { kind: "guest", name: caller.person.name };
+  if (caller.mind) return { kind: "mind", hostname: caller.mind.hostname };
+  return { kind: "code" };
 }
