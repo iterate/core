@@ -61,6 +61,9 @@ export const CALL_DUE = "call/due";
 const VOICE_AGENT_MAX_MS = 30 * 60_000;
 /** How often a hang-up OpenAI did not take is tried, 30 s apart, before it is given up. */
 const HANGUP_TRIES = 10;
+/** How many of a row's stopped invites the call keeps: a page has one invite under way at a
+ *  time, so its last few stops cover every start still on its way. */
+const STOPPED_KEPT = 8;
 const KINDS = ["mic", "camera", "screen", "ai"] as const;
 /** Who asked, as the kernel tells a facet (iterate/sdk `onBehalfOf()`), structurally. */
 export type Asked =
@@ -93,6 +96,12 @@ const Row = z.object({
   /** This page's admission: each join's own id. Work of an earlier admission of the same row
    *  (its leave, its offers, its voice agent) is refused, so it never touches this one. */
   admission: z.string().optional(),
+  /** The page's order of that admission (`seq` of its admit): an admit that comes later but is
+   *  older (a delayed one) admits nobody while this row lives. */
+  seq: z.number().optional(),
+  /** The voice agent invites this row's page stopped before their claim (the last STOPPED_KEPT):
+   *  such an invite claims nothing when its start comes after its stop. */
+  stopped: z.array(z.string()).optional(),
 });
 /** An admission's id, as a page sends it back. A call with no id (a kit from before admissions)
  *  keeps the earlier behaviour until every pin has moved. */
@@ -103,7 +112,9 @@ const isCurrent = (row: { admission?: string } | undefined, admission: string | 
   Boolean(row) && (!admission || row!.admission === admission);
 const JoinInput = z
   .union([
-    z.object({ admit: z.string().min(1).max(64) }),
+    // `seq`: the page's own order of its admits (a page's later admit has a higher one). An admit
+    // with none (a kit from before it) replaces the row's admission as before.
+    z.object({ admit: z.string().min(1).max(64), seq: z.number().int().nonnegative().optional() }),
     z.object({ admission: z.string().min(1).max(64) }),
   ])
   .optional();
@@ -135,6 +146,8 @@ export type CallData = z.infer<typeof CallData>;
 /** A page: the name of its own subscription row. */
 const Page = z.string().regex(/^[\w:.@-]{1,200}$/);
 const Sdp = z.string().min(1).max(20_000);
+/** A voice agent invite's id, the page's own. */
+const Invite = z.string().min(1).max(64);
 const Mid = z.string().min(1).max(64);
 /** One step of the SFU's signalling. A track is "<page>:<kind>"; a layer is "f", "h" or "q". */
 const StepInput = z.union([
@@ -153,7 +166,16 @@ const StepInput = z.union([
   z.object({ reset: z.enum(["pub", "sub"]) }),
 ]);
 /** The voice agent's act: start it with the host page's SDP offer, or stop it. */
-const ActInput = z.union([z.object({ start: Sdp }), z.object({ stop: z.string().max(200) })]);
+const ActInput = z.union([
+  // `invite`: the page's own id of this invite, which the claim takes
+  z.object({ start: Sdp, invite: Invite.optional() }),
+  // a stop: with `withdraw`, the host page's stop of that invite alone; without it, a member sends
+  // away whichever agent is in the call (and a call from before `withdraw` reads it so)
+  z.object({ stop: z.string().max(200), withdraw: Invite.optional() }),
+  // the host page's stop of an invite whose claim it has not seen: no `stop`, so a call from
+  // before `withdraw` refuses it and sends away nobody
+  z.object({ withdraw: Invite, why: z.string().max(200).optional() }),
+]);
 
 /** What the call does outside its own data, handed in by its facet (../call.ts) or a test. */
 export type CallDeps = {
@@ -204,7 +226,13 @@ const nameOf = (who: Who) => {
   if (!who.kind) return name || "A member";
   return name ? `A guest who gives the name ${name}` : "A guest";
 };
-const fresh = (): CallData => ({ since: null, pages: {}, ai: null, hangups: [], n: 0 });
+const fresh = (): CallData => ({
+  since: null,
+  pages: {},
+  ai: null,
+  hangups: [],
+  n: 0,
+});
 
 export class Call {
   readonly #deps: CallDeps;
@@ -235,6 +263,7 @@ export class Call {
     if (!parsed.success) refuse("A join takes nothing, { admit: id } or { admission: id }.");
     const refresh = parsed.data && "admission" in parsed.data ? parsed.data.admission : undefined;
     const admit = parsed.data && "admit" in parsed.data ? parsed.data.admit : undefined;
+    const seq = parsed.data && "admit" in parsed.data ? parsed.data.seq : undefined;
     const { who, member, own } = await this.#admit(asked, page);
     let admission = refresh || admit || crypto.randomUUID();
     const closes: string[] = [];
@@ -246,14 +275,17 @@ export class Call {
         return;
       }
       if (Object.hasOwn(data.pages, own)) {
-        if (admit) {
+        const row = data.pages[own]!;
+        // an admit older than the row's admission (one that a newer admit overtook on its way)
+        // admits nobody; the same admit again changes nothing
+        if (admit && seq !== undefined && row.seq !== undefined && seq < row.seq) refuse(GONE);
+        if (admit && row.admission !== admit) {
           // a new admission of the same row: the earlier one's work is refused from here, its
           // voice agent too
-          const row = data.pages[own]!;
           closes.push(...[row.pub, row.sub].filter((id): id is string => Boolean(id)));
-          Object.assign(row, { admission, pub: undefined, sub: undefined, tracks: {} });
+          Object.assign(row, { admission, seq, pub: undefined, sub: undefined, tracks: {} });
           if (data.ai?.page === own) this.#endAi(data, after, "its host joined again");
-        } else admission = data.pages[own]!.admission ?? admission;
+        } else admission = row.admission || admission;
         // who and whether a member, from this call's stamp: a member's row is never swept as a
         // guest's, nor a guest's kept as a member's
         Object.assign(data.pages[own]!, { who, member });
@@ -266,7 +298,7 @@ export class Call {
       if (rows.length >= MAX_PAGES) refuse(`This call has ${MAX_PAGES} pages in it, its most.`);
       if (rows.filter((one) => one.who.actor === who.actor).length >= MAX_PAGES_PER_ACTOR)
         refuse(`You are in this call on ${MAX_PAGES_PER_ACTOR} pages. Leave on one first.`);
-      data.pages[own] = { who, member, since: this.#deps.now(), tracks: {}, admission };
+      data.pages[own] = { who, member, since: this.#deps.now(), tracks: {}, admission, seq };
       data.since ??= this.#deps.now();
       after.notes.push([`${nameOf(who)} joined the call.`, { kind: "joined", who }]);
     });
@@ -314,6 +346,8 @@ export class Call {
       const kind = step.publish;
       if (kind === "ai" && this.#data?.ai?.page !== own)
         refuse("Only the voice agent's host publishes its voice.");
+      // the agent whose voice this is: a later invite of the same page is another agent
+      const claimSeen = kind === "ai" ? this.#data?.ai?.claim : undefined;
       const sessionId = await this.#session(own, "pub", id);
       const made = await call("POST", `/sessions/${sessionId}/tracks/new`, {
         sessionDescription: { type: "offer", sdp: step.sdp },
@@ -323,6 +357,8 @@ export class Call {
       await this.#locked((data, after) => {
         const row = data.pages[own];
         if (!ours(row) || row?.pub !== sessionId) return;
+        // the same agent, still: one sent away meanwhile (or a later invite's) records no voice
+        if (kind === "ai" && (data.ai?.page !== own || data.ai.claim !== claimSeen)) return;
         kept = true;
         const again = Boolean(row.tracks[kind]);
         row.tracks[kind] = { sessionId, trackName: kind, gen: ++data.n };
@@ -332,7 +368,15 @@ export class Call {
             { kind: `${kind}-on`, who: row.who },
           ]);
       });
-      if (!kept) refuse(GONE);
+      if (!kept) {
+        // the SFU added the track after the admission ended: no list of its session held it, so
+        // it is closed here, by its own mid
+        await call("PUT", `/sessions/${sessionId}/tracks/close`, {
+          tracks: [{ mid: step.mid }],
+          force: true,
+        }).catch(() => {});
+        refuse(GONE);
+      }
       return { sdp: made.sessionDescription?.sdp };
     }
     if ("unpublish" in step) {
@@ -432,38 +476,51 @@ export class Call {
     const own = Page.safeParse(page);
     const id = Admission.safeParse(admission);
     if (!actor || !own.success || !id.success) return;
-    const pages = (await this.#load()).pages;
-    if (!Object.hasOwn(pages, own.data) || pages[own.data]!.who.actor !== actor) return;
-    // an earlier admission's leave: the page is in the call again, and stays
-    if (id.data && pages[own.data]!.admission !== id.data) return;
-    await this.#remove(own.data, "left", id.data);
+    // whose row, and which admission, are read inside the removal's lock: an earlier admission's
+    // leave, or another person's, removes nothing
+    await this.#remove(own.data, "left", { admission: id.data, actor });
   }
 
   /** The voice agent: start it with the host page's SDP offer (a member alone), or send it away.
    *  An expected refusal is an answer, not an error: `{ error, credit? , noKey? }`. */
   async voiceAgent(asked: Asked, page: unknown, input: unknown, admission?: unknown) {
     const parsed = ActInput.safeParse(input);
-    if (!parsed.success) refuse("The voice agent takes { start: an SDP offer } or { stop }.");
+    if (!parsed.success)
+      refuse("The voice agent takes { start: an SDP offer }, { stop } or { withdraw }.");
     const act = parsed.data!;
     const { who, member, own } = await this.#admit(asked, page);
     this.#current((await this.#load()).pages[own], admission);
     if (!member) refuse("Only a member can invite the voice agent.");
-    if ("stop" in act) {
-      await this.#locked((data, after) => this.#endAi(data, after, `${nameOf(who)} sent it away`));
+    const id = Admission.parse(admission);
+    if ("stop" in act || "withdraw" in act) {
+      const withdraw = "withdraw" in act ? act.withdraw : undefined;
+      await this.#locked((data, after) => {
+        // the asker's admission, still the row's: a stop that a leave overtook ends no agent
+        if (!isCurrent(data.pages[own], id)) return;
+        if (withdraw && data.ai?.claim !== withdraw) {
+          // its own invite, by its id, and no other: one not claimed yet claims nothing when its
+          // start comes after this stop
+          const row = data.pages[own]!;
+          row.stopped = [...(row.stopped || []), withdraw].slice(-STOPPED_KEPT);
+          return;
+        }
+        this.#endAi(data, after, `${nameOf(who)} sent it away`);
+      });
       return {};
     }
     if (!(await this.setup()).openai)
       return { error: "This mind has no OpenAI key for the voice agent.", noKey: true };
     let claimed = false;
     let busy = "";
-    const claim = crypto.randomUUID();
-    const id = Admission.parse(admission);
+    // the page's id of this invite, which its own stop names; a kit from before it gets one here
+    const claim = act.invite || crypto.randomUUID();
     let gone = false;
     await this.#locked((data, after) => {
-      // the host's admission, still the row's: one that left while the call checked its setup
-      // claims nothing, so no paid session starts for it
+      // the host's admission, still the row's and still a member's: one that left, or joined
+      // again as no member, while the call checked its setup claims nothing
       const row = data.pages[own];
-      if (!row || (id && row.admission !== id)) {
+      // or its own stop came first
+      if (!row || (id && row.admission !== id) || !row.member || row.stopped?.includes(claim)) {
         gone = true;
         return;
       }
@@ -477,10 +534,21 @@ export class Call {
     });
     if (gone) return { error: GONE };
     if (!claimed) return { error: `The voice agent is in the call, with ${busy}.` };
-    // the session OpenAI made, once it made one: whatever fails after that, it is hung up
+    // the claim, still this one's, right before the paid call: a stop, a leave or a new
+    // admission of the host since the claim starts no session
+    let still = false;
+    await this.#locked((data) => {
+      still = data.ai?.claim === claim;
+    });
+    if (!still) return { error: "The voice agent was sent away." };
+    // the session OpenAI made, once it made one: whatever fails after that, it is hung up. One
+    // that OpenAI answers after this call's bound is nobody's: the facet hangs it up when it comes.
     let providerSession = "";
+    let answered = false;
+    const starting = voiceAgentStart(this.#deps.outbound(), act.start);
     try {
-      const started = await voiceAgentStart(this.#out(), act.start);
+      const started = await this.#bound(starting, "api.openai.com");
+      answered = true;
       providerSession = started.providerSession;
       let kept = false;
       await this.#locked((data) => {
@@ -496,6 +564,12 @@ export class Call {
       }
       return { sdp: started.sdp };
     } catch (error) {
+      // the bound gave up before OpenAI answered: what it answers later is hung up
+      if (!answered && !(error instanceof VoiceRefused))
+        void starting.then(
+          (late) => this.#locked((data) => this.#owe(data, late.providerSession)),
+          () => {},
+        );
       const why = error instanceof Error ? error.message : String(error);
       await this.#deps.audit("call/voice-agent-failed", { error: why }).catch(() => {});
       await this.#locked((data, after) => {
@@ -517,7 +591,12 @@ export class Call {
 
   /** A page's row was un-set: its socket closed, or went silent. */
   async pageGone(page: string) {
-    if (Object.hasOwn((await this.#load()).pages, page)) await this.#remove(page, "gone");
+    const row = (await this.#load()).pages[page];
+    if (!row) return;
+    // an un-set that came late: a row its page holds again is in the call; else the admission it
+    // saw goes (a newer one, come in since, is the next look's)
+    if (await this.#deps.holds(page, row.who.actor)) return;
+    await this.#remove(page, "gone", { admission: row.admission });
   }
 
   /** The call's look at itself: guests who are out leave, a page whose row is no longer held
@@ -528,8 +607,12 @@ export class Call {
     const links = share || (await this.#deps.share());
     const now = this.#deps.now();
     for (const [page, row] of Object.entries((await this.#load()).pages)) {
-      if (!row.member && !isLiveGuest(links, row.who.actor, now)) await this.#remove(page, "out");
-      else if (!(await this.#deps.holds(page, row.who.actor))) await this.#remove(page, "gone");
+      // the admission it looked at: one that came in since is looked at by the next sweep
+      const seen = { admission: row.admission };
+      if (!row.member && !isLiveGuest(links, row.who.actor, now))
+        await this.#remove(page, "out", seen);
+      else if (!(await this.#deps.holds(page, row.who.actor)))
+        await this.#remove(page, "gone", seen);
     }
     await this.#locked(() => {});
   }
@@ -592,24 +675,25 @@ export class Call {
   /** The mind's `fetch` and secrets, each call bounded: past `outboundMs` it fails in words. */
   #out(): Outbound {
     const outbound = this.#deps.outbound();
-    const ms = this.#deps.outboundMs ?? 10_000;
-    const within = async <T>(work: Promise<T>, what: string) => {
-      let timer: ReturnType<typeof setTimeout> | null = null;
-      const late = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${what} did not answer in ${ms / 1000} s`)), ms);
-      });
-      try {
-        return await Promise.race([work, late]);
-      } finally {
-        clearTimeout(timer);
-      }
-    };
     return {
-      fetch: (request) => within(outbound.fetch(request), new URL(request.url).hostname),
+      fetch: (request) => this.#bound(outbound.fetch(request), new URL(request.url).hostname),
       secrets: {
-        describe: (path) => within(outbound.secrets.describe(path), `the secret ${path}`),
+        describe: (path) => this.#bound(outbound.secrets.describe(path), `the secret ${path}`),
       },
     };
+  }
+  /** `work`, or past `outboundMs` a failure in words about `what`; the work itself goes on. */
+  async #bound<T>(work: Promise<T>, what: string) {
+    const ms = this.#deps.outboundMs ?? 10_000;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${what} did not answer in ${ms / 1000} s`)), ms);
+    });
+    try {
+      return await Promise.race([work, late]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Who asks, by the kernel's word, and that `page` is their own row: else a refusal. */
@@ -685,12 +769,18 @@ export class Call {
 
   /** A page out of the call, for `how`: its sessions close, and the voice agent and the call end
    *  with it when they must. */
-  async #remove(page: string, how: "left" | "gone" | "out", admission?: string) {
+  async #remove(
+    page: string,
+    how: "left" | "gone" | "out",
+    { admission, actor }: { admission?: string; actor?: string } = {},
+  ) {
     const closes: string[] = [];
     await this.#locked((data, after) => {
       const row = data.pages[page];
-      // a newer admission came in while this leave waited for the lock: it stays
+      // a newer admission came in while this removal waited for the lock: it stays; and a leave
+      // removes its asker's own row alone
       if (!row || (admission && row.admission !== admission)) return;
+      if (actor && row.who.actor !== actor) return;
       delete data.pages[page];
       closes.push(...[row.pub, row.sub].filter((id): id is string => Boolean(id)));
       const words = {

@@ -445,6 +445,173 @@ test("admissions: a kit from before admissions keeps the call's earlier behaviou
   expect(room.call.live()).toMatchObject({ inCall: {} });
 });
 
+test("admissions: an admit older than the row's, by the page's own order, admits nobody, and the same admit again changes nothing", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  // B comes in before A's first admit reaches the call: the call has never seen A
+  await room.call.join(owner, "page-owner", { admit: "b", seq: 2 });
+  await room.call.signal(owner, "page-owner", { publish: "mic", sdp: "o", mid: "0" }, "b");
+  await expect(room.call.join(owner, "page-owner", { admit: "a", seq: 1 })).rejects.toThrow(
+    "This page's call ended.",
+  );
+  await room.call.join(owner, "page-owner", { admit: "b", seq: 2 });
+  expect(room.call.live().inCall["page-owner"]).toMatchObject({ tracks: { mic: 1 } });
+  // a later admission of the page replaces B
+  await room.call.join(owner, "page-owner", { admit: "c", seq: 3 });
+  expect(room.call.live().inCall["page-owner"]).toMatchObject({ tracks: {} });
+});
+
+test("admissions: a claim that a new admission of its host ended before the paid call starts no session", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner", { admit: "a-1" });
+  room.openai = { status: 201, body: { transport: { sdp: "answer" }, session: { id: "sess_z" } } };
+  // the host joins again (its rejoin) while the claim's note is on its way
+  const note = room.deps.note;
+  let joinedAgain = false;
+  room.deps.note = async (content, payload) => {
+    await note(content, payload);
+    if (payload.kind === "voice-agent-joined" && !joinedAgain) {
+      joinedAgain = true;
+      await room.call.join(owner, "page-owner", { admit: "a-2" });
+    }
+  };
+  expect(await room.call.voiceAgent(owner, "page-owner", { start: "offer" }, "a-1")).toEqual({
+    error: "The voice agent was sent away.",
+  });
+  expect(room.sent.some(({ url }) => url.includes("api.openai.com"))).toBe(false);
+});
+
+test("admissions: a session OpenAI makes after the call's bound gave up is hung up when it comes", async () => {
+  const room = fakeCall({ outboundMs: 30 });
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner", { admit: "a-1" });
+  room.openai = {
+    status: 201,
+    body: { transport: { sdp: "answer" }, session: { id: "sess_late" } },
+  };
+  let release = () => {};
+  room.openaiHeld = new Promise((resolve) => (release = resolve));
+  expect(await room.call.voiceAgent(owner, "page-owner", { start: "offer" }, "a-1")).toMatchObject({
+    error: "api.openai.com did not answer in 0.03 s",
+  });
+  release();
+  await vi.waitFor(() =>
+    expect(room.sent.map(({ url }) => url)).toContain(
+      "https://api.openai.com/v1/live/sessions/sess_late/hangup",
+    ),
+  );
+});
+
+test("admissions: a host's withdraw ends that invite's agent alone, also while its start is under way, and before its claim", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  room.held.set("page-owner-2", "user_owner");
+  await room.call.join(owner, "page-owner", { admit: "a-1" });
+  await room.call.join(owner, "page-owner-2", { admit: "b-1" });
+  room.openai = { status: 201, body: { transport: { sdp: "answer" }, session: { id: "sess_s" } } };
+  let release = () => {};
+  room.openaiHeld = new Promise((resolve) => (release = resolve));
+  const starting = room.call.voiceAgent(
+    owner,
+    "page-owner",
+    { start: "offer", invite: "inv-2" },
+    "a-1",
+  );
+  await vi.waitFor(() => expect(room.call.live().voiceAgent).not.toBeNull());
+  // another page's withdraw, and an earlier invite's of the same page: not this agent
+  await room.call.voiceAgent(owner, "page-owner-2", { withdraw: "x" }, "b-1");
+  await room.call.voiceAgent(owner, "page-owner", { withdraw: "inv-1" }, "a-1");
+  expect(room.call.live().voiceAgent).not.toBeNull();
+  // the host's withdraw while OpenAI has not answered: the session it makes is hung up
+  await room.call.voiceAgent(owner, "page-owner", { withdraw: "inv-2" }, "a-1");
+  release();
+  expect(await starting).toEqual({ error: "The voice agent was sent away." });
+  expect(room.call.live().voiceAgent).toBeNull();
+  await vi.waitFor(() =>
+    expect(room.sent.map(({ url }) => url)).toContain(
+      "https://api.openai.com/v1/live/sessions/sess_s/hangup",
+    ),
+  );
+  // a withdraw that comes before its start: that start claims nothing and pays for nothing
+  room.openaiHeld = null;
+  const asked = room.sent.length;
+  await room.call.voiceAgent(owner, "page-owner", { withdraw: "inv-3" }, "a-1");
+  expect(
+    await room.call.voiceAgent(owner, "page-owner", { start: "offer", invite: "inv-3" }, "a-1"),
+  ).toMatchObject({ error: expect.any(String) });
+  expect(room.sent.slice(asked).some(({ url }) => url.includes("api.openai.com"))).toBe(false);
+});
+
+test("admissions: a delayed un-set of a row that its page holds again removes nobody", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner", { admit: "a-1" });
+  // A's un-set is on its way; the page holds its row again and B comes in
+  await room.call.join(owner, "page-owner", { admit: "a-2" });
+  await room.call.pageGone("page-owner");
+  expect(Object.keys(room.call.live().inCall)).toEqual(["page-owner"]);
+  // an un-set whose row is gone for good removes it
+  room.held.delete("page-owner");
+  await room.call.pageGone("page-owner");
+  expect(room.call.live()).toMatchObject({ inCall: {} });
+});
+
+test("admissions: a voice offered for an invite that a later invite of the same page replaced is not recorded", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner", { admit: "a-1" });
+  room.openai = { status: 201, body: { transport: { sdp: "answer" }, session: { id: "sess_1" } } };
+  await room.call.voiceAgent(owner, "page-owner", { start: "offer", invite: "inv-1" }, "a-1");
+  let release = () => {};
+  room.sessionHeld = new Promise((resolve) => (release = resolve));
+  const voice = room.call.signal(owner, "page-owner", { publish: "ai", sdp: "o", mid: "3" }, "a-1");
+  await vi.waitFor(() => expect(room.sent.at(-1)?.url).toMatch(/\/sessions\/new$/));
+  await room.call.voiceAgent(owner, "page-owner", { stop: "x", withdraw: "inv-1" }, "a-1");
+  room.openai = { status: 201, body: { transport: { sdp: "answer" }, session: { id: "sess_2" } } };
+  await room.call.voiceAgent(owner, "page-owner", { start: "offer", invite: "inv-2" }, "a-1");
+  release();
+  await expect(voice).rejects.toThrow("This page's call ended.");
+  expect(room.call.live().inCall["page-owner"]?.tracks).toEqual({});
+});
+
+test("admissions: a voice published after its agent was sent away is not recorded, and its track is closed", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner", { admit: "a-1" });
+  room.openai = { status: 201, body: { transport: { sdp: "answer" }, session: { id: "sess_v" } } };
+  await room.call.voiceAgent(owner, "page-owner", { start: "offer" }, "a-1");
+  let release = () => {};
+  room.sessionHeld = new Promise((resolve) => (release = resolve));
+  const voice = room.call.signal(owner, "page-owner", { publish: "ai", sdp: "o", mid: "3" }, "a-1");
+  await vi.waitFor(() => expect(room.sent.at(-1)?.url).toMatch(/\/sessions\/new$/));
+  await room.call.voiceAgent(owner, "page-owner", { stop: "sent away", own: true }, "a-1");
+  release();
+  await expect(voice).rejects.toThrow("This page's call ended.");
+  expect(room.call.live().inCall["page-owner"]?.tracks).toEqual({});
+  expect(room.sent.at(-1)).toMatchObject({
+    url: `https://rtc.live.cloudflare.com/v1/apps/${ID}/sessions/session1abcdef/tracks/close`,
+    body: { tracks: [{ mid: "3" }], force: true },
+  });
+});
+
+test("admissions: a sweep that saw an admission whose hold was lost removes no newer admission of the row", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner", { admit: "a-1" });
+  // the sweep finds the hold lost; the page joins again before the removal
+  const holds = room.deps.holds;
+  let joinedAgain = false;
+  room.deps.holds = async (page, actor) => {
+    if (joinedAgain) return holds(page, actor);
+    joinedAgain = true;
+    await room.call.join(owner, "page-owner", { admit: "a-2" });
+    return false;
+  };
+  await room.call.sweep();
+  expect(Object.keys(room.call.live().inCall)).toEqual(["page-owner"]);
+});
+
 test("a fresh call reads its setup at once, so a page can join before anyone has", async () => {
   const room = fakeCall();
   // unknown, and asked for, at the first look
