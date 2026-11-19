@@ -1,9 +1,9 @@
 # Apps
 
 How an app of this mind is laid out and mounted, the UI components a page loads, the integration
-packages and Voice: `apps/`, `apps/theme.css`, `apps/live-reload/live-reload.js`,
-`apps/open-files.ts`, `apps/dash/public/app.js`, `apps/voice/`, `apps/onboarding/` and
-`integrations` in `worker.ts`.
+packages, Voice and the call on an agent: `apps/`, `apps/theme.css`,
+`apps/live-reload/live-reload.js`, `apps/open-files.ts`, `apps/dash/public/app.js`, `apps/voice/`,
+`apps/onboarding/`, `call.ts` and `integrations` in `worker.ts`.
 
 An app is a folder under `apps/`, and a convention, not a framework: copy one to start one of your
 own.
@@ -176,3 +176,45 @@ worker.ts      take the "// " off the import of installVoice, and off installVoi
 The page then asks for the OpenAI key once, if the mind has none. The page loads its voice code
 from the build that `package.json` pins, so the page and the mind's relay are one build: to
 upgrade, change that pin. A commit that changes what `voice.ts` bundles ends the calls in progress.
+
+## A call on an agent
+
+Any agent's context can hold a call: everyone in it talks, and shares a camera and a screen,
+through Cloudflare Realtime's SFU, and a member can add the voice agent, which everyone hears and
+talks to. No app is needed: a page draws the call with the UI kit's parts (`@iterate-com/ui`).
+
+- **The call is a facet on the agent's context**, the processor row `call`: `call.ts` at the
+  config's root (a publication offers a facet's class only from a root module or an app's
+  `backend.ts`), its rules in `call/rules.ts`. A member's page turns it on:
+  `itx.cd(agent).processors.enable("call", CALL_FACET)`. A page calls its four methods over the
+  session it already holds: `join`, `signal` (one step of the SFU's signalling), `leave` and
+  `voiceAgent`. Its live state is what a page draws: who is in the call and what each page sends,
+  the voice agent, which secrets the mind has (`setup`, null until its first read), and the live
+  share links.
+- **Who asks is the kernel's word** (`onBehalfOf()` of iterate/sdk). A page is its own subscription
+  row on the agent's context, held by the asker: when that row is un-set (the page closed, or its
+  socket went silent), the page is out of the call and its SFU sessions close. A call that names
+  nobody (a script, an agent's tool) is refused in words: the agent is no participant, and it
+  learns of the call by its notes.
+- **Guests** are on a share link (`call/share.ts`: `share/link-made`, `share/link-ended`,
+  `share/guest-joined` on the agent's own log; the secret only as its hash). From a page that holds
+  a guest's view of the agent's context, a guest calls `join`, `signal` and `leave` (the facet's
+  `personMethods`); the call checks the guest's link at each call, and a guest whose link ended is
+  out at the call's next look. The voice agent is a member's alone.
+- **What the call does outside the mind** (`call/outbound.ts`), with secrets by placeholder:
+  `/secrets/cloudflare-realtime-sfu` and `/secrets/cloudflare-turn` (the stack's deploy makes them),
+  and `/secrets/openai` for the voice agent. Each call outside the mind has a bound of 10 s. A
+  member's relay credentials last 4 hours, a guest's 15 minutes. The voice agent leaves when its
+  host's page leaves, when no member is in the call, when a member sends it away, and after 30
+  minutes; a hang-up OpenAI did not take is tried again.
+- **What the agent is told**: one quiet message for each fact (who joined and left, a camera or a
+  screen on and off, the voice agent in and out), `payload.callNote` beside its words, and no
+  turn. A guest is named as "a guest who gives the name …": the name is the guest's claim, cut to
+  40 characters, with no bracket and no line break. Failures of the SFU and OpenAI go to the audit
+  log `<agent>/call`.
+- **The page's parts** (the UI kit): `useCall(context, page, liveValue)` holds the call in the tab;
+  `CallBar` is its controls, small enough for an agent's header; `CallTiles` is the cameras, the
+  screens and what the call says, beside the chat. TURN over TLS on 443 where UDP is blocked,
+  pickers for the microphone, camera and speaker, repair of a failed connection, three simulcast
+  layers for a camera. Capture starts only by the person's own press: a page that joins again by
+  itself keeps the mute, and its camera and screen stay off.
