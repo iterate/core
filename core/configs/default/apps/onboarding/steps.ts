@@ -87,8 +87,10 @@ export type StepLog = {
 export type Step = {
   id: string;
   /** The actions of its buttons, besides "decline" and "check", which every step has. `opens`:
-   *  its answer may be a page to open (an action that answers a link and does not say so fails). */
-  actions: Readonly<Record<string, { opens: boolean }>>;
+   *  its answer may be a page to open (an action that answers a link and does not say so fails).
+   *  A function decides it from the step's state, when that decides whether a page comes: the
+   *  page then opens no tab for a press that answers none. */
+  actions: Readonly<Record<string, { opens: boolean | ((state: StepState) => boolean) }>>;
   /** Whether this mind is offered the step. */
   offered(context: StepContext): boolean;
   words(state: StepState, context: StepContext): Card;
@@ -266,13 +268,17 @@ function stepOf(context: StepContext, id: string): Step {
   return step;
 }
 
-/** The step's card, each button that may answer a page marked `opens`. */
+/** The step's card, each button that may answer a page in this state marked `opens`. */
 function cardOf(step: Step, state: StepState, context: StepContext): Card {
   const card = step.words(state, context);
+  const opens = (action: string) => {
+    const may = step.actions[action]?.opens;
+    return typeof may === "function" ? may(state) : may;
+  };
   return {
     ...card,
     buttons: card.buttons.map((button) =>
-      button.action && step.actions[button.action]?.opens ? { ...button, opens: true } : button,
+      button.action && opens(button.action) ? { ...button, opens: true } : button,
     ),
   };
 }

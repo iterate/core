@@ -166,12 +166,34 @@ test("Not now after a signed rule: the card does not say 'not connected', says w
       "No credit from iterate Cloud\n\nYour signed rule still lets iterate send help and updates to this mind. End it with your passkey to stop that.\n\nButtons: Connect · End the rule",
   });
   const [card] = await onboardingCards(context);
-  expect(card).toMatchObject({
-    buttons: [
-      { label: "Connect", action: "connect", opens: true },
-      { label: "End the rule", action: "disconnect", opens: true },
-    ],
+  // with the rule on, Connect acts at once and answers no page, so the page opens no tab for it
+  expect(card?.buttons).toEqual([
+    { label: "Connect", action: "connect" },
+    { label: "End the rule", action: "disconnect", opens: true },
+  ]);
+});
+
+test("a press opens a tab only where a page can come: Connect before the rule, Disconnect with it; Try again with the rule on opens none", async () => {
+  const before = fakeMind();
+  const fresh = await onboardingCards(contextOf(before, fakeCredit().credit));
+  expect(fresh[0]?.buttons).toContainEqual({
+    label: "Connect",
+    action: "connect",
+    primary: true,
+    opens: true,
   });
+  // the rule is on, and iterate has not approved the mind: Try again acts at once
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
+  const context = contextOf(mind, fake.credit);
+  const refused = await runStep(context, STEP, "connect");
+  expect(refused.link).toBeUndefined();
+  const [card] = await onboardingCards(context);
+  expect(card?.buttons).toEqual([
+    { label: "Try again", action: "connect", primary: true },
+    { label: "Not now", action: "decline" },
+    { label: "End the rule", action: "disconnect", opens: true },
+  ]);
 });
 
 test("Connect: one link to sign the rule, and nothing at iterate or in the secrets before a member's signed rule lands; then the grant, both secrets and a note that starts the agent's turn", async () => {

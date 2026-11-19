@@ -142,6 +142,9 @@ function Steps() {
       const answer = await ask(`/steps/${step}/${action}`, "POST");
       if (tab && answer.link) tab.location.href = answer.link;
       else tab?.close();
+      // a page the card did not expect (it changed since it was drawn): this tab goes there, as no
+      // new one may open after an await
+      if (!tab && answer.link) window.location.assign(answer.link);
       await reload();
     } catch (failure) {
       tab?.close();

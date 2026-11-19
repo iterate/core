@@ -682,9 +682,11 @@ async function changed(
 
 export const connectIterateCloud: Step = {
   id: "connect-iterate-cloud",
+  // the passkey page comes only to sign the rule (Connect with none) or to end it (Disconnect with
+  // one): with the rule on, Connect acts at once; with none, Disconnect has nothing to sign
   actions: {
-    connect: { opens: true },
-    disconnect: { opens: true },
+    connect: { opens: (state) => !factsOf(state)?.meld },
+    disconnect: { opens: (state) => Boolean(factsOf(state)?.meld) },
     "add-openai-key": { opens: true },
   },
   // open while CREDIT_OPEN is true; iterate Cloud's own mind gives the credit, so it is offered none
