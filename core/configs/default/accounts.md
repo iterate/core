@@ -186,8 +186,8 @@ connected to. To connect a service, a member asks an agent; then it shows there.
   Write `integrationCalls`, and each function that a button calls, as a method, never as an arrow
   field (`integrationCalls = () => [...]`): Workers RPC reaches a class's methods alone. With no
   such method, the page says "This mind's config offers no function to buttons" at each press.
-  The Dash's `/connect/<app>`, `/connect/cloudflare` and `POST /remove/<app>` still answer, for a
-  card that an older config wrote; no card of this template links to them, and no new card should.
+  The Dash has no path that acts for a card: a button that should change something calls a
+  function, never a `url` on the Dash.
 
 - An MCP server: `itx.connectToMcp(url, { headers })` gives a live handle and keeps no record of
   the server. Only the secret that its header names stays. So keep the server's credential in a
