@@ -225,7 +225,8 @@ function proposerWords(draft: Draft) {
   if (!by.success) return where ? `It was proposed ${where}.` : "It was proposed by this mind.";
   const asker = by.data;
   if (asker.kind === "code")
-    return `Proposed by this mind's own code${where ? ` ${where}` : ""}, with no person's request behind it.`;
+    // code that runs in a member's own request stamps "code" too: the platform knows no more
+    return `Proposed by this mind's own code${where ? ` ${where}` : ""}. The platform cannot tell whether a person asked for it: sign it only if you expected it.`;
   const who =
     asker.kind === "member"
       ? `${asker.email ? `<strong>${text(asker.email)}</strong>, a member` : "a member"} signed in to this mind`

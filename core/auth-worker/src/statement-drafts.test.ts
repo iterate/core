@@ -354,7 +354,7 @@ test.for([
   [
     "the mind's own code at its root",
     { from: "/", by: { kind: "code" } },
-    "Proposed by this mind's own code at the mind's root context (<code>/</code>), with no person's request behind it.",
+    "Proposed by this mind's own code at the mind's root context (<code>/</code>). The platform cannot tell whether a person asked for it: sign it only if you expected it.",
   ],
   [
     "a member through an agent",
