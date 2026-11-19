@@ -17,7 +17,7 @@ import { voiceApp } from "./apps/voice/app.ts";
 // line and off `installVoice` in the init case below, in the commit that adds the package.
 // import { installVoice } from "@iterate-com/voice/install";
 import { calendarEvent } from "./calendar.ts";
-import { cloudAccountsEvent } from "./cloud-accounts.ts";
+import { cloudAccountSecret, cloudAccountsEvent, removeCloudAccount } from "./cloud-accounts.ts";
 import { cloudDeliveryOf, mindFormEvent, sayMindForm } from "./cloud-deliveries.ts";
 import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
 import {
@@ -379,6 +379,14 @@ export default class extends IterateConfigEntrypoint {
     return await cloudflareConnect(itx, options);
   }
 
+  /** `itx.config.removeCloudAccount(path)`: the Integrations page's "Remove" for an account that
+   *  a member connected through iterate Cloud. The mind forgets it and asks the Cloud to stop its
+   *  deliveries (cloud-accounts.ts `removeCloudAccount`; accounts.md, "Remove an account"). */
+  async removeCloudAccount(path: string) {
+    using itx = this.getItx();
+    return await removeCloudAccount(itx, path);
+  }
+
   /** `itx.config.cloudflare(tool, args)`: one request to Cloudflare's REST API (`"execute"`), or
    *  who the mind is connected as (`"whoami"`), with the member's consent: agents read the
    *  account and query its logs and traces (cloudflare.ts; cloudflare.md). */
@@ -446,10 +454,16 @@ async function cloudDeliveryEvent(itx: Itx, event: IterateConfigProcessEventArgs
         bot: { username: string };
         reply: string;
       };
+      // The secret that holds the account the delivery is for, `/secrets/x` or `/secrets/x-2`
+      // (cloud-accounts.ts `cloudAccountSecret`): the answer names it. An account that no secret
+      // holds any more was removed, and its delivery reaches no agent.
+      const connection = await cloudAccountSecret(itx, linked.provider, linked.account);
+      if (!connection) {
+        console.warn({ event: "config.x-delivery-for-removed-account", account: linked.account });
+        break;
+      }
       const agent = `/agents/x/u${message.from.xUserId}`;
       await itx.agents.create(agent);
-      // the secret the account was linked into: `/secrets/<client>`
-      const connection = `/secrets/${linked.provider}`;
       const answer =
         message.kind === "dm"
           ? `{ kind: "dm", to: ${JSON.stringify(message.from.xUserId)}, text }`

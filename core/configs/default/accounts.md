@@ -11,9 +11,18 @@ scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of
   `client: { cloud: "github", origin: "https://cloud.iterate.com", accounts: ["acme"] }`: the mind gets the events and the installation tokens of those alone, where the
   member administers them, and none when it names none. `install: true` sends the member to the
   App's install page first, and connects the installation they choose there.
-- Several accounts of one provider:
-  `itx.secrets.beginOAuth("/secrets/google-personal", { client: { cloud: "google", origin: "https://cloud.iterate.com" }, extra: { login_hint: "ada@gmail.com" } })`
-  beside `/secrets/google`: `login_hint` asks Google for that account.
+- Several accounts of one provider: each in a secret of its own, the first free name
+  (`/secrets/google`, then `/secrets/google-2`; `/secrets/x`, then `/secrets/x-2`), as the
+  Dash's "Add account" names them. For Google,
+  `itx.secrets.beginOAuth("/secrets/google-2", { client: { cloud: "google", origin: "https://cloud.iterate.com" }, extra: { login_hint: "ada@gmail.com" } })`:
+  `login_hint` asks Google for that account. X has no such parameter: its consent is for the
+  account that the browser is signed in to at x.com. For a second X account, the member switches
+  to it (or signs out) at x.com first, or opens the link in a private window.
+- Which secret holds which account: the Integrations page's rows (the account, and its secret),
+  or ask the service with each secret's placeholder (`GET https://api.x.com/2/users/me`,
+  `GET https://www.googleapis.com/oauth2/v3/userinfo`). A call names its account by its secret:
+  nothing picks one for you. With one account of an app, use it; with several and no word which,
+  ask the member which one.
 - GitHub's deliveries for an installation the member administers arrive as
   `events.iterate.com/github/webhook-received` on `/integrations/github/<installation id>`, signed
   by the Cloud's key: `event.source.signer.principal.actor` is `"iterate-cloud"`.
@@ -72,8 +81,8 @@ scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of
   `cloud-scopes.ts` names this mind's own for the app (its comments have Google with Drive and
   Docs, and X as the person). A secret keeps the scopes it was connected with: after a change
   there, the member presses "Connect again" on the account's row. Keep the Gmail and Calendar
-  scopes in a Google entry, or their push ends. Each call takes the secret's placeholder header,
-  as `AGENTS.md` shows (`/secrets/google`, `/secrets/x`):
+  scopes in a Google entry, or their push ends. Each call takes the placeholder header of the
+  account's own secret, as `AGENTS.md` shows (`/secrets/google`, `/secrets/x-2`):
   - Drive: `GET https://www.googleapis.com/drive/v3/files?q=name+contains+'plan'` lists files.
   - Docs: `GET https://docs.googleapis.com/v1/documents/<id>` reads a document.
   - A post as the person: `POST https://api.x.com/2/tweets` with `{ "text": "…" }`.
@@ -91,12 +100,16 @@ scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of
 The `events.iterate.com/x/message-received` case hands what a linked X account says to
 iterate's bot (a direct message, or a post that mentions it) to an agent of its own per
 account, `/agents/x/u<x user id>`. A member links an account with
-`itx.secrets.beginOAuth("/secrets/x", { client: { cloud: "x", origin: "https://cloud.iterate.com" } })` and opens the link. iterate
-Cloud then relays that account's messages, each signed by the Cloud, and only an event that
-`cloudDeliveryOf` takes for the Cloud's reaches an agent. The agent answers through the Cloud with the `itx.fetch` its
-context shows; the vault signs that request, and the Cloud sends it as the bot only to an
-account this mind linked. Link a member's own account alone: whoever writes from a linked
-account speaks to an agent with the mind's reach.
+`itx.secrets.beginOAuth("/secrets/x", { client: { cloud: "x", origin: "https://cloud.iterate.com" } })`,
+a second one at `/secrets/x-2`, and opens the link (a second account: see "Several accounts"
+above). iterate Cloud then relays each account's messages on its own context,
+`/integrations/x/<x user id>`, each signed by the Cloud, and only an event that
+`cloudDeliveryOf` takes for the Cloud's reaches an agent. The agent answers through the Cloud
+with the `itx.fetch` its context shows, which names the secret of the account the message came
+to (`cloud-accounts.ts` `cloudAccountSecret`); the vault signs that request, and the Cloud sends
+it as the bot only to an account this mind linked. A message for an account that no secret holds
+any more (it was removed) reaches no agent. Link a member's own account alone: whoever writes
+from a linked account speaks to an agent with the mind's reach.
 
 ## The Integrations page
 
@@ -105,9 +118,24 @@ connected to. To connect a service, a member asks an agent; then it shows there.
 
 - It shows the accounts connected through iterate Cloud under the heading "iterate Cloud"
   (`cloud-accounts.ts`): a card for each app the Cloud offers, and on it one row for each
-  account, with its secret. A row appears when the secret is set and goes when it is deleted,
-  with nothing for you to register. To disconnect an account, delete its secret. The apps'
+  account: its name at the service (an address, `@handle`) and its secret. A row appears when
+  the secret is set and goes when it is deleted, with nothing for you to register. The apps'
   marks are the Dash's own files, `apps/dash/public/brands/`.
+- **Remove an account.** A row's "Remove" asks the member first, then calls
+  `removeCloudAccount` (`cloud-accounts.ts`). You do the same when a member asks in words:
+  `await itx.config.removeCloudAccount("/secrets/x-2")`. It asks iterate Cloud to stop
+  delivering for the account (`ask/release`), drops the Gmail and Calendar rows that read
+  through the secret, and deletes the secret. The answer says what the Cloud did: `"released"`;
+  `"shared"` (another secret of the mind holds the same account, so its deliveries go on, and
+  the Gmail and Calendar rows read through that secret now);
+  `"not-offered"` (GitHub: its deliveries are the installations', and go on); or
+  `{ notReleased }` with the Cloud's or the service's words. The secret is gone in each case.
+  When the service gave no answer, or refused the token, for another secret of the same app,
+  the Remove changes nothing and throws why: that secret may hold the same account. Try again
+  later, or connect that other account again (or remove it first).
+  The account's context, its agents and their history stay. Connecting the same account again
+  later takes it back at the Cloud by itself, and its deliveries return at its next refresh.
+  Remove a key (no account of the Cloud's) on the Secrets page.
 - `await itx.secrets.cloud("https://cloud.iterate.com")` answers that Cloud and the names of the
   apps it offers, `{ origin, clients: ["github", "google", …] }`; `clients` is empty when the
   Cloud gave no list.

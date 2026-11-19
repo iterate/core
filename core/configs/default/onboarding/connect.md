@@ -14,7 +14,9 @@ The owner should come away with: the mind connects to what they already use, one
   one approval by the owner. The call names the Cloud as `origin`, and the secret keeps it:
   - Google (Gmail, Calendar): `itx.secrets.beginOAuth("/secrets/google", { client: { cloud: "google", origin: "https://cloud.iterate.com" } })`
   - Slack: `itx.secrets.beginOAuth("/secrets/slack", { client: { cloud: "slack", origin: "https://cloud.iterate.com" } })`
-  - X: `itx.secrets.beginOAuth("/secrets/x", { client: { cloud: "x", origin: "https://cloud.iterate.com" } })`
+  - X: `itx.secrets.beginOAuth("/secrets/x", { client: { cloud: "x", origin: "https://cloud.iterate.com" } })`.
+    A second account goes to the first free name, `/secrets/x-2`; X connects the account that
+    the browser is signed in to at x.com (`accounts.md`, "Several accounts").
   - GitHub: `onboarding/github.md`.
 - The owner opens the `authorizationUrl`, confirms on the Cloud's page, approves at the service,
   and the tokens land in the secret. They never pass through the chat.

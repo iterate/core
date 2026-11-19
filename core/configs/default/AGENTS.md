@@ -175,9 +175,12 @@ constant `ITERATE_CLOUD`, and the template's own code imports it from there.
 - `const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/github", { client: { cloud: "github", origin: "https://cloud.iterate.com" } })`,
   then give the member the link. They confirm on the Cloud's page, then approve at the provider, and
   the tokens land in the secret. `"google"` and `"x"` work the same way.
-- Several accounts of one provider: connect each to a secret of its own, through the same client.
-  Each secret holds and refreshes its own tokens, and a request names the account by the secret
-  it names.
+- Several accounts of one provider: connect each to a secret of its own, through the same client,
+  at the first free name (`/secrets/x`, then `/secrets/x-2`). Each secret holds and refreshes its
+  own tokens, and a request names the account by the secret it names: with several and no word
+  which, ask the member.
+- Remove an account: `await itx.config.removeCloudAccount("/secrets/x-2")`, as the
+  Integrations page's "Remove" does ([accounts.md](accounts.md), "Remove an account").
 - Use the account with a placeholder, never a token:
   `itx.fetch(new Request("https://api.github.com/user", { headers: { authorization: 'Bearer getSecret("/secrets/github", { field: "accessToken" })' } }))`.
   The Cloud keeps the app's secret and adds it at each refresh. The tokens stay in this mind's

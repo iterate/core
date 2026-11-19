@@ -7,7 +7,8 @@
 //                        Slack, X): what it is for, and a button that begins a connect ("Connect",
 //                        then "Add account"; apps/dash/app.ts answers it). A card has one row for
 //                        each account that a member connected through that app: whose account it
-//                        is, and the secret that holds it. An agent connects one the same way
+//                        is, and the secret that holds it, with "Remove" (`removeCloudAccount`,
+//                        which an agent calls too). An agent connects one the same way
 //                        (AGENTS.md, "Accounts through iterate Cloud"), and its row appears.
 //   "Keys and accounts"  every other secret: a key, or a grant through an app of the mind's own.
 //                        One list, the card "Secrets (12)", with a row for
@@ -64,8 +65,10 @@ const LENT = "lent";
 
 type Json = Record<string, unknown>;
 
-/** A request that says whose account a token is for, and the name in its answer. */
-type WhoAmI = { url: string; name: z.ZodType<string> };
+/** A request that says whose account a token is for: the name a person knows it by, and the id
+ *  that iterate Cloud keys its deliveries by (`account`, the route's word in
+ *  internal-packages/cloud-clients `reachedBy`), both from the one answer. */
+type WhoAmI = { url: string; name: z.ZodType<string>; account?: z.ZodType<string> };
 
 /** ONE APP OF THE CLOUD'S, by the name the Cloud gives its client: what a person calls the
  *  service, what the app is for, and the request that names a grant's account. Its mark is the Dash's own file, `apps/dash/public/brands/<name>.svg`. `installation`: the same for a GitHub App installation's token,
@@ -85,6 +88,8 @@ const APPS: Record<string, CloudApp> = {
     whoami: {
       url: "https://www.googleapis.com/oauth2/v3/userinfo",
       name: z.object({ email: z.string().min(1) }).transform((body) => body.email),
+      // the Cloud keys a mailbox by its address in lower case
+      account: z.object({ email: z.string().min(1) }).transform((body) => body.email.toLowerCase()),
     },
   },
   github: {
@@ -111,6 +116,7 @@ const APPS: Record<string, CloudApp> = {
       // Slack answers 200 with `ok: false` to a token it refuses: no `team` is no name
       url: "https://slack.com/api/auth.test",
       name: z.object({ team: z.string().min(1) }).transform((body) => body.team),
+      account: z.object({ team_id: z.string().min(1) }).transform((body) => body.team_id),
     },
   },
   x: {
@@ -121,6 +127,9 @@ const APPS: Record<string, CloudApp> = {
       name: z
         .object({ data: z.object({ username: z.string().min(1) }) })
         .transform((body) => `@${body.data.username}`),
+      account: z
+        .object({ data: z.object({ id: z.string().min(1) }) })
+        .transform((body) => body.data.id),
     },
   },
 };
@@ -149,6 +158,13 @@ export type CloudAccountsItx = {
   secrets: {
     list(): Promise<Secret[]>;
     cloud(origin: string): Promise<{ origin: string; clients: string[] }>;
+    delete(path: string): Promise<unknown>;
+  };
+  kv: {
+    get(key: string): Promise<string | null>;
+    put(key: string, value: string): Promise<unknown>;
+    delete(key: string): Promise<unknown>;
+    list(prefix?: string): Promise<{ keys: string[] }>;
   };
   rewriteRules: {
     list(): Promise<{ match: string; target: string | null; description?: string }[]>;
@@ -160,6 +176,9 @@ export type CloudAccountsItx = {
     };
   };
 };
+
+/** The part of `itx` that removing an account and finding a delivery's secret use. */
+type AccountsItx = Pick<CloudAccountsItx, "fetch" | "secrets" | "kv">;
 
 export type CloudAccountsEvent = { type: string; path: string; payload?: unknown };
 
@@ -240,8 +259,8 @@ async function keepCloudSection(
       const row =
         before && secret.path !== changedSecret
           ? before
-          : await rowOf(itx, name, app, secret, before, dash);
-      if (row) rows[key] = { ...row, actions: rowActionsOf(name, secret, dash) };
+          : await rowOf(itx, name, app, secret, before);
+      if (row) rows[key] = { ...row, actions: rowActionsOf(name, app, secret, row, dash) };
     }
     const connected = Object.keys(rows).length;
     // the card before its rows: a row stands under a card that exists
@@ -437,15 +456,38 @@ async function cloudOf(
 }
 
 /** One account's row: the service asked whose account the secret is for. `before` stands when
- *  the service gave no answer. */
+ *  the service gave no answer. The account's id is kept for the Cloud's deliveries
+ *  (`cloudAccountSecret`), and an account that this mind let go of at the Cloud
+ *  (`removeCloudAccount`) is taken back there: a member connected it again. */
 async function rowOf(
   itx: CloudAccountsItx,
   client: string,
   app: CloudApp,
   secret: Secret,
   before: Json | undefined,
-  dash: string,
 ): Promise<Json | undefined> {
+  const installation = secret.refresh === "github-app-installation";
+  const answer = await whoIs(itx, app, secret);
+  if (answer === "unanswered") return before;
+  if (answer.account) await keepAccount(itx, client, answer.account, secret.path);
+  return {
+    account: answer.name ? answer.name.slice(0, 200) : `${app.title} account`,
+    // a row that is well needs no words: the page shows its dot
+    status: answer.name
+      ? { kind: "ok" }
+      : { kind: "attention", text: `${app.title} refused the token. Connect the account again.` },
+    details: { ...(installation && { Kind: "App installation" }), Secret: secret.path },
+  };
+}
+
+/** Whose account `secret` holds, in the service's own answer: the name a person knows, and the
+ *  Cloud's id for it. Both are absent when the service refused the token; "unanswered" when it
+ *  gave no answer (busy, or down). */
+async function whoIs(
+  itx: AccountsItx,
+  app: CloudApp,
+  secret: Secret,
+): Promise<{ name?: string; account?: string } | "unanswered"> {
   const installation = secret.refresh === "github-app-installation";
   const ask = (installation && app.installation) || app.whoami;
   const answer = await itx
@@ -459,34 +501,237 @@ async function rowOf(
       }),
     )
     .catch(() => null);
-  if (!answer || answer.status === 429 || answer.status >= 500) return before;
-  const name = ask.name.safeParse(answer.ok ? await answer.json().catch(() => null) : null).data;
+  if (!answer || answer.status === 429 || answer.status >= 500) return "unanswered";
+  const body: unknown = answer.ok ? await answer.json().catch(() => null) : null;
   return {
-    account: name ? name.slice(0, 200) : `${app.title} account`,
-    // a row that is well needs no words: the page shows its dot
-    status: name
-      ? { kind: "ok" }
-      : { kind: "attention", text: `${app.title} refused the token. Connect the account again.` },
-    details: { ...(installation && { Kind: "App installation" }), Secret: secret.path },
-    actions: rowActionsOf(client, secret, dash),
+    name: ask.name.safeParse(body).data,
+    account: ask.account?.safeParse(body).data,
   };
+}
+
+/** WHERE THE MIND KEEPS WHAT IT KNOWS OF ONE CLOUD ACCOUNT, in kv, by the app and the Cloud's id:
+ *  `cloud-account:<app>/<id>` names the secret that holds it, and `cloud-account-left:<app>/<id>`
+ *  says that this mind let go of it at the Cloud. */
+const ACCOUNT_KV = "cloud-account:";
+const LEFT_KV = "cloud-account-left:";
+
+/** The account `account` of `client` is in `secret`. An account that this mind let go of at the
+ *  Cloud is asked for again there (`{ account, again: true }`): the Cloud keeps a let-go across every
+ *  later connect until the mind says so. Its deliveries come back at the grant's next refresh,
+ *  which is when the Cloud reads whom the grant reaches. A Cloud that did not take the word is
+ *  asked again at the account's next row.
+ *
+ *  A secret holds one account: an earlier account's row that names `secret` goes ("Connect
+ *  again" as another person), so that a delivery for that account is not answered as this one. */
+async function keepAccount(
+  itx: AccountsItx,
+  client: string,
+  account: string,
+  secret: string,
+): Promise<void> {
+  const kept = `${ACCOUNT_KV}${client}/${account}`;
+  await itx.kv.put(kept, secret);
+  for (const key of (await itx.kv.list(`${ACCOUNT_KV}${client}/`)).keys)
+    if (key !== kept && (await itx.kv.get(key)) === secret) await itx.kv.delete(key);
+  if (!(await itx.kv.get(`${LEFT_KV}${client}/${account}`))) return;
+  const taken = await askCloud(itx, client, secret, "release", { account, again: true });
+  if (taken === "taken") await itx.kv.delete(`${LEFT_KV}${client}/${account}`);
+  else console.warn({ event: "config.cloud-account-again-not-taken", client, answer: taken });
+}
+
+/** An ask of iterate Cloud for this mind (core/secrets-worker cloud-client.ts `askOf`), in the
+ *  name of `secret`, an account connected through the Cloud's app `client`: "taken" when the
+ *  Cloud answered 200, else what it answered. A rule that holds the request for a member answers
+ *  202, and nothing has reached the Cloud then. */
+async function askCloud(
+  itx: AccountsItx,
+  client: string,
+  secret: string,
+  verb: string,
+  body: Json,
+): Promise<"taken" | string> {
+  const answer = await itx
+    .fetch(
+      new Request(`${ITERATE_CLOUD}/clients/${client}/ask/${verb}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "iterate-connection": `getSecret(${JSON.stringify(secret)})`,
+        },
+        body: JSON.stringify(body),
+      }),
+    )
+    .catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+  if (typeof answer === "string") return answer;
+  return answer.status === 200
+    ? "taken"
+    : `${answer.status} ${(await answer.text()).slice(0, 200)}`;
+}
+
+/** WHICH SECRET HOLDS THE CLOUD ACCOUNT `account` of the app `client` (an X user id, a Slack
+ *  team id, a mailbox's address): for a delivery, whose context names the account and not the
+ *  secret. The secret kept for it when its row was made, while the catalog still has it; else each
+ *  secret of that app is asked whose account it holds, in the catalog's order, and the one that
+ *  holds it is kept. Null when no secret of the mind holds it (it was removed): a delivery for it
+ *  reaches no agent. When a service gave no answer for some secret and none matched, the first
+ *  secret of the app: it cannot be told, and a delivery is not dropped for a busy service. */
+export async function cloudAccountSecret(
+  itx: AccountsItx,
+  client: string,
+  account: string,
+): Promise<string | null> {
+  const app = Object.hasOwn(APPS, client) ? APPS[client]! : undefined;
+  const ofApp = (await itx.secrets.list()).filter(
+    (secret) => ofIterateCloud(secret) && secret.cloud === client,
+  );
+  const kept = await itx.kv.get(`${ACCOUNT_KV}${client}/${account}`);
+  if (kept && ofApp.some((secret) => secret.path === kept)) return kept;
+  if (!app) return ofApp[0]?.path ?? null;
+  let unanswered = false;
+  for (const secret of ofApp) {
+    const answer = await whoIs(itx, app, secret);
+    if (answer === "unanswered") unanswered = true;
+    else if (answer.account === account) {
+      await itx.kv.put(`${ACCOUNT_KV}${client}/${account}`, secret.path);
+      return secret.path;
+    }
+  }
+  return unanswered ? (ofApp[0]?.path ?? null) : null;
+}
+
+/** What `removeCloudAccount` did: the secret is gone, and at iterate Cloud `cloud` says what
+ *  happened to its deliveries. */
+export type RemovedAccount = {
+  secret: string;
+  app: string;
+  /** The Cloud's id for the account, when the service answered whose it is. */
+  account?: string;
+  cloud: "released" | "shared" | "not-offered" | { notReleased: string };
+};
+
+/** REMOVE ONE ACCOUNT CONNECTED THROUGH iterate Cloud: the Integrations page's "Remove" (the Dash's
+ *  `POST /remove/<app>`) and an agent's `itx.config.removeCloudAccount(path)`. In this order:
+ *
+ *  1. Whose account the secret holds is asked, while the secret can still be used.
+ *  2. The Cloud is asked to let go of the account for this mind (`ask/release`): its deliveries
+ *     (X's messages, Gmail's and Calendar's pushes, Slack's events) stop, and a later connect of
+ *     the same account does not bring them back until the mind says so (`keepAccount`). Not when
+ *     another secret of the mind holds the same account: its deliveries are that secret's too
+ *     ("shared"). Not for GitHub: its deliveries are the installations', which a person's grant and
+ *     each installation's secret share, and the catalog does not name an installation
+ *     ("not-offered").
+ *  3. What the mind kept for the secret goes: the Gmail and Calendar rows that read through it
+ *     (gmail.ts, calendar.ts) and the account's own row here. When another secret holds the same
+ *     account, they read through that secret instead: they are kept by mailbox, one for each.
+ *  4. The secret is deleted. Its row on the Integrations page goes at its `secret/deleted`.
+ *
+ *  The secret goes even when the Cloud did not take the release (it gave no answer): `cloud` says
+ *  so, and a delivery for an account that no secret holds reaches no agent (`cloudAccountSecret`).
+ *  Nothing changes, and the Remove throws its reason, when the service gave no answer, or refused
+ *  the token, for another secret of the app: that secret may hold the same account, and a release
+ *  would stop its deliveries. What the account's deliveries made stays: its context
+ *  `/integrations/<app>/<id>`, its agent and their history. */
+export async function removeCloudAccount(itx: AccountsItx, path: string): Promise<RemovedAccount> {
+  const secrets = await itx.secrets.list();
+  const secret = secrets.find((each) => each.path === path);
+  if (!secret || !/^\/secrets\/[^/]+$/.test(path) || !ofIterateCloud(secret))
+    throw new Error(
+      `${path} is no account connected through iterate Cloud: delete a key on the Secrets page`,
+    );
+  const client = secret.cloud!;
+  const app = Object.hasOwn(APPS, client) ? APPS[client]! : undefined;
+  const asked = app?.whoami.account ? await whoIs(itx, app, secret) : "unanswered";
+  const account = asked === "unanswered" ? undefined : asked.account;
+  let cloud: RemovedAccount["cloud"] = "not-offered";
+  const holder = app && account ? await otherHolder(itx, app, account, secret, secrets) : null;
+  if (app?.whoami.account) {
+    cloud = { notReleased: `${app.title} did not say whose account ${path} holds` };
+    if (holder) cloud = "shared";
+    else if (account) cloud = await releaseAt(itx, client, account, path);
+  }
+  if (account && holder) await itx.kv.put(`${ACCOUNT_KV}${client}/${account}`, holder);
+  else if (account) await itx.kv.delete(`${ACCOUNT_KV}${client}/${account}`);
+  for (const prefix of ["gmail:", "calendar:"]) {
+    for (const key of (await itx.kv.list(prefix)).keys) {
+      const value: unknown = JSON.parse((await itx.kv.get(key)) || "null");
+      const row = z.looseObject({ secret: z.string() }).safeParse(value).data;
+      if (row?.secret !== path) continue;
+      if (holder) await itx.kv.put(key, JSON.stringify({ ...row, secret: holder }));
+      else await itx.kv.delete(key);
+    }
+  }
+  await itx.secrets.delete(path);
+  return { secret: path, app: client, account, cloud };
+}
+
+/** Another secret of the app that holds `account` too, else null. Throws, so that the Remove
+ *  changes nothing, when the service gave no answer, or refused the token, for another secret:
+ *  that secret may hold the account, and the Cloud cannot be told to let go of it on a guess. */
+async function otherHolder(
+  itx: AccountsItx,
+  app: CloudApp,
+  account: string,
+  secret: Secret,
+  secrets: Secret[],
+): Promise<string | null> {
+  const unknown: string[] = [];
+  for (const other of secrets) {
+    if (other.path === secret.path || !ofIterateCloud(other) || other.cloud !== secret.cloud)
+      continue;
+    const answer = await whoIs(itx, app, other);
+    if (answer === "unanswered" || !answer.account) unknown.push(other.path);
+    else if (answer.account === account) return other.path;
+  }
+  if (unknown.length)
+    throw new Error(
+      `${app.title} did not say whose account ${unknown.join(", ")} holds (it gave no answer, or refused the token), and it may be the same account as ${secret.path}. Nothing was removed. Try again in a minute, or connect ${unknown.join(", ")} again or remove it first.`,
+    );
+  return null;
+}
+
+/** Step 2 of `removeCloudAccount`, when no other secret holds `account`: the Cloud lets go of it.
+ *  A let-go that the Cloud took is remembered, so that a later connect of the same account takes
+ *  it back. */
+async function releaseAt(
+  itx: AccountsItx,
+  client: string,
+  account: string,
+  path: string,
+): Promise<RemovedAccount["cloud"]> {
+  const taken = await askCloud(itx, client, path, "release", { account });
+  if (taken !== "taken") return { notReleased: taken };
+  await itx.kv.put(`${LEFT_KV}${client}/${account}`, new Date().toISOString());
+  return "released";
 }
 
 /** A Cloud row's buttons, from the app, the secret and whose grant it is: for a new row and for
  *  one that stands, so that a row made by an older template gets today's. A PERSON'S GRANT can
  *  always be connected again: after a refusal, and to bring the scopes that cloud-scopes.ts names
  *  now into a secret made before. An installation's token is the App's own to mint: there is
- *  nothing to connect again. */
-function rowActionsOf(client: string, secret: Secret, dash: string): Json[] {
+ *  nothing to connect again. Every account can be removed (`removeCloudAccount`): the Dash asks
+ *  first, in the row's own words. */
+function rowActionsOf(
+  client: string,
+  app: CloudApp,
+  secret: Secret,
+  row: Json,
+  dash: string,
+): Json[] {
+  const name = secret.path.split("/").at(-1);
+  const account = typeof row.account === "string" ? row.account : secret.path;
   return [
     ...(secret.refresh === "github-app-installation"
       ? []
-      : [
-          {
-            label: "Connect again",
-            url: `${dash}/connect/${client}?secret=${secret.path.split("/").at(-1)}`,
-          },
-        ]),
+      : [{ label: "Connect again", url: `${dash}/connect/${client}?secret=${name}` }]),
     { label: "Manage", url: `${dash}/?page=secrets` },
+    {
+      label: "Remove",
+      url: `${dash}/remove/${client}?secret=${name}`,
+      confirm: `Remove ${account}? The mind deletes ${secret.path}${
+        app.whoami.account
+          ? ` and asks iterate Cloud to stop delivering for this ${app.title} account`
+          : `. iterate Cloud keeps delivering the installations' events, which a GitHub grant shares`
+      }. Its agents and their history stay. To use it again, connect it again.`.slice(0, 400),
+    },
   ];
 }

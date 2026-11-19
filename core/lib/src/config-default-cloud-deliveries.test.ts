@@ -130,7 +130,7 @@ test("a mind with an account connected through the Cloud says once that it reads
   expect(asked?.method).toBe("POST");
   expect(asked?.headers.get("iterate-connection")).toBe('getSecret("/secrets/github")');
   expect(await asked?.json()).toEqual({ reads: true });
-  expect([...mind.kept]).toEqual([[WORD, "said"]]);
+  expect([...mind.kept]).toEqual([[WORD, SAID]]);
   await sayMindForm(mind.itx);
   expect(mind.asked).toHaveLength(1);
 });
@@ -168,7 +168,7 @@ test("the word is said when an account's secret is set, with no publish: for a s
   await mindFormEvent(mind.itx, { type: SET, path: "/secrets/github" });
   expect({ asked: mind.asked.map(({ url }) => url), kept: [...mind.kept] }).toEqual({
     asked: [`${CLOUD}/clients/github/ask/mind-form`],
-    kept: [[WORD, "said"]],
+    kept: [[WORD, SAID]],
   });
   // a key of the mind's own is no account of the Cloud's: nothing is asked for it
   const alone = mindWithCloud({ connected: false });
@@ -194,7 +194,7 @@ test("an account that cannot ask is passed over for the next one", async () => {
     `${CLOUD}/clients/github/ask/mind-form`,
     `${CLOUD}/clients/google/ask/mind-form`,
   ]);
-  expect(mind.kept.get(WORD)).toBe("said");
+  expect(mind.kept.get(WORD)).toBe(SAID);
 });
 
 test("a word the Cloud did not take is logged, not thrown, and said again an hour later, not before", async () => {
@@ -221,8 +221,27 @@ test("a word the Cloud did not take is logged, not thrown, and said again an hou
   mind.kept.set(WORD, String(Date.now() - 2 * 60 * 60_000));
   mind.answers = 200;
   await sayMindForm(mind.itx);
-  expect([mind.asked.length, mind.kept.get(WORD)]).toEqual([3, "said"]);
+  expect([mind.asked.length, mind.kept.get(WORD)]).toEqual([3, SAID]);
 });
+
+test("the word is kept with the mind's name: a word for another name, or one that names none, is said again", async () => {
+  // a word that names no mind, and a word for another name
+  for (const before of ["said", "said templestein.family"]) {
+    const mind = mindWithCloud();
+    mind.kept.set(WORD, before);
+    await sayMindForm(mind.itx);
+    expect([mind.asked.length, mind.kept.get(WORD)]).toEqual([1, SAID]);
+  }
+  // the word for this very name: nothing is asked
+  const mind = mindWithCloud();
+  mind.kept.set(WORD, SAID);
+  await sayMindForm(mind.itx);
+  expect(mind.asked).toHaveLength(0);
+});
+
+/** The mind's control-plane hostname, and the word kept once the Cloud took it under that name. */
+const NAME = "iterate.templestein.family";
+const SAID = `said ${NAME}`;
 
 /** The Cloud that the template names: a secret of it asks it, and no other Cloud is asked. */
 const CLOUD = ITERATE_CLOUD;
@@ -242,6 +261,7 @@ function mindWithCloud({ cloud = true, connected = true, second = false, elsewhe
     /** What the Cloud answers the next ask; a string is a failed fetch. */
     answers: 200 as number | string,
     itx: {
+      whoami: () => ({ mindSlug: NAME }),
       fetch: async (request: Request): Promise<Response> => {
         mind.asked.push(request);
         if (typeof mind.answers === "string") throw new Error(mind.answers);

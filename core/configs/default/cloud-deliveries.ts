@@ -55,6 +55,7 @@ export function cloudDeliveryOf(
 /** The part of `itx` that `sayMindForm` uses. */
 export type MindFormItx = {
   fetch(request: Request): Promise<Response>;
+  whoami(): { mindSlug?: string } | Promise<{ mindSlug?: string }>;
   secrets: {
     list(): Promise<{ path: string; cloud?: string; cloudOrigin?: string }[]>;
     cloud(origin: string): Promise<{ origin: string; clients: string[] }>;
@@ -65,7 +66,11 @@ export type MindFormItx = {
   };
 };
 
-/** The one kv key: `"said"` once the Cloud took the word, else the time of the last try. */
+/** The one kv key: `said <name>` once the Cloud took the word from the mind under the name
+ *  `<name>` (its control-plane hostname, `itx.whoami()`'s `mindSlug`), else the time of the last
+ *  try. The Cloud keeps the word by the mind's name: a mind that moved to a new name is another
+ *  mind there, and gets the key form until it says the word again under the new one. So a word
+ *  kept for another name, or a bare `said` that names none, counts as not said. */
 const MIND_FORM_KEY = "cloud-deliveries:mind-form";
 /** How long after a try that the Cloud did not take the next one waits. */
 const TRY_AGAIN_MS = 60 * 60_000;
@@ -80,11 +85,12 @@ const TRY_AGAIN_MS = 60 * 60_000;
  *  an account a member connected through the Cloud at `ITERATE_CLOUD`: each such account is
  *  tried in turn until the Cloud takes the word, since not every kind of connection can ask. A
  *  secret asks its own Cloud alone, so an account of another Cloud is not tried. With no such
- *  account it does nothing: such a mind gets no delivery either. Said once; after a try that was
- *  not taken, the next one waits an hour. */
+ *  account it does nothing: such a mind gets no delivery either. Said once for each name of the
+ *  mind (`MIND_FORM_KEY`); after a try that was not taken, the next one waits an hour. */
 export async function sayMindForm(itx: MindFormItx): Promise<void> {
+  const said = `said ${(await itx.whoami()).mindSlug ?? ""}`;
   const kept = await itx.kv.get(MIND_FORM_KEY);
-  if (kept === "said" || Number(kept) > Date.now() - TRY_AGAIN_MS) return;
+  if (kept === said || Number(kept) > Date.now() - TRY_AGAIN_MS) return;
   // the catalog first: a mind with no account of the Cloud's asks the Cloud nothing
   const connected = (await itx.secrets.list()).filter(
     (secret) => secret.cloud && secret.cloudOrigin === ITERATE_CLOUD,
@@ -114,7 +120,7 @@ export async function sayMindForm(itx: MindFormItx): Promise<void> {
       answer.status === 200 &&
       ((await answer.json().catch(() => null)) as { ok?: unknown } | null)?.ok === true;
     if (taken) {
-      await itx.kv.put(MIND_FORM_KEY, "said");
+      await itx.kv.put(MIND_FORM_KEY, said);
       return;
     }
     answers.push(typeof answer === "string" ? answer : answer.status);

@@ -3,7 +3,11 @@
 // again or goes; and "Keys and accounts", every other secret, by the service it is pinned to.
 // The fake registry takes only what the real one takes (the contract's own schemas).
 import { expect, test } from "vitest";
-import { cloudAccountsEvent } from "../../configs/default/cloud-accounts.ts";
+import {
+  cloudAccountSecret,
+  cloudAccountsEvent,
+  removeCloudAccount,
+} from "../../configs/default/cloud-accounts.ts";
 import { ITERATE_CLOUD } from "../../configs/default/cloud-deliveries.ts";
 import { IntegrationRegistryContract } from "./integrations.ts";
 
@@ -48,6 +52,7 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
       actions: [
         { label: "Connect again", url: "https://dash.example.com/connect/google?secret=google" },
         { label: "Manage", url: "https://dash.example.com/?page=secrets" },
+        removeOf("google", "google"),
       ],
     },
     "github/github": expect.objectContaining({ account: "ada" }),
@@ -55,7 +60,10 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
     "github/github-installation-7": expect.objectContaining({
       account: "acme",
       details: { Kind: "App installation", Secret: "/secrets/github-installation-7" },
-      actions: [{ label: "Manage", url: "https://dash.example.com/?page=secrets" }],
+      actions: [
+        { label: "Manage", url: "https://dash.example.com/?page=secrets" },
+        removeOf("github", "github-installation-7"),
+      ],
     }),
   });
 
@@ -101,6 +109,7 @@ test("a secret set again is asked for again, one that the service refuses says s
     actions: [
       { label: "Connect again", url: "https://dash.example.com/connect/google?secret=google" },
       { label: "Manage" },
+      { label: "Remove" },
     ],
   });
 
@@ -257,6 +266,7 @@ test("a row an older template made gets today's buttons at the next publish, wit
     actions: [
       { label: "Connect again", url: "https://dash.example.com/connect/google?secret=google" },
       manage,
+      removeOf("google", "google"),
     ],
   });
   // a refusal keeps its words, and gets the same buttons
@@ -267,6 +277,7 @@ test("a row an older template made gets today's buttons at the next publish, wit
     actions: [
       { label: "Connect again", url: "https://dash.example.com/connect/github?secret=github" },
       manage,
+      removeOf("github", "github"),
     ],
   });
   expect(rows["github/github-installation-7"]).toEqual(installation);
@@ -387,6 +398,183 @@ test("each value a computer lends gets a card under 'Lent by a computer', and lo
   expect(mind.section("lent")).toEqual({ heading: undefined, cards: {}, rows: {} });
 });
 
+test("several X accounts: each is a row by its handle under X's one card, with 'Add account' for the next", async () => {
+  const mind = withX(cloudMind());
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+  const { cards, rows } = mind.registry();
+  expect(cards.x).toMatchObject({
+    status: { text: "2 accounts" },
+    actions: [{ label: "Add account", url: "https://dash.example.com/connect/x" }],
+  });
+  expect(rows["x/x"]).toMatchObject({ account: "@ada", details: { Secret: "/secrets/x" } });
+  expect(rows["x/x-2"]).toMatchObject({
+    account: "@grace",
+    details: { Secret: "/secrets/x-2" },
+    actions: [
+      { label: "Connect again", url: "https://dash.example.com/connect/x?secret=x-2" },
+      { label: "Manage" },
+      removeOf("x", "x-2"),
+    ],
+  });
+  // the Cloud's id of each account is kept, for its deliveries
+  expect([mind.kv.get("cloud-account:x/42"), mind.kv.get("cloud-account:x/43")]).toEqual([
+    "/secrets/x",
+    "/secrets/x-2",
+  ]);
+});
+
+test("Remove: the Cloud lets go of the account, what the mind kept for the secret goes, then the secret; its row goes at its event", async () => {
+  const mind = withX(cloudMind());
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+  // a Gmail row that reads through another secret stays
+  mind.kv.set(
+    "gmail:/integrations/google/ada@example.com",
+    JSON.stringify({ secret: "/secrets/google" }),
+  );
+
+  const removed = await removeCloudAccount(mind.itx, "/secrets/x-2");
+
+  expect(removed).toEqual({ secret: "/secrets/x-2", app: "x", account: "43", cloud: "released" });
+  expect(mind).toMatchObject({
+    cloudAsks: [
+      { route: "/clients/x/ask/release", secret: "/secrets/x-2", body: { account: "43" } },
+    ],
+  });
+  expect(mind.secrets.has("/secrets/x-2")).toBe(false);
+  expect(mind.kv.has("cloud-account:x/43")).toBe(false);
+  expect(mind.kv.has("cloud-account-left:x/43")).toBe(true);
+  expect(mind.kv.has("gmail:/integrations/google/ada@example.com")).toBe(true);
+  await cloudAccountsEvent(mind.itx, deleted("/secrets/x-2"));
+  expect(Object.keys(mind.registry().rows).filter((row) => row.startsWith("x/"))).toEqual(["x/x"]);
+  expect(mind.registry().cards.x).toMatchObject({ status: { text: "Connected" } });
+
+  // CONNECTED AGAIN: the mind takes the account back at the Cloud, once
+  mind.secrets.set("/secrets/x-2", xSecret());
+  await cloudAccountsEvent(mind.itx, set("/secrets/x-2"));
+  expect(mind.cloudAsks.at(-1)).toEqual({
+    route: "/clients/x/ask/release",
+    secret: "/secrets/x-2",
+    body: { account: "43", again: true },
+  });
+  expect(mind.kv.has("cloud-account-left:x/43")).toBe(false);
+  await cloudAccountsEvent(mind.itx, set("/secrets/x-2"));
+  expect(mind.cloudAsks.length).toBe(2);
+});
+
+test("Remove: while another secret holds the same account, the Cloud is not asked, and the mailbox's rows read through that secret", async () => {
+  const mind = cloudMind();
+  mind.secrets.set("/secrets/google-2", { ...mind.secrets.get("/secrets/google")! });
+  mind.accounts.set("/secrets/google-2", { email: "Ada@Example.com" });
+  mind.kv.set("cloud-account:google/ada@example.com", "/secrets/google-2");
+  mind.kv.set(
+    "gmail:/integrations/google/ada@example.com",
+    JSON.stringify({ secret: "/secrets/google-2", historyId: "7" }),
+  );
+  mind.kv.set(
+    "calendar:/integrations/google/ada@example.com",
+    JSON.stringify({ secret: "/secrets/google-2" }),
+  );
+
+  expect(await removeCloudAccount(mind.itx, "/secrets/google-2")).toEqual({
+    secret: "/secrets/google-2",
+    app: "google",
+    account: "ada@example.com",
+    cloud: "shared",
+  });
+  expect(mind).toMatchObject({ cloudAsks: [] });
+  expect(Object.fromEntries(mind.kv)).toEqual({
+    "cloud-account:google/ada@example.com": "/secrets/google",
+    "gmail:/integrations/google/ada@example.com": JSON.stringify({
+      secret: "/secrets/google",
+      historyId: "7",
+    }),
+    "calendar:/integrations/google/ada@example.com": JSON.stringify({ secret: "/secrets/google" }),
+  });
+  expect(mind.secrets.has("/secrets/google-2")).toBe(false);
+});
+
+test("Remove: when the service cannot say whose account another secret of the app holds, nothing changes and the answer says why", async () => {
+  const mind = withX(cloudMind());
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+  const before = Object.fromEntries(mind.kv);
+  // X gives no answer for /secrets/x-2, then refuses its token
+  for (const status of [503, 401]) {
+    mind.status.set("/secrets/x-2", status);
+    await expect(removeCloudAccount(mind.itx, "/secrets/x")).rejects.toThrow(
+      "X did not say whose account /secrets/x-2 holds",
+    );
+  }
+  expect(mind).toMatchObject({ cloudAsks: [] });
+  expect(mind.secrets.has("/secrets/x")).toBe(true);
+  expect(Object.fromEntries(mind.kv)).toEqual(before);
+  // X answers again: the Remove goes through
+  mind.status.delete("/secrets/x-2");
+  expect(await removeCloudAccount(mind.itx, "/secrets/x")).toMatchObject({ cloud: "released" });
+});
+
+test("Remove: a Cloud that refuses, a service that gives no answer, GitHub and a key", async () => {
+  const mind = withX(cloudMind());
+  // the Cloud refuses: the secret goes all the same, and the answer says so
+  mind.cloudAnswers.push(new Response("no", { status: 503 }));
+  expect(await removeCloudAccount(mind.itx, "/secrets/x")).toEqual({
+    secret: "/secrets/x",
+    app: "x",
+    account: "42",
+    cloud: { notReleased: "503 no" },
+  });
+  expect(mind.secrets.has("/secrets/x")).toBe(false);
+  // X gives no answer: nobody can say which account to let go of
+  mind.status.set("/secrets/x-2", 503);
+  expect(await removeCloudAccount(mind.itx, "/secrets/x-2")).toMatchObject({
+    cloud: { notReleased: "X did not say whose account /secrets/x-2 holds" },
+  });
+  // GitHub's deliveries are the installations': the Cloud is not asked
+  expect(await removeCloudAccount(mind.itx, "/secrets/github-installation-7")).toEqual({
+    secret: "/secrets/github-installation-7",
+    app: "github",
+    cloud: "not-offered",
+  });
+  expect(mind.cloudAsks.length).toBe(1);
+  // a key, or a secret that is not there: nothing changes
+  await expect(removeCloudAccount(mind.itx, "/secrets/openai")).rejects.toThrow(
+    "/secrets/openai is no account connected through iterate Cloud",
+  );
+  await expect(removeCloudAccount(mind.itx, "/secrets/x-9")).rejects.toThrow("no account");
+  expect(mind.secrets.has("/secrets/openai")).toBe(true);
+});
+
+test("a delivery's account names its secret: the one kept for it, else the one that holds it; none once it was removed", async () => {
+  const mind = withX(cloudMind());
+  // nothing kept yet: each X secret is asked, and the answer is kept
+  expect(await cloudAccountSecret(mind.itx, "x", "43")).toBe("/secrets/x-2");
+  expect(mind.kv.get("cloud-account:x/43")).toBe("/secrets/x-2");
+  const asked = mind.asked.length;
+  expect(await cloudAccountSecret(mind.itx, "x", "43")).toBe("/secrets/x-2");
+  expect(mind.asked.length).toBe(asked);
+  // no secret holds it
+  expect(await cloudAccountSecret(mind.itx, "x", "99")).toBe(null);
+  await removeCloudAccount(mind.itx, "/secrets/x-2");
+  expect(await cloudAccountSecret(mind.itx, "x", "43")).toBe(null);
+  // X gave no answer for a secret: the first, rather than a lost message
+  mind.status.set("/secrets/x", 503);
+  expect(await cloudAccountSecret(mind.itx, "x", "99")).toBe("/secrets/x");
+});
+
+test("a secret connected again as another account no longer answers for the account it held", async () => {
+  const mind = withX(cloudMind());
+  await cloudAccountsEvent(mind.itx, PUBLISHED);
+  expect(await cloudAccountSecret(mind.itx, "x", "43")).toBe("/secrets/x-2");
+  // "Connect again" on /secrets/x-2 as @linus (44)
+  mind.accounts.set("/secrets/x-2", { data: { id: "44", username: "linus" } });
+  await cloudAccountsEvent(mind.itx, set("/secrets/x-2"));
+  expect([mind.kv.get("cloud-account:x/43"), mind.kv.get("cloud-account:x/44")]).toEqual([
+    undefined,
+    "/secrets/x-2",
+  ]);
+  expect(await cloudAccountSecret(mind.itx, "x", "43")).toBe(null);
+  expect(await cloudAccountSecret(mind.itx, "x", "42")).toBe("/secrets/x");
+});
+
 /** The root's fact that the rule for `match` was set or unset. */
 const ruleConfigured = (match: string) => ({
   type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -409,9 +597,38 @@ const deleted = (path: string) => ({
   payload: { path },
 });
 
+/** A row's "Remove": a change that the Dash asks about first (removeCloudAccount). */
+const removeOf = (app: string, name: string) =>
+  expect.objectContaining({
+    label: "Remove",
+    url: `https://dash.example.com/remove/${app}?secret=${name}`,
+    confirm: expect.stringContaining(`The mind deletes /secrets/${name}`),
+  });
+
 /** A mind whose template names the Cloud at CLOUD (with `cloud: false`, that Cloud gives no list), with a Google grant, a GitHub grant and a GitHub App
  *  installation's secret through the Cloud's apps, a Google grant of an app of its own, and a
  *  key of another service. */
+/** An X account's secret, connected through the Cloud's app. */
+function xSecret() {
+  return {
+    urls: ["https://api.x.com"],
+    refresh: "oauth-refresh-token",
+    cloud: "x",
+    cloudOrigin: CLOUD,
+  };
+}
+
+/** `mind` with the Cloud's X app, and two X accounts: @ada (42) at `/secrets/x` and @grace (43)
+ *  at `/secrets/x-2`. */
+function withX(mind: ReturnType<typeof cloudMind>) {
+  mind.offered = [...mind.offered, "x"];
+  mind.secrets.set("/secrets/x", xSecret());
+  mind.secrets.set("/secrets/x-2", xSecret());
+  mind.accounts.set("/secrets/x", { data: { id: "42", username: "ada" } });
+  mind.accounts.set("/secrets/x-2", { data: { id: "43", username: "grace" } });
+  return mind;
+}
+
 function cloudMind({ cloud = true } = {}) {
   const secrets = new Map<
     string,
@@ -461,6 +678,7 @@ function cloudMind({ cloud = true } = {}) {
   ]);
   const status = new Map<string, number>();
   const appended: { type: string; payload: unknown }[] = [];
+  const kv = new Map<string, string>();
   const state = {
     integrations: {} as Record<string, unknown>,
     connections: {} as Record<string, unknown>,
@@ -473,8 +691,13 @@ function cloudMind({ cloud = true } = {}) {
     appended,
     /** The clients the Cloud publishes; `unknown` is one this file has no words for. */
     offered: ["google", "github", "slack", "unknown"],
+    kv,
     /** The secrets a service was asked about, in order. */
     asked: [] as string[],
+    /** Each ask of iterate Cloud: its route, the secret it names and its body. */
+    cloudAsks: [] as { route: string; secret: string; body: unknown }[],
+    /** What the Cloud answers the next asks, in order; then 200. */
+    cloudAnswers: [] as Response[],
     /** The root's rewrite rules, as `rewriteRules.list()` answers them: the platform's own names
      *  alone, until a test lends one. */
     rules: [
@@ -505,6 +728,14 @@ function cloudMind({ cloud = true } = {}) {
     itx: {
       url: async () => "https://example.com/",
       fetch: async (request: Request) => {
+        if (request.url.startsWith(`${CLOUD}/clients/`)) {
+          mind.cloudAsks.push({
+            route: new URL(request.url).pathname,
+            secret: /getSecret\("([^"]+)"\)/.exec(request.headers.get("iterate-connection")!)![1]!,
+            body: await request.json(),
+          });
+          return mind.cloudAnswers.shift() || Response.json({ connected: false });
+        }
         // every secret here keeps its token as `accessToken`: a placeholder for another field
         // finds nothing, as the vault answers
         const secret = /getSecret\("([^"]+)", \{ field: "accessToken" \}\)/.exec(
@@ -520,6 +751,15 @@ function cloudMind({ cloud = true } = {}) {
       secrets: {
         list: async () => [...secrets].map(([path, secret]) => ({ path, ...secret })),
         cloud: async (origin: string) => ({ origin, clients: cloud ? mind.offered : [] }),
+        delete: async (path: string) => secrets.delete(path),
+      },
+      kv: {
+        get: async (key: string) => kv.get(key) ?? null,
+        put: async (key: string, value: string) => kv.set(key, value),
+        delete: async (key: string) => kv.delete(key),
+        list: async (prefix = "") => ({
+          keys: [...kv.keys()].filter((key) => key.startsWith(prefix)),
+        }),
       },
       rewriteRules: { list: async () => structuredClone(mind.rules) },
       cd: (path: string) => ({
