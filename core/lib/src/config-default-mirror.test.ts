@@ -46,10 +46,18 @@ test("the homepage answers GET and HEAD of / alone: anything else that no case t
     getItx: {
       value: () => ({
         whoami: async () => ({ path: "/", mindSlug: "iterate.example.com" }),
+        url: async () => "https://example.com/",
         [Symbol.dispose]() {},
       }),
     },
   }) as { fetch(request: Request): Promise<Response> };
+  const homepage = await config.fetch(new Request("https://example.com/"));
+  const homepageHtml = await homepage.text();
+  expect(homepage.headers.get("content-type")).toContain("text/html");
+  expect(homepageHtml).toContain("<title>iterate.example.com</title>");
+  expect(homepageHtml).toContain("Homepage of mind iterate.example.com");
+  expect(homepageHtml).toContain('href="https://onboarding.example.com/"');
+  expect(homepageHtml).toContain('href="https://dash.example.com/"');
   const status = async (url: string, method = "GET") =>
     (await config.fetch(new Request(url, { method }))).status;
   expect({

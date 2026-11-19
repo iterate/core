@@ -575,7 +575,7 @@ test.for([
     expect(await personOf(stack.env, cookie)).toBeNull();
 
     const added = await firstPasskeyAdded(stack.env, cookie);
-    expect(added).toMatchObject({ status: 200, next: "https://example.com/" });
+    expect(added).toMatchObject({ status: 200, next: "https://onboarding.example.com/" });
     // the answer's cookie is the passkey's own session, a member's
     expect(await statusOf(stack.env, "/keys.json", added.cookie)).toBe(200);
     expect(await personOf(stack.env, added.cookie)).toMatchObject({ email, member: true });
@@ -646,7 +646,7 @@ test("the page of a link that is over says to ask for a new one, and offers no e
   const html = await (await ask(stack.env, "/keys/first")).text();
   expect(html).toContain("<p>This link was used before, or its 24 hours are over.</p>");
   expect(html).toContain(
-    `<p>Ask whoever gave you the link for a new one. With a passkey for ${MIND}, <a href="/sign-in?next=https%3A%2F%2Fexample.com%2F">sign in</a>.</p>`,
+    `<p>Ask whoever gave you the link for a new one. With a passkey for ${MIND}, <a href="/sign-in?next=https%3A%2F%2Fonboarding.example.com%2F">sign in</a>.</p>`,
   );
   expect(html).not.toMatch(/email/i);
 });
@@ -768,18 +768,18 @@ test.for([
   },
   // a network-path reference names a host: it is that host, or nothing
   { next: "//shop.second.example/a", ends: "https://shop.second.example/a" },
-  { next: "//evil.example/", ends: "https://example.com/" },
+  { next: "//evil.example/", ends: "https://onboarding.example.com/" },
   // a path that begins with two slashes stays a path of this origin, written whole
   {
     next: "https://iterate.example.com//evil.example/a",
     ends: "https://iterate.example.com//evil.example/a",
   },
-  { next: "/\\evil.example/", ends: "https://example.com/" },
-  { next: "https://evil.example/", ends: "https://example.com/" },
-  { next: "http://shop.second.example/", ends: "https://example.com/" },
-  { next: "blob:https://iterate.example.com/a-page", ends: "https://example.com/" },
-  { next: "javascript:alert(1)", ends: "https://example.com/" },
-  { next: "", ends: "https://example.com/" },
+  { next: "/\\evil.example/", ends: "https://onboarding.example.com/" },
+  { next: "https://evil.example/", ends: "https://onboarding.example.com/" },
+  { next: "http://shop.second.example/", ends: "https://onboarding.example.com/" },
+  { next: "blob:https://iterate.example.com/a-page", ends: "https://onboarding.example.com/" },
+  { next: "javascript:alert(1)", ends: "https://onboarding.example.com/" },
+  { next: "", ends: "https://onboarding.example.com/" },
 ])(
   "after the first passkey, the browser that came with next $next ends at $ends",
   async ({ next, ends }) => {
@@ -787,7 +787,7 @@ test.for([
     const { cookie } = await enrolling(stack, MEMBER);
     // the form keeps the address that was checked, and none for a `next` that is not the mind's
     const form = await formOf(stack.env, cookie, `/keys/first?${new URLSearchParams({ next })}`);
-    expect(form).toMatchObject({ next: ends === "https://example.com/" ? "" : ends });
+    expect(form).toMatchObject({ next: ends === "https://onboarding.example.com/" ? "" : ends });
     const added = await firstPasskeyAdded(stack.env, cookie, {
       challenge: form.challenge!,
       next: form.next,

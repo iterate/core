@@ -22,7 +22,7 @@ test("a token for an owner with no passkey yet opens the session that adds the f
   const answer = await ask(env, "/sign-in/access", await tokenOf());
   expect({ status: answer.status, location: answer.headers.get("location") }).toEqual({
     status: 303,
-    location: `/keys/first?next=${encodeURIComponent("https://example.com/")}`,
+    location: `/keys/first?next=${encodeURIComponent("https://onboarding.example.com/")}`,
   });
   // the row's kind is this proof's own (./enrolment.ts `Proof`)
   expect(db.prepare("select method, key_id from browser_sessions").all()).toEqual([
@@ -47,7 +47,7 @@ test("the sign-in goes on to the `next` it was given, when that is an address of
     await locationFor("https://elsewhere.example.net/"),
   ]).toEqual([
     `/keys/first?next=${encodeURIComponent("https://dash.example.com/agents")}`,
-    `/keys/first?next=${encodeURIComponent("https://example.com/")}`,
+    `/keys/first?next=${encodeURIComponent("https://onboarding.example.com/")}`,
   ]);
 });
 

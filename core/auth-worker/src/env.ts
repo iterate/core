@@ -45,3 +45,10 @@ export function homeOf(env: Env) {
   const config = configOf(env);
   return `https://${zoneOf(config, config.controlPlaneHostname)}/`;
 }
+
+/** The mind's onboarding wizard (`https://onboarding.<zone>/`), where a new person continues setup
+ *  after adding their first passkey when no `next` URL was passed. */
+export function onboardingOf(env: Env) {
+  const config = configOf(env);
+  return `https://onboarding.${zoneOf(config, config.controlPlaneHostname)}/`;
+}

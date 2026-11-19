@@ -369,9 +369,22 @@ export default class extends IterateConfigEntrypoint {
           return new Response("Not found\n", { status: 404 });
         using itx = this.getItx();
         const { mindSlug } = await itx.whoami();
-        return new Response("Homepage of mind " + mindSlug + "\n", {
-          headers: { "content-type": "text/plain; charset=utf-8" },
-        });
+        const zone = new URL(await itx.url()).hostname;
+        const safeSlug = (mindSlug || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;");
+        const safeZone = zone.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+        return new Response(
+          [
+            "<!doctype html>",
+            '<meta charset="utf-8">',
+            `<title>${safeSlug}</title>`,
+            '<body style="font-family:system-ui,-apple-system,sans-serif;max-width:36rem;margin:4rem auto;padding:0 1.25rem;line-height:1.6">',
+            `<h1>Homepage of mind ${safeSlug}</h1>`,
+            `<p><a href="https://onboarding.${safeZone}/">Continue setup</a> &middot; <a href="https://dash.${safeZone}/">Open Dash</a></p>`,
+            "</body>",
+            "",
+          ].join("\n"),
+          { headers: { "content-type": "text/html; charset=utf-8" } },
+        );
       }
     }
   }

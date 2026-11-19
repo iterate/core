@@ -33,7 +33,7 @@ import { AccountFacts } from "./account-facts.ts";
 import { isOwner } from "./config.ts";
 import { cookieClaimsOf, cookieOf, newSessionId, sessionCookie, userAgentOf } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
-import { configOf, type Env, homeOf, issuerOf } from "./env.ts";
+import { configOf, type Env, issuerOf, onboardingOf } from "./env.ts";
 import { honouredNext } from "./key-rules.ts";
 import { outsiderKeysRevoked, outsiderKeysRevokedFacts } from "./keys-pages.ts";
 import { isMember } from "./members.ts";
@@ -341,8 +341,12 @@ async function firstPasskeyAdded(
   return facts.on(
     Response.json(
       // where the browser goes on: the `next` the page was given, checked again here, else the
-      // mind's own front page
-      { key, label, next: honouredNext(input.data.next || null, configOf(env)) || homeOf(env) },
+      // mind's onboarding wizard
+      {
+        key,
+        label,
+        next: honouredNext(input.data.next || null, configOf(env)) || onboardingOf(env),
+      },
       { headers: { "set-cookie": made.setCookie, "cache-control": "no-store" } },
     ),
   );
@@ -407,7 +411,7 @@ async function linkSpent(env: Env, request: Request): Promise<Response> {
 
 function linkPage(env: Env, next: string | null) {
   const mind = configOf(env).controlPlaneHostname;
-  const signIn = `/sign-in?${new URLSearchParams({ next: next || homeOf(env) })}`;
+  const signIn = `/sign-in?${new URLSearchParams({ next: next || onboardingOf(env) })}`;
   return page({
     title: `Add your passkey to ${mind}`,
     body: `<h1>Add your passkey to ${text(mind)}</h1>
