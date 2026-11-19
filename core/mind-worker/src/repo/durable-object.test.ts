@@ -270,7 +270,7 @@ function repoWith(oids: string[]) {
       return state.logReads;
     },
     async pushed(push: { ref: string | null; after: string }) {
-      own.stream.append({
+      const [event] = await own.stream.append({
         type: "events.iterate.com/repo/pushed",
         // as the boundary keys it: by the message, so two pushes of one commit are two facts
         idempotencyKey: `repo/pushed:${push.ref}:${push.after}:${(pushes += 1)}`,
@@ -283,13 +283,20 @@ function repoWith(oids: string[]) {
           commitsTruncated: false,
         },
       });
-      await settle(50);
+      await repo.facet.waitUntilProcessed({ offset: event!.offset });
+      await repo.settled();
     },
     /** A new incarnation on the same storage: its revive reads the log and runs the pass at the head. */
     async restarted() {
       repo.facet = host();
       await repo.facet.revive();
-      await settle(50);
+      await repo.settled();
+    },
+    /** Waits until the facet's background work (a push's tries, on real timers) is done: the
+     *  engine's marker of work in flight is set when the first starts and deleted when the last
+     *  settles. Not a fixed time, which a slow runner can outlast. */
+    async settled() {
+      await vi.waitFor(() => expect(storage.kv.get("processor-work-started")).toBeUndefined());
     },
     notPublished() {
       return own.events
