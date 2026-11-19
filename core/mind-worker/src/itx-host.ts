@@ -109,7 +109,7 @@ defineItxHost({
   }),
   egress: (request, { path }) =>
     tracedModelCall(request, path, () =>
-      sendRecordingSecretFacts(request, env.DOOR, (secretPath) => contextAt(secretPath)),
+      sendRecordingSecretFacts(request, env.DOOR, (secretPath) => contextAt(secretPath), path),
     ),
   // The vault's gate for acts. The kernel asks for the verb rules on each call a context resolves
   // by its own table: kept a few seconds, so a new rule holds within that time.

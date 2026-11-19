@@ -1,7 +1,7 @@
 import { stampCaller, type ItxHostRootContext } from "core-itx";
-import { env } from "cloudflare:workers";
+import { env, waitUntil } from "cloudflare:workers";
 import type { SecretOperation, SecretRefresh, SecretUses, StackClientName } from "iterate/api";
-import { codedError, releasedAnswer } from "iterate/lib";
+import { codedError, releasedAnswer, reportIssue } from "iterate/lib";
 import { recordFacts } from "iterate/facts";
 import {
   assertSecretPath,
@@ -107,26 +107,38 @@ export function secretsRoot(context: ItxHostRootContext, egress: Door) {
 }
 
 // A fact that does not land is reported and the Response still goes on: the request was sent, and
-// the secrets Worker's own log holds the use.
+// the secrets Worker's own log holds the use. The answer goes back at once and the fact lands within
+// one append after it, so code that reads the log right after its `fetch` may not see it yet. A held
+// answer waits for its facts: a person reads them next.
 export async function sendRecordingSecretFacts(
   request: Request,
   egress: Door,
   contextOf: (path: string) => ReachableContext,
+  context: string,
 ): Promise<Response> {
-  const recorded = async (response: Response) => {
-    const { answer, recorded } = recordFacts(response, (path, events) =>
-      contextOf(path).append(...events),
+  // the audit of a use: a fact that did not land names the secret and the calling context alone
+  const recorded = async (response: Response, held: boolean) => {
+    const { answer, recorded } = recordFacts(response, (secret, events) =>
+      contextOf(secret)
+        .append(...events)
+        .catch((error: unknown) =>
+          reportIssue("secret.fact-not-recorded", error, { secret, context }),
+        ),
     );
-    await recorded;
+    if (held) await recorded;
+    else waitUntil(recorded);
     return answer;
   };
   const named = secretPathsReferenced(request).length > 0;
   const headers = new Headers(request.headers);
-  const answer = await recorded(await egress.fetch(request));
-  if (!named || answer.headers.get(VAULT_ANSWER_HEADER) !== "held") return answer;
+  const first = await egress.fetch(request);
+  const held = named && first.headers.get(VAULT_ANSWER_HEADER) === "held";
+  const answer = await recorded(first, held);
+  if (!held) return answer;
   headers.set(SECRET_HELD_HEADER, ((await answer.json()) as { digest: string }).digest);
   headers.delete("content-length");
   return recorded(
     await egress.fetch(new Request(request.url, { method: request.method, headers })),
+    true,
   );
 }
