@@ -305,8 +305,9 @@ const Zones = z.object({
   ),
 });
 const User = z.object({ result: z.object({ email: z.string().min(1) }) });
+// `script` is null on a route that turns Workers off
 const Routes = z.object({
-  result: z.array(z.object({ pattern: z.string(), script: z.string().optional() })),
+  result: z.array(z.object({ pattern: z.string(), script: z.string().nullish() })),
 });
 
 type GrantCheck =

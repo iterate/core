@@ -396,6 +396,8 @@ function cloudflareOfTheMind(request: Request) {
   if (pathname.endsWith("/workers/routes"))
     return Response.json({
       result: [
+        // a route that turns Workers off: Cloudflare answers null for its script
+        { pattern: "off.example.com/*", script: null },
         { pattern: "*.example.com/*", script: "iterate-example-com-boundary" },
         { pattern: "example.com/*", script: "iterate-example-com-boundary" },
       ],
