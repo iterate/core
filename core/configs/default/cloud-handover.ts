@@ -15,6 +15,7 @@
 // agent's greeting when the owner first opens its chat, with the handover already in its context.
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
+import { connectWaitsForRule } from "./apps/onboarding/steps.ts";
 import { ITERATE_MIND } from "./cloud-deliveries.ts";
 
 /** The Cloud's own cap (internal-packages/installer `HANDOVER_WORDS`), applied again here. */
@@ -204,18 +205,26 @@ const helperBrief = (job: string, person: string) =>
     .filter(Boolean)
     .join("\n\n");
 
+/** The root as `iterateLetInEvent` uses it: it also reads the onboarding app's log. */
+type LetInItx = Parameters<typeof connectWaitsForRule>[0] & Pick<HandoverItx, "cd">;
+
 /** THE OWNER LET iterate.iterate.com IN (onboarding/let-iterate-in.md): the rule the owner signed
  *  with their passkey lands as `mind-meld/configured` on `/minds/iterate.iterate.com`. When a person signed
  *  it and it lets iterate.iterate.com add events somewhere, the onboarding agent gets a note that starts
  *  its turn, so the owner, whom the signing page has just brought back to the chat, need not say
  *  that they signed. Keyed by the event's path and offset: a replay adds nothing. An empty
- *  `append` (the meld ends), a rule with no person as signer, or another path does nothing. */
-export async function iterateLetInEvent(itx: Pick<HandoverItx, "cd">, event: LetInEvent) {
+ *  `append` (the meld ends), a rule with no person as signer, or another path does nothing. While
+ *  the onboarding app's "Connect to iterate Cloud" waits for this rule, that step writes the one
+ *  note, with what came of the credit, and this writes none: one turn, not two. A delivery of the
+ *  same rule again AFTER the step settled finds no connect waiting, and writes this note then: a
+ *  second turn in that replay alone. */
+export async function iterateLetInEvent(itx: LetInItx, event: LetInEvent) {
   if (event.path !== `/minds/${ITERATE_MIND}`) return;
   if (event.type !== "events.iterate.com/mind-meld/configured") return;
   if (!event.source?.signer?.principal.email) return;
   const rule = MeldRule.safeParse(event.payload);
   if (!rule.success) return;
+  if (await connectWaitsForRule(itx)) return;
   await itx
     .cd(ONBOARDING_AGENT)
     .append({

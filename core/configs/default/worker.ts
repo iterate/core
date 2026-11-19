@@ -9,6 +9,8 @@ import { installAgents } from "iterate/agents/install";
 import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 import { dashApp } from "./apps/dash/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
+import { onboardingApp } from "./apps/onboarding/app.ts";
+import { onboardingEvent, runStep, stepContext } from "./apps/onboarding/steps.ts";
 import { voiceApp } from "./apps/voice/app.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
 // Voice is off (apps.md, "Voice"). The Voice app's "Turn voice on" takes the "// " off this
@@ -56,6 +58,7 @@ const integrations: Integration[] = [];
 const docs = docsApp();
 const dash = dashApp();
 const voice = voiceApp();
+const onboarding = onboardingApp();
 // The guestbook, an example of an app for end users, people who are not members (people.md, "The
 // guestbook"). To turn it on, uncomment this line, its import above and its case in `fetch`.
 // const guestbook = guestbookApp();
@@ -287,6 +290,9 @@ export default class extends IterateConfigEntrypoint {
       // What each context is for, the line the mind's catalog shows: the table in
       // context-descriptions.ts, written at a context's birth and at each publish.
       contextDescriptionsEvent(itx, event),
+      // The onboarding app's steps (apps/onboarding/steps.ts): the events that change a step's
+      // card, such as the owner's signed rule for iterate Cloud. Any other event returns at once.
+      onboardingEvent(itx, event),
     ]);
     const failed = hooks.find((hook) => hook.status === "rejected");
     if (failed) throw failed.reason;
@@ -321,6 +327,12 @@ export default class extends IterateConfigEntrypoint {
         return dash.open?.(request) || this.auth.require(request) || dash.fetch(request, this);
       case "voice": // the Voice app, for members: call the mind from a browser
         return voice.open?.(request) || this.auth.require(request) || voice.fetch(request, this);
+      case "onboarding": // the onboarding app, for members: the steps above the onboarding chat
+        return (
+          onboarding.open?.(request) ||
+          this.auth.require(request) ||
+          onboarding.fetch(request, this)
+        );
       // case "guestbook": // the guestbook, for everyone: no guard here, its routes ask for who they need
       //   return guestbook.fetch(request, this);
       // case "telegram": // an integration package's own pages and webhook, one of `integrations`
@@ -349,6 +361,14 @@ export default class extends IterateConfigEntrypoint {
   async slack(method: string, args?: Record<string, unknown>) {
     using itx = this.getItx();
     return await slackForAgent(itx, method, args);
+  }
+
+  /** `itx.config.onboardingStep(step, action)`: one press of a button of the onboarding app, as
+   *  the onboarding agent makes it from the owner's plain words (apps/onboarding/steps.ts;
+   *  onboarding/connect-iterate-cloud.md). It answers `{ status, words, link? }`. */
+  async onboardingStep(step: string, action: string) {
+    using itx = this.getItx();
+    return await runStep(await stepContext(itx), step, action);
   }
 
   /** `itx.config.cloudflareConnect({ tell? })`: the one link that a member opens to connect the

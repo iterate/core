@@ -43,6 +43,7 @@ import {
   PhoneIcon,
   PlugIcon,
   ShieldCheckIcon,
+  SparklesIcon,
   UsersIcon,
   WaypointsIcon,
 } from "@iterate-com/ui/icons";
@@ -93,6 +94,7 @@ const pages = [
 const apps = [
   { name: "Docs", host: "docs", icon: BookOpenIcon },
   { name: "Voice", host: "voice", icon: PhoneIcon },
+  { name: "Onboarding", host: "onboarding", icon: SparklesIcon },
 ].map((app) => ({ ...app, href: `https://${app.host}.${zone}` }));
 
 // The stack's pages about who may do what. "Approvals" shows how many requests wait for a yes.

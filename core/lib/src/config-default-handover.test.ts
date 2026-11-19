@@ -236,9 +236,33 @@ test.for([
   },
 );
 
+test("while the onboarding app's connect waits for this rule, its step writes the one note and the let-in writes none", async () => {
+  const waiting = [
+    {
+      type: "onboarding/step-action-requested",
+      offset: 1,
+      payload: { step: "connect-iterate-cloud", action: "connect" },
+    },
+  ];
+  const root = rootOf("https://example.com/", waiting);
+  await run(root, LET_IN);
+  expect(root).toMatchObject({ appended: [] });
+  // once it settled, a rule signed again is told as before
+  const settled = rootOf("https://example.com/", [
+    ...waiting,
+    {
+      type: "onboarding/step-action-settled",
+      offset: 2,
+      payload: { step: "connect-iterate-cloud", requestOffset: 1, outcome: "succeeded" },
+    },
+  ]);
+  await run(settled, LET_IN);
+  expect(settled.appended).toHaveLength(1);
+});
+
 /** A mind's root as the case uses it: its address, the agents it creates, and the events appended
  *  anywhere, with the platform's refusal of a key it has seen. */
-function rootOf(url: string) {
+function rootOf(url: string, onboarding: unknown[] = []) {
   const created: string[] = [];
   const appended: { path: string; event: { idempotencyKey: string } }[] = [];
   return {
@@ -251,6 +275,12 @@ function rootOf(url: string) {
       },
     },
     cd: (path: string) => ({
+      // the onboarding app's log: a connect of its first step waits, or nothing
+      readEvents: async () => ({
+        events: path === "/apps/onboarding" ? onboarding : [],
+        scannedThroughOffset: onboarding.length,
+        atHead: true,
+      }),
       append: async (event: { idempotencyKey: string }) => {
         if (appended.some((seen) => seen.event.idempotencyKey === event.idempotencyKey))
           throw Object.assign(new Error("seen"), { code: "IDEMPOTENCY_CONFLICT" });

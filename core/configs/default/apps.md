@@ -2,7 +2,8 @@
 
 How an app of this mind is laid out and mounted, the UI components a page loads, the integration
 packages and Voice: `apps/`, `apps/theme.css`, `apps/live-reload/live-reload.js`,
-`apps/open-files.ts`, `apps/dash/public/app.js`, `apps/voice/` and `integrations` in `worker.ts`.
+`apps/open-files.ts`, `apps/dash/public/app.js`, `apps/voice/`, `apps/onboarding/` and
+`integrations` in `worker.ts`.
 
 An app is a folder under `apps/`, and a convention, not a framework: copy one to start one of your
 own.
@@ -138,6 +139,19 @@ platform retries, and a hook that throws on every event slows the mind's own cas
 trickle. A package serves its
 own setup page and webhook on its host and keeps its credentials through `itx.secrets`; the
 Dash shows what it registered and links to its page.
+
+## Onboarding
+
+`apps/onboarding/` shows a new owner's onboarding steps as cards above the chat with
+`/agents/onboarding`. A card uses no model, so it works before anything pays for one. Each step is
+one module of `apps/onboarding/steps/`, one entry in the list `STEPS` (`steps.ts`): its words,
+its `check` of the facts, and its actions. Every button is also the onboarding agent's call
+`itx.config.onboardingStep(step, action)`, which answers `{ status, words, link? }`. The steps
+write four events on `/apps/onboarding` (`contract.ts`), and the page draws their reduced state.
+
+The first step is "Connect to iterate Cloud": the owner signs the meld rule with a passkey, and
+the mind takes iterate's credit for OpenAI and Exa by iterate's proxy, where no key of theirs is
+set (`onboarding/connect-iterate-cloud.md`). A new step is one more file and one more entry.
 
 ## Voice
 

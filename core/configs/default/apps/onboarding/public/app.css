@@ -1,0 +1,77 @@
+/* app.css — the page's own layout. @iterate-com/ui's stylesheet holds the utility classes its own
+   components use and no others, so what this page adds is written here as plain CSS, on the
+   theme's variables (apps/theme.css). */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* the cards on top, at most half the height; the chat takes the rest */
+.onboarding {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.onboarding-steps {
+  display: flex;
+  max-height: 50%;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.onboarding-chat {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.onboarding-points {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.onboarding-points dt {
+  font-weight: 600;
+}
+
+.onboarding-points dd {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+.onboarding-command {
+  margin-top: 0.75rem;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  background: var(--muted);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.onboarding-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.onboarding-footnote {
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+}
+
+.onboarding-error {
+  font-size: 0.875rem;
+  color: var(--destructive);
+}

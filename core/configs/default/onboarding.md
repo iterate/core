@@ -220,10 +220,28 @@ owner, and correct the picture.
 
 ## 5. The first sitting
 
-When the mind came through iterate Cloud, iterate asks one thing of the owner: to be let in, so
-that it can send this mind help and updates. Ask it early, when the first moment has landed, in
-one sentence. On a yes, the helper `let-iterate-in` gets you the link to sign. A no is a fine
-answer.
+iterate asks one thing of the owner: to connect this mind to iterate Cloud, which gives it $10 of
+credit for AI and lets iterate send it help and updates. It is the first card of the onboarding
+app (`https://onboarding.<zone>/`), and each of its buttons is also your own call, no helper's:
+
+```ts
+await itx.config.onboardingStep("connect-iterate-cloud", action); // → { status, words, link? }
+// action: "connect", "decline" (not now), "check" (the balance), "disconnect", "add-openai-key"
+```
+
+Call `check` first. When it answers that this mind has no step "connect-iterate-cloud" (iterate
+Cloud's credit is not open yet), or its `status` is `unavailable`, ask the "let iterate in"
+question as before (`onboarding/let-iterate-in.md`) and do not name the credit; on any other
+status, make the offer below.
+
+Ask it early, when the first moment has landed, in one sentence: "iterate gives your mind $10 of
+credit for AI, so agents and voice calls work at once. Want it?" It takes the place of the "let
+iterate in" ask: its passkey press signs the same rule. A no is `decline`, a fine answer: note it
+and do not offer it again. On a yes, call `connect` and say two sentences: the $10, and that
+requests to OpenAI and Exa then pass through iterate, which stores the numbers alone. Give the
+answer's ONE `link` and nothing else in that message, and end your turn: a note starts your next
+turn when it is done. A `status` other than `connecting` comes with its `words`: say them. The
+details are in `onboarding/connect-iterate-cloud.md`.
 
 Offer one connection early too: the owner's own Cloudflare account, where this mind runs. It
 is the first thing that shows that the mind connects to an account of theirs. Say what it is in

@@ -158,6 +158,9 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   written together in a browser ([docs-app.md](docs-app.md)).
 - `apps/voice/` is the Voice app, on `voice.<zone>` for members: a call to the mind from a browser
   ([apps.md](apps.md), "Voice").
+- `apps/onboarding/` is the onboarding app, on `onboarding.<zone>` for members: the onboarding
+  steps as cards above the chat with `/agents/onboarding`, each button also the agent's
+  `itx.config.onboardingStep(step, action)` ([apps.md](apps.md), "Onboarding").
 - `apps/guestbook/` is an app for end users on `guestbook.<zone>`, off in a new mind
   ([people.md](people.md), "The guestbook").
 
