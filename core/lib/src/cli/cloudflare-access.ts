@@ -41,15 +41,33 @@ const KEPT = join(dirname(CONFIG_PATH), "cloudflare-access.json");
 /** A kept token must live this long still: a run needs it for its checks and its deploy. */
 const LEAST_LEFT_MS = 20 * 60_000;
 
-/** THE SCOPE THAT MAKES API TOKENS OF THE ACCOUNT. Cloudflare's page shows it as "Account API
- *  Token Provisioning", marks it sensitive and leaves it unticked, so a person who approves the
- *  page as it opens grants everything but this. */
-export const MAKES_API_TOKENS = "account_api_tokens:create";
+/** Environment variable carrying the owner-created Cloudflare telemetry API token
+ *  (core/alchemy/src/telemetry-token.ts). */
+export const TELEMETRY_TOKEN_ENV = "CLOUDFLARE_TELEMETRY_API_TOKEN";
+
+/** The four permission groups for the single account-owned telemetry API token: Workers R2 Data
+ *  Catalog Write, Workers R2 Storage Bucket Item Write, Workers R2 SQL Read, and Account Analytics
+ *  Read. */
+export const TELEMETRY_TOKEN_PERMISSIONS = [
+  { key: "r2_catalog", type: "edit" },
+  { key: "workers_r2_bucket_item", type: "edit" },
+  { key: "r2_catalog_sql", type: "read" },
+  { key: "account_analytics", type: "read" },
+] as const;
+
+/** Pre-filled Cloudflare dashboard link for creating the single account-owned telemetry API token
+ *  (https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/). */
+export function telemetryTokenPage(stageName: string): URL {
+  const page = new URL("https://dash.cloudflare.com/?to=/:account/api-tokens");
+  page.searchParams.set("permissionGroupKeys", JSON.stringify(TELEMETRY_TOKEN_PERMISSIONS));
+  page.searchParams.set("name", `iterate-${stageName}-telemetry`);
+  return page;
+}
 
 /** WHAT ONE DEPLOY OF THE STACK NEEDS: a scope for each kind of resource that
  *  core/alchemy/src/stack.ts declares, and for nothing else. A Worker's bindings to Workers AI,
  *  Browser Rendering, Images and Analytics Engine are part of its upload and need no scope of
- *  their own. */
+ *  their own. Telemetry uses an owner-created API token instead of minting tokens through OAuth. */
 export const STACK_SCOPES = [
   // the five Workers with their Durable Objects, the Worker that holds the stack's state, and
   // the telemetry Worker's workers.dev address
@@ -60,7 +78,7 @@ export const STACK_SCOPES = [
   "d1.write",
   // the files bucket and the telemetry bucket
   "workers-r2.write",
-  // the telemetry bucket's data catalog, and the catalog token's own right to it
+  // turning on the telemetry bucket's data catalog
   "r2-catalog.write",
   // telemetry's streams, sinks and pipelines
   "pipelines.write",
@@ -93,13 +111,6 @@ export const STACK_SCOPES = [
   // the Realtime SFU app and the TURN key that a call app uses. Not the only permission that
   // makes them: "Realtime" or "Realtime Admin" does too (core/alchemy src/realtime.ts)
   "calls.write",
-  // telemetry's two API tokens of the account
-  MAKES_API_TOKENS,
-  // What those two tokens hold beside the catalog's write: a token made through a sign-in may
-  // hold only permissions that the sign-in's own scopes cover.
-  "workers-r2-bucket-item.write",
-  "r2-catalog-sql.read",
-  "account-analytics.read",
 ];
 
 /** WHAT `iterate deploy` ASKS A SIGN-IN FOR: the stack's scopes, and those of the command's own
@@ -312,8 +323,8 @@ export class SignInEnded extends Error {}
 
 /** A KEPT SIGN-IN AT CLOUDFLARE, as one JSON document: the file of `iterate cloudflare sign-in
  *  --file`, or what `--print` prints for a secret store. It can do everything that a deploy can,
- *  making API tokens of the account among it, until it is signed out of. `scopes`: what the
- *  sign-in asked for, `offline_access` aside; `lacks`: what Cloudflare said it did not grant. */
+ *  until it is signed out of. `scopes`: what the sign-in asked for, `offline_access` aside;
+ *  `lacks`: what Cloudflare said it did not grant. */
 export const KeptSignIn = z.object({
   kind: z.literal("iterate-cloudflare-sign-in"),
   accessToken: z.string(),
@@ -501,7 +512,7 @@ export async function keptSignInOf(
     await revoke(refreshToken);
     await revoke(answer.access_token);
     const problem = lacks.length
-      ? `The sign-in at Cloudflare did not grant ${lacks.join(", ")}${lacks.includes(MAKES_API_TOKENS) ? ` ("Account API Token Provisioning" was not ticked)` : ""}, and a deploy needs it.`
+      ? `The sign-in at Cloudflare did not grant ${lacks.join(", ")}, and a deploy needs it.`
       : "Cloudflare gave no refresh token (offline_access was not granted), so the sign-in would end within the hour.";
     throw new Error(`${problem} Nothing is kept, and the grant is revoked. Run the command again.`);
   }

@@ -21,7 +21,7 @@ with no passkey left a way back in. What follows is the deploy by hand.
   `UPDATE_STACK_BINDINGS=1 pnpm --filter core-alchemy test`.
 - Every resource of the account is named `iterate-<alchemy.stageName>-…` (`namesOf` in
   `src/config.ts`).
-- The stack's state, with the generated keys, the two API tokens' values and the secrets of the
+- The stack's state, with the generated keys, the telemetry API token's value and the secrets of the
   OAuth client, the SFU app and the TURN key, is in the Worker `iterate-<alchemy.stageName>-state` of the same account.
 - One private OAuth client of the account, `iterate-<alchemy.stageName>-cloudflare`, registered
   with read scopes alone (iterate/api `CLOUDFLARE_READ_SCOPES`). A member connects the mind to
@@ -30,7 +30,7 @@ with no passkey left a way back in. What follows is the deploy by hand.
   `iterate-<alchemy.stageName>-turn`, by Alchemy's own resources. The secrets Worker alone holds
   their secrets, and serves them as `/secrets/cloudflare-realtime-sfu` and
   `/secrets/cloudflare-turn`. They cost nothing until a call uses them.
-- Six providers of our own are beside the script, each for one thing that Alchemy does not do
+- Seven providers of our own are beside the script, each for one thing that Alchemy does not do
   (read in 2.0.0-beta.85 and in beta.87, the version that `pnpm-workspace.yaml` pins), and one
   wrapper of Alchemy's own (`src/realtime.ts`). The header of each file says what, and when the
   file can go.
@@ -110,12 +110,23 @@ pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the termin
   `STACK_SCOPES` in [cloudflare-access.ts](../lib/src/cli/cloudflare-access.ts). A sign-in's
   scope is an API token's permission under another spelling (`workers-scripts.write` is "Workers
   Scripts Write").
+- Telemetry needs one account-owned API token (`CLOUDFLARE_TELEMETRY_API_TOKEN`) holding "Workers
+  R2 Data Catalog Write", "Workers R2 Storage Bucket Item Write", "Workers R2 SQL Read", and
+  "Account Analytics Read" (`src/telemetry-token.ts`). When the bucket
+  `iterate-<alchemy.stageName>-telemetry` already exists in the account, scope "Workers R2 Storage
+  Bucket Item Write" and "Workers R2 SQL Read" to that bucket alone. `iterate deploy` opens a
+  pre-filled Cloudflare dashboard link for it on first deploy and passes it in
+  `CLOUDFLARE_TELEMETRY_API_TOKEN`. The stack keeps the value in Alchemy's state so later deploys
+  and plans reuse it without asking again. Upgrading a stack that still holds legacy
+  `TelemetryCatalogToken` / `TelemetryAnalyticsToken` deletes them when the credential has
+  API-token write permission, or logs their names and dashboard link for manual removal when it
+  does not.
 - The OAuth client needs the permission "OAuth Client Write". A person's sign-in can never hold
   it: Cloudflare's sign-in has no scope for it, and a token that a sign-in makes may not hold it.
-  So the deploy takes one more API token, with that one permission, in
+  A manual deploy may pass an API token with that permission in
   `CLOUDFLARE_OAUTH_CLIENT_API_TOKEN`: when it is set, every call for the client uses it, and the
-  deploy's credential makes none (`src/cloudflare-oauth-client.ts`). `iterate deploy` asks for it
-  and sets it. A deploy's own API token that holds the permission needs no second token.
+  deploy's credential makes none (`src/cloudflare-oauth-client.ts`). `iterate deploy` does not ask
+  for it. A deploy's own API token that holds the permission needs no second token.
 - A deploy with neither is no failure: it takes about 24 seconds longer, makes no client and says
   so, and each later deploy asks again. The secrets Worker's plain-text variable
   `CLOUDFLARE_CLIENT_ID` says which: the client's id, or `none`.

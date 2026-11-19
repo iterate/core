@@ -77,25 +77,19 @@ What it does, in order:
    public client: no secret, no server of iterate's). The access lives about an hour and is not
    renewed. It is kept in the CLI's config folder until a deploy works, then revoked, so a second
    run asks for no second approval. `CLOUDFLARE_API_TOKEN` replaces the sign-in.
-   - **Tick "Account API Token Provisioning" on Cloudflare's page.** Cloudflare marks it as
-     sensitive and leaves it unticked. The deploy makes two API tokens with which the mind reads
-     its own logs and metrics; they read nothing else and deploy nothing.
-   - **Without the tick the command deploys nothing.** It reads what the sign-in granted, revokes
-     the access, and tells you to run the command again with "Account API Token Provisioning"
-     ticked.
-   - The sign-in asks for what one deploy of the stack needs and for nothing more: `STACK_SCOPES`
-     in [cloudflare-access.ts](cloudflare-access.ts) says which resource needs each scope.
+   - The sign-in asks for what one deploy of the stack needs and for nothing more (never "Account
+     API Token Provisioning"): `STACK_SCOPES` in [cloudflare-access.ts](cloudflare-access.ts) says
+     which resource needs each scope.
 2. **The account.** One that you selected on Cloudflare's page, or a new one in your name
    (`--new-account`): Cloudflare allows a login five extra accounts. An approval covers only the
    accounts selected on that page, so for a new account, or one you did not select, Cloudflare
    asks once more.
-3. **The domain.** A domain of the account, a new one that Cloudflare's registrar sells, or one
-   from another registrar, whose nameservers you then change. It asks the registrar about up to
-   20 names made from your name (the "-erate" names first, as iterate's is) and lists the free
-   ones with their price a year. You can type a domain, or a few words to get more names. It asks
-   before it buys, with the price; `--buy` is the yes. Cloudflare charges the account's payment
-   method and registers the domain to the account's contact. Both are set on Cloudflare's own
-   pages: an account that never registered a domain is sent to the page for its contact details
+3. **The domain.** One unified list puts **Buy a brand new domain** at the top (available names
+   made from your name with their yearly price, plus **Enter a brand new domain name and buy
+   that** to type a domain or keywords) and **Use an existing cloudflare zone** right below it. It
+   asks before it buys, with the price; `--buy` is the yes. Cloudflare charges the account's
+   payment method and registers the domain to the account's contact. Both are set on Cloudflare's
+   own pages: an account that never registered a domain is sent to the page for its contact details
    first, and a purchase that Cloudflare refuses says why and opens the page where that is set.
    A domain from another registrar you add on Cloudflare's own page, and the command waits until
    the account has it. The mind takes a whole domain that nothing else uses (a new one is
@@ -103,7 +97,13 @@ What it does, in order:
    another Worker, or with an A, AAAA, CNAME or MX record, is in use: the command says what is
    there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS
    record and Workers route of that domain, right before the deploy and after every other check.
-4. **Workers Paid, R2 and Zero Trust.** It opens the page for each one that is off and waits
+4. **Telemetry API token (first deploy).** On a first deploy (unless
+   `CLOUDFLARE_TELEMETRY_API_TOKEN` is already set in the environment), the command shows a
+   pre-filled Cloudflare dashboard link for creating one account-owned telemetry API token
+   (`iterate-<stage>-telemetry`) with the four telemetry permissions, waits for Enter before
+   opening it, and verifies the token you paste. Alchemy keeps the token in the stack's encrypted
+   state so later deploys and plans reuse it without asking again.
+5. **Workers Paid, R2 and Zero Trust.** It opens the page for each one that is off and waits
    until it is on. Off means Cloudflare refused the read, and the account's line shows its words.
    A read that failed is not a fact: a 429 or a 5xx is read again, and after three the command
    stops with nothing changed and says to run it again. An owner proves their address through Cloudflare Access, which needs the
@@ -114,8 +114,9 @@ What it does, in order:
    plan there. Cloudflare may ask for a payment method and charges nothing for the Free plan.
    With nobody at the terminal it stops with that page's address. Whether Cloudflare allows the
    set-up through the API on an account that never had Zero Trust is not yet seen.
-5. **The config**, which is the script's one input, written to
-   `${XDG_CACHE_HOME:-~/.cache}/iterate/deploys/<stage>/config.json`:
+6. **The config**, which is the script's one input, written to
+   `${XDG_CACHE_HOME:-~/.cache}/iterate/deploys/<stage>/config.json` and printed (with any
+   sensitive keys redacted) to stdout after the deploy:
    - `controlPlaneHostname`: `iterate.<domain>`. `--control-plane-hostname` names another: the
      domain itself, or one label under it.
    - `ownerEmails`: the owner, who is the Cloudflare login unless `--owner` names another address.
@@ -131,13 +132,13 @@ What it does, in order:
    - `mindId`: for a new mind, the id of the identity that the command makes right before the
      deploy ([The mind's identity key](#the-minds-identity-key)). A mind that is there already
      keeps its own.
-6. **The source.** It fetches [iterate/core](https://github.com/iterate/core) into
+7. **The source.** It fetches [iterate/core](https://github.com/iterate/core) into
    `${XDG_CACHE_HOME:-~/.cache}/iterate/core` and installs it with pnpm (using local `pnpm` when
    its major version matches `packageManager`, otherwise `npx --yes <packageManager>`), while you
    sign in. In a checkout of the source it deploys that checkout.
    `--source <folder>` names a checkout, `--ref <branch or commit>` another version. It needs git.
    A source from before the one Alchemy script is refused, before anything changes.
-7. **The deploy**: `pnpm run deploy --stage <stage> --yes` of core/alchemy. Its output goes to
+8. **The deploy**: `pnpm run deploy --stage <stage> --yes` of core/alchemy. Its output goes to
    `deploy.log` beside the config. A new state store can refuse the run that made it ("State
    store request failed"): the command then deploys once more by itself. Any other failure prints
    the log's last lines and its path. Run the command again on the same computer: it goes on
@@ -221,7 +222,7 @@ npx iterate cloudflare sign-out --file ~/.iterate-cloudflare-sign-in.json     # 
 ```
 
 - **`iterate cloudflare sign-in`** opens the deploy's page with the deploy's scopes and
-  `offline_access`. Select only the mind's account, and tick "Account API Token Provisioning".
+  `offline_access`. Select only the mind's account.
   A grant that lacks a scope, or comes with no refresh token, is revoked and nothing is kept.
   `--file <path>` keeps it in a new file of mode 600. `--print` prints it as one JSON document
   on standard output, for a pipe into a secret store (`| doppler secrets set NAME > /dev/null`,
@@ -242,10 +243,8 @@ npx iterate cloudflare sign-out --file ~/.iterate-cloudflare-sign-in.json     # 
   at the terminal reads it before it deploys.
 
 **What a kept sign-in can do: everything that a deploy can, in the accounts you selected.** It
-writes Workers, DNS records and every other resource of the stack, and it makes API tokens of
-the account ("Account API Token Provisioning": the deploy makes the mind's two telemetry tokens
-with it). A token made through a sign-in may hold only permissions that the sign-in's scopes
-cover, and none that manages tokens or OAuth clients. Keep it where you keep a production secret: a file of mode 600 on a computer that
+writes Workers, DNS records and every other resource of the stack, and cannot mint API tokens or
+OAuth clients. Keep it where you keep a production secret: a file of mode 600 on a computer that
 only you use, or a secret store. End it with `iterate cloudflare sign-out` when you no longer need
 it.
 

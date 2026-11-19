@@ -5,10 +5,12 @@ import { expect, test } from "vitest";
 import { MindConfig as ScriptConfig } from "../../../alchemy/src/config.ts";
 import {
   DEPLOY_SCOPES,
-  MAKES_API_TOKENS,
   RECOVER_SCOPES,
   scopesLacking,
   STACK_SCOPES,
+  TELEMETRY_TOKEN_ENV,
+  TELEMETRY_TOKEN_PERMISSIONS,
+  telemetryTokenPage,
 } from "./cloudflare-access.ts";
 import {
   boundaryCheck,
@@ -17,8 +19,11 @@ import {
   deployArgsOf,
   deployConfigOf,
   deployedMind,
+  domainPickerOptions,
   earlierDeployOf,
+  ENTER_NEW_DOMAIN,
   erateOf,
+  formatMindConfigForStdout,
   identityKeyLineOf,
   isInteractiveEnv,
   mindConfigIn,
@@ -26,8 +31,10 @@ import {
   PNPM_COMPAT_ENV,
   pnpmCommandOf,
   productRead,
+  redactMindConfig,
   saysTheStateStoreRefused,
   stageNameOf,
+  verifyTelemetryToken,
   zeroTrustStep,
 } from "./deploy.ts";
 
@@ -227,42 +234,130 @@ test("the key's line names the key file only when it is here, and only when this
   expect(identityKeyLineOf(keyFile, { gaveTheId: false })).toBeUndefined();
 });
 
-test("a sign-in asks for the scope that makes API tokens, and for a scope that covers each permission of the script's two tokens", () => {
-  // The script's tokens name permission groups, and a token made through a sign-in may hold only
-  // groups that the sign-in's scopes cover: each group here, with the scope that is its other
-  // spelling. A group that the script names and this table does not fails the test.
-  const scopeOfGroup: Record<string, string> = {
-    "Workers R2 Data Catalog Write": "r2-catalog.write",
-    "Workers R2 Storage Bucket Item Write": "workers-r2-bucket-item.write",
-    "Workers R2 SQL Read": "r2-catalog-sql.read",
-    "Account Analytics Read": "account-analytics.read",
-  };
-  const script = readFileSync(
-    new URL("../../../alchemy/src/stack.ts", import.meta.url).pathname,
-    "utf8",
-  );
-  const groups = [...script.matchAll(/permissionGroups: \[([^\]]*)\]/g)].flatMap(([, names]) =>
-    [...(names || "").matchAll(/"([^"]+)"/g)].map(([, name]) => name || ""),
-  );
-  expect(groups.length).toBeGreaterThan(0);
-  expect([...new Set(groups)].toSorted()).toEqual(Object.keys(scopeOfGroup).toSorted());
-  expect(STACK_SCOPES).toContain(MAKES_API_TOKENS);
-  for (const scope of Object.values(scopeOfGroup)) expect(STACK_SCOPES).toContain(scope);
+test("sign-in never asks for Account API Token Provisioning, stack uses TelemetryToken, and telemetryTokenPage pre-fills the four telemetry permissions", () => {
+  expect(STACK_SCOPES).not.toContain("account_api_tokens:create");
+  expect(DEPLOY_SCOPES).not.toContain("account_api_tokens:create");
+  expect(STACK_SCOPES).not.toContain("workers-r2-bucket-item.write");
+  expect(STACK_SCOPES).not.toContain("r2-catalog-sql.read");
+  expect(STACK_SCOPES).not.toContain("account-analytics.read");
   // the deploy's sign-in asks for the stack's scopes whole, and no scope twice
   expect(DEPLOY_SCOPES).toEqual(expect.arrayContaining(STACK_SCOPES));
   expect([...new Set(DEPLOY_SCOPES)]).toEqual(DEPLOY_SCOPES);
   // the recovery's sign-in can write to D1, and can deploy and make nothing else
   expect(RECOVER_SCOPES.filter((scope) => !scope.endsWith(".read"))).toEqual(["d1.write"]);
+
+  const script = readFileSync(
+    new URL("../../../alchemy/src/stack.ts", import.meta.url).pathname,
+    "utf8",
+  );
+  expect(script).not.toContain("AccountApiToken");
+  expect(script).toContain('TelemetryToken("TelemetryToken"');
+
+  const url = telemetryTokenPage("ada-labs-com");
+  expect(url).toMatchObject({ origin: "https://dash.cloudflare.com" });
+  expect(url.searchParams.get("to")).toBe("/:account/api-tokens");
+  expect(url.searchParams.get("name")).toBe("iterate-ada-labs-com-telemetry");
+  expect(JSON.parse(url.searchParams.get("permissionGroupKeys") || "")).toEqual(
+    TELEMETRY_TOKEN_PERMISSIONS,
+  );
+  expect(TELEMETRY_TOKEN_ENV).toBe("CLOUDFLARE_TELEMETRY_API_TOKEN");
 });
 
 test("what a sign-in did not grant is read from the token answer's scope, and an answer with none granted all", () => {
   expect(scopesLacking(DEPLOY_SCOPES, undefined)).toEqual([]);
   expect(scopesLacking(DEPLOY_SCOPES, DEPLOY_SCOPES.join(" "))).toEqual([]);
-  const unticked = DEPLOY_SCOPES.filter((scope) => scope !== MAKES_API_TOKENS).join(" ");
-  expect(scopesLacking(DEPLOY_SCOPES, unticked)).toEqual([MAKES_API_TOKENS]);
+  const unticked = DEPLOY_SCOPES.filter((scope) => scope !== "d1.write").join(" ");
+  expect(scopesLacking(DEPLOY_SCOPES, unticked)).toEqual(["d1.write"]);
   expect(scopesLacking(["zone.read", "d1.write"], "d1.write offline_access")).toEqual([
     "zone.read",
   ]);
+});
+
+test("domainPickerOptions builds one unified list with Buy a brand new domain on top, enter-new option, and Use an existing cloudflare zone below", () => {
+  const options = domainPickerOptions({
+    offers: [
+      { name: "aderate.com", registrable: true, pricing: { registration_cost: "10.44" } },
+      { name: "aderate.dev", registrable: true, pricing: { registration_cost: "12.18" } },
+    ],
+    zones: [
+      { id: "z1", name: "existing-free.com", status: "active", uses: [] },
+      { id: "z2", name: "existing-mind.dev", status: "active", stageName: "existing", uses: [] },
+      { id: "z3", name: "unreadable.com", status: "active", unread: true },
+    ],
+  });
+  expect(options).toEqual([
+    { value: "\0heading-buy", label: "Buy a brand new domain", disabled: true },
+    { value: "aderate.com", label: "aderate.com", hint: "10.44 USD a year" },
+    { value: "aderate.dev", label: "aderate.dev", hint: "12.18 USD a year" },
+    {
+      value: ENTER_NEW_DOMAIN,
+      label: "Enter a brand new domain name and buy that",
+      hint: "type a domain to buy, or keywords for more names",
+    },
+    { value: "\0heading-zones", label: "Use an existing cloudflare zone", disabled: true },
+    { value: "existing-free.com", label: "existing-free.com", hint: "in this account, unused" },
+    {
+      value: "existing-mind.dev",
+      label: "existing-mind.dev",
+      hint: "a mind is here already: deploy over it",
+    },
+  ]);
+
+  const noZones = domainPickerOptions({ offers: [], zones: [] });
+  expect(noZones.map((option) => [option.label, Boolean(option.disabled)])).toEqual([
+    ["Buy a brand new domain", true],
+    ["Enter a brand new domain name and buy that", false],
+    ["Use an existing cloudflare zone", true],
+    ["No existing Cloudflare zones in this account", true],
+  ]);
+});
+
+test("redactMindConfig and formatMindConfigForStdout print full MindConfig while redacting any sensitive keys", () => {
+  const sample = {
+    mindId: "a".repeat(64),
+    controlPlaneHostname: "iterate.ada-labs.com",
+    ownerEmails: ["ada@example.org"],
+    topology: "full-cloudflare",
+    alchemy: { stageName: "ada-labs-com" },
+    cloudflare: { accountId: "0".repeat(32), zones: ["ada-labs.com"] },
+    mail: undefined,
+    extra: { apiToken: "cf-secret-123", nestedSecret: "shh", publicLabel: "ok" },
+  };
+  const redacted = redactMindConfig(sample);
+  expect(redacted).toEqual({
+    mindId: "a".repeat(64),
+    controlPlaneHostname: "iterate.ada-labs.com",
+    ownerEmails: ["ada@example.org"],
+    topology: "full-cloudflare",
+    alchemy: { stageName: "ada-labs-com" },
+    cloudflare: { accountId: "0".repeat(32), zones: ["ada-labs.com"] },
+    extra: { apiToken: "[redacted]", nestedSecret: "[redacted]", publicLabel: "ok" },
+  });
+  const printed = formatMindConfigForStdout(sample);
+  expect(printed).not.toContain("cf-secret-123");
+  expect(printed).not.toContain("shh");
+  expect(JSON.parse(printed)).toEqual(redacted);
+});
+
+test("verifyTelemetryToken accepts active account-owned tokens and rejects user-owned or invalid tokens", async () => {
+  const accountId = "0".repeat(32);
+  const ok = (result: unknown) => ({ status: 200, result, total: 0, error: "" });
+  const unauthorized = { status: 401, result: null, total: 0, error: "Invalid access token" };
+
+  expect(
+    await verifyTelemetryToken(accountId, "tok-acct", async (_method, path) =>
+      path === `/accounts/${accountId}/tokens/verify` ? ok({ status: "active" }) : unauthorized,
+    ),
+  ).toEqual({ ok: true });
+
+  const userToken = await verifyTelemetryToken(accountId, "tok-user", async (_method, path) =>
+    path === "/user/tokens/verify" ? ok({ status: "active" }) : unauthorized,
+  );
+  expect(userToken).toMatchObject({ ok: false });
+  expect("error" in userToken && userToken.error).toMatch(/user-owned API token/i);
+
+  const invalid = await verifyTelemetryToken(accountId, "tok-bad", async () => unauthorized);
+  expect(invalid).toEqual({ ok: false, error: "Invalid access token" });
 });
 
 test("pnpmCommandOf uses local pnpm only when major version matches packageManager, else npx --yes", () => {
@@ -296,7 +391,7 @@ test("the deploy runs again by itself after the state store's refusal, and after
   expect(saysTheStateStoreRefused("[15:25:30.212] INFO: Computing plan")).toBe(false);
 });
 
-test("deploy has no manual API token prompt, strips inherited OAuth token, respects CI=1, waits for Enter before opening browser, and ends at onboarding.<zone>", () => {
+test("deploy has no OAuth-client token prompt or Account API Token Provisioning, isolates token env vars, prints MindConfig, respects CI=1, waits for Enter before opening browser, and ends at onboarding.<zone>", () => {
   expect(onboardingUrlOf("ada-labs.com")).toBe("https://onboarding.ada-labs.com/");
   expect(isInteractiveEnv({}, true)).toBe(true);
   expect(isInteractiveEnv({ CI: "1" }, true)).toBe(false);
@@ -307,12 +402,26 @@ test("deploy has no manual API token prompt, strips inherited OAuth token, respe
   const source = readFileSync(new URL("./deploy.ts", import.meta.url), "utf8");
   expect(source).not.toContain("apiTokenPage");
   expect(source).not.toContain("oauthClientStep");
+  expect(source).not.toContain("Account API Token Provisioning");
+  expect(source).not.toContain("MAKES_API_TOKENS");
+  expect(source).toContain("CLOUDFLARE_OAUTH_CLIENT_API_TOKEN: _droppedOAuthToken");
+  expect(source).toContain("CLOUDFLARE_TELEMETRY_API_TOKEN: _droppedTelemetryToken");
   expect(source).toContain(
-    "const { CLOUDFLARE_OAUTH_CLIENT_API_TOKEN: _droppedOAuthToken, ...parentEnv } = process.env;",
+    "await telemetryTokenStep(cf, account, stageName, { plan: input.plan })",
+  );
+  expect(source).toContain(
+    "p.log.info(`MindConfig:\\n${formatMindConfigForStdout(deployedConfig)}`)",
   );
   expect(source).toContain("Press Enter to open in browser...");
   expect(source.indexOf("Press Enter to open in browser...")).toBeLessThan(
     source.indexOf("openPageCommand(new URL(url)"),
+  );
+  // telemetry token is collected before buying a domain or erasing zone holdings
+  expect(source.indexOf("await telemetryTokenStep(")).toBeLessThan(
+    source.indexOf("const zone = await zoneOf("),
+  );
+  expect(source.indexOf("await telemetryTokenStep(")).toBeLessThan(
+    source.indexOf("await eraseHoldings("),
   );
 });
 

@@ -3,12 +3,13 @@
     "Telemetry": [
       "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
       "ITERATE:plain_text",
-      "ITERATE__ANALYTICS_TOKEN:output of TelemetryAnalyticsToken.value",
-      "ITERATE__CATALOG_TOKEN:output of TelemetryCatalogToken.value",
+      "ITERATE__ANALYTICS_TOKEN:output of TelemetryToken.value",
+      "ITERATE__CATALOG_TOKEN:output of TelemetryToken.value",
       "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
       "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
       "METRICS:Cloudflare.AnalyticsEngine.Dataset",
-      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream"
+      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
+      "TELEMETRY_TOKEN_SOURCE:plain_text"
     ],
     "Auth": [
       "DB:Cloudflare.D1Database AuthDb",
@@ -62,12 +63,13 @@
     "Telemetry": [
       "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
       "ITERATE:plain_text",
-      "ITERATE__ANALYTICS_TOKEN:output of TelemetryAnalyticsToken.value",
-      "ITERATE__CATALOG_TOKEN:output of TelemetryCatalogToken.value",
+      "ITERATE__ANALYTICS_TOKEN:output of TelemetryToken.value",
+      "ITERATE__CATALOG_TOKEN:output of TelemetryToken.value",
       "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
       "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
       "METRICS:Cloudflare.AnalyticsEngine.Dataset",
-      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream"
+      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
+      "TELEMETRY_TOKEN_SOURCE:plain_text"
     ],
     "Auth": [
       "DB:Cloudflare.D1Database AuthDb",
@@ -120,12 +122,13 @@
     "Telemetry": [
       "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
       "ITERATE:plain_text",
-      "ITERATE__ANALYTICS_TOKEN:output of TelemetryAnalyticsToken.value",
-      "ITERATE__CATALOG_TOKEN:output of TelemetryCatalogToken.value",
+      "ITERATE__ANALYTICS_TOKEN:output of TelemetryToken.value",
+      "ITERATE__CATALOG_TOKEN:output of TelemetryToken.value",
       "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
       "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
       "METRICS:Cloudflare.AnalyticsEngine.Dataset",
-      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream"
+      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
+      "TELEMETRY_TOKEN_SOURCE:plain_text"
     ],
     "Auth": [
       "DB:Cloudflare.D1Database AuthDb",

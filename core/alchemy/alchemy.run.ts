@@ -18,6 +18,11 @@ import { loadMindConfig, namesOf } from "./src/config.ts";
 import { DataCatalogProviderThatWaitsForItsToken } from "./src/data-catalog-token-wait.ts";
 import { CallsWithoutWriteProviders } from "./src/realtime.ts";
 import { mindStack, refuseDeploy } from "./src/stack.ts";
+import {
+  AccountApiTokenDeleteFallbackProvider,
+  TELEMETRY_TOKEN,
+  TelemetryTokenProvider,
+} from "./src/telemetry-token.ts";
 
 const config = loadMindConfig();
 
@@ -45,8 +50,12 @@ export default Alchemy.Stack(
       ArtifactsNamespaceProvider(),
       ArtifactsRepoSubscriptionProvider(),
       CatalogTablesOfSinksProvider(),
-      // with the API token that `iterate deploy` checked for the client alone, when it gave one
+      // with an optional API token for the OAuth client when deploying by hand
       CloudflareOAuthClientProvider(process.env[OAUTH_CLIENT_TOKEN]?.trim() || undefined),
+      // with the owner-created telemetry API token on first deploy or rotation; kept in state after
+      TelemetryTokenProvider(process.env[TELEMETRY_TOKEN]?.trim() || undefined),
+      // legacy AccountApiToken cleanup succeeds even without API-token write scope on fresh sign-ins
+      AccountApiTokenDeleteFallbackProvider(),
       DataCatalogProviderThatWaitsForItsToken(),
       // Alchemy's own providers of the SFU app and TURN key, where a credential without "Calls
       // Write" leaves them not made (src/realtime.ts): these win over `Cloudflare.providers()`

@@ -14,11 +14,11 @@
 // how a refusal is told from an invalid credential.
 //
 // AN API TOKEN FOR THE CLIENT ALONE. A sign-in at Cloudflare cannot grant "OAuth Client Write" (no
-// OAuth scope names it), and a token that a sign-in makes may not hold it either. So
-// `iterate deploy` takes one API token with that one permission from the person, and gives it to
-// the script as `CLOUDFLARE_OAUTH_CLIENT_API_TOKEN` (`OAUTH_CLIENT_TOKEN`). When it is set, every
-// call of this resource uses it, and the deploy's own credential makes no call here; otherwise
-// the deploy's credential makes them, as for every other resource.
+// OAuth scope names it), and a token that a sign-in makes may not hold it either. A manual deploy
+// can pass an API token with that permission in `CLOUDFLARE_OAUTH_CLIENT_API_TOKEN`
+// (`OAUTH_CLIENT_TOKEN`). When it is set, every call of this resource uses it, and the deploy's
+// own credential makes no call here; otherwise the deploy's credential makes them, as for every
+// other resource.
 //
 // Alchemy has no resource for an account's OAuth clients (2.0.0-beta.85 and beta.87); the SDK under it has
 // the calls. When Alchemy has one that keeps the secret and takes a refusal as an outcome, this

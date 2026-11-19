@@ -44,12 +44,13 @@ import {
   cloudflareAccess,
   DEPLOY_SCOPES,
   endAccess,
-  MAKES_API_TOKENS,
   SIGN_IN_ENDED_EXIT,
   SIGN_IN_FILE,
   SignInEnded,
+  TELEMETRY_TOKEN_ENV,
   parsed,
   resultOf,
+  telemetryTokenPage,
 } from "./cloudflare-access.ts";
 import { loginFlowFor } from "./device-login/flow.ts";
 import {
@@ -286,6 +287,28 @@ export async function productRead(
  *  the one failure after which the command deploys again by itself. */
 export const saysTheStateStoreRefused = (line: string) =>
   /State store .*failed|StateStoreError/.test(line);
+
+/** Deep-clones a JSON-compatible config value, replacing any sensitive key's value with
+ *  `"[redacted]"` so `MindConfig` can be printed safely to stdout. */
+export function redactMindConfig(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => redactMindConfig(item));
+  if (typeof value !== "object" || !value) return value;
+  const redacted: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === undefined) continue;
+    redacted[key] =
+      /(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|credential|authorization)/i.test(
+        key,
+      )
+        ? "[redacted]"
+        : redactMindConfig(entry);
+  }
+  return redacted;
+}
+
+/** Pretty-printed JSON of the deployed `MindConfig` with any sensitive values redacted. */
+export const formatMindConfigForStdout = (config: Record<string, unknown>) =>
+  JSON.stringify(redactMindConfig(config), null, 2);
 
 /** Where setup continues in the browser once the mind is deployed and answering. */
 export const onboardingUrlOf = (zone: string) => `https://onboarding.${zone}/`;
@@ -568,6 +591,8 @@ type Run = {
   /** the file that holds the script's one input */
   config: string;
   token: string;
+  /** owner-created Cloudflare telemetry API token, passed when creating or rotating it */
+  telemetryToken?: string;
   log: string;
   children: Set<ChildProcess>;
   say?: (line: string) => void;
@@ -612,7 +637,11 @@ function deployOnce(
   return new Promise((done, failed) => {
     const file = createWriteStream(run.log, { flags: "a" });
     const { command, first } = run.source.pnpm;
-    const { CLOUDFLARE_OAUTH_CLIENT_API_TOKEN: _droppedOAuthToken, ...parentEnv } = process.env;
+    const {
+      CLOUDFLARE_OAUTH_CLIENT_API_TOKEN: _droppedOAuthToken,
+      CLOUDFLARE_TELEMETRY_API_TOKEN: _droppedTelemetryToken,
+      ...parentEnv
+    } = process.env;
     const child = spawn(command, [...first, ...args], {
       cwd: join(run.source.dir, "core/alchemy"),
       env: {
@@ -622,6 +651,7 @@ function deployOnce(
         NO_COLOR: "1",
         FORCE_COLOR: "0",
         CLOUDFLARE_API_TOKEN: run.token,
+        ...(run.telemetryToken && { [TELEMETRY_TOKEN_ENV]: run.telemetryToken }),
         ITERATE_MIND_CONFIG: run.config,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -652,10 +682,12 @@ function deployOnce(
 
 /** A line of the deploy's output with the text of any token replaced. */
 const hidden = (line: string, run: Run) =>
-  [run.token, process.env.CLOUDFLARE_OAUTH_CLIENT_API_TOKEN].reduce<string>(
-    (text, token) => (token ? text.replaceAll(token, "[token]") : text),
-    line,
-  );
+  [
+    run.token,
+    run.telemetryToken,
+    process.env[TELEMETRY_TOKEN_ENV],
+    process.env.CLOUDFLARE_OAUTH_CLIENT_API_TOKEN,
+  ].reduce<string>((text, token) => (token ? text.replaceAll(token, "[token]") : text), line);
 
 /** The deploy. When the state store refused it (`saysTheStateStoreRefused`), it runs once more. */
 async function deployStack(run: Run): Promise<number> {
@@ -829,10 +861,66 @@ async function offersOf(cf: Cloudflare, account: string, domains: string[]): Pro
  *  person adds it on Cloudflare's own page (it is theirs at another registrar). */
 type Pick = { domain: string; zone?: Zone; offer?: Offer };
 
-/** The domain, and how the account gets it: a zone it has, one to buy, or one to add. With no
- *  `--domain`, the person picks from the account's zones and the free names of `candidatesOf`
- *  with their prices, and may type a domain, or a few words for more names: the question comes
- *  again until a domain is picked. `person` is the name the candidates are made from. */
+/** Sentinel option value for entering a brand new domain name to buy (or search keywords). */
+export const ENTER_NEW_DOMAIN = "\0enter-new-domain";
+
+export type DomainPickerOption = {
+  value: string;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+};
+
+/** Builds the single unified domain-picker list:
+ *  1. "Buy a brand new domain" — available domains to buy, plus entering a brand new domain name
+ *  2. "Use an existing cloudflare zone" — the account's existing Cloudflare zones */
+export function domainPickerOptions(input: {
+  offers: readonly Offer[];
+  zones: readonly Zone[];
+  maxOffers?: number;
+}): DomainPickerOption[] {
+  const readableZones = input.zones.filter((zone) => !zone.unread);
+  const shownOffers = input.offers.slice(0, input.maxOffers ?? 6);
+  const options: DomainPickerOption[] = [
+    { value: "\0heading-buy", label: "Buy a brand new domain", disabled: true },
+    ...shownOffers.map((offer) => ({
+      value: offer.name,
+      label: offer.name,
+      hint: priceOf(offer),
+    })),
+    {
+      value: ENTER_NEW_DOMAIN,
+      label: "Enter a brand new domain name and buy that",
+      hint: "type a domain to buy, or keywords for more names",
+    },
+    { value: "\0heading-zones", label: "Use an existing cloudflare zone", disabled: true },
+  ];
+  if (readableZones.length > 0) {
+    for (const zone of readableZones) {
+      options.push({
+        value: zone.name,
+        label: zone.name,
+        hint: zone.stageName
+          ? "a mind is here already: deploy over it"
+          : zone.uses?.length
+            ? "in this account, in use: its records would be erased"
+            : "in this account, unused",
+      });
+    }
+  } else {
+    options.push({
+      value: "\0no-zones",
+      label: "No existing Cloudflare zones in this account",
+      disabled: true,
+    });
+  }
+  return options;
+}
+
+/** The domain, and how the account gets it: a new one to buy, a zone the account has, or one to
+ *  add. With no `--domain`, the person picks from one unified list with "Buy a brand new domain"
+ *  at the top (including entering a brand new domain name to buy) and "Use an existing cloudflare
+ *  zone" below. `person` is the name the initial candidates are made from. */
 async function pickDomain(
   cf: Cloudflare,
   account: string,
@@ -840,44 +928,30 @@ async function pickDomain(
   zones: Zone[],
   person: string,
 ): Promise<Pick> {
-  const OTHER = "\0other";
   const free = async (words?: string) =>
     (await offersOf(cf, account, candidatesOf(person, words))).filter((offer) => offer.registrable);
   let offers = input.domain ? [] : await free();
+  let maxOffers = 6;
   for (;;) {
+    const options = domainPickerOptions({ offers, zones, maxOffers });
+    const firstSelectable = options.find((option) => !option.disabled)?.value;
     let domain =
       input.domain?.toLowerCase() ||
       (await ask<string>("pass --domain <domain>", () =>
         p.select({
           message:
             "Which domain does the mind live at? It takes the whole domain: its site, its mail and its sign-in.",
-          maxItems: 14,
-          options: [
-            ...zones
-              .filter((zone) => !zone.unread)
-              .map((zone) => ({
-                value: zone.name,
-                label: zone.name,
-                hint: zone.stageName
-                  ? "a mind is here already: deploy over it"
-                  : zone.uses?.length
-                    ? "in this account, in use: its records would be erased"
-                    : "in this account, unused",
-              })),
-            ...offers.map((offer) => ({
-              value: offer.name,
-              label: offer.name,
-              hint: `free to buy, ${priceOf(offer)}`,
-            })),
-            { value: OTHER, label: "Another domain, or more names", hint: "type it" },
-          ],
+          maxItems: 16,
+          initialValue: firstSelectable,
+          options,
         }),
       ));
-    if (domain === OTHER) {
+    if (domain === ENTER_NEW_DOMAIN) {
       const typed = (
         await ask<string>("pass --domain <domain>", () =>
           p.text({
-            message: "A domain (ada-labs.com), or a few words to find more free names",
+            message:
+              "Enter a brand new domain name to buy (e.g. ada-labs.com), or a few words for more ideas",
             validate: (value) => (value?.trim() ? undefined : "A domain, or a few words"),
           }),
         )
@@ -889,6 +963,7 @@ async function pickDomain(
         if (more.length === 0) p.log.warn(`No name from "${typed}" is free at Cloudflare.`);
         // the new names first, then the ones from before
         offers = [...more, ...offers.filter((old) => more.every((now) => now.name !== old.name))];
+        maxOffers = 8;
         continue;
       }
       domain = typed;
@@ -1199,6 +1274,111 @@ export async function earlierDeployOf(
   );
 }
 
+/** Whether the deployed telemetry Worker already has its owner-provided telemetry token kept in
+ *  Alchemy's state (core/alchemy/src/stack.ts `TELEMETRY_TOKEN_SOURCE`). */
+async function stackHasTelemetryToken(cf: Cloudflare, account: string, stageName: string) {
+  const settings = await cf(
+    "GET",
+    `/accounts/${account}/workers/scripts/iterate-${stageName}-telemetry/settings`,
+  );
+  if (settings.status !== 200) return false;
+  return Boolean(
+    WorkerSettings.safeParse(settings.result).data?.bindings.some(
+      (binding) =>
+        binding.type === "plain_text" &&
+        binding.name === "TELEMETRY_TOKEN_SOURCE" &&
+        binding.text === "provided",
+    ),
+  );
+}
+
+/** Verifies that a pasted or env-provided Cloudflare telemetry API token is an active
+ *  account-owned token for `accountId`. Rejects user-owned tokens (which stop working when that
+ *  user leaves the account) with a specific message. */
+export async function verifyTelemetryToken(
+  accountId: string,
+  token: string,
+  api: Cloudflare = cloudflare(token),
+) {
+  const Active = z.object({ status: z.string() });
+  try {
+    const accountAnswer = await api("GET", `/accounts/${accountId}/tokens/verify`);
+    if (accountAnswer.status === 200 && resultOf(Active, accountAnswer)?.status === "active")
+      return { ok: true as const };
+    const userAnswer = await api("GET", "/user/tokens/verify");
+    if (userAnswer.status === 200 && resultOf(Active, userAnswer)?.status === "active")
+      return {
+        ok: false as const,
+        error:
+          "that is a user-owned API token, which stops working if that user leaves the account. Create an account-owned API token using the dashboard link above instead",
+      };
+    return {
+      ok: false as const,
+      error: accountAnswer.error || userAnswer.error || `HTTP ${accountAnswer.status}`,
+    };
+  } catch (error) {
+    return {
+      ok: false as const,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Collects and verifies the single account-owned Cloudflare telemetry API token when needed:
+ *  - Uses `CLOUDFLARE_TELEMETRY_API_TOKEN` from the environment when set (for deploy and `--plan`);
+ *  - Skips prompting during `--plan` or on re-deploys when the stack already keeps the token in state;
+ *  - Otherwise opens a pre-filled Cloudflare dashboard link (after Enter) and reads the token. */
+async function telemetryTokenStep(
+  cf: Cloudflare,
+  account: Account,
+  stageName: string,
+  options: { plan?: boolean } = {},
+): Promise<string | undefined> {
+  const fromEnv = process.env[TELEMETRY_TOKEN_ENV]?.trim();
+  if (fromEnv) {
+    const checked = await verifyTelemetryToken(account.id, fromEnv);
+    if (!checked.ok)
+      throw new Error(
+        `Cloudflare rejected ${TELEMETRY_TOKEN_ENV} (${checked.error}). Create a valid account-owned telemetry token at ${telemetryTokenPage(stageName).href} and run again.`,
+      );
+    p.log.info(`Using Cloudflare telemetry API token from ${TELEMETRY_TOKEN_ENV}.`);
+    return fromEnv;
+  }
+  if (options.plan) return undefined;
+  if (await stackHasTelemetryToken(cf, account.id, stageName)) return undefined;
+  const url = telemetryTokenPage(stageName).href;
+  const bucket = `iterate-${stageName}-telemetry`;
+  if (!interactive())
+    throw new Error(
+      `Telemetry needs one account-owned Cloudflare API token (${TELEMETRY_TOKEN_ENV}). Create it at:\n${url}\nIf the bucket ${bucket} already exists, scope "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" to ${bucket}. Then re-run with ${TELEMETRY_TOKEN_ENV}=<token>. Nothing was changed.`,
+    );
+  await page(
+    [
+      `Create one account-owned Cloudflare telemetry API token for ${account.name} so your mind can read its own logs and metrics.`,
+      `Permissions are pre-filled (Workers R2 Data Catalog Write, Workers R2 Storage Bucket Item Write, Workers R2 SQL Read, Account Analytics Read). Select account "${account.name}" if prompted; if the bucket ${bucket} already exists, scope "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" to ${bucket} alone (for a new mind, you can narrow it to ${bucket} after the first deploy). Click "Continue to summary" → "Create Token", and copy the token.`,
+    ].join("\n"),
+    url,
+  );
+  for (;;) {
+    const pasted = (
+      await ask<string>(`set ${TELEMETRY_TOKEN_ENV}=<token>`, () =>
+        p.password({
+          message: "Paste the account-owned Cloudflare telemetry API token",
+          validate: (value) => (value?.trim() ? undefined : "Paste the API token from Cloudflare"),
+        }),
+      )
+    ).trim();
+    const checked = await verifyTelemetryToken(account.id, pasted);
+    if (checked.ok) {
+      p.log.success("Verified the Cloudflare telemetry API token.");
+      return pasted;
+    }
+    p.log.warn(
+      `Cloudflare rejected that token (${checked.error}). Paste an active account-owned API token.`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The mind's identity.
 
@@ -1278,7 +1458,7 @@ export async function deployMind(input: DeployInput) {
         DEPLOY_SCOPES,
         async ({ url, code, minutes }) => {
           await page(
-            `Sign in at Cloudflare and approve the access. Tick "Account API Token Provisioning" on its page, which Cloudflare leaves unticked: the deploy makes two API tokens with which the mind reads its own logs, and they read nothing else and deploy nothing. Check that the page shows the code ${code}. Select the account for the mind. The code works for ${minutes} minutes.`,
+            `Sign in at Cloudflare and approve the access. Check that the page shows the code ${code}. Select the account for the mind. The code works for ${minutes} minutes.`,
             url.href,
           );
         },
@@ -1303,19 +1483,17 @@ export async function deployMind(input: DeployInput) {
     };
 
     // A sign-in that lacks a required scope cannot deploy: end the access and tell the user to
-    // re-run and tick the missing permission.
+    // re-run and approve all requested permissions.
     if (access.lacks.length > 0) {
-      const missingTokenProvisioning = access.lacks.includes(MAKES_API_TOKENS);
-      const why = `The sign-in at Cloudflare did not grant ${access.lacks.join(", ")}${missingTokenProvisioning ? ` ("Account API Token Provisioning" was not ticked)` : ""}, and a deploy needs it.`;
+      const why = `The sign-in at Cloudflare did not grant ${access.lacks.join(", ")}, and a deploy needs it.`;
       await endAccess(access);
       if (access.keptIn)
         throw new SignInEnded(
-          `${why} Nothing was changed. Sign out of the kept sign-in in ${access.keptIn} (iterate cloudflare sign-out), and sign in again with it ticked.`,
+          `${why} Nothing was changed. Sign out of the kept sign-in in ${access.keptIn} (iterate cloudflare sign-out), and sign in again.`,
         );
-      const nextStep = missingTokenProvisioning
-        ? 'Run the command again and tick "Account API Token Provisioning".'
-        : "Run the command again and grant all requested permissions.";
-      throw new Error(`${why} Nothing was changed. ${nextStep}`);
+      throw new Error(
+        `${why} Nothing was changed. Run the command again and grant all requested permissions.`,
+      );
     }
 
     const user = await cf("GET", "/user");
@@ -1556,6 +1734,11 @@ export async function deployMind(input: DeployInput) {
       ? await holdingsToErase(pick.zone.uses || [], pick.zone.id)
       : undefined;
 
+    // Collect the single telemetry API token before mutating the account or buying a domain so
+    // stopping here leaves nothing changed. For `--plan`, pass the env var through when set
+    // without prompting interactively.
+    const telemetryToken = await telemetryTokenStep(cf, account, stageName, { plan: input.plan });
+
     // the account's workers.dev name: a new account has none, and a Worker needs one
     if (!resultOf(z.object({ subdomain: z.string().min(1) }), subdomain)) {
       let refusal = "";
@@ -1645,7 +1828,8 @@ export async function deployMind(input: DeployInput) {
     // and this run signs nothing.
     const mindId =
       config.mindId || (await identityOfNewMind(controlPlaneHostname, Boolean(earlier?.leftover)));
-    writeFileSync(configFile, `${JSON.stringify({ ...config, mindId }, null, 2)}\n`);
+    const deployedConfig = { ...config, mindId };
+    writeFileSync(configFile, `${JSON.stringify(deployedConfig, null, 2)}\n`);
     access = await renewed();
     if (input.plan) {
       const plan = join(work, "plan.log");
@@ -1656,6 +1840,7 @@ export async function deployMind(input: DeployInput) {
         stageName,
         config: configFile,
         token: access.token,
+        telemetryToken,
         log: plan,
         children,
       };
@@ -1685,6 +1870,7 @@ export async function deployMind(input: DeployInput) {
       stageName,
       config: configFile,
       token: access.token,
+      telemetryToken,
       log,
       children,
       say: deploying.say,
@@ -1701,7 +1887,7 @@ export async function deployMind(input: DeployInput) {
     const boundary = `/accounts/${account.id}/workers/scripts/iterate-${stageName}-boundary/settings`;
     const check = await boundaryCheck(
       () => cf("GET", boundary),
-      { ...config, mindId },
+      deployedConfig,
       () => sleep(2000),
     );
     // A miss is a fault of this release, not of the person's account or input, and a second run
@@ -1758,6 +1944,7 @@ export async function deployMind(input: DeployInput) {
         ? `Your mind at ${controlPlaneHostname} is updated.`
         : `Your mind is deployed at ${controlPlaneHostname}.`,
     );
+    p.log.info(`MindConfig:\n${formatMindConfigForStdout(deployedConfig)}`);
     const keyLine = identityKeyLineOf(keyFileOf(IDENTITIES, mindId), {
       gaveTheId: !config.mindId,
       posted,

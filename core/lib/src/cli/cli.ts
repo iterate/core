@@ -319,7 +319,7 @@ const launcherProcedures = {
         }),
       )
       .meta({
-        description: `Sign in at Cloudflare for \`iterate deploy\` with nobody at Cloudflare's page: the deploy's scopes and offline_access. The sign-in can do everything a deploy can, making API tokens of the account among it. A deploy uses it with ${SIGN_IN_FILE}=<file>, and rewrites the file at each renewal`,
+        description: `Sign in at Cloudflare for \`iterate deploy\` with nobody at Cloudflare's page: the deploy's scopes and offline_access. A deploy uses it with ${SIGN_IN_FILE}=<file>, and rewrites the file at each renewal`,
       })
       .handler(async ({ input }) => {
         if (Boolean(input.file) === Boolean(input.print))
@@ -334,7 +334,7 @@ const launcherProcedures = {
           );
         const kept = await keptSignInOf(({ url, code, minutes }) =>
           console.error(
-            `Open this page, check that it shows the code ${code}, select ONLY the mind's account, tick "Account API Token Provisioning", and approve. The code works for ${minutes} minutes.\n\n  ${url.href}\n`,
+            `Open this page, check that it shows the code ${code}, select ONLY the mind's account, and approve. The code works for ${minutes} minutes.\n\n  ${url.href}\n`,
           ),
         );
         if (!input.file) {

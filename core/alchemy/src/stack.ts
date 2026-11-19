@@ -16,8 +16,9 @@
 // connects in. The stack then has no mind Worker and nothing that only a mind Worker binds, and
 // the boundary, the same build, holds the connection in a Durable Object of its own.
 //
-// The stack generates four keys (three with an external mind) and two API tokens of the account,
-// and makes one OAuth client in it, through which a member connects the mind to the account.
+// The stack generates four keys (three with an external mind), keeps one owner-created telemetry
+// API token in state, and makes one OAuth client in the account, through which a member connects
+// the mind to the account.
 // An owner signs in first with a code mailed to their address, by the mind or by Cloudflare
 // Access, and adds a passkey.
 import { readFileSync } from "node:fs";
@@ -40,6 +41,7 @@ import { CatalogTablesOfSinks } from "./catalog-tables-of-sinks.ts";
 import { CloudflareOAuthClient } from "./cloudflare-oauth-client.ts";
 import { type MindConfig, namesOf } from "./config.ts";
 import { REALTIME_SFU, realtimeConfigOf, TURN_KEY } from "./realtime.ts";
+import { TelemetryToken } from "./telemetry-token.ts";
 
 const core = (path: string) => resolve(import.meta.dirname, "../..", path);
 /** A Worker's fetch to a hostname of its own zone reaches the Worker routed there. */
@@ -98,40 +100,16 @@ export const mindStack = (config: MindConfig) =>
         },
       ],
     });
-    // Two API tokens of the account, which the telemetry Worker alone holds. The first writes
-    // the tables and reads them with SQL. Its Data Catalog Write is for the whole account: a
-    // sink refuses a token whose Data Catalog Write is for the bucket alone.
-    const catalogToken = yield* Cloudflare.ApiToken.AccountApiToken("TelemetryCatalogToken", {
-      name: `${names.telemetryBucket}-catalog`,
-      policies: [
-        {
-          effect: "allow",
-          permissionGroups: ["Workers R2 Data Catalog Write"],
-          resources: { [`com.cloudflare.api.account.${accountId}`]: "*" },
-        },
-        {
-          effect: "allow",
-          permissionGroups: ["Workers R2 Storage Bucket Item Write", "Workers R2 SQL Read"],
-          resources: {
-            [`com.cloudflare.edge.r2.bucket.${accountId}_default_${names.telemetryBucket}`]: "*",
-          },
-        },
-      ],
-    });
-    // The second reads `metrics`, the Analytics Engine dataset.
-    const analyticsToken = yield* Cloudflare.ApiToken.AccountApiToken("TelemetryAnalyticsToken", {
-      name: `${names.telemetryBucket}-analytics`,
-      policies: [
-        {
-          effect: "allow",
-          permissionGroups: ["Account Analytics Read"],
-          resources: { [`com.cloudflare.api.account.${accountId}`]: "*" },
-        },
-      ],
+    // One API token of the account, created by the owner in Cloudflare's dashboard and kept in
+    // Alchemy's state (./telemetry-token.ts). It holds Workers R2 Data Catalog Write, Workers R2
+    // Storage Bucket Item Write, Workers R2 SQL Read, and Account Analytics Read, and the
+    // telemetry Worker alone receives it.
+    const telemetryToken = yield* TelemetryToken("TelemetryToken", {
+      name: names.telemetryBucket,
     });
     const telemetryCatalog = yield* Cloudflare.R2.DataCatalog("TelemetryCatalog", {
       bucket: telemetryBucket,
-      token: catalogToken.value,
+      token: telemetryToken.value,
       compaction: { state: "enabled" },
       snapshotExpiration: { state: "enabled", maxSnapshotAge: "1d", minSnapshotsToKeep: 5 },
     });
@@ -140,7 +118,7 @@ export const mindStack = (config: MindConfig) =>
     const sinkTables = yield* CatalogTablesOfSinks("TelemetrySinkTables", {
       catalogUri: telemetryCatalog.catalogUri,
       catalogId: telemetryCatalog.catalogId,
-      token: catalogToken.value,
+      token: telemetryToken.value,
       namespace: "telemetry",
       tables: ["events", "logs", "spans"],
     });
@@ -164,7 +142,7 @@ export const mindStack = (config: MindConfig) =>
           type: "basin_catalog",
           catalog: telemetryCatalog,
           table: { namespace: sinkTables.namespace, name: table },
-          token: catalogToken.value,
+          token: telemetryToken.value,
           format: { type: "parquet", compression: "zstd", rowGroupBytes: 32 * 1024 * 1024 },
           rollingPolicy: { intervalSeconds: 60 },
         });
@@ -199,8 +177,10 @@ export const mindStack = (config: MindConfig) =>
           eventsWriterName: mindIsInTheStack ? names.mind : "external-mind",
         }),
         ITERATE__OTLP_SECRET: otlpSecret,
-        ITERATE__CATALOG_TOKEN: catalogToken.value,
-        ITERATE__ANALYTICS_TOKEN: analyticsToken.value,
+        ITERATE__CATALOG_TOKEN: telemetryToken.value,
+        ITERATE__ANALYTICS_TOKEN: telemetryToken.value,
+        // Plain-text marker read by `iterate deploy` to know the telemetry token is kept in state.
+        TELEMETRY_TOKEN_SOURCE: "provided",
         EVENTS: yield* telemetryTable("events"),
         LOGS: yield* telemetryTable("logs"),
         SPANS: yield* telemetryTable("spans"),
