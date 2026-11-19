@@ -153,6 +153,10 @@ What it does, in order:
      asked. It is the domain with `-` for each dot, cut to 32 characters, with `z` first when
      the domain starts with a digit.
    - `topology: "full-cloudflare"`, and `cloudflare`: the account and the one domain.
+   - `mail`: absent, unless `--mail-forward-to <address>` names where each mail to the mind is
+     forwarded as it arrived ([core/alchemy](../../../alchemy/README.md#the-one-input)). The
+     address must be a verified destination address of the account's Email Routing, which a
+     person adds in the dashboard; while it is not, every mail to the mind fails for its sender.
    - `mindId`: for a new mind, the id of the identity that the command makes right before the
      deploy ([The mind's identity key](#the-minds-identity-key)). A mind that is there already
      keeps its own.
@@ -165,7 +169,13 @@ What it does, in order:
    `deploy.log` beside the config. A new state store can refuse the run that made it ("State
    store request failed"): the command then deploys once more by itself. Any other failure prints
    the log's last lines and its path. Run the command again on the same computer: it goes on
-   with that deploy ("A deploy that stopped", below). Then the command waits until the sign-in
+   with that deploy ("A deploy that stopped", below). Then it reads the boundary Worker's
+   settings again, up to five times two seconds apart, and checks that `DEPLOY_CONFIG` is the
+   config it deployed and that `MAIL_FORWARD_TO` is there exactly when the config names
+   `mail.forwardTo`. When all is held, one line says so, with the forward's address. When no read
+   answers, a warning says that the check did not run; the deploy succeeded. A miss is a fault of
+   the release, which a second run does not mend: its error comes at once, the command still does
+   every later step, and then it ends non-zero with the same error, which asks for a report. Then the command waits until the sign-in
    page and the domain's own front page answered five times in a row. On a dev zone the whole
    command took 2 min 14 s (18 Nov 2026): the deploy 1 min 50 s, the wait 20 s.
 
@@ -173,8 +183,9 @@ What it does, in order:
 command reads that mind's own config from Cloudflare (the boundary Worker's variable `ITERATE`),
 shows it, and deploys over it. The deploy starts from the whole config that the mind was deployed
 with, which the stack keeps in the boundary Worker's variable `DEPLOY_CONFIG`, so every field
-stays, the sandboxes' image among them. `--owner` and `--control-plane-hostname` each replace
-what the mind has. It asks first; `--yes` is the yes. No file of an earlier deploy is needed. A
+stays, the sandboxes' image and the mail forward among them. `--owner`,
+`--control-plane-hostname` and `--mail-forward-to` each replace what the mind has;
+`--mail-forward-to none` removes the forward. It asks first; `--yes` is the yes. No file of an earlier deploy is needed. A
 run over a mind with a sandbox image planned no changes and took 29 s (18 Nov 2026).
 
 - A mind deployed before the stack kept `DEPLOY_CONFIG` is refused, with nothing changed: deploy

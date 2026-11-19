@@ -28,7 +28,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync }
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
 import { mindAddressAsTyped, mindMcpNameOf, mindMcpUrlOf } from "../mind-api.ts";
@@ -76,6 +76,8 @@ export type DeployInput = {
   newAccount?: boolean;
   owner?: string;
   controlPlaneHostname?: string;
+  /** where each mail is forwarded as it arrived; `none` stops the forward (`deployConfigOf`) */
+  mailForwardTo?: string;
   yes?: boolean;
   buy?: boolean;
   eraseRecords?: boolean;
@@ -133,7 +135,8 @@ type DeployedMind = z.infer<typeof DeployedConfig> & {
  *  `owner` as its one owner, and answers at `iterate.<domain>` unless `controlPlaneHostname`
  *  names the zone itself or another name one label under it. A mind that is `deployed` keeps its
  *  zones, its topology, its owners and its hostname: `owner` and `controlPlaneHostname` are then
- *  what a flag said, and each replaces what the mind has.
+ *  what a flag said, and each replaces what the mind has. So does `mailForwardTo`, the config's
+ *  `mail.forwardTo`, and `none` there removes it: with no flag the mind keeps its forward.
  *
  *  `mindId` is the deployed mind's own, and nothing here ever gives a mind that has an id
  *  another. A mind with none gets the hash of the genesis that the command signs right before
@@ -143,6 +146,7 @@ export function deployConfigOf(answers: {
   domain: string;
   owner?: string;
   controlPlaneHostname?: string;
+  mailForwardTo?: string;
   deployed?: DeployedMind;
 }) {
   const { deployed } = answers;
@@ -171,8 +175,20 @@ export function deployConfigOf(answers: {
     );
   // a mind that is there starts from its deploy's whole config: only what a flag names changes
   const kept = deployed?.deployConfig;
+  const forwardTo = answers.mailForwardTo;
+  if (forwardTo === "")
+    throw new Error("--mail-forward-to is empty: give an address, or none to stop the forward.");
+  if (
+    forwardTo &&
+    forwardTo !== "none" &&
+    (!z.email().safeParse(forwardTo).success || zoneOfMailAddress({ zones }, forwardTo))
+  )
+    throw new Error(
+      `The mail forward ${forwardTo} is no email address, or one at a domain of the mind, which takes that mail. Pass --mail-forward-to with an address elsewhere, or none.`,
+    );
   return {
     ...kept,
+    mail: forwardTo === "none" ? undefined : forwardTo ? { forwardTo } : kept?.mail,
     mindId: deployed?.mindId,
     controlPlaneHostname,
     ownerEmails,
@@ -199,6 +215,51 @@ export function mindConfigIn(settings: unknown): Omit<DeployedMind, "stageName">
   const config = parsed(DeployedConfig, text("ITERATE") || "");
   const deployConfig = parsed(KeptDeployConfig, text("DEPLOY_CONFIG") || "");
   return config && { ...config, deployConfig };
+}
+
+/** WHAT THE BOUNDARY DOES NOT HOLD OF THE CONFIG THAT A DEPLOY GAVE IT, read from its settings
+ *  after the deploy, or null when it holds all: the whole config as `DEPLOY_CONFIG`, which the
+ *  next deploy starts from, and the mail forward as `MAIL_FORWARD_TO` exactly when the config
+ *  names one. */
+export function boundaryMisses(settings: unknown, deployed: Record<string, unknown>) {
+  const text = (name: string) =>
+    WorkerSettings.safeParse(settings).data?.bindings.find((binding) => binding.name === name)
+      ?.text;
+  const kept = parsed(z.unknown(), text("DEPLOY_CONFIG") || "");
+  if (!isDeepStrictEqual(kept, JSON.parse(JSON.stringify(deployed))))
+    return "its DEPLOY_CONFIG is not the config that this run deployed, so the next deploy would not start from the mind's own config";
+  const forwardTo = MailForward.safeParse(deployed.mail).data?.forwardTo;
+  if (text("MAIL_FORWARD_TO") !== forwardTo)
+    return forwardTo
+      ? `it has no MAIL_FORWARD_TO ${forwardTo}, so the mind keeps each mail and forwards none`
+      : "it has a MAIL_FORWARD_TO that the config does not name, so the mind forwards its mail there";
+  return null;
+}
+const MailForward = z.object({ forwardTo: z.string() });
+
+/** The forward address that a config's `mail` names, or undefined. */
+export const forwardOf = (mail: unknown) => MailForward.safeParse(mail).data?.forwardTo;
+
+/** THE CHECK AFTER A DEPLOY, which a read that failed does not fail: up to five reads of the
+ *  boundary's settings, `pause` between them, until one answers 200 and holds all. A read that is
+ *  not fresh yet, a 429 or a 5xx is read again. `held`; the last 200 read's miss; or `unread`
+ *  with the last status when no read answered 200. */
+export async function boundaryCheck(
+  read: () => Promise<{ status: number; result?: unknown }>,
+  deployed: Record<string, unknown>,
+  pause: () => Promise<unknown>,
+) {
+  let miss: string | null = null;
+  let status = 0;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    if (attempt > 1) await pause();
+    const answer = await read();
+    status = answer.status;
+    if (status !== 200) continue;
+    miss = boundaryMisses(answer.result, deployed);
+    if (!miss) return { held: true as const };
+  }
+  return miss ? { miss } : { unread: status };
 }
 
 /** Whether a line of a deploy's output says that the stack's state store refused a request. A
@@ -1690,6 +1751,7 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       domain,
       owner: mind ? input.owner : await newOwner(),
       controlPlaneHostname: input.controlPlaneHostname,
+      mailForwardTo: input.mailForwardTo,
       deployed: mind,
     });
     const { controlPlaneHostname } = config;
@@ -1731,8 +1793,14 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
           ? []
           : [`${config.ownerEmails.join(", ")} as its only owner`]),
       ];
-      const how =
-        changes.length > 0 ? `with ${changes.join(" and ")}` : "with the same owners and hostname";
+      const forwardBefore = forwardOf(deployed.deployConfig?.mail);
+      const forwardAfter = forwardOf(config.mail);
+      const forwardWords = forwardAfter
+        ? `${forwardAfter === forwardBefore ? "keeps forwarding" : "forwards"} each mail to ${forwardAfter}`
+        : forwardBefore && `stops forwarding mail (was ${forwardBefore})`;
+      const how = `${
+        changes.length > 0 ? `with ${changes.join(" and ")}` : "with the same owners and hostname"
+      }${forwardWords ? `; it ${forwardWords}` : ""}`;
       if (
         !input.yes &&
         !(await ask<boolean>(`a mind is at ${domain} already; pass --yes to deploy over it`, () =>
@@ -1976,6 +2044,32 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       );
     }
     deploying.done(`Deployed (${seconds(deployBegan)}).`);
+    const boundary = `/accounts/${account.id}/workers/scripts/iterate-${stageName}-boundary/settings`;
+    const check = await boundaryCheck(
+      () => cf("GET", boundary),
+      { ...config, mindId },
+      () => sleep(2000),
+    );
+    // A miss is a fault of this release, not of the person's account or input, and a second run
+    // deploys the same code: so the words say that the mind runs and ask for a report. The
+    // command still ends every later step (the mind's identity, its first sign-in) and then fails.
+    const missed =
+      "miss" in check
+        ? `The deploy finished and the mind runs. But its boundary Worker does not hold what this run deployed: ${check.miss}. This is a fault in this release of iterate, not in your account or in what you typed, and running the command again does not mend it. Please report it to iterate with this message. The deploy's log: ${log}`
+        : undefined;
+    if (missed) p.log.error(missed);
+    else if ("unread" in check)
+      p.log.warn(
+        `Could not read the boundary Worker's settings (status ${check.unread}), so this run did not check that it holds the deploy's config. The deploy itself succeeded.`,
+      );
+    else {
+      const forwardTo = forwardOf(config.mail);
+      p.log.success(
+        forwardTo
+          ? `The boundary holds this deploy's config, and forwards each mail to ${forwardTo}.`
+          : "The boundary holds this deploy's config (no mail forward).",
+      );
+    }
 
     // A NEW ROUTE REACHES CLOUDFLARE'S EDGE WITHIN A MINUTE OR TWO, and until then some answers
     // are 522, 500 or 404. So the mind answers when both of its addresses did, five times in a
@@ -2040,6 +2134,8 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     });
     if (keyLine) p.log.info(keyLine);
     p.log.info(`The deploy's config and its log: ${work}`);
+    // the check's miss, said above, ends the command non-zero once every step is done
+    if (missed) throw new Error(missed);
     p.outro(`Done in ${seconds(began)}.`);
   } catch (error) {
     // a stop is an expected end: its one line, with no stack, and a failed exit code

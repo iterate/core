@@ -17,6 +17,8 @@ import {
   closingOf,
   chatgptPlanWay,
   deployArgsOf,
+  boundaryCheck,
+  boundaryMisses,
   deployConfigOf,
   deployedMind,
   earlierDeployOf,
@@ -93,6 +95,10 @@ test("a new mind's config is the script's one input but for its id: the zone who
     topology: "full-cloudflare",
     alchemy: { stageName: "ada-labs-com" },
     cloudflare: { accountId: "0".repeat(32), zones: ["ada-labs.com"] },
+  });
+  expect(deployConfigOf(answers).mail).toBeUndefined();
+  expect(deployConfigOf({ ...answers, mailForwardTo: "team@group.example" })).toMatchObject({
+    mail: { forwardTo: "team@group.example" },
   });
 });
 
@@ -476,6 +482,7 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
       zones: ["ada-labs.com"],
       containerImage: `registry.cloudflare.com/${accountId}/iterate-sandbox@sha256:${"ab".repeat(32)}`,
     },
+    mail: { forwardTo: "team@group.example" },
   });
   // every field of the script's config, nested ones too, is in this one: a new field fails here
   type Shape = Record<string, object>;
@@ -534,6 +541,17 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
     ...whole,
     ownerEmails: ["grace@example.org"],
   });
+  expect(overMind(whole, { mailForwardTo: "other@group.example" })).toEqual({
+    ...whole,
+    mail: { forwardTo: "other@group.example" },
+  });
+  const { mail: _, ...withoutMail } = whole;
+  expect(JSON.parse(JSON.stringify(overMind(whole, { mailForwardTo: "none" })))).toEqual(
+    withoutMail,
+  );
+  expect(() => overMind(whole, { mailForwardTo: "team@ada-labs.com" })).toThrow(
+    /domain of the mind/,
+  );
   // a mind deployed before the stack kept its whole config is read, with no deploy config: the
   // command then deploys nothing over it (deployMind)
   expect(
@@ -802,6 +820,84 @@ test("a deploy that failed says that a run on this computer goes on with it", ()
   expect(command.match(/join\(work, "config\.json"\)/g)).toHaveLength(1);
   expect(command).toContain(
     "A deploy keeps what it made: run the command again on this computer, and it goes on with this deploy's config.",
+  );
+});
+
+test("after a deploy the boundary holds the whole config, and the mail forward exactly when the config names one", () => {
+  const deployed = { ...deployConfigOf(answers), mail: { forwardTo: "team@group.example" } };
+  const settings = (config: object, forwardTo?: string) => ({
+    bindings: [
+      { type: "plain_text", name: "DEPLOY_CONFIG", text: JSON.stringify(config) },
+      ...(forwardTo ? [{ type: "plain_text", name: "MAIL_FORWARD_TO", text: forwardTo }] : []),
+    ],
+  });
+  expect(boundaryMisses(settings(deployed, "team@group.example"), deployed)).toBeNull();
+  // the config it holds differs, or is none
+  expect(boundaryMisses(settings({ ...deployed, mail: undefined }), deployed)).toMatch(
+    /DEPLOY_CONFIG is not the config/,
+  );
+  expect(boundaryMisses({ bindings: [] }, deployed)).toMatch(/DEPLOY_CONFIG is not the config/);
+  // the forward is missing, or left over
+  expect(boundaryMisses(settings(deployed), deployed)).toMatch(/forwards none/);
+  const { mail: _, ...withoutMail } = deployed;
+  expect(boundaryMisses(settings(withoutMail, "team@group.example"), withoutMail)).toMatch(
+    /does not name/,
+  );
+  expect(boundaryMisses(settings(withoutMail), withoutMail)).toBeNull();
+});
+
+test("the check after a deploy reads again before it calls a miss, and a read that never answers is no miss", async () => {
+  const deployed = { ...deployConfigOf(answers), mail: { forwardTo: "team@group.example" } };
+  const held = {
+    status: 200,
+    result: {
+      bindings: [
+        { type: "plain_text", name: "DEPLOY_CONFIG", text: JSON.stringify(deployed) },
+        { type: "plain_text", name: "MAIL_FORWARD_TO", text: "team@group.example" },
+      ],
+    },
+  };
+  const stale = { status: 200, result: { bindings: held.result.bindings.slice(0, 1) } };
+  const check = async (...reads: { status: number; result?: unknown }[]) => {
+    let pauses = 0;
+    const outcome = await boundaryCheck(
+      async () => reads.shift() ?? { status: 0 },
+      deployed,
+      async () => pauses++,
+    );
+    return { outcome, pauses };
+  };
+  // 200 at once
+  expect(await check(held)).toEqual({ outcome: { held: true }, pauses: 0 });
+  // a 429, then a 200
+  expect(await check({ status: 429 }, held)).toEqual({ outcome: { held: true }, pauses: 1 });
+  // a read that is not fresh yet, then one that holds all
+  expect(await check(stale, held)).toEqual({ outcome: { held: true }, pauses: 1 });
+  // five reads that each miss the forward
+  expect(await check(stale, stale, stale, stale, stale)).toMatchObject({
+    outcome: { miss: expect.stringMatching(/forwards none/) },
+    pauses: 4,
+  });
+  // five reads that never answer 200: no miss, the last status
+  expect(
+    await check(
+      { status: 500 },
+      { status: 429 },
+      { status: 500 },
+      { status: 503 },
+      { status: 502 },
+    ),
+  ).toEqual({ outcome: { unread: 502 }, pauses: 4 });
+});
+
+test("the flag's forward is one plain address, or none; an empty one is refused, not read as no flag", () => {
+  expect(() => deployConfigOf({ ...answers, mailForwardTo: "" })).toThrow(
+    /give an address, or none/,
+  );
+  // only `none` in lower case removes it: `None` is no address
+  expect(() => deployConfigOf({ ...answers, mailForwardTo: "None" })).toThrow(/no email address/);
+  expect(() => deployConfigOf({ ...answers, mailForwardTo: "Team <team@group.example>" })).toThrow(
+    /no email address/,
   );
 });
 

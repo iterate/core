@@ -397,6 +397,8 @@ export const mindStack = (config: MindConfig) =>
         SECRETS: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "Secrets" }),
         SECRET_USE: Cloudflare.WorkerEntrypoint(secrets, { entrypoint: "SecretUse" }),
         SEND_EMAIL: yield* Cloudflare.Email.SendEmail("SEND_EMAIL"),
+        // absent without `mail`: such a mind's boundary has no binding more
+        ...(config.mail && { MAIL_FORWARD_TO: config.mail.forwardTo }),
         TELEMETRY: Cloudflare.WorkerEntrypoint(telemetry, { entrypoint: "Telemetry" }),
         ...(mindIsInTheStack
           ? {

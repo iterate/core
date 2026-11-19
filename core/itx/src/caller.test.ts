@@ -43,6 +43,12 @@ test("a signed statement is held to the rule that guards the platform's facts", 
   expect(() => refuseNonPlatformWrites(mail, { principal: null })).toThrow(/platform's own/);
 });
 
+test("only the platform says that a forward of a mail failed: a member reads it as what Cloudflare said", () => {
+  const failed = [{ type: "events.iterate.com/email/forward-failed" }];
+  expect(() => refuseNonPlatformWrites(failed, platform)).not.toThrow();
+  expect(() => refuseNonPlatformWrites(failed, { principal: null })).toThrow(/platform's own/);
+});
+
 test("only the platform says that a deploy reached the mind: loaded code cannot replace the stack's record, with a key or with none", () => {
   const deployed = {
     type: "events.iterate.com/mind/stack-deployed",

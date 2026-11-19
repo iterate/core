@@ -67,6 +67,36 @@ void test("no config field names another state store: the store is iterate-<stag
   assert.deepEqual(refused.error?.issues[0]?.path, ["alchemy"]);
 });
 
+void test("a mind's mail is forwarded to one address, or to none", () => {
+  assert.equal(MindConfig.parse(config()).mail, undefined);
+  assert.deepEqual(
+    MindConfig.parse({ ...config(), mail: { forwardTo: "team@group.example" } }).mail,
+    { forwardTo: "team@group.example" },
+  );
+});
+
+void test("a forward address that is no address, and a mail setting with another key, are refused", () => {
+  for (const mail of [
+    { forwardTo: "the team" },
+    { forwardTo: "team@group.example", cc: "x" },
+    {},
+    true,
+  ])
+    assert.equal(MindConfig.safeParse({ ...config(), mail }).success, false, JSON.stringify(mail));
+});
+
+void test("a forward address at a zone of the mind, or under one, is refused: such a mail comes back to the mind", () => {
+  for (const forwardTo of ["team@example.com", "team@mail.example.com", "team@SUB.example.net"]) {
+    const refused = MindConfig.safeParse({ ...config(), mail: { forwardTo } });
+    assert.deepEqual(refused.error?.issues[0]?.path, ["mail", "forwardTo"], forwardTo);
+  }
+  // another domain that only ends in the same letters is no part of it
+  assert.equal(
+    MindConfig.safeParse({ ...config(), mail: { forwardTo: "team@notexample.com" } }).success,
+    true,
+  );
+});
+
 function config() {
   return {
     mindId: "a".repeat(64),

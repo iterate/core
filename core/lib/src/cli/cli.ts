@@ -202,6 +202,12 @@ const launcherProcedures = {
           .describe(
             "Where the mind's sign-in, API and MCP server answer: the domain itself, or one label under it (default: iterate.<domain>; for a mind that is there already: the one it has)",
           ),
+        mailForwardTo: z
+          .string()
+          .optional()
+          .describe(
+            "Forward each mail to the mind there as it arrived, a verified destination address of the account's Email Routing; none stops it (default: none; for a mind that is there already: the one it has)",
+          ),
         buy: z
           .boolean()
           .optional()

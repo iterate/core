@@ -142,6 +142,7 @@ const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/mind/identity-record-refused",
   "events.iterate.com/email/received",
   "events.iterate.com/email/sent",
+  "events.iterate.com/email/forward-failed",
   "events.iterate.com/email/send-failed",
   "events.iterate.com/email/delivery-failed",
   "events.iterate.com/webhook/received",

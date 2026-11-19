@@ -40,6 +40,11 @@ export const MindConfig = z
        *  image. Only iterate's own mind sets it. */
       containerImage: z.string().min(1).optional(),
     }),
+    /** Absent: each mail stays in the mind alone. `forwardTo`: each mail is then forwarded there
+     *  as it arrived (a team's mailbox or group). The address must be a verified destination
+     *  address of the account's Email Routing, which a person confirms once by the link
+     *  Cloudflare mails to it. */
+    mail: z.strictObject({ forwardTo: z.email() }).optional(),
   })
   // One label, because Cloudflare's certificate for a zone covers the zone and `*.<zone>` alone.
   .refine(
@@ -63,6 +68,18 @@ export const MindConfig = z
     {
       path: ["ownerEmails"],
       error: "no address at a zone of the mind: the mind takes that mail",
+    },
+  )
+  .refine(
+    ({ mail, cloudflare }) =>
+      !mail ||
+      cloudflare.zones.every(
+        (zone) => !`.${mail.forwardTo.split("@")[1]}`.toLowerCase().endsWith(`.${zone}`),
+      ),
+    {
+      path: ["mail", "forwardTo"],
+      error:
+        "not an address at a zone of the mind: its mail comes to the mind, so the forward would come back",
     },
   );
 export type MindConfig = z.infer<typeof MindConfig>;
